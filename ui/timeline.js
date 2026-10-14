@@ -8,9 +8,9 @@
  * ES module. Exports `Timeline`.
  */
 
-import { getTrackColor, NULL_ID_COLOR } from './overlays.js';
-import { someValidPoint3d, points3dNodeCount, hasPoint3d } from '../pose/pose-data.js';
-import { isCameraTracked } from './settings.js';
+import { getTrackColor, NULL_ID_COLOR } from './overlays.js?v=2dc001fe527c';
+import { someValidPoint3d, points3dNodeCount, hasPoint3d } from '../pose/pose-data.js?v=2dc001fe527c';
+import { isCameraTracked } from './settings.js?v=2dc001fe527c';
 
 /**
  * Parse a `session.frameIdentityMap` key ("frameIdx:camName:trackIdx") into
@@ -68,6 +68,13 @@ export class Timeline {
         /** @type {Function|null} */
         this._onFrameChange = options.onFrameChange || null;
 
+        /**
+         * Reads the toolbar's Tracks / Identity coloring (`state.colorByIdentity`)
+         * so track rows wear the same palette as the canvas (`getTrackColor`).
+         * @type {Function|null}
+         */
+        this._getColorByIdentity = options.getColorByIdentity || null;
+
         /** @type {Function|null} */
         this._onRangeSelect = options.onRangeSelect || null;
 
@@ -78,6 +85,9 @@ export class Timeline {
 
         /** Current frame index (0-based) */
         this._currentFrame = 0;
+
+        /** Pending `requestAnimationFrame` id of a coalesced redraw (`_requestRedraw`). */
+        this._redrawRaf = 0;
 
         /** Horizontal zoom level (1 = all frames fit in view) */
         this._zoom = 1;
@@ -231,18 +241,100 @@ export class Timeline {
 
         // --- Create canvas ---------------------------------------------------
 
+        // The wrapper's scroll height is the timeline's FULL content height,
+        // carried by this spacer; the canvas is only a BAND of it around what
+        // is visible (`_placeBand`). It used to be the full content height:
+        // 3,600 x 12,704 device pixels (~183 MB) on a 17-camera, 561-row
+        // project, every redraw rasterizing all of it although the scroll area
+        // shows about a sixth. The band is at most the visible height plus one
+        // margin above and one below, positioned in content coordinates, so
+        // native scrolling still moves it smoothly; a scroll that nears its
+        // edge re-centres it and redraws.
+        /** @type {HTMLDivElement} */
+        this._spacerEl = document.createElement('div');
+        this._spacerEl.className = 'timeline-spacer';
+        this._spacerEl.style.width = '1px';
+        this._spacerEl.style.height = '0';
+        this._spacerEl.style.pointerEvents = 'none';
+        this._trackScrollEl.appendChild(this._spacerEl);
+        // A band edge reached mid-fling shows the wrapper for a frame: make it
+        // read as timeline background rather than a gap.
+        this._trackScrollEl.style.background = this.BG_COLOR;
+
         /** @type {HTMLCanvasElement} */
         this._canvas = document.createElement('canvas');
         this._canvas.style.display = 'block';
-        this._canvas.style.width = '100%';
-        this._canvas.style.height = '100%';
+        this._canvas.style.position = 'absolute';
+        this._canvas.style.left = '0';
+        this._canvas.style.top = '0';
         this._canvas.style.cursor = 'pointer';
-        // Canvas lives inside the scroll wrapper so vertical overflow
-        // produces a scrollbar instead of clipping.
         this._trackScrollEl.appendChild(this._canvas);
+
+        /** The canvas band, in content CSS px: top and height (`_placeBand`). */
+        this._bandTop = 0;
+        this._bandHeight = 0;
+        /** Backing-store scale of the band (devicePixelRatio, clamped under the canvas size cap). */
+        this._effDpr = 1;
 
         /** @type {CanvasRenderingContext2D} */
         this._ctx = this._canvas.getContext('2d');
+
+        // --- Playhead element ------------------------------------------------
+        //
+        // The playhead is the ONLY frame-dependent thing on the timeline, so it
+        // is not painted into the canvas: it is this element, laid over the
+        // canvas inside the scroll wrapper (so it scrolls with the rows) and
+        // moved with a CSS transform. Changing frame repaints nothing.
+        //
+        // It used to be painted, and every frame step redrew the whole canvas
+        // to move it. On a 17-camera, 561-row project that canvas is
+        // 3,600 x 12,704 device pixels, and repainting it on every step of a
+        // held arrow key (30 ms key repeat) outran the GPU at a Retina scale
+        // factor: Chrome's 2D-canvas rate limiter then blocked the page for
+        // 230-450 ms every ~0.6 s, holding stepping to ~19 frames/s
+        // (`CanvasRenderingContext2D::FinalizeFrame` -> "GPU backpressure" in a
+        // trace). It also replaces the playback-only snapshot-and-blit path.
+        //
+        // Same geometry as the old painted playhead: a 2.5 px line from the top
+        // to the label area (`_positionPlayhead`), and a 10 x 6 px triangle
+        // standing on its foot. pointer-events:none, so the canvas keeps every
+        // click, drag and wheel.
+        /** @type {HTMLDivElement} */
+        this._playheadEl = document.createElement('div');
+        this._playheadEl.className = 'timeline-playhead';
+        var _phStyle = this._playheadEl.style;
+        _phStyle.position = 'absolute';
+        _phStyle.left = '0';
+        _phStyle.top = '0';
+        _phStyle.width = '0';
+        _phStyle.height = '0';
+        _phStyle.pointerEvents = 'none';
+        _phStyle.zIndex = '2';
+        _phStyle.willChange = 'transform';
+        _phStyle.display = 'none';
+        this._playheadLineEl = document.createElement('div');
+        var _plStyle = this._playheadLineEl.style;
+        _plStyle.position = 'absolute';
+        _plStyle.left = '-1.25px';
+        _plStyle.top = '0';
+        _plStyle.width = '2.5px';
+        _plStyle.height = '0';
+        _plStyle.background = this.PLAYHEAD_COLOR;
+        this._playheadHeadEl = document.createElement('div');
+        var _pfStyle = this._playheadHeadEl.style;
+        _pfStyle.position = 'absolute';
+        _pfStyle.left = '-5px';
+        _pfStyle.top = '0';
+        _pfStyle.width = '0';
+        _pfStyle.height = '0';
+        _pfStyle.borderLeft = '5px solid transparent';
+        _pfStyle.borderRight = '5px solid transparent';
+        _pfStyle.borderBottom = '6px solid ' + this.PLAYHEAD_COLOR;
+        this._playheadEl.appendChild(this._playheadLineEl);
+        this._playheadEl.appendChild(this._playheadHeadEl);
+        this._trackScrollEl.appendChild(this._playheadEl);
+        /** Line length the playhead element was last laid out for (css px), or null. */
+        this._playheadBottom = null;
 
         // --- Tooltip element -------------------------------------------------
 
@@ -337,6 +429,8 @@ export class Timeline {
         this._canvas.addEventListener('touchmove', this._onTouchMove, { passive: false });
         this._canvas.addEventListener('touchend', this._onTouchEnd);
         this._canvas.addEventListener('contextmenu', this._onContextMenu);
+        this._onTrackScroll = this._handleTrackScroll.bind(this);
+        this._trackScrollEl.addEventListener('scroll', this._onTrackScroll, { passive: true });
 
         // --- ResizeObserver --------------------------------------------------
 
@@ -353,15 +447,143 @@ export class Timeline {
     // -----------------------------------------------------------------------
 
     /**
-     * Update the current frame indicator.
-     * @param {number} frameIdx
+     * Fit the canvas to the band of content around the visible rows: from one
+     * margin above the scroll position to one margin below the visible
+     * bottom (margin = the visible height, at least 256 px), clamped to the
+     * content. Reallocates the backing store only when the band's pixel size
+     * changes (or `force`), positions the canvas at the band's top, and sets
+     * the context transform so drawing stays in CONTENT coordinates —
+     * anything outside the band is simply clipped. Returns whether the band
+     * moved or resized (the caller then redraws).
+     *
+     * Browsers cap a <canvas> backing store at ~32767px per side; setting a
+     * canvas larger fails to allocate and renders as the broken-canvas "sad
+     * face". The band is rarely that tall now, but the ratio is still scaled
+     * down to stay under the cap (CSS size unchanged; only backing resolution
+     * drops).
+     *
+     * @param {boolean} [force]
+     * @returns {boolean}
+     * @private
      */
-    setCurrentFrame(frameIdx) {
+    _placeBand(force) {
+        var w = this._cssWidth || 0, h = this._cssHeight || 0;
+        var viewH = Math.max(0, this._viewHeight || 0);
+        var margin = Math.max(viewH, 256);
+        var bandH = Math.min(h, viewH + 2 * margin);
+        var scrollTop = this._trackScrollEl ? (this._trackScrollEl.scrollTop || 0) : 0;
+        var bandTop = Math.max(0, Math.min(Math.round(scrollTop - margin), Math.max(0, h - bandH)));
+        var dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+        var MAX_CANVAS = 32000;
+        var effDpr = dpr;
+        if (w > 0 && w * effDpr > MAX_CANVAS) effDpr = MAX_CANVAS / w;
+        if (bandH > 0 && bandH * effDpr > MAX_CANVAS) effDpr = MAX_CANVAS / bandH;
+        var pw = Math.max(1, Math.floor(w * effDpr)), ph = Math.max(1, Math.floor(bandH * effDpr));
+        var resized = force || this._canvas.width !== pw || this._canvas.height !== ph || this._effDpr !== effDpr;
+        var moved = bandTop !== this._bandTop;
+        if (!resized && !moved) return false;
+        if (this._canvas.width !== pw) this._canvas.width = pw;
+        if (this._canvas.height !== ph) this._canvas.height = ph;
+        if (resized) this._canvas.style.height = bandH + 'px';
+        if (moved || resized) this._canvas.style.top = bandTop + 'px';
+        this._bandTop = bandTop;
+        this._bandHeight = bandH;
+        this._effDpr = effDpr;
+        // (Re)set every time: assigning width/height resets the context state.
+        this._ctx.setTransform(effDpr, 0, 0, effDpr, 0, -bandTop * effDpr);
+        return true;
+    }
+
+    /**
+     * The track area scrolled: if the visible rows come within half a margin
+     * of the band's edge, move the band and redraw it. Scrolling inside the
+     * band costs nothing — the canvas scrolls natively with the content.
+     * @private
+     */
+    _handleTrackScroll() {
+        var h = this._cssHeight || 0;
+        if (!h) return;
+        var viewH = Math.max(0, this._viewHeight || 0);
+        var half = Math.max(viewH, 256) / 2;
+        var top = this._trackScrollEl.scrollTop || 0;
+        var needTop = Math.max(0, top - half), needBottom = Math.min(h, top + viewH + half);
+        if (needTop >= this._bandTop && needBottom <= this._bandTop + this._bandHeight) return;
+        if (this._placeBand(false)) this.redraw();
+    }
+
+    /**
+     * Update the current frame indicator.
+     *
+     * Only the playhead depends on the current frame, and it is a positioned
+     * element rather than part of the canvas (see the constructor), so this
+     * moves it and repaints nothing — unless following the frame scrolls the
+     * visible window (zoomed in, frame off screen), which moves the track bars
+     * and markers too and so redraws the canvas.
+     *
+     * `opts.playback` (passed by `ui/rendering.js` while video plays) is
+     * accepted and no longer changes anything: playback used to need its own
+     * snapshot-and-blit fast path because every call repainted the canvas.
+     *
+     * @param {number} frameIdx
+     * @param {{playback?: boolean}} [opts]
+     */
+    setCurrentFrame(frameIdx, opts) {
         frameIdx = this._clampFrame(frameIdx);
         if (frameIdx === this._currentFrame) return;
         this._currentFrame = frameIdx;
+        var prevScroll = this._scrollFrame;
         this._ensureFrameVisible(frameIdx);
-        this.redraw();
+        if (this._scrollFrame !== prevScroll) { this.redraw(); return; }
+        this._positionPlayhead();
+    }
+
+    /**
+     * Lay the playhead element out at `_currentFrame`: a CSS transform for the
+     * position (compositor-only), and — only when the layout changed — the
+     * line's length and the triangle's top. Hidden when the frame is outside
+     * the visible window, exactly where the painted playhead used to be
+     * skipped. Called by `redraw()` (layout may have changed) and by
+     * `setCurrentFrame` (only the frame did).
+     * @private
+     */
+    _positionPlayhead() {
+        var el = this._playheadEl;
+        if (!el) return;
+        var H = this._cssHeight || 0;
+        var x = this._frameToX(this._currentFrame + 0.5);
+        if (!H || !(x >= this.LEFT_MARGIN - 2) || x > this._cssWidth - this.RIGHT_PADDING + 2) {
+            if (el.style.display !== 'none') el.style.display = 'none';
+            return;
+        }
+        // Down to the top of the label area, or the bottom of the canvas when
+        // labels are hidden — the painted playhead's rule.
+        var layout = this._layout || { labelAreaTop: H - this.LABEL_AREA_HEIGHT, showLabels: true };
+        var lineBottom = layout.showLabels ? layout.labelAreaTop : H;
+        if (this._playheadBottom !== lineBottom) {
+            this._playheadBottom = lineBottom;
+            this._playheadLineEl.style.height = lineBottom + 'px';
+            this._playheadHeadEl.style.top = (lineBottom - 6) + 'px';
+        }
+        el.style.transform = 'translateX(' + x + 'px)';
+        if (el.style.display !== 'block') el.style.display = 'block';
+    }
+
+    /**
+     * Redraw on the next animation frame, coalescing however many requests
+     * arrive before it. For a change to the timeline's data that is not itself
+     * followed by a redraw (`setFrameModified`): frame steps no longer repaint
+     * the canvas, so nothing else would show it. Synchronous where there is no
+     * `requestAnimationFrame`.
+     * @private
+     */
+    _requestRedraw() {
+        if (typeof requestAnimationFrame !== 'function') { this.redraw(); return; }
+        if (this._redrawRaf) return;
+        var self = this;
+        this._redrawRaf = requestAnimationFrame(function () {
+            self._redrawRaf = 0;
+            self.redraw();
+        });
     }
 
     /**
@@ -435,7 +657,6 @@ export class Timeline {
      * number labels at the bottom remain visible as long as possible.
      */
     resize() {
-        var dpr = window.devicePixelRatio || 1;
         var rect = this._container.getBoundingClientRect();
         var w = Math.round(rect.width);
 
@@ -457,24 +678,15 @@ export class Timeline {
         var h = Math.max(natural, availableH);
         if (h < 0) h = 0;
 
-        // Browsers cap a <canvas> backing store at ~32767px per side; setting a
-        // canvas larger fails to allocate and the element renders as the broken-
-        // canvas "sad face". A tall timeline (e.g. 8 views × their tracks/
-        // identities) makes h*dpr exceed that. Scale the backing-store device
-        // ratio down just enough to stay under the cap — CSS size (style.width/
-        // height) and scroll are unchanged, so only backing resolution drops,
-        // and only when the timeline is extremely tall.
-        var MAX_CANVAS = 32000;
-        var effDpr = dpr;
-        if (w > 0 && w * effDpr > MAX_CANVAS) effDpr = MAX_CANVAS / w;
-        if (h > 0 && h * effDpr > MAX_CANVAS) effDpr = MAX_CANVAS / h;
-        this._canvas.width = Math.max(1, Math.floor(w * effDpr));
-        this._canvas.height = Math.max(1, Math.floor(h * effDpr));
+        // The spacer carries the full content height (the wrapper's scroll
+        // height, so scrolling is unchanged); the canvas covers only a band
+        // of it (`_placeBand`).
+        this._spacerEl.style.height = h + 'px';
         this._canvas.style.width = w + 'px';
-        this._canvas.style.height = h + 'px';
-        this._ctx.setTransform(effDpr, 0, 0, effDpr, 0, 0);
         this._cssWidth = w;
         this._cssHeight = h;
+        this._viewHeight = availableH;
+        this._placeBand(true);
         this._clampScroll();
         this._scrollbarTrack.style.left = this.LEFT_MARGIN + 'px';
         this._scrollbarTrack.style.right = this.RIGHT_PADDING + 'px';
@@ -600,9 +812,10 @@ export class Timeline {
         const H = this._cssHeight;
         if (!W || !H) return;
 
-        // --- Background ---
+        // --- Background (the band; everything below draws in content
+        // coordinates and the canvas clips it to the band) ---
         ctx.fillStyle = this.BG_COLOR;
-        ctx.fillRect(0, 0, W, H);
+        ctx.fillRect(0, this._bandTop, W, this._bandHeight || H);
 
         // --- Compute layout (applies collapse priority) ---
         const layout = this._computeLayout(H);
@@ -653,8 +866,8 @@ export class Timeline {
             ctx.fillRect(x0, 0, x1 - x0, H);
         }
 
-        // --- Current frame playhead ---
-        this._drawPlayhead(ctx, H);
+        // --- Current frame playhead: an element, not paint (see the constructor) ---
+        this._positionPlayhead();
 
         // --- Scrollbar ---
         this._updateScrollbar();
@@ -664,6 +877,8 @@ export class Timeline {
      * Destroy the timeline: remove event listeners, observer, and DOM elements.
      */
     destroy() {
+        if (this._redrawRaf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(this._redrawRaf);
+        this._redrawRaf = 0;
         this._canvas.removeEventListener('mousedown', this._onMouseDown);
         this._canvas.removeEventListener('mousemove', this._onMouseMove);
         window.removeEventListener('mouseup', this._onMouseUp);
@@ -673,6 +888,7 @@ export class Timeline {
         this._canvas.removeEventListener('touchmove', this._onTouchMove);
         this._canvas.removeEventListener('touchend', this._onTouchEnd);
         this._canvas.removeEventListener('contextmenu', this._onContextMenu);
+        if (this._trackScrollEl) this._trackScrollEl.removeEventListener('scroll', this._onTrackScroll);
         this._resizeObserver.disconnect();
         // Canvas now lives inside _trackScrollEl, not directly on the
         // container. Remove the wrapper (which carries the canvas with it).
@@ -948,8 +1164,8 @@ export class Timeline {
                 var trackName = session.tracks[ct] || ('track_' + ct);
                 // The "No ID" track is the null track → same gray the ID panel
                 // uses for its "No ID" row.
-                var color = (session.isNoIdTrack && session.isNoIdTrack(ct))
-                    ? NULL_ID_COLOR : getTrackColor(ct);
+                var noIdTrack = !!(session.isNoIdTrack && session.isNoIdTrack(ct));
+                var color = noIdTrack ? NULL_ID_COLOR : getTrackColor(ct, this._colorByIdentity());
 
                 this._trackSegments.push({
                     trackIdx: ct,
@@ -959,6 +1175,7 @@ export class Timeline {
                     trackName: trackName,
                     treeRole: 'middle', // assigned in finalizeTreeRoles pass
                     _isTrack: true,     // marker for visibility filter (Block 2)
+                    _trackColored: !noIdTrack,   // recolored by recolorTracks()
                 });
                 this._trackNames.push(''); // placeholder, finalized below
             }
@@ -1154,11 +1371,12 @@ export class Timeline {
             this._trackSegments.push({
                 trackIdx: idv,
                 cameraName: CAM,
-                color: getTrackColor(idv),
+                color: getTrackColor(idv, this._colorByIdentity()),
                 segments: this._framesToSegments(idFrames[idv]),
                 trackName: name,
                 treeRole: 'middle',
                 _isIdentity: true,
+                _trackColored: true,
             });
             this._trackNames.push('');
         }
@@ -1915,9 +2133,14 @@ export class Timeline {
         const X_CONNECTOR = X_CAM_RIGHT + (maxCamW > 0 ? colGap : 0);
         const X_TRACK = X_CONNECTOR + maxConnW;
 
+        // Rows outside the canvas band would be clipped anyway; skip them.
+        const bandTop = this._bandTop || 0;
+        const bandBottom = this._bandHeight ? bandTop + this._bandHeight : Infinity;
+
         for (let t = 0; t < this._trackSegments.length; t++) {
             const track = this._trackSegments[t];
             const rowY = top + rowYPositions[t];
+            if (rowY + this.TRACK_ROW_HEIGHT < bandTop || rowY > bandBottom) continue;
             const labelY = rowY + this.TRACK_ROW_HEIGHT / 2;
 
             // Tracking-excluded: this camera is turned off in the Tracking Wizard
@@ -2313,41 +2536,6 @@ export class Timeline {
         ctx.textAlign = 'left';
     }
 
-    /**
-     * Draw the playhead (current frame indicator).
-     * @private
-     */
-    _drawPlayhead(ctx, H) {
-        const x = this._frameToX(this._currentFrame + 0.5);
-        if (x < this.LEFT_MARGIN - 2 || x > this._cssWidth - this.RIGHT_PADDING + 2) return;
-
-        // The playhead always extends down to the top of the label area
-        // (or to the bottom of the canvas when labels are hidden). It is
-        // drawn slightly bolder than the grouped-instance white bars so
-        // it stays clearly distinguishable.
-        const layout = this._layout || { labelAreaTop: H - this.LABEL_AREA_HEIGHT, showLabels: true };
-        const lineBottom = layout.showLabels ? layout.labelAreaTop : H;
-
-        ctx.strokeStyle = this.PLAYHEAD_COLOR;
-        ctx.lineWidth = 2.5;
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, lineBottom);
-        ctx.stroke();
-
-        // Triangle at bottom of the non-label area, pointing down.
-        const triH = 6;
-        const triW = 5;
-        const triY = lineBottom;
-        ctx.fillStyle = this.PLAYHEAD_COLOR;
-        ctx.beginPath();
-        ctx.moveTo(x, triY - triH);
-        ctx.lineTo(x - triW, triY);
-        ctx.lineTo(x + triW, triY);
-        ctx.closePath();
-        ctx.fill();
-    }
-
     // -----------------------------------------------------------------------
     // Coordinate conversion
     // -----------------------------------------------------------------------
@@ -2564,7 +2752,7 @@ export class Timeline {
         if (x >= this.LEFT_MARGIN && x <= this._cssWidth - this.RIGHT_PADDING) {
             const frame = this._clampFrame(this._xToFrame(x));
             const marker = this._frameMarkers.get(frame);
-            let text = 'Frame ' + (frame + 1);
+            let text = 'Frame ' + (frame + 1).toLocaleString('en-US');
             if (marker) {
                 const parts = [];
                 if (marker.hasUser) parts.push('user');
@@ -2572,7 +2760,10 @@ export class Timeline {
                 if (marker.modified) parts.push('modified');
                 if (parts.length > 0) text += ' (' + parts.join(', ') + ')';
             }
-            this._showTooltip(x, y, text);
+            // `y` is relative to the canvas BAND; the tooltip lives in the
+            // container, so place it from the pointer's client position.
+            var crect = this._container.getBoundingClientRect();
+            this._showTooltip(x, e.clientY - crect.top, text);
         } else {
             this._hideTooltip();
         }
@@ -2641,7 +2832,7 @@ export class Timeline {
                 this._currentFrame = frame;
                 this._emitFrameChange(frame);
                 if (this._onDragEnd) this._onDragEnd(frame);
-                this.redraw();
+                this._positionPlayhead();
             }
         }
     }
@@ -2763,7 +2954,7 @@ export class Timeline {
         const frame = this._clampFrame(this._xToFrame(x));
         this._currentFrame = frame;
         this._emitFrameChange(frame);
-        this.redraw();
+        this._positionPlayhead();
     }
 
     /**
@@ -2782,7 +2973,7 @@ export class Timeline {
         if (frame !== this._currentFrame) {
             this._currentFrame = frame;
             this._emitFrameChange(frame);
-            this.redraw();
+            this._positionPlayhead();
         }
     }
 
@@ -2844,15 +3035,42 @@ export class Timeline {
     setFrameModified(frameIdx, modified) {
         if (modified === undefined) modified = true;
         const marker = this._frameMarkers.get(frameIdx);
+        var changed;
         if (marker) {
+            changed = marker.modified !== modified;
             marker.modified = modified;
         } else {
+            changed = !!modified;
             this._frameMarkers.set(frameIdx, {
                 hasUser: false,
                 hasPredicted: false,
                 modified: modified,
             });
         }
+        // The white "modified" line is canvas paint. A frame step used to
+        // repaint the canvas, which is what made a flag set here appear; it no
+        // longer does (only the playhead element moves), so ask for a redraw —
+        // coalesced, since bulk operations set thousands of frames in a loop.
+        if (changed) this._requestRedraw();
+    }
+
+    /** @private Whether the canvas is coloring by Identity right now. */
+    _colorByIdentity() {
+        return !!(this._getColorByIdentity && this._getColorByIdentity());
+    }
+
+    /**
+     * Repaint the track-colored rows in the palette of the current Tracks /
+     * Identity coloring, without rebuilding them: the segments do not depend
+     * on it, and a rebuild walks every frame of every camera.
+     */
+    recolorTracks() {
+        var on = this._colorByIdentity();
+        for (var i = 0; i < this._trackSegments.length; i++) {
+            var row = this._trackSegments[i];
+            if (row._trackColored) row.color = getTrackColor(row.trackIdx, on);
+        }
+        this.redraw();
     }
 
     /**

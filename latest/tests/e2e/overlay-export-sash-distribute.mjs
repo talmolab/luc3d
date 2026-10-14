@@ -219,7 +219,10 @@ try {
     await page.waitForTimeout(400);
     const dl = page.waitForEvent('download', { timeout: 120000 });
     await page.evaluate(() => {
-        Array.from(document.querySelectorAll('button'))
+        // Scoped to the modal — see the note in overlay-export-display-settings.mjs:
+        // a document-wide /^Export/i match finds the plane panel's
+        // "Export New Calibration" first and clicks that instead.
+        Array.from(document.querySelectorAll('#ovExportOverlay button'))
             .find(b => /^Export/i.test(b.textContent.trim())).click();
     });
     const download = await dl;

@@ -20,11 +20,23 @@ Full documentation, tutorials, and user guides: (https://talmolab.github.io/luc3
 - `styles.css` — All styling
 
 ## Local Development
+The same commands work on macOS, Linux and Windows.
 ```bash
-python3 -m http.server 8080 --bind 0.0.0.0
+python3 server.py 8080
 # App: http://localhost:8080/
 # Tests: http://localhost:8080/tests/test-runner.html
 ```
+`python3 -m http.server 8080 --bind 0.0.0.0` also works, but does not support
+`--offline` (below).
+
+### Offline
+Four dependencies (three.js, mp4box, dockview-core, yaml) normally load from a
+CDN. Fetch them once, while connected, and the app runs with no network:
+```bash
+python3 scripts/offline_deps.py install
+python3 server.py --offline
+```
+
 ## Web Deployment
 
 <a href="https://luc3d.sleap.ai/" target="_blank" rel="noopener noreferrer">Access the live site here</a>
@@ -61,12 +73,16 @@ Chrome or Edge — the app uses the File System Access and WebCodecs APIs, which
 Firefox and Safari do not support.
 
 Nothing to install; all libraries load automatically (~11 MB on first visit,
-cached afterwards).
+cached afterwards). Most of them are served from this site, but four still come
+from a CDN, so a cold load needs internet — see [Offline](#offline) to remove
+that dependency.
 
 ## Tests
 Browser-based tests in `tests/test-runner.html`. Open in browser to run.
 
 ## Python Scripts
+- `scripts/offline_deps.py` — Vendor the CDN dependencies into `lib/` for offline
+  use (`install` / `check` / `bundle` / `clean`). Standard library only.
 - `scripts/json_to_slp.py` — Convert JSON export to SLEAP .slp format
 - `scripts/json_to_h5.py` — Convert JSON export to HDF5 format
-- Require: h5py, numpy
+- `json_to_*.py` require: h5py, numpy

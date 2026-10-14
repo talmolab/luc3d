@@ -205,6 +205,88 @@
         });
     });
 
+    // Firefox 157 + HEVC: the backend initializes (demuxing works) but WebCodecs
+    // cannot decode the track, so every getFrame used to fail twice before the
+    // <video> fallback. _initMediabunny now asks the track once and drops it.
+    describe('A codec WebCodecs cannot decode drops the backend up front', function () {
+        // Run `fn` with window.SleapIO's backend replaced by one whose track
+        // answers canDecode() with `canDecode` (a value, or a function to call).
+        async function withBackend(canDecode, fn) {
+            var g = (typeof window !== 'undefined') ? window : globalThis;
+            var prev = g.SleapIO;
+            var be = {
+                numFrames: 50, fps: 60, closed: 0,
+                close: function () { be.closed++; },
+                input: { getPrimaryVideoTrack: async function () {
+                    var track = { codec: 'hevc', getCodecParameterString: async function () { return 'hev1.1.6.L123.90'; } };
+                    if (canDecode !== undefined) {
+                        track.canDecode = typeof canDecode === 'function' ? canDecode : async function () { return canDecode; };
+                    }
+                    return track;
+                } },
+            };
+            g.SleapIO = { MediaBunnyVideoBackend: { fromBlob: async function () { return be; } } };
+            try { return await fn(be); }
+            finally { g.SleapIO = prev; }
+        }
+
+        it('drops the backend and records why when canDecode() is false', async function () {
+            var d = makeDecoder();
+            await withBackend(false, async function (be) {
+                await d._initMediabunny({ name: 'cam1.mp4' });
+                assertTrue(d._mbBackend === null, 'backend dropped');
+                assertEqual(be.closed, 1, 'dropped backend closed');
+                assertEqual(d._mbUnavailable && d._mbUnavailable.reason, 'codec', 'reason recorded');
+                assertEqual(d._mbUnavailable.codec, 'hevc', 'codec recorded');
+                assertEqual(d._mbUnavailable.codecString, 'hev1.1.6.L123.90', 'codec string recorded');
+                // frame count + fps are container metadata: still adopted
+                assertEqual(d.samples.length, 50, "backend's frame count adopted");
+                assertEqual(d._fps, 60, "backend's fps adopted");
+            });
+        });
+
+        it('keeps the backend when canDecode() is true', async function () {
+            var d = makeDecoder();
+            await withBackend(true, async function (be) {
+                await d._initMediabunny({ name: 'cam1.mp4' });
+                assertTrue(d._mbBackend === be, 'backend kept');
+                assertEqual(be.closed, 0, 'not closed');
+                assertTrue(d._mbUnavailable === null, 'nothing recorded');
+            });
+        });
+
+        it('keeps the backend when the question cannot be asked', async function () {
+            var d1 = makeDecoder();
+            await withBackend(undefined, async function (be) {   // no canDecode method
+                await d1._initMediabunny({ name: 'cam1.mp4' });
+                assertTrue(d1._mbBackend === be, 'no canDecode → backend kept (per-frame fallback still covers it)');
+            });
+            var d2 = makeDecoder();
+            await withBackend(async function () { throw new Error('boom'); }, async function (be) {
+                await d2._initMediabunny({ name: 'cam1.mp4' });
+                assertTrue(d2._mbBackend === be, 'canDecode throws → backend kept');
+            });
+        });
+
+        it('then steps through the <video> path without attempting a decode', async function () {
+            var d = makeDecoder();
+            await withBackend(false, async function () {
+                await d._initMediabunny({ name: 'cam1.mp4' });
+            });
+            var html5 = 0;
+            d._getFrameHTML5 = async function () { html5++; return { html5: true }; };
+            var warned = 0;
+            var origWarn = console.warn;
+            console.warn = function () { warned++; };
+            try {
+                var f = await d.getFrame(3);
+                assertTrue(f && f.html5, 'served by the <video> path');
+            } finally { console.warn = origWarn; }
+            assertEqual(html5, 1, '<video> path called once');
+            assertEqual(warned, 0, 'no "Mediabunny decode failed … falling back" warning per frame');
+        });
+    });
+
     describe('Issue #115: close() releases the mediabunny backend', function () {
         it('calls backend.close() and clears the reference', function () {
             var d = makeDecoder();

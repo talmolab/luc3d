@@ -28,8 +28,8 @@
  * This test builds a REAL H.264 video with actual B-frames (ffmpeg, `-bf 3`)
  * where each frame has a burned-in, human-readable frame number, and
  * independently extracts ground-truth PNGs for each display-order frame via
- * `ffmpeg -vsync 0` (both fixtures are checked in — see
- * tests/fixtures/bframes-test/). It decodes every frame through the REAL
+ * `ffmpeg -vsync 0` (both are checked in and regenerated together by
+ * tests/fixtures/bframes-test/make_fixture.sh). It decodes every frame through the REAL
  * MediaBunnyVideoBackend (via OnDemandVideoDecoder) and asserts each
  * decoded frame's pixel content matches its ground-truth PNG — proving
  * decode ORDER correctness, not just that mediabunny is "active."
@@ -39,12 +39,24 @@
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const PORT = Number(process.env.PORT || 8102);
 const NUM_FRAMES = 30;
+// The fixture (video + ground-truth PNGs) is generated TOGETHER by
+// tests/fixtures/bframes-test/make_fixture.sh; `bframes-test.mp4` is committed
+// via a .gitignore exception (*.mp4 is otherwise ignored — for a while only the
+// PNGs were in the repo, so this test could not run on a fresh checkout).
+// BFRAME_DIR=<repo-relative dir> runs it against another video + PNG set.
+const FIX = (process.env.BFRAME_DIR || 'tests/fixtures/bframes-test').replace(/\/+$/, '');
+if (!fs.existsSync(path.join(repoRoot, FIX, 'bframes-test.mp4'))) {
+    console.error(`  ✗ ${FIX}/bframes-test.mp4 is missing — regenerate it with ` +
+        'tests/fixtures/bframes-test/make_fixture.sh (it rewrites the PNGs too).');
+    process.exit(1);
+}
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
@@ -59,7 +71,7 @@ try {
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 20000 });
 
-    const r = await page.evaluate(async (numFrames) => {
+    const r = await page.evaluate(async ({ numFrames, FIX }) => {
         const videoMod = await import('/loading/video.js');
         const OnDemandVideoDecoder = videoMod.OnDemandVideoDecoder;
 
@@ -87,7 +99,7 @@ try {
             return sum / n;
         }
 
-        const resp = await fetch('/tests/fixtures/bframes-test/bframes-test.mp4');
+        const resp = await fetch('/' + FIX + '/bframes-test.mp4');
         const blob = await resp.blob();
         const file = new File([blob], 'bframes-test.mp4', { type: 'video/mp4' });
 
@@ -99,7 +111,7 @@ try {
             var decodedFrame = await decoder.getFrame(i);
             var decodedSig = decodedFrame ? canvasSignature(decodedFrame, 320, 240) : null;
 
-            var pngName = '/tests/fixtures/bframes-test/frame_' + String(i + 1).padStart(3, '0') + '.png';
+            var pngName = '/' + FIX + '/frame_' + String(i + 1).padStart(3, '0') + '.png';
             var img = await new Promise(function (resolve, reject) {
                 var im = new Image();
                 im.onload = function () { resolve(im); };
@@ -118,7 +130,7 @@ try {
             mbBackendActive: !!decoder._mbBackend,
             results: results,
         };
-    }, NUM_FRAMES);
+    }, { numFrames: NUM_FRAMES, FIX });
 
     check(r.mbBackendActive, 'mediabunny backend is active for this real B-frame video (not silently falling back)');
 

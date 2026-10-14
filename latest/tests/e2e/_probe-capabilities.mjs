@@ -28,6 +28,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { acquireBrowserLock } from '../../scripts/browser-lock.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -175,6 +176,8 @@ const pageUrl = (b) => `http://localhost:${PORT}/tests/e2e/${PAGE}?browser=${b}&
     (process.env.READBACK === '0' ? '&readback=0' : '') + (process.env.LOOP ? '&loop=' + process.env.LOOP : '') +
     `&media=${encodeURIComponent(JSON.stringify(VERIFY ? verifyMedia : media))}`;
 
+// a visible browser window: one such run at a time across sessions (scripts/browser-lock.mjs)
+const releaseBrowserLock = await acquireBrowserLock({ label: '_probe-capabilities' });
 for (const b of BROWSERS) {
     const app = APPS[b];
     if (!app) { console.log(`skip unknown browser ${b}`); continue; }
@@ -184,6 +187,7 @@ for (const b of BROWSERS) {
     while (!received.has(b) && Date.now() - t0 < 5 * 60 * 1000) await new Promise(r => setTimeout(r, 1000));
     console.log(received.has(b) ? `  report received in ${((Date.now() - t0) / 1000).toFixed(0)} s` : '  NO REPORT within 5 min');
 }
+await releaseBrowserLock();
 
 // ---- summary -----------------------------------------------------------------
 if (VERIFY) {

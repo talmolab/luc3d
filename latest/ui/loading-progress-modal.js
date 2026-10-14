@@ -288,7 +288,8 @@ export class LoadingProgressModal {
     _renderRow(task) {
         if (!this._listEl) return;
         // Cache rows on a private map so we don't depend on host querySelector
-        // capabilities (the Node test sandbox only supports tag-name selectors).
+        // capabilities (a since-retired Node test sandbox only supported tag-name
+        // selectors).
         if (!this._rowMap) this._rowMap = new Map();
         let row = this._rowMap.get(task.id) || null;
         if (!row && typeof this._listEl.querySelector === 'function') {
@@ -504,9 +505,9 @@ export class LoadingProgressModal {
      */
     _rebuildRootSnapshot() {
         if (!this.root) return;
-        // Skip in real browser environments. The Node test sandbox stubs
-        // `document` without a real HTMLElement constructor, so `instanceof`
-        // returns false there and the snapshot path still runs.
+        // Skip in real browser environments. Only a DOM stub without a real
+        // HTMLElement constructor (the since-retired Node test sandbox) gets
+        // past this check.
         if (typeof window !== 'undefined' &&
             typeof window.HTMLElement === 'function' &&
             this.root instanceof window.HTMLElement) {

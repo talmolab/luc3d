@@ -16,7 +16,9 @@
  * `options.reprojErrorThreshold` instead.
  */
 
-import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d } from './pose-data.js?v=cd51175df002';
+import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js?v=2dc001fe527c';
+import { jacobiEigen } from './plane-fit.js?v=2dc001fe527c';
+export { jacobiEigen };
 
 // Settings readers for `triangulateAndReproject` (see the header). Unset means
 // "every camera included, no threshold" — the same defaults as before the split.
@@ -75,127 +77,10 @@ export function matTranspose(A) {
     return T;
 }
 
-/**
- * Jacobi eigenvalue algorithm for an NxN symmetric matrix.
- *
- * Iteratively applies Givens (Jacobi) rotations to drive off-diagonal elements
- * to zero. Converges for any real symmetric matrix. Particularly efficient and
- * robust for small matrices (4x4 in our case).
- *
- * @param {number[][]} M - NxN symmetric matrix (will not be modified)
- * @param {number} [maxIter=100] - Maximum number of sweeps
- * @param {number} [tol=1e-12] - Convergence tolerance for off-diagonal norm
- * @returns {{ eigenvalues: number[], eigenvectors: number[][] }}
- *   eigenvalues[i] is the i-th eigenvalue.
- *   eigenvectors[i] is the i-th eigenvector (column i of the rotation matrix).
- */
-export function jacobiEigen(M, maxIter, tol) {
-    if (maxIter === undefined) maxIter = 100;
-    if (tol === undefined) tol = 1e-12;
-
-    const n = M.length;
-
-    // Deep copy M into A (we will modify A in-place)
-    const A = [];
-    for (let i = 0; i < n; i++) {
-        A[i] = M[i].slice();
-    }
-
-    // V accumulates the product of all rotation matrices -> eigenvectors
-    // Start with identity
-    const V = [];
-    for (let i = 0; i < n; i++) {
-        V[i] = new Array(n).fill(0);
-        V[i][i] = 1;
-    }
-
-    for (let iter = 0; iter < maxIter; iter++) {
-        // Compute off-diagonal Frobenius norm
-        let offDiagNorm = 0;
-        for (let i = 0; i < n; i++) {
-            for (let j = i + 1; j < n; j++) {
-                offDiagNorm += A[i][j] * A[i][j];
-            }
-        }
-        offDiagNorm = Math.sqrt(2 * offDiagNorm); // factor of 2 because symmetric
-
-        if (offDiagNorm < tol) {
-            break; // Converged
-        }
-
-        // Sweep: zero out each off-diagonal element (i < j)
-        for (let p = 0; p < n; p++) {
-            for (let q = p + 1; q < n; q++) {
-                if (Math.abs(A[p][q]) < tol * 1e-2) {
-                    continue; // Skip tiny elements
-                }
-
-                // Compute rotation angle
-                const app = A[p][p];
-                const aqq = A[q][q];
-                const apq = A[p][q];
-
-                let theta;
-                if (Math.abs(app - aqq) < 1e-15) {
-                    theta = Math.PI / 4;
-                } else {
-                    theta = 0.5 * Math.atan2(2 * apq, app - aqq);
-                }
-
-                const c = Math.cos(theta);
-                const s = Math.sin(theta);
-
-                // Apply rotation to A: A' = G^T A G
-                // Only rows/cols p and q change
-
-                // First, compute new values for rows p and q
-                const newRowP = new Array(n);
-                const newRowQ = new Array(n);
-                for (let j = 0; j < n; j++) {
-                    newRowP[j] = c * A[p][j] + s * A[q][j];
-                    newRowQ[j] = -s * A[p][j] + c * A[q][j];
-                }
-                for (let j = 0; j < n; j++) {
-                    A[p][j] = newRowP[j];
-                    A[q][j] = newRowQ[j];
-                }
-
-                // Now columns p and q
-                const newColP = new Array(n);
-                const newColQ = new Array(n);
-                for (let i = 0; i < n; i++) {
-                    newColP[i] = c * A[i][p] + s * A[i][q];
-                    newColQ[i] = -s * A[i][p] + c * A[i][q];
-                }
-                for (let i = 0; i < n; i++) {
-                    A[i][p] = newColP[i];
-                    A[i][q] = newColQ[i];
-                }
-
-                // Accumulate rotation into V
-                for (let i = 0; i < n; i++) {
-                    const vip = V[i][p];
-                    const viq = V[i][q];
-                    V[i][p] = c * vip + s * viq;
-                    V[i][q] = -s * vip + c * viq;
-                }
-            }
-        }
-    }
-
-    // Extract eigenvalues from diagonal of A, eigenvectors from columns of V
-    const eigenvalues = new Array(n);
-    const eigenvectors = [];
-    for (let i = 0; i < n; i++) {
-        eigenvalues[i] = A[i][i];
-        eigenvectors[i] = new Array(n);
-        for (let j = 0; j < n; j++) {
-            eigenvectors[i][j] = V[j][i]; // column i of V
-        }
-    }
-
-    return { eigenvalues: eigenvalues, eigenvectors: eigenvectors };
-}
+// `jacobiEigen` lives in ./plane-fit.js, not here: `pose/plane-data.js` needs
+// the least-squares plane fit built on it and must not import this module.
+// That file depends only on ./pose-data.js, so a worker can still load it.
+// Re-exported because every existing caller reads it from this module.
 
 /**
  * For a 4x4 symmetric matrix M, find the eigenvector corresponding to the
@@ -247,12 +132,21 @@ export function svd3x4(A) {
 // `matTranspose` + `matMul` (fresh arrays) and the generic `jacobiEigen`, which
 // allocates four arrays per Givens rotation. Profiled on HardFight_1kModels that
 // was ~5 s of an 8.6 s DLT Triangulate All and ~5 s of Track All, mostly
-// allocation and GC. The kernel below performs EXACTLY the same floating-point
-// operations in the same order — the same A entries, the same k-ordered sums
-// for M = AᵀA (starting from 0, as matMul does), the same rotation sequence,
-// angles, row-then-column update order and skip/convergence tests, and the same
-// strict-< smallest-|eigenvalue| pick — on preallocated typed arrays, so its
-// result is bit-identical to `svd3x4(A)` (pinned by tests/test-dlt-kernel.mjs).
+// allocation and GC. The kernel below builds the same A entries and the same
+// k-ordered sums for M = AᵀA (starting from 0, as matMul does), so M is
+// bit-identical to the one `svd3x4(A)` builds (`dltNormalMatrixFlat`).
+//
+// The null vector of M is then found by INVERSE ITERATION
+// (`smallestEigvec4Inverse`), not by the Jacobi sweeps `svd3x4` uses. Jacobi
+// was 23% of a whole Track All (15.1 s of 65 s on the 5-mouse, 8-camera,
+// 108,000-frame recording, ~9M solves at ~1.7 µs — atan2/cos/sin for each of
+// ~30 rotations); inverse iteration is ~0.35 µs. It is NOT bit-identical to
+// Jacobi: on seven real recordings (228,956 frames) the two agree to under
+// 1e-9 mm and Track All groups every frame identically, and inverse iteration
+// is the MORE rotation-invariant of the two (see "Triangulation must not depend
+// on where the origin is" in CLAUDE.md). Anything it cannot settle falls back
+// to the Jacobi kernel, `smallestEigvec4Flat`, which is still bit-identical to
+// `solveSmallestEigenvector4x4`. Pinned by tests/test-triangulation-kernels.mjs.
 // ---------------------------------------------------------------------------
 let _dltA = new Float64Array(8 * 4);
 const _dltM = new Float64Array(16);
@@ -260,12 +154,15 @@ const _dltJA = new Float64Array(16);
 const _dltJV = new Float64Array(16);
 const _dltRowP = new Float64Array(4);
 const _dltRowQ = new Float64Array(4);
+const _dltL = new Float64Array(16);
+const _dltY = new Float64Array(4);
 
 /**
  * Smallest-eigenvalue eigenvector of the 4x4 symmetric `M` (flat, row-major),
  * written into `out[0..3]`. Bit-identical to
  * `solveSmallestEigenvector4x4(rows(M))` — the same Jacobi sweeps
- * (maxIter 100, tol 1e-12) as `jacobiEigen`.
+ * (maxIter 100, tol 1e-12) as `jacobiEigen`. The DLT's fallback when
+ * `smallestEigvec4Inverse` cannot settle.
  */
 function smallestEigvec4Flat(M, out) {
     const maxIter = 100, tol = 1e-12, n = 4;
@@ -332,38 +229,133 @@ function smallestEigvec4Flat(M, out) {
     return out;
 }
 
+/** Most inverse-iteration steps before `smallestEigvec4Inverse` hands over to Jacobi. */
+const INVERSE_MAX_ITER = 50;
 /**
- * DLT null vector for observations already gathered as rows: `xs[r], ys[r]`
- * with projection matrix `Ps[r]`, r < nObs. Writes the homogeneous 4-vector
- * into `out`. Same A entries and M = AᵀA sums as building A + `svd3x4`.
+ * Converged when no entry of the unit vector moves by more than this in one
+ * step: ~4 roundings of a unit-length entry. Measured on realistic DLT systems
+ * (8 cameras, 2 px noise): 4–5 steps; one view ~50 px off: 5–9; a 300 px
+ * outlier or all-wild views converge slowly (their two smallest eigenvalues are
+ * close, so the null vector is barely determined) and some reach
+ * INVERSE_MAX_ITER, which is what the Jacobi fallback is for.
  */
-function dltHomogeneousFlat(xs, ys, Ps, nObs, out) {
+const INVERSE_TOL = 1e-15;
+
+/**
+ * Smallest-eigenvalue eigenvector of the 4x4 symmetric positive semi-definite
+ * `M` (flat, row-major, e.g. a DLT system's AᵀA), written into `out[0..3]` as a
+ * unit vector, by inverse iteration: Cholesky-factor `M + δI` once, then solve
+ * `(M + δI)·w = v` and normalize until `v` stops moving. The shift
+ * `δ = 1e-15·trace(M)` lets an exactly singular M (noise-free observations)
+ * factor, and changes no eigenvector — each step shrinks every other direction
+ * by `(λmin + δ) / (λ + δ)`. `M + δI` is positive definite, so every step keeps
+ * the sign of `v` and the convergence test needs no sign alignment.
+ *
+ * Falls back to the Jacobi kernel `smallestEigvec4Flat` — exactly today's
+ * answer for those inputs — when M is not finite / not positive semi-definite
+ * enough to factor, or the iteration has not settled after INVERSE_MAX_ITER
+ * steps. The start vector is fixed, so the result is deterministic.
+ */
+function smallestEigvec4Inverse(M, out) {
+    const tr = M[0] + M[5] + M[10] + M[15];
+    if (!(tr > 0) || tr === Infinity) return smallestEigvec4Flat(M, out);
+    const shift = tr * 1e-15;
+    const L = _dltL, y = _dltY;
+    for (let i = 0; i < 4; i++) {
+        for (let j = 0; j <= i; j++) {
+            let sum = M[i * 4 + j];
+            if (i === j) sum += shift;
+            for (let k = 0; k < j; k++) sum -= L[i * 4 + k] * L[j * 4 + k];
+            if (i === j) {
+                if (!(sum > 0)) return smallestEigvec4Flat(M, out);   // also catches NaN
+                L[i * 5] = Math.sqrt(sum);
+            } else {
+                L[i * 4 + j] = sum / L[j * 5];
+            }
+        }
+    }
+    let v0 = 0.5, v1 = 0.5, v2 = 0.5, v3 = 0.5;
+    for (let it = 0; it < INVERSE_MAX_ITER; it++) {
+        // L·y = v (forward), then Lᵀ·w = y (back), w written into out
+        y[0] = v0 / L[0];
+        y[1] = (v1 - L[4] * y[0]) / L[5];
+        y[2] = (v2 - L[8] * y[0] - L[9] * y[1]) / L[10];
+        y[3] = (v3 - L[12] * y[0] - L[13] * y[1] - L[14] * y[2]) / L[15];
+        out[3] = y[3] / L[15];
+        out[2] = (y[2] - L[14] * out[3]) / L[10];
+        out[1] = (y[1] - L[9] * out[2] - L[13] * out[3]) / L[5];
+        out[0] = (y[0] - L[4] * out[1] - L[8] * out[2] - L[12] * out[3]) / L[0];
+        const norm = Math.sqrt(out[0] * out[0] + out[1] * out[1] + out[2] * out[2] + out[3] * out[3]);
+        if (!(norm > 0) || norm === Infinity) return smallestEigvec4Flat(M, out);
+        const a = out[0] / norm, b = out[1] / norm, c = out[2] / norm, d = out[3] / norm;
+        const moved = Math.max(Math.abs(a - v0), Math.abs(b - v1), Math.abs(c - v2), Math.abs(d - v3));
+        v0 = a; v1 = b; v2 = c; v3 = d;
+        if (moved <= INVERSE_TOL) {
+            out[0] = v0; out[1] = v1; out[2] = v2; out[3] = v3;
+            return out;
+        }
+    }
+    return smallestEigvec4Flat(M, out);
+}
+
+/**
+ * M = AᵀA of the DLT system, into `_dltM`: the same A entries and the same
+ * k-ordered sums as `matMul(matTranspose(A), A)`, so bit-identical to the M
+ * `svd3x4(A)` builds. Only the upper triangle is summed; the lower one is a
+ * copy, which is exact — each product is the same two factors, and IEEE 754
+ * multiplication commutes. Arguments as for `dltHomogeneousFlat`.
+ */
+function dltNormalMatrixFlat(xs, ys, Ps, nObs, s, cx, cy, cz) {
+    if (s === undefined) { s = 1; cx = 0; cy = 0; cz = 0; }
     const rows = nObs * 2;
     if (_dltA.length < rows * 4) _dltA = new Float64Array(rows * 4 * 2);
     const A = _dltA;
     for (let idx = 0; idx < nObs; idx++) {
         const x = xs[idx], y = ys[idx], P = Ps[idx];
         const o1 = (2 * idx) * 4, o2 = (2 * idx + 1) * 4;
-        A[o1] = x * P[2][0] - P[0][0];
-        A[o1 + 1] = x * P[2][1] - P[0][1];
-        A[o1 + 2] = x * P[2][2] - P[0][2];
-        A[o1 + 3] = x * P[2][3] - P[0][3];
-        A[o2] = y * P[2][0] - P[1][0];
-        A[o2 + 1] = y * P[2][1] - P[1][1];
-        A[o2 + 2] = y * P[2][2] - P[1][2];
-        A[o2 + 3] = y * P[2][3] - P[1][3];
+        // Column 4 is row r of P·T's last entry:
+        //   P[r][0]*cx + P[r][1]*cy + P[r][2]*cz + P[r][3]
+        const p0w = P[0][0] * cx + P[0][1] * cy + P[0][2] * cz + P[0][3];
+        const p1w = P[1][0] * cx + P[1][1] * cy + P[1][2] * cz + P[1][3];
+        const p2w = P[2][0] * cx + P[2][1] * cy + P[2][2] * cz + P[2][3];
+        A[o1] = s * (x * P[2][0] - P[0][0]);
+        A[o1 + 1] = s * (x * P[2][1] - P[0][1]);
+        A[o1 + 2] = s * (x * P[2][2] - P[0][2]);
+        A[o1 + 3] = x * p2w - p0w;
+        A[o2] = s * (y * P[2][0] - P[1][0]);
+        A[o2 + 1] = s * (y * P[2][1] - P[1][1]);
+        A[o2 + 2] = s * (y * P[2][2] - P[1][2]);
+        A[o2 + 3] = y * p2w - p1w;
     }
     const M = _dltM;
     for (let i = 0; i < 4; i++) {
-        for (let j = 0; j < 4; j++) {
+        for (let j = i; j < 4; j++) {
             let sum = 0;
             for (let k = 0; k < rows; k++) {
                 sum += A[k * 4 + i] * A[k * 4 + j];
             }
             M[i * 4 + j] = sum;
+            M[j * 4 + i] = sum;
         }
     }
-    return smallestEigvec4Flat(M, out);
+    return M;
+}
+
+/**
+ * DLT null vector for observations already gathered as rows: `xs[r], ys[r]`
+ * with projection matrix `Ps[r]`, r < nObs. Writes the homogeneous 4-vector
+ * into `out`. M = AᵀA is bit-identical to the one `svd3x4` builds
+ * (`dltNormalMatrixFlat`); its null vector comes from `smallestEigvec4Inverse`.
+ *
+ * The unknown is a point in the NORMALIZED world frame `X = s·X' + c` (see the
+ * note on `triangulatePointDLT`), so the rows are formed from `P·T` rather than
+ * `P`. Omitting `s`/`cx`/`cy`/`cz` is the identity frame, which reproduces the
+ * raw rows exactly — multiplying by 1 and adding 0 are exact in IEEE 754 — so
+ * `__triangulationKernelsForTest`'s bit-identity of M against `svd3x4(A)`'s is
+ * unaffected.
+ */
+function dltHomogeneousFlat(xs, ys, Ps, nObs, out, s, cx, cy, cz) {
+    return smallestEigvec4Inverse(dltNormalMatrixFlat(xs, ys, Ps, nObs, s, cx, cy, cz), out);
 }
 const _dltXs = [], _dltYs = [], _dltPs = [];
 const _dltOut = new Float64Array(4);
@@ -372,6 +364,76 @@ const _dltOut = new Float64Array(4);
 // ============================================
 // Core triangulation
 // ============================================
+
+/**
+ * The camera centre of a 3x4 projection matrix, or null if it is degenerate.
+ *
+ * `P = [M | p4]` and the centre is the null vector, `C = -M^-1 p4`. Used only
+ * to build the normalizing frame below — nothing else reads it.
+ * @private
+ */
+function cameraCentreFromP(P) {
+    const a = P[0][0], b = P[0][1], c = P[0][2];
+    const d = P[1][0], e = P[1][1], f = P[1][2];
+    const g = P[2][0], h = P[2][1], i = P[2][2];
+    const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if (!isFinite(det) || Math.abs(det) < 1e-12) return null;
+    const x = P[0][3], y = P[1][3], z = P[2][3];
+    const C = [
+        -(((e * i - f * h) * x) + (-(b * i - c * h) * y) + ((b * f - c * e) * z)) / det,
+        -((-(d * i - f * g) * x) + ((a * i - c * g) * y) + (-(a * f - c * d) * z)) / det,
+        -(((d * h - e * g) * x) + (-(a * h - b * g) * y) + ((a * e - b * d) * z)) / det,
+    ];
+    return (isFinite(C[0]) && isFinite(C[1]) && isFinite(C[2])) ? C : null;
+}
+
+/**
+ * Cache of normalizing frames, keyed on the caller's `projectionMatrices`
+ * ARRAY. `triangulatePoints` passes the same array for every keypoint of a
+ * group, so this computes one 3x3 inverse per camera per group rather than per
+ * point. Weak, so a released camera set is collectable.
+ * @private
+ */
+const _dltFrameCache = new WeakMap();
+
+/**
+ * The similarity that `triangulatePointDLT` solves in: centre on the camera
+ * centroid, scale by their mean distance from it.
+ *
+ * Derived from the CAMERAS ONLY — never from the observations or the answer —
+ * which is precisely what makes it transform covariantly with the world frame
+ * and so makes the solve frame-invariant (see the note on the DLT itself).
+ * @private
+ */
+function dltNormalizingFrame(projectionMatrices) {
+    if (_dltFrameCache.has(projectionMatrices)) {
+        return _dltFrameCache.get(projectionMatrices);
+    }
+    const centres = [];
+    for (let i = 0; i < projectionMatrices.length; i++) {
+        const P = projectionMatrices[i];
+        if (!P) continue;
+        const C = cameraCentreFromP(P);
+        if (C) centres.push(C);
+    }
+    let frame = null;
+    if (centres.length > 0) {
+        let cx = 0, cy = 0, cz = 0;
+        for (let i = 0; i < centres.length; i++) {
+            cx += centres[i][0]; cy += centres[i][1]; cz += centres[i][2];
+        }
+        cx /= centres.length; cy /= centres.length; cz /= centres.length;
+        let s = 0;
+        for (let i = 0; i < centres.length; i++) {
+            s += Math.hypot(centres[i][0] - cx, centres[i][1] - cy, centres[i][2] - cz);
+        }
+        s /= centres.length;
+        if (!isFinite(s) || s < 1e-9) s = 1;          // coincident centres
+        if (isFinite(cx) && isFinite(cy) && isFinite(cz)) frame = { cx, cy, cz, s };
+    }
+    _dltFrameCache.set(projectionMatrices, frame);
+    return frame;
+}
 
 /**
  * Triangulate a single 3D point from 2+ 2D observations using DLT.
@@ -384,6 +446,38 @@ const _dltOut = new Float64Array(4);
  * The system Ax = 0 is solved via SVD (smallest right singular vector).
  * The solution x is a homogeneous 4-vector; we convert to 3D by dividing
  * by the last component.
+ *
+ * ## IT IS SOLVED IN A NORMALIZED WORLD FRAME, AND THAT IS LOAD-BEARING
+ *
+ * DLT minimizes an ALGEBRAIC error, and `‖x‖ = 1` on a HOMOGENEOUS 4-vector is
+ * not a geometric constraint: it weights the direction part `(X,Y,Z)` against
+ * the scale part `W`, so moving the world origin re-weights the cost and moves
+ * the minimizer. Solving in the raw calibration frame therefore made this
+ * function depend on WHERE THE ORIGIN HAPPENS TO BE — and
+ * `Set as New Calibration`, whose whole contract is that it re-expresses the
+ * world and changes no geometry, moved it by ~1.2 m. Measured on a real
+ * 6-camera session: identical 2D triangulated 0.26 mm apart at the median but
+ * 17 mm at p99 and metres in the tail, and because `CrossViewTracker` scores
+ * its cross-view association against exactly these points (`_retriangulate`),
+ * 21% of frames came out grouped DIFFERENTLY — three times worse by
+ * reprojection — purely from swapping the calibration file.
+ *
+ * So the system is built in a frame derived from the CAMERAS: origin at their
+ * centroid, unit = their mean distance from it (`dltNormalizingFrame`). Under
+ * a rigid change of world frame `X' = R(X - o)` the camera centres move with
+ * everything else, so that frame moves with them, and the normalized `A`
+ * differs only by `diag(Rᵀ, 1)` on its columns — an ORTHOGONAL factor, which
+ * leaves `‖x‖ = 1` alone. The null vector therefore maps exactly, and the
+ * answer is exactly the rigidly-transformed answer. Scaling is the same
+ * argument plus ordinary conditioning (Hartley).
+ *
+ * The frame must depend on the cameras ALONE. Deriving it from the
+ * observations, or from a first-pass answer, would make it depend on the very
+ * thing being solved for and the invariance argument collapses.
+ *
+ * If no camera centre can be recovered (degenerate projection matrices) this
+ * falls back to solving in the raw frame, which is the old behaviour — a worse
+ * answer is better than no answer.
  *
  * @param {(number[]|null)[]} observations - 2D points [[x1,y1], [x2,y2], ...]
  *   null entries mean the point is not visible in that camera.
@@ -404,16 +498,25 @@ export function triangulatePointDLT(observations, projectionMatrices) {
         return null;
     }
 
-    // Rows of A (2 per observation: x·P[2] − P[0], y·P[2] − P[1]) and its null
-    // vector, via the allocation-free kernel — bit-identical to building A as
-    // row arrays and calling `svd3x4(A)` (see `dltHomogeneousFlat`).
+    // The camera-derived similarity this is solved in (see the note above).
+    // Null only when no projection matrix yields a centre, in which case the
+    // frame is the identity and this is the original raw-frame solve.
+    const nf = dltNormalizingFrame(projectionMatrices);
+    const s = nf ? nf.s : 1;
+    const cx = nf ? nf.cx : 0, cy = nf ? nf.cy : 0, cz = nf ? nf.cz : 0;
+
+    // Rows of A (2 per observation: x·P[2] − P[0], y·P[2] − P[1], taken through
+    // the normalizing frame) and its null vector, via the allocation-free
+    // kernel — the same M = AᵀA as `svd3x4(A)`, solved by inverse iteration
+    // (see `dltHomogeneousFlat`).
     for (let idx = 0; idx < validIndices.length; idx++) {
         const i = validIndices[idx];
         _dltXs[idx] = observations[i][0];
         _dltYs[idx] = observations[i][1];
         _dltPs[idx] = projectionMatrices[i];
     }
-    const xHomog = dltHomogeneousFlat(_dltXs, _dltYs, _dltPs, validIndices.length, _dltOut);
+    const xHomog = dltHomogeneousFlat(
+        _dltXs, _dltYs, _dltPs, validIndices.length, _dltOut, s, cx, cy, cz);
     _dltPs.length = 0;   // don't pin projection matrices between calls
 
     // Convert from homogeneous coordinates
@@ -423,7 +526,12 @@ export function triangulatePointDLT(observations, projectionMatrices) {
         return null;
     }
 
-    return [xHomog[0] / w, xHomog[1] / w, xHomog[2] / w];
+    // Back out of the normalized frame: X = s·X' + c
+    return [
+        s * (xHomog[0] / w) + cx,
+        s * (xHomog[1] / w) + cy,
+        s * (xHomog[2] / w) + cz,
+    ];
 }
 
 /**
@@ -1061,6 +1169,29 @@ export function reprojectPointCamera(point3d, camera) {
 }
 
 /**
+ * The homogeneous depth `w` of a 3D point in a camera's projective frame:
+ * POSITIVE in front of the camera, negative behind it, ~0 on the plane through
+ * the centre of projection.
+ *
+ * `reprojectPoint` divides by `w` without checking its sign, so a point BEHIND
+ * the camera comes back as a mirrored pixel coordinate that is finite,
+ * plausible, and geometrically meaningless. Any caller reprojecting into a
+ * camera it did not choose — one the user never annotated in, e.g. filling in
+ * the views a plane was not placed on — has to gate on this. Callers
+ * reprojecting into the camera an observation CAME from do not: the point is
+ * in front by construction there.
+ *
+ * @param {number[]} point3d - [X, Y, Z]
+ * @param {Camera} camera - Needs `.projectionMatrix`.
+ * @returns {number} `w`, or NaN if the camera has no projection matrix.
+ */
+export function cameraDepth(point3d, camera) {
+    const P = camera && camera.projectionMatrix;
+    if (!P || !P[2]) return NaN;
+    return P[2][0] * point3d[0] + P[2][1] * point3d[1] + P[2][2] * point3d[2] + P[2][3];
+}
+
+/**
  * Reproject an array of 3D points into a camera's native (distorted) pixel space.
  *
  * @param {Float64Array} points3d - Flat [X,Y,Z] per keypoint (all-NaN = missing)
@@ -1207,8 +1338,8 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     // own error without ever influencing the geometry. `included[c]` gates only the
     // observation collection; reprojection/error steps still cover every camera.
     // Source: `options.includedCameras` (explicit list, for tests) else the live
-    // Camera Views setting. `typeof` guard keeps this safe under the flat-script
-    // test harness where the ES import isn't resolved.
+    // Camera Views setting, reached through a hook — unset in a worker, where
+    // every view is included (the pool passes `includedCameras` explicitly).
     const included = cameraNames.map(function (n) {
         if (options && options.includedCameras) return options.includedCameras.indexOf(n) >= 0;
         return _settingsHooks.isCameraTracked ? _settingsHooks.isCameraTracked(n) : true;
@@ -1457,7 +1588,458 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
  * agree bit for bit. Not part of the app's API.
  */
 export const __triangulationKernelsForTest = {
-    svd3x4, dltHomogeneousFlat,
+    svd3x4, dltHomogeneousFlat, dltNormalMatrixFlat, smallestEigvec4Flat, smallestEigvec4Inverse,
+    solveSmallestEigenvector4x4, matMul, matTranspose,
     projectAndJacobianCamera, projectAndJacobian,
     _projectAndJacobianCameraInto, _projectAndJacobianInto,
 };
+
+
+// ============================================
+// Cross-view tracker geometry — moved here from ./triangulation.js (2026-10-12)
+// so the tracker can run in a worker (pose/tracker-worker.js): Hungarian
+// assignment, back-projection to rays, point-to-ray distance, and the
+// fundamental matrix / epipolar error. ./triangulation.js re-exports them, so
+// every existing import keeps working. Moved verbatim (bit-identical).
+// ============================================
+
+/**
+ * Solve the assignment problem using the Hungarian algorithm.
+ * Given an n x m cost matrix, returns the optimal assignment
+ * that minimizes total cost.
+ *
+ * @param {number[][]} costMatrix - n x m cost matrix (n <= m)
+ * @returns {number[]} assignment - assignment[i] = column assigned to row i (-1 if unassigned)
+ */
+export function hungarianAlgorithm(costMatrix) {
+    var n = costMatrix.length;
+    if (n === 0) return [];
+    var m = costMatrix[0].length;
+    if (m === 0) return new Array(n).fill(-1);
+
+    // Clamp non-finite (Infinity / NaN) entries to a large finite sentinel.
+    // An all-Infinity cost matrix would otherwise leave delta/j1 unchanged
+    // inside the augmenting-path search (Infinity < Infinity === false),
+    // sending j0 to -1 and dereferencing cost[NaN] on the next iteration.
+    // Callers gate matches by a threshold (e.g., cost < 100) so spurious
+    // assignments at the sentinel value are naturally filtered out.
+    var SENTINEL = 1e15;
+    var hasFinite = false;
+    for (var ri = 0; ri < n; ri++) {
+        for (var ci = 0; ci < m; ci++) {
+            if (Number.isFinite(costMatrix[ri][ci])) { hasFinite = true; break; }
+        }
+        if (hasFinite) break;
+    }
+    if (!hasFinite) return new Array(n).fill(-1);
+
+    // Ensure n <= m (more columns than rows)
+    var transposed = false;
+    var C;
+    if (n > m) {
+        transposed = true;
+        C = [];
+        for (var j = 0; j < m; j++) {
+            C[j] = [];
+            for (var i = 0; i < n; i++) {
+                var v0 = costMatrix[i][j];
+                C[j][i] = Number.isFinite(v0) ? v0 : SENTINEL;
+            }
+        }
+        var tmp = n; n = m; m = tmp;
+    } else {
+        C = [];
+        for (var i2 = 0; i2 < n; i2++) {
+            C[i2] = new Array(m);
+            for (var c2 = 0; c2 < m; c2++) {
+                var v1 = costMatrix[i2][c2];
+                C[i2][c2] = Number.isFinite(v1) ? v1 : SENTINEL;
+            }
+        }
+    }
+
+    // Pad to square if needed
+    var sz = Math.max(n, m);
+    var cost = [];
+    for (var r = 0; r < sz; r++) {
+        cost[r] = [];
+        for (var c = 0; c < sz; c++) {
+            cost[r][c] = (r < n && c < m) ? C[r][c] : 0;
+        }
+    }
+
+    // u[i] and v[j] are potentials
+    var u = new Array(sz + 1).fill(0);
+    var v = new Array(sz + 1).fill(0);
+    var p = new Array(sz + 1).fill(0);   // p[j] = row assigned to col j
+    var way = new Array(sz + 1).fill(0); // way[j] = previous col in path
+
+    for (var i1 = 1; i1 <= sz; i1++) {
+        p[0] = i1;
+        var j0 = 0;
+        var minv = new Array(sz + 1).fill(Infinity);
+        var used = new Array(sz + 1).fill(false);
+
+        do {
+            used[j0] = true;
+            var i0 = p[j0];
+            var delta = Infinity;
+            var j1 = -1;
+
+            for (var j = 1; j <= sz; j++) {
+                if (used[j]) continue;
+                var cur = cost[i0 - 1][j - 1] - u[i0] - v[j];
+                if (cur < minv[j]) {
+                    minv[j] = cur;
+                    way[j] = j0;
+                }
+                if (minv[j] < delta) {
+                    delta = minv[j];
+                    j1 = j;
+                }
+            }
+
+            for (var j2 = 0; j2 <= sz; j2++) {
+                if (used[j2]) {
+                    u[p[j2]] += delta;
+                    v[j2] -= delta;
+                } else {
+                    minv[j2] -= delta;
+                }
+            }
+
+            j0 = j1;
+        } while (p[j0] !== 0);
+
+        do {
+            var j3 = way[j0];
+            p[j0] = p[j3];
+            j0 = j3;
+        } while (j0);
+    }
+
+    // Extract assignment
+    var result;
+    if (!transposed) {
+        result = new Array(n).fill(-1);
+        for (var j4 = 1; j4 <= sz; j4++) {
+            if (p[j4] > 0 && p[j4] <= n && j4 <= m) {
+                result[p[j4] - 1] = j4 - 1;
+            }
+        }
+    } else {
+        result = new Array(costMatrix.length).fill(-1);
+        for (var j5 = 1; j5 <= sz; j5++) {
+            if (p[j5] > 0 && p[j5] <= n && j5 <= m) {
+                // transposed: row in C = col in original, col in C = row in original
+                var origRow = j5 - 1;
+                var origCol = p[j5] - 1;
+                if (origRow < costMatrix.length && origCol < costMatrix[0].length) {
+                    result[origRow] = origCol;
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
+/**
+ * Compute camera center from a 3x4 projection matrix P.
+ * The camera center is the null space of P: P * C = 0.
+ * We find it via the smallest eigenvector of P^T * P.
+ *
+ * @param {number[][]} P - 3x4 projection matrix
+ * @returns {number[]} [X, Y, Z] camera center in world coordinates
+ */
+export function cameraCenter(P) {
+    var hit = _pGeometry(P);
+    if (hit.center) return hit.center.slice();
+    var PT = matTranspose(P);      // 4x3
+    var PTP = matMul(PT, P);       // 4x4 symmetric
+    var v = solveSmallestEigenvector4x4(PTP);
+    var w = v[3];
+    hit.center = [v[0] / w, v[1] / w, v[2] / w];
+    return hit.center.slice();
+}
+
+// Per-projection-matrix memo for the geometry `cameraCenter` and
+// `backProjectToRay(s)` derive from P alone (its null vector, and the
+// pseudo-inverse Pᵀ(PPᵀ)⁻¹). Track All asks for both once per detection per
+// frame, and recomputing them — a 4x4 Jacobi eigen-solve plus four matMuls —
+// was ~6.8 s of a 17 s run on HardFight_1kModels. Keyed by the P array itself
+// (`Camera.projectionMatrix` is cached per camera) and VALIDATED on every hit
+// against a snapshot of its 12 entries, so a P mutated in place recomputes
+// rather than returning stale geometry. The cached values are produced by the
+// exact same code as before, so results are bit-identical.
+var _pGeomCache = new WeakMap();
+function _pGeometry(P) {
+    var e = _pGeomCache.get(P);
+    if (e) {
+        var snap = e.snap, same = true;
+        for (var r = 0, k = 0; r < 3 && same; r++) {
+            for (var c = 0; c < 4; c++, k++) {
+                if (!Object.is(P[r][c], snap[k])) { same = false; break; }
+            }
+        }
+        if (same) return e;
+    }
+    var snapNew = new Float64Array(12);
+    for (var r2 = 0, k2 = 0; r2 < 3; r2++) for (var c2 = 0; c2 < 4; c2++, k2++) snapNew[k2] = P[r2][c2];
+    e = { snap: snapNew, center: null, pinv: null };
+    _pGeomCache.set(P, e);
+    return e;
+}
+
+/** Pseudo-inverse Pᵀ(PPᵀ)⁻¹ (4x3) of P, memoized per P. Read-only. */
+function _pseudoInverse(P) {
+    var e = _pGeometry(P);
+    if (e.pinv) return e.pinv;
+    var PT = matTranspose(P);
+    var PPT = matMul(P, PT);
+    var PPTinv = invert3x3(PPT);
+    e.pinv = matMul(PT, PPTinv);
+    return e.pinv;
+}
+
+/**
+ * Back-project a 2D point to a 3D ray using a 3x4 projection matrix.
+ *
+ * @param {number[]} point2d - [u, v] pixel coordinates
+ * @param {number[][]} P - 3x4 projection matrix
+ * @returns {{origin: number[], direction: number[]}} Ray origin and unit direction
+ */
+export function backProjectToRay(point2d, P) {
+    var origin = cameraCenter(P);
+
+    // Pseudo-inverse pinv(P) = P^T * inv(P * P^T), memoized per P.
+    var pinvP = _pseudoInverse(P); // 4x3
+
+    // Back-project: homogeneous 3D point = pinv(P) * [u, v, 1]^T
+    var u = point2d[0], v = point2d[1];
+    var hx = pinvP[0][0] * u + pinvP[0][1] * v + pinvP[0][2];
+    var hy = pinvP[1][0] * u + pinvP[1][1] * v + pinvP[1][2];
+    var hz = pinvP[2][0] * u + pinvP[2][1] * v + pinvP[2][2];
+    var hw = pinvP[3][0] * u + pinvP[3][1] * v + pinvP[3][2];
+
+    // Dehomogenize
+    var px = hx / hw;
+    var py = hy / hw;
+    var pz = hz / hw;
+
+    // Direction = backprojected point - origin, normalized
+    var dx = px - origin[0];
+    var dy = py - origin[1];
+    var dz = pz - origin[2];
+    var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (len < 1e-15) {
+        return { origin: origin, direction: [0, 0, 1] };
+    }
+
+    return { origin: origin, direction: [dx / len, dy / len, dz / len] };
+}
+
+/**
+ * Batch back-project multiple 2D points to 3D rays.
+ * Computes camera center and pseudo-inverse once for efficiency.
+ *
+ * @param {(number[]|null)[]} points2d - Array of [u,v] or null
+ * @param {number[][]} P - 3x4 projection matrix
+ * @returns {{origin: number[], directions: (number[]|null)[]}} Ray origin and directions
+ */
+export function backProjectToRays(points2d, P) {
+    var origin = cameraCenter(P);
+
+    // Pseudo-inverse, memoized per P (see `_pGeometry`).
+    var pinvP = _pseudoInverse(P);
+
+    var directions = [];
+    for (var i = 0; i < points2d.length; i++) {
+        if (points2d[i] == null) {
+            directions.push(null);
+            continue;
+        }
+        var u = points2d[i][0], v = points2d[i][1];
+        var hx = pinvP[0][0] * u + pinvP[0][1] * v + pinvP[0][2];
+        var hy = pinvP[1][0] * u + pinvP[1][1] * v + pinvP[1][2];
+        var hz = pinvP[2][0] * u + pinvP[2][1] * v + pinvP[2][2];
+        var hw = pinvP[3][0] * u + pinvP[3][1] * v + pinvP[3][2];
+
+        var px = hx / hw;
+        var py = hy / hw;
+        var pz = hz / hw;
+
+        var dx = px - origin[0];
+        var dy = py - origin[1];
+        var dz = pz - origin[2];
+        var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (len < 1e-15) {
+            directions.push([0, 0, 1]);
+        } else {
+            directions.push([dx / len, dy / len, dz / len]);
+        }
+    }
+
+    return { origin: origin, directions: directions };
+}
+
+/**
+ * Compute perpendicular distance from a 3D point to a ray.
+ *
+ * @param {number[]} point - [x, y, z]
+ * @param {number[]} rayOrigin - [x, y, z]
+ * @param {number[]} rayDir - [dx, dy, dz] unit direction
+ * @returns {number} perpendicular distance
+ */
+export function pointToRayDistance(point, rayOrigin, rayDir) {
+    // Vector from ray origin to point
+    var vx = point[0] - rayOrigin[0];
+    var vy = point[1] - rayOrigin[1];
+    var vz = point[2] - rayOrigin[2];
+
+    // Project onto ray direction
+    var proj = vx * rayDir[0] + vy * rayDir[1] + vz * rayDir[2];
+
+    // Closest point on ray
+    var cx = rayOrigin[0] + proj * rayDir[0];
+    var cy = rayOrigin[1] + proj * rayDir[1];
+    var cz = rayOrigin[2] + proj * rayDir[2];
+
+    // Distance
+    var dx = point[0] - cx;
+    var dy = point[1] - cy;
+    var dz = point[2] - cz;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+/**
+ * Batch compute point-to-ray distances for arrays of points and directions.
+ * Handles null entries in either array.
+ *
+ * @param {Float64Array} points - Flat [x,y,z] per node (all-NaN = missing)
+ * @param {number[]} rayOrigin - [x, y, z]
+ * @param {(number[]|null)[]} rayDirs - Array of [dx,dy,dz] or null
+ * @returns {(number|null)[]} distances, null where either input is missing
+ */
+export function pointsToRayDistances(points, rayOrigin, rayDirs) {
+    var results = [];
+    var len = Math.min(points3dNodeCount(points), rayDirs.length);
+    var p = [0, 0, 0];
+    for (var i = 0; i < len; i++) {
+        if (rayDirs[i] == null || !readPoint3d(points, i, p)) {
+            results.push(null);
+        } else {
+            results.push(pointToRayDistance(p, rayOrigin, rayDirs[i]));
+        }
+    }
+    return results;
+}
+
+/**
+ * Compute the fundamental matrix from cam1 to cam2.
+ * F = K2^{-T} * [t_rel]_x * R_rel * K1^{-1}
+ *
+ * This matches sleap-3d's compute_fundamental_matrix with normalized_points=False.
+ *
+ * @param {Camera} cam1 - First camera
+ * @param {Camera} cam2 - Second camera
+ * @returns {number[][]} 3x3 fundamental matrix
+ */
+export function computeFundamentalMatrix(cam1, cam2) {
+    var R1 = cam1.rotationMatrix;
+    var R2 = cam2.rotationMatrix;
+    var t1 = cam1.tvec;
+    var t2 = cam2.tvec;
+
+    // Relative rotation: R_rel = R2 * R1^T
+    var R1T = matTranspose(R1);  // 3x3
+    var R_rel = mat3x3Multiply(R2, R1T);
+
+    // Relative translation: t_rel = t2 - R_rel * t1
+    var Rt1 = [
+        R_rel[0][0] * t1[0] + R_rel[0][1] * t1[1] + R_rel[0][2] * t1[2],
+        R_rel[1][0] * t1[0] + R_rel[1][1] * t1[1] + R_rel[1][2] * t1[2],
+        R_rel[2][0] * t1[0] + R_rel[2][1] * t1[1] + R_rel[2][2] * t1[2]
+    ];
+    var t_rel = [t2[0] - Rt1[0], t2[1] - Rt1[1], t2[2] - Rt1[2]];
+
+    // Skew-symmetric matrix [t_rel]_x
+    var tx = [
+        [0, -t_rel[2], t_rel[1]],
+        [t_rel[2], 0, -t_rel[0]],
+        [-t_rel[1], t_rel[0], 0]
+    ];
+
+    // Essential matrix: E = [t_rel]_x * R_rel
+    var E = mat3x3Multiply(tx, R_rel);
+
+    // Fundamental matrix: F = K2^{-T} * E * K1^{-1}
+    var K1inv = invert3x3(cam1.matrix);
+    var K2inv = invert3x3(cam2.matrix);
+    var K2invT = matTranspose(K2inv);
+
+    var temp = mat3x3Multiply(E, K1inv);
+    var F = mat3x3Multiply(K2invT, temp);
+
+    return F;
+}
+
+/**
+ * Compute mean epipolar distance for a pair of keypoint arrays.
+ * For each valid keypoint pair, computes the epiline from point1 using F,
+ * then measures the distance of point2 to that epiline.
+ *
+ * @param {(number[]|null)[]} points1 - Keypoints in camera 1 (array of [x,y] or null)
+ * @param {(number[]|null)[]} points2 - Keypoints in camera 2 (array of [x,y] or null)
+ * @param {number[][]} F - 3x3 fundamental matrix (cam1 -> cam2)
+ * @returns {number} Mean epipolar distance, or Infinity if no valid pairs
+ */
+export function epipolarError(points1, points2, F) {
+    var totalError = 0;
+    var count = 0;
+    var len = Math.min(points1.length, points2.length);
+
+    for (var i = 0; i < len; i++) {
+        if (points1[i] == null || points2[i] == null) continue;
+
+        var x1 = points1[i][0], y1 = points1[i][1];
+        var x2 = points2[i][0], y2 = points2[i][1];
+
+        // Epiline in camera 2: l = F * [x1, y1, 1]^T
+        var la = F[0][0] * x1 + F[0][1] * y1 + F[0][2];
+        var lb = F[1][0] * x1 + F[1][1] * y1 + F[1][2];
+        var lc = F[2][0] * x1 + F[2][1] * y1 + F[2][2];
+
+        // Distance of point2 to epiline: |x2^T * l| / ||l[:2]||
+        var num = Math.abs(x2 * la + y2 * lb + lc);
+        var den = Math.sqrt(la * la + lb * lb);
+        if (den > 1e-15) {
+            totalError += num / den;
+            count++;
+        }
+    }
+
+    return count > 0 ? totalError / count : Infinity;
+}
+
+/**
+ * Compute an n x m cost matrix of epipolar errors between two arrays of
+ * keypoint arrays (detections).
+ *
+ * @param {(number[]|null)[][]} detections1 - Array of n keypoint arrays from camera 1
+ * @param {(number[]|null)[][]} detections2 - Array of m keypoint arrays from camera 2
+ * @param {number[][]} F - 3x3 fundamental matrix (cam1 -> cam2)
+ * @returns {number[][]} n x m cost matrix
+ */
+export function epipolarErrorMatrix(detections1, detections2, F) {
+    var n = detections1.length;
+    var m = detections2.length;
+    var matrix = [];
+    for (var i = 0; i < n; i++) {
+        matrix[i] = [];
+        for (var j = 0; j < m; j++) {
+            matrix[i][j] = epipolarError(detections1[i], detections2[j], F);
+        }
+    }
+    return matrix;
+}

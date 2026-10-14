@@ -7,53 +7,57 @@
 import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
-    asPoints3d, points3dNodeCount, someValidPoint3d,
-} from '../pose/pose-data.js';
+    asPoints3d, points3dNodeCount, someValidPoint3d, lazyPlaceholderXY, pooledPoints3d,
+} from '../pose/pose-data.js?v=2dc001fe527c';
 import {
     reprojectPointsCamera, reprojectPoints, computeReprojectionErrors,
     storeReprojectedInstances, getInstanceGroupsForFrame,
-} from '../pose/triangulation.js';
+} from '../pose/triangulation.js?v=2dc001fe527c';
 import {
     parseSlpH5, parseSlpViaSleapIO, instanceMatchesPoints, parsePoints3dH5, pickFiles,
-} from './file-io.js';
+} from './file-io.js?v=2dc001fe527c';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames,
-} from './slp-merge.js';
-import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js';
+} from './slp-merge.js?v=2dc001fe527c';
+import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=2dc001fe527c';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController,
-} from '../ui/app-state.js';
+} from '../ui/app-state.js?v=2dc001fe527c';
 import {
     autoAssignVideosToCameras, forceVideoSelection, forceVideoSelectionWithFolder,
     showParentDirMatchSummary, createViewForVideoFile, updateTotalFrames,
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
-} from '../loading/session-loader.js';
-import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js';
+} from '../loading/session-loader.js?v=2dc001fe527c';
+import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=2dc001fe527c';
+import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=2dc001fe527c';
 import {
     showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
-} from './save-load.js';
+} from './save-load.js?v=2dc001fe527c';
 
 // Circular import — these are still defined in app.js for now. They are only
 // invoked inside function bodies, never at module-init time, so live-binding
 // lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=2dc001fe527c';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=2dc001fe527c';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=2dc001fe527c';
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js';
+import { setup3DViewport } from '../pose/initialization.js?v=2dc001fe527c';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
-import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js';
+import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=2dc001fe527c';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=2dc001fe527c';
 // Block 1 (Prompt 4): keep timeline._uploadedCameras in sync after SLP
 // load so the gutter filters to the cameras that actually have video
 // assignments rather than every calibration camera.
-import { recomputeUploadedCameras } from '../loading/session-loader.js';
+import { recomputeUploadedCameras } from '../loading/session-loader.js?v=2dc001fe527c';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
-import { readVisibilityMetadata } from './visibility-metadata.js';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=2dc001fe527c';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=2dc001fe527c';
+import { readVisibilityMetadata } from './visibility-metadata.js?v=2dc001fe527c';
+import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=2dc001fe527c';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -218,6 +222,9 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
                 if (_dupCamInsts && _dupCamInsts.length > 0) {
                     for (var _dpi = 0; _dpi < _dupCamInsts.length; _dpi++) {
                         if (instanceMatchesPoints(_dupCamInsts[_dpi], points)) {
+                            // The group dict has no per-node scores; the raw
+                            // row it replaces does.
+                            inst.adoptPointScoresFrom(_dupCamInsts[_dpi]);
                             _dupCamInsts.splice(_dpi, 1);
                             break;
                         }
@@ -233,7 +240,7 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
             // Restore 3D points
             var _igPts = asPoints3d(igDict.points);
             if (points3dNodeCount(_igPts) > 0) {
-                group.points3d = _igPts;
+                group.points3d = pooledPoints3d(_igPts);
                 restoredWith3d++;
                 // Which solver produced this 3D (persisted in metadata.lucid;
                 // absent = DLT). Without it a reopened project has BA 3D with an
@@ -401,6 +408,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
 
                 var inst = new Instance(points, instTrackIdx, instType, instScore);
                 inst.setOccludedFrom(occluded);
+                if (instType === 'predicted' && _isPred && typedInst._score) inst.setPointScores(typedInst._score);
                 inst.modified = instMeta.modified || false;
                 if (instMeta.nulledNodes) {
                     inst.nulledNodes = new Set(instMeta.nulledNodes);
@@ -429,7 +437,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
             var i3d = typedIG.instance3d;
             var _i3dPts = asPoints3d(i3d && i3d.points);
             if (points3dNodeCount(_i3dPts) > 0) {
-                group.points3d = _i3dPts;
+                group.points3d = pooledPoints3d(_i3dPts);
                 restoredWith3d++;
                 // Which solver produced this 3D (persisted in metadata.lucid;
                 // absent = DLT). Without it a reopened project has BA 3D with an
@@ -536,12 +544,14 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
                 // each member's 2D here materializes the lazy store frame-by-frame
                 // (~324k times on a real cage5 project) and degrades to hours. The
                 // 2D is instead hydrated on scrub from the lazy store by
-                // `_rawInstIndex` (see `hydrateLazyFrameGroups` in triangulation.js).
-                // A null-filled placeholder keeps the Instance valid until then; the
-                // constructor turns it into a NaN-filled Float64Array of the right
-                // node count (and an all-clear occlusion set), so nothing else is
-                // needed to make the placeholder node-aligned.
-                var points = new Array(numNodes).fill(null);
+                // `_rawInstIndex` (see `finalizeLazyFrameGroup` in triangulation.js).
+                // The placeholder keeps the Instance valid and node-aligned until
+                // then: ONE NaN-filled Float64Array per node count, SHARED by every
+                // placeholder member (`lazyPlaceholderXY`) — the constructor adopts
+                // it by reference. A private buffer each was ~335 B and one
+                // ArrayBuffer per member (2.66M members on the real cage5 project);
+                // `Instance._ownXY` copies it before any in-place write.
+                var points = lazyPlaceholderXY(numNodes);
 
                 var instMeta = instanceMetaMap[igCamName] || {};
                 var _isPred = PredI ? (typedInst instanceof PredI)
@@ -573,7 +583,13 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
             var i3d = typedIG.instance3d;
             var _i3dPts = asPoints3d(i3d && i3d.points);
             if (points3dNodeCount(_i3dPts) > 0) {
-                group.points3d = _i3dPts; // REUSE — asPoints3d passes a flat array through uncopied
+                // Copied into the slab pool (pose-data.js `pooledPoints3d`): the
+                // reader hands one compacted Float64Array per group (#189), i.e.
+                // one ArrayBuffer per group — 539,545 on an 8-camera, 108,000-frame
+                // project, each swept by every full GC. The copy is ~360 B per
+                // group of backing store (outside V8's pointer cage), and the
+                // reader's array is released with its typed group.
+                group.points3d = pooledPoints3d(_i3dPts);
                 restoredWith3d++;
                 // Which solver produced this 3D (persisted in metadata.lucid;
                 // absent = DLT). Without it a reopened project has BA 3D with an
@@ -613,6 +629,11 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
  * share ONE implementation — previously the session-folder path rebuilt the
  * session flat (raw poses only) and silently dropped grouping, occlusion
  * (`nulledNodes`), and identities from the project SLP. Keep them unified.
+ *
+ * It does NOT read the Visibility or Define Planes keys of `metadata.lucid`:
+ * each caller does that itself, with `readVisibilityMetadata` /
+ * `readPlaneMetadata`, because only the caller knows whether the load replaces
+ * the project or adds a session to it.
  *
  * @param {Session} session - session whose FrameGroups already hold pass-1 raw instances
  * @param {Object} slpData - parsed SLP data (from parseSlpViaSleapIO or parseSlpH5)
@@ -708,7 +729,7 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
             }
             ulFgCount++;
             if (ulFgCount % BATCH === 0) {
-                onProgress('Preparing unlinked instances (' + ulFgCount + '/' + session.frameGroups.size + ')...');
+                onProgress('Preparing unlinked instances (' + ulFgCount.toLocaleString('en-US') + '/' + session.frameGroups.size.toLocaleString('en-US') + ')...');
                 await new Promise(function (r) { setTimeout(r, 0); });
             }
         }
@@ -857,6 +878,11 @@ export async function handleLoadSlpFile(slpFile) {
         state.views = [];
         state.videoFiles = [];
         state.sessions = [];
+        // Plane state is project-scoped and lives on a module singleton, so
+        // it does NOT go away with `state.sessions`. `readPlaneMetadata`
+        // only restores into an EMPTY model, so without this the previous
+        // project's planes would survive and the new one's be dropped.
+        resetPlaneState();
         // Reset decoder pool + cold reserve on new project load. Old decoders
         // point at the previous project's files and must be released to avoid
         // dangling mp4box references / leaked file handles.
@@ -1034,6 +1060,9 @@ export async function handleLoadSlpFile(slpFile) {
         var session = new Session(cameras, sessSkeleton, sessTracks);
         session.name = sessName;
         readVisibilityMetadata(session, earlyVisibility);
+        // Define Planes state — pool/planes/origin from the first session that
+        // carries them, this session's per-view 2D onto this session.
+        readPlaneMetadata(session, earlyVisibility);
 
         // Populate FrameGroups from worker's frames array (yield every 20K for UI)
         var BATCH = 20000;
@@ -1070,6 +1099,7 @@ export async function handleLoadSlpFile(slpFile) {
                     instData.score || 0
                 );
                 if (instData.occluded) inst.setOccludedFrom(instData.occluded);
+                if (instData.pointScores) inst.setPointScores(instData.pointScores);
                 // Rebuild the occlusion flag for a user label whose occluded
                 // node was saved as finite-xy + not-visible. Grouped instances
                 // get their explicit nulledNodes back from metadata below (and
@@ -1081,7 +1111,7 @@ export async function handleLoadSlpFile(slpFile) {
                 fg.addInstance(camName, inst);
             }
             if (fi > 0 && fi % BATCH === 0) {
-                showLoading('Building session (' + fi + '/' + totalFrames + ')...');
+                showLoading('Building session (' + fi.toLocaleString('en-US') + '/' + totalFrames.toLocaleString('en-US') + ')...');
                 await new Promise(function (r) { setTimeout(r, 0); });
             }
         }
@@ -1210,7 +1240,7 @@ export async function handleLoadSlpFile(slpFile) {
             // --- Embedded videos: use frame-worker for on-demand extraction ---
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=2dc001fe527c', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
@@ -1357,6 +1387,44 @@ export async function handleLoadSlpFile(slpFile) {
                 });
                 var cameraNames = cameras.map(function (c) { return c.name; });
 
+                // The camera a picked video belongs to: parent directory, then
+                // exact stem, then the filename the SLP references for that
+                // camera. Hoisted out of the post-load assignment loop so the
+                // de-prioritization below can group by the SAME answer the
+                // assignment will give — matching twice with two different
+                // rules is how a video gets dropped for one camera and bound to
+                // another.
+                var slpMatchCam = function (vFile) {
+                    var mStem = vFile.name.replace(/\.[^.]+$/, '');
+                    var mRel = vFile.webkitRelativePath || vFile.name;
+                    var mParts = mRel.split('/');
+                    var mParentDir = mParts.length >= 2 ? mParts[mParts.length - 2] : null;
+
+                    if (mParentDir && cameraNames.indexOf(mParentDir) >= 0) return mParentDir;
+                    if (cameraNames.indexOf(mStem) >= 0) return mStem;
+                    for (var cmi in videoIdxToCameraName) {
+                        var camN = videoIdxToCameraName[cmi];
+                        var vMeta = slpData.videos[cmi];
+                        if (!vMeta) continue;
+                        var refPath = vMeta.sourceFilename || vMeta.filename || '';
+                        if (refPath === '.') continue;
+                        var refBase = refPath.replace(/^.*[\/\\]/, '').replace(/\.[^.]+$/, '').toLowerCase();
+                        if (mStem.toLowerCase() === refBase || mStem.toLowerCase().indexOf(refBase) >= 0) return camN;
+                    }
+                    return null;
+                };
+
+                // A `-calibration` stem loses to a plainly-named video of the
+                // SAME camera, but still loads when it is that camera's only
+                // candidate (#199). Applied before the decoders open so a
+                // superseded clip is never decoded.
+                var _slpPref = preferNonCalibrationVideos(vidFiles, slpMatchCam);
+                if (_slpPref.dropped.length) {
+                    console.log('[load-slp] preferring plainly-named videos over calibration-named ' +
+                        _slpPref.dropped.map(function (f) { return '"' + f.name + '"'; }).join(', '));
+                    vidFiles = _slpPref.kept;
+                }
+
                 var slpModal = getLoadingProgressModal({ title: 'Importing project' });
                 slpModal.show();
 
@@ -1413,35 +1481,9 @@ export async function handleLoadSlpFile(slpFile) {
                     var vFile = slpEntry.file;
                     var stem = vFile.name.replace(/\.[^.]+$/, '');
 
-                    // Match to camera by parent directory name or filename
-                    var assignedCam = null;
-                    var relPath = vFile.webkitRelativePath || vFile.name;
-                    var pathParts = relPath.split('/');
-                    var parentDir = pathParts.length >= 2 ? pathParts[pathParts.length - 2] : null;
-
-                    // Try parent directory name → camera name
-                    if (parentDir && cameraNames.indexOf(parentDir) >= 0) {
-                        assignedCam = parentDir;
-                    }
-                    // Try video stem → camera name
-                    if (!assignedCam && cameraNames.indexOf(stem) >= 0) {
-                        assignedCam = stem;
-                    }
-                    // Try matching against SLP video references
-                    if (!assignedCam) {
-                        for (var cmi in videoIdxToCameraName) {
-                            var camN = videoIdxToCameraName[cmi];
-                            var vMeta = slpData.videos[cmi];
-                            if (!vMeta) continue;
-                            var refPath = vMeta.sourceFilename || vMeta.filename || '';
-                            if (refPath === '.') continue;
-                            var refBase = refPath.replace(/^.*[\/\\]/, '').replace(/\.[^.]+$/, '').toLowerCase();
-                            if (stem.toLowerCase() === refBase || stem.toLowerCase().indexOf(refBase) >= 0) {
-                                assignedCam = camN;
-                                break;
-                            }
-                        }
-                    }
+                    // Match to camera by parent directory name or filename —
+                    // the same answer the de-prioritization above grouped by.
+                    var assignedCam = slpMatchCam(vFile);
 
                     state.videoFiles.push({
                         file: vFile, name: stem, decoder: slpEntry.decoder,
@@ -1613,14 +1655,20 @@ export async function handleLoadSlpFile(slpFile) {
         clearDirty();
         hideLoading();
         var statusParts = [state.sessions.length + ' session(s)', skeleton.nodes.length + ' nodes'];
-        if (state.session) statusParts.push(state.session.numFrames + ' labeled frames');
+        if (state.session) statusParts.push(state.session.numFrames.toLocaleString('en-US') + ' labeled frames');
         if (state.views.length > 0) statusParts.push(state.views.length + ' views');
         setStatus('SLP loaded (' + statusParts.join(', ') + ')', 'success');
 
         // One skeleton per project: a multi-session .slp otherwise carries a
-        // per-session skeleton each. Prompt for a single unifying skeleton file.
+        // per-session skeleton each. Prompt for a single unifying skeleton file,
+        // and only once that is answered check whether the sessions' embedded
+        // calibrations agree — a `.slp` carries one per session, so merging two
+        // separately-calibrated recordings lands here too. See
+        // `ui/calibration-notice.js`.
         if (state.sessions.length > 1) {
-            promptImportSkeletonForAllSessions();
+            promptImportSkeletonForAllSessions(function () {
+                noteSessionCalibrationDivergence(state.sessions);
+            });
         }
     } catch (err) {
         console.error('[load-slp] FATAL:', err);
@@ -1803,7 +1851,7 @@ export async function handleAddSlp() {
         if (hasEmbedded) {
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=2dc001fe527c', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
@@ -2035,7 +2083,7 @@ export async function handleAddSlp() {
         hideLoading();
         var dockPanelCount = paneManager.api ? paneManager.api.panels.length : 0;
         console.log('[add-slp] Done. Dock panels: ' + dockPanelCount + ', Views: ' + state.views.length);
-        setStatus('Added SLP: ' + cameras.length + ' camera(s), ' + affectedFrames.length + ' frames merged. Panels: ' + dockPanelCount, 'success');
+        setStatus('Added SLP: ' + cameras.length + ' camera(s), ' + affectedFrames.length.toLocaleString('en-US') + ' frames merged. Panels: ' + dockPanelCount, 'success');
     } catch (err) {
         console.error('[add-slp] FATAL:', err);
         hideLoading();
@@ -2111,12 +2159,12 @@ export async function handleLoadPoints3dH5() {
                 }
                 if (existingGroup) {
                     // Assign 3D points to existing group
-                    existingGroup.points3d = asPoints3d(pts3d);
+                    existingGroup.points3d = pooledPoints3d(pts3d);
                     existingGroup.markClean();
                 } else {
                     // Create a new InstanceGroup with just 3D data
                     var newGroup = new InstanceGroup(Date.now() + frameIdx * 100 + trackIdx, trackIdx); // identityId = trackIdx
-                    newGroup.points3d = asPoints3d(pts3d);
+                    newGroup.points3d = pooledPoints3d(pts3d);
                     newGroup.markClean();
                     frameGroupsList.push(newGroup);
                 }
@@ -2151,8 +2199,7 @@ export async function handleLoadPoints3dH5() {
             // No decoders exist, so updateTotalFrames() (which reads decoder
             // sample counts) would reset this to 0 — write the frame-counter
             // DOM directly instead.
-            var totalEl = document.getElementById('totalFrames');
-            if (totalEl) totalEl.textContent = state.totalFrames;
+            refreshReadoutTotals();
         }
 
         drawAllOverlays(state.currentFrame);
@@ -2164,8 +2211,8 @@ export async function handleLoadPoints3dH5() {
         updateSeekbar(state.currentFrame);
 
         hideLoading();
-        setStatus('3D points loaded: ' + framesUpdated + ' frames (duration ' +
-            state.totalFrames + '), ' + ptsData.trackNames.length + ' tracks', 'success');
+        setStatus('3D points loaded: ' + framesUpdated.toLocaleString('en-US') + ' frames (duration ' +
+            state.totalFrames.toLocaleString('en-US') + '), ' + ptsData.trackNames.length + ' tracks', 'success');
     } catch (err) {
         console.error('Failed to load 3D points:', err);
         hideLoading();

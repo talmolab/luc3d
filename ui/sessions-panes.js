@@ -28,21 +28,22 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d } from '../pose/pose-data.js';
+} from './app-state.js?v=2dc001fe527c';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=2dc001fe527c';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=2dc001fe527c';
 import {
     triangulateAndReproject, storeReprojectedInstances, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod,
-} from '../pose/triangulation.js';
+} from '../pose/triangulation.js?v=2dc001fe527c';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js';
-import { OnDemandVideoDecoder } from '../loading/video.js';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js';
+} from '../loading/session-loader.js?v=2dc001fe527c';
+import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js?v=2dc001fe527c';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=2dc001fe527c';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -50,25 +51,27 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js';
+} from './video-filters.js?v=2dc001fe527c';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=2dc001fe527c';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js';
+import { setSoloView } from './ui-wiring.js?v=2dc001fe527c';
+import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=2dc001fe527c';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=2dc001fe527c';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=2dc001fe527c';
 // `autoAssignState` is a mutable binding tracked via ESM live binding.
 // The cycle (identity-assignment imports panelRenderers from here) is
 // hoist-safe because both reads are inside function bodies.
-import { autoAssignState } from './identity-assignment.js';
+import { autoAssignState } from './identity-assignment.js?v=2dc001fe527c';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js';
-import { getLoadingProgressModal } from './loading-progress-modal.js';
+import { setup3DViewport } from '../pose/initialization.js?v=2dc001fe527c';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=2dc001fe527c';
 
 // ============================================
 // Dockview Pane Manager
@@ -98,22 +101,70 @@ class VideoPaneRenderer {
 
         var self = this;
 
-        // Unzoom button (shown when view is zoomed)
+        // Zoom badge (shown while the view is zoomed or at 1:1). The button
+        // reads the zoom as a % of 1:1 (`applyZoom` writes the label) and a
+        // click fits the view; hovering opens a menu of presets — the
+        // Triangulate split-button pattern, the same pure-CSS `.tri-dropdown`.
+        var findView = function () {
+            return state.views.find(function (v) { return v.name === self.viewName; });
+        };
+        var badge = document.createElement('div');
+        badge.className = 'zoom-badge tri-dropdown';
+        badge.style.display = 'none';
+        // Clicks here are for the badge, not the cell's pan / box-zoom drag.
+        badge.addEventListener('mousedown', function (e) { e.stopPropagation(); });
         var unzoomBtn = document.createElement('button');
         unzoomBtn.className = 'unzoom-btn';
-        unzoomBtn.textContent = 'Zoomed';
+        unzoomBtn.setAttribute('aria-haspopup', 'menu');
+        unzoomBtn.innerHTML = '<span class="zoom-badge-label">Zoomed</span><span class="tri-caret">▾</span>';
         unzoomBtn.title = 'Click to reset zoom';
-        unzoomBtn.style.display = 'none';
-        unzoomBtn.addEventListener('mouseenter', function () { unzoomBtn.textContent = 'Unzoom'; });
-        unzoomBtn.addEventListener('mouseleave', function () { unzoomBtn.textContent = 'Zoomed'; });
         unzoomBtn.addEventListener('click', function (e) {
             e.stopPropagation();
-            var view = state.views.find(function (v) { return v.name === self.viewName; });
+            var view = findView();
             if (view && videoController) {
                 videoController.resetZoom(view);
             }
         });
-        this.element.appendChild(unzoomBtn);
+        var menu = document.createElement('div');
+        menu.className = 'tri-dropdown-menu zoom-preset-menu';
+        menu.setAttribute('role', 'menu');
+        var presetItems = [];
+        var refreshPresetChecks = function () {
+            var view = findView();
+            var pct = view && videoController ? videoController.zoomPercent(view) : null;
+            presetItems.forEach(function (it) {
+                // 100% is ticked only when the view IS at 1:1 (on the pixel
+                // grid, per-axis scale), never merely near it.
+                var on = it.pct === 100
+                    ? !!(view && view.zoom && view.zoom.native)
+                    : pct !== null && Math.abs(pct - it.pct) < 0.05;
+                it.el.querySelector('.trail-check').textContent = on ? '✓' : '';
+                it.el.setAttribute('aria-checked', on ? 'true' : 'false');
+            });
+        };
+        ZOOM_PRESET_PERCENTS.concat([null]).forEach(function (pct) {
+            var item = document.createElement('div');
+            item.className = 'tri-dropdown-item';
+            item.setAttribute('role', pct ? 'menuitemradio' : 'menuitem');
+            if (pct) item.setAttribute('data-zoom-pct', String(pct));
+            else item.setAttribute('data-zoom-fit', '');
+            item.innerHTML = '<span><span class="trail-check"></span>' + (pct ? pct + '%' : 'Fit') + '</span>'
+                + (pct ? '<span class="tri-dropdown-hint">' + zoomRatioLabel(pct) + '</span>' : '');
+            item.addEventListener('click', function (e) {
+                e.stopPropagation();
+                var view = findView();
+                if (!view || !videoController) return;
+                if (pct) videoController.setZoomPercent(view, pct);
+                else videoController.resetZoom(view);
+                refreshPresetChecks();
+            });
+            menu.appendChild(item);
+            if (pct) presetItems.push({ pct: pct, el: item });
+        });
+        badge.addEventListener('mouseenter', refreshPresetChecks);
+        badge.appendChild(unzoomBtn);
+        badge.appendChild(menu);
+        this.element.appendChild(badge);
         this._unzoomBtn = unzoomBtn;
 
         // Canvas wrapper
@@ -370,11 +421,26 @@ const _paneManagerImpl = {
      * Add all views arranged in an optimal grid layout.
      * n<=3: 1 row. n<=8: 2 rows. n<=15: 3 rows.
      * Top row gets ceil(n/rows) items, remaining rows fill the rest.
+     *
+     * Laying every view out as a grid IS grid mode, so this also leaves solo
+     * mode. The loaders and session switches call it straight after
+     * `clearAll()`, and only `newProject` used to reset `state.viewMode` — so a
+     * load made while a view was solo'd showed the grid but stayed 'single',
+     * and `v` (a no-op when already solo) silently did nothing until `g`.
      */
     addAllViewsAsGrid() {
         var views = state.views;
         var n = views.length;
         if (n === 0) return;
+
+        if (state.viewMode !== 'grid') {
+            state.viewMode = 'grid';
+            // the solo chip ("cam4 (4/5)"), cleared as ui-wiring's showViewIndicator does in grid mode
+            var chip = document.getElementById('viewModeIndicator');
+            if (chip) chip.remove();
+            var dockEl = document.getElementById('videoDock');
+            if (dockEl) dockEl.classList.remove('has-view-indicator');
+        }
 
         // Calculate grid dimensions
         var rows, cols;
@@ -446,6 +512,40 @@ const _paneManagerImpl = {
                 });
             }
         }
+    },
+
+    /**
+     * Close EVERY pane showing `viewName`, so removing a video takes its panel
+     * out of the dock instead of leaving an empty one behind (luc3d #216).
+     *
+     * The panel's own × and `clearAll` both go through `panel.api.close()`, and
+     * so does this — `onDidRemovePanel` is what decrements `dockedViews` and
+     * clears the strip's in-dock dot, so closing the panel by hand (removing
+     * its element, say) would leave both of those claiming the view is still
+     * docked. Every pane, not the first: a view can be docked more than once
+     * (a dropped multi-selection, or a grid-layout restore), and a survivor
+     * would still be rendering a view that no longer exists.
+     *
+     * Resolves panes through `panelRenderers` rather than the panel id, since
+     * the id embeds a counter (`video-<name>-<n>`) and a view name may itself
+     * contain dashes.
+     */
+    removeVideoPanel(viewName) {
+        if (!viewName || !this.api) return 0;
+        var panels = Array.from(this.api.panels);
+        var closed = 0;
+        for (var i = 0; i < panels.length; i++) {
+            var renderer = panelRenderers.get(panels[i].id);
+            if (!renderer || renderer.getViewName() !== viewName) continue;
+            panels[i].api.close();
+            closed++;
+        }
+        // `onDidRemovePanel` keeps the count, but only for panes that existed.
+        // A view docked in `dockedViews` with no pane left (a restore that got
+        // out of step) would otherwise keep blocking a later re-add.
+        this.dockedViews.delete(viewName);
+        updateStripItemStatus(viewName, false);
+        return closed;
     },
 
     clearAll() {
@@ -538,6 +638,13 @@ export function refreshPaneInteractions() {
     // Render current frame to newly created canvases and fit sizes
     fitCanvasesToCells();
     if (videoController) {
+        // `initZoom` above put every view back at fit — or, while View ▸
+        // Native Resolution is on, flagged it 1:1 with its scale still to be
+        // derived from the box `fitCanvasesToCells` just laid out.
+        for (var ni = 0; ni < state.views.length; ni++) {
+            var nv = state.views[ni];
+            if (nv.zoom && nv.zoom.native) videoController.reapplyZoom(nv);
+        }
         videoController.seekToFrame(state.currentFrame);
     }
     drawAllOverlays(state.currentFrame);
@@ -1401,6 +1508,22 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
 
         // 2. Remove view from InstanceGroups and re-triangulate
         for (var [frameIdx2, groups] of fromSession.instanceGroups) {
+            // The re-solve below reads the REMAINING members' 2D. On a lazy
+            // project a member of a frame that is not resident is a `_lazy2d`
+            // placeholder whose 2D is all-NaN — after a reopen, and since #280
+            // after Track All / Triangulate All too (`releaseFrameMembers2d`).
+            // Triangulating placeholders finds no 3D, so the group silently KEPT
+            // its old points3d — solved WITH the view that just moved — and was
+            // still marked clean. Hydrate this frame's members from the store for
+            // the re-solve (only when one of its groups loses the view), and give
+            // the 2D back after, exactly as the image ID-switch check does.
+            var hydrated2d = false;
+            for (var hgi = 0; hgi < groups.length; hgi++) {
+                if (groups[hgi].instances.has(viewName) || groups[hgi].reprojectedInstances.has(viewName)) {
+                    hydrated2d = hydrateFrameMembers2d(fromSession, frameIdx2) > 0;
+                    break;
+                }
+            }
             for (var gi = 0; gi < groups.length; gi++) {
                 var group = groups[gi];
                 if (group.instances.has(viewName) || group.reprojectedInstances.has(viewName)) {
@@ -1423,7 +1546,7 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
                                 { method: resolveTriangulationMethod(group) });
                             var valid = someValidPoint3d(result.points3d);
                             if (valid) {
-                                group.points3d = result.points3d;
+                                group.points3d = pooledPoints3d(result.points3d);
                                 group.triangulationMethod = result.method;
                                 group.reprojections = result.reprojections;
                                 storeReprojectedInstances(group, result, fromSession.cameras);
@@ -1438,6 +1561,7 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
                     }
                 }
             }
+            if (hydrated2d) releaseFrameMembers2d(fromSession, frameIdx2);
         }
 
         // 3. Move video file reference (only search within origin session's indices)
@@ -1587,8 +1711,7 @@ export function removeSession(idx) {
         }
 
         // Reset frame counter display
-        document.getElementById('currentFrame').textContent = '0';
-        document.getElementById('totalFrames').textContent = '0';
+        clearReadout();
 
         // Show dock empty message
         var emptyMsg = document.getElementById('videoDockEmpty');
@@ -2080,7 +2203,7 @@ export async function switchSession(newIdx) {
     } else if (newSession.totalFrames > 0) {
         state.totalFrames = newSession.totalFrames;
         state.fps = newSession.fps || 30;
-        document.getElementById('totalFrames').textContent = state.totalFrames;
+        refreshReadoutTotals();
         document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
     }
 
@@ -2109,6 +2232,8 @@ export async function switchSession(newIdx) {
     // Block 2 (Prompt 4): re-render the Visibility tab's Timeline
     // toggle lists from the new session's per-session hidden Sets.
     try { populateTimelineVisibility(newSession); } catch (e) { /* non-fatal in tests */ }
+    // ID-switch results are per session: show this one's list and timeline markers.
+    try { refreshIdSwitchPanel(newSession); } catch (e) { /* non-fatal in tests */ }
 
     // Restore per-session timeline height + collapsed state. First visit
     // (no `_timelineHeight` stored) → fit to the new session's data,

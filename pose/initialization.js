@@ -10,32 +10,39 @@
 
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline,
-         hasRealVideo, VIEW_NAMES } from '../ui/app-state.js';
-import { Instance, UnlinkedInstance, points3dNodeCount, getPoint3d } from './pose-data.js';
+         hasRealVideo, isViewDocked, VIEW_NAMES } from '../ui/app-state.js?v=2dc001fe527c';
+import { Instance, UnlinkedInstance, points3dNodeCount, getPoint3d, groupDisplayName } from './pose-data.js?v=2dc001fe527c';
 import {
     getInstanceGroupsForFrame, updateTimelineForFrame,
     reTriangulateGroup, sessionHasCalibration, getOrComputeReprojectedInstance,
-} from './triangulation.js';
-import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
-import { rebuildVideoController } from '../loading/session-loader.js';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
-import { createDemoSession } from '../demo-data.js';
-import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData } from '../ui/ui-wiring.js';
-import { installTimelineShortcuts } from '../ui/timeline-controller.js';
-import { setupPanelTabs, setupSkeletonEditing, updateInfoPanel } from '../ui/info-panel.js';
-import { setupSplitHandles } from '../ui/layout-controls.js';
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
+} from './triangulation.js?v=2dc001fe527c';
+import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=2dc001fe527c';
+import { rebuildVideoController } from '../loading/session-loader.js?v=2dc001fe527c';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=2dc001fe527c';
+import { resetPlaneState } from '../import-export/plane-metadata.js?v=2dc001fe527c';
+import { createDemoSession } from '../demo-data.js?v=2dc001fe527c';
+import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData } from '../ui/ui-wiring.js?v=2dc001fe527c';
+import { installInfoTips } from '../ui/info-tip.js?v=2dc001fe527c';
+import { installNodeTooltip } from '../ui/node-tooltip.js?v=2dc001fe527c';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=2dc001fe527c';
+import { installTimelineShortcuts } from '../ui/timeline-controller.js?v=2dc001fe527c';
+import { setupPanelTabs, setupSkeletonEditing, setupVideosTab, updateInfoPanel } from '../ui/info-panel.js?v=2dc001fe527c';
+import {
+    setupPlaneDefinition, planeInteractionCallbacks, syncPlanes3D, refreshPlanePanel,
+} from '../ui/plane-definition.js?v=2dc001fe527c';
+import { setupSplitHandles } from '../ui/layout-controls.js?v=2dc001fe527c';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=2dc001fe527c';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=2dc001fe527c';
 import {
     manualAssignState, getTotalUnlinkedCount, cleanupManualAssignment, startManualAssignment,
     editGroupState, cancelEditGroup, finishEditGroup, updateEditGroupToast,
     purgeTriangulationDataForGroup,
-} from '../ui/identity-assignment.js';
-import { getTrackColor, getGroupColor } from '../ui/overlays.js';
-import { Viewport3D } from '../ui/viewport3d.js';
-import { isViewport3DVisible, markViewport3DSkipped } from '../ui/panel-visibility.js';
-import { Timeline } from '../ui/timeline.js';
-import { InteractionManager } from '../ui/interaction.js';
+} from '../ui/identity-assignment.js?v=2dc001fe527c';
+import { getTrackColor, getGroupColor } from '../ui/overlays.js?v=2dc001fe527c';
+import { Viewport3D } from '../ui/viewport3d.js?v=2dc001fe527c';
+import { isViewport3DVisible, markViewport3DSkipped } from '../ui/panel-visibility.js?v=2dc001fe527c';
+import { Timeline } from '../ui/timeline.js?v=2dc001fe527c';
+import { InteractionManager } from '../ui/interaction.js?v=2dc001fe527c';
 
 // ============================================
 // Logging
@@ -54,10 +61,17 @@ window.logMessage = function (msg, level) {
 async function init() {
     try {
         // Setup UI components (no data needed)
+        // Before any panel renders: one delegated set of listeners serving every
+        // ⓘ in the app, so a panel that rebuilds its rows does not have to
+        // re-wire them (and cannot forget to).
+        installInfoTips();
+        installNodeTooltip();
         setupEmptyVideoController();
         setupUI();
         setupPanelTabs();
         setupSkeletonEditing();
+        setupVideosTab();
+        setupPlaneDefinition();
         setupInteraction();
         try {
             paneManager.init(document.getElementById('videoDock'));
@@ -86,6 +100,7 @@ function setupEmptyVideoController() {
     setVideoController(new VideoController(state, {
         updateSeekbar: updateSeekbar,
         drawOverlays: drawAllOverlays,
+        isViewShown: isViewDocked,
         onPlaybackStateChange: onPlaybackStateChange,
         log: window.logMessage,
         onZoomChange: function () {
@@ -137,6 +152,11 @@ export async function loadDemoSession() {
         state.session = null;
         state.sessions = [];
         state.triangulationResults = new Map();
+        // Plane state is project-scoped and lives on a module singleton, so
+        // it does NOT go away with `state.sessions`. `readPlaneMetadata`
+        // only restores into an EMPTY model, so without this the previous
+        // project's planes would survive and the new one's be dropped.
+        resetPlaneState();
         paneManager.clearAll();
 
         // Load videos and create view objects (no grid cells needed - dockview creates them)
@@ -364,7 +384,7 @@ export function addNewInstanceSmart() {
 // ============================================
 
 export function setupInteraction() {
-    setInteractionManager(new InteractionManager({
+    setInteractionManager(new InteractionManager(Object.assign({
         getState: function () { return state; },
 
         getInstanceGroups: function (frameIdx) {
@@ -446,7 +466,7 @@ export function setupInteraction() {
         },
 
         onInstanceConverted: function (instanceGroup) {
-            const trackName = state.session.tracks[instanceGroup.trackIdx] || 'Track ' + instanceGroup.trackIdx;
+            const trackName = groupDisplayName(state.session, instanceGroup, state.currentFrame);
             setStatus('Converted ' + trackName + ' to user instance', 'success');
             // Record all view points from the converted group
             for (var [vn, inst] of instanceGroup.instances) {
@@ -471,7 +491,7 @@ export function setupInteraction() {
         onDoubleClickReprojected: function (group, viewName) {
             var frameIdx = state.currentFrame;
             var identityId = group.identityId;
-            var trackName = state.session.tracks[identityId] || 'Track ' + identityId;
+            var trackName = groupDisplayName(state.session, group, frameIdx);
 
             // Search all groups for an existing UserInstance group with this track
             // Find the existing group for this track (user or predicted)
@@ -584,8 +604,7 @@ export function setupInteraction() {
 
         onClonePredictedGroup: function (predGroup) {
             var frameIdx = state.currentFrame;
-            var trackIdx = predGroup.identityId;
-            var trackName = (trackIdx >= 0 && state.session.tracks[trackIdx]) || ('Group ' + trackIdx);
+            var trackName = groupDisplayName(state.session, predGroup, frameIdx);
 
             // Convert predicted instances to user IN PLACE — no new group
             // Fill null points from reprojection and mark as occluded
@@ -651,7 +670,14 @@ export function setupInteraction() {
         },
 
         onInstanceDeleted: function (frameIdx, group, deletedViews) {
-            var trackName = group ? (state.session.tracks[group.identityId] || 'Track ' + group.identityId) : 'unlinked instance';
+            // A delete is an unsaved change. Without this the Delete key (and
+            // Edit ▸ Delete Instance / the toolbar, which share this path) left
+            // the project clean: no prompt on closing the tab, and none on
+            // switching sessions, which evicts the session's lazy store and with
+            // it the delete. Custom Instance Delete and "Delete group" already
+            // marked it.
+            markDirty();
+            var trackName = group ? groupDisplayName(state.session, group, frameIdx) : 'unlinked instance';
             setStatus('Deleted ' + trackName, 'success');
 
             // Clear per-view cache only for the views whose instance was deleted
@@ -696,7 +722,7 @@ export function setupInteraction() {
             var textEl = document.getElementById('manualAssignToastText');
             if (textEl) {
                 var totalUnlinked = getTotalUnlinkedCount();
-                textEl.textContent = 'Frame ' + (state.currentFrame + 1) +
+                textEl.textContent = 'Frame ' + (state.currentFrame + 1).toLocaleString('en-US') +
                     '. Select instances for manual Identity Assignment. Instances Selected: ' +
                     count + '/' + totalUnlinked;
             }
@@ -708,7 +734,7 @@ export function setupInteraction() {
 
         onAssignmentGroupCreated: function (group) {
             cleanupManualAssignment();
-            var trackName = state.session.tracks[group.identityId] || 'Track ' + group.identityId;
+            var trackName = groupDisplayName(state.session, group, state.currentFrame);
 
             // Auto-triangulate the new group
             reTriangulateGroup(group);
@@ -833,7 +859,10 @@ export function setupInteraction() {
                 videoController.resetZoom(view);
             }
         },
-    }));
+    // Plane annotation (View ▸ Define Planes). Merged in as its own bag so
+    // `ui/interaction.js` needs no import of the plane feature and the plane
+    // module owns its own callback contract.
+    }, planeInteractionCallbacks())));
 
     // Attach to all overlay canvases
     interactionManager.attach(state.views);
@@ -904,6 +933,7 @@ export function setup3DViewport() {
             showCameraPyramids: _3dPyramidShow ? _3dPyramidShow.checked : true,
             skeletonNodeSize: (function() { var e = document.getElementById('vis3dNodeSize'); return e ? parseFloat(e.value) || 2 : 2; })(),
             skeletonEdgeWeight: (function() { var e = document.getElementById('vis3dEdgeWeight'); return e ? parseFloat(e.value) || 0.8 : 0.8; })(),
+            skeletonBrightness: (function() { var e = document.getElementById('vis3dBrightness'); var v = e ? parseFloat(e.value) : NaN; return isNaN(v) ? 0.5 : Math.min(100, Math.max(0, v)) / 100; })(),
             skeletonNodeShape: (function() { var e = document.getElementById('vis3dNodeStyle'); return e ? (e.getAttribute('data-value') || 'circle') : 'circle'; })(),
             showSkeletonNodes: (function() { var e = document.getElementById('vis3dNodeShow'); return e ? e.checked : true; })(),
             showSkeletonEdges: (function() { var e = document.getElementById('vis3dEdgeShow'); return e ? e.checked : true; })(),
@@ -928,6 +958,16 @@ export function setup3DViewport() {
 
         // Show initial frame's 3D points
         update3DViewport(state.currentFrame);
+
+        // Re-apply annotated planes. `setup3DViewport` disposes and re-creates
+        // the Viewport3D, which drops everything in its scene — without this
+        // a triangulated plane vanishes the next time the viewport is rebuilt
+        // (the same gap `setEnvironment` still has).
+        syncPlanes3D();
+        // …and the panel that lists them. Every project-load path rebuilds the
+        // viewport, so this is the one place a freshly RESTORED plane model
+        // reaches the Nodes / Planes tables.
+        refreshPlanePanel();
 
         // Fit after a short delay to ensure skeleton meshes are in the scene
         setTimeout(function () {
@@ -1022,6 +1062,7 @@ export function setupTimeline() {
 
     setTimeline(new Timeline(container, {
         totalFrames: state.totalFrames,
+        getColorByIdentity: function () { return state.colorByIdentity; },
         onFrameChange: (function () {
             var lastRender = 0, timer = null, pending = null;
             return function (frameIdx) {
@@ -1049,7 +1090,7 @@ export function setupTimeline() {
             else navigateToFrame(frameIdx);
         },
         onRangeSelect: function (startFrame, endFrame) {
-            setStatus('Selected range: ' + startFrame + '-' + endFrame);
+            setStatus('Selected range: ' + startFrame.toLocaleString('en-US') + '–' + endFrame.toLocaleString('en-US'));
         },
     }));
 
@@ -1097,6 +1138,7 @@ function highlightVideoCell(cameraName) {
 export function updateFpsDisplay() {
     var fpsEl = document.getElementById('fpsDisplay');
     if (fpsEl) fpsEl.textContent = (state.fps || 30).toFixed(1) + ' fps';
+    refreshReadoutTotals();   // the times are frame / fps
 }
 
 // ============================================

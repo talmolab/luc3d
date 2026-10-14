@@ -8,42 +8,46 @@
 import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
-    toBoxedPoints3d, asPoints3d, someValidPoint3d,
-} from '../pose/pose-data.js';
+    toBoxedPoints3d, someValidPoint3d, pooledPoints3d,
+} from '../pose/pose-data.js?v=2dc001fe527c';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
-} from '../pose/triangulation.js';
-import { OnDemandVideoDecoder } from '../loading/video.js';
-import { createDemoSkeleton } from '../demo-data.js';
+} from '../pose/triangulation.js?v=2dc001fe527c';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=2dc001fe527c';
+import { createDemoSkeleton } from '../demo-data.js?v=2dc001fe527c';
 import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
-} from './file-io.js';
+} from './file-io.js?v=2dc001fe527c';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setInteractionManager,
-} from '../ui/app-state.js';
+} from '../ui/app-state.js?v=2dc001fe527c';
 import {
     autoAssignVideosToCameras, forceVideoSelection, showParentDirMatchSummary,
     forceVideoSelectionWithFolder, createViewForVideoFile, updateTotalFrames,
     rebuildVideoController, fitCanvasesToCells,
-} from '../loading/session-loader.js';
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
-import { updateInfoPanel } from '../ui/info-panel.js';
+} from '../loading/session-loader.js?v=2dc001fe527c';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=2dc001fe527c';
+import { updateInfoPanel } from '../ui/info-panel.js?v=2dc001fe527c';
 // Pass 3i-3: setupInteraction / setup3DViewport / hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, hideWelcomeOverlay,
-} from '../pose/initialization.js';
+} from '../pose/initialization.js?v=2dc001fe527c';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
-import { handleLoadSlpFile } from './slp-import.js';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=2dc001fe527c';
+import { handleLoadSlpFile } from './slp-import.js?v=2dc001fe527c';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
     openProjectWriter, streamSessionIntoWriter, finalizeProjectWriter,
-} from './slp-streaming-write.js';
-import { SioLazyLoader } from '../loading/sio-lazy-loader.js';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
-import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js';
+} from './slp-streaming-write.js?v=2dc001fe527c';
+import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=2dc001fe527c';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=2dc001fe527c';
+import { showLoading, hideLoading } from '../ui/loading-overlay.js?v=2dc001fe527c';
+import { clearReadout } from '../ui/frame-readout.js?v=2dc001fe527c';
+import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=2dc001fe527c';
+import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=2dc001fe527c';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=2dc001fe527c';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -153,6 +157,11 @@ export function newProject(force) {
     state.views = [];
     state.videoFiles = [];
 
+    // Define Planes state is project-scoped and lives on a module singleton,
+    // so it survives `state.session = null` — clear it explicitly or a new
+    // project opens carrying the previous one's nodes, planes and origin.
+    resetPlaneState();
+
     // Clear 3D viewport (remove skeletons and camera pyramids)
     if (viewport3d) {
         viewport3d.setFrame([]);
@@ -167,10 +176,7 @@ export function newProject(force) {
     if (stripList) stripList.innerHTML = '';
 
     // Reset frame counter display
-    var curFrameEl = document.getElementById('currentFrame');
-    if (curFrameEl) curFrameEl.textContent = '0';
-    var totalFramesEl = document.getElementById('totalFrames');
-    if (totalFramesEl) totalFramesEl.textContent = '0';
+    clearReadout();
     var fpsEl = document.getElementById('fpsDisplay');
     if (fpsEl) fpsEl.textContent = '30.0 fps';
 
@@ -345,7 +351,7 @@ function serializeSessionFrames(session) {
 
 async function ensureSleapIO() {
     if (window.SleapIO) return window.SleapIO;
-    var mod = await import('./lib/sleap-io/index.browser.js');
+    var mod = await import('./lib/sleap-io/index.browser.js?v=2dc001fe527c');
     window.SleapIO = mod;
     return mod;
 }
@@ -731,6 +737,76 @@ async function buildSlpBytes(opts) {
 }
 
 /**
+ * The frame + instance columns of every store of a loader whose store was
+ * EDITED IN MEMORY (`SioLazyLoader._storeEditedInMemory`: Propagate IDs →
+ * Tracks and the other `remapTracksFromIdentity` callers, Custom Instance
+ * Delete's `deleteInstanceRows`), or `null` when it was not.
+ *
+ * Pass 2 of the multi-session save re-opens each camera from its SOURCE FILE,
+ * which holds the columns as loaded, not as edited — while pass 1 built the
+ * header tracks, each camera's `trackBase` and every group's
+ * `(frame, instance offset)` refs from the edited store. Appending the file's
+ * columns under that header wrote every propagated instance on the wrong track
+ * name, brought deleted instances back, and pointed a group member that sat
+ * after a deleted row at the deleted instance's points.
+ *
+ * Both edits touch only `framesData` (a delete renumbers
+ * `instance_id_start/end`) and `instancesData`; neither touches
+ * `pointsData`/`predPointsData` (a delete keeps every surviving row's
+ * `point_id_start/end`, pointing into the unchanged points table). So these two
+ * are all pass 2 needs to write the edited store, and the points tables — by far
+ * the largest part of a store — are still evicted with the loader. A shared
+ * project store (`openProjectSlp`) maps every camera to the same two objects.
+ *
+ * @returns {Map<string, {framesData: Object, instancesData: Object}>|null}
+ */
+function keepEditedStoreColumns(loader) {
+    if (!loader || !loader._storeEditedInMemory) return null;
+    var kept = new Map();
+    for (var camName of loader.labelsByCam.keys()) {
+        var store = loader.labelsByCam.get(camName)._lazyDataStore;
+        if (store) kept.set(camName, { framesData: store.framesData, instancesData: store.instancesData });
+    }
+    return kept;
+}
+
+/**
+ * Put `keepEditedStoreColumns`' columns back over a freshly re-opened loader's
+ * stores, so pass 2 appends the store as it was when pass 1 ran. Refuses
+ * (throws) when the re-opened file no longer fits them — a different frame-row
+ * count, or a points table too short for the kept `point_id_end` — rather than
+ * writing instances against the wrong rows: that means the file on disk
+ * changed after it was loaded.
+ */
+function restoreEditedStoreColumns(loader, kept) {
+    for (var entry of kept) {
+        var camName = entry[0], cols = entry[1];
+        var labels = loader.labelsByCam.get(camName);
+        var store = labels && labels._lazyDataStore;
+        if (!store) throw new Error('multi-session save: camera "' + camName + '" is missing from its re-opened file');
+        var fd = store.framesData || {};
+        var keptFd = cols.framesData || {};
+        var nNow = (fd.frame_idx || fd.frame_id || []).length;
+        var nKept = (keptFd.frame_idx || keptFd.frame_id || []).length;
+        var maxPoint = 0;
+        var ends = (cols.instancesData && cols.instancesData.point_id_end) || [];
+        for (var j = 0; j < ends.length; j++) if (Number(ends[j]) > maxPoint) maxPoint = Number(ends[j]);
+        // A row's point range indexes the user OR the predicted points table,
+        // so the longer of the two bounds every kept `point_id_end`.
+        var nPoints = Math.max(
+            ((store.pointsData && store.pointsData.x) || []).length,
+            ((store.predPointsData && store.predPointsData.x) || []).length);
+        if (nNow !== nKept || (nPoints > 0 && maxPoint > nPoints)) {
+            throw new Error('multi-session save: the file for camera "' + camName + '" no longer matches the ' +
+                'loaded data (' + nNow.toLocaleString('en-US') + ' frame rows vs ' + nKept.toLocaleString('en-US') + ' when loaded) — it changed on disk after ' +
+                'loading. Not writing its edited instances against the wrong rows.');
+        }
+        store.framesData = cols.framesData;
+        store.instancesData = cols.instancesData;
+    }
+}
+
+/**
  * Reopen a fresh `SioLazyLoader` for `session` from cheap, previously-retained
  * `File`/`Blob` handles (`SioLazyLoader.sourceFiles`, captured at the original
  * `open()`). A local-disk `File` is a lazy handle, not a resident copy of the
@@ -750,6 +826,12 @@ async function reopenSessionLazyLoader(session, sourceFileEntries, wasSharedStor
         session.lazyLoader = loader;
         return loader;
     }
+    // Parallel, and `sourceFiles` is in the ORIGINAL load's open-resolution
+    // order — neither matters: each store is re-indexed into the union of the
+    // cameras' track names in camera-NAME order (`SioLazyLoader._unifyTracks`),
+    // so this re-derives the track columns the original load had. A store
+    // edited in memory since is not in the files; `finalizeMultiSessionSave`
+    // puts pass 1's columns back over these (`restoreEditedStoreColumns`).
     var opens = [];
     for (var i = 0; i < sourceFileEntries.length; i++) {
         var entry = sourceFileEntries[i];
@@ -777,7 +859,8 @@ export function beginMultiSessionSave() {
  * and an open `lazyLoader`. Builds its ref graph against `handle.ctx`'s
  * running counter, then EVICTS the session's heavy state (lazy loader,
  * `frameGroups`, `instanceGroups`) — safe because the small ref graph +
- * cheap `sourceFiles` handles are kept in `handle.pending`.
+ * cheap `sourceFiles` handles are kept in `handle.pending`, plus, for a store
+ * edited in memory, its frame + instance columns (`keepEditedStoreColumns`).
  *
  * This is the piece that must be interleaved with each session's OWN
  * compute step for truly memory-bounded end-to-end processing of sessions
@@ -804,7 +887,13 @@ export async function commitSessionForMultiSessionSave(handle, session) {
     var sourceFiles = Array.from(session.lazyLoader.sourceFiles.entries());
     var wasSharedStore = !!session.lazyLoader._sharedStore;
     var refGraph = await buildSessionRefGraph(session, sessViews, sessVideoFiles, handle.ctx);
-    handle.pending.push({ session: session, sourceFiles: sourceFiles, refGraph: refGraph, sharedStore: wasSharedStore });
+    // A store edited in memory is not what pass 2 will read back from the
+    // files: keep its frame + instance columns (`keepEditedStoreColumns`).
+    var editedColumns = keepEditedStoreColumns(session.lazyLoader);
+    handle.pending.push({
+        session: session, sourceFiles: sourceFiles, refGraph: refGraph, sharedStore: wasSharedStore,
+        editedColumns: editedColumns,
+    });
 
     // Evict: this session's contribution now lives in `refGraph` (small — a
     // ref-only RecordingSession + the materialized user-edit overlay
@@ -846,6 +935,7 @@ export async function finalizeMultiSessionSave(handle, opts) {
         for (var j = 0; j < handle.pending.length; j++) {
             var p = handle.pending[j];
             await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore);
+            if (p.editedColumns) restoreEditedStoreColumns(p.session.lazyLoader, p.editedColumns);
             streamSessionIntoWriter(writer, p.session, p.refGraph);
             p.session.lazyLoader.close();
             p.session.lazyLoader = null;
@@ -981,8 +1071,13 @@ export async function saveProjectSlp() {
         setStatus('No session to save', 'error');
         return;
     }
+    // In Brave the save-file picker is OFF by default, so Save lands here: the
+    // whole file is built in memory and downloaded (risky for a large
+    // project, and never updates the file in place). Say why, and how to fix.
+    var fsaHint = fileSystemAccessHint();
     try {
-        setStatus('Building SLP...', 'warning');
+        setStatus(fsaHint ? 'Building SLP in memory to download it (Brave cannot save straight to a file)...'
+            : 'Building SLP...', 'warning');
 
         var bytes = await buildSlpBytes();
         var blob = new Blob([bytes], { type: 'application/x-hdf5' });
@@ -1001,14 +1096,15 @@ export async function saveProjectSlp() {
         document.body.removeChild(a);
         setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
 
-        setStatus('Project saved as SLP (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)', 'success');
+        setStatus('Project saved as SLP (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)' +
+            (fsaHint ? ' — downloaded, not saved in place. ' + fsaHint : ''), 'success');
     } catch (err) {
         if (err && err.name === 'SaveCancelledError') {
             setStatus('Save cancelled', 'warning');
             return;
         }
         console.error('Save project SLP failed:', err);
-        setStatus('Save failed: ' + err.message, 'error');
+        setStatus('Save failed: ' + err.message + (fsaHint ? ' ' + fsaHint : ''), 'error');
     }
 }
 
@@ -1066,7 +1162,10 @@ export function saveProject() {
                 // omit-the-defaults rule as the `.slp` writers — the project
                 // JSON puts them at the session-dict level rather than under a
                 // `metadata.lucid`.
-                return writeVisibilityMetadata(sessData, sess);
+                writeVisibilityMetadata(sessData, sess);
+                // Define Planes state, at the same session-dict level and under
+                // the same keys the `.slp` writers use.
+                return writePlaneMetadata(sessData, sess);
             }),
         };
 
@@ -1111,6 +1210,7 @@ export function saveProject() {
     // Session-scoped Visibility-panel state (see the v3 branch above). `_restoreProjectV2`
     // reads these at this same level for both the v2 and v3 shapes.
     writeVisibilityMetadata(projectData, state.session);
+    writePlaneMetadata(projectData, state.session);
 
     // Serialize each frame
     for (const [frameIdx, fg] of state.session.frameGroups) {
@@ -1239,7 +1339,7 @@ export async function handleLoadProject(prePickedFile) {
             var LARGE_SLP_BYTES = 200 * 1024 * 1024;
             if (ext === 'slp' && file.size > LARGE_SLP_BYTES) {
                 // Dynamic import avoids a session-loader ↔ save-load import cycle.
-                var _sl = await import('../loading/session-loader.js');
+                var _sl = await import('../loading/session-loader.js?v=2dc001fe527c');
                 if (_sl && typeof _sl.handleLoadProjectSlpLazy === 'function') {
                     return _sl.handleLoadProjectSlpLazy(file);
                 }
@@ -1261,6 +1361,11 @@ export async function handleLoadProject(prePickedFile) {
         const data = JSON.parse(text);
 
         // 1. Restore session data (cameras, skeleton, instances, groups)
+        // Define Planes state is project-scoped and lives on a module
+        // singleton, so it does not go away with the old sessions.
+        // `readPlaneMetadata` only restores into an EMPTY model, so without
+        // this the previous project's planes survive and this file's are lost.
+        resetPlaneState();
         var cameras;
         if (data.version === 3) {
             cameras = _restoreProjectV3(data);
@@ -1597,7 +1702,7 @@ export async function handleLoadProject(prePickedFile) {
 
         hideLoading();
 
-        var statusParts = [cameras.length + ' cameras', state.session.numFrames + ' labeled frames'];
+        var statusParts = [cameras.length + ' cameras', state.session.numFrames.toLocaleString('en-US') + ' labeled frames'];
         if (state.views.length > 0) {
             statusParts.push(state.views.length + ' views');
         }
@@ -1671,6 +1776,9 @@ function _restoreProjectV2(data) {
     // Session-scoped Visibility-panel state. Shared by the v2 (whole document)
     // and v3 (per-session dict) shapes — both put these keys at this level.
     readVisibilityMetadata(session, data);
+    // Define Planes state. Project-scoped keys are ingested by whichever
+    // session is read first; placements land on this one.
+    readPlaneMetadata(session, data);
     // Legacy global identity map (removed). Captured here and migrated to
     // per-frame entries after frame groups load (see end of this function).
     var legacyGlobalIdentities = data.trackIdentityMap || null;
@@ -1696,7 +1804,7 @@ function _restoreProjectV2(data) {
                         : (groupData.trackIdx != null ? groupData.trackIdx : -1);
                     var group = new InstanceGroup(groupData.id || Date.now(), loadedIdentityId);
                     if (groupData.points3d) {
-                        group.points3d = asPoints3d(groupData.points3d);
+                        group.points3d = pooledPoints3d(groupData.points3d);
                     }
                     if (groupData.reprojections) {
                         group.reprojections = groupData.reprojections;
@@ -2028,14 +2136,9 @@ function _restoreLegacySession(data) {
 // Loading / Status
 // ============================================
 
-export function showLoading(msg) {
-    document.getElementById('loadingOverlay').classList.remove('hidden');
-    document.getElementById('loadingStatus').textContent = msg || 'Loading...';
-}
-
-export function hideLoading() {
-    document.getElementById('loadingOverlay').classList.add('hidden');
-}
+// The overlay itself (and its progress bar) lives in ui/loading-overlay.js;
+// re-exported here because ~10 modules import these two from this one.
+export { showLoading, hideLoading };
 
 export function setStatus(text, type) {
     document.getElementById('statusText').textContent = text;

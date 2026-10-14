@@ -65,18 +65,74 @@
  * derivation: `figs/out/tmp/corr12_run.log` and the manuscript pick-up notes in
  * the `talmolab/luc3d@eric/figs` worktree (2026-08-13/14).
  *
+ * -----------------------------------------------------------------------
+ * THE MATCH GATE (2026-10-03) — a second divergence from the reference
+ * -----------------------------------------------------------------------
+ * The reference Hungarian gives every target a detection whenever a view has
+ * at least as many detections as there are targets, however bad the match:
+ * `velocity_threshold` / `distance_threshold` only drive the adjacency
+ * negative, they never reject. So one extra detection (a reflection in the
+ * arena wall) plus one target with nothing real to follow (a spare target
+ * left over from an earlier false birth) is enough for the solver to trade a
+ * correct match away. Measured on a real 5-mouse, 8-camera recording
+ * (194366_05mice_flippers, frame 3,620, Camera4_topR): the spare target's
+ * forced match was cheapest on the real mouse (-26.7) while that mouse's own
+ * target scored +55.9 on it, and the reflection scored about -600 for both.
+ * Summed, giving the mouse to the spare and its own target the reflection
+ * won by ~21, and the mouse's identity moved to the reflection and stayed
+ * there.
+ * `matchGate` (default OFF since 2026-10-07, #285: it helps SLAP but gave ~6x the
+ * ID switches on Mouse-Dyad-10M and ~10x on s-DANNCE; 1 = on, 0 = the pre-gate
+ * tracker exactly) splits each view's assignment into two stages:
+ *   1. **Tracked targets** (still holding a detection after stale eviction)
+ *      are matched with one "no match" option each at adjacency 0, so a
+ *      tracked target only takes a detection it scores POSITIVELY on — i.e.
+ *      within roughly `distanceThreshold` of where it is — and never has to
+ *      take a bad one to make the totals work.
+ *   2. **Lost targets** (every detection evicted as stale — the animal was
+ *      unseen for `stale` frames) then compete for the leftovers exactly as
+ *      before, forced. That is how an animal that vanished and reappeared
+ *      elsewhere is re-acquired; gating them too would orphan it for good.
+ *
  * Faithful-port quirks still preserved from the reference (do NOT "fix" these
  * without new measurement — they were not implicated by the fig8-bench search):
  *   - `velocity_threshold` / `distance_threshold` are SOFT (drive the cost term
- *     negative), not hard gates; negative-cost matches are not filtered out.
+ *     negative), not hard gates. With `matchGate` off, negative-cost matches
+ *     are not filtered out; with it on, see "THE MATCH GATE" above.
  *   - The 3D term ignores the time gap (Δt forced to 0 in the reference).
  *   - 3D velocity is zero (no motion prediction); re-triangulation is plain DLT
  *     over all of a target's (now freshness-filtered) per-view detections.
  *
- * Depends on: pose/triangulation.js (all geometry is coordinate-agnostic and
- * reused directly by passing the bare extrinsic + normalized points).
+ * Depends on: pose/triangulation.js, reused directly by passing the bare
+ * extrinsic + normalized points.
+ *
+ * ## THE GEOMETRY MUST BE COORDINATE-AGNOSTIC, AND ONE PIECE OF IT WAS NOT
+ *
+ * Both cost terms are geometric GIVEN `target.points3d`: `_adjacency2d`
+ * projects that 3D into the view and measures normalized-pixel distance,
+ * `_adjacency3d` measures point-to-ray distance in mm. `reprojectPoint`,
+ * `backProjectToRays`, `pointsToRayDistances` and `epipolarErrorMatrix` are all
+ * invariant to a rigid change of world frame (the fundamental matrix is the
+ * relative pose, invariant to 1e-19 under a re-base). So `points3d` is the ONLY
+ * frame-dependent input — and `_retriangulate` builds it with plain DLT, which
+ * until the fix in `triangulatePointDLT` was NOT invariant: minimizing an
+ * algebraic error under `‖x‖ = 1` on a homogeneous 4-vector weights direction
+ * against scale, so moving the origin moved the answer.
+ *
+ * `Set as New Calibration` moves it ~1.2 m. Measured on the real cage session
+ * that shifted `points3d` by up to 15 mm, and since `_adjacency3d` divides
+ * millimetre distances by `distanceThreshold` (default 1.0) that is a cost
+ * swing of ~15 PER NODE — so 21% of frames came out grouped differently, three
+ * times worse by reprojection, purely from swapping the calibration file.
+ *
+ * Keep it that way: anything added to the cost must be a function of the rays
+ * and the pixels, or of `points3d`, and never of absolute world coordinates.
+ * Note this path calls `triangulatePoints` (DLT) unconditionally — the
+ * Settings "Refined" / `ba` method does NOT reach the tracker.
  */
 
+// From the core, not ./triangulation.js (which re-exports them): that module pulls in
+// the UI, and this one must load in a worker (pose/tracker-worker.js).
 import {
     triangulatePoints,
     reprojectPoint,
@@ -85,8 +141,8 @@ import {
     hungarianAlgorithm,
     computeFundamentalMatrix,
     epipolarErrorMatrix,
-} from './triangulation.js';
-import { points3dNodeCount, readPoint3d } from './pose-data.js';
+} from './triangulation-core.js?v=2dc001fe527c';
+import { points3dNodeCount, readPoint3d } from './pose-data.js?v=2dc001fe527c';
 
 // ---------------------------------------------------------------------------
 // Normalized-coordinate helpers
@@ -121,6 +177,22 @@ export function Detection(instance, cam, frameIdx, slot) {
     // so materializing here is cheaper than converting at every read.
     this.pointsPixel = instance.toPointsArray();       // raw pixel keypoints ([x,y]|null)
     this.pointsNorm = this.pointsPixel.map(function (p) { return normalizePoint(p, cam); });
+    this._rays = null;                                 // detectionRays' cache: back-projected rays...
+    this._raysExt = null;                              // ...and the extrinsic they were cast with
+}
+
+// The detection back-projected to one ray per node (`backProjectToRays`), cast
+// ONCE: the 3D term scores every target against the same detection, and the rays
+// depend on the detection and its camera alone — recomputing them per target
+// cost 4.9 s of a 67 s Track All (5 mice). Keyed on the extrinsic matrix object,
+// which `Camera.setExtrinsics` replaces, so a moved camera recasts them. The
+// result is only read (pointsToRayDistances), so sharing it changes nothing.
+function detectionRays(det, ext) {
+    if (det._rays === null || det._raysExt !== ext) {
+        det._rays = backProjectToRays(det.pointsNorm, ext);
+        det._raysExt = ext;
+    }
+    return det._rays;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +206,24 @@ function Target(trackId) {
     this.identityId = null;       // filled at commit time
     this._touched = false;        // got a matched detection this frame (sync: re-fuse at frame end)
     this._snapMean = null;        // frame-start frameIdxMean() snapshot (sync); null outside a frame
+    this._lost = false;           // no detection left at frame start (match gate: matched ungated)
+    this._proj = null;            // targetProjection's cache: {p3, ext, pts}
+}
+
+// The target's 3D projected into one camera, per node — [x, y] normalized, or
+// null where the node has no 3D — which the 2D term compares each of that view's
+// detections against. Cached on the target and recomputed only when its points3d
+// or the camera changes: points3d is only ever REPLACED (`_retriangulate`), never
+// edited, and within a frame every view is scored against the same points3d (the
+// sync fix), so this runs once per (target, view) rather than once per (target,
+// detection). Same function on the same inputs, so the numbers are identical.
+function targetProjection(target, ext) {
+    var c = target._proj, p3 = target.points3d;
+    if (c !== null && c.p3 === p3 && c.ext === ext) return c.pts;
+    var n = points3dNodeCount(p3), pts = new Array(n), tp = [0, 0, 0];
+    for (var k = 0; k < n; k++) pts[k] = readPoint3d(p3, k, tp) ? projectNorm(tp, ext) : null;
+    target._proj = { p3: p3, ext: ext, pts: pts };
+    return pts;
 }
 
 Target.prototype.frameIdxMean = function () {
@@ -200,6 +290,9 @@ export class CrossViewTracker {
      *   that frame's association runs. 0 disables eviction (reproduces the
      *   pre-fix, unbounded-staleness reference behavior) for reproducibility/
      *   debugging; any positive number is floored to an integer.
+     *   matchGate (0) — THE MATCH GATE (see file header). A tracked target only
+     *   takes a detection it scores positively on; lost targets re-acquire
+     *   ungated. 0 (the default since #285) is the pre-gate forced assignment.
      */
     constructor(hp) {
         hp = hp || {};
@@ -216,6 +309,8 @@ export class CrossViewTracker {
         this.nodeWeights = Array.isArray(hp.nodeWeights) ? hp.nodeWeights : null;
         // Stale-anchor fix (see file header). Default 20; 0 = off (pre-fix behavior).
         this.stale = Math.max(0, Math.floor(num(hp.stale, 20)));
+        // Match gate (see file header). Default off (#285); 1 = on.
+        this.matchGate = num(hp.matchGate, 0) > 0;
 
         this.targets = [];                 // list of live Target
         this.unmatchedByCam = new Map();   // camName -> Detection[] (births buffer)
@@ -272,6 +367,9 @@ export class CrossViewTracker {
             // camera processed later this frame doesn't see a mean already moved
             // by an earlier camera's match this same frame.
             tg._snapMean = tg.frameIdxMean();
+            // Match gate: a target with nothing left to anchor it is "lost" for
+            // the whole frame, even once an earlier camera re-acquires it.
+            tg._lost = tg.detsByCam.size === 0;
         }
     }
 
@@ -284,34 +382,26 @@ export class CrossViewTracker {
             if (tg._touched) tg._retriangulate();
             tg._touched = false;
             tg._snapMean = null;
+            tg._lost = false;
         }
     }
 
     _trackView(dets, cam) {
-        var self = this;
         var N = this.targets.length, M = dets.length;
         var matchedDet = new Array(M).fill(false);
 
         if (N > 0 && M > 0) {
-            // adjacency[t][d] = 2D term + 3D term (higher = better). We negate for
-            // LUCID's minimizing Hungarian (== maximize adjacency).
-            var cost = [];
-            for (var t = 0; t < N; t++) {
-                cost[t] = [];
-                for (var d = 0; d < M; d++) {
-                    cost[t][d] = -this._adjacency(this.targets[t], dets[d], cam);
+            if (!this.matchGate) {
+                this._assign(this.targets, dets, cam, matchedDet, false);
+            } else {
+                // Match gate (see file header): tracked targets first, gated;
+                // lost targets then take what is left, forced, as before.
+                var tracked = [], lost = [];
+                for (var t = 0; t < N; t++) {
+                    (this.targets[t]._lost ? lost : tracked).push(this.targets[t]);
                 }
-            }
-            var assign = hungarianAlgorithm(cost);   // assign[t] = det col, or out-of-range
-            for (var ti = 0; ti < N; ti++) {
-                var di = assign[ti];
-                if (di != null && di >= 0 && di < M) {
-                    // Sync fix: record the match now but defer re-triangulation to
-                    // _endFrame(), so a later camera THIS frame is scored against
-                    // the same points3d an earlier camera this frame was.
-                    this.targets[ti]._deferDetection(dets[di]);
-                    matchedDet[di] = true;
-                }
+                this._assign(tracked, dets, cam, matchedDet, true);
+                this._assign(lost, dets, cam, matchedDet, false);
             }
         }
 
@@ -321,6 +411,38 @@ export class CrossViewTracker {
         this.unmatchedByCam.set(cam.name, leftover);
 
         this._initializeTargets();
+    }
+
+    // One Hungarian over `targets` × this view's still-unmatched detections.
+    // adjacency[t][d] = 2D term + 3D term (higher = better), negated for LUCID's
+    // minimizing Hungarian (== maximize adjacency). Ungated, every target takes
+    // a detection while any are free (reference behavior). Gated, each target
+    // also gets a "no match" column at adjacency 0, so it takes a detection only
+    // when that raises the total — i.e. never one it scores at or below 0.
+    _assign(targets, dets, cam, matchedDet, gated) {
+        var cols = [];
+        for (var d = 0; d < dets.length; d++) if (!matchedDet[d]) cols.push(d);
+        var N = targets.length, M = cols.length;
+        if (N === 0 || M === 0) return;
+        var width = gated ? M + N : M;
+        var cost = [];
+        for (var t = 0; t < N; t++) {
+            cost[t] = new Array(width).fill(0);   // gated "no match" columns stay 0
+            for (var c = 0; c < M; c++) {
+                cost[t][c] = -this._adjacency(targets[t], dets[cols[c]], cam);
+            }
+        }
+        var assign = hungarianAlgorithm(cost);   // assign[t] = column, or out-of-range
+        for (var ti = 0; ti < N; ti++) {
+            var ci = assign[ti];
+            if (ci == null || ci < 0 || ci >= M) continue;   // unmatched / "no match"
+            if (gated && !(cost[ti][ci] < 0)) continue;      // tie at 0 or NaN: not a match
+            // Sync fix: record the match now but defer re-triangulation to
+            // _endFrame(), so a later camera THIS frame is scored against
+            // the same points3d an earlier camera this frame was.
+            targets[ti]._deferDetection(dets[cols[ci]]);
+            matchedDet[cols[ci]] = true;
+        }
     }
 
     // Cost = adjacency_2d + adjacency_3d (reference `set_adjacency_matrix`).
@@ -348,14 +470,13 @@ export class CrossViewTracker {
         var ext = det.cam.extrinsicMatrix;
         var decay = Math.exp(-this.timePenalty * dt);
         var sum = 0;
-        var n = Math.min(points3dNodeCount(target.points3d), det.pointsNorm.length);
-        var tp = [0, 0, 0];
+        var projs = targetProjection(target, ext);              // once per (target, view), not per detection
+        var n = Math.min(projs.length, det.pointsNorm.length);
         for (var k = 0; k < n; k++) {
             var w = this._nodeWeight(k);
             if (w === 0) continue;                               // node dropped from matching
-            var dp = det.pointsNorm[k];
-            if (dp == null || !readPoint3d(target.points3d, k, tp)) continue;  // np.nansum skips NaN
-            var proj = projectNorm(tp, ext);
+            var dp = det.pointsNorm[k], proj = projs[k];
+            if (dp == null || proj === null) continue;           // np.nansum skips NaN
             var dx = dp[0] - proj[0], dy = dp[1] - proj[1];
             var distance = Math.sqrt(dx * dx + dy * dy);
             if (!isFinite(distance)) continue;                   // np.nansum: skip degenerate
@@ -371,7 +492,7 @@ export class CrossViewTracker {
     _adjacency3d(target, det, cam) {
         if (target.points3d == null) return 0;
         var ext = det.cam.extrinsicMatrix;
-        var ray = backProjectToRays(det.pointsNorm, ext);        // origin + per-node dirs
+        var ray = detectionRays(det, ext);                       // origin + per-node dirs, cast once per detection
         var dists = pointsToRayDistances(target.points3d, ray.origin, ray.directions);
         var sum = 0;
         for (var k = 0; k < dists.length; k++) {

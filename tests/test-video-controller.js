@@ -8,7 +8,7 @@
 
 (function () {
     const { describe, it, beforeEach, assertEqual, assertNotNull,
-        assertTrue, assertFalse, assertGreaterThan } = TestFramework;
+        assertTrue, assertFalse, assertGreaterThan, assertNull } = TestFramework;
 
     // Mock decoder - simulates OnDemandVideoDecoder without real video
     function createMockDecoder(width, height, totalFrames) {
@@ -274,31 +274,41 @@
             }
         });
 
-        it('pausePlayback stops and steps one frame forward (frame-accurate snap)', async function () {
+        it('pausePlayback stops and re-decodes the frame it stopped on (no forward step)', async function () {
+            var overlaid = [];
+            ctrl.callbacks.drawOverlays = function (f) { overlaid.push(f); };
             ctrl.startPlayback();
             await new Promise(function (r) { setTimeout(r, 0); });
+            state.views.forEach(function (v) { v.decoder.lastSeekedFrame = null; });
             state.currentFrame = 10;
             ctrl.pausePlayback();
             await new Promise(function (r) { setTimeout(r, 0); });   // seekToFrame is async
             assertFalse(state.isPlaying, 'paused');
-            assertEqual(state.currentFrame, 11, 'snapped one frame forward via frame-accurate seek');
+            assertEqual(state.currentFrame, 10, 'rests on the frame playback stopped on — no +1 step');
+            state.views.forEach(function (v, i) {
+                assertEqual(v.decoder.lastSeekedFrame, 10, 'view ' + i + ' re-decoded frame 10 via getFrame');
+            });
+            assertEqual(overlaid[overlaid.length - 1], 10, 'overlay redrawn at the same frame after the re-decode');
         });
 
-        it('pausePlayback clamps at the last frame', async function () {
+        it('pausePlayback at the last frame stays on the last frame', async function () {
             ctrl.startPlayback();
             await new Promise(function (r) { setTimeout(r, 0); });
             state.currentFrame = state.totalFrames - 1;   // 99
             ctrl.pausePlayback();
             await new Promise(function (r) { setTimeout(r, 0); });
-            assertEqual(state.currentFrame, state.totalFrames - 1, 'does not advance past the last frame');
+            assertEqual(state.currentFrame, state.totalFrames - 1, 'stays on the last frame');
         });
 
-        it('pausePlayback does not snap when not playing', async function () {
+        it('pausePlayback does not re-decode when not playing', async function () {
             state.currentFrame = 20;
             assertFalse(state.isPlaying);
-            ctrl.pausePlayback();   // no-op snap (wasPlaying false)
+            ctrl.pausePlayback();   // wasPlaying false → stop only
             await new Promise(function (r) { setTimeout(r, 0); });
-            assertEqual(state.currentFrame, 20, 'no forward step when already paused');
+            assertEqual(state.currentFrame, 20, 'frame unchanged when already paused');
+            state.views.forEach(function (v, i) {
+                assertEqual(v.decoder.lastSeekedFrame, null, 'view ' + i + ' not re-decoded');
+            });
         });
 
         it('stopPlayback cancels animation frame', async function () {
@@ -388,6 +398,215 @@
             // At 2x: offset should be 100 - 100*2 = -100
             assertEqual(view.zoom.offsetX, -100);
             assertEqual(view.zoom.offsetY, -100);
+        });
+    });
+
+    // View ▸ Native Resolution (Shift+0) and the snap to it. The pixel-exact
+    // behaviour needs real layout and a real compositor, so it is pinned by
+    // tests/e2e/native-resolution-zoom.mjs; these cover the pure rule and the
+    // no-layout fallbacks.
+    describe('VideoController - Native resolution (1:1)', function () {
+        var state, ctrl;
+
+        beforeEach(function () {
+            state = createTestState(2, 100);
+            ctrl = new VideoController(state, {});
+        });
+
+        it('snapZoomToNative lands a step that crosses 1:1 on it, from either side', function () {
+            var up = snapZoomToNative(1.40, 1.54, 1.5);
+            assertTrue(up.snapped, 'zoom in through 1:1 snaps');
+            assertEqual(up.scale, 1.5);
+            var down = snapZoomToNative(1.60, 1.45, 1.5);
+            assertTrue(down.snapped, 'zoom out through 1:1 snaps');
+            assertEqual(down.scale, 1.5);
+        });
+
+        it('snapZoomToNative lands a step that ends just short of 1:1 on it', function () {
+            var s = snapZoomToNative(1.30, 1.5 * (1 - NATIVE_SNAP_TOL / 2), 1.5);
+            assertTrue(s.snapped, 'within the tolerance');
+            assertEqual(s.scale, 1.5);
+        });
+
+        it('snapZoomToNative leaves other steps alone', function () {
+            var s = snapZoomToNative(1.0, 1.1, 1.5);
+            assertFalse(s.snapped);
+            assertEqual(s.scale, 1.1);
+            var n = snapZoomToNative(1.0, 1.1, null);
+            assertFalse(n.snapped, 'no 1:1 scale known → no snap');
+            assertEqual(n.scale, 1.1);
+        });
+
+        it('snapZoomToNative does not pull a step that STARTS on 1:1 back to it', function () {
+            var s = snapZoomToNative(1.5, 1.5 * 1.1, 1.5);
+            assertFalse(s.snapped, 'leaving 1:1 is not a crossing');
+            assertEqual(s.scale, 1.5 * 1.1);
+            var t = snapZoomToNative(1.5, 1.5 * 1.01, 1.5);
+            assertFalse(t.snapped, 'not even a small step');
+        });
+
+        it('zoomPercentLabel reads the zoom as a percentage of 1:1', function () {
+            assertEqual(zoomPercentLabel(1.5, 1.5, true), '100%', 'at 1:1');
+            assertEqual(zoomPercentLabel(1.875, 1.5, false), '125%');
+            assertEqual(zoomPercentLabel(0.75, 1.5, false), '50%');
+            assertEqual(zoomPercentLabel(15, 1.5, false), '1000%');
+            assertEqual(zoomPercentLabel(2, null, false), 'Zoomed', 'no 1:1 scale known');
+        });
+
+        it('zoomPercentLabel never reads "100%" for a view that is not exactly at 1:1', function () {
+            assertEqual(zoomPercentLabel(1.497, 1.5, false), '99.8%', 'just under');
+            assertEqual(zoomPercentLabel(1.5 * 1.003, 1.5, false), '100.3%', 'just over');
+            assertEqual(zoomPercentLabel(1.5 * 0.9999, 1.5, false), '≈100%', 'a hair under');
+            assertEqual(zoomPercentLabel(1.5, 1.5, false), '≈100%', 'the 1:1 scale, but not held at 1:1');
+        });
+
+        it('the badge presets are 50 / 100 / 150 / 200 % of 1:1', function () {
+            assertEqual(JSON.stringify(ZOOM_PRESET_PERCENTS), JSON.stringify([50, 100, 150, 200]));
+        });
+
+        it('zoomRatioLabel gives screen:video pixels in lowest terms', function () {
+            assertEqual(zoomRatioLabel(50), '1:2');
+            assertEqual(zoomRatioLabel(100), '1:1');
+            assertEqual(zoomRatioLabel(150), '3:2');
+            assertEqual(zoomRatioLabel(200), '2:1');
+            assertEqual(zoomRatioLabel(125), '5:4');
+            assertEqual(zoomRatioLabel(300), '3:1');
+        });
+
+        it('without layout, setZoomPercent does nothing and zoomPercent is null', function () {
+            var view = state.views[0];
+            ctrl.initZoom(view);
+            assertFalse(ctrl.setZoomPercent(view, 150), 'no 1:1 scale → no preset');
+            assertEqual(view.zoom.scale, 1.0, 'scale untouched');
+            assertNull(ctrl.zoomPercent(view));
+            assertFalse(ctrl.setZoomPercent(view, 0), 'a non-positive percentage is refused');
+        });
+
+        it('nativeZoomScales is null for a canvas that is not laid out', function () {
+            assertNull(ctrl.nativeZoomScales(state.views[0]), 'detached canvas');
+            assertNull(ctrl.nativeZoomScales({ videoWidth: 640, videoHeight: 480 }), 'no canvas');
+        });
+
+        it('without layout, zoomVideo never snaps and setNativeResolution is a no-op', function () {
+            var view = state.views[0];
+            ctrl.initZoom(view);
+            assertFalse(ctrl.zoomVideo(view, 2.0), 'no snap');
+            assertFalse(!!view.zoom.native);
+            assertFalse(ctrl.setNativeResolution(true), 'no laid-out view → not on');
+            assertFalse(!!state.nativeResolution);
+        });
+
+        it('initZoom seeds the 1:1 flag from state.nativeResolution', function () {
+            state.nativeResolution = true;
+            ctrl.initZoom(state.views[0]);
+            assertTrue(state.views[0].zoom.native, 'a pane rebuild keeps 1:1');
+            state.nativeResolution = false;
+            ctrl.initZoom(state.views[1]);
+            assertFalse(state.views[1].zoom.native);
+        });
+
+        it('_rotatedBBox takes a separate vertical scale (90° swaps it into the width)', function () {
+            var b0 = ctrl._rotatedBBox(100, 50, 2, 0, 3);
+            assertEqual(b0.width, 200);
+            assertEqual(b0.height, 150);
+            var b90 = ctrl._rotatedBBox(100, 50, 2, 90, 3);
+            assertEqual(b90.width, 150, 'height × scaleY becomes the width');
+            assertEqual(b90.height, 200);
+            var same = ctrl._rotatedBBox(100, 50, 2, 90);
+            assertEqual(same.width, 100, 'scaleY defaults to scale');
+        });
+    });
+
+    // Only the views on screen are decoded and played (`callbacks.isViewShown`,
+    // which the app feeds `isViewDocked`): with one camera solo'd out of 17,
+    // the other 16 used to decode every step and play during playback.
+    describe('VideoController - Only shown views (isViewShown)', function () {
+        var state, ctrl, shown;
+
+        beforeEach(function () {
+            state = createTestState(3, 100);
+            shown = { cam0: false, cam1: true, cam2: false };
+            ctrl = new VideoController(state, {
+                drawOverlays: function () {},
+                updateSeekbar: function () {},
+                isViewShown: function (v) { return !!shown[v.name]; },
+            });
+        });
+
+        it('seekToFrame decodes the shown views only', async function () {
+            await ctrl.seekToFrame(42);
+            assertEqual(state.views[1].decoder.lastSeekedFrame, 42, 'shown cam1 decoded');
+            assertEqual(state.views[0].decoder.lastSeekedFrame, null, 'hidden cam0 not decoded');
+            assertEqual(state.views[2].decoder.lastSeekedFrame, null, 'hidden cam2 not decoded');
+            assertEqual(state.currentFrame, 42);
+        });
+
+        it('with no view shown, seekToFrame decodes every view (as without the callback)', async function () {
+            shown = {};
+            await ctrl.seekToFrame(7);
+            for (var i = 0; i < state.views.length; i++) {
+                assertEqual(state.views[i].decoder.lastSeekedFrame, 7, 'view ' + i + ' decoded');
+            }
+        });
+
+        it('startPlayback plays the shown views only', async function () {
+            ctrl.startPlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });
+            assertTrue(state.views[1].decoder.playingNative, 'shown cam1 plays');
+            assertFalse(state.views[0].decoder.playingNative, 'hidden cam0 does not play');
+            assertFalse(state.views[2].decoder.playingNative, 'hidden cam2 does not play');
+            ctrl.stopPlayback();
+        });
+
+        it('a change of shown views during playback restarts it on the new views', async function () {
+            ctrl.startPlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });
+            assertTrue(state.views[1].decoder.playingNative, 'cam1 plays first');
+            shown = { cam0: false, cam1: false, cam2: true };   // the solo view switched
+            for (var i = 0; i < 20 && !state.views[2].decoder.playingNative; i++) {
+                await new Promise(function (r) { setTimeout(r, 20); });
+            }
+            assertTrue(state.isPlaying, 'still playing after the switch');
+            assertTrue(state.views[2].decoder.playingNative, 'newly shown cam2 plays');
+            assertFalse(state.views[1].decoder.playingNative, 'no-longer-shown cam1 is paused');
+            ctrl.stopPlayback();
+        });
+
+        it('a view that goes off screen has its decoded frames released; a shown one keeps them', async function () {
+            var released = [0, 0, 0];
+            state.views.forEach(function (v, i) { v.decoder.releaseFrames = function () { released[i]++; }; });
+            await ctrl.seekToFrame(5);                       // cam1 shown
+            assertEqual(released.join(), '0,0,0', 'nothing released while the shown set is unchanged');
+            shown = { cam0: false, cam1: false, cam2: true };   // the solo view switched to cam2
+            await ctrl.seekToFrame(6);
+            assertEqual(released[1], 1, 'cam1, no longer shown, released its frames');
+            assertEqual(released[2], 0, 'cam2, now shown, keeps its frames');
+            assertEqual(released[0], 0, 'cam0, never shown, untouched');
+            await ctrl.seekToFrame(7);
+            assertEqual(released[1], 1, 'released once, on the transition — not on every step');
+        });
+
+        it('a decoder reused by a shown view is not released (decoders are pooled across sessions)', async function () {
+            var released = 0;
+            var shared = state.views[1].decoder;
+            shared.releaseFrames = function () { released++; };
+            await ctrl.seekToFrame(5);                       // cam1 (shared decoder) shown
+            // A session switch: new view objects, cam2 now holds the same decoder.
+            state.views[2].decoder = shared;
+            shown = { cam0: false, cam1: false, cam2: true };
+            await ctrl.seekToFrame(6);
+            assertEqual(released, 0, 'the shared decoder is still shown through cam2, so it keeps its frames');
+        });
+
+        it('pausePlayback re-decodes the shown views only', async function () {
+            ctrl.startPlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });
+            state.views.forEach(function (v) { v.decoder.lastSeekedFrame = null; });
+            state.currentFrame = 10;
+            ctrl.pausePlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });
+            assertEqual(state.views[1].decoder.lastSeekedFrame, 10, 'shown cam1 re-decoded');
+            assertEqual(state.views[0].decoder.lastSeekedFrame, null, 'hidden cam0 not re-decoded');
         });
     });
 

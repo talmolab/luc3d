@@ -39,7 +39,14 @@ the old `app.js` entry point.
   labeled pose without first nudging a node) → nearest predicted instance →
   default BFS spread layout at the cursor.
 - `setupInteraction()` — instantiates `InteractionManager` with all callback
-  wiring (selection, drag, double-click, edit-group, etc.).
+  wiring (selection, drag, double-click, edit-group, etc.). Its
+  `onInstanceDeleted` — the tail of the Delete key, Edit ▸ Delete Instance and
+  the toolbar's "- Instance" — calls `markDirty()`. It used not to, so a plain
+  Delete left the project clean: no prompt on closing the tab, and none on a
+  session switch, which evicts the session's lazy store and the delete with it.
+  Pinned by `tests/e2e/sequence-lazy-workflow.mjs` cycle 5c ("every delete marked
+  the project (and its session) dirty"), which failed for every path but the
+  context menu before.
 - `setup3DViewport()` — instantiates `Viewport3D` and wires the
   "Show Camera View"/"Show Initial View" buttons. **Respects the `\` toggle**
   (`isViewport3DVisible()`, `ui/panel-visibility.js`): it no longer clears the
@@ -65,11 +72,20 @@ the old `app.js` entry point.
 - `setupTimeline()` — instantiates `Timeline` and wires its frame-change /
   range-select callbacks plus the display-mode button group. The frame-change /
   drag-end callbacks fall back to `navigateToFrame` when there's no video.
-- `updateFpsDisplay()` — refreshes the FPS readout.
+  Passes `getColorByIdentity` (reads `state.colorByIdentity`) so the
+  timeline's track rows use the palette the canvas uses.
+- `updateFpsDisplay()` — refreshes the FPS readout, and the frame readout's
+  times (`refreshReadoutTotals`), which are frame / fps.
 
 **Imports from project modules.**
-- `../ui/app-state.js` — `state`, controller singletons + setters, `VIEW_NAMES`.
-- `./pose-data.js` — `Instance`, `UnlinkedInstance`.
+- `../ui/app-state.js` — `state`, controller singletons + setters, `VIEW_NAMES`,
+  `isViewDocked` (the video controller's `isViewShown`).
+- `./pose-data.js` — `Instance`, `UnlinkedInstance`, `points3dNodeCount`,
+  `getPoint3d`, `groupDisplayName` (the group name in every interaction status
+  line — `onInstanceConverted`, `onClonePredictedGroup`,
+  `onDoubleClickReprojected`, `onInstanceDeleted`, `onAssignmentGroupCreated`.
+  Never index `session.tracks` by a group's `trackIdx` (it has none) or by its
+  `identityId`).
 - `./triangulation.js` — `getInstanceGroupsForFrame`, `updateTimelineForFrame`,
   `reTriangulateGroup`, `sessionHasCalibration`.
 - `../loading/video.js` — `OnDemandVideoDecoder`, `VideoController`.
@@ -79,8 +95,23 @@ the old `app.js` entry point.
 - `../demo-data.js` — `createDemoSession`.
 - `../ui/ui-wiring.js` — `setupUI`, `setupMenus`, `updateSeekbar`,
   `onPlaybackStateChange`, `fitTimelineToData`.
+- `../ui/frame-readout.js` — `refreshReadoutTotals`, from `updateFpsDisplay`.
+- `../ui/info-tip.js` — `installInfoTips`, called FIRST in `init()`, before any
+  panel renders: the listeners are delegated, so they must be in place before
+  the first `[data-infotip]` element exists.
+- `../ui/node-tooltip.js` — `installNodeTooltip`, right after it (the listeners
+  that put the node tooltip away on a press, key, wheel, scroll or resize).
 - `../ui/info-panel.js` — `setupPanelTabs`, `setupSkeletonEditing`,
-  `updateInfoPanel`.
+  `setupVideosTab` (the Videos tab's Load/Remove buttons, wired once here
+  because `updateInfoPanel`'s no-session early return used to leave them dead on
+  a fresh app — luc3d #216), `updateInfoPanel`.
+- `../ui/plane-definition.js` — `setupPlaneDefinition` (called from `init()`
+  right after `setupSkeletonEditing`, and **before** `paneManager.init` — its
+  drop listeners are delegated on the `#videoDock` container, which is static
+  markup, so panes added later are covered without re-wiring) and
+  `planeInteractionCallbacks` (`Object.assign`ed onto the InteractionManager's
+  callback bag in `setupInteraction`, so `ui/interaction.js` needs no import of
+  the plane feature).
 - `../ui/layout-controls.js` — `setupSplitHandles`.
 - `../ui/rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`.
 - `../ui/sessions-panes.js` — `populateViewStrip`, `populateSessionStrip`.
@@ -106,7 +137,1199 @@ edit-group remove/add).
 
 ---
 
+### pose/plane-fit.js
+
+**Purpose.** The **one least-squares plane fit in the app**, and the symmetric
+eigensolver it needs, in a module with no dependency but `pose/pose-data.js`.
+
+**Why it exists as its own file.** `pose/plane-data.js` has to be able to fit a
+plane, to enforce a `plane-locked` node's constraint in
+`planeLockForNode` / `constrainPoint3dForNode` / `usablePlaneFit`. It cannot import
+`pose/triangulation.js`, where both functions used to live: that module reaches
+into `ui/app-state.js`, `ui/rendering.js`, `ui/info-panel.js`, `ui/settings.js`
+and `import-export/save-load.js`, so importing it would drag the whole UI into a
+model module whose own header promises the opposite, and every Node test that
+imports `plane-data.js` with no loader hooks would stop working.
+Duplicating the maths in the model was the alternative and is worse: a derived
+fit has to agree EXACTLY with the one `Fit` stores, or a held corner projected
+onto the derived plane moves AGAIN the next time the user clicks Fit. One
+definition, two importers.
+
+**Key exports.**
+- **`fitPlaneToPoints3d(points3d)`** — total-least-squares plane through the
+  centroid: the eigenvector of the SMALLEST eigenvalue of the points' 3x3
+  covariance, which minimizes squared PERPENDICULAR distance. Returns
+  `{centroid, normal, rms, nPoints}`, or **null** for fewer than 3 present
+  points, coincident points, or COLLINEAR ones — collinear points admit a
+  pencil of planes, and "fitting" to an arbitrary member of it would silently
+  rotate the annotation to nonsense. The middle eigenvalue against the largest
+  is what detects that. **The normal's SIGN is arbitrary** (it is a PCA
+  eigenvector), which is why `pose/plane-angle.js` measures an unsigned angle
+  and why the mesh exporters derive winding instead of trusting it.
+- **`jacobiEigen(M, maxIter?, tol?)`** — Jacobi rotations for an NxN symmetric
+  matrix, returning `{eigenvalues, eigenvectors}` (vectors as ROWS, paired by
+  index, **unsorted**). Exported because the DLT solver reads it from here too:
+  `pose/triangulation-core.js` imports and re-exports it rather than keeping a
+  second copy, so there is ONE implementation. It was module-private before the
+  split.
+- **`planeIntersectionBasis(fits)`** — several planes reduced to an orthonormal
+  description of what they have in common: `{dirs, offsets, used}` with
+  `dirs[j]·x = offsets[j]`. Gram-Schmidt over the augmented plane equations
+  `[n | d]`, which is what makes the projection below a sum of independent
+  corrections instead of a linear solve and, more usefully, makes the RANK fall
+  out — 1 a plane, 2 a line, 3 a point, 0 nothing. This is the geometry behind
+  `PlaneModel.planeLockForNode`: a `plane-locked` node is held by every plane it
+  belongs to, so what it may move in is their intersection.
+  A plane that adds no independent direction is **dropped, not averaged in**,
+  on a minimum-angle threshold of about 0.06° (`PLANE_INDEPENDENCE_TOL`, module
+  -private): two nearly-parallel planes do intersect, in a line that runs off
+  towards infinity as they line up, so fits a millimetre apart and half a degree
+  out would put that line a hundred millimetres away — a worse answer than
+  admitting the second plane says nothing new. Planes meant to constrain a
+  corner in two directions, a floor and a wall, cross at a real angle.
+- **`projectOntoPlaneIntersection(xyz, basis)`** — the nearest point to `xyz`
+  satisfying every constraint in `basis`, or null if the arithmetic did not stay
+  finite. Orthonormal directions mean each correction is orthogonal to the ones
+  before it and cannot undo them, so this is the exact projection and
+  re-projecting a point already on the subspace is a no-op. A rank-3 basis
+  ignores `xyz` entirely, which is the point.
+
+**Imports from project modules.** `./pose-data.js` — `points3dNodeCount`,
+`readPoint3d`. That module imports nothing at all, so this one is importable in
+Node with no stubs — which is the point.
+
+**Imported by.** `pose/triangulation.js` (which re-exports
+`fitPlaneToPoints3d` unchanged, because every existing caller and test reads it
+from there), `pose/triangulation-core.js` (`jacobiEigen`, re-exported) and
+`pose/plane-data.js`. Note the core is worker-loaded, so nothing heavier than
+`./pose-data.js` may ever be added to this module's imports.
+
+**Tests.** Covered through its callers: `tests/test-plane-constrained-fit.mjs`
+(the unconstrained path as the constrained one's baseline),
+`tests/test-plane-nodes.mjs` §20b (the derived fit) and §20c (the intersection,
+including the rank-1/2/3 ladder, the fourth plane that adds nothing and the
+near-duplicate that is dropped), `tests/test-plane-angle.mjs`,
+`tests/e2e/define-plane-mode.mjs` (the collinear and two-point refusals) and
+`tests/e2e/plane-lock-holds.mjs`.
+
+---
+
+### pose/plane-nodes.js
+
+**Purpose.** The **global pool of plane nodes**. A plane node used to belong to
+exactly one plane (`PlaneSkeleton` owned the node names, the colours and a flat
+per-plane `points3d`), and that representation cannot express the thing the
+feature is for — two planes MEETING along a shared line. Duplicated corners are
+two independent 3D points that drift apart the moment either plane is
+re-solved, silently splitting the annotated intersection. So nodes moved out of
+the planes and into one pool; a plane became an ordered list of node
+references.
+
+**Key exports.**
+- `class PlaneNode` — `id` (stable, NEVER reused), `name`, `color`, `pin`,
+  `xyz` (`Float64Array(3)`, all-NaN = untriangulated, matching
+  `InstanceGroup.points3d`) and `error` (mean reprojection error, px).
+  `hasPoint3d()` / `getPoint3d()` / `setPoint3d(xyz, {force})` /
+  `clearPoint3d({force})`. **The node's `xyz` is the single source of truth for
+  a plane node's 3D** — nothing else stores one, and every writer funnels
+  through `setPoint3d`, which REFUSES on a `locked` node unless forced. That
+  refusal is the entire locking mechanism.
+- **TWO pin states**, because "do not move this" and "do not move this OFF ITS
+  PLANE" are different promises:
+
+  | `pin` | meaning |
+  |---|---|
+  | `'none'` | unpinned |
+  | `'plane-locked'` | may move, but only within EVERY plane it is a member of |
+  | `'locked'` | the 3D is frozen outright — what the constrained-fit subsystem calls an ANCHOR |
+
+  `plane-locked` is **not** an anchor and must never reach
+  `fitPlaneConstrained`: its position is not fixed, so a fit that held it there
+  would be solving the wrong problem. The two chokepoints every
+  fit/triangulation consumer reads — `planeImmutableMask`
+  (`ui/plane-definition.js`) and `planeNodeImmutability` (`plane-data.js`) —
+  therefore report `locked` ONLY. Nor can `plane-locked` be enforced here: the
+  restriction is geometric and a node cannot resolve a plane's fit — nor does
+  it know which planes reference it — so `PlaneModel.planeLockForNode` /
+  `constrainPoint3dForNode` own it. **The node carries no plane id.** What
+  holds it is its MEMBERSHIP, so one plane leaves it a surface, two the line
+  they meet in and three a single point; adding it to a plane tightens the
+  constraint by itself and deleting one loosens it with no cascade. The planes
+  it projects onto do NOT have to be stored `planeFit`s — see `usablePlaneFit`;
+  requiring one made this pin state inert in practice, since setting the pin is
+  itself what clears the fits of the planes holding it.
+- `immutable` is now an **accessor** for `pin === 'locked'` (getter and setter).
+  That is what kept the two-state split small: `setPoint3d`'s refusal,
+  `clearPoint3d`, `mutableIds`, `nodeFreezeState` and every one of the ~30
+  readers written against the original boolean work unchanged. The setter
+  collapses `plane-locked` → `'none'` on `false`, which is what "unpin this
+  node" has always meant.
+- `nodePinState(node)` → the tri-state value; the accessor new code should read,
+  since `immutable` cannot tell `plane-locked` from `none`. `normalizePin(v)`
+  coerces anything (including the legacy boolean and a malformed saved value)
+  into a valid state, defaulting to `'none'` rather than throwing — a malformed
+  project file must load. `PIN_STATES` lists them in increasing strictness.
+- `class PlaneNodePool` — the ordered pool. Its order is the canonical index
+  space every `PlaneInstance` is keyed by, so it owns the operations that
+  change it: `addNode(name, {color, immutable, pin})`
+  (`pin` wins over `immutable` when both are given), `removeNode(id)`,
+  `moveNode(from, to)` (the last two are LOW LEVEL — go through `PlaneModel`,
+  which keeps the per-view 2D in step). Plus `getNode(id)`, `nodeAt(i)`,
+  `indexOf(id)`, `has(id)`, `ids()`/`names()`/`colors()`, `setImmutable`,
+  `setPin(id, pin)` (the only way to reach `plane-locked`, since `setImmutable`
+  is a boolean and can only express the two ends; it takes NO plane, because
+  membership is the constraint and there is nothing here to nominate),
+  `freezeState`, `hasPoint3d`/`getPoint3d`/`setPoint3d`/`clearPoint3d` by id,
+  `points3d()` (flat, pool order, freshly allocated) and `mutableIds()`.
+  `adoptNode(node)` is the RESTORE-path twin of `addNode`: it takes an
+  already-built node and KEEPS ITS ID, because plane membership, plane edges and
+  every placement's `nodeIds` ledger are all stored as IDs — re-minting them on
+  load would re-point every one of those references at whatever node landed in
+  that slot. It advances `_nextId` past the adopted ID, so the pool's "IDs are
+  NEVER reused" promise survives a load. Used by `pose/plane-serialization.js`.
+- `nodeFreezeState(node)` → `'mutable' | 'frozen' | 'frozen-unsolved'`, keyed on
+  `locked` alone (a `plane-locked` node reports `'mutable'`, because it does
+  move). **It deliberately kept its three values** rather than widening to the
+  new state: the return value is used verbatim as a CSS class
+  (`'plane-node-' + st`) and keyed by `nodeStateTitle` and `styles.css`, so a
+  fourth value would mean more edit sites for no gain.
+  The flag is settable at ANY time, including before anything is triangulated —
+  marking a known reference up front is reasonable and rejecting it would be
+  obstructive. But a pinned node with no 3D can never ACQUIRE one, because
+  being pinned is exactly what forbids a solve from writing it, so that dead
+  end is NAMED rather than hidden. A constrained fit and the node table both
+  need to tell the three states apart without re-deriving the condition.
+- `PLANE_NODE_COLORS`, `defaultNodeColor(i)`.
+
+**Why per-node `Float64Array(3)` and not one flat pool array.** A flat
+pool-order array would have to be spliced in step with the node list on every
+add/remove/reorder — exactly the index-shifting fragility this module exists to
+remove. Callers that want the flat form ask for it explicitly
+(`points3d()` here, `points3dForPlane()` in `plane-data.js`) and get a fresh
+array in the order they asked for.
+
+**Imports from project modules.** None (deliberately dependency-free).
+
+**`Camera.setExtrinsics(rvec, tvec)`** replaces the extrinsics in place and
+drops the memoized `rotationMatrix` / `extrinsicMatrix` / `projectionMatrix`.
+Those three memoize on first read and there is no other way to invalidate them,
+so assigning `rvec`/`tvec` directly leaves a camera that REPORTS its new pose
+and PROJECTS with its old one — a divergence nothing would flag. It mutates
+rather than replacing the object on purpose: callers all over the app hold
+`Camera` references obtained by name lookup, and swapping in a new instance
+would leave some of them on the old extrinsics. Written for
+`pose/origin-rebase.js`; pinned by `tests/test-origin-rebase.mjs` §7.
+
+**Imported by.** `pose/plane-data.js` (which re-exports all of it),
+`pose/plane-serialization.js`.
+
+**Tests.** `tests/test-plane-nodes.mjs`,
+`tests/test-plane-serialization.mjs` (the `adoptNode` restore path).
+
+---
+
+### pose/plane-data.js
+
+**Purpose.** Data model for user-annotated **planes** — step 1 of re-defining
+the 3D viewer's origin (the end goal being a translation vector + rotation
+matrix that move the world frame onto an annotated plane). Owns the types
+annotation produces and nothing about the solve or the UI, which live in
+`pose/triangulation.js` and `ui/plane-definition.js`.
+
+**Key exports.**
+- `class PlaneSkeleton` — one plane: `nodeIds[]` (an ORDERED LIST OF NODE
+  REFERENCES into the pool), `edges` as pairs of **NODE IDS**, `name`, `color`,
+  `filled`, `triangulation` (`{views, nNodes, meanError}`) and `planeFit`
+  (`{centroid, normal, rms, nPoints}` — **the object a later step turns into
+  the translation + rotation that re-defines the origin**). Membership and
+  edges are IDs, never index pairs: an index pair breaks the instant the pool
+  shifts or a node is shared. `size`, `hasNode`/`indexOfNode`/`addNode(id)`/
+  `removeNode(id)` (which drops the edges through it)/`moveNode`,
+  `addEdge`/`hasEdge`/`removeEdge`/`removeEdgeBetween`, `clearTriangulation()`.
+  **Deliberately NOT a `Skeleton` subclass any more** — `Skeleton` models nodes
+  it OWNS (`addNode(name)` mints one, `removeNode(idx)` renumbers edges by
+  index), both actively wrong for references into a shared pool.
+  **`clearTriangulation()` drops `planeFit` + `triangulation` and NOTHING
+  ELSE.** It cannot reach a node's 3D — the plane holds no reference to the
+  pool. That asymmetry is the point: it is called on every 2D edit, placement
+  change and node-list change, so if it could still null 3D, a pinned node's
+  surveyed coordinate would evaporate the first time the user nudged an
+  unrelated corner in an unrelated view.
+- `class PlaneInstance extends Instance` — **one per VIEW**, covering the whole
+  pool (index = pool index), not one per (view, plane). `ui/interaction.js`
+  drags a plane node through the SAME `hasPoint`/`getX`/`getY`/`setPoint`/
+  `numNodes` path it drags a UserInstance through, and one instance per view
+  keeps that a single implementation. Carries `id`, `viewName`,
+  `type: 'plane'`, `nulledNodes` (Set of POOL INDICES; same field name and
+  meaning as a UserInstance's, so the inherited `hasAnyUsablePoint()` already
+  reads it), **`derivedNodes`** (Set of POOL INDICES whose 2D here was
+  REPROJECTED from the 3D rather than annotated — see below), `placedPlanes`
+  (Set of PLANE IDS — explicit, because with shared nodes "this node has a
+  position here" can no longer tell you which planes the user placed) and
+  **`nodeIds`** (the NODE ID of each column). Frame-independent by design.
+  - `nodeIds` is a LEDGER, not a second addressing scheme: callers still address
+    the instance by POOL INDEX through the inherited accessors. It exists
+    because **a count is not an identity.** An instance can be DETACHED from the
+    model (per-session placement maps), and while detached the pool can have a
+    node spliced out of the MIDDLE or moved. Re-syncing such a map by node COUNT
+    re-seats every column past the edit onto its neighbour's node — silently,
+    with every point still looking valid. Matching by ID is the only repair that
+    can tell those cases apart.
+  - `isNodeNulled(i)` / `toggleNodeNull(i)` / `isPlanePlaced(planeId)`,
+    `centroid(indices?)` (restrict to one plane's nodes for its label).
+  - `isNodeDerived(i)` / `setNodeDerived(i, on)` / `clearDerivedNodes(indices?)`
+    — the REPROJECTED flag. `triangulatePlane` reprojects a solved plane into the
+    views it is not placed on so the user can see (and correct) where it lands
+    there; such a point is exactly the projection of the current 3D, so it is not
+    evidence. Feeding it back would add no information while dragging the
+    reported reprojection error toward zero — a quality readout that improves
+    every time you press the button. So a derived point renders and drags like
+    any other, but is excluded from the solve and from the error average until
+    the user DRAGS it, which clears the flag. Deliberately separate from
+    `nulledNodes`: "turned off" and "never placed" are different facts, and a
+    right-click-off must not silently promote a reprojection to an annotation.
+  - `_indexFlagSets()` — every index-keyed flag set (`nulledNodes`,
+    `derivedNodes`) in one list, which the three index-remapping paths
+    (`resyncToNodeIds` / `removeNodeAt` / `moveNodeAt`) all iterate. A set left
+    un-remapped points at its NEIGHBOUR's node and every point still looks
+    valid — the aliasing failure class this whole model was rebuilt to avoid — so
+    add a new per-(view, node) set here and remapping follows for free.
+  - `appendNode(id)` — one unpositioned column. New slots are left UNPOSITIONED,
+    unlike the per-plane model: a node only becomes visible on a view once a
+    plane referencing it is placed there, and that is where seeding happens.
+  - `resyncToNodeIds(ids)` — re-seat the columns onto `ids` BY NODE ID; a
+    survivor keeps its point and its per-node flags (nulled, derived) wherever it
+    moved to, a dropped
+    node's column goes, a new node arrives unpositioned. The repair path for a
+    detached map, and what `attachPlacements` / `ensureInstance` use.
+  - `seedNodeNear(idx, cx, cy, ordinal, videoW, videoH)` — golden-angle spoke,
+    for a node joining an ALREADY-placed plane (an unpositioned node draws
+    nothing, so there would be nothing to grab).
+  - `removeNodeAt(i)` / `moveNodeAt(from, to)` — mirror the pool's splice/move,
+    carrying the per-node flag sets with their nodes.
+- `class PlaneModel` — pool + planes + `placements` (`Map<viewName,
+  PlaneInstance>`) + `meshObjects` (a `MeshObjectSet`, see
+  `pose/mesh-object-3d.js` — purely ADDITIVE: no method here reads or maintains
+  it, and `deletePlane` deliberately does NOT cascade into it, because membership
+  resolves lazily), and every operation that spans them. Doing any of these
+  piecemeal corrupts the index space: `createPlane`/`getPlane`/`deletePlane`
+  (**deletes NO nodes — every one survives**),
+  `adoptPlane(plane)` (the restore-path twin of `createPlane`, keeping the
+  plane's ID because `PlaneInstance.placedPlanes` stores plane IDs — see
+  `PlaneNodePool.adoptNode`),
+  `planesForNode(id)`, `planeLockForNode(nodeId)`,
+  `constrainPoint3dForNode(nodeId, xyz)`, `usableFitForPlane(planeOrId)`,
+  `ensureInstance`/`getInstance`/`views`/`allInstances`,
+  `attachPlacements(map)` (adopt a session-owned map, re-syncing every instance
+  to the pool and pruning placement flags for deleted planes),
+  `addNode`/`deleteNode`/`moveNode` (pool + every view's 2D + every plane's
+  membership and edges), `addNodeToPlane`/`createNodeInPlane`/
+  `removeNodeFromPlane`, `placePlane`/`unplacePlane`/`isPlanePlaced`/
+  `placedViews`/`placedPlanes`, `isNodeVisibleOn`/`visibleNodeIndices`/
+  `planeNodeIndices`, `invalidateNode3D(id)` and `invalidatePlane3D(plane)`.
+- **Deleting a plane deletes no nodes, ever.** Nodes are plane-independent now,
+  so a node no plane references is still a valid pool member the Nodes table
+  lists, and the user's only instrument for removing one is an explicit
+  `deleteNode`. Auto-deleting "orphans" would destroy exactly the nodes worth
+  keeping — a pinned surveyed reference, a corner staged for a plane not built
+  yet — as a side effect of an unrelated action, and deletion is the one path
+  no re-fit can undo. `removeNodeFromPlane` follows the same rule
+  (`deleteIfOrphan` defaults to FALSE, opt-in for a caller that has actually
+  confirmed the intent).
+- **`planeLockForNode(nodeId)`** answers what a `plane-locked` node may move
+  in: `{rank, planes, basis}`, where `rank` is how many directions it is pinned
+  in — **0** free, **1** a plane's surface, **2** the line two planes meet in,
+  **3** the single point three meet at, which is a lock in all but name — and
+  `planes` is every plane holding it that has a usable fit. The planes are its
+  MEMBERSHIP (`planesForNode`), never a nominated id: a node added to a wall is
+  held by that wall from the next call, a plane deleted stops holding anything
+  with no cascade, and there is no second record of "which plane" that could
+  disagree with the planes the node is actually in. Each plane contributes a
+  USABLE fit with the node EXCLUDED (`usablePlaneFit`), so no plane can be
+  derived from the very point being moved; the geometry is
+  `planeIntersectionBasis` in `pose/plane-fit.js`, which also decides which
+  planes are independent enough to count.
+- **`constrainPoint3dForNode(nodeId, xyz)`** is the SINGLE place the
+  `plane-locked` pin state is honoured: the point comes back as the NEAREST
+  position satisfying every plane the node belongs to
+  (`projectOntoPlaneIntersection`), so an edit that already satisfies them is
+  taken verbatim and re-applying the constraint to a committed position is a
+  no-op. A node that is not `plane-locked`, or that nothing can currently hold,
+  passes through untouched. It cannot live on `PlaneNode` (where `locked` is
+  enforced, in `setPoint3d`) because the constraint is geometric and a node can
+  neither resolve a plane's fit nor find the planes referencing it.
+- **`usablePlaneFit(plane, pool, excludeNodeId?)`** / **
+  `PlaneModel.usableFitForPlane(planeOrId)`** — the plane to project onto: the
+  stored `planeFit`, else one derived with `fitPlaneToPoints3d` from the plane's
+  own solved corners, writing nothing. **Requiring a STORED fit is what made
+  `plane-locked` do nothing at all**, and the loop is worth stating: `setNodePin`
+  (`ui/plane-definition.js`) clears the `planeFit` of every plane holding the node
+  whose pin just changed — including the planes it is being held in — so
+  plane-locking a node's last act was to remove the planes it was being locked
+  to. On a real five-plane cage, four planes had no stored fit and typing
+  `z = 2000` into the held corner left it 683 mm off its plane with nothing
+  saying so.
+  **`excludeNodeId` is not an optimisation.** A derived fit is least-squares
+  through the points it is handed, so including the node being constrained lets
+  the plane CHASE it: the projection lands between the typed point and the real
+  plane, and every repeat edit drifts further (measured 647 mm out on that same
+  project). Excluding it makes the plane the OTHER corners define — which is what
+  "keep this corner in the plane" means — and makes re-projecting a committed
+  position a no-op. A STORED fit is used unexcluded, because it does not move
+  when a corner is nudged. Fewer than 3 other solved corners, or collinear ones,
+  derive nothing and the constraint stays inert: two corners admit a pencil of
+  planes and choosing one would silently invent geometry.
+  `ui/plane-angle.js`'s `usableFit` now delegates here, so the dialog and the pin
+  cannot disagree about where a plane is.
+- **`force` never rides a cascade.** `setPoint3d`/`clearPoint3d`'s `force` means
+  one narrow thing — explicit user re-entry of a pinned coordinate. Invalidation
+  fires off edits made somewhere else entirely, so it does NOT forward its
+  options to the leaf: `invalidateNode3D` / `invalidatePlane3D` take the
+  separately named `forceClearImmutable`, and a stray `{force:true}` in their
+  options cannot strip a pinned node.
+- Per-plane materializers, all freshly allocated (the pool stays the single
+  source of truth): `points3dForPlane(plane, pool)` → flat `Float64Array(3n)`
+  in PLANE order, all-NaN triple for a node with no 3D — the shape the 3D
+  viewport payload, the fit and the origin frame already read;
+  `writePoints3dForPlane(plane, pool, flat, {force, constrain})` →
+  `{written, skippedIds, constrainedIds}` (the ONLY way a solve should publish;
+  it SKIPS `locked` nodes and says which, so a writer cannot quietly undo the
+  constraint it solved under). The optional `constrain(nodeId, xyz) → xyz` hook
+  is threaded HERE rather than at each call site precisely because this is the
+  one sanctioned publish path — every solve (triangulate, fit, the angle edit)
+  therefore honours a `plane-locked` node without any of them having to
+  remember to. Callers holding a model pass `constrainPoint3dForNode`; callers
+  that do not (the pure tests) pass nothing and get the old behaviour exactly;
+  `nodeErrorsForPlane`, `planeNodes`/`planeNodeNames`/`planeNodeColors`/
+  `planeNodeImmutability` (parallel to `planeNodeColors`; a corner shared
+  between two planes reads pinned in BOTH, which is what lets a frozen shared
+  node hold an intersection line still while either plane is re-fitted. It
+  reports `locked` ONLY — a `plane-locked` node is not an anchor, and feeding it
+  to `fitPlaneConstrained` as one would hold fixed a point whose position is not
+  fixed) /
+  `planeNodeIndices`, `planeEdgesLocal` (plane-order index pairs, for the 3D
+  payload) / `planeEdgesPoolIndices` (for the 2D overlay + interaction hit
+  test), `planeCentroid2d(plane, pool, instance)`.
+- `planeCycleOrderIds(plane)` — the RING the user drew, as node IDs, or `null`
+  when their connections do not form one. A ring is a single simple cycle
+  covering every node the plane references (every node at degree exactly 2, one
+  closed walk); an open chain, a partial or disjoint cycle, a branch, or no
+  edges at all returns null, because those state an outline only partially and
+  guessing the rest is how a fill self-intersects. Purely topological, so it is
+  the ONLY form that can express a **concave** outline (an L-shaped floor) — the
+  user's edges say so explicitly, and nothing may second-guess them.
+- `planePolygonOrderIds(plane)` — the ring when there is one, else MEMBERSHIP
+  order, as node IDs; `planePolygonOrder(plane)` (plane-local indices) and
+  `planePolygonOrderPoolIndices(plane, pool)` are its two index views. The
+  coordinate-free answer, kept for callers that want it — **the fill does not
+  use these** (see below).
+- `convexHullOrder2d(pts)` / `convexHullOrder3d(qs, normal?)` — hull of a point
+  set as indices into it, in ring order. Andrew's monotone chain; interior
+  points, points on a hull edge, and duplicates are dropped, so the result is
+  the outline and nothing else. Fewer than 3 hull vertices (coincident or
+  collinear input) returns the input order unchanged, so a caller's own `< 3`
+  guard reads the way it always did. The 3D form projects onto an in-plane basis
+  first — `normal` (a `planeFit`'s) fixes it, otherwise one is estimated from
+  the two longest independent directions in the set; that only ever decides
+  vertex ORDER, never a coordinate.
+- `planeFillOrderPoolIndices(plane, pool, instance)` (2D, pool indices) /
+  `planeFillOrder3d(plane, pool)` (3D, plane-local indices) — **what the fill
+  actually walks.** The user's ring when they drew one, otherwise the CONVEX
+  HULL of the plane's points. Two things this fixes over membership order: a
+  quad whose corners were not added in ring order fills as a self-intersecting
+  bowtie, and — the reason the hull fallback exists — a node placed in the
+  MIDDLE of a plane is necessarily a REFLEX vertex in membership order, so the
+  fill carves a notch in to it instead of covering it. Under the hull the
+  outline is the outermost nodes and an interior node sits INSIDE the fill.
+  Hulling per VIEW in 2D rather than once in 3D is deliberate: the fill is a 2D
+  silhouette of that view's points, which exist before anything is triangulated.
+  Unpositioned nodes contribute no vertex; a node with 2D but no 3D is a vertex
+  of the 2D fill and not the 3D one.
+- `seedPlanePoints(n, cx, cy, videoW, videoH)` — node 0 at 12 o'clock, the rest
+  evenly around a ring of `PLACEMENT_RADIUS_FRAC` (12%) of the video's shorter
+  side, clamped into the frame. A 4-node plane lands as a recognisable quad to
+  drag onto the real feature, not a pile of coincident dots.
+- `PLANE_COLORS`, `PLACEMENT_RADIUS_FRAC`, and everything re-exported from
+  `pose/plane-nodes.js`.
+
+**Nodes are plane-independent.** A plane REFERENCES nodes; it does not own
+them. The same node may belong to any number of planes, which is what lets two
+planes meet along a shared line — the corners on it are ONE node with ONE 3D
+position, so the line cannot split when either plane is re-triangulated.
+`planeFit` stays per-plane because two planes through the same edge genuinely
+have different fits; the triangulated POINTS are what is shared.
+
+**Placement membership is explicit; un-placing keeps 2D.** Visibility is
+derived from `placedPlanes` (`isNodeVisibleOn`), so nothing consults the points
+to decide what to draw and there is no reference counting to get wrong.
+Un-placing a plane from a view therefore does NOT destroy 2D — re-placing
+restores exactly what the user positioned, and `placePlane` seeds only the
+nodes that have no position yet. Deleting a NODE is what destroys 2D,
+everywhere at once.
+
+**Isolation.** PlaneInstances live on `PlaneModel.placements`, NOT in
+`frameGroups` / `instanceGroups`. Nothing in the existing pose pipeline can
+see them, so `type: 'plane'` never has to be handled by code that switches on
+user/predicted/reprojected.
+
+**Imports from project modules.** `./pose-data.js` — `Instance`;
+`./plane-nodes.js` — the pool (re-exported); `./mesh-object-3d.js`;
+`./plane-fit.js` — `fitPlaneToPoints3d` for `usablePlaneFit`, plus
+`planeIntersectionBasis` / `projectOntoPlaneIntersection` for
+`planeLockForNode`. Still DOM-free and still off `pose/triangulation.js`, which
+is the whole reason the fit lives in its own module.
+
+**Imported by.** `ui/plane-definition.js`, `ui/plane-angle.js`,
+`pose/plane-serialization.js`, `pose/plane-angle.js`.
+
+**Tests.** `tests/test-plane-nodes.mjs` (§20/§20b/§20c for the pin constraint,
+the derived fit with the exclusion's negative control, and the
+membership-intersection ladder),
+`tests/test-plane-serialization.mjs`, `tests/e2e/define-plane-mode.mjs`,
+`tests/e2e/plane-lock-holds.mjs`.
+
+---
+
+### pose/plane-serialization.js
+
+**Purpose.** The Define Planes feature's **on-disk form, both ways** — the node
+pool, the planes (membership, edges, fill, the solve summary, the plane fit),
+the per-view 2D and the origin frame, to plain JSON and back. Owns the mapping
+and NOTHING about where the bytes end up; `import-export/plane-metadata.js`
+decides that. DOM-free and UI-free so the round trip is directly testable, which
+matters more here than usual: a subtly wrong restore does not crash, it hands
+back a plane whose corners sit on their NEIGHBOURS' nodes with every point still
+looking perfectly valid.
+
+**The scope split it encodes.** PROJECT-scoped: the pool, the planes, the origin
+frame — one node has one 3D position for the whole project, which is the entire
+reason the pool is global. SESSION-scoped: the `PlaneInstance` per view, because
+a view belongs to a session (stored on `Session.planePlacements`).
+
+**Key exports.**
+- `serializePlaneNodes(pool)` / `restorePlaneNodes(data)` — pool order is
+  preserved because it IS the index space every `PlaneInstance` is keyed by. A
+  node with no 3D **omits `xyz` entirely** rather than writing three numbers:
+  `JSON.stringify(NaN)` is `null`, so a naive round trip returns
+  `[null, null, null]` and every `isFinite` check downstream has to defend
+  against it. A locked node's coordinate is restored with `{force: true}` —
+  being locked is exactly what refuses an ordinary write. Entries with a missing
+  or DUPLICATE id are skipped, never renumbered.
+- **The two pin states, written so BOTH directions degrade correctly.** A
+  `locked` node writes `pin: 'locked'` **and**, redundantly, `immutable: true`,
+  so a build predating the split still freezes it — that key is the only thing
+  such a build reads. A `plane-locked` node writes `pin` alone and deliberately
+  **no** `immutable`, because an older build cannot enforce "stays in its
+  planes" and reading it as a hard freeze would be strictly wrong; treating it
+  as free is the honest fallback. **No plane id rides along**: the pin holds a
+  node in every plane it is a member of, and membership is already in the file
+  under `planes`. A `pinPlaneId` written by an earlier build named one of those
+  planes, so it is read and DISCARDED rather than adopted — keeping it would
+  resurrect a second source of truth about the same thing. On restore `pin`
+  wins when
+  present, and a legacy record's `immutable: true` means `locked`, which is what
+  it has always meant. Both go through `normalizePin`, so an unrecognized value
+  loads as unpinned rather than refusing the file. An unpinned node writes
+  NEITHER key, per the format's rule that defaults are never written — which is
+  why `tests/e2e/save-golden-digest.mjs` does not move, and why
+  `PLANE_METADATA_KEYS` does not change: this rides the existing `planeNodes`
+  key and needs no version bump.
+- `serializePlanes(planes)` / `restorePlanes(data, pool)` — includes `filled`,
+  `triangulation` and `planeFit`, because those are the plane's STATE, not a
+  cache: a reopened plane that came back un-fit would offer Set Origin no
+  corners and report no error, so the user would have to re-solve to get back
+  what they saved. References to nodes the pool does not hold are **dropped**
+  (the plane comes back one corner short, which is visible) rather than kept
+  dangling (a -1 index reads whatever sits at the end of the points array —
+  a corner in a plausible but wrong place, which is not).
+- `serializeMeshObjects(set)` / `restoreMeshObjects(data, planeIds)` — the named
+  groups of planes. Membership is written VERBATIM, **including IDs whose plane
+  has since been deleted**: membership resolves lazily everywhere else, so
+  scrubbing on the write side would be the one place that quietly decides a plane
+  is gone forever. The READ side drops unresolvable IDs instead, at the point
+  where the live plane set is actually known — which is why `restorePlaneProject`
+  restores objects LAST, after the planes they filter against are installed.
+  An object writes exactly `id`/`name`/`color`/`planeIds` — there is NO
+  orientation key, because winding is derived. A `flipNormals` left in a file by
+  an older build is read and DISCARDED rather than adopted: re-applying a stale
+  override would invert exactly the objects the derivation already gets right.
+- `serializePlanePlacements(placements, pool)` / `restorePlanePlacements(data,
+  pool, planeIds)` — points are written as `{n: <nodeId>, xy, off, derived}`,
+  **not** as a dense pool-order array. A dense array can only be re-seated by
+  COUNTING, and counting is exactly the repair that cannot tell "a node was
+  appended" from "a node was spliced out of the middle": every column past the
+  edit comes back on its neighbour's node, still looking like a good point. A
+  view holding no positioned point and no placed plane contributes nothing.
+- `serializeOriginFrame(frame)` / `restoreOriginFrame(data)` — writes only the
+  **two things the user chose** (the origin and the +Z, plus the
+  `sourcePlane`/`sourceNode` labels, which cannot be re-derived once a plane is
+  renamed). `R`, the translation and the axis-angle form are derived
+  deterministically by `buildOriginFrame`, so storing them too would create a
+  second source of truth that a file edit or a version bump could put at odds
+  with the inputs. The rebuild is exact.
+- `serializePlaneProject(model)` / `restorePlaneProject(model, data)` — the
+  project-scoped bundle: pool + planes + mesh objects. `restore` **REPLACES** all
+  three rather than merging: two projects' node IDs are unrelated, so a merge
+  would either collide IDs or renumber them, and renumbering is the one thing
+  this module must never do. (Replacing all three in one call is also what makes
+  `resetPlaneState()` a single call as the model grows.) A plane the user named
+  but has not populated still round-trips, as does an object named before it was
+  populated; only a model with no nodes, no planes AND no objects serializes to
+  `null`.
+
+**Absence is a value.** Every serializer returns `null` when there is nothing to
+say, so a project that never opened the feature writes no keys and its bytes are
+unchanged (`tests/e2e/save-golden-digest.mjs`). Every reader tolerates absent,
+malformed and partial input — a `.slp` from SLEAP, or from a LUCID build older
+than this module, restores an empty model rather than throwing.
+
+**Imports from project modules.** `./plane-nodes.js` — `PlaneNode`,
+`PlaneNodePool`; `./plane-data.js` — `PlaneSkeleton`, `PlaneInstance`;
+`./origin-frame.js` — `buildOriginFrame`.
+
+**Imported by.** `import-export/plane-metadata.js`.
+
+**Tests.** `tests/test-plane-serialization.mjs` (ESM, 74 assertions — identity
+after the trip, the NaN case, a pool that CHANGED between save and load, garbage
+tolerance, the origin rebuild), `tests/e2e/plane-persistence-roundtrip.mjs`
+(the same claims through the real app and a real `.slp`).
+
+---
+
+### pose/origin-frame.js
+
+**Purpose.** The **payload of the whole Define Planes feature**: turns "this
+annotated corner is the origin, and +Z points that way" into the translation +
+rotation that re-express the calibration's world frame in the user's frame.
+Everything upstream (plane skeletons, placements, triangulation, plane fit, 3D
+corner dragging) exists to produce this function's two inputs. DOM-free and
+dependency-free, so it is directly testable and callable from a future save
+path.
+
+**Convention, stated once and used everywhere:**
+
+    p_new = R · p_old + t,    t = −R · origin
+
+`R`'s **rows** are the new frame's axes in old-world coordinates. `t` is the
+mapping's translation, **not** the origin's position — both are reported and
+both are labelled in the UI, because confusing them silently flips a sign. The
+inverse is `p_old = Rᵀ · p_new + origin`.
+
+**Key exports.**
+- `buildOriginFrame(origin, zAxis, xHint)` → `{origin, xAxis, yAxis, zAxis, R,
+  translation, rotationVector, axis, angleRad, angleDeg}` or **null**. Z is the
+  user's choice; X and Y are not, so they are derived deterministically — old
+  world +X projected onto the plane (Gram-Schmidt), falling back to old +Y when
+  Z is within ~26° of X and the projection is ill-conditioned; `Y = Z × X`. That
+  fixes the roll about Z arbitrarily but **consistently**: the same two clicks
+  must not produce a different rotation twice. `xHint` is the hook for a later
+  step that wants a meaningful X (a plane edge, say) — it belongs here rather
+  than as a re-derivation elsewhere. Returns null on non-finite input or a
+  zero-length Z rather than inventing a frame.
+- `rotationMatrixToAxisAngle(R)` → `{axis, angleRad}`. Handles the two cases the
+  generic formula divides by zero on: angle ≈ 0 (returns +X and 0, so the
+  rotation vector is exactly the zero vector) and angle ≈ π (recovered from
+  `R + I = 2nnᵀ`, taking the largest diagonal column for conditioning). **The π
+  case is not exotic here** — it is what picking the "blue" arrow produces.
+- `rotationAboutAxis(axis, angleRad)` → row-major 3×3, or **null** for a
+  zero-length or non-finite axis. Rodrigues, `R = I + sin t·K + (1 − cos t)·K²`,
+  written out in closed form rather than as two matrix products so it is exactly
+  orthonormal for a unit axis. **The exact inverse of
+  `rotationMatrixToAxisAngle`**, which is why it lives here: the two are tested
+  against each other, so neither can drift from this module's convention alone.
+  The same formula also appears inline in `Camera.rotationMatrix`
+  (`pose/pose-data.js`), which bakes the angle into an OpenCV-style `rvec`'s
+  magnitude; that one is coupled to the class and is deliberately left alone.
+- `mulMat3Vec3(R, v)` → `R · v`, no translation — what rotating a DIRECTION (a
+  plane normal) needs, as against `applyOriginFrame`, which is an affine map of
+  a POINT. Confusing the two is how a rotated normal picks up a translation.
+- `applyOriginFrame(frame, p)` / `unapplyOriginFrame(frame, q)`.
+- `rebaseExtrinsics(camR, camT, frame)` → `{R, rvec, tvec}` or **null** — the
+  **calibration half of the origin change**. Applying an origin deliberately
+  moves nothing in the data (see `ui/origin-definition.js`), which leaves the
+  calibration as the one artifact still speaking the old frame; a downstream
+  tool handed the user's 3D and the ORIGINAL `calibration.toml` would reproject
+  against the wrong world. From `p_cam = R_cam·p_old + t_cam` and
+  `p_old = Rᵀ·p_new + origin`: `R_new = R_cam·Rᵀ`,
+  `t_new = R_cam·origin + t_cam`. **The translation is built from
+  `frame.origin`, not `frame.translation`** — the two differ by a rotation, and
+  substituting one produces a calibration that still almost works, which is the
+  worst kind of wrong. Intrinsics and distortion are not its business. Returns
+  both notations because the TOML writer matches the source file's shape.
+- `normalize3` / `cross3` / `dot3`.
+
+**Imports from project modules.** None, deliberately.
+
+**Imported by.** `ui/origin-definition.js`, `pose/origin-rebase.js`
+(`rebaseExtrinsics` + the point/direction transforms), `pose/plane-serialization.js`
+(which persists an applied frame as its two INPUTS — the origin and the chosen
++Z — and rebuilds everything else through `buildOriginFrame` on load, so the
+derived `R` / translation / axis-angle can never contradict them),
+`pose/mesh-object-geometry.js` (`applyOriginFrame` only) and
+`pose/plane-angle.js` (the rotation primitive plus the vector helpers).
+
+**Tests.** `tests/test-origin-frame.mjs` (ESM — the numerical branches the
+wizard rarely reaches: 180°, the near-parallel X fallback, rigidity,
+round-trip, degenerate refusals, §9 the `rotationAboutAxis` ↔
+`rotationMatrixToAxisAngle` round trip over five axes × five angles, asserting
+orthonormality and `det = +1` at each, and §10 `rebaseExtrinsics` — pinned by
+the one invariant that matters, that a point lands on the same camera
+coordinates via (old extrinsics, old point) and (new extrinsics, re-based
+point), plus a negative control that substituting `frame.translation` for
+`frame.origin` gives a different answer) and `tests/e2e/define-plane-mode.mjs`
+§14 end to end.
+
+---
+
+### pose/origin-rebase.js
+
+**Purpose.** Move the **whole project** into the defined origin — the engine
+behind the Danger Zone's `Set as New Calibration`. `ui/origin-definition.js`
+applies an origin to what is DRAWN and to nothing else, deliberately; this
+module is the other choice, taken explicitly, and rewrites every stored 3D
+number so the project IS that frame.
+
+**Three transforms, and they must all happen together:**
+
+| thing | rule |
+|---|---|
+| 3D point | `p' = R·p + t` (affine) |
+| 3D direction (a plane normal) | `n' = R·n` — **no translation** |
+| camera | `R_cam' = R_cam·Rᵀ`, `t_cam' = R_cam·origin + t_cam` |
+
+Do all three and **every 2D pixel is unchanged**: a point's reprojection under
+the new calibration lands exactly where it landed under the old one. That
+invariant is the whole safety argument, and it is what both test files assert
+first. Move the points without the cameras (or vice versa) and every
+reprojection error in the project silently explodes. So the set is not
+negotiable: `InstanceGroup.points3d` across every session it is handed, the
+plane node pool, each plane's stored fit, and every camera. 2D data — member
+instances, reprojected instances, plane placements — is invariant and is not
+touched.
+
+**The `sessions` argument is the SUBSET the user chose**, and that is the whole
+mechanism — no function here takes a "which sessions" flag, so there is no
+partial code path to drift out of step. On a multi-session project the
+confirmation dialog carries a checkbox per session (`ui/origin-rebase.js`) and
+hands in the filtered array; a session that is not in it keeps BOTH its 3D and
+its cameras, so it stays internally consistent while the project as a whole
+ends up holding 3D in two frames. The plane pool and the plane fits are
+project-scoped and move exactly once, with the active session — which the
+dialog does not allow to be deselected.
+
+**Key exports.**
+- `countRebaseTargets(sessions, model)` → the tally the confirmation dialog
+  lists. **`tally.points3d` is every 3D point that moves — `keypoints3d` PLUS
+  `planeNodes`** — and it is what the dialog's headline quotes. A plane node is
+  a 3D point: same calibration world, same rewrite in `applyOriginRebase`.
+  Quoting `keypoints3d` alone under a heading that says "3D points" told a user
+  with planes and no pose annotation that nothing would be updated, one row
+  above the nine plane nodes about to move. A plane FIT stays out of the sum —
+  it is a centroid and a normal, not a point.
+  Groups are bucketed by their MEMBERS' types (`user` / `predicted` /
+  neither), because `points3d` itself carries no provenance — LUCID writes one
+  `Instance3D` per group either way. Each bucket is counted **both ways**:
+  `userGroups` / `predictedGroups` / `untypedGroups` (how many groups) and
+  `userKeypoints3d` / `predictedKeypoints3d` / `untypedKeypoints3d` (how many
+  points they hold), so the dialog can put points under a points heading and
+  keep the group count in the label. `reprojectedInstances` is reported and
+  labelled **unchanged**, because it is not work.
+  **`userInstances` / `predictedInstances` are the WHOLE 2D population**, not
+  the grouped half: most of what an imported `.slp` carries is ungrouped
+  predictions, which `restoreGroupingAndUnlink` parks in
+  `FrameGroup.unlinkedInstances`, and counting only group members reported
+  **0 predicted instances** on a project holding hundreds of thousands. The
+  enumeration mirrors `ui/custom-delete-ops.js`'s `collectSessionWide`:
+  `lazyLoader.forEachInstanceRow` (duck-typed, no import) on a lazy project,
+  because `session.frameGroups` there is a small resident window; group members
+  plus the unlinked pool on an eager one, which are disjoint by construction.
+  `instanceScope` (`'store'` / `'resident'`) says which answered, and
+  `userMembers` / `predictedMembers` keep the grouped subtotal.
+  **`perSession` is the same record once per session**, holding only what is
+  session-scoped: cameras, pose 3D, the 2D population, `planePoints2d`. The
+  plane pool and the plane fits are project-scoped (one shared `PlaneModel`)
+  and appear only in the totals — splitting them per session would invent a
+  division the data does not have. Every per-session field sums to its total,
+  which `tests/test-origin-rebase.mjs` §1d asserts field by field.
+  `planePoints2d` is the planes' own 2D, counted in POINTS so it shares a unit
+  with the pose 2D beside it in the dialog.
+- `subsetRebaseTally(full, keep)` → the same tally re-totalled over a SUBSET of
+  its sessions, `keep(perSessionRecord, index)` choosing them. The confirmation
+  dialog's headline numbers have to follow its session checkboxes, and
+  re-running `countRebaseTargets` on the filtered array — which is what the
+  COMMIT does — re-walks the 2D inventory, i.e. a pass over a lazy project's
+  whole columnar store per click. Every session-scoped number is already in
+  `full.perSession`, so this is a re-FOLD rather than a re-count: it shares one
+  private `foldPerSessionTotals` with `countRebaseTargets`, so a re-fold and a
+  fresh count of the same sessions are the same tally by construction (pinned
+  field-for-field by `tests/test-origin-rebase.mjs` §11). `planeNodes` /
+  `planeFits` are carried over VERBATIM — project-scoped, moving once, with the
+  active session.
+- `planOriginRebase(sessions, model, frame, opts)` → a plan, `null` when
+  cancelled or the frame is unusable, or `{failed, camera}` when one camera
+  cannot be re-based (which abandons the WHOLE plan — a project with one camera
+  left in the old frame is worse than one that did not move). **Writes
+  nothing:** it builds the replacement buffers beside the live ones, so
+  cancelling is free and exact. Yields every `opts.yieldEvery` (default 2,000)
+  units and asks `opts.shouldCancel()` there.
+- `applyOriginRebase(plan)` → swaps them in, synchronously. Plane nodes are
+  written straight to `node.xyz`, **bypassing `PlaneNode.setPoint3d`'s refusal
+  for a Locked node**: a pin says "do not re-solve this point", not "exempt this
+  point from the world moving".
+
+**Why copy-on-write rather than transform-in-place-and-invert.** The second
+would halve the peak (~175 MB on a 7.3M-point project, in typed arrays outside
+V8's cage — the cheap place for it) but `Rᵀ(R·p + t − t)` is not bit-identical
+to `p`, so a *cancelled* operation would leave every coordinate perturbed in its
+last few ULPs.
+
+**It is an O(groups) in-memory walk even on a lazily-reopened project.**
+`session.instanceGroups` is built in full at load by BOTH reconstructors in
+`import-export/slp-import.js` — it is the grouping + 3D, and only the 2D
+`frameGroups` are windowed. So there is no hydration sweep here and no
+resident-only hazard (#194/#195): nothing this module reads can be absent.
+
+**Imports from project modules.** `./origin-frame.js` (`applyOriginFrame`,
+`mulMat3Vec3`, `rebaseExtrinsics`), `./pose-data.js` (`pooledPoints3d` — `applyOriginRebase` stores each re-based group in the slab pool — `points3dNodeCount`,
+`hasPoint3d`). DOM-free.
+
+**Imported by.** `ui/origin-rebase.js`.
+
+**Tests.** `tests/test-origin-rebase.mjs` (ESM — over a real `PlaneModel` and
+real `Camera`s: the pixel invariant with an un-rewritten-calibration negative
+control, that planning writes nothing, that a cancel is byte-identical, NaN
+preservation, the Locked node moving anyway, the centroid/normal split with a
+negative control, camera cache invalidation, the 3x3-notation case, and §11
+the SUBSET case — a re-fold equalling a fresh count field for field, and an
+omitted session's 3D *and* cameras coming out bit-identical while the chosen
+one's move, with a negative control that the same point DOES move when its
+session is included) and `tests/e2e/set-new-calibration.mjs`.
+
+---
+
+### pose/calibration-compare.js
+
+**Purpose.** Do the sessions of a multi-session project agree about where the
+world is? A multi-session load reads ONE CALIBRATION PER SESSION FOLDER and
+nothing makes them match, so this module answers the question and, when the
+answer is no, says which of two very different things went wrong.
+
+**The two disagreements, which need opposite advice.**
+- **Same rig, different origin.** `Set as New Calibration` re-bases every
+  session in memory but writes ONE file, and `pickCalibrationFile` then PREFERS
+  that file on the next load — so one session comes back re-based while the rest
+  come back in the original frame. Recoverable by moving a file.
+- **Genuinely calibrated apart.** A rig moved, or a camera was re-focused
+  between recordings. No file move helps; those sessions' 3D simply is not in a
+  shared space.
+
+**Telling them apart is a MEASUREMENT, not a guess.** For one physical camera
+described by two calibrations A and B, a world point obeys
+`x = R_A*p_A + t_A` and `x = R_B*p_B + t_B`, so if the two worlds are related at
+all they are related by `p_A = R_f*p_B + t_f`, giving
+
+    R_f = R_A^T * R_B        t_f = R_A^T * (t_B - t_A)
+
+per camera. If EVERY camera agrees on `(R_f, t_f)` the two calibrations differ
+only by where the origin is, and `t_f` is literally the position of B's origin in
+A's coordinates — the number worth quoting to the user. If they disagree, no
+single frame change explains them. On the real `small_multi_session` folder the
+eight cameras agree to 3e-14 in rotation and 5e-13 mm in translation, which is
+why `FRAME_ROT_SPREAD` / `FRAME_TRANS_SPREAD` can be loose (1e-6, 1e-3 mm) and
+still decide the question.
+
+**Key exports.** `compareSessionCalibrations(sessions)` — groups the sessions by
+identical calibration, takes the LARGEST group as the reference (earliest on a
+tie, so the wording is stable across reloads) and describes every other group
+against it. Each difference gets a `kind`:
+- `'cameras'` — a different camera SET, with `onlyHere` / `onlyInReference` names.
+- `'lens'` — intrinsics, distortion or image size differ, in `lensCameras`. An
+  origin change never touches these, so this alone rules out the recoverable case.
+- `'origin'` — one rigid transform explains every camera. Carries `frame` with
+  `origin`, `distanceMm`, `angleDeg`, `axis` and the measured `spreadRot` /
+  `spreadTransMm`.
+- `'extrinsics'` — the cameras moved and no single origin explains them.
+`report.frameOnly` is true only when EVERY difference is `'origin'`; that one
+flag is what selects which advice the modal prints.
+
+**Three deliberate details.** A session with NO cameras is excluded from the
+comparison and listed in `withoutCalibration` rather than counted as a third
+calibration — a per-camera folder load with no `.toml` would otherwise raise the
+modal on a perfectly consistent project. A camera whose rotation or translation
+will not read (NaN, wrong length) is DROPPED, so one malformed entry cannot
+masquerade as a divergence. And only cameras whose LENS matches contribute to the
+frame solve: a re-focused camera's extrinsics are not a statement about the origin.
+
+**Imports from project modules.** `./origin-frame.js` (`rotationAboutAxis`,
+`rotationMatrixToAxisAngle`, `normalize3`) — the rotation maths it would
+otherwise duplicate; `rotationAboutAxis` IS Rodrigues with the angle separated
+out, so an `rvec` converts by handing it the vector and its own magnitude. No
+other imports and DOM-free, so the comparison is unit-testable under Node.
+
+**Imported by.** `ui/calibration-notice.js`.
+
+**Tests.** `tests/test-calibration-compare.mjs` (ESM, 51 assertions — the
+re-based fixtures are built with the app's own `buildOriginFrame` +
+`rebaseExtrinsics`, so the detector and the re-base cannot drift apart silently;
+plus a pure translation, a pure rotation, a matrix-form `rvec`, all four `kind`s,
+a 1 nm negative control, an even split, and a NaN camera) and
+`tests/e2e/multi-session-calibration-notice.mjs` (the real calibrations off disk).
+
+---
+
+### pose/plane-angle.js
+
+**Purpose.** Set the ANGLE BETWEEN two annotated planes. Every plane's
+`planeFit` is fitted independently through its own triangulated corners, so
+nothing makes two planes that are perpendicular in the real world come out
+perpendicular in the model — a floor and a wall land a degree or two off, and
+that error is then baked into everything derived from them (a mesh object's
+geometry, an exported cage, an origin frame taken from one of them). This
+module lets the user ASSERT the relationship instead: hold one plane fixed and
+rotate the other rigidly until the angle is met.
+
+DOM-free and THREE-free. It imports **only** `origin-frame.js` and
+`plane-data.js`, and deliberately **not** `triangulation.js` — not even for
+`planesInvalidatedByFit`, whose question `PlaneModel.planesForNode` answers from
+the other side — because triangulation.js pulls in DOM and three.js UI modules,
+and a test would then need the loader stubs `tests/test-plane-constrained-fit.mjs`
+has to install. Being importable with no stubs is most of this module's value.
+
+**Hence the optional `fits` argument** on `hingeAxis` and `planAngleEdit`. A
+plane can hold 3D for every corner and still carry no stored `planeFit` —
+pinning a node clears the fit of every plane standing on it, and a plane that
+was triangulated but never Fitted never had one. Such a plane is perfectly
+measurable; it just needs a fit computed. That used to be on the other side of
+this import line; `fitPlaneToPoints3d` now lives in the stub-free
+`pose/plane-fit.js`, so the argument survives as a **test seam** rather than a
+necessity — `tests/test-plane-angle.mjs` feeds it hand-written fits, including
+all four normal-sign combinations, which no derivation would hand it. The caller
+derives the real one (`ui/plane-angle.js` > `usableFit`, now the model's
+`usablePlaneFit`) and passes it in, and everything here treats a derived fit and
+a stored one identically — `newMovingFit` is the rotation of whichever it got.
+
+**The angle is UNSIGNED, and that is not a simplification.**
+`fitPlaneToPoints3d` takes the smallest-eigenvalue eigenvector straight from
+`jacobiEigen` and never stabilizes its sign (only the CONSTRAINED path calls
+`orientNormalLike`). A signed dihedral angle read off two stored normals is
+therefore not reproducible — it is θ or 180 − θ depending on round-off in two
+unrelated fits. The measurement is `acos(|n_f · n_m|)` ∈ [0°, 90°], invariant
+under flipping either normal, which is also exactly what a user means by "the
+angle between these planes". `tests/test-plane-angle.mjs` §7 asserts all four
+sign combinations move the points to the same place.
+
+**The axis is the SHARED EDGE.** Two planes that meet share their corner nodes
+— one `PlaneNode`, one `xyz`, referenced by both — so the line through them is
+the natural hinge: rotating about it leaves every shared corner exactly where it
+was, the planes stay joined, and the fixed plane is not disturbed at all.
+
+| shared, triangulated nodes | axis | `kind` |
+|---|---|---|
+| 2 or more | the line through the two farthest apart | `'edge'` |
+| exactly 1 | through it, along `n_fixed × n_moving` | `'node'` |
+| none | through the moving plane's centroid, same direction | `'centroid'` |
+
+`n_fixed × n_moving` is the direction the planes' intersection line runs, so the
+fallbacks turn about the direction the shared edge would have had; parallel
+normals leave it undetermined and any perpendicular is used (a local `anyPerp`,
+matching triangulation.js's own local copy).
+
+**Key exports.**
+- `planeAngleDeg(nA, nB)` → degrees in [0, 90], or null. 0 = parallel,
+  90 = perpendicular.
+- `sharedNodeIds(planeA, planeB)` → the membership intersection in `planeA`'s
+  order. There is no existing helper — the model only answers the inverse
+  question (`planesForNode`) — and membership is a short `number[]` of IDs, so a
+  filter is both the clearest and the fastest thing.
+- `hingeAxis(fixedPlane, movingPlane, pool, fits?)` → `{point, dir, kind,
+  sharedIds, hingeIds}` or null. `hingeIds` are the corners ON the axis, and so the ones
+  guaranteed not to move.
+- `sharedNodesSpanAPlane(ids, pool)` — three or more shared corners off a line
+  mean the planes already share a PLANE, and no rotation can change their angle
+  without moving the fixed plane too. That is `overconstrained`, refused rather
+  than approximated.
+- `solveAngleRotation(nFixed, nMoving, axisDir, targetDeg)` → radians or null.
+  Rotating `m` about `u` traces a sinusoid in the dot product with `f`:
+  `A + B cos φ + C sin φ` with `A = (m·u)(u·f)`, `B = m_⊥·f`,
+  `C = (u × m_⊥)·f`. So `|(R·m)·f| = cos target` is `A + K cos(φ − δ) = ±T`,
+  solved in closed form — two signs × two arccos branches, up to four
+  candidates, and **the smallest |φ| is returned**. That is what keeps a wall
+  tilting the way it already leans rather than flipping through the floor, and
+  it is the single most load-bearing line in the module (a mutation to `>`
+  reddens 20 assertions). The result is then re-measured and rejected if it
+  misses the target, so a wrong branch fails loudly. `K ≈ 0` means the moving
+  normal lies along the hinge, where rotating cannot change the angle at all.
+- `applyRotationToPoints3d(flat, R, pivot, nodeIds, fixedIds)` → a NEW
+  `Float64Array`; missing nodes stay missing. `fixedIds` are copied through
+  verbatim: points on the axis are fixed mathematically, but only to within
+  round-off, and a shared corner drifting by an ulp is exactly the silent
+  divergence the shared node pool exists to prevent.
+- `rotatePlaneFit(fit, R, pivot)` — the same rigid motion applied to a stored
+  fit. **Rotating rather than re-fitting is deliberate:** a re-fit re-derives
+  the normal's sign from `jacobiEigen` and can flip it, which changes nothing
+  geometrically but silently inverts anything downstream that read the old sign.
+  `rms` / `nPoints` are properties of the annotation and ride through unchanged,
+  as does `constrained` when present (dropping it is a bug
+  `serializePlaneFit` already has, and is not worth repeating).
+- `planAngleEdit(fixedPlane, movingPlane, targetDeg, model, fits?)` → a plan, mirroring
+  `planPlaneFit`. **PURE — it reads the model and writes nothing**, which is
+  what lets the UI preview it, refuse it, or be cancelled with nothing to undo,
+  and which is its own test. Refusal codes: `no_model`, `no_plane`,
+  `same_plane`, `no_fit`, `bad_target`, `degenerate_axis`, `overconstrained`,
+  `unreachable`, and `locked_nodes`.
+- `ANGLE_TOL_DEG`, `HINGE_MIN_LEN`, `COLLINEAR_TOL_FRAC`, `NAME_LIST_CAP`.
+
+**Every warning NAMES what it counts.** A count on its own ("2 other planes")
+tells the user nothing they can act on, so each `warnings[]` entry spells out
+the things it is about:
+- `plane_locked_elsewhere` lists `node (in "plane", …)` per held node — the
+  node FIRST, the planes holding it elsewhere second. The old wording put a bare
+  node list in parentheses right after "another plane", which read as if the
+  parenthetical named the plane. "Elsewhere" is MEMBERSHIP: the pin nominates no
+  plane, so a corner this rotation shares with a wall is pulled back onto that
+  wall, while a corner whose only plane is the moving one rides along and is not
+  reported.
+- `stale_fits` lists `"plane" (shares node, …)` — both which fit is about to be
+  cleared and which moved corner costs it. The shared node is the one the user
+  would have to un-share to avoid the loss.
+- Both are capped at `NAME_LIST_CAP` (3) names inline with a `+N more` tail,
+  because the angle dialog is a narrow floating panel; each carries the
+  untruncated list in a `detail` string, which `ui/plane-angle.js` hangs off the
+  warning line as a `title` tooltip. Singular/plural is exact in both.
+`stalePlaneIds` is unchanged in meaning and shape — the commit path keys off it.
+
+**Pin states decide who may move.** A `locked` node the rotation would move is a
+hard refusal (`locked_nodes`, naming the nodes) — the user pinned that
+coordinate and the angle cannot be honoured with it. Nodes on the HINGE are
+excluded from that check because they do not move: locking a shared corner is
+the documented way to hold an intersection line still, so it must not block the
+very edit it enables. `plane-locked` nodes are allowed: a rigid rotation of the
+whole plane keeps them in that plane by construction. One held in a DIFFERENT
+plane is allowed but warned about, since the commit projects it back and the
+result may then miss the target.
+
+**Imports from project modules.** `./origin-frame.js`, `./plane-data.js`.
+
+**Imported by.** `ui/plane-angle.js`.
+
+**Tests.** `tests/test-plane-angle.mjs` (ESM, 188 assertions over a
+floor-and-wall fixture whose angle is analytic — §10 and §12 pin the warning
+wording, so a warning that stops naming its nodes fails) and
+`tests/e2e/plane-angle.mjs` (the real app; §6b asserts the rendered warning text
+and its tooltip).
+
+---
+
+### pose/mesh-object-3d.js
+
+**Purpose.** The **grouping layer**: a *3D Mesh Object* is a named set of
+PLANES, the way a plane is a named set of nodes. It completes the three-level
+model — a node is a point with one 3D position, a plane is a group of nodes, and
+an object is a group of planes **whose shape is determined by how those planes
+are connected**. Nothing here is geometric; `mesh-object-geometry.js` derives the
+shape on demand.
+
+The class is `MeshObject3D` because a JS identifier may not begin with a digit.
+**Every user-facing string says "3D Mesh Object"** — the table header, the
+buttons, the status messages. Know that before renaming anything.
+
+**Key exports.**
+- `class MeshObject3D` — `id` (stable, never reused), `name`, `color` and
+  `planeIds` (ordered; insertion order is the face order an export will use).
+  Deliberately NO orientation field: winding is derived in
+  `pose/mesh-object-geometry.js`, so a stored override could only ever be a
+  second source of truth for it. `hasPlane` / `addPlane` / `removePlane`,
+  `resolvePlaneIds(model)` / `resolvePlanes(model)` / `planeCount(model)` /
+  `danglingCount(model)`.
+- `class MeshObjectSet` — `objects`, `size`, `isEmpty`, `createObject(name, {color})`,
+  `adoptObject(obj)` (RESTORE path — keeps the file's ID and advances `_nextId`,
+  exactly as `PlaneNodePool.adoptNode` does and for the same reason),
+  `getObject(id)`, `deleteObject`, `renameObject` (refuses a blank name),
+  `recolorObject`, `objectsForPlane(planeId)`, `clear()`.
+- `MESH_OBJECT_COLORS`, `defaultMeshObjectColor(i)` — a palette deliberately
+  disjoint from `PLANE_COLORS` and `PLANE_NODE_COLORS`, because an object's
+  colour overrides its members' when drawn and the two must be tellable apart.
+
+**Why membership resolves LAZILY, and why there is no delete cascade.** Every
+read of membership filters against the live planes (`resolvePlaneIds`). So
+`PlaneModel.deletePlane` does not know objects exist, needs no hook, and cannot
+leave an object holding a dangling reference — the reference is simply never
+dereferenced except through the filter. This is the single design choice that
+makes the whole feature **additive**: no method that predates it changes
+behaviour. The cost is that `planeIds.length` is NOT the face count; call
+`planeCount(model)`.
+
+**Imports from project modules.** None (deliberately dependency-free; the
+`PlaneModel` references are JSDoc types only).
+
+**Imported by.** `pose/plane-data.js` (which owns a `MeshObjectSet` as
+`PlaneModel.meshObjects` and re-exports these symbols),
+`pose/plane-serialization.js`, `ui/mesh-objects.js`.
+
+**Tests.** `tests/test-mesh-object-3d.mjs` (51 assertions — identity, adoption,
+membership order, and §4 the additivity guarantee: a plane model with objects on
+it is byte-identical to one without, including after deleting a member plane).
+
+---
+
+### pose/mesh-object-geometry.js
+
+**Purpose.** Turn "a group of planes" into a **mesh**, derived and never stored.
+The shape is a pure function of the plane model, rebuilt whenever anyone asks —
+the same rule `ui/viewport3d.js` follows when it rebuilds `_planeGroup` every
+update. A stored mesh is a second copy of every vertex that goes stale the moment
+a node is dragged, re-triangulated or pinned.
+
+**How connectivity determines the shape.** All three fall out of the global node
+pool, and none of it needs a merge-by-distance pass:
+1. **Vertices** are the pool nodes the member planes reference — two planes
+   referencing one node produce ONE vertex, so a shared corner welds itself.
+2. **Faces** are the planes, each a ring of vertex indices.
+3. **Edges** are shared automatically: an edge is an unordered pair of vertices,
+   and two faces are adjacent iff they list the same pair. That adjacency graph
+   IS "how the planes are connected"; shells, naked edges, manifoldness and
+   coherent winding are all read off it.
+
+**Key exports.**
+- `buildMeshObjectGeometry(obj, model, {frame, scale, eps})` → `MeshObjectGeometry`:
+  `vertices` (`Float64Array`, 3V), `vertexNodeIds` (V, provenance), `faces`
+  (polygon rings), `facePlaneIds`, `faceNormals` (3F, unit, coherent),
+  `triangles` (`Uint32Array`, ear-clipped) and `connectivity` (`vertices`,
+  `faces`, `shells`, `edgeCount`, `nakedEdges`, `nonManifoldEdges`, `isClosed`,
+  `isOriented`, `degenerateFaces`, `stalledFaces`, `danglingPlaneIds`,
+  `coincident`, `volume`).
+- `faceRingNodeIds(plane, pool)` — the same dispatch `planeFillOrder3d` uses
+  (user edge cycle, else convex hull seeded by `planeFit.normal`) but in NODE
+  IDS, which is the only index space two different planes share.
+- `faceAdjacency`, `orientFacesCoherently`, `meshConnectivity`, `signedVolume`,
+  `areaVectorZ`, `earClip2d`, `earClipFace`, `newellNormal`,
+  `coincidentNodeReport`, `connectivitySummary`.
+
+**Winding is the part the annotation does not determine.** A face's ring
+ultimately depends on `planeFit.normal`, a PCA eigenvector whose SIGN IS
+ARBITRARY, so independently-fit planes have unrelated windings — black patches
+and failed booleans downstream. `orientFacesCoherently` fixes the relative half
+by BFS over the adjacency graph using the manifold rule (**two faces sharing an
+edge traverse it in OPPOSITE directions**). The global half is then ONE BIT,
+and there is a rule for each topology:
+
+- **CLOSED** — `signedVolume`. Negative ⇒ flip all ⇒ outward.
+- **OPEN** — no enclosed volume, so the convention is **+Z is up**:
+  `areaVectorZ` (the Z of `Σ (b−a) × (c−a)`, i.e. the area-weighted vertical
+  component of the normal field) must come out non-negative. For a cage that
+  means **the floor faces up**, because a vertical wall's area vector is
+  horizontal and contributes nothing — the floor alone decides. Coherent winding
+  then couples the rest, so the walls end up on their INWARD faces, the surfaces
+  enclosing the arena. Unlike `signedVolume` this is origin-INDEPENDENT, which
+  is what makes it legitimate on an open surface, and the axis is that of the
+  frame the vertices are already in (so with an origin defined, "up" is the
+  user's up — the same frame the exporters write). Only an all-vertical surface
+  has no vertical component to read; `UPRIGHT_EPS` (relative to
+  `surfaceAreaScale`, so it means the same at any unit scale) catches that and
+  leaves the orientation alone.
+
+This replaced a real coin flip: the open default used to fall out of the PCA
+sign of whichever ring happened to be first, so the same cage exported either
+way depending on the order its planes were created in.
+`tests/test-mesh-object-geometry.mjs` §3b feeds one cage in four ring
+orders/windings and demands one answer — it was confirmed to FAIL on the
+previous build (one arrangement gave `n.z = −1`).
+
+**There is no user override, and the panel has no `Flip normals` control.** The
+derivation answers every case it could: `signedVolume` when the mesh is closed,
++Z-up when it is open. The one shape with no defined answer — an all-vertical
+open surface — is left exactly as the coherent pass produced it, which is
+STABLE across rebuilds; the test asserts that rather than asserting a direction,
+since `areaVectorZ` is ~0 there and reading a sign off it would flip the object
+on floating-point noise.
+
+**Ear clipping, not the viewport's fan.** `viewport3d._buildPlaneFillMesh` fans
+over the ring, which is right for a translucent overlay and self-overlaps on any
+concave face. `earClipFace` projects onto the face's own 2D basis and clips
+there. Its point-in-triangle test is deliberately **non-strict**: a vertex lying
+exactly ON a candidate ear's edge must block it, or the ear is clipped and the
+triangle pokes outside the polygon — a plain L-shaped ring hits this.
+
+**Coordinates.** LUCID's world is Z-up right-handed and **so is Blender's** — no
+axis conversion belongs anywhere in this pipeline. The only transforms applied
+are the user's origin frame (`applyOriginFrame`) and a uniform positive scale
+(non-positive is ignored rather than allowed to mirror the mesh).
+
+**Imports from project modules.** `./plane-data.js` — `planeCycleOrderIds`,
+`convexHullOrder3d`; `./origin-frame.js` — `applyOriginFrame`. DOM-free and
+THREE-free.
+
+**Imported by.** `ui/mesh-objects.js`.
+
+**Tests.** `tests/test-mesh-object-geometry.mjs` (86 assertions — a unit cube
+from six deliberately-inconsistent rings welding to 8 vertices and enclosing +1,
+an open cage, shell counting, ear clipping against a fan negative control,
+coincident-node detection, frame + scale). Its coherence negative control checks
+the **opposite-traversal property directly** rather than comparing volumes,
+because signed volume is taken about the world origin and any face through the
+origin contributes zero however it is wound — a unit cube at `[0,1]³` measures
++1 even with half its rings backwards.
+
+---
+
 ### pose/pose-data.js
+
+**`InstanceGroup.points3d` on the bulk paths lives in a slab pool.**
+`pooledPoints3d(points)` copies a group's flat 3D into a 1 MB slab and returns a
+`Float64Array` VIEW of exactly its 3N doubles (`isPooledPoints3d` tells them
+apart); an already-pooled array comes back unchanged, null/empty pass through,
+boxed rows are normalized first (`asPoints3d`), and anything over a sixteenth of
+a slab keeps its own buffer. Every bulk writer stores through it: Triangulate
+All (`_applyGroupStep`, pose/triangulation.js; `applyIdentitySolve` and
+Group by Track, ui/export-modals.js), Track All (`commitTrackedFrame`,
+pose/tracker.js — which also stops the group sharing the tracker target's live
+array), reopen and the other import paths (import-export/slp-import.js; the JSON
+project loader in save-load.js), the origin re-base (`applyOriginRebase`) and
+`moveVideosToSession`. Single-frame solves keep their own buffers (bounded). A
+view behaves like an owned array for everything `points3d` is used for —
+indexing, in-place writes (they stay in its own region), `length`, `slice()`,
+`new Float64Array(view)`, `ArrayBuffer.isView` — but must never be TRANSFERRED
+or re-wrapped through `.buffer` (that is the whole slab; a `postMessage` of one
+would also copy it). Nothing does either. Why: 539,545 groups owned 539,545
+ArrayBuffers after Triangulate All on the 8-camera, 108,000-frame project, and
+every full GC sweeps every ArrayBuffer. Dead regions of re-solved groups pin
+their slab until its last view goes — a Triangulate All replaces every group, so
+old slabs die whole. Covered by `tests/test-points3d-pool.mjs` and
+`tests/e2e/sequence-lazy-workflow.mjs` (`checkPooled`).
+
+**`InstanceGroup.reprojectedInstances` starts as the shared
+`NO_REPROJECTED_INSTANCES`**, an empty read-only Map (a subclass whose `set`
+throws); `addReprojectedInstance` gives the group a Map of its own on its first
+write. Reading, iterating, `clear()` and `delete()` behave as on any empty Map,
+and replacing the whole Map by assignment is fine. After Track All + Triangulate
+All on the 8-camera, 108,000-frame project, 539,545 groups each owned an empty
+Map (a JSMap plus its hash table) and held 40 entries between them. Writers must
+go through `addReprojectedInstance`, test fixtures included — a direct `.set` on
+the shared Map throws rather than leaking an entry into every group.
+
+**`frameIdentityMap` is a `FrameIdentityMap`.** A packed key is above V8's
+small-integer range for every frame past 127, so in a plain Map every entry
+cost a heap Number — 4,147,806 after Track All on the 8-camera, 108,000-frame
+project, plus a multi-million-slot hash table, all marked or scanned by every
+full GC — measured at ~29 ms of a ~195 ms full GC and 103 MB of V8 heap
+(`_bench-playback.mjs HEAPPROBE=1`, #282).
+`FrameIdentityMap extends Map` and overrides every method: numeric keys and
+values live in `Float64Array`s in insertion order, with an open-addressing
+`Int32Array` index; other keys (the legacy `"frame:cam:null"` strings, NaN) and
+non-number values go to small side Maps. Map semantics are kept exactly —
+insertion order (load-bearing: `exportFrameIdentityEntries` writes in it, so the
+saved bytes depend on it), `set` on an existing key keeping its place,
+SameValueZero keys, live iteration (deleted-before-reached skipped, added
+visited, `clear()` ends it). One difference: deleted entries are holes until the
+arrays next grow, and if most are dead they are COMPACTED instead — an iterator
+open across a compaction throws rather than skip or repeat silently. `Session`
+exposes `frameIdentityMap` through an accessor that converts any plain Map
+assigned to it (keeping order), so `deleteTrackAt`'s and Track All's
+`= new Map()` still end up compact; `propagateIdentitiesToTracks` builds its new
+map and its two transient packed-key maps as `FrameIdentityMap`s directly. It
+must not be structured-cloned or posted to a worker (its Map slot is empty);
+nothing does. Covered by `tests/test-frame-identity-map.mjs` — 60,000 random
+operations in lockstep with a real Map, compared in full order.
 
 **`frameIdentityMap` packed keys (luc3d #185 follow-up #3).** `frameIdentityMap`
 maps (frameIdx, camera, raw trackIdx) → identityId with **one entry per 2D
@@ -236,12 +1459,45 @@ resize any backup alongside, so `restorePoints()` stays node-aligned),
 `Float64Array`, adopted by reference) and normalizes, so all 23 construction
 sites were untouched. Only readers changed.
 
+**The shared lazy placeholder.** `lazyPlaceholderXY(numNodes)` returns ONE
+NaN-filled `Float64Array(2n)` per node count, and `isLazyPlaceholderXY(xy)`
+recognises it by identity. Every lazy `InstanceGroup` member whose 2D lives only
+in the store points at it: a reopened project's placeholders
+(`reconstructInstanceGroupsFromSessionLazy`) and members whose frame went
+non-resident (`releaseFrameMembers2d`, `pose/lazy-residency.js`). A private
+buffer each was 1.39 GB and ~4.2M ArrayBuffers after a Track All on the 8-camera
+108,000-frame project. **It is never written:** the three IN-PLACE writers —
+`setPoint`, `clearPoint` and `setPointVisible`'s restore — call the private
+`_ownXY()` first, which swaps in a copy when `_xy` is the placeholder. Writers
+that assign a new array (`setPointsFrom`, `adoptPointsFrom`, `restorePoints`,
+`insertNodeAt`/`removeNodeAt`) need no guard. A NEW in-place writer must call
+`_ownXY()`, or one edit moves every lightweight member in the project.
+
 f64 rather than f32 is deliberate: identical cage cost, and bit-exact values keep
 `tests/e2e/save-golden-digest.mjs` byte-for-byte unchanged across the conversion.
 
 One behavior change, unavoidable in the representation: a boxed row could
 previously hold `[NaN, NaN]` and count as *present*; NaN-x now means absent. No
 producer emits such a row (every construction site writes `null`).
+
+**Per-node model scores live in ONE pool, not on each instance.** A prediction
+read from an `.slp` carries the model's confidence in each node
+(`pred_points.score`) — what the node tooltip shows (`ui/node-tooltip.js`) and
+what the writers put back. `Instance.setPointScores(src, start)` copies them into
+module-private `Float32Array` chunks (`storePointScores`; the first chunk starts
+at 4,096 scores and doubles to 1M, later chunks are 1M, a segment never straddles
+two) and the instance keeps only `_ps`, the integer offset of its first node
+(-1 = none, set in the constructor so every Instance keeps one shape). Measured in
+V8: a `Float32Array(15)` per instance is ~320 B of heap plus an ArrayBuffer for
+every GC to sweep, the integer ~8 B — and an EAGER per-camera folder can hold
+millions of predictions. Segments are written once and never edited, so
+`adoptPointScoresFrom` may share one and `insertNodeAt`/`removeNodeAt` write a new
+segment (`splicePointScores`) rather than touching the old; nothing is freed (a
+deleted instance leaves its floats behind, bounded by what was loaded, and a
+project load reloads the page). `pointScore(k)` is NaN for no score and for any
+`k` that is not an integer in range — `null >= 0` is true in JS and read node 0
+before that guard. **A lazy project does not use the pool**: frames re-hydrate on
+every revisit and would refill it, so its scores stay in the store (below).
 
 **Purpose.** Pure data-model classes — no DOM, no I/O. The single source of
 truth for skeletons, cameras, instances, frame groups, identities, and the
@@ -266,13 +1522,28 @@ session graph that holds them.
   and `identityId` (null unless this is a TRACKLESS UNLINKED instance whose
   disbanded group's identity was retained on it by `unlinkGroup` — luc3d
   #201; consumed/cleared when the instance joins a group; not persisted).
-  Methods `toggleOccluded`, `setPointVisible`, `backupPoints`, `restorePoints`.
+  Methods `toggleOccluded`, `setPointVisible`, `backupPoints`, `restorePoints`,
+  and the per-node model scores `setPointScores(src, start)`,
+  `adoptPointScoresFrom(other)`, `hasPointScores()`, `pointScore(k)` (see the
+  score pool above).
 - `UnlinkedInstance` — wrapper around an `Instance` not yet placed in an
   `InstanceGroup`. Auto-incrementing `id`.
 - `FrameGroup` — per-frame container of linked `instances` and
   `unlinkedInstances`, both keyed by camera name.
-- `Identity` — id + name + color (uses `IDENTITY_COLORS` palette).
-- `IDENTITY_COLORS` — 20-color palette for identity badges.
+- `Identity` — id + name + color (uses `IDENTITY_COLORS` palette). A color
+  passed in that equals the OLD default for its slot (`id % 20`, private
+  `LEGACY_IDENTITY_COLORS`) is replaced by the current default: projects store
+  identity colors, LUCID has no control for picking one, so that color IS the
+  old default. Every load path builds identities through this constructor, so
+  this is the one upgrade point. Any other color is kept.
+- `IDENTITY_COLORS` — 20-color palette for identity badges; identity N takes
+  entry N, so N animals show the first N. Entries 0-6 are the original neon
+  set; 7-19 were chosen farthest-first (CIEDE2000) so the closest pair stays
+  as wide as possible per animal count (18.0 at 8 animals, 13.7 at 12; the old
+  7-19 gave 6.0 at 8). Every entry is L* >= 55 and vivid.
+  `UNIDENTIFIED_TRACK_COLORS` (`ui/overlays.js`) must stay ΔE2000 ≥ 20 from
+  every entry. All of it is pinned by `tests/test-track-identity-palette.mjs`
+  §2, §8 and §9, so a change here re-runs that test.
 - `InstanceGroup` — cross-view grouped instances + triangulated `points3d`
   + cached `reprojectedInstances`. `markDirty`/`markClean`. Also
   `triangulationMethod` (`'ba'`|`'dlt'`|undefined), recording WHICH SOLVER
@@ -286,8 +1557,33 @@ session graph that holds them.
   error under a "DLT" label for BA points (measured on the regression fixture:
   1.62 px shown instead of 1.43 px). Guarded by
   `tests/e2e/triangulate-all-ba-file-roundtrip.mjs`.
+- `groupDisplayName(session, group, frameIdx)` — the name a status line gives an
+  `InstanceGroup`, never `undefined`/`null`. A group has **no `trackIdx`** (its
+  member instances do, and a member's can be `null` since luc3d #273), and
+  `identityId` is an identity id, not an index into `session.tracks` — reading
+  either as a track index printed "Converted Track undefined to user instance".
+  Resolved in `getGroupColor`'s order: the per-frame identity of a member's own
+  (camera, trackIdx) at `frameIdx`, then `group.identityId` via `getIdentity`,
+  then the first member's track name (`'Track N'` for an unnamed index, as the
+  2D labels do), then `'group'`. Only a non-negative integer `trackIdx` counts as
+  a track (a pre-#273 `-1` is trackless). Used by the five group-naming status
+  lines in `pose/initialization.js`. Tested by `tests/test-group-display-name.mjs`.
 - `Session` — top-level container: cameras, skeleton, tracks, identities,
-  frameGroups, instanceGroups. The `numFrames` getter returns
+  frameGroups, instanceGroups. **`predictedNodeScore(cameraName, frameIdx,
+  inst, k)`** is the one answer to "what did the model score this node?" — the
+  node tooltip and the streaming writer's overlay both ask it. NaN unless `inst`
+  is `'predicted'` (an edit makes an instance `'user'`, and its positions are then
+  not what was scored; a reprojection was never scored). An eager prediction
+  answers from its own scores; a lazy one from the store row it was hydrated
+  from (`_rawInstIndex`, which must be an integer — `null` is not row 0), via
+  `lazyLoader.predictedPointScore` and by node NAME, so a skeleton edit after
+  loading cannot pair a node with another node's score. **`numAnimals`** is the number of animals every
+  tracking run on the session caps identities at: a positive integer, `'auto'`
+  (an explicit auto-detect), or `null` while nobody has been asked, which is
+  what makes Track Frame / Track All prompt. Per session because a session is
+  one recording; saved as `metadata.lucid.numAnimals`
+  (`import-export/visibility-metadata.js`), read and set through
+  `pose/tracker.js`. The `numFrames` getter returns
   `lazyLoader.nFrames` on a lazy session (`frameGroups` there holds only the
   visited/resident window, badly understating the project) and `frameGroups.size`
   otherwise. **Tracks and identities are per-session.** The
@@ -345,7 +1641,13 @@ session graph that holds them.
   correction history. No frame materialization, so nothing hydrates or evicts.
   Returns `{entries, groups, frames}`. Guarded by the `swapIdentitiesForward
   (#172)` block in `tests/test-identity.js` and end to end by
-  `tests/e2e/identity-switch-propagates-to-end.mjs`;
+  `tests/e2e/identity-switch-propagates-to-end.mjs`. It is
+  `swapIdentitiesInRange(startFrame, Infinity, …)`;
+  `swapIdentitiesInRange(startFrame, endFrame, identityA, identityB)` — the same
+  swap bounded on BOTH sides (inclusive), what fixing a flagged ID switch does
+  (`ui/id-switch-modal.js`): the frames after the pair's switch-back are already
+  right. Its own inverse, which is how a fix is undone. Covered by
+  `tests/test-id-switch-fix.mjs` §3;
   `swapIdentitiesForwardInCamera(startFrame, cameraName, identityA, identityB)` —
   the **single-view** counterpart (luc3d #201). Same dense value swap, forward to
   the end of the project, but restricted to ONE camera: this is how an ID is
@@ -614,27 +1916,93 @@ bookkeeping, session save/load.
 
 ### pose/tracker-worker.js
 
-**Purpose.** Web Worker scaffold for batch cross-view tracking (currently
-dead code — see comment at top of file). No `new Worker(...)` spawn site
-exists in the codebase, and the worker references `CrossViewTracker` and
-`Detection2D` which are not defined anywhere.
+**Purpose.** Module worker that runs Track All's `CrossViewTracker` off the
+main thread, spawned by `pose/tracker-pool.js`. (It replaced a dead scaffold of
+the same name that referenced classes that no longer existed.) The tracker is
+sequential — each frame is matched against the targets the previous one left —
+so ONE worker runs it, frame by frame, in order; what moves off the main thread
+is the work itself, while the main thread keeps hydrating frames and committing
+the results.
 
-**Message protocol** (only what the worker handles, even though it can't
-run in its current state).
-- IN: `{type: 'start', data: {frames, cameras, hyperparameters}}`.
-- IN: `{type: 'cancel'}`.
-- OUT: `{type: 'progress', frame, total}` — every 100 frames.
-- OUT: `{type: 'cancelled', frame}`.
-- OUT: `{type: 'complete', results: {identityAssignments, numTargets}}`.
-- OUT: `{type: 'error', message}`.
+**Bit-identical by construction.** It runs the same code
+(`pose/cross-view-tracker.js`) on the same inputs in the same order:
+- cameras arrive with the main thread's own cached `_cachedR` / `_cachedRt` /
+  `_cachedP` installed, so no matrix is re-derived here;
+- each detection arrives as a copy of its instance's flat `_xy` — the only
+  thing `Detection` reads (`toPointsArray` → `getPoint`), and it snapshots that
+  at construction, so the tracker never reads an `Instance` again — in the same
+  per-camera slot order `buildTrackerDetections` uses (the detection filter is
+  applied on the main thread, by `buildTrackerInputs`).
+Pinned by `tests/e2e/track-all-worker.mjs`.
 
-**Imports from project modules.** None (originally used `importScripts`
-which was removed during the ESM migration).
+**Message protocol.** A batch travels as a handful of TYPED ARRAYS each way,
+never one object or buffer per detection — serializing ~2,400 small arrays per
+100-frame batch cost ~1 s of a 7 s Track All across the two threads
+(HardFight), which made the worker run 10% SLOWER than inline until it went.
+- IN `{type: 'init', hp, cameras: [{name, matrix, dist, rvec, tvec, size, R, Rt, P}]}`
+  → `{type: 'ready'}`. The arrays are rebuilt by push (`unboxed`): a structured
+  clone delivers V8's generic boxed-number arrays, and the tracker reads these
+  matrices in its innermost loops (worker tracking 7.7 → 7.5 s on HardFight).
+- IN `{type: 'frames', id, fis, counts, lens, xy}` — frame `i`'s camera `c` has
+  `counts[i*C + c]` detections, each one's `_xy` the next `lens[d]` values of
+  `xy` (frame, camera, slot order); a detection's `Instance` adopts its VIEW.
+  → `{type: 'tracked', id, r: {fis, nT, live, trackIds, nMem, mem, p3len, p3}}`
+  — per frame, what `commitTrackedFrame` reads, in tracker order: `nT[i]`
+  targets holding a detection from >= 2 cameras THIS frame, each with its
+  `trackId`, `nMem` (camera index, slot) pairs in `mem` in its `detsByCam` order,
+  and a copy of its 3D as the next `p3len` values of `p3` (-1: none); `live[i]`
+  = the tracker's target count after the frame (the run's `numTargets`). All
+  transferred.
+- Any throw → `{type: 'error', id, message}`.
 
-**Imported by.** Nothing.
+**Imports from project modules.** `./pose-data.js` (`Camera`, `Instance`),
+`./cross-view-tracker.js` (`CrossViewTracker`, `Detection`) — both worker-safe.
 
-**User-facing features.** None — dead code, intended to back a future
-"Track All in Worker" mode.
+**Imported by.** Spawned by `pose/tracker-pool.js` via
+`new Worker(new URL('pose/tracker-worker.js', document.baseURI), {type: 'module'})`.
+
+**User-facing features.** Track All / Track Frame Range run their tracker here.
+
+---
+
+### pose/tracker-pool.js
+
+**Purpose.** The main-thread side of Track All's tracker worker
+(`pose/tracker-worker.js`): `startTrackerWorker(cameras, hp, onFrame, opts)`
+spawns it, posts `init`, and resolves with a handle once it answers `ready` — or
+`null` (track inline) when workers are unavailable, `window.LUCID_TRACKER_WORKER
+=== 0` (`trackerWorkerWanted`; the kill switch and the A/B tests' inline side),
+or it fails to start. A worker that cannot start never costs a run.
+
+**Handle.** `submit(fi, cams)` queues one frame (per camera, in the run's
+order, each detection's flat 2D in slot order), COPYING it into the batch's one
+growing `Float64Array`, and posts the batch (transferred) every `TRACKER_BATCH`
+(100) frames. `saturated()` / `throttle()` hold the main
+thread to at most `TRACKER_MAX_IN_FLIGHT` (20) batches ahead — 2,000 frames, one
+sweep window, so the worker has a window's work queued while the main thread
+hydrates the next instead of idling through it. `committedThrough(fi)` resolves
+once every submitted frame up to `fi` is committed (flushing a partial batch);
+`finish()` once everything is. `cpuBusyMs()` is the worker's busy time (a
+`createBusyClock` lane open while it holds a batch) for the CPU line; `close()`
+terminates it.
+
+**Results commit IN ORDER, from the message handler.** `decode` turns a batch's
+`r` back into `onFrame(fi, targets, live)` calls — `targets`
+`[{trackId, points3d, members}]`, `members` a view of (camera index, slot) pairs
+and `points3d` a view to COPY (`pooledPoints3d` does), not keep — for each frame
+of each returned batch, wrapped in
+`opts.busyDuring` so the loading overlay counts it as main-thread work even
+inside an `idleWhile` wait. A frame must still be RESIDENT when its result
+arrives — the caller holds sweep windows until `committedThrough`. A commit that
+throws, or a worker that errors, sets `failure`: every later wait rejects with
+it, so a mid-run failure fails the pass (error status) rather than hanging.
+
+**Imports from project modules.** `../ui/load-graph.js` (`createBusyClock`).
+
+**Imported by.** `pose/tracker.js`.
+
+**User-facing features.** Track All / Track Frame Range speed, and their CPU
+line (the worker plus the main thread).
 
 ---
 
@@ -643,6 +2011,46 @@ which was removed during the ESM migration).
 **Purpose.** Cross-view instance matching and identity assignment. Pairwise
 epipolar/reprojection scoring, Hungarian assignment, multi-frame
 identity propagation.
+
+**Track All closes the Timeline and the 3D viewer.** On success, a full Track
+All calls `collapseTimeline()` (`ui/timeline-controller.js`) and
+`collapseViewport3D(viewport3d)` (`ui/panel-visibility.js`) so the views showing
+the new IDs get the space back — there is no 3D pose to look at until Triangulate
+All runs. A closed panel stays closed. Track Frame Range and Track Frame leave
+both as they were. Covered by `tests/e2e/track-all-closes-timeline-and-3d.mjs`.
+
+**Track All ends on a summary box.** After the automatic ID-switch checks,
+`runTrackingPass` (Track All only — a range is a targeted re-run inspected on the
+timeline) opens `showTrackSummaryModal` (`ui/track-summary-modal.js`) with
+`summarizeTrackedIdentities` and one `describeSwitchCheck` per cue
+(`ui/track-summary.js`), after keeping both on the session with
+`rememberTrackSummary`, so the ID Switches tab can reopen the box once it is closed. It reports how long tracking took — `trackStart` is taken
+AFTER the animal-count prompt, so the user's typing is not counted, and stops when
+the identity pass returns — with its speed (fps, and × real time from the
+recording rate `state.fps`, falling back to `session.fps`, as the ID-switch checks
+read it), and each check's own `elapsedMs` (stamped by `runIdSwitchChecks`). It exists because a check that found nothing used to end the
+run with no visible next step. The summary is wrapped in its own `try`: tracking
+has already succeeded, so a summary failure only logs. Covered by
+`tests/e2e/track-all-summary.mjs`.
+
+**Every tracking pass marks the project dirty.** Track Frame, Track Frame Range
+and Track All rewrite `session.instanceGroups`, `session.frameIdentityMap` and
+`session.identities`, so each calls `markDirty()` — `trackCurrentFrame` before it
+drops the frame's groups, `runTrackingPass` before `clearIdSwitchResults` and its
+own clear, so both sweeps (`runCrossViewTrackerProgress` and the windowed
+`sweepTrackAllFrames`) are covered by the one call. For a long time none did:
+after Track All on a fresh project the save dot and `• Lucid` title never
+appeared and closing the tab lost the result without a prompt. The call sits
+AFTER every bail-out (a refused click is not an edit) and is deliberately NOT
+conditional on what the run found: the clear runs first, so a re-run that
+matches nothing — or throws partway — has still wiped the previous result, and
+gating on `numTargets`/`numIdentities` would leave exactly that unflagged. Same
+placement rule as `triangulateAllFrames`. Covered by
+`tests/e2e/track-marks-dirty.mjs` (all three entry points, eager and windowed,
+the zero-match re-run, and the bail-outs as negative controls), the Track All
+step of `tests/e2e/sequence-lazy-workflow.mjs` and `tests/test-tracker-gui.mjs`.
+Those tests switch the automatic ID-switch checks off, because a check that runs
+calls `markDirty()` itself and would hide a tracker that never does.
 
 **Animal-count auto-detect is a resident SAMPLE, deliberately.**
 `computeMaxInstancesPerView` (used when the user has not set a count) reads
@@ -778,8 +2186,9 @@ no `points3d` are skipped) and show the total in the bottom-left status bar
 node weights change which instances get grouped (not which nodes triangulate),
 this is the headline metric for comparing weight settings.
 
-**Auto-cap.** When the user leaves the "Number of animals" prompt empty,
-`trackAll` / `trackCurrentFrame` resolve `numAnimals` via
+**Auto-cap.** When the animal count is blank (the prompt answered empty, or
+the toolbar's Animals field cleared), `trackAll` / `trackCurrentFrame` resolve
+`numAnimals` via
 `computeMaxInstancesPerView(session)` — the largest instance count seen
 in any (camera, frame) pair across the session — instead of leaving it
 null. Without the cap, leftover groups that survive reorder (after Fix
@@ -795,24 +2204,57 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   undefined `CrossViewTracker` — latent bug, see comment in source).
 - `trackAll()` — toolbar "Track All" handler — runs `matchFrameInstances`
   across every frame with temporal continuity signals.
+- `getTrackerNumAnimals()` / `setTrackerNumAnimals(n)` /
+  `onTrackerNumAnimalsChange(fn)` — the ACTIVE session's animal count
+  (`Session.numAnimals`; the getter returns `null` for auto-detect and for
+  never-asked alike). It lives on the session so it is saved with the project.
+  The native `promptNumAnimals()` fires only while the session has **no answer
+  at all** (`numAnimalsAnswered`: `numAnimals` is `null`), not while the count
+  reads null: a blank answer is stored as `'auto'`, and gating on null
+  re-prompted on every Track Frame / Track All after one. The prompt is
+  pre-filled with the session's count, else the last count given in any
+  session this page has seen (`_lastNumAnimals`), so a multi-session project of
+  the same animals answers each new session with one Enter.
+  `setTrackerNumAnimals` counts as an answer, null included; on a change it
+  calls `markDirty()` (it is project state now) and notifies the listeners —
+  that is how the toolbar's Animals field (`ui/animal-count-field.js`) follows
+  the prompt and the Track Frame Range dialog. With no session it is a no-op:
+  there is nothing to save the count with. Loading never goes through it — the
+  readers set `numAnimals` directly, so a reopened project is not dirty.
 
 **Imports from project modules.**
+- `./pose-data.js` — `InstanceGroup`, `points3dNodeCount`, `hasPoint3d`,
+  `readPoint3d`, `pooledPoints3d` (`commitTrackedFrame` stores a COPY of the
+  target's 3D in the slab pool — one ArrayBuffer per group was 539,545 for a
+  full Track All, and the group no longer shares the target's live array).
 - `./triangulation.js` — `computeFundamentalMatrix`, `triangulatePointDLT`,
   `triangulatePoints`, `reprojectPoint`, `reprojectPoints`,
   `computeInstanceDistance`, `hungarianAlgorithm`.
 - `../ui/app-state.js` — `state`, `interactionManager`, `timeline`,
-  `getActiveSession`.
+  `viewport3d`, `getActiveSession`.
 - `../ui/settings.js` — `getNodeWeightArray`, `getTrackingThresholds`,
   `getTrackingThreshold`, `isCameraTracked` (both `trackAll`/`trackCurrentFrame`
   drop cameras where `isCameraTracked(name)` is false before tracking; abort with
   a warning if fewer than 2 views remain included).
-- `../import-export/save-load.js` — `setStatus`, `hideLoading`.
+- `../import-export/save-load.js` — `markDirty` (every tracking pass, once its
+  bail-outs are behind it — see above), `setStatus`, `hideLoading`.
 - `../ui/loading-overlay.js` — `showLoadingProgress`, `createProgressPacer`,
-  `yieldToPaint`.
+  `yieldToPaint`, `idleWhile` / `busyDuring` (the waits on the tracker worker
+  are idle time, its commits are not), and `setLoadingCpu` as the identity pass
+  starts: the overlay's CPU line and graph. On the worker it is
+  `{mainThread: true, cpuBusyMs: pool.cpuBusyMs}` — the worker's busy time plus
+  the main thread's minus its waits (tooltip: "…by Track All: its tracker worker,
+  and the main thread loading frames and writing back the results"); inline it
+  is `{mainThread: true}` alone — one core's share (tooltip: "…which runs on the
+  main thread: one core at most"). Covered by `tests/e2e/track-all-cpu-load.mjs`
+  (both), which also pins the progress line's, status line's and summary box's
+  thousands commas.
+- `./tracker-pool.js` — `startTrackerWorker` (see "Track All runs its tracker on
+  a worker" below).
 - `../ui/rendering.js` — `drawAllOverlays`, `showPredictedOnly`,
   `PREDICTED_ONLY_NOTE`: Track Frame (when it found targets), Track Frame Range
   and Track All (when they assigned identities) end showing ONLY the Predicted
-  layer — User, Reproj, Errors unticked — and append the note to the status line
+  layer — User, Reprojections, Errors unticked — and append the note to the status line
   when that changed anything (the tracking counterpart of Triangulate All's
   Reproj-only switch, #243).
 - `../ui/info-panel.js` — `updateInfoPanel`.
@@ -823,17 +2265,68 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   per `autoImageSwitchCheck` (default off)) and awaits them, so the pass resolves
   after the checks. It also drops the session's earlier results and their
   markers (`clearIdSwitchResults(session)`) before clearing identities, for both paths.
+  Its return value (each result carries `elapsedMs`) feeds the Track All summary.
+- `../ui/track-summary.js` — `summarizeTrackedIdentities`, `describeSwitchCheck`
+  (the Track All summary's data).
+- `../ui/track-summary-modal.js` — `showTrackSummaryModal`: opened at the end of a
+  successful Track All (see above), with the session so it shows the Identities
+  section (`ui/identity-gallery.js`); `rememberTrackSummary`: keeps it for reopening.
+- `../ui/timeline-controller.js` — `collapseTimeline`: a successful Track All
+  (not a range) closes the Timeline if it is open.
+- `../ui/panel-visibility.js` — `collapseViewport3D`: the same, for the 3D viewer
+  (passed `viewport3d` from `../ui/app-state.js`, which is also imported).
   No cycle: that module imports app-state, save-load, loading-overlay, settings,
   `pose/id-switch-check.js` and `ui/image-embedder.js`, none of which import the
   tracker.
 - `../ui/color-by.js` — `setColorByIdentity`: a successful Track All / Track
   Frame Range that assigned identities switches Color from Tracks to ID
   (#242) and says so in the status line. Track Frame (one frame) does not.
+- `../ui/trail-presets.js` — `setTrailSeconds`, `trailSecondsName`,
+  `TRACK_ALL_TRAIL_SECONDS`: a successful Track All that assigned identities
+  turns node trails on at ¼ s **if they are off** (each animal's recent path is
+  where an identity switch shows) and says so in the status line ("node trails
+  on (¼ second)"). A length the user already picked is kept; Track Frame and
+  Track Frame Range (a targeted re-run) leave trails alone. Through the shared
+  setter, so ui-wiring's handler moves the menus' checkmarks and the button's
+  blue. Covered by `tests/test-tracker-gui.mjs` and
+  `tests/e2e/track-all-turns-on-trails.mjs`.
 
 **Imported by.** `ui/ui-wiring.js`.
 
 **User-facing features.** "Track Frame" / "Track All" buttons, identity
 propagation across frames, find-match-for-selected.
+
+**Track All runs its tracker on a worker** (`pose/tracker-pool.js` +
+`pose/tracker-worker.js`). `runTrackingPass` makes the run
+(`createTrackerRun`, which now keeps `hp` on it) and `attachTrackerWorker`
+starts ONE worker with it; the tracker is sequential, so the parallelism is the
+main thread hydrating frames, building inputs and committing results WHILE the
+worker tracks. Per frame, `submitTrackerFrame` builds `buildTrackerInputs`
+(`buildTrackerDetections`' filter and slot order exactly; per camera, each
+passing detection's `_xy` — the pool copies it — plus a kept
+`{frameIdx, instance, unlinkedId}` per slot) and submits it; `commitWorkerFrame`
+turns the worker's targets back into the shape `commitTrackedFrame` reads off a
+`CrossViewTracker` (targets in order, each one's this-frame members in its
+`detsByCam` order, camera indices back to names) and calls it — the
+commit is the inline one, unchanged, so identities, `frameIdentityMap`, groups,
+promotions and 3D are bit-identical to the inline run
+(`tests/e2e/track-all-worker.mjs`, with a 1e-9 px negative control). Both
+loops take the run: `trackFrameListProgress` (the non-windowed one;
+`runCrossViewTrackerProgress` is now a wrapper over it, inline) and
+`sweepTrackAllFrames(session, run, onProgress, opts)`, which on the worker sweeps
+with `releaseLag: 1` and `beforeRelease → committedThrough(end - 1)`: a window
+stays resident until its results are written into its FrameGroups, while the
+next one hydrates. Progress reports the frames COMMITTED, not sent. If the
+worker cannot start, both run inline as before; `window.LUCID_TRACKER_WORKER =
+0` forces that. **Measured** (`tests/e2e/_diag-trackall-ab.mjs`, OLD = inline):
+05mice_flippers (lazy, 108,000 frames, 5 mice) 54.9 → 37.9 s; HardFight (eager,
+36,000 frames, 3 mice) 7.5 → 7.3 s; identical groups on every frame and
+bit-identical tracker 3D on both. The gain is what the main thread had besides
+tracking — a lazy project's hydration — so an eager project gains little: the
+tracker alone is ~90% of its run. `tests/e2e/_diag-trackall-worker-profile.mjs`
+traces both threads (per-thread busy time, `PROFILE=1` for V8 self time per
+function), which is how the messaging cost (see `pose/tracker-worker.js`) was
+found.
 
 **Tracker engine.** `trackCurrentFrame` / `trackAll` drive the
 `CrossViewTracker` (`pose/cross-view-tracker.js`) exclusively — it is the app's
@@ -972,7 +2465,8 @@ reversed; a non-integer endpoint is refused outright, because every comparison
 against `NaN` is false and it would otherwise sail past the ordering check and
 sweep nothing while reporting a `NaN` range. Like Track All, a range run does NOT propagate to tracks.
 `getTrackerNumAnimals` / `setTrackerNumAnimals` expose the animal count so the
-modal can collect it inline; `runTrackingPass` skips the native `promptNumAnimals()`
+modal can collect it inline (and the toolbar's Animals field then shows what it
+set); `runTrackingPass` skips the native `promptNumAnimals()`
 on the range path so a `prompt()` never stacks on top of the dialog.
 `runTrackingPass` **returns** `{ok, start, end, identities, frames}` — `ok:false`
 for every bail-out, and on success the CLAMPED, normalized span actually swept.
@@ -1004,6 +2498,22 @@ faithful port of `/root/vast/eric/sleap-3d/sleap_3d/tracker.py`, and as of
 of 3D `Target`s, one camera-view at a time, via Hungarian assignment on a cost
 that sums a 2D reprojection term and a 3D point-to-ray term. Still no Kalman
 filter, no velocity model (matches the reference).
+
+**"All geometry is coordinate-agnostic" — true of everything it imports EXCEPT
+the triangulation.** The file header makes that claim, and it holds for
+`reprojectPoint`, `backProjectToRays`, `pointsToRayDistances` and
+`epipolarErrorMatrix` (the fundamental matrix is the relative pose, invariant to
+1e-19 under a re-base). It did NOT hold for `triangulatePoints`, which
+`_retriangulate` calls to build `target.points3d` — the single frame-dependent
+input to both cost terms, which are otherwise geometric given that 3D. A ~1.2 m
+re-base moved it by up to 15 mm, and since `_adjacency3d` divides millimetre
+distances by `distanceThreshold` (default **1.0**), that is a cost swing of ~15
+per node. 21% of frames came out grouped differently. Fixed in
+`triangulatePointDLT` (see `pose/triangulation.js`), not here — the tracker was
+right to assume invariance; the estimator was not delivering it. Note the
+tracker calls `triangulatePoints` (DLT) unconditionally and never
+`triangulatePointsBA`, so the Settings "Refined" method does **not** reach this
+path.
 
 **Stale-anchor fix (2026-08-14).** The reference keeps one detection per camera
 FOREVER (never expired) and re-fuses mid-frame, mutating the shared target list
@@ -1041,7 +2551,10 @@ tracker exactly):
 fix (`ui/settings.js`); `scripts/bench/hooks.mjs`'s `THRESHOLD_DEFAULTS` was
 updated to match (its own comment requires staying in sync).
 
-**Match gate (2026-10-03, `matchGate` hp, default 1; 0 = off).** The reference
+**Match gate (2026-10-03, `matchGate` hp; default OFF since 2026-10-07, #285; 1 = on).**
+Off by default because on Eric's proofread benchmarks it helped SLAP-2M but gave
+about 6x the ID switches on Mouse-Dyad-10M and about 10x on s-DANNCE (#285); 0 is
+the pre-gate tracker exactly, so the default is the tracker from before #248. The reference
 Hungarian is forced: whenever a view has at least as many detections as
 targets, every target takes one, however negative its adjacency. One spare
 target (left by an earlier false birth — common when the animal count is
@@ -1077,6 +2590,30 @@ ingest (`normalizePoint` == `cv2.undistortPoints` with no `P`), and the
 `velocityThreshold` is in normalized image units (so the 2D term saturates and
 the 3D term dominates — hence `corr3dWeight` is the meaningful knob).
 
+**Score caches (2026-10-12) — the matching cost, computed once instead of per
+pair.** `_assign` scores every target against every detection of a view, and two
+of the inputs depend on only ONE side of the pair:
+- **`detectionRays(det, ext)`** — the detection back-projected to one ray per node
+  (`backProjectToRays`), cached on the `Detection` (`_rays`, `_raysExt`). It was
+  recast for every target: 4.9 s of a 67 s Track All with 5 mice.
+- **`targetProjection(target, ext)`** — the target's 3D projected into a camera, per
+  node, cached on the `Target` (`_proj = {p3, ext, pts}`), so once per (target,
+  view) instead of once per (target, detection).
+Both key on OBJECT IDENTITY, which is exactly when their inputs change:
+`target.points3d` is only ever REPLACED (`_retriangulate`; nothing edits it), and
+`Camera.setExtrinsics` replaces `extrinsicMatrix`. Within a frame every view is
+scored against the same `points3d` (the sync fix), which is what makes the
+per-view projection reusable. The arithmetic is unchanged, only how often it runs.
+Measured with `_diag-trackall-ab.mjs` (origin/main vs this) on 8 recordings —
+`05mice_flippers` (108,000 frames, 5 mice) 63.0 -> 55.0 s and 63.5 -> 54.8 s,
+HardFight 8.2 -> 7.4 s, and the six 3-4-mouse ground-truth sessions 6-13%
+faster — with identity groups identical on all 253,956 frames and the tracker's
+3D identical to the bit (max difference 0 mm); the harness's negative control
+(`matchGate` flipped on the new side) reports 744 of 18,058 frames differing.
+Pinned by `tests/test-cross-view-tracker.mjs` "Score caches": identical scores,
+and a moved camera / replaced `points3d` recomputed exactly — each confirmed to
+fail with its invalidation removed.
+
 **Exports.** `CrossViewTracker` (class: `trackFrame(detsByCam, camsOrder)`,
 maintains `.targets`), `Detection` (2D observation: `pointsNorm`/`pointsPixel` +
 `cam`/`frameIdx`/`slot`), `normalizePoint`.
@@ -1106,13 +2643,15 @@ nodes entirely (dropping them from matching). `null`/omitted ⇒ every node weig
 1 (faithful). Wired from `runCrossViewTracker` via the Tracking Wizard's Node
 Weights section (`getNodeWeightArray`).
 
-**Imports.** `pose/triangulation.js` (all geometry is coordinate-agnostic and
+**Imports.** `pose/triangulation-core.js` (all geometry is coordinate-agnostic and
 reused by passing the bare extrinsic + normalized points:
 `triangulatePoints`, `reprojectPoint`, `backProjectToRays`,
 `pointsToRayDistances`, `hungarianAlgorithm`, `computeFundamentalMatrix`,
-`epipolarErrorMatrix`).
+`epipolarErrorMatrix`). From the core, NOT `pose/triangulation.js` (which
+re-exports them): that module pulls in the whole UI, and this one must load in
+`pose/tracker-worker.js`. Keep every import of this module worker-safe.
 
-**Imported by.** `pose/tracker.js`.
+**Imported by.** `pose/tracker.js`, `pose/tracker-worker.js`.
 
 ---
 
@@ -1124,8 +2663,12 @@ hosts the lazy-H5 frame loader and the user-facing triangulation orchestration
 (single-frame, all-frames, multi-frame range).
 
 **The pure math now lives in `pose/triangulation-core.js`** (DLT,
-refinement, reprojection, errors, `triangulateAndReproject`, `invert3x3`) so the
-Triangulate All worker pool can load it; this module imports it and
+refinement, reprojection, errors, `triangulateAndReproject`, `invert3x3`, and —
+since the tracker moved to a worker — the tracker's geometry:
+`hungarianAlgorithm`, `cameraCenter`, `backProjectToRay(s)`,
+`pointToRayDistance`, `pointsToRayDistances`, `computeFundamentalMatrix`,
+`epipolarError`, `epipolarErrorMatrix`) so the Triangulate All worker pool and
+Track All's tracker worker can load it; this module imports it and
 **re-exports every public name**, so all existing imports keep working. It
 installs the core's two settings hooks (`setTriangulationSettingsHooks`) with
 `isCameraTracked` / `getTrackingThreshold`.
@@ -1144,6 +2687,9 @@ solve / `_applyGroupStep`, so `triangulateAllFrames` (eager and the windowed
 apply results in submission order; `_triangulateGroupStep` (prepare + inline
 solve + apply) remains for Triangulate Range. Measured: Track All 16.9 s ->
 7.4 s, Refined Triangulate All 78.5 s -> 8.8 s, DLT 8.5 s -> 2.3 s.
+
+**`triangulatePointDLT` is frame-invariant, and that is load-bearing** — see
+`pose/triangulation-core.js`, which is where it now lives.
 
 **3D points are flat (luc3d #189).** The array-level entry points speak the
 `Float64Array(3N)` `points3d` representation (see `pose/pose-data.js`):
@@ -1166,7 +2712,23 @@ this module and used by EVERY operation that must touch every frame. Hydrate a
 2,000-frame window (`batchLoadLazyFrames`) → run the callback → drop the window's
 non-user `frameGroups` (pinning the on-screen frame and any user-edited frame) →
 `releaseWindow` → force a real collection every 5 windows. `opts.start`/`opts.end`
-restrict it to a range. **Progress/yielding is clock-paced**
+restrict it to a range. The playback eviction is HELD for the whole sweep
+(`holdLazyResidency`, released in a `finally` by the exported wrapper around
+`_sweepLazyFrameWindowsHeld`): it protects windows around the on-screen frame,
+not the window being swept, so a draw landing in one of the sweep's yields could
+otherwise drop frames the sweep hydrated but has not visited yet. **The window
+release also gives each released frame's group members' 2D back to the store**
+(`releaseFrameMembers2d`, `pose/lazy-residency.js`): each window's hydration
+re-adopts every member's row, and Track All builds its groups from the
+instances it hydrated, so without this one sweep left every member of the
+project holding a private copy of its 2D (4,152,565 members / 1.39 GB on the
+real 8-camera project). Solver jobs capture their 2D at submit, so releasing a
+window whose solves are still in flight is safe. **Release lag** (Track All's
+tracker worker): `opts.releaseLag` N keeps the last N visited windows resident
+and releases each only after the next N have been visited, awaiting
+`opts.beforeRelease(start, end)` first — the tracker's results are WRITTEN into
+the window's FrameGroups, so unlike a solve they must land before it goes.
+Both omitted: exactly the old behaviour. **Progress/yielding is clock-paced**
 (`createProgressPacer`, `ui/loading-overlay.js`): `opts.onProgress(done, total)`
 is awaited just before each ~250 ms yield and once at the end, where `done` is the
 sweep POSITION (frames passed, data or not), so it rises monotonically to `total`
@@ -1485,6 +3047,90 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `invert3x3`, `backProjectToRay`, `backProjectToRays`,
   `pointToRayDistance`, `pointsToRayDistances`,
   `computeFundamentalMatrix`, `epipolarError`, `epipolarErrorMatrix`.
+- Plane fitting (View ▸ Define Planes):
+  `fitPlaneToPoints3d(points3d)` → `{centroid, normal, rms, nPoints}|null` —
+  **now defined in `pose/plane-fit.js` and merely RE-EXPORTED here**, so
+  `pose/plane-data.js` can reach it without importing this UI-coupled module;
+  every existing caller and test still reads it from here. `jacobiEigen` moved
+  with it and is imported back for the DLT solver. Also
+  `projectPoints3dOntoPlane(points3d, plane)` → a NEW flat `points3d` with every
+  present point dropped onto the plane (input untouched, missing nodes stay
+  missing), which stays here. The fit is **total least squares via PCA** — the
+  normal is the eigenvector of the smallest eigenvalue of the points' 3x3
+  covariance, via `jacobiEigen` (which returns eigenvectors as ROWS paired
+  with unsorted `eigenvalues[i]`). Perpendicular distance is the right objective
+  because the corners carry error in all three axes; an ordinary least-squares
+  fit of z on (x, y) would privilege an axis and blow up edge-on. Returns
+  **null** for fewer than 3 points, coincident points, or COLLINEAR points —
+  collinear input admits infinitely many planes, so a normal there would be
+  arbitrary and "fitting" to it would silently rotate the annotation to
+  nonsense. Detected via the middle eigenvalue relative to the largest.
+- CONSTRAINED plane fitting (IMMUTABLE / "frozen" plane nodes):
+  `fitPlaneConstrained(points3d, options)`,
+  `projectPoints3dOntoPlaneConstrained(points3d, plane, immutable)`,
+  `mergeFrozenPoints3d(solved, frozen, immutable)`,
+  `summarizePlaneTriangulation(points3d, nodeErrors, immutable)`,
+  `planesInvalidatedByFit(movedNodeIds, planes, excludePlaneId)`,
+  `orientNormalLike(normal, previous)`, `normalizeImmutableMask(immutable, n)`,
+  and the constants `PLANE_COPLANAR_TOL_FRAC` (1e-3), `PLANE_COPLANAR_TOL_FLOOR`,
+  `PLANE_ANCHOR_COND_FRAC` (κ = 1e-3), `PLANE_MUTABLE_DEVIATION_FRAC` (0.05).
+  All PURE and model-agnostic: they take a flat `points3d` plus a plain
+  immutability spec (`Set` of indices | boolean mask | index list, normalized by
+  `normalizeImmutableMask`), never the plane node-pool objects. An immutable
+  node's 3D is FROZEN — not moved by 2D editing, by triangulation, or by the
+  fit — so the fit minimizes the SAME perpendicular residual subject to hard
+  linear constraints: pin the offset with an anchor, restrict the normal to an
+  admissible subspace `N` (3×q), take the smallest eigenvector of `NᵀMN` where
+  `M = Σ(p−a)(p−a)ᵀ` over the MUTABLE points, **scattered about the anchor, not
+  the centroid** (`M = S_c + m(c−a)(c−a)ᵀ` — genuinely a different matrix from
+  the free fit's). q follows the frozen set's rank: rank 0 (1 anchor, or several
+  coincident) ⇒ q=3; rank 1 (2 anchors, or 3+ collinear) ⇒ q=2, solved in closed
+  form as a 2×2 eigenproblem in the basis of `d⊥`; rank 2 (3+ non-collinear) ⇒
+  q=1, the anchors alone determine the plane and the mutable points get **zero**
+  weight (hard constraints, not weighted). Exactly 3 non-collinear anchors use
+  the **exact cross product**, no eigen solve. 4+ are OVER-determined and are
+  free-fit alone first (reusing `fitPlaneToPoints3d`) and rejected unless
+  `rms ≤ max(τ·anchorDiameter, floor)`.
+  **The 0-immutable case deliberately does NOT come through here** — it returns
+  `code: 'not_constrained'` and the caller must use `fitPlaneToPoints3d`, whose
+  floats are pinned by `tests/e2e/define-plane-mode.mjs`.
+  **Every threshold is SCALE-RELATIVE** (a fraction of the point set's
+  diameter): scene units are whatever the calibration used, so an absolute
+  millimetre tolerance would misfire on either a bench rig or an arena.
+  **Result object** — `{ok, code, message, plane, anchorIndices, anchorNames,
+  mutableIndices, mutableNames, warnings[], metrics}`. `code` is
+  machine-readable so the UI decides block-vs-confirm **structurally, never by
+  sniffing the message**: `ok` | `not_constrained` | `no_anchor_3d` |
+  `anchors_collinear` | `anchors_noncoplanar` | `underdetermined`. `warnings[]`
+  carries the non-fatal half — `anchors_collinear_relaxed` (a 3rd+ collinear
+  anchor adds no information, so it relaxes to the 2-anchor line case),
+  `anchors_coincident`, and `mutable_far_from_plane` (the flatten is well
+  defined but drastic — the UI should confirm, not block). Every message is
+  keyed to node NAMES with the plane name for disambiguation, never indices,
+  because the global node pool makes duplicate names likelier.
+  **Fails before mutating**: validation returns without reading or writing
+  anything further, and the flatten is a separate call.
+  **`hasPoint3d` only rejects NaN**, so an ±Infinity anchor would sail through
+  it into `jacobiEigen` (which has no NaN/Inf guard) and yield a garbage
+  eigenvector — anchors are therefore checked with an explicit `isFinite` and
+  return `no_anchor_3d`.
+  `projectPoints3dOntoPlaneConstrained` copies immutable coordinates through
+  **bit-identically** (a raw element copy, NOT "projecting an on-plane point is a
+  no-op" — round-off makes that false, and a frozen point drifting an ulp per
+  re-fit is the exact silent corruption the flag exists to prevent).
+  `summarizePlaneTriangulation` reports `nNodes`/`meanError` over MUTABLE nodes
+  only and the frozen residuals separately as `nAnchors`/`anchorMeanError` plus a
+  per-node `provenance` (`'frozen'`|`'triangulated'`|`'missing'`): a frozen
+  node's residual is an OUT-OF-SAMPLE residual — no DOF were spent fitting it —
+  so folding it into `meanError` misrepresents the solve the user is judging.
+  `planesInvalidatedByFit` does not block a shared-node fit (co-owning a node is
+  ordinary work); it tells the UI whose `planeFit` to drop after a fit moved a
+  node they share. **The user's instrument for pinning a shared intersection
+  line is the immutable flag** — freeze the shared nodes and neither fit moves
+  them. Covered by `tests/test-plane-constrained-fit.mjs`, which checks the 1-
+  and 2-anchor solves against a brute-force search over the admissible normals
+  (a fit that centred on the centroid would still produce a plausible-looking
+  plane through the anchor; only a residual comparison catches it).
 - Group math: `triangulateAndReproject(instanceGroup, cameras, options)`
   (`options.method` = `'dlt'`|`'ba'`, `options.triangulateOnly`,
   `options.robustScale` (BA soft-L1 scale in px), `options.includedCameras`,
@@ -1518,6 +3164,23 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   fallback straight to `.reprojections[viewName]` (via `drawReprojectedSkeleton`,
   no Instance wrapper needed) — also unchanged. Covered by
   `tests/test-reprojection-lifecycle.js`'s "getOrComputeReprojectedInstance" block.
+  `reprojectIntoEveryCamera(reprojections, points3d, cameras)` — **a group's
+  reprojection must reach EVERY calibrated camera, including one where it has
+  no instance on that frame.** The bulk sweeps solve each group from its
+  `groupCameras`, so `triangulateAndReproject` hands back reprojections for
+  those cameras only. Three of them stored that as-is: `triangulateAllFrames`'
+  in-memory path, `triangulateMultiFrameInstances`, and Group by Track
+  (`ui/export-modals.js`). `ui/rendering.js`'s lazy fill only fills a group
+  whose reprojections are EMPTY, so it never added the missing camera. On a
+  real 8-camera recording, a mouse hidden behind another in one side view lost
+  its reprojection there after Triangulate All ▸ Refined, though it had shown
+  right after Track All. All three now pass their result through this helper,
+  which adds `reprojectPointsCamera(points3d, cam)` for each missing camera, in
+  place. It adds reprojections only: the 3D, the per-camera errors and the
+  mean are untouched, since a camera with no instance has nothing to measure
+  against. Covered by `tests/e2e/triangulate-all-reprojects-every-view.mjs`
+  (all three paths plus the windowed sweep, against single-frame Triangulate,
+  on a real overlay canvas; confirmed to fail on the pre-fix build).
   **Two robustness features:** (1) views excluded in the Tracking Wizard's Camera
   Views panel (`isCameraTracked`, or `options.includedCameras` override) never
   contribute to the 3D solve, but are still reprojected INTO — an excluded view
@@ -1536,13 +3199,74 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   large prediction `.slp` to the main-thread `SioLazyLoader`
   (`loading/sio-lazy-loader.js`). Shared consumers: `ensureLazyFrameData`,
   `buildLazyFrameGroupSync`, `batchLoadLazyFrames` (branches on `loader.isSync`
-  for worker-free loaders), `loadAllLazyFrames`, `evictLazyFrames` (prunes
-  `session.frameGroups`, and on its throttled tick also calls
-  `SioLazyLoader.capInternalCaches` to bound the loader's internal typed-frame
-  caches — which `frameGroups` eviction alone leaks).
+  for worker-free loaders), `loadAllLazyFrames`, `ensureLazyTrailWindow(frameIdx,
+  trailLength)`, and `evictLazyFrames(anchorFrame)`
+  — the app-state wrapper around `pose/lazy-residency.js`'s
+  `evictLazyFrameGroups`. A no-op until `session.frameGroups` exceeds
+  `LAZY_RESIDENT_CAP`; then it protects windows around the on-screen frame and
+  `anchorFrame`, keeps at least the node-trail length behind them, passes every
+  object the InteractionManager holds (`_uiHeldObjects`: selection, Group-mode
+  picks, an unlinked drag, the Edit Group target) and `state.triangulationResults`.
+  Called after a NEW frame is hydrated by `ensureLazyFrameData`,
+  `ensureLazyTrailWindow` and the playback
+  loader (`ui/ui-wiring.js`), never from `batchLoadLazyFrames`. It had existed
+  since before the module split with no caller at all, which is why playback
+  kept every frame it ever hydrated (see `pose/lazy-residency.js`). The loader's
+  own caches are bounded separately (its 100-frame adapted-dict LRU and
+  sleap-io.js's `frameCacheLimit`).
+  `ensureLazyTrailWindow(frameIdx, trailLength)` hydrates the `trailLength`
+  frames BEHIND `frameIdx` — the node-trail window, which a seek's own
+  hydration (target + 30 ahead) does not reach. Called by `drawAllOverlays` and
+  by the overlay-video export (preview and each exported frame, with the
+  export's own trail length). Synchronous for `SioLazyLoader` (built before it
+  returns, then one `evictLazyFrames`); for the worker loader it returns a
+  Promise of the frames loaded and keeps at most one request in flight.
+  Measured on a synthetic 8-camera, 5-animal, 15-node project
+  (`tests/e2e/_bench-trail-window.mjs`): when the window is already resident,
+  which is every playback frame, it costs ~1.7 µs at a 500-frame trail, and
+  2,500 simulated playback steps (with the playback loader's load + eviction)
+  built 0 frames; filling it after a jump costs ~1 / 11 / 50–60 ms at
+  10 / 100 / 500 frames. On the real 8-camera, 108,000-frame project
+  (`_bench-playback.mjs`, A/B against the parent commit) playback draws/s and
+  overlay cost were within run-to-run noise at both 10 and 500 frames, jump
+  times were unchanged, and the window fill (~80 ms per jump at 500 frames)
+  showed up in the first step after each jump.
   `LazyFrameLoader` spawns `loading/slp-import-worker.js` (resolved against
   `document.baseURI` so sub-path deployments work — see ISSUES.md I-8) for HDF5
   reads.
+  **`LazyFrameLoader`'s tracks are the union over its cameras, whichever worker
+  answers first.** Each worker's `metadata` message goes through
+  `_registerCamera`, which picks the skeleton of the first camera BY NAME and
+  calls `_unifyTracks`: `trackNames` = the union of every camera's own names
+  (`loading/track-union.js`; `_ownTrackNames` pads a list shorter than the
+  data's `nTracks` with the worker's own `track_<i>` convention), plus a
+  per-camera own→session map kept only where it is not the identity. It used to
+  take `trackNames` from the first `metadata` to arrive — the same first-wins
+  bug as `SioLazyLoader`. A worker only knows its own file, so frames are
+  re-indexed as they ARRIVE, in `onmessage` (`_remapFrameTracks` on
+  `frameData` and `framesData`) — the one place `getFrame`, `prefetch` and
+  `batchLoadLazyFrames` (which posts to the workers directly) all pass through.
+  A camera whose map moved has its dense occupancy grid re-keyed into the SPARSE
+  form by `denseOccupancyToSparse` (a wider dense grid would cost nFrames × the
+  whole union); an identity camera keeps its grid as is. Covered by
+  `tests/test-lazy-track-union.js`.
+  **A hydrated trackless instance is `trackIdx: null`, never `-1`.** Both lazy
+  loaders hand over the columnar store's trackless value, `-1`, and the four
+  hydration paths — `ensureLazyFrameData`, `hydrateLazyCameras`,
+  `buildLazyFrameGroupSync`, `batchLoadLazyFrames` (both branches) — passed it
+  straight into `new Instance`, while every eager path normalizes to `null`
+  (`resolveImportTrackIdx`) and the readers test `trackIdx == null`. So a lazily
+  hydrated trackless instance drew in the palette's LAST track colour
+  (`getTrackColor(-1)` wraps) instead of `UNGROUPED_USER_COLOR`, got a
+  "Track -1" pill from `getInstanceLabelName`, and lost the identity an
+  ungrouped trackless instance retains (luc3d #201). All four now go through
+  `lazyInstanceTrackIdx` (`>= 0` kept, anything else `null`). The STORE keeps
+  `-1` — `appendStore`, `forEachInstanceRow` and `remapTracksFromIdentity`
+  speak it — so the mapping happens exactly where a store row becomes an
+  `Instance`. `frameIdentityMap` keys `null` and `-1` alike (`Session._fimKey`),
+  so no saved identity moves. Covered by `tests/e2e/lazy-trackless-null.mjs`
+  (every path, the colour, the label and the retained identity; confirmed to
+  fail pre-fix).
   **A FrameGroup that exists is not necessarily complete.**
   `ensureLazyFrameData` used to open with a bare
   `if (session.frameGroups.has(frameIdx)) return;`, which is only sound when
@@ -1631,9 +3355,9 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   time it was (re)visited after being evicted — reported as Bundle-Adjustment
   reprojections "becoming predictions" starting around frame ~5,500, which
   lines up with `loadAllLazyFrames`'s `BATCH = 5000` sweep window and
-  `ui/ui-wiring.js`'s 5000-frame playback preload (`batchLoadLazyFrames(cur,
-  5000)`) — any frame outside what's already resident takes this branch on
-  first touch. Fixed by calling `finalizeLazyFrameGroup(session, fg,
+  `ui/ui-wiring.js`'s then-5000-frame playback preload (`batchLoadLazyFrames(cur,
+  5000)`, now `LAZY_PLAYBACK_AHEAD`) — any frame outside what's already resident
+  takes this branch on first touch. Fixed by calling `finalizeLazyFrameGroup(session, fg,
   frameIdx)` here too, exactly mirroring the `isSync` branch. Regression test:
   `tests/e2e/batch-lazy-hydration-worker-loader.mjs` (fakes the worker with a
   synchronous `postMessage` stand-in; confirmed failing pre-fix — both the
@@ -1674,8 +3398,12 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
 
 **Imports from project modules.**
 - `./pose-data.js` — `mat3x3Multiply`, `FrameGroup`, `Instance`,
-  `UnlinkedInstance`, `InstanceGroup`.
-- `../ui/app-state.js` — `state`, `timeline`, `viewport3d`.
+  `UnlinkedInstance`, `InstanceGroup`, `pooledPoints3d` (`_applyGroupStep`
+  stores every Triangulate All result in the slab pool).
+- `../ui/app-state.js` — `state`, `timeline`, `viewport3d`, `interactionManager`
+  (the objects `evictLazyFrames` must not drop out from under the UI).
+- `./lazy-residency.js` — `evictLazyFrameGroups`, `holdLazyResidency`,
+  `releaseLazyResidency`, `LAZY_RESIDENT_CAP`, `LAZY_KEEP_BEHIND`.
 - `../ui/rendering.js` — `setReprojErrorVisible`, `showReprojectionsOnly`,
   `REPROJ_ONLY_NOTE` (Triangulate All ends Reproj-only — #243), `drawAllOverlays`.
 - `../ui/info-panel.js` — `updateTriangulationBadge`.
@@ -1684,10 +3412,17 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
 - `../import-export/save-load.js` — `markDirty`, `setStatus`,
   `showLoading`, `hideLoading`.
 - `../ui/loading-overlay.js` — `showLoadingProgress`, `createProgressPacer`,
-  `yieldToPaint` (Triangulate All's eager loop and `sweepLazyFrameWindows`).
+  `yieldToPaint` (Triangulate All's eager loop and `sweepLazyFrameWindows`), and
+  `setLoadingCpu`: both Triangulate All paths hand the overlay their solver's
+  `cpuBusyMs()` right after creating it (`showSolverCpu`), so the overlay shows a
+  CPU line and a CPU-only load graph — triangulation never touches the GPU — whose
+  tooltip names the workers, or "solving on the main thread" when inline.
+  `hideLoading` stops it.
 - `./triangulation-core.js` — the pure math (re-exported) and
   `setTriangulationSettingsHooks`.
 - `./triangulation-pool.js` — `createGroupSolver` (Triangulate All's parallel solve).
+- `../loading/track-union.js` — `unionTrackNames`, `remapTrackIdx`,
+  `isIdentityRemap` (`LazyFrameLoader`'s track union).
 - `./initialization.js` — `update3DViewport` (circular).
 
 **Imported by.** `pose/tracker.js`, `pose/initialization.js`,
@@ -1702,16 +3437,123 @@ loading, "Triangulation needed" badge.
 
 ---
 
+### pose/lazy-residency.js
+
+**Purpose.** Keep a LAZY project's resident frames bounded during playback,
+without ever dropping a frame that holds anything the store cannot rebuild. On a
+lazy project `session.frameGroups` is meant to be a window, but nothing evicted
+it: `evictLazyFrames` had no caller, and the playback loader kept 5,000 frames
+hydrated ahead of the playhead, so every played frame stayed. Measured on the
+8-camera `05mice_flippers` project (108,000 frames, per-camera `.slp` > 150 MB):
+resident frame groups 5,145 -> 31,600 over five 20 s runs, heap toward the
+renderer's ~4.2 GB limit. After a Triangulate All the draw path also caches
+reprojections for every drawn frame (`fillLazyReprojections`), forever.
+
+**Key exports.** `evictLazyFrameGroups(session, { anchors, ahead, behind, cap,
+refs, triangulationResults })` -> `{ resident, evicted, protected, blocked,
+membersReleased }` or null (no lazy loader, at/under `cap`, or held);
+`frameEvictionBlocker(session, frameIdx, fg, refs)` -> a reason string or null;
+`releaseFrameMembers2d(session, frameIdx, { refs })` -> members released;
+`hydrateFrameMembers2d(session, frameIdx)` -> members hydrated;
+`member2dReleaseBlocker(member, desc, numNodes, refs)` -> a reason or null;
+`holdLazyResidency` /
+`releaseLazyResidency` / `isLazyResidencyHeld` (nestable); `lastLazyEvictionPass()`
+(diagnostics); `LAZY_PLAYBACK_AHEAD` (600, the playback loader's lookahead),
+`LAZY_KEEP_BEHIND` (512, > the 500-frame maximum node trail),
+`LAZY_RESIDENT_CAP` (1536), `LAZY_PREFETCH_MARGIN` (32, covers
+`ensureLazyFrameData`'s 30-frame scrub prefetch).
+
+**Contract — a frame is dropped only if ALL hold:**
+- It is outside every protected window `[anchor - behind, anchor + ahead]`
+  (default `ahead` = `LAZY_PLAYBACK_AHEAD + LAZY_PREFETCH_MARGIN`).
+- No hold is active (the windowed sweeps hold for their whole run).
+- **Re-hydration would rebuild exactly what is resident** (`frameEvictionBlocker`
+  returns null). Re-hydration makes one Instance per store row tagged
+  `_rawInstIndex`, re-seats this frame's `instanceGroups` members by
+  `_rawInstIndex` (`finalizeLazyFrameGroup`) and unlinks the rest. So: every
+  camera with data must be backed by the loader (`'camera'`); per camera the
+  resident instances must be a bijection onto the store rows (`'count'`, `'row'`);
+  linked instances must be exactly the members re-seated there and unlinked ones
+  must not be (`'grouping'`); no instance may be `'user'` (the streaming save
+  reads its edit overlay from RESIDENT frames — `buildSessionRefGraph`), modified,
+  backed-up mid-edit or nulled (`'modified'`), resized by a skeleton edit
+  (`'skeleton'`), or held by the UI (`'ui'`); and each unlinked instance must
+  still match its row — track (`'track'`), type (`'type'`), and no #201 identity
+  stamped on the instance (`'identity'`, not persisted). Group members' own fields
+  are not compared: they survive in `instanceGroups` (never evicted) and come back
+  as the SAME objects. Points are not compared — every 2D edit path promotes to
+  `user`, sets `modified` or `nulledNodes`. A loader without
+  `describeStoreFrame` (the worker-backed `LazyFrameLoader`) never evicts.
+- Dropping a frame also drops its DERIVED reprojection caches
+  (`group.reprojections`, `group.reprojectedInstances`, its
+  `triangulationResults` entry) — the state `sweepTriangulateAllFrames` leaves
+  every frame in; `fillLazyReprojections` re-derives them on the next draw.
+
+**Group members' 2D goes back to the store too.** `instanceGroups` is never
+evicted, but a member of a frame that is NOT resident need not hold its 2D.
+Measured after Track All + Triangulate All on the 8-camera 108,000-frame
+project: 4,152,565 members, every one an untouched prediction holding a private
+`Float64Array` copy of its store row — 1.39 GB (443 MB V8 heap + 951 MB backing
+stores) and ~4.2M ArrayBuffers that every full GC sweeps; with them released,
+`usedJSHeapSize` went 5,057 -> 3,745 MB and the five-run tracked playback bench
+stopped degrading (57.5 ... 51.6 -> 58.7 ... 58.8 new images/s, 0 long
+animation frames). `releaseFrameMembers2d` points each releasable member at the
+shared `lazyPlaceholderXY` and sets `_lazy2d` — exactly a reopened project's
+lightweight member — and `finalizeLazyFrameGroup` re-adopts the row's 2D the
+next time the frame is hydrated. Rules:
+- **Only for a NON-resident frame** (its members are what is on screen), never
+  for a group or member the UI holds, and only for a member re-hydration would
+  give back exactly (`member2dReleaseBlocker`): an untouched prediction — not
+  `'user'`, `'modified'`/mid-edit/nulled, no `'occlusion'` set (hydration brings
+  occlusion back clear), no `'skeleton'` change — whose store `'row'` exists and
+  is a prediction. Its other fields (track, type, score, identity) stay on the
+  member object; only `_xy` is given back.
+- **Re-adoption keys on the member's CURRENT `_rawInstIndex`**, never a cached
+  row or position — a store compaction (Custom Delete, interactive deletes)
+  renumbers released members too, and must keep pointing each at its own row.
+- **Where it runs:** wherever a frame stops being resident — the windowed
+  sweeps' window release and `evictLazyFrameGroups`. A reader that needs member
+  2D of a frame it does not hydrate brackets the read with
+  `hydrateFrameMembers2d` / `releaseFrameMembers2d` (the image ID-switch check's
+  `frameCropGeometry`, `ui/image-embedder.js`); `hydrateFrameMembers2d` builds
+  each row exactly as `buildLazyFrameGroupSync` + `finalizeLazyFrameGroup` do
+  and does NOT make the frame resident.
+
+**Imports from project modules.** `./pose-data.js` (`Instance`,
+`lazyPlaceholderXY`) — still DOM-free, so the Node test can drive it.
+
+**Imported by.** `pose/triangulation.js` (`evictLazyFrames`,
+`sweepLazyFrameWindows`), `ui/ui-wiring.js` (`LAZY_PLAYBACK_AHEAD`),
+`ui/image-embedder.js` (`hydrateFrameMembers2d`, `releaseFrameMembers2d`).
+
+**Coverage.** `tests/test-lazy-residency.mjs` (every blocker against an untouched
+twin, windows, cap, holds, the reprojection drop, a simulated 20,000-frame
+playback, and the constants against the code they protect; fails 28 checks with
+the predicate gutted); `tests/e2e/lazy-playback-eviction.mjs` (`describeStoreFrame`
+vs the real sleap-io.js materializer on every row, and evict -> re-hydrate through
+the real path rebuilding every frame identically); `tests/e2e/sequence-lazy-workflow.mjs`
+cycle 7 (edits, the real playback loader played far past the cap, save, reopen —
+fails with the `user`/`modified` blockers removed: a member's edit is lost on save).
+
+---
+
 ### pose/triangulation-core.js
 
 **Purpose.** The pure triangulation math, split out of `pose/triangulation.js`
 so a Web Worker can load it: matrix helpers (`matMul`, `matTranspose`,
-`jacobiEigen`, `solveSmallestEigenvector4x4`, `svd3x4`), DLT
+`solveSmallestEigenvector4x4`, `svd3x4`), DLT
 (`triangulatePointDLT`, `triangulatePoints`), the "Refined" point stage
 (`triangulatePointBA`, `triangulatePointsBA`, `BA_ROBUST_SCALE_PX`),
-reprojection (`reprojectPoint(s)`, `reprojectPointCamera(s)`), errors
+reprojection (`reprojectPoint(s)`, `reprojectPointCamera(s)`, `cameraDepth` —
+the homogeneous `w`, POSITIVE in front of the camera, which any caller
+reprojecting into a camera it did not choose must gate on), errors
 (`computeReprojectionError(s)`, `computeMeanReprojectionError`), `invert3x3`,
-and the full per-group pipeline `triangulateAndReproject`.
+the full per-group pipeline `triangulateAndReproject`, and the cross-view
+tracker's geometry — `hungarianAlgorithm`, `cameraCenter`, `backProjectToRay`,
+`backProjectToRays` (with their `_pGeometry` / `_pseudoInverse` WeakMap memo),
+`pointToRayDistance`, `pointsToRayDistances`, `computeFundamentalMatrix`,
+`epipolarError`, `epipolarErrorMatrix` — moved here verbatim from
+`pose/triangulation.js` so `pose/tracker-worker.js` can load the tracker.
 
 **Key exports.** All of the above, plus `setTriangulationSettingsHooks({
 isCameraTracked, getTrackingThreshold })` — the only app state the pipeline
@@ -1719,26 +3561,111 @@ reads (unset = every camera included, no threshold; the main thread installs
 them, a worker gets resolved values via `options.includedCameras` /
 `options.reprojErrorThreshold`) — and `__triangulationKernelsForTest`.
 
-**Allocation-free hot paths, bit-identical by construction.**
-- DLT: `dltHomogeneousFlat` + `smallestEigvec4Flat` perform the exact
-  operations of row arrays -> `matTranspose` -> `matMul` -> `jacobiEigen` ->
-  smallest-|λ| pick (same k-ordered sums from 0, same Givens sequence, angles,
-  row-then-column updates, skip/convergence tests) on preallocated typed arrays.
-  The generic path allocated four arrays per rotation.
+**Allocation-free hot paths, bit-identical by construction — except the DLT's
+null-vector solve.**
+- DLT matrix: `dltNormalMatrixFlat` builds M = AᵀA with the exact operations of
+  row arrays -> `matTranspose` -> `matMul` (same A entries, same k-ordered sums
+  from 0) on preallocated typed arrays. It sums only the upper triangle and
+  mirrors it, which is exact: each product has the same two factors, and IEEE
+  754 multiplication commutes.
+- DLT solve: `dltHomogeneousFlat` finds M's null vector with
+  `smallestEigvec4Inverse` — **inverse iteration**: Cholesky of `M + δI`
+  (`δ = 1e-15·trace`, so an exactly singular M factors; the shift changes no
+  eigenvector), then solve-and-normalize from a fixed start until no entry
+  moves by more than `INVERSE_TOL` (1e-15). This is the one deliberate break
+  from bit-identity. The Jacobi kernel it replaced, `smallestEigvec4Flat`
+  (still bit-identical to `jacobiEigen` -> smallest-|λ| pick), cost ~1.7 µs per
+  solve — atan2/cos/sin for each of ~30 rotations — and Track All runs ~9M of
+  them: **15.1 s of a 65 s Track All** on the 5-mouse, 8-camera, 108,000-frame
+  recording (23%, the largest single function in the profile). Inverse
+  iteration is ~0.35 µs (4–5 steps on clean systems; one view ~50 px off, 5–9).
+  Systems whose two smallest eigenvalues are close (a 300 px outlier, all views
+  wild) can take INVERSE_MAX_ITER (50) steps and then fall back to
+  `smallestEigvec4Flat`, as do a non-finite M and one that does not factor —
+  which is exactly today's answer for those. It must CONVERGE rather than run a
+  fixed number of steps: the start vector does not rotate with the world, so an
+  unconverged answer depends on the frame, and the frame-invariance tests catch
+  that (a 1e-5 tolerance fails two of them).
+  Agreement, measured with `tests/e2e/_diag-trackall-ab.mjs` (Track All, then
+  DLT Triangulate All, with `main` and with this solver, compared frame by
+  frame) on seven real recordings — the 5-mouse one (108,000 frames, lazy) and
+  the six proofread SLAP ground-truth sessions (18–19k frames each, 3 and 4
+  mice): **identical identity groups on all 228,956 frames** (every group's
+  identity and its exact 2D detection in every camera), and 3D within 8.6e-10 mm
+  after Track All and after Triangulate All. Track All 65.5 -> 50.4 s on the
+  5-mouse recording, 3.4–5.4 -> 2.4–3.9 s on the others (~30%). Triangulate All
+  is unchanged (27.3 vs 27.7 s): it solves in the worker pool, where the DLT was
+  not the bottleneck. The harness's negative control — the match gate switched
+  on in one build only — differs on 4,389 of 18,058 frames, so a "0 differ" is
+  a real result; a deliberately sloppy solver (tolerance 1e-4, 3D off by up to
+  53 mm) still grouped every frame identically, so the tracker is robust to
+  this kind of change by a wide margin.
 - Refinement: `triangulatePointBA` projects through
   `_projectAndJacobian(Camera)Into`, which write into one scratch object with
   the same expressions as `projectAndJacobian`, `distortJacobian` and
   `Camera.distortPoint` (including their different r²·r² vs r⁴ association). It
   was ~11.6 s of GC in an 80 s Refined run.
 Pinned by `tests/test-triangulation-kernels.mjs` (thousands of random systems,
-`Object.is` per value). **Any edit to these kernels must keep operation order,**
-or results drift in the last bits and tracker decisions can flip.
+`Object.is` per value for the bit-identical parts; for the inverse iteration:
+agreement with Jacobi, a null vector no worse than Jacobi's by Rayleigh
+quotient, rotation invariance, and the fallbacks). **Any edit to these kernels
+must keep operation order,** or results drift in the last bits and tracker
+decisions can flip — and a change to the solve itself needs a before/after
+Track All on real recordings (`tests/e2e/_diag-trackall-ab.mjs`), since a tiny
+3D difference is no proof that no association flips.
 
-**Imports from project modules.** `./pose-data.js` only (point3d helpers).
+**`triangulatePointDLT` SOLVES IN A CAMERA-DERIVED FRAME, and that is
+load-bearing.** DLT minimizes an ALGEBRAIC error, and `‖x‖ = 1` on a
+HOMOGENEOUS 4-vector is not geometric: it weights the direction part `(X,Y,Z)`
+against the scale part `W`, so moving the world origin re-weights the cost and
+moves the minimizer. Solving in the raw calibration frame therefore made the
+answer depend on WHERE THE ORIGIN HAPPENS TO BE — which
+`Set as New Calibration`, whose whole contract is that it re-expresses the world
+and changes no geometry, moves by ~1.2 m. Measured on the real 6-camera cage
+session: identical 2D came out 0.26 mm apart at the median but 17 mm at p99 and
+metres in the tail, and because `CrossViewTracker._retriangulate` scores
+cross-view association against exactly these points, **21% of frames came out
+grouped differently — three times worse by reprojection (16.5 px vs 51.8 px) —
+purely from swapping the calibration file.**
+
+The system is now built in a frame derived from the CAMERAS alone
+(`dltNormalizingFrame`: centroid of the camera centres, unit = their mean
+distance from it, cached per `projectionMatrices` array). Under a rigid change
+of world frame the camera centres move with everything else, so the normalizing
+frame moves with them, the normalized `A` differs only by an ORTHOGONAL factor
+`diag(Rᵀ, 1)` on its columns, `‖x‖ = 1` is untouched, and the null vector maps
+exactly. Two rules follow:
+- **The frame must depend on the cameras ONLY.** Deriving it from the
+  observations, or from a first-pass answer, makes it depend on the thing being
+  solved for and the invariance argument collapses.
+- **Degenerate projection matrices fall back to the raw frame**, which is the
+  old behaviour — a worse answer beats no answer.
+
+Measured effect of the change on the trusted (un-rebased) baseline: the median
+point moves 0.048 mm and the median per-point reprojection error moves
+**+0.0064 px**, while total squared reprojection error over 95k points falls
+**74%** (7.96e10 → 2.05e10) and the worst outlier goes 201,637 px → 7,387 px —
+the ordinary conditioning win Hartley normalization buys. Pinned by
+`tests/e2e/triangulation-frame-invariant.mjs`, which was confirmed to FAIL on
+the pre-fix build. **A noiseless fixture cannot pin this**: when the rays meet
+exactly, `A·x = 0` has an exact null vector and every positive re-weighting
+finds it, so the test injects noise deliberately.
+
+`dltHomogeneousFlat` takes the frame as four optional trailing arguments
+(`s, cx, cy, cz`); omitting them is the identity frame, which reproduces the raw
+rows exactly — multiplying by 1 and adding 0 are exact in IEEE 754 — so the
+bit-identity `tests/test-triangulation-kernels.mjs` pins is unaffected.
+
+**Imports from project modules.** `./pose-data.js` (point3d helpers, and `mat3x3Multiply` for `computeFundamentalMatrix`) and
+`./plane-fit.js` for `jacobiEigen`, which is re-exported from here. That
+function has ONE home: `pose/plane-data.js` needs the least-squares plane fit
+built on it and must not import `pose/triangulation.js` (and the whole UI with
+it), and `plane-fit.js` itself depends only on `./pose-data.js`, so a worker can
+still load this module.
 
 **Imported by.** `pose/triangulation.js` (re-exports), `pose/triangulation-pool.js`,
-`pose/triangulation-worker.js`. Loaded before `pose/triangulation.js` by
-`tests/run-node.js`.
+`pose/triangulation-worker.js`, `pose/cross-view-tracker.js` (and so
+`pose/tracker-worker.js`).
 
 ---
 
@@ -1751,7 +3678,7 @@ cores busy).
 
 **Key exports.** `createGroupSolver(cameras, { method, triangulateOnly,
 expectedGroups })` -> `{ submit(group, groupCameras, cb), mark(cb), throttle(),
-finish(), cancel(), parallel, workers }`; `MIN_GROUPS_FOR_WORKERS` (2000).
+finish(), cancel(), cpuBusyMs(), parallel, workers }`; `MIN_GROUPS_FOR_WORKERS` (2000).
 
 **Contract.**
 - **Callbacks run in submission order** (jobs and `mark`s interleaved as
@@ -1771,11 +3698,24 @@ finish(), cancel(), parallel, workers }`; `MIN_GROUPS_FOR_WORKERS` (2000).
   and are terminated after 30 s idle. One solver owns the pool at a time (a
   concurrent second run solves inline). Every call site passes `method:
   method` explicitly (`tests/test-triangulation-method-propagation.mjs`).
+- **`cpuBusyMs()`** — the run's CPU time so far, thread-ms summed over threads,
+  for the loading overlay's CPU line (`createBusyClock`, `ui/load-graph.js`, one
+  per solver). A lane per worker slot from `postMessage` to its reply (one batch
+  per slot at a time); and `'main'`, open from `createGroupSolver` to `finish` /
+  `cancel` EXCEPT while the main thread waits on the workers in `throttle` /
+  `finish` (`waitOn`) — it prepares and applies batches the rest of the time. A
+  reply is handled during such a wait, so `onWorkerMessage` reopens `'main'` for
+  its duration (nested, so a reply handled while `'main'` is already open is not
+  counted twice). The caller's paint waits (`pacer.yield`) still count as busy: at
+  most a frame per ~250 ms chunk. Inline, `'main'` never closes: exactly one core.
+  Measured on a 12-core M2 Pro, Refined, 11 workers: 92-95% — the 11 workers are
+  91.7% on their own, so the main thread mostly waits on them.
 
 **Imports from project modules.** `./triangulation-core.js`
 (`triangulateAndReproject`), `./pose-data.js` (`Instance`), `../ui/settings.js`
 (`isCameraTracked`, `getTrackingThreshold` — `typeof`-guarded for the flat test
-sandbox).
+sandbox), `../ui/load-graph.js` (`createBusyClock`; only called inside
+`createGroupSolver`, which the flat test sandbox never runs).
 
 **Imported by.** `pose/triangulation.js` (`triangulateAllFrames`,
 `sweepTriangulateAllFrames`), `ui/export-modals.js`
@@ -1785,7 +3725,9 @@ sandbox).
 All route (eager, windowed with windows released mid-flight, group-by-identity
 DLT) run inline and on a forced 4-worker pool must hash identically, with a
 reprojection threshold and an excluded camera in effect (and a control proving
-those settings change the result).
+those settings change the result). `tests/e2e/triangulate-all-cpu-load.mjs` —
+`cpuBusyMs()` through the overlay: more than one core's share on the pool (so
+the workers are counted), exactly one core's inline.
 
 ---
 
@@ -1810,57 +3752,95 @@ results}` (points3d buffers transferred) or `{type:'error', id, message}`.
 
 **Purpose.** The analysis behind Tracks ▸ **Check ID Switches (Body Size)…** and
 **(Images)…**, which also run automatically after Track All / Track Frame Range
-(`ui/id-switch-modal.js`). Flags close encounters between two tracked identities
-where the animals leaving the encounter look more like each other's identity than
-their own — a possible identity switch. Two cues through ONE machinery: body size
-(3D bone lengths, cheap, no video) and appearance (embeddings of masked,
-pose-aligned crops, supplied by the caller — `ui/image-embedder.js` in the app).
-Pure — no DOM, no app state — so both run headlessly (the image check with any
-embedding provider).
+(`ui/id-switch-modal.js`). Flags contacts between two tracked identities where the
+labels may have changed hands — a possible identity switch — by asking whether
+each animal looks like ITSELF across the contact, using no identity labels across
+it. Two cues through ONE pipeline (`scoreContacts`): body size (3D bone lengths,
+cheap, no video) and appearance (embeddings of masked, pose-aligned crops,
+supplied by the caller — `ui/image-embedder.js` in the app). Pure — no DOM, no app
+state — so both run headlessly (the image check with any embedding provider).
 
 **Key exports.** `checkSizeSwitches(session, opts)` and
-`checkImageSwitches(session, opts)` (async) -> `{ok, flags, changes, encounters,
-identities, sampledFrames, closeDistance, threshold, fps, step, sampleHz, cue}`
-(+ `bones` for size; + `imageHz`, `crops`, `cameras` for images) or
-`{ok:false, reason}`; `markChangePoints(scored, o)` (the change-point step,
-exported so calibration can re-apply thresholds to the same scores);
-`fitSoftmax(X, y, n, D, K, opts)` (L2 multinomial logistic regression, Adam);
-`fitPCA(X, n, D, k)` (randomized subspace iteration); `SIZE_BONES`;
-`REFERENCE_HZ` (15); `SIZE_CHECK_DEFAULTS` (`fps` REQUIRED, `sampleHz` 15,
-`folds` 5, `gapSeconds` 10, `syncSeconds` 1, `threshold` -50, `continueBelow` 0,
-`followSeconds` 60, `minTrackedSeconds` 60, `sepFactor` 0.65, `signal`, ...);
-`IMAGE_CHECK_DEFAULTS` (+ `imageHz` 2, `threshold` -25, `pcaDims` 32,
-`getEmbeddings` REQUIRED: `async (frame, items[{k, group}]) -> per item
-[{camera, vector}]`, STARTED in increasing frame order with up to `inFlight`
-(default 2; the image embedder asks for 8) in flight; optional `prepareFrames(frames)` (awaited once with the
-sorted frames it will ask for) and `releaseFrames()` (always called at the end) let
-the provider stream its video).
+`checkImageSwitches(session, opts)` (async) -> `{ok, flags, changes ([]),
+encounters (the scored contacts), identities, sampledFrames, closeDistance,
+threshold, fps, step, sampleHz, cue}` (+ `bones` for size; + `imageHz`, `crops`,
+`cameras` for images) or `{ok:false, reason}`; the pipeline's parts —
+`contactEpisodes(grid, gapSeconds)`, `learnIdentityMetric(X, n, D, stretch, sample,
+o)`, `contactChangeScores(grid, feat, o, every)`, `markContactChanges(scored, o)`
+(the change-point step, returning the change points; exported so a threshold can
+be re-applied to the same scores), `symmetricEigen(A, n)` (cyclic Jacobi) and
+`fitPCA(X, n, D, k)` (randomized subspace iteration); `KEYFRAME_GAP_TOLERANCE` (1.1);
+`planKeyframeSamples(frames, keyframes, hasFrame)` -> `{decode, snapped, spacing,
+keyframeGap, maxShift}` (which frame each image sample decodes in one camera — see
+"Keyframe sampling" under `ui/image-embedder.js`); `SIZE_BONES`;
+`SIZE_CHECK_DEFAULTS` (`fps` REQUIRED, `sampleHz` 15, `minTrackedSeconds` 60,
+`sepFactor` 0.65, `episodeGapSeconds` 3, `minApartSeconds` 3, `windowSeconds` 10,
+`maxSpanSeconds` 60, `followSeconds` 5, `metricPcaDims` 64, `metricDims` 16,
+`metricReg` 0.1, `signal`; `threshold` -1, `maxTrainRows` 200000);
+`IMAGE_CHECK_DEFAULTS` (the same shared ones; `threshold` -0.8, `maxTrainRows`
+20000, `imageHz` 2, `getEmbeddings` REQUIRED: `async (frame, items[{k, group}]) ->
+per item [{camera, vector}]`, STARTED in increasing frame order with up to
+`inFlight` (default 2; the image embedder asks for 8) in flight; optional
+`prepareFrames(frames)` (awaited once with the sorted frames it will ask for) and
+`releaseFrames()` (always called at the end) let the provider stream its video).
 
-**The shared method.** Every round(fps / `sampleHz`)-th frame is a grid sample.
-"Close" = body centroids within `sepFactor` x the median body extent (unit-free).
-Tracklet = a run where an identity is apart from every other; encounter = the last
-close sample of a close spell, scored when both identities' next tracklets start
-within `syncSeconds`. A softmax is trained on the tracker's OWN labels with blocked
-CV (each fold excludes `gapSeconds` either side) — on bone lengths (size), or per
-camera on PCA-reduced embeddings, averaged over cameras (images, sampled every
-round(sampleHz / imageHz)-th grid sample). Log-probabilities are normalised within
-each frame across the identities present; an encounter's score = summed evidence
-for the claimed labelling minus the exchanged one over the two following
-tracklets. Each sample is weighted by `REFERENCE_HZ` / that cue's sample rate, so
-scores are evidence per unit TIME and thresholds hold at any frame rate (25-120
-fps tested within 0.4%). `opts.signal` cancels (AbortError).
+**The grid.** Every round(fps / `sampleHz`)-th frame is a grid sample: per
+identity its InstanceGroup, body centroid and bone lengths. "Close" = body
+centroids within `sepFactor` x the median body extent (unit-free). Tracklet = a
+run where an identity is apart from every other.
 
-**Change points, not raw flags.** The model can tell that the labelling on the
-two sides of an encounter disagrees, not which side is right (it learns whichever
-side covers more of the session). Per pair, a run of flagged encounters (starting
-below `threshold`, continuing FORWARD while below `continueBelow`) yields one
-change point: its start (`kind: 'onset'`) when it reaches the session end, else
-the first unflagged encounter after it (`kind: 'end'`, in `changes`) when it
-starts the session; both for a middle run of 2+. Other members are repeats
-(`continues`). A change point within `followSeconds` after another of a different
-pair sharing an identity is its follow-on (`followOf`).
+**The method (images 2026-10-09, size 2026-10-11).** Features per (sample,
+identity) come in VIEWS: the image check embeds crops every round(sampleHz /
+imageHz)-th grid sample, one view per camera; the size check's one view is the
+16 bone lengths of every grid sample, each standardised by its spread over the
+session. Per view the features are centred — embeddings also scaled to unit
+length, since an embedding's direction is what it encodes while a bone-length
+vector's size is the signal — and projected into a metric learned WITHOUT
+identity labels (`learnIdentityMetric`): an LDA whose "same animal" pairs are
+features of one identity within one tracklet (it is apart from all others, so its
+label cannot change hands there) and whose "different animals" pairs are two
+identities in the same frame — both true however wrong the tracking is. Contacts
+are #286's episodes (`contactEpisodes`: the two identities in one connected
+component of the close graph, so a swap through a third animal counts; runs <
+`episodeGapSeconds` apart merged), and episodes separated by less than
+`minApartSeconds` of usable samples of either animal are merged too, so a swap
+inside a long huddle is judged from the stretches either side of it. Each episode
+is scored (`contactChangeScores`) per view from the mean feature of each animal
+just before (aB, bB) and just after (aA, bA) it — up to `windowSeconds` a side,
+within `maxSpanSeconds`, never past the pair's neighbouring episode, a sample
+being usable when the animal is not in contact with its partner (it may touch a
+third: a crop masks others out): S = cos(aB,aA) + cos(bB,bA) − cos(aB,bA) −
+cos(bB,aA), mean over views seeing both animals on both sides (episodes with none
+are dropped). Below `threshold` the labels changed hands there
+(`markContactChanges`): taking the session's start as right, a pair's 1st, 3rd, …
+flagged contact is an `onset` whose `switchBackAt` is the next one (or null: to
+the end), its 2nd, 4th, … the `end` of that stretch (`switchedAt`), so fixing
+either row swaps the same stretch; all are in `flags` (`changes` is []), none is a
+repeat (`continues` is always false), and a change point of a pair sharing one
+identity within `followSeconds` of another is its `followOf` (a three-way
+relabel). A score is a difference of cosines between mean features, so no sample
+rate scales it (25-120 fps tested). `opts.signal` cancels (AbortError).
 
-**Calibration (2026-10-03).** Size: on the 5-mouse tail-mark recording
+**Why not a classifier on the tracker's labels** — what both checks did before:
+a softmax trained on Track All's own labels with blocked cross-validation,
+flagging encounters whose aftermath it disagreed with, change points from runs of
+flagged encounters. It learns whichever labelling covers more of the session, and
+when a pair swaps several times none does — on the CD1FSCR3_CSI recording (3 white
+CD1 mice, two in mesh jackets) the plain mouse wore id_0 for 36% and id_1 for 50%
+of 15 min, the image classifier's per-sample evidence for id_0 vs id_1 was ±0.5,
+and the real 0:19 swap (at the pair's FIRST encounter, so the swapped stretch
+before it was never scored) was missed while 17 false change points were raised.
+**Why the metric:** on five white mice raw DINOv2 cosine separated real changes
+from clean contacts at AUC 0.68; in the metric 0.78. **Why cosine, not distance,
+for size:** a bone-length vector has essentially one direction (size), so the
+MIDDLE-sized animal sits near the average and its own before/after cosine is weak
+(a synthetic swap involving it scores -0.7, between the two extremes -1.4); the
+distance-based alternative — the dot product of the two animals' difference before
+and after, which is what comparing the two labellings by distance reduces to —
+was tried and scored worse on the real recordings (pooled AUC 0.86-0.87 vs 0.88,
+more false rows at every catch rate), its scale swinging per recording.
+
+**Calibration of the classifier method (2026-10-03; both checks have since been replaced, see below).** Size: on the 5-mouse tail-mark recording
 (194366_05mice_flippers, 108k frames, 8 cameras) planted swaps AUC 0.95; the real
 gate-off switch (frame 74,544) is an onset; the verified run gets 7 false change
 points / 30 min. Images, calibrated with this code on DINOv2 embeddings of the
@@ -1874,6 +3854,9 @@ the similar-size, different-coat pairs (brown-black: size AUC 0.73, 5% caught at
 false-flag rate per clean encounter. When both checks flag an encounter it was a
 real swap 98% of the time (images alone 79%; none on the 5-mouse run with no
 switches). Images remain weak for animals that look alike (same coat).
+**Superseded by the 2026-10-09/11 calibrations below**; the notes on views per
+animal, sampling rate and keyframes were measured with the old image scoring and
+are kept for what they say about the crops.
 **Views per animal** (`imageCheckMaxViews`, default 3; recalibrated 2026-10-04):
 embedding only each animal's 3 largest views matches all 8 — brown-black AUC
 0.925, 48% at -25, 0.8% false flags, "Both" 98% real; 5-mouse: real switch scored
@@ -1887,18 +3870,122 @@ at keyframes — every 250 frames, ~0.23/s on these files — would cut decoding
 white-dark 75% -> 55% -> 41%, image-only flags real 77% -> 57% -> 51%; 5-mouse
 false change points 21 -> 29 -> 40 / 30 min and the real switch missed at -25
 below 2/s. The tracklets after an encounter are short, so they need dense samples.
-The rate stays 2/s; cheaper decoding has to come from the recordings (keyframes
-every 0.5 s, so samples could land on keyframes) or from decode parallelism.
+The rate stays 2/s; cheaper decoding has to come from the recordings — which is
+what keyframe sampling does: on recordings with a keyframe every 0.5 s each sample
+moves to its nearest keyframe, <= 0.25 s away (`planKeyframeSamples`; see
+"Keyframe sampling" under `ui/image-embedder.js`). **Moving samples by up to
+±0.25 s does not change the result** (2026-10-04, 5-mouse recording, the real
+model and check, 3 views; snapped = moved to frames 0, 30, 60, …; control =
+every sample moved by a constant 16 frames, i.e. different frames with no
+keyframe logic). Gate-on tracking (no real switch): planted-swap AUC 0.880
+today / 0.880 snapped / 0.873 control, 43.5 / 43.8 / 44.4% caught at -25, change
+points 10 / 7 / 9; encounter scores vs today correlate 0.982 (snapped) and 0.977
+(control). Gate-off tracking: the real switch (74,544, id_2/id_3) is an onset in
+all three (-94 / -99 / -112), AUC 0.812 / 0.805 / 0.807, change points 11 / 14 /
+16, correlation 0.981 / 0.973. Snapping moves the scores less than the control
+does, so its differences are which-frames-were-sampled noise. Harness:
+`tests/e2e/_diag-image-keyframe-snap.mjs` (planted swaps cost no re-run: with
+blocked CV an encounter's tracklet rows are never in their own fold's training
+set, so swapping the two animals' labels after it turns its score S into exactly
+-S).
+
+**Calibration of the image method (2026-10-09).** Real model and crops, every
+view embedded at 2/s (3 largest replayed offline, exactly as the app selects them;
+the in-repo check reproduces the prototype's scores at every threshold), Track All
+with the app's defaults (match gate off, node weights 1), on 8 recordings, 1 h 45 min:
+the 6 proofread SLAP sessions of 2022-10-07, the 5-mouse tail-mark recording (truth:
+the tail-checked gate-on reference, id_1/id_2 swapped from 20:41.7; the top 5
+"false" rows were checked against the tail marks and are false) and the
+CD1FSCR3_CSI recording (truth: a plain-vs-jacket labelling of the same
+embeddings, margin median 0.41). Truth events = moments where identities change
+the animal they sit on (a swap and swap-back within 20 s with no net change is not
+counted); a row is right when both its identities change animals within its
+contact ± 3 s. At -0.8: **10 of 12 relabels caught, 12 rows, 2 false**; the old
+image scoring (tracklet, classifier, -25) 5 of 12 with 98 false rows, #286's
+episode scoring (classifier, -200) 8 of 12 with 15 false. -0.5: 10 of 12, 6 false;
+-1.2: 8 of 12, none false. The SLAP sessions and CD1 alone: 9 of 10, 0 false at
+-0.3 to -0.8, real changes -1.0 to -2.8, clean contacts no lower than -0.21 (white
+vs white). Five white mice are the hard case: 1 of 2 at -0.8 with 2 false rows
+(the 21:57 three-way relabel scores -0.19). Missed: a brown/black swap 14 s before
+the end of 143153 (-0.04, one side has 7 crops). Robust to the knobs — at -0.8,
+`metricDims` 32, `metricReg` 0.03/0.3, `windowSeconds` 5/20, `minApartSeconds` 1.6 (3 crops),
+`episodeGapSeconds` 1, `metricPcaDims` 32 and all views give 9-10 of 12 with 0-2
+false rows (`metricDims` 8: 6 false); without the evidence-driven merge
+(`minApartSeconds` 0) the 144215 huddle swap goes unscored, and with crops only from
+time apart from EVERY animal 17 of its 24 episodes have none. On the same 8 runs
+the size check's classifier gave 60 rows, 56 false. Analysis after embedding: 3-7 s
+per 10-min session, 21 s for 30 min of 5 animals. Harness: the session scratchpad
+of 2026-10-09 (collect.mjs, evalall.mjs, ba.mjs) — not in the repo.
+
+**Calibration of the size method (2026-10-11).** The same 8 runs, truth and row
+rule, from the tracker's 3D. NOTE: 142111 loaded alone gets scrambled node NAMES
+on main (its `back` camera's skeleton is nested under `nx_graph`; fixed on the
+unmerged branch `claude/dreamy-chatterjee-d480db`), so every bone length by name is
+wrong there — the numbers below use its standard node order, which every other
+session shares. At -1: **6 of 12 relabels caught, 13 rows, 7 false**, all 7 on the
+five white mice (the SLAP sessions and CD1: 5 of 10, 0 false); the classifier it
+replaces, at its -50 default: 4 of 12, 54 rows, 50 false (at -200: 3 of 12, 13
+rows, 10 false). -0.8: 7 of 12, 18 rows, 11 false; -1.2: 4 of 12, 9 rows, 5 false.
+Bone lengths cannot tell apart animals of one size (142111's white/black swap
+scores +0.5), but catch what images miss (143153's brown/black swap 14 s before the
+end, -1.1). **Limitation:** on animals of IDENTICAL size the windows are noise, and
+the cosine of noise-only means still dips just past -1 now and then (the synthetic
+fixture of `tests/e2e/id-switch-image-check.mjs`: 2 of 24 contacts at -1.02 and
+-1.15). Not renormalising the window means (the mean of unit vectors, its length
+kept) silences that exactly (all ~0.00) and gave the image check 10 of 12 with NO
+false rows at -0.5 — but on the real recordings it made size slightly worse (pooled
+AUC 0.867 vs 0.879; 10 false rows vs 7 at 6 caught), and on 16 new sessions it
+gained the image check nothing either (see "Out of sample"), so both checks keep
+renormalised means. Swept at -1: `metricDims` 2 is much worse (59 false at -0.8),
+4 worse, 8 equal to 16 one step looser; `windowSeconds` 20/30 and `minApartSeconds` 1.6
+change little, 6.4 loses 2 relabels. The five-mouse "false" rows at 1:01, 14:55,
+16:07, 26:41 were checked against the tail marks (both checks flag some of them).
+With both checks at their defaults, rows both flag ("Both", same pair, overlapping
+contacts) were real 5 of 5, image-only rows 5 of 7, size-only 1 of 8. The size
+check takes ~0.2 s per 10-min session and ~1.3 s for 30 min of 5 animals after
+the grid is built.
+
+**Out of sample (2026-10-11), both checks.** Confirmed on 16 proofread SLAP sessions of
+2022-10-07 that played no part in choosing the methods or the thresholds — every
+multi-animal one not used above: 131531, 132603, 133702, 134804, 135851, 140918,
+161055, 162233, 163346, 170913, 173152, 180149, 181300, 183527, 184618, 190807
+(2 h 49 min; 15 with two mice, including white/white 163346 and brown/brown
+173152, and 190807 with two brown and one white), with the same harness, truth
+and row rule. Images at -0.8: **9 of 11 relabels caught, 11 rows, 0 false**. Every real
+change scored below every one of the 348 clean contacts (per-contact AUC 1.000),
+so no threshold from -0.2 to -1.2 gave a false row; -0.5 and looser caught 10 of
+11. Missed: a swap inside the pair's first contact, which starts the session
+(183527 at 0:24 — there is no "before" to compare), and a swap between the two
+brown mice that scored -0.58 (190807 at 9:06). A variant that keeps the length of
+the window means (the mean of unit vectors, not renormalised), which had looked
+better on the 8 calibration runs (10 of 12 with no false rows at -0.5), gave the
+identical 9 of 11 with no false rows here — no gain, so not adopted. Size at -1:
+**2 of 11 caught, 2 rows, 0 false** (-0.8: 3 of 11, 5 rows, 2 false; per-contact
+AUC 0.902); the classifier it replaces, at its -50 default: 0 of 11 caught, 20 rows,
+all false. These mice are close in size, so size catches little here — but it no
+longer raises false rows. These
+sessions keep a second label file per camera
+(`*.predictions.static.externals.slp`), which a harness has to leave out of the
+folder pick.
 
 **Imports from project modules.** `pose/pose-data.js` (`readPoint3d`).
 
-**Imported by.** `ui/id-switch-modal.js`.
+**Imported by.** `ui/id-switch-modal.js`, `ui/image-embedder.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`).
 
 **Coverage.** `tests/test-id-switch-check.mjs` (synthetic 3-animal sessions defined
-in time: clean -> no flags; minority / majority switch -> onset / end change point;
+in time: clean -> no flags; a switch late or early in the session (the swapped
+stretch the minority or the MAJORITY) -> one onset at the switch, nothing else;
 25-120 fps invariance; images with synthetic embeddings catching a swap between
-animals of IDENTICAL size that size misses; cancellation; PCA; failure reasons;
-crop geometry of `ui/image-embedder.js`), `tests/e2e/size-switch-check.mjs`,
+animals of IDENTICAL size that size misses; a pair swapping three times from its
+first encounter (all three found by BOTH checks, onset/end/onset with the right
+fix edges); #286's huddle and three-animal scenarios; the identity metric on
+look-alike animals (98% vs raw cosine 52%); `symmetricEigen`; `markContactChanges`;
+cancellation; PCA; failure reasons; progress;
+crop geometry of `ui/image-embedder.js`; `planKeyframeSamples`: sparse/unknown
+keyframes move nothing, a keyframe every 30 frames moves every 32-frame sample
+<= 15 frames, strictly increasing, untracked keyframes skipped, gaps up to 1.1x
+the spacing qualify and beyond do not, a keyframe every 0.5 s at 100 and 50 fps),
+`tests/e2e/image-keyframe-sampling.mjs`, `tests/e2e/size-switch-check.mjs`,
 `tests/e2e/track-auto-size-switch-check.mjs`, `tests/e2e/id-switch-image-check.mjs`.
 
 ---
@@ -1987,6 +4074,19 @@ Calibration and `envSkeleton` remain per-session.
 **Key exports.**
 - `state` — mutable application state (current frame, sessions, dirty
   flag, view list, color mode, etc.).
+  `state.trailLength` (node-trail frames) is an **accessor**, not a field: it
+  reads `trailFrames(state.trailSeconds, state.fps)` (`ui/trail-presets.js`), so
+  it follows the frame rate when a video loads or the FPS pill is edited, with
+  no caller recomputing it. Setting it (tests and benches pin a frame count)
+  stores `frames / fps` in `trailSeconds`. The pickers set `trailSeconds`.
+  `state.trailShade` — the node-trail shade, a `TRAIL_SHADES` key
+  (`ui/overlays.js`), starting at `DEFAULT_TRAIL_SHADE` ('dark'); `ui/ui-wiring.js`
+  replaces it at startup with the one remembered in `localStorage`.
+  `state.nativeResolution` is View ▸ Native Resolution (Shift+0): true exactly
+  when every shown view is at one video pixel per device pixel. Written only by
+  `VideoController._syncNativeMode` (derived from the views, never latched), and
+  read by `VideoController.initZoom` so a pane rebuild keeps every view at 1:1
+  (see `loading/video.js`).
 - `videoController`, `interactionManager`, `viewport3d`, `timeline`,
   `paneManager` — live `let` bindings.
 - `setVideoController`, `setInteractionManager`, `setViewport3D`,
@@ -1997,6 +4097,18 @@ Calibration and `envSkeleton` remain per-session.
   controller. Frame navigation / playback branch on this, not on the
   controller's existence (used by `navigateToFrame`, the transport buttons, and
   the keyboard handler so play/pause + stepping work without video).
+- `isViewDocked(view)` — true when the view has a pane in the dock
+  (`paneManager.dockedViews`; a pane in an inactive tab counts), or when there
+  is no dock yet. Fed to `VideoController` as `callbacks.isViewShown` and read by
+  `drawAllOverlays`, so stepping, playback and overlay drawing skip the views
+  nobody can see — one camera solo'd, or panes closed. Measured on a 17-camera
+  1680×1200 HEVC 120 fps project with one camera solo'd (together with
+  `OnDemandVideoDecoder.releaseFrames` for the views that went off screen):
+  jumps 2.1 s → 0.1 s, single steps 168 → 18 ms, playback 11 → 119 new
+  pictures/s. Safe because
+  docking a view again builds a NEW canvas, whose renderer re-seeks the current
+  frame (`refreshPaneInteractions`), so a skipped view never shows a stale
+  picture. Covered by `tests/e2e/solo-view-decodes-shown-only.mjs`.
 - `VIEW_NAMES` — `['back', 'mid', 'side', 'top']`.
 - `getActiveSession()`, `setActiveSession(session)`.
 - `rememberSkeleton(skeleton)` / `buildRememberedSkeleton()` — in-memory cache of
@@ -2012,7 +4124,8 @@ Calibration and `envSkeleton` remain per-session.
   matching skeleton. Same lifetime model as the remembered skeleton (app session
   only). Filled/read by `copySelectedInstance`/`pasteInstance` in `ui-wiring.js`.
 
-**Imports from project modules.** None.
+**Imports from project modules.** `./trail-presets.js` (`trailFrames`,
+`trailRate`) and `./overlays.js` (`DEFAULT_TRAIL_SHADE`), both import-free.
 
 **Imported by.** `pose/initialization.js`, `pose/triangulation.js`,
 `pose/tracker.js`, `import-export/save-load.js`,
@@ -2028,7 +4141,7 @@ playback state, dirty tracking, multi-session UI.
 
 ### ui/color-by.js
 
-**Purpose.** The toolbar's **Color: Tracks / ID** setting
+**Purpose.** The toolbar's **Tracks / Identity** coloring setting
 (`state.colorByIdentity`), settable from anywhere. The toggle's DOM and
 redraws live in `ui/ui-wiring.js`, but `pose/tracker.js` also flips it — after
 Track All the user wants to see IDs (#242) — and the tracker cannot import
@@ -2037,12 +4150,13 @@ ui-wiring (import loop; its Node tests stub UI modules). Dependency-free.
 **Key exports.** `setColorByIdentity(state, on)` -> `true` if it changed
 anything (the handler runs only on a change); `onColorByChange(fn)` —
 registers the single change handler (ui-wiring: button highlight +
-`drawAllOverlays` + `update3DViewport`). With no handler (Node tests) it only
+`drawAllOverlays` + `update3DViewport` + the timeline's track rows and the
+Visibility tab's track swatches). With no handler (Node tests) it only
 sets the state.
 
 **Imports from project modules.** None.
 
-**Imported by.** `ui/ui-wiring.js` (registers the handler; the Tracks / ID
+**Imported by.** `ui/ui-wiring.js` (registers the handler; the Tracks / Identity
 buttons route through `setColorByIdentity`), `pose/tracker.js`.
 
 **Coverage.** `tests/test-tracker-gui.mjs` (Track All flips it once, a second
@@ -2064,22 +4178,66 @@ buffered in memory, and multi-session loading refuses. Measured on Brave 1.96
 `brave://flags/#file-system-access-api` ("File System Access API"). Safari and
 Firefox can't enable the API, so they get no hint (existing messages stand).
 
+**Brave's fingerprinting protection ("farbling").** With Shields at their
+default, Brave reports a RANDOM core count to each site
+(`navigator.hardwareConcurrency`, between 2 and the true count, fixed per site
+for a session) and adds noise to canvas pixel reads. Measured with Brave 1.97
+(Chromium 155) on a 12-core M2 Pro, fresh profiles: 4, 6, 7, 8, 9, 10, 11, 12
+cores across sessions; a 64 x 64 pattern written and read back came back with
+230-280 of 16,384 values off by 1 (0 in Chromium). A per-site exception
+(Shields > Advanced controls > Allow fingerprinting) stops both: 12 cores every
+session, 0 values changed. It matters because the worker pools are sized from
+the core count — Triangulate All on 60,000 frames took 3.0 s with 12 reported,
+4.7 s with 4 and 16 s at Brave's floor of 2 (above ~6 the main thread feeding
+the workers is the limit, so a middling draw costs little) — the CPU line
+divides by it, and the image ID-switch check reads its crops from a canvas. The
+app cannot learn the true count, so it tells the user how to give it: a note
+under the CPU line of the progress popups. Detection is the canvas read, not
+the count: a draw can land on the true count (it did, in the e2e run) and the
+noise is still there.
+
 **Key exports.**
 - `isBrave()` — `navigator.brave.isBrave` present.
 - `hasFileSystemAccess()` — save + directory pickers available.
 - `fileSystemAccessHint()` — how to enable the API (paste
   `brave://flags/#file-system-access-api`, set Enabled, relaunch — or use
   Chrome/Edge); `''` unless Brave with the API off, so callers can append it.
+- `canvasReadsPerturbed()` — a known 64 x 64 pattern written with
+  `putImageData` and read straight back comes back changed. Checked once per
+  page and cached (~7 ms in Brave): it cannot change without a reload, which is
+  what changing Shields does. `__setCanvasProbe(fn)` replaces it for tests.
+- `braveFingerprintingActive()` — Brave AND canvas reads perturbed.
+- `braveFingerprintingHint(cores)` -> `{lead, why, steps, after}` | null —
+  "Brave reports a random number of CPU cores to this site (this session: N)"
+  ("random", not "wrong": the draw can be the true count), what that does here,
+  three steps — save first (changing Shields reloads the page); click the
+  Shields icon (the lion) at the right end of the address bar; open Advanced
+  controls and choose Allow fingerprinting (older versions: switch off Block
+  fingerprinting), reload if Brave does not — and "This note goes away once it
+  has worked." The labels are Brave 1.97's own, read out of its `locale.pak`.
+  null unless `braveFingerprintingActive()`.
+- `renderBraveFingerprintingHint(el, cores)` — fills `el` (a `.progress-hint`)
+  with the bold lead, a numbered list and the after-note, built from text
+  nodes, and shows it; hides and empties it when there is no hint.
 
-**Imports from project modules.** None.
+**Imports from project modules.** None. No DOM at load (the canvas probe runs
+on first use, on the main thread), so it is safe to import anywhere.
 
 **Imported by.** `loading/session-loader.js` (multi-session load message),
 `import-export/save-load.js` (`saveProjectSlp` download fallback status),
 `ui/export-modals.js` (3D video + JSON export in-memory confirms),
-`ui/overlay-export-modal.js` (overlay video in-memory confirm).
+`ui/overlay-export-modal.js` (overlay video in-memory confirm),
+`ui/loading-overlay.js` (`setLoadingCpu`: the note under the loading card's CPU
+line, `#loadingBraveHint`), `ui/id-switch-modal.js` (the image check's dialog,
+under its CPU and GPU lines).
 
 **Tests.** `tests/test-browser-hints.js`; verified end to end in real Brave
 (default profile vs `--enable-features=FileSystemAccessAPI`).
+`tests/e2e/brave-fingerprinting-hint.mjs` drives REAL Brave (fresh headless
+profiles; skips when Brave is not installed, `BRAVE=` overrides the path): the
+note in both popups with default Shields, not on a popup without a CPU line,
+gone with the popup; none with the per-site exception (which also gives the
+true core count); none in Chromium.
 
 ### ui/custom-delete-ops.js
 
@@ -2093,7 +4251,31 @@ into `tests/test-runner.html` for isolated unit testing — same contract as
 **Exports.** `collectDeletionTargets(session, filters, ctx)` (pure — returns
 `{targets, count, byCamera, groupsDissolved, groupsUngrouped, instancesPromoted,
 groupsLosing3d}`), `previewCascade(targets)`, `executeDeletion(session, targets)`,
-`pruneOrphanIdentities(session, frameIndices)`.
+`pruneOrphanIdentities(session, frameIndices)`, and the durable half shared with
+the interactive deletes: `deleteTargetsFromStore(session, targets)` (→ `{durable,
+errorRows, firstError, touchedFrames}`) plus the two target builders it is fed by
+`ui/interaction.js` and `ui/ui-wiring.js`, `unlinkedTarget(frameIdx, ul)` and
+`groupMemberTargets(frameIdx, group, camNames?)`.
+
+**Every delete of a store-backed instance goes through `deleteTargetsFromStore`,
+not only this dialog.** The Delete key / Edit ▸ Delete Instance / the toolbar's
+"- Instance" (`InteractionManager._deleteSelected`) and the group context menu's
+"Delete group" used to edit the RESIDENT frame alone, and on a lazy project that
+is undone twice over: a windowed sweep (Track All, Triangulate All) or playback
+eviction releases the predicted-only frame and re-hydrates the row, and the
+streaming save writes the store rows of any camera-frame with no user instance
+(`buildSessionRefGraph`'s overlay covers only camera-frames with one). So a
+deleted prediction came straight back — confirmed on the real app by
+`tests/e2e/sequence-lazy-workflow.mjs` cycle 5c, which drives all five shapes
+(ungrouped, one view, Shift+Delete, the context menu, down-to-one-survivor) and
+failed on every one before. The helper must run BEFORE the caller's memory edit:
+it recognises the victims by their `_rawInstIndex` while they are still in the
+group/frame, and renumbers the survivors around them. A target with no `rawIdx`
+(an instance added this session) has no row and never reaches the store; an
+eager session has no store and the call is a no-op apart from that renumbering.
+It passes `deleteInstanceRows` an `only` map, so one keypress walks one
+camera-frame instead of offering all ~2.7M rows of a real project to the
+predicate.
 
 **Vocabulary.** SLEAP's *video* scope is LUCID's **session** — every camera in a
 session shares one frame index space, so a camera is a VIEW FILTER, not a frame
@@ -2162,7 +4344,8 @@ irreversible side effects.
 §5.2): (1) `lazyLoader.deleteInstanceRows` — the persistence, and it must run BEFORE
 `_rawInstIndex` is touched since the row identity *is* `_rawInstIndex`;
 (2) renumber `_rawInstIndex` on survivors, else `refFor` writes grouping refs at the
-wrong instances and `finalizeLazyFrameGroup` hydrates the wrong 2D;
+wrong instances and `finalizeLazyFrameGroup` hydrates the wrong 2D — (1) and (2)
+are `deleteTargetsFromStore`;
 (3) `instanceGroups` cascade; (4) `frameGroups` cascade under the same `seen` Set
 (hydrated frames share instance objects between the maps — the #195 lesson);
 (5) prune `frameIdentityMap`. Never assigns `group.observedPoints` (read-only getter
@@ -2181,8 +4364,190 @@ PR #153 implementation silently matched nothing, making its prune dead code.
 
 **Imports from project modules.** None (deliberately).
 
-**Tests.** `tests/test-custom-delete-ops.js` (19 cases), plus
-`tests/test-custom-delete-store.js` for the store primitive it drives.
+**Tests.** `tests/test-custom-delete-ops.js` (31 cases — its "interactive
+deletes reach the store" suite drives `InteractionManager._deleteSelected` against
+a recording stub store, and was confirmed to fail against the pre-fix
+`ui/interaction.js`), plus `tests/test-custom-delete-store.js` for the store
+primitive it drives, and `tests/e2e/sequence-lazy-workflow.mjs` cycle 5c for the
+real app (sweep + save + reopen).
+
+---
+
+### ui/frame-counters.js
+
+**Purpose.** Pure, DOM-free logic behind the status bar's **Labeled Frames**,
+**Instances** and **Triangulated** counters; `updateFrameCounters`
+(`ui/rendering.js`) is the DOM/scheduling half. Imports **no project modules**
+— it only reads the `Session` it is handed — so a Node test drives it with real
+`pose/pose-data.js` objects and a real `SioLazyLoader` (same contract as
+`ui/custom-delete-ops.js`), and it bridges into both browser-suite runners.
+
+**The counting rules** (unchanged from the old in-place loop): a frame is
+labeled in the active camera if it holds a user instance, grouped or not, or a
+GROUPED prediction — an ungrouped prediction is raw tracker output and does not
+count; **Instances** counts user instances in that camera; **Triangulated**
+counts frames with at least one `InstanceGroup` carrying `points3d`, in any
+camera.
+
+**Why it is not a walk of `session.frameGroups`.** On a lazy project that map is
+the resident window, so the old loop reported a plausible, tiny number ("5789"
+of 108,000 frames — the #194/#195 class). A count is now split in two:
+- **Resident frames** are counted LIVE from their `FrameGroup`. They are what is
+  on screen, they carry in-memory edits the store does not know about, and the
+  current frame is one of them, so an edit shows up immediately.
+- **Every other frame** comes from a per-frame **baseline** built without
+  hydrating anything: Triangulated straight off `session.instanceGroups` (never
+  windowed — it also catches a frame with 3D but no 2D `FrameGroup`, which the
+  old loop missed on any project); Labeled / Instances from the columnar store
+  via `lazyLoader.forEachInstanceRow({camera, start, end})` plus
+  `instanceGroups` membership, **mirroring `finalizeLazyFrameGroup`**
+  (`pose/triangulation.js`): a row whose in-frame offset is some member's
+  `_rawInstIndex` is that member, with the MEMBER's type; a member with no
+  `_rawInstIndex`, or one past the frame's last row, is dropped; every other row
+  is ungrouped, with the store's type. That is what makes the baseline "what
+  the frame would count as if it were visited now", and
+  `tests/test-frame-counters.mjs` checks it against the real hydration path.
+
+The baseline is per-FRAME, not a total, so resident frames can be taken back
+out of it: `total − Σbaseline(resident) + Σlive(resident)`. That is
+O(resident) per call and exact whatever the resident set is — scrubbing,
+eviction and sweeps' window release need no rebuild. Only a change to frames
+that are NOT resident (a bulk operation) does.
+
+**An EAGER project counts from a baseline too — and re-counts only the drawn
+frame.** There every frame is resident, so "resident frames live" was a walk of
+the WHOLE project on every redraw, i.e. on every frame step: ~10 ms of each
+~18 ms step on a 36,000-frame × 17-camera project (the single largest cost of a
+step once #301 stopped decoding hidden cameras). The builder now gives an eager
+project (no lazy loader) a camera half built from the `FrameGroup`s with
+`residentFrameUserCount`, and marks the result `eager: true`;
+`countFrameCounters` then returns the baseline's totals with no walk at all,
+and `refreshCountedFrame(session, baseline, f)` — which `updateFrameCounters`
+calls for the drawn frame on every update — re-counts frame `f` into EVERY
+camera half held and into the 3D half, adjusting the totals: O(cameras). That
+keeps it exact through edits, which are always to the frame on screen and
+always followed by a redraw of it. A change to frames NOT on screen is a bulk
+operation, which ends with a same-frame redraw — and `updateFrameCounters`
+rebuilds the baseline after any same-frame redraw, exactly as on a lazy
+project; on an eager project that rebuild DROPS the other views' halves (every
+frame being resident, `nonResidentCameraCounts` cannot tell an edit from a bulk
+change), and each is rebuilt — one walk — when its view is next active.
+Side effect: Triangulated on an eager project now counts a frame with 3D but no
+2D `FrameGroup` too, as the lazy count always did; the walk never reached it.
+
+**Exports.**
+- `residentFrameUserCount(fg, cam)` -> `-1` if the frame is not labeled in
+  `cam`, else its user-instance count (one number, so the per-frame loop
+  allocates nothing).
+- `groupsHaveTriangulation(groups)` -> boolean.
+- `createFrameCounterBaselineBuilder(session, cam, {tri}?)` -> `{step(budget),
+  result}` — the baseline as a RESUMABLE build: ~100 ms at 108,000 frames x 8
+  cameras, nearly all memory latency on each frame's groups (no reordering
+  avoids it), so the caller spreads it over short tasks. `step` does about
+  `budget` frames / `instanceGroups` entries and returns true when done.
+  `result` = `{tri: {byFrame: Uint8Array, total}, cams: Map<cam, {byFrame:
+  Int32Array, labeledTotal, usersTotal}>, eager}`; on an eager project the
+  camera half comes from the `FrameGroup`s and `eager` is true; the camera half
+  is absent when the project is lazy but its loader cannot enumerate rows (the
+  worker-backed analysis-`.h5` loader — every frame with data is then
+  resident). `tri: false`
+  skips the 3D half. The session is read live between steps; a change mid-build
+  can leave the result stale, and the caller rebuilds after changes anyway.
+- `computeFrameCounterBaseline(session, cam)` / `computeLazyCameraBaseline(session, cam)`
+  — the same, run to completion (whole baseline / camera half only).
+- `countFrameCounters(session, cam, baseline)` -> `{labeled, instances,
+  triangulated}`. With an eager baseline holding `cam`'s half (or no `cam`):
+  the baseline's totals, no walk. With no baseline (or none for `cam`),
+  Labeled / Instances are the old resident-only count.
+- `refreshCountedFrame(session, baseline, f)` — re-count frame `f` into an
+  EAGER baseline in place (every camera half + the 3D half, totals adjusted;
+  arrays grow for a frame past their end). A no-op on a lazy baseline.
+- `nonResidentCameraCounts(session, half)` -> `{labeled, instances}` — the part
+  of a camera half that `countFrameCounters` actually uses. Two builds that
+  differ here saw a change to non-resident frames (a bulk operation), which
+  `updateFrameCounters` takes as its cue to drop the other views' halves.
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/rendering.js`; bridged as `window.__FrameCounters` by
+`tests/test-runner.html`.
+
+**Tests.** `tests/test-frame-counters.mjs` (lazy: counts equal a fully-hydrated
+count through the real `batchLoadLazyFrames`, with negative controls; residency
+changes need no rebuild; a bulk change does; sliced == one-shot build. Eager:
+baseline totals equal the full walk; counting and re-counting iterate no
+frames; an edit shows only once its frame is re-counted (the negative control
+proving the count is the baseline), across two cameras, un-labeling, 3D, a
+frame past the arrays' end; the 3D-only frame the walk missed),
+`tests/e2e/status-counters-eager.mjs` (the real `updateFrameCounters` and
+status-bar text on an eager project: 60 steps walk the frames 0 times — 60 on
+the pre-fix build — and the text stays exact through an on-screen edit, a
+two-camera edit, a bulk change off screen and camera switches),
+`tests/test-bottom-bar.js` (the rules, on eager sessions, against this module
+rather than a copy), and `tests/e2e/sequence-lazy-workflow.mjs`'s
+`checkCounters` (the real status bar on a lazily reopened project: at reopen,
+around Triangulate All and after Track All; confirmed to fail on the pre-fix
+build, which showed "Triangulated: 3" with 3 frames resident).
+
+---
+
+### ui/frame-readout.js
+
+**Purpose.** The controls bar's frame readout, left of the transport buttons:
+the current time / duration on top, the current frame / total frames below,
+every count with thousands separators.
+
+    00:41.100 / 20:00.000
+        1,234 / 36,000
+
+**Key exports.** `formatFrameNumber(n)` (`36000` -> `"36,000"`, one cached
+`Intl.NumberFormat('en-US')`, since it runs on every frame of playback),
+`frameReadoutText(frameIdx, totalFrames, fps)` -> `{frame, total, time,
+duration}` (pure; `frameIdx` null = the empty "0 / 0" state), `NO_TIME`
+(`--:--.---`), and the DOM half: `showReadoutFrame(frameIdx)` (the per-frame
+path — writes `#currentFrame` / `#currentTime`), `refreshReadoutTotals()`
+(re-reads `state.totalFrames` / `state.fps`, writes `#totalFrames` /
+`#totalTime`, re-times the frame on screen and refreshes the seekbar's time
+ruler) and `clearReadout()` (which empties the ruler too).
+
+**Behaviour.**
+- **It speaks the seekbar tooltip's language**, on purpose: the same separator
+  and the same `formatTimestamp`, and the same time — a frame's START time,
+  `frameIdx / state.fps`, at the playback FPS the FPS pill shows. So a click on
+  the seekbar puts the tooltip's exact text into this readout. The duration is
+  `totalFrames / fps`, so the last frame reads one frame short of it
+  (`19:59.967 / 20:00.000` at 30 fps). An unknown frame rate (`state.fps` is 0
+  while a multi-session load has no video yet) shows `NO_TIME` rather than a
+  made-up clock.
+- **Every writer of the readout goes through here** — `updateSeekbarVisual`,
+  the inline frame editor and FPS pill (`ui/ui-wiring.js`), `updateFpsDisplay`
+  (`pose/initialization.js`), the loaders (`loading/session-loader.js`,
+  `import-export/slp-import.js`), session switch / removal
+  (`ui/sessions-panes.js`) and New Project (`import-export/save-load.js`) — so
+  the time row cannot fall out of step with the frame row. A new path that
+  changes `state.totalFrames` or `state.fps` must call `refreshReadoutTotals`.
+- The inline frame editor accepts the number the way the readout shows it:
+  `"12,345"` seeks to frame 12,345 (commas and spaces are stripped).
+- Layout (`.frame-display` in `styles.css`) is a three-column grid — current
+  values right-aligned, totals left-aligned — so the two slashes stay in one
+  vertical line whatever the digit counts. The time row is 0.85em of the frame
+  row, both rows fit the 56 px controls bar at every width.
+
+**Imports from project modules.** `./app-state.js` (`state`),
+`./seekbar-tooltip.js` (`formatTimestamp`), `./seekbar-ticks.js`
+(`refreshSeekbarTicks` — the ruler marks the same times, so it follows every
+totals / FPS change, including the FPS pill's, which moves no frame) — all
+import-free, so the text half runs in Node.
+
+**Imported by.** `ui/ui-wiring.js`, `ui/sessions-panes.js`,
+`pose/initialization.js`, `loading/session-loader.js`,
+`import-export/slp-import.js`, `import-export/save-load.js`.
+
+**Coverage.** `tests/test-frame-readout.mjs` (the text: separators, start time
+vs duration, hours, unknown fps, the empty state, and agreement with
+`seekbarTooltipText`) and `tests/e2e/frame-readout.mjs` (real app: seekbar
+clicks show the tooltip's text, the slashes line up and the readout fits the bar
+at 1400 and 640 px, the frame editor takes `"12,345"`, an FPS edit re-times it).
 
 ---
 
@@ -2402,14 +4767,17 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `./app-state.js` — `state`, `viewport3d`, `timeline`, `getActiveSession`.
 - `./browser-hints.js` — `fileSystemAccessHint` (appended to the 3D-video and
   JSON-export "must be built in memory" confirms in Brave).
-- `../pose/pose-data.js` — `InstanceGroup`.
+- `../pose/pose-data.js` — `InstanceGroup`, `UnlinkedInstance`, `pooledPoints3d`
+  (Group by Identity / Track & Triangulate All store each solve in the slab pool).
 - `../pose/triangulation.js` — `triangulateAndReproject`,
   `storeReprojectedInstances`, `frameHasGroupedUserInstances`,
   `loadAllLazyFrames`, `triangulateMultiFrameInstances`,
   `sessionHasCalibration`, `showCalibrationRequiredPopup`,
   `getInstanceGroupsForFrame`, `sweepLazyFrameWindows`,
   `resolveTriangulationMethod`, `findEquivalentPriorGroup`, `adoptPrior3d`,
-  `triangulationMethodLabel` (the last four for the adopt-don't-downgrade rule).
+  `triangulationMethodLabel` (the last four for the adopt-don't-downgrade rule),
+  `reprojectIntoEveryCamera` (Group by Track reprojects each solve into every
+  camera, not only the cameras it has instances in or the run's camera filter).
 - `./viewport3d.js` — `Viewport3D` (Export 3D Video modal).
 - `./overlays.js` — `getTrackColor`, `getGroupColor` (Export 3D Video modal).
 - `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`,
@@ -2620,9 +4988,37 @@ for freshly-triangulated AND reopened projects alike.
   over a stale `group.identityId`, and dot/`getGroupColor` agreement in both
   color modes.
 
+**Instance tables layout: both fit a 300 px panel.** Grouped Instances is
+Track / Identity · Views · Type · Error · unlink; Ungrouped Instances is
+Track / Identity · Type · Points · Score, under one full-width header row per
+camera. In both, a row's track and identity `<select>`s are STACKED in the
+first cell, all `STACKED_SELECT_PX` (80) wide and left-aligned, track on top
+(the Grouped row's dirty marker sits beside its track dropdown) — so a row is
+two lines tall. Side by side, the dropdowns made Grouped ~390 px and Ungrouped
+~324 px wide, and the Instances tab scrolled sideways inside the default 300 px
+panel; stacked, plus 4 px cell padding scoped to the two tables in
+`styles.css`, they need ~250 px and ~226 px against ~257 px of room once the
+tab's 11 px scrollbar shows. The track dropdown is the FIRST select in that
+cell — tests and code that look for it must say so (`select:first-of-type`).
+
+Under each group that has reprojections, `updateFrameInfo` adds a row:
+a REPROJECTION_COLOR dot and a "Reprojection" badge (`.badge-reproj`; it read
+"Reproj") in the Track / Identity cell, titled "Reprojection of <name>"; the
+reprojected view count (`n/cameras`) under Views; an EMPTY Type cell; the Error
+dash; and the trailing empty cell — one cell per header column. The badge leads
+the row rather than sitting under Type because the Type column then only has
+to fit "Pred*", which is what makes the width above possible; the group's name
+is on the row just above. (Before the stacked layout, this row was also one
+cell short — built without an Identity cell when that column was added — so
+every later cell sat one column left.) Covered by
+`tests/e2e/info-panel-instance-tables.mjs`, which measures each table's fit as
+its MIN-CONTENT width (the tables are `width: 100%`, so their rendered width
+always equals their container and cannot show an overflow) and fails on the
+old layouts.
+
 **Instance-panel track/identity dropdowns.** Each grouped/unlinked instance
 row has a track `<select>` and an identity `<select>`. Both selects include a
-`(none)` option (value `-1`) and a `(+) New Track` / `(+) New ID` option (value
+`(none)` option (value `-1`) and a `(+) New Track` / `(+) New Identity` option (value
 `__new__`). The track select defaults to `(none)` for a trackless instance/group
 (trackIdx == null) — it does NOT snap to the first track (index 0); selecting
 `(none)` sets the instance(s) trackless (the group path also unassigns its
@@ -2637,18 +5033,106 @@ the removed Tracks-menu "Assign Track" / "Assign Identity" submenus; the reusabl
 track/identity edit never regrows the bottom timeline panel — it rebuilds +
 repaints at the user's current height instead of growing to fit all rows.
 
-**Responsive panel tabs.** `setupPanelTabs` makes the tab bar (Instances,
-Visibility, Videos, Cameras, Skeleton, Session) width-aware. Each tab sizes to
-its full name (never ellipsis-truncated); a `ResizeObserver` on `.panel-tabs`
-runs `layoutPanelTabs()`, which greedily keeps the leading tabs whose names fit
-the panel's current width and demotes the rest into an auto-built **"More ▾"**
-dropdown (`.panel-tab-more*` in styles.css). Widening the panel promotes tabs
-back into the bar one at a time. At least the first tab always stays in the bar.
-The dropdown closes on outside-click or `Esc`; the More button shows the active
-highlight when the selected tab currently lives inside it.
+**The Track `<select>` is built LAZILY** (`buildTrackSelect`, via
+`ui/lazy-select.js`). Until the user presses or focuses it, it holds three
+options — the head (`(none)`), the current track and `(+) New Track` —
+and the full list is filled in on that first `mousedown` / `focus`, both of
+which fire before the browser opens the list or acts on a key. An eager select
+held an `<option>` per session track, and `updateFrameInfo` builds one per row
+on every update: an un-tracked 8-camera prediction project with 863 tracks made
+~35,000 options per update, the rebuild plus its style/layout took ~200 ms, and
+because that outlasted `AUX_UPDATE_MS` the 10 Hz throttle in `ui/rendering.js`
+let it run on EVERY frame — playback capped at ~5 fps, against 60 with the panel
+hidden. Lazy, the same project plays at 59.9 new frames/s against 60 hidden
+(`tests/e2e/_bench-playback.mjs`, `PREP=none SCENARIOS=full,noInfo`), with no
+long tasks. What a closed select shows is unchanged — same value, same label,
+nothing selected for an index past the track list — except its closed WIDTH,
+which now fits three options rather than every track (capped by `max-width`
+either way). The **Identity** selects stay eager: one option per identity, i.e.
+per animal, they were never part of the measured cost, and a lazy select
+ignores a scripted `.value` until focused, which
+`tests/e2e/ungroup-retains-identity.mjs` and `ungroup-trackless-reopen.mjs`
+rely on. Covered by `tests/test-lazy-select.js` (the helper: closed size
+independent of the entry count; filled, option-for-option the eager list) and
+`tests/e2e/info-panel-many-tracks.mjs` (the real `updateFrameInfo` with 10 and
+1,000 tracks gives the same option count; a real click fills the list without
+resizing the select; picking a track, `(none)` and `(+) New Track` still work).
+That e2e fails on the eager build — 43,387 options and ~228 ms per update at
+1,000 tracks, against 421 and ~7 ms.
+
+**The panel tab bar is ONE horizontal scroller.** `setupPanelTabs` makes
+`.panel-tabs` scroll sideways with every tab (Instances, Visibility, ID
+Switches, Videos, Cameras, Skeleton, Session) always inside it, in markup
+order. Each tab still sizes to its full name, never truncated.
+
+This replaced a **"More ▾" overflow dropdown** that demoted whichever tabs did
+not fit. At the default 300px panel width that was five of seven, so the
+panel's own name for the thing the user was looking at was usually behind a
+control they had to open first — and WHICH tabs were behind it moved as the
+panel was resized, so the bar never looked the same twice. `layoutPanelTabs`
+and every `.panel-tab-more*` rule are gone; do not bring them back.
+
+Five things about it:
+- **Three ways to scroll it, and a vertical wheel is one of them.** A trackpad
+  over a ~31px strip gives a two-finger VERTICAL swipe, so the `wheel` handler
+  takes whichever axis the gesture is actually on and applies it to
+  `scrollLeft`. That steals nothing from the app's "one scroller per panel"
+  rule: the bar sits OUTSIDE `.panel-tab-content`, which is the panel's one
+  vertical scroller, so a vertical wheel here moved nothing before. It
+  `preventDefault()`s only when the bar actually moved, so a swipe past either
+  end is still the page's.
+- **Click-and-drag has a 4px threshold, and a real drag SUPPRESSES the click.**
+  A row of buttons that can be dragged will otherwise switch tabs every time
+  the user flicks it — the pointerup that ends a drag still produces a click on
+  whatever tab it landed on. The suppression is a capture-phase `click`
+  listener on the bar (capture, so it runs before the tab's own handler rather
+  than after it has already switched), and it is cleared on the next
+  `pointerdown` so a drag that never produced a click cannot eat the press
+  after it. Pointer capture is taken only once the threshold is crossed:
+  capturing on every press re-targets the plain click that follows one. Touch
+  pointers are skipped outright — `overflow-x: auto` + `touch-action: pan-x`
+  already give them native momentum panning, and driving `scrollLeft` on top
+  would move the bar twice per gesture.
+- **Selecting a tab scrolls it into view**, by hand rather than with
+  `scrollIntoView`, which walks every scrollable ancestor and could scroll the
+  app's layout out from under it. This is what keeps `openIdSwitchPanel`
+  (`ui/id-switch-modal.js`, which just `.click()`s the button) from leaving the
+  active tab off-screen — an active tab nobody can see reads as no tab being
+  active. `.panel-tabs` is `position: relative` precisely so each tab's
+  `offsetLeft` is measured in the scroller's own space.
+- **The edge fades are the only affordance**, toggled by the `scroll-left` /
+  `scroll-right` classes and drawn with `mask-image` (painted in the element's
+  own box, so it stays pinned to the edges while the tabs move underneath, and
+  costs no extra element — a gradient overlay inside a scroller would scroll
+  away). The scrollbar is suppressed: the strip is ~31px tall and a horizontal
+  bar under it would sit on the active tab's 2px underline. A `ResizeObserver`
+  recomputes them, since resizing the panel changes WHETHER it overflows.
+- **`user-select: none` on the bar** — the documented exception for "a surface
+  whose job is to be dragged". Without it a drag smears a selection across the
+  tab names.
+Covered by `tests/e2e/panel-tabs-scroller.mjs`.
+
+**The Videos tab's two buttons are wired at SETUP, not per-session.**
+`setupVideosTab()` (called once from `pose/initialization.js`) installs the
+`#btnLoadVideos` → `handleLoadVideos` and `#btnRemoveVideo` → `removeVideoFile`
+handlers. They used to be assigned inside `updateInfoPanel`, which returns early
+when `state.session` is null (and while the panel is collapsed) — so on a
+freshly-opened app, exactly when you reach for **Load Videos**, the button
+carried no handler at all and clicking it did nothing, while `File ▸ Load
+Videos…` kept working because *that* is wired at setup (luc3d #216). Nothing in
+the wiring reads `state`, so it has no business in a per-session rebuild.
+Two details ride along:
+- The button is **`Load Videos`**, named after the menu item it duplicates, and
+  **`Remove Video`** (singular — it acts on the one selected row).
+- The selected row is held by **identity** (`selectedVideoFile`), not by row
+  index. Both buttons rebuild the table, and an index into the OLD table names a
+  different video in the new one; `populateVideosTable` clears the selection,
+  disables `Remove Video` and resets the detail block on every rebuild, so the
+  button can never act on a row that is no longer on screen.
+Covered by `tests/e2e/videos-panel-buttons.mjs`.
 
 **Key exports.**
-- Tab control: `setupPanelTabs`.
+- Tab control: `setupPanelTabs`, `setupVideosTab`.
 - Tables: `populateVideosTable`, `populateCamerasTable`,
   `populateSkeletonTable`, `populateSessionAssignTable`,
   `populateUnassignedVideos`.
@@ -2679,7 +5163,8 @@ Three things deliberately stay outside the gate:
   `updateInfoPanel`'s hidden branch calls `updateFrameInfo` for the same
   reason. Only the panel's own DOM is skipped. `updateStatusBarForFrame` does
   **not** call `updateFrameCounters()` while `state.isPlaying`: those counters
-  walk every frame group (~8–9 ms at 36,000 frames), are independent of the
+  walk every resident frame group (every frame of an eager project, ~8–9 ms at
+  36,000 frames; a lazy project adds a cached baseline), are independent of the
   current frame, and recomputing them on the 10 Hz playback updates stalled the
   video-frame callback enough to drop frames
   (`tests/e2e/_bench-playback.mjs`). `VideoController.stopPlayback` redraws
@@ -2728,6 +5213,10 @@ on reload); see `ui/app-state.js`.
 - `./rendering.js` — `drawAllOverlays`, `updateFrameCounters`.
 - `./interaction.js` — `isInteractiveClickTarget`.
 - `./panel-visibility.js` — `isInfoPanelVisible`, `markInfoPanelStale`.
+- `./section-state.js` — `persistSectionState` (Skeleton ▸ Nodes / Edges,
+  under the `skeletonSectionsOpen` key).
+- `./lazy-select.js` — `buildLazySelect`, behind `buildTrackSelect` (both
+  instance tables' Track `<select>`s).
 - `./id-switch-modal.js` — `refreshIdSwitchPanel`: `updateInfoPanel` re-renders
   the ID Switches tab (and its seekbar markers) for the active session.
 - `./app-state.js` — `state`, `timeline`, `interactionManager`,
@@ -2750,13 +5239,14 @@ on reload); see `ui/app-state.js`.
   correction touches that view only (luc3d #201) — the ungroup → fix one view →
   regroup workflow — and passes its instance so a TRACKLESS row takes the
   per-frame instance-level path (`applyIdentitySwitch` mode **frame**; picking
-  "—" on a trackless row clears `Instance.identityId` directly, there being no
+  "(none)" on a trackless row clears `Instance.identityId` directly, there being no
   map entry to clear). The unlinked row's ID `<select>` pre-selects from
   `getIdentityIdForUnlinkedInstance` (per-frame map entry for a tracked row,
   instance-level retained identity for a trackless one), which is why
   `Session.unlinkGroup` has to retain the
   disbanded group's identity in the map / on the instance for the row to read as anything
-  but "—".
+  but "(none)". (Both tables' "no track" / "no identity" option reads "(none)"; the
+  Ungrouped table's used to read "—".)
 - `./sessions-panes.js` — `populateSessionsPanel`, `populateViewStrip`,
   `populateSessionStrip`.
 
@@ -2781,10 +5271,13 @@ class="slider"></span></label>`) rather than a bare checkbox so the
 control matches the rest of the Visibility panel. Track AND identity
 rows both render a `.vis-color-swatch`: identity rows pull from
 `identity.color`, track rows compute their swatch via
-`getTrackColor(i)` (imported from `./overlays.js`) where `i` is the
-row's position in `session.tracks` — the same palette-index the
-timeline canvas itself uses for the bar color, so the swatch in the
-panel matches the bar the user sees on the timeline. Camera rows have
+`getTrackColor(i, state.colorByIdentity)` (imported from `./overlays.js`)
+where `i` is the row's position in `session.tracks` — the same palette-index
+AND palette the timeline canvas itself uses for the bar color (`NULL_ID_COLOR`
+for the No ID track), so the swatch in the panel matches the bar the user
+sees on the timeline. The Tracks / Identity change handler (`ui/ui-wiring.js`)
+re-runs `populateTimelineVisibility` so the swatches switch palette with the
+mode. Camera rows have
 no swatch (cameras have no intrinsic color in the data model).
 
 The change listener calls `toggle{Camera,Track,Identity}Visibility(session, name)`
@@ -2800,7 +5293,7 @@ reflect the freshly-active session's hidden sets.
 
 **Visibility tab — section order + Display Legend (Phase-7 refinement).**
 `index.html` reorders the tab so the **Timeline** subsection is at the
-top of the Visibility panel (above User / Predicted / Reprojections).
+top of the Visibility panel (above User / Predictions / Reprojections).
 The **Display Legend** control is its own `<h3>` section sitting between
 Reprojections and Video Brightness, mirroring how Video Brightness and
 Video Rotation are presented. All static checkboxes in the panel
@@ -2826,9 +5319,76 @@ edit-group mode, keyboard shortcuts.
   `onMouseLeave`/`onWheel`, `onKeyDown`, `_addNewInstance` (used by smart-add;
   lays out a new skeleton via an inline BFS fan-out from the highest-degree
   root, with a vertical-line fallback when there are no edges).
+  `canvasToVideo(clientX, clientY, viewName)` maps a pointer to video pixels;
+  on a ROTATED view it rebuilds the display size from `cssW × zoom.scale` and
+  `cssH × zoom.scaleY` — the vertical scale differs a hair from the horizontal
+  one at native resolution (`VideoController.nativeZoomScales`), and using
+  `zoom.scale` for both put a click up to ~0.3% of the frame height off there.
 - `isInteractiveClickTarget(target)` — used by other UI to skip
   click-through on form controls.
 
+**Plane annotation (View ▸ Define Planes).** A `PlaneInstance`
+(`pose/plane-data.js`) is edited through the SAME code path as a UserInstance —
+`hasPoint`/`getX`/`getY`/`setPoint`/`numNodes` is the whole interface the drag
+path needs, and PlaneInstance inherits all of it — so plane editing cannot
+drift from pose editing. Added surface:
+- `findNearestPlaneNode(vx, vy, viewName)` — mirrors `findNearestNode`
+  (nodes first, then edges; an edge hit returns `nodeIdx: -1` for
+  `_resolveNearestNode`), with the same zoom-corrected thresholds. It considers
+  only the indices `getPlaneNodeIndices(viewName)` reports as SHOWN there
+  (`planeNodeIndexSet`, also passed to `_resolveNearestNode`'s new `allowed`
+  argument): a plane instance covers the feature's whole node pool, so without
+  the filter a node whose only plane is not placed on this view would take a
+  click while drawing nothing.
+- `selectPlane(plane, nodeIdx)` + `selectedPlane` / `selectedPlaneNodeIdx` /
+  `hoveredPlaneNode`. A plane selection and a pose selection are **mutually
+  exclusive** (each `select*` clears the other) so exactly one thing is ever
+  reported as selected; `clearSelection()` clears both.
+- The `beginPlaneDrag(viewName, nodeIdx, wholePlane)` callback, asked once at
+  mousedown. `allowed:false` refuses the drag (a PINNED node; the feature puts
+  the reason in the status bar) while the click still SELECTS, so the node stays
+  reachable for un-pinning. Its `indices` become `dragInfo.indexFilter`, which
+  both `_onDragMove` and `_onDragUp` honour in whole-instance mode — an
+  Alt+drag must carry the grabbed plane's nodes and leave every other plane's
+  where they are, and the pool-wide instance makes that a real distinction.
+- The `isPlaneDataLocked()` callback, asked in the right-click branch before a
+  plane node is nulled. True while something else is reading plane geometry and
+  must not have it change underneath (the Set Angle dialog, which stays open
+  over a live 3D view); nulling a plane node invalidates its 3D, so it is a
+  geometry edit like a drag. Deliberately NOT folded into `isPlaneEditMode`,
+  which gates hit-testing too: with that false a click meant for a plane corner
+  would fall through and grab a pose node instead. Plane nodes keep selecting
+  and hovering while locked; only the mutations are refused. Like
+  `beginPlaneDrag`'s `allowed:false`, the callback puts the reason in the status
+  bar itself — this module cannot explain a refusal it does not own, and a
+  silent one reads as a broken click.
+- `onPlaneChanged(planeInstance, movedIndices, {moved})` — the second argument
+  names the node indices the edit touched (`[nodeIdx]`, the alt-drag's filter, or
+  null for "unknown"), so the feature can invalidate exactly those nodes' 3D.
+  `moved` separates a DRAG (`true`) from a right-click null-toggle (`false`):
+  only a drag means the user positioned those points, which is what promotes a
+  REPROJECTED corner to a real observation. Toggling one off says nothing about
+  where it is, so it must not.
+- `_startDrag`'s trailing `plane` argument, carried on `dragInfo.plane`.
+  Planes live outside `frameGroups`, so unlike a grouped instance they cannot
+  be re-resolved from `instanceGroupIdx` mid-drag and are held by reference.
+  `onMouseUp` skips its usual `instance.type = 'user'` promotion for a plane —
+  promoting it would put a PlaneInstance into the pose pipeline's vocabulary.
+- Gestures: click to select, drag a node, **Alt+drag** to translate the whole
+  plane (reusing `altDragSource`'s `mode: 'instance'`), **right-click** to
+  toggle a node off into `nulledNodes`.
+- The node hit radius comes from the `getPlaneNodeSize` callback (the shared
+  Plane Appearance ▸ Node Size slider), so what you can grab is always what you
+  can see; `planeHitRadius` is the fallback when no callback is supplied.
+
+**Everything plane-related is gated on `_planeEditable()`** — the
+`isPlaneEditMode` + `getPlaneInstances` callbacks. Outside "Defining Plane
+Mode" every plane branch is dead, so plane nodes can never compete with pose
+nodes for a click during normal annotation; with no callbacks wired the whole
+feature is inert. Inside the mode, planes are checked FIRST on mousedown/hover
+so a plane node on top of a pose instance is still grabbable, and a MISS falls
+through to the normal handling so pose editing keeps working.
+`tests/e2e/define-plane-mode.mjs` pins both directions of that gate.
 **Deselecting an unlinked instance clears the Delete target too.** Two fields
 track an unlinked selection: `assignmentSelection` (what the amber ring and the
 Ungrouped Instances row highlight read) and `selectedUnlinked` (what
@@ -2922,10 +5482,49 @@ deadzone (`_onDragMove`, ~3 CSS px) multiply by it so they stay constant on scre
 — previously the deadzone was a fixed 3 video px, which forced a large on-screen
 drag at high zoom and blocked fine node adjustments.
 
+**A delete is a STORE delete first (`_deleteSelected`).** The Delete key, Edit ▸
+Delete Instance and the toolbar's "- Instance" all land in `_deleteSelected`,
+which now calls `deleteTargetsFromStore` (`ui/custom-delete-ops.js`) with the
+selected ungrouped instance (`unlinkedTarget`) or the deleted group members
+(`groupMemberTargets` — the one view, or every view for Shift+Delete) BEFORE it
+edits the frame. On a lazy project the columnar store is the source of truth, and
+the resident-only edit it used to make did not survive: a windowed sweep or
+playback eviction releases a predicted-only frame and re-hydrates the row, and the
+streaming save writes the store rows of any camera-frame with no user instance —
+so the deleted prediction came back, before or after a save. The store call goes
+first because it identifies the victims by `_rawInstIndex` while they are still in
+the group/frame and renumbers the survivors around them. The camera of an
+ungrouped delete is the instance's own (`ul.cameraName`), not
+`lastInteractedView`. The in-memory semantics (auto-ungroup to a lone survivor,
+mixed→user promotion, partial deletes keeping their 3D) are unchanged; an eager
+session has no store, so it deletes exactly as before. Covered by
+`tests/test-custom-delete-ops.js` ("interactive deletes reach the store") and
+`tests/e2e/sequence-lazy-workflow.mjs` cycle 5c.
+
 **Imports from project modules.**
 - `../pose/pose-data.js` — `Instance`.
+- `../pose/triangulation.js` — `getOrComputeReprojectedInstance`.
+- `./keyboard-target.js` — `shouldIgnoreShortcut`.
+- `./custom-delete-ops.js` — `deleteTargetsFromStore`, `groupMemberTargets`,
+  `unlinkedTarget` (import-free itself, so this adds no cycle).
+- `./node-tooltip.js` — `nodeTooltipText`, `setNodeTooltipTarget`,
+  `hideNodeTooltip`.
+- `./overlays.js` — `getGroupColor`, `unlinkedDupIndices`, `unlinkedBaseColor`
+  (the node tooltip's color; `overlays.js` imports nothing, so no cycle).
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`.
+
+**The node tooltip is fed from the hover.** `onMouseMove` hands
+`_nodeTooltipTarget(state, view, frame, hit, ulHit)` to
+`setNodeTooltipTarget` on every move: the node under the pointer (linked or
+unlinked), named from the skeleton, with `Session.predictedNodeScore` as the
+score — none on an edge, a plane node or empty canvas, and no score on a
+reprojection — and the color the hovered instance is drawn from
+(`getGroupColor` for a group's member or reprojection, `unlinkedBaseColor` for
+an ungrouped one, in the current Tracks / Identity mode). It reports the
+instance the hit test picked — the one a click would select: where a grouped and
+an ungrouped skeleton overlap, grouped wins. `onMouseLeave` hides it. See
+`ui/node-tooltip.js`.
 
 **User-facing features.** Click-to-select skeleton nodes, drag to move
 keypoints, Alt+drag to move a whole instance, Alt+wheel to rotate one about a
@@ -2962,7 +5561,7 @@ if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' ||
 
 meaning "don't steal keys from someone who is typing". But `tagName` is `INPUT`
 for a **checkbox** too — and for a radio, a range slider and a file picker. So
-the moment the user clicked the User / Predicted / Reproj / Errors toolbar
+the moment the user clicked the User / Predicted / Reprojections / Errors toolbar
 checkbox, that test went true for every keystroke and **every shortcut in the
 app went dead**, not just the one the checkbox wanted. Spacebar toggled the
 checkbox instead of playing the video, and the only cure was to click back onto
@@ -2982,9 +5581,24 @@ a video pane.
    for. **Keyboard focus is deliberately left alone** (detected via
    `:focus-visible`): tab to the checkbox, press `Space`, still get a toggle.
 
+**The third owner: the browser.** A keystroke can belong to neither the focused
+control nor the app. `Mod+C` is bound to Copy selected instance, and the catalog
+dispatcher `preventDefault()`s every binding it matches — which cancels the
+keydown's `copy` default action too. Text selected anywhere outside a field — a
+panel, a modal, the status bar's error message — could therefore be highlighted
+and **never copied**: the keystroke went to the pose annotation instead and left
+"No instance selected to copy" in the status bar. `shouldIgnoreShortcut` now
+hands the copy/cut chord back **whenever a selection exists**, and only then, so
+Copy selected instance is untouched in the normal annotating case. Cut is
+included with copy; **paste deliberately is not** — nothing about having
+selected some text says the user wants to replace it.
+
 **Key exports.**
-- `shouldIgnoreShortcut(e)` — the guard itself: `isTextEntryTarget(e.target) ||
-  targetOwnsKey(e.target, e)`.
+- `shouldIgnoreShortcut(e)` — the guard itself: the clipboard-chord rule above,
+  then `isTextEntryTarget(e.target) || targetOwnsKey(e.target, e)`.
+- `hasTextSelection(doc)` — true for a non-collapsed selection with text in it.
+  The whole read is wrapped: a selection inside a shadow root or a cross-origin
+  frame can throw, and the honest answer there is "none I can speak for".
 - `isTextEntryTarget(t)` — free-text targets, which block every shortcut:
   `<textarea>`, `contenteditable`, the text-ish `<input>` types, `role=textbox`
   /`searchbox`/`combobox`, **and `<select>`** (it uses the arrows, `Enter` and
@@ -3031,6 +5645,8 @@ bridges into both test runners and unit-tests against plain object stubs.
 **Tests.** `tests/test-keyboard-target.js` (the predicates, both runners),
 `tests/e2e/checkbox-focus-hotkeys.mjs` (the real app: click the checkbox, press
 Space, get playback; Tab to it and Space still toggles) and
+`tests/e2e/copy-panel-text.mjs` (the clipboard rule, against the REAL clipboard,
+with the no-selection negative control) and
 `tests/e2e/triangulate-button-focus.mjs` (the capture-phase half: the two
 Triangulate buttons, plus a synthesized button that stops propagation, so the
 rule is pinned rather than those two ids).
@@ -3077,11 +5693,12 @@ after all tasks complete; stays open on error.
 
 **Notes / caveats.**
 - `_rebuildRootSnapshot` no-ops in real browsers (guarded by
-  `this.root instanceof window.HTMLElement`). It only runs in headless Node
-  test sandboxes where `appendChild` does not reflect children into
-  `root.innerHTML`. Running it in a browser would replace the real DOM
-  (including the progress-bar markup `_renderRow` appends) with a simplified
-  label-only snapshot — hiding every bar.
+  `this.root instanceof window.HTMLElement`). It only runs under a DOM stub
+  where `appendChild` does not reflect children into `root.innerHTML` — the
+  since-retired `tests/run-node.js` sandbox was the only such host. Running it
+  in a browser would replace the real DOM (including the progress-bar markup
+  `_renderRow` appends) with a simplified label-only snapshot — hiding every
+  bar.
 - Long session names truncate with ellipsis at the modal max-width (380 px)
   rather than forcing horizontal expansion. CSS: `.lpm-group-label` is
   `flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden;
@@ -3098,10 +5715,40 @@ determinate progress bar — the ONE progress component shared by Track All,
 Triangulate All (all three routes), Group by Identity/Track, and anything else
 that runs a chunked main-thread loop behind the overlay.
 
+**It is a card in the image ID-switch check's dialog style**
+(`ui/id-switch-modal.js`): an opaque `.loading-card` (540 px, `--bg-secondary`,
+border, 8 px radius, 24 px padding, shadow) with an optional title
+(`#loadingTitle`), the message, the ETA, the image check's bar — a track that
+clips a cyan fill, and a playhead line (`#loadingProgressHead`) standing proud
+of it — and the large percentage under the bar (`#loadingPct`; shared rule with
+`.id-switch-progress-pct`), then the detail line and the CPU row, all
+left-aligned. The full-window `.loading-overlay` under it is TRANSPARENT: the
+app stays visible, not greyed out, but cannot be clicked while an operation
+runs (Triangulate All resolves its settings once and relies on that). The image
+check's own backdrop is transparent too (`.id-switch-progress-overlay`). The
+spinner (now 14 px, before the message) shows only for a message with no bar.
+Every caller of the overlay gets the card — loading, exports, Group by — but
+only Track All / Track Frame Range, Triangulate All and the body-size check
+give it a title. Pinned in all four by `tests/e2e/fixtures/progress-card.js`
+(opaque card, transparent but blocking backdrop, left-aligned, the CPU line at
+the card's content edge).
+
 **Key exports.**
-- `showLoading(msg)` — indeterminate form (spinner + text); hides the bar.
-- `showLoadingProgress(label, done, total, { step, steps, detail, unit })` —
-  writes the standard `"<label>: done/total frames (pct%)…"` line and drives the
+- `showLoading(msg, { title })` — indeterminate form (spinner + text); hides the
+  bar and the percentage.
+- **The title** (`opts.title` on either call) names the operation — "Track All",
+  "Triangulate All", "Checking ID switches (body size)" — and is KEPT until
+  `hideLoading` (or a call passing another; `''` clears it), so the progress
+  calls deep inside a run, and a message mid-run, need not repeat it; each
+  operation passes it on its first call only. An operation that passes none
+  shows none.
+- `showLoadingProgress(label, done, total, { step, steps, detail, unit, title })` —
+  writes the standard `"<label>: done/total frames…"` line — the counts
+  with thousands commas, "Triangulating: 2,000,000/2,000,000 frames…"
+  (`toLocaleString('en-US')`, so the separator does not depend on the browser's
+  locale), the floored percentage under the bar instead of in the line (the
+  image check's layout), moves the playhead with the fill (both by `transform`,
+  so both glide on the compositor), and drives the
   bar (`#loadingProgress` / `#loadingProgressFill`, `role="progressbar"`). The
   line under the bar (`#loadingSubstatus`) carries `Step k of n` (only when
   `steps > 1`) and `detail` (method, group counts), so the main line keeps one
@@ -3118,22 +5765,63 @@ that runs a chunked main-thread loop behind the overlay.
   done, total)` and `formatRemaining(ms)` are exported for tests, as is the
   clock hook `__setLoadingOverlayClock(fn)`. The raw estimate is exposed as
   `#loadingEta[data-ms]`, which the bench reads to score accuracy.
-- `hideLoading()` — hides the overlay and resets the bar.
+- `hideLoading()` — hides the overlay and resets the bar (and stops `setLoadingCpu`).
+- `setLoadingCpu(source)` — while an operation that can clock its CPU time runs,
+  a CPU line and a graph of the last minute under the detail line
+  (`#loadingHardware` = `#loadingCpu` + `#loadingGraph`): "CPU: 12 cores · load
+  92%", sampled every `CPU_SAMPLE_MS` (1 s) as busy thread-ms / cores through
+  `createLoadMeter`, its tooltip ending "kept busy over the last 5 s by " +
+  `source.counts`. A source has `cpuBusyMs()` — Triangulate All, its solver's
+  clock over the workers and the main thread — and/or `mainThread: true`, for
+  which the overlay clocks the main thread itself (`createBusyClock`): busy from
+  the call on, EXCEPT while it waits in `yieldToPaint` or `idleWhile` — each
+  closes the `'main'` lane for the wait, counting overlapping waits so the lane
+  reopens once, when the last one ends. Both given, the line is their SUM: Track
+  All / Track Frame Range on the tracker worker (`pose/tracker-pool.js`) pass
+  `{mainThread: true, cpuBusyMs: pool.cpuBusyMs}`, the worker plus the main
+  thread hydrating and committing — between one and two cores' share. Inline
+  (no worker) they pass `{mainThread: true}` alone, which reads one core's share
+  (8% on 12 cores): the honest picture of a single-threaded pass on a many-core
+  machine. Its other waits — the windowed sweep's 50 ms GC hint every 5 windows
+  — still count; negligible. CPU only: the
+  operations that report here never use the GPU. The same parts as the image
+  check's dialog (`createLoadGraph`, `formatCpuLoad`, `setLoadLine`,
+  `ui/load-graph.js`); the graph is built into `#loadingGraph` once and
+  `clear()`ed per operation. In Brave with its fingerprinting protection on,
+  a note under it (`#loadingBraveHint`, `renderBraveFingerprintingHint`,
+  `ui/browser-hints.js`) says the core count is a random one and how to stop
+  that. Until `hideLoading()` or `setLoadingCpu(null)`; a
+  source that throws stops it. An operation that never calls it shows no CPU
+  row (Group by Identity/Track, the body-size ID-switch check, loading). The
+  body-size check is left out ON PURPOSE: it runs as one uninterrupted block of
+  main-thread work, 218 ms on 27k frames x 3 animals and 760 ms on 106k
+  (measured), and the line samples once a second after 0.5 s of history — so it
+  could only ever read "CPU: 12 cores", with no load. A CPU line is worth adding
+  to an operation that runs for several seconds AND yields while it does.
+- `idleWhile(promise)` — awaits `promise` as main-thread IDLE time for a
+  `{mainThread}` CPU line (the main thread waiting on a worker is not using the
+  CPU), sharing `yieldToPaint`'s wait count. No line: just the promise.
+- `busyDuring(fn)` — runs `fn` counted as main-thread CPU time even inside an
+  `idleWhile` / `yieldToPaint` wait: the tracker worker's results are committed
+  from its message handler, which runs during exactly those waits.
 - `createProgressPacer(intervalMs = PROGRESS_INTERVAL_MS)` → `{ due(), yield() }`.
   `due()` is true at most once per interval (a `performance.now()` check, cheap
   enough to call every iteration); `yield()` = `yieldToPaint()`, after which the
   interval restarts (so it measures WORK time between yields).
-- `yieldToPaint()` — resolves after the browser has painted: rAF then a task
+- `yieldToPaint()` — (also the wait a `{mainThread}` CPU line leaves out) resolves after the browser has painted: rAF then a task
   queued after it (a bare `setTimeout(0)` can fire before the next display frame,
   leaving the overlay unpainted for another whole chunk), with a 100 ms timer
   fallback for throttled rAF. A hidden tab yields through a `MessageChannel`
   instead — no paint needed, and unlike chained timers it is not throttled to
   1/s in background tabs.
-- `PROGRESS_INTERVAL_MS` (250).
+- `PROGRESS_INTERVAL_MS` (250), `CPU_SAMPLE_MS` (1000).
 
-**Imports from project modules.** None (safe under the Node test stubs: every
-DOM access is null-guarded, and with no `requestAnimationFrame` it yields via
-`MessageChannel`).
+**Imports from project modules.** `./load-graph.js` (`createLoadMeter`,
+`createBusyClock`, `createLoadGraph`, `formatCpuLoad`, `setLoadLine`, `cpuCores` —
+itself import-free and DOM-free at load), `./browser-hints.js`
+(`renderBraveFingerprintingHint`; also import-free and DOM-free at load). Safe under the Node test stubs: every DOM access is
+null-guarded (no `#loadingHardware` → `setLoadingCpu` does nothing), and with no
+`requestAnimationFrame` it yields via `MessageChannel`.
 
 **Imported by.** `import-export/save-load.js` (re-exports `showLoading`/
 `hideLoading`), `pose/tracker.js`, `pose/triangulation.js`, `ui/export-modals.js`,
@@ -3151,6 +5839,85 @@ DOM access is null-guarded, and with no `requestAnimationFrame` it yields via
   measures run time, update cadence and paints/s on a real project.
 - Not to be confused with `ui/loading-progress-modal.js`, the per-camera,
   multi-row panel used for video loading.
+
+---
+
+### ui/load-graph.js
+
+**Purpose.** How busy a long operation keeps the CPU (and the GPU), for its
+progress UI: the busy clock its threads report to, the rolling load meter, the
+"CPU: 12 cores · load 7%" line, and a small graph of the last minute. Shared by
+the image check's progress dialog (`ui/id-switch-modal.js`: CPU and GPU lines,
+both series) and the loading overlay (`ui/loading-overlay.js` `setLoadingCpu`:
+the CPU alone — Triangulate All and Track All). No browser API reports the CPU's or a GPU's
+utilisation, so every load is the operation's OWN busy time as a share of the
+hardware, and each line's tooltip says other apps are not in it.
+
+**Key exports.**
+- `LOAD_WINDOW_MS` (5000); `createLoadMeter(windowMs)` -> `(now, busyMs) ->
+  pct|null` (moved here from `ui/image-embedder.js`, which re-exports it) — the
+  share of the window spent busy; for the CPU, feed thread-ms / cores.
+- `createBusyClock(now?)` -> `{begin(lane), end(lane), close(lane?), ms()}` —
+  busy time summed over lanes (threads); nested per lane (a crop worker holds
+  several queued jobs; a pool's `'main'` is reopened by a reply handled while it
+  waits); open spans count up to now; `close()` with no argument closes every lane.
+- `formatCpuLoad(cores, load, counts)` -> `{text, title, load}` — "CPU: 12 cores ·
+  load 7%" (`cores` = `navigator.hardwareConcurrency`, logical processors; one
+  saturated thread on 12 cores reads 8%); the tooltip is "The share of the CPU's
+  12 cores kept busy over the last 5 s by " + `counts` + ". Browsers do not report
+  the CPU's total load, so other apps are not included." `cpuCores()`.
+- `LOAD_GRAPH_SPAN_MS` (60 s); `loadGraphPath(samples, now, spanMs, w, h)` -> SVG
+  path data, placed by TIME (ticks are uneven: long work blocks the 1 s timer),
+  broken at nulls, a lone point as a zero-length segment (a dot under the round cap).
+- `LOAD_GRAPH_W` / `LOAD_GRAPH_H` / `LOAD_GRAPH_PAD` (84 x 34 px plot, the series
+  inset 2 px so 0% and 100% are not half clipped). 84 rather than the first
+  cut's 104: with the y labels beside it, that is what keeps the image check's
+  "GPU: WebGPU, fp16 · load 100%" (205 px) on one line in its 540 px dialog.
+  `LOAD_GRAPH_TICK` (4 px): the axis ticks' length.
+- `createLoadGraph(box)` -> `{show(on), push(t, cpu, gpu), clear()}` — builds the
+  graph into `box` (class `load-graph`): a 50% hairline, a CPU and a GPU series,
+  and **labelled axes**, as few as fit — "100%", "50%", "0%" left of the plot and
+  "60 s ago" … "now" under it, 9 px in the muted text colour — **each with a tick
+  pointing OUT of the plot** (MATLAB's `TickDir 'out'`, which keeps the data clear
+  of them): a 4 px tick at each labelled level running left from the left edge,
+  and one under each bottom corner running down; a label sits 2 px beyond its
+  tick. The ticks are absolutely positioned spans in the plot's wrapper, placed
+  from the same constants as the series (the SVG must keep `overflow: hidden` —
+  points older than the span sit left of it — so they cannot be drawn in it), and
+  the plot's corners are square, an axes box whose corner ticks continue its
+  edges. The y labels are
+  ZERO-HEIGHT boxes (`line-height: 0`) spread by `space-between` over a column
+  as tall as the plot's 0-100% span and offset by its inset (`height` /
+  `margin-top` set inline from the constants), so each label's text centres on
+  the level it names — measured within 0.5 px. Both axes are `aria-hidden`; the
+  SVG's `aria-label` ("Load from 0 to 100% over the last 60 s") says the same.
+  On hover, a cursor, a dot per series and a readout above the graph ("12 s
+  ago · CPU 7% · GPU 80%") for the nearest MEASURED sample (the first tick's are
+  null), kept current as the graph moves under a still pointer. `show(false)` is
+  `visibility`, so the space stays reserved.
+- `setLoadLine(el, text, title, series)` — a line's text and tooltip, and its
+  legend key (`.load-line.has-series::before`, in `.is-cpu` / `.is-gpu` colour).
+
+**Styles.** `styles.css` `.load-line` / `.load-graph*`; the series colours are
+`:root` `--load-cpu` `#3987e5` and `--load-gpu` `#d95926`, the first two slots
+of the dataviz skill's validated categorical palette (dark steps), checked
+against the plot's `#1a1a1a` (CVD dE 26.8).
+
+**Imports from project modules.** None, and no DOM at load time:
+`ui/image-embedder.js` imports it and is also loaded by the crop and model workers.
+
+**Imported by.** `ui/image-embedder.js`, `ui/id-switch-modal.js`,
+`ui/loading-overlay.js`, `pose/triangulation-pool.js`.
+
+**Coverage.** `tests/test-load-graph.mjs` (the clock, the meter, the CPU line,
+the path); the axis labels' rendered text against the levels they name, and the
+five ticks (at those levels / under the corners, pointing out, labels clear of
+them), in all three places the graph appears, by
+`tests/e2e/fixtures/load-graph-axes.js` (a Range over each label — the boxes are
+zero-height); the DOM half in `tests/e2e/id-switch-image-check.mjs` (CPU + GPU,
+hover), `tests/e2e/triangulate-all-cpu-load.mjs` (CPU only, on the overlay) and
+`tests/e2e/track-all-cpu-load.mjs` (the overlay's main-thread clock, with the
+paint-wait control).
 
 ---
 
@@ -3175,10 +5942,10 @@ info panel, and timeline.
 
 **User-facing features.** Drag-to-resize panel boundaries between video
 grid / 3D / info-panel / timeline. Also wires the two toolbar panel-toggle
-buttons (`#infoPanelToggleBtn`, `#viewport3dToggleBtn`) and keeps their labels
+buttons (`#infoPanelToggleBtn`, `#viewport3dToggleBtn`) and keeps their state
 in sync from the `MutationObserver` that watches the 3D container's and info
 wrapper's `class` attributes — so a collapse from any entry point (button, `\`,
-View menu) relabels both buttons, and the initial labels are correct.
+View menu) updates both buttons, and the initial state is correct.
 
 ---
 
@@ -3357,7 +6124,12 @@ the classic-script unit runner and exercised without a browser dock.
   set — the list has already changed once (`360` → `480`), and a stored key
   nothing recognises would blank the `<select>` while `outputSizeFor` quietly fell
   back to `DEFAULT_RES`, leaving the summary quoting a size the visible control
-  doesn't name.
+  doesn't name. `sanitizeSettings` also **folds a stored `labelSize` of 0 into
+  `showLabels: false` and restores the default size** (issue #223): a blob written
+  before the toggle existed encodes "off" as a 0 and carries no `showLabels`, so
+  without this the setting would come back ON *and* the toggle would be dead,
+  since 0px labels draw nothing. A 0 is unreachable from the current modal, so
+  this can only ever be reading the old meaning.
   `UNRESTORED_KEYS` (`res`, `outW`, `outH`) are **written to storage but never read
   back**, so the modal always opens at `DEFAULT_RES` = **1080p**. The tier decides
   pixel count, bitrate and therefore file size, and a value silently inherited from a
@@ -3370,9 +6142,26 @@ the classic-script unit runner and exercised without a browser dock.
   likes overlays to look, not how big the file will be. Note it is the **read** that
   resets, not the write; `tests/e2e/overlay-export-modal.mjs` asserts both halves.
 - `overlayOptionsFrom(settings, videoW, videoH, canvasW, canvasH)` — the
-  settings → `drawFrameOverlays()` options translation. Explicitly nulls ALL
+  settings → `drawFrameOverlays()` options translation (`trailShade` passes
+  through as its key; `drawNodeTrails` resolves it). The default
+  `trailShade: 'dark'` repeats `DEFAULT_TRAIL_SHADE` because this module imports
+  nothing; `tests/test-overlay-export-layout.js` holds the two together. Explicitly nulls ALL
   interaction state (selection / hover / drag / assignment): an export has no
   cursor, and a stray highlight would be burned into the video.
+  **Node labels are gated by `showLabels`, never by their size** (issue #223).
+  `settings.user.showLabels` / `settings.reproj.showLabels` are real booleans the
+  modal surfaces as `Show node labels`, beside `Show nodes` / `Show edges`;
+  `labelSize` is only a size, floored at 1 in the modal. Before #223 the only off
+  switch was a size of 0, which is undiscoverable and reads as "make it tiny".
+  Defaults are user **on** / reproj **off**, matching the Visibility panel's own
+  (`visUserLabelSize` 12, `visReprojLabelSize` 0), so a fresh export renders what
+  the app is already showing. **Predicted has no toggle because the app has no
+  such layer**: `ui/rendering.js` hardcodes `predictedOpts.showLabels: false`
+  too, so predicted instances have never carried node names and an export toggle
+  would be inventing one. Note `showLabels` also gates the TRACK-name labels
+  (`drawInstanceLabels`), exactly as the size-of-0 gate did — one meaning of
+  "labels", shared with the live app, rather than a split only the export knows
+  about.
 - `seedLayoutPlan(viewNames, include3D)` — the mirror-the-main-window seed (same
   row-count heuristic as `addAllViewsAsGrid`, 3D docked right of the whole grid).
   Returns add-panel steps whose positions reference **earlier** entries by index,
@@ -3398,6 +6187,11 @@ composition and its user / predicted / reprojected overlay layers.
 
 **Key exports.** `showOverlayExportModal()`, `settingsFromVisibilityPanel()`,
 `loadOverlayExportSettings()`, and a re-export of `TILE_3D`.
+The node-trail shade is seeded from `state.trailShade` and offered as the Layers
+group's **Trail shade** select (`#ovTrailShade`, the five `TRAIL_SHADES`), right
+under Node trails; like the trail length it is then remembered with the export's
+own settings. `loadOverlayExportSettings` replaces a stored shade this build does
+not offer with `DEFAULT_TRAIL_SHADE`, which would otherwise leave the select blank.
 
 **Layout.** `[views strip] [composition dock] [settings panel]`. The strip lists
 the **3D grid FIRST**, then one thumbnail per video; drag or double-click to dock.
@@ -3430,6 +6224,16 @@ version: `index.html`'s CSS, `sessions-panes.js`, and this module), seeded via
 `seedLayoutPlan` to mirror the main window. The settings panel carries the frame
 range (**1-based display**, 0-based internally, matching the issue) at the top,
 then layers, per-layer appearance, background, and quality/output.
+**`Show node labels`** (issue #223) sits in the User and Reprojection Appearance
+groups with `Show nodes` / `Show edges`, and the `Node label size` field below it
+floors at **1** — an off switch hidden at the bottom of a numeric range is
+precisely what the toggle replaces. The Reprojection group gained its own
+`Node label size` / `Label opacity` fields at the same time, so the toggle it
+grew is not the only reprojection-label control. `settingsFromVisibilityPanel`
+SPLITS the panel's folded encoding on the way in: the panel says "off" with a
+size of 0, so a 0 seeds `showLabels: false` and leaves the export's size at its
+default — copying the 0 through would leave the toggle able to turn on nothing.
+There is no Predicted entry; see `overlayOptionsFrom` above for why.
 
 **Output dimensions.** Quality & Output has a Resolution picker — the four shared
 tiers **480p (854×480) / 720p (1280×720) / 1080p (1920×1080) / 2160p (3840×2160)**
@@ -3676,7 +6480,7 @@ whether any of this is applied.
 **Unlinked instances ARE drawn**, in the preview and in the encoded frames, by
 `collectUnlinked(frameGroup, viewName)` — which reads the RAW `FrameGroup` via
 `getUnlinkedInstances()` (NOT the `toOverlayFrameGroup` copy, which carries only
-`frameGroup.instances`) and filters by the User/Predicted layer checkboxes, so
+`frameGroup.instances`) and filters by the User/Predictions layer checkboxes, so
 unticking a layer drops its unlinked instances too. It is assigned onto the
 options as `opts.unlinkedInstances = …` rather than passed in the
 `overlayOptionsFrom` literal — worth knowing, because a grep for
@@ -3689,7 +6493,8 @@ exported but the amber `?` editing prompt is not.
 - `./browser-hints.js` — `fileSystemAccessHint` (appended to the in-memory
   export confirm in Brave).
 - `./viewport3d.js` — `Viewport3D`.
-- `./overlays.js` — `drawFrameOverlays`, `getTrackColor`, `getGroupColor`.
+- `./overlays.js` — `drawFrameOverlays`, `getTrackColor`, `getGroupColor`,
+  `TRAIL_SHADES`, `DEFAULT_TRAIL_SHADE`, `trailShadeFor`.
 - `./rendering.js` — `getVisibilitySettings` (the seed).
 - `./overlay-export-layout.js` — the pure helpers above.
 - `./video-encode.js` — `createMp4Writer`, `videoEncodingAvailable`.
@@ -3698,7 +6503,9 @@ exported but the amber `?` editing prompt is not.
   modules, so this adds no cycle, and sharing `buildVideoFilter` with
   `applyVideoFilters` is what keeps the export from drifting from the live view.
 - `../pose/triangulation.js` — `getInstanceGroupsForFrame`,
-  `ensureLazyFrameData`, `triangulateAndReproject`, `storeReprojectedInstances`,
+  `ensureLazyFrameData`, `ensureLazyTrailWindow` (the frames behind the first
+  exported frame and the preview frame that the node trails draw),
+  `triangulateAndReproject`, `storeReprojectedInstances`,
   `sessionHasCalibration`.
 - `../pose/pose-data.js` — `points3dNodeCount`.
 - `../import-export/save-load.js` — `setStatus`.
@@ -3823,11 +6630,32 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   the overlay-video export sets them (SLEAP's "Show: ☑ Nodes ☑ Edges"); the live
   Visibility panel has no such toggle. They ride in on the per-type opts bags, so
   `drawFrameOverlays` forwards them without needing to know about them.
-- Color: `TRACK_COLORS`, `REPROJECTION_COLOR`, `UNGROUPED_USER_COLOR`,
+- Identity-mode name labels: `drawFrameOverlays` sections 3a (predicted) and
+  4a (user) give an instance with no resolved identity its SKELETON's base
+  color in `colorByIndex`. Left empty, `drawInstanceLabels` fell back to
+  `getTrackColor(trackIdx)` — Track mode's vivid palette — so the label of an
+  identity-less grouped instance drew in a color near an identity's while
+  its skeleton was muted. Covered by `tests/e2e/unidentified-track-palette.mjs`.
+- Color: `TRACK_COLORS` (Track mode's vivid palette),
+  `UNIDENTIFIED_TRACK_COLORS` (11 muted earth tones, Identity mode's: when
+  coloring by Identity a track color is never an identity color, see CLAUDE.md
+  UI Conventions, enforced by `tests/test-track-identity-palette.mjs`),
+  `REPROJECTION_COLOR`, `UNGROUPED_USER_COLOR`,
   `NULL_ID_COLOR` (space gray `#a7adba` for explicit-none instances when
-  coloring by identity), `getTrackColor`, `getGroupColor`,
+  coloring by identity), `getTrackColor(trackIdx, colorByIdentity?)` (picks
+  the palette by the mode; `getGroupColor` / `getInstanceColor` pass their
+  `useIdentity` through, so an identity-less track is muted in Identity mode),
+  `getGroupColor`,
   `getInstanceColor`, `adjustColorBrightness`, `errorColor`, `hexToRgb`,
   `brightenColor`, `desaturateColor`, `complementaryColor`.
+  **`unlinkedDupIndices(unlinkedInstances, typeFilter)`** and
+  **`unlinkedBaseColor(instance, dupIdx, session, cameraName, useIdentity,
+  frameIdx)`** are the rule `drawUnlinkedInstances` colors an ungrouped
+  instance by — `getInstanceColor`, darkened by `max(0.35, 1 − 0.22·k)` for the
+  k-th later instance of the same type sharing a raw `trackIdx` — pulled out so
+  the node tooltip's stripe (`ui/interaction.js` → `ui/node-tooltip.js`) is
+  computed by the same function and cannot name a different color from the one
+  drawn. Behaviour unchanged (`tests/e2e/unlinked-instance-color-collision.mjs`).
   `getGroupColor`/`getInstanceColor` return `NULL_ID_COLOR` when
   `useIdentity` and `session.isExplicitNoIdentity(...)` is true, and also —
   when coloring by track — for any instance/group on the "No ID" track
@@ -4069,18 +6897,72 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `options.trailLength`+1 **present** frames up to and including `frameIdx`
   (sparse-aware, like SLEAP's `labels.find(video,
   range(0,frame_idx+1))[-trail_length:]`; only reads frames already in
-  `session.frameGroups`, so no lazy-H5 fetch — the perf concern in #102). Draws a
-  trail for **every track that appears anywhere in the window** (linked AND
-  unlinked via `trailViewInstances`, matched by per-view `trackIdx`) — including
-  tracks that have **vanished** from the current frame, so a trail lingers and
-  fades out rather than disappearing the instant its instance is gone (unlinked
-  matters too: identities are inspected BEFORE cross-view linking). Each node's
-  positions join into a polyline that toward the past thins, fades, and darkens;
+  `session.frameGroups`, so no lazy-H5 fetch — the perf concern in #102).
+  **Trails attach to what is DISPLAYED.** Only a shown layer gets trails —
+  `options.trailUser` / `trailPredicted` / `trailReprojected`, which
+  `drawFrameOverlays` sets from the toolbar's User / Predictions / Reprojections
+  boxes (omitted = on) — so with both Predictions and Reprojections on, both sets
+  are drawn, back to front like the skeletons (`drawTrailLayer` once per set):
+  - **2D trails** follow a per-view `trackIdx` through the displayed User and
+    Predicted instances, linked AND unlinked (`trailViewInstances`; unlinked
+    matters: identities are inspected BEFORE cross-view linking). ONE trail per
+    track across both types, so a prediction corrected into a user instance does
+    not break it; where a frame holds both for one track, the user instance (drawn
+    on top) is followed. With one type hidden its frames are gaps.
+  - **Reprojection trails** follow a 3D group through its reprojection into the
+    view. Each frame has its own group objects, so `groupTrailKey(group, session,
+    viewName, frameIdx)` links them: the per-frame identity (resolved like
+    `getGroupColor` — this view's member, else every member), else the group's
+    `identityId`, else a member's track. `groupReprojection(group, viewName,
+    camera)` gives the positions exactly as the reprojection skeleton has them:
+    the cached reprojected `Instance`, else `group.reprojections`, else — the
+    usual case for a frame behind the playhead, since Triangulate All's sweep and
+    lazy eviction drop those caches — the group's 3D points through
+    `camera.project` + `distortPoint` (what `reprojectPointsCamera` computes).
+    **Read-only:** it never writes those caches, which the info panel and the
+    error vectors read as "this frame was triangulated", and it never
+    re-triangulates. Colored like the reprojection skeleton —
+    `getGroupColor` dimmed by `options.reprojBrightness` — which also keeps the two
+    sets apart when both are shown. Worst case (every past frame projected) is
+    ~1.2 ms per view per redraw at 100 frames × 5 animals × 17 nodes, vs ~0.1 ms
+    for the 2D trails.
+  Every track/animal that appears anywhere in the window gets a trail — including
+  ones that have **vanished** from the current frame, so a trail lingers and
+  fades out rather than disappearing the instant its instance is gone. Each node's
+  positions join into a polyline that toward the past thins and fades.
+  **Width:** the newest segment is exactly as thick as its layer's skeleton edges
+  — `options.lineWidth` (User ▸ Edge Weight), `options.predictedLineWidth`
+  (Predictions) or `options.reprojLineWidth` (Reprojections), chosen per segment by
+  the instance at its older end — and tapers to `1/(W-1)` of that at the oldest,
+  floored at 0.8 px but never above the edge width (a sub-pixel export tile).
+  It used to start at TWICE the User edge weight whatever it traced, so a trail
+  of predictions began at 6 px beside 2 px edges. Covered by
+  `tests/test-node-trails.mjs` §13 and `tests/e2e/node-trail-width.mjs` (both
+  fail on the old rule). The layers are covered by §14 and
+  `tests/e2e/trails-per-layer.mjs` (real Track All + Triangulate All, every
+  trail segment matched to the predicted or reprojected nodes it joins; on the
+  old code Reprojections-only drew 72 segments per view on the hidden
+  predictions);
   each segment is colored by the instance's color AT that frame (per-frame identity
   lookup), so an identity/color **switch shows as a color change along the trail**.
+  **Shade.** That color is drawn in `options.trailShade` — a key of
+  `TRAIL_SHADES` (Very dark / Dark / Normal / Light / Very light, `amount`
+  −0.65 / −0.4 / 0 / 0.4 / 0.7), default and fallback `DEFAULT_TRAIL_SHADE`
+  ('dark') — so the skeleton on the current frame stands apart from its history
+  (SLEAP 1.4's View ▸ Trail Shade, whose Dark is the same ×0.6). `trailColor(hex,
+  shadeKey, age)` is the rule: a negative amount scales RGB by `1 + amount`, a
+  positive one blends toward white (`brightenColor`; SLEAP's ×1.25 does nothing to
+  a channel already at 255, which is most of `TRACK_COLORS`), and `age` (0 newest
+  → ~1 oldest, `k / (W + 1)`) moves the color further the SAME way — darker by up
+  to 45% more, or that much further toward white — so a trail never fades back
+  toward its track's color. **Normal reproduces the pre-shade colors exactly**
+  (V scaled 1.0 → 0.55). `trailShadeFor(key)` returns the entry or null (strict;
+  the callers that need a fallback apply it).
   `drawFrameOverlays` calls it right after the canvas clear (behind the live
   skeletons) when `options.trailLength > 0`. Length is chosen from the **Tracks ▸
-  Node Trails** submenu (Off/10/50/100/250/500 → `state.trailLength`).
+  Node Trails** submenu or the toolbar's **Trails** button (Off / ¼ s / ½ s / 1 s / 2 s
+  → `state.trailSeconds`, drawn as `state.trailLength` = seconds × fps frames;
+  see `ui/trail-presets.js` and `ui/ui-wiring.js`).
   **Performance (it runs per view, per playback redraw):**
   - `trailWindowFrames(frameGroups, frameIdx, trailLength)` (exported) finds the
     window by **walking back** from `frameIdx` — ~`trailLength` lookups — instead
@@ -4089,6 +6971,21 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
     on and grew further into the video. After `frameGroups.size` steps without
     filling the window (a sparse project) it falls back to the scan, so it is
     never worse than before.
+  - **On a LAZY project a missing frame is not an unlabelled one.**
+    `frameGroups` there is a residency window, so `drawNodeTrails` passes
+    `residentOnly` (`!!session.lazyLoader`) and the window ENDS at the first
+    non-resident frame instead of skipping it. Skipping it was the bug: a seek
+    hydrates its target and the frames ahead of it, not the ones behind, so the
+    walk (or its scan fallback) reached frames still resident from before the
+    jump and every trail ran straight from each animal's position now to where
+    it was thousands of frames earlier — seen on picking a row in the ID
+    Switches tab. The draw path fills the window first
+    (`ensureLazyTrailWindow`, `pose/triangulation.js`), so the rule only
+    shortens a trail while its frames are still arriving. An EAGER project
+    keeps SLEAP's sparse semantics. Covered by `tests/test-node-trails.mjs` §11
+    and `tests/e2e/lazy-trail-window.mjs` (real `navigateToFrame` →
+    `drawAllOverlays`, a forward and a backward jump; it fails on the old
+    build with a 350 px segment per node).
   - Segments are **batched per age step**: every node's newer→older segment at
     window index k has the same style (alpha / width / historical color of k),
     so they share one path and one `stroke()` — `numNodes` times fewer strokes.
@@ -4105,8 +7002,12 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   **ID overlays:** in identity color mode (`options.colorByIdentity`) it now
   labels **predicted** instances with their identity name/color (step 3a), not
   just user instances — so the cross-view tracker's output (predicted) shows its
-  IDs as text for proofreading. `options.trailLength` threads through to
-  `drawNodeTrails`. Covered by `tests/test-node-trails.mjs`.
+  IDs as text for proofreading. `options.trailLength` and `options.trailShade`
+  thread through to `drawNodeTrails`, with `showUser` / `showPredicted` /
+  `showReprojected` as its layer switches, `userOpts` / `predictedOpts` /
+  `reprojOpts.lineWidth` as its edge widths and `reprojOpts.brightness`. Covered by `tests/test-node-trails.mjs`
+  (§12: the shade scale on every palette color, and the drawn strokes) and
+  `tests/e2e/node-trail-shade.mjs` (the menus and the real draw path).
   **Reprojection node color ignored the Visibility panel on the raw-fallback
   path (luc3d #209).** Step 2 has two ways to draw a group's reprojection:
   a materialized `reprojectedInstances` `Instance` (built by
@@ -4139,7 +7040,11 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
 **Imports from project modules.** None.
 
 **Imported by.** `pose/initialization.js`, `ui/timeline.js`,
-`ui/rendering.js`, `ui/info-panel.js`.
+`ui/rendering.js`, `ui/info-panel.js`, `ui/app-state.js` (`DEFAULT_TRAIL_SHADE`),
+`ui/ui-wiring.js` (`TRAIL_SHADES`, `TRACK_COLORS`, `trailShadeFor`,
+`trailColor` — the trail menus), `ui/overlay-export-modal.js`,
+`ui/interaction.js` (`getGroupColor`, `unlinkedDupIndices`, `unlinkedBaseColor`
+— the node tooltip's color).
 
 **User-facing features.** All on-canvas pose drawing — colored skeletons,
 reprojection error vectors, drag preview, selection highlight, instance
@@ -4155,10 +7060,10 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 
 **Key exports.**
 - `setReprojErrorVisible(visible, opts?)` — show/hide the reproj-error info
-  column. Showing it ticks the Reproj and Errors boxes unless
+  column. Showing it ticks the Reprojections and Errors boxes unless
   `opts.checkBoxes === false`.
 - `showReprojectionsOnly()` -> `boolean` — after Triangulate All (#243): User,
-  Predicted, Errors off, Reproj on, each changed box firing its own `change`
+  Predictions, Errors off, Reprojections on, each changed box firing its own `change`
   event (so the deselect-hidden-instance handler and redraw run as for a
   click); returns whether anything changed. `REPROJ_ONLY_NOTE` is the status
   suffix the callers append when it did. The four Triangulate All endings
@@ -4167,8 +7072,8 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   false})` then this, so a run is compared with the USER's boxes, not with
   Errors just re-ticked.
 - `showPredictedOnly()` -> `boolean` — the tracking counterpart: after Track
-  Frame / Track Frame Range / Track All (`pose/tracker.js`) Predicted on; User,
-  Reproj, Errors off, by the same change-event mechanics (shared private
+  Frame / Track Frame Range / Track All (`pose/tracker.js`) Predictions on; User,
+  Reprojections, Errors off, by the same change-event mechanics (shared private
   `setToolbarLayers`). `PREDICTED_ONLY_NOTE` is its status suffix.
 - `getVisibilitySettings()` — reads per-view checkbox state from the DOM.
   Includes **`showUnlinkedBadge`** (the Visibility panel's *Unlinked Instances ▸
@@ -4191,7 +7096,11 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   issue #95. (`drawReprojectedSkeleton`'s own primitive fallback stays `'x'`
   for direct callers; the user-facing default comes from here.)
 - `drawAllOverlays(frameIdx, viewFrames?)` — main per-frame redraw across every
-  view. Optional `viewFrames` (`{ viewName: frameIdx }`, passed by the
+  DOCKED view (`isViewDocked`: a view whose pane is closed, or that another
+  solo'd camera hides, has a detached overlay canvas and is skipped — docking it
+  again creates a new canvas and redraws, so nothing stale shows; with no view
+  docked at all, every view is drawn, as `VideoController._shownViews` falls
+  back). Optional `viewFrames` (`{ viewName: frameIdx }`, passed by the
   per-refresh playback loop in `loading/video.js`) draws each view's overlay at
   the frame ITS canvas shows (from that view's captured `VideoFrame`), so
   overlay and video agree per camera even when cameras are a frame or two
@@ -4200,8 +7109,13 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   view's frame. The lazy reprojection fill is the private
   `fillLazyReprojections(fi, groups)`, run for `frameIdx` and once for each
   other per-view frame. Threads
-  `state.colorByIdentity` and `state.trailLength` (node-trail length, issue #102)
-  into each `drawFrameOverlays` call. It also computes the per-view
+  `state.colorByIdentity`, `state.trailLength` (node-trail length, issue #102)
+  and `state.trailShade` into each `drawFrameOverlays` call. With trails on in a lazy project it first
+  calls `ensureLazyTrailWindow(frameIdx, state.trailLength)`
+  (`pose/triangulation.js`), so the trail drawn right after a seek has the
+  frames BEHIND the target, which the seek's own hydration does not load; a
+  worker-backed loader's frames arrive later and trigger one redraw. A no-op
+  during playback (those frames were just played). It also computes the per-view
   **`labelDisplayScale`** (backing-store px per on-screen CSS px) that
   `overlays.js` sizes node/track labels with: `overlayCanvas.offsetWidth` — the
   LAYOUT width, which no CSS transform touches — times `view.zoom.scale`, which
@@ -4224,14 +7138,14 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   including the Visibility checkbox handler that already ends in a redraw. **Playback throttle (issue #115):** the
   skeleton overlays + video redraw every frame, but the two *auxiliary* updates —
   `updateFrameInfo` (info-panel DOM + reproj-error aggregation) and
-  `timeline.setCurrentFrame` (a full timeline-canvas `redraw()`) — are coalesced
-  to ~10 Hz (`AUX_UPDATE_MS`) while `state.isPlaying`, since neither is legible at
-  playback speed and both were a per-frame cost capping buffered-playback fps.
-  When paused (seek/step) they run every call; `VideoController.stopPlayback`
-  fires one final unthrottled `drawAllOverlays` so the panel/playhead settle to
-  the exact stop frame. While playing, the timeline call passes
-  `{ playback: true }` so the timeline only moves its playhead over a cached
-  snapshot instead of a full redraw (see `ui/timeline.js`).
+  `timeline.setCurrentFrame` — are coalesced to ~10 Hz (`AUX_UPDATE_MS`) while
+  `state.isPlaying`, since neither is legible at playback speed and the info
+  panel is a per-frame cost capping buffered-playback fps. When paused
+  (seek/step) they run every call; `VideoController.stopPlayback` fires one
+  final unthrottled `drawAllOverlays` so the panel/playhead settle to the exact
+  stop frame. `timeline.setCurrentFrame` only moves the timeline's playhead
+  element now (no canvas repaint, see `ui/timeline.js`), so it is cheap either
+  way; the `{ playback: true }` it is passed while playing changes nothing.
 
   **Lazy reprojection fill — honors the group's triangulation method.** A group
   with `points3d` but no `reprojections`/`reprojectedInstances` is re-solved here
@@ -4265,10 +7179,79 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   permanently deny the panel numbers it could never recompute. The gate lives
   one level down, in `updateFrameInfo` itself, which is where the panel
   *consumes* `state.triangulationResults`.
-- `updateFrameCounters()` — updates status-bar frame counters.
+- `updateFrameCounters()` — the status bar's Camera / Labeled Frames /
+  Instances / Triangulated, over the **WHOLE project**, lazy ones included.
+  It used to walk `session.frameGroups`, which on a lazy project is the
+  resident window — after Track All + Triangulate All on a 108,000-frame,
+  8-camera project it read "Labeled Frames: 5789" and "Triangulated: 5789"
+  (the #194/#195 resident-only bug class). The counting rules and the
+  whole-project baseline live in `ui/frame-counters.js`; this function owns
+  WHICH camera (`interactionManager.lastInteractedView`, else the first view),
+  WHEN to (re)build the baseline, and the DOM. Per call it is
+  O(resident frames) on a lazy project — `countFrameCounters` counts resident
+  frames live and takes everything else from the cached baseline — and O(1) in
+  project size on an EAGER one, where every frame is resident: there it
+  re-counts the drawn frame into the baseline (`refreshCountedFrame`) and shows
+  the baseline's totals. (It walked all 36,000 frames x 17 cameras of an eager
+  project on every step before, ~10 ms per step.) A finished rebuild of an eager
+  baseline drops the other views' halves rather than comparing them. Still
+  skipped during playback (`updateStatusBarForFrame`, `ui/info-panel.js`).
+
+  The baseline is cached per session in a `WeakMap` (so a closed project and
+  its store are never retained by the status bar), with one camera half per
+  view visited. Building it is ~100 ms at 108,000 frames x 8 cameras, nearly all
+  memory latency on each frame's groups, so:
+  - **Synchronous** only when there is none: the first update of a session
+    (or after its `lazyLoader` changes) and the first time each view becomes
+    active (`computeLazyCameraBaseline`) — once per view per session.
+  - Otherwise **rebuilt in the background** (`runCounterRebuild`), 250 ms after
+    the last update that asked, in 8,192-frame slices (≤ ~8 ms each) via
+    `createFrameCounterBaselineBuilder`. An update asks when it redraws the
+    SAME frame as the previous one (or a rebuild is still pending, e.g. one
+    abandoned to playback): every data change — an edit, Track All, Triangulate
+    All, a session-wide delete — redraws the current frame, so the counts follow
+    all of them with no per-operation invalidation (Track All does not even
+    mark the project dirty), while a redraw on a NEW frame is navigation and
+    costs no whole-project work. A rebuild in flight sets `again` instead of
+    restarting, so a stream of updates cannot starve it. The other views'
+    halves are carried over — they can only lag a bulk operation — UNLESS the
+    rebuild shows this view's non-resident part moved
+    (`nonResidentCameraCounts`), which means one just happened: then they are
+    dropped and each is recomputed exactly on its next activation. An edit to
+    the current frame moves only resident frames, so annotating keeps view
+    switches free.
+  - An edit to the current frame shows immediately — resident frames are always
+    counted live.
+
+  **Plane placements draw last.** After `drawFrameOverlays` returns for a view,
+  the loop calls `drawPlaneOverlays(view)` (`ui/plane-definition.js`) on the
+  same overlay canvas. The order is load-bearing: `drawFrameOverlays` opens
+  with a `clearRect`, so planes drawn before it would be wiped. Planes are
+  frame-independent (static scene geometry), so this runs on every frame
+  regardless of the current `FrameGroup`, and in every mode — not just
+  Defining Plane Mode. Pinned by `tests/e2e/define-plane-mode.mjs`, which
+  samples overlay pixels.
+
+  **Defining Plane Mode's toolbar lock is re-asserted here.** The toolbar block
+  near the top of `drawAllOverlays` RECOMPUTES `tbGroup.disabled` /
+  `tbEditGroup.disabled` from the pose selection on every overlay draw, and the
+  mode redraws constantly — so `applyPlaneModeToolbarLock()`
+  (`ui/plane-definition.js`) is called right after it rather than only at
+  `enterPlaneMode`, where the lock would survive until the first mouse move. A
+  no-op when the mode is off. Pinned by
+  `tests/e2e/plane-mode-toolbar-lock.mjs` §3, which first proves the draw really
+  does reach that code (without a session `drawAllOverlays` returns early and
+  the assertion would be vacuous).
+
+  **The toolbar's Animals field catches up with a session change here too.**
+  The count is per session and nothing announces a session change — the
+  session switch and every load path assign `state.session` themselves — but
+  every one of them ends in a draw, so `syncAnimalCountField()`
+  (`ui/animal-count-field.js`) is called right after the lock. Two comparisons
+  when the session and its count are the ones already shown.
 
 **Imports from project modules.**
-- `./app-state.js` — `state`, `interactionManager`, `timeline`.
+- `./app-state.js` — `state`, `interactionManager`, `timeline`, `isViewDocked`.
 - `../pose/triangulation.js` — `ensureLazyFrameData`,
   `getInstanceGroupsForFrame`, `triangulateAndReproject`,
   `storeReprojectedInstances`.
@@ -4277,15 +7260,1997 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `trackingExcluded` so views excluded in the Tracking Wizard render grey).
 - `./identity-assignment.js` — `editGroupState`, `finishEditGroup`.
 - `./info-panel.js` — `updateFrameInfo`.
+- `./frame-counters.js` — `computeFrameCounterBaseline`,
+  `computeLazyCameraBaseline`, `createFrameCounterBaselineBuilder`,
+  `countFrameCounters`.
+- `./plane-definition.js` — `drawPlaneOverlays`, `applyPlaneModeToolbarLock`.
+  **Circular** (that module imports `drawAllOverlays` back); safe because both
+  call sites are inside function bodies.
+- `./animal-count-field.js` — `syncAnimalCountField`. **Circular** through
+  `pose/tracker.js`, which imports this module; safe for the same reason.
+- `./node-tooltip.js` — `syncNodeTooltipFrame`, first thing in
+  `drawAllOverlays`: a node tooltip about another frame names a node that has
+  moved out from under the pointer.
 
 **Imported by.** `pose/triangulation.js`, `pose/tracker.js`,
 `pose/initialization.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`, `loading/session-loader.js`,
 `ui/identity-assignment.js`, `ui/export-modals.js`,
-`ui/sessions-panes.js`, `ui/ui-wiring.js`, `ui/view-align-modal.js`.
+`ui/sessions-panes.js`, `ui/ui-wiring.js`, `ui/plane-definition.js`,
+`ui/view-align-modal.js`.
 
 **User-facing features.** Every overlay redraw — after seek, drag,
 re-triangulate, identity assignment, or visibility-toggle change.
+
+---
+
+### ui/plane-dialog.js
+
+**Purpose.** The small blocking-error / confirmation modal the plane and origin
+flows share.
+
+Split out of `ui/plane-definition.js` when that file hit 4,474 lines. It was the
+easiest thing in it to lift: it touches no plane state, no model and no
+viewport. Four call sites reach it — the fit refusal, the Triangulate
+locked-nodes report, node deletion and `ui/origin-definition.js` — which is
+what makes a shared home the honest one rather than an accident of which
+feature needed it first.
+
+A **LEAF module**: it imports nothing.
+
+**Key exports.**
+- `showPlaneDialog({title, message, confirmLabel?, onConfirm?})` — OK-only when
+  there is no `onConfirm`, Cancel/confirm when there is. **Esc CANCELS**, per the
+  project modal rule, so an accidental dismissal can never apply the thing the
+  user was still deciding about.
+
+**Imported by** `ui/plane-definition.js` (which also re-exports it, so the name
+stays reachable at its original path), `ui/plane-nodes-panel.js`,
+`ui/plane-angle.js`, `ui/origin-definition.js`.
+
+### ui/animal-count-field.js
+
+**Purpose.** The toolbar's **Animals** field (`#tbNumAnimals`), first in the
+Track group: shows and edits the ACTIVE session's animal count, the number every
+tracking run caps identities at (`Session.numAnimals`, through
+`pose/tracker.js`). The count used to be visible only in the first-use
+`prompt()`, so a user who forgot what they typed had no way to find out. Blank is
+auto-detect (`placeholder="auto"`), as in the prompt and the Track Frame Range
+dialog.
+
+**Two ways the shown value goes stale, two refreshes.** A change to the count
+(the prompt, the Track Frame Range dialog, the field itself) repaints it through
+`onTrackerNumAnimalsChange`. A change of ACTIVE SESSION has no event — the
+session switch and every load path assign `state.session` themselves — so
+`syncAnimalCountField()` is called from `drawAllOverlays` (`ui/rendering.js`),
+which all of them end in, and costs two comparisons when nothing changed. The
+plane toolbar lock is re-asserted from there for the same reason. It never
+rewrites the field while it has focus.
+
+**Editing.** Commits on `change` (Enter or blur), so a half-typed "1" on the way
+to "12" is never the count; Enter blurs (handing the shortcuts back — a number
+field blocks them all while focused, `ui/keyboard-target.js`), Esc reverts and
+blurs. A bad entry — below 1, not a whole number, or text `value` reports as
+`''` (`validity.badInput`, a stray "e") — reverts with an error status rather
+than being read as blank, and changes nothing. With no session loaded it reverts
+too and says why: the count is saved with a session. A good one goes through
+`setTrackerNumAnimals`, which marks the project dirty.
+
+**Placement and width.** BEFORE Track Frame, not after Track All, where the
+label read as "Track All Animals". Not in Defining Plane Mode's toolbar lock: it
+changes no annotation. The toolbar must fit a 1440px window
+(`tests/e2e/toolbar-3d-toggle-button.mjs` §7), and before this field there were
+~50px to spare. Its ~72px came from the `.toolbar`'s 4px flex gap (a leftover
+of the removed `.toolbar-separator`, 24px), 2px less between the visibility
+checkboxes, and a compact field (11px label, 26px input). The Trails menu
+(`#trailsMenu`) now hangs from its button's RIGHT edge, because the button moved
+right and the closed menu ran 1px past the window as scroll overflow.
+
+**Key exports.**
+- `wireAnimalCountField()` — called once from `setupUI` (`ui/ui-wiring.js`).
+- `syncAnimalCountField()` — called from `drawAllOverlays`; O(1).
+
+**Imports from project modules.** `./app-state.js` (`state`),
+`../import-export/save-load.js` (`setStatus`), `../pose/tracker.js`
+(`getTrackerNumAnimals`, `setTrackerNumAnimals`, `onTrackerNumAnimalsChange`).
+
+**Imported by.** `ui/ui-wiring.js`, `ui/rendering.js`.
+
+Covered by `tests/e2e/toolbar-animal-count.mjs` (placement, the prompt, typed
+counts reaching Track All, bad entries, Esc, shortcuts, blank = answered, the
+range dialog, per-session switching, and a save → fresh page → Load Project
+reopen) and, for the file format, `tests/e2e/visibility-settings-roundtrip.mjs`
+and `tests/test-visibility-metadata.js`.
+
+### ui/plane-toolbar-lock.js
+
+**Purpose.** Disable the pose-annotation toolbar while Defining Plane Mode is
+on, and restore it exactly as it was on exit.
+
+Split out of `ui/plane-definition.js`. Self-contained: it reads one flag
+(`planeState.active`) and otherwise only touches toolbar DOM, with no fan-in
+from the rest of the panel.
+
+**Key exports.**
+- `applyPlaneModeToolbarLock()` — **idempotent, and must stay so**, because
+  `drawAllOverlays` re-derives `tbGroup.disabled` / `tbEditGroup.disabled` from
+  the pose selection on every overlay draw and the mode redraws constantly. Each
+  button's PRIOR `disabled` and `title` are snapshotted on the transition only —
+  re-snapshotting on the re-assert would record the LOCKED state and make the
+  restore a no-op.
+
+Adding a button to the lock means adding its id to `PLANE_LOCKED_TOOLBAR_IDS`;
+if it opens a menu, its wrapper also needs `PLANE_LOCKED_DROPDOWN_IDS`, since a
+`.tri-dropdown` menu opens on hover and its items are `div`s, so `disabled` on
+the button reaches neither.
+
+**Imports** `planeState` from `ui/plane-definition.js` — circular, and safe only
+because the binding is read INSIDE the function body. **Imported by**
+`ui/plane-definition.js` (re-exported) and, through that path,
+`ui/rendering.js`.
+
+### ui/plane-overlays.js
+
+**Purpose.** Draw the placed planes onto a view's 2D overlay canvas.
+
+Split out of `ui/plane-definition.js`. Pure rendering: it reads the model and
+the interaction state and writes pixels, and nothing in the panel calls back
+into it.
+
+**Key exports.**
+- `drawPlaneOverlays(view)` — called from `drawAllOverlays` AFTER
+  `drawFrameOverlays`, which begins with a `clearRect`, so drawing earlier would
+  be wiped. Planes are drawn in **every** mode, not just Defining Plane Mode —
+  they are geometry the user annotated, and hiding them outside the mode would
+  make them look lost. Only the SELECTION and HOVER decorations are mode-gated.
+  Fills and edges are per PLANE; NODES are drawn once each over the union, since
+  a corner two planes share is one node with one 2D point.
+
+**What is drawn outside the mode is the user's to choose**, through the
+Visibility panel's `Planes` section: `planeVisibility`
+(`ui/plane-visibility.js`) gates the plane BODY (fill, edges, plane name) and
+the NODES separately, and forces every part on while the mode is active. It
+decides WHETHER a plane is drawn, never HOW — the fill still comes from
+`plane.filled` alone, so a shown plane looks the same in both modes.
+
+**Imported by** `ui/plane-definition.js` (re-exported, which is how
+`ui/rendering.js` still reaches it unchanged). **Imports** `planeVisibility`
+from `ui/plane-visibility.js` beside the hub bindings.
+
+### ui/plane-visibility.js
+
+**Purpose.** Which PARTS of the annotated planes are drawn, in which
+representation — the one reader of the Visibility panel's `Planes` section.
+
+**Key exports.**
+- `PLANE_VIS_IDS` — the four checkbox ids (`visPlanes2D`, `visPlanes3D`,
+  `visPlaneNodes2D`, `visPlaneNodes3D`), keyed by the field each produces.
+  Exported so `ui/ui-wiring.js`'s `visCheckIds` persistence list and the tests
+  name them from here: a toggle missing from that list still works and silently
+  forgets, which is invisible until the next reload.
+- `planeVisibility(modeActive)` → `{planes2d, planes3d, nodes2d, nodes3d}`.
+
+Three things it decides, and each has a reason:
+- **Defining Plane Mode overrides all four.** The panel's tables, the 2D
+  placement drags and the 3D corner drags all act on parts the user has to be
+  able to see, so honouring a toggle inside the mode would hide the thing being
+  edited. These toggles are about the DEFAULT mode, where a plane is scenery.
+- **They decide WHETHER a plane is drawn, never HOW.** A shown plane keeps its
+  own colour, edges and `Fill`, so the two representations and the two modes
+  cannot disagree about what a plane looks like. There is deliberately no fill
+  override: `plane.filled` is project state written to the `.slp`, the `Fill`
+  button is the one thing that sets it, and a plane gaining a fill because it
+  became visible is the same confusion `mesh-membership-highlight.mjs` pins
+  against for the mesh-object highlight ("no fill of its own"). The four
+  toggles themselves ride `localStorage.visibilitySettings` with the panel's
+  other global appearance prefs — browser-local display taste, not project
+  state, so `save-golden-digest.mjs` cannot move.
+- **A missing checkbox reads as ON.** The headless runners build a partial DOM,
+  and a harness that silently renders nothing and passes is far harder to spot
+  than a stray plane.
+
+**NO IMPORTS, deliberately** — it is read from inside the plane panel's
+`plane-definition` ↔ `plane-overlays` cycle and from `ui/ui-wiring.js`, and a
+module with no edges of its own cannot be the one that closes a loop.
+**Imported by** `ui/plane-overlays.js` (2D), `ui/plane-definition.js`
+(`syncPlanes3D`) and `ui/ui-wiring.js` (the ids, for persistence and the
+change listeners). Covered by `tests/e2e/plane-visibility-toggles.mjs`.
+
+### ui/plane-nodes-panel.js
+
+**Purpose.** Section 1 of the Define Planes panel: the global Nodes table, the
+padlock (pin) picker, the typed x/y/z editor and node deletion.
+
+The largest cluster split out of `ui/plane-definition.js` (~880 lines) and the
+one with the most self-contained state — the pin popover singleton is read and
+written nowhere else in the app.
+
+**The model state stays in the hub.** `planeState`, and the one
+`new PlaneModel()` on it, is imported and never redeclared: a second copy would
+diverge silently, since the tests assert behavior rather than object identity.
+
+**Key exports.**
+- `renderNodesTable()` — one row per pool node; rebuilt on almost every
+  interaction, which is why selecting a row must NOT rebuild it (see
+  `setSelectedNode` in the hub).
+- `renderPinInfoButton()` — wired ONCE, guarded by `dataset.wired`; it is not a
+  per-repaint renderer despite the name.
+- `renderFrozenWarning()`, `planeLockWhere(lock)` — the latter is shared with
+  the hub's 3D corner drag, which reports where a plane-locked node was pulled
+  back to.
+
+The pin picker REPOSITIONS on scroll rather than dismissing: a `scroll` event
+arrives a frame late, so dismissing made it impossible to open on a row you had
+just scrolled to.
+
+**Imports** `state`, `setInfoTip`, `showPlaneDialog`, `setStatus`/`markDirty`,
+`PIN_STATES`, `nodeFreezeState`, `reprojectPointCamera`, `isOriginModeActive`,
+and from the hub `ICON_PIN`/`ICON_INFO`/`makeDeleteButton`/`setEmptyState`/
+`redraw`/`planeModel`/`planePool`/`planeState`/`refreshPlanePanel`/
+`refreshTriangulationErrors`/`syncPlanes3D`/`syncSelectedNode3D`. Every hub
+binding is read inside a function body only.
+
+### ui/plane-editor-panel.js
+
+**Purpose.** The EDITOR half of the panel's **Planes** section: the name
+field, the member list, the "+ Add" existing-node picker and the edge pickers,
+for whichever plane is selected. It renders directly under the roster
+(`ui/plane-list-panel.js`) inside the same `<details>`.
+
+**One section, two modules.** The roster and the editor are one
+`#planePlanesDetails` in the markup and two modules here, split by what they
+render: the roster draws EVERY plane, this draws the SELECTED one. They were two
+top-level sections as well — "Edit Plane" above "Planes" — until the reader
+having to hold a plane in their head while scrolling between the list that picks
+it and the controls that act on it made the case for merging them.
+
+**It does not CHOOSE the plane.** It used to: a plane dropdown was its
+top row, listing every plane by id with `+ New Plane` pinned last and a
+disabled "— select a plane —" placeholder holding the value when nothing was
+selected. That made it a **second writer of `planeState.selectedPlaneId`**,
+which the Planes table already owns — and the price of the
+duplication was all on the control: a placeholder that is not a plane, an
+ACTION sitting among the planes as if it were one, and a list whose labels are
+user-editable names keyed by id so a rename relabels rather than re-selects.
+The section now matches **3D Mesh Objects**, where the table selects and one
+`+ New` button creates: a plane is picked by clicking its row in the roster, and
+`+ New Plane` (`#btnNewPlaneSkeleton`, between the roster and this editor, and
+the only one in the panel) creates and selects. `renderEditor` reads
+`getSelectedPlane()` and renders; it writes no selection state at all.
+
+**Key exports.**
+- `renderEditor()` — the module's ONLY export and its entry point, called by
+  the hub's `refreshPlanePanel`. It also calls into the Nodes section
+  (`renderNodesTable` / `renderFrozenWarning`); that is one-directional, as
+  that module never calls back.
+
+**Imported by** `ui/plane-definition.js`.
+
+### ui/plane-list-panel.js
+
+**Purpose.** The ROSTER half of the panel's **Planes** section: the Planes
+table, its action row, the `Views: annotated / total` fraction and the per-plane
+placements sub-row. The table is also the DRAG SOURCE that places a plane onto a
+video view, and **the one control that SELECTS** which plane the editor below it
+(`ui/plane-editor-panel.js`, same `<details>`) edits.
+
+Cohesive by what it renders, not by size: everything here draws or wires one
+Planes row, and nothing here solves anything — Triangulate and Fit are reported
+through the hub's `triangulatePlaneAndReport` / `fitPlaneAndReport`.
+
+**Key exports.**
+- `renderPlanesTable()`, `renderActionRow()`, `renderOriginButton()`.
+- `ICON_TRIANGULATE` / `ICON_MESH` / `ICON_FIT` — the action glyphs, also set by
+  the hub's one-time wiring.
+- `annotatedViewStats(plane)` stays private to the module but is the reason it
+  exists: it counts **hand-placed** views only, never reprojected ones, because
+  `Triangulate` reprojects a plane into views it was never placed on and
+  counting those would make the fraction read full after one Triangulate and
+  never say anything again. It uses the SAME test `triangulatePlane` applies to
+  choose contributing views, so the number and the solver cannot disagree.
+  Pinned by `tests/e2e/plane-views-column.mjs`.
+
+**Imported by** `ui/plane-definition.js`.
+
+### ui/plane-definition.js
+
+> **This module was SPLIT.** It reached 4,474 lines, so the panel's parts and
+> three cross-cutting helpers now live beside it:
+> `ui/plane-nodes-panel.js` (Nodes), `ui/plane-list-panel.js` (the Planes
+> roster) and `ui/plane-editor-panel.js` (the selected plane's editor, under
+> that roster in the same section), plus
+> `ui/plane-dialog.js`, `ui/plane-toolbar-lock.js` and `ui/plane-overlays.js`.
+> The hub kept the model accessors, the placements, the two solver controllers
+> (triangulate and fit), the mode lifecycle, `refreshPlanePanel`, the
+> interaction callbacks and the one-time wiring — the orchestration that drives
+> the sections.
+>
+> **`planeState` did not move, and must not.** It is declared here and holds the
+> one `new PlaneModel()`; a second copy would diverge silently, since the tests
+> assert behavior rather than object identity.
+>
+> **The export surface is unchanged** — every name importable from this path
+> before the split still is, several by re-export. That is deliberate: ~25 of
+> them are reached by `await import('/ui/plane-definition.js')` from the e2e
+> tests, so the set of names this path resolves is part of the contract.
+> A few module-private helpers (`redraw`, `makeDeleteButton`, `setEmptyState`,
+> `ICON_PIN`, `ICON_INFO`, `syncSelectedNode3D`, `planeImmutableMask`) became
+> exports because the new modules need them.
+>
+> Each new module imports its hub bindings CIRCULARLY and reads them inside
+> function bodies only — never at module top level, where a circular import is
+> still `undefined`. That rule is what makes this feature's existing cycles
+> safe, and it is the one thing to preserve when adding to any of these files.
+
+
+**Purpose.** "Defining Plane Mode" (**View ▸ Define Planes**) — the annotation
+UI for re-defining the 3D viewer's origin. The end goal of that work is a
+**translation vector + rotation matrix** that move the world frame onto a plane
+the user marks up; this module owns how the user *draws* that plane and owns
+nothing about the solve. The data model (`PlaneNodePool`, `PlaneSkeleton`,
+`PlaneInstance`, `PlaneModel`) lives in `pose/plane-nodes.js` +
+`pose/plane-data.js` and is partly re-exported here.
+
+The pool, the planes and the origin frame live in app-session memory; the
+per-view 2D lives on the active `Session`. **All of it is persisted** by
+`import-export/plane-metadata.js`, so **every plane/node MUTATION calls
+`markDirty()`** — an unsaved rename, re-colour, pin, placement, membership
+change, fill, solve, drag or origin is a real unsaved change and the save dot
+has to say so. The rule is per mutation, **not** per repaint:
+`refreshPlanePanel()` / `syncPlanes3D()` / `redraw()` run for plenty of reasons
+that change nothing on disk (entering the mode, a slider, a hover), and marking
+from them would leave the dot permanently on. The node-size / edge-width /
+3D-corner-size sliders are the deliberate exception — browser-local display
+taste, not written to the project, so they must not mark it dirty.
+
+**Nodes are GLOBAL and a node may be in several planes.** The pool holds every
+plane node in the project; a plane is an ordered list of node IDs plus optional
+edges. That is what lets two planes MEET along a shared line — the corners on
+that line are one node with one 3D position and one 2D point per view, so
+re-solving either plane cannot split the line apart.
+
+**The panel's SHAPE is that model made visible: two SIBLING sections**, not a
+nodes editor nested inside a plane editor. A node outlives the planes that
+reference it, so presenting node creation as a sub-step of editing one plane
+would misstate the model. That is the one split the panel keeps — choosing a
+plane and editing it were two sections and are now one, because they are one
+job.
+
+1. **Nodes** (`#planeNodesDetails`) — the project-wide pool. A LIST, not a
+   grid: each node is one row — chevron, colour, name, padlock, × — with **no
+   column labels**, and expanding it reveals its 3D position and the planes
+   using it. Everything in it acts on the NODE, so it applies to every plane
+   using it, and there is **no membership column**. Carries `#planeNodeNameInput` + `#btnAddPlaneNode`,
+   `#planeNodesEmpty` and `#planeFrozenWarning`. **`+ Node` mints a POOL node
+   and touches no plane** — it neither creates one nor joins one (it used to do
+   both), and a duplicate name is refused rather than silently minting a second
+   node under a name the user identifies the first one by. A node in zero planes
+   is a valid resting state, rendered `.plane-node-unused`. The × here
+   **destroys** the node project-wide and confirms first when it is shared or
+   pinned, naming the planes it will change.
+2. **Planes** (`#planePlanesDetails`) — the roster AND the selected plane, in
+   one section, in this order. Its summary is `Planes` plus the selected plane's
+   name (`#planeEditorTitle`), so a folded section still says which plane the
+   controls inside belong to.
+
+   First the **roster**: `#planeSkeletonsTable` (the drag
+   source, with the per-plane expander and placement rows; each row's meta reads
+   `N off, N reprojected`, since a view Triangulate reprojected onto is placed
+   like any other and would otherwise give no clue that its corners are the
+   model's output rather than the user's annotation) and
+   `#planeSkeletonsEmpty`. **This table is the only selector**: a row click is
+   the one writer of `planeState.selectedPlaneId` besides `createPlane`, and
+   everything below it re-reads that on every `refreshPlanePanel`. It used to
+   share the job with a plane dropdown in a separate Edit Plane section; both
+   are gone, so there is nothing left for it to agree with.
+
+   Then **`+ New Plane`** (`#btnNewPlaneSkeleton`, in a
+   `.panel-button-row.plane-create-row`, ruled off below), which sits OUTSIDE
+   `#planeEditorContent` so it stays live with nothing selected — with no
+   planes at all it is the only thing in the section that can do anything, so
+   empty-stating it too would make this a dead end. It does NOT select either;
+   it creates and the creation selects.
+
+   Then the **selected plane**, which is `#planeEditorContent`, swapped for
+   `#planeEditorEmpty` when nothing is selected
+   ("click a plane in the table above, or + New Plane" — that string names both
+   controls above it and tracks both): the EDITABLE name `#planeSkeletonName`
+   (the one place a plane is
+   renamed — the rename re-renders, so the roster and the section header
+   follow live), then three foldables. `#planeMembersDetails`, a members table
+   (`#planeMembersTable`, `NAME | COLOR swatch | ×`)
+   whose × is `removeNodeFromPlane(…, {deleteIfOrphan:false})` — the REFERENCE
+   goes, the node stays in the pool with its 3D, pin and 2D — plus an
+   **add-an-existing-node** control (`#planeAddNodeSelect` +
+   `#btnAddExistingPlaneNode`) listing every pool node not already in the plane,
+   disabled with a spoken reason when there is none, and the **only** way a
+   node enters a plane. `#planeEdgesDetails` (edges are per-plane), whose
+   hint states that connections are OPTIONAL — triangulation and fitting are
+   edge-independent and edges exist for visual reference, and to state a fill
+   outline the convex hull cannot (a CONCAVE one). Without edges the fill hulls
+   the plane's points, so an unconnected plane still fills correctly. And
+   `#planeActionsDetails` (**Actions**): the shared `.plane-action-row`
+   (Triangulate / Fill / Fit), `Set Origin` and `Set Angle Between Planes` —
+   three loose button rows under the roster before, where they read as actions
+   on the TABLE rather than on one plane.
+
+   Last, and deliberately outside `#planeEditorContent`:
+   `#planeAppearanceDetails` (**Plane Appearance**). It styles every plane in
+   the roster rather than the selected one, so it must not empty-state with the
+   editor.
+
+**Planes has ONE labelled row, and it says `Name`.** There were two,
+stacked and doing different things — a `Select Plane` dropdown over an
+`Edit Name` field — and those labels had to name the ACTION because as
+`Plane` / `Name` they named the noun twice and left which was which to be
+discovered. With selection a roster row click the disambiguation is
+moot: one row, labelled `Name`, the same word 3D Mesh Objects uses for the same
+control. `.plane-name-row > span` stays a FIXED 72px column
+(`flex: 0 0 72px` + `nowrap`). It no longer has two different-width labels to
+hold apart, but it is what makes the input's left edge the same in the panel's
+TWO `.plane-name-row`s — this one and 3D Mesh Objects' — so the two sections'
+Name fields line up rather than each being sized by its own label.
+`tests/e2e/plane-section-info.mjs` §6 asserts there is exactly one such row,
+that it reads "Name", that no plane dropdown survives anywhere in the
+section, and that `+ New Plane` sits above the field.
+`tests/e2e/define-plane-mode.mjs` §2 asserts the section body's whole child
+list, so a part that appears, disappears or moves fails there.
+
+**Member node names are INDENTED off the table's left edge** (12px on
+`#planeMembersTable`'s first column, header included).
+`.plane-node-shared` paints its 2px accent bar INSIDE the row, so at the
+table's inherited 6px of cell padding a shared node's name cleared the bar by
+four pixels and the whole column read as flush with the edge. §7 of the same
+test pins the padding and that the header matches it.
+
+**Entering the mode mints NO plane.** `enterPlaneMode` re-selects an existing
+plane so re-entry resumes where it left off, but creates nothing. A phantom
+`plane_1` is indistinguishable from one the user made and forgot, so it gets
+dragged onto a view and triangulated before anyone questions it; an empty
+Planes list plus an empty-stated editor is the honest starting point. Pinned by
+`define-plane-mode.mjs` §1b.
+
+The add-an-existing-node dropdown is the **headline affordance**: picking a node
+another plane already uses is exactly how an intersection is built. It replaced
+the old per-row "In" checkbox, which is gone (and with it `.plane-node-member`),
+and it is now the ONLY route from the pool into a plane — creating a node and
+putting one in a plane are two separate acts, because a node is not owned by a
+plane.
+
+**Key exports.**
+- `planeState` — `{ active, model, selectedPlaneId, selectedNodeId, nodeSize,
+  edgeWidth, nodeSize3d, expanded, expandedNodes }`. `active` is the mode flag;
+  `model` is the `PlaneModel` (pool + planes + per-view 2D);
+  `nodeSize`/`edgeWidth`/`nodeSize3d` are ONE shared value each across every
+  plane (Plane Appearance sliders — reference geometry you size once for
+  legibility against your video, not per-plane styling); `expanded` is the set
+  of plane ids whose placement dropdown is open. `selectedNodeId` is the pool
+  node the Nodes table has SELECTED and the 3D view is ringing — transient
+  (cleared by the next click anywhere else), so it is neither saved nor
+  remembered, and deliberately separate from `expandedNodes`: opening a node's
+  coordinates asks to READ something, selecting it asks to be SHOWN where it
+  is.
+- `planeModel()` — the model, with its 2D **bound to the active session**.
+  Planes and nodes are project-scoped, but a `PlaneInstance` is 2D on one
+  session's views, so the placements map lives on the `Session` and is adopted
+  through `attachPlacements` whenever the active session changes (identity
+  check, so the re-sync/prune runs once per switch, not once per call). Every
+  accessor below goes through this.
+- `planePool()` / `getPlanes()` / `getPlane(id)` / `getSelectedPlane()` /
+  `createPlane(name)` / `deletePlane(id)`. **Deleting a plane keeps every one
+  of its nodes** — nodes are plane-independent, so a node in no plane is an
+  ordinary pool member that simply is not drawn anywhere, and auto-pruning it
+  would throw away a pinned coordinate or a positioned 2D point as a side
+  effect of tidying up. The Nodes table is the one place a node is destroyed.
+- `planePoints3d(plane)` / `planeNodeNameAt(plane, idx)` / `planeHasAny3d(plane)`
+  — the plane-ordered views of pool state that `ui/origin-definition.js` and the
+  3D payload read.
+- `getPlaneInstance(view)` / `getPlaneInstances(view)` / `placedPlanesOn(view)`
+  / `placedViewsOf(plane)` / `placePlaneOnView(...)` / `unplacePlaneFromView(...)`
+  — ONE `PlaneInstance` per VIEW, indexed by pool order, on
+  `session.planePlacements` (`Map<viewName, PlaneInstance>`). Deliberately
+  **not** keyed by frame: a plane is static scene geometry. Un-placing KEEPS
+  the 2D (visibility is derived from the placed set), so re-placing restores
+  exactly what the user positioned.
+- `triangulatePlane(plane)` — solves the plane's 3D corners across every view it
+  is placed on, writing them onto the NODES (`writePoints3dForPlane`, which
+  refuses pinned ones) plus `plane.triangulation`. Follows
+  `triangulateAndReproject` on the two points that matter for correctness —
+  observations are **undistorted** before the linear DLT (only valid in ideal
+  pinhole coordinates) and error is measured in each camera's **native** pixel
+  space against the raw annotation. Right-click-disabled nodes are excluded per
+  view. Pinned nodes keep their stored 3D (`mergeFrozenPoints3d` discards their
+  DLT result) but their residual IS measured and reported separately
+  (`summarizePlaneTriangulation`) — an out-of-sample residual saying "your
+  pinned anchor no longer agrees with where you clicked". DLT only, no BA: a
+  plane is 3-8 hand-placed corners. Returns `{ok:false, reason}` rather than
+  throwing.
+  - **Requires 2+ HAND-PLACED views, not 2+ placements.** Once triangulation
+    reprojects a plane into the views it was not placed on, those views ARE
+    placed but contribute nothing, so a placement count would let a plane
+    annotated on ONE view return a confident answer built from one ray. The gate
+    counts views with at least one usable (positioned, not nulled, not derived)
+    observation, and `plane.triangulation.views` lists only those — otherwise
+    `refreshTriangulationErrors` would average in a view whose residual is zero
+    by construction.
+  - Then it calls `reprojectPlaneIntoUnplacedViews`, and
+    `triangulatePlaneAndReport` **redraws the 2D overlays** — triangulation now
+    writes 2D, so without that the new placement is real, listed in the panel,
+    and invisible until some unrelated event repaints.
+- `reprojectPlaneIntoUnplacedViews(plane)` — writes the plane's solved 3D into
+  the `PlaneInstance` of every view it is NOT placed on, flags those points
+  `derived`, and places the plane there so it draws. Into the real instance
+  rather than a read-only reprojection overlay because a plane is reference
+  geometry the user is trying to get RIGHT: the useful thing is not only seeing
+  where it lands in the other views but being able to grab a corner there and
+  fix it, and dragging one is what turns it into evidence. Three refusals:
+  - **Never claims to be evidence** — every written point is `derived`, so it is
+    out of the next solve and out of the error average (see `PlaneInstance`).
+  - **Never writes a mirrored ghost** — a point BEHIND a camera still divides
+    through to a finite, plausible pixel (`reprojectPoint` does not check the
+    sign of `w`), so each node is gated on `cameraDepth > 0`. A view with nothing
+    in front of it is left alone and reported in `behindViews`.
+  - **Never overwrites a view the user placed** — those hold the user's own
+    annotation. The one exception is a point that is itself derived: those are
+    REFRESHED wherever they are, because a reprojection left over from a solve
+    two edits ago reads as current, which is worse than none.
+  Off-frame reprojections are still written when the point is in front of the
+  camera (a plane may legitimately extend past the frame edge; clamping would
+  fake a corner). Cameras with no `state.views` entry are skipped — a placement
+  nobody can see. Consequence worth knowing: un-placing a reprojected view is
+  undone by the next Triangulate, by design.
+- `planPlaneFit(plane)` / `applyPlaneFit(plane, plan)` / `fitPlane(plane, opts)`
+  — the **second half** of the origin pipeline, split so the two outcomes that
+  need the user happen before anything is written. With **no pinned node** it
+  is `fitPlaneToPoints3d` + `projectPoints3dOntoPlane`, unchanged; with one or
+  more it is `fitPlaneConstrained` + `projectPoints3dOntoPlaneConstrained`. The
+  free case is deliberately NOT routed through the constrained solver (it would
+  move floats for no benefit, and returns `not_constrained` to stop that by
+  accident). Then the correction goes out to BOTH representations:
+  `syncPlanes3D` for the viewer, and `reprojectPointCamera` into every placed
+  view's 2D — **skipping pinned nodes**, whose 3D did not move and whose
+  annotation is the user's, not the model's. Nodes toggled OFF still get their
+  2D updated; the off flags are preserved. Derived points are rewritten too (so
+  they keep agreeing with the fitted 3D) but excluded from the reported
+  `movedPx`, which answers "how far did the fit move YOUR annotations".
+  `refreshTriangulationErrors` re-derives the per-node errors afterwards, also
+  skipping derived points.
+  **`applyPlaneFit` stores the fit BEFORE the write, and the write goes through
+  the `constrain` hook.** The flattened points are on THIS plane by
+  construction, so the hook is a no-op for a corner this plane alone holds —
+  and not a no-op for one that also belongs to another plane.
+  `planeImmutableMask` deliberately reports only `locked`, so a plane-locked
+  corner is one the fit is free to move, and fitting "right wall" used to drag a
+  corner it shares with "Ground" off Ground, silently. The ORDER is the other
+  half of it: a plane-locked corner of the plane being fitted is held by that
+  plane too, so a hook running before `plane.planeFit` is replaced projects the
+  corner onto the plane being superseded, which the fit then moves out from
+  under it — leaving the corner 13 mm off the very plane it was just fitted to
+  (`tests/e2e/plane-lock-holds.mjs` §4).
+- **Blocking vs confirming.** `fitPlaneAndReport` dispatches on the result
+  **CODE**, never on the message text. `no_anchor_3d` / `anchors_collinear` /
+  `anchors_noncoplanar` / `underdetermined` BLOCK: the message goes to a dialog
+  and the status bar and **nothing is mutated**. The `mutable_far_from_plane`
+  warning CONFIRMS instead (the fit is valid; only flattening a corner metres
+  onto it is drastic).
+- **Stale-fit propagation.** After a successful fit the nodes that actually
+  MOVED are found by an `Object.is` diff of input vs output (immutable entries
+  are bit-identical and missing ones stay NaN, so the diff is exact), and
+  `planesInvalidatedByFit` names the OTHER planes standing on them. Their
+  `planeFit` is dropped and the user is told which ones went stale — a shared
+  node moved by fitting plane B silently breaks plane A's fit otherwise.
+- `syncPlanes3D()` — pushes every plane that has 3D into `viewport3d.setPlanes`
+  (`points3dForPlane` / `planeEdgesLocal` / `planeFillOrder3d` /
+  `planeNodeColors`, all in the plane's own node order). `polygonOrder` is the
+  FILL's ring — the user's edge cycle or the convex hull — not membership order,
+  so an interior corner is covered by the fill rather than notching it. Full rebuild, so it is
+  also the REMOVE path. No-ops when `viewport3d` is null. Also the one place the
+  3D drag callbacks are wired (idempotent), since the viewport is re-created per
+  session load, and the one place the Visibility panel's `Planes` toggles reach
+  3D: it sets `viewport3d.showPlaneSurfaces` / `showPlaneNodes` from
+  `planeVisibility(planeState.active)`. The payload itself is unchanged by them
+  — `filled` is still `plane.filled` alone, and every plane with 3D is still in
+  it, because `_planes` is what a drag, the node marker and the mesh highlight
+  resolve ids against. The payload's `editable` is
+  `planeState.active && !isOriginModeActive() && !isAngleModalOpen() &&
+  !!model.usableFitForPlane(plane)`, and that last term is a **USABLE** fit, not
+  a stored one: gating the drag on a stored `planeFit` was the same mistake
+  `usableFit` fixed for Set Angle, and it left a well-annotated plane — three
+  solved corners, a perfectly good surface to slide along — refusing to be
+  touched in 3D, because pinning any of its nodes had cleared the fit. The
+  payload carries the usable fit as `planeFit` (the drag surface) and
+  `fitted: !!plane.planeFit` separately, because **Set Origin's corner picker
+  asks a different question** — "has the user DECLARED this plane's frame?",
+  which `fittedPlanes()` counts — and widening the drag surface must not
+  quietly make an un-Fit plane eligible to define the project's origin. That
+  last term is also the 3D half of the Set Angle edit lock
+  (see `ui/plane-angle.js`): that dialog is not modal, so the view under it stays
+  orbitable, and a corner dragged while it is open would move the geometry its
+  readout and its ghost were computed from. It then calls
+  the private `syncMeshObject3D()`, which pushes the SELECTED 3D Mesh Object's
+  member plane IDS into `viewport3d.setMeshMembership` (or `null` when nothing
+  is selected). That lives here rather than in `ui/mesh-objects.js` because this
+  is the function every plane mutation already routes through — anywhere else
+  and the highlight would lag a node drag by a frame. **IDs, never geometry:**
+  the derived geometry is built in the user's ORIGIN frame while the viewport
+  group that draws it is in CALIBRATION world, so passing it drew the object
+  displaced and rotated away from its own cage. The payload also carries
+  `nodeIds` (`plane.nodeIds.slice()`, parallel to `nodeColors`), which is what
+  lets the viewport resolve the SELECTED node — a pool-wide id — against
+  corners it draws per plane.
+- **Selecting a node** — `syncSelectedNode3D()` / `setSelectedNode(id)` /
+  `applyNodeSelectionClass()` / `onDocumentClickForNodeSelection(e)` (all
+  private). `syncSelectedNode3D` is `syncMeshObject3D`'s twin: it pushes
+  `planeState.selectedNodeId` into `viewport3d.setSelectedPlaneNode` as an ID
+  and is called at the end of `syncPlanes3D`, so a plane rebuild cannot leave
+  the marker behind. `onDocumentClickForNodeSelection` is ONE `click` listener
+  on `document`, in the CAPTURE phase, wired once in `setupPlaneDefinition`:
+  anything carrying `data-plane-node-id` (the Nodes table's two rows, and a
+  plane's per-node triangulation lines) selects that node, everything else —
+  the rest of the panel, the 3D view, any canvas — clears it. Capture, because
+  the row's own controls `stopPropagation` (the colour swatch, the padlock, the
+  pin popover) and a click on one of those still means "this node"; one
+  listener, because "clicked a node row" and "clicked anywhere else" are the
+  same event seen from two sides, and wiring selection per row and clearing per
+  surface leaves every surface nobody remembered to wire holding a stale
+  marker. `setSelectedNode` deliberately does NOT rebuild the table — it
+  toggles `plane-node-selected` on rows that already exist (`applyNodeSelectionClass`),
+  because the click that selects a row is very often the click that is about to
+  focus its name field, and a rebuild would throw that input away before the
+  caret landed in it. A stale id is dropped in `renderNodesTable`, which every
+  route that deletes a node ends in.
+- **3D corner dragging** — `onPlaneNodeDragged3D` / `onPlaneNodeDragEnd3D`
+  (private; installed by `syncPlanes3D`). The viewport has already constrained
+  the position to the dragged plane's surface, so these mostly only write it:
+  onto the node, then `reprojectPointCamera` into every placed view. **The 2D
+  follows the 3D here** — the reverse of every other edit path, and the only
+  consistent choice: a fitted corner is *defined* by the plane. Per-move work is
+  `syncPlanes3D` + `redraw` only; the panel catches up on drag end. Two pin
+  states, handled differently:
+  - A **LOCKED** node is refused (once per drag, with the reason in the status
+    bar): the payload marks draggability per PLANE, not per node, so the pin is
+    enforced in the callback.
+  - A **PLANE-LOCKED** node is not refused, it is **held** — the position goes
+    through `constrainPoint3dForNode`, which gets the last word. The viewport's
+    own constraint is the plane under the cursor and knows nothing about the pin,
+    so without this a corner shared by two planes could be pulled off the other
+    one by dragging it as a corner of this one. The corner then stops tracking
+    the pointer, which is correct, and `onPlaneNodeDragEnd3D` says so — naming
+    what actually holds it (a plane, the line two meet in, the point three meet
+    at) instead of claiming "it stays on the fitted plane" about geometry that
+    is only part of the answer. A corner in three planes cannot move at all,
+    and the drag reports that rather than silently doing nothing.
+  The gate is `usableFitForPlane`, matching the payload: the two have to ask the
+  same question or a corner advertises a drag that then does nothing.
+- **The Nodes list's shape** — `renderNodesTable` / `renderNodeDetailRow` /
+  `renderPinInfoButton`. It is a LIST of nodes, not a grid of their properties,
+  and everything about it follows from that: the colour leads the row because it
+  is how you tell this corner from the others on every view and in 3D; the name
+  is a borderless input that only looks like a field when you go near it; the
+  coordinates are one chevron away rather than always on screen; and the pin is
+  a padlock. Every column is named except the chevron, which names itself, and
+  `Pinned` also carries `#planePinInfo`: what the THREE pin states MEAN is the
+  one thing no icon can say. The delete × is a bare grey glyph rather than the
+  shared red `.panel-btn` — right in a table you visit to remove something,
+  wrong in a list of six nodes you are reading.
+- **The pin picker** — `openPinPopover` / `closePinPopover` /
+  `positionPinPopover` / `onPinPopoverReflow` / `schedulePinPopoverClose` /
+  `setNodePin`, and `ICON_PIN`. The `<select>` that used to sit in every row had
+  to be wide enough for the words "Plane-locked" and carried a second line
+  naming the plane a held node is held in — two lines of chrome per row to say
+  something that is usually "Unlocked". Now: one 15px padlock, coloured by
+  state, and hovering or clicking it floats a three-state picker over the panel.
+  Five things are deliberate:
+  - **It floats** (`position: fixed`, anchored to the icon, appended to
+    `document.body`). In-row would mean reserving three icons' worth of width
+    the row only needs while the pointer is there, and `.plane-panel` scrolls —
+    an absolutely positioned child would be clipped by its `overflow-y: auto`
+    at the first and last row.
+  - **A scroll REPOSITIONS it; it only closes when the icon leaves the panel.**
+    Dismissing on scroll was the first attempt and was wrong twice over: a
+    `scroll` event is delivered on the next frame, so the very scroll that
+    brought a row into view arrived *after* the picker opened and shut it again
+    — the picker could not be opened at all on a row you had just scrolled to.
+    `tests/e2e/define-plane-mode.mjs` §19 pins this.
+  - **Hover opens, a click makes it sticky**, and leaving closes it after a
+    260ms grace — the pointer has to cross a few pixels of row to reach it.
+    Esc and an outside mousedown close it too.
+  - **The current state is shown, dimmed and `disabled`.** It is there to say
+    what you have, not to be picked again.
+  - **`setNodePin` is model logic, not widget logic** — it was the `<select>`'s
+    change handler, and it keeps all three rules: Set Origin Mode refuses,
+    `plane-locked` is refused for a node in no plane (where "stays in its
+    planes" has no meaning) and nominates none for a node in any, and every
+    plane standing on the node loses its stored fit, because a pin change
+    changes what a fit is allowed to do. The status then names what holds the
+    node — asked AFTER the change, so it answers with derived planes, the same
+    answer every other reader of the pin gets. A plane the node is in that
+    cannot yet say where it is is still NAMED, with the reason: "Plane-locked"
+    alone would leave the user looking for a restriction the panel is not
+    showing.
+- **Typing a position** — `commitNodeXyz` /
+  `applyTypedNodePoint` / `reprojectNodeIntoPlacedViews` / `fmtXyz` (all
+  private). The expanded panel's three fields are the keyboard path to the same
+  place the 3D drag reaches, and it follows the drag exactly: **the 2D follows
+  the 3D**, so every view the node is placed on is rewritten to the exact
+  reprojection of what was typed, the per-node errors are re-derived, and the
+  stored `planeFit`s are left alone (a corner must not move the frame it
+  defines). Four decisions worth knowing:
+  - **Why they are in an expanded row.** The info panel is a fixed 300px; the
+    row's own controls want ~120 of the ~282 it has to spend, and three legible
+    number fields do not fit in what is left at any panel width the app
+    currently has. They also do not belong on screen at rest: nine nodes of
+    nine numbers was most of what made the old list unreadable.
+  - **A field still showing what the panel printed keeps its FULL stored
+    double.** The display is 4 decimals (`fmtXyz`), all three fields are read on
+    every commit (a position is a triple), and re-parsing them all would round
+    the two axes the user never touched — editing z would silently move x.
+  - **Revert-on-invalid, except when there is nothing to revert to.** A node
+    with no 3D is being ENTERED rather than edited, so the first two numbers
+    typed stay put until the third arrives, with the status asking for them.
+  - **`locked` is read-only and `plane-locked` is projected.** A Locked node's
+    fields are `disabled` and its panel carries no commit listener at all (the
+    guard in `commitNodeXyz` covers the pin changing under a live field); a
+    Plane-locked one goes through `constrainPoint3dForNode`, the same model-side
+    enforcement a solve's publish path uses, and the status names what it was
+    moved to — a plane, the line two planes meet in, or the point three meet at
+    — because a number that comes back different from the one typed needs
+    explaining, and "Plane-locked" without the geometry does not explain it.
+    `planeLockWhere` is the one place that sentence fragment is built, so the
+    typed editor, the drag-end status, the padlock tooltip and the pin picker
+    cannot describe the same restriction three different ways.
+- `enterPlaneMode()` / `exitPlaneMode()` / `togglePlaneMode()` /
+  `isPlaneModeActive()` — show/hide the `#planeModeBar` banner and swap the
+  info panel's `.panel-tabs` + `.panel-tab-content` for `#planePanel`. The swap
+  only toggles inline `display`, so the tab bar's scroll position and active
+  tab are untouched and exiting restores exactly the previously-active tab. Exiting also
+  clears the plane selection/hover, and unwinds both things entered from inside
+  the mode that lock this panel: `exitOriginMode()` and `closeAngleModal()`.
+- `handlePlaneDrop(planeId, viewName, clientX, clientY)` — the drop listener is
+  a thin adapter over this. Converts the cursor position with
+  `interactionManager.canvasToVideo`, so a drop lands where the pointer is under
+  zoom / pan / rotation exactly like a click would.
+- `planeInteractionCallbacks()` — the callback bag `ui/interaction.js` needs
+  (`isPlaneEditMode`, `getPlaneInstances`, **`getPlaneNodeIndices`**,
+  `getPlaneEdges`, `getPlaneNodeSize`, **`beginPlaneDrag`**,
+  `isPlaneDataLocked`, `onPlaneChanged`, `onPlaneSelectionChanged`). Merged into the InteractionManager's callbacks in
+  `pose/initialization.js` so that module keeps no import of the plane feature.
+  Two of these carry the pool model into hit testing: `getPlaneNodeIndices`
+  reports the indices actually SHOWN on a view (an instance covers the whole
+  pool, so a node whose only plane is un-placed would otherwise be grabbable
+  while drawing nothing), and `beginPlaneDrag` refuses a **pinned** node and
+  restricts an Alt+drag to the grabbed plane's nodes (translating every point of
+  the instance would drag unrelated planes along). It also refuses every node
+  while the Set Angle dialog is open — the 2D half of that edit lock, with the
+  reason in the status bar; the click still SELECTS, as with a pinned node.
+  `isPlaneDataLocked` (`isAngleModalOpen`) closes that half's other two doors:
+  the right-click null toggle, which reaches the model without passing through
+  `beginPlaneDrag`, and — in `handlePlaneDrop` — dragging a plane row onto a
+  view, which no `disabled` could stop because a `<tr>` does not take one.
+- `onPlaneChanged(inst, movedIndices, {moved})` — a 2D edit invalidates the 3D of
+  **the nodes that moved**, not the whole plane: a node's 3D is the node's, and
+  clearing a neighbour's would throw away work the edit says nothing about.
+  Pinned nodes are skipped (`invalidateNode3D`), but every plane standing on a
+  moved node still loses its fit. When `moved` is true it also clears those
+  nodes' `derived` flags — a point the user dragged is theirs, whatever put it
+  there. Deliberately NOT done inside `setPoint`: the fit's 2D write-back and the
+  3D corner drag go through the same setter and must not promote the model's own
+  output to evidence.
+- `drawPlaneOverlays(view)` — fills and edges per placed plane, then the NODES
+  once each over the union of those planes (a shared corner is one node with one
+  point, so drawing it twice would only double the anti-aliasing), then the
+  plane name at each plane's own centroid. Called by `drawAllOverlays` **after**
+  `drawFrameOverlays`. Three node states are visually distinct because they mean
+  three different things to the next solve: **solid** = the user's annotation,
+  counted; **hollow grey** = nulled, turned off; **ghosted with a dashed ring** =
+  derived, reprojected into a view the user never annotated, so shown and
+  draggable but not counted. Nulled wins when both apply. A **pinned** node gets
+  an extra white ring on top, because finding out it will not move by dragging it
+  would read as a broken drag rather than a deliberate lock.
+- `refreshPlanePanel()` — rebuilds the panel: `renderEditor` (section header +
+  empty state, plane name, the global Nodes table and its per-node coordinate
+  rows, the frozen-node warning, the
+  selected plane's members table, the add-an-existing-node dropdown, and the
+  connection selects + table), then the planes table, action row, origin button
+  and origin result, and finally `refreshMeshObjectsPanel()` from
+  `ui/mesh-objects.js`. Full DOM rebuild per mutation, deliberately — no
+  incremental diffing. It ends with the private `applyAngleModalLock()`, which
+  disables every control in `#planePanel` while the Set Angle dialog is open
+  (the panel half of that dialog's edit lock). LAST, so it overrides whatever
+  the renders above decided, and re-asked on every render rather than remembered
+  — a rebuild would otherwise leak an enabled button, and unlocking needs no
+  bookkeeping because those renders have just recomputed each control's real
+  state.
+- `setupPlaneDefinition()` — one-time wiring. Called once from
+  `pose/initialization.js`. Calls `setupMeshObjects()`.
+
+**The 3D Mesh Objects table is NOT here.** It lives in `ui/mesh-objects.js`, and
+this module's entire involvement is one import, the `setupMeshObjects()` call
+above, the `refreshMeshObjectsPanel()` call above and the private
+`syncMeshObject3D()`. That separation is deliberate: the objects feature is
+strictly additive, and keeping it out of this file is what makes "nothing
+existing changed" checkable rather than asserted.
+- `PLANE_DRAG_MIME` — `'application/x-lucid-plane-skeleton'`.
+- Re-exports `PlaneModel` / `PlaneSkeleton` / `PlaneInstance` / `PlaneNode` /
+  `PlaneNodePool` / `seedPlanePoints` / `planePolygonOrder` /
+  `points3dForPlane` / `nodeFreezeState` from `pose/plane-data.js`.
+
+**Editing is gated on the mode.** `isPlaneModeActive()` backs the interaction
+manager's `isPlaneEditMode` callback, so **outside** Defining Plane Mode a
+plane draws but never takes a click — plane nodes can never compete with pose
+nodes during normal annotation. Inside the mode planes take priority on
+mousedown, and a MISS falls through to the normal handling, so pose editing
+still works while the mode is on.
+
+**One placement per view per plane.** A second drop of the same plane on the
+same view is refused with a status warning rather than re-seeding, so carefully
+positioned nodes can't be destroyed by a stray drag.
+
+**The drag payload must never be `text/plain`.** `ui/sessions-panes.js` tells
+dockview to `accept()` any drag over the dock whose types include `text/plain`
+and to turn the drop into a **new video panel** named from the payload. A
+plain-text plane payload would be swallowed there as a bogus view name instead
+of placing a plane. Using a private MIME means dockview's
+`onUnhandledDragOverEvent` never accepts, no droptarget overlay appears, and
+this module's delegated listeners on `#videoDock` get the events.
+`tests/e2e/define-plane-mode.mjs` guards both halves: it asserts `dragstart`
+sets *only* the private MIME, and performs a real browser drag that must not
+spawn a dockview panel.
+
+**Imports from project modules.**
+- `../pose/plane-data.js` — `PlaneModel`, `PlaneSkeleton`, `PlaneInstance`,
+  `PlaneNode`, `PlaneNodePool`, `seedPlanePoints`, `planePolygonOrder`,
+  `planeFillOrderPoolIndices`, `planeFillOrder3d`, `planeNodeIndices`,
+  `planeNodeNames`,
+  `planeNodeColors`, `planeEdgesLocal`, `planeEdgesPoolIndices`,
+  `planeCentroid2d`, `points3dForPlane`, `writePoints3dForPlane`,
+  `nodeErrorsForPlane`, `nodeFreezeState`.
+- `../pose/pose-data.js` — `hasPoint3d`, `getPoint3d`.
+- `./app-state.js` — `state`, `interactionManager`, `viewport3d`.
+- `./origin-definition.js` — the Set Origin wizard. **Circular** (that module
+  imports `planeState` / `planeModel` / `getPlane` / `planePoints3d` /
+  `planeNodeNameAt` / `syncPlanes3D` back); call-time use only.
+- `./overlays.js` — `makeVideoToCanvasTransform`.
+- `./section-state.js` — `persistSectionStates` (every collapsible section in
+  the panel except Danger Zone, under the `planeSectionsOpen` key).
+- `./info-tip.js` — `setInfoTip` (the Pinned column's ⓘ, the Planes table's
+  Views column and the ⓘ in each major section's `<summary>`:
+  `PLANE_SECTION_INFO` / `wireSectionInfoButtons`).
+- `./plane-visibility.js` — `planeVisibility`, read by `syncPlanes3D` to push
+  `showPlaneSurfaces` / `showPlaneNodes` into the viewport. The same module
+  backs the 2D half in `ui/plane-overlays.js`, which is what keeps the two
+  representations agreeing about what "planes are off" means.
+- `../import-export/save-load.js` — `setStatus`, `markDirty`.
+- `./rendering.js` — `drawAllOverlays`, and `../pose/triangulation.js` —
+  `triangulatePoints`, `reprojectPointCamera`, `fitPlaneToPoints3d`,
+  `projectPoints3dOntoPlane`, `fitPlaneConstrained`,
+  `projectPoints3dOntoPlaneConstrained`, `mergeFrozenPoints3d`,
+  `summarizePlaneTriangulation`, `planesInvalidatedByFit`. Both **circular**
+  (rendering imports `drawPlaneOverlays` from here, and triangulation imports
+  rendering); safe because every use is inside a function body.
+
+**The mode blocks the pose-annotation toolbar.**
+`applyPlaneModeToolbarLock()` disables `+ Instance` / `- Instance` / `Group` /
+`Edit Group` / `Triangulate` / `Triangulate All` / `Track Frame` / `Track All`
+while the mode is on. All of them act on POSE annotation, which is a different
+object than the plane geometry the mode is for: in the mode a click lands on a
+plane node, the info panel is the plane panel, and `interactionManager`'s
+selection is a plane — so pressing Group or Triangulate would operate on a pose
+selection the user can no longer see or change, producing an edit they did not
+mean and cannot observe. The VISIBILITY controls (User / Predictions /
+Reprojections / Errors), Sessions, Tracks / Identity and the Panel toggle are deliberately NOT blocked: they
+change what is DRAWN, not what is annotated, and turning Predictions off to see
+the plane you are placing is exactly what the mode is for.
+
+Three details it has to get right:
+- **`disabled` alone is not enough for the two Triangulate buttons.** Each sits
+  inside a `.tri-dropdown` whose menu opens on **hover** (CSS) and whose DLT /
+  BA entries are `div`s with their own click handlers, so `disabled` on the
+  button reaches neither. The wrappers get `.plane-mode-locked`
+  (`pointer-events: none`), which kills the hover-open and the items together.
+- **The lock is re-asserted from `drawAllOverlays`**, because that function
+  rewrites `tbGroup.disabled` / `tbEditGroup.disabled` on every overlay draw.
+- **Each button's prior `disabled` is snapshotted at lock time and restored on
+  exit** — the rule `lockUI` in `ui/origin-definition.js` already follows, so a
+  button disabled for its own reasons (Track All mid-run) does not come back
+  enabled. The snapshot is taken only on the transition; re-taking it on the
+  re-assert would record the LOCKED state and make the restore a no-op.
+
+`styles.css` gained a `.toolbar-btn:disabled` rule at the same time — a disabled
+toolbar button previously had no styling of its own, so it looked exactly like a
+live one and only failed on click.
+
+**Imported by.** `ui/rendering.js` (`drawPlaneOverlays`,
+`applyPlaneModeToolbarLock`), `ui/ui-wiring.js`
+(`togglePlaneMode`, for the View menu item), `pose/initialization.js`
+(`setupPlaneDefinition`, `planeInteractionCallbacks`, `refreshPlanePanel` —
+called next to `syncPlanes3D` in `setup3DViewport`, which is the one place a
+freshly RESTORED plane model reaches the Nodes / Planes tables on every
+project-load path), `ui/origin-definition.js`,
+`import-export/plane-metadata.js` (`planeState`, at call time).
+
+**DOM it owns.** `#planeModeBar` (+ `#planeModeExit`) under the toolbar, and
+`#planePanel` inside `#infoPanel` — **three sibling `.info-section`s**, in this
+order:
+1. `#planeNodesDetails` — the POOL list `#planeNodesTable`
+   (`.plane-nodes-table`), columns **(chevron) / Color / Name / Pinned /
+   Delete**. The three icon columns are content-sized, so their labels set their
+   width and Name takes what is left; `.th-center` centres a label and its
+   control together. `Pinned`'s label carries `#planePinInfo`, the button
+   explaining the three states. There is no membership column and no 3D column:
+   the padlock says what the state badge used to, and the row carries the rest
+   (its `title` is `nodeStateTitle`, and `plane-node-frozen-unsolved` draws an
+   error stripe).
+
+   A node's IDENTITY row is `.plane-node-main`: `.plane-node-expander` (with
+   `.plane-caret`), `.plane-node-color`, `.plane-node-name`,
+   `.plane-node-pin-btn[data-pin]` and `.plane-node-del`. **Select it with
+   `tr.plane-node-main`, never `tbody tr`** — an expanded node adds a second
+   row. That row, `.plane-node-detail`, appears only while the node is in
+   `planeState.expandedNodes`, and holds one `colspan=5` cell ▸
+   `.plane-node-detail-body` ▸ `.plane-node-xyz-line` (three
+   `.plane-node-xyz-cell`: `.plane-node-xyz-label` +
+   `.plane-node-xyz-input[data-axis]`) and `.plane-node-planes`
+   (`.plane-node-plane-chip`, one per plane the node is in, with EVERY plane
+   currently holding a plane-locked node marked `.plane-node-plane-holder` and
+   carrying a `.plane-node-plane-mark`). Both rows carry
+   `data-plane-node-id` and
+   `.plane-node-row.plane-node-{mutable,frozen,frozen-unsolved}` plus
+   `.plane-node-unused` / `.plane-node-shared`, so every state cue runs down the
+   whole node; the open identity row also gets `.plane-node-open`. Both rows of
+   the SELECTED node (`planeState.selectedNodeId`) carry
+   `.plane-node-selected`, which tints the cells rather than adding a third
+   left bar — `.plane-node-shared` and `.plane-node-frozen-unsolved` each claim
+   the same 2px inset, and selection has to be legible on top of either.
+   `data-plane-node-id` is also what makes an element SELECT its node: the
+   capture-phase listener in `setupPlaneDefinition` reads it, so the per-node
+   lines of a plane's triangulation readout (`.plane-tri-node`) select too. The picker is
+   `#planePinPopover` (`.plane-pin-popover` ▸ `.plane-pin-option[data-pin]`,
+   the current one `.is-current`), a child of `document.body` rather than of any
+   row. With it: `#planeNodesEmpty`, the
+   `#planeFrozenWarning` line, and `#planeNodeNameInput` + `#btnAddPlaneNode`
+   (pool-only: it creates no plane and joins none).
+2. `#planePlanesDetails` — **Planes**. Summary =
+   `.plane-summary-label` ("Planes") + `#planeEditorTitle` (the SELECTED
+   plane's name) + `#planePlanesInfo`. The body, in order:
+   `#planeSkeletonsTable` (the **Planes** table, drag
+   source and the only selector; `data-plane-skeleton-id`, `.plane-expander` /
+   `.plane-placed-count`,
+   `.plane-placements-row` ▸ `.plane-placements-body` ▸ `.plane-placement-item`
+   / `.plane-tri-summary` / `.plane-tri-node` ▸ `.plane-tri-node-name` /
+   `-xyz` / `-err` / `-pin`, each node line also carrying
+   `data-plane-node-id`), `#planeSkeletonsEmpty`, then
+   `.panel-button-row.plane-create-row` ▸ `#btnNewPlaneSkeleton`
+   (`+ New Plane`), then `#planeEditorEmpty` and `#planeEditorContent` — the
+   latter swapped for the former when nothing is selected. Inside
+   `#planeEditorContent`: `#planeSkeletonName` (the editable name),
+   `#planeMembersDetails` (the members
+   table `#planeMembersTable`, columns **Name / Color swatch / ×**, rows
+   carrying `data-plane-member-id` and `.plane-member-name` /
+   `.plane-member-swatch`; `#planeMembersEmpty`; `#planeAddNodeSelect` +
+   `#btnAddExistingPlaneNode` + `#planeAddNodeHint`), `#planeEdgesDetails`
+   (`#planeEdgesTable`, `#planeEdgesEmpty`, `#planeEdgeSrcSelect` /
+   `#planeEdgeDstSelect` / `#btnAddPlaneEdge`) and `#planeActionsDetails`
+   (**Actions**: the `.plane-action-row` ▸ `#btnPlaneTriangulate` /
+   `#btnPlaneFill` / `#btnPlaneFit`, then `#btnSetOrigin`, then
+   `#btnSetPlaneAngle`). Last in the body and OUTSIDE
+   `#planeEditorContent`: `#planeAppearanceDetails` (**Plane Appearance**:
+   `#planeNodeSize` / `#planeEdgeWeight` / `#planeNodeSize3d`). Appearance is a
+   SUB-section rather than a section of its own because it styles exactly what
+   the roster lists and nothing else in the panel, and it is outside the
+   swapped body because that is the part that needs a selected plane; it stays
+   `open` so the sliders are no less discoverable than when they sat at the top
+   level.
+
+It also creates
+the modal `#planeDialog` (`.plane-confirm-overlay` / `.plane-confirm-modal`,
+`#planeDialogMessage`, `#btnPlaneDialogCancel` / `#btnPlaneDialogConfirm` /
+`#btnPlaneDialogDismiss`) for blocking errors and confirmations — **Esc closes
+it, and Esc CANCELS**, per the project's modal rule. Styles live under the
+"Defining Plane Mode" block at the end of `styles.css`.
+
+**Section titles are 14px** (`.plane-details > summary`). The sub-sections —
+Nodes In This Plane, Node Connections, Actions and Plane Appearance, all four
+inside Planes — stay at 12px via
+`.plane-subdetails`, which is what makes the hierarchy legible without indenting
+them.
+`tests/e2e/define-plane-mode.mjs` §2 asserts both sizes, so a section added with
+the wrong wrapper is caught rather than merely looking odd.
+
+**The pin states are named for the padlock.** `PIN_LABELS` reads
+**Unlocked / Plane-locked / Locked** — it said "Free" while the control was a
+`<select>`, and the three names now have to be the three things a padlock can
+be. The model values (`'none'`, `'plane-locked'`, `'locked'`) did not change,
+and neither did anything on disk.
+
+**Icons are inlined SVG strings** (`ICON_PIN`, `ICON_INFO`, and the older
+`ICON_TRIANGULATE` / `ICON_MESH` / `ICON_FIT`) — no build step and no asset
+requests: an `<img>` per row would be three more round trips and a flash of
+nothing on first paint, and `currentColor` is what lets one padlock take the
+state's colour. The three padlocks were traced from supplied Lucide-style SVGs
+whose files landed in the gitignored `prompts/` scratch folder, so **the
+geometry in `ICON_PIN` is the only surviving copy** — edit it there, not from a
+file. The C2PA provenance blob those exports carried (8KB of base64 each) is
+dropped.
+
+**The panel's width belongs to the tables.** `#infoPanel` is a fixed 300px, so
+the coordinate fields were paid for by the boxes around them: `.plane-panel`,
+the `.info-section` wrapper (which had been inheriting the 14/16 padding meant
+for the tabbed info panel), `.plane-details-body` and the cell padding were all
+trimmed, and the generic `.data-table` 120px cell cap is lifted inside the plane
+panel — it exists to ellipsize read-only text and would have clipped a row of
+inputs. (The Planes table takes the opposite tack for the same reason; see
+**It FITS the 300px panel** below.)
+The sections stay `<details>`: folding one away is how room is made
+VERTICALLY, which is the axis that is cheap here. Those rows also stop
+pretending to be clickable (no hover highlight, default cursor) — they are
+forms, nothing happens when you click one, and a hover that lit up half a node
+was advertising an interaction that does not exist.
+
+**`frozen-unsolved` is said in the open.** A node pinned before it was ever
+triangulated can never acquire a 3D — the pin is exactly what forbids a solve
+from writing one — and it blocks every fit of every plane it belongs to
+(`no_anchor_3d`). So it gets its own badge colour in the Nodes table AND a
+`#planeFrozenWarning` line naming the nodes, not just a tooltip: a tooltip is
+not read by someone who does not already suspect a problem.
+
+**Three shared appearance values, not two.** `planeState.nodeSize` (2D, canvas
+px) and `planeState.nodeSize3d` (3D scene units) are separate because they are
+in unrelated units — one is sized against the video, the other against the
+world — and `nodeSize3d` is separate from the viewport's own
+`skeletonNodeSize` so sizing plane corners never resizes pose nodes.
+`wirePlaneSlider` takes an optional `apply` callback for exactly this: the 3D
+slider re-pushes the scene (`syncPlanes3D`) instead of redrawing the canvases.
+
+**The Planes table.** Columns are expander / Name / Nodes / **Views** / delete.
+The only per-row action is delete. Expanding a row reveals that plane's
+placements inline — one line per view, click to
+select, × to un-place — plus the triangulation, pinned-anchor and plane-fit
+readouts when there are any. There is no separate Placements table. The row is
+the drag handle, so the expander and action cells suspend `tr.draggable` on
+`mouseenter` — otherwise a button press starts a drag.
+
+**Views is `annotated / total`, and ANNOTATED is not PLACED.**
+`annotatedViewStats` counts the views where at least one of the plane's corners
+is hand-placed — present, not switched off, not reprojected — over every view
+in the session. The distinction is the reason the column is worth having:
+`Triangulate` reprojects a plane into the views it was never placed on, so
+afterwards it IS placed everywhere while the user may have drawn it twice.
+Those corners are the solve's own output and are excluded from the next solve as
+evidence, so counting them would make the fraction read full after one
+Triangulate and never say anything again. It uses the SAME test
+`triangulatePlane` applies to pick contributing views (`usableViews` there), so
+the number and the solver cannot disagree about what counts. A shared node
+hand-placed for a neighbouring plane counts for this one too — one node is one
+2D point per view, so the evidence really is there for both. With no calibration
+loaded the cell is a dash, not `0/0`.
+
+The column's ⓘ (`planeViewsInfo`, in `PLANE_SECTION_INFO`) is **one short
+sentence** — "The fraction of number of hand-annotated views out of all views."
+— and every tip in this panel is held to that. A tip long enough to need
+reading is a tip nobody reads, and it covers the pointer while it is up. The
+reprojected-corners caveat therefore lives on the CELL's own `title`, beside the
+number it qualifies, rather than in the header's tip.
+`tests/e2e/plane-views-column.mjs` §5 asserts the tip stays under 120 characters
+and one sentence, so it cannot silently grow back into a paragraph.
+
+**Three unlabelled marks were removed to make room for it**, and the row is
+better for having one legible number instead of three illegible ones:
+- **`+n` shared nodes**, on the Nodes cell. It meant "of which n are shared",
+  but `+` reads as an ADDITION: `4 +4` on a plane with four corners looked like
+  nine. The count stays in the cell's `title`, where it can use words.
+- **The `3D` badge**, shown once a plane was solved. Two letters in a box, in a
+  column with no header. Whether a plane has 3D is answerable from the viewport,
+  the node coordinates and the triangulation readout in the expanded row.
+- **The placed-view count** beside the caret. It was a THIRD view number on the
+  row, one column from the Views fraction, measuring something different
+  (placed, not annotated) with nothing saying so. The expander is now a bare
+  caret; the placements themselves are still listed when the row is expanded.
+
+**It FITS the 300px panel, and two separate things had to give for that.** The
+section used to scroll horizontally and clip the right-hand end of every line
+in an expanded row (panel `scrollWidth` 401 against `clientWidth` 300):
+- **The table grew.** An auto-layout table is sized by its widest cell and
+  simply ignores `width: 100%`, so `#planeSkeletonsTable` (and, for the same
+  reason, `#planeMembersTable` / `#planeEdgesTable`) is `table-layout: fixed`
+  with the `<th>` widths binding — 20 / auto / 46 / 62 / 28 px here. The 62 is
+  measured, not guessed: "VIEWS" is 37px at the header's 10px/0.5px uppercase,
+  plus the 16px ⓘ and its 3px margin, plus 6px of cell padding. Below that the
+  header silently becomes "VIEWS…", which `tests/e2e/plane-views-column.mjs`
+  §6 catches by comparing each header's `scrollWidth` to its `clientWidth`. The cells'
+  inherited ellipsis is what gives instead, so a long plane name truncates and
+  repeats itself in `tdName.title` (which also carries the row's drag hint,
+  because a cell `title` wins over the row's). `#planeNodesTable` is
+  deliberately NOT fixed: its rows are input fields that size themselves.
+- **`white-space: nowrap` leaked into the sub-row.** `.data-table tbody td`
+  sets it, and it inherits into every div `buildPlacementsRow` puts in the
+  cell, so the three summary sentences could not wrap. They now live inside
+  `.plane-placements-body`, which undoes it — and which also gives the sub-row
+  the `margin-left: 22px` + left rule that an expanded NODE already had, so the
+  two sections read as one widget.
+`.plane-tri-node` went from one nowrap string to a **wrapping flex row** of
+parts (`.plane-tri-node-name` / `-xyz` / `-err` / `-pin`): at 246px of usable
+width a long name plus a coordinate triple plus a residual does not fit on one
+line, and wrapping keeps all of it on screen where truncating would not. Only
+the name ever ellipses, and the whole line is repeated in the row's `title`.
+The trailing word **"pinned" became the `ICON_PIN.locked` padlock** — the same
+one the Nodes list uses — which buys back a third of a coordinate's width; the
+word survives in that tooltip. Nothing else was shortened: coordinates are
+still 1 decimal and residuals 2. Pinned by `define-plane-mode.mjs` §18b, which
+builds a worst-case row (long plane name, long node names, four view names,
+four-digit coordinates, a constrained fit, two pins) and asserts
+`scrollWidth <= clientWidth` on the panel, the table, the section and the
+expanded cell, plus that no descendant's right edge passes the panel's.
+
+**The shared action row** (`#btnPlaneTriangulate` / `#btnPlaneFill` /
+`#btnPlaneFit`, below the table) acts on the **selected** plane and is disabled
+outright when nothing is selected. When something IS selected the buttons stay
+enabled even if the action's precondition fails — clicking then reports WHY in
+the status bar, which teaches more than a dead button. `renderActionRow()` owns
+their enabled/active state and titles.
+
+**`#btnSetOrigin`** sits below that row and hands off to
+`ui/origin-definition.js`. It is gated on there being a FITTED plane anywhere —
+not on the panel selection — because the wizard picks its corner in the 3D
+scene from any fitted plane; gating it on the selection would disable it for a
+perfectly valid project. `renderOriginButton()` owns that.
+
+**`#btnSetPlaneAngle`** sits below THAT and hands off to `ui/plane-angle.js`,
+gated the same way but on **two** planes and on a USABLE fit rather than a
+stored one (`anglePlanes()` — see that module), since an angle is a relationship
+and a plane that has been triangulated has a plane whether or not anyone pressed
+Fit. `renderAngleButton()` (imported, and called from `refreshPlanePanel`) owns
+it.
+
+**Triangulate says which nodes it could not move.** `showLockedNodesDialog`
+raises a modal naming a plane's `locked` nodes whenever `Triangulate` skipped
+any, and `triangulatePlane` refuses outright (with `lockedNodeNames` on the
+result) when EVERY node is locked, rather than reporting a success that moved
+nothing. The skip itself is old, correct behaviour — `setPoint3d` refusing a
+locked write is the entire locking mechanism — what changed is the REPORTING:
+it used to be a parenthetical inside a green success line ("… (2 pinned,
+kept)"), which reads as a detail rather than as "the thing you asked for did
+not happen to these corners". That matters far more now that
+**Set Angle Between Two Planes locks nodes automatically**, so a user can
+arrive holding locks they never set by hand. **`Fit` deliberately does NOT get
+this dialog:** holding pinned nodes fixed is what a CONSTRAINED FIT is *for* —
+the plane is solved to pass exactly through them, so they are honoured rather
+than skipped, and `reportFit` already says how many were held. A modal there
+would nag about the feature working as designed.
+
+`showPlaneDialog` and `refreshTriangulationErrors` are exported (rather than
+module-private) so `ui/plane-angle.js` can reuse the one error-modal idiom and
+the error re-derivation instead of growing a second copy of either.
+
+**A major section explains itself in an ⓘ, not a paragraph.** Nodes, Node
+Connections, Planes and 3D Mesh Objects each used to END in a `.plane-hint`
+block of prose. In a ~300px column that is a wall of text permanently wedged
+between one table and the next, read once and then scenery — and it sat at the
+FOOT of the section, answering "what is this?" after the user had scrolled past
+whatever they were unsure about. `PLANE_SECTION_INFO` maps each section's ⓘ to
+its sentence and `wireSectionInfoButtons` installs them ONCE from
+`setupPlaneDefinition` (not from `refreshPlanePanel`: these buttons are in the
+static markup and their text never changes; `renderPinInfoButton` is the
+exception only because its icon lives in a table header the panel rebuilds).
+Two sections deliberately have NEITHER a paragraph nor an ⓘ: the Danger Zone,
+whose warning belongs in the confirmation dialogs that actually fire, and Edit
+Plane's "+ Add", where a working picker explains itself and only its two
+EMPTY-STATE lines — real dead ends — survive.
+
+**Tests.** `tests/e2e/define-plane-mode.mjs`, `tests/e2e/plane-mode-toolbar-lock.mjs`
+(the toolbar lock: the redraw race, the dropdown hole, the visibility
+carve-out and the restore-on-exit rule), `tests/e2e/plane-persistence-roundtrip.mjs`
+(the dirty flag, driven through the real panel handlers),
+`tests/e2e/plane-angle.mjs` (the locked-node dialog, and that unlocking hands
+the corners back to the solver) and `tests/e2e/plane-section-info.mjs` (the four
+ⓘ, that the paragraphs are gone, and that clicking an ⓘ does not fold its
+section while the heading beside it still does).
+
+---
+
+### ui/origin-definition.js
+
+**Purpose.** "Set Origin Mode" — the wizard that collects the two inputs
+`pose/origin-frame.js` needs, applies the result, and reports it.
+
+**The wizard.** Three steps, because both inputs are picked in the 3D scene and
+each must be committed before the next is meaningful:
+
+| step | action | result |
+|---|---|---|
+| `node` | click **any node** of a **fitted** plane | the new origin |
+| `axis` | click the red (+n) or blue (−n) arrow | the new +Z |
+| `confirm` | Cancel (back to `node`) / Continue | applies |
+
+**ANY node of the plane, not just one on its outline.** A plane is a group of
+nodes and its fit is a surface through all of them, so a node in the MIDDLE of
+the floor is as good an origin as one at its edge — and on a real cage it is
+usually the better one, since that is where a physical mark tends to be. The
+picker never asked for an outline node: `_handleOriginPick` collects one mesh
+per `plane.nodeIds` entry, so "is this a corner?" is not a question the viewport
+can even ask. Only the wizard's own copy said otherwise ("Click a corner of a
+fitted plane"), which is a restriction a user would reasonably believe and act
+on — hence `tests/e2e/origin-picks-any-node.mjs`, which pins the copy AND drives
+a click onto a node strictly inside a five-node quad.
+
+**Only fitted planes offer nodes, and FITTED here means the user clicked
+Fit.** Enforced in the viewport via `userData.planeFitted` — fed by the
+payload's own `fitted` flag, independent of both `planeEditable` (dragging is
+OFF during the wizard, but those same nodes stay pickable) and the payload's
+`planeFit`, which is a *usable* fit and may be derived. That separation is
+deliberate: a derived surface is enough to slide a corner along, but picking the
+origin is a declaration about the project's frame, and a plane nobody has Fit
+must not become eligible for it by accident. `fittedPlanes()` counts stored fits
+only, and entering the mode is refused when nothing is fitted — so the button,
+the picker and this list all agree.
+
+**Both candidate arrows are always drawn.** The choice is between a normal and
+its negation; showing one would hide that there IS a choice. Choosing dims the
+loser rather than removing it, and the axis picker stays armed through
+`confirm`, so switching is one click and needs no cancel.
+
+**Key exports.** `originState`, `enterOriginMode` / `exitOriginMode` /
+`isOriginModeActive`, `fittedPlanes()`, `pickOriginNode(planeId, nodeIdx)` /
+`pickOriginAxis('positive'|'negative')`, `cancelOriginPick` / `applyOrigin` /
+`clearOrigin` / `confirmClearOrigin`, `exportUpdatedCalibration()`,
+`renderWizard` / `renderOriginResult`, `setupOriginDefinition`,
+`attachOriginCallbacks(vp)`.
+
+**The UI lock.** `lockUI` walks the menu bar, toolbar, info panel, viewport and
+timeline and records each button's **prior** `disabled` state, restoring it
+exactly on exit — blanket-enabling would bring back buttons that were disabled
+for their own reasons (the plane action row with nothing selected). Esc, the
+mode's Exit button and the wizard's Cancel/Continue are the exceptions and the
+only way out. The menu bar's dropdowns are `div`s, so `disabled` cannot reach
+them: `body.origin-mode-lock` blocks them in CSS instead. `exitPlaneMode`
+unwinds this mode first, or leaving would strand every button disabled.
+
+**Applying an origin does not move any data.** `viewport3d.setOriginFrame` moves
+the displayed grid + axes — and the ORBIT with them, so dragging and zooming
+re-center on the new origin (`_rebaseControls`, see `ui/viewport3d.js`); cameras,
+skeletons and planes stay in calibration world coordinates. Re-baking them would silently change every 3D number the rest
+of the app reads and reports — and the transform, not a rewritten point cloud,
+is the deliverable.
+
+The frame **is** persisted: `import-export/plane-metadata.js` writes it as its
+two INPUTS — the origin and the chosen +Z — and `pose/origin-frame.js` rebuilds
+`R`, the translation and the axis-angle form deterministically on load, so the
+derived quantities can never contradict the inputs. Applying or clearing an
+origin therefore calls `markDirty()`; entering and leaving the mode does not, as
+a wizard the user backed out of changed nothing.
+
+**Arrow length is scaled to the PLANE** (`arrowLengthFor`: 70% of the plane's
+reach from the picked node), not to the camera baseline — a fixed length is
+invisible on a room-sized plane and off-screen on a small one.
+
+**`fittedPlanes()` asks the POINTS, not the plane.** A plane keeps its
+`planeFit` until something clears it, but its corners' 3D can be invalidated
+independently (they live on the nodes), so the filter requires at least one
+node with a 3D position — otherwise the wizard would dead-end on a corner that
+no longer exists. `pickOriginNode`'s `nodeIdx` is an index into the PLANE's own
+node order (what the 3D payload was laid out in), not a pool index; the two
+differ as soon as a node is shared.
+
+**Imports from project modules.** `./app-state.js` (`state`, `viewport3d`),
+`../import-export/save-load.js` (`setStatus`, `markDirty`),
+`../pose/origin-frame.js` (`buildOriginFrame`, `rebaseExtrinsics`),
+`../pose/pose-data.js` (`getPoint3d`, `hasPoint3d`, `Camera`),
+`../import-export/file-io.js` (`exportCalibrationTOML`, `downloadTOML`), and
+**circularly** `./plane-definition.js` (`planeState`, `planeModel`, `getPlane`,
+`planePoints3d`, `planeNodeNameAt`, `syncPlanes3D`, `showPlaneDialog`) and
+`./origin-rebase.js` (`showSetCalibrationModal` — this module owns the button,
+that one owns what it does) — call-time use only, same rule as the other cycles
+in this directory. Plane 3D lives on the shared
+node pool now, so this module reads it through `planePoints3d(plane)` (a
+plane-ordered materialization) and node names through `planeNodeNameAt`,
+never off the plane object.
+
+**Imported by.** `ui/plane-definition.js`, `ui/origin-rebase.js`,
+`import-export/plane-metadata.js` (`originState`, at call time).
+
+**DOM it owns.** `#originModeBar` (+ `#originModeExit`), the
+`#originInstruction` overlay inside `.viewport3d-container`
+(`#originDragHandle`, `#originStepText`, `#originLegend`, `#originConfirmRow`
+with `#btnOriginCancel` / `#btnOriginContinue`), and, in the plane panel,
+`#originResultSection` / `#originResultDetails` / `#originResult` plus
+`#originDangerSection` / `#originDangerDetails` (`#btnExportCalibration`,
+`#btnSetCalibration`, `#btnClearOrigin`). The overlay is `pointer-events: none`
+except for its button row and its drag grip, so it can never steal a pick from
+the canvas below.
+
+**The overlay is draggable** (`setupInstructionDrag` / `placeBox` /
+`applyBoxPosition`), because it floats over the very corner or arrow the wizard
+is asking the user to click. Only the grip (`#originDragHandle`) takes pointer
+events — making the whole box draggable would have meant giving it
+`pointer-events: auto` and swallowing picks across its full footprint. The
+position is page-session state (module-level `boxPos`, container-relative px,
+not persisted) and is re-clamped every time the box is shown, since the 3D
+viewport is resizable and a spot that was inside it can stop being so while the
+box is hidden. Placing it explicitly also clears the stylesheet's centring
+`translateX(-50%)`, which would otherwise offset the box from the cursor.
+
+**Two collapsible blocks, not one section.** The readout lives in
+`#originResultDetails` ("Defined Origin", **open** by default — it is what the
+user just asked for) and the three actions that reach OUTSIDE the 3D view live
+below it in `#originDangerDetails` ("Danger Zone", **collapsed** by default).
+Both appear and disappear together with `originState.frame`, because all three
+actions are relative to a defined origin: without one, export and Set would
+write the calibration back out unchanged and Reset has nothing to reset.
+Collapsing the readout matters because it is a dozen labelled vectors plus a
+3×3 in a ~300px column, permanently in the way of everything below it.
+
+- **`Export New Calibration`** → `exportUpdatedCalibration()`, which downloads
+  `calibration-rebased.toml` (`REBASED_CALIBRATION_NAME` from
+  `loading/calibration-pick.js`, shared with `ui/origin-rebase.js` — the two
+  produce byte-identical TOML for a given origin): every camera's extrinsics through
+  `rebaseExtrinsics`, written with the existing `exportCalibrationTOML` /
+  `downloadTOML`. This is the other half of the deliverable — applying an origin
+  deliberately moves no annotated point, which is only coherent if whoever
+  consumes that 3D also gets a calibration that agrees on where the world is.
+  Intrinsics, distortion, size and camera ORDER ride through untouched, so a
+  diff against the original shows the origin change and nothing else; and the
+  rotation keeps the NOTATION it arrived in (a 3×3 for an anipose-style
+  calibration, a Rodrigues triple otherwise), since silently changing
+  representation would make the file stop matching its siblings in a rig's
+  config directory. It returns the TOML string, which is what the e2e asserts on.
+- **`Set as New Calibration`** → `ui/origin-rebase.js`, which overwrites
+  `calibration.toml` AND re-bases every 3D number in the project so the world
+  becomes the defined origin. The committing twin of Export; see that module's
+  entry for the ordering that makes a cancel safe.
+- **`Reset to Calibration Origin`** moved here from the readout and now goes
+  through `confirmClearOrigin`, which raises `showPlaneDialog` first. `clearOrigin`
+  itself stays unguarded — the load path (`plane-metadata.js`) and the tests must
+  reach it without a dialog, and the confirmation is about an unrecoverable
+  CLICK, not about the operation. Unrecoverable literally: the frame is derived
+  from a node and an arrow picked in the 3D view and nothing records which, so
+  "undo" means walking the wizard again and hoping for the same corner.
+
+**The Defined Origin readout is stacked, not tabular** (`renderOriginResult` →
+`vectorBlock` → `namedBlock`; the old `vectorTable` is gone). Each of the seven
+vectors is a `.origin-block`: its NAME on one line — with the unit (`mm`/`rad`)
+as a muted `.origin-unit` span beside it — and its x/y/z on a
+`.origin-block-body` line **indented** underneath, and the 3×3 `R` gets the same
+shape with its caption as the name. The panel is ~300px and the previous
+five-column table (`name | x | y | z | unit`) was wider than that, so the unit
+column was clipped off the right edge; stacking is what buys the width back.
+The layout classes are the Nodes list's own `.plane-node-xyz-line` /
+`-cell` / `-label`, deliberately shared so the two readouts in the one panel
+line up — **a coupling to keep in mind when those rules change.** What is NOT
+shared: the value is a `.origin-xyz-value` span, not `.plane-node-xyz-input`,
+because these are computed outputs and a box that looks typeable would lie; and
+nothing here expands or collapses, since it is seven fixed vectors rather than a
+list that grows with the project. Precision is unchanged at 3 decimals
+throughout — it already fits.
+
+**Tests.** `tests/e2e/define-plane-mode.mjs` §14 — which covers both blocks
+(the readout collapses to its summary; the Danger Zone appears with the frame,
+ships collapsed, and holds the three actions stacked and un-truncated), the
+export (the emitted TOML is round-tripped back through `parseCalibrationTOML`
+and a probe point must land on the same camera coordinates as it did under the
+ORIGINAL calibration in the OLD frame, with a negative control showing the
+unrewritten file does not), and the Reset warning (opening it, Esc and Cancel
+all keep the frame; only Confirm clears). It also measures
+`#originResult`'s `scrollWidth` vs `clientWidth` (and its widest descendant, and
+the whole `.plane-panel`) **twice**: once on the fixture and once after
+restaging the frame with six-figure mm coordinates and a long corner name — the
+fixture's two-figure numbers fit even the old table, so only the wide case
+actually pins the overflow fix. `tests/e2e/_diag-origin-panel.mjs` (untracked,
+`_diag-` = not part of any suite) screenshots both blocks — the readout to
+`$OUT` and the (force-opened) Danger Zone to `$OUT-danger.png`, separately,
+because the panel's own scroll clips the second out of the first's frame;
+`WIDE=1` stages the same wide-coordinate case.
+
+---
+
+### ui/origin-rebase.js
+
+**Purpose.** The dialogs, the progress bar, the Cancel button and the file write
+for **`Set as New Calibration`** — the committing twin of `Export New
+Calibration`. The maths and the plan are `pose/origin-rebase.js`'s.
+
+**The order of operations is not arbitrary.**
+
+1. Confirm, with the inventory (`countRebaseTargets`).
+2. **Get the file handle, still inside the click.** `showSaveFilePicker` needs
+   transient user activation and activation expires in a few seconds, so asking
+   for it *after* a minute of re-basing throws `SecurityError`. It has to come
+   first even though it reads oddly.
+3. Plan — the slow part — behind a blocking progress modal with Cancel.
+4. Write the file.
+5. Only then swap the buffers in.
+
+Every failure mode therefore leaves the project untouched: a cancel drops the
+plan, and so does a failed write. Step 5 is the one irreversible moment and it
+is synchronous, so it cannot fail part-way.
+
+**The calibration file is never overwritten.** The re-based calibration goes to
+a NEW file, `calibration-rebased.toml` (`REBASED_CALIBRATION_NAME`) — not over
+the `calibration.toml` the project was annotated against, which is usually
+shared with tools outside LUCID. `Export New Calibration` writes the SAME name,
+because for a given origin the two produce byte-identical TOML. Stated once, up
+front, in `#originRebaseStaleWarning`: the new file takes PRECEDENCE over
+`calibration.toml` when a folder holds both, which is exactly what
+`pickCalibrationFile` does. That warning used to also claim a folder `.toml`
+beats the calibration embedded in the `.slp` — true of
+`handleLoadSessionFolderSingleSlp` (which reads the embedded copy only when the
+folder has no `.toml`) but NOT of reopening the `project.slp`, which never
+scans a folder, so the unconditional claim overstated it.
+
+**The project IS saved, automatically.** `autoSaveAfterRebase` runs `quickSave`
+as the commit's last step, so `project.slp` stops disagreeing with the
+calibration written beside it. It saves ONLY when `state.slpFileHandle` already
+exists: `quickSave` would otherwise open `showSaveFilePicker`, which needs
+transient user activation the Continue click no longer has, and that case gets a
+status asking for Save As instead. Success is read from the DIRTY FLAG
+(`!state.isDirty`), not from the absence of an exception, because `quickSave`
+reports its own failures without re-raising. It runs before the summary status
+line, or `quickSave`'s own status text would overwrite the counts.
+
+**There is no completion modal** (`showRebaseDoneModal`, `#originRebaseDone`
+and `#originRebaseTodo` are gone). It listed two obligations: the save now
+happens by itself, and the calibration warning had already been given in the
+confirmation, so all it added was a dialog between the user and their re-based
+project.
+
+**A multi-session commit leaves a THIRD consequence, stated in the
+confirmation.** There is one calibration file per session FOLDER and this action
+writes exactly one of them, so the folders that were not written still hold a
+calibration in the old frame, and the next folder load then splits the project
+across two frames. `#originRebaseMultiNote` (when `t.sessions > 1`) names the
+count and ends with the one thing left to do — *Ensure other re-based sessions
+have an updated calibration file in their folders.* It deliberately does NOT
+explain the old-frame/new-frame consequence or promise a load-time note: the
+actionable instruction is what the user can use, and
+`ui/calibration-notice.js`'s modal still reports the divergence if they do
+nothing. Saying it in the confirmation rather than afterwards also puts it
+where the user can still decline. Its first clause follows the SELECTION below
+(`All 2 loaded sessions are re-based…` vs `1 of 2 loaded sessions are
+re-based…`), because it is the one sentence a user checks their intent
+against. The folder count is `picked - 1`, NOT `total - 1`: the folders it
+names are the RE-BASED sessions other than the current one, whose
+`calibration.toml` no longer matches their 3D — a DESELECTED session kept its
+old 3D and its old calibration, which still agree, so counting it would send
+the user to update a folder that is already consistent. With every session
+selected the two are the same number. When `picked === 1` the trailing clauses
+are omitted entirely: there are no other re-based folders, and an instruction
+about sessions that do not exist reads as a defect in the dialog. Pinned by
+`tests/e2e/set-new-calibration.mjs` §6/§7/§8.
+
+**On a multi-session project the user CHOOSES which sessions move.** Re-basing
+all of them unconditionally was a decision the dialog was making on the user's
+behalf, so `#originRebaseBySession` carries a checkbox per row
+(`.origin-rebase-session-toggle`, `data-session-index`) and the Continue click
+hands `runSetCalibration` the FILTERED array — no mode flag, so there is no
+partial code path to drift. Four things about it:
+- **The ACTIVE session's toggle is checked and DISABLED.** Its cameras are what
+  `calibration-rebased.toml` describes, and the project-wide `PlaneModel` — the
+  node pool and every plane fit — moves once, with it; leaving it behind would
+  write a calibration for a frame the project's own plane geometry is not in.
+  It is found by `sessions.indexOf(state.session)`, NOT by
+  `state.activeSessionIdx` and not by assuming 0: `state.session` is what
+  `runSetCalibration` reads to choose the cameras for the file, so pinning the
+  row by anything else could let the pinned row and the written calibration name
+  different sessions.
+- **Every headline number follows the selection**, through
+  `subsetRebaseTally` — a re-FOLD of `tFull.perSession`, not a re-count, so a
+  click does not re-walk a lazy project's columnar store. One `renderSelection()`
+  owns all four selection-dependent strings (both tables, the block note, the
+  hazard warning, the multi-session note) and is called at build time too, so no
+  initial string can drift from it. `plane nodes` / `Plane fits` deliberately do
+  NOT move with the selection: one project-scoped `PlaneModel`, moving once.
+- **Deselecting is a real hazard and `#originRebaseSubsetWarning` says so**,
+  in two sentences and ONLY while something is switched off: the sessions left
+  behind keep their old 3D while the rest of the project moves, so the project
+  holds 3D in two coordinate frames — exactly what
+  `pose/calibration-compare.js` detects and `ui/calibration-notice.js` reports
+  on the next load. It sits under the checkboxes rather than with the two
+  cautions, because it is feedback on the control that causes it.
+- **`runSetCalibration` force-includes `state.session`** if the caller left it
+  out. Unreachable from the UI, but without it `exportCalibrationTOML` would be
+  handed zero cameras and write a valid, EMPTY calibration — silently, and
+  after the 3D had already moved.
+
+**Write access.** `Load Calibration` goes through a plain `<input type=file>`,
+which hands back bytes and no write handle, and a session-folder load gives no
+handles at all — so there is nothing to inherit and the user points at the file
+once per page session (`calibHandle`, not persisted; `resetCalibrationHandle()`
+is the test seam). Without the File System Access API it degrades to a plain
+download. With more than one session loaded, the CHOSEN sessions are re-based
+(see below) but only the ACTIVE session's cameras go into the file, and the
+dialog says so.
+
+**Blocking means blocking.** The progress modal's scrim stops the pointer and a
+capture-phase `keydown` swallower stops the app's shortcuts, which are bound on
+`document` and would otherwise happily scrub the timeline or start a
+triangulation on top of a re-base. Esc is passed through as Cancel, per the
+project's modal rule.
+
+**The inventory is TWO tables, and which table a row is in is the claim being
+made about it.** `#originRebaseCounts` is *Origin-dependent — updated* (3D
+points to update, split into pose keypoints and plane nodes; plane fits; camera
+**extrinsics**); `#originRebaseKeeps` is *Not origin-dependent — unchanged*
+(2D user/predicted instances, reprojections, plane placements, camera
+**intrinsics + distortion**, image size and camera order). A camera appears in
+both on purpose: its extrinsics move and its lens model does not, and "does
+this rewrite my intrinsics?" is the most common fear about pressing the button.
+The first title says *updated* rather than *rewritten*: these numbers are
+re-expressed in a new frame, which is not the same threat as being overwritten,
+and half this dialog's job is saying what is NOT overwritten.
+
+**Those two blocks FOLD; the per-session one does not.** `buildTable`'s fifth
+argument, `collapsible`, builds the block as a real `<details open>` whose
+`<summary>` is the title (styled by `summary.origin-rebase-block-title` in
+`styles.css` — the browser's marker suppressed and one rotated caret drawn in
+both states), so the keyboard, the accessibility tree and the `open` attribute
+come from the browser instead of a hand-rolled click handler on a `div`. The
+note and the table both sit INSIDE, so folding hides a section's whole body
+rather than leaving an orphaned sentence. The **state is deliberately not
+persisted** — no `persistSectionState`, nothing in `localStorage`: that helper
+is for display taste in a long-lived panel, while the two-table split is the
+claim this dialog asks the user to trust, so a fold made once must never be how
+the next re-base is confirmed. Every open rebuilds them expanded.
+`#originRebaseBySession` stays a plain `div` because it holds the per-session
+checkboxes, and folding away the control the user came to use is worse than an
+uneven stack. Still ONE scroller — the `<details>` add no `overflow`, and
+folding both shortens the modal's contents (983 → 605 px on the multi-session
+fixture) with Continue reachable in either state. `buildTable` returns
+`{ table, note, block }`.
+
+**Every row is present for every project, zeros included.** A per-camera
+session with no `project.slp` has no instance groups and no pose 3D, so those
+rows read 0 — which is how a reader tells an un-triangulated session from a
+triangulated one. Hiding them would make the modal's shape depend on the load
+path and turn "there is no 3D here" into silence, which is the failure this
+dialog already had once.
+
+**`#originRebaseBySession` appears only when `sessions > 1`.** A multi-session
+project loads each folder independently, so it can carry a different
+`calibration.toml` per session — and only the ACTIVE one's calibration is
+written out. Each row is a checkbox + the session name, then
+`N 3D · M cam · K 2D`. It is its own block rather than sub-rows of the totals:
+those already decompose by provenance and sum exactly to their headline, and a
+second, orthogonal decomposition under the same parent would break that. The
+row's cell carries the name and NOTHING else (no `(active)` suffix): which row
+is pinned is read off its disabled control, and the block note names the
+session, which is where a disabled control's explanation has to live since a
+disabled input's own tooltip never fires.
+
+**The modal caps its own height and scrolls, with the action row `position:
+sticky`.** Three tables plus two cautions is ~975px, so Cancel / Continue would
+otherwise sit below the fold on a laptop. Sticky keeps it to ONE scroller, per
+the no-scroll-within-scroll rule; the tables never get their own.
+
+**The 2D rows are the whole population, with the grouped subtotal beside
+them** (`12,480 — 2,604 in instance groups`). They are inventory, not work
+— 2D does not move — but a user whose project is mostly ungrouped
+predictions was told it held none.
+
+**The origin-dependent table's headline is the SUM, and every sub-row under it
+is a count of POINTS.** `3D points to update` quotes `tally.points3d`; beneath it sit the
+three pose buckets and `plane nodes`, and they add up to it. The group counts
+moved into the row LABELS (`from 2 User instance groups`) because a heading that
+says "3D points" with a number of groups under it is two units in one column.
+The same rule governs the success status line, which names the total and then
+spells out the pose/plane split rather than printing `0 3D points, 9 plane
+nodes` and leaving the reader to reconcile it. Pinned by
+`tests/e2e/set-new-calibration.mjs` §1 (the sub-rows sum to the headline) and
+§5 (a planes-only project, where the headline is the plane node count and every
+pose bucket is zero).
+
+**Key exports.** `showSetCalibrationModal()`,
+`runSetCalibration(sessions)` — whose argument is the CHOSEN subset, not
+necessarily every loaded session — and `resetCalibrationHandle()`. The file name itself is
+`REBASED_CALIBRATION_NAME`, from `loading/calibration-pick.js` — a module with
+no imports, so both origin actions and the folder loaders can read it without
+crossing the `origin-rebase` / `origin-definition` cycle.
+
+**Tests.** `tests/e2e/set-new-calibration.mjs` (the dialogs, both cancels, the
+commit, the new file name and both warnings) and
+`tests/e2e/origin-rebase-slp-diff.mjs` (saves the same project on each side of
+the re-base and diffs every HDF5 dataset — what changes in `project.slp`, what
+does not, and the negative control showing what a leftover `calibration.toml`
+costs).
+
+**After the swap** (`finishRebase`) the defined origin is **cleared**, not kept:
+the project is now expressed in that frame, so the offset from it is zero and a
+table still reporting the old rotation would describe a transform that has
+already happened. The grid goes back to the world axes for the same reason.
+`state.triangulationResults` (and each session's) is dropped rather than
+transformed — it is derived from 3D that just moved — and the 3D viewport is
+rebuilt, not merely re-framed, because the skeletons in it are built from
+`points3d`.
+
+**Imports from project modules.** `./app-state.js`, `../import-export/save-load.js`,
+`../import-export/file-io.js` (`exportCalibrationTOML`, `downloadTOML`),
+`../pose/origin-rebase.js` (`countRebaseTargets`, `subsetRebaseTally`,
+`planOriginRebase`, `applyOriginRebase`), `./rendering.js`,
+`../pose/initialization.js`, and
+**circularly** `./origin-definition.js` + `./plane-definition.js`, call-time use
+only.
+
+**Imported by.** `ui/origin-definition.js` (which owns the button).
+
+**Tests.** `tests/e2e/set-new-calibration.mjs` — the modal's inventory, Cancel at
+the confirmation, Cancel mid-flight (asserting no file was written and not one
+coordinate moved), and the commit: the file goes to a stand-in
+`FileSystemFileHandle` (headless Chromium exposes `showSaveFilePicker` but
+rejects it instantly with `AbortError`, the same reason
+`video-encode-streaming.mjs` supplies its own), every probe point keeps its
+pixel, and the origin collapses.
+
+---
+
+### ui/calibration-notice.js
+
+**Purpose.** The modal that tells the user a multi-session project's sessions do
+not all carry the same calibration. Raised at the END of a multi-session load,
+once every session is in `state.sessions`.
+
+**Why it has to exist at all: the failure is INVISIBLE.** Each session still
+reprojects correctly against its own cameras, so every error stays small and
+every number stays plausible. What is broken is only the comparison BETWEEN
+sessions — which nothing on screen performs, and so nothing on screen
+contradicts. Without the note the user finds out when a distance measured in one
+session does not match the same distance in another, long after annotating both.
+
+**Silent in the ordinary case, and that is the point.** The sessions of one
+project normally carry copies of a single calibration, so the modal opens only
+when `compareSessionCalibrations` reports `ok === false`. A note on every
+multi-session load would be worse than no note.
+
+**It is a NOTE, not a prompt.** One dismiss button, and it changes nothing.
+Offering to fix the divergence here would mean writing to the user's session
+folders during a load, which is not what a load is for.
+
+**It says WHO differs and nothing else.** One fixed title — *Sessions with
+different calibrations detected* — then one `.calib-notice-group` section per
+distinct calibration: a letter (`Calibration A`), `N sessions · M cameras` on
+the title row, and the session FOLDER NAMES one per line, monospace, capped at
+10 with `and N more`. Plus one line naming any session excluded for having no
+calibration at all. That is the entire modal.
+
+Removed, and asserted absent by the e2e test: a lead paragraph, a per-`kind`
+explanation of the difference, the measured offset, a consequence paragraph and
+two numbered remedies. Five blocks of prose over a two-row table is a document,
+not a note — nobody reads it on the way into a project, and the one string they
+need (the odd folder's name) was buried in it. Three rules follow:
+- **No branch on `report.frameOnly`.** The title and the layout are the same for
+  all four `kind`s, because the user's next move is the same either way: open
+  the folder the modal names. The classification is still computed, and
+  `noteSessionCalibrationDivergence` LOGS it with the measured offset — the
+  console is where someone asking "how different?" is already looking.
+- **The largest group is listed FIRST** (`report.reference`, so the modal cannot
+  disagree with the console line), which puts the odd session out last.
+- **The letter is not read off the file name.** Two groups routinely both loaded
+  a file called `calibration.toml`, so the letter is the only handle a group
+  has.
+The remedies moved to where the divergence is created: the
+`Set as New Calibration` confirmation's `#originRebaseMultiNote` states the
+obligation to deal with the other session folders before it writes the file
+that causes this.
+
+**Key exports.** `noteSessionCalibrationDivergence(sessions)` — compares, logs
+(including the offset and `kind` per divergent group), shows the modal if
+needed, and returns the report (or null). Wrapped in a try/catch: a load must
+never fail because of a check that only prints a note.
+`showCalibrationNoticeModal(report)` builds the dialog. Esc closes it, per the
+project's modal rule, and it reuses `.plane-confirm-overlay` plus
+`.origin-rebase-block` / `-block-title` / `-block-note` so the scrim, z-index,
+height cap and sticky action row are the origin dialogs' existing ones. Its own
+classes — `.calib-notice-group{,-title,-count}`, `.calib-notice-session{,s}` —
+are in `styles.css` beside those. Its titles are plain `<div>`s and stay
+un-foldable: the folding rules `ui/origin-rebase.js` added are scoped to
+`summary.origin-rebase-block-title`, so sharing the class costs nothing here.
+
+**Imports from project modules.** `../pose/calibration-compare.js`.
+
+**Imported by.** `loading/session-loader.js` (`handleLoadMultiSession`),
+`import-export/slp-import.js` (the multi-session `.slp` path).
+
+**Tests.** `tests/e2e/multi-session-calibration-notice.mjs`.
+
+---
+
+### ui/plane-angle.js
+
+**Purpose.** The dialog and the commit for **Set Angle Between Two Planes** —
+the UI half of `pose/plane-angle.js`. That module plans purely; this one asks,
+previews and writes, the same split `planPlaneFit` / `applyPlaneFit` uses and
+for the same reason: the geometry must be inspectable and refusable before
+anything is written.
+
+**Why a modal rather than a mode.** Set Origin is a wizard because its inputs
+are PICKED in the 3D view (a corner, then an axis arrow). This action's inputs
+are two planes and a number, which a form states better than a sequence of
+clicks — and they could not be picked in 3D as things stand: plane FILL meshes
+carry no `userData`, so only corners are raycastable and there is no "click a
+plane" gesture to reuse.
+
+**What the commit does, in order, because the order is load-bearing.**
+1. write the rotated 3D through `writePoints3dForPlane` — the one sanctioned
+   publish path, which skips LOCKED nodes and routes PLANE-LOCKED ones through
+   `PlaneModel.constrainPoint3dForNode`.
+2. install the ROTATED fit (`rotatePlaneFit`) rather than re-fitting, so the
+   normal's sign cannot flip.
+3. reproject the moved corners into every 2D view the plane is placed on,
+   exactly as `applyPlaneFit` does, so the annotation agrees with the 3D. Only
+   the corners that MOVED are rewritten — a hinge corner's 2D is the user's
+   observation of a point that did not move. The reprojection reads each node's
+   ACTUAL position, not the plan's, because the constrain hook may have moved a
+   plane-locked node off it.
+4. clear the stored fit of any OTHER plane whose nodes moved.
+5. **Hold the moved nodes PLANE-LOCKED to the plane that moved.** This is what
+   makes the angle durable: without it the next Triangulate on that plane
+   re-solves those corners from 2D and silently throws the angle away.
+   Plane-locked rather than Locked because what the user asserted is the
+   plane's ORIENTATION, not where each corner sits on it — a held corner is
+   still re-solved and `constrainPoint3dForNode` projects the answer back onto
+   the planes it belongs to — the rotated one among them — so the annotation
+   goes on improving while the angle survives, instead of every later solve of
+   this plane being a no-op the user has to unpin their way out of. A node the
+   user had already Locked is left Locked: that is a stronger promise they made
+   deliberately. It nominates NO plane, because the pin no longer takes one: a
+   corner this rotation moved is in the rotated plane by definition. It still
+   happens LAST because step 1 writes through the same constrain hook and until
+   step 2 the stored fit is still the OLD one — a node pinned any earlier would
+   have had its rotation projected straight back onto the plane it was being
+   rotated off.
+
+   **A held corner shared with another plane may miss the target**, and that is
+   what `plane_locked_elsewhere` warns about: the pin holds it in that plane
+   too, so the commit projects it back there and the rotation is no longer
+   exactly rigid for it. Reported, never refused.
+
+**Which planes it offers: usable, not fitted.** `fittedPlanes()` — what Set
+Origin asks — is the wrong question here, and asking it listed **2 of a user's
+5** annotated planes. A plane loses its stored `planeFit` for reasons that say
+nothing about whether it HAS a plane: pinning a node clears the fit of every
+plane standing on it (and this action's own auto-lock does exactly that), and a
+plane that was triangulated but never Fitted never had one. Set Origin genuinely
+needs the stored fit, because it offers that plane's corners as an origin; this
+action only needs to know WHERE the plane is, which the triangulated corners
+already say. So `usableFit` returns the stored fit or derives one — it now
+delegates to the model's `usablePlaneFit`, so this dialog and the
+`plane-locked` pin cannot disagree about where a plane is — and **nothing is
+written**: deriving is a measurement,
+and opening a dialog must not mutate the project. The PLAIN fit, not the
+constrained one: this value is rotated with the points, and a TLS fit is exactly
+equivariant under a rigid motion where an anchor-constrained fit is not.
+
+**Key exports.**
+- `usableFit(plane, model)` → the plane's stored fit, else one derived now, else
+  null (fewer than 3 solved corners, or they are coincident or collinear). A
+  thin wrapper over `PlaneModel`'s `usablePlaneFit`, kept as the name this
+  dialog and its tests were written against.
+- `anglePlanes()` → every plane with a usable fit, in model order.
+- `showPlaneAngleModal()` — the dialog: two plane `<select>`s (picking the same
+  plane in both swaps them rather than producing a dead form), a swap button, a
+  readout of the current angle and the hinge, a target field, the plan's
+  warnings (each line is the warning's `message`, with its optional `detail` —
+  the untruncated node/plane list the narrow line had to cap — set as the
+  line's `title` tooltip), Cancel / Apply. **Esc cancels**, via a capture-phase `keydown`
+  listener, per the app-wide modal convention. Refuses up front with
+  `showPlaneDialog` when fewer than two planes are usable, rather than opening a
+  form that cannot be completed. The derived fits are handed to `planAngleEdit`
+  as its `fits` argument, which that module keeps as a test seam (see
+  `pose/plane-angle.js`).
+
+**It is the one plane dialog that is NOT modal.** Alone among them, its inputs
+are two planes the user has to ORBIT to tell apart — "back wall" and "front
+wall" are indistinguishable in a dropdown — and the thing it is asking about is
+in the 3D view. So:
+- the backdrop draws no scrim and takes `pointer-events: none`, with the dialog
+  itself taking the pointer back, leaving the 3D view live underneath;
+- `parkBesideViewport` opens it to the LEFT of `#viewport3dContainer` instead of
+  centred over it (falling back to the screen's left edge, never off it), and
+  the header still drags it anywhere;
+- the two chosen planes wear matching coloured outlines in the scene
+  (`viewport3d.setPlaneRoles`), keyed to a swatch beside each dropdown —
+  `ROLE_FIXED_COLOR` `#4da3ff` for the one held, `ROLE_MOVING_COLOR` `#ffd24d`
+  for the one that moves. Deliberately not the planes' own colours, which would
+  make the roles mean something different in every project.
+- **Apply re-plans before committing.** A live 3D view means the scene could
+  have changed since the last input change, and `lastPlan` would then describe
+  geometry that no longer exists. The plan is pure, so re-running it is free.
+
+Esc still cancels: that listener is on the document and owes nothing to the
+backdrop.
+
+**But "live view" is not "live data" — the EDIT LOCK.** Everything the dialog
+says (the current angle, the hinge, the ghost's shape) is read from plane
+geometry, so letting that geometry change underneath it produces a readout
+describing a scene that no longer exists and a ghost drawn from corners that
+have moved. While the dialog is open, plane data is therefore frozen in all
+three places it can be edited from:
+- `refreshPlanePanel` ends in `applyAngleModalLock`, which disables every
+  `button` / `select` / `input` in `#planePanel` and puts `plane-angle-lock` on
+  `<body>` (the class does what `disabled` cannot: dim the panel so the lock is
+  visible, and stop the `<summary>` elements folding sections away);
+- `syncPlanes3D` pushes `editable: false`, which makes 3D corners inert — no
+  drag, and no `move` cursor advertising one;
+- `beginPlaneDrag` refuses a 2D corner drag with a status line saying why, and
+  its two siblings close the paths that do not go through it: the
+  `isPlaneDataLocked` callback (the right-click null toggle, which invalidates
+  the node's 3D) and a guard in `handlePlaneDrop` (dropping a plane row onto a
+  view — a `<tr>` takes no `disabled`).
+
+All three ask `isAngleModalOpen()` on every render rather than being toggled by
+hand, so there is no lock state to get out of step and a mid-dialog re-render
+cannot leak an unlocked control. Unlocking needs no bookkeeping either: those
+renders recompute each control's real disabled state, so not re-disabling it is
+correct. What stays live: orbiting, zooming, panning, selection, the ghost
+preview, the dialog's own Cancel and Apply (they are in `document.body`, not in
+the locked panel) — and pose annotation, which cannot touch a plane.
+`exitPlaneMode` calls `closeAngleModal`, the same way it unwinds Set Origin
+Mode: a dialog that holds this panel locked must not outlive it.
+- `applyAngleEdit(plan, fixedPlane, movingPlane)` → `{ok, movedPx,
+  skippedNames, constrainedNames, heldNames, stalePlaneNames, achievedDeg}`.
+  One `markDirty()`, then the panel's mutation quartet.
+- `renderAngleButton()` — enable/disable `#btnSetPlaneAngle` with the reason in
+  its `title`, modelled on `renderOriginButton`. **Two** usable planes, not one:
+  an angle is a relationship.
+- `setupPlaneAngle()` — wire the button; called once from
+  `setupPlaneDefinition`.
+- `closeAngleModal()` — tear the dialog down, clear the ghost and the role
+  outlines, and lift the edit lock. Exported for `exitPlaneMode`.
+- `isAngleModalOpen()` — read by the three edit-lock guards above.
+
+**The live plan.** Every input change re-runs `planAngleEdit` and stores the
+result; Apply commits exactly that stored plan, so Apply can never act on a
+staler state than the readout shows. The plan is pure, so doing this per
+keystroke writes nothing.
+
+**The target field.** Commit-on-`change` with **revert-on-invalid**, the panel's
+convention — and the EMPTY case is checked before `Number`, which would read
+`''` as 0, a silent, plausible and wrong answer ("make these planes parallel").
+`keydown` is `stopPropagation`'d so the app's hotkeys do not fire while typing.
+
+**DOM it owns.** `#planeAngleOverlay` (`.plane-confirm-overlay`, reused
+wholesale), `.plane-angle-modal`, `#planeAngleFixed`, `#planeAngleMoving`,
+`#btnPlaneAngleSwap`, `#planeAngleReadout`, `#planeAngleTarget`,
+`#planeAngleWarn`, `#btnPlaneAngleCancel`, `#btnPlaneAngleApply`. The panel
+button `#btnSetPlaneAngle` is static markup in `index.html`, in its own
+`.panel-button-row` after `#btnSetOrigin`; it is caught automatically by origin
+mode's `lockUI` selector (`.plane-panel button`) and so must **not** be added to
+`UNLOCKED_IDS`. Styles: `styles.css` § "Set Angle Between Two Planes".
+
+**No keyboard shortcut**, so no `ACTION_CATALOG` entry — matching Set Origin.
+
+**Imports from project modules.** `./plane-definition.js` (circular, call-time
+only — `planeModel`, `planeState`, `refreshPlanePanel`, `syncPlanes3D`,
+`showPlaneDialog`, `refreshTriangulationErrors`), `../pose/plane-data.js`
+(`writePoints3dForPlane`, `points3dForPlane`), `../pose/triangulation.js`
+(`reprojectPointCamera`, `fitPlaneToPoints3d`), `../pose/plane-angle.js`,
+`./app-state.js`, `../import-export/save-load.js`, `./rendering.js`.
+
+**Imported by.** `ui/plane-definition.js` (`setupPlaneAngle`,
+`renderAngleButton`, `isAngleModalOpen`, `closeAngleModal`).
+
+**Tests.** `tests/e2e/plane-angle.mjs` — the button's gating, the dialog, the
+ghost preview, Apply, the auto-hold, and (§8) that a plane whose stored fit was
+cleared by a pin is still offered, (§9) that the dialog parks beside the 3D view
+and leaves it clickable with both planes outlined, (§10) the edit lock — that
+corners are draggable in 2D and 3D before the dialog opens and neither is while
+it is open, that all 63 of the panel's controls go disabled while the dialog's
+own two stay live, that the ghost still follows the typed angle while the data
+is frozen, that closing restores each control to its OWN state rather than
+blanket-enabling, and that leaving Defining Plane Mode closes the dialog. §5b keeps the Triangulate
+locked-nodes modal covered, which is now the only place it is asserted. §4/§5
+are the pair that make the hold observable: with the corners held, a Triangulate against PERTURBED 2D
+moves them and still lands them at 90°; set Free, the same solve walks them off
+the plane. Both measure the angle from the CORNERS (`__pointAngle`), not from
+the stored fit — a stored fit is not re-derived when a node moves, so measuring
+it would have reported 90° either way.
+
+---
+
+### ui/mesh-objects.js
+
+**Purpose.** The **3D Mesh Objects table** — a third table under Nodes and
+Planes, for the third layer of the model (a node is a point, a plane is a group
+of nodes, an object is a group of planes). Create, name, recolour and delete an
+object; add and remove its member planes; and read a connectivity report of the
+shape those planes imply. No orientation control — winding is derived (see
+`pose/mesh-object-geometry.js`).
+
+Deliberately its OWN module rather than more of `ui/plane-definition.js`. That
+file already owns the mode, the placements, the drags and two tables; this
+feature is strictly additive, so keeping it separate is what makes the "nothing
+existing changes" claim checkable — `plane-definition.js` gains one import, one
+`setupMeshObjects()` call and one `refreshMeshObjectsPanel()` call, and that is
+the whole of its involvement.
+
+**Key exports.** `meshObjectState` (`{selectedObjectId}` — panel-local, NOT
+persisted), `getSelectedMeshObject()`, `meshObjectGeometry(obj)` (builds in the
+applied origin frame at scale 1, so reported numbers match the viewport),
+`refreshMeshObjectsPanel()`, `createMeshObject(name)`, `deleteObject(obj)`,
+`setupMeshObjects()`.
+
+**Everything shown is DERIVED.** The report and the member list are recomputed
+from the model on every render — the underlying 3D can move at any
+moment (a node drag, a re-triangulate, a fit, an origin change), and
+`buildMeshObjectGeometry` is cheap at this scale while being wrong is not.
+
+**The report is written to be actionable**, and says nothing the reader cannot
+act on. The counts are there, but what a user needs is the next move: a
+multi-shell object says that joining requires SHARING a node, and
+coincident-but-unshared nodes are named as pairs — the "I thought I joined it"
+case, which is invisible in the viewport because the two corners are drawn on
+top of each other.
+
+By the same rule it **says nothing about normals**, and a single-shell OPEN
+object gets no line of its own. Winding is derived and has no user control
+(`pose/mesh-object-geometry.js`), so the paragraph explaining which way an open
+object had been oriented was the longest thing in the box and the one nobody
+could do anything with; and "open" is the ordinary state for a cage with no lid
+rather than a finding. Closed still reports its volume, because a number is not
+prose. Pinned by `tests/e2e/mesh-object-roundtrip.mjs` §2.
+
+**There is no Shape column.** The table listed a per-row badge — `closed`,
+`2 shells`, `open — 6 naked` — whose terms the panel defined nowhere once the
+report's explanatory line went. A one-word verdict in vocabulary the reader does
+not have is not a verdict; it is a prompt to ask someone. Everything ACTIONABLE
+about connectivity is in the selected object's report, in sentences, so nothing
+was lost but the jargon. A row is now swatch / name / planes / delete, and the
+table no longer derives every object's full geometry on every repaint in order
+to print one word. `tests/e2e/mesh-object-roundtrip.mjs` §2 asserts the badge,
+the header cell and the fifth `<td>` are all gone.
+
+**Membership is edited by PICK-AND-ADD**, the same idiom the Planes section
+uses to put an existing node in a plane: `renderMembers` lists the planes IN the object, one
+row each with an × to take it back out, and `renderAddPlaneSelect` offers a
+`<select>` of the NON-members plus `+ Add` (`#meshObjectAddPlaneSelect` /
+`#btnAddMeshObjectPlane`). It replaced a checkbox against every plane in the
+project, which made the list grow with the PROJECT rather than with the object
+and never said which planes were actually in it without reading every row. An
+empty picker is a real state — every plane is already a member — and it is said
+in words with the button disabled, not left as a dead dropdown. A member whose
+plane was since deleted still gets a (greyed) row, because its × is the only way
+to clear the stale id.
+
+**What this module may NOT do.** Nothing here creates, deletes or edits a node or
+a plane. An object is a grouping: dissolving it cannot destroy its members, and
+removing a plane from an object must not delete the plane. The panel's only
+destructive action is the object's own ×, which removes the grouping and nothing
+else. That constraint is what keeps 3D Mesh Objects from being able to break a
+workflow that predates them.
+
+**Export.** `Export .stl` / `Export .glb` (`#btnExportMeshStl` /
+`#btnExportMeshGlb`) sit in the editor, because they act on the SELECTED
+object. Both write the geometry `meshObjectGeometry` already reports on —
+origin frame applied, scale 1 — so the file and the badge above it cannot
+describe different shapes, and the calibration's own millimetres reach the file
+unscaled. They are DISABLED, with the reason in the tooltip, until the object
+has triangulated faces: both writers would refuse, and saying so on the button
+beats letting the click land and reporting a failure afterwards. Neither marks
+the project dirty — an export writes a file, not a change, the same reason the
+appearance sliders do not. The formats themselves, and the one sanctioned axis
+conversion, are `import-export/mesh-export.js`.
+
+**Imports from project modules.** `./plane-definition.js` — `planeModel`,
+`refreshPlanePanel`, `syncPlanes3D` (circular, and safe for the same reason the
+rest of this feature's cycles are: every use is inside a function body);
+`./origin-definition.js` — `originState`; `../pose/mesh-object-geometry.js`;
+`../import-export/save-load.js` — `setStatus`, `markDirty`;
+`../import-export/mesh-export.js` — `meshObjectToSTL`, `meshObjectToGLB`,
+`isExportable`, `meshFilenameStem`; `../import-export/file-io.js` —
+`downloadBytes`.
+
+**Imported by.** `ui/plane-definition.js`.
+
+**Selection is visible.** The selected object's row carries `.plane-selected`
+and `#meshObjectsTable tbody tr.plane-selected` styles it exactly as the Planes
+table styles its own selection. The class was always applied; the rule was
+missing, so the editor below appeared to be attached to nothing.
+
+**Tests.** `tests/e2e/mesh-object-roundtrip.mjs` (the panel driving the model
+through real DOM handlers, the pick-and-add membership editor and the selected
+row's marking, the dirty flag per mutation, the derived shape tracking
+membership, save → reopen by ID, the PROJECT scope, and three negative controls:
+untouched projects write no key, the feature is additive, and deleting an object
+keeps its planes and nodes); `tests/e2e/mesh-membership-highlight.mjs` (what the
+3D viewport actually draws for a selection); `tests/e2e/mesh-object-export.mjs`
+(the two export buttons).
 
 ---
 
@@ -4320,19 +9285,105 @@ timeline, hover text, click snaps to the tick's frame, reviewed dimming).
 
 ---
 
+### ui/seekbar-ticks.js
+
+**Purpose.** A time ruler under the transport seekbar (`#seekbarRuler` inside
+`#seekbar`): labelled major ticks (`00:00  05:00  10:00 …`) with unlabelled
+minor ticks between them, so a moment can be found and clicked by eye without
+hovering for the tooltip.
+
+**Key exports.** `seekbarTimeTicks(totalFrames, fps, widthPx, {charPx}?)` ->
+`{step, minorStep, majors: [{frac, seconds, label, end}], minors: [frac]}`
+(pure; the last major is the end tick); `formatTickLabel(seconds, decimals)`
+(`mm:ss`, `h:mm:ss` from an hour up, rounded before splitting);
+`formatDurationLabel(seconds, decimals)` (the end tick's label: rounded to the
+millisecond like `formatTimestamp`, then TRUNCATED, so it is a prefix of the
+readout's total); `TICK_STEPS` and the spacing constants
+(`MIN_LABEL_SPACING_PX`, `LABEL_SPACING_WIDTHS`, `MIN_MINOR_SPACING_PX`,
+`MAX_MINOR_PER_MAJOR`, `DEFAULT_CHAR_PX`); the DOM half,
+`installSeekbarTicks(layerEl, {getTotalFrames, getFps})` and
+`refreshSeekbarTicks()`.
+
+**Behaviour.**
+- **The step follows the video and the bar.** The major step is the SMALLEST of
+  `TICK_STEPS` (1/2/5 below a minute, 1/2/5/10/15/30 min, then hours) whose
+  labels are at least `max(60 px, 1.75 label widths)` apart at the bar's
+  width — 5:00 for a 30-minute recording on a 700 px bar, 2:00 on 1200 px, 1 s
+  for a 10 s clip. The minor step is the smallest nice step that divides the
+  major into at most 6 parts and is still 8 px apart. Neither is shorter than one
+  frame. No ruler when `00:00` and the duration do not both fit, or without a
+  frame rate (fps 0 while a session has no video).
+- **The bar's end is always marked**: a tick at the last frame, labelled with
+  the duration — the readout's total, `totalFrames / fps`, truncated to the
+  ruler's precision (`14:23` for `14:23.617`, never `14:24`; a 29.97 fps
+  recording a hair under 30:00 reads `30:00`, as the readout does), in bold
+  (`.is-end`, weight 600 like the readout's current frame). It wins
+  every collision: a regular label closer to it than the spacing rule allows
+  loses its text (the tick stays), and a regular or minor tick within 8 px of
+  it is dropped, since it would read as a double tick.
+- **Same mapping and same clock as the rest of the bar.** A tick for time `t`
+  sits at `t·fps / (totalFrames − 1)` — the thumb's and the ID-switch ticks'
+  frame -> position mapping at the readout's frame-start time — so a click on
+  `05:00` lands on the frame the readout shows as `05:00.000` (to within the
+  pixel a click is rounded to). Labels are the readout's format without the
+  milliseconds; a decimal only for sub-second steps.
+- **Part of the seekbar, not a strip beside it.** The layer is a child of
+  `#seekbar`, so a click or drag on a label scrubs and hovering one shows the
+  seekbar tooltip. It hangs below the 24 px bar box; `.seekbar-container`'s
+  `margin-bottom` reserves the room, so the controls bar centres bar + ruler
+  together. Painted under the ID-switch marks and the thumb. Every label is
+  centred on its tick, the two ends included: `00:00` and the duration hang
+  half a label (~17 px; ~23 px for `1:23:45`) past the bar's ends, into the room
+  `.seekbar-container`'s side margins (12 px, 16 px at <= 640 px, where the
+  controls bar's gap halves) add to that gap — clear of the transport buttons
+  and the FPS pill at every width.
+- **Never re-rendered per frame.** `refreshSeekbarTicks` (called from
+  `updateSeekbarVisual` on every frame, and from `refreshReadoutTotals` /
+  `clearReadout`) compares the frame count, FPS and width with what is drawn
+  and returns; a `ResizeObserver` on the layer re-lays it when the bar's width
+  changes (window resize, the frame readout gaining a digit). Positions are
+  percentages, and an unchanged ruler writes nothing. The label font's
+  character width is measured once (a hidden probe), not per render.
+
+**Imports from project modules.** None (dependency-free, so the tick choice runs
+in Node).
+
+**Imported by.** `ui/ui-wiring.js` (installed in the seekbar-scrubbing IIFE in
+`setupUI`; refreshed by `updateSeekbarVisual`), `ui/frame-readout.js`
+(`refreshSeekbarTicks`).
+
+**Coverage.** `tests/test-seekbar-ticks.mjs` (label format; the step choice
+over a grid of frame rates × durations × widths: nice steps, at least a frame,
+labels far enough apart, the smallest step that fits, minors dividing majors
+and never on one, the end tick labelled with the duration and nothing on top of
+it, neighbouring labels — the end one included — far enough apart; the duration
+label a prefix of `formatTimestamp`; monotone in duration and width) and
+`tests/e2e/seekbar-ticks.mjs` (real app: labels centred on their ticks at the
+time's position, no overlap, inside the controls bar, the two end labels clear
+of the transport buttons and the FPS pill; the end label matches `#totalTime`
+and a click on it lands on the last frame; a click on a label seeks to that
+time and hovering it shows the tooltip; longer
+recordings get longer steps and a bar resize alone re-lays it; the FPS pill
+re-times it; fps 0 / no frames clear it; 200 frame steps make zero ruler DOM
+mutations; fits at 640 px).
+
+---
+
 ### ui/seekbar-tooltip.js
 
 **Purpose.** Hover tooltip on the transport seekbar (#142): "Frame 1,234 ·
 00:41.100" for the point under the cursor, so you can see where a click or
-drag will land before making it.
+drag will land before making it — and a hover line on the bar marking that
+frame.
 
 **Key exports.** `formatTimestamp(seconds)` (`mm:ss.mmm`, `h:mm:ss.mmm` from an
 hour up; rounds to the millisecond before splitting, so never `00:60.000`),
 `seekbarTooltipText(frameIdx, fps)`, `installSeekbarTooltip(seekbar,
-{frameAtFraction, getTotalFrames, getFps, markerAt?})` -> the tooltip element
-(`markerAt(frac, widthPx)` -> `{frame, text}` | null: a possible-ID-switch tick
-under the cursor — its frame replaces `frameAtFraction`'s, as the scrub handlers
-snap to it, and its text is appended)
+{frameAtFraction, getTotalFrames, getFps, markerAt?, hoverLine?})` -> the
+tooltip element (`markerAt(frac, widthPx)` -> `{frame, text}` | null: a
+possible-ID-switch tick under the cursor — its frame replaces
+`frameAtFraction`'s, as the scrub handlers snap to it, and its text is
+appended; `hoverLine`: the `#seekbarHoverLine` element, from `index.html`)
 (`#seekbarTooltip`, `.seekbar-tooltip`).
 
 **Behaviour.**
@@ -4347,6 +9398,19 @@ snap to it, and its text is appended)
   leave / release outside, and never shown when `totalFrames <= 1`. Centred on
   the cursor and clamped to the bar's extent; `pointer-events: none` so it
   cannot steal the hover.
+- **The hover line** (`#seekbarHoverLine`, `.seekbar-hover-line`) marks the same
+  frame ON the bar, at that frame's own position (`frame / (totalFrames − 1)`,
+  the thumb's mapping) rather than at the raw cursor — so it snaps onto an
+  ID-switch tick exactly as a click does, and is never clamped like the bubble.
+  In the ID Switches tab's playhead colours (`.id-switch-phead`:
+  `--text-primary`, a 1 px dark outline) but BIGGER than an ID-switch tick
+  (4 x 24 px, the bar's full height, against 3 x 16 px), so it reads clearly
+  among them.
+  Painted over the ID-switch ticks and under the thumb — its place in
+  `index.html`'s markup, at the ticks' z-index, is what orders it. Shown and
+  hidden with the tooltip, except during a drag, when the thumb already sits on
+  the frame: it hides on press and comes back on a release over the bar.
+  Positioned in px from the cached rect, so it adds writes and no layout reads.
 - **Layout-free while moving**, so hovering during playback adds no forced
   synchronous layout to the frame: the bar's rect is read on mouseenter / drag
   start and cached (a `ResizeObserver` and window `resize` drop it — the bar's
@@ -4358,13 +9422,16 @@ snap to it, and its text is appended)
 in Node).
 
 **Imported by.** `ui/ui-wiring.js` (installed inside the seekbar-scrubbing
-IIFE in `setupUI`).
+IIFE in `setupUI`), `ui/frame-readout.js` (`formatTimestamp`, so the frame
+readout's time row reads exactly as this tooltip does).
 
 **Coverage.** `tests/test-seekbar-tooltip.mjs` (formatting) and
 `tests/e2e/seekbar-tooltip.mjs` (real mouse events: follows the pointer,
 tooltip frame == the frame a click lands on, drag off the bar, edges clamped,
 drawn on top of the timeline, no timestamp at fps 0, and zero layout reads
-across a run of hover moves).
+across a run of hover moves; the hover line at the clicked frame's position and
+under the bubble, its colours compared against a live `.id-switch-phead` and
+its size against a live tick, its z-order, snapping onto a tick, hiding through a drag and on leave).
 
 ---
 
@@ -4376,9 +9443,29 @@ add/remove/switch, and view-strip thumbnails. Owns the on-screen
 multi-video docking layout.
 
 **Key exports.**
-- `panelRenderers` — Map of panelId → VideoPaneRenderer.
+- `panelRenderers` — Map of panelId → VideoPaneRenderer. Each pane carries
+  the zoom badge, `.zoom-badge.tri-dropdown`, shown while its view is zoomed or
+  at native resolution. Its `.unzoom-btn` reads the zoom as a percentage of 1:1
+  ("125% ▾", "100% ▾" — `applyZoom` writes `.zoom-badge-label` via
+  `zoomPercentLabel`, `loading/video.js`) and a click fits the view. Hovering
+  opens `.zoom-preset-menu` — the Triangulate split-button pattern, the same
+  pure-CSS hover `.tri-dropdown` — with `ZOOM_PRESET_PERCENTS` (50 / 100 / 150 /
+  200 %, each hinted with its screen:video pixel ratio from `zoomRatioLabel`:
+  1:2 / 1:1 / 3:2 / 2:1) and Fit, for THAT pane's view only (`setZoomPercent` /
+  `resetZoom`).
+  The current preset is ticked, re-read on each hover; 100% is ticked only when
+  the view is AT 1:1 (`zoom.native`), never merely near it. Items carry
+  `data-zoom-pct` / `data-zoom-fit`. The badge stops `mousedown` so a click on it
+  never starts the cell's pan / box zoom. It hangs from the badge's right edge
+  above the view legend (z 8 vs 7); the cell clips it, so a very short pane
+  can cut the menu off.
 - `multiSelectViews`, `clearMultiSelect`.
-- `refreshPaneInteractions`.
+- `refreshPaneInteractions` — re-inits every view's zoom (`initZoom`), fits the
+  canvases, then re-derives the 1:1 scale of every view `initZoom` flagged
+  native (View ▸ Native Resolution on), since that scale depends on the box
+  `fitCanvasesToCells` just laid out. A pane's `init` schedules a second call
+  one frame later, which re-inits zoom AGAIN — so after any pane rebuild every
+  view is either fitted or, with the mode on, at 1:1.
 - `scrollViewStripTo(viewName)` — scroll that view's strip item into sight.
   `.view-strip-list` is `overflow-y: auto`, so on a project with more cameras
   than fit the column, arrow-cycling the solo view would otherwise move the
@@ -4403,7 +9490,20 @@ multi-video docking layout.
 - `./id-switch-modal.js` — `refreshIdSwitchPanel`: `switchSession` shows the new
   session's ID-switch results and markers (try/catch, like `populateTimelineVisibility`).
 - `./app-state.js` — `state`, controllers + setters.
-- `../pose/pose-data.js` — `FrameGroup`, `UnlinkedInstance`, `Camera`.
+- `../pose/pose-data.js` — `FrameGroup`, `UnlinkedInstance`, `Camera`,
+  `pooledPoints3d` (the re-solved groups' 3D).
+- `../pose/lazy-residency.js` — `hydrateFrameMembers2d`, `releaseFrameMembers2d`.
+  `moveVideosToSession` re-solves every origin-session group that loses the
+  moved view, and on a lazy project a member of a non-resident frame is a
+  `_lazy2d` placeholder (after a reopen, and since #280 after Track All /
+  Triangulate All). Triangulating placeholders found no 3D, so each such group
+  silently KEPT its old points3d — solved WITH the moved view — and was marked
+  clean. Each affected frame's members are now hydrated from the store for the
+  re-solve and given back after, as the image ID-switch check does. Covered by
+  `tests/e2e/move-video-lazy-members.mjs` (fails 0/10 non-resident groups
+  re-solved without the hydration). Unchanged and still resident-only: step 1
+  moves the moved camera's 2D for RESIDENT frames only — its rows for every other
+  frame stay in the origin session's lazy store.
 - `../pose/triangulation.js` — `triangulateAndReproject`,
   `storeReprojectedInstances`, `getInstanceGroupsForFrame`,
   `sessionHasCalibration`, `resolveTriangulationMethod`. Moving a view between
@@ -4430,6 +9530,8 @@ multi-video docking layout.
   module), hoist-safe because the only read is inside the view strip's click
   handler, which cannot run during module evaluation.
 - `./info-panel.js` — `updateInfoPanel`.
+- `./frame-readout.js` — `clearReadout` (session removed),
+  `refreshReadoutTotals` (`switchSession` restoring a cached frame count / fps).
 - `./identity-assignment.js` — `autoAssignState`.
 - `../pose/initialization.js` — `setup3DViewport`.
 
@@ -4508,6 +9610,24 @@ existing pane instead), so no click sequence can produce a duplicate pane;
 duplicates come only from the drag/drop docking path and `addAllViewsAsGrid`.
 See **Single-view ("solo") mode** under `ui/ui-wiring.js`.
 
+**`removeVideoPanel(viewName)` — the counterpart to `addVideoPanel`.** Closes
+EVERY pane showing that view and returns how many it closed. Used by
+`removeVideoFile` (`loading/session-loader.js`) so the Videos tab's **Remove
+Video** takes the whole panel out of the dock instead of leaving an empty,
+still-titled one behind (luc3d #216). Three things about it:
+- It goes through `panel.api.close()`, exactly as the pane's own × and
+  `clearAll` do — `onDidRemovePanel` is what decrements `dockedViews` and clears
+  the strip's in-dock dot, so tearing the element out by hand would leave both
+  claiming the view is still docked.
+- **Every** pane, not the first: a view can be docked more than once (a dropped
+  multi-selection, or an `addAllViewsAsGrid` restore), and a survivor would go
+  on rendering a view that no longer exists.
+- Panes are matched through `panelRenderers`, never by parsing the panel id —
+  the id is `video-<name>-<counter>` and a view name may itself contain dashes.
+It also deletes the `dockedViews` entry outright afterwards, so a view left in
+the map with no pane (bookkeeping that got out of step) cannot block a later
+re-add.
+
 **`syncDockedViews()` — `fromJSON` builds panels behind `addVideoPanel`'s back.**
 `paneManager.dockedViews` (viewName → pane count) is maintained by
 `addVideoPanel` / `addAllViewsAsGrid` / `onDidRemovePanel`, and it drives both
@@ -4518,6 +9638,15 @@ a plain strip click on a view that is visibly on screen did nothing, and a
 double-click docked a duplicate pane. `syncDockedViews()` re-derives the counts
 (and the dots) by walking `api.panels` through `panelRenderers`, and
 `setGridMode` calls it immediately after `fromJSON`.
+
+**`addAllViewsAsGrid()` leaves solo mode.** Laying every view out as a grid IS
+grid mode, so it sets `state.viewMode = 'grid'` and removes the solo chip
+(`#viewModeIndicator` + the dock's `has-view-indicator`). The loaders, session
+switches and `removeSession` all rebuild the dock with `clearAll()` +
+`addAllViewsAsGrid()`, and only `newProject` used to reset the mode — so a load
+made while a view was solo'd showed the grid with the mode still `'single'`, and
+`v` (a no-op when already solo) silently did nothing until `g`. Pinned by
+`tests/e2e/solo-view-navigation.mjs` §6.
 
 **Video display settings — brightness, contrast (issue #149) and rotation.**
 `populateVideoBrightnessTable`, `populateVideoContrastTable` and
@@ -4583,30 +9712,108 @@ change point and repeat on the transport seekbar (`setSeekbarSwitchMarkers`, `ui
 **Key exports.** `runIdSwitchChecks({size?, image?, auto?, statusPrefix?,
 navigateToFrame?, inject?})`; `setIdSwitchNavigator(fn)` (ui-wiring registers
 `navigateToFrame` once, so rows stay clickable when the tracker started the
-check); `refreshIdSwitchPanel(session?)` (render the tab and put that session's
+check); `setIdSwitchRefresher(fn)` (ui-wiring registers the repaint run after a
+fix / undo — overlays, 3D, info panel, timeline — keeping this module a leaf);
+`setTrackSummaryOpener(fn)` (ui/track-summary-modal.js registers `reopenTrackSummary`
+for the tab's **Show Track All summary** button — the first thing in the tab, above
+"Possible ID switches", in both the results and the empty state, shown only when the
+session has a summary from a Track All in this page, since it is not saved; it is
+how a box closed without running the image check is got back, to run it);
+`refreshIdSwitchPanel(session?)` (render the tab and put that session's
 markers on the seekbar — called after a check, from `updateInfoPanel` and from
 `switchSession`); `openIdSwitchPanel()` (show the panel, if hidden, on the tab);
 `clearIdSwitchResults(session?)` (called by `runTrackingPass` before it relabels);
 `ID_SWITCH_LEAD_IN_SECONDS`, `idSwitchLeadInFrame(marker, fps)`,
 `updateIdSwitchProgress(frame)`; back-compat
-`runSizeSwitchCheck`. `inject: {createEmbedder, hasWebGPU}` replaces the image
-model and the WebGPU probe — test-only (`tests/e2e/id-switch-image-check.mjs`).
+`runSizeSwitchCheck`. `inject: {createEmbedder}` replaces the image model —
+test-only (`tests/e2e/id-switch-image-check.mjs`).
 
 **Runs automatically after tracking.** `pose/tracker.js`'s `runTrackingPass` calls
 `runIdSwitchChecks({auto: true, statusPrefix, size, image})` after BOTH Track All
 and Track Frame Range: size when the Tracking Wizard's `autoSwitchCheck` is on
 (default), images when `autoImageSwitchCheck` is on (default OFF — minutes, needs
-the videos + WebGPU). Auto mode appends each check's result to the pass's status
+the videos; with no GPU it runs on the CPU, slower, rather than being skipped). Auto mode appends each check's result to the pass's status
 line ("Assigned N identities … · ID-switch check (body size): …; ID-switch check
 (images): …"), opens the ID Switches tab only when a possible switch is found, and reports
 a check that cannot run as "skipped — reason", never as a failure of the pass. It
-always analyses the WHOLE session's identities.
+always analyses the WHOLE session's identities. Each result it returns carries
+`elapsedMs`, the check's wall-clock time (model download and video decoding
+included), which the Track All summary box shows (`ui/track-summary.js`); it is
+not saved — `serializeIdSwitchReview` (`ui/id-switch-review.js`) picks its fields explicitly.
 
-**The image check.** Needs the session's videos and WebGPU (else it says why).
-Runs under its own cancellable progress dialog (Cancel / Esc -> "cancelled", no
+**The image check.** Needs the session's videos (else it says why), and the
+network the first time, to download the model: offline, an error the embedder
+marks `cannotRun` (ui/image-embedder.js — a failed download, or no Nose/TTI) is
+returned as the reason rather than thrown as a failure, so the status reads
+"Check ID Switches (images): needs an internet connection to download the image
+model (…)" and, after tracking, "skipped — …" — where it used to be "failed —
+Failed to fetch dynamically imported module: https://cdn.jsdelivr.net/…" (the
+original goes to the console). Not a GPU:
+without one the embedder runs the model on the CPU (`pickImageDevice` /
+`createCpuModelPool`, ui/image-embedder.js), ~15x slower, and the check runs as
+usual — from the menu and after tracking alike. It used to refuse ("needs WebGPU —
+on the CPU it would take hours"), which was the wrong call for a user who had
+opted in. `fmtDuration` therefore reaches hours ("about 2 h 5 min left"). Runs under its own cancellable progress dialog (Cancel / Esc -> "cancelled", no
 markers added): model download (first use), "Cropping and embedding N views:
-frame i of n — about X min left", then fitting. Reads `imageCheckHz` (default 2)
-and `imageCheckThreshold` (default -25). Measured on a real 5-min, 3-animal,
+frame i of n — about X min left", then "Learning what tells the animals apart
+(camera i of n)", with the overall percentage under
+the bar (the same rounded value as the bar's width; embedding is its first 90%) and
+the ID Switches rows' playhead line (`.id-switch-phead`) at the fill's leading edge.
+Under the percentage, **the CPU line over the device line**, and **a graph of both
+loads to their right** (`hardware(cpu, gpu)` / `sample(cpu, gpu)` on the dialog).
+The CPU line (`formatEmbedCpu`, ui/image-embedder.js): "CPU: 12 cores · load 7%" —
+the share of ALL `navigator.hardwareConcurrency` cores the check kept busy over the
+last 5 s, i.e. `createLoadMeter` over (`cpuBusyMs()` + the fit's main-thread time) /
+cores, so one saturated thread on 12 cores reads 8%. The fit is timed HERE, in the
+progress callback: it runs synchronously between `progress('fit', …)` calls, so the
+time from the end of one callback's `yieldToPaint` to the start of the next is
+main-thread fitting (`fitMs`); the first camera's interval is not counted (it is the
+wait for the last embeddings). Video decoding and the page's other main-thread work
+are not in it — no browser API reports a thread's or the CPU's load — and its
+tooltip says so. The device line: "GPU: Apple metal-3 (WebGPU, fp16) · load 87%",
+the load refreshed every second from the first embedded frame (`createLoadMeter`
+over `busyMs()`), so it falls to 0% while fitting, which the CPU line then shows;
+with no GPU, "No GPU: running on the CPU (4 workers) — slow" in the warning colour,
+why in its tooltip, and no load. **The graph** (`createLoadGraph`, `ui/load-graph.js`
+— the same one the loading overlay shows for Triangulate All and Track All; an
+84 x 34 px plot with 0/50/100% and "60 s ago" … "now" axis labels and outward ticks, the lines inset
+2 px so 0% and 100% are not half clipped; the dialog is a fixed 540 px so the GPU
+line fits beside it and the width does not follow the progress text): the last
+`LOAD_GRAPH_SPAN_MS` (60 s), newest at the right edge, 0-100% with a hairline at
+50%, one sample per tick of the same 1 s timer, so its newest points ARE the two
+lines' loads. Points are placed by TIME (`loadGraphPath`), not index — fitting
+blocks the main thread for seconds, so ticks are uneven. A line with a series wears
+its colour as a legend key (`.has-series::before`, with a hanging indent so a long
+GPU name wraps after it); the "No GPU" line has no series and no key. Colours are
+the first two slots of the dataviz skill's validated categorical palette (dark
+steps), CPU `#3987e5`, GPU `#d95926` — validated against the plot's `#1a1a1a`
+(CVD dE 26.8). Hovering shows a cursor, a dot per series and a readout above the
+graph ("12 s ago · CPU 7% · GPU 80%") for the nearest MEASURED sample (the first
+tick's are null). The graph and both lines keep their space before they appear
+(`visibility`, `min-height`), so the dialog does not jump. An injected
+embedder without `device()` shows no line. **Beside them, above Cancel, a sample
+crop** (128 px, captioned "id_2 · cam5" with the animal's current label): exactly
+the model input — greyscale, nose right, masked — turned back into pixels by
+`inputTensorToPixels`, so bad keypoints show up as bad crops while the check runs —
+with **the skeleton drawn over it** (`drawCropSkeleton`) in the animal's identity
+colour over a dark outline, at the keypoints `cropPointsToInput` maps into the
+crop, because a masked, rotated greyscale crop on its own reads as abstract. The
+skeleton is on the dialog's canvas only; the model input is untouched.
+It changes every `CROP_PREVIEW_MS` (400 ms), cycling through the embedder's
+`sampleCrops()`, by TIME rather than every nth crop, since crops/s differs ~15x
+between a GPU and the CPU. A draw costs ~0.1 ms of main thread (measured: frame
+times 8.3 ms median with and without it at 4 Hz) and no GPU time — the tensor is
+already on the main thread before its batch is uploaded. An embedder without
+`sampleCrops` (the test's fake without a `device`) shows no square. The dialog's `finally` also calls the
+embedder's `releaseFrames` (idempotent): `checkImageSwitches` does too, but not
+when it fails before its first frame, and the CPU workers hold ~600 MB each. On a
+CPU run "About these flags" says the model ran on the CPU, instead of the GPU-busy
+hint. Reads `imageCheckHz` (default 2)
+and `imageChangeThreshold` (default -0.8 — a new id, since 2026-10-09: the image
+score's scale changed, and an old `imageCheckThreshold` of -25 would have been
+clamped to -4). Image rows show their score to one decimal (`fmtScore`; size
+rows stay whole numbers), and an image 'end' row reads "labels change back here".
+"About these flags" describes each check that ran in its own terms. Measured on a real 5-min, 3-animal,
 8-camera session in Chrome (HEVC from Google Drive), before streaming decode and
 view selection: 370 s, ~20 crops/s end to end. Its encounter scores matched the
 offline-calibrated ones (correlation 0.999). Speed now (5-mouse, 8 cameras, local
@@ -4623,8 +9830,9 @@ attached to the result as `model` and its note shown under "About these flags";
 as "Image check speed on this machine: …". Passes `inFlight: embedder.inFlight`.
 
 **User-facing features.** The **ID Switches** tab (`#tabIdSwitches` /
-`#idSwitchPanel` in `index.html`, third tab; at the default panel width it sits in
-"More ▾"). Results are stored per session on `session._idSwitch` (`{results:
+`#idSwitchPanel` in `index.html`, third tab; at the default panel width it is
+scrolled off the right of the tab bar, and `openIdSwitchPanel` scrolls it back
+into view). Results are stored per session on `session._idSwitch` (`{results:
 {size?, image?}, reviewed: Set, showRepeats, current}`), so they survive
 closing/reopening the tab and switching sessions — and are SAVED in the `.slp`
 (`metadata.lucid.idSwitchReview`, see `ui/id-switch-review.js`; ticking a row,
@@ -4634,17 +9842,20 @@ or a new tracking pass. The tab shows a heading, per-check counts, "About these
 flags" (the method, calibration figures, sampling rate, frame-rate warning and
 the image backend note), a sticky toolbar ("N of M reviewed", **Next
 unreviewed ▸** — the next unticked row after the current one, wrapping —
-**Clear**, and "Show N later encounters that still look swapped"), then one row
+**Clear**, and "Show N later encounters that still look swapped" — only for
+results restored from files saved before 2026-10-11: the checks no longer make
+repeats), then one row
 per change point: a **reviewed** checkbox, time, `id_a ↔ id_b` (each name in its
 identity's colour, as in the overlays), score, the encounter's span ("close
 4:59.6–5:01.7 (frames 17,977–18,105)") with an **end ⇥** button, and
 "frame N · check · note" (Both / size / images; "follows the switch at m:ss";
-"labelling changes here; earlier encounters look swapped"; "still swapped"). A
-change point both checks found (same pair within 1 s) is ONE "Both" row (scores
-"size / image"). Clicking a row navigates there; ticking it dims the row and its
+"labels change back here" on an 'end'; "still swapped" on a restored repeat). The
+score is shown to one decimal (`fmtScore`; whole numbers for the summed-evidence
+scores of files saved before 2026-10-09). A change point both checks found (same
+pair, overlapping contacts) is ONE "Both" row (scores "size / image"). Clicking a row navigates there; ticking it dims the row and its
 seekbar tick (`reviewed`). **Where a row lands:** an encounter's frame is the
-LAST close sample (the labels are read from the tracklets AFTER it), so a swap
-happens before it, while the animals are close; clicking a row therefore lands
+LAST close sample (the labels are compared before and after the contact), so a
+swap happens before it, while the animals are close; clicking a row therefore lands
 `ID_SWITCH_LEAD_IN_SECONDS` (1 s) before the close spell STARTS
 (`idSwitchLeadInFrame`, from the flag's `startFrame`; its end frame when the start
 is unknown, e.g. a file saved before start frames were kept), so pressing play
@@ -4652,13 +9863,25 @@ shows the whole interaction; **end ⇥** jumps to the end frame, and Next
 unreviewed uses the lead-in too. **The selected row's progress bar** pops up on
 selection and follows the viewer's frame (stepping, scrubbing, playback):
 0% at the landing frame (1 s before the close spell), the close spell — where a
-swap would happen — shaded amber in the middle, 100% at 1 s after the
-encounter's end; clamped outside that range. `updateIdSwitchProgress(frame)` is
+swap would happen — red in the middle, the lead-in and lead-out orange, 100% at
+1 s after the encounter's end; clamped outside that range. The section colours
+come from `ID_SWITCH_SECTION_RGB` (`ui/id-switch-highlight.js`), set inline.
+A **playhead** line (`.id-switch-phead`) marks the current frame at the fill's
+leading edge and stands 4 px proud of the bar, so the coloured track is an inner
+element (`.id-switch-ptrack`) that clips the fill and band to its rounded ends
+while the bar itself does not clip; both move in the same style write.
+**Clicking or dragging the bar goes to that frame** (`round(p0 + x·(p1 − p0))`),
+like the transport seekbar; a `::before` gives it a hit area 7 px taller on each
+side. It is a `pointerdown` on the list (window-level move/up listeners, the bar
+re-found on every move so a panel rebuilt mid-drag cannot strand it, repeats of
+the same frame skipped), and the click that ends the press is swallowed so it
+never re-lands the row on its lead-in. `updateIdSwitchProgress(frame)` is
 called from `ui/ui-wiring.js` `updateSeekbarVisual` on every frame change: one
 style write, and a no-op without a selected row (the bar element is looked up
 once per render/selection, not per frame). The same interval drives an
 **animated box around the pair in every camera view** (`ui/id-switch-highlight.js`,
-set by row selection and panel renders, advanced by `updateIdSwitchProgress`). A check run from the menu always opens the tab; an
+set by row selection and panel renders, advanced by `updateIdSwitchProgress`),
+which wears the colour of the bar section the frame is in. A check run from the menu always opens the tab; an
 automatic one only when it found something. The tab content is the panel's one
 scroller (the list has none of its own). With no results it says so and offers
 "Check by body size" / "Check by images…" (they click the menu items).
@@ -4668,26 +9891,59 @@ scroller (the list has none of its own). With no results it says so and offers
 and the tab button), not by importing ui-wiring. The module keeps its `-modal`
 name for the image check's progress dialog, which is still modal.
 
+**Fixing a switch.** The selected row shows **Fix switch…** under its bar. It
+opens a confirmation naming the frames (`idSwitchFixPlan`, `ui/id-switch-review.js`)
+and why each edge is where it is; Esc / Cancel / a click outside change nothing,
+and every keystroke stops at the dialog (capture phase) so no app shortcut acts
+under it. Confirming calls `Session.swapIdentitiesInRange` (every view), records
+the fix in `st.fixes`, renames the other rows the swap re-labels, ticks the row,
+marks the project dirty, repaints through the registered refresher and returns the
+view to the row's lead-in, so pressing play shows the corrected labels. The row
+then reads **Fixed** (not struck through) with the swapped frames and, on the
+LATEST fix only, **Undo fix** — later fixes may build on an earlier one, so only
+the last is exactly reversible; undo swaps the same frames back. A follow-on row's
+dialog says to fix the switch it follows first. Re-running a check forgets the
+fixes (the swaps stay): its rows were scored on the fixed labels, so an undo would
+rename them wrongly.
+
 **Imports from project modules.** `ui/app-state.js` (`state`, `timeline`,
 `getActiveSession`), `import-export/save-load.js` (`setStatus`),
-`ui/loading-overlay.js` (`showLoadingProgress`, `hideLoading`, `yieldToPaint`),
+`ui/loading-overlay.js` (`showLoading`, `hideLoading`, `yieldToPaint` — the body-size
+check shows the overlay's card titled "Checking ID switches (body size)", a spinner and
+"Comparing each animal's body size before and after its contacts…", not a counter:
+it is one uninterrupted ~0.2-1.5 s block whose only progress is 0 then 1 of one fitting
+step, which the counter printed as a frozen "0/1 frames (0%)"),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
-`ui/image-embedder.js` (`hasWebGPU`, `createImageEmbedder`),
-`ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`),
-`ui/id-switch-highlight.js` (`setIdSwitchHighlight`, `updateIdSwitchHighlight`).
+`ui/image-embedder.js` (`createImageEmbedder`, `IMAGE_MODEL_MB`, `formatEmbedTiming`,
+`formatEmbedDevice`, `formatEmbedCpu`, `inputTensorToPixels`, `INPUT`),
+`ui/load-graph.js` (`createLoadMeter`, `createLoadGraph`, `setLoadLine`, `cpuCores`),
+`ui/browser-hints.js` (`renderBraveFingerprintingHint`: in Brave with its fingerprinting
+protection on, the note under the CPU and GPU lines — `prog.braveHint(cores)`),
+`ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`,
+`idSwitchFixPlan`, `idSwitchFixFor`, `idSwitchRenameForFix`),
+`ui/id-switch-highlight.js` (`setIdSwitchHighlight`, `updateIdSwitchHighlight`,
+`refreshIdSwitchHighlight`, `ID_SWITCH_SECTION_RGB`).
 
 **Imported by.** `ui/ui-wiring.js` (`#menuCheckSizeSwitches`,
-`#menuCheckImageSwitches`, `setIdSwitchNavigator`, `updateIdSwitchProgress`), `pose/tracker.js` (the
+`#menuCheckImageSwitches`, `setIdSwitchNavigator`, `setIdSwitchRefresher`, `updateIdSwitchProgress`), `pose/tracker.js` (the
 automatic run, `clearIdSwitchResults`), `ui/info-panel.js` and
-`ui/sessions-panes.js` (`refreshIdSwitchPanel`).
+`ui/sessions-panes.js` (`refreshIdSwitchPanel`), `ui/track-summary-modal.js`
+(`openIdSwitchPanel`, `refreshIdSwitchPanel`, `setTrackSummaryOpener`).
 
 **Coverage.** `tests/e2e/size-switch-check.mjs` (size, menu path, the checklist:
 ticks, Next unreviewed, persistence across the tab / a re-run / a session switch,
 Clear, one scroller),
 `tests/e2e/track-auto-size-switch-check.mjs` (after Track All / Track Frame Range),
 `tests/e2e/id-switch-image-check.mjs` (images with an injected embedder: "Both"
-merge, identical-size animals found by images only, Esc cancel, no WebGPU, menu,
-default off).
+merge, identical-size animals found by images only, Esc cancel, the progress dialog's
+percentage / playhead / CPU line above the GPU line / load graph (placement, legend
+keys, newest points = the lines' loads, hover readout) / sample crop (label and
+camera caption, a new one every 0.4 s from a list that sits still) and skeleton
+overlay, no GPU = runs on the CPU to the end and graphs the CPU alone, menu, default
+off), `tests/e2e/image-check-cpu.mjs` (the real dialog's measured CPU line and
+CPU-only graph), `tests/e2e/id-switch-fix.mjs` (Fix switch…: both start rules in the
+dialog, Esc / Cancel / shortcuts, the swap fixes exactly the crossed stretch, the
+row afterwards, the renamed follow-on, saved, Undo exact).
 
 ---
 
@@ -4703,28 +9959,52 @@ ids, are what a reopened project still agrees on); `idSwitchPrimary(res)` (chang
 points), `idSwitchMarkers(res)` (+ repeats), `idSwitchOnsets(res)` (the
 "possible switches" count), `idSwitchEncounterCount(res)`;
 `linkIdSwitchResults(results)` (tag each marker's `cue`, link a size and an image
-change point of the same pair within 1 s as `agree` — "Both");
+change point of the same pair at the same contact as `agree` — "Both": their close
+spells overlap, give or take 1 s, since the two checks merge contacts by their own
+evidence; or, without start frames, they end within 1 s — the nearest one wins);
 `serializeIdSwitchReview(session)` -> payload or `null` (no check results -> no
 key, so untouched projects keep their bytes); `ingestIdSwitchReview(session,
 payload)` (rebuilds `session._idSwitch`, re-links "Both"; ignores anything
-malformed, never throws).
+malformed, never throws); `idSwitchFixPlan(m, res, {currentFrame,
+totalFrames, window?})` -> `{key, partnerKey, nameA, nameB, from, to, start
+('current' | 'separate'), edge}` or null
+— what fixing row `m` swaps (see below); `idSwitchFixFor(st, m)` (the fix covering
+a row, its own or its partner's); `idSwitchRenameForFix(st, fix)` (renames the
+other pairs' rows inside a fixed stretch — an involution, keys follow).
+
+**What a fix swaps.** The boundary is the CURRENT frame whenever it is inside the
+row's window (`o.window` — in the app the whole progress bar, 1 s before the
+animals come close to 1 s after they separate), so the user puts it where they saw
+the labels flip by playing, stepping or clicking the bar; outside the window it
+falls back to e + 1 (where the animals separate). Without `o.window` the window is
+the close spell [s, e + 1]. An onset swaps from there to its `switchBackAt` encounter's last
+close frame, or the last frame; an 'end' swaps the stretch BEFORE it, from just
+after `switchedAt` (or frame 0) to the frame before its boundary. The change point
+at the other edge is the fix's `partnerKey` (the same stretch). Results restored
+from a file saved before the links existed pair by the nearest change point of
+the same pair on the right side. After a fix, every OTHER row in the stretch that
+names exactly one of the pair is about the animal that now carries the other
+name, so it is renamed (selecting it must still box the same animals); the fixed
+pair's own rows are not.
 
 **Format.** `{v: 1, checks: {size?|image?: {encounters, sampleHz, step, fps,
 fpsFromVideo, [imageHz, crops, cameras, model: {name, note}], points: [[frame,
 nameA, nameB, score (0.1), kind ('' | 'end'), followOf (frame | -1), continues
 (0 | 1), startFrame (the encounter's first close frame | -1; absent in files saved
-before it existed — they still open, rows then land on the end frame)], …]}},
-reviewed: [rowKey, …]}` — only what the tab and the timeline
+before it existed — they still open, rows then land on the end frame), link
+(`switchBackAt` / `switchedAt` | -1 for none; absent in older files)], …]}},
+reviewed: [rowKey, …], fixes?: [[key, partnerKey, nameA, nameB, from, to], …]}`
+(`fixes` oldest first, only when something was fixed) — only what the tab and the timeline
 draw; not the encounters or the fitted models. A restored check result has
 `restored: true` and `encounterCount` instead of `encounters`.
 
-**Imports from project modules.** None (loads in the node test sandbox; listed in
-`tests/run-node.js`).
+**Imports from project modules.** None.
 
 **Imported by.** `ui/id-switch-modal.js`, `import-export/visibility-metadata.js`.
 
 **Coverage.** `tests/test-id-switch-check.mjs` (lossless reopen -> re-save,
 "Both" re-link, ticks, garbage tolerance, nothing written without results);
+`tests/test-id-switch-fix.mjs` (the links, the plans, renaming, fixes round trip);
 `tests/e2e/visibility-settings-roundtrip.mjs` (both writers, real reader).
 
 ---
@@ -4735,9 +10015,14 @@ draw; not the encounters or the fitted models. A restored check result has
 every camera view, while the viewer's frame is inside that row's interval (1 s
 before they come close -> 1 s after they separate — the row's progress-bar span).
 
-**Key exports.** `setIdSwitchHighlight({nameA, nameB, p0, p1} | null)`;
-`updateIdSwitchHighlight(frame)` (every frame change, via
-`ui/id-switch-modal.js` `updateIdSwitchProgress`); `getIdSwitchHighlight()`.
+**Key exports.** `setIdSwitchHighlight({nameA, nameB, p0, s, e, p1} | null)`
+(`s..e` is the close spell); `updateIdSwitchHighlight(frame)` (every frame
+change, via `ui/id-switch-modal.js` `updateIdSwitchProgress`);
+`refreshIdSwitchHighlight()` (recompute the boxes at the current frame after the
+identities changed — a fix — or the node weights did, on Settings Apply); `getIdSwitchHighlight()`; `ID_SWITCH_SECTION_RGB` (`{lead, close}` as `r, g, b`
+strings — orange / red) and `idSwitchSection(target, frame)` (`'close'` over
+`[s, e]`, else `'lead'`); `idSwitchBoxNodeMask(nodeNames)` (`mask[k]` true for a
+node weighted above 0, or `null` = every node when none or all are weighted 0).
 
 **How.** Draws on its OWN canvas per view (`.id-switch-canvas`, appended to the
 view's `.canvas-wrapper`, `pointer-events: none`), backing size video × zoom like
@@ -4746,22 +10031,52 @@ overlay redraw paths (which clear the overlay canvas every frame) never touch it
 and the overlay-video export does not include it. A `requestAnimationFrame` loop
 runs ONLY while the frame is in the interval — the outline marches (dash offset)
 and pulses even when paused — and stops after clearing the canvases once outside
-it. Boxes are recomputed only when the frame changes: per camera, the instances
+it. It is kept cheap because it runs during playback on every view: a view is
+repainted when the frame changes and otherwise at most every `ANIM_MS` (33 ms; the
+animation is timed from the clock, so its speed does not depend on the rate), and
+a repaint clears only the rectangle the previous one drew (`_dirty`) instead of
+the whole video-sized canvas — repainting all eight full canvases at the display
+rate (120 Hz) was twice the video's own rate. Boxes are recomputed only when the frame changes: per camera, the instances
 whose identity NAME is one of the pair at that frame (per-frame track identity
 first, then the group's `identityId`; unlinked instances via
 `getIdentityIdForUnlinkedInstance`), one box around both (or the one visible),
-labelled "id_a ↔ id_b" in the identities' colours. Lines, padding and text are
+labelled "id_a ↔ id_b" in the identities' colours. **The box encloses only the
+nodes the Tracking Wizard weights above 0** (`getNodeWeightArray` over the
+session skeleton), so with the tail nodes at 0 it frames the bodies and heads
+rather than a tail sweeping across the view. An instance none of whose weighted
+nodes is visible in a view falls back to ALL its nodes, so an animal is never
+dropped from the box; a skeleton weighted 0 throughout encloses every node. The
+weights are read on each recompute, and Settings Apply calls
+`refreshIdSwitchHighlight`, so a change shows on the frame already on screen. The outline wears the
+colour of the row's progress-bar SECTION the frame is in — orange over the
+lead-in and lead-out, red over the close spell — from `ID_SWITCH_SECTION_RGB`,
+which the bar (`ui/id-switch-modal.js` `progressHtml`) also reads, so the two
+cannot drift. Lines, padding and text are
 sized in SCREEN pixels (canvas width / (layout width × zoom)), so a small tile
-of a large video stays readable. Lazy projects: nothing for a non-resident frame.
+of a large video stays readable. Lazy projects: nothing for a non-resident frame
+— and the box appears once that frame is hydrated. Selecting a row jumps to a
+frame that is usually not resident yet, and its hydration redraws the overlays
+without being a frame change, so while the frame is missing (`_waiting`) the
+animation loop checks `frameGroups.has(frame)` on each tick and recomputes when
+it lands. Before that, the box stayed empty until the frame next changed (i.e.
+until play was pressed).
 
 **Imports from project modules.** `ui/app-state.js` (`state`), `ui/overlays.js`
-(`makeVideoToCanvasTransform`).
+(`makeVideoToCanvasTransform`), `ui/settings.js` (`getNodeWeightArray`).
 
-**Imported by.** `ui/id-switch-modal.js`.
+**Imported by.** `ui/id-switch-modal.js`, `ui/settings-modal.js`
+(`refreshIdSwitchHighlight`, on Apply).
 
 **Coverage.** `tests/e2e/id-switch-highlight.mjs` (two real views: box around
-the pair and not the third animal, animates while paused, cleared past the
-interval and redrawn on return, Clear stops it).
+the pair and not the third animal, animates while paused, orange in the
+lead-in / red in the close spell / orange in the lead-out with the bar's
+sections matching, the bar's playhead and click / drag seeking, cleared past the
+interval and redrawn on return, a moved box leaves nothing behind, Clear stops
+it, a zero-weight node is left out — re-fit on Apply without a frame change —
+the fallback for an instance showing only zero-weight nodes, and a row whose
+landing frame is not resident gets its box when the frame is hydrated, with no
+frame change); `tests/e2e/_bench-playback.mjs` scenario `idswitch` (playback cost on a real
+project with a row selected over the whole run).
 
 ---
 
@@ -4769,8 +10084,40 @@ interval and redrawn on return, Clear stops it).
 
 **Purpose.** Appearance embeddings for the image ID-switch check: for a sampled
 frame and the identities present, decode that frame in every camera
-(streamed: see below), cut a masked, pose-aligned crop of each identity from
-its own 2D keypoints, and embed the crops with DINOv2-small on the GPU.
+(streamed, and moved to the nearest keyframe when keyframes are dense: see
+below), cut a masked, pose-aligned crop of each identity from
+its own 2D keypoints, and embed the crops with DINOv2-small — on the GPU, or
+without one on the CPU.
+
+**Where the model runs** (`pickImageDevice`, at `createImageEmbedder`): a HARDWARE
+WebGPU adapter, else the CPU — no WebGPU, no adapter, or only a software one.
+SwiftShader (headless Chromium with WebGPU on; what a VM with no GPU gets) ran
+the model at 0.27 crops/s, 10x slower than ONE CPU worker, so it is never used.
+**The CPU path** runs the fp32 model on WebAssembly in module workers
+(`createCpuModelPool`, `ui/image-model-worker.js`), each with its own model.
+Measured on a 12-core M2 Pro, in the browser:
+- **Same embeddings.** CPU fp32 vs WebGPU fp32: cosine 1.00000 on every crop
+  (vs WebGPU fp16: 0.9997–0.9999). The CPU runtime's DEFAULT model is int8, and
+  that is what "drifts from the calibrated embeddings" referred to — the dtype,
+  not the device.
+- **Off the main thread, or the page freezes.** On it, one run blocks the page for
+  its whole duration: 0.33 s for 1 crop, 2.6 s for 8 — the dialog and its Cancel
+  stall. onnxruntime's own `wasm.proxy` worker cannot start from the CDN bundle
+  ("worker not ready"), so LUCID runs its own. In workers the longest main-thread
+  gap was 51 ms.
+- **Several workers, because one thread each.** Without cross-origin isolation
+  (which GitHub Pages cannot turn on) WebAssembly gets ONE thread. Workers scale:
+  1 -> 2.8, 2 -> 5.1, 4 -> 9.7, 6 -> 13.8, 8 -> 14.6 crops/s (GPU: ~150). Each
+  costs ~600 MB of process memory (its own model + runtime), so
+  `cpuModelWorkerCount` takes half the cores beyond two, at most one per 2 GB of
+  `navigator.deviceMemory`, at most `CPU_MODEL_MAX_WORKERS` (4), at least 1.
+- The first worker downloads the model (88 MB, reported) and the rest load it from
+  the browser cache; a worker that fails to start is dropped. `run(data, n)`
+  splits a batch evenly over the workers, in order. `releaseFrames` terminates
+  them — they are not kept between runs (reloading is ~1 s from cache).
+WebNN is not tried on the CPU path (it is judged against WebGPU). The run
+summary says "model busy" and "CPU (N workers) fp32" instead of "GPU busy" /
+"WebGPU".
 
 **Speed.** `prepareFrames(frames)` opens one `streamingReader` per camera over the
 whole sorted frame list (mediabunny `samplesAtTimestamps`: decode forward once,
@@ -4812,6 +10159,28 @@ frames, 8 cameras, 8 in flight): RTX 2000 Ada PC 131 crops/s, GPU busy 92% at
 supply-bound. 16 in flight was tried and reverted: no change (PC 124, VM 160
 crops/s; decode is throughput-bound, so each frame just waited twice as long)
 while the PC's dedicated GPU memory climbed to 10.6 GB.
+**Live, in the progress dialog** (`device()` / `busyMs()` -> `formatEmbedDevice`
++ `createLoadMeter`; `cpuBusyMs()` -> `formatEmbedCpu`): which GPU runs the model,
+how busy the check keeps it, and how busy it keeps the CPU. `cpuBusyMs()` is one
+`createBusyClock` (`ui/load-graph.js`) shared by the crop pool, the CPU model pool and inline (main-
+thread) crops: a lane per worker, busy while it HOLDS a job (queued in it or
+running — waits inside a job, such as a crop's GPU readback, count), summed over
+lanes, open spans counted up to now so a seconds-long CPU model run shows while it
+runs. The clock outlives the pools (the crop pool is re-made after `releaseFrames`),
+and a pool's `terminate` / failed worker closes its lanes.
+`gpuAdapterInfo(device, adapter)` names it from the model's own
+`GPUDevice.adapterInfo` (onnxruntime's `env.webgpu.adapter` is undefined in this
+build; a fresh default adapter is the last resort) — "Apple metal-3" from vendor
++ architecture, since browsers usually withhold `description` — and reads
+`isFallbackAdapter`. That flag matters: a SOFTWARE adapter (SwiftShader) is
+WebGPU on the CPU, so `pickImageDevice` sends it to the CPU workers, and the line
+says "No GPU" in the warning colour instead of a load. The load is the share of the last `GPU_LOAD_WINDOW_MS`
+(5 s) spent in model runs, the one in flight included — `gpuBusyPct`, but recent.
+No browser API reports a GPU's total utilisation, so other apps' use is not in
+it, and its tooltip says so. Real model, M2 Pro, 8 views: 92 -> 99% while
+embedding (148 crops/s; whole-run `gpuBusyPct` 98%), then 86 / 63 / 43 / 24 / 4 /
+0% at 1 s steps once idle. WebNN is not called a GPU (the browser picks its
+device; it measured CPU-only on macOS).
 **Decode workers were tried and removed** (2026-10-04). The recordings are HEVC,
 P-frames only, a keyframe every 250 frames, so the check decodes essentially
 every frame of every camera (~2,000–2,700 decoded frames/s on the field
@@ -4824,6 +10193,52 @@ busy (19–26% vs 44%) and dedicated GPU memory climbing in a GC sawtooth to 19.
 of 20 GB. Not reproducible on macOS (no unclosed-VideoFrame warnings), so it was
 removed rather than kept as an option. Cheaper decoding has to come from the
 recordings (keyframes every 0.5 s).
+**Keyframe sampling (2026-10-04).** `prepareFrames` reads each camera's keyframes
+from the container's packet index (`keyframeIndices`: mediabunny
+`EncodedPacketSink.packets(…, {metadataOnly: true})`, `type === 'key'`, mapped to
+frame indices through the backend's `_frameTimes`; no frame data read, cached per
+video) and plans the samples with `planKeyframeSamples` (pose/id-switch-check.js):
+when the median keyframe gap is <= `KEYFRAME_GAP_TOLERANCE` (1.1) x the sample
+spacing (32 frames at 60 fps and 2/s; the 10% lets a recorder's "keyframe every
+0.5 s" qualify at frame rates where rounding makes the spacing a little shorter —
+49 frames at 100 fps, 24 at 50 — at every rate up to 240 fps), each sample moves
+to its nearest keyframe within half of max(spacing, keyframe gap) that has
+tracking (`session.instanceGroups.has`), so `samplesAtTimestamps` decodes ONE
+frame per sample (mediabunny resets to the target's keyframe when it is past the
+last decoded packet). Each view crops its animals from the keypoints of the frame
+it actually decoded (`decodedFrame`; the same identity's group there — an
+identity seen twice in that frame is left out), while the evidence still counts
+at the grid frame, so encounters and tracklets are unchanged. Sparser keyframes
+move nothing: the timestamps are exactly the old ones. Per camera, so cameras
+encoded differently mix. `opts.keyframes`: `false` (or `window.
+LUCID_IMAGE_KEYFRAMES = 0`) turns it off; a function `(decoder) -> keyframe
+indices` replaces the index (diagnostics). `stats().keyframes` /
+`summarizeKeyframePlans` -> `{cameras, of, snappedPct, keyframeGap, spacing}`, and
+the speed line ends "· decoded at keyframes in 8/8 cameras (100% of samples)" or
+"· every frame decoded (keyframe every 250 frames; a keyframe every 0.5 s — 35
+frames or fewer — would decode only the samples)". Measured on the M2 Pro, 2-minute clips of the 8 cameras of the
+5-mouse recording decoded concurrently (`tests/e2e/_bench-image-keyframe-decode.mjs`,
+1,800 camera-samples): original files and x265 with a keyframe every 250 frames
+151 samples/s (53,768 frames decoded, ~4,500/s — the hardware decoder's limit);
+x265 with a keyframe every 30 frames 297 samples/s in place (27,000 frames:
+mediabunny already skips to each sample's GOP) and **2,800 samples/s snapped
+(1,800 frames) — 18.6x today**. On that HEVC (hardware decoder) a keyframe decoded
+alone is bit-identical to it decoded mid-stream (96/96 raw planes; embeddings of
+the same crops max |difference| 0). Cost of the keyframes (x265, same QP 24, P-only):
++42% file size over the 8 cameras (+30% to +65% per camera; the static views pay
+most), at slightly HIGHER quality vs the original (PSNR +0.6 to +0.75 dB on every
+camera, SSIM up ~0.0015); on camera 0, QP 26 restores the size at -0.35 dB.
+The field recordings come from campy's NVENC writer (`-preset fast -qp 24 -bf:v
+0`, no `-g`, so NVENC's default keyframe every 250 frames); from those files'
+own keyframe / P-frame sizes, a keyframe every 30 frames at QP 24 projects to
++53% (+43% to +70% per camera; 6.3 -> ~9.7 GB per 30-min 8-camera session).
+**AV1** (campy's `av1_nvenc` setups) works the same way: keyframes from the
+packet index, one decoded packet per sample, bit-identical keyframes (96/96,
+embeddings max |difference| 0). It costs more: SVT-AV1 (low-delay, CRF 32) +95%
+size for a keyframe every 30 frames; and on the M2 Pro, which has no AV1
+hardware (Chrome decodes it in software), it is only 2x faster: 140 samples/s
+today -> 272 snapped (134 in place; software AV1 keyframes are expensive). GPUs
+with AV1 decode (RTX 30/40, Ada) should look like the HEVC case; not measured.
 Embeddings are bit-identical across all of this (cosine 1.00000 vs seeking,
 top-k vs the same views at all-k, and max |difference| 0 for worker vs inline
 crops over 5,687 real crops).
@@ -4856,16 +10271,67 @@ decode + crop ceiling rose from 145 to ~270 crops/s at 3 views (decoding alone:
 7.9 s vs 8.3 s with cropping) — headroom for a GPU faster than ~145 crops/s.
 Numbers in `ui/id-switch-modal.js`.
 
-**Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, webnn})` ->
-`{getEmbeddings, prepareFrames, releaseFrames, backend, stats, inFlight, views}` (the provider
-`checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and
-disposes a WebNN model);
-`loadImageModel(onStatus)` (once, cached promise); `hasWebGPU()`;
+**Offline, or a host blocked (`asModelDownloadFailure`).** The runtime
+(cdn.jsdelivr.net) and the model (huggingface.co) download on first use, and
+without the network both reject with a bare TypeError that names no cause —
+"Failed to fetch dynamically imported module: <url>" and "Failed to fetch" in
+Chrome (measured), other wordings in Firefox and Safari — which the status line
+used to print verbatim ("failed — Failed to fetch"). Every such wording, from
+either download (and onnxruntime's own failed `.wasm` fetch, which it wraps in a
+plain Error), becomes `MODEL_OFFLINE_REASON` as a `cannotRun` error, which
+`runImage` (ui/id-switch-modal.js) reports as the reason the check cannot run —
+a skip after tracking — rather than a failure. Anything else is left alone. The
+CPU workers classify it themselves, where the error is still a real one, and post
+the flag across. **A retry needs no reload** (`importTransformers`): Chrome keeps
+a failed dynamic import of a URL failed for the page's lifetime — re-importing it
+rejects even once the network is back (measured) — so the runtime is imported
+once, and a retry after a failure imports it under a new FRAGMENT (`#retry1`):
+the same request, since a fragment is never sent, but a new module-map entry.
+`loadImageModel` and `loadWebNNModel` share it, so the page never holds two copies
+of the runtime. `createImageEmbedder`'s two preflight throws (no videos, no
+Nose/TTI) are `cannotRun` errors too.
+
+**Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, webnn, keyframes})` ->
+`{getEmbeddings, prepareFrames, releaseFrames, backend, device, busyMs, cpuBusyMs, stats, inFlight, views}` (the provider
+`checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and the
+CPU model workers and disposes a WebNN model; `device()` -> `{backend: 'webgpu'|'webnn'|'cpu',
+comparing, dtype, adapter, fallback, workers, why}` and `busyMs()` feed the progress
+dialog's device line, `sampleCrops()` its sample crop: `[{tensor, frame, camera,
+identityId, points}]` (`points` from `cropPointsToInput`), one per frame rotating through its animals and cameras, the last
+`SAMPLE_CROPS` kept as REFERENCES (nothing is converted unless the dialog asks).
+Several rather than the latest because on the CPU frames arrive in bursts — 8 cut
+at once, then ~6 s of model time — and one latest crop sat still between them); `opts.device` ('auto' | 'webgpu' | 'cpu') and `opts.cpuWorkers`
+force a device / worker count (tests, benchmarking);
+`pickImageDevice()` -> `{kind: 'webgpu'|'cpu', adapter, why}`; `cpuModelWorkerCount(cores, memoryGB)`,
+`CPU_MODEL_MAX_WORKERS`; `createCpuModelPool(count, onStatus, clock?)` -> `{size, run(data, n) ->
+Promise<Float32Array[]>, terminate()}`; `createCropPool(clock?)` -> `{broken, run(image, crops), terminate()}` | null
+(`clock`: a `createBusyClock`, ui/load-graph.js);
+`loadImageModel(onStatus)` (WebGPU; once, cached promise);
+`importTransformers()` (the runtime, imported once; re-imported under a new fragment
+after a failure); `cannotRun(reason, cause)` (an Error whose message is the reason
+the check cannot run, flagged `cannotRun`); `asModelDownloadFailure(err)` (a failed
+download as `MODEL_OFFLINE_REASON`, else `err` unchanged); `MODEL_OFFLINE_REASON`;
 `selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
-`summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
+`summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`;
+`describeAdapter(info)`, `gpuAdapterInfo(device, adapter)` -> `{name, fallback}`,
+`createLoadMeter` (re-exported from ui/load-graph.js, where it now lives), `GPU_LOAD_WINDOW_MS` (=
+`LOAD_WINDOW_MS`; the CPU line's window too),
+`formatEmbedDevice(device, load)` -> `{text, warn, title, metered, load}` (`metered`: the line has a series in
+the load graph — not for the CPU workers or a software adapter; `load`: what it shows, null when none),
+`formatEmbedCpu(cores, load)` -> `{text, title, load}` (`formatCpuLoad` with this check's "counts": cropping,
+the CPU model, fitting — not video decoding); `inputTensorToPixels(tensor, rgba)`
+(a model input back to grey RGBA, the inverse of `writeInputTensor`'s normalisation),
+`SAMPLE_CROPS` (12); `cropPointsToInput(g)` (`g.pts`, the keypoints `cropGeometry` now also
+records, NaN when missing, into model-input pixels: cutCrop's rotate-about-the-body-centre
+and scale, then x 224/160 — which is exact for an align_corners=false resize; pinned
+against `cutCrop` itself within 0.04 px, at any rotation);
+`keyframeIndices(decoder)` -> `Promise<Int32Array|null>` (cached per video);
+`summarizeKeyframePlans(plans)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
 `chooseBackend(trial)`, `WEBNN_BATCH`, `WEBNN_TRIAL_FRAMES`; `createCropPool()` -> `{run(image, crops) ->
 Promise<Float32Array[]>, broken, terminate()}` or null; crop helpers
-`cropGeometry`, `cutCrop`, `convexHull`, `writeInputTensor`; constants
+`cropGeometry` (now also `pts`: every keypoint, for the overlay — cutCrop ignores it), `cutCrop`,
+`convexHull`, `writeInputTensor`, `skeletonIndex(nodes)` (now also `n`, the node count),
+`frameCropGeometry(session, frame, items, cams, atFrames, sk)` -> `geo[view][item]`; constants
 `TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (224).
 
 **The crop** (must match the calibration): rotate so the nose points right
@@ -4877,6 +10343,17 @@ length is black, and so are the other animals' hulls in that view; resized to
 real crops: pixel correlation 0.994 (median), 99% mask agreement; embeddings
 cosine 0.971 (vs 0.644 between different crops).
 
+**Crop geometry on a lazy project: `frameCropGeometry`.** The geometry comes from
+group members' 2D, for frames the check never makes resident — and on a lazy
+project those members hold no 2D (a reopened project's placeholders never had
+it; a Track All's are given back to the store as each window is released —
+`pose/lazy-residency.js`). Read directly, every such member yields no geometry,
+so the check embedded nothing there. `frameCropGeometry` hydrates the members of
+each frame it reads (the sampled frame and any keyframe-snapped `atFrames`) with
+`hydrateFrameMembers2d`, computes the geometry, and gives the 2D back with
+`releaseFrameMembers2d` — so the check costs no residency and leaves nothing
+inflated.
+
 **Dependencies.** transformers.js **pinned to 4.3.0** (`/+esm` from jsdelivr —
 pinned for the reason dockview is) and `onnx-community/dinov2-small` from the
 Hugging Face CDN, both fetched on FIRST USE and cached by the browser; nothing
@@ -4885,13 +10362,32 @@ fp32 (~88 MB). WebGPU only: the CPU (WASM) runtime measured ~50x slower (3 vs 15
 crops/s) and its int8 model drifts (cosine 0.953 vs the calibrated model). Re-check
 the CLS extraction (`last_hidden_state` token 0) on any version bump.
 
-**Imports from project modules.** `ui/app-state.js` (`state.views`). Spawns
-`ui/image-crop-worker.js`.
+**Imports from project modules.** `ui/app-state.js` (`state.views`),
+`pose/id-switch-check.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`),
+`pose/lazy-residency.js` (`hydrateFrameMembers2d`, `releaseFrameMembers2d` — DOM-free,
+so the crop worker can load it); `mediabunny`
+(`EncodedPacketSink`, imported LAZILY inside `keyframeIndices` — a static bare
+import would break this module in Node tests and in the crop worker, which has no
+importmap). Spawns `ui/image-crop-worker.js`.
 
 **Imported by.** `ui/id-switch-modal.js`, `ui/image-crop-worker.js`.
 
-**Coverage.** Crop geometry, `selectViews`, `chooseBackend` and the resize table in
-`tests/test-id-switch-check.mjs`; the crop pool in `tests/e2e/image-crop-worker.mjs`;
+**Coverage.** Crop geometry, `selectViews`, `chooseBackend`, the resize table and
+the keyframe line of `formatEmbedTiming`, and the dialog's lines (`formatEmbedCpu`,
+`formatEmbedDevice`'s `metered`/`load`) in
+`tests/test-id-switch-check.mjs` (the shared load helpers: `tests/test-load-graph.mjs`); `frameCropGeometry` on a released member (with
+the direct-read control that finds nothing) in `tests/test-lazy-residency.mjs`; the crop pool, and its busy clock against
+real workers, in `tests/e2e/image-crop-worker.mjs`; `cpuBusyMs()` over the real CPU model workers in
+`tests/e2e/image-check-cpu.mjs`;
+keyframe sampling on generated 60 fps H.264 and AV1 (keyframes every 30 frames vs one) in
+`tests/e2e/image-keyframe-sampling.mjs` (keyframe index, one decoded packet per
+sample, bit-identical planes, sparse video unchanged); a failed download in
+`tests/test-image-model-download.mjs` (every browser's wording becomes the reason,
+nothing else does; the summary row) and `tests/e2e/image-check-offline.mjs` (the
+real app with every off-localhost request aborted after boot: the runtime and the
+weights, on the GPU and CPU paths, a retry in the same page, after Track All, and
+two negative controls; confirmed to fail on the pre-fix build); accuracy on real data by
+`tests/e2e/_diag-image-keyframe-snap.mjs` (diagnostic, not in the suite);
 the full path on real data by a scratch harness (not in the suite: it needs the
 proofread videos and GPU) — see the image-check notes above.
 
@@ -4916,6 +10412,42 @@ is worker-safe).
 **Spawned by.** `ui/image-embedder.js` (`createCropPool`).
 
 **Coverage.** `tests/e2e/image-crop-worker.mjs`.
+
+---
+
+### ui/image-model-worker.js
+
+**Purpose.** Module worker that runs the image ID-switch check's model on the CPU
+when there is no hardware GPU: DINOv2-small at **fp32** on WebAssembly (the
+default int8 is what drifts from the calibration; fp32 equals the WebGPU fp32
+model, cosine 1.00000). Off the main thread because there a run blocks the page
+for its whole duration (2.6 s for 8 crops); several run side by side because
+WebAssembly gets one thread without cross-origin isolation. See
+`ui/image-embedder.js` ("The CPU path") for the measurements.
+
+**Messages.** IN `{type: 'load'}` -> `{type: 'loaded'}` (while downloading:
+`{type: 'progress', loaded, total}`) or `{type: 'error', message, cannotRun}`
+(`cannotRun`: a failed download, `message` then being `MODEL_OFFLINE_REASON` —
+classified here by `asModelDownloadFailure`, where the error is still a real
+one); IN `{type:
+'run', id, data: Float32Array(n x 3 x 224 x 224) (transferred), n}` -> `{type:
+'result', id, cls: Float32Array(n x 384) (transferred), dim}` — each crop's CLS
+token, read exactly as the main thread's `clsVectors` does — or `{type: 'error',
+id, message}`.
+
+**Imports from project modules.** `ui/image-embedder.js` (`importTransformers`,
+`asModelDownloadFailure`, `IMAGE_MODEL_ID`, `INPUT` — so the pin stays in one
+place), then the runtime through `importTransformers` (a dynamic cross-origin
+import of `TRANSFORMERS_URL`, which a module worker may do).
+
+**Spawned by.** `ui/image-embedder.js` (`createCpuModelPool`).
+
+**Coverage.** `tests/e2e/image-check-cpu.mjs` (the real model in headless Chromium,
+which has no GPU: vectors bit-identical to the main thread's per animal and camera,
+a responsive page, worker teardown, and the real dialog — the after-tracking path —
+running instead of refusing); `tests/e2e/id-switch-image-check.mjs` §4 (the dialog
+with no GPU runs to the end and finds the switch); `tests/e2e/image-check-offline.mjs`
+(offline: the reason, not "Failed to fetch").
 
 ---
 
@@ -4944,7 +10476,10 @@ handler elsewhere and listed for reference only. The two **mouse gestures** on
 an instance — `moveInstance` (`Alt+Drag`) and `rotateInstance` (`Alt+Wheel`,
 issue #198) — are in the catalog for the same reason: they have no key to
 rebind, so they are reference-only, but they belong in Settings ▸ Keyboard
-Shortcuts and the Hot Keys modal where people look for them.
+Shortcuts and the Hot Keys modal where people look for them. So is
+`nativeResolution` (`Shift+0`, View ▸ Native Resolution): matched BY PHYSICAL
+KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
+`+` / `-` / `0`, since Shift+0 types `)` on a US layout.
 
 **Key exports.**
 - `getDefaultTriangulationMethod()` / `setDefaultTriangulationMethod(method)` —
@@ -4975,7 +10510,7 @@ Shortcuts and the Hot Keys modal where people look for them.
   `stale`, `matchGate` (0/1 toggle for the CrossViewTracker match gate),
   `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
-  0/1, the image check likewise, default 0; `imageCheckThreshold` -25;
+  0/1, the image check likewise, default 0; `imageChangeThreshold` -0.8;
   `imageCheckHz` 2; `imageCheckMaxViews` 3; `imageCheckWebNN` — 0/1, try WebNN,
   default 0). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
   `reprojWeight`, `minMatchScore`, `prevIdentityBonus`, `reprojGate2/3/4`,
@@ -5074,7 +10609,8 @@ switch stored as `1`/`0` (`makeToggle`). Covered by
 state only (only editable bindings are tracked); nothing commits until **Apply**
 (`setDefaultTriangulationMethod` + `applyBindings` + `setNodeWeights` +
 `setCameraWeights` + `setTrackingThresholds`), which then repaints overlays +
-timeline so excluded views grey immediately. Cancel / close `×` / backdrop click
+timeline so excluded views grey immediately, and re-fits the ID-switch box
+(`refreshIdSwitchHighlight`), which encloses only nonzero-weight nodes. Cancel / close `×` / backdrop click
 / Escape discard. A
 capture-phase document keydown listener makes the modal fully capture the
 keyboard (background shortcuts don't fire while it's open) and is removed on
@@ -5085,7 +10621,8 @@ teardown.
 `getNodeWeight`, `setNodeWeights`, `getCameraWeight`, `setCameraWeights`,
 `getTrackingThresholdDefs`, `setTrackingThresholds`); `./app-state.js`
 (`getActiveSession`, `state`, `timeline`); `./rendering.js` (`drawAllOverlays`,
-for the post-Apply repaint).
+for the post-Apply repaint); `./modal-geometry.js` (`installModalGeometry`);
+`./id-switch-highlight.js` (`refreshIdSwitchHighlight`, on Apply).
 
 **Imported by.** `ui/ui-wiring.js`.
 
@@ -5107,28 +10644,81 @@ Rows whose camera is excluded from tracking in the Tracking Wizard
 both the gutter label and the occupancy bars — distinct from the
 per-session visibility filter (`_hiddenCameras`), which drops the row entirely.
 
-**Canvas backing-store cap.** `resize()` clamps the canvas backing store to
-`MAX_CANVAS` (32000px/side). A tall timeline (e.g. 8 views × their tracks/
-identities) makes `getPreferredHeight() * devicePixelRatio` exceed the browser's
-~32767px `<canvas>` limit, which fails to allocate and renders as the broken-
-canvas "sad face" over just the timeline region. When that would happen the
+**The canvas is a BAND of the content, not all of it.** Inside the scroll
+wrapper (`_trackScrollEl`), a spacer (`_spacerEl`) carries the timeline's full
+content height — `max(getPreferredHeight(), visible height)` — so the scroll
+range and native scrolling are what they always were. The canvas is absolutely
+positioned over only a band of that content (`_placeBand`): from one margin
+above the scroll position to one margin below the visible bottom (margin = the
+visible height, at least 256 px), clamped to the content, so at most
+visible + 2 margins tall. Drawing stays in CONTENT coordinates — the context
+transform carries `-_bandTop` — and whatever falls outside the band is simply
+clipped; `_drawTrackBars` also skips rows outside it. A scroll inside the band
+costs nothing (the canvas scrolls with the content); one that brings the
+visible rows within half a margin of the band's edge (`_handleTrackScroll`, on
+the wrapper's `scroll` event) moves the band and redraws. `_cssHeight` and
+`_layout` are still the CONTENT's, so the layout, the label area and the
+playhead element are unchanged; the hover tooltip is placed from the pointer's
+client position (canvas `offsetY` is now band-relative). The wrapper's
+background is the timeline's, so a band edge reached mid-fling reads as
+background for the frame before the redraw.
+
+The canvas used to be the full content height. On the 17-camera MultiCam_18
+project that is 561 rows, 3,600 × 12,704 device px (174 MB), every redraw
+rasterizing all of it while the wrapper showed about a sixth; as a band it is
+3,600 × 1,884 (26 MB), and a redraw including the GPU raster went from ~279 ms
+to ~28 ms (headless, forced readback; 126 → 29 ms on the 8-camera HardFight
+project). Screenshots of the timeline at the top, middle and bottom of its
+scroll range are pixel-identical to the full-height canvas's. A collapsed
+timeline (visible height 0) now keeps only a ~512 px band instead of a
+full-size canvas. Covered by `tests/test-timeline-visible-band.js` (the band's
+size and the spacer's scroll range; band pixels equal a full-height reference
+rendering at the same content rows, in the middle and at the bottom, labels
+included; no redraw for a scroll inside the band, one for a scroll past it; the
+playhead still spans the content; a content that fits is one band) and the
+backing-store clamp cases in `tests/test-timeline-height.js`.
+
+**Canvas backing-store cap.** `_placeBand` still clamps the backing store to
+`MAX_CANVAS` (32000px/side): a browser `<canvas>` larger than ~32767px per side
+fails to allocate and renders as the broken-canvas "sad face". The band is
+rarely near that now (width × dpr is the likelier case); when it would be, the
 effective device-pixel ratio is scaled down (CSS size + scroll unchanged; only
 backing resolution drops) so the canvas always allocates.
 
-**Playback playhead fast path.** `setCurrentFrame(frameIdx, { playback: true })`
-(passed by `ui/rendering.js` only while `state.isPlaying`) does not repaint the
-timeline: the playhead is the only frame-dependent layer, so `redraw()` — while
-`_playbackMode` is set — snapshots the canvas just before drawing the playhead
-into `_staticCache`, and later playback calls blit that snapshot and draw only
-the playhead (`_drawFromStaticCache`). A full redraw on the 175-track HardFight
-project cost ~4.5 ms plus a forced style recalc (`ctx.font`) inside the
-video-frame callback, enough to drop video frames (`tests/e2e/_bench-playback.mjs`).
-Falls back to a full redraw when the visible window scrolls or the backing store
-changed size; any other `redraw()` (hover, resize, data change) re-snapshots, so
-the cache is always the last full redraw. A call WITHOUT the flag leaves playback
-mode, frees the snapshot and redraws in full even on the same frame (the
-`stopPlayback` settle call). Pixel-parity guarded by
-`tests/test-timeline-playback-playhead.js`.
+**The playhead is an element, not canvas paint.** It is the only
+frame-dependent thing on the timeline, so `setCurrentFrame` moves a positioned
+`div.timeline-playhead` (inside `_trackScrollEl`, so it scrolls with the rows;
+`pointer-events: none`, so the canvas keeps every pointer event) with a CSS
+transform — `_positionPlayhead` — and repaints NOTHING. The canvas is redrawn
+only when what it shows changes: data, zoom, size, range selection, or a scroll
+of the visible window — including the scroll `setCurrentFrame` itself makes
+when it follows a frame out of a zoomed window. Same geometry as the painted
+playhead: a 2.5 px line from the top to the label area (to the bottom when
+labels are hidden), a 10 × 6 px triangle on its foot, hidden when the frame is
+outside the window. A click or touch on the timeline moves it the same way.
+
+It used to be painted, so every frame step repainted the WHOLE canvas to move
+it — and the canvas is the timeline's full content height, not the visible
+part: on the 17-camera MultiCam_18 project 561 rows, 3,600 × 12,704 device
+pixels (~46 MP). On each step of a held arrow key (30 ms repeat) that outran
+the GPU at a Retina scale factor, and Chrome's 2D-canvas rate limiter blocked
+the page for 230–450 ms every ~0.6 s (`CanvasRenderingContext2D::FinalizeFrame`
+→ `SharedContextRateLimiter` → "GPU backpressure via
+GL_COMMANDS_COMPLETED_CHROMIUM" in a trace), holding stepping to ~19 frames/s
+on a main thread that was two-thirds idle. With `redraw` stubbed out, or at a
+1x scale factor, the same held key ran at the full 33 frames/s. This also
+REPLACES the old playback-only fast path (`_playbackMode` / `_staticCache`
+snapshot-and-blit, added because a full redraw inside the video-frame callback
+dropped frames): `opts.playback` is still accepted and changes nothing.
+
+`setFrameModified` now asks for a repaint (`_requestRedraw`: coalesced to one
+`requestAnimationFrame`, synchronous without rAF) when the flag actually
+changes: the white "modified" line is canvas paint, and a frame step's full
+repaint used to be the only thing that made a flag set without a redraw
+appear. Covered by `tests/test-timeline-playback-playhead.js` (no repaint on a
+step, playback call, click, or step inside a zoomed window; no playhead in the
+canvas pixels; geometry; hidden off-window; resize; the coalesced repaint for
+`setFrameModified`).
 
 **Trackpad / wheel semantics.** `_handleWheel` maps wheel input as:
 horizontal-dominant scroll (`|deltaX| > |deltaY|`) pans `_scrollFrame`
@@ -5151,10 +10741,21 @@ when the bar appears/disappears.
 - `Timeline` — class. Selected methods: `setData(session)`,
   `setCurrentFrame(frameIdx, opts?)`, `setTotalFrames(n)`, `setZoom(level)`,
   `scrollTo(frameIdx)`, `resize`, `redraw`, `destroy`,
-  `setDisplayMode(mode)`, `refreshTracks(session, opts?)`,
+  `setDisplayMode(mode)`, `refreshTracks(session, opts?)`, `recolorTracks()`,
   `setFrameModified(frameIdx, modified)`, `getPreferredHeight`,
   `getCameraGroups`, `getLabelLines`, `getRowCount`,
   `getTrackAreaElement`.
+
+**Track rows follow the Tracks / Identity coloring.** The constructor takes
+`options.getColorByIdentity` (`pose/initialization.js` passes a reader of
+`state.colorByIdentity`), and a track row's bar is `getTrackColor(trackIdx,
+colorByIdentity)`, so the bar wears the palette the canvas draws that track in.
+Rows whose color comes from a track index carry `_trackColored` (not the No ID
+track's gray, not the "+N more" or empty rows); `recolorTracks()` repaints just
+those in the current mode's palette and redraws. It does NOT rebuild: segments
+do not depend on the mode, and `_buildTrackSegments` walks every frame of every
+camera. The Tracks / Identity change handler (`ui/ui-wiring.js`) calls it.
+Covered by `tests/e2e/unidentified-track-palette.mjs`.
 
 **Possible-ID-switch markers** are no longer drawn here — they moved to the
 transport seekbar (`ui/seekbar-markers.js`); the timeline's marker layer, its
@@ -5411,14 +11012,18 @@ Frame Number") keyboard-shortcut installer. Has zero transitive
 `app.js` imports so it can be bridged into the test runner.
 
 **Key exports.**
-- `toggleTimeline`, `fitTimelineToData`, `syncTimelineToggleButton`,
-  `installTimelineShortcuts`, `getCachedTimelineHeight`,
-  `setCachedTimelineHeight`.
+- `toggleTimeline`, `collapseTimeline`, `fitTimelineToData`,
+  `syncTimelineToggleButton`, `installTimelineShortcuts`,
+  `getCachedTimelineHeight`, `setCachedTimelineHeight`.
+- `collapseTimeline()` closes the timeline only if it is open (never opens
+  it), via `toggleTimeline()` so the height cache and toolbar button match a
+  manual collapse. Returns whether it collapsed anything.
 
 **Imports from project modules.**
 - `./app-state.js` — `state` (for `state.timeline`).
 
-**Imported by.** `pose/initialization.js`, `ui/ui-wiring.js`
+**Imported by.** `pose/initialization.js`, `pose/tracker.js`
+(`collapseTimeline`, after Track All), `ui/ui-wiring.js`
 (re-exports the same surface so legacy `import { toggleTimeline, … } from
 './ui-wiring.js'` keeps working).
 
@@ -5458,9 +11063,9 @@ so it loads cleanly in the headless node test runner without dragging in
 - `get{Camera,Track,Identity}VisibilityList(session)` — `[{ name, visible }]`
   (identity rows also include `id` and `color`). Track-row swatch color
   is intentionally NOT set by this module — `ui/info-panel.js` decorates
-  each track entry with `getTrackColor(i)` after the list returns so this
+  each track entry with `getTrackColor(i, state.colorByIdentity)` after the list returns so this
   module can stay free of `./overlays.js` (and the wider import graph) and
-  load cleanly in the headless node test sandbox.
+  stay bridgeable by `tests/test-runner.html` without loading the app.
 - `renameHiddenTrack(session, oldName, newName)` /
   `renameHiddenIdentity(session, oldName, newName)` — migrate hidden-set
   membership when the user renames a track / identity, so the toggle stays
@@ -5647,6 +11252,278 @@ the app-wide modal convention. On a successful run the viewer is parked on the
 
 ---
 
+### ui/trail-presets.js
+
+**Purpose.** Node-trail lengths, in SECONDS — the presets Off, ¼ s, ½ s, 1 s, 2 s, and
+any custom length typed into Tracks ▸ Node Trails ▸ Custom…, in seconds or in
+frames — and their
+conversion to the frames a trail draws. A fixed frame list (it was
+10/50/100/250/500) meant something different on every camera: 50 frames is ½ s of
+a 100 fps recording and nearly 2 s of a 30 fps one. DOM-free and import-free, so
+`ui/app-state.js` can import it and `tests/test-trail-presets.mjs` runs it in Node.
+
+**Key exports.**
+- `TRAIL_PRESETS` — `{key, seconds, name}` per preset; `key` names the Tracks ▸
+  Node Trails item ids (`menuTrails<key>`).
+- `trailFrames(seconds, fps)` — `round(seconds × fps)`, at least 1 for a trail
+  that is on, at most `MAX_TRAIL_FRAMES`; 0 when off. 15/30/60/120 at 60 fps,
+  25/50/100/200 at 100 fps.
+- `trailRate(fps)` — `fps`, or 30 while none is known (`state.fps` is 0 before a
+  video loads), so a trail is never silently 0 frames.
+- `trailPresetFor(seconds)` — the preset of exactly that length, or null (custom).
+- `trailSecondsName(seconds)` — the preset's name, or a custom length in seconds
+  to at most 3 decimals ("1.5 seconds").
+- `trailLabel(seconds, fps)` — "½ second (30 frames)", "1.5 seconds (90
+  frames)", or "Off". The menus, the button's tooltip and the status line all
+  use it.
+- `parseTrailSeconds(text)` — the Custom… Seconds field: a plain decimal above 0
+  (a decimal comma is accepted, since the field is text), else null.
+- `parseTrailFrames(text)` — the Custom… Frames field: a whole number of at
+  least 1, else null.
+- `formatTrailSeconds(seconds)` — how the Seconds field shows a length: at most
+  3 decimals, no trailing zeros ("0.167").
+- `trailSecondsForFrames(frames, fps)` — how a length typed in frames is stored:
+  `frames / fps`, EXACTLY (10 frames at 60 fps is 1/6 s, not 0.167), so it draws
+  the frames typed. The unit test round-trips 1–500 frames at 24–250 fps.
+- `MAX_TRAIL_FRAMES` (500) — `LAZY_KEEP_BEHIND` (512) must stay above the longest
+  trail, since trails draw resident frames only; without the cap a 2 s trail on a
+  300 fps recording would be 600 frames, so from 250 fps up 2 s draws 500. The test asserts the inequality.
+- `setTrailSeconds(state, seconds)` / `onTrailSecondsChange(fn)` — THE setter for
+  `state.trailSeconds`, the `ui/color-by.js` pattern: it sets the state and, only
+  on a change (it returns whether there was one), runs the ONE handler ui-wiring
+  registers — both menus' checkmarks, the Trails button's blue and tooltip, a
+  redraw. The menus go through it, and so does Track All (`pose/tracker.js`),
+  which cannot import ui-wiring. A throwing handler is logged, never re-raised.
+- `TRACK_ALL_TRAIL_SECONDS` (0.25) — the length Track All turns trails on at;
+  a preset, so the menus check "¼ second" rather than "Custom".
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/app-state.js`, `ui/ui-wiring.js`, `pose/tracker.js`.
+
+### ui/track-summary.js
+
+**Purpose.** What the Track All summary box says, DOM-free so the decision tree is
+unit-tested in Node (`tests/test-track-summary.mjs`). Track All used to end on a
+status line, plus the ID Switches tab when the automatic check found something;
+when it found nothing — or never ran — there was no visible next step, and the
+three cases read alike.
+
+**Key exports.**
+- `summarizeTrackedIdentities(session, {frames, animals, animalsAuto, elapsedMs, fps})`
+  — frames per identity, frames with any identity, frames with every animal, from
+  `session.instanceGroups` (never evicted on a lazy project, so the whole project).
+  An identity listed twice in one frame counts once.
+- `describeSwitchCheck(enabled, res, identities, whyNotRun)` — one check's outcome
+  as `{state, switches, encounters, reason, elapsedMs}`, state one of `found` /
+  `clear` / `skipped` / `failed` / `cancelled` / `off` / `na` (one identity).
+  Switches are `idSwitchOnsets` — the "possible switches" count the tab uses.
+- `planTrackSummary(summary, checks)` — the rows, the notes, the next step and the
+  buttons. Recommends **Review switches** when any check found one; **Triangulate
+  All** otherwise (with "Check by images…" / "Check by body size" offered when that
+  check did not run, and a caveat that body size cannot separate similar-sized
+  animals when only size came back clear); **Tracking Wizard…** when nothing was
+  matched. A skipped check never gets a "nothing found" headline. Notes flag more
+  (or fewer) identities than animals.
+- `formatShare(count, total)` — floored to one decimal, so only a full count reads
+  "100%". `formatDuration(ms)` — "0.4 s", "42 s", "3 min 5 s", "1 h 12 min".
+- `formatTrackingSpeed(frames, ms, recordingFps)` — the Tracking time row's detail:
+  frames tracked per wall-clock second ("300 fps") and, when the recording's rate
+  is known, how many times faster than real time ("10×" for 30 min of video
+  tracked in 3). The multiplier is the throughput over the recording fps, so the
+  two cannot disagree; with no rate only the fps is shown.
+- `MAX_IDENTITY_ROWS` (12) — identity rows listed before "and N more" (the modal
+  gets no inner scroller). `CLEAR_NOTE` — a clear row's hover text.
+
+**Notes / caveats.**
+- **A clear check says "Nothing flagged in N close encounters", never "No possible
+  switches".** A check that raises nothing has not shown there is no switch — the
+  size check cannot see one between animals of the same size, the image check one
+  between look-alikes, and neither one inside a single contact with no "before" —
+  so the row states what the check did (raised no flag) rather than a conclusion
+  about the data, its text is the ordinary text colour rather than the success
+  green that read as a pass, and its tooltip (`CLEAR_NOTE`) says it can still miss
+  a switch. The same wording is used by the status line (`runIdSwitchChecks`) and
+  the ID Switches tab's header ("37 close encounters · nothing flagged";
+  ui/id-switch-modal.js); a non-zero count still reads "possible switches",
+  which is accurate about what WAS flagged.
+- **A time is shown only for a check that spent real time** (found / clear /
+  failed / cancelled); a skip returns at its preflight.
+- **Long reasons are cut at their first parenthesis** (the skeleton skip lists 16
+  bone pairs); the row carries the whole reason as `full`, which the modal puts in
+  the row's tooltip.
+
+**Imports from project modules.** `ui/id-switch-review.js` (`idSwitchOnsets`,
+`idSwitchEncounterCount`), itself import-free.
+
+**Imported by.** `pose/tracker.js`, `ui/track-summary-modal.js`.
+
+### ui/track-summary-modal.js
+
+**Purpose.** The box that opens when Track All finishes: identities, frames
+tracked, frames with every animal, tracking time with its speed (fps, × real
+time), a bar per identity, the **Identities** section (`ui/identity-gallery.js` —
+five sample images and a path map per identity), each
+ID-switch check's result and time, and the **Next step** with its button focused.
+Renders `planTrackSummary` (`ui/track-summary.js`) and the gallery, and nothing else.
+
+**Key exports.** `showTrackSummaryModal(summary, checks, {session})` — returns
+`{close, overlay, gallery}`, or null without a DOM (Node harnesses run Track All);
+with `session` it adds the Identities section, whose `gallery.done` settles once
+its images are drawn (`pose/tracker.js` and `reopenTrackSummary` pass it);
+`setTrackSummaryNavigator(fn)` (ui-wiring registers `navigateToFrame`, as it does
+for the ID Switches tab: a sample or a map point clicked closes the box and goes
+to that frame — the tracker that opens the box cannot import `pose/initialization.js`);
+`rememberTrackSummary(session, opts, checks, identities)` (Track All keeps what the
+box showed on `session._trackSummary` — in memory, not saved — and refreshes the
+ID Switches tab so its button appears); `reopenTrackSummary(session)` (the tab's
+**Show Track All summary**).
+
+**Reopening.** Closing the box used to be final, which stranded a user who had not
+turned on the image check before Track All: the box is what offers it. The ID
+Switches tab's button (`setTrackSummaryOpener`, registered at module load — this
+module imports `ui/id-switch-modal.js`, so that one stays a leaf) reopens it. The
+counts are re-taken from the session as it is now (`summarizeTrackedIdentities`
+with the pass's options — a fixed switch moves the shares); the tracking time is
+the pass's own. Each check shows its CURRENT result: a check run since the box
+closed replaces the pass's "Not run" / "Skipped" (and is no longer offered), and a
+check whose results were cleared reads "Not run" again. A skip or failure is kept
+from the pass, because `runIdSwitchChecks` stores only results that ran.
+
+**Notes / caveats.**
+- **A note, not a prompt.** Nothing changes until a button is pressed; Close,
+  `Esc` and a backdrop click dismiss it. Each action button clicks the existing
+  control — `#tbTriangulateAll`, `#menuCheckImageSwitches`,
+  `#menuCheckSizeSwitches`, `#menuTrackingWizard` — so it runs exactly what the
+  user would have run by hand (a disabled button, e.g. under Defining Plane Mode,
+  ignores it the same way). **Review switches** opens the ID Switches tab and
+  presses `#idSwitchNext`, landing on the first flagged switch.
+- **Keys stop at it** (capture-phase listener, as `openFixDialog` does), so the
+  app's shortcuts do not act under it; `Enter` / `Space` still press the focused
+  primary button.
+- **One at a time.** A second Track All closes the first box before opening its
+  own.
+- **No inner scroller.** The identity list is capped instead; the modal itself
+  caps its height at the viewport. It drops `.multi-frame-modal`'s 420px
+  `min-width` so it fits a narrow window. With the Identities section
+  (`.has-gallery`) it widens to 780px and its button row is STICKY at the
+  bottom, so the recommended step stays in view while the rows scroll.
+
+**Imports from project modules.** `ui/track-summary.js` (`planTrackSummary`,
+`summarizeTrackedIdentities`, `describeSwitchCheck`), `ui/id-switch-modal.js`
+(`openIdSwitchPanel`, `refreshIdSwitchPanel`, `setTrackSummaryOpener`),
+`ui/identity-gallery.js` (`renderIdentityGallery`).
+
+**Imported by.** `pose/tracker.js`, `ui/ui-wiring.js` (`setTrackSummaryNavigator`).
+No cycle: none of its imports reaches back to the tracker.
+
+**Coverage.** `tests/e2e/track-all-summary.mjs` — the real Track All button, the
+rows and times, the key swallowing and `Esc`, `Enter` running Triangulate All,
+replacement on a second run, no box after Track Frame Range, the nothing-tracked
+case, Review switches landing on the first switch, and §2b reopening from the ID
+Switches tab (the button's place above "Possible ID switches", the same box, a
+check run since reported rather than "Not run", Clear, and no button without a
+Track All). The Identities section: `tests/e2e/identity-gallery.mjs`. Tests that
+click the app after a Track All close the box first (`#trackSummaryClose`).
+
+### ui/identity-gallery.js
+
+**Purpose.** The Track All summary's **Identities** section: one row per identity
+— its name, five sample images of that animal spread over the recording, each
+from the view that shows it best and rotating through the views, and a map of its
+path over one camera's view (the camera picked above the rows). An identity that
+switched between animals that look different shows up as a row whose images are
+not all the same animal, or a path that jumps across the cage — seen before
+either ID-switch check is run. On the real CD1 recording (plain vs jacketed
+mouse) the two rows swap coats after the first sample; on 2022-10-07/145420 one
+dark-mouse row opens on a white mouse.
+
+**How a row is chosen** (the planning half, DOM-free):
+- `identityTracks(session)` — every identity's tracked frames and 3D centroids,
+  from `session.instanceGroups` (resident in full even on a lazy project). A
+  frame where an identity has two groups is left out, as the image check does.
+- `pickSampleFrames` — the middles of five equal slots of the identity's tracked
+  span, each moved, when it has to be, to a frame where the animal is ISOLATED
+  (its nearest other identity more than 1.5 of its body sizes away), the
+  isolated frame nearest the middle winning. Maximising isolation instead pushed
+  every pick to a slot edge, two samples a few frames apart; and only the middle
+  60% of each slot is searched, so in a cage too crowded for any frame to be
+  isolated neighbouring samples still stay 40% of a slot apart.
+- `pickCamera` — among the views where the group has a 2D member: the largest
+  projection of its 3D (diagonal, with the camera's distortion) inside the image
+  is the best, and among the views good enough to use (inside the image, at
+  least 30% of the best's size and 40 px) the one this identity's samples used
+  LEAST wins, so the five rotate through the views. A view whose 2D detection is
+  poor (under half its keypoints, or spread 2.5x wider than the 3D) is passed
+  over while any other is not: scattered keypoints cut a huge crop with a speck
+  of animal in it — seen on 145420 before the rule.
+- `cropSquare` — full colour, upright, unmasked: a square of 1.4x the keypoints'
+  larger extent + 12 px. NOT the image check's masked, rotated greyscale crop,
+  which is the model's input, not something a person compares coats in. The
+  animal's own keypoints are drawn as small dots in its colour, which is what
+  says which animal the row means when two share an image.
+- `memberPointsByCamera` — the identity's 2D in every camera at one frame, read
+  with `hydrateFrameMembers2d` / `releaseFrameMembers2d` around it: on a lazy
+  project a member of a frame that is not resident holds only the shared
+  placeholder (see CLAUDE.md "A lazy project's resident frames are a WINDOW").
+- `projectTrack` — the path in a camera's pixels, thinned evenly to
+  `MAP_MAX_POINTS`, broken where frames are more than 2 s apart (the gap test
+  scales with the thinning) or a point does not project; `defaultMapCamera` — the
+  camera with the most 2D members over a thinned sample of the groups.
+
+**Drawing.** `renderIdentityGallery(host, session, {onPick})` builds the rows
+with placeholders at once and fills them AFTER the box paints: the maps first,
+then each row's images, one decoded frame per sample (`view.decoder.getFrame`,
+drawn immediately — a decoder's cached frame may be closed by the next decode).
+It stops as soon as the box is closed. Measured: 0.8–2.2 s for the 8-camera,
+54,000-frame CD1 recording, 4–5 s for a 10-camera 4-mouse session. Without a
+video a sample says "no video" and the maps still draw the paths on a dark
+ground. The map is a still frame of the chosen camera (the current frame),
+darkened, with the path coloured by TIME on a one-hue sequential ramp (dataviz
+reference blue, the early end the darker step) and a 0:00 → end key; hovering a
+map shows the time of the nearest point, and a click on one goes there. The
+chosen view is kept on `session._galleryView` (in memory), so reopening the
+summary keeps it. Rows are capped at `GALLERY_MAX_ROWS` (12), as the identity
+bars are.
+
+**Hover to enlarge.** Resting the pointer on a sample shows it at
+`GALLERY_ZOOM` (320 px) beside the tile — right of it if that fits, else left,
+always inside the window — captioned with the identity, time and camera. Two
+things about it are deliberate:
+- **The preview is a second copy of the crop, cut when the tile is drawn**, at up
+  to 320 px × devicePixelRatio but never more than the crop's own video pixels.
+  Scaling the 88 px tile up would only show a blurrier tile, and re-decoding on
+  hover cannot be done: the decoder's frame may already be closed, and a seek per
+  hover is slow. ~60 crops of at most 320² px is a few tens of MB at worst.
+- **It lives in the summary's overlay, not the modal.** The modal scrolls and
+  would clip it; the overlay is fixed and full-window, and closing the box
+  removes the preview with it. It takes no pointer events, scrolling the box
+  hides it (the tile moves out from under a still pointer), and a drawn sample
+  drops its native `title`, which would otherwise surface a second later on top
+  of the preview saying the same thing. A sample with no image ("no video",
+  "no keypoints") has nothing to enlarge and shows none.
+
+**Key exports.** `renderIdentityGallery`, `identityTracks`, `identityGroupAt`,
+`groupCentroid`, `pickSampleFrames`, `projectedBox`, `pickCamera`, `cropSquare`,
+`memberPointsByCamera`, `projectTrack`, `defaultMapCamera`, `timeColor`;
+`GALLERY_SAMPLES` (5), `GALLERY_MAX_ROWS`, `GALLERY_TILE` (88 px),
+`GALLERY_ZOOM` (320 px), `MAP_MAX_POINTS` (2,400).
+
+**Imports from project modules.** `ui/app-state.js` (`state`),
+`pose/lazy-residency.js` (`hydrateFrameMembers2d`, `releaseFrameMembers2d`).
+
+**Imported by.** `ui/track-summary-modal.js`.
+
+**Coverage.** `tests/test-identity-gallery.mjs` (the planning half, including a
+released lazy member read through hydration with the direct-read control) and
+`tests/e2e/identity-gallery.mjs` (the real Track All on stand-in videos that
+paint each animal its own colour: every image in a row shows that row's animal,
+spread over the recording and from more than one camera; the maps, the view
+selector and its time key; the hover preview — size, placement, the same
+sample and animal, its caption, hiding on leave and with the box, none on a
+"no video" tile; both clicks; no videos; and the negative control —
+identities swapped halfway, each row then showing BOTH animals).
+
 ### ui/view-align-modal.js
 
 **Purpose.** The **Align Views to References** dialog (#226), opened from View ▸
@@ -5755,9 +11632,9 @@ paint, and that `drawLegend` still works for the export.
 
 **Purpose.** Per-CAMERA video display settings — brightness, contrast (issue
 #149) and rotation. Pure and DOM-free: it imports NO project modules, so it can
-be bridged into `tests/test-runner.html` and the `vm` sandbox runner without
-dragging `app.js` in. `ui/sessions-panes.js` owns the DOM half (the
-Visibility-tab tables) and calls in here for the math and the per-session stores.
+be bridged into `tests/test-runner.html` without dragging `app.js` in.
+`ui/sessions-panes.js` owns the DOM half (the Visibility-tab tables) and calls
+in here for the math and the per-session stores.
 
 **One store shape, three settings.** All three are per-camera and live on the
 SESSION as a plain `{ cameraName: value }` map (`Session.videoBrightness` /
@@ -5873,18 +11750,84 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   Tracks ▸ **Check ID Switches (Body Size)…** (`menuCheckSizeSwitches`) calls
   `runIdSwitchChecks({size: true, navigateToFrame})`, and Tracks ▸ **Check ID
   Switches (Images)…** (`menuCheckImageSwitches`) `runIdSwitchChecks({image: true,
-  navigateToFrame})`, from `ui/id-switch-modal.js`; `setIdSwitchNavigator` is
-  called once at setup.
-- Color-by toggle: the "Color by" Tracks/ID control lives in the top
+  navigateToFrame})`, from `ui/id-switch-modal.js`; `setIdSwitchNavigator` and
+  `setIdSwitchRefresher` (the repaint after the tab fixes a switch) are called
+  once at setup, as is `setTrackSummaryNavigator` (`ui/track-summary-modal.js`:
+  the Track All summary's Identities samples and maps go to a frame).
+- Color-by toggle: the Tracks / Identity control lives in the top
   toolbar (buttons `colorByTracks` / `colorById`, next to the Errors
-  checkbox), not the Tracks menu. `updateColorByToggle()` reflects
+  checkbox), not the Tracks menu. It has no visible "Color" label (the group
+  carries `aria-label="Color by"`, each button a "Color instances by …"
+  tooltip), and the second button is spelled out, "Identity" rather than
+  "ID". `updateColorByToggle()` reflects
   `state.colorByIdentity` on the buttons. Every change of the setting goes
   through `setColorByIdentity` (`ui/color-by.js`) and lands in the one
   handler registered here via `onColorByChange`: update the active class,
   re-render the 2D overlays via `drawAllOverlays` AND the 3D viewer via
   `update3DViewport` (whose `getGroupColor` closure reads
-  `state.colorByIdentity` live, so instances recolor instantly). The buttons
-  use it, and so does the tracker after Track All (#242).
+  `state.colorByIdentity` live, so instances recolor instantly), and — since a
+  track's color changes palette with the mode (`getTrackColor`) — recolor the
+  timeline's track rows (`timeline.recolorTracks()`) and the Visibility tab's
+  track swatches (`populateTimelineVisibility`). The buttons use it, the
+  tracker after Track All (#242), and Tracks ▸ Propagate Tracks → IDs, which
+  used to set `state.colorByIdentity` directly and skip it.
+- Node Trails (issue #102): two pickers for `state.trailSeconds` — the Tracks ▸
+  Node Trails submenu (`#menuTrailsSubmenu`, items `menuTrailsOff` /
+  `menuTrailsQuarter` / `menuTrailsHalf` / `menuTrailsSecond` / `menuTrailsTwoSeconds`) and the toolbar's
+  **Trails** button (`#tbTrails`, right of Tracks / Identity). Both menus' items
+  are built from `TRAIL_PRESETS` (`ui/trail-presets.js`: Off, ¼ s, ½ s, 1 s, 2 s;
+  `data-trail-sec`) plus a last **Custom…** item (`data-trail-custom`,
+  `menuTrailsCustom`), and both go through `setTrailSeconds`. Custom… opens
+  `showCustomTrailModal` (`#trailCustomModal`): a **Seconds** and a **Frames**
+  field (`#trailCustomSeconds` / `#trailCustomFrames`), the same length at the
+  current rate. Typing in either rewrites the other; an invalid entry blanks the
+  other, disables Apply and says why in `.modal-error`. The field typed in LAST
+  is what Apply sets, and either way it is stored in seconds — so a custom
+  length follows the frame rate exactly like a preset, and a length typed in
+  frames is stored as `frames / fps` exactly and draws the frames typed. It
+  opens on the current length, kept exact (re-applying a 10-frame trail
+  untouched does not round it to its "0.167" display). A note under the fields
+  names the rate ("At 60 fps.") and adds "A trail draws at most 500 frames."
+  past the cap. Enter applies, Esc / Cancel change nothing. It is a dialog rather than a field in
+  the menu because both menus open on hover and would close under the user the
+  moment the pointer drifted. A length no preset matches checks Custom, whose
+  label then names it ("Custom: 1.5 seconds (90 frames)…") in both menus. A preset is a span of
+  TIME, so each item names its frame count at the current rate — "½ second (30
+  frames)" at 60 fps, "(50 frames)" at 100 — and `updateTrailChecks` re-reads
+  `state.fps` whenever either menu is entered (`mouseenter`/`focusin` on
+  `#trailsDropdown` and `#menuTrailsParent`), because the rate changes in many
+  places (video load, session switch, the FPS pill) and none of them is told
+  about trails. It also moves the checkmark in BOTH menus and rewrites the
+  button's tooltip ("Node trails: ½ second (30 frames)"), and gives the button
+  the toolbar's `.active` blue while any trail is on (preset or custom) — the
+  same look as 3D / Panel / Identity — so a trail being on reads at a glance
+  without hovering the button. Off removes it. The FPS pill's commit
+  redraws the overlays when trails are on, since the frame count just changed.
+  The label stays a bare
+  "Trails ▾" on purpose, to save toolbar width: the toolbar needs ~1,380 px
+  with it (see the panel toggles below), and the value in the label would
+  add ~25 px more. The button is a `.tri-dropdown`, so its menu opens on hover in
+  pure CSS exactly like the Triangulate split buttons', and like theirs stays
+  up after a pick until the pointer leaves; clicking the button itself does
+  nothing. Display state, never saved; not in the Defining Plane Mode
+  toolbar lock (it changes what is drawn, not what is annotated). Covered by
+  `tests/e2e/node-trails-toolbar.mjs` (including the frame counts following the
+  FPS pill) and `tests/test-trail-presets.mjs`.
+  **Trail shade.** Both menus hold two radio groups under small headings
+  (`.trail-menu-heading`, each group a `role="group"`): **Length** (the items
+  above) and, after a separator, **Shade** — one item per `TRAIL_SHADES` entry
+  (`ui/overlays.js`; `data-trail-shade`, menubar ids `menuTrailsShade<Key>`, e.g.
+  `menuTrailsShadeVeryDark`), each with a swatch (`.trail-shade-swatch`): the
+  first track color running into that shade's trail from newest to oldest, the
+  contrast the choice is about. A pick goes through `setTrailShade`, which sets
+  `state.trailShade`, moves the checkmark in both menus, redraws and names the
+  shade in the status bar ("… (trails are off)" while they are). Default Dark.
+  Unlike the length, the shade is **remembered** in `localStorage`
+  (`nodeTrailShade`, best-effort, read once at setup; an unknown value keeps the
+  default): it is display taste, like the Visibility panel's appearance prefs,
+  and loading a project reloads the page. It never reaches the `.slp`. The
+  button's tooltip still names only the length. Covered by
+  `tests/e2e/node-trail-shade.mjs`.
 - Node Style: the four per-section Node Style button groups
   (`visUserNodeStyle` / `visPredNodeStyle` / `visReprojNodeStyle` /
   `vis3dNodeStyle`) reuse the `.line-style-btn` click handler (active toggle +
@@ -5921,7 +11864,14 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `loadSingleSessionFromCache`, `menuLoadMultiSessionFolder`).
 - Group ops: `unlinkGroup`, `performGroupButtonAction` (shared by the toolbar
   Group button and the `Shift+G` shortcut — context-sensitive group/ungroup),
-  `showGroupContextMenu`, `hideGroupContextMenu`.
+  `showGroupContextMenu`, `hideGroupContextMenu`. The context menu's **Delete
+  group** (`#ctxDeleteGroup`) removes the members' store rows first —
+  `deleteTargetsFromStore(session, groupMemberTargets(frame, group))` from
+  `ui/custom-delete-ops.js`, exactly as the Delete key does — then
+  `removeInstanceGroup`. Removing the group from memory alone is undone on a lazy
+  project by the next re-hydration or save (see `ui/interaction.js`'s
+  `_deleteSelected` note); covered by `tests/e2e/sequence-lazy-workflow.mjs`
+  cycle 5c (`D_CTX`).
 - Instance copy/paste (`copySelectedInstance` / `pasteInstance`, wired via
   `setHandler` to catalog ids `copyInstance` (Mod+C) / `pasteInstance` (Mod+V)).
   Copy snapshots the selected UserInstance in the focused view (a grouped
@@ -5937,15 +11887,63 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `Paste not supported for different skeletons!`. Occlusion flags are not carried
   (coordinates + per-node visibility are).
 - Seekbar: `updateSeekbar`, `updateSeekbarVisual`,
-  `onPlaybackStateChange`.
+  `onPlaybackStateChange`. On a lazy project, starting playback runs the
+  background `lazyPlaybackLoader`: it keeps `LAZY_PLAYBACK_AHEAD` (600) frames
+  hydrated ahead of the playhead and calls `evictLazyFrames(cur)` after each
+  top-up, so what playback leaves behind is dropped (`pose/lazy-residency.js`).
+  The Play button, Space and the seekbar's resume preload the same window
+  before starting. It was
+  5000 frames with no eviction, which kept every played frame resident; the
+  lookahead and the eviction's protected ahead-window are one constant, so they
+  cannot drift apart.
+  **A click or drag on the seekbar keeps the video playing or paused, as it
+  was.** The scrub pauses (`scrubToFrame` always stops playback); a press that
+  began while playing — or while a previous press's resume was still pending
+  (`videoController.resumePending`) — calls `videoController.resumeAfterScrub`
+  on release, which plays on from wherever the scrub lands. It used to leave the
+  video paused at the clicked frame. A video-less project does the same with
+  its timer (`stopNoVideoPlayback` on the press, `startNoVideoPlayback` on the
+  release). Covered by `tests/e2e/seekbar-click-keeps-playback.mjs`.
 - Toggles: `toggleInfoPanel`, `refreshInfoPanelAfterShow`,
   `updateInfoPanelToggleBtn`, `toggle3DViewport`,
-  `update3DViewportToggleBtn`, `lockPanelToggleWidths`, `toggleTimeline`,
+  `update3DViewportToggleBtn`, `toggleTimeline`,
   `syncTimelineToggleButton`, `fitTimelineToData`.
 - View modes: `enterSingleViewMode`, `cycleSingleView`, `setSoloView`,
   `setGridMode`, `updateVideoGridDisplay`, `showViewIndicator`. See
   **Single-view ("solo") mode** below.
 - Playback: `applyPlaybackRate`, `seekToLabeledFrame`.
+- View ▸ **Native Resolution (1:1)** (`menuNativeResolution`) and **`Shift+0`**
+  (matched by `e.code === 'Digit0'` in the transport keydown handler, beside
+  `+` / `-` / `0`, so only while real video is loaded) both call
+  `videoController.toggleNativeResolution()` (`loading/video.js`). The menu
+  tick (`.trail-check`) is refreshed when the View menu is clicked open, from
+  `nativeResolutionActive()` — whether it is on is derived from the views, so
+  asking at open time cannot go stale. `updateVideoGridDisplay` and the
+  `setGridMode` layout restore carry each view's `zoom.native` across the pane
+  rebuild (a restored 1:1 view gets `reapplyZoom`, not the old box's scale).
+- View ▸ **Define Planes** (`menuDefinePlanes`) → `togglePlaneMode()`
+  (`ui/plane-definition.js`) — enters/leaves "Defining Plane Mode". A mode, not
+  a modal, so it has no Esc binding; the banner's Exit button is the way out.
+  Also bound to **`Mod+Shift+P`** (`definePlanes` in `ACTION_CATALOG`, dispatched
+  via `setHandler`), which calls the SAME `togglePlaneMode()` — exiting has real
+  unwinding to do (Set Origin Mode, the angle dialog, the toolbar lock), so a
+  second entry point would be a second place to forget it. `p` alone is Toggle
+  Predictions, and the two are separated only by `matchChord`'s rule that a bare
+  letter requires shift to be UP. Covered by
+  `tests/e2e/define-planes-shortcut.mjs`.
+- Help ▸ **Hot Keys** (`menuHotkeys`) and **`?`** (`showHotkeys` in
+  `ACTION_CATALOG`) → `showHotkeysHelp()`, which renders the shortcut list from
+  `getActions()`. It sits at **module scope**, and must stay there: it has two
+  callers in two different closures — the menu item is wired in `setupMenus`,
+  `setHandler('showHotkeys', ...)` runs in `setupUI` — and while it was declared
+  *inside* `setupMenus` the second one threw `ReferenceError: showHotkeysHelp is
+  not defined`, so `?` had never opened the help for any shortcut. It also
+  returns early if `#hotkeysClose` is already in the DOM: `dispatchEvent` does
+  not consume the keydown for the listeners after it, so a second `?` would
+  otherwise stack a second overlay. There is deliberately **no `case '?'` in the
+  plain-key switch** — that switch returns on any modifier and `?` is Shift+/,
+  so it was unreachable, and where it was reachable it opened a duplicate.
+  Covered by `tests/e2e/define-planes-shortcut.mjs` §5.
 
 **Panel toggles: independent sizing, and hidden means idle.** `toggleInfoPanel`
 (`I`) and `toggle3DViewport` (`\`) each only flip their own panel's `collapsed`
@@ -5965,7 +11963,8 @@ split handles write inline widths there, which would defeat the collapse the
 same way).
 
 Each toggle also drives the work, not just the pixels — see
-`ui/panel-visibility.js`. Hiding the 3D viewport calls
+`ui/panel-visibility.js`. Hiding the 3D viewport goes through that module's
+`collapseViewport3D` (shared with Track All, which closes the panel) and calls
 `Viewport3D.setVisible(false)` (render loop stopped, scene rebuilds deferred)
 and lets `update3DViewport` skip out; showing it calls `setVisible(true)` then
 `update3DViewport(state.currentFrame)`, which also auto-inits the viewport if a
@@ -5975,29 +11974,31 @@ actually skipped (`consumeInfoPanelStale`). Covered by
 `tests/e2e/panel-toggle-independence.mjs`.
 
 **Toolbar toggle buttons (issue #151).** Both panels have a labelled button at
-the far right of the toolbar, `#viewport3dToggleBtn` ("Hide/Show 3D View") to
-the left of `#infoPanelToggleBtn` ("Hide/Show Panel"), grouped in
+the far right of the toolbar, `#viewport3dToggleBtn` ("3D") to the left of
+`#infoPanelToggleBtn` ("Panel"), grouped in
 `.toolbar-group.panel-toggles` and outlined (`.panel-toggle-btn`) so they read
 as layout controls rather than as more annotation actions. Previously the 3D
 viewport could only be collapsed from `\` or View ▸ Toggle 3D Viewport, neither
 of which is discoverable. `update3DViewportToggleBtn` /
-`updateInfoPanelToggleBtn` derive each label from the container's `collapsed`
-class rather than from whoever did the toggling, so all three entry points stay
-in sync; both are called from the toggle itself **and** from the
+`updateInfoPanelToggleBtn` derive each button's state from the container's
+`collapsed` class rather than from whoever did the toggling, so all three entry
+points stay in sync; both are called from the toggle itself **and** from the
 `MutationObserver` in `ui/layout-controls.js` that already watches those two
-containers' class attributes (which is also what sets the initial labels). Both
-labels for both buttons live in one `PANEL_TOGGLE_BUTTONS` table, which is also
-what `lockPanelToggleWidths` measures.
+containers' class attributes (which is also what sets the initial state).
 
-`lockPanelToggleWidths` (called once from `setupSplitHandles`) pins each button
-to the width of its own **wider** label, because "Hide" and "Show" are not the
-same width in the toolbar's proportional system font: unpinned, the 3D toggle
-measured 90.5px as "Hide 3D View" and 95.8px as "Show 3D View", and since the
-pair is right-aligned, the 5.3px growth on a label swap also shoved the button
-to its left sideways on every toggle. The width is measured from the real
-labels rather than hardcoded, so it stays correct if a label, the font size or
-the button padding changes; the app ships only system fonts, so there is no
-late web-font reflow to re-measure for.
+The labels are short and **fixed**: the button is highlighted (`.active`,
+`aria-pressed`) while its panel is shown — the same kind of toggle as
+`#tbSessions` at the toolbar's left edge — and the tooltip says what a click
+will do ("Hide 3D viewer (\)" / "Show 3D viewer (\)"), via the private
+`syncPanelToggleBtn`. They used to swap "Hide 3D View" / "Show 3D View" and
+"Hide Panel" / "Show Panel", which cost ~95px of toolbar width and needed
+`lockPanelToggleWidths` to pin each button to its wider label so a swap did not
+shove its neighbour sideways ("Hide" and "Show" are different widths in a
+proportional font). A fixed label cannot resize, so that function is gone. With
+the short labels, and ONE divider line between toolbar groups (each
+`.toolbar-group`'s right border; the extra `.toolbar-separator` beside it is
+gone), the whole toolbar fits a 1440 px window (it needs ~1,380 px), which
+`tests/e2e/toolbar-3d-toggle-button.mjs` asserts.
 
 **Single-view ("solo") mode.** `v` (`singleViewMode`) calls
 `enterSingleViewMode`, which caches the dockview grid layout
@@ -6036,14 +12037,33 @@ camera highlight all follow from that one `setActive()` via
 panels behind `addVideoPanel`'s back, so `paneManager.syncDockedViews()` runs
 first to re-derive the docked bookkeeping.
 
+**The cached layout is VALIDATED at the point of use, not invalidated at each
+mutation.** `savedGridLayout` is a snapshot taken when `v` was pressed, and
+`state.views` can change while solo — removing a video (`removeVideoFile`),
+loading one, or switching sessions, which replaces the list wholesale. `g` then
+`fromJSON`'d the snapshot and rebuilt a pane for a view that no longer exists:
+an empty pane wearing the removed camera's name, which is what a user reads as
+"the video went blank" (luc3d #216). A view ADDED while solo is the same mistake
+mirrored — `g` would restore a grid missing it. `savedGridLayoutMatchesViews()`
+compares the snapshot's panel set against the live view list as a SET (both
+directions), and `setGridMode` drops the layout when it disagrees, falling back
+to a fresh `addAllViewsAsGrid()`. Validating at the one reader rather than
+invalidating at every writer is deliberate: a list of invalidation call sites is
+a list something can be left off, and this cache has exactly one reader. It
+reads `params.viewName` off the SERIALIZED panel records — the `params` every
+pane is added with, part of dockview's documented `toJSON` shape, not one of the
+private internals `ui/overlay-export-modal.js` depends on.
+
 Covered end to end by `tests/e2e/solo-view-navigation.mjs` (real keyboard/mouse
-events against the real dock and strip); `tests/test-view-mode.js` only
-simulates the index arithmetic in isolation.
+events against the real dock and strip) and `tests/e2e/videos-panel-buttons.mjs`
+§7 (the stale snapshot, the positional drift of `singleViewIndex`, and removing
+the solo'd view itself);
+`tests/test-view-mode.js` only simulates the index arithmetic in isolation.
 
 **Visibility panel — the global/session split.** `saveVisSettings` /
 `restoreVisSettings` cache the panel's **global appearance preferences** (the
-`visSliderIds` / `visCheckIds` / `visStyleIds` lists — User, Predicted,
-Reprojections, Display Legend and 3D Viewer) in
+`visSliderIds` / `visCheckIds` / `visStyleIds` lists — User, Predictions,
+Reprojections, Planes, Display Legend and 3D Viewer) in
 `localStorage.visibilitySettings`. Those are browser-local display taste, shared
 across every session, and are deliberately **not** written into the `.slp`:
 baking them into the project file would make opening a colleague's project
@@ -6051,6 +12071,14 @@ silently reassign your node sizes and 3D widgets. The panel's *session-scoped*
 settings — per-camera video brightness / contrast / rotation and the timeline
 hidden sets — take the opposite route and persist per session via
 `import-export/visibility-metadata.js`; they never touch localStorage.
+
+The **`Planes` section**'s four toggles (`PLANE_VIS_IDS`, imported from
+`ui/plane-visibility.js` rather than re-typed, so this file cannot drift from
+the module that reads them) are wired apart from the other checkbox toggles for
+two reasons: they need BOTH repaints — `drawAllOverlays` for the 2D overlays and
+`syncPlanes3D` for the 3D scene, which is rebuilt rather than redrawn — and no
+pose selection can point at a plane, so the deselect sweep the other toggles
+share has nothing to do for them.
 
 **Hold-to-rotate (`Shift+R` + `←`/`→`).** `rotationLoop` advances
 `view.rotation` by a fractional `60 * dt` every frame so the animation stays
@@ -6086,24 +12114,42 @@ hides the chip, or the legend would sit low in grid mode forever.
 
 **Imports from project modules.** Nearly every other module — see file
 header for the full list. Notable ones: `app-state.js`,
-`timeline-controller.js`, `pose-data.js`, `triangulation.js`,
+`timeline-controller.js`, `pose-data.js`, `triangulation.js`
+(incl. `evictLazyFrames`), `lazy-residency.js` (`LAZY_PLAYBACK_AHEAD`),
 `rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`,
 `file-io.js`, `session-loader.js`, `video.js`, `tracker.js`,
 `initialization.js`, `identity-assignment.js`, `export-modals.js`,
 `sessions-panes.js`, `settings.js`, `settings-modal.js`,
 `track-range-modal.js` (`showTrackRangeModal`, wired to the Track Frame split
 button's `#tbTrackFrameRange` dropdown item — #212),
+`animal-count-field.js` (`wireAnimalCountField`, the Track group's Animals
+field),
 `view-align-modal.js` (`showAlignViewsModal`, wired to View ▸ "Align Views to
 References…" — #226),
 `seekbar-tooltip.js` (`installSeekbarTooltip`, the seekbar's hover tooltip —
 #142),
+`frame-readout.js` (`showReadoutFrame`, `refreshReadoutTotals` — the
+time / frame readout, written by `updateSeekbarVisual`, the inline frame editor
+and the FPS pill),
 `seekbar-markers.js` (`installSeekbarMarkers`, `seekbarMarkerAt`,
 `describeSwitchMarker`, `setSeekbarMarkerFrames` — the possible-ID-switch ticks:
 the scrub handlers and the tooltip snap to a tick within 5 px),
-`color-by.js` (`onColorByChange`, `setColorByIdentity` — the Color: Tracks /
-ID toggle, also flipped by the tracker after Track All — #242),
+`seekbar-ticks.js` (`installSeekbarTicks`, `refreshSeekbarTicks` — the time
+ruler under the seekbar; `updateSeekbarVisual` calls the refresh, a no-op
+unless the frame count or FPS changed),
+`color-by.js` (`onColorByChange`, `setColorByIdentity` — the Tracks /
+Identity toggle, also flipped by the tracker after Track All — #242),
+`trail-presets.js` (`TRAIL_PRESETS`, `MAX_TRAIL_FRAMES`, `trailPresetFor`,
+`trailLabel`, `trailFrames`, `trailRate`, `formatTrailSeconds`,
+`trailSecondsForFrames`, `parseTrailSeconds`, `parseTrailFrames`,
+`setTrailSeconds`, `onTrailSecondsChange` — the Node Trails menus and their
+Custom… dialog; the change handler is registered here, so a length set by Track
+All syncs the menus too),
+`overlays.js` (`TRAIL_SHADES`, `TRACK_COLORS`, `trailShadeFor`, `trailColor` —
+the menus' Shade group and its swatches),
 `video-filters.js` (`setSessionRotation`; `clampRotation` still comes in via
-`sessions-panes.js`, which re-exports it).
+`sessions-panes.js`, which re-exports it), `plane-definition.js`
+(`togglePlaneMode`).
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`,
 `ui/layout-controls.js`, `loading/session-loader.js`,
@@ -6154,6 +12200,9 @@ imports the modal. The menu is revealed purely by `:hover`, which is
 worth knowing when driving it from a test: a modal opening over the toolbar
 drops hover, so a second click on the item has to re-hover the button first (see
 `tests/e2e/track-frame-range.mjs`).
+
+**The Animals field (`#tbNumAnimals`)** is wired by `wireAnimalCountField()`
+from `ui/animal-count-field.js`, which owns it (see that entry).
 
 **Track / Identity menu modals.** The `Tracks` menu's New / Rename / Delete
 actions for both tracks and identities open shared private modal helpers in
@@ -6225,7 +12274,7 @@ single source of truth for the Settings panel). The remaining shortcuts keep
 their own dedicated handlers and appear as **fixed** reference entries (not
 rebindable): `Mod+S` Save (works while typing), transport (`←/→`, `Space`,
 `Home`/`End`, `Opt+←/→`), the `1–9` identity / `Shift+1–9` track digit ranges,
-zoom (`+`/`-`/`0`), `Shift+R`+rotate, `Delete` plus the legacy `c`
+zoom (`+`/`-`/`0`, and `Shift+0` native resolution), `Shift+R`+rotate, `Delete` plus the legacy `c`
 confirm-group alias (`groupConfirmLegacy`, canvas-context ops in
 `interaction.js`), and `Mod+J`/`Mod+Shift+J` (timeline-controller).
 `Enter`/`Escape` remain hard-coded modal-button special cases.
@@ -6265,10 +12314,15 @@ via the options bag.
 **Key exports.**
 - `Viewport3D` — class. Selected methods: `setFrame(instanceGroups)`,
   `setSelectedInstance`, `setEnvironment`, `clearEnvironment`,
+  `setPlanes`, `clearPlanes`, `setMeshMembership`, `clearMeshMembership`,
+  `setSelectedPlaneNode`, `clearSelectedPlaneNode`,
+  `setAnglePreview`, `clearAnglePreview`, `setPlaneRoles`, `clearPlaneRoles`,
+  `setOriginPickMode`, `setOriginCandidates`,
+  `clearOriginCandidates`, `setOriginFrame`, `clearOriginFrame`,
   `addCameraPyramids`, `selectCamera`, `showSelectedCameraView`,
   `showInitialView`, `setMissingVideoCameras`, `highlightCamera`,
-  `resize`, `resetCamera`, `lookAtOrigin`, `fitToScene`,
-  `setVisible(visible)` / `isVisible()`, `dispose`.
+  `resize`, `resetCamera`, `lookAtOrigin`, `fitToScene`, `originPivot`,
+  `originUp`, `setVisible(visible)` / `isVisible()`, `dispose`.
 - **`setVisible(false)` stops ALL processing** (the `\` toggle's other half —
   see `ui/panel-visibility.js`). A collapsed container is still a perfectly
   good render target as far as WebGL is concerned, so the `_animate()` loop
@@ -6290,6 +12344,271 @@ via the options bag.
   and restore the normal one on the next line. `visible` is a per-instance
   constructor option (default `true`) rather than a DOM read, because the two
   export-modal instances must keep rendering regardless of the main panel.
+
+**Scene groups.** Nine `THREE.Group` siblings under the scene: `_cameraGroup`,
+`_skeletonGroup`, `_envGroup`, `_planeGroup`, `_meshMembershipGroup`,
+`_angleGroup` (the Set Angle ghost), `_planeRoleGroup` (the Set Angle role
+outlines), `_originGroup` (the Set Origin candidate arrows) and `_framePivot`
+(the grid floor + axis helper).
+**`updateSkeleton` clears ONLY `_skeletonGroup`**, every frame — that is the
+entire mechanism by which the environment overlay and annotated planes persist.
+Anything frame-independent must be a sibling, never a child of
+`_skeletonGroup`.
+
+**Plane corners size independently of pose nodes.** `setPlanes` uses
+`this.planeNodeSize` (the panel's "3D Node Size" slider, pushed in by
+`syncPlanes3D`), not `skeletonNodeSize` — sizing reference geometry for
+legibility must not resize the pose annotation.
+
+**`showPlaneSurfaces` / `showPlaneNodes`** (both default `true`) decide which
+meshes `setPlanes` builds: the plane BODY — its edges and its fill — and its
+CORNERS, independently. They are the Visibility panel's "Planes in 3D Views" /
+"Nodes in 3D Views" toggles, pushed in by `syncPlanes3D` and forced on inside
+Defining Plane Mode (`ui/plane-visibility.js`). They **never filter `_planes`**:
+the ids in it are what a live drag, `setSelectedPlaneNode`'s marker,
+`setMeshMembership`'s highlight and `setPlaneRoles`' outlines all resolve
+against, so hiding a plane must cost meshes and nothing else. With the corners
+off nothing is pickable, which is correct — the payload is only `editable`
+inside the mode, where both flags are on.
+
+**`setPlanes(planes)` / `clearPlanes()`** — user-annotated planes from
+View ▸ Define Planes (`ui/plane-definition.js`'s `syncPlanes3D`). Full rebuild
+per call, like `setEnvironment`. Payload per plane:
+`{id, name, color, nodeIds, nodeColors, nodeImmutable, edges, polygonOrder,
+filled, editable, planeFit, fitted, points3d}` — where `nodeIds` is the POOL
+ids behind this plane's corners (parallel to `nodeColors`, and what
+`setSelectedPlaneNode` resolves against) and `planeFit` is a **usable** fit
+(the drag surface, stored or derived) and `fitted` is whether the user has
+actually clicked Fit, which is the different question Set Origin asks. Nodes
+are spheres in their own per-node colour (the cross-view correspondence cue),
+edges reuse `_createCylinder`, and `filled` adds a fan-triangulated
+`BufferGeometry` mesh built by `_buildPlaneFillMesh` — `DoubleSide` because a
+plane is viewable from either face, `depthWrite: false` so the translucent fill
+never occludes nodes behind it. The fan walks `polygonOrder`, so it covers the
+real outline rather than an index-order bowtie, and a corner in the middle of a
+plane is covered by the fill instead of being a vertex of it. A fan is only
+valid over a convex ring, which a hull always is; a user-drawn CONCAVE ring can
+still fan wrong, which is the price of honouring their edges. **`points3d` needs no
+transform**: the Three camera is Z-up and the scene is already in the
+calibration's world frame, so coordinates go straight into `position.set`, the
+same as skeleton nodes and camera centres.
+
+**`setAnglePreview(spec)` / `clearAnglePreview()`** — a GHOST of where
+**Set Angle Between Two Planes** would put the plane being rotated, shown live
+while its dialog is open and cleared on Cancel, Esc and Apply. ADDITIVE in the
+same way `setMeshMembership` is: its own group, its own pair of calls, and nothing
+in it touches `_planeGroup`. Geometry comes from the caller — the PLANNED
+points, which have not been written to any node — while the plane's edge list,
+polygon ring and colour are read back out of the last `setPlanes` payload by
+`spec.planeId`, so the ghost is drawn exactly like the real plane and there is
+no second copy of that payload shape to keep in step. The fill reuses
+`_buildPlaneFillMesh`, so a concave ring is ordered the same way it is for the
+solid plane and only the material differs. **`depthTest: false` on purpose:**
+the ghost overlaps the plane it proposes to replace, the useful thing to see is
+the DIFFERENCE between the two, and a depth-tested ghost is hidden by the very
+plane it is about to move — the same reasoning as the dimmed, non-depth-tested
+unchosen arrow in the origin picker. `clearPlanes()` clears it too, since a
+proposal about a plane that is no longer here must not hang in the scene. It is
+pure display: nothing here writes a node or marks the project dirty.
+
+**`setPlaneRoles(roles)` / `clearPlaneRoles()`** — fat, see-through-everything
+outlines saying WHICH planes the Set Angle dialog's two dropdowns are naming,
+and which of them is being held. `roles` is `[{planeId, color}]`; `null` or `[]`
+clears. A THIRD group rather than the ghost's, because the two answer different
+questions and are cleared at different times — a refused plan drops the ghost
+while the roles are still what the user is choosing between. Geometry comes
+from the last `setPlanes` payload (the plane AS IT IS; the ghost is the one
+showing the proposal), corners are drawn as well as edges so a plane with no
+edge list still reads, and `renderOrder` 8 puts it under the ghost's 9/10 so a
+proposal is never obscured by the highlight of the plane it would move.
+`clearPlanes()` clears it too. Pure display.
+**`setMeshMembership(payload)` / `clearMeshMembership()`** — MEMBERSHIP
+highlighting for the SELECTED 3D Mesh Object, pushed by `syncPlanes3D`. Payload
+`{planeIds}`; `null` clears. ADDITIVE: its own `_meshMembershipGroup`, a
+sibling of `_planeGroup` that the per-plane fills above never touch.
+
+**It draws the member PLANES, not a derived body**, and that is the design. An
+object IS its member planes — the same cage already on screen — so each member's
+FACE is filled and its corners and edges redrawn, fatter, in `MESH_MEMBER_COLOR`
+(one fixed yellow). Four consequences worth stating:
+
+- **The face is the part that reads.** Corners and an outline alone left every
+  plane wearing its own colour, so on a five-walled cage "is this wall in the
+  object?" came down to a few dots. The face is built by
+  `_buildPlaneFillGeometry` — the same ring-walking fan as the plane's own fill,
+  split out of `_buildPlaneFillMesh` so a highlight can never disagree in shape
+  with the surface it highlights — at opacity 0.45 against the fill's 0.28, and
+  it is drawn whatever the plane's own `filled` flag says, because what is being
+  shown is MEMBERSHIP and not the plane's display setting. `depthTest` stays ON
+  for the face (a filled face ignoring depth paints a cage's back walls over its
+  front) and OFF for the corners and outline (so an occluded member still
+  announces itself).
+- **The colour is fixed, not the object's.** A highlight has to be legible
+  against whatever colours the user gave their planes, and an object drawn in a
+  colour of its own competes with five plane colours at once. The payload
+  therefore carries **no colour field at all** — an unused one would be an
+  invitation to wire the object's colour back in. Only one object is selected at
+  a time, so a shared highlight colour is never ambiguous; the object's colour
+  stays its identity in the table swatch, the editor and the `.glb`
+  `baseColorFactor`.
+- **It cannot drift.** Positions are read out of `this._planes`, the very
+  payload the plane drawing was built from, so a highlight is always exactly on
+  top of its plane. The previous version pushed the object's DERIVED geometry
+  instead, which `pose/mesh-object-geometry.js` builds in the user's **origin
+  frame** — while this group, like every data group, hangs off `scene` rather
+  than `_framePivot` and is drawn in **calibration world**. Defining an origin
+  therefore made the object float away from the cage, translated and rotated by
+  the frame. Pinned by `tests/e2e/mesh-membership-highlight.mjs`, which asserts
+  exact equality with a frame set and shows the derived vertex to be elsewhere
+  as its control.
+- **Winding is no longer shown here.** The old two-tone front/back surface made
+  "I am looking at the inside" visible; membership highlighting does not. Nor is
+  it reported in the panel — winding is derived, not chosen, so there is nothing
+  for a user to act on and a read-out would be prose nobody can use.
+
+A member plane that was deleted simply has nothing to light up — the same lazy
+resolution the model uses, no cascade and no throw. `renderOrder` 7 puts the
+whole highlight ABOVE the plane fills (0) and UNDER the Set Angle role outlines
+(8), so it covers the plane it lights up while an open angle dialog still reads
+over it.
+
+**`setSelectedPlaneNode(payload)` / `clearSelectedPlaneNode()`** — the ONE plane
+node selected in the Nodes table, pushed by `syncPlanes3D`'s
+`syncSelectedNode3D`. Payload `{nodeId}`; `null` clears. ADDITIVE, in its own
+`_nodeSelectGroup`, a sibling of `_planeGroup`. Four things about it:
+
+- **A pool node ID crosses the boundary, never a position.** `_findPlaneNodePoint`
+  resolves it against `this._planes` (the payload's `nodeIds`), so the marker is
+  built from the very numbers the corner was drawn from — the same rule
+  `setMeshMembership` follows, and for the same reason: a position computed
+  anywhere else may be in the user's ORIGIN frame while this group is drawn in
+  CALIBRATION world.
+- **One marker, even for a shared corner.** The first plane carrying the id
+  wins and there is nothing to choose between them — every plane referencing a
+  node draws it at that node's one position, which is what a shared corner IS,
+  and a second marker on top of the first would only z-fight with it.
+- **Three rings, in the three coordinate planes, with an EMPTY middle.** A
+  corner is about a dozen pixels across at a normal zoom, so anything solid
+  drawn over it — a ball, or a wireframe sphere, whose lines close up into one
+  at that size — hides the node's own colour, which is how the user knows they
+  landed on the right one. Three at right angles rather than one facing the
+  camera: one ring would need re-aiming every orbit (per-frame work this
+  viewport otherwise stays free of) and edge-on it is a line, while three
+  cannot all be edge-on at once. `NODE_SELECT_COLOR` is white and fixed, for
+  the reason `MESH_MEMBER_COLOR` is: a node wears its own colour everywhere
+  else, so a marker in that colour is invisible on the one node it is about.
+- **A node in no plane is marked nowhere.** The 3D view draws planes; a node no
+  plane references is not in it, and inventing a marker for it would draw a
+  point the user cannot see anywhere else. `depthTest: false` and
+  `renderOrder` 7, like the membership outline — a corner behind a filled wall
+  is exactly the one worth finding. `clearPlanes()` clears it too, since
+  `_planes` is what it is resolved through.
+  Pinned by `tests/e2e/plane-node-selection.mjs`.
+
+**Dragging a plane corner in 3D** (`_setupPlaneEditing` and friends;
+callbacks `onPlaneNodeDragged(planeId, nodeIdx, [x,y,z])` /
+`onPlaneNodeDragEnd(planeId, nodeIdx)`, wired by `syncPlanes3D`). Two rules,
+both enforced here rather than by the caller:
+1. **Only a plane WITH A FIT is draggable, and never a PINNED corner.**
+   `setPlanes` stamps
+   `userData.planeEditable = editable && planeFit && !nodeImmutable[k]` on each
+   corner mesh and the raycast only ever collects those, so a corner with no
+   plane — no constrained direction to move in — is inert. `planeFit` asks
+   whether there IS a surface, not who supplied it: the caller sends a
+   **usable** fit, so an un-Fit plane with three solved corners is draggable
+   too (see `ui/plane-definition.js` > `syncPlanes3D`). The `nodeImmutable` term
+   matters because `planeEditable` also gates the **hover cursor**
+   (`_pickPlaneNode`, used by both the drag and the `'move'` cursor): without it
+   a pinned corner would advertise a drag that `onPlaneNodeDragged` then
+   refuses.
+   **`userData.planeFitted` comes from the payload's separate `fitted` flag**,
+   not from `planeFit`, and deliberately does not follow `planeEditable` down
+   either. Set Origin's picker asks whether the user has DECLARED this plane's
+   frame — the question `fittedPlanes()` counts — so a derived surface must not
+   make an un-Fit plane eligible to define the project's origin; and a pinned
+   corner is a *preferred* Set Origin anchor and must stay pickable. A payload
+   that omits `fitted` falls back to `!!planeFit`, so an older caller is
+   unchanged.
+2. **A corner can only move WITHIN its fitted plane.** The drag resolves the
+   pointer ray against a `THREE.Plane` built from the fit's normal + centroid,
+   so the result is on the plane by construction — there is no "move then
+   re-project" step that could drift. Near-parallel rays (`|cos| < 1e-3`, an
+   edge-on view) are refused rather than flung to a huge coordinate.
+
+The fit itself is held **fixed** for the drag and not re-derived after it:
+centroid + normal are what a later step turns into the origin's translation +
+rotation, so a corner nudge must not move the frame it defines (and re-fitting
+mid-drag would let the plane chase the corner being dragged).
+
+The `pointerdown` listener is **capture-phase on `container`, not on the
+canvas** — OrbitControls registered its own canvas `pointerdown` first, and at
+the target element capture and bubble listeners fire in *registration* order, so
+a canvas capture listener would still run second and the orbit would already
+have started. From an ancestor the capture phase genuinely precedes the target,
+which lets it `stopPropagation()`. `controls.enabled` is also flipped for the
+duration. `_suppressCameraClick` swallows the one `click` that follows a drag
+released over a camera pyramid, which would otherwise jump the view into that
+camera's perspective. `dispose()` removes the container listener — it outlives
+the viewport, so leaving it attached would keep a disposed instance firing.
+
+**Set Origin support** (`setOriginPickMode` / `setOriginCandidates` /
+`setOriginFrame`, driven by `ui/origin-definition.js`).
+- `setOriginPickMode('node'|'axis'|null)` arms picking. While armed the click
+  handler **consumes the click even on a miss** — a stray click must not select
+  a camera and swing the view away from the corner being aimed at. `'node'`
+  only ever collects meshes flagged `userData.planeFitted`.
+- `setOriginCandidates({origin, normal, length, chosen})` draws both ±normal
+  arrows as real shaft+head **meshes** — not `ArrowHelper`, whose `Line` shaft
+  raycasts against a distance threshold rather than geometry and is unreliable
+  to click. `chosen` dims the loser instead of removing it. `length` comes from
+  the caller because it must scale to the plane, not the camera baseline.
+- `setOriginFrame(frame)` moves `_framePivot` (grid + axes) onto the user's
+  frame via `makeBasis` — basis **columns**, since a parent transform maps
+  frame-local coordinates out into world. Only the frame and the ORBIT move; no
+  data group is touched.
+
+**The orbit follows the applied origin** (`originPivot` / `originUp` /
+`_rebaseControls`, plus `_frameDirection`). Interaction is part of the display:
+re-basing only the grid would leave drag, pan and wheel keyed on a calibration
+origin that is no longer drawn anywhere, so the whole scene would swing about an
+invisible point. `_rebaseControls` moves `controls.target` onto the frame's
+origin and `camera.up` onto its +Z, and translates the camera by the same delta
+so the **view does not jump** — direction and distance survive, only the pivot
+changes. Zoom needs nothing extra: OrbitControls dollies along the camera→target
+ray, so moving the target moves the zoom centre with it. `setOriginFrame(null)`
+is symmetric, putting the orbit back on the calibration origin and world +Z.
+
+**Why the controls get REBUILT, not just re-aimed.** r147's OrbitControls bakes
+the orbit axis in at construction: `update` captures a quaternion from
+`camera.up` once, when its closure is defined, so a later `camera.up = …` re-aims
+the camera and nothing else. `_createControls` therefore owns construction (and
+the `'change'` → `_checkDeclutter` listener, so a rebuild keeps it) and records
+the axis actually in force as `_controlsUp`; `_rebaseControls` rebuilds only when
+the axis really moved — a re-applied frame or a Reset View is a plain
+`controls.update()`. `minDistance`/`maxDistance`/`enabled` carry across.
+
+**`resetCamera` / `fitToScene` / `showInitialView` are frame-relative.** The
+canned viewing angles (`(500,-500,400)`, `(1,-1,0.8)`) are stated in FRAME
+coordinates and rotated out through `_frameDirection`, so "the default view"
+means the same angle onto the user's grid as onto the calibration's. With a frame
+applied `fitToScene` also fits **around the frame's origin** rather than the
+point cloud's centroid, measuring its radius from that same point: framing one
+point while orbiting another is exactly what makes the first drag after a fit
+swing the scene off-centre.
+
+**Picking calls `scene.updateMatrixWorld()` first.** Raycasting reads
+`matrixWorld`, which is otherwise only refreshed by `render()`. The origin
+arrows are built in response to the PREVIOUS click, so a click arriving before
+the next frame would raycast against stale (identity) transforms and silently
+miss. Same guard in `_pickPlaneNode`, where `setPlanes` rebuilds mid-drag.
+
+**`fitToScene` counts plane nodes.** Its point set is camera positions +
+`node_*` inside `_skeletonGroup` + **`planeNode_*` inside `_planeGroup`** +
+the origin. Without the plane term the view stays on the cameras and an
+annotated plane — the whole reason for the mode — sits off screen. The
+`planeNode_` prefix deliberately does not match the `node_` test, so nothing is
+double-counted, and `_planeGroup` is empty until a plane is triangulated, so
+framing is unchanged for projects with no planes.
 - Constructor options `skeletonNodeShape` (`'circle'` sphere / `'square'` cube /
   `'triangle'` tetrahedron / `'x'` crossed bars — `updateSkeleton` builds the
   matching node geometry) and `preserveDrawingBuffer` (keeps the WebGL buffer
@@ -6348,6 +12667,263 @@ either one on its own zeroes the handle.
 
 ---
 
+### ui/info-tip.js
+
+**Purpose.** The ⓘ explanation, shown where the user is looking — a small
+popover beside the pointer.
+
+The text used to go to `setStatus`, which paints it in the status bar at the
+**bottom-left of the window**: the furthest point on screen from the icon just
+clicked, outside the region being read on any wide window, and a bar that also
+carries save results, triangulation counts and errors — so a help string sat in
+it afterwards.
+
+A **LEAF module** — it imports nothing. Every panel with something to explain is
+a caller, and several of those already import each other.
+
+**Key exports.**
+- `setInfoTip(el, text)` — declare an explanation. Sets `data-infotip`, and
+  **removes `title`**: left on, the native tooltip surfaces a second later
+  saying the same sentence in a second place. The text stays reachable to
+  assistive tech as `aria-label`. Idempotent, so a renderer may call it on every
+  repaint.
+- `installInfoTips()` — install the delegated listeners; call once at startup
+  (`pose/initialization.js`, before any panel renders). Further calls are
+  no-ops, so a second caller cannot double every handler.
+- `hideInfoTip()` — put it away.
+- `placeTipNear(el, x, y)` — the placement rule below (beside the pointer,
+  flipped at the viewport edges), for any `position: fixed` popover. Shared with
+  the node tooltip (`ui/node-tooltip.js`) so the app has one rule for where a tip
+  goes.
+
+**Delegation, not per-element wiring.** One `#infoTip` element and one set of
+listeners on `document`, matching `[data-infotip]`. The plane panel rebuilds its
+tables on almost every interaction: an info button wired at creation time would
+have to be re-wired by every renderer, and the one that forgot would fail
+SILENTLY — an icon with no tip looks exactly like an icon whose text is empty.
+A `tests/e2e/info-tip.mjs` case creates a `[data-infotip]` element after startup
+and asserts it is served with no wiring at all.
+
+**The tip lives and dies with the hover.** It appears when the pointer reaches
+the icon and goes away when the pointer leaves — **including when the icon was
+clicked**. A click only guarantees one is showing, which is what a touch device
+needs (a tap, and no hover to have shown it already); it buys no extra time.
+Anything a click pinned open is an explanation that outlives the question,
+sitting over a panel the user has already moved on from and needing a second,
+deliberate click to clear. The single exception is a tip summoned by the
+KEYBOARD: no pointer to leave, so it waits for blur or `Esc`.
+
+**A click must not also do the thing underneath.** These icons sit inside
+things that are themselves clickable — a table row, and the `<summary>` that
+folds the very section being asked about — so the click listener is registered
+in the CAPTURE phase and calls `stopPropagation`. `preventDefault` is not also
+needed, and was tried: every ⓘ in the app is a `<button>`, which makes the
+button the click's activation target, so a `<summary>` ancestor's fold never
+runs. That holds only while the icon has its own activation behaviour — a plain
+`<span>` ⓘ inside a `<summary>` WOULD fold it, since the DOM runs activation
+behaviour after dispatch and stopping propagation does not reach it.
+`tests/e2e/plane-section-info.mjs` §4 pins the behaviour either way, and also
+that the heading BESIDE the icon still folds.
+
+**Four details that are not taste.**
+- **The keyboard path is gated on `:focus-visible`.** Clicking a `<button>`
+  focuses it, so without the gate a mouse click marked the tip keyboard-held and
+  it survived the pointer leaving — precisely the behaviour the hover rule above
+  forbids. `:focus-visible` is exactly the "arrived by keyboard" signal, so the
+  two paths stop overlapping. `tests/e2e/info-tip.mjs` §4 goes red without it.
+- **`pointer-events: none` on the tip.** It follows the cursor, so without this
+  it slides under the pointer, takes the hover, fires `mouseout` on the icon and
+  flickers itself away.
+- **It FLIPS to the other side of the pointer rather than clamping.** Nearly
+  every info icon is in the right-hand panel, close enough to the edge that a
+  clamped tip would cover the pointer and the icon under it.
+- **A scroll DISMISSES it** (`position: fixed` does not follow one), unlike the
+  pin picker, which repositions. The difference is whether the user is mid-
+  interaction: a picker is, a sentence they have finished reading is not.
+
+Leaving the icon, clicking elsewhere, `Esc`, blur, a scroll or a resize all
+dismiss.
+
+**Imported by.** `ui/plane-definition.js` (the Pinned column's ⓘ and the four
+major sections' ⓘ), `pose/initialization.js` (`installInfoTips`),
+`ui/node-tooltip.js` (`placeTipNear`).
+
+Coverage: `tests/e2e/info-tip.mjs` — placement beside the cursor, the viewport
+clamp and the flip, hover/click/Esc/outside-click dismissal, that `title` is
+gone while `aria-label` is not, that the status bar is left untouched (the
+regression), and the delegation case above. `tests/e2e/plane-section-info.mjs`
+covers the section headings' ⓘ and the no-fold rule.
+
+### ui/node-tooltip.js
+
+**Purpose.** Rest the pointer on a pose node and its name appears beside it —
+and on a prediction, the model's score for THAT node on a second line:
+`trunk` / `(score: 0.94)`. SLEAP 1.6.5's node tooltip (`QtNode.setToolTip`,
+`sleap/gui/widgets/video.py`), same text: `f"{name}\n(score: {score:.2f})"`, the
+name alone for a user node.
+
+**Key exports.** `nodeTooltipText(nodeName, score)` (pure; NaN score → the name
+alone), `setNodeTooltipTarget(target, clientX, clientY)` (`target` =
+`{key, text, frameIdx, color}` or null; called by `ui/interaction.js` on every mousemove
+over a view), `syncNodeTooltipFrame(frameIdx)` (called by `drawAllOverlays` in
+`ui/rendering.js`), `hideNodeTooltip()`, `installNodeTooltip()` (once, at
+startup), `NODE_TIP_DELAY_MS` (700), `NODE_TIP_AWAKE_MS` (2000).
+
+**Who decides what.** `InteractionManager._nodeTooltipTarget` turns the hover's
+hit (`findNearestNode` / `findNearestUnlinkedNode`) into the target: an edge hit,
+a plane node and empty canvas give none (SLEAP's tooltips are on nodes), a
+reprojection is named without a score, and the score is
+`Session.predictedNodeScore` — so the tooltip never decides whether a number is a
+prediction's. This module only times, places and hides it.
+
+**Timing is Qt's.** The first tip waits `NODE_TIP_DELAY_MS`; while one is
+showing, and for `NODE_TIP_AWAKE_MS` after it hides, the next node's shows at
+once — the pointer crosses dozens of nodes while annotating, and an instant tip
+would flicker over the points being placed. A press, a key or the wheel hides it
+and restores the delay. A shown tip stays where it appeared, as Qt's does.
+
+**It never outlives what it describes.** A tip is about one node on one frame. A
+new frame moves the node from under a still pointer, so `drawAllOverlays` calls
+`syncNodeTooltipFrame` (a redraw naming no frame — `ui/plane-angle.js` calls
+`drawAllOverlays()` bare — is not a frame change). Leaving the view, a press,
+a key, the wheel, a scroll, a resize and window blur hide it too. It holds
+strings and numbers only, never an Instance, so it cannot keep a lazy frame alive.
+
+**The color says WHICH skeleton.** Where skeletons overlap, `trunk (score:
+0.42)` does not say whose trunk, so the tip's left edge is a 5 px stripe in the
+color the hovered instance is drawn FROM (`target.color` →
+`--node-tip-color`): its track's, or its identity's in Identity mode, darkened
+like the skeleton for a second ungrouped instance on one track. The base color,
+not a selection's white or a prediction's desaturated tint — it identifies the
+animal. The interaction manager takes it from the renderer's own functions
+(`ui/overlays.js`), so it cannot name a color that is not on screen.
+
+It reuses the ⓘ tip's look (`.info-tip.node-tip`; `.node-tip` adds
+`white-space: pre-line` for the two lines, and the stripe) and its placement (`placeTipNear`),
+and is `pointer-events: none` — a tip that took the hover would make the view see
+a `mouseleave` and hide it.
+
+**Imports from project modules.** `./info-tip.js` — `placeTipNear`.
+
+**Imported by.** `ui/interaction.js`, `ui/rendering.js`, `pose/initialization.js`.
+
+Coverage: `tests/test-node-scores.mjs` (the text) and
+`tests/e2e/node-score-tooltip.mjs` (real mouse: the delay and the awake window,
+a prediction's per-node score, a user node's bare name, none on an edge or empty
+canvas, placement beside but not over the pointer, hidden on a new frame and on a
+press; the stripe for two crossing tracks whose tips read identically, a
+darkened duplicate track, a group in Tracks vs Identity mode, and an overlap
+where the grouped skeleton wins; plus the score data behind it on every load
+path and both writers).
+
+### ui/section-state.js
+
+**Purpose.** Remember which collapsible `<details>` sections a user left open,
+across page loads.
+
+A `<details>` keeps its state only as long as its DOM node lives — the app
+session. But **loading a project reloads the page**, so the markup's `open`
+attributes came back and every section in the Define Planes panel was expanded
+again; the user refolded the same four or five after every load. The state has
+to outlive the document, so it lives in `localStorage`.
+
+**Browser-local display taste, NOT project state** — the same classification as
+the plane panel's node-size / edge-width sliders and the Visibility panel's
+global appearance prefs. It must never be written into the `.slp`: it would move
+`save-golden-digest.mjs`, and opening a colleague's project would refold your
+panel.
+
+A **LEAF module** — it imports nothing. `ui/info-panel.js` (Skeleton ▸ Nodes /
+Edges) and `ui/plane-definition.js` (the whole Define Planes panel) both use it
+and already sit on opposite sides of several import chains, so anything with its
+own imports would risk closing a cycle.
+
+**Key exports.**
+- `persistSectionState(id, key)` — restore one `<details>` from `key`'s map,
+  then listen for `toggle`. **Restore first, listen second**: assigning
+  `el.open` itself fires `toggle`, so a listener attached earlier would open by
+  writing back what it had just read. An id with **no stored value keeps the
+  markup default**, which is what lets a section ship collapsed without this
+  module having an opinion.
+- `persistSectionStates(ids, key)` — the same for several under one key.
+
+**Storage is best-effort on BOTH sides.** Private windows, blocked site data and
+quota errors make `localStorage` throw on read *and* on write, and a section
+that cannot be remembered must still open and close — so every access is
+wrapped and a failure degrades to the markup's default. The `toggle` handler
+**re-reads the map** rather than mutating a captured copy: several sections
+share one key and each holds its own closure, so a stale copy would write back
+its neighbours' state as it was when that one section was wired.
+
+**Callers and their keys.**
+- `skeletonSectionsOpen` — `skeletonNodesSection`, `skeletonEdgesSection`.
+- `planeSectionsOpen` — `planeNodesDetails`, `planePlanesDetails`,
+  `planeMembersDetails`, `planeEdgesDetails`, `planeActionsDetails`,
+  `planeAppearanceDetails`, `meshObjectsDetails`, `originResultDetails`.
+  The sub-sections are included deliberately: Planes is the tallest thing in
+  the panel and most of that height is its four sub-sections.
+  **`originDangerDetails` is deliberately ABSENT** — it ships collapsed because
+  it holds the three actions that rewrite the calibration every downstream tool
+  reads, and a Danger Zone left open because it was expanded once, weeks ago, in
+  a different project is exactly the state being collapsed is for.
+
+**Imported by.** `ui/info-panel.js`, `ui/plane-definition.js`.
+
+**The panel's MAJOR sections are OUTLINED, its sub-sections are not.** Styling,
+but structural: both levels are the same bordered `.plane-details` box, so
+"Plane Appearance" inside Planes read as top-level as "3D Mesh Objects" beside
+it. `.plane-panel > .info-section > .plane-details` has its existing 1px border
+recoloured to the accent, **all four sides**. Not a bar under the title: a
+marked header says where a section STARTS, and it is where a tall open one ENDS
+that is ambiguous when the next one follows it in a single scrolling column.
+Recolouring the border already there, rather than adding a second outline, is
+what keeps this from costing content width in a ~300px panel already full of
+boxes-within-boxes. The header keeps its own tint, so a folded section still
+says what it is. Danger Zone is outlined the same way in the error colour — it
+must not pick up the accent, since the point of the red is that it does not look
+like its neighbours; that rule is restated at this selector's specificity
+because `.plane-panel > .info-section > ...` would otherwise win.
+
+Coverage: `tests/e2e/plane-section-state.mjs` — the reload round trip, that a
+repaint does not reopen what the user just collapsed, the Danger Zone negative
+control, that nothing reaches the project metadata or the dirty flag, and a
+context whose `localStorage` throws.
+
+### ui/lazy-select.js
+
+**Purpose.** A `<select>` that builds its full option list only when the user
+reaches for it — the info panel's per-row Track dropdown, which `updateFrameInfo`
+rebuilds on every update (see `ui/info-panel.js` ▸ "The Track `<select>` is
+built LAZILY" for the measurement that motivated it).
+
+A **LEAF module** — it imports nothing — so the browser suite bridges it
+(`window.__LazySelect`) without loading the app.
+
+**Key exports.**
+- `buildLazySelect({ head, tail, value, label, entries, cssText })` — returns a
+  select holding `head`, the entry `[value, label]`, and `tail`, with `value`
+  selected. The middle option is omitted when `value` is the head's or the
+  tail's, or when `label` is `undefined` — meaning no entry has that value, so
+  nothing is selected, exactly as an eager select would show. On the first
+  `mousedown` or `focus` it calls `entries()` once and inserts every
+  `[value, label]` between head and tail, keeping the selection.
+
+Three things about it:
+- **`mousedown` AND `focus`.** Both fire before the browser opens the list
+  (mouse) or acts on a key (keyboard), so the user always picks from the
+  complete list, in the eager order. Script that assigns `.value` without
+  either selects nothing — as on any select lacking that option; dispatch
+  `focus` first.
+- **Filling locks the closed width** (`style.width = offsetWidth`) before
+  inserting, so a long track name does not widen the select under the pointer
+  as its list opens.
+- **The caller supplies `label`**, not the helper, so finding the current
+  entry's label never builds the list the helper exists to avoid.
+
+**Imported by.** `ui/info-panel.js`.
+
+Coverage: `tests/test-lazy-select.js`, `tests/e2e/info-panel-many-tracks.mjs`.
+
 ### ui/panel-visibility.js
 
 **Purpose.** The single answer to "is the 3D viewport / info panel actually on
@@ -6377,6 +12953,12 @@ be readable by the code doing it.
   also on `window.__lucidPanelVis`) — diagnostics. A visibility gate that
   looks right and still does the work has no visual signature at all, so the
   counters are what `tests/e2e/panel-toggle-independence.mjs` reads.
+- `collapseViewport3D(viewport3d)` — collapse the 3D panel if expanded (no-op
+  otherwise; returns whether it did): park the inline width, add `collapsed`,
+  `viewport3d.setVisible(false)`. The collapse half of `toggle3DViewport`, which
+  calls it; it lives here so `pose/tracker.js` can close the panel after Track
+  All without importing `ui/ui-wiring.js` (an import loop). The viewport is a
+  PARAMETER, not an import, to keep this module a leaf.
 
 **Imports from project modules.** **None — this is a leaf module by design.**
 `ui/info-panel.js`, `ui/ui-wiring.js` and `pose/initialization.js` all need to
@@ -6384,8 +12966,9 @@ ask it, and several of those already import each other, so any import here
 would close a cycle.
 
 **Imported by.** `ui/info-panel.js` (gates `updateInfoPanel` /
-`updateFrameInfo`), `ui/ui-wiring.js` (`refreshInfoPanelAfterShow`),
-`pose/initialization.js` (gates `update3DViewport` and `setup3DViewport`).
+`updateFrameInfo`), `ui/ui-wiring.js` (`refreshInfoPanelAfterShow`,
+`toggle3DViewport`), `pose/initialization.js` (gates `update3DViewport` and
+`setup3DViewport`), `pose/tracker.js` (`collapseViewport3D` after Track All).
 
 **Note.** `ui/viewport3d.js` deliberately does NOT import this — it takes a
 per-instance `visible` flag instead, because the export modals mount their own
@@ -6455,6 +13038,170 @@ import site is unchanged; bridged into the test runner as
 
 ---
 
+### loading/calibration-pick.js
+
+**Purpose.** Two small facts about calibration FILES that several modules need
+and that must not disagree: what the re-based calibration is called, and which
+file to load when a folder holds more than one candidate.
+
+**No imports, deliberately.** `loading/session-loader.js` reaches Three.js
+through a CDN specifier and `import-export/file-io.js` pulls in the browser
+world, so neither can be loaded by a Node test — and the selection rule below
+is exactly the kind of thing that wants a unit test. It is also outside the
+`ui/origin-rebase.js` / `ui/origin-definition.js` cycle, where a `const`
+exported from either and imported by the other sits in TDZ for whichever side
+initializes second.
+
+**Key exports.**
+- `REBASED_CALIBRATION_NAME` — `'calibration-rebased.toml'`, the file BOTH
+  origin actions write. They produce byte-identical TOML for a given origin
+  (same cameras, same `rebaseExtrinsics`, same writer); what differs is whether
+  the project moved to match, which is a property of the project and not of the
+  file. Deliberately not `calibration.toml`: that one is usually shared with
+  tools outside LUCID and neither action's business to rewrite.
+- `pickCalibrationFile(matches)` → `{file, ambiguous}`. Prefers
+  `REBASED_CALIBRATION_NAME` (case-insensitively — a case-insensitive
+  filesystem can spell it differently), else the lexicographically first match
+  so the choice is at least DETERMINISTIC across loads of the same folder.
+  `ambiguous` is the NAMES of the candidates it passed over, so a caller can
+  say what it used and what it ignored. Does not mutate its argument: the
+  loaders keep scanning afterwards.
+
+**Why it exists.** Both folder loaders used to do `calibFile = file` as they
+scanned, so with two matches the winner was whichever the enumeration yielded
+LAST — an order neither the File System Access API nor `webkitdirectory`
+promises. Harmless while a folder could hold one match; that ended when
+`Set as New Calibration` began writing a NEW file instead of overwriting
+`calibration.toml`. Picking the wrong one is the quiet failure the whole
+re-base flow warns about: the stale file parses, every camera loads, every
+number looks plausible, and every reprojection is wrong.
+
+**Imported by.** `loading/session-loader.js` (both folder loaders),
+`ui/origin-rebase.js`, `ui/origin-definition.js`.
+
+**Tests.** `tests/test-calibration-file-pick.mjs`.
+
+### loading/video-file-pick.js
+
+**Purpose.** Which of a camera's candidate videos is the session recording.
+Two rules about calibration-named files that four load paths need and that must
+not disagree.
+
+**No imports, deliberately** — the same reason as `loading/calibration-pick.js`:
+`loading/session-loader.js` reaches Three.js through a CDN specifier and cannot
+be loaded by a Node test at all, and this decision is pure and worth pinning.
+
+**Key exports.**
+- `isCalibrationImagesVideo(file)` — the HARD exclusion. True for a clip under a
+  `calibration_images/` path segment (matched at ANY depth, so the answer does
+  not depend on which directory the user picked as the root). No such file is
+  ever the session recording. `session-loader.js`'s `isCalibrationVideoFile` is
+  now just this.
+- `hasCalibrationStem(file)` — the SOFT signal: a stem ending in `-calibration`
+  or `_calibration`. Positional, not about the separator — `calibration-cam1.mp4`
+  is not a match.
+- `preferNonCalibrationVideos(files, groupKeyFn)` → `{kept, dropped}`. Drops each
+  calibration-STEMMED video that has a non-calibration sibling under the same
+  group key. Order-preserving, does not mutate its argument, and a file whose key
+  is null is never dropped (nothing says it is redundant).
+- `matchVideoToCamera(file, cameraNames, refBaseByCam)` — the camera a video
+  belongs to, by parent directory, then the camera name ANYWHERE in the stem,
+  then the filename the project references for that camera. All case-insensitive;
+  null when nothing matches. Used both to assign a camera and, in the same load,
+  as the group key above — matching twice with two different rules is how a video
+  gets dropped for one camera and bound to another.
+
+**Why it exists (#199).** The stem used to be a hard exclusion sharing one
+predicate with the path rule, so `cam1-calibration.mp4` — an ordinary session
+video an alpha tester had simply named that way — was dropped outright and the
+folder load produced ZERO views with no message saying why. On the real session
+folders all 38 calibration clips live under `calibration_images/` and none
+outside it, so the stem rule excluded only false positives. It is now a hint
+about which of several candidates is the recording, never proof that a file is
+not one.
+
+**The grouping is per CAMERA, not per folder.** That is the scope in which "is
+there a better candidate?" is a meaningful question; a folder-wide rule would let
+one camera's plain video suppress another camera's only video.
+
+**Imported by.** `loading/session-loader.js` (the per-camera folder loader, the
+single-SLP folder loader, and `attachVideosForLazyReopen`),
+`import-export/slp-import.js`.
+
+**Tests.** `tests/test-video-file-pick.mjs` (the rules),
+`tests/e2e/calibration-named-videos-load.mjs` (both real loaders; confirmed to
+fail on the pre-fix build, each loader on a different half).
+
+### loading/track-union.js
+
+**Purpose.** What `session.tracks` IS for a per-camera session folder, where
+every camera's `.slp`/`.h5` carries its own track list, as one pure rule shared
+by all three per-camera paths: the eager loop in
+`handleLoadSessionFolderPerCamera`, `SioLazyLoader` and `LazyFrameLoader`.
+
+**The decision.** `session.tracks` is **the union of the cameras' track NAMES,
+cameras taken in sorted camera-name order, each camera's names in its file
+order**, and every camera's own track index is re-expressed as an index into
+it. Per-camera track lists were considered and rejected: every consumer of a
+trackIdx indexes ONE list — overlays (`session.tracks[trackIdx]` names,
+`getTrackColor(trackIdx)`), the info panel's Track select, the Tracks Timeline
+(`_buildTrackSegments`, keyed per camera but named from `session.tracks`), the
+export modal's track stats and Custom Delete's track filter (both aggregate
+`forEachInstanceRow` track values ACROSS cameras), `remapTracksFromIdentity`
+(treats the column as `session.tracks` indices), and the streaming writer — so a
+per-camera list would mean giving every one of them a camera argument.
+Concatenation (one block per camera, as the streaming writer used to produce)
+was rejected too: it is what the eager path never did, it multiplies the list by
+the camera count (3,507 entries for the real folder below) with duplicate names,
+and it would make `metadata.lucid.hiddenTracks` (saved by NAME) ambiguous.
+Merging by name means a name two cameras share is one session track — one index,
+colour and Track-select entry. It says nothing about the animal (a raw
+per-camera tracker's `track_0` is unrelated across cameras), and nothing needs
+it to: the cross-view tracker keys association, `trustTracks` votes and
+`frameIdentityMap` by **(camera, trackIdx)**, which any per-camera-injective map
+preserves.
+
+**Why it exists.** Both lazy loaders took `trackNames` from whichever camera's
+file finished opening FIRST (`open()` runs for every camera in parallel), while
+each camera's instances kept indices into their OWN list. On the real folder
+`20260713_174659-194366_05mice_flippers` (8 cameras holding 262, 443, 249, 863,
+483, 405, 388 and 414 tracks, all `track_0..track_{n-1}`), five loads gave
+`session.tracks.length` = 262, 863, 863, 863, 388 — local SSD vs SMB share
+changed the winner. A camera with more tracks than the winner had trackIdx
+values past the end of the list (Camera3_sideC's 249–862 when Camera2_mid won),
+and any camera's names/colours were read off another camera's list wherever
+the lists differ. On that data the union is `track_0..track_862` and every map
+is the identity, so the fix rewrites no column there.
+
+**Key exports.**
+- `unionTrackNames(perCamera)` → `{names, remapByCam}` for
+  `[{camName, names}]`. Input order is irrelevant. Names are matched as a
+  MULTISET (the k-th `x` of a camera maps to the k-th `x` slot), so a camera
+  that repeats a name keeps distinct tracks and every per-camera map is
+  injective. Camera names compare by UTF-16 code unit (`<`), so the order is
+  locale-independent.
+- `remapTrackIdx(remap, ownIdx)` → session index or `-1`. Trackless stays
+  trackless, and so does an index OUTSIDE the camera's own list — what
+  sleap-io's lazy materializer always made of one (`tracks[id]` undefined → no
+  track). Keeping it raw would name whatever session track sits at that index.
+  Accepts an `Int32Array` or a plain object map.
+- `isIdentityRemap(remap)`.
+
+**Imports from project modules.** None (deliberately) — loads in Node.
+
+**Imported by.** `loading/session-loader.js` (the eager per-camera loop and
+`addColumnarFramesToSession`), `loading/sio-lazy-loader.js` (`_unifyTracks`),
+`pose/triangulation.js` (`LazyFrameLoader._unifyTracks`,
+`denseOccupancyToSparse`, `_remapFrameTracks`).
+
+**Tests.** `tests/test-track-union.mjs` (the rule, incl. 200 orderings of the
+real folder's shape), `tests/test-lazy-track-union.js` (`LazyFrameLoader`
+through its real `onmessage`, all six metadata orders),
+`tests/e2e/percam-track-union.mjs` (the real folder loader, lazy in all six
+open-resolution orders plus eager, the store, occupancy and the streaming
+writer's header). The e2e file and the `LazyFrameLoader` tests were confirmed
+to FAIL on the pre-fix build.
+
 ### loading/session-loader.js
 
 **Purpose.** Orchestrator for every session-loading workflow — empty
@@ -6478,7 +13225,22 @@ filesystem enumeration, decoder rebuild.
   `nulledNodes`/occlusion, identities, 3D points — via the shared
   `restoreGroupingAndUnlink` (`import-export/slp-import.js`), so loading a
   project `.slp` reflects the changes saved in THAT file. (Previously it used
-  the raw parser and rebuilt flat poses, dropping all of that.) Views are
+  the raw parser and rebuilt flat poses, dropping all of that.) The rest of the
+  session's `metadata.lucid` goes through the same two readers the other
+  project readers call: `readVisibilityMetadata` (brightness / contrast /
+  rotation, the hidden camera / track / identity sets, the ID Switches
+  checklist) and `readPlaneMetadata` (the Define Planes state). It used to call
+  neither, so a project reopened this way came back with all of it at defaults.
+  Unlike the other readers it **adds** a session rather than replacing the
+  project — it is also the Sessions list's "Add session folder" — so it calls
+  `resetPlaneState()` only when no session is open (it is then starting the
+  project, and `readPlaneMetadata` restores only into an empty model). When a
+  project is open its planes stay, and the new session's 2D is seated on them
+  by node ID only if `planeMetadataConflict` finds the file's nodes and planes
+  in the open model under the same IDs and names; otherwise the 2D is dropped
+  and the status bar says so, because plane-node IDs restart at 1 in every
+  project and another project's corners would land on this one's nodes.
+  Covered by `tests/e2e/reopen-folder-session-settings.mjs`. Views are
   ordered by **calibration camera index**, not folder file-enumeration order,
   so the 2D panes don't reshuffle on reload.
   `handleEmptySession()` creates a blank, video-less session and makes it
@@ -6496,16 +13258,56 @@ filesystem enumeration, decoder rebuild.
   `null`; used by the lazy project reopen) and closes on `Esc` (resolving
   `null`, per the modal UI convention) — every caller treats `null` as "no
   videos picked".
-- `isCalibrationVideoFile(file)` — true for per-camera calibration clips
+- `isCalibrationVideoFile(file)` — true for per-camera calibration clips,
+  identified by a `calibration_images/` PATH segment
   (`<cam>/calibration_images/<date>-<cam>-calibration.mp4`). The folder scans
   recurse into camera subfolders, so these clips would otherwise be collected
   and substring-matched to a camera (their filename embeds the camera name).
   Applied in the parent-directory pick (both FSA + webkitdirectory branches),
   the "Select Session Folder" scan, and the SLP-import video filter so the
-  calibration video never loads as a session view.
-- View/grid: `createViewForVideoFile`, `updateGridLayout`,
+  calibration video never loads as a session view. Now a thin re-export of
+  `isCalibrationImagesVideo` (`loading/video-file-pick.js`): it used to ALSO
+  exclude any `-calibration` / `_calibration` filename stem, which silently
+  dropped ordinary session videos named that way (#199). That stem is now a
+  per-camera de-prioritizing hint — see `preferNonCalibrationVideos`, applied by
+  the per-camera folder loader, the single-SLP folder loader,
+  `attachVideosForLazyReopen` and the SLP import.
+- View/grid: `createViewForVideoFile`, `removeVideoFile`, `updateGridLayout`,
   `createVideoPromptCell`, `fitCanvasesToCells`, `cellResizeObserver`,
-  `rebuildVideoController`, `updateTotalFrames`.
+  `reapplyAllZoom`, `rebuildVideoController`, `updateTotalFrames`.
+  `reapplyAllZoom()` runs `videoController.reapplyZoom` on every view — what
+  `cellResizeObserver` does after `fitCanvasesToCells`, and what a
+  devicePixelRatio change does: a module-level `matchMedia('(resolution: Ndppx)')`
+  watcher (re-armed on each change) calls it, because a view at native
+  resolution is scaled in DEVICE pixels and dragging the window to a display
+  with another DPR resizes nothing, so no ResizeObserver fires. Headless DPR
+  emulation fires neither that event nor a resize, which is why
+  `tests/e2e/native-resolution-zoom.mjs` calls `reapplyAllZoom` itself.
+  `removeVideoFile(videoFile)` is `createViewForVideoFile`'s inverse and the
+  whole of the Videos tab's **Remove Video** (luc3d #216): it closes the dock
+  pane (`paneManager.removeVideoPanel`), drops the view from `state.views` —
+  which is what takes the view-strip thumbnail with it — splices
+  `state.videoFiles`, **remaps every session's `videoFileIndices`** across that
+  splice (they are indices INTO `state.videoFiles`, so a stale one re-points a
+  session at its neighbour's video on the next switch), `close()`s the decoder
+  and removes it from `state.decoderPool`/`_decoderPoolCold`, then resettles
+  everything derived from the view list. The old handler removed only the
+  view's `.video-cell` ELEMENT, leaving the pane docked and titled with an empty
+  body plus a live thumbnail. The session's CAMERA is deliberately kept — it
+  carries the calibration and the annotations; "no video loaded for this camera"
+  is an ordinary state that `recomputeUploadedCameras` already models. Accepts a
+  `{name, assignedCamera}` descriptor too, since the Videos table synthesises
+  rows from `state.views` when `state.videoFiles` is empty. Covered by
+  `tests/e2e/videos-panel-buttons.mjs`.
+  **It re-seats `state.singleViewIndex` BY NAME, not by clamping.** That index
+  is a position in `state.views`, so removing a video that sits BEFORE the
+  solo'd one slides the next camera into its slot — a clamp only catches a
+  dangling index, so solo silently showed a different view from the one the
+  user put it on. The solo'd view's name is noted before the splice and the
+  index re-derived from it; removing the solo'd view itself has no right
+  answer, so that case falls back to the clamp AND re-renders the dock
+  (`updateVideoGridDisplay`), since the pane just closed was the only one and
+  single-view mode would otherwise be left showing nothing.
 - Session-mode UI: `showSessionModeModal`, `showMissingFilesPopup`.
 - Filesystem: `enumerateDirectoryHandle`.
 - Misc: `resolveImportTrackIdx` — re-exported from
@@ -6519,7 +13321,14 @@ opening devtools. Any view with a real decoder but no `_mbBackend` (its
 `_initMediabunny`/`switchSource` init silently failed) now triggers
 `setStatus('N of M camera(s) fell back to HTML5 seeking...', 'warning')` so
 it's visible at a glance right after every load/session-switch, without
-needing to check the console or set anything manually.
+needing to check the console or set anything manually. A decoder that dropped
+its backend ON PURPOSE because this browser's WebCodecs cannot decode the
+codec (`decoder._mbUnavailable.reason === 'codec'` — Firefox + HEVC, see
+`loading/video.js`) gets its own clause instead: `N of M camera(s) step with
+<video> seeks: this browser cannot decode HEVC with WebCodecs, so stepping is
+slower` — not "init failed … a frame or two off", which is neither the cause
+nor (since the mid-frame seek) the measured result. Both clauses can appear,
+joined by `; `.
 
 Fresh-session creation sites (video-only, calibration-only, multi-cam directory)
 seed the skeleton from `buildRememberedSkeleton()` (falling back to an empty
@@ -6566,8 +13375,10 @@ before the worker's fast compound reads and columnar transfer — see
 `loading/slp-import-worker.js`). Step 2 builds each camera's Instances straight
 from the worker's columnar result via the exported
 **`addColumnarFramesToSession(session, camName, columnar, trackRemap)`** —
-the same track remap / `resolveImportTrackIdx` / `score || 1.0` / occlusion as
-the nested-`frames` loop it replaced (kept for results without `columnar`), with
+the same track remap / `resolveImportTrackIdx` / `score || 1.0` / occlusion /
+per-node model scores (`columnar.pointScore` → `Instance.setPointScores`, a
+prediction's only) as the nested-`frames` loop it replaced (kept for results
+without `columnar`, which takes each instance's `pointScores`), with
 each Instance given its own `Float64Array` `slice` (not a `subarray` view, which
 would pin the whole camera buffer and make any structured clone of the instance
 copy all of it). A digest of the loaded session (every frame, camera,
@@ -6615,6 +13426,22 @@ on 100k-frame predictions. The lazy loader is chosen when all lazy jobs are `.sl
 (analysis `.h5` folders still use `LazyFrameLoader`); a lazy-open failure surfaces
 an error rather than falling back to the OOM-prone eager path. It plugs into the
 existing `state.session.lazyLoader` seam, so rendering/scrubbing are unchanged.
+
+**One `session.tracks` for the folder, whichever path and whichever file
+opens first.** Each camera's file has its own track list; the session's is
+their union in camera-name order, each camera's indices mapped into it
+(`loading/track-union.js` has the rule and the reasons). The eager loop builds
+that union from every parse result BEFORE adding any camera's instances and
+maps each through `remapTrackIdx` (an index outside the camera's own list
+becomes trackless instead of staying raw); it used to merge in calibration
+camera order as it went, and to keep an out-of-list index as is. The lazy
+branch takes `lazyLoader.trackNames`, which both loaders now build the same way
+— they used to take the list of the first camera to finish opening (262 / 863 /
+388 tracks across loads of one real 8-camera folder), with every other camera's
+indices still in its own list. The dead `else` that appended lazy names to an
+eager session's list (impossible since the per-folder routing below) is gone.
+Covered by `tests/e2e/percam-track-union.mjs` (all six lazy open orders and the
+eager path give the same list; confirmed to fail pre-fix).
 
 **The routing decision is per FOLDER, not per file.** Deciding per file let one
 folder come back part eager and part lazy, and that combination is silently
@@ -6692,26 +13519,43 @@ blank until the user manually re-ran Triangulate All. Covered by
 `tests/e2e/reopen-reprojection-panel-autopopulate.mjs`.
 
 **Imports from project modules.**
-- `../ui/app-state.js` (incl. `buildRememberedSkeleton`), `../pose/pose-data.js`,
+- `../ui/app-state.js` (incl. `buildRememberedSkeleton`, and `isViewDocked` as the
+  rebuilt video controller's `isViewShown`), `../pose/pose-data.js`,
   `../ui/browser-hints.js` (`fileSystemAccessHint` — Brave hint in the
   multi-session "needs a folder picker" message), `./video.js`, `../import-export/file-io.js`, `../pose/triangulation.js`
   (`shouldUseLazyH5`, `shouldUseLazySlp`, `LazyFrameLoader`),
   `./sio-lazy-loader.js` (`SioLazyLoader`),
+  `./track-union.js` (`unionTrackNames`, `remapTrackIdx`),
   `../import-export/save-load.js`,
   `../ui/rendering.js` (`drawAllOverlays`, `setReprojErrorVisible`),
-  `../ui/info-panel.js` (`updateInfoPanel`),
+  `../ui/info-panel.js` (`updateInfoPanel`, `promptImportSkeletonForAllSessions`),
+  `../ui/calibration-notice.js` (`noteSessionCalibrationDivergence`),
+  `../ui/frame-readout.js` (`refreshReadoutTotals`, wherever the loaders set
+  `state.totalFrames` / `state.fps`),
   `../import-export/skeleton-json.js` (`parseSkeletonJSON`),
   `../import-export/slp-import.js`, `../ui/loading-progress-modal.js`,
   `../ui/loading-overlay.js` (`showLoadingProgress`, `createProgressPacer`,
   `yieldToPaint` — the per-camera folder load's step progress),
   `../import-export/import-track-resolve.js`,
   `../pose/initialization.js`, `../ui/sessions-panes.js`, `../ui/ui-wiring.js`,
-  `../import-export/visibility-metadata.js` (`readVisibilityMetadata`, for the
-  lazy-reopen read of the session-scoped Visibility settings).
+  `../import-export/visibility-metadata.js` (`readVisibilityMetadata`) and
+  `../import-export/plane-metadata.js` (`readPlaneMetadata`, `resetPlaneState`,
+  `planeMetadataConflict`) — the lazy reopen's and the single-SLP folder load's
+  reads of the session-scoped Visibility settings and the Define Planes state.
 
 **Imported by.** `pose/initialization.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`, `ui/info-panel.js`,
 `ui/sessions-panes.js`, `ui/ui-wiring.js`.
+
+**`handleLoadMultiSession` ends with a calibration cross-check.** Each session
+subfolder carried its own calibration and nothing made them agree, so the tail
+calls `noteSessionCalibrationDivergence(state.sessions)` — LAST, once every
+session is in `state.sessions`, because comparing while they are still arriving
+one at a time reports a divergence the next session resolves, and a modal raised
+mid-load would sit over the loading overlay. It is queued behind the skeleton
+prompt (passed as that prompt's `onDone`) for the same reason: two stacked
+modals, and the user answers whichever is on top. See
+`ui/calibration-notice.js`.
 
 **User-facing features.** File menu Load Calibration / Load Videos /
 Load Session Folder / Load Multi-Session (plus the lazy Load Project path for
@@ -6742,8 +13586,11 @@ worker. Frames are materialized on demand via `labels.frameAt(row)`, so
 `getFrameSync` returns data synchronously.
 
 **Key export.** class `SioLazyLoader` — `open(camName, file, onProgress)` (reads
-metadata + builds a videoFrameIdx→store-row map, first camera's skeleton/tracks
-win), `openProjectSlp(file, onProgress)` (lazy reopen of a SINGLE multi-camera
+metadata + builds a videoFrameIdx→store-row map; the skeleton is the first
+camera BY NAME's and `trackNames` is the union over every opened camera, with
+each store re-indexed into it — see "Track indices" below — so nothing depends
+on which parallel open resolves first; returns THIS camera's own track names),
+`openProjectSlp(file, onProgress)` (lazy reopen of a SINGLE multi-camera
 project `.slp` — the "Load Project" path for large projects: one interleaved
 store shared by every camera, split into the same per-camera maps `open()`
 builds; sets `_sharedStore = true` so the streaming re-save appends the store
@@ -6757,7 +13604,8 @@ real Playwright test run (`tests/test-lazy-reopen.js`): reopening an
 already-saved project left the Tracks Timeline with NO occupancy data for any
 camera until a propagate action happened to rebuild it, unlike the per-camera
 `open()` path which always had it from the start), `getFrame` / `getFrameSync`
-(adapt typed instances → `{trackIdx, score,
+(adapt typed instances → `{trackIdx (-1 = none, as in the store; hydration
+maps it to `null`), score,
 type, points, occluded}`, LRU-cached), `prefetch`, `close` (also clears
 `videoIdByCam`); fields `nFrames`,
 `skeleton`, `trackNames`, `videos`, `trackOccupancy`, `videoIdByCam` (only set
@@ -6768,6 +13616,40 @@ handle, not a resident copy of the bytes, so retaining these costs ~nothing and
 lets a caller reopen a fresh loader for the SAME cameras later without
 re-picking files; used by the multi-session streaming save's pass-2 restream,
 `reopenSessionLazyLoader` in `import-export/save-load.js`).
+
+**Track indices: one list, every store re-indexed into it (`_unifyTracks`).**
+`session.tracks` for a per-camera folder is the union of the cameras' own track
+names, cameras in name order (`loading/track-union.js` has the rule and why).
+`open()` used to set `trackNames` from whichever camera's open resolved FIRST
+and leave every store holding its own file's indices — nondeterministic
+(262/863/388 tracks across loads of one real folder) and wrong for every other
+camera (indices past the end, names from another camera's list). Now `open()`
+records the camera's OWN names in `_trackSourceByCam` (`{names, toSession}`,
+`toSession` = the session index each own track currently holds) and calls
+`_unifyTracks(newCam)`, which re-derives the union FROM THE OWN NAMES (never
+from a previous union — that would make the result order-dependent) and, per
+camera: rewrites `instancesData.track` through the old map's inverse when its
+indices moved (always for the new camera, whose out-of-list values become `-1`
+rather than coming to name an appended track); rebuilds `labels.tracks` IN
+PLACE to the union (shared with `_lazyDataStore.tracks`; own `Track` objects
+kept at their new indices); recomputes that camera's occupancy if its column
+changed, else just updates `nTracks`; clears the frame caches it invalidated.
+After it, every column value is a `trackNames` index in every camera, which is
+what `adaptTypedInstance`, `forEachInstanceRow`, `_computeSparseOccupancy`,
+`remapTracksFromIdentity`, Custom Delete and the streaming writer all assume —
+and since every camera's `labels.tracks` is then the same name list, the
+writer's name-signature dedup writes the tracks ONCE (it used to write one copy
+per camera: 14 tracks for a 9-track union in the e2e fixture). On the real data
+(every list `track_0..track_{n-1}`) every map is the identity, so the cost is
+one read pass over each camera's track column. `reopenSessionLazyLoader`
+(multi-session save, pass 2) re-opens through the same `open()`, so it
+re-derives the same columns — which is why `_unifyTracks` does not set
+`_storeEditedInMemory`, while `remapTracksFromIdentity` and
+`deleteInstanceRows` do (the multi-session save then keeps the live frame +
+instance columns for pass 2; see `import-export/save-load.js`). `close()`
+clears it. `remapTracksFromIdentity` resets each camera's
+own names to the propagated list (and `trackNames` with it), so a later
+`_unifyTracks` starts from that. Covered by `tests/e2e/percam-track-union.mjs`.
 
 `trackOccupancy` (phase-5) is populated per camera by `_computeSparseOccupancy(labels,
 nFrames, rowMap?)` — one O(nInstances) pass over the columnar store (`framesData.frame_idx` +
@@ -6825,9 +13707,11 @@ correctness for speed — same result either way). Verified on a real
 for real ordered data, confirms the fallback sort still engages and
 produces the IDENTICAL correct segments for a deliberately shuffled rowMap).
 
-**`deleteInstanceRows(shouldDeleteFn)` — the durable-delete primitive (Custom
-Instance Delete).** Permanently removes instance rows from the columnar store so a
-bulk delete survives eviction, re-hydration, save and reload. Companion to
+**`deleteInstanceRows(shouldDeleteFn, opts)` — the durable-delete primitive
+(Custom Instance Delete, and since the interactive-delete fix every Delete key /
+"Delete group" too, via `deleteTargetsFromStore` in `ui/custom-delete-ops.js`).**
+Permanently removes instance rows from the columnar store so a delete survives
+eviction, re-hydration, save and reload. Companion to
 `remapTracksFromIdentity`; same diagnostics contract
 (`{deleted, errorRows, firstError, byCamera}`, per-row `try/catch`, `console.error`
 on `errorRows`). Exists because a resident-only delete fails **twice**: (1) without
@@ -6838,8 +13722,24 @@ columns verbatim with no per-instance filter, and the user-correction overlay sk
 any camera-frame with no resident *user* instance and bails on
 `lucidInsts.length === 0`, so an emptied camera-frame streams back unchanged.
 Mutating the store is the only thing that fixes both.
+- **One keypress must not cost a bulk pass.** Measured on a real-size shared store
+  (180,210 frames x 5 cameras, 2.7M rows, 10 f64 columns) a single-row delete was
+  130-200 ms and ~216 MB of fresh column buffers; it is now ~25-30 ms with no new
+  buffer. Three changes, each pinned by `tests/test-custom-delete-store.js`'s
+  "one keypress, not one bulk pass" suite against the old whole-store answers:
+  `opts.only` (camName → frame indices, a Map's keys or a Set) offers the predicate
+  just those camera-frames' rows; compaction runs **in place from the first deleted
+  row** — one `copyWithin` per surviving run when at most `DELETE_RUN_COPY_MAX`
+  (4096) rows go (~5 ms vs ~70 ms element by element), the plain loop beyond that,
+  where runs are short and many — and a typed column is re-exposed as a shorter
+  `subarray` view, or `slice`d to a right-sized copy when more than half the rows
+  went so a bulk delete still gives its memory back; and `trackOccupancy` is rebuilt
+  only for a camera that LOST a row. In place is safe because every reader indexes
+  `store.instancesData.<col>` element-wise and fresh (`appendStore`, the store's own
+  `materializeFrame`, `forEachInstanceRow`); an array under two column names is
+  compacted once.
 - Compacts every `instancesData` column of length `nInst` (iterates `Object.keys`,
-  so a schema addition is carried through; `col.constructor` preserves typed-vs-plain
+  so a schema addition is carried through; the view/`slice` keeps typed-vs-plain
   and int-vs-float). **Leaves `pointsData`/`predPointsData` alone on purpose** —
   `appendStore` walks points PER SURVIVING INSTANCE via `point_id_start/end`, so
   orphaned point rows are never visited and never written.
@@ -6857,17 +13757,19 @@ Mutating the store is the only thing that fixes both.
   `remapTracksFromIdentity`'s `rebuiltLabels` guard (which only covers a one-time
   tracks rebuild) this guard has to cover the whole mutation, because compaction is
   global to a store.
-- Then rebuilds each affected camera's `trackOccupancy` and clears both cache layers
+- Then rebuilds the `trackOccupancy` of each camera that lost a row and clears both cache layers
   (`this.cache` + `labels._lazyFrameList.clearCache()`), same as
   `remapTracksFromIdentity`.
 - **Caller contract:** store-only. The caller must also renumber `_rawInstIndex` on
   surviving instances in each touched (camera, frame) — else `refFor` writes grouping
   refs at the wrong instances and hydration loads the wrong 2D — and mirror the
   removal into `frameGroups`/`instanceGroups` under one shared `seen` Set.
-- Unit tests: `tests/test-custom-delete-store.js` (11 cases — compaction, column-length
+- Unit tests: `tests/test-custom-delete-store.js` (19 cases — compaction, column-length
   coherence, typed-array kind, order-independence, emptied-frame collapse,
   `from_predicted` remap + degrade-to-`-1`, shared-store apply-once, per-row error
-  isolation, no-op).
+  isolation, no-op; plus `opts.only`, both compaction strategies against an
+  independent filter, in-place view vs right-sized shrink, aliased columns, and the
+  per-camera occupancy rebuild).
 
 Memory-bounding primitives (phase-5 full pipeline): `open()` sets each camera's
 `labels.frameCacheLimit` (default 512) so sleap-io.js's lazy `Labels` FIFO-bounds
@@ -6890,7 +13792,12 @@ from each camera's columnar store (`framesData.instance_id_start/end` +
 `instancesData.track`) — zero frame/instance materialization, independent of
 what's resident. Used by `Session.propagateTracksToIdentities`
 (`pose/pose-data.js`) so an unvisited frame's track still gets stamped to
-identity. `remapTracksFromIdentity(newTrackNames, remapFn)` — the write-side
+identity. An optional second argument `{camera, start, end}` narrows the walk
+to one camera and/or a frame range (`[start, end)`, visited in ascending frame
+order via the row map instead of its iteration order); added for the status
+bar's whole-project counters (`ui/frame-counters.js`), which read one camera
+and spread the walk over short tasks. Without it the walk is exactly as before.
+`remapTracksFromIdentity(newTrackNames, remapFn)` — the write-side
 companion, used by `Session.propagateIdentitiesToTracks`: rebuilds each
 underlying `labels.tracks` (shared by reference with its
 `_lazyDataStore.tracks` — mutated in place, so both stay in sync; a shared
@@ -6944,12 +13851,41 @@ points at step 2's filtering, not this method) and folds `errorRows` into its
 own return value; `ui/ui-wiring.js`'s propagate handler reports a nonzero
 `lazyErrorRows` as an error status instead of a false "success".
 
-**Imports.** `window.SleapIO.readSlpStreaming` (via the index.html bridge) and the
-local vendored `lib/h5wasm/h5wasm.iife.js` (passed as `h5wasmUrl`).
+**`describeStoreFrame(camName, frameIdx)`** — what re-hydrating one
+camera-frame WOULD build, read straight from the columns with nothing
+materialized: `{ count, trackIdx: Int32Array, predicted: Uint8Array }` (entry `k`
+= the row an `Instance._rawInstIndex` of `k` names; trackless and a track id with
+no `Track` behind it are -1; an absent `instance_type` reads as 0, a user row,
+exactly as `materializeFrame` defaults it), `count: 0` for a frame with no row,
+null for a camera this loader does not back. The playback eviction
+(`pose/lazy-residency.js`) proves a resident frame rebuildable against it;
+`tests/e2e/lazy-playback-eviction.mjs` pins it to the real materializer.
+
+**`predictedPointScore(camName, frameIdx, offsetInFrame, nodeName)`** — the
+model's score for one node of the store's prediction at that in-frame offset
+(an `Instance._rawInstIndex`), read straight from `pred_points.score` through
+`point_id_start`: the lazy half of `Session.predictedNodeScore`, which the node
+tooltip and the streaming writer's overlay ask. Nothing is materialized and
+nothing is kept on the instance, so a re-hydrated frame costs exactly what it did.
+The node is NAMED and looked up in the row's store skeleton — the store keeps
+the skeleton it was read with, while a skeleton edit after loading re-indexes
+the resident instances, so an index could pair a node with its neighbour's
+score; an added or renamed node simply has none. NaN for a user row (type 0, as
+`materializeFrame` reads it), an offset that is not an integer inside the
+frame's rows, a frame or camera with no row, or a NaN score. Pinned against a
+hand-built store by `tests/test-node-scores.mjs` and against the real one by
+`tests/e2e/node-score-tooltip.mjs`.
+
+**Imports.** `./track-union.js` (`unionTrackNames`);
+`window.SleapIO.readSlpStreaming` / `window.SleapIO.Track` (via the index.html
+bridge) and the local vendored `lib/h5wasm/h5wasm.iife.js` (passed as
+`h5wasmUrl`).
 
 **Imported by.** `loading/session-loader.js`
 (`handleLoadSessionFolderPerCamera` routing, `handleLoadProjectSlpLazy`) and
-`import-export/save-load.js` (`reopenSessionLazyLoader`).
+`import-export/save-load.js` (`reopenSessionLazyLoader`). `describeStoreFrame` is
+called duck-typed from `pose/lazy-residency.js`, `predictedPointScore` from
+`Session.predictedNodeScore` (`pose/pose-data.js`).
 
 **User-facing features.** Lets a session folder of large multi-camera prediction
 `.slp` files — and a large saved project `.slp` (Load Project) — load and render
@@ -7021,12 +13957,22 @@ cloning eight of them to the main thread was most of what remained of the
 session-folder load once the reads were fast (~2 s of ~5 s). With
 `columnar: true` the worker instead returns `data.columnar` = `{ numNodes,
 nFrames, nInstances, frameIdx, videoIdx, instOffsets (nFrames+1), trackIdx,
-score, type (1 = predicted), xy (NaN = missing), occluded }` — the same
+score, type (1 = predicted), xy (NaN = missing), occluded, pointScore }` — the same
 frames/instances kept and the same values, as typed arrays whose buffers are
 TRANSFERRED (zero-copy) in the `postMessage`. Only `parseSlpH5(file, null,
 { columnar: true })` from `handleLoadSessionFolderPerCamera` asks for it; every
 other caller still gets `data.frames`. The equivalence test also requires the
 columnar result to expand back to exactly the nested `frames`.
+
+**A prediction's per-node scores (`pred_points.score`)** ride along both ways:
+each nested instance carries `pointScores` (a `Float64Array(numNodes)`, NaN where
+a node has none; null for a user instance or a prediction read from `points`),
+and the columnar result a flat `pointScore` (`[i*numNodes + k]`, NaN for user
+instances), transferred with the rest. They are what the node tooltip shows; the
+importers keep them with `Instance.setPointScores`. **Not for analysis `.h5`
+files**, deliberately: `parseAnalysisH5` reads `point_scores` and drops them, and
+the NOTE there says what showing them would take (the lazy `.h5` path being the
+hard part).
 
 **Imports from project modules.** None.
 
@@ -7117,6 +14063,72 @@ tolerance (half a frame period, `0.5/_fps`) so high-fps recordings
 (e.g. 400 fps) step every frame instead of freezing under a fixed
 constant (issue #89).
 
+**`<video>` seeks aim at the MIDDLE of the frame (`html5SeekTime`).**
+`_getFrameHTML5` sets `currentTime = (i + 0.5) / fps`, not `i / fps`. A
+frame-start time sits on the boundary with frame i−1 and browsers round it
+either way: on barcode clips (frame number burned into the pixels, 8 cameras
+seeking at once, gitignored `verify/seek-probe.html`), Firefox 157 showed i−1
+for every frame with `i % 3 == 2` at 60 and 150 fps (63–70% exact, HEVC and
+H.264 alike), Chrome/Brave/Safari for most frames (7–33%). Mid-interval was
+exact in all 2,160 Firefox seeks and in every H.264 seek in the other three
+(their `<video>` HEVC: 80–90% vs 7–15% — they step HEVC through mediabunny, so
+only a decode failure reaches this). Seeking to mediabunny's exact PTS
+(`_frameTimes[i]`) is the frame start again and missed identically; the
+midpoint of two PTSs matched `(i + 0.5) / fps`. **`requestVideoFrameCallback`
+cannot verify a landing in Firefox**: its `mediaTime` echoes the seek target,
+not the frame shown (Chrome's does report the shown frame). `seekNativeSettled`
+(play start) treats an element parked on the frame's middle as already there:
+`(i+0.5)/fps − i/fps` comes out an ulp over half a frame for ~30% of frames,
+and re-seeking to the frame start would land on i−1 in Firefox. **Only a
+position `_getFrameHTML5` set itself skips the seek** (`_html5Moved`, set by
+`playNative`, `seekNative` and a real `seekNativeSettled` seek, cleared by the
+next `_getFrameHTML5` seek and by `switchSource`): after playback the picture
+need not match `currentTime`, and the +0 pause re-decode (asking for the frame
+already under the playhead) drew the NEXT frame on 1 Firefox HEVC pause in 10
+by skipping its seek. Measured with the pause harness (gitignored
+`verify/pause-xb.html`, 8 cameras, Firefox, HEVC): paused picture == skeleton
+for the shipped +1 re-decode 31% → 100%, for +0 28% → 100%.
+
+**A codec WebCodecs cannot decode drops the backend up front
+(`_mbCannotDecode`).** Firefox 157 demuxes HEVC — `MediaBunnyVideoBackend`
+initializes — but has no WebCodecs HEVC decoder, so every `getFrame` failed
+twice (the step stream, then the backend's own `getFrame`) before falling back:
+1,544 warnings in one 8-camera stepping run. `_initMediabunny` now asks
+mediabunny's `track.canDecode()` (`VideoDecoder.isConfigSupported` on the full
+decoder config; ~0 ms) once, AFTER adopting the backend's frame count and fps
+(container metadata, still right), and on `false` closes the backend and sets
+`_mbUnavailable = { reason: 'codec', codec, codecString }`; a failed init sets
+`{ reason: 'init', message }`, and both `init` and `switchSource` reset it.
+Measured `false` only for HEVC in Firefox; `true` for H.264 there and for both
+in Chrome, Brave and Safari, whose path is therefore unchanged. A check that
+cannot be asked answers null, leaving the per-frame fallback to cover it.
+End to end (gitignored `verify/step-probe.html`, the real decoder, HEAD vs
+this, 8 cameras, Firefox, HEVC 60 fps): exact 67–70% → 100%, fallback warnings
+1,544 → 0; step time unchanged within run-to-run noise (8-camera medians
+~0.7 s per jump or forward step, ~1.2 s back, both builds — Firefox's own
+`<video>` HEVC seek is the cost, and the skipped attempts were cheap). Chrome,
+Brave and Safari: identical before and after (mediabunny on every camera, 100%
+exact, same step times). With no backend, the image
+ID-switch check's `keyframeIndices` / `streamingReader`
+(`ui/image-embedder.js`) take their `getFrame` path rather than a stream that
+cannot decode.
+
+Covered by `tests/test-mediabunny-backend.js` (stubbed backend: dropped on
+`false`, kept on `true`, kept when the question cannot be asked, no per-frame
+warning afterwards), `tests/test-html5-seek-tolerance.js` (the mid target, the
+play-start parking, the `_html5Moved` rule) and
+`tests/e2e/html5-step-mid-frame.mjs` — real Chromium made to answer "cannot
+decode" (`VideoDecoder.isConfigSupported` stubbed for the whole run, which
+mediabunny also consults before each decode, so a KEPT backend fails every
+frame exactly as in Firefox + HEVC), stepping the real decoder forward,
+backward and by jumps through `tests/fixtures/barcode-60/barcode-60.mp4`
+(4 KB, 60 fps, frame number as a barcode; `make_fixture.sh` regenerates it)
+and reading every frame number back. On the pre-fix build it fails with 256
+fallback warnings and most steps one frame behind; its control decoder,
+seeking to the frame START, must land wrong (89 of 128 headless) or the test
+could not tell the targets apart. The fixture is 60 fps on purpose: at 10 fps
+(`bframes-test`) frame times are whole microseconds and both targets land.
+
 **Frame-accurate mediabunny backend (default-on, issue #115).** HTML5
 `<video>.currentTime` seeking is NOT frame-accurate — it can return a
 frame a whole GOP behind the one requested, so the pose overlay (drawn
@@ -7189,7 +14201,7 @@ video element", added to dodge Chrome browser-process crashes from repeated
 updated when it landed: it closed the WebCodecs `this.decoder` but left
 `_mbBackend` untouched, still bound to the PREVIOUS video. Every
 frame-accurate `getFrame()` after a pooled-decoder session switch/reopen
-(stepping, the `pausePlayback()` snap) then silently decoded from the wrong,
+(stepping, the `pausePlayback()` re-decode) then silently decoded from the wrong,
 stale video — reproducing the exact pose/video misalignment #141 fixed, but
 only on switch/reopen (a fresh `init()` was always fine, which is why this
 was hard to pin down from a fresh-load repro). Fixed by closing the old
@@ -7198,6 +14210,18 @@ the end of `switchSource()`, mirroring `init()`'s setup. Covered by
 `tests/e2e/switchsource-mediabunny-refresh.mjs` (proves it via decoded pixel
 content, not just the backend's `filename`, since the fixture videos happen
 to share a frame count).
+
+**The `<video>` `error` listener reads the ELEMENT it was attached to, not
+`this._videoEl`.** Both `init()` and `switchSource()` register a `once: true`
+`error` listener that rejects their metadata promise. That listener OUTLIVES a
+successful load, and `close()` ends with `src = ""` + `load()` — which fires one
+last `error` event, asynchronously, after `close()` has already nulled
+`this._videoEl`. Reading the code through `self._videoEl` therefore threw
+`Cannot read properties of null (reading 'error')` out of an event handler on
+every decoder that is CLOSED rather than garbage-collected. Latent until
+`removeVideoFile` (luc3d #216) made closing a decoder an ordinary user action;
+the cold-pool eviction path hit it too, just invisibly. Both sites now capture
+`var el = this._videoEl` at registration and read `el.error`.
 
 **A cached HTML5 fallback permanently shadowed mediabunny for that frame
 index (issue #115 followup, `eric/seeking-regression`).** `getFrame()`
@@ -7241,6 +14265,70 @@ around calls into `_mbBackend.getFrame`. Covered by two unit tests in
 serialization contract; the real WebCodecs race itself isn't reproducible
 headlessly).
 
+**Paused stepping keeps a decode stream open (`_mbGetFrame`, 2026-10-04).**
+`MediaBunnyVideoBackend.getFrame` opens a fresh decoder per frame and decodes
+from the frame's keyframe, so on P-frame recordings with a keyframe every 250
+frames EVERY paused frame — an arrow-key step forward included — decoded ~125
+frames per camera. `getFrame` now goes through `_mbGetFrame`, which keeps one
+mediabunny `sink.samples(t)` stream per decoder (`_stepCursor`: decodes from the
+keyframe once, then stays a few frames ahead) and serves any request at or after
+its position that needs no newer keyframe (`_sameKeyframeRun`: the target's key
+packet, via a lazily created `EncodedPacketSink.getKeyPacket` — `import('mediabunny')`
+on first use — is at or before the stream's next frame) by advancing it; a step
+back or a jump past the next keyframe reopens it at the target, i.e. the same
+decode as before. Results go into the backend's frame cache as `getFrame`'s did,
+so stepping back over frames just shown stays a cache hit. Released after
+`STEP_CURSOR_IDLE_MS` (3 s) idle, by `releaseStepCursor()` (called for every view
+by `VideoController.startPlayback`), `switchSource` and `close`. Any failure
+falls back to the backend's own `getFrame`; `window.LUCID_STEP_CURSOR = 0` turns it
+off. Measured (M2 Pro, real Chrome, 2-min clips of the 8 cameras of the 5-mouse
+recording, all 8 views per frame; `tests/e2e/_bench-step-cursor.mjs`): on the
+original recordings (keyframe every 250) a step forward 148 -> **1 ms**, a held
+arrow key 2.6 -> **245 frames/s**; re-encoded with a keyframe every 30, 64 -> 1 ms
+and 15.6 -> 366 frames/s. Steps back and jumps are unchanged apart from the
+stream's read-ahead (~40 extra packets decoded in the background on opening:
+jump 206 -> 214 ms, step back 405 -> 421 ms on the originals). Stepped frames are
+pixel-identical to the frame-accurate decode. Cost while paused: each open stream
+holds its few read-ahead frames (and a decoder) until it idles out.
+**Stepping BACK decodes in chunks (`_decodeBackChunk`, 2026-10-05).** A frame can
+only be decoded forward from its keyframe, so each step back re-decoded the whole
+run from the keyframe — up to 250 frames per camera, ~420 ms for 8 views, and
+choppy (cheap just after a keyframe, dear just before the next). When a request is
+1–3 frames before the previous one, `_mbGetFrame` instead decodes that run once
+and caches up to `STEP_BACK_CHUNK` (24) frames ending at the target, never earlier
+than its keyframe, so the next steps back are cache hits. Capped at 40% of the
+frame cache (60 in the app), so the chunk on screen and the one being prefetched
+both fit; `window.LUCID_STEP_BACK_CHUNK = 0` turns it off.
+**Background prefetch + landing warm-up.** While stepping back, `_prefetchBack`
+decodes the chunk before the cached run in the background (its own decoder, not
+under `_mbSeekLock`; one at a time; a request for a frame it is decoding waits for
+it), and `_scheduleBackWarm` does the same `STEP_BACK_WARM_MS` (250 ms) after the
+user LANDS on a frame by a jump (seekbar, a flagged switch, end of playback) and
+stays — counted from when the frame is shown, so back-to-back jumps never start
+one. Anything but a step back cancels it (`job.cancelled`, checked per decoded
+frame; `releaseStepCursor` too). Chunk frames are cached by `_cacheNear`, which
+evicts the frame FARTHEST from the user rather than the least recently used:
+stepping back, the not-yet-reached prefetched frames ARE the least recently used,
+and LRU evicted exactly them (a hitch every ~30 steps).
+`window.LUCID_STEP_BACK_PREFETCH = 0` turns prefetch and warm-up off.
+Jumps and seekbar drags (larger moves) don't trigger it. Held left arrow, 72
+steps, 8 views, original recordings (`_bench-step-cursor.mjs`, app cache 60):
+2.3 -> **34.6 steps/s**, median step 428 -> 0 ms, but every 24th step costs ~0.7 s
+(the run + 24 bitmaps per camera); keyframe every 30: 15.1 -> 70.1 steps/s, worst
+step ~240 ms. With prefetch + warm-up, landing then holding the key at 30 steps/s:
+**0 of 72 steps over 50 ms** (29.8 steps/s achieved; chunks alone: 3 hitches of
+~0.5–0.6 s), keyframe every 30 also 0 (chunks alone: 4); stepping as fast as
+frames come, 45.7 steps/s, where it can outrun the prefetch. Jumps unchanged
+(208 -> 215 ms). Memory: the cache peaks at its existing ceiling (60 frames per
+camera, 480 here) with or without chunking — chunking fills it sooner, it does
+not raise it. Stepped-back frames pixel-identical to the unchunked decode. Guarded by
+`tests/e2e/step-cursor.mjs` (one packet per step vs every frame since the
+keyframe, pixel-identical stepped / stepped-back / jumped frames, reopening at the
+right keyframe, chunked back steps — 2 of 30 steps decode, same frames — the
+landing warm-up, a held left arrow finding 120/120 frames already cached in a
+30-frame cache (111/120 with plain LRU eviction, which the test was checked to
+fail on), cancellation by a jump, and release on idle / request / close).
+
 **Callers must coalesce rapid single-frame steps via `scrubToFrame`, never
 call `seekToFrame` directly for repeatable user input (issue #115
 followup-followup, `eric/seeking-regression`).** Adding `_mbSeekLock` above
@@ -7264,6 +14352,19 @@ in `tests/test-video-controller.js` (rapid relative `"+1"` steps against an
 artificially slow decoder decode fewer frames than requests) and
 `tests/e2e/arrow-key-coalesced-stepping.mjs` (drives the REAL keydown
 handler, proves every ArrowRight press routes through `scrubToFrame`).
+
+**`resumeAfterScrub(prepare)` — play on from where a scrub lands.** A scrub
+stops playback, so the seekbar (on release of a press that began while
+playing) asks for it back. It waits for the scrub queue to drain
+(`_scrubSettled`, resolved by `_processScrub` once no target is in flight or
+queued), then for the optional `prepare(frame)` promise (the app hydrates a
+lazy project's frames ahead, as Play does), then `startPlayback()` at
+`state.currentFrame`. Starting before the scrub drains would let a queued seek
+paint over the playing video. It stays pending (`resumePending`) until playback
+starts, and any later `scrubToFrame` or `stopPlayback` cancels it — so an arrow
+step in that window leaves the video paused, while a second seekbar click reads
+`resumePending` as "still playing". Covered by
+`tests/e2e/seekbar-click-keeps-playback.mjs`.
 
 **Playback overlay/video sync — native default + per-frame throttling
 (issue #115 follow-up).** During playback the pose overlay drifted a few
@@ -7293,23 +14394,64 @@ from that frame's own timestamp), `drawImage`s exactly that frame, and calls
 a refresh where no view's frame changes draws nothing, captures are always
 `close()`d (held ones on `stopPlayback` via `_refreshCleanup`), and playback
 stops when the primary `<video>` ends. **Browsers whose `VideoFrame(<video>)`
-timestamps don't track the picture** (Safari 27: 0 in ~98% of captures;
-Firefox 157: a constant — measured with `tests/e2e/_probe-capabilities.mjs`)
-are detected per decoder by `judgeVideoFrameTimestamps` (the timestamp must
-move with the clock and agree within 3 frames; cached as
-`decoder._vfTimestamps = 'ok'|'bad'`). A `'bad'` view stops capturing (also
-avoiding Firefox's 5–11 ms/refresh capture cost), is painted with
-`drawCurrentFrame`, and takes its index from a per-view
-requestVideoFrameCallback `mediaTime` — exact in Safari (one callback per shown
-picture), projected forward ≤ 100 ms where callbacks are coalesced
-(`rvfcCallbacksCoalesced()`: Firefox, ~24 callbacks/s covering 2–6 pictures),
-else the clock. rVFC is registered only for fallback views (registering it on
-every view altered Chrome's presentation). Without this the loop froze in
-Safari/Firefox. Verified in the real browsers with
-`tests/e2e/_verify-playback-loop.html` (barcode frame numbers read back from
-each canvas): painted == overlay 100% in Chrome, 96–100% in Safari, ~30–95%
-(within ±1 frame) in Firefox, which exposes no exact per-picture timing.
-`self._refreshFallback` exposes the fallback state for that check. WHICH frame each view shows is chosen
+timestamps don't track the picture** (Safari 27: 0, or an exact copy of
+`currentTime`; Firefox 157: a constant) are detected per decoder by
+`judgeVideoFrameTimestamps` (the timestamp must move, agree with the clock
+within max(3 frames, 50 ms) — 3 frames alone misjudged Chrome/Brave at 150 fps
+on 60 Hz, where the presented frame trails the clock by more — and not BE the
+clock: equal to `currentTime` to the µs while off the frame grid; cached as
+`decoder._vfTimestamps = 'ok'|'bad'`). **WebKit never captures at all**
+(`videoFrameCaptureUnsafe()`, an engine check like `rvfcCallbacksCoalesced`):
+Safari's capture timestamp is 0 or an exact copy of `currentTime` and named the
+captured picture in 0–3% of captures, yet a clock reading can pass judging (the
+old judge passed it at 150 fps: picture 1–13 frames behind the overlay), and
+drawing captures cost ~25% of Safari's presented pictures. While a view is
+still being judged it is not drawn (its canvas keeps the paused frame). A
+`'bad'` view stops capturing (also avoiding Firefox's 5–11 ms/refresh capture
+cost), is painted with `drawCurrentFrame`, and is indexed from a per-view
+requestVideoFrameCallback: **Safari** (one callback per shown picture) is
+painted INSIDE the callback at its `mediaTime` (where `drawImage` and
+`mediaTime` are the same frame; by the refresh a 150 fps video can be 1–2 on),
+but only once the reported frame first changes — the first callback after the
+pre-play seek carries the pre-seek frame's metadata. **Firefox** (coalesced,
+~24 callbacks/s: `rvfcCallbacksCoalesced()`) is painted on the refresh and
+indexed by a **`CoalescedFrameClock`** evaluated at the instant of the draw:
+Firefox paints the last queued frame due by `TimeStamp::Now()`, and each
+callback bounds that frame's due time to one refresh (`expectedDisplayTime ==
+now` → the refresh before, `> now` → the refresh after), so the intersection
+says when a draw is CERTAIN. With ≤ ~½ frame per refresh (60 fps on 120 Hz)
+the loop skips an uncertain refresh when the next would be certain (≤ 2 in a
+row) — the frame lands a refresh later, cadence unchanged; with more (60 fps
+on 60 Hz, where every bound is a whole refresh wide; 150 fps) it draws the
+midpoint guess. A Firefox estimate never steps backwards. With no rVFC, the
+clock. (Tried and dropped: at 60 Hz, deferring Firefox's draw to a timer just
+before the next vsync raised 60 fps alignment to ~70–85%, but Firefox's timers
+slip under load and 8 cameras fell to 48–56 distinct frames/s, below the old
+loop's 58.6.) **Until a fallback view's first usable callback its index is unknown
+and it is not drawn**: its canvas still shows the paused `startFrame`, which
+is what it is overlaid at — the clock is no stand-in (after a seek Safari kept
+painting the PRE-seek picture: frame 279 overlaid on 66). rVFC is registered
+only for fallback views (registering it on every view altered Chrome's
+presentation). Measured on real browsers with `verify/play-xb.html` (app's
+decoder + this loop on barcode clips, every camera's canvas read back against
+its overlay frame at random instants; under the headed-browser lock, no hidden
+tabs; % aligned for 5×H.264 60 fps / 5×H.264 150 fps / 8×HEVC 60 fps, the
+previous loop → this one, both on the same main):
+
+| | 120 Hz display | 60 Hz display |
+|---|---|---|
+| Chrome | 100/100/100 → 100/100/100 | 100/87.3/100 → 100/100/100 (judging tolerance) |
+| Brave | 100/100/100 → 100/100/100 | 100/100/100 → 100/100/100 |
+| Safari | 83.5/1.6/69.0 → 100/96.2/100 | 76.5/1.3/24.5 → 100/94.8/100 |
+| Firefox | 48.7/49.7/52.2 → 98.1/89.6/91.9 | 12.2/1.7/47.3 → 77.3/28.5/80.4 |
+
+Firefox's camera 0 also shows every frame now (60 fps video: 34 → 60
+distinct frames/s at 120 Hz, 50 → 60 at 60 Hz). What remains is
+what the browsers expose: at 150 fps Safari shows ~26 of 150 frames/s and
+occasionally hands `drawImage` a buffer 1–2 older than its callback's; Firefox
+gives no certainty within a refresh at 60 Hz, and at 150 fps cannot keep its
+frames on its own clock. `self._refreshFallback` exposes the fallback state
+(each Firefox view's `clock`). WHICH frame each view shows is chosen
 by an exported, pure **`PlaybackSchedule`**, with
 **`pickScheduledFrame(target, shown, pending, cap)`** choosing per view between
 the frame on screen, ONE capture held from an earlier refresh, and this
@@ -7370,11 +14512,118 @@ records as `zoom.baseW/baseH`. When a cell is resized, `reapplyZoom` rescales th
 offset by the base-size ratio (`offset *= newBase/oldBase`) before re-clamping, so
 a zoomed-in image keeps the same region centered instead of jumping.
 
+**Wheel zoom stays under the cursor — through the WHOLE transform.**
+`zoomVideo(view, factor, cssX, cssY)` anchors through `_zoomAbout`, which
+inverts `applyZoom`'s full transform: a canvas-box point u is drawn at
+`flex + off + c + R·(u∘s − c)` (the wrapper's flex-centring offset in its cell,
+then its rotation R about its own centre c). The old `q − (q − off)·s/s0`
+dropped the flex term, so in a letterboxed axis the picture slid out from under
+the cursor by 10% of that offset per notch (14 video px per notch, measured).
+An axis whose picture still FITS its pane is re-centred by `_constrainOffsets`
+on every step regardless — anchoring can only hold along an overflowing axis.
+
+**Native resolution (1:1).** View ▸ Native Resolution / `Shift+0`
+(`setNativeResolution`, `toggleNativeResolution`) shows a view at ONE VIDEO
+PIXEL PER DEVICE PIXEL, so the picture is not resampled at all. It is a zoom
+scale, not a second display path: the backing canvas is already the video's
+native size (`canvas.width = videoWidth`), only the wrapper's CSS transform
+scales it. Measured with seeded noise against real screenshots
+(`tests/e2e/native-resolution-zoom.mjs`), two things are needed and each alone
+breaks it:
+- **A scale PER AXIS** (`nativeZoomScales` → `{x, y}`, stored as `zoom.scale` /
+  `zoom.scaleY`, written `scale(sx, sy)`). `fitCanvasesToCells` floors the canvas
+  box to whole CSS px, so its aspect is a hair off the video's (561×400 for
+  1680×1200); one uniform scale left the vertical axis resampled by ~0.3% and
+  1.6% of pixels exact. A fractional CSS height does NOT fix it — Chrome lays out
+  in 1/64 px and still came out 0.03 px short. `zoom.scaleY` exists only while
+  `zoom.native` (`_scaleY(z)` reads it), so every other zoom is unchanged.
+  `_rotatedBBox` / `_constrainOffsets` / `zoomToRect` and the rotated-view path of
+  `InteractionManager.canvasToVideo` read it.
+- **A pan on the device-pixel grid** (`_alignNativeOffsets`, run by
+  `applyZoom` while native). Chrome snaps the wrapper's own layout position to
+  whole device pixels before a non-translation transform, so what remains to
+  align is where the transform puts the canvas's top-left — `off + c − R·c`. A
+  half-device-pixel pan scored 2.4% exact.
+Exact at an integer devicePixelRatio — dpr 1 and 2, headless AND a headed,
+GPU-composited window on a Retina Mac — and, headless, at 1.25 and 1.5 too. At
+dpr 2.2 (110% browser zoom on Retina) no pan or box correction gets below a
+smooth error curve: Chrome resamples the canvas whatever the transform says, so
+the video is shown at its native SIZE but not pixel-exact. The test asserts
+only the size at fractional DPRs and prints the exact share.
+
+How it behaves:
+- **Derived, not latched.** `state.nativeResolution` is true exactly when every
+  shown view (`_zoomableViews`: laid out and `isViewShown`) has `zoom.native`;
+  `_syncNativeMode` recomputes it after every zoom change, so the menu tick
+  cannot disagree with the screen. A wheel snap that puts the solo view at 1:1
+  turns it on; zooming away turns it off.
+- **Held across everything that moves the 1:1 scale** — it depends on the box
+  and on devicePixelRatio. `reapplyZoom` re-derives it about the cell centre
+  for a native view (cell resize, `reapplyAllZoom` on a DPR change). A pane
+  rebuild re-inits every view: `initZoom` seeds `zoom.native` from
+  `state.nativeResolution`, and `refreshPaneInteractions` then re-derives the
+  scale for the new box — so cycling the solo camera keeps 1:1.
+- **OFF clears every view**, shown or hidden: a pane rebuild restores hidden
+  views' saved zoom (`updateVideoGridDisplay`), and a stale flag would bring one
+  back at 1:1. ON flags hidden views for the same reason.
+- **The snap.** `zoomVideo` passes each step through `snapZoomToNative`: a step
+  that crosses the view's 1:1 scale, or ends within `NATIVE_SNAP_TOL` (2%) of
+  it, lands exactly on it (`zoom.native` set) and returns true; a step from 1:1
+  leaves it. The `[fit, 10x]` range stretches to include 1:1 — a video smaller
+  than its pane can be zoomed OUT to 1:1, which is then the floor. The wheel
+  handler adds a HOLD: after a snap, same-direction wheel events are swallowed
+  until the wheel rests `NATIVE_SNAP_HOLD_MS` (250 ms), each swallowed event
+  extending it, so a fast spin or trackpad momentum stops at 1:1 and a fresh
+  gesture goes on past it; a reversal is never held. `+` / `-` snap on the way
+  with no hold (each press is discrete). Box zoom never snaps.
+- **The pane badge reads the zoom as a percentage of 1:1** — `zoomPercentLabel`
+  (exported, pure): 100% is one video pixel per device pixel, 125% is zoomed
+  in past it, 65% shows less. Only a view HELD at 1:1 reads exactly "100%"; one
+  within rounding of it but not held (off the pixel grid, or a hair off the
+  scale — so still resampled) reads "99.8%" or "≈100%" instead. "Zoomed" when
+  no 1:1 scale is known (canvas not laid out). It shows at 1:1 even when 1:1
+  happens to equal the fit, being the only sign a wheel zoom snapped there.
+  Set by `applyZoom`, so it follows every zoom, resize and DPR change; the same
+  call toggles `.video-cell.native-resolution`. Tabular figures, so it does
+  not jitter while wheel-zooming.
+- **Hovering the badge offers presets** (`ZOOM_PRESET_PERCENTS`: 50 / 100 / 150
+  / 200 %, plus Fit; the menu is built in `ui/sessions-panes.js`). They act on
+  that pane's view only, about the cell centre: `setZoomPercent(view, 100)` is
+  `_enterNative` (exact, held, turns the mode on if it was the last view off
+  1:1); any other value is a plain uniform zoom of `pct/100 ×` the 1:1 scale.
+  A preset is NOT clamped to the wheel's range — 50% below fit is honoured —
+  and the wheel's range in turn stretches to wherever the view already is
+  (`lo = min(fit-min, 1:1, current)`, `hi = max(10, 1:1, current)`), so a notch
+  from 50% goes to 55% instead of jumping back up to fit.
+- Grid views are each put at their own 1:1, centred, like `+`/`-`/`0` acting
+  on every view.
+
 **Key exports.**
 - `videoLog(msg, level)` — namespaced logger.
+- `STEP_CURSOR_IDLE_MS` (3000) — idle time before a paused-stepping stream closes.
+- `STEP_BACK_CHUNK` (24) — frames decoded and cached per backward step.
+- `STEP_BACK_WARM_MS` (250) — pause after landing on a frame before warming the chunk behind it.
+- `snapZoomToNative(oldScale, newScale, nativeScale)` → `{scale, snapped}` — the
+  pure snap rule (see **Native resolution** above). `NATIVE_SNAP_TOL` (0.02),
+  `NATIVE_SNAP_HOLD_MS` (250).
+- `zoomPercentLabel(scale, nativeScale, isNative)` → the pane badge's read-out
+  ("125%", "100%", "≈100%", "Zoomed"; see **Native resolution** above).
+- `ZOOM_PRESET_PERCENTS` (`[50, 100, 150, 200]`) — the badge menu's presets.
+- `zoomRatioLabel(pct)` — a percentage as screen:video pixels in lowest terms
+  (`200` → `"2:1"`, `150` → `"3:2"`), the hint beside each preset.
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
-  `getFrame(frameIndex)`, `_initMediabunny(source)` /
-  `_mediabunnyEnabled()` (opt-in frame-accurate backend, issue #115),
+  `getFrame(frameIndex)` (mediabunny: via `_mbGetFrame`, the open stepping
+  stream), `releaseStepCursor()`, `releaseFrames()` (closes and drops every
+  cached decoded frame — mediabunny backend cache + HTML5/WebCodecs cache — and
+  the stepping streams, keeping the decoder open; called by
+  `VideoController._shownViews` for a view that went off screen, since 17
+  cameras' full 60-frame caches at 1680×1200 are ~8 GB of ImageBitmaps and keep
+  Chrome garbage-collecting), `_initMediabunny(source)` /
+  `_mediabunnyEnabled()` (default-on frame-accurate backend, issue #115),
+  `_mbCannotDecode(backend)` (null, or `{reason: 'codec', codec, codecString}`
+  when WebCodecs cannot decode the track — the backend is then dropped and
+  that object kept as `_mbUnavailable`), `html5SeekTime(i)` (`(i + 0.5)/fps`,
+  the `<video>` stepping seek target),
   `decodeRange(start, end)`, `playNative`, `pauseNative`, `seekNative`,
   `switchSource`, `close`, `drawCurrentFrame`, `_awaitPlayable` (init and
   switchSource await the element's load through it: when the browser refuses
@@ -7393,19 +14642,60 @@ a zoomed-in image keeps the same region centered instead of jumping.
 - `pickScheduledFrame(target, shownIdx, pendingIdx, capIdx)` →
   `'shown'|'pending'|'cap'|null` (hold until the target passes the shown
   frame; then the newest candidate not past it, else the oldest past it).
+- `CoalescedFrameClock` — class (pure); which frame Firefox's
+  `drawImage(<video>)` paints, from its coalesced rVFC callbacks.
+  `observe(now, index, expectedDisplayTime, framesPerMs, fallbackPeriodMs)`
+  per callback; `frameAt(t, slackMs)` → `{index, certain, step}` (index = the
+  midpoint guess when not certain; step = frames per refresh) or null while
+  unknown; `reset()`. Ignores a callback that only re-reports a frame (the
+  paused start frame, a stall), forgets the clock when the frame goes back,
+  and adopts a jump AHEAD only once the next callback confirms it (Firefox
+  sometimes reports a frame ~10 ahead that is never painted). Unit-tested on
+  simulated Firefox callbacks in `tests/test-playback-frame-sync.js`.
 - `EmbeddedVideoDecoder` — class for SLP-embedded frames. `getFrame`,
   `hasFrame`, `close`.
 - `VideoController` — class. Selected methods: `seekToFrame`,
   `scrubToFrame`, `togglePlayback`, `startPlayback`, `stopPlayback`,
-  `pausePlayback` (user-pause: stop + frame-accurate mediabunny step one
-  frame forward so the video lands exactly on-frame with the pose overlay,
-  issue #115 — the play button and spacebar call this, internal stops call
-  `stopPlayback`),
+  `pausePlayback` (user-pause: stop + frame-accurate re-decode — mediabunny,
+  or the mid-frame `<video>` seek where WebCodecs cannot decode — of the frame
+  playback stopped on, so every camera rests exactly on-frame with the pose
+  overlay; the play button and spacebar call this, internal stops call
+  `stopPlayback`. It used to step one frame FORWARD (issue #115), which the
+  per-refresh loop made a visible jump on every pause; re-decoding the current
+  frame repaints an identical picture in Chrome/Brave and still lines up the
+  Safari/Firefox fallback loop and any camera that stopped a frame out of step
+  with camera 0. Measured in all four browsers at 60/120 Hz with barcode
+  clips: +0 ends aligned in 100% of camera-pauses — Firefox HEVC included
+  since its stepping moved to mid-frame seeks, see `_html5Moved` above),
   `_startBufferedPlayback` / `_bufferedPlaybackEnabled` (buffered
   video-led mediabunny playback, issue #115),
-  `setupSeekbar`, `setupKeyboardHandlers`, `initZoom`, `applyZoom`,
-  `zoomVideo`, `resetZoom`, `zoomToRect`, `zoomAllVideos`,
+  `setupSeekbar`, `setupKeyboardHandlers` (NOT called by the app — the live
+  transport and zoom keys, `Shift+0` included, are in `ui/ui-wiring.js`), `initZoom`, `applyZoom`,
+  `zoomVideo` (returns true when the step snapped to 1:1), `resetZoom`,
+  `zoomToRect`, `zoomAllVideos`, `nativeZoomScales(view)` (`{x, y}` or null
+  while not laid out), `setNativeResolution(on)`, `toggleNativeResolution()`,
+  `nativeResolutionActive()`, `zoomPercent(view)` (% of 1:1, or null),
+  `setZoomPercent(view, pct)` (the badge presets), `reapplyZoom`,
   `resetAllZoom`, `setupZoomHandlers`.
+
+**Only the views on screen are decoded, played and captured** —
+`_shownViews()`: views with a decoder for which the optional
+`callbacks.isViewShown(view)` is true (the app passes `isViewDocked`, from
+`ui/app-state.js`), or every decoder view when there is no callback or none is
+shown. A decoder that was shown at the previous call and is not now gets
+`releaseFrames()` — once, on the transition, compared BY DECODER because
+decoders are pooled across session switches. Without it the hidden views' caches
+stayed full forever: after using the grid, solo playback was 68% GC and reached
+63 of 120 pictures/s with 43% dropped; with it, 115/s and none dropped.
+Returning to the grid then costs one keyframe decode per view. `seekToFrame` (so every step, jump and the `pausePlayback` re-decode)
+decodes only those; `startPlayback` seeks, plays and captures only those, and
+its loops RESTART playback when the shown set changes mid-play (a solo switch,
+a pane closed or docked) — a newly shown view's `<video>` is paused wherever it
+was left. Before this, solo'ing one camera of a 17-camera 120 fps project left
+every cost of the full grid in place (jumps ~2.1 s, steps ~170 ms, playback ~11
+new pictures/s), because the 16 hidden decoders still decoded every step and
+played. Covered by `tests/test-video-controller.js` ("Only shown views") and
+`tests/e2e/solo-view-decodes-shown-only.mjs`.
 
 **`setupZoomHandlers`'s wheel-to-zoom stands down while Alt is held.** Alt
 turns the wheel into the instance-rotation control (`ui/interaction.js`
@@ -7417,10 +14707,13 @@ Option+scroll that strayed into the margin from zooming the view out from under
 a rotation in progress. Removing the line alone turns the margin check in
 `tests/e2e/alt-wheel-rotate-instance.mjs` red.
 
-**Imports from project modules.** `ui/keyboard-target.js` only — the
+**Imports from project modules.** `ui/keyboard-target.js` — the
 `shouldIgnoreShortcut` guard its `setupKeyboardHandlers` keydown listener
-applies (issue #163); that module imports nothing itself. Otherwise none (uses
-the global `MP4Box` from script tag).
+applies (issue #163); that module imports nothing itself — and
+`loading/video-codec-diagnosis.js` (`diagnoseUnplayableVideo`, for
+`_awaitPlayable`). `mediabunny` (`EncodedPacketSink`) is imported lazily by
+`_keyTimestamp`. Otherwise none (uses the global `MP4Box` from script tag, and
+`window.SleapIO.MediaBunnyVideoBackend`).
 
 **Imported by.** `pose/initialization.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`, `loading/session-loader.js`,
@@ -7437,10 +14730,22 @@ keyboard transport.
 ### import-export/visibility-metadata.js
 
 **Purpose.** The `metadata.lucid` ↔ `Session` mapping for the Visibility panel's
-SESSION-SCOPED settings — and for the other per-session panel state that belongs
-in the project file: the ID Switches tab's review checklist (`idSwitchReview`,
-`ui/id-switch-review.js`). One module owns the key list so a writer and a reader
-cannot drift: adding a setting means touching this file and nothing else.
+SESSION-SCOPED settings — and for the other per-session state that belongs in
+the project file: the ID Switches tab's review checklist (`idSwitchReview`,
+`ui/id-switch-review.js`) and the number of animals tracking uses
+(`numAnimals` ↔ `Session.numAnimals`, the toolbar's Animals field). One module
+owns the key list so a writer and a reader cannot drift: adding a setting means
+touching this file and nothing else.
+
+**`numAnimals`.** A positive integer or `"auto"`. A never-asked session
+(`null`) writes nothing, so it is asked again after a reopen exactly as a new
+session is, and anything else read back (0, 2.5, `"3"`, `"AUTO"`) is treated
+the same way. The read assigns unconditionally, so a file without the key
+leaves `null`, never a stale value. The two helpers (`serializeNumAnimals` /
+`ingestNumAnimals`) are private to this module rather than in
+`pose/tracker.js`, which this module cannot import: tracker.js pulls in the
+whole UI, and this module is bridged into `tests/test-runner.html`, which must
+not load the app.
 
 **What it covers, and what it deliberately does not.** The Visibility panel
 holds two kinds of state:
@@ -7448,9 +14753,9 @@ holds two kinds of state:
   timeline's hidden camera / track / identity sets. These describe *this
   project's* videos and entities, so they belong in the project file. That is
   everything this module handles.
-- **Global appearance preferences** — the User / Predicted / Reprojections /
-  Display Legend / 3D Viewer sliders, styles and toggles. Those are browser-local
-  display taste, shared across every session, and stay in
+- **Global appearance preferences** — the User / Predictions / Reprojections /
+  Planes / Display Legend / 3D Viewer sliders, styles and toggles. Those are
+  browser-local display taste, shared across every session, and stay in
   `localStorage.visibilitySettings` (see `ui/ui-wiring.js`). They are **not**
   written here on purpose: baking them into the `.slp` would make opening a
   colleague's project silently reassign your node sizes and 3D widgets.
@@ -7458,7 +14763,7 @@ holds two kinds of state:
 **Key exports.**
 - `VISIBILITY_METADATA_KEYS` — every key this module may write
   (`videoBrightness`, `videoContrast`, `videoRotation`, `hiddenCameras`,
-  `hiddenTracks`, `hiddenIdentities`, `idSwitchReview`). Exported so tests can assert a default
+  `hiddenTracks`, `hiddenIdentities`, `idSwitchReview`, `numAnimals`). Exported so tests can assert a default
   project carries none of them without duplicating the list.
 - `writeVisibilityMetadata(lucid, session)` — mutate a `metadata.lucid` dict in
   place, adding only non-default settings; returns the same dict.
@@ -7487,15 +14792,168 @@ bridges into the test runners without pulling `app.js` in.
 **Imported by.** The four writers — `import-export/file-io.js`
 (`buildSlpLabelsAllViews`), `import-export/slp-streaming-write.js`
 (`buildSessionRefGraph`), and `import-export/save-load.js` (`saveProject`, both
-the v2 and v3 project-JSON shapes) — and the three readers —
+the v2 and v3 project-JSON shapes) — and the four readers —
 `import-export/slp-import.js` (`handleLoadSlpFile`), `loading/session-loader.js`
-(`handleLoadProjectSlpLazy`), and `import-export/save-load.js`
-(`_restoreProjectV2`).
+(`handleLoadProjectSlpLazy` and `handleLoadSessionFolderSingleSlp`), and
+`import-export/save-load.js` (`_restoreProjectV2`).
 
 **Tests.** `tests/test-visibility-metadata.js` (unit; bridged as
 `window.__VisibilityMetadata`) and
 `tests/e2e/visibility-settings-roundtrip.mjs` (real app, both writers; includes
-the ID Switches checklist).
+the ID Switches checklist); `tests/e2e/reopen-folder-session-settings.mjs` reopens
+a real saved project through the single-SLP folder loader.
+
+---
+
+### import-export/mesh-export.js
+
+**Purpose.** A 3D mesh object as a file another program can open: **binary
+STL** for CAD and **binary glTF (.glb)** for Blender. Both take the same
+`MeshObjectGeometry` that `pose/mesh-object-geometry.js` derives, so neither
+format re-derives anything and a shape that is wrong in one is wrong in both
+rather than wrong in different ways. DOM-free and pure — geometry in, bytes
+out; `ui/mesh-objects.js` owns the buttons and the download.
+
+**The one sanctioned axis conversion.** The project rule is that LUCID's world
+is Z-up, Blender's is too, and no axis conversion belongs in the plane/mesh
+pipeline. That rule is about the PIPELINE, and it does not survive contact with
+glTF, whose spec FIXES the up axis at +Y (glTF 2.0 3.5):
+
+| format | axes | why |
+|---|---|---|
+| STL | verbatim Z-up | the format defines no up axis; CAD treats Z as up |
+| GLB | `(x, y, z)` -> `(x, z, -y)` | the spec mandates +Y up; Blender's importer applies the inverse, landing it back Z-up |
+
+Write Z-up into a .glb instead and the file is off-spec: Blender still rotates
+it, so the cage arrives lying on its side, and three.js / Babylon / Sketchfab /
+QuickLook all show it tipped over. The conversion is a -90 degree rotation
+about X, determinant +1 — a rotation, **not** a mirror — so triangle winding
+survives and **no winding flip accompanies it**. Adding one later would
+silently invert every normal.
+
+**Key exports.**
+- `meshObjectToSTL(geometry, {name})` -> `Uint8Array | null`. Binary, not
+  ASCII: ~5x smaller and exact to the last float32 bit. The 80-byte header
+  deliberately does not begin with `solid`, which is what makes lenient parsers
+  guess ASCII and read garbage. STL repeats every corner per triangle, so the
+  node-level welding is invisible in the file — by the format's design.
+- `meshObjectToGLB(geometry, {name, color})` -> `Uint8Array | null`. One
+  self-contained file (JSON chunk + BIN chunk, spec padding: spaces for JSON,
+  zeros for BIN). Vertices stay **welded** and indexed. **No NORMAL attribute,
+  deliberately** — glTF then mandates flat shading, which is right for a
+  faceted cage; supplying normals would mean either splitting every shared
+  vertex (undoing the welding) or smoothing across hard edges that are real.
+  The colour is converted sRGB -> **linear**, because `baseColorFactor` is
+  linear and passing the picker's hex through makes every export paler than the
+  swatch.
+- `isExportable(geometry)` — what the buttons gate on.
+- `meshFilenameStem(name)` — object names are free text, and a slash in a
+  download name is a path the browser will not write.
+
+**Both return `null` rather than an empty file.** An empty export opens, shows
+nothing, and reads as "my annotation is broken" rather than "I exported an
+object with no triangulated faces yet".
+
+**Precision.** Positions are float32 in both formats — not a choice, it is what
+the formats define. LUCID's float64 millimetres keep ~1e-4 mm at ~1e3 mm, so a
+re-imported mesh is not bit-identical to the project's numbers. The project
+file stays the source of truth.
+
+**Imports from project modules.** None. **Imported by.** `ui/mesh-objects.js`.
+
+**Tests.** `tests/test-mesh-export.mjs` (the byte layouts, with a negative
+control on each axis claim) and `tests/e2e/mesh-object-export.mjs` (the buttons
+and the downloaded bytes). The axis behaviour was additionally confirmed
+against **real Blender** in `--background` mode: both files put the tracked
+corner at (0, 0, 300).
+
+---
+
+### import-export/plane-metadata.js
+
+**Purpose.** The `metadata.lucid` ↔ plane-state mapping, and the reason plane
+edits now mark the project dirty. The Define Planes pipeline (nodes, planes,
+per-view 2D, triangulation, plane fit, origin frame) is project state — it
+describes *this* project's cage, floor and reference geometry — but until this
+module none of it reached the project file, which is why `ui/plane-definition.js`
+deliberately did **not** call `markDirty()`: flagging a project dirty for state a
+save would silently drop is worse than losing it. Same shape and the same three
+invariants as `import-export/visibility-metadata.js`; one module owns the key
+list so a writer and a reader cannot drift.
+
+**The scope split, and why one payload is written N times.** `metadata.lucid` is
+per SESSION, but the plane model is not:
+- The **node pool, the planes, the 3D Mesh Objects and the origin frame are
+  PROJECT-scoped** — a node has one 3D position whatever session you are looking
+  at, and "these planes are the cage" is a statement about the project's geometry
+  rather than about any one recording. They are written
+  IDENTICALLY into every session's dict, so opening any one session of a
+  multi-session project restores the same geometry, and read back by whichever
+  session is ingested first (the rest hold the same bytes). Duplication is the
+  price of a per-session container; the payload is a few dozen nodes, not a
+  frame table.
+- The **per-view 2D is SESSION-scoped**, because a view belongs to a session. It
+  lives on `Session.planePlacements`, exactly where `planeModel()` picks it up.
+
+**Key exports.**
+- `PLANE_METADATA_KEYS` — `planeNodes`, `planes`, `meshObjects`,
+  `planePlacements`, `planeOrigin`. Exported so the slim-metadata / golden-digest
+  guards can assert a project that never opened the feature carries none of them.
+- `writePlaneMetadata(lucid, session)` — mutate a `metadata.lucid` dict in place;
+  returns the same dict. Reads the pool / planes off the module singleton and the
+  2D off `session.planePlacements`, so saving a BACKGROUND session writes its own
+  placements rather than whichever map the model happens to have attached.
+- `readPlaneMetadata(session, lucid)` — placements land on `session`; the
+  project-scoped half lands on the shared model **only when it is still empty**.
+  That guard is what makes ingesting N sessions idempotent: the first session
+  carrying plane state restores it, the rest are skipped rather than appended
+  (which would double every node).
+- `resetPlaneState()` — empty the model (pool, planes AND mesh objects, all three
+  via one `restorePlaneProject(model, null)`), drop the applied origin and the
+  plane selection. **Every load path must call it**, because the corollary of the
+  empty-model guard is that skipping it does not merge the two projects — it
+  keeps the OLD one and silently discards the NEW one's planes. Called by
+  `newProject`, the JSON load, the eager `.slp` import, the lazy reopen, the
+  demo-session load, and the single-SLP folder load when no session is open.
+- `planeMetadataConflict(lucid)` — why a `metadata.lucid` dict's plane state
+  cannot be read into the live model, or `null` when it can. For a loader that
+  ADDS a session to an open project (the single-SLP folder load) and so does not
+  reset: the open pool is kept and the file's 2D is seated on it by node ID, and
+  plane-node IDs restart at 1 in every project, so another project's corners
+  would land on this one's nodes with every point looking valid. `null` when the
+  model is empty, or when every node and plane the file lists is in the model
+  under the same id AND name; otherwise a short reason for the status bar.
+
+**What is deliberately NOT written.** The plane panel's node size, edge width and
+3D corner size are browser-local display taste — the same category as the
+Visibility panel's global appearance preferences, and kept out of the `.slp` for
+the same reason. So are the editor's transient selections. The one thing restored
+beyond the data is the plane SELECTION being re-pointed at a plane that still
+exists, since a selection naming a deleted plane renders an empty editor.
+
+**Imports from project modules.** `../pose/plane-serialization.js` (all the
+actual mapping); `../ui/plane-definition.js` — `planeState`;
+`../ui/origin-definition.js` — `originState`; `../ui/app-state.js` — `state`.
+The two `ui/` imports are circular by design and safe for the same reason the
+rest of this feature's cycles are: every use is inside a function body, so the
+bindings resolve at call time.
+
+**Imported by.** The four writers — `import-export/file-io.js`
+(`buildSlpLabelsAllViews`), `import-export/slp-streaming-write.js`
+(`buildSessionRefGraph`), and `import-export/save-load.js` (`saveProject`, both
+the v2 and v3 project-JSON shapes) — and the four readers —
+`import-export/slp-import.js` (`handleLoadSlpFile`), `loading/session-loader.js`
+(`handleLoadProjectSlpLazy` and `handleLoadSessionFolderSingleSlp`), and
+`import-export/save-load.js` (`_restoreProjectV2`). Plus `pose/initialization.js` for `resetPlaneState` on the
+demo-session load.
+
+**Tests.** `tests/e2e/plane-persistence-roundtrip.mjs` (real app, both `.slp`
+writers, the dirty-flag half, the session-scope split, the untouched-project
+control and the replace-not-merge control) over
+`tests/test-plane-serialization.mjs` (the mapping itself);
+`tests/e2e/reopen-folder-session-settings.mjs` (the single-SLP folder load: the
+reset when it starts a project, and `planeMetadataConflict` when it adds a
+session from another project).
 
 ---
 
@@ -7614,7 +15072,16 @@ exports via the eager path; partially-resident refuses and says so).
   `buildSlpLabelsMultiSession`, `serializeSkeleton`, `_buildSioPoints`
   (per-node `[x,y,visible,complete]` builder — nulled/occluded/optional
   per-point score; also reused by `slp-streaming-write.js` for edited-frame
-  overlays).
+  overlays). **A point's score is its node's OWN model score** when it has one
+  (`Instance.pointScore`, or the caller's `nodeScore(k)` — the streaming writer
+  passes one that reads the lazy store), and the `perPointScore` the writer
+  passes (the instance score) only for a node with none; with `nodeOrder` the
+  canonical node gets its LOCAL node's score. All three writers pass a
+  `perPointScore` for a prediction — `buildSlpLabelsAllViews`, the project Save,
+  passed none and so stored 0 for every node, and the others stamped the instance
+  score on all of them: either way a reopened project's node tooltip showed one
+  number for every node. Pinned by `tests/test-node-score-export.js` and, end to
+  end through save + reopen, `tests/e2e/node-score-tooltip.mjs`.
   (PR 5.2 deleted `convertSlpToV06Compatible` — export is now raw
   `saveSlpToBytes`; SLEAP >= 1.6 / sleap-io >= 0.7 reads the flat-matrix
   `field_names` layout natively.) On 2D export both `buildSlpLabels` and
@@ -7689,7 +15156,9 @@ exports via the eager path; partially-resident refuses and says so).
   drives `window.SleapIO.readSlpStreaming(file, {rawSessions:true})` (PR #196)
   and adapts the typed `Labels` into the `slpData` shape via the private
   `_typedInstanceToSlpData` pose transform (columnar `_xy`/`_visible` →
-  `points[]` + parallel `occluded[]`, NOT `numpy()`). Each `sessions[]` entry is
+  `points[]` + parallel `occluded[]`, NOT `numpy()`; a prediction's per-node
+  scores as `pointScores`, the typed instance's own `_score` column by reference,
+  null for a user instance — the importers copy it with `Instance.setPointScores`). Each `sessions[]` entry is
   the verbatim on-disk dict (for the direct calibration/video-map/metadata reads)
   PLUS a `_typedSession` ref (the typed RecordingSession) used by
   `reconstructInstanceGroupsFromSession` for grouping — which reads LUCID's legacy
@@ -7700,7 +15169,10 @@ exports via the eager path; partially-resident refuses and says so).
   identity / occlusion) verified in-browser.
 - H5 build/parse: `buildPoints3dH5`, `buildReprojH5`,
   `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`.
-- Misc: `downloadJSON`, `instancePointsMatch`, `instanceMatchesPoints`
+- Misc: `downloadJSON`, `downloadBytes` (the binary sibling, for the STL/GLB
+  mesh exports; the Blob is handed the VIEW, never `bytes.buffer`, which on a
+  subarray would write the neighbouring bytes too), `instancePointsMatch`,
+  `instanceMatchesPoints`
   (the same comparison with a LUCID `Instance` on the left, read through the flat
   typed accessors so the SLP-load dedup passes don't allocate a boxed points array
   per candidate).
@@ -7717,7 +15189,9 @@ exports via the eager path; partially-resident refuses and says so).
 
 **Imported by.** `import-export/save-load.js`,
 `import-export/slp-import.js`, `loading/session-loader.js`,
-`ui/export-modals.js`, `ui/ui-wiring.js`.
+`ui/export-modals.js`, `ui/ui-wiring.js`, `ui/origin-definition.js`
+(`exportCalibrationTOML` + `downloadTOML`) and
+`ui/origin-rebase.js` (the same two, for the in-place `calibration.toml`).
 
 **User-facing features.** Underlies File menu Load Calibration / Load
 Videos / Export TOML / Export SLP / Export H5; spawns SLP-parse worker.
@@ -7894,10 +15368,14 @@ camera-frame to its overlay (instance position by object identity, then
 `track`) or otherwise to the shifted store row. Only edited camera-frames are
 materialized (minimal at prediction scale); every other frame streams from the
 columnar store. An overlaid frame's untouched predicted siblings are
-re-materialized too (the store row is skipped wholesale); they carry the
-instance-level score as a per-point score (the frameGroup keeps no per-point
-scores) so SLEAP's GUI doesn't hide them — mirrors the eager `buildSlpLabels`
-reproj export. **Scope:** predictions + full grouping (identities + 3D) + 2D
+re-materialized too (the store row is skipped wholesale); each node carries
+its OWN model score, read back from the row being replaced
+(`Session.predictedNodeScore` → `SioLazyLoader.predictedPointScore`, by the
+sibling's `_rawInstIndex`), and the instance score only where it has none — a
+point with no score is one SLEAP's GUI hides. Stamping the instance score on
+every node was what this used to do, and after a save it was all a reopened
+project's node tooltip had to show. Mirrors the eager `buildSlpLabels` reproj
+export. **Scope:** predictions + full grouping (identities + 3D) + 2D
 corrections.
 
 **Imports.** `window.SleapIO` (streaming writer API); `_buildSioPoints`
@@ -7979,6 +15457,36 @@ loading-overlay/status-text UI helpers.
   shared store N times (duplicating every frame/track).
   `commitSessionForMultiSessionSave` records the flag as `sharedStore` on
   `handle.pending`, and `finalizeMultiSessionSave` passes it through.
+  A per-camera session reopens through parallel `open()`s in `sourceFiles`
+  order (= the ORIGINAL load's resolution order); neither order matters, since
+  `SioLazyLoader._unifyTracks` re-indexes every store into the union of the
+  cameras' track names in camera-NAME order — so pass 2 re-derives the track
+  columns the original load had.
+  **A store edited in memory is written AS EDITED.** Propagate IDs → Tracks
+  (and every other `remapTracksFromIdentity` caller) and Custom Instance
+  Delete (`deleteInstanceRows`) change the live store's columns, which are not
+  in the source files — but pass 1 builds the header tracks, each camera's
+  `trackBase` and every group's `(frame, instance offset)` refs from that live
+  store. Pass 2 used to append the files' columns under it: every propagated
+  instance came out on the wrong track name, deleted instances came back, and a
+  group member sitting after a deleted row in its camera-frame resolved to the
+  deleted instance's points. Now `commitSessionForMultiSessionSave` keeps the
+  loader's `framesData` + `instancesData` per camera when
+  `SioLazyLoader._storeEditedInMemory` is set (`keepEditedStoreColumns`, stored
+  as `editedColumns` on `handle.pending`), and `finalizeMultiSessionSave` puts
+  them back over the re-opened stores before `streamSessionIntoWriter`
+  (`restoreEditedStoreColumns`). Those two are all either edit touches: a
+  delete keeps every survivor's `point_id_start/end`, pointing into the
+  unchanged points table — so `pointsData`/`predPointsData`, by far the
+  largest part of a store, are still evicted and re-read, and an UNEDITED
+  session keeps nothing at all. `restoreEditedStoreColumns` throws if the
+  re-opened file no longer fits the kept columns (another frame-row count, or a
+  points table shorter than the largest kept `point_id_end`): the file changed
+  on disk after loading, and writing edited instances against its rows would be
+  silent corruption. The single-session save streams from the live loader and
+  never had this. Covered by `tests/e2e/multi-session-save-store-edits.mjs`
+  (confirmed to fail pre-fix: wrong track names, resurrected rows, the group on
+  the deleted instance, no refusal).
 
   **GC-timing finding (real cage5×3) — resolved.** Dereferencing a session's
   heavy state makes it *eligible* for GC but doesn't force reclamation —
@@ -8044,6 +15552,7 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   `../loading/sio-lazy-loader.js` (`SioLazyLoader`, for
   `reopenSessionLazyLoader`), `./slp-streaming-write.js`,
   `../ui/rendering.js`, `../ui/info-panel.js`,
+  `../ui/frame-readout.js` (`clearReadout`, New Project),
   `../pose/initialization.js`, `../ui/sessions-panes.js`,
   `./slp-import.js`, `./visibility-metadata.js`
   (`writeVisibilityMetadata`/`readVisibilityMetadata` for the session-scoped
@@ -8135,7 +15644,10 @@ onto the first track label (e.g. `global_0`) after an export/reload round-trip.
   loader** (`loading/session-loader.js#handleLoadSessionFolderSingleSlp`) share
   ONE implementation — that loader previously rebuilt the session flat (raw
   poses only) and silently dropped grouping, occlusion, and identities from the
-  saved project `.slp`.
+  saved project `.slp`. It does NOT read the Visibility or Define Planes keys:
+  each caller calls `readVisibilityMetadata` / `readPlaneMetadata` itself,
+  since only the caller knows whether the load replaces the project or adds a
+  session to it.
 - Occlusion of **unlinked** user labels is restored on load by
   `nulledNodesFromOcclusion` (lives in `import-export/import-track-resolve.js` so
   it's unit-testable; see that module). Called in the pass-1 raw-instance build
@@ -8180,6 +15692,11 @@ onto the first track label (e.g. `global_0`) after an export/reload round-trip.
   (falling back to the raw dict's `identity_idx` for legacy files). Reads both LUCID's legacy and
   the new canonical `sessions_json`. Same pass-1 dedup + trackless/identity-less
   handling as the dict version. Returns `{ restoredGroups, restoredWith3d }`.
+  **Per-node model scores:** a prediction's come from the typed instance's
+  `_score` here, and from the `pointScores` of the raw-SLP instance a group
+  member REPLACES in the dict version (the group dict has none of its own —
+  `adoptPointScoresFrom`); pass 1 keeps each instance's `pointScores`. They are
+  what the node tooltip shows (`Session.predictedNodeScore`).
 - `parseSlpForImport(file, onProgress)` (private) — dispatches `.slp` →
   `parseSlpViaSleapIO`, else / on error → `parseSlpH5`.
 
@@ -8193,13 +15710,31 @@ onto the first track label (e.g. `global_0`) after an export/reload round-trip.
 closes every decoder in `state.decoderPool` and `state._decoderPoolCold`,
 cancels every cold eviction timer, and re-initialises both arrays.
 
+**Lazy reopen's lightweight members share ONE placeholder.**
+`reconstructInstanceGroupsFromSessionLazy` builds each group member WITHOUT its
+2D (it is hydrated on scrub by `_rawInstIndex`, `finalizeLazyFrameGroup`); the
+stand-in is now the shared `lazyPlaceholderXY(numNodes)` (`pose/pose-data.js`),
+adopted by reference, instead of a private NaN-filled `Float64Array` per member
+— ~335 B and one ArrayBuffer each, 2.66M of them on the real cage5 project. The
+same placeholder is what `pose/lazy-residency.js` releases members back to, so a
+reopened project and a freshly tracked one look alike off-screen.
+Every restored group's 3D goes into the slab pool (`pooledPoints3d`,
+`pose/pose-data.js`): the reader hands one compacted `Float64Array` per group
+(#189), i.e. one ArrayBuffer each; the copy is ~360 B of backing store per
+group, outside V8's pointer cage, and the reader's array is released with its
+typed group.
+
 **Imports from project modules.**
-- `../pose/pose-data.js`, `../pose/triangulation.js`, `./file-io.js`,
+- `../pose/pose-data.js` (incl. `lazyPlaceholderXY`), `../pose/triangulation.js`, `./file-io.js`,
   `./slp-merge.js`, `../loading/video.js`, `../ui/app-state.js`,
   `../loading/session-loader.js`, `./save-load.js`,
   `../ui/rendering.js`, `../ui/info-panel.js`,
+  `../ui/calibration-notice.js` (`noteSessionCalibrationDivergence`, behind the
+  multi-session skeleton prompt — a `.slp` carries one calibration per session,
+  so merging two separately-calibrated recordings lands here too),
   `../pose/initialization.js`, `../ui/ui-wiring.js`,
-  `../ui/sessions-panes.js`, `./visibility-metadata.js`
+  `../ui/frame-readout.js` (`refreshReadoutTotals`, when a video-less import
+  sets the frame count), `../ui/sessions-panes.js`, `./visibility-metadata.js`
   (`readVisibilityMetadata`). Also spawns
   `../loading/frame-worker.js` (twice) via `new Worker(new URL(...))`.
 
@@ -8274,6 +15809,8 @@ compatibility check, track merging, frame merging, group rebuild.
 - `mergeSlpFramesIntoSession(session, slpData, videoIdxToCameraName,
   cameras, trackRemap, nodeReorderMap)` — trackless instances (track=-1/null),
   user OR predicted, keep `trackIdx = null` (no longer coerce predictions to 0).
+  A prediction keeps its per-node model scores (`pointScores`), re-ordered by
+  `nodeReorderMap` exactly as its points are.
 - `rebuildInstanceGroupsForFrames(session, frameIndices)` — groups by `trackIdx`;
   trackless instances of any type are skipped (not bucketed into track 0).
 

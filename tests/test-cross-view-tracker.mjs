@@ -155,5 +155,115 @@ group('Determinism — same inputs + weight → identical assignment');
     eq(JSON.stringify(run()), JSON.stringify(run()), 'two runs produce identical targets');
 }
 
+// ===========================================================================
+// Match gate (pose/cross-view-tracker.js, "THE MATCH GATE"). Detections built
+// from arbitrary per-camera 3D point sets, so a view can carry an extra
+// detection (a "reflection") the other views do not.
+function det(cam, frameIdx, slot, pts3) {
+    return new Detection(new Instance(pts3.map(p => cam.project(p)), slot, 'predicted', 1.0), cam, frameIdx, slot);
+}
+function viewDets(frameIdx, perCam) {
+    const m = new Map();
+    CAMS.forEach(c => m.set(c.name, (perCam[c.name] || []).map((p, i) => det(c, frameIdx, i, p))));
+    return m;
+}
+function nearestTarget(trk, c) {
+    return trk.targets.reduce((b, t) => dist3(centroidOf(t.points3d), c) < dist3(centroidOf(b.points3d), c) ? t : b);
+}
+const GATE_HP = { corr2dWeight: 1, corr3dWeight: 6, velocityThreshold: 10, distanceThreshold: 5, timePenalty: 0.1 };
+
+group('Match gate — a spare target cannot trade an animal onto a reflection');
+{
+    // The real-data failure (5-mouse recording, frame 3,620, Camera4_topR) in
+    // miniature: a spare target sits right behind animal A along c0's viewing
+    // rays, so in c0 it scores almost as well on A's detection as A's own
+    // target does — and a reflection appears in c0 only, far from both. Forced
+    // assignment (gate off) must place all three targets; giving A's detection
+    // to the spare and the reflection to A costs slightly less in total, so A's
+    // target is moved onto the reflection.
+    function run(matchGate) {
+        const trk = new CrossViewTracker(Object.assign({ maxTargets: 3, matchGate }, GATE_HP));
+        const A = [-7, 0, 48], B = [7, 0, 48], G = [0, 8, 48];
+        const three = [nodes3d(A), nodes3d(B), nodes3d(G)];
+        trk.trackFrame(viewDets(0, { c0: three, c1: three, c2: three }), CAMS);
+        const tA = nearestTarget(trk, A), tG = nearestTarget(trk, G);
+        // White-box: park the spare 8 units behind A along c0's rays (+1 to the side).
+        const C0 = [0, 0, -40];
+        tG.points3d = Float64Array.from(nodes3d(A).flatMap(p => {
+            const v = p.map((x, i) => x - C0[i]), L = Math.hypot(...v);
+            return [p[0] + 8 * v[0] / L + 1, p[1] + 8 * v[1] / L, p[2] + 8 * v[2] / L];
+        }));
+        const reflection = nodes3d([A[0], A[1] - 30, A[2]]);
+        trk.trackFrame(viewDets(1, {
+            c0: [nodes3d(A), nodes3d(B), reflection],   // slot 2 = the reflection
+            c1: [nodes3d(A), nodes3d(B)],
+            c2: [nodes3d(A), nodes3d(B)],
+        }), CAMS);
+        return { a: tA.detsByCam.get('c0'), g: tG.detsByCam.get('c0') };
+    }
+    const off = run(0);
+    eq(off.a.slot, 2, 'gate OFF reproduces the bug: A\'s target is forced onto the reflection');
+    ok(off.g.frameIdx === 1 && off.g.slot === 0, 'gate OFF: the spare target takes A\'s real detection');
+    const on = run(1);
+    ok(on.a.frameIdx === 1 && on.a.slot === 0, 'gate ON: A\'s target keeps A\'s detection');
+    eq(on.g.frameIdx, 0, 'gate ON: the spare target is left unmatched this frame');
+}
+
+group('Match gate — a LOST target still re-acquires its animal far from where it vanished');
+{
+    // Animal A disappears for longer than `stale`, so every one of its target's
+    // detections is evicted, then reappears 12 units away (well beyond the 5-unit
+    // distance threshold, so the adjacency is negative). The cap stops a new
+    // birth; only the ungated lost-target stage can pick A back up.
+    const trk = new CrossViewTracker(Object.assign({ maxTargets: 2, stale: 20 }, GATE_HP));
+    const A = [-7, 0, 48], B = [7, 0, 48], A2 = [-7, 12, 48];
+    const both = [nodes3d(A), nodes3d(B)];
+    for (let f = 0; f < 3; f++) trk.trackFrame(viewDets(f, { c0: both, c1: both, c2: both }), CAMS);
+    const tA = nearestTarget(trk, A);
+    const onlyB = [nodes3d(B)];
+    for (let f = 3; f < 31; f++) trk.trackFrame(viewDets(f, { c0: onlyB, c1: onlyB, c2: onlyB }), CAMS);
+    eq(tA.detsByCam.size, 0, 'A\'s target is lost (every detection evicted as stale)');
+    const back = [nodes3d(A2), nodes3d(B)];
+    trk.trackFrame(viewDets(31, { c0: back, c1: back, c2: back }), CAMS);
+    eq(trk.targets.length, 2, 'no extra target was born');
+    eq(tA.detsByCam.size, 3, 'the lost target re-acquired A in all three views');
+    ok(dist3(centroidOf(tA.points3d), A2) < 1.0, 'and re-triangulated at A\'s new position');
+}
+
+group('Score caches — rays per detection, projection per target: same scores, recomputed when the inputs change');
+{
+    // Two animals born at frame 0, then scored against frame-1 detections in a camera of their own (so moving
+    // it touches nothing else). The caches change no arithmetic, only how often it runs — so every score must
+    // equal the one built from scratch: fresh Detections over the SAME pixel keypoints (re-projecting the 3D
+    // through a moved camera would change the inputs, not test the cache), and the targets' cache dropped.
+    const trk = new CrossViewTracker();
+    const A = [0, 0, 0], B = [9, 0, 0];
+    trk.trackFrame(frameDetections(0, [A, B]), CAMS);
+    const [tA, tB] = trk.targets;
+    const cam = makeCam('cx', [0, 0.2, 0.1], [-6, 2, 42]);
+    const mkDets = () => [A, B].map((c, i) => det(cam, 1, i, nodes3d([c[0] + 0.4, c[1] - 0.3, c[2]])));
+    const scores = (dets) => [tA, tB].map(t => dets.map(d => trk._adjacency(t, d, cam)));
+    const fresh = () => { tA._proj = null; tB._proj = null; return scores(dets.map(d => new Detection(d.instance, d.cam, d.frameIdx, d.slot))); };
+    const same = (x, y) => x.every((row, i) => row.every((v, j) => Object.is(v, y[i][j])));
+    const dets = mkDets();
+    const s1 = scores(dets), s2 = scores(dets);
+    ok(same(s1, s2) && same(s1, fresh()), 'scoring twice, and scoring from scratch, give identical numbers');
+    ok(dets.every(d => d._rays !== null) && tA._proj !== null, 'and the caches were filled (rays on each detection, projection on each target)');
+
+    // A moved camera (Camera.setExtrinsics replaces its extrinsic matrix) must recast the cached rays
+    const before = scores(dets);
+    cam.setExtrinsics([0, 0.25, 0.05], [-5, 1, 44]);
+    const moved = scores(dets);
+    ok(!same(before, moved), 'control: moving the camera changes the scores');
+    ok(same(moved, fresh()), 'the SAME detections, scored after the move, match freshly built ones exactly (rays recast, projection redone)');
+
+    // A replaced points3d (only _retriangulate assigns it, never edits it) must be re-projected
+    const p3 = scores(dets);
+    tA.points3d = Float64Array.from(tB.points3d);
+    const swapped = scores(dets);
+    ok(!same(p3, swapped), 'control: replacing a target\'s 3D changes its scores');
+    ok(same(swapped, fresh()), 'and the cached projection follows it exactly');
+}
+
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);
 if (failed > 0) { console.error('\nFailures:\n - ' + failures.join('\n - ')); process.exit(1); }

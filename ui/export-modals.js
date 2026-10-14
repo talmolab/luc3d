@@ -8,8 +8,8 @@
 //
 // Extracted from app.js per the consolidated Pass 3 plan, Module 13.
 
-import { state, viewport3d, timeline, getActiveSession } from './app-state.js';
-import { InstanceGroup, UnlinkedInstance } from '../pose/pose-data.js';
+import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=2dc001fe527c';
+import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=2dc001fe527c';
 import {
     triangulateAndReproject,
     frameHasGroupedUserInstances,
@@ -23,30 +23,34 @@ import {
     findEquivalentPriorGroup,
     adoptPrior3d,
     triangulationMethodLabel,
-} from '../pose/triangulation.js';
-import { Viewport3D } from './viewport3d.js';
-import { getTrackColor, getGroupColor } from './overlays.js';
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
-import { updateInfoPanel } from './info-panel.js';
-import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
+    reprojectIntoEveryCamera,
+} from '../pose/triangulation.js?v=2dc001fe527c';
+import { Viewport3D } from './viewport3d.js?v=2dc001fe527c';
+import { getTrackColor, getGroupColor } from './overlays.js?v=2dc001fe527c';
+import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=2dc001fe527c';
+import { updateInfoPanel } from './info-panel.js?v=2dc001fe527c';
+import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=2dc001fe527c';
+import { showLoadingProgress, yieldToPaint } from './loading-overlay.js?v=2dc001fe527c';
+import { createGroupSolver } from '../pose/triangulation-pool.js?v=2dc001fe527c';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
     findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
-} from '../import-export/file-io.js';
+} from '../import-export/file-io.js?v=2dc001fe527c';
 
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from '../pose/initialization.js';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js';
+import { update3DViewport } from '../pose/initialization.js?v=2dc001fe527c';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=2dc001fe527c';
+import { fileSystemAccessHint } from './browser-hints.js?v=2dc001fe527c';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
 // private copies of all four and had silently drifted apart (a 2x bitrate floor
 // gap at the smallest tier, and two disagreeing level tables).
 import {
     RES_PRESETS, bitrateFor, estimatedBytes, h264CodecFor, shouldStreamToDisk,
-} from './overlay-export-layout.js';
+} from './overlay-export-layout.js?v=2dc001fe527c';
 
 // ============================================
 // Group by Track & Triangulate All
@@ -153,7 +157,7 @@ export function showGroupByTrackModal() {
             '<td><input type="checkbox" class="gbt-track-cb" data-idx="' + tIdx + '" checked></td>' +
             '<td>' + tName + '</td>' +
             '<td>' + stats.nodeCount + ' nodes</td>' +
-            '<td>' + stats.frames.size + '</td>' +
+            '<td>' + stats.frames.size.toLocaleString('en-US') + '</td>' +
             '<td>' + stats.cameras.size + '</td>' +
             '</tr>';
     }
@@ -320,18 +324,39 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
         ? (explicitMethod === 'ba' ? 'ba' : 'dlt')
         : resolveTriangulationMethod(null);
 
-    showLoading('Grouping by identity & triangulating 0/' + totalFrames + ' frames (' +
-        triangulationMethodLabel(prefMethod) + ')...');
+    // A lazy session the sweep cannot window materializes every frame first
+    // (`sweepLazyFrameWindows`' non-windowed branch) — a labelled stage of its own.
+    var gLoader = session.lazyLoader;
+    var gSteps = (gLoader && !(gLoader.isSync && typeof gLoader.releaseWindow === 'function')) ? 2 : 1;
+    var gMethodLabel = triangulationMethodLabel(prefMethod);
+    if (gSteps === 2) {
+        showLoadingProgress('Loading frames', 0, totalFrames, { step: 1, steps: gSteps });
+    } else {
+        showLoadingProgress('Grouping & triangulating', 0, totalFrames,
+            { step: 1, steps: 1, detail: gMethodLabel });
+    }
+    await yieldToPaint();
 
     var totalGrouped = 0;
     var totalTriangulated = 0;
     // 3D provenance, reported at the end: groups whose existing 3D was reused
     // as-is vs. groups that genuinely had to be solved, and with what.
     var reused3d = 0, solvedBa = 0, solvedDlt = 0;
+    // Solves run on the worker pool (pose/triangulation-pool.js); the regrouping
+    // itself stays on the main thread. Results land in submission order.
+    var gSolver = createGroupSolver(cameras,
+        { method: prefMethod, triangulateOnly: true, expectedGroups: totalFrames });
+    function applyIdentitySolve(group, triResult) {
+        group.points3d = pooledPoints3d(triResult.points3d);   // slab-pooled (pose-data.js)
+        group.triangulationMethod = triResult.method;
+        if (triResult.method === 'ba') solvedBa++; else solvedDlt++;
+    }
 
     // Memory-bounded sweep over every frame (windows + release on lazy sessions),
     // replacing the old loadAllLazyFrames-then-iterate path that re-OOMed.
-    var processedFrames = await sweepTriangulationFrames(session, function (frameIdx, fg) {
+    var processedFrames;
+    try {
+    processedFrames = await sweepTriangulationFrames(session, function (frameIdx, fg) {
         // `fg` is undefined for a frame that has 3D grouping but no resident 2D
         // (the sweep's contract — see `sweepLazyFrameWindows`). Without this guard
         // the very next line throws a TypeError, which aborts the whole operation
@@ -486,31 +511,38 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
             } else {
                 // Still `triangulateOnly` (reprojections are recomputed on demand
                 // when drawing); that skips the reprojection/error passes, not the
-                // solve, so BA still runs when BA is what was asked for.
-                var triResult = triangulateAndReproject(group, cameras,
-                    { triangulateOnly: true, method: prefMethod });
-                group.points3d = triResult.points3d;
-                group.triangulationMethod = triResult.method;
-                if (triResult.method === 'ba') solvedBa++; else solvedDlt++;
+                // solve, so BA still runs when BA is what was asked for. Solved on
+                // the worker pool (bit-identical; applied in submission order).
+                gSolver.submit(group, cameras, applyIdentitySolve.bind(null, group));
             }
             group.markClean();
 
             totalGrouped++;
             totalTriangulated++;
         }
+        return gSolver.throttle();
 
     }, {
+        onLoadProgress: function (done, total) {
+            showLoadingProgress('Loading frames', done, total, { step: 1, steps: gSteps });
+        },
         onProgress: function (done, total) {
-            var el = document.getElementById('loadingStatus');
-            if (el) el.textContent =
-                'Grouping by identity & triangulating ' + done + '/' + total + ' frames (' +
-                triangulationMethodLabel(prefMethod) + '; ' +
-                reused3d.toLocaleString() + ' existing solutions kept)...';
+            showLoadingProgress('Grouping & triangulating', done, total, {
+                step: gSteps, steps: gSteps,
+                detail: gMethodLabel + ' · ' + reused3d.toLocaleString() + ' existing solutions kept' +
+                    (gSolver.parallel ? ' · ' + gSolver.workers + ' workers' : ''),
+            });
         },
     });
+    await gSolver.finish();
+    } catch (e) {
+        gSolver.cancel();
+        throw e;
+    }
 
     hideLoading();
-    setReprojErrorVisible(true);
+    setReprojErrorVisible(true, { checkBoxes: false });
+    var reprojOnly = showReprojectionsOnly();   // #243: proofreading comes next
     drawAllOverlays(state.currentFrame);
     // Populate the 3D viewer for the current frame. Without this, "Triangulate
     // All" (which routes here when identities exist) triangulated every frame
@@ -521,11 +553,11 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
     // Name the 3D's provenance so a run that kept BA solutions can't be mistaken
     // for one that silently re-solved them with DLT.
     setStatus('Grouped ' + totalGrouped + ' identity groups, triangulated ' +
-        totalTriangulated + ' across ' + processedFrames + ' frames via ' +
+        totalTriangulated.toLocaleString('en-US') + ' across ' + processedFrames.toLocaleString('en-US') + ' frames via ' +
         triangulationMethodLabel(prefMethod) + ' (' +
         reused3d.toLocaleString() + ' kept existing 3D, ' +
         solvedBa.toLocaleString() + ' solved via Refined, ' +
-        solvedDlt.toLocaleString() + ' via DLT)', 'success');
+        solvedDlt.toLocaleString() + ' via DLT)' + (reprojOnly ? REPROJ_ONLY_NOTE : ''), 'success');
     console.log('[groupByIdentity] 3D provenance: reused', reused3d,
         '| solved BA', solvedBa, '| solved DLT', solvedDlt);
 }
@@ -567,8 +599,8 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
     // than a surprise.
     var prefMethodT = resolveTriangulationMethod(null);
 
-    showLoading('Grouping & triangulating 0/' + totalFrames + ' frames (' +
-        triangulationMethodLabel(prefMethodT) + ')...');
+    showLoadingProgress('Grouping & triangulating', 0, totalFrames,
+        { detail: triangulationMethodLabel(prefMethodT) });
 
     var totalGrouped = 0;
     var totalTriangulated = 0;
@@ -709,8 +741,11 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
             group.triangulationMethod = result.method;
             if (result.method === 'ba') solvedBaT++; else solvedDltT++;
 
-            group.reprojections = result.reprojections;
-            group.points3d = result.points3d;
+            // The solve covered the group's own cameras; reproject into every
+            // camera (`allCameras`, not the run's camera filter), as the live
+            // view does after any other triangulation.
+            group.reprojections = reprojectIntoEveryCamera(result.reprojections, result.points3d, allCameras);
+            group.points3d = pooledPoints3d(result.points3d);   // slab-pooled (pose-data.js)
             // NOT storeReprojectedInstances here — "Group by Track" sweeps the
             // WHOLE project; eagerly building a full Instance (+ its own
             // `occluded` array) per camera per group here was a major memory
@@ -748,15 +783,17 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
 
     }, {
         onProgress: function (done, total) {
-            showLoading('Triangulating... ' + done + '/' + total + ' frames (' +
-                triangulationMethodLabel(prefMethodT) + '; ' +
-                reused3dT.toLocaleString() + ' existing solutions kept)');
+            showLoadingProgress('Grouping & triangulating', done, total, {
+                detail: triangulationMethodLabel(prefMethodT) + ' · ' +
+                    reused3dT.toLocaleString() + ' existing solutions kept',
+            });
         },
     });
 
     // Post-triangulation updates — hide loading first so user sees results
     hideLoading();
-    setReprojErrorVisible(true);
+    setReprojErrorVisible(true, { checkBoxes: false });
+    var reprojOnly = showReprojectionsOnly();   // #243: proofreading comes next
     drawAllOverlays(state.currentFrame);
     update3DViewport(state.currentFrame);
     if (viewport3d) viewport3d.fitToScene();
@@ -766,11 +803,11 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
     // Name the 3D's provenance so a run that kept BA solutions can't be mistaken
     // for one that silently re-solved them with DLT. `avgError` covers only the
     // groups actually solved here — an adopted group's error is derived on demand.
-    setStatus('Grouped ' + totalGrouped + ' track-groups, triangulated ' + totalTriangulated +
+    setStatus('Grouped ' + totalGrouped + ' track-groups, triangulated ' + totalTriangulated.toLocaleString('en-US') +
         ' frames via ' + triangulationMethodLabel(prefMethodT) +
         ' (avg error: ' + avgError + 'px; ' + reused3dT.toLocaleString() +
         ' kept existing 3D, ' + solvedBaT.toLocaleString() + ' solved via Refined, ' +
-        solvedDltT.toLocaleString() + ' via DLT)', 'success');
+        solvedDltT.toLocaleString() + ' via DLT)' + (reprojOnly ? REPROJ_ONLY_NOTE : ''), 'success');
     console.log('[group-by-track] Done:', totalGrouped, 'groups across', totalTriangulated,
         'frames, avg error:', avgError, '| 3D provenance: reused', reused3dT,
         '| solved BA', solvedBaT, '| solved DLT', solvedDltT);
@@ -2353,13 +2390,13 @@ function condenseMissingFrames(frames) {
         if (frames[i] === end + 1) {
             end = frames[i];
         } else {
-            ranges.push(start === end ? '' + start : start + '–' + end);
+            ranges.push(start === end ? start.toLocaleString('en-US') : start.toLocaleString('en-US') + '–' + end.toLocaleString('en-US'));
             start = frames[i];
             end = frames[i];
         }
     }
-    ranges.push(start === end ? '' + start : start + '–' + end);
-    return ranges.join(', ');
+    ranges.push(start === end ? start.toLocaleString('en-US') : start.toLocaleString('en-US') + '–' + end.toLocaleString('en-US'));
+    return ranges.join('; ');       // not ', ': the numbers carry thousands commas ("1,234–1,240; 2,000")
 }
 
 export function showTriangulateMultiFrameModal() {
@@ -2500,7 +2537,7 @@ export function showTriangulateMultiFrameModal() {
         if (missingFrames.length > 0) {
             var errorEl = document.getElementById('tfError');
             if (missingFrames.length === 1) {
-                errorEl.textContent = 'Frame ' + (missingFrames[0] + 1) + ' does not have identity assignment.';
+                errorEl.textContent = 'Frame ' + (missingFrames[0] + 1).toLocaleString('en-US') + ' does not have identity assignment.';
             } else {
                 errorEl.textContent = 'Frames [' + condenseMissingFrames(missingFrames.map(function(f) { return f + 1; })) + '] do not have identity assignment.';
             }
@@ -2528,7 +2565,7 @@ async function runMultiFrameTriangulation(startFrame, endFrame, overlayEl) {
 
     var result = await triangulateMultiFrameInstances(startFrame, endFrame, function (completed, total) {
         var pct = Math.round((completed / total) * 100);
-        if (progressLabel) progressLabel.textContent = completed + ' / ' + total + ' frames';
+        if (progressLabel) progressLabel.textContent = completed.toLocaleString('en-US') + ' / ' + total.toLocaleString('en-US') + ' frames';
         if (progressFill) progressFill.style.width = pct + '%';
     });
 
@@ -2543,7 +2580,7 @@ async function runMultiFrameTriangulation(startFrame, endFrame, overlayEl) {
 
     // Show summary and close button
     if (progressLabel) {
-        progressLabel.textContent = 'Done — triangulated ' + result.triangulated + ' frames (' + result.totalGroups + ' groups, avg error: ' + avgError + 'px)';
+        progressLabel.textContent = 'Done — triangulated ' + result.triangulated.toLocaleString('en-US') + ' frames (' + result.totalGroups.toLocaleString('en-US') + ' groups, avg error: ' + avgError + 'px)';
     }
 
     var actionsEl = document.getElementById('tfActions');
@@ -2555,7 +2592,7 @@ async function runMultiFrameTriangulation(startFrame, endFrame, overlayEl) {
         });
     }
 
-    setStatus('Multi-frame triangulation complete: ' + result.triangulated + '/' + totalFrames + ' frames, avg error: ' + avgError + 'px', 'success');
+    setStatus('Multi-frame triangulation complete: ' + result.triangulated.toLocaleString('en-US') + '/' + totalFrames.toLocaleString('en-US') + ' frames, avg error: ' + avgError + 'px', 'success');
 
     // Update timeline: mark frames with grouped UserInstances, refresh track bars
     if (timeline) {
@@ -2641,10 +2678,11 @@ export async function exportLabels() {
     if (!writer) {
         // No streaming target: the whole document has to be held in memory.
         var BIG = 20000;
+        var fsaHintJson = fileSystemAccessHint();
         if (totalFrames > BIG && !window.confirm(
             'This project has ' + totalFrames.toLocaleString() + ' frames. Without a ' +
             'save-file picker the whole JSON export must be built in memory, which ' +
-            'may crash the tab.\n\nExport anyway?')) {
+            'may crash the tab.' + (fsaHintJson ? '\n\n' + fsaHintJson : '') + '\n\nExport anyway?')) {
             setStatus('Export cancelled', 'warning');
             return;
         }
@@ -2687,7 +2725,7 @@ export async function exportLabels() {
             nFrames++;
         }, {
             onProgress: function (done, tot) {
-                showLoading('Exporting labels... ' + done + '/' + tot + ' frames');
+                showLoading('Exporting labels... ' + done.toLocaleString('en-US') + '/' + tot.toLocaleString('en-US') + ' frames');
             },
         });
 
@@ -2879,7 +2917,7 @@ export function showExport3DVideoModal() {
         // output resolution is stated.
         '    <div style="font-size:12px;color:var(--text-secondary);">Output: <span id="v3dExportOutSize">—</span></div>' +
         '    <div style="font-size:12px;color:var(--text-secondary);">Duration: <span id="v3dExportDuration">0:00</span></div>' +
-        '    <div style="font-size:12px;color:var(--text-secondary);">Exported Frames: <span id="v3dExportSelCount">' + frameCount + '</span></div>' +
+        '    <div style="font-size:12px;color:var(--text-secondary);">Exported Frames: <span id="v3dExportSelCount">' + frameCount.toLocaleString('en-US') + '</span></div>' +
         '    <div style="font-size:12px;color:var(--text-secondary);">Estimated File Size: <span id="v3dExportSize">—</span></div>' +
         '  </div>' +
         '</div>' +
@@ -2905,7 +2943,7 @@ export function showExport3DVideoModal() {
         '    <div style="background:#333;border-radius:4px;height:8px;overflow:hidden;">' +
         '      <div id="v3dExportProgressFill" style="width:0%;height:100%;background:var(--accent,#4a9eff);transition:width 0.1s;"></div>' +
         '    </div>' +
-        '    <div id="v3dExportProgressLabel" style="font-size:11px;color:var(--text-secondary);margin-top:4px;">Encoding 0 / ' + frameCount + '</div>' +
+        '    <div id="v3dExportProgressLabel" style="font-size:11px;color:var(--text-secondary);margin-top:4px;">Encoding 0 / ' + frameCount.toLocaleString('en-US') + '</div>' +
         '  </div>' +
         '</div>' +
         '<div class="modal-actions" style="margin-top:14px;display:flex;justify-content:flex-end;gap:10px;">' +
@@ -2934,6 +2972,7 @@ export function showExport3DVideoModal() {
             pyramidLength: read3dNum('vis3dPyramidLength', 40),
             skeletonNodeSize: read3dNum('vis3dNodeSize', 2),
             skeletonEdgeWeight: read3dNum('vis3dEdgeWeight', 0.8),
+            skeletonBrightness: (function() { var e = document.getElementById('vis3dBrightness'); var v = e ? parseFloat(e.value) : NaN; return isNaN(v) ? 0.5 : Math.min(100, Math.max(0, v)) / 100; })(),
             showCameraLabels: read3dBool('vis3dLabelShow', true),
             showCameraSpheres: read3dBool('vis3dSphereShow', true),
             showCameraPyramids: read3dBool('vis3dPyramidShow', true),
@@ -3231,9 +3270,10 @@ export function showExport3DVideoModal() {
                     fileHandle = null;
                 }
             }
+            var fsaHint3d = fileSystemAccessHint();
             if (!fileHandle && !window.confirm('This clip is about ' + _fmtBytes(estBytes) +
                 '. Without a save-file picker it must be built entirely in memory, which may ' +
-                'crash the tab.\n\nExport anyway?')) {
+                'crash the tab.' + (fsaHint3d ? '\n\n' + fsaHint3d : '') + '\n\nExport anyway?')) {
                 setStatus('3D video export cancelled', 'warning');
                 exporting = false;
                 cleanup();
@@ -3285,7 +3325,7 @@ export function showExport3DVideoModal() {
                 if (out % 5 === 0 || i === expEnd) {
                     var pct = Math.round(((out + 1) / nFrames) * 100);
                     progressFill.style.width = pct + '%';
-                    progressLabel.textContent = 'Encoding ' + (out + 1) + ' / ' + nFrames;
+                    progressLabel.textContent = 'Encoding ' + (out + 1).toLocaleString('en-US') + ' / ' + nFrames.toLocaleString('en-US');
                     await new Promise(function (r) { setTimeout(r, 0); });
                 }
             }
@@ -3294,7 +3334,7 @@ export function showExport3DVideoModal() {
                 progressLabel.textContent = 'Finalizing...';
                 var result = await writer.finish();
                 if (!result.streamed) downloadBlob(result.blob, fname);
-                setStatus('3D video exported: ' + fname + ' (' + nFrames + ' frames @ ' + fps +
+                setStatus('3D video exported: ' + fname + ' (' + nFrames.toLocaleString('en-US') + ' frames @ ' + fps +
                     ' fps, ' + W + '×' + H + ')', 'success');
             } else {
                 // A cancelled STREAMED export still commits what was written,

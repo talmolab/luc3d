@@ -2,6 +2,7 @@ import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { acquireBrowserLock } from '../../scripts/browser-lock.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -26,6 +27,8 @@ const DPR = Number(process.env.DPR || 1);
 const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
 await new Promise(r => setTimeout(r, 800));
 
+// a visible browser window: one such run at a time across sessions (scripts/browser-lock.mjs)
+const releaseBrowserLock = HEADED ? await acquireBrowserLock({ label: 'run-unit-tests HEADED' }) : async () => {};
 let exitCode = 1;
 try {
   const browser = await chromium.launch({ headless: !HEADED });
@@ -57,6 +60,7 @@ try {
   exitCode = (fails.length || domFails.length) ? 1 : 0;
   await browser.close();
 } finally {
+  await releaseBrowserLock();
   server.kill('SIGTERM');
 }
 process.exit(exitCode);

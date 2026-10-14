@@ -3,21 +3,35 @@
 // - getVisibilitySettings: collects user-controlled visibility/style settings from the DOM.
 // - drawAllOverlays: per-frame multi-view overlay rendering (calls drawFrameOverlays).
 // - setReprojErrorVisible: toggles reprojection-error column visibility in info panels.
-// - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances).
+// - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
+//   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline } from './app-state.js?v=cd51175df002';
-import { points3dNodeCount } from '../pose/pose-data.js?v=cd51175df002';
+import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=2dc001fe527c';
+import { points3dNodeCount } from '../pose/pose-data.js?v=2dc001fe527c';
 import {
-    ensureLazyFrameData, getInstanceGroupsForFrame,
+    ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=cd51175df002';
-import { drawFrameOverlays } from './overlays.js?v=cd51175df002';
-import { syncViewLegends } from './view-legend.js?v=cd51175df002';
-import { isCameraTracked } from './settings.js?v=cd51175df002';
+} from '../pose/triangulation.js?v=2dc001fe527c';
+import { drawFrameOverlays } from './overlays.js?v=2dc001fe527c';
+import { syncViewLegends } from './view-legend.js?v=2dc001fe527c';
+import { isCameraTracked } from './settings.js?v=2dc001fe527c';
+// Plane placements draw on the same overlay canvas, so they must run AFTER
+// drawFrameOverlays (which opens with a clearRect). Circular import — safe
+// because the call site is inside drawAllOverlays' body.
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=2dc001fe527c';
+// The toolbar's Animals field shows the ACTIVE session's count. Circular
+// (it reaches pose/tracker.js, which imports this module) — safe for the same
+// reason: the call site is inside drawAllOverlays' body.
+import { syncAnimalCountField } from './animal-count-field.js?v=2dc001fe527c';
+import { syncNodeTooltipFrame } from './node-tooltip.js?v=2dc001fe527c';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=cd51175df002';
-import { updateFrameInfo } from './info-panel.js?v=cd51175df002';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=2dc001fe527c';
+import { updateFrameInfo } from './info-panel.js?v=2dc001fe527c';
+import {
+    computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
+    countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
+} from './frame-counters.js?v=2dc001fe527c';
 
 // ============================================
 // Reproj/Error visibility
@@ -25,7 +39,7 @@ import { updateFrameInfo } from './info-panel.js?v=cd51175df002';
 
 /**
  * Show / hide the reprojection-error UI (Info Panel section + error columns).
- * Showing it also ticks the toolbar's Reproj and Errors boxes — unless
+ * Showing it also ticks the toolbar's Reprojections and Errors boxes — unless
  * `opts.checkBoxes === false`, which the Triangulate All paths pass because
  * they set the boxes themselves via `showReprojectionsOnly` (#243). Ticking
  * Errors here first would make every run look like a change (and flicker it).
@@ -51,7 +65,7 @@ export function setReprojErrorVisible(visible, opts) {
 /**
  * After Triangulate All (#243): the next job is proofreading the 3D, so show
  * the reprojections and hide what competes with them — User, Predicted and
- * Errors off, Reproj on (the toolbar checkboxes). Each change fires the
+ * Errors off, Reprojections on (the toolbar checkboxes). Each change fires the
  * checkbox's own `change` event, exactly as a click would, so the existing
  * handler deselects an instance whose type just got hidden and redraws.
  *
@@ -65,13 +79,13 @@ export function showReprojectionsOnly() {
 }
 
 // Suffix for a Triangulate All status line when `showReprojectionsOnly` hid
-// anything, so the user knows where User / Predicted went.
-export var REPROJ_ONLY_NOTE = ' · showing Reproj only (toolbar)';
+// anything, so the user knows where User / Predictions went.
+export var REPROJ_ONLY_NOTE = ' · showing Reprojections only (toolbar)';
 
 /**
  * After Track Frame / Track Frame Range / Track All: the run's product is the
- * tracked PREDICTIONS (now colored by identity), so show only those — Predicted
- * on; User, Reproj and Errors off. Same mechanics as `showReprojectionsOnly`
+ * tracked PREDICTIONS (now colored by identity), so show only those — Predictions
+ * on; User, Reprojections and Errors off. Same mechanics as `showReprojectionsOnly`
  * (each box fires its own `change` event). Returns whether anything changed.
  */
 export function showPredictedOnly() {
@@ -79,7 +93,7 @@ export function showPredictedOnly() {
 }
 
 // Suffix for a tracking status line when `showPredictedOnly` changed anything.
-export var PREDICTED_ONLY_NOTE = ' · showing Predicted only (toolbar)';
+export var PREDICTED_ONLY_NOTE = ' · showing Predictions only (toolbar)';
 
 /** Set toolbar layer checkboxes `[[id, checked], …]` as clicks would; true if any changed. */
 function setToolbarLayers(want) {
@@ -228,6 +242,10 @@ function fillLazyReprojections(fi, instanceGroups) {
 export function drawAllOverlays(frameIdx, viewFrames) {
     if (!state.session) return;
 
+    // A node tooltip names a node on the frame it was hovered on; on any other
+    // frame that node has moved out from under the pointer.
+    syncNodeTooltipFrame(frameIdx);
+
     // Lazy H5: fetch frame data on demand if not yet loaded
     if (state.session.lazyLoader && !state.session.frameGroups.has(frameIdx)) {
         ensureLazyFrameData(frameIdx).then(function () {
@@ -236,6 +254,19 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             }
         });
         return;
+    }
+
+    // Node trails draw resident frames only, and a seek hydrates the frames
+    // ahead of its target, not behind it — so hydrate the trail's window first.
+    // A no-op on every playback frame (those frames were just played).
+    if (state.trailLength > 0 && state.session.lazyLoader) {
+        // Worker-backed loader: one request at a time, so on landing redraw
+        // whatever frame is on screen NOW — after another jump that redraw is
+        // what requests the new frame's window.
+        var trailLoad = ensureLazyTrailWindow(frameIdx, state.trailLength);
+        if (trailLoad) trailLoad.then(function (n) {
+            if (n > 0) drawAllOverlays(state.currentFrame);
+        });
     }
 
     // Auto-finish edit group mode on frame change
@@ -292,6 +323,16 @@ export function drawAllOverlays(frameIdx, viewFrames) {
         var isReprojSelected = interactionManager ? interactionManager.selectedReprojected : false;
         tbEditGroup.disabled = isReprojSelected;
     }
+    // Defining Plane Mode blocks the pose-annotation buttons, and the two
+    // above are recomputed on EVERY overlay draw — so the lock is re-asserted
+    // here rather than only at `enterPlaneMode`, where it would survive until
+    // the first mouse move. A no-op when the mode is off.
+    applyPlaneModeToolbarLock();
+    // Nothing announces a session change (each load path and the session
+    // switch assign `state.session` themselves), and every one of them ends in
+    // a draw — so the per-session Animals field catches up here. O(1) when the
+    // session and its count are the ones already shown.
+    syncAnimalCountField();
 
     var editGroupTarget = interactionManager ? interactionManager.editGroupTarget : null;
 
@@ -299,8 +340,16 @@ export function drawAllOverlays(frameIdx, viewFrames) {
     // frames), each needing the same lazy reprojection fill — done once each.
     var filledFrames = null;
 
+    // Views not on screen (another camera is solo'd, or the pane was closed)
+    // have detached overlay canvases: skip them. Docking one again creates a
+    // new canvas and redraws (`refreshPaneInteractions`), so nothing stale is
+    // ever shown. With NO view docked, draw them all — the same fallback as
+    // `VideoController._shownViews`.
+    const anyDocked = state.views.some(isViewDocked);
+
     for (const view of state.views) {
         if (!view.overlayCtx || !view.overlayCanvas) continue;
+        if (anyDocked && !isViewDocked(view)) continue;
 
         // This view's frame: during playback, the frame ITS canvas shows
         // (`viewFrames`); otherwise — or if that frame isn't hydrated in a lazy
@@ -381,6 +430,7 @@ export function drawAllOverlays(frameIdx, viewFrames) {
         drawFrameOverlays(view.overlayCtx, view.name, overlayFrameGroup, vGroups, state.session, {
             colorByIdentity: state.colorByIdentity,
             trailLength: state.trailLength,
+            trailShade: state.trailShade,
             // NOT vis.showLegend: the live legend is pane chrome now
             // (`syncViewLegends`, below), because anything painted on this
             // canvas rotates with the view. `drawFrameOverlays` keeps the
@@ -413,6 +463,10 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             editGroupTarget: editGroupTarget,
             trackingExcluded: !isCameraTracked(view.name),
         });
+
+        // Annotated planes (View ▸ Define Planes). Frame-independent, so they
+        // are drawn on every frame regardless of the current FrameGroup.
+        drawPlaneOverlays(view);
     }
 
     // The legend lives in the pane, outside the rotating `.canvas-wrapper`, so
@@ -427,10 +481,11 @@ export function drawAllOverlays(frameIdx, viewFrames) {
 
     // Update info panel with current frame stats + the timeline playhead.
     // During playback these are THROTTLED to ~10 Hz: `updateFrameInfo` rebuilds
-    // info-panel DOM and re-aggregates reprojection errors, and
-    // `timeline.setCurrentFrame` does a full timeline-canvas `redraw()` — both
-    // per frame. A human can't read either at playback speed, and doing them
-    // every frame is a major per-frame cost that caps buffered playback fps.
+    // info-panel DOM and re-aggregates reprojection errors per frame — a human
+    // can't read it at playback speed, and doing it every frame is a major
+    // per-frame cost that caps buffered playback fps. (`timeline.setCurrentFrame`
+    // only moves the playhead element now, ui/timeline.js, so it is cheap; it
+    // shares the throttle because it always has.)
     // The skeleton overlays + video above still update every frame, so tracking
     // stays smooth and frame-accurate; only these two auxiliary updates coalesce.
     // When paused (seek/step) they always run so the panel/playhead are exact.
@@ -438,8 +493,6 @@ export function drawAllOverlays(frameIdx, viewFrames) {
     if (!state.isPlaying || (_auxNow - _lastAuxUpdate) >= AUX_UPDATE_MS) {
         _lastAuxUpdate = _auxNow;
         updateFrameInfo(frameIdx, instanceGroups);
-        // While playing, only the playhead moves: let the timeline blit its
-        // cached track/marker layer instead of a full redraw (ui/timeline.js).
         if (timeline) timeline.setCurrentFrame(frameIdx, state.isPlaying ? { playback: true } : undefined);
     }
 }
@@ -448,59 +501,174 @@ export function drawAllOverlays(frameIdx, viewFrames) {
 // Frame counters (status bar)
 // ============================================
 
-export function updateFrameCounters() {
-    if (!state.session) return;
+// Whole-project baselines for the counters (see ui/frame-counters.js), one per
+// session: `{ loader, tri, cams: Map<camera, half>, lastFrame }`. A WeakMap so
+// a closed project's baseline — and the session and store it was read from — is
+// never kept alive by the status bar.
+var _counterBaselines = new WeakMap();
+// Rebuild this long after the last redraw that asked for one: coalesces a drag
+// or a burst of edits into one rebuild, and lands well before anyone reads the
+// counter after a bulk operation.
+var COUNTER_REBUILD_DELAY_MS = 250;
+// Frames per rebuild slice (a few ms each on a real project), so a rebuild never
+// holds the page for the ~100 ms a 108,000-frame x 8-camera one takes in total.
+var COUNTER_REBUILD_STEP = 8192;
+// `pending`: asked for and not yet installed — survives a rebuild abandoned to
+// playback, so the next paused update finishes the job.
+var _counterRebuild = { timer: 0, running: false, again: false, pending: false };
 
-    // Determine active camera
-    var activeCam = interactionManager ? interactionManager.lastInteractedView : null;
-    if (!activeCam && state.views.length > 0) activeCam = state.views[0].name;
+function counterCamera() {
+    var cam = interactionManager ? interactionManager.lastInteractedView : null;
+    if (!cam && state.views.length > 0) cam = state.views[0].name;
+    return cam || null;
+}
 
-    var cameraEl = document.getElementById('statusCamera');
-    if (cameraEl) cameraEl.textContent = 'Camera: ' + (activeCam || '-');
+/**
+ * Give `baseline` a camera half for `cam` if it has none — synchronously, since
+ * without it a lazy count would be the resident window, the very number this
+ * replaces, and an eager one a walk of every frame on every step. Once per view
+ * per session, or after a rebuild dropped it. Not for a lazy loader that cannot
+ * enumerate rows: it has no camera half to build.
+ */
+function ensureCameraHalf(session, baseline, cam) {
+    if (!cam || baseline.cams.has(cam)) return;
+    var loader = session.lazyLoader;
+    if (loader && typeof loader.forEachInstanceRow !== 'function') return;
+    var half = computeLazyCameraBaseline(session, cam);
+    if (half) baseline.cams.set(cam, half);
+}
 
-    var labeledCount = 0;
-    var instanceCount = 0;
-    var triangulatedCount = 0;
-
-    state.session.frameGroups.forEach(function(fg, frameIdx) {
-        // Per-camera: labeled if frame has a grouped/ungrouped UserInstance
-        // or grouped PredictedInstance in this view
-        var hasLabeled = false;
-        if (activeCam) {
-            // Check grouped instances for this camera
-            var camInstances = fg.instances.get(activeCam) || [];
-            for (var i = 0; i < camInstances.length; i++) {
-                var t = camInstances[i].type || 'user';
-                if (t === 'user') {
-                    hasLabeled = true;
-                    instanceCount++;
-                } else if (t === 'predicted') {
-                    hasLabeled = true;
-                }
-            }
-            // Check ungrouped UserInstances for this camera
-            var ulInstances = fg.getUnlinkedInstances(activeCam);
-            for (var u = 0; u < ulInstances.length; u++) {
-                var ulType = ulInstances[u].instance.type || 'user';
-                if (ulType === 'user') {
-                    hasLabeled = true;
-                    instanceCount++;
-                }
-            }
-        }
-        if (hasLabeled) labeledCount++;
-
-        // Triangulated: frame has at least one InstanceGroup with points3d
-        var frameGroupsList = state.session.instanceGroups.get(frameIdx) || [];
-        for (var g = 0; g < frameGroupsList.length; g++) {
-            if (frameGroupsList[g].points3d) { triangulatedCount++; break; }
-        }
-    });
-
+function renderFrameCounters(session, activeCam, baseline) {
+    var c = countFrameCounters(session, activeCam, baseline);
     var labeledEl = document.getElementById('statusLabeledFrames');
     var triangulatedEl = document.getElementById('statusTriangulatedFrames');
     var instancesEl = document.getElementById('statusInstances');
-    if (labeledEl) labeledEl.textContent = 'Labeled Frames: ' + labeledCount;
-    if (instancesEl) instancesEl.textContent = 'Instances: ' + instanceCount;
-    if (triangulatedEl) triangulatedEl.textContent = 'Triangulated: ' + triangulatedCount;
+    if (labeledEl) labeledEl.textContent = 'Labeled Frames: ' + c.labeled.toLocaleString('en-US');
+    if (instancesEl) instancesEl.textContent = 'Instances: ' + c.instances.toLocaleString('en-US');
+    if (triangulatedEl) triangulatedEl.textContent = 'Triangulated: ' + c.triangulated.toLocaleString('en-US');
+}
+
+function requestCounterRebuild() {
+    _counterRebuild.pending = true;
+    if (_counterRebuild.running) { _counterRebuild.again = true; return; }
+    if (_counterRebuild.timer) clearTimeout(_counterRebuild.timer);
+    _counterRebuild.timer = setTimeout(runCounterRebuild, COUNTER_REBUILD_DELAY_MS);
+}
+
+function runCounterRebuild() {
+    _counterRebuild.timer = 0;
+    var session = state.session;
+    // Playback skips the counters (`updateStatusBarForFrame`); the redraw that
+    // stops it sees `pending` and asks again.
+    if (!session || state.isPlaying) return;
+    var cam = counterCamera();
+    var builder = createFrameCounterBaselineBuilder(session, cam);
+    _counterRebuild.running = true;
+    _counterRebuild.again = false;
+    var slice = function () {
+        if (state.session !== session || state.isPlaying) {
+            _counterRebuild.timer = 0;
+            _counterRebuild.running = false;   // abandoned; `pending` stays set
+            return;
+        }
+        if (!builder.step(COUNTER_REBUILD_STEP)) {
+            _counterRebuild.timer = setTimeout(slice, 0);
+            return;
+        }
+        _counterRebuild.timer = 0;
+        _counterRebuild.running = false;
+        _counterRebuild.pending = false;
+        var prev = _counterBaselines.get(session);
+        var next = builder.result;
+        next.loader = session.lazyLoader;
+        if (prev && prev.loader === next.loader && next.eager) {
+            // Eager: the other views' halves are DROPPED, each rebuilt (one
+            // walk, ~10 ms on 36,000 frames x 17 cameras) when its view is next
+            // active. A rebuild follows an edit or a bulk change, and on an
+            // eager project nothing cheap can tell which: every frame is
+            // resident, so `nonResidentCameraCounts` says nothing.
+            next.lastFrame = prev.lastFrame;
+        } else if (prev && prev.loader === next.loader) {
+            next.lastFrame = prev.lastFrame;
+            // The other views' halves can only be behind on frames that changed
+            // while NOT resident — a bulk operation. If this view's own
+            // non-resident part moved, one happened: drop them, so each is
+            // rebuilt exactly when its view is next active instead of showing a
+            // pre-operation count until then. An edit to the current frame
+            // moves only resident frames, so annotating keeps view switches free.
+            var oldHalf = prev.cams.get(cam), newHalf = next.cams.get(cam);
+            var bulkChange = false;
+            if (oldHalf && newHalf) {
+                var a = nonResidentCameraCounts(session, oldHalf);
+                var b = nonResidentCameraCounts(session, newHalf);
+                bulkChange = a.labeled !== b.labeled || a.instances !== b.instances;
+            }
+            if (!bulkChange) {
+                prev.cams.forEach(function (half, c) { if (!next.cams.has(c)) next.cams.set(c, half); });
+            }
+        }
+        _counterBaselines.set(session, next);
+        var shownCam = counterCamera();   // the view may have changed mid-build
+        ensureCameraHalf(session, next, shownCam);
+        refreshCountedFrame(session, next, state.currentFrame);   // an edit made mid-build
+        renderFrameCounters(session, shownCam, next);
+        if (_counterRebuild.again) requestCounterRebuild();
+    };
+    slice();
+}
+
+/**
+ * Status-bar counters: Labeled Frames and Instances for the active camera, and
+ * Triangulated, all over the WHOLE project.
+ *
+ * On a lazy project most frames are not resident, so the count is the live
+ * count of the resident frames plus a cached whole-project baseline for the
+ * rest (`countFrameCounters`) — O(resident frames) per call, like the
+ * resident-only count it replaced. On an eager project every frame is resident,
+ * so that would be a walk of the whole project per step (~10 ms at 36,000
+ * frames x 17 cameras); there the count is the baseline alone, kept exact by
+ * re-counting the drawn frame into it each call (`refreshCountedFrame`) — O(1).
+ * Building the baseline is a walk of every frame's groups (~100 ms on a
+ * 108,000-frame x 8-camera project), so:
+ *
+ * - It is built SYNCHRONOUSLY only when there is none: the first update of a
+ *   session (or after its lazy loader changes), and the first time a view
+ *   becomes active (its camera half).
+ * - Otherwise it is REBUILT in the background, in slices, shortly after a
+ *   redraw of the SAME frame as the previous update. Every operation that
+ *   changes data redraws the current frame — an edit, Track All, Triangulate
+ *   All, a session-wide delete — so the counts follow all of them without each
+ *   having to invalidate anything (Track All does not even mark the project
+ *   dirty). A redraw on a NEW frame is navigation, which changes no data:
+ *   stepping and scrubbing cost no whole-project work at all.
+ * - An edit to the current frame needs no rebuild to show: the current frame is
+ *   resident, and resident frames are always counted live (on an eager
+ *   project, re-counted into the baseline).
+ */
+export function updateFrameCounters() {
+    var session = state.session;
+    if (!session) return;
+
+    var activeCam = counterCamera();
+    var cameraEl = document.getElementById('statusCamera');
+    if (cameraEl) cameraEl.textContent = 'Camera: ' + (activeCam || '-');
+
+    var baseline = _counterBaselines.get(session);
+    var fresh = false;
+    if (!baseline || baseline.loader !== session.lazyLoader) {
+        baseline = computeFrameCounterBaseline(session, activeCam);
+        baseline.loader = session.lazyLoader;
+        _counterBaselines.set(session, baseline);
+        fresh = true;
+    } else {
+        ensureCameraHalf(session, baseline, activeCam);
+    }
+    // Eager: re-count the drawn frame into the baseline (O(1); a no-op on a
+    // lazy project, whose resident frames are counted live).
+    refreshCountedFrame(session, baseline, state.currentFrame);
+    renderFrameCounters(session, activeCam, baseline);
+
+    var sameFrame = baseline.lastFrame === state.currentFrame;
+    baseline.lastFrame = state.currentFrame;
+    if (!fresh && (sameFrame || _counterRebuild.pending)) requestCounterRebuild();
 }

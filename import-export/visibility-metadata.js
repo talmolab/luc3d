@@ -1,5 +1,9 @@
 // import-export/visibility-metadata.js — the `metadata.lucid` <-> Session
-// mapping for the Visibility panel's SESSION-SCOPED settings.
+// mapping for the Visibility panel's SESSION-SCOPED settings, and for the other
+// per-session state that belongs in the project file: the ID Switches tab's
+// review checklist (`idSwitchReview`, ui/id-switch-review.js) and the number of
+// animals tracking uses (`numAnimals`, `Session.numAnimals`, the toolbar's
+// Animals field).
 //
 // ## What this covers, and what it deliberately does not
 //
@@ -10,7 +14,7 @@
 //     project's videos and entities, so they belong in the project file. That
 //     is everything this module handles.
 //
-//   * Global appearance preferences — the User / Predicted / Reprojections /
+//   * Global appearance preferences — the User / Predictions / Reprojections /
 //     Display Legend / 3D Viewer sliders, styles and toggles. Those are
 //     browser-local display taste, are shared across every session, and stay in
 //     `localStorage.visibilitySettings` (see `ui/ui-wiring.js`). They are NOT
@@ -21,8 +25,8 @@
 //
 // One module owns the key list so a writer and a reader cannot drift — adding a
 // setting means touching `writeVisibilityMetadata` / `readVisibilityMetadata`
-// here and nothing else. The six call sites (four writers, three readers, one
-// of which is shared) each pass the `metadata.lucid` dict straight through.
+// here and nothing else. Every call site — four writers, four readers — passes
+// the `metadata.lucid` dict straight through.
 //
 // Three invariants the callers depend on:
 //
@@ -47,8 +51,9 @@ import {
     serializeVideoContrast, ingestVideoContrast,
     serializeVideoBrightness, ingestVideoBrightness,
     serializeVideoRotation, ingestVideoRotation,
-} from '../ui/video-filters.js';
-import { serializeHiddenSets, ingestHiddenSets } from '../ui/timeline-visibility.js';
+} from '../ui/video-filters.js?v=2dc001fe527c';
+import { serializeHiddenSets, ingestHiddenSets } from '../ui/timeline-visibility.js?v=2dc001fe527c';
+import { serializeIdSwitchReview, ingestIdSwitchReview } from '../ui/id-switch-review.js?v=2dc001fe527c';
 
 /**
  * Every `metadata.lucid` key this module may write. Exported so tests (and the
@@ -64,7 +69,26 @@ export const VISIBILITY_METADATA_KEYS = [
     'hiddenCameras',
     'hiddenTracks',
     'hiddenIdentities',
+    'idSwitchReview',
+    'numAnimals',
 ];
+
+// `Session.numAnimals` <-> `metadata.lucid.numAnimals`: a positive integer, or
+// "auto" for an explicit auto-detect. A session nobody has asked (`null`, the
+// default) writes nothing — so it is asked again on the next Track Frame /
+// Track All, exactly as before the count was saved — and anything else read
+// back is treated the same way. Kept here rather than in pose/tracker.js,
+// which this module cannot import: tracker.js pulls in the whole UI, and this
+// module is bridged into tests/test-runner.html, which must not load the app.
+function serializeNumAnimals(session) {
+    var n = session.numAnimals;
+    if (n === 'auto') return n;
+    return (Number.isInteger(n) && n >= 1) ? n : null;
+}
+
+function ingestNumAnimals(session, raw) {
+    session.numAnimals = (raw === 'auto' || (Number.isInteger(raw) && raw >= 1)) ? raw : null;
+}
 
 /**
  * Write a session's Visibility-panel state into a `metadata.lucid` dict.
@@ -97,6 +121,13 @@ export function writeVisibilityMetadata(lucid, session) {
         }
     }
 
+    // The ID Switches checklist: absent unless a check left results on this session.
+    var review = serializeIdSwitchReview(session);
+    if (review) lucid.idSwitchReview = review;
+
+    var numAnimals = serializeNumAnimals(session);
+    if (numAnimals != null) lucid.numAnimals = numAnimals;
+
     return lucid;
 }
 
@@ -116,5 +147,7 @@ export function readVisibilityMetadata(session, lucid) {
     ingestVideoContrast(session, src.videoContrast);
     ingestVideoRotation(session, src.videoRotation);
     ingestHiddenSets(session, src);
+    ingestIdSwitchReview(session, src.idSwitchReview);
+    ingestNumAnimals(session, src.numAnimals);
     return session;
 }

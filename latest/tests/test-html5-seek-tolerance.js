@@ -141,6 +141,61 @@
             );
         });
 
+        // A seek to the frame START (i/fps) sits on the boundary with frame i-1:
+        // Firefox showed i-1 for every third frame, Chrome/Safari for most
+        // (verify/seek-probe.html, barcode clips). The middle was exact.
+        it('seeks to the MIDDLE of the frame interval, (i + 0.5) / fps', async function () {
+            var decoder = makeDecoder(getDecoderClass(), 60, 1000);
+
+            await withStubbedBitmap(async function () {
+                await decoder.getFrame(7);
+                await decoder.getFrame(8);
+                await decoder.getFrame(2);
+            });
+
+            assertEqual(decoder._videoEl.seeks.join(','), [7.5 / 60, 8.5 / 60, 2.5 / 60].join(','),
+                'each step sets currentTime to its frame\'s middle (observed ' + decoder._videoEl.seeks.join(', ') + ')');
+        });
+
+        it('play start does not re-seek an element parked on the frame\'s middle', async function () {
+            // (i+0.5)/fps - i/fps comes out an ulp OVER half a frame for ~30% of
+            // frames; seekNativeSettled's half-frame test alone would re-seek
+            // them to i/fps — the boundary Firefox rounds to i-1.
+            var decoder = makeDecoder(getDecoderClass(), 60, 1000);
+            var reseeked = [];
+            await withStubbedBitmap(async function () {
+                for (var i = 0; i < 60; i++) {
+                    await decoder.getFrame(i);
+                    var before = decoder._videoEl.seeks.length;
+                    await decoder.seekNativeSettled(i);
+                    if (decoder._videoEl.seeks.length !== before) reseeked.push(i);
+                }
+            });
+            assertEqual(reseeked.length, 0, 'frames re-seeked at play start: ' + reseeked.join(', '));
+        });
+
+        it('re-seeks the current frame once playback or a frame-start seek moved the element', async function () {
+            // After playback the picture need not match currentTime (Firefox: the
+            // +0 pause re-decode drew the NEXT frame on 1 pause in 10 by skipping
+            // the seek), so only a position _getFrameHTML5 set itself is trusted.
+            var decoder = makeDecoder(getDecoderClass(), 60, 1000);
+            decoder._videoEl.play = function () { return Promise.resolve(); };
+            await withStubbedBitmap(async function () {
+                await decoder.getFrame(10);               // 1 seek
+                decoder.cache.clear();
+                decoder.playNative();                     // playback moved it…
+                decoder._videoEl._ct = 10.6 / 60;         // …and paused inside frame 10
+                await decoder.getFrame(10);               // 2: must seek anyway
+                decoder.cache.clear();
+                await decoder.getFrame(10);               // parked by us again: no seek
+                decoder.cache.clear();
+                decoder.seekNative(10);                   // 3: frame-start seek
+                await decoder.getFrame(10);               // 4: must seek anyway
+            });
+            assertEqual(decoder._videoEl.seeks.length, 4,
+                'seeks: ' + decoder._videoEl.seeks.map(function (t) { return (t * 60).toFixed(2); }).join(', ') + ' (frames)');
+        });
+
         it('short-circuits a redundant request for the frame already displayed', async function () {
             var decoder = makeDecoder(getDecoderClass(), 30, 1000);
 

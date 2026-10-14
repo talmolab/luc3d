@@ -4,18 +4,19 @@
  * Fixture: a synthetic TRACKED session (InstanceGroups with identities + 3D
  * skeletons, no video): three animals of clearly different size meet at 24
  * scheduled close encounters, and the identity labels of one pair are exchanged
- * after encounter 16 for the rest of the session — a switch that persists, the
- * shape the size check was validated on (pose/size-switch-check.js; unit-level
- * coverage in tests/test-size-switch-check.mjs). Asserted through the real menu:
- *  1. The ID Switches tab of the right panel opens; its first change point is
- *     the switch encounter, naming the swapped pair; any others come after it
- *     and involve a swapped identity (its encounters with the third animal look
- *     off too); the status line reports the count.
- *  2. The SEEKBAR carries the markers as ticks (the change point plus faint
- *     repeats) and the timeline none; hovering a tick names the switch in the
+ * after encounter 16 for the rest of the session — a switch that persists
+ * (pose/id-switch-check.js; unit-level coverage in tests/test-id-switch-check.mjs).
+ * Asserted through the real menu:
+ *  1. The ID Switches tab of the right panel opens with ONE change point: the
+ *     switch encounter, naming the swapped pair. The pair's later contacts, and
+ *     the swapped identities' contacts with the third animal, are not flagged:
+ *     the labels stay swapped there, but nothing changes hands. The status line
+ *     reports the count.
+ *  2. The SEEKBAR carries the marker as a tick (no faint repeats: the check makes
+ *     none) and the timeline none; hovering a tick names the switch in the
  *     seekbar tooltip, and clicking near it lands on exactly its frame.
  *  3. The tab is the panel's one scroller (the list has no scroller of its own);
- *     "Show repeats" lists the still-swapped encounters too.
+ *     with no repeats there is no "Show repeats" control.
  *  4. Each row shows its encounter's span ("close m:ss.s–m:ss.s"); clicking it
  *     lands 1 s before the animals come close (so play shows the whole
  *     interaction), "end ⇥" on the encounter's end; the selected row pops up a
@@ -31,6 +32,9 @@
  *  6. On an untracked session the action warns instead of running.
  *  7. The tab states the sampling it used and that, with no video loaded, the
  *     frame rate is the app's value rather than a measured one.
+ *  8. Its popup is the image check's card style (fixtures/progress-card.js): titled
+ *     "Checking ID switches (body size)", a spinner and a message — no counter —
+ *     opaque, the app behind it not greyed out.
  *
  * Run: node tests/e2e/size-switch-check.mjs     (SHOT=/path.png saves a seekbar screenshot, BAR_SHOT= the selected row,
  *      PANEL_SHOT=/path.png the ID Switches tab)
@@ -104,7 +108,23 @@ try {
         return { swapFrame, pair: events[SWAP].pair.map(k => 'id_' + k), totalFrames: T * STEP };
     });
 
-    // ---- 1. run it from the real menu item: the ID Switches tab opens
+    // ---- 1. run it from the real menu item: the ID Switches tab opens. The check is over in well under a
+    //         second, so its popup is captured the moment it appears (fixtures/progress-card.js).
+    await page.evaluate(async () => {
+        const { progressCardStyle } = await import('/tests/e2e/fixtures/progress-card.js');
+        const overlay = document.getElementById('loadingOverlay');
+        window.__sizeCard = null;
+        const mo = new MutationObserver(() => {
+            if (window.__sizeCard || overlay.classList.contains('hidden')) return;
+            const t = document.getElementById('loadingTitle');
+            window.__sizeCard = Object.assign(progressCardStyle(overlay.querySelector('.loading-card'), overlay), {
+                title: t.classList.contains('hidden') ? null : t.textContent, message: document.getElementById('loadingStatus').textContent,
+                spinner: !document.getElementById('loadingSpinner').classList.contains('hidden'),
+                bar: !document.getElementById('loadingProgress').classList.contains('hidden') });
+            mo.disconnect();
+        });
+        mo.observe(overlay, { attributes: true, subtree: true, childList: true, characterData: true });
+    });
     await page.evaluate(() => document.getElementById('menuCheckSizeSwitches').click());
     await page.waitForSelector('#tabIdSwitches.active .id-switch-row', { timeout: 60000 });
     const rowsNow = () => page.evaluate(() => Array.from(document.querySelectorAll('#idSwitchPanel .id-switch-row'))
@@ -114,31 +134,34 @@ try {
         done: (document.querySelector('.id-switch-done') || {}).textContent || '' }));
     ui.rows = await rowsNow();
     console.log('    rows:', JSON.stringify(ui.rows.map(r => [r.frame, r.text])));
-    // The swapped identities also carry the "wrong" label in their encounters with the THIRD animal
-    // after the switch, so those can surface as change points too — but only after the switch, and
-    // only involving a swapped identity. The first change point is the switch itself.
+    // Each contact asks whether the animals still look like themselves across it, so only the contact where
+    // the labels changed hands is a change point — not the pair's later contacts, nor the swapped identities'
+    // contacts with the third animal, where the labels are swapped but nothing changes.
     const row = ui.rows[0] || {};
-    check(ui.rows.length >= 1 && ui.rows.every(r => r.frame >= fx.swapFrame - 40 && fx.pair.some(n => r.text.includes(n))),
-        `every change point (${ui.rows.length}) is at/after the switch and involves a swapped identity`);
+    {   // its popup: the image check's card, as a titled message with a spinner — no "0/1 frames" counter
+        const c = await page.evaluate(() => window.__sizeCard);
+        check(!!c && c.ok && c.title === 'Checking ID switches (body size)' && /body size before and after/.test(c.message) && c.spinner && !c.bar,
+              `its popup is the image check's card: "${c && c.title}", "${c && c.message}", a spinner and no counter, opaque, the app not greyed out` +
+              (c && !c.ok ? ' — ' + c.why : ''));
+    }
+    check(ui.rows.length === 1, `one change point (${ui.rows.length})`);
     check(Math.abs(row.frame - fx.swapFrame) <= 40, `…at the switch encounter (frame ${row.frame}, switch at ${fx.swapFrame})`);
     check(fx.pair.every(n => (row.text || '').includes(n)), `…naming the swapped pair (${fx.pair.join(' ↔ ')}): "${row.text}"`);
     check(/15\.0 samples\/s \(every 4th frame at 60 fps/.test(ui.rate) && /not measured/.test(ui.rate),
         `the tab states the sampling and that the frame rate is not from a video ("${ui.rate.slice(0, 110)}…")`);
-    check(/ 1 possible switch /.test(ui.status) && /ID Switches tab/.test(ui.status), `status counts one switch, not its follow-ons, and points at the tab ("${ui.status}")`);
-    check(ui.rows.slice(1).every(r => /follows the switch at/.test(r.text)), 'the other change points are labelled as its follow-ons');
+    check(/ 1 possible switch /.test(ui.status) && /ID Switches tab/.test(ui.status), `status counts one switch and points at the tab ("${ui.status}")`);
     check(/^0 of \d+ reviewed/.test(ui.done.trim()), `checklist starts at "${ui.done.trim()}"`);
 
     // ---- 2. seekbar ticks (not the timeline)
     const markers = await page.evaluate(async () => (await import('/ui/seekbar-markers.js')).getSeekbarSwitchMarkers());
-    check(markers.some(m => !m.continues && Math.abs(m.frame - fx.swapFrame) <= 40), `the seekbar has the change-point marker (${markers.length} markers)`);
-    check(markers.some(m => m.continues), 'the seekbar also shows the still-swapped repeats');
+    check(markers.length === 1 && Math.abs(markers[0].frame - fx.swapFrame) <= 40, `the seekbar has the change-point marker (${markers.length} markers)`);
     const ticks = await page.evaluate(async () => {
         const AS = await import('/ui/app-state.js');
         return { n: document.querySelectorAll('#seekbarMarks .seekbar-mark').length, repeats: document.querySelectorAll('#seekbarMarks .seekbar-mark.is-repeat').length,
                  timelineApi: typeof AS.timeline.setSwitchMarkers };
     });
-    check(ticks.n === markers.length && ticks.repeats >= 1 && ticks.timelineApi === 'undefined',
-        `${ticks.n} ticks drawn on the seekbar (${ticks.repeats} faint repeats); the timeline no longer draws switch markers`);
+    check(ticks.n === markers.length && ticks.repeats === 0 && ticks.timelineApi === 'undefined',
+        `${ticks.n} tick drawn on the seekbar (${ticks.repeats} faint repeats); the timeline no longer draws switch markers`);
     // hover a tick, then click 2 px beside it: the tooltip names the switch and the click lands on its frame
     const tick = await page.evaluate(f => { const el = document.querySelector('#seekbarMarks .seekbar-mark[data-frame="' + f + '"]'); const r = el.getBoundingClientRect();
         return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }, row.frame);
@@ -156,16 +179,12 @@ try {
         await page.screenshot({ path: process.env.SHOT, clip: box ? { x: box.x - 10, y: box.y - 40, width: box.width + 20, height: box.height + 50 } : undefined });
     }
 
-    // ---- 3. one scroller; Show repeats
-    await page.evaluate(() => document.getElementById('idSwitchRepeats').click());
-    const withRep = await rowsNow();
+    // ---- 3. one scroller; no repeats to show
     const scroll = await page.evaluate(() => ({ tab: getComputedStyle(document.getElementById('tabIdSwitches')).overflowY,
-        list: getComputedStyle(document.getElementById('idSwitchList')).overflowY }));
-    check(withRep.length > ui.rows.length && withRep.some(r => /still swapped/.test(r.text)),
-        `"Show repeats" lists the still-swapped encounters too (${ui.rows.length} -> ${withRep.length} rows)`);
+        list: getComputedStyle(document.getElementById('idSwitchList')).overflowY, repeats: !!document.getElementById('idSwitchRepeats') }));
+    check(!scroll.repeats, 'no "Show repeats" control: the check makes no repeats');
     check(scroll.tab === 'auto' && scroll.list === 'visible', `the tab is the one scroller (tab ${scroll.tab}, list ${scroll.list})`);
     if (process.env.PANEL_SHOT) await page.screenshot({ path: process.env.PANEL_SHOT });
-    await page.evaluate(() => document.getElementById('idSwitchRepeats').click());
 
     // ---- 4. click a row -> 1 s before the animals come close; "end ⇥" -> the encounter's end
     const span = await page.evaluate(async (f) => {
@@ -240,9 +259,9 @@ try {
     }
     // leave the tab and come back; re-run; switch sessions away and back — results and ticks persist
     await page.click('.panel-tab[data-tab="tabInstances"]');
-    // at the default panel width the tab sits in "More ▾" — reach it the way a user would
-    if (await page.isVisible('.panel-tab[data-tab="tabIdSwitches"]')) await page.click('.panel-tab[data-tab="tabIdSwitches"]');
-    else { await page.click('.panel-tab-more-btn'); await page.click('.panel-tab-more-item:has-text("ID Switches")'); }
+    // Every tab is always in the bar now; at the default panel width this one
+    // is scrolled out of sight, which Playwright's own auto-scroll handles.
+    await page.click('.panel-tab[data-tab="tabIdSwitches"]');
     let back = await rowsNow();
     check(back.length === ui.rows.length && back[0].reviewed, `reopening the tab shows the same ${back.length} rows, first still ticked`);
     await page.evaluate(() => document.getElementById('menuCheckSizeSwitches').click());
