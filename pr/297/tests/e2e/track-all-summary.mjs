@@ -14,6 +14,11 @@
  *     beside it.
  *  2. While it is open the app's shortcuts do not act under it (`p` leaves
  *     Predicted alone); Esc closes it, and the shortcut works again after.
+ *  2b. Closed, it can be reopened: the ID Switches tab has "Show Track All
+ *     summary" ABOVE "Possible ID switches", which reopens the same box. A check
+ *     run after it was closed is reported there (not "Not run", and no longer
+ *     offered); after Clear both read "Not run" and the button stays; a session
+ *     with no Track All has no button.
  *  3. Enter presses the focused primary: the box closes and Triangulate All runs.
  *  4. A second Track All replaces the box rather than stacking another.
  *  5. Track Frame Range does not open it.
@@ -148,6 +153,60 @@ try {
     await page.keyboard.press('p');
     check((await pred()) === !p0, 'after it closes, `p` reaches the app again (the key listener was removed)');
     await page.keyboard.press('p');
+
+    // ---- 2b. closed, it can be reopened from the ID Switches tab -----------------------------
+    const tab = () => page.evaluate(() => {
+        const host = document.getElementById('idSwitchPanel');
+        const first = host && host.firstElementChild;
+        return { button: !!document.getElementById('idSwitchTrackSummary'),
+            first: first ? first.className : '', heading: (host && host.querySelector('h3') || {}).textContent || '' };
+    });
+    await page.evaluate(async () => (await import('/ui/id-switch-modal.js')).openIdSwitchPanel());
+    let t2 = await tab();
+    check(t2.button && /id-switch-track-summary/.test(t2.first) && /Possible ID switches/i.test(t2.heading),
+        `the ID Switches tab has "Show Track All summary" above "Possible ID switches" (${JSON.stringify(t2)})`);
+    const first = s;
+    await page.click('#idSwitchTrackSummary');
+    s = await summary();
+    check(s.count === 1 && s.title === first.title && JSON.stringify(s.stats.slice(0, 3)) === JSON.stringify(first.stats.slice(0, 3)) &&
+        s.stats[3] === first.stats[3] && JSON.stringify(s.ids) === JSON.stringify(first.ids),
+        'the button reopens the same summary: title, counts, tracking time and identities');
+    check(JSON.stringify(s.checks.map(c => c.text)) === JSON.stringify(first.checks.map(c => c.text)) &&
+        JSON.stringify(s.buttons) === JSON.stringify(first.buttons), `…the same check rows and buttons (${JSON.stringify(s.buttons)})`);
+    check(s.focused === 'trackSummaryPrimary', 'its recommended step is focused again');
+    await page.keyboard.press('Escape');
+    // a check run after the box was closed is reported when it is reopened, not "Not run"
+    await page.evaluate(async () => {
+        const M = await import('/ui/id-switch-modal.js');
+        const fake = async () => {
+            const proto = new Map();
+            return { views: ['c0'], getEmbeddings: async (frame, items) => items.map(it => {
+                if (!proto.has(it.group.identityId)) proto.set(it.group.identityId, Float32Array.from({ length: 32 }, () => Math.random() - 0.5));
+                return [{ camera: 'c0', vector: Float32Array.from(proto.get(it.group.identityId), v => v + 0.05 * (Math.random() - 0.5)) }];
+            }) };
+        };
+        await M.runIdSwitchChecks({ image: true, inject: { createEmbedder: fake } });
+        await M.openIdSwitchPanel();
+    });
+    await page.click('#idSwitchTrackSummary');
+    s = await summary();
+    const img = s.checks.find(c => c.cue === 'image');
+    check(img && img.text === 'No close encounters to check' && /is-clear/.test(img.cls) && /s$/.test(img.time),
+        `after the image check ran, the reopened row reports it with its time: "${img && img.text}" (${img && img.time})`);
+    check(!s.buttons.includes('Check by images…'), `…and no longer offers to run it (${JSON.stringify(s.buttons)})`);
+    await page.keyboard.press('Escape');
+    // cleared results read "Not run" again; the button stays (it is above the empty state too)
+    await page.evaluate(() => document.getElementById('idSwitchClear').click());
+    t2 = await tab();
+    check(t2.button && /id-switch-track-summary/.test(t2.first), 'after Clear, the button is still at the top of the tab');
+    await page.click('#idSwitchTrackSummary');
+    s = await summary();
+    check(s.checks.every(c => c.text === 'Not run'), `after Clear, both checks read "Not run": ${JSON.stringify(s.checks.map(c => c.text))}`);
+    await page.keyboard.press('Escape');
+    // a session that never ran Track All has no button
+    await page.evaluate(async () => { await window.__buildTrackable('noTrackAll', { frames: 30 });
+        (await import('/ui/id-switch-modal.js')).refreshIdSwitchPanel(); });
+    check(!(await tab()).button, 'a session without a Track All has no button');
 
     // ---- 3. Enter presses the primary: Triangulate All runs ----------------------------------
     await page.evaluate(async () => { await window.__buildTrackable('A2'); await (await import('/pose/tracker.js')).trackAll(); });

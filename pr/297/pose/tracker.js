@@ -16,24 +16,25 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=62b2a70af739';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=62b2a70af739';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=62b2a70af739';
+} from './triangulation.js?v=fdc4121aed2e';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=fdc4121aed2e';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=fdc4121aed2e';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=62b2a70af739';
-import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=62b2a70af739';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=62b2a70af739';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=62b2a70af739';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=62b2a70af739';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=62b2a70af739';
-import { updateInfoPanel } from '../ui/info-panel.js?v=62b2a70af739';
-import { setColorByIdentity } from '../ui/color-by.js?v=62b2a70af739';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=62b2a70af739';
-import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=62b2a70af739';
-import { showTrackSummaryModal } from '../ui/track-summary-modal.js?v=62b2a70af739';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=62b2a70af739';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=62b2a70af739';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=fdc4121aed2e';
+import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=fdc4121aed2e';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=fdc4121aed2e';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=fdc4121aed2e';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=fdc4121aed2e';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=fdc4121aed2e';
+import { updateInfoPanel } from '../ui/info-panel.js?v=fdc4121aed2e';
+import { setColorByIdentity } from '../ui/color-by.js?v=fdc4121aed2e';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=fdc4121aed2e';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=fdc4121aed2e';
+import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=fdc4121aed2e';
+import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=fdc4121aed2e';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=fdc4121aed2e';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=fdc4121aed2e';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -788,8 +789,25 @@ function setNullNodesStatus(n) {
     }
 }
 
-// Tracker state: number of animals (null = unconstrained)
-var trackerNumAnimals = null;
+// The number of animals lives on the SESSION (`Session.numAnimals`: a count,
+// 'auto', or null = never answered) so it is saved with the project — see
+// pose/pose-data.js. These two read it.
+function sessionNumAnimals(session) {
+    return (session && typeof session.numAnimals === 'number') ? session.numAnimals : null;
+}
+// A blank answer (auto-detect) is an answer too, so it must not bring the
+// prompt back on every run — the toolbar's Animals field shows "auto" and is
+// where it gets changed afterwards.
+function numAnimalsAnswered(session) {
+    return !!session && session.numAnimals != null;
+}
+// The last count given in ANY session this page has seen. Pre-fills the prompt
+// for a session nobody has answered yet, which in a multi-session project of
+// the same animals makes each one a single Enter.
+var _lastNumAnimals = null;
+// Told when the count changes, so the toolbar field follows the prompt and the
+// Track Frame Range dialog. A listener that throws must not stop the others.
+var _numAnimalsListeners = [];
 
 // Auto-detect cap: the largest instance count seen in any (camera, frame)
 // pair across the session. Without a cap, leftover groups that survive
@@ -827,43 +845,66 @@ function computeMaxInstancesPerView(session) {
         console.warn('[tracker] auto-detected ' + max + ' animals per view from ' +
             resident.toLocaleString() + ' resident frame(s) of ' + total.toLocaleString() +
             '. If that is lower than the real animal count, set it explicitly ' +
-            '(Track ▸ number of animals) before running Track All.');
+            '(the Animals field beside Track All) before running Track All.');
     }
     return max;
 }
 
-function promptNumAnimals() {
-    var input = prompt('Number of animals (leave empty for auto-detect):', trackerNumAnimals || '');
+function promptNumAnimals(session) {
+    var input = prompt('Number of animals (leave empty for auto-detect):',
+        sessionNumAnimals(session) || _lastNumAnimals || '');
     if (input === null) return false;  // cancelled
     input = input.trim();
     if (input === '') {
-        trackerNumAnimals = null;
+        setTrackerNumAnimals(null);
     } else {
         var n = parseInt(input);
         if (isNaN(n) || n < 1) {
             setStatus('Invalid number', 'error');
             return false;
         }
-        trackerNumAnimals = n;
+        setTrackerNumAnimals(n);
     }
     return true;
 }
 
 /**
- * The user's animal count, or null for "auto-detect from the resident sample".
- * Exported so the Track Frame Range modal can show the current value and set it
- * inline instead of stacking a native `prompt()` on top of a modal dialog.
+ * The ACTIVE session's animal count, or null for "auto-detect from the resident
+ * sample" (also what a never-answered session reads as). Read by the toolbar's
+ * Animals field and the Track Frame Range modal, which show the current value
+ * and set it inline — the modal so a native `prompt()` never stacks on top of it.
  * @returns {number|null}
  */
-export function getTrackerNumAnimals() { return trackerNumAnimals; }
+export function getTrackerNumAnimals() { return sessionNumAnimals(getActiveSession()); }
 
 /**
- * Set the animal count used as `maxTargets` by every tracking entry point.
+ * Set the active session's animal count, used as `maxTargets` by every tracking
+ * entry point. Counts as the user's answer, so Track Frame / Track All stop
+ * prompting — including for null, which is an explicit auto-detect. It is
+ * project state (saved in the `.slp`), so a change marks the project dirty.
+ * A no-op with no session: there is nothing to save it with.
  * @param {number|null} n  A positive integer, or null/NaN for auto-detect.
  */
 export function setTrackerNumAnimals(n) {
-    trackerNumAnimals = (typeof n === 'number' && isFinite(n) && n >= 1)
-        ? Math.floor(n) : null;
+    var session = getActiveSession();
+    if (!session) return;
+    var next = (typeof n === 'number' && isFinite(n) && n >= 1) ? Math.floor(n) : 'auto';
+    if (typeof next === 'number') _lastNumAnimals = next;
+    if (session.numAnimals === next) return;
+    session.numAnimals = next;
+    markDirty();
+    var count = sessionNumAnimals(session);
+    for (var i = 0; i < _numAnimalsListeners.length; i++) {
+        try { _numAnimalsListeners[i](count); } catch (e) { /* ignore */ }
+    }
+}
+
+/**
+ * Call `fn(count)` whenever the animal count changes (`count` null = auto).
+ * @param {(count: number|null) => void} fn
+ */
+export function onTrackerNumAnimalsChange(fn) {
+    if (typeof fn === 'function') _numAnimalsListeners.push(fn);
 }
 
 // ============================================
@@ -1115,11 +1156,11 @@ export function trackCurrentFrame() {
     }
 
     // Prompt for number of animals on first use
-    if (trackerNumAnimals == null) {
-        if (!promptNumAnimals()) return;
+    if (!numAnimalsAnswered(session)) {
+        if (!promptNumAnimals(session)) return;
     }
 
-    var effectiveNumAnimals = trackerNumAnimals || computeMaxInstancesPerView(session);
+    var effectiveNumAnimals = sessionNumAnimals(session) || computeMaxInstancesPerView(session);
 
     // Honor per-view tracking inclusion from the Tracking Wizard: excluded views
     // are dropped from the association math entirely (still visible in the GUI).
@@ -1323,8 +1364,8 @@ async function runTrackingPass(range) {
     // Prompt for number of animals. Track Frame Range collects it in its own
     // modal (blank there is an explicit "auto-detect"), so it never stacks a
     // native prompt() on top of the dialog the user just filled in.
-    if (!isRange && trackerNumAnimals == null) {
-        if (!promptNumAnimals()) return bail;
+    if (!isRange && !numAnimalsAnswered(session)) {
+        if (!promptNumAnimals(session)) return bail;
     }
 
     // How long tracking took, for the summary box: from here (after the animal-count
@@ -1335,7 +1376,7 @@ async function runTrackingPass(range) {
     // has two labelled stages; everything else is the identity pass alone.
     var STEPS = (loader && !windowed) ? 2 : 1;
     if (loader && !windowed) {
-        showLoadingProgress('Loading frames', 0, session.numFrames, { step: 1, steps: STEPS });
+        showLoadingProgress('Loading frames', 0, session.numFrames, { step: 1, steps: STEPS, title: human });
         await yieldToPaint();
         try {
             await loadAllLazyFrames(function (msg, done, total) {
@@ -1380,12 +1421,13 @@ async function runTrackingPass(range) {
         }
     }
 
-    var effectiveNumAnimals = trackerNumAnimals || computeMaxInstancesPerView(session);
+    var userNumAnimals = sessionNumAnimals(session);
+    var effectiveNumAnimals = userNumAnimals || computeMaxInstancesPerView(session);
     var totalFrameCount = windowed
         ? (isRange ? hi - lo + 1 : loader.nFrames)
         : frameIndices.length;
     console.log('[' + label + '] numAnimals:', effectiveNumAnimals,
-        trackerNumAnimals ? '(user-set)' : '(auto-detected from max instances per view)',
+        userNumAnimals ? '(user-set)' : '(auto-detected from max instances per view)',
         'frames:', totalFrameCount, windowed ? '(windowed)' : '',
         isRange ? '(range ' + lo + '–' + hi + ', 0-based)' : '');
     console.time('[' + label + '] total');
@@ -1417,7 +1459,10 @@ async function runTrackingPass(range) {
     }
 
     var stageOpts = { step: STEPS, steps: STEPS };
-    showLoadingProgress('Assigning identities', 0, totalFrameCount, stageOpts);
+    showLoadingProgress('Assigning identities', 0, totalFrameCount, Object.assign({ title: human }, stageOpts));   // the card's title, kept to hideLoading
+    // ...with its CPU line and graph (ui/loading-overlay.js; hideLoading stops it). The tracker steps the
+    // frames in order on the main thread — no workers — so this reads one core's share while it runs.
+    setLoadingCpu({ mainThread: true, counts: human + ', which runs on the main thread: one core at most' });
 
     // Drive the CrossViewTracker across the frames and populate IDENTITIES +
     // per-frame identity map + InstanceGroups only. Deliberately does NOT propagate
@@ -1448,6 +1493,13 @@ async function runTrackingPass(range) {
         var switchedToIds = lres.numIdentities > 0 && setColorByIdentity(state, true);
         // ...and only the predictions (User, Reproj, Errors off), the layer tracking produced.
         var predOnly = lres.numIdentities > 0 && showPredictedOnly();
+        // ...and, after Track All, node trails at ¼ s if they are off: each
+        // animal's recent path is where an identity switch shows. A length the
+        // user already picked is left alone, and so is a range (a targeted
+        // re-run, inspected on the timeline). Through ui-wiring's handler, so
+        // the Trails menus and button follow.
+        var trailsOn = !isRange && lres.numIdentities > 0 && !(state.trailSeconds > 0) &&
+            setTrailSeconds(state, TRACK_ALL_TRAIL_SECONDS);
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
@@ -1462,9 +1514,10 @@ async function runTrackingPass(range) {
         }
         console.timeEnd('[' + label + '] total');
         var doneMsg = 'Assigned ' + lres.numIdentities + ' identities across ' +
-            totalFrameCount + ' frames' +
+            totalFrameCount.toLocaleString('en-US') + ' frames' +
             (isRange ? ' (' + displayFrame(lo) + '–' + displayFrame(hi) + ')' : '') +
             (switchedToIds ? ', now coloring by Identity' : '') +
+            (trailsOn ? ', node trails on (' + trailSecondsName(TRACK_ALL_TRAIL_SECONDS) + ')' : '') +
             ' — use Tracks ▸ Propagate IDs → Tracks to apply' + (predOnly ? PREDICTED_ONLY_NOTE : '');
         setStatus(doneMsg, 'success');
         // Then check the result for identity switches (ui/id-switch-modal.js): by body
@@ -1487,18 +1540,20 @@ async function runTrackingPass(range) {
             try {
                 // `runIdSwitchChecks` returns null only when there were no tracked 3D skeletons to check.
                 var noSkeletons = 'no tracked 3D skeletons';
-                showTrackSummaryModal(
-                    summarizeTrackedIdentities(session, {
-                        frames: totalFrameCount, animals: effectiveNumAnimals, animalsAuto: trackerNumAnimals == null,
-                        elapsedMs: trackMs,
-                        // The recording's rate, as the ID-switch checks read it (measured
-                        // from the video when one is loaded), for the real-time multiplier.
-                        fps: state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 0),
-                    }),
-                    {
-                        size: describeSwitchCheck(autoSize, checkRes && checkRes.size, lres.numIdentities, noSkeletons),
-                        image: describeSwitchCheck(autoImage, checkRes && checkRes.image, lres.numIdentities, noSkeletons),
-                    });
+                var summaryOpts = {
+                    frames: totalFrameCount, animals: effectiveNumAnimals, animalsAuto: userNumAnimals == null,
+                    elapsedMs: trackMs,
+                    // The recording's rate, as the ID-switch checks read it (measured
+                    // from the video when one is loaded), for the real-time multiplier.
+                    fps: state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 0),
+                };
+                var summaryChecks = {
+                    size: describeSwitchCheck(autoSize, checkRes && checkRes.size, lres.numIdentities, noSkeletons),
+                    image: describeSwitchCheck(autoImage, checkRes && checkRes.image, lres.numIdentities, noSkeletons),
+                };
+                // Kept on the session, so the ID Switches tab can reopen the box once it is closed
+                rememberTrackSummary(session, summaryOpts, summaryChecks, lres.numIdentities);
+                showTrackSummaryModal(summarizeTrackedIdentities(session, summaryOpts), summaryChecks, { session: session });
             } catch (e) {
                 console.error('[' + label + '] summary failed:', e);
             }

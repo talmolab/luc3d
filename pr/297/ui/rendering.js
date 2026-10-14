@@ -6,27 +6,32 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=62b2a70af739';
-import { points3dNodeCount } from '../pose/pose-data.js?v=62b2a70af739';
+import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=fdc4121aed2e';
+import { points3dNodeCount } from '../pose/pose-data.js?v=fdc4121aed2e';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=62b2a70af739';
-import { drawFrameOverlays } from './overlays.js?v=62b2a70af739';
-import { syncViewLegends } from './view-legend.js?v=62b2a70af739';
-import { isCameraTracked } from './settings.js?v=62b2a70af739';
+} from '../pose/triangulation.js?v=fdc4121aed2e';
+import { drawFrameOverlays } from './overlays.js?v=fdc4121aed2e';
+import { syncViewLegends } from './view-legend.js?v=fdc4121aed2e';
+import { isCameraTracked } from './settings.js?v=fdc4121aed2e';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=62b2a70af739';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=fdc4121aed2e';
+// The toolbar's Animals field shows the ACTIVE session's count. Circular
+// (it reaches pose/tracker.js, which imports this module) — safe for the same
+// reason: the call site is inside drawAllOverlays' body.
+import { syncAnimalCountField } from './animal-count-field.js?v=fdc4121aed2e';
+import { syncNodeTooltipFrame } from './node-tooltip.js?v=fdc4121aed2e';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=62b2a70af739';
-import { updateFrameInfo } from './info-panel.js?v=62b2a70af739';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=fdc4121aed2e';
+import { updateFrameInfo } from './info-panel.js?v=fdc4121aed2e';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
-} from './frame-counters.js?v=62b2a70af739';
+} from './frame-counters.js?v=fdc4121aed2e';
 
 // ============================================
 // Reproj/Error visibility
@@ -237,6 +242,10 @@ function fillLazyReprojections(fi, instanceGroups) {
 export function drawAllOverlays(frameIdx, viewFrames) {
     if (!state.session) return;
 
+    // A node tooltip names a node on the frame it was hovered on; on any other
+    // frame that node has moved out from under the pointer.
+    syncNodeTooltipFrame(frameIdx);
+
     // Lazy H5: fetch frame data on demand if not yet loaded
     if (state.session.lazyLoader && !state.session.frameGroups.has(frameIdx)) {
         ensureLazyFrameData(frameIdx).then(function () {
@@ -319,6 +328,11 @@ export function drawAllOverlays(frameIdx, viewFrames) {
     // here rather than only at `enterPlaneMode`, where it would survive until
     // the first mouse move. A no-op when the mode is off.
     applyPlaneModeToolbarLock();
+    // Nothing announces a session change (each load path and the session
+    // switch assign `state.session` themselves), and every one of them ends in
+    // a draw — so the per-session Animals field catches up here. O(1) when the
+    // session and its count are the ones already shown.
+    syncAnimalCountField();
 
     var editGroupTarget = interactionManager ? interactionManager.editGroupTarget : null;
 
@@ -416,6 +430,7 @@ export function drawAllOverlays(frameIdx, viewFrames) {
         drawFrameOverlays(view.overlayCtx, view.name, overlayFrameGroup, vGroups, state.session, {
             colorByIdentity: state.colorByIdentity,
             trailLength: state.trailLength,
+            trailShade: state.trailShade,
             // NOT vis.showLegend: the live legend is pane chrome now
             // (`syncViewLegends`, below), because anything painted on this
             // canvas rotates with the view. `drawFrameOverlays` keeps the
@@ -528,9 +543,9 @@ function renderFrameCounters(session, activeCam, baseline) {
     var labeledEl = document.getElementById('statusLabeledFrames');
     var triangulatedEl = document.getElementById('statusTriangulatedFrames');
     var instancesEl = document.getElementById('statusInstances');
-    if (labeledEl) labeledEl.textContent = 'Labeled Frames: ' + c.labeled;
-    if (instancesEl) instancesEl.textContent = 'Instances: ' + c.instances;
-    if (triangulatedEl) triangulatedEl.textContent = 'Triangulated: ' + c.triangulated;
+    if (labeledEl) labeledEl.textContent = 'Labeled Frames: ' + c.labeled.toLocaleString('en-US');
+    if (instancesEl) instancesEl.textContent = 'Instances: ' + c.instances.toLocaleString('en-US');
+    if (triangulatedEl) triangulatedEl.textContent = 'Triangulated: ' + c.triangulated.toLocaleString('en-US');
 }
 
 function requestCounterRebuild() {

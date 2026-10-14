@@ -8,56 +8,56 @@ import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
     asPoints3d, points3dNodeCount, someValidPoint3d, lazyPlaceholderXY, pooledPoints3d,
-} from '../pose/pose-data.js?v=62b2a70af739';
+} from '../pose/pose-data.js?v=fdc4121aed2e';
 import {
     reprojectPointsCamera, reprojectPoints, computeReprojectionErrors,
     storeReprojectedInstances, getInstanceGroupsForFrame,
-} from '../pose/triangulation.js?v=62b2a70af739';
+} from '../pose/triangulation.js?v=fdc4121aed2e';
 import {
     parseSlpH5, parseSlpViaSleapIO, instanceMatchesPoints, parsePoints3dH5, pickFiles,
-} from './file-io.js?v=62b2a70af739';
+} from './file-io.js?v=fdc4121aed2e';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames,
-} from './slp-merge.js?v=62b2a70af739';
-import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=62b2a70af739';
+} from './slp-merge.js?v=fdc4121aed2e';
+import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=fdc4121aed2e';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController,
-} from '../ui/app-state.js?v=62b2a70af739';
+} from '../ui/app-state.js?v=fdc4121aed2e';
 import {
     autoAssignVideosToCameras, forceVideoSelection, forceVideoSelectionWithFolder,
     showParentDirMatchSummary, createViewForVideoFile, updateTotalFrames,
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
-} from '../loading/session-loader.js?v=62b2a70af739';
-import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=62b2a70af739';
-import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=62b2a70af739';
+} from '../loading/session-loader.js?v=fdc4121aed2e';
+import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=fdc4121aed2e';
+import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=fdc4121aed2e';
 import {
     showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
-} from './save-load.js?v=62b2a70af739';
+} from './save-load.js?v=fdc4121aed2e';
 
 // Circular import — these are still defined in app.js for now. They are only
 // invoked inside function bodies, never at module-init time, so live-binding
 // lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=62b2a70af739';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=62b2a70af739';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=62b2a70af739';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=fdc4121aed2e';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=fdc4121aed2e';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=fdc4121aed2e';
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=62b2a70af739';
+import { setup3DViewport } from '../pose/initialization.js?v=fdc4121aed2e';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
-import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=62b2a70af739';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=62b2a70af739';
+import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=fdc4121aed2e';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=fdc4121aed2e';
 // Block 1 (Prompt 4): keep timeline._uploadedCameras in sync after SLP
 // load so the gutter filters to the cameras that actually have video
 // assignments rather than every calibration camera.
-import { recomputeUploadedCameras } from '../loading/session-loader.js?v=62b2a70af739';
+import { recomputeUploadedCameras } from '../loading/session-loader.js?v=fdc4121aed2e';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=62b2a70af739';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=62b2a70af739';
-import { readVisibilityMetadata } from './visibility-metadata.js?v=62b2a70af739';
-import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=62b2a70af739';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=fdc4121aed2e';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=fdc4121aed2e';
+import { readVisibilityMetadata } from './visibility-metadata.js?v=fdc4121aed2e';
+import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=fdc4121aed2e';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -222,6 +222,9 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
                 if (_dupCamInsts && _dupCamInsts.length > 0) {
                     for (var _dpi = 0; _dpi < _dupCamInsts.length; _dpi++) {
                         if (instanceMatchesPoints(_dupCamInsts[_dpi], points)) {
+                            // The group dict has no per-node scores; the raw
+                            // row it replaces does.
+                            inst.adoptPointScoresFrom(_dupCamInsts[_dpi]);
                             _dupCamInsts.splice(_dpi, 1);
                             break;
                         }
@@ -405,6 +408,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
 
                 var inst = new Instance(points, instTrackIdx, instType, instScore);
                 inst.setOccludedFrom(occluded);
+                if (instType === 'predicted' && _isPred && typedInst._score) inst.setPointScores(typedInst._score);
                 inst.modified = instMeta.modified || false;
                 if (instMeta.nulledNodes) {
                     inst.nulledNodes = new Set(instMeta.nulledNodes);
@@ -720,7 +724,7 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
             }
             ulFgCount++;
             if (ulFgCount % BATCH === 0) {
-                onProgress('Preparing unlinked instances (' + ulFgCount + '/' + session.frameGroups.size + ')...');
+                onProgress('Preparing unlinked instances (' + ulFgCount.toLocaleString('en-US') + '/' + session.frameGroups.size.toLocaleString('en-US') + ')...');
                 await new Promise(function (r) { setTimeout(r, 0); });
             }
         }
@@ -1090,6 +1094,7 @@ export async function handleLoadSlpFile(slpFile) {
                     instData.score || 0
                 );
                 if (instData.occluded) inst.setOccludedFrom(instData.occluded);
+                if (instData.pointScores) inst.setPointScores(instData.pointScores);
                 // Rebuild the occlusion flag for a user label whose occluded
                 // node was saved as finite-xy + not-visible. Grouped instances
                 // get their explicit nulledNodes back from metadata below (and
@@ -1101,7 +1106,7 @@ export async function handleLoadSlpFile(slpFile) {
                 fg.addInstance(camName, inst);
             }
             if (fi > 0 && fi % BATCH === 0) {
-                showLoading('Building session (' + fi + '/' + totalFrames + ')...');
+                showLoading('Building session (' + fi.toLocaleString('en-US') + '/' + totalFrames.toLocaleString('en-US') + ')...');
                 await new Promise(function (r) { setTimeout(r, 0); });
             }
         }
@@ -1230,7 +1235,7 @@ export async function handleLoadSlpFile(slpFile) {
             // --- Embedded videos: use frame-worker for on-demand extraction ---
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=62b2a70af739', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=fdc4121aed2e', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
@@ -1645,7 +1650,7 @@ export async function handleLoadSlpFile(slpFile) {
         clearDirty();
         hideLoading();
         var statusParts = [state.sessions.length + ' session(s)', skeleton.nodes.length + ' nodes'];
-        if (state.session) statusParts.push(state.session.numFrames + ' labeled frames');
+        if (state.session) statusParts.push(state.session.numFrames.toLocaleString('en-US') + ' labeled frames');
         if (state.views.length > 0) statusParts.push(state.views.length + ' views');
         setStatus('SLP loaded (' + statusParts.join(', ') + ')', 'success');
 
@@ -1841,7 +1846,7 @@ export async function handleAddSlp() {
         if (hasEmbedded) {
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=62b2a70af739', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=fdc4121aed2e', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
@@ -2073,7 +2078,7 @@ export async function handleAddSlp() {
         hideLoading();
         var dockPanelCount = paneManager.api ? paneManager.api.panels.length : 0;
         console.log('[add-slp] Done. Dock panels: ' + dockPanelCount + ', Views: ' + state.views.length);
-        setStatus('Added SLP: ' + cameras.length + ' camera(s), ' + affectedFrames.length + ' frames merged. Panels: ' + dockPanelCount, 'success');
+        setStatus('Added SLP: ' + cameras.length + ' camera(s), ' + affectedFrames.length.toLocaleString('en-US') + ' frames merged. Panels: ' + dockPanelCount, 'success');
     } catch (err) {
         console.error('[add-slp] FATAL:', err);
         hideLoading();
@@ -2201,8 +2206,8 @@ export async function handleLoadPoints3dH5() {
         updateSeekbar(state.currentFrame);
 
         hideLoading();
-        setStatus('3D points loaded: ' + framesUpdated + ' frames (duration ' +
-            state.totalFrames + '), ' + ptsData.trackNames.length + ' tracks', 'success');
+        setStatus('3D points loaded: ' + framesUpdated.toLocaleString('en-US') + ' frames (duration ' +
+            state.totalFrames.toLocaleString('en-US') + '), ' + ptsData.trackNames.length + ' tracks', 'success');
     } catch (err) {
         console.error('Failed to load 3D points:', err);
         hideLoading();

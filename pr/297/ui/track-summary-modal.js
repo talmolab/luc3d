@@ -12,10 +12,29 @@
 // existing menu item or toolbar button, so it runs exactly what the user would
 // have run by hand.
 //
-// Depends on: ui/track-summary.js, ui/id-switch-modal.js (openIdSwitchPanel).
+// Closing it is not the end of it: Track All keeps what it showed on the session
+// (`rememberTrackSummary`), and the ID Switches tab reopens it
+// (`reopenTrackSummary`) — with each check's CURRENT result, so a check run after
+// the box was closed is reported rather than still "Not run".
+//
+// Under the identity bars, the "Identities" section (ui/identity-gallery.js): five
+// sample images of each identity and a map of its path, so a switch between
+// animals that look different can be seen before anything else is run. Clicking
+// a sample or a point on a map closes the box and goes to that frame.
+//
+// Depends on: ui/track-summary.js, ui/id-switch-modal.js (openIdSwitchPanel,
+// refreshIdSwitchPanel, setTrackSummaryOpener), ui/identity-gallery.js.
 
-import { planTrackSummary } from './track-summary.js?v=62b2a70af739';
-import { openIdSwitchPanel } from './id-switch-modal.js?v=62b2a70af739';
+import { planTrackSummary, summarizeTrackedIdentities, describeSwitchCheck } from './track-summary.js?v=fdc4121aed2e';
+import { openIdSwitchPanel, refreshIdSwitchPanel, setTrackSummaryOpener } from './id-switch-modal.js?v=fdc4121aed2e';
+import { renderIdentityGallery } from './identity-gallery.js?v=fdc4121aed2e';
+
+// The viewer's frame navigation, registered once by ui-wiring (as the ID Switches tab's is):
+// the tracker that opens this box cannot import pose/initialization.js.
+var _navigate = null;
+
+/** Register `navigateToFrame` for the Identities section's samples and maps (called once from ui/ui-wiring.js). */
+export function setTrackSummaryNavigator(fn) { _navigate = fn; }
 
 /** Click an existing control by id (a disabled button ignores it, as it would a real click). */
 function clickById(id) {
@@ -55,9 +74,11 @@ function safeColor(c) {
  *
  * @param {Object} summary  from `summarizeTrackedIdentities`
  * @param {{size: object, image: object}} checks  each from `describeSwitchCheck`
- * @returns {{close: function, overlay: HTMLElement}|null}  null without a DOM
+ * @param {{session?: Object}} [opts]  the tracked session: with it, the Identities section
+ * @returns {{close: function, overlay: HTMLElement, gallery: Object|null}|null}  null without a DOM;
+ *   `gallery.done` settles once its images are drawn
  */
-export function showTrackSummaryModal(summary, checks) {
+export function showTrackSummaryModal(summary, checks, opts) {
     if (typeof document === 'undefined') return null;     // Node harnesses drive Track All with no DOM
     var plan = planTrackSummary(summary, checks);
     var old = document.getElementById('trackSummaryOverlay');
@@ -111,6 +132,11 @@ export function showTrackSummaryModal(summary, checks) {
         }
         modal.appendChild(ids);
     }
+    // ---- what each identity looks like, and where it went (filled in after the box opens) ----
+    var gallery = opts && opts.session ? renderIdentityGallery(modal, opts.session, {
+        onPick: function (frame) { close(); if (_navigate) _navigate(frame); },
+    }) : null;
+    if (gallery) modal.classList.add('has-gallery');
     plan.notes.forEach(function (t) { modal.appendChild(el('p', 'track-summary-note', t)); });
 
     // ---- the ID-switch checks ----------------------------------------------
@@ -180,5 +206,46 @@ export function showTrackSummaryModal(summary, checks) {
     document.addEventListener('keydown', onKey, true);
     overlay.addEventListener('mousedown', function (e) { if (e.target === overlay) close(); });
     primary.focus();
-    return { close: close, overlay: overlay };
+    return { close: close, overlay: overlay, gallery: gallery };
 }
+
+/**
+ * Keep a finished Track All's summary on its session, for `reopenTrackSummary`.
+ * In memory only — not saved with the project. Replaces the session's previous one.
+ *
+ * @param {Session} session
+ * @param {Object} opts  `summarizeTrackedIdentities`'s options for the pass
+ * @param {{size: object, image: object}} checks  what the box showed, from `describeSwitchCheck`
+ * @param {number} identities  identities the pass assigned
+ */
+export function rememberTrackSummary(session, opts, checks, identities) {
+    if (!session) return;
+    session._trackSummary = { opts: opts, checks: checks, identities: identities };
+    refreshIdSwitchPanel(session);                       // the tab's reopen button appears
+}
+
+/**
+ * Reopen the session's last Track All summary. The numbers are re-counted from the
+ * session as it is now (a fixed switch moves the shares), the time is the pass's own,
+ * and each check shows its current result: a check run since replaces the pass's
+ * "Not run" / "Skipped", and one whose results were cleared reads "Not run" again.
+ * A skip or a failure is not kept by the check itself, so it comes from the pass.
+ *
+ * @returns {{close: function, overlay: HTMLElement}|null}  null when there is none
+ */
+export function reopenTrackSummary(session) {
+    var saved = session && session._trackSummary;
+    if (!saved) return null;
+    var results = (session._idSwitch && session._idSwitch.results) || {};
+    var checks = {};
+    ['size', 'image'].forEach(function (cue) {
+        var now = results[cue], then = saved.checks[cue];
+        if (now && now.ok) checks[cue] = describeSwitchCheck(true, now, saved.identities);
+        else if (then && (then.state === 'found' || then.state === 'clear')) checks[cue] = describeSwitchCheck(false, null, saved.identities);
+        else checks[cue] = then;
+    });
+    return showTrackSummaryModal(summarizeTrackedIdentities(session, saved.opts), checks, { session: session });
+}
+
+// The ID Switches tab's "Show Track All summary" (ui/id-switch-modal.js stays a leaf: it is handed this)
+setTrackSummaryOpener(reopenTrackSummary);

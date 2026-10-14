@@ -8,36 +8,40 @@
  * the CHANGE POINTS in the right panel's "ID Switches" tab as a checklist —
  * click a row to jump there, tick it once reviewed, "Next unreviewed" walks the
  * list. Results (and what was reviewed) are kept per session until the check
- * runs again or "Clear". A change point both checks found (same pair, within
- * 1 s) is shown once as "Both". Repeats (other encounters of a pair that is
- * still swapped) are counted and can be shown.
+ * runs again or "Clear". A change point both checks found (same pair, same
+ * contact) is shown once as "Both". Repeats (other encounters of a pair that is
+ * still swapped) are counted and can be shown — only results restored from files
+ * saved before 2026-10-11 have any.
  *
  * The size check only reads the tracker's 3D skeletons (seconds, no video). The
  * image check decodes video and embeds crops on the GPU (ui/image-embedder.js) —
  * or, with no GPU, on the CPU, ~15x slower but still run: minutes to hours. It
  * needs the session's videos, and runs under its own cancellable progress dialog
- * (Cancel / Esc) that says which device is doing the work.
+ * (Cancel / Esc) that says which device is doing the work, how busy the check
+ * keeps the CPU and the GPU, and graphs both over the last minute.
  *
  * Kept a leaf: `navigateToFrame` is registered by ui-wiring
  * (setIdSwitchNavigator), so this module never imports pose/initialization.js.
  *
- * Depends on: pose/id-switch-check.js, ui/image-embedder.js, ui/app-state.js,
+ * Depends on: pose/id-switch-check.js, ui/image-embedder.js, ui/load-graph.js, ui/browser-hints.js, ui/app-state.js,
  * ui/loading-overlay.js, ui/settings.js (getTrackingThreshold),
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=62b2a70af739';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=62b2a70af739';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=62b2a70af739';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=62b2a70af739';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=62b2a70af739';
-import { getTrackingThreshold } from './settings.js?v=62b2a70af739';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=62b2a70af739';
-import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, createLoadMeter, formatEmbedDevice,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=62b2a70af739';
+import { state, getActiveSession } from './app-state.js?v=fdc4121aed2e';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=fdc4121aed2e';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=fdc4121aed2e';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=fdc4121aed2e';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=fdc4121aed2e';
+import { getTrackingThreshold } from './settings.js?v=fdc4121aed2e';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=fdc4121aed2e';
+import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
+         inputTensorToPixels, INPUT } from './image-embedder.js?v=fdc4121aed2e';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=fdc4121aed2e';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=fdc4121aed2e';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=62b2a70af739';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=fdc4121aed2e';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -107,6 +111,29 @@ var _refresh = null;
 /** Register the repaint run after a fix / undo changes identities (called once from ui/ui-wiring.js). */
 export function setIdSwitchRefresher(fn) { _refresh = fn; }
 
+// Reopens a session's last Track All summary (`reopenTrackSummary`), registered by
+// ui/track-summary-modal.js — which imports this module, so this one stays a leaf.
+var _openSummary = null;
+
+/** Register what the tab's "Show Track All summary" button runs (called once from ui/track-summary-modal.js). */
+export function setTrackSummaryOpener(fn) { _openSummary = fn; }
+
+/**
+ * Above "Possible ID switches": a button that reopens the session's Track All summary
+ * once its box was closed — the box offers the checks not run yet. Only after a Track All
+ * in this page: the summary is not saved with the project.
+ */
+function trackSummaryHtml(session) {
+    return session && session._trackSummary && _openSummary
+        ? '<div class="info-section id-switch-track-summary"><button class="panel-btn" id="idSwitchTrackSummary" ' +
+          'title="Reopen the box Track All showed when it finished">Show Track All summary</button></div>'
+        : '';
+}
+function wireTrackSummary(host, session) {
+    var b = host.querySelector('#idSwitchTrackSummary');
+    if (b) b.addEventListener('click', function () { if (_openSummary) _openSummary(session); });
+}
+
 /**
  * The recording's frame rate, and whether it was measured from the video. The
  * checks convert their time settings (and weight their scores) with it, so a
@@ -166,23 +193,30 @@ function drawCropSkeleton(ctx, pts, edges, color) {
 function openProgressDialog(title) {
     var ctl = new AbortController();
     var overlay = document.createElement('div');
-    overlay.className = 'multi-frame-modal-overlay';
+    overlay.className = 'multi-frame-modal-overlay id-switch-progress-overlay';   // no grey backdrop (styles.css)
     overlay.innerHTML = '<div class="multi-frame-modal id-switch-progress"><h3>' + escapeHtml(title) + '</h3>' +
         '<div class="id-switch-progress-text">Starting…</div>' +
         // the same playhead line as the ID Switches rows' bars, standing proud of an inner track that clips the fill
         '<div class="id-switch-progress-bar"><div class="id-switch-progress-track"><div class="id-switch-progress-fill"></div></div>' +
         '<div class="id-switch-phead"></div></div>' +
-        // the percentage and the device line, beside a sample of the crops being embedded (above Cancel)
+        // the percentage, then the CPU and GPU lines with their load graph to the right — all beside a sample of
+        // the crops being embedded (above Cancel)
         '<div class="id-switch-progress-row"><div class="id-switch-progress-info">' +
         '<div class="id-switch-progress-pct">0%</div>' +
-        '<div class="id-switch-progress-gpu"></div></div>' +
+        '<div class="id-switch-progress-hw"><div class="id-switch-progress-lines">' +
+        '<div class="id-switch-progress-cpu load-line is-cpu" hidden></div><div class="id-switch-progress-gpu load-line is-gpu"></div></div>' +
+        '<div class="id-switch-progress-graph"></div></div></div>' +
         '<figure class="id-switch-progress-crop"><canvas width="' + INPUT + '" height="' + INPUT + '" role="img" aria-label="Sample crop"></canvas>' +
         '<figcaption>First crop…</figcaption></figure></div>' +
+        // Brave hiding the real core count (and adding noise to canvas reads): what to do (ui/browser-hints.js)
+        '<div class="progress-hint" hidden></div>' +
         '<div class="modal-actions"><button id="idSwitchCancel">Cancel</button></div></div>';
     document.body.appendChild(overlay);
     var textEl = overlay.querySelector('.id-switch-progress-text'), fill = overlay.querySelector('.id-switch-progress-fill'),
         head = overlay.querySelector('.id-switch-phead'), pctEl = overlay.querySelector('.id-switch-progress-pct'),
         gpuEl = overlay.querySelector('.id-switch-progress-gpu'), cropEl = overlay.querySelector('.id-switch-progress-crop'),
+        cpuEl = overlay.querySelector('.id-switch-progress-cpu'), graph = createLoadGraph(overlay.querySelector('.id-switch-progress-graph')),
+        hintEl = overlay.querySelector('.progress-hint'),
         cropCanvas = cropEl.querySelector('canvas'), cropCaption = cropEl.querySelector('figcaption'), cropPixels = null;
     var cancel = function () { if (!ctl.signal.aborted) { ctl.abort(); textEl.textContent = 'Cancelling…'; } };
     var onKey = function (e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); } };
@@ -199,13 +233,23 @@ function openProgressDialog(title) {
                 pctEl.textContent = pct;
             }
         },
-        /** The device line: `{text, warn, title}` from formatEmbedDevice (ui/image-embedder.js). */
-        device: function (d) {
+        /**
+         * The CPU line (`{text, title}` from formatEmbedCpu; null: none) and the device line under it (`{text,
+         * warn, title, metered}` from formatEmbedDevice, ui/image-embedder.js). A line with a series in the
+         * graph wears its colour as a legend key; the graph shows once either line has one.
+         */
+        hardware: function (c, d) {
             if (ctl.signal.aborted) return;
-            gpuEl.textContent = d.text;
+            cpuEl.hidden = !c;
+            if (c) setLoadLine(cpuEl, c.text, c.title, true);
+            setLoadLine(gpuEl, d.text, d.title, !!d.metered);
             gpuEl.classList.toggle('is-warn', !!d.warn);
-            if (d.title) gpuEl.title = d.title; else gpuEl.removeAttribute('title');
+            graph.show(!!c || !!d.metered);
         },
+        /** In Brave with its fingerprinting protection on: the note on its random core count (`cores`, as reported). */
+        braveHint: function (cores) { if (!ctl.signal.aborted) renderBraveFingerprintingHint(hintEl, cores); },
+        /** One point of the load graph, in percent (null: not measured, or no such series). */
+        sample: function (cpuLoad, gpuLoad) { if (!ctl.signal.aborted) graph.push(performance.now(), cpuLoad, gpuLoad); },
         /**
          * Show a model input (`inputTensorToPixels`) captioned `label`, with `skeleton` — `{points, edges,
          * color}`, points in input pixels (cropPointsToInput) — drawn over it; null hides the square.
@@ -233,14 +277,13 @@ function openProgressDialog(title) {
 // ---------------------------------------------------------------------------
 
 async function runSize(session, rate) {
-    var label = 'Checking ID switches (body size)';
-    showLoadingProgress(label, 0, 1);
+    // The overlay's plain form (spinner + message), not a counter: the check is one uninterrupted block of
+    // main-thread work (~0.2-1.5 s) whose only progress is 0 then 1 of one fitting step — which the counter
+    // used to print as "0/1 frames (0%)", frozen until the overlay closed.
+    showLoading('Comparing each animal\'s body size before and after its contacts…', { title: 'Checking ID switches (body size)' });
     await yieldToPaint();
     try {
-        return await checkSizeSwitches(session, {
-            fps: rate.fps,
-            onProgress: async function (done, total) { showLoadingProgress(label, done, total); await yieldToPaint(); },
-        });
+        return await checkSizeSwitches(session, { fps: rate.fps });
     } finally { hideLoading(); }
 }
 
@@ -255,12 +298,22 @@ async function runImage(session, rate, inject) {
         embedder = await (inject.createEmbedder || createImageEmbedder)(session, { onStatus: function (t) { prog.update(t, 0); },
             maxViewsPerAnimal: getTrackingThreshold('imageCheckMaxViews'),
             webnn: getTrackingThreshold('imageCheckWebNN') > 0 });
-        // What runs the model, and — once embedding starts, every second — how busy it keeps the GPU
-        var meter = createLoadMeter();
+        // What runs the model, and — once embedding starts, every second — how busy the check keeps the CPU and
+        // the GPU, as two lines and a graph. The CPU's busy time is the embedder's threads plus the fit, which runs
+        // on the main thread between progress calls (fitMs, timed below); it is shared by all the cores.
+        var meter = createLoadMeter(), cpuMeter = createLoadMeter(), fitMs = 0, fitFrom = 0;
+        var cores = cpuCores();
+        var hasCpu = typeof embedder.cpuBusyMs === 'function';
+        if (hasCpu) prog.braveHint(cores);
         var showDevice = function () {
-            if (typeof embedder.device !== 'function') return;
-            var load = ticker && typeof embedder.busyMs === 'function' ? meter(performance.now(), embedder.busyMs()) : null;
-            prog.device(formatEmbedDevice(embedder.device(), load));
+            if (typeof embedder.device !== 'function' && !hasCpu) return;
+            var now = performance.now();
+            var load = ticker && typeof embedder.busyMs === 'function' ? meter(now, embedder.busyMs()) : null;
+            var cpuLoad = ticker && hasCpu ? cpuMeter(now, (embedder.cpuBusyMs() + fitMs) / Math.max(1, cores)) : null;
+            var cpu = hasCpu ? formatEmbedCpu(cores, cpuLoad) : null;
+            var gpu = formatEmbedDevice(typeof embedder.device === 'function' ? embedder.device() : null, load);
+            prog.hardware(cpu, gpu);
+            if (ticker) prog.sample(cpu && cpu.load, gpu.load);
         };
         showDevice();
         // A sample of what the model is given, every CROP_PREVIEW_MS, cycling through the embedder's recent
@@ -296,9 +349,12 @@ async function runImage(session, rate, inject) {
                     prog.update('Cropping and embedding ' + embedder.views.length + ' views: frame ' + done.toLocaleString() +
                         ' of ' + total.toLocaleString() + (done > 3 ? ' — about ' + fmtDuration(left) + ' left' : ''), 0.9 * done / total);
                 } else {
+                    if (fitFrom) fitMs += performance.now() - fitFrom;   // the fit since the last yield: main-thread CPU
+                    fitFrom = 0;
                     prog.update('Learning what tells the animals apart (camera ' + Math.min(done + 1, total) + ' of ' + total + ')…', 0.9 + 0.1 * done / Math.max(1, total));
                 }
                 await yieldToPaint();
+                if (stage !== 'embed') fitFrom = performance.now();
             },
         });
         if (res && embedder.backend) res.model = embedder.backend();   // after releaseFrames: the final word
@@ -309,6 +365,12 @@ async function runImage(session, rate, inject) {
         return res;
     } catch (e) {
         if (e && e.name === 'AbortError') return { ok: false, reason: 'cancelled', cancelled: true };
+        // A check that cannot run here — no network for the model's first download, no Nose/TTI —
+        // is a reason, like the gates above, not a failure (image-embedder.js `cannotRun`)
+        if (e && e.cannotRun) {
+            if (e.cause) console.warn('[id-switch-check:image] ' + e.message, e.cause);
+            return { ok: false, reason: e.message };
+        }
         throw e;
     } finally {
         clearInterval(ticker); clearInterval(cropTicker);
@@ -441,22 +503,21 @@ export function clearIdSwitchResults(session) {
 
 function aboutHtml(st, ran) {
     var r0 = st.results[ran[0]], im = st.results.image;
-    var sz = st.results.size;
-    return '<p>' + (sz && sz.ok ? 'By <b>body size</b>, each close encounter between two identities is scored by whether the ' +
-            'animals leaving it match the 3D size of the identities they now carry, learned from the tracker\'s own labels. ' : '') +
-        (im && im.ok ? 'By <b>images</b>, each contact is scored by whether each animal looks like itself just before and ' +
-            'just after it, so the check does not rely on the tracker\'s labels being mostly right. ' : '') +
-        'Flags are leads to review, not certainties: size cannot tell apart animals of near-equal size, and images ' +
-        'cannot tell apart animals that look alike.' +
+    var sz = st.results.size, by = [sz && sz.ok ? '3D body size' : '', im && im.ok ? 'appearance in the videos' : ''].filter(Boolean);
+    return '<p>Each contact between two identities is scored by whether each animal still looks like itself just before ' +
+        'and just after it — by ' + by.join(' and by ') + ' — so the checks do not rely on the tracker\'s labels being ' +
+        'mostly right. Flags are leads to review, not certainties: size cannot tell apart animals of near-equal size, ' +
+        'and images cannot tell apart animals that look alike.' +
         (ran.length === 2 ? ' <b>Review "Both" rows first</b> — when both checks flag the same contact it was a real swap ' +
-            'more often (on 8 proofread or tail-marked recordings: 4 of 4, against 6 of 8 for images alone).' : '') + '</p>' +
+            'more often (on 8 proofread or tail-marked recordings: 5 of 5, against 5 of 7 for images alone and 1 of 8 ' +
+            'for size alone).' : '') + '</p>' +
         '<p class="id-switch-rate">Analysed ' + r0.sampleHz.toFixed(1) + ' samples/s (every ' +
         (r0.step === 1 ? 'frame' : ordinal(r0.step) + ' frame') + ' at ' + r0.fps.toFixed(2).replace(/\.?0+$/, '') + ' fps' +
         (im && im.ok ? '; images at ' + im.imageHz.toFixed(1) + '/s, ' + im.crops.toLocaleString() + ' crops from ' + im.cameras.length + ' views' +
             (im.model && im.model.note ? ' (' + escapeHtml(im.model.note) + ')' : '') : '') +
         (r0.fpsFromVideo ? ', measured from the video)'
             : ') — <b>no video is loaded, so this frame rate was not measured</b>. If the recording ran at a ' +
-              'different rate, set it in the fps box and run the check again: scores are evidence per second.') + '</p>' +
+              'different rate, set it in the fps box and run the check again: its time windows are set in seconds.') + '</p>' +
         (im && im.ok && im.timing && im.timing.crops ? '<p class="id-switch-rate">Image check speed on this machine: ' +
             escapeHtml(formatEmbedTiming(im.timing)) + (im.timing.backend === 'cpu'
                 ? '. There was no GPU, so the image model ran on the CPU — the same model, much slower.</p>'
@@ -641,9 +702,9 @@ function idName(session, name) {
     return '<span class="id-switch-id"' + (col ? ' style="color:' + col + '"' : '') + '>' + escapeHtml(name) + '</span>';
 }
 
-/** A row's score: size scores are summed evidence (whole numbers), image scores a cosine contrast (-4..4). */
+/** A row's score: a cosine contrast (-4..4), to one decimal; results restored from older files were summed evidence (whole numbers). */
 function fmtScore(m) {
-    return m.cue === 'image' && Math.abs(m.score) < 100 ? (Math.round(m.score * 10) / 10).toFixed(1) : String(Math.round(m.score));
+    return Math.abs(m.score) < 10 ? (Math.round(m.score * 10) / 10).toFixed(1) : String(Math.round(m.score));
 }
 
 function rowHtml(session, st, f, both) {
@@ -651,7 +712,7 @@ function rowHtml(session, st, f, both) {
     var score = f.agree ? fmtScore(f) + ' / ' + fmtScore(f.agree) : fmtScore(f);
     var note = f.continues ? 'still swapped'
         : f.followOf != null ? 'follows the switch at ' + fmtTime(f.followOf)
-        : f.kind === 'end' ? (f.cue === 'image' ? 'labels change back here' : 'labelling changes here; earlier encounters look swapped') : '';
+        : f.kind === 'end' ? 'labels change back here' : '';
     var fixed = idSwitchFixFor(st, f);
     return '<div class="id-switch-row cue-' + cue + (f.continues || f.followOf != null ? ' is-repeat' : '') + (rev ? ' is-reviewed' : '') +
         (fixed ? ' is-fixed' : '') +
@@ -704,7 +765,7 @@ export function refreshIdSwitchPanel(session) {
     var st = session && session._idSwitch;
     var ran = st ? ['size', 'image'].filter(function (c) { return st.results[c] && st.results[c].ok; }) : [];
     if (!ran.length) {
-        host.innerHTML = '<div class="info-section"><h3>Possible ID switches</h3><p class="table-empty id-switch-empty">' +
+        host.innerHTML = trackSummaryHtml(session) + '<div class="info-section"><h3>Possible ID switches</h3><p class="table-empty id-switch-empty">' +
             (hasTrackedIdentities(session) ? 'No ID-switch check has run on this session yet.' : 'Run Track All first: the checks need tracked identities with 3D.') +
             '</p><div class="id-switch-run"><button class="panel-btn" data-run="menuCheckSizeSwitches">Check by body size</button>' +
             '<button class="panel-btn" data-run="menuCheckImageSwitches">Check by images…</button></div></div>';
@@ -712,12 +773,13 @@ export function refreshIdSwitchPanel(session) {
         host.querySelectorAll('[data-run]').forEach(function (b) {
             b.addEventListener('click', function () { var m = document.getElementById(b.dataset.run); if (m) m.click(); });
         });
+        wireTrackSummary(host, session);
         return;
     }
     var both = ran.length === 2, primary = listRows(st, false), all = listRows(st, true);
     var repeats = all.length - primary.length, done = primary.filter(function (m) { return isReviewed(st, m); }).length;
     var rows = st.showRepeats ? all : primary;
-    host.innerHTML =
+    host.innerHTML = trackSummaryHtml(session) +
         '<div class="info-section id-switch-head"><h3>Possible ID switches</h3>' +
         ran.map(function (c) {
             var r = st.results[c], n = countOnsets(r);
@@ -737,6 +799,7 @@ export function refreshIdSwitchPanel(session) {
         (rows.length ? rows.map(function (f) { return rowHtml(session, st, f, both); }).join('')
             : '<p class="table-empty">No encounter scored below the threshold.</p>') + '</div>';
     _progStale = true;                               // the list was rebuilt: re-find the selected row's bar
+    wireTrackSummary(host, session);
     highlightRow(rows.filter(function (f) { return rowKey(f) === st.current; })[0] || null);
     var nav = st.navigate || _navigate;
     // A row lands ID_SWITCH_LEAD_IN_SECONDS before the animals come close (data-go), so pressing play
