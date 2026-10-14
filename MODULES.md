@@ -99,6 +99,8 @@ the old `app.js` entry point.
 - `../ui/info-tip.js` — `installInfoTips`, called FIRST in `init()`, before any
   panel renders: the listeners are delegated, so they must be in place before
   the first `[data-infotip]` element exists.
+- `../ui/node-tooltip.js` — `installNodeTooltip`, right after it (the listeners
+  that put the node tooltip away on a press, key, wheel, scroll or resize).
 - `../ui/info-panel.js` — `setupPanelTabs`, `setupSkeletonEditing`,
   `setupVideosTab` (the Videos tab's Load/Remove buttons, wired once here
   because `updateInfoPanel`'s no-session early return used to leave them dead on
@@ -1485,6 +1487,25 @@ One behavior change, unavoidable in the representation: a boxed row could
 previously hold `[NaN, NaN]` and count as *present*; NaN-x now means absent. No
 producer emits such a row (every construction site writes `null`).
 
+**Per-node model scores live in ONE pool, not on each instance.** A prediction
+read from an `.slp` carries the model's confidence in each node
+(`pred_points.score`) — what the node tooltip shows (`ui/node-tooltip.js`) and
+what the writers put back. `Instance.setPointScores(src, start)` copies them into
+module-private `Float32Array` chunks (`storePointScores`; the first chunk starts
+at 4,096 scores and doubles to 1M, later chunks are 1M, a segment never straddles
+two) and the instance keeps only `_ps`, the integer offset of its first node
+(-1 = none, set in the constructor so every Instance keeps one shape). Measured in
+V8: a `Float32Array(15)` per instance is ~320 B of heap plus an ArrayBuffer for
+every GC to sweep, the integer ~8 B — and an EAGER per-camera folder can hold
+millions of predictions. Segments are written once and never edited, so
+`adoptPointScoresFrom` may share one and `insertNodeAt`/`removeNodeAt` write a new
+segment (`splicePointScores`) rather than touching the old; nothing is freed (a
+deleted instance leaves its floats behind, bounded by what was loaded, and a
+project load reloads the page). `pointScore(k)` is NaN for no score and for any
+`k` that is not an integer in range — `null >= 0` is true in JS and read node 0
+before that guard. **A lazy project does not use the pool**: frames re-hydrate on
+every revisit and would refill it, so its scores stay in the store (below).
+
 **Purpose.** Pure data-model classes — no DOM, no I/O. The single source of
 truth for skeletons, cameras, instances, frame groups, identities, and the
 session graph that holds them.
@@ -1508,7 +1529,10 @@ session graph that holds them.
   and `identityId` (null unless this is a TRACKLESS UNLINKED instance whose
   disbanded group's identity was retained on it by `unlinkGroup` — luc3d
   #201; consumed/cleared when the instance joins a group; not persisted).
-  Methods `toggleOccluded`, `setPointVisible`, `backupPoints`, `restorePoints`.
+  Methods `toggleOccluded`, `setPointVisible`, `backupPoints`, `restorePoints`,
+  and the per-node model scores `setPointScores(src, start)`,
+  `adoptPointScoresFrom(other)`, `hasPointScores()`, `pointScore(k)` (see the
+  score pool above).
 - `UnlinkedInstance` — wrapper around an `Instance` not yet placed in an
   `InstanceGroup`. Auto-incrementing `id`.
 - `FrameGroup` — per-frame container of linked `instances` and
@@ -1552,7 +1576,15 @@ session graph that holds them.
   a track (a pre-#273 `-1` is trackless). Used by the five group-naming status
   lines in `pose/initialization.js`. Tested by `tests/test-group-display-name.mjs`.
 - `Session` — top-level container: cameras, skeleton, tracks, identities,
-  frameGroups, instanceGroups. **`numAnimals`** is the number of animals every
+  frameGroups, instanceGroups. **`predictedNodeScore(cameraName, frameIdx,
+  inst, k)`** is the one answer to "what did the model score this node?" — the
+  node tooltip and the streaming writer's overlay both ask it. NaN unless `inst`
+  is `'predicted'` (an edit makes an instance `'user'`, and its positions are then
+  not what was scored; a reprojection was never scored). An eager prediction
+  answers from its own scores; a lazy one from the store row it was hydrated
+  from (`_rawInstIndex`, which must be an integer — `null` is not row 0), via
+  `lazyLoader.predictedPointScore` and by node NAME, so a skeleton edit after
+  loading cannot pair a node with another node's score. **`numAnimals`** is the number of animals every
   tracking run on the session caps identities at: a positive integer, `'auto'`
   (an explicit auto-detect), or `null` while nobody has been asked, which is
   what makes Track Frame / Track All prompt. Per session because a session is
@@ -1932,7 +1964,8 @@ both as they were. Covered by `tests/e2e/track-all-closes-timeline-and-3d.mjs`.
 `runTrackingPass` (Track All only — a range is a targeted re-run inspected on the
 timeline) opens `showTrackSummaryModal` (`ui/track-summary-modal.js`) with
 `summarizeTrackedIdentities` and one `describeSwitchCheck` per cue
-(`ui/track-summary.js`). It reports how long tracking took — `trackStart` is taken
+(`ui/track-summary.js`), after keeping both on the session with
+`rememberTrackSummary`, so the ID Switches tab can reopen the box once it is closed. It reports how long tracking took — `trackStart` is taken
 AFTER the animal-count prompt, so the user's typing is not counted, and stops when
 the identity pass returns — with its speed (fps, and × real time from the
 recording rate `state.fps`, falling back to `session.fps`, as the ID-switch checks
@@ -2147,7 +2180,12 @@ drifts upward (e.g., 4 → 11 on the test fixture).
 - `../import-export/save-load.js` — `markDirty` (every tracking pass, once its
   bail-outs are behind it — see above), `setStatus`, `hideLoading`.
 - `../ui/loading-overlay.js` — `showLoadingProgress`, `createProgressPacer`,
-  `yieldToPaint`.
+  `yieldToPaint`, and `setLoadingCpu({mainThread: true})` as the identity pass
+  starts: the overlay's CPU line and graph, clocking the main thread minus its
+  paint waits — one core's share, since the tracker steps frames in order with no
+  workers (tooltip: "…by Track All, which runs on the main thread: one core at
+  most"). Covered by `tests/e2e/track-all-cpu-load.mjs`, which also pins the
+  progress line's, status line's and summary box's thousands commas.
 - `../ui/rendering.js` — `drawAllOverlays`, `showPredictedOnly`,
   `PREDICTED_ONLY_NOTE`: Track Frame (when it found targets), Track Frame Range
   and Track All (when they assigned identities) end showing ONLY the Predicted
@@ -2166,7 +2204,8 @@ drifts upward (e.g., 4 → 11 on the test fixture).
 - `../ui/track-summary.js` — `summarizeTrackedIdentities`, `describeSwitchCheck`
   (the Track All summary's data).
 - `../ui/track-summary-modal.js` — `showTrackSummaryModal`: opened at the end of a
-  successful Track All (see above).
+  successful Track All (see above), with the session so it shows the Identities
+  section (`ui/identity-gallery.js`); `rememberTrackSummary`: keeps it for reopening.
 - `../ui/timeline-controller.js` — `collapseTimeline`: a successful Track All
   (not a range) closes the Timeline if it is open.
 - `../ui/panel-visibility.js` — `collapseViewport3D`: the same, for the 3D viewer
@@ -3241,7 +3280,12 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
 - `../import-export/save-load.js` — `markDirty`, `setStatus`,
   `showLoading`, `hideLoading`.
 - `../ui/loading-overlay.js` — `showLoadingProgress`, `createProgressPacer`,
-  `yieldToPaint` (Triangulate All's eager loop and `sweepLazyFrameWindows`).
+  `yieldToPaint` (Triangulate All's eager loop and `sweepLazyFrameWindows`), and
+  `setLoadingCpu`: both Triangulate All paths hand the overlay their solver's
+  `cpuBusyMs()` right after creating it (`showSolverCpu`), so the overlay shows a
+  CPU line and a CPU-only load graph — triangulation never touches the GPU — whose
+  tooltip names the workers, or "solving on the main thread" when inline.
+  `hideLoading` stops it.
 - `./triangulation-core.js` — the pure math (re-exported) and
   `setTriangulationSettingsHooks`.
 - `./triangulation-pool.js` — `createGroupSolver` (Triangulate All's parallel solve).
@@ -3522,7 +3566,7 @@ cores busy).
 
 **Key exports.** `createGroupSolver(cameras, { method, triangulateOnly,
 expectedGroups })` -> `{ submit(group, groupCameras, cb), mark(cb), throttle(),
-finish(), cancel(), parallel, workers }`; `MIN_GROUPS_FOR_WORKERS` (2000).
+finish(), cancel(), cpuBusyMs(), parallel, workers }`; `MIN_GROUPS_FOR_WORKERS` (2000).
 
 **Contract.**
 - **Callbacks run in submission order** (jobs and `mark`s interleaved as
@@ -3542,11 +3586,24 @@ finish(), cancel(), parallel, workers }`; `MIN_GROUPS_FOR_WORKERS` (2000).
   and are terminated after 30 s idle. One solver owns the pool at a time (a
   concurrent second run solves inline). Every call site passes `method:
   method` explicitly (`tests/test-triangulation-method-propagation.mjs`).
+- **`cpuBusyMs()`** — the run's CPU time so far, thread-ms summed over threads,
+  for the loading overlay's CPU line (`createBusyClock`, `ui/load-graph.js`, one
+  per solver). A lane per worker slot from `postMessage` to its reply (one batch
+  per slot at a time); and `'main'`, open from `createGroupSolver` to `finish` /
+  `cancel` EXCEPT while the main thread waits on the workers in `throttle` /
+  `finish` (`waitOn`) — it prepares and applies batches the rest of the time. A
+  reply is handled during such a wait, so `onWorkerMessage` reopens `'main'` for
+  its duration (nested, so a reply handled while `'main'` is already open is not
+  counted twice). The caller's paint waits (`pacer.yield`) still count as busy: at
+  most a frame per ~250 ms chunk. Inline, `'main'` never closes: exactly one core.
+  Measured on a 12-core M2 Pro, Refined, 11 workers: 92-95% — the 11 workers are
+  91.7% on their own, so the main thread mostly waits on them.
 
 **Imports from project modules.** `./triangulation-core.js`
 (`triangulateAndReproject`), `./pose-data.js` (`Instance`), `../ui/settings.js`
 (`isCameraTracked`, `getTrackingThreshold` — `typeof`-guarded for the flat test
-sandbox).
+sandbox), `../ui/load-graph.js` (`createBusyClock`; only called inside
+`createGroupSolver`, which the flat test sandbox never runs).
 
 **Imported by.** `pose/triangulation.js` (`triangulateAllFrames`,
 `sweepTriangulateAllFrames`), `ui/export-modals.js`
@@ -3556,7 +3613,9 @@ sandbox).
 All route (eager, windowed with windows released mid-flight, group-by-identity
 DLT) run inline and on a forced 4-worker pool must hash identically, with a
 reprojection threshold and an excluded camera in effect (and a control proving
-those settings change the result).
+those settings change the result). `tests/e2e/triangulate-all-cpu-load.mjs` —
+`cpuBusyMs()` through the overlay: more than one core's share on the pool (so
+the workers are counted), exactly one core's inline.
 
 ---
 
@@ -4010,22 +4069,66 @@ buffered in memory, and multi-session loading refuses. Measured on Brave 1.96
 `brave://flags/#file-system-access-api` ("File System Access API"). Safari and
 Firefox can't enable the API, so they get no hint (existing messages stand).
 
+**Brave's fingerprinting protection ("farbling").** With Shields at their
+default, Brave reports a RANDOM core count to each site
+(`navigator.hardwareConcurrency`, between 2 and the true count, fixed per site
+for a session) and adds noise to canvas pixel reads. Measured with Brave 1.97
+(Chromium 155) on a 12-core M2 Pro, fresh profiles: 4, 6, 7, 8, 9, 10, 11, 12
+cores across sessions; a 64 x 64 pattern written and read back came back with
+230-280 of 16,384 values off by 1 (0 in Chromium). A per-site exception
+(Shields > Advanced controls > Allow fingerprinting) stops both: 12 cores every
+session, 0 values changed. It matters because the worker pools are sized from
+the core count — Triangulate All on 60,000 frames took 3.0 s with 12 reported,
+4.7 s with 4 and 16 s at Brave's floor of 2 (above ~6 the main thread feeding
+the workers is the limit, so a middling draw costs little) — the CPU line
+divides by it, and the image ID-switch check reads its crops from a canvas. The
+app cannot learn the true count, so it tells the user how to give it: a note
+under the CPU line of the progress popups. Detection is the canvas read, not
+the count: a draw can land on the true count (it did, in the e2e run) and the
+noise is still there.
+
 **Key exports.**
 - `isBrave()` — `navigator.brave.isBrave` present.
 - `hasFileSystemAccess()` — save + directory pickers available.
 - `fileSystemAccessHint()` — how to enable the API (paste
   `brave://flags/#file-system-access-api`, set Enabled, relaunch — or use
   Chrome/Edge); `''` unless Brave with the API off, so callers can append it.
+- `canvasReadsPerturbed()` — a known 64 x 64 pattern written with
+  `putImageData` and read straight back comes back changed. Checked once per
+  page and cached (~7 ms in Brave): it cannot change without a reload, which is
+  what changing Shields does. `__setCanvasProbe(fn)` replaces it for tests.
+- `braveFingerprintingActive()` — Brave AND canvas reads perturbed.
+- `braveFingerprintingHint(cores)` -> `{lead, why, steps, after}` | null —
+  "Brave reports a random number of CPU cores to this site (this session: N)"
+  ("random", not "wrong": the draw can be the true count), what that does here,
+  three steps — save first (changing Shields reloads the page); click the
+  Shields icon (the lion) at the right end of the address bar; open Advanced
+  controls and choose Allow fingerprinting (older versions: switch off Block
+  fingerprinting), reload if Brave does not — and "This note goes away once it
+  has worked." The labels are Brave 1.97's own, read out of its `locale.pak`.
+  null unless `braveFingerprintingActive()`.
+- `renderBraveFingerprintingHint(el, cores)` — fills `el` (a `.progress-hint`)
+  with the bold lead, a numbered list and the after-note, built from text
+  nodes, and shows it; hides and empties it when there is no hint.
 
-**Imports from project modules.** None.
+**Imports from project modules.** None. No DOM at load (the canvas probe runs
+on first use, on the main thread), so it is safe to import anywhere.
 
 **Imported by.** `loading/session-loader.js` (multi-session load message),
 `import-export/save-load.js` (`saveProjectSlp` download fallback status),
 `ui/export-modals.js` (3D video + JSON export in-memory confirms),
-`ui/overlay-export-modal.js` (overlay video in-memory confirm).
+`ui/overlay-export-modal.js` (overlay video in-memory confirm),
+`ui/loading-overlay.js` (`setLoadingCpu`: the note under the loading card's CPU
+line, `#loadingBraveHint`), `ui/id-switch-modal.js` (the image check's dialog,
+under its CPU and GPU lines).
 
 **Tests.** `tests/test-browser-hints.js`; verified end to end in real Brave
 (default profile vs `--enable-features=FileSystemAccessAPI`).
+`tests/e2e/brave-fingerprinting-hint.mjs` drives REAL Brave (fresh headless
+profiles; skips when Brave is not installed, `BRAVE=` overrides the path): the
+note in both popups with default Shields, not on a popup without a CPU line,
+gone with the popup; none with the per-site exception (which also gives the
+true core count); none in Chromium.
 
 ### ui/custom-delete-ops.js
 
@@ -5316,8 +5419,24 @@ session has no store, so it deletes exactly as before. Covered by
 - `./keyboard-target.js` — `shouldIgnoreShortcut`.
 - `./custom-delete-ops.js` — `deleteTargetsFromStore`, `groupMemberTargets`,
   `unlinkedTarget` (import-free itself, so this adds no cycle).
+- `./node-tooltip.js` — `nodeTooltipText`, `setNodeTooltipTarget`,
+  `hideNodeTooltip`.
+- `./overlays.js` — `getGroupColor`, `unlinkedDupIndices`, `unlinkedBaseColor`
+  (the node tooltip's color; `overlays.js` imports nothing, so no cycle).
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`.
+
+**The node tooltip is fed from the hover.** `onMouseMove` hands
+`_nodeTooltipTarget(state, view, frame, hit, ulHit)` to
+`setNodeTooltipTarget` on every move: the node under the pointer (linked or
+unlinked), named from the skeleton, with `Session.predictedNodeScore` as the
+score — none on an edge, a plane node or empty canvas, and no score on a
+reprojection — and the color the hovered instance is drawn from
+(`getGroupColor` for a group's member or reprojection, `unlinkedBaseColor` for
+an ungrouped one, in the current Tracks / Identity mode). It reports the
+instance the hit test picked — the one a click would select: where a grouped and
+an ungrouped skeleton overlap, grouped wins. `onMouseLeave` hides it. See
+`ui/node-tooltip.js`.
 
 **User-facing features.** Click-to-select skeleton nodes, drag to move
 keypoints, Alt+drag to move a whole instance, Alt+wheel to rotate one about a
@@ -5507,10 +5626,40 @@ determinate progress bar — the ONE progress component shared by Track All,
 Triangulate All (all three routes), Group by Identity/Track, and anything else
 that runs a chunked main-thread loop behind the overlay.
 
+**It is a card in the image ID-switch check's dialog style**
+(`ui/id-switch-modal.js`): an opaque `.loading-card` (540 px, `--bg-secondary`,
+border, 8 px radius, 24 px padding, shadow) with an optional title
+(`#loadingTitle`), the message, the ETA, the image check's bar — a track that
+clips a cyan fill, and a playhead line (`#loadingProgressHead`) standing proud
+of it — and the large percentage under the bar (`#loadingPct`; shared rule with
+`.id-switch-progress-pct`), then the detail line and the CPU row, all
+left-aligned. The full-window `.loading-overlay` under it is TRANSPARENT: the
+app stays visible, not greyed out, but cannot be clicked while an operation
+runs (Triangulate All resolves its settings once and relies on that). The image
+check's own backdrop is transparent too (`.id-switch-progress-overlay`). The
+spinner (now 14 px, before the message) shows only for a message with no bar.
+Every caller of the overlay gets the card — loading, exports, Group by — but
+only Track All / Track Frame Range, Triangulate All and the body-size check
+give it a title. Pinned in all four by `tests/e2e/fixtures/progress-card.js`
+(opaque card, transparent but blocking backdrop, left-aligned, the CPU line at
+the card's content edge).
+
 **Key exports.**
-- `showLoading(msg)` — indeterminate form (spinner + text); hides the bar.
-- `showLoadingProgress(label, done, total, { step, steps, detail, unit })` —
-  writes the standard `"<label>: done/total frames (pct%)…"` line and drives the
+- `showLoading(msg, { title })` — indeterminate form (spinner + text); hides the
+  bar and the percentage.
+- **The title** (`opts.title` on either call) names the operation — "Track All",
+  "Triangulate All", "Checking ID switches (body size)" — and is KEPT until
+  `hideLoading` (or a call passing another; `''` clears it), so the progress
+  calls deep inside a run, and a message mid-run, need not repeat it; each
+  operation passes it on its first call only. An operation that passes none
+  shows none.
+- `showLoadingProgress(label, done, total, { step, steps, detail, unit, title })` —
+  writes the standard `"<label>: done/total frames…"` line — the counts
+  with thousands commas, "Triangulating: 2,000,000/2,000,000 frames…"
+  (`toLocaleString('en-US')`, so the separator does not depend on the browser's
+  locale), the floored percentage under the bar instead of in the line (the
+  image check's layout), moves the playhead with the fill (both by `transform`,
+  so both glide on the compositor), and drives the
   bar (`#loadingProgress` / `#loadingProgressFill`, `role="progressbar"`). The
   line under the bar (`#loadingSubstatus`) carries `Step k of n` (only when
   `steps > 1`) and `detail` (method, group counts), so the main line keeps one
@@ -5527,22 +5676,54 @@ that runs a chunked main-thread loop behind the overlay.
   done, total)` and `formatRemaining(ms)` are exported for tests, as is the
   clock hook `__setLoadingOverlayClock(fn)`. The raw estimate is exposed as
   `#loadingEta[data-ms]`, which the bench reads to score accuracy.
-- `hideLoading()` — hides the overlay and resets the bar.
+- `hideLoading()` — hides the overlay and resets the bar (and stops `setLoadingCpu`).
+- `setLoadingCpu(source)` — while an operation that can clock its CPU time runs,
+  a CPU line and a graph of the last minute under the detail line
+  (`#loadingHardware` = `#loadingCpu` + `#loadingGraph`): "CPU: 12 cores · load
+  92%", sampled every `CPU_SAMPLE_MS` (1 s) as busy thread-ms / cores through
+  `createLoadMeter`, its tooltip ending "kept busy over the last 5 s by " +
+  `source.counts`. Two kinds of source: `{cpuBusyMs, counts}` — Triangulate All,
+  its solver's clock over the workers and the main thread — or `{mainThread:
+  true, counts}` — Track All / Track Frame Range, whose tracker steps the frames
+  in order on the main thread with no workers. For that one the overlay clocks
+  the main thread itself (`createBusyClock`): busy from the call on, EXCEPT while
+  it waits in `yieldToPaint` — which closes the `'main'` lane for the wait,
+  counting overlapping yields so the lane reopens once, when the last one ends.
+  So it reads one core's share (8% on 12 cores): the honest picture of a
+  single-threaded pass on a many-core machine. Its other waits — the windowed
+  sweep's 50 ms GC hint every 5 windows — still count; negligible. CPU only: the
+  operations that report here never use the GPU. The same parts as the image
+  check's dialog (`createLoadGraph`, `formatCpuLoad`, `setLoadLine`,
+  `ui/load-graph.js`); the graph is built into `#loadingGraph` once and
+  `clear()`ed per operation. In Brave with its fingerprinting protection on,
+  a note under it (`#loadingBraveHint`, `renderBraveFingerprintingHint`,
+  `ui/browser-hints.js`) says the core count is a random one and how to stop
+  that. Until `hideLoading()` or `setLoadingCpu(null)`; a
+  source that throws stops it. An operation that never calls it shows no CPU
+  row (Group by Identity/Track, the body-size ID-switch check, loading). The
+  body-size check is left out ON PURPOSE: it runs as one uninterrupted block of
+  main-thread work, 218 ms on 27k frames x 3 animals and 760 ms on 106k
+  (measured), and the line samples once a second after 0.5 s of history — so it
+  could only ever read "CPU: 12 cores", with no load. A CPU line is worth adding
+  to an operation that runs for several seconds AND yields while it does.
 - `createProgressPacer(intervalMs = PROGRESS_INTERVAL_MS)` → `{ due(), yield() }`.
   `due()` is true at most once per interval (a `performance.now()` check, cheap
   enough to call every iteration); `yield()` = `yieldToPaint()`, after which the
   interval restarts (so it measures WORK time between yields).
-- `yieldToPaint()` — resolves after the browser has painted: rAF then a task
+- `yieldToPaint()` — (also the wait a `{mainThread}` CPU line leaves out) resolves after the browser has painted: rAF then a task
   queued after it (a bare `setTimeout(0)` can fire before the next display frame,
   leaving the overlay unpainted for another whole chunk), with a 100 ms timer
   fallback for throttled rAF. A hidden tab yields through a `MessageChannel`
   instead — no paint needed, and unlike chained timers it is not throttled to
   1/s in background tabs.
-- `PROGRESS_INTERVAL_MS` (250).
+- `PROGRESS_INTERVAL_MS` (250), `CPU_SAMPLE_MS` (1000).
 
-**Imports from project modules.** None (safe under the Node test stubs: every
-DOM access is null-guarded, and with no `requestAnimationFrame` it yields via
-`MessageChannel`).
+**Imports from project modules.** `./load-graph.js` (`createLoadMeter`,
+`createBusyClock`, `createLoadGraph`, `formatCpuLoad`, `setLoadLine`, `cpuCores` —
+itself import-free and DOM-free at load), `./browser-hints.js`
+(`renderBraveFingerprintingHint`; also import-free and DOM-free at load). Safe under the Node test stubs: every DOM access is
+null-guarded (no `#loadingHardware` → `setLoadingCpu` does nothing), and with no
+`requestAnimationFrame` it yields via `MessageChannel`.
 
 **Imported by.** `import-export/save-load.js` (re-exports `showLoading`/
 `hideLoading`), `pose/tracker.js`, `pose/triangulation.js`, `ui/export-modals.js`,
@@ -5560,6 +5741,85 @@ DOM access is null-guarded, and with no `requestAnimationFrame` it yields via
   measures run time, update cadence and paints/s on a real project.
 - Not to be confused with `ui/loading-progress-modal.js`, the per-camera,
   multi-row panel used for video loading.
+
+---
+
+### ui/load-graph.js
+
+**Purpose.** How busy a long operation keeps the CPU (and the GPU), for its
+progress UI: the busy clock its threads report to, the rolling load meter, the
+"CPU: 12 cores · load 7%" line, and a small graph of the last minute. Shared by
+the image check's progress dialog (`ui/id-switch-modal.js`: CPU and GPU lines,
+both series) and the loading overlay (`ui/loading-overlay.js` `setLoadingCpu`:
+the CPU alone — Triangulate All and Track All). No browser API reports the CPU's or a GPU's
+utilisation, so every load is the operation's OWN busy time as a share of the
+hardware, and each line's tooltip says other apps are not in it.
+
+**Key exports.**
+- `LOAD_WINDOW_MS` (5000); `createLoadMeter(windowMs)` -> `(now, busyMs) ->
+  pct|null` (moved here from `ui/image-embedder.js`, which re-exports it) — the
+  share of the window spent busy; for the CPU, feed thread-ms / cores.
+- `createBusyClock(now?)` -> `{begin(lane), end(lane), close(lane?), ms()}` —
+  busy time summed over lanes (threads); nested per lane (a crop worker holds
+  several queued jobs; a pool's `'main'` is reopened by a reply handled while it
+  waits); open spans count up to now; `close()` with no argument closes every lane.
+- `formatCpuLoad(cores, load, counts)` -> `{text, title, load}` — "CPU: 12 cores ·
+  load 7%" (`cores` = `navigator.hardwareConcurrency`, logical processors; one
+  saturated thread on 12 cores reads 8%); the tooltip is "The share of the CPU's
+  12 cores kept busy over the last 5 s by " + `counts` + ". Browsers do not report
+  the CPU's total load, so other apps are not included." `cpuCores()`.
+- `LOAD_GRAPH_SPAN_MS` (60 s); `loadGraphPath(samples, now, spanMs, w, h)` -> SVG
+  path data, placed by TIME (ticks are uneven: long work blocks the 1 s timer),
+  broken at nulls, a lone point as a zero-length segment (a dot under the round cap).
+- `LOAD_GRAPH_W` / `LOAD_GRAPH_H` / `LOAD_GRAPH_PAD` (84 x 34 px plot, the series
+  inset 2 px so 0% and 100% are not half clipped). 84 rather than the first
+  cut's 104: with the y labels beside it, that is what keeps the image check's
+  "GPU: WebGPU, fp16 · load 100%" (205 px) on one line in its 540 px dialog.
+  `LOAD_GRAPH_TICK` (4 px): the axis ticks' length.
+- `createLoadGraph(box)` -> `{show(on), push(t, cpu, gpu), clear()}` — builds the
+  graph into `box` (class `load-graph`): a 50% hairline, a CPU and a GPU series,
+  and **labelled axes**, as few as fit — "100%", "50%", "0%" left of the plot and
+  "60 s ago" … "now" under it, 9 px in the muted text colour — **each with a tick
+  pointing OUT of the plot** (MATLAB's `TickDir 'out'`, which keeps the data clear
+  of them): a 4 px tick at each labelled level running left from the left edge,
+  and one under each bottom corner running down; a label sits 2 px beyond its
+  tick. The ticks are absolutely positioned spans in the plot's wrapper, placed
+  from the same constants as the series (the SVG must keep `overflow: hidden` —
+  points older than the span sit left of it — so they cannot be drawn in it), and
+  the plot's corners are square, an axes box whose corner ticks continue its
+  edges. The y labels are
+  ZERO-HEIGHT boxes (`line-height: 0`) spread by `space-between` over a column
+  as tall as the plot's 0-100% span and offset by its inset (`height` /
+  `margin-top` set inline from the constants), so each label's text centres on
+  the level it names — measured within 0.5 px. Both axes are `aria-hidden`; the
+  SVG's `aria-label` ("Load from 0 to 100% over the last 60 s") says the same.
+  On hover, a cursor, a dot per series and a readout above the graph ("12 s
+  ago · CPU 7% · GPU 80%") for the nearest MEASURED sample (the first tick's are
+  null), kept current as the graph moves under a still pointer. `show(false)` is
+  `visibility`, so the space stays reserved.
+- `setLoadLine(el, text, title, series)` — a line's text and tooltip, and its
+  legend key (`.load-line.has-series::before`, in `.is-cpu` / `.is-gpu` colour).
+
+**Styles.** `styles.css` `.load-line` / `.load-graph*`; the series colours are
+`:root` `--load-cpu` `#3987e5` and `--load-gpu` `#d95926`, the first two slots
+of the dataviz skill's validated categorical palette (dark steps), checked
+against the plot's `#1a1a1a` (CVD dE 26.8).
+
+**Imports from project modules.** None, and no DOM at load time:
+`ui/image-embedder.js` imports it and is also loaded by the crop and model workers.
+
+**Imported by.** `ui/image-embedder.js`, `ui/id-switch-modal.js`,
+`ui/loading-overlay.js`, `pose/triangulation-pool.js`.
+
+**Coverage.** `tests/test-load-graph.mjs` (the clock, the meter, the CPU line,
+the path); the axis labels' rendered text against the levels they name, and the
+five ticks (at those levels / under the corners, pointing out, labels clear of
+them), in all three places the graph appears, by
+`tests/e2e/fixtures/load-graph-axes.js` (a Range over each label — the boxes are
+zero-height); the DOM half in `tests/e2e/id-switch-image-check.mjs` (CPU + GPU,
+hover), `tests/e2e/triangulate-all-cpu-load.mjs` (CPU only, on the overlay) and
+`tests/e2e/track-all-cpu-load.mjs` (the overlay's main-thread clock, with the
+paint-wait control).
 
 ---
 
@@ -6290,6 +6550,14 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `getGroupColor`,
   `getInstanceColor`, `adjustColorBrightness`, `errorColor`, `hexToRgb`,
   `brightenColor`, `desaturateColor`, `complementaryColor`.
+  **`unlinkedDupIndices(unlinkedInstances, typeFilter)`** and
+  **`unlinkedBaseColor(instance, dupIdx, session, cameraName, useIdentity,
+  frameIdx)`** are the rule `drawUnlinkedInstances` colors an ungrouped
+  instance by — `getInstanceColor`, darkened by `max(0.35, 1 − 0.22·k)` for the
+  k-th later instance of the same type sharing a raw `trackIdx` — pulled out so
+  the node tooltip's stripe (`ui/interaction.js` → `ui/node-tooltip.js`) is
+  computed by the same function and cannot name a different color from the one
+  drawn. Behaviour unchanged (`tests/e2e/unlinked-instance-color-collision.mjs`).
   `getGroupColor`/`getInstanceColor` return `NULL_ID_COLOR` when
   `useIdentity` and `session.isExplicitNoIdentity(...)` is true, and also —
   when coloring by track — for any instance/group on the "No ID" track
@@ -6676,7 +6944,9 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
 **Imported by.** `pose/initialization.js`, `ui/timeline.js`,
 `ui/rendering.js`, `ui/info-panel.js`, `ui/app-state.js` (`DEFAULT_TRAIL_SHADE`),
 `ui/ui-wiring.js` (`TRAIL_SHADES`, `TRACK_COLORS`, `trailShadeFor`,
-`trailColor` — the trail menus), `ui/overlay-export-modal.js`.
+`trailColor` — the trail menus), `ui/overlay-export-modal.js`,
+`ui/interaction.js` (`getGroupColor`, `unlinkedDupIndices`, `unlinkedBaseColor`
+— the node tooltip's color).
 
 **User-facing features.** All on-canvas pose drawing — colored skeletons,
 reprojection error vectors, drag preview, selection highlight, instance
@@ -6900,6 +7170,9 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   call sites are inside function bodies.
 - `./animal-count-field.js` — `syncAnimalCountField`. **Circular** through
   `pose/tracker.js`, which imports this module; safe for the same reason.
+- `./node-tooltip.js` — `syncNodeTooltipFrame`, first thing in
+  `drawAllOverlays`: a node tooltip about another frame names a node that has
+  moved out from under the pointer.
 
 **Imported by.** `pose/triangulation.js`, `pose/tracker.js`,
 `pose/initialization.js`, `import-export/save-load.js`,
@@ -9342,7 +9615,13 @@ change point and repeat on the transport seekbar (`setSeekbarSwitchMarkers`, `ui
 navigateToFrame?, inject?})`; `setIdSwitchNavigator(fn)` (ui-wiring registers
 `navigateToFrame` once, so rows stay clickable when the tracker started the
 check); `setIdSwitchRefresher(fn)` (ui-wiring registers the repaint run after a
-fix / undo — overlays, 3D, info panel, timeline — keeping this module a leaf); `refreshIdSwitchPanel(session?)` (render the tab and put that session's
+fix / undo — overlays, 3D, info panel, timeline — keeping this module a leaf);
+`setTrackSummaryOpener(fn)` (ui/track-summary-modal.js registers `reopenTrackSummary`
+for the tab's **Show Track All summary** button — the first thing in the tab, above
+"Possible ID switches", in both the results and the empty state, shown only when the
+session has a summary from a Track All in this page, since it is not saved; it is
+how a box closed without running the image check is got back, to run it);
+`refreshIdSwitchPanel(session?)` (render the tab and put that session's
 markers on the seekbar — called after a check, from `updateInfoPanel` and from
 `switchSession`); `openIdSwitchPanel()` (show the panel, if hidden, on the tab);
 `clearIdSwitchResults(session?)` (called by `runTrackingPass` before it relabels);
@@ -9382,11 +9661,38 @@ frame i of n — about X min left", then "Learning what tells the animals apart
 (camera i of n)", with the overall percentage under
 the bar (the same rounded value as the bar's width; embedding is its first 90%) and
 the ID Switches rows' playhead line (`.id-switch-phead`) at the fill's leading edge.
-Under the percentage, the device line (`formatEmbedDevice`, ui/image-embedder.js):
-"GPU: Apple metal-3 (WebGPU, fp16) · load 87%", the load refreshed every second
-from the first embedded frame (`createLoadMeter` over `busyMs()`), so it falls to
-0% while fitting, which runs on the CPU; with no GPU, "No GPU: running on the CPU
-(4 workers) — slow" in the warning colour, why in its tooltip. An injected
+Under the percentage, **the CPU line over the device line**, and **a graph of both
+loads to their right** (`hardware(cpu, gpu)` / `sample(cpu, gpu)` on the dialog).
+The CPU line (`formatEmbedCpu`, ui/image-embedder.js): "CPU: 12 cores · load 7%" —
+the share of ALL `navigator.hardwareConcurrency` cores the check kept busy over the
+last 5 s, i.e. `createLoadMeter` over (`cpuBusyMs()` + the fit's main-thread time) /
+cores, so one saturated thread on 12 cores reads 8%. The fit is timed HERE, in the
+progress callback: it runs synchronously between `progress('fit', …)` calls, so the
+time from the end of one callback's `yieldToPaint` to the start of the next is
+main-thread fitting (`fitMs`); the first camera's interval is not counted (it is the
+wait for the last embeddings). Video decoding and the page's other main-thread work
+are not in it — no browser API reports a thread's or the CPU's load — and its
+tooltip says so. The device line: "GPU: Apple metal-3 (WebGPU, fp16) · load 87%",
+the load refreshed every second from the first embedded frame (`createLoadMeter`
+over `busyMs()`), so it falls to 0% while fitting, which the CPU line then shows;
+with no GPU, "No GPU: running on the CPU (4 workers) — slow" in the warning colour,
+why in its tooltip, and no load. **The graph** (`createLoadGraph`, `ui/load-graph.js`
+— the same one the loading overlay shows for Triangulate All and Track All; an
+84 x 34 px plot with 0/50/100% and "60 s ago" … "now" axis labels and outward ticks, the lines inset
+2 px so 0% and 100% are not half clipped; the dialog is a fixed 540 px so the GPU
+line fits beside it and the width does not follow the progress text): the last
+`LOAD_GRAPH_SPAN_MS` (60 s), newest at the right edge, 0-100% with a hairline at
+50%, one sample per tick of the same 1 s timer, so its newest points ARE the two
+lines' loads. Points are placed by TIME (`loadGraphPath`), not index — fitting
+blocks the main thread for seconds, so ticks are uneven. A line with a series wears
+its colour as a legend key (`.has-series::before`, with a hanging indent so a long
+GPU name wraps after it); the "No GPU" line has no series and no key. Colours are
+the first two slots of the dataviz skill's validated categorical palette (dark
+steps), CPU `#3987e5`, GPU `#d95926` — validated against the plot's `#1a1a1a`
+(CVD dE 26.8). Hovering shows a cursor, a dot per series and a readout above the
+graph ("12 s ago · CPU 7% · GPU 80%") for the nearest MEASURED sample (the first
+tick's are null). The graph and both lines keep their space before they appear
+(`visibility`, `min-height`), so the dialog does not jump. An injected
 embedder without `device()` shows no line. **Beside them, above Cancel, a sample
 crop** (128 px, captioned "id_2 · cam5" with the animal's current label): exactly
 the model input — greyscale, nose right, masked — turned back into pixels by
@@ -9504,10 +9810,17 @@ rename them wrongly.
 
 **Imports from project modules.** `ui/app-state.js` (`state`, `timeline`,
 `getActiveSession`), `import-export/save-load.js` (`setStatus`),
-`ui/loading-overlay.js` (`showLoadingProgress`, `hideLoading`, `yieldToPaint`),
+`ui/loading-overlay.js` (`showLoading`, `hideLoading`, `yieldToPaint` — the body-size
+check shows the overlay's card titled "Checking ID switches (body size)", a spinner and
+"Comparing each animal's body size before and after its contacts…", not a counter:
+it is one uninterrupted ~0.2-1.5 s block whose only progress is 0 then 1 of one fitting
+step, which the counter printed as a frozen "0/1 frames (0%)"),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
 `ui/image-embedder.js` (`createImageEmbedder`, `IMAGE_MODEL_MB`, `formatEmbedTiming`,
-`createLoadMeter`, `formatEmbedDevice`),
+`formatEmbedDevice`, `formatEmbedCpu`, `inputTensorToPixels`, `INPUT`),
+`ui/load-graph.js` (`createLoadMeter`, `createLoadGraph`, `setLoadLine`, `cpuCores`),
+`ui/browser-hints.js` (`renderBraveFingerprintingHint`: in Brave with its fingerprinting
+protection on, the note under the CPU and GPU lines — `prog.braveHint(cores)`),
 `ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`,
 `idSwitchFixPlan`, `idSwitchFixFor`, `idSwitchRenameForFix`),
 `ui/id-switch-highlight.js` (`setIdSwitchHighlight`, `updateIdSwitchHighlight`,
@@ -9516,7 +9829,8 @@ rename them wrongly.
 **Imported by.** `ui/ui-wiring.js` (`#menuCheckSizeSwitches`,
 `#menuCheckImageSwitches`, `setIdSwitchNavigator`, `setIdSwitchRefresher`, `updateIdSwitchProgress`), `pose/tracker.js` (the
 automatic run, `clearIdSwitchResults`), `ui/info-panel.js` and
-`ui/sessions-panes.js` (`refreshIdSwitchPanel`).
+`ui/sessions-panes.js` (`refreshIdSwitchPanel`), `ui/track-summary-modal.js`
+(`openIdSwitchPanel`, `refreshIdSwitchPanel`, `setTrackSummaryOpener`).
 
 **Coverage.** `tests/e2e/size-switch-check.mjs` (size, menu path, the checklist:
 ticks, Next unreviewed, persistence across the tab / a re-run / a session switch,
@@ -9524,8 +9838,11 @@ Clear, one scroller),
 `tests/e2e/track-auto-size-switch-check.mjs` (after Track All / Track Frame Range),
 `tests/e2e/id-switch-image-check.mjs` (images with an injected embedder: "Both"
 merge, identical-size animals found by images only, Esc cancel, the progress dialog's
-percentage / playhead / GPU line / sample crop and skeleton overlay, no GPU = runs on
-the CPU to the end, menu, default off), `tests/e2e/id-switch-fix.mjs` (Fix switch…: both start rules in the
+percentage / playhead / CPU line above the GPU line / load graph (placement, legend
+keys, newest points = the lines' loads, hover readout) / sample crop and skeleton
+overlay, no GPU = runs on the CPU to the end and graphs the CPU alone, menu, default
+off), `tests/e2e/image-check-cpu.mjs` (the real dialog's measured CPU line and
+CPU-only graph), `tests/e2e/id-switch-fix.mjs` (Fix switch…: both start rules in the
 dialog, Esc / Cancel / shortcuts, the swap fixes exactly the crossed stretch, the
 row afterwards, the renamed follow-on, saved, Undo exact).
 
@@ -9745,7 +10062,14 @@ supply-bound. 16 in flight was tried and reverted: no change (PC 124, VM 160
 crops/s; decode is throughput-bound, so each frame just waited twice as long)
 while the PC's dedicated GPU memory climbed to 10.6 GB.
 **Live, in the progress dialog** (`device()` / `busyMs()` -> `formatEmbedDevice`
-+ `createLoadMeter`): which GPU runs the model and how busy the check keeps it.
++ `createLoadMeter`; `cpuBusyMs()` -> `formatEmbedCpu`): which GPU runs the model,
+how busy the check keeps it, and how busy it keeps the CPU. `cpuBusyMs()` is one
+`createBusyClock` (`ui/load-graph.js`) shared by the crop pool, the CPU model pool and inline (main-
+thread) crops: a lane per worker, busy while it HOLDS a job (queued in it or
+running — waits inside a job, such as a crop's GPU readback, count), summed over
+lanes, open spans counted up to now so a seconds-long CPU model run shows while it
+runs. The clock outlives the pools (the crop pool is re-made after `releaseFrames`),
+and a pool's `terminate` / failed worker closes its lanes.
 `gpuAdapterInfo(device, adapter)` names it from the model's own
 `GPUDevice.adapterInfo` (onnxruntime's `env.webgpu.adapter` is undefined in this
 build; a fresh default adapter is the last resort) — "Apple metal-3" from vendor
@@ -9870,7 +10194,7 @@ of the runtime. `createImageEmbedder`'s two preflight throws (no videos, no
 Nose/TTI) are `cannotRun` errors too.
 
 **Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, webnn, keyframes})` ->
-`{getEmbeddings, prepareFrames, releaseFrames, backend, device, busyMs, stats, inFlight, views}` (the provider
+`{getEmbeddings, prepareFrames, releaseFrames, backend, device, busyMs, cpuBusyMs, stats, inFlight, views}` (the provider
 `checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and the
 CPU model workers and disposes a WebNN model; `device()` -> `{backend: 'webgpu'|'webnn'|'cpu',
 comparing, dtype, adapter, fallback, workers, why}` and `busyMs()` feed the progress
@@ -9881,8 +10205,9 @@ Several rather than the latest because on the CPU frames arrive in bursts — 8 
 at once, then ~6 s of model time — and one latest crop sat still between them); `opts.device` ('auto' | 'webgpu' | 'cpu') and `opts.cpuWorkers`
 force a device / worker count (tests, benchmarking);
 `pickImageDevice()` -> `{kind: 'webgpu'|'cpu', adapter, why}`; `cpuModelWorkerCount(cores, memoryGB)`,
-`CPU_MODEL_MAX_WORKERS`; `createCpuModelPool(count, onStatus)` -> `{size, run(data, n) ->
-Promise<Float32Array[]>, terminate()}`;
+`CPU_MODEL_MAX_WORKERS`; `createCpuModelPool(count, onStatus, clock?)` -> `{size, run(data, n) ->
+Promise<Float32Array[]>, terminate()}`; `createCropPool(clock?)` -> `{broken, run(image, crops), terminate()}` | null
+(`clock`: a `createBusyClock`, ui/load-graph.js);
 `loadImageModel(onStatus)` (WebGPU; once, cached promise);
 `importTransformers()` (the runtime, imported once; re-imported under a new fragment
 after a failure); `cannotRun(reason, cause)` (an Error whose message is the reason
@@ -9891,8 +10216,12 @@ download as `MODEL_OFFLINE_REASON`, else `err` unchanged); `MODEL_OFFLINE_REASON
 `selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
 `summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`;
 `describeAdapter(info)`, `gpuAdapterInfo(device, adapter)` -> `{name, fallback}`,
-`createLoadMeter(windowMs)` -> `(now, busyMs) -> pct|null`, `GPU_LOAD_WINDOW_MS`,
-`formatEmbedDevice(device, load)` -> `{text, warn, title}`; `inputTensorToPixels(tensor, rgba)`
+`createLoadMeter` (re-exported from ui/load-graph.js, where it now lives), `GPU_LOAD_WINDOW_MS` (=
+`LOAD_WINDOW_MS`; the CPU line's window too),
+`formatEmbedDevice(device, load)` -> `{text, warn, title, metered, load}` (`metered`: the line has a series in
+the load graph — not for the CPU workers or a software adapter; `load`: what it shows, null when none),
+`formatEmbedCpu(cores, load)` -> `{text, title, load}` (`formatCpuLoad` with this check's "counts": cropping,
+the CPU model, fitting — not video decoding); `inputTensorToPixels(tensor, rgba)`
 (a model input back to grey RGBA, the inverse of `writeInputTensor`'s normalisation),
 `SAMPLE_CROPS` (12); `cropPointsToInput(g)` (`g.pts`, the keypoints `cropGeometry` now also
 records, NaN when missing, into model-input pixels: cutCrop's rotate-about-the-body-centre
@@ -9946,9 +10275,12 @@ importmap). Spawns `ui/image-crop-worker.js`.
 **Imported by.** `ui/id-switch-modal.js`, `ui/image-crop-worker.js`.
 
 **Coverage.** Crop geometry, `selectViews`, `chooseBackend`, the resize table and
-the keyframe line of `formatEmbedTiming` in
-`tests/test-id-switch-check.mjs`; `frameCropGeometry` on a released member (with
-the direct-read control that finds nothing) in `tests/test-lazy-residency.mjs`; the crop pool in `tests/e2e/image-crop-worker.mjs`;
+the keyframe line of `formatEmbedTiming`, and the dialog's lines (`formatEmbedCpu`,
+`formatEmbedDevice`'s `metered`/`load`) in
+`tests/test-id-switch-check.mjs` (the shared load helpers: `tests/test-load-graph.mjs`); `frameCropGeometry` on a released member (with
+the direct-read control that finds nothing) in `tests/test-lazy-residency.mjs`; the crop pool, and its busy clock against
+real workers, in `tests/e2e/image-crop-worker.mjs`; `cpuBusyMs()` over the real CPU model workers in
+`tests/e2e/image-check-cpu.mjs`;
 keyframe sampling on generated 60 fps H.264 and AV1 (keyframes every 30 frames vs one) in
 `tests/e2e/image-keyframe-sampling.mjs` (keyframe index, one decoded packet per
 sample, bit-identical planes, sparse video unchanged); a failed download in
@@ -10921,12 +11253,33 @@ three cases read alike.
 
 **Purpose.** The box that opens when Track All finishes: identities, frames
 tracked, frames with every animal, tracking time with its speed (fps, × real
-time), a bar per identity, each
+time), a bar per identity, the **Identities** section (`ui/identity-gallery.js` —
+five sample images and a path map per identity), each
 ID-switch check's result and time, and the **Next step** with its button focused.
-Renders `planTrackSummary` (`ui/track-summary.js`) and nothing else.
+Renders `planTrackSummary` (`ui/track-summary.js`) and the gallery, and nothing else.
 
-**Key exports.** `showTrackSummaryModal(summary, checks)` — returns
-`{close, overlay}`, or null without a DOM (Node harnesses run Track All).
+**Key exports.** `showTrackSummaryModal(summary, checks, {session})` — returns
+`{close, overlay, gallery}`, or null without a DOM (Node harnesses run Track All);
+with `session` it adds the Identities section, whose `gallery.done` settles once
+its images are drawn (`pose/tracker.js` and `reopenTrackSummary` pass it);
+`setTrackSummaryNavigator(fn)` (ui-wiring registers `navigateToFrame`, as it does
+for the ID Switches tab: a sample or a map point clicked closes the box and goes
+to that frame — the tracker that opens the box cannot import `pose/initialization.js`);
+`rememberTrackSummary(session, opts, checks, identities)` (Track All keeps what the
+box showed on `session._trackSummary` — in memory, not saved — and refreshes the
+ID Switches tab so its button appears); `reopenTrackSummary(session)` (the tab's
+**Show Track All summary**).
+
+**Reopening.** Closing the box used to be final, which stranded a user who had not
+turned on the image check before Track All: the box is what offers it. The ID
+Switches tab's button (`setTrackSummaryOpener`, registered at module load — this
+module imports `ui/id-switch-modal.js`, so that one stays a leaf) reopens it. The
+counts are re-taken from the session as it is now (`summarizeTrackedIdentities`
+with the pass's options — a fixed switch moves the shares); the tracking time is
+the pass's own. Each check shows its CURRENT result: a check run since the box
+closed replaces the pass's "Not run" / "Skipped" (and is no longer offered), and a
+check whose results were cleared reads "Not run" again. A skip or failure is kept
+from the pass, because `runIdSwitchChecks` stores only results that ran.
 
 **Notes / caveats.**
 - **A note, not a prompt.** Nothing changes until a button is pressed; Close,
@@ -10943,19 +11296,105 @@ Renders `planTrackSummary` (`ui/track-summary.js`) and nothing else.
   own.
 - **No inner scroller.** The identity list is capped instead; the modal itself
   caps its height at the viewport. It drops `.multi-frame-modal`'s 420px
-  `min-width` so it fits a narrow window.
+  `min-width` so it fits a narrow window. With the Identities section
+  (`.has-gallery`) it widens to 780px and its button row is STICKY at the
+  bottom, so the recommended step stays in view while the rows scroll.
 
-**Imports from project modules.** `ui/track-summary.js` (`planTrackSummary`),
-`ui/id-switch-modal.js` (`openIdSwitchPanel`).
+**Imports from project modules.** `ui/track-summary.js` (`planTrackSummary`,
+`summarizeTrackedIdentities`, `describeSwitchCheck`), `ui/id-switch-modal.js`
+(`openIdSwitchPanel`, `refreshIdSwitchPanel`, `setTrackSummaryOpener`),
+`ui/identity-gallery.js` (`renderIdentityGallery`).
 
-**Imported by.** `pose/tracker.js`. No cycle: neither import reaches back to the
-tracker.
+**Imported by.** `pose/tracker.js`, `ui/ui-wiring.js` (`setTrackSummaryNavigator`).
+No cycle: none of its imports reaches back to the tracker.
 
 **Coverage.** `tests/e2e/track-all-summary.mjs` — the real Track All button, the
 rows and times, the key swallowing and `Esc`, `Enter` running Triangulate All,
 replacement on a second run, no box after Track Frame Range, the nothing-tracked
-case, and Review switches landing on the first switch. Tests that click the app
-after a Track All close the box first (`#trackSummaryClose`).
+case, Review switches landing on the first switch, and §2b reopening from the ID
+Switches tab (the button's place above "Possible ID switches", the same box, a
+check run since reported rather than "Not run", Clear, and no button without a
+Track All). The Identities section: `tests/e2e/identity-gallery.mjs`. Tests that
+click the app after a Track All close the box first (`#trackSummaryClose`).
+
+### ui/identity-gallery.js
+
+**Purpose.** The Track All summary's **Identities** section: one row per identity
+— its name, five sample images of that animal spread over the recording, each
+from the view that shows it best and rotating through the views, and a map of its
+path over one camera's view (the camera picked above the rows). An identity that
+switched between animals that look different shows up as a row whose images are
+not all the same animal, or a path that jumps across the cage — seen before
+either ID-switch check is run. On the real CD1 recording (plain vs jacketed
+mouse) the two rows swap coats after the first sample; on 2022-10-07/145420 one
+dark-mouse row opens on a white mouse.
+
+**How a row is chosen** (the planning half, DOM-free):
+- `identityTracks(session)` — every identity's tracked frames and 3D centroids,
+  from `session.instanceGroups` (resident in full even on a lazy project). A
+  frame where an identity has two groups is left out, as the image check does.
+- `pickSampleFrames` — the middles of five equal slots of the identity's tracked
+  span, each moved, when it has to be, to a frame where the animal is ISOLATED
+  (its nearest other identity more than 1.5 of its body sizes away), the
+  isolated frame nearest the middle winning. Maximising isolation instead pushed
+  every pick to a slot edge, two samples a few frames apart; and only the middle
+  60% of each slot is searched, so in a cage too crowded for any frame to be
+  isolated neighbouring samples still stay 40% of a slot apart.
+- `pickCamera` — among the views where the group has a 2D member: the largest
+  projection of its 3D (diagonal, with the camera's distortion) inside the image
+  is the best, and among the views good enough to use (inside the image, at
+  least 30% of the best's size and 40 px) the one this identity's samples used
+  LEAST wins, so the five rotate through the views. A view whose 2D detection is
+  poor (under half its keypoints, or spread 2.5x wider than the 3D) is passed
+  over while any other is not: scattered keypoints cut a huge crop with a speck
+  of animal in it — seen on 145420 before the rule.
+- `cropSquare` — full colour, upright, unmasked: a square of 1.4x the keypoints'
+  larger extent + 12 px. NOT the image check's masked, rotated greyscale crop,
+  which is the model's input, not something a person compares coats in. The
+  animal's own keypoints are drawn as small dots in its colour, which is what
+  says which animal the row means when two share an image.
+- `memberPointsByCamera` — the identity's 2D in every camera at one frame, read
+  with `hydrateFrameMembers2d` / `releaseFrameMembers2d` around it: on a lazy
+  project a member of a frame that is not resident holds only the shared
+  placeholder (see CLAUDE.md "A lazy project's resident frames are a WINDOW").
+- `projectTrack` — the path in a camera's pixels, thinned evenly to
+  `MAP_MAX_POINTS`, broken where frames are more than 2 s apart (the gap test
+  scales with the thinning) or a point does not project; `defaultMapCamera` — the
+  camera with the most 2D members over a thinned sample of the groups.
+
+**Drawing.** `renderIdentityGallery(host, session, {onPick})` builds the rows
+with placeholders at once and fills them AFTER the box paints: the maps first,
+then each row's images, one decoded frame per sample (`view.decoder.getFrame`,
+drawn immediately — a decoder's cached frame may be closed by the next decode).
+It stops as soon as the box is closed. Measured: 0.8–2.2 s for the 8-camera,
+54,000-frame CD1 recording, 4–5 s for a 10-camera 4-mouse session. Without a
+video a sample says "no video" and the maps still draw the paths on a dark
+ground. The map is a still frame of the chosen camera (the current frame),
+darkened, with the path coloured by TIME on a one-hue sequential ramp (dataviz
+reference blue, the early end the darker step) and a 0:00 → end key; hovering a
+map shows the time of the nearest point, and a click on one goes there. The
+chosen view is kept on `session._galleryView` (in memory), so reopening the
+summary keeps it. Rows are capped at `GALLERY_MAX_ROWS` (12), as the identity
+bars are.
+
+**Key exports.** `renderIdentityGallery`, `identityTracks`, `identityGroupAt`,
+`groupCentroid`, `pickSampleFrames`, `projectedBox`, `pickCamera`, `cropSquare`,
+`memberPointsByCamera`, `projectTrack`, `defaultMapCamera`, `timeColor`;
+`GALLERY_SAMPLES` (5), `GALLERY_MAX_ROWS`, `GALLERY_TILE` (88 px),
+`MAP_MAX_POINTS` (2,400).
+
+**Imports from project modules.** `ui/app-state.js` (`state`),
+`pose/lazy-residency.js` (`hydrateFrameMembers2d`, `releaseFrameMembers2d`).
+
+**Imported by.** `ui/track-summary-modal.js`.
+
+**Coverage.** `tests/test-identity-gallery.mjs` (the planning half, including a
+released lazy member read through hydration with the direct-read control) and
+`tests/e2e/identity-gallery.mjs` (the real Track All on stand-in videos that
+paint each animal its own colour: every image in a row shows that row's animal,
+spread over the recording and from more than one camera; the maps, the view
+selector and its time key; both clicks; no videos; and the negative control —
+identities swapped halfway, each row then showing BOTH animals).
 
 ### ui/view-align-modal.js
 
@@ -11185,7 +11624,8 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   Switches (Images)…** (`menuCheckImageSwitches`) `runIdSwitchChecks({image: true,
   navigateToFrame})`, from `ui/id-switch-modal.js`; `setIdSwitchNavigator` and
   `setIdSwitchRefresher` (the repaint after the tab fixes a switch) are called
-  once at setup.
+  once at setup, as is `setTrackSummaryNavigator` (`ui/track-summary-modal.js`:
+  the Track All summary's Identities samples and maps go to a frame).
 - Color-by toggle: the Tracks / Identity control lives in the top
   toolbar (buttons `colorByTracks` / `colorById`, next to the Errors
   checkbox), not the Tracks menu. It has no visible "Color" label (the group
@@ -12123,6 +12563,10 @@ a caller, and several of those already import each other.
   (`pose/initialization.js`, before any panel renders). Further calls are
   no-ops, so a second caller cannot double every handler.
 - `hideInfoTip()` — put it away.
+- `placeTipNear(el, x, y)` — the placement rule below (beside the pointer,
+  flipped at the viewport edges), for any `position: fixed` popover. Shared with
+  the node tooltip (`ui/node-tooltip.js`) so the app has one rule for where a tip
+  goes.
 
 **Delegation, not per-element wiring.** One `#infoTip` element and one set of
 listeners on `document`, matching `[data-infotip]`. The plane panel rebuilds its
@@ -12173,13 +12617,80 @@ Leaving the icon, clicking elsewhere, `Esc`, blur, a scroll or a resize all
 dismiss.
 
 **Imported by.** `ui/plane-definition.js` (the Pinned column's ⓘ and the four
-major sections' ⓘ), `pose/initialization.js` (`installInfoTips`).
+major sections' ⓘ), `pose/initialization.js` (`installInfoTips`),
+`ui/node-tooltip.js` (`placeTipNear`).
 
 Coverage: `tests/e2e/info-tip.mjs` — placement beside the cursor, the viewport
 clamp and the flip, hover/click/Esc/outside-click dismissal, that `title` is
 gone while `aria-label` is not, that the status bar is left untouched (the
 regression), and the delegation case above. `tests/e2e/plane-section-info.mjs`
 covers the section headings' ⓘ and the no-fold rule.
+
+### ui/node-tooltip.js
+
+**Purpose.** Rest the pointer on a pose node and its name appears beside it —
+and on a prediction, the model's score for THAT node on a second line:
+`trunk` / `(score: 0.94)`. SLEAP 1.6.5's node tooltip (`QtNode.setToolTip`,
+`sleap/gui/widgets/video.py`), same text: `f"{name}\n(score: {score:.2f})"`, the
+name alone for a user node.
+
+**Key exports.** `nodeTooltipText(nodeName, score)` (pure; NaN score → the name
+alone), `setNodeTooltipTarget(target, clientX, clientY)` (`target` =
+`{key, text, frameIdx, color}` or null; called by `ui/interaction.js` on every mousemove
+over a view), `syncNodeTooltipFrame(frameIdx)` (called by `drawAllOverlays` in
+`ui/rendering.js`), `hideNodeTooltip()`, `installNodeTooltip()` (once, at
+startup), `NODE_TIP_DELAY_MS` (700), `NODE_TIP_AWAKE_MS` (2000).
+
+**Who decides what.** `InteractionManager._nodeTooltipTarget` turns the hover's
+hit (`findNearestNode` / `findNearestUnlinkedNode`) into the target: an edge hit,
+a plane node and empty canvas give none (SLEAP's tooltips are on nodes), a
+reprojection is named without a score, and the score is
+`Session.predictedNodeScore` — so the tooltip never decides whether a number is a
+prediction's. This module only times, places and hides it.
+
+**Timing is Qt's.** The first tip waits `NODE_TIP_DELAY_MS`; while one is
+showing, and for `NODE_TIP_AWAKE_MS` after it hides, the next node's shows at
+once — the pointer crosses dozens of nodes while annotating, and an instant tip
+would flicker over the points being placed. A press, a key or the wheel hides it
+and restores the delay. A shown tip stays where it appeared, as Qt's does.
+
+**It never outlives what it describes.** A tip is about one node on one frame. A
+new frame moves the node from under a still pointer, so `drawAllOverlays` calls
+`syncNodeTooltipFrame` (a redraw naming no frame — `ui/plane-angle.js` calls
+`drawAllOverlays()` bare — is not a frame change). Leaving the view, a press,
+a key, the wheel, a scroll, a resize and window blur hide it too. It holds
+strings and numbers only, never an Instance, so it cannot keep a lazy frame alive.
+
+**The color says WHICH skeleton.** Where skeletons overlap, `trunk (score:
+0.42)` does not say whose trunk, so the tip's left edge is a 5 px stripe in the
+color the hovered instance is drawn FROM (`target.color` →
+`--node-tip-color`): its track's, or its identity's in Identity mode, darkened
+like the skeleton for a second ungrouped instance on one track. The base color,
+not a selection's white or a prediction's desaturated tint — it identifies the
+animal. The interaction manager takes it from the renderer's own functions
+(`ui/overlays.js`), so it cannot name a color that is not on screen.
+
+It reuses the ⓘ tip's look (`.info-tip.node-tip`; `.node-tip` adds
+`white-space: pre-line` for the two lines, and the stripe) and its placement (`placeTipNear`),
+and is `pointer-events: none` — a tip that took the hover would make the view see
+a `mouseleave` and hide it.
+
+**Top-level names are prefixed (`nodeTip…`)** because `tests/run-node.js` loads
+this module and `ui/info-tip.js` into ONE vm global scope, where two `tipEl`s
+would be the same variable.
+
+**Imports from project modules.** `./info-tip.js` — `placeTipNear`.
+
+**Imported by.** `ui/interaction.js`, `ui/rendering.js`, `pose/initialization.js`.
+
+Coverage: `tests/test-node-scores.mjs` (the text) and
+`tests/e2e/node-score-tooltip.mjs` (real mouse: the delay and the awake window,
+a prediction's per-node score, a user node's bare name, none on an edge or empty
+canvas, placement beside but not over the pointer, hidden on a new frame and on a
+press; the stripe for two crossing tracks whose tips read identically, a
+darkened duplicate track, a group in Tracks vs Identity mode, and an overlap
+where the grouped skeleton wins; plus the score data behind it on every load
+path and both writers).
 
 ### ui/section-state.js
 
@@ -12608,8 +13119,10 @@ the fix LUCID's by-name medians on that file (Nose–Head 36.5 px, Ear_L–Ear_R
   or `{kind: 'mismatch', missing, extra}` (different names, a different count
   or a repeated name — no by-name remap exists).
 - `permuteNodeAxis(buf, perm, width)`, `permuteColumnarNodes(col, perm)` (the
-  worker's columnar result), `permuteInstanceNodes(inst, perm)` (the nested
-  `frames` shape), `permuteStoreNodeRows(store, perm)` (a sleap-io.js
+  worker's columnar result: `xy`, `occluded` and the prediction's per-node
+  `pointScore`), `permuteInstanceNodes(inst, perm)` (the nested `frames` shape:
+  `points`, `occluded`, `pointScores`) — EVERY per-node buffer moves, or the node
+  tooltip shows a node its neighbour's score, `permuteStoreNodeRows(store, perm)` (a sleap-io.js
   `LazyDataStore`: each instance's point rows in `pointsData` or
   `predPointsData`, every column; a span that is not `perm.length` rows is left
   alone). All in place.
@@ -12802,8 +13315,10 @@ before the worker's fast compound reads and columnar transfer — see
 `loading/slp-import-worker.js`). Step 2 builds each camera's Instances straight
 from the worker's columnar result via the exported
 **`addColumnarFramesToSession(session, camName, columnar, trackRemap)`** —
-the same track remap / `resolveImportTrackIdx` / `score || 1.0` / occlusion as
-the nested-`frames` loop it replaced (kept for results without `columnar`), with
+the same track remap / `resolveImportTrackIdx` / `score || 1.0` / occlusion /
+per-node model scores (`columnar.pointScore` → `Instance.setPointScores`, a
+prediction's only) as the nested-`frames` loop it replaced (kept for results
+without `columnar`, which takes each instance's `pointScores`), with
 each Instance given its own `Float64Array` `slice` (not a `subarray` view, which
 would pin the whole camera buffer and make any structured clone of the instance
 copy all of it). A digest of the loaded session (every frame, camera,
@@ -13374,6 +13889,25 @@ null for a camera this loader does not back. The playback eviction
 (`pose/lazy-residency.js`) proves a resident frame rebuildable against it;
 `tests/e2e/lazy-playback-eviction.mjs` pins it to the real materializer.
 
+**`predictedPointScore(camName, frameIdx, offsetInFrame, nodeName)`** — the
+model's score for one node of the store's prediction at that in-frame offset
+(an `Instance._rawInstIndex`), read straight from `pred_points.score` through
+`point_id_start`: the lazy half of `Session.predictedNodeScore`, which the node
+tooltip and the streaming writer's overlay ask. Nothing is materialized and
+nothing is kept on the instance, so a re-hydrated frame costs exactly what it did.
+The node is NAMED and looked up in the order the camera's rows are in NOW —
+`_nodeOrderByCam`, which is the session skeleton's once `_unifyNodeOrder` has
+re-ordered a camera whose file lists the nodes differently (#296; the store's
+skeleton keeps the file's order, so reading it there gave every node its
+neighbour's score), else the store skeleton's. By name, not index, because a
+skeleton edit after loading re-indexes the resident instances, so an index could
+pair a node with its neighbour's score; an added or renamed node simply has none. NaN for a user row (type 0, as
+`materializeFrame` reads it), an offset that is not an integer inside the
+frame's rows, a frame or camera with no row, or a NaN score. Pinned against a
+hand-built store by `tests/test-node-scores.mjs` (a re-ordered camera included,
+confirmed to fail without the current-order lookup) and against the real one by
+`tests/e2e/node-score-tooltip.mjs`.
+
 **Imports.** `./track-union.js` (`unionTrackNames`); `./slp-skeleton.js`
 (`nodeOrderRemap`, `permuteStoreNodeRows`);
 `window.SleapIO.readSlpStreaming` / `window.SleapIO.Track` (via the index.html
@@ -13383,7 +13917,8 @@ bridge) and the local vendored `lib/h5wasm/h5wasm.iife.js` (passed as
 **Imported by.** `loading/session-loader.js`
 (`handleLoadSessionFolderPerCamera` routing, `handleLoadProjectSlpLazy`) and
 `import-export/save-load.js` (`reopenSessionLazyLoader`). `describeStoreFrame` is
-called duck-typed from `pose/lazy-residency.js`.
+called duck-typed from `pose/lazy-residency.js`, `predictedPointScore` from
+`Session.predictedNodeScore` (`pose/pose-data.js`).
 
 **User-facing features.** Lets a session folder of large multi-camera prediction
 `.slp` files — and a large saved project `.slp` (Load Project) — load and render
@@ -13455,7 +13990,7 @@ cloning eight of them to the main thread was most of what remained of the
 session-folder load once the reads were fast (~2 s of ~5 s). With
 `columnar: true` the worker instead returns `data.columnar` = `{ numNodes,
 nFrames, nInstances, frameIdx, videoIdx, instOffsets (nFrames+1), trackIdx,
-score, type (1 = predicted), xy (NaN = missing), occluded }` — the same
+score, type (1 = predicted), xy (NaN = missing), occluded, pointScore }` — the same
 frames/instances kept and the same values, as typed arrays whose buffers are
 TRANSFERRED (zero-copy) in the `postMessage`. Only `parseSlpH5(file, null,
 { columnar: true })` from `handleLoadSessionFolderPerCamera` asks for it; every
@@ -13471,6 +14006,16 @@ later symmetries — jsonpickled as `{"py/id": n}` references — came back as b
 edges. It now calls the shared, Node-testable parser, which fixes both and
 agrees with the vendored sleap-io.js reader. `data.skeleton` is unchanged in
 shape (`{name, nodes, edges}`, nodes in column order).
+
+**A prediction's per-node scores (`pred_points.score`)** ride along both ways:
+each nested instance carries `pointScores` (a `Float64Array(numNodes)`, NaN where
+a node has none; null for a user instance or a prediction read from `points`),
+and the columnar result a flat `pointScore` (`[i*numNodes + k]`, NaN for user
+instances), transferred with the rest. They are what the node tooltip shows; the
+importers keep them with `Instance.setPointScores`. **Not for analysis `.h5`
+files**, deliberately: `parseAnalysisH5` reads `point_scores` and drops them, and
+the NOTE there says what showing them would take (the lazy `.h5` path being the
+hard part).
 
 **Imports from project modules.** `./slp-skeleton.js` (`parseSlpSkeleton`).
 
@@ -14557,7 +15102,16 @@ exports via the eager path; partially-resident refuses and says so).
   `buildSlpLabelsMultiSession`, `serializeSkeleton`, `_buildSioPoints`
   (per-node `[x,y,visible,complete]` builder — nulled/occluded/optional
   per-point score; also reused by `slp-streaming-write.js` for edited-frame
-  overlays).
+  overlays). **A point's score is its node's OWN model score** when it has one
+  (`Instance.pointScore`, or the caller's `nodeScore(k)` — the streaming writer
+  passes one that reads the lazy store), and the `perPointScore` the writer
+  passes (the instance score) only for a node with none; with `nodeOrder` the
+  canonical node gets its LOCAL node's score. All three writers pass a
+  `perPointScore` for a prediction — `buildSlpLabelsAllViews`, the project Save,
+  passed none and so stored 0 for every node, and the others stamped the instance
+  score on all of them: either way a reopened project's node tooltip showed one
+  number for every node. Pinned by `tests/test-node-score-export.js` and, end to
+  end through save + reopen, `tests/e2e/node-score-tooltip.mjs`.
   (PR 5.2 deleted `convertSlpToV06Compatible` — export is now raw
   `saveSlpToBytes`; SLEAP >= 1.6 / sleap-io >= 0.7 reads the flat-matrix
   `field_names` layout natively.) On 2D export both `buildSlpLabels` and
@@ -14632,7 +15186,9 @@ exports via the eager path; partially-resident refuses and says so).
   drives `window.SleapIO.readSlpStreaming(file, {rawSessions:true})` (PR #196)
   and adapts the typed `Labels` into the `slpData` shape via the private
   `_typedInstanceToSlpData` pose transform (columnar `_xy`/`_visible` →
-  `points[]` + parallel `occluded[]`, NOT `numpy()`). Each `sessions[]` entry is
+  `points[]` + parallel `occluded[]`, NOT `numpy()`; a prediction's per-node
+  scores as `pointScores`, the typed instance's own `_score` column by reference,
+  null for a user instance — the importers copy it with `Instance.setPointScores`). Each `sessions[]` entry is
   the verbatim on-disk dict (for the direct calibration/video-map/metadata reads)
   PLUS a `_typedSession` ref (the typed RecordingSession) used by
   `reconstructInstanceGroupsFromSession` for grouping — which reads LUCID's legacy
@@ -14842,10 +15398,14 @@ camera-frame to its overlay (instance position by object identity, then
 `track`) or otherwise to the shifted store row. Only edited camera-frames are
 materialized (minimal at prediction scale); every other frame streams from the
 columnar store. An overlaid frame's untouched predicted siblings are
-re-materialized too (the store row is skipped wholesale); they carry the
-instance-level score as a per-point score (the frameGroup keeps no per-point
-scores) so SLEAP's GUI doesn't hide them — mirrors the eager `buildSlpLabels`
-reproj export. **Scope:** predictions + full grouping (identities + 3D) + 2D
+re-materialized too (the store row is skipped wholesale); each node carries
+its OWN model score, read back from the row being replaced
+(`Session.predictedNodeScore` → `SioLazyLoader.predictedPointScore`, by the
+sibling's `_rawInstIndex`), and the instance score only where it has none — a
+point with no score is one SLEAP's GUI hides. Stamping the instance score on
+every node was what this used to do, and after a save it was all a reopened
+project's node tooltip had to show. Mirrors the eager `buildSlpLabels` reproj
+export. **Scope:** predictions + full grouping (identities + 3D) + 2D
 corrections.
 
 **Imports.** `window.SleapIO` (streaming writer API); `_buildSioPoints`
@@ -15169,6 +15729,11 @@ onto the first track label (e.g. `global_0`) after an export/reload round-trip.
   (falling back to the raw dict's `identity_idx` for legacy files). Reads both LUCID's legacy and
   the new canonical `sessions_json`. Same pass-1 dedup + trackless/identity-less
   handling as the dict version. Returns `{ restoredGroups, restoredWith3d }`.
+  **Per-node model scores:** a prediction's come from the typed instance's
+  `_score` here, and from the `pointScores` of the raw-SLP instance a group
+  member REPLACES in the dict version (the group dict has none of its own —
+  `adoptPointScoresFrom`); pass 1 keeps each instance's `pointScores`. They are
+  what the node tooltip shows (`Session.predictedNodeScore`).
 - `parseSlpForImport(file, onProgress)` (private) — dispatches `.slp` →
   `parseSlpViaSleapIO`, else / on error → `parseSlpH5`.
 
@@ -15281,6 +15846,8 @@ compatibility check, track merging, frame merging, group rebuild.
 - `mergeSlpFramesIntoSession(session, slpData, videoIdxToCameraName,
   cameras, trackRemap, nodeReorderMap)` — trackless instances (track=-1/null),
   user OR predicted, keep `trackIdx = null` (no longer coerce predictions to 0).
+  A prediction keeps its per-node model scores (`pointScores`), re-ordered by
+  `nodeReorderMap` exactly as its points are.
 - `rebuildInstanceGroupsForFrames(session, frameIndices)` — groups by `trackIdx`;
   trackless instances of any type are skipped (not bucketed into track 0).
 

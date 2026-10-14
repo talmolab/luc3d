@@ -92,8 +92,8 @@ try {
         };
         window.__shown = () => {
             const num = (id) => {
-                const m = /(\d+)\s*$/.exec((document.getElementById(id) || {}).textContent || '');
-                return m ? Number(m[1]) : null;
+                const m = /([\d,]+)\s*$/.exec((document.getElementById(id) || {}).textContent || '');   // "Labeled Frames: 1,234"
+                return m ? Number(m[1].replace(/,/g, '')) : null;
             };
             return { labeled: num('statusLabeledFrames'), instances: num('statusInstances'), triangulated: num('statusTriangulatedFrames') };
         };

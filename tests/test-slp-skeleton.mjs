@@ -158,6 +158,11 @@ console.log('\n6. Permuters move each node\'s values with it');
     check(eq(Array.from(xy.slice(0, 6)).map(String), ['10', '11', 'NaN', 'NaN', '30', '31']) &&
         eq(Array.from(xy.slice(6)), [12, 13, 20, 21, 32, 33]), 'columnar xy: every row re-ordered, NaN moves with its node');
     check(eq(Array.from(occ), [0, 0, 1, 0, 1, 0]), 'columnar occlusion re-ordered with it');
+    // the prediction's per-node scores (the node tooltip) move with their nodes too
+    const sc = { numNodes: 3, xy: new Float64Array(12), occluded: new Uint8Array(6),
+                 pointScore: new Float64Array([0.3, 0.1, 0.2, /* row 2 */ 0.6, 0.4, 0.5]) };
+    permuteColumnarNodes(sc, perm);
+    check(eq(Array.from(sc.pointScore), [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]), 'columnar pointScore re-ordered with its nodes');
     const other = { numNodes: 4, xy: new Float64Array(8).fill(1), occluded: new Uint8Array(4) };
     permuteColumnarNodes(other, perm);
     check(other.xy.every(v => v === 1), 'a columnar result of another node count is left alone');
@@ -166,6 +171,9 @@ console.log('\n6. Permuters move each node\'s values with it');
     permuteInstanceNodes(inst, perm);
     check(eq(inst.points, [[10, 11], null, [30, 31]]) && eq(inst.occluded, [false, false, true]),
         'nested instance: points and occlusion re-ordered');
+    const scored = { points: [[30, 31], [10, 11], [20, 21]], occluded: [false, false, false], pointScores: new Float64Array([0.3, 0.1, NaN]) };
+    permuteInstanceNodes(scored, perm);
+    check(eq(Array.from(scored.pointScores).map(String), ['0.1', 'NaN', '0.3']), 'nested instance: pointScores re-ordered with their nodes');
 
     const flags = [1, 2, 3, 4, 5, 6];
     permuteNodeAxis(flags, perm, 1);

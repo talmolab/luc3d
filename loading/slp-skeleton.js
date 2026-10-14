@@ -216,23 +216,27 @@ export function permuteNodeAxis(buf, perm, width) {
 
 /**
  * Re-order the node axis of the SLP import worker's COLUMNAR result
- * (`buildColumnarFrames`: `xy` = rows x n x 2, `occluded` = rows x n) in place,
- * so camera column `perm[s]` becomes session column `s`.
+ * (`buildColumnarFrames`: `xy` = rows x n x 2, `occluded` and the prediction's
+ * per-node `pointScore` = rows x n) in place, so camera column `perm[s]` becomes
+ * session column `s`. Every per-node buffer moves: one left behind pairs a node
+ * with its neighbour's value (the node tooltip's score, `Instance.setPointScores`).
  *
- * @param {{numNodes: number, xy: Float64Array, occluded: Uint8Array}} col
+ * @param {{numNodes: number, xy: Float64Array, occluded: Uint8Array, pointScore?: Float64Array}} col
  * @param {Int32Array} perm
  */
 export function permuteColumnarNodes(col, perm) {
     if (!col || col.numNodes !== perm.length) return;
     permuteNodeAxis(col.xy, perm, 2);
     permuteNodeAxis(col.occluded, perm, 1);
+    if (col.pointScore) permuteNodeAxis(col.pointScore, perm, 1);
 }
 
 /**
- * Re-order one nested-shape instance (`{ points: [[x,y]|null], occluded: [] }`,
- * the worker's default `frames` shape and `parseSlpViaSleapIO`'s) in place.
+ * Re-order one nested-shape instance (`{ points: [[x,y]|null], occluded: [],
+ * pointScores }`, the worker's default `frames` shape and `parseSlpViaSleapIO`'s)
+ * in place — its per-node scores too, for the reason `permuteColumnarNodes` gives.
  *
- * @param {{points?: Array, occluded?: Array}} inst
+ * @param {{points?: Array, occluded?: Array, pointScores?: Float64Array}} inst
  * @param {Int32Array} perm
  */
 export function permuteInstanceNodes(inst, perm) {
@@ -244,6 +248,10 @@ export function permuteInstanceNodes(inst, perm) {
     if (inst.occluded && inst.occluded.length === perm.length) {
         var o = Array.prototype.slice.call(inst.occluded);
         for (var t = 0; t < perm.length; t++) inst.occluded[t] = o[perm[t]];
+    }
+    if (inst.pointScores && inst.pointScores.length === perm.length) {
+        var c = Array.prototype.slice.call(inst.pointScores);
+        for (var u = 0; u < perm.length; u++) inst.pointScores[u] = c[perm[u]];
     }
 }
 
