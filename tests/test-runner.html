@@ -97,6 +97,8 @@
     <script src="test-skeleton-json.js"></script>
     <script src="test-triangulation.js"></script>
     <script src="test-triangulation-ba.js"></script>
+    <!-- Excluded views + the reprojection-error threshold in triangulateAndReproject -->
+    <script src="test-triangulation-robust.js"></script>
     <script src="test-file-io.js"></script>
     <script src="test-interaction.js"></script>
     <script src="test-regressions.js"></script>
@@ -124,6 +126,7 @@
     <script src="test-timeline-height.js"></script>
     <script src="test-timeline-sparse-occupancy.js"></script>
     <script src="test-timeline-playback-playhead.js"></script>
+    <script src="test-timeline-visible-band.js"></script>
     <script src="test-grouped-track-dropdown.js"></script>
     <!-- The info panel's lazily-filled Track <select> (ui/lazy-select.js). Needs
          window.__LazySelect from the bridge below. -->
@@ -146,6 +149,12 @@
     <script src="test-timeline-scroll.js"></script>
     <script src="test-timeline-toggle-shortcut.js"></script>
 
+    <!-- Prompt 4 / Block 2: per-session hidden cameras / tracks / identities
+         (ui/timeline-visibility.js) and what the timeline draws for them. -->
+    <script src="test-timeline-visibility-toggles.js"></script>
+    <script src="test-timeline-visibility-state.js"></script>
+    <script src="test-timeline-visibility-list.js"></script>
+
     <!-- Drag freeze regression tests -->
     <script src="test-drag-freeze.js"></script>
 
@@ -167,6 +176,8 @@
     <!-- Assignment mode tests -->
     <script src="test-assignment.js"></script>
     <script src="test-occlusion-node-availability.js"></script>
+    <!-- A prediction's per-node model scores on save (pred_points.score) -->
+    <script src="test-node-score-export.js"></script>
 
     <!-- Predicted double-click → user instance: selection transfer + multi-select preservation -->
     <script src="test-predicted-dblclick.js"></script>

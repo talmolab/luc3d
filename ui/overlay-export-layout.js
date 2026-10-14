@@ -264,6 +264,10 @@ export function defaultOverlayExportSettings() {
             errors: false, legend: false,
         },
         trailLength: 0,
+        // A TRAIL_SHADES key. Must equal DEFAULT_TRAIL_SHADE in ui/overlays.js —
+        // this module imports nothing, so the value is repeated here and a unit
+        // test (tests/test-overlay-export-layout.js) holds the two together.
+        trailShade: 'dark',
         colorBy: 'track',
         background: 'video',
         // `showLabels` is the node-name toggle, and it is the ONLY off switch:
@@ -429,6 +433,7 @@ export function overlayOptionsFrom(settings, videoW, videoH, canvasW, canvasH) {
     return {
         colorByIdentity: settings.colorBy === 'identity',
         trailLength: settings.trailLength || 0,
+        trailShade: settings.trailShade,
         showLegend: !!settings.layers.legend,
         // Read by `drawTileContent`, not by `drawFrameOverlays` — a burned-in camera
         // name is a caption on the TILE, drawn upright outside the view transform,

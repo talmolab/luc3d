@@ -44,6 +44,7 @@ import {
 import { SioLazyLoader } from '../loading/sio-lazy-loader.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { showLoading, hideLoading } from '../ui/loading-overlay.js';
+import { clearReadout } from '../ui/frame-readout.js';
 import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js';
 import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
@@ -175,10 +176,7 @@ export function newProject(force) {
     if (stripList) stripList.innerHTML = '';
 
     // Reset frame counter display
-    var curFrameEl = document.getElementById('currentFrame');
-    if (curFrameEl) curFrameEl.textContent = '0';
-    var totalFramesEl = document.getElementById('totalFrames');
-    if (totalFramesEl) totalFramesEl.textContent = '0';
+    clearReadout();
     var fpsEl = document.getElementById('fpsDisplay');
     if (fpsEl) fpsEl.textContent = '30.0 fps';
 
@@ -800,7 +798,7 @@ function restoreEditedStoreColumns(loader, kept) {
             ((store.predPointsData && store.predPointsData.x) || []).length);
         if (nNow !== nKept || (nPoints > 0 && maxPoint > nPoints)) {
             throw new Error('multi-session save: the file for camera "' + camName + '" no longer matches the ' +
-                'loaded data (' + nNow + ' frame rows vs ' + nKept + ' when loaded) — it changed on disk after ' +
+                'loaded data (' + nNow.toLocaleString('en-US') + ' frame rows vs ' + nKept.toLocaleString('en-US') + ' when loaded) — it changed on disk after ' +
                 'loading. Not writing its edited instances against the wrong rows.');
         }
         store.framesData = cols.framesData;
@@ -1704,7 +1702,7 @@ export async function handleLoadProject(prePickedFile) {
 
         hideLoading();
 
-        var statusParts = [cameras.length + ' cameras', state.session.numFrames + ' labeled frames'];
+        var statusParts = [cameras.length + ' cameras', state.session.numFrames.toLocaleString('en-US') + ' labeled frames'];
         if (state.views.length > 0) {
             statusParts.push(state.views.length + ' views');
         }

@@ -8,19 +8,22 @@
  * the CHANGE POINTS in the right panel's "ID Switches" tab as a checklist —
  * click a row to jump there, tick it once reviewed, "Next unreviewed" walks the
  * list. Results (and what was reviewed) are kept per session until the check
- * runs again or "Clear". A change point both checks found (same pair, within
- * 1 s) is shown once as "Both". Repeats (other encounters of a pair that is
- * still swapped) are counted and can be shown.
+ * runs again or "Clear". A change point both checks found (same pair, same
+ * contact) is shown once as "Both". Repeats (other encounters of a pair that is
+ * still swapped) are counted and can be shown — only results restored from files
+ * saved before 2026-10-11 have any.
  *
  * The size check only reads the tracker's 3D skeletons (seconds, no video). The
- * image check decodes video and embeds crops on the GPU (ui/image-embedder.js):
- * minutes, needs the session's videos and WebGPU, and runs under its own
- * cancellable progress dialog (Cancel / Esc).
+ * image check decodes video and embeds crops on the GPU (ui/image-embedder.js) —
+ * or, with no GPU, on the CPU, ~15x slower but still run: minutes to hours. It
+ * needs the session's videos, and runs under its own cancellable progress dialog
+ * (Cancel / Esc) that says which device is doing the work, how busy the check
+ * keeps the CPU and the GPU, and graphs both over the last minute.
  *
  * Kept a leaf: `navigateToFrame` is registered by ui-wiring
  * (setIdSwitchNavigator), so this module never imports pose/initialization.js.
  *
- * Depends on: pose/id-switch-check.js, ui/image-embedder.js, ui/app-state.js,
+ * Depends on: pose/id-switch-check.js, ui/image-embedder.js, ui/load-graph.js, ui/browser-hints.js, ui/app-state.js,
  * ui/loading-overlay.js, ui/settings.js (getTrackingThreshold),
  * import-export/save-load.js (setStatus).
  */
@@ -29,10 +32,13 @@ import { state, getActiveSession } from './app-state.js';
 import { setSeekbarSwitchMarkers } from './seekbar-markers.js';
 import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js';
 import { setStatus, markDirty } from '../import-export/save-load.js';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js';
 import { getTrackingThreshold } from './settings.js';
 import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js';
-import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming } from './image-embedder.js';
+import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
+         inputTensorToPixels, INPUT } from './image-embedder.js';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js';
+import { renderBraveFingerprintingHint } from './browser-hints.js';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
          idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js';
@@ -73,10 +79,12 @@ function fmtTime(frame) {
     return m + ':' + (s < 10 ? '0' : '') + s;
 }
 
+/** "45 s", "12 min", "2 h 5 min" (hours: the image check on the CPU). */
 function fmtDuration(sec) {
     if (!isFinite(sec)) return '';
     if (sec < 90) return Math.max(1, Math.round(sec)) + ' s';
-    return Math.round(sec / 60) + ' min';
+    var min = Math.round(sec / 60);
+    return min < 90 ? min + ' min' : Math.floor(min / 60) + ' h ' + (min % 60) + ' min';
 }
 
 /** True when at least one tracked frame has a 3D skeleton with an identity. */
@@ -103,6 +111,29 @@ var _refresh = null;
 /** Register the repaint run after a fix / undo changes identities (called once from ui/ui-wiring.js). */
 export function setIdSwitchRefresher(fn) { _refresh = fn; }
 
+// Reopens a session's last Track All summary (`reopenTrackSummary`), registered by
+// ui/track-summary-modal.js — which imports this module, so this one stays a leaf.
+var _openSummary = null;
+
+/** Register what the tab's "Show Track All summary" button runs (called once from ui/track-summary-modal.js). */
+export function setTrackSummaryOpener(fn) { _openSummary = fn; }
+
+/**
+ * Above "Possible ID switches": a button that reopens the session's Track All summary
+ * once its box was closed — the box offers the checks not run yet. Only after a Track All
+ * in this page: the summary is not saved with the project.
+ */
+function trackSummaryHtml(session) {
+    return session && session._trackSummary && _openSummary
+        ? '<div class="info-section id-switch-track-summary"><button class="panel-btn" id="idSwitchTrackSummary" ' +
+          'title="Reopen the box Track All showed when it finished">Show Track All summary</button></div>'
+        : '';
+}
+function wireTrackSummary(host, session) {
+    var b = host.querySelector('#idSwitchTrackSummary');
+    if (b) b.addEventListener('click', function () { if (_openSummary) _openSummary(session); });
+}
+
 /**
  * The recording's frame rate, and whether it was measured from the video. The
  * checks convert their time settings (and weight their scores) with it, so a
@@ -121,16 +152,72 @@ function recordingFps(session) {
 // A small cancellable progress dialog for the (long) image check
 // ---------------------------------------------------------------------------
 
+/** How often the progress dialog's sample crop changes (ms). */
+const CROP_PREVIEW_MS = 400;
+
+function identityOf(session, id) {
+    var ids = (session && session.identities) || [];
+    for (var i = 0; i < ids.length; i++) if (ids[i] && ids[i].id === id) return ids[i];
+    return null;
+}
+
+/**
+ * The skeleton over the sample crop (224 px canvas, shown at 128 px): edges then
+ * nodes in the identity's colour over a dark outline, so it reads on light and
+ * dark fur alike. Missing keypoints (NaN) and their edges are skipped; the tail
+ * runs off the crop, which is cut around the body.
+ */
+function drawCropSkeleton(ctx, pts, edges, color) {
+    var ok = function (i) { return i >= 0 && 2 * i + 1 < pts.length && isFinite(pts[2 * i]) && isFinite(pts[2 * i + 1]); };
+    ctx.save();
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (var pass = 0; pass < 2; pass++) {
+        ctx.strokeStyle = pass ? (color || '#9e9e9e') : 'rgba(0, 0, 0, 0.7)';
+        ctx.lineWidth = pass ? 2.5 : 5;
+        ctx.beginPath();
+        edges.forEach(function (e) {
+            if (!ok(e[0]) || !ok(e[1])) return;
+            ctx.moveTo(pts[2 * e[0]], pts[2 * e[0] + 1]); ctx.lineTo(pts[2 * e[1]], pts[2 * e[1] + 1]);
+        });
+        ctx.stroke();
+    }
+    for (var i = 0; 2 * i + 1 < pts.length; i++) {
+        if (!ok(i)) continue;
+        ctx.beginPath(); ctx.arc(pts[2 * i], pts[2 * i + 1], 3.5, 0, 2 * Math.PI);
+        ctx.fillStyle = color || '#9e9e9e'; ctx.fill();
+        ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(0, 0, 0, 0.7)'; ctx.stroke();
+    }
+    ctx.restore();
+}
+
 function openProgressDialog(title) {
     var ctl = new AbortController();
     var overlay = document.createElement('div');
-    overlay.className = 'multi-frame-modal-overlay';
+    overlay.className = 'multi-frame-modal-overlay id-switch-progress-overlay';   // no grey backdrop (styles.css)
     overlay.innerHTML = '<div class="multi-frame-modal id-switch-progress"><h3>' + escapeHtml(title) + '</h3>' +
         '<div class="id-switch-progress-text">Starting…</div>' +
-        '<div class="id-switch-progress-bar"><div class="id-switch-progress-fill"></div></div>' +
+        // the same playhead line as the ID Switches rows' bars, standing proud of an inner track that clips the fill
+        '<div class="id-switch-progress-bar"><div class="id-switch-progress-track"><div class="id-switch-progress-fill"></div></div>' +
+        '<div class="id-switch-phead"></div></div>' +
+        // the percentage, then the CPU and GPU lines with their load graph to the right — all beside a sample of
+        // the crops being embedded (above Cancel)
+        '<div class="id-switch-progress-row"><div class="id-switch-progress-info">' +
+        '<div class="id-switch-progress-pct">0%</div>' +
+        '<div class="id-switch-progress-hw"><div class="id-switch-progress-lines">' +
+        '<div class="id-switch-progress-cpu load-line is-cpu" hidden></div><div class="id-switch-progress-gpu load-line is-gpu"></div></div>' +
+        '<div class="id-switch-progress-graph"></div></div></div>' +
+        '<figure class="id-switch-progress-crop"><canvas width="' + INPUT + '" height="' + INPUT + '" role="img" aria-label="Sample crop"></canvas>' +
+        '<figcaption>First crop…</figcaption></figure></div>' +
+        // Brave hiding the real core count (and adding noise to canvas reads): what to do (ui/browser-hints.js)
+        '<div class="progress-hint" hidden></div>' +
         '<div class="modal-actions"><button id="idSwitchCancel">Cancel</button></div></div>';
     document.body.appendChild(overlay);
-    var textEl = overlay.querySelector('.id-switch-progress-text'), fill = overlay.querySelector('.id-switch-progress-fill');
+    var textEl = overlay.querySelector('.id-switch-progress-text'), fill = overlay.querySelector('.id-switch-progress-fill'),
+        head = overlay.querySelector('.id-switch-phead'), pctEl = overlay.querySelector('.id-switch-progress-pct'),
+        gpuEl = overlay.querySelector('.id-switch-progress-gpu'), cropEl = overlay.querySelector('.id-switch-progress-crop'),
+        cpuEl = overlay.querySelector('.id-switch-progress-cpu'), graph = createLoadGraph(overlay.querySelector('.id-switch-progress-graph')),
+        hintEl = overlay.querySelector('.progress-hint'),
+        cropCanvas = cropEl.querySelector('canvas'), cropCaption = cropEl.querySelector('figcaption'), cropPixels = null;
     var cancel = function () { if (!ctl.signal.aborted) { ctl.abort(); textEl.textContent = 'Cancelling…'; } };
     var onKey = function (e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); } };
     overlay.querySelector('#idSwitchCancel').addEventListener('click', cancel);
@@ -140,7 +227,46 @@ function openProgressDialog(title) {
         update: function (text, frac) {
             if (ctl.signal.aborted) return;
             if (text != null) textEl.textContent = text;
-            if (frac != null) fill.style.width = Math.round(100 * Math.min(1, Math.max(0, frac))) + '%';
+            if (frac != null) {
+                var pct = Math.round(100 * Math.min(1, Math.max(0, frac))) + '%';
+                fill.style.width = head.style.left = pct;
+                pctEl.textContent = pct;
+            }
+        },
+        /**
+         * The CPU line (`{text, title}` from formatEmbedCpu; null: none) and the device line under it (`{text,
+         * warn, title, metered}` from formatEmbedDevice, ui/image-embedder.js). A line with a series in the
+         * graph wears its colour as a legend key; the graph shows once either line has one.
+         */
+        hardware: function (c, d) {
+            if (ctl.signal.aborted) return;
+            cpuEl.hidden = !c;
+            if (c) setLoadLine(cpuEl, c.text, c.title, true);
+            setLoadLine(gpuEl, d.text, d.title, !!d.metered);
+            gpuEl.classList.toggle('is-warn', !!d.warn);
+            graph.show(!!c || !!d.metered);
+        },
+        /** In Brave with its fingerprinting protection on: the note on its random core count (`cores`, as reported). */
+        braveHint: function (cores) { if (!ctl.signal.aborted) renderBraveFingerprintingHint(hintEl, cores); },
+        /** One point of the load graph, in percent (null: not measured, or no such series). */
+        sample: function (cpuLoad, gpuLoad) { if (!ctl.signal.aborted) graph.push(performance.now(), cpuLoad, gpuLoad); },
+        /**
+         * Show a model input (`inputTensorToPixels`) captioned `label`, with `skeleton` — `{points, edges,
+         * color}`, points in input pixels (cropPointsToInput) — drawn over it; null hides the square.
+         * The skeleton is on this canvas only: the model's input is untouched.
+         */
+        crop: function (tensor, label, skeleton) {
+            if (ctl.signal.aborted) return;
+            cropEl.hidden = !tensor;
+            if (!tensor) return;
+            var ctx = cropCanvas.getContext('2d');
+            cropPixels = cropPixels || ctx.createImageData(INPUT, INPUT);
+            inputTensorToPixels(tensor, cropPixels.data);
+            ctx.putImageData(cropPixels, 0, 0);
+            if (skeleton && skeleton.points) drawCropSkeleton(ctx, skeleton.points, skeleton.edges || [], skeleton.color);
+            cropEl.classList.add('has-crop');
+            cropCaption.textContent = label;
+            cropCanvas.setAttribute('aria-label', 'Sample crop: ' + label);
         },
         close: function () { document.removeEventListener('keydown', onKey); overlay.remove(); },
     };
@@ -151,14 +277,13 @@ function openProgressDialog(title) {
 // ---------------------------------------------------------------------------
 
 async function runSize(session, rate) {
-    var label = 'Checking ID switches (body size)';
-    showLoadingProgress(label, 0, 1);
+    // The overlay's plain form (spinner + message), not a counter: the check is one uninterrupted block of
+    // main-thread work (~0.2-1.5 s) whose only progress is 0 then 1 of one fitting step — which the counter
+    // used to print as "0/1 frames (0%)", frozen until the overlay closed.
+    showLoading('Comparing each animal\'s body size before and after its contacts…', { title: 'Checking ID switches (body size)' });
     await yieldToPaint();
     try {
-        return await checkSizeSwitches(session, {
-            fps: rate.fps,
-            onProgress: async function (done, total) { showLoadingProgress(label, done, total); await yieldToPaint(); },
-        });
+        return await checkSizeSwitches(session, { fps: rate.fps });
     } finally { hideLoading(); }
 }
 
@@ -166,18 +291,52 @@ async function runImage(session, rate, inject) {
     inject = inject || {};
     var views = (state.views || []).filter(function (v) { return v && v.decoder; });
     if (!views.length && !inject.createEmbedder) return { ok: false, reason: 'needs the session\'s videos to be loaded' };
-    if (!(await (inject.hasWebGPU || hasWebGPU)())) return { ok: false, reason: 'needs WebGPU (current Chrome or Edge) — on the CPU it would take hours' };
+    // No GPU is not a reason to skip: the embedder then runs on the CPU, slowly, and the dialog says so
     var prog = openProgressDialog('Checking ID switches (images)');
-    var t0 = 0;
+    var t0 = 0, ticker = null, cropTicker = null, embedder = null;
     try {
-        var embedder = await (inject.createEmbedder || createImageEmbedder)(session, { onStatus: function (t) { prog.update(t, 0); },
+        embedder = await (inject.createEmbedder || createImageEmbedder)(session, { onStatus: function (t) { prog.update(t, 0); },
             maxViewsPerAnimal: getTrackingThreshold('imageCheckMaxViews'),
             webnn: getTrackingThreshold('imageCheckWebNN') > 0 });
+        // What runs the model, and — once embedding starts, every second — how busy the check keeps the CPU and
+        // the GPU, as two lines and a graph. The CPU's busy time is the embedder's threads plus the fit, which runs
+        // on the main thread between progress calls (fitMs, timed below); it is shared by all the cores.
+        var meter = createLoadMeter(), cpuMeter = createLoadMeter(), fitMs = 0, fitFrom = 0;
+        var cores = cpuCores();
+        var hasCpu = typeof embedder.cpuBusyMs === 'function';
+        if (hasCpu) prog.braveHint(cores);
+        var showDevice = function () {
+            if (typeof embedder.device !== 'function' && !hasCpu) return;
+            var now = performance.now();
+            var load = ticker && typeof embedder.busyMs === 'function' ? meter(now, embedder.busyMs()) : null;
+            var cpuLoad = ticker && hasCpu ? cpuMeter(now, (embedder.cpuBusyMs() + fitMs) / Math.max(1, cores)) : null;
+            var cpu = hasCpu ? formatEmbedCpu(cores, cpuLoad) : null;
+            var gpu = formatEmbedDevice(typeof embedder.device === 'function' ? embedder.device() : null, load);
+            prog.hardware(cpu, gpu);
+            if (ticker) prog.sample(cpu && cpu.load, gpu.load);
+        };
+        showDevice();
+        // A sample of what the model is given, every CROP_PREVIEW_MS, cycling through the embedder's recent
+        // crops — by time, not every nth crop, since crops/s differs ~15x between a GPU and the CPU. ~0.1 ms
+        // a draw; the embedder only keeps references.
+        if (typeof embedder.sampleCrops === 'function') {
+            var shown = null, nextCrop = 0;
+            cropTicker = setInterval(function () {
+                var list = embedder.sampleCrops();
+                if (!list || !list.length) return;
+                var c = list[nextCrop++ % list.length];
+                if (c === shown) return;
+                shown = c;
+                var who = identityOf(session, c.identityId);
+                prog.crop(c.tensor, (who ? who.name : 'no ID') + ' · ' + c.camera,
+                    { points: c.points, edges: session.skeleton && session.skeleton.edges, color: who && who.color });
+            }, CROP_PREVIEW_MS);
+        } else prog.crop(null);
         t0 = performance.now();
         var res = await checkImageSwitches(session, {
             fps: rate.fps,
             imageHz: getTrackingThreshold('imageCheckHz') || 2,
-            threshold: getTrackingThreshold('imageCheckThreshold'),
+            threshold: getTrackingThreshold('imageChangeThreshold'),
             getEmbeddings: embedder.getEmbeddings,
             prepareFrames: embedder.prepareFrames,
             inFlight: embedder.inFlight || 2,
@@ -185,13 +344,17 @@ async function runImage(session, rate, inject) {
             signal: prog.signal,
             onProgress: async function (stage, done, total) {
                 if (stage === 'embed') {
+                    if (!ticker) { ticker = setInterval(showDevice, 1000); showDevice(); }
                     var el = (performance.now() - t0) / 1000, left = done ? el * (total - done) / done : NaN;
                     prog.update('Cropping and embedding ' + embedder.views.length + ' views: frame ' + done.toLocaleString() +
                         ' of ' + total.toLocaleString() + (done > 3 ? ' — about ' + fmtDuration(left) + ' left' : ''), 0.9 * done / total);
                 } else {
-                    prog.update('Learning each animal\'s appearance (' + done + ' / ' + total + ')…', 0.9 + 0.1 * done / Math.max(1, total));
+                    if (fitFrom) fitMs += performance.now() - fitFrom;   // the fit since the last yield: main-thread CPU
+                    fitFrom = 0;
+                    prog.update('Learning what tells the animals apart (camera ' + Math.min(done + 1, total) + ' of ' + total + ')…', 0.9 + 0.1 * done / Math.max(1, total));
                 }
                 await yieldToPaint();
+                if (stage !== 'embed') fitFrom = performance.now();
             },
         });
         if (res && embedder.backend) res.model = embedder.backend();   // after releaseFrames: the final word
@@ -202,8 +365,20 @@ async function runImage(session, rate, inject) {
         return res;
     } catch (e) {
         if (e && e.name === 'AbortError') return { ok: false, reason: 'cancelled', cancelled: true };
+        // A check that cannot run here — no network for the model's first download, no Nose/TTI —
+        // is a reason, like the gates above, not a failure (image-embedder.js `cannotRun`)
+        if (e && e.cannotRun) {
+            if (e.cause) console.warn('[id-switch-check:image] ' + e.message, e.cause);
+            return { ok: false, reason: e.message };
+        }
         throw e;
-    } finally { prog.close(); }
+    } finally {
+        clearInterval(ticker); clearInterval(cropTicker);
+        // checkImageSwitches releases it too, but not when it fails before its first frame — and the CPU
+        // workers hold ~600 MB each. Releasing twice is harmless.
+        if (embedder && typeof embedder.releaseFrames === 'function') { try { embedder.releaseFrames(); } catch (e) { /* ignore */ } }
+        prog.close();
+    }
 }
 
 /**
@@ -216,10 +391,10 @@ async function runImage(session, rate, inject) {
  * never as an error of the tracking pass.
  *
  * @param {{size?: boolean, image?: boolean, auto?: boolean, statusPrefix?: string,
- *          navigateToFrame?: function(number), inject?: {createEmbedder?, hasWebGPU?}}} opts
- *   `inject` replaces the image model and the WebGPU probe — for tests only
+ *          navigateToFrame?: function(number), inject?: {createEmbedder?}}} opts
+ *   `inject.createEmbedder` replaces the image model — for tests only
  *   (tests/e2e/id-switch-image-check.mjs), so they need no GPU or model download.
- * @returns {Promise<{size?: object, image?: object}|null>}
+ * @returns {Promise<{size?: object, image?: object}|null>}  each result carries `elapsedMs`
  */
 export async function runIdSwitchChecks(opts) {
     opts = opts || {};
@@ -235,12 +410,15 @@ export async function runIdSwitchChecks(opts) {
     }
     var rate = recordingFps(session), results = {}, parts = [], level = 'success';
     for (var cue of cues) {
-        var res;
+        var res, t0 = performance.now();
         try { res = cue === 'size' ? await runSize(session, rate) : await runImage(session, rate, opts.inject); }
         catch (e) {
             console.error('[id-switch-check:' + cue + ']', e);
             res = { ok: false, reason: 'failed — ' + e.message, failed: true };
         }
+        // Wall-clock time of this check, model download and video decoding included (the
+        // Track All summary reports it). Not saved: the .slp checklist picks its fields.
+        res.elapsedMs = performance.now() - t0;
         results[cue] = res;
         if (!res.ok) {
             parts.push(head(cue) + ': ' + (auto && !res.failed && !res.cancelled ? 'skipped — ' : '') + res.reason);
@@ -251,7 +429,7 @@ export async function runIdSwitchChecks(opts) {
         var n = countOnsets(res);
         parts.push(head(cue) + ': ' + (n
             ? n + ' possible switch' + (n === 1 ? '' : 'es') + ' in ' + res.encounters.length + ' close encounters'
-            : 'no possible switches in ' + res.encounters.length + ' close encounters'));
+            : 'nothing flagged in ' + res.encounters.length + ' close encounters'));
         if (n) level = 'warning';
     }
     var ran = cues.filter(function (c) { return results[c] && results[c].ok; });
@@ -325,22 +503,26 @@ export function clearIdSwitchResults(session) {
 
 function aboutHtml(st, ran) {
     var r0 = st.results[ran[0]], im = st.results.image;
-    return '<p>Each close encounter between two identities is scored by whether the animals leaving it look like the ' +
-        'identities they now carry — by 3D body size' + (im && im.ok ? ' and/or by appearance in the videos' : '') +
-        ', learned from the tracker\'s own labels. Flags are leads to review, not certainties: size cannot tell apart ' +
-        'animals of near-equal size, and images struggle with animals that look alike.' +
-        (ran.length === 2 ? ' <b>Review "Both" rows first</b> — when both checks flag the same encounter it was a real swap ' +
-            'far more often (in calibration: 98% vs 79% for images alone, and none on a 30-min recording with no switches).' : '') + '</p>' +
+    var sz = st.results.size, by = [sz && sz.ok ? '3D body size' : '', im && im.ok ? 'appearance in the videos' : ''].filter(Boolean);
+    return '<p>Each contact between two identities is scored by whether each animal still looks like itself just before ' +
+        'and just after it — by ' + by.join(' and by ') + ' — so the checks do not rely on the tracker\'s labels being ' +
+        'mostly right. Flags are leads to review, not certainties: size cannot tell apart animals of near-equal size, ' +
+        'and images cannot tell apart animals that look alike.' +
+        (ran.length === 2 ? ' <b>Review "Both" rows first</b> — when both checks flag the same contact it was a real swap ' +
+            'more often (on 8 proofread or tail-marked recordings: 5 of 5, against 5 of 7 for images alone and 1 of 8 ' +
+            'for size alone).' : '') + '</p>' +
         '<p class="id-switch-rate">Analysed ' + r0.sampleHz.toFixed(1) + ' samples/s (every ' +
         (r0.step === 1 ? 'frame' : ordinal(r0.step) + ' frame') + ' at ' + r0.fps.toFixed(2).replace(/\.?0+$/, '') + ' fps' +
         (im && im.ok ? '; images at ' + im.imageHz.toFixed(1) + '/s, ' + im.crops.toLocaleString() + ' crops from ' + im.cameras.length + ' views' +
             (im.model && im.model.note ? ' (' + escapeHtml(im.model.note) + ')' : '') : '') +
         (r0.fpsFromVideo ? ', measured from the video)'
             : ') — <b>no video is loaded, so this frame rate was not measured</b>. If the recording ran at a ' +
-              'different rate, set it in the fps box and run the check again: scores are evidence per second.') + '</p>' +
+              'different rate, set it in the fps box and run the check again: its time windows are set in seconds.') + '</p>' +
         (im && im.ok && im.timing && im.timing.crops ? '<p class="id-switch-rate">Image check speed on this machine: ' +
-            escapeHtml(formatEmbedTiming(im.timing)) + '. GPU busy well under 100% means it waited on video decoding, ' +
-            'cropping or the browser\'s main thread rather than computing.</p>' : '');
+            escapeHtml(formatEmbedTiming(im.timing)) + (im.timing.backend === 'cpu'
+                ? '. There was no GPU, so the image model ran on the CPU — the same model, much slower.</p>'
+                : '. GPU busy well under 100% means it waited on video decoding, ' +
+                  'cropping or the browser\'s main thread rather than computing.</p>') : '');
 }
 
 // ---- The selected row's progress bar ------------------------------------------------
@@ -520,12 +702,17 @@ function idName(session, name) {
     return '<span class="id-switch-id"' + (col ? ' style="color:' + col + '"' : '') + '>' + escapeHtml(name) + '</span>';
 }
 
+/** A row's score: a cosine contrast (-4..4), to one decimal; results restored from older files were summed evidence (whole numbers). */
+function fmtScore(m) {
+    return Math.abs(m.score) < 10 ? (Math.round(m.score * 10) / 10).toFixed(1) : String(Math.round(m.score));
+}
+
 function rowHtml(session, st, f, both) {
     var cue = f.agree ? 'both' : f.cue, key = rowKey(f), rev = isReviewed(st, f);
-    var score = f.agree ? Math.round(f.score) + ' / ' + Math.round(f.agree.score) : Math.round(f.score);
+    var score = f.agree ? fmtScore(f) + ' / ' + fmtScore(f.agree) : fmtScore(f);
     var note = f.continues ? 'still swapped'
         : f.followOf != null ? 'follows the switch at ' + fmtTime(f.followOf)
-        : f.kind === 'end' ? 'labelling changes here; earlier encounters look swapped' : '';
+        : f.kind === 'end' ? 'labels change back here' : '';
     var fixed = idSwitchFixFor(st, f);
     return '<div class="id-switch-row cue-' + cue + (f.continues || f.followOf != null ? ' is-repeat' : '') + (rev ? ' is-reviewed' : '') +
         (fixed ? ' is-fixed' : '') +
@@ -578,7 +765,7 @@ export function refreshIdSwitchPanel(session) {
     var st = session && session._idSwitch;
     var ran = st ? ['size', 'image'].filter(function (c) { return st.results[c] && st.results[c].ok; }) : [];
     if (!ran.length) {
-        host.innerHTML = '<div class="info-section"><h3>Possible ID switches</h3><p class="table-empty id-switch-empty">' +
+        host.innerHTML = trackSummaryHtml(session) + '<div class="info-section"><h3>Possible ID switches</h3><p class="table-empty id-switch-empty">' +
             (hasTrackedIdentities(session) ? 'No ID-switch check has run on this session yet.' : 'Run Track All first: the checks need tracked identities with 3D.') +
             '</p><div class="id-switch-run"><button class="panel-btn" data-run="menuCheckSizeSwitches">Check by body size</button>' +
             '<button class="panel-btn" data-run="menuCheckImageSwitches">Check by images…</button></div></div>';
@@ -586,17 +773,19 @@ export function refreshIdSwitchPanel(session) {
         host.querySelectorAll('[data-run]').forEach(function (b) {
             b.addEventListener('click', function () { var m = document.getElementById(b.dataset.run); if (m) m.click(); });
         });
+        wireTrackSummary(host, session);
         return;
     }
     var both = ran.length === 2, primary = listRows(st, false), all = listRows(st, true);
     var repeats = all.length - primary.length, done = primary.filter(function (m) { return isReviewed(st, m); }).length;
     var rows = st.showRepeats ? all : primary;
-    host.innerHTML =
+    host.innerHTML = trackSummaryHtml(session) +
         '<div class="info-section id-switch-head"><h3>Possible ID switches</h3>' +
         ran.map(function (c) {
             var r = st.results[c], n = countOnsets(r);
             return '<div class="id-switch-summary">' + (both ? '<b>' + (c === 'size' ? 'Body size' : 'Images') + ':</b> ' : '') +
-                encounterCount(r).toLocaleString() + ' close encounters · <b>' + n + '</b> possible switch' + (n === 1 ? '' : 'es') + '</div>';
+                encounterCount(r).toLocaleString() + ' close encounters · ' +
+                (n ? '<b>' + n + '</b> possible switch' + (n === 1 ? '' : 'es') : 'nothing flagged') + '</div>';
         }).join('') +
         '<details class="id-switch-about"><summary>About these flags</summary>' + aboutHtml(st, ran) + '</details>' +
         '</div>' +
@@ -611,6 +800,7 @@ export function refreshIdSwitchPanel(session) {
         (rows.length ? rows.map(function (f) { return rowHtml(session, st, f, both); }).join('')
             : '<p class="table-empty">No encounter scored below the threshold.</p>') + '</div>';
     _progStale = true;                               // the list was rebuilt: re-find the selected row's bar
+    wireTrackSummary(host, session);
     highlightRow(rows.filter(function (f) { return rowKey(f) === st.current; })[0] || null);
     var nav = st.navigate || _navigate;
     // A row lands ID_SWITCH_LEAD_IN_SECONDS before the animals come close (data-go), so pressing play

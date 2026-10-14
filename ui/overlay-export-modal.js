@@ -30,11 +30,13 @@ import { state, videoController, getActiveSession } from './app-state.js';
 import { Viewport3D } from './viewport3d.js';
 import {
     drawFrameOverlays, drawLegend, drawViewNameLabel, getTrackColor, getGroupColor,
+    TRAIL_SHADES, DEFAULT_TRAIL_SHADE, trailShadeFor,
 } from './overlays.js';
 import { getVisibilitySettings } from './rendering.js';
 import {
     getInstanceGroupsForFrame,
     ensureLazyFrameData,
+    ensureLazyTrailWindow,
     triangulateAndReproject,
     storeReprojectedInstances,
     sessionHasCalibration,
@@ -119,6 +121,7 @@ export function settingsFromVisibilityPanel() {
     s.layers.errors = !!vis.showErrors;
     s.layers.legend = !!vis.showLegend;
     s.trailLength = state.trailLength || 0;
+    s.trailShade = state.trailShade || DEFAULT_TRAIL_SHADE;
     s.colorBy = state.colorByIdentity ? 'identity' : 'track';
     function copy(dst, src, keys) {
         if (!src) return;
@@ -149,7 +152,10 @@ export function settingsFromVisibilityPanel() {
 }
 
 export function loadOverlayExportSettings() {
-    return applyStoredSettings(settingsFromVisibilityPanel());
+    var s = applyStoredSettings(settingsFromVisibilityPanel());
+    // A stored shade this build does not offer would leave the select blank.
+    if (!trailShadeFor(s.trailShade)) s.trailShade = DEFAULT_TRAIL_SHADE;
+    return s;
 }
 
 /**
@@ -929,6 +935,13 @@ export function showOverlayExportModal() {
             try { await ensureLazyFrameData(f); } catch (e) { /* ignore */ }
             if (token !== previewToken) return;
         }
+        // The frames behind `f` the node trails draw (see ensureLazyTrailWindow).
+        var trailLoad = session.lazyLoader && settings.trailLength > 0
+            ? ensureLazyTrailWindow(f, settings.trailLength) : null;
+        if (trailLoad) {
+            await trailLoad;
+            if (token !== previewToken) return;
+        }
 
         var frameGroup = session.getFrameGroup(f);
         var groups = getInstanceGroupsForFrame(f);
@@ -1352,6 +1365,8 @@ export function showOverlayExportModal() {
         addSelect(gLayers.body, 'Color by', settings, 'colorBy',
             [['track', 'Track'], ['identity', 'Identity']], 'ovColorBy');
         addNumber(gLayers.body, 'Node trails (frames)', settings, 'trailLength', 0, 500, 10);
+        addSelect(gLayers.body, 'Trail shade', settings, 'trailShade',
+            TRAIL_SHADES.map(function (sh) { return [sh.key, sh.name]; }), 'ovTrailShade');
         addSelect(gLayers.body, 'Background', settings, 'background',
             [['video', 'video'], ['black', 'black'], ['white', 'white'], ['gray', 'gray']], 'ovBackground');
 
@@ -1447,10 +1462,10 @@ export function showOverlayExportModal() {
         playhead.style.left = pctOf(previewFrame) + '%';
         if (startField) startField.value = rangeStart + 1;   // 1-based display
         if (endField) endField.value = rangeEnd + 1;
-        scrubVal.textContent = 'frame ' + (previewFrame + 1) + ' / ' + frameCount;
+        scrubVal.textContent = 'frame ' + (previewFrame + 1).toLocaleString('en-US') + ' / ' + frameCount.toLocaleString('en-US');
         var note = modal.querySelector('#ovRangeNote');
         if (note) {
-            note.textContent = selectedCount() + ' frames · ' +
+            note.textContent = selectedCount().toLocaleString('en-US') + ' frames · ' +
                 fmtDuration(selectedCount() / currentFps()) + ' @ ' + currentFps() + ' fps';
         }
         refreshSummary();
@@ -1482,7 +1497,7 @@ export function showOverlayExportModal() {
         if (f > lastIdx) f = lastIdx;
         previewFrame = f;
         playhead.style.left = pctOf(f) + '%';
-        scrubVal.textContent = 'frame ' + (f + 1) + ' / ' + frameCount;
+        scrubVal.textContent = 'frame ' + (f + 1).toLocaleString('en-US') + ' / ' + frameCount.toLocaleString('en-US');
         schedulePreview();
         syncViewer(f);
     }
@@ -1620,7 +1635,7 @@ export function showOverlayExportModal() {
             var bytes = estimatedBytes(size.width, size.height, fps, settings.quality, nFrames);
             summaryEl.textContent = n + ' tile' + (n === 1 ? '' : 's') + ' · ' + resTierLabel(size) +
                 ' · ' + size.width + '×' + size.height +
-                ' · ' + nFrames + ' frames · ~' + fmtBytes(bytes);
+                ' · ' + nFrames.toLocaleString('en-US') + ' frames · ~' + fmtBytes(bytes);
             if (outNote) {
                 outNote.textContent = 'One .mp4 laid out exactly as the composition (' +
                     size.width + '×' + size.height + ' at ' +
@@ -1637,7 +1652,7 @@ export function showOverlayExportModal() {
             var firstSize = individualSizeFor(layout.tiles[0]);
             syncOutFields(firstSize);
             summaryEl.textContent = n + ' file' + (n === 1 ? '' : 's') + ' · ' + resTierLabel(null) +
-                ' · ' + nFrames + ' frames · ~' + fmtBytes(total);
+                ' · ' + nFrames.toLocaleString('en-US') + ' frames · ~' + fmtBytes(total);
             if (outNote) {
                 // Quality is named here TOO. It used to appear only in the stitched
                 // branch, so in this mode the ONLY visible effect of changing
@@ -1935,6 +1950,12 @@ export function showOverlayExportModal() {
                 if (session.lazyLoader && !session.frameGroups.has(f)) {
                     try { await ensureLazyFrameData(f); } catch (e) { /* frame stays empty */ }
                 }
+                // The first frame's trail reaches back before the export range;
+                // every later frame's window is already resident.
+                if (session.lazyLoader && settings.trailLength > 0) {
+                    var expTrailLoad = ensureLazyTrailWindow(f, settings.trailLength);
+                    if (expTrailLoad) await expTrailLoad;
+                }
                 var frameGroup = session.getFrameGroup(f);
                 var groups = getInstanceGroupsForFrame(f);
                 if (settings.layers.reproj || settings.layers.errors) ensureReprojections(groups, session);
@@ -1992,7 +2013,7 @@ export function showOverlayExportModal() {
                 if (out % 5 === 0 || f === expEnd) {
                     var pct = Math.round(((out + 1) / nFrames) * 100);
                     progressFill.style.width = pct + '%';
-                    progressLabel.textContent = 'Encoding ' + (out + 1) + ' / ' + nFrames;
+                    progressLabel.textContent = 'Encoding ' + (out + 1).toLocaleString('en-US') + ' / ' + nFrames.toLocaleString('en-US');
                     await new Promise(function (r) { setTimeout(r, 0); });
                 }
             }
@@ -2009,11 +2030,11 @@ export function showOverlayExportModal() {
                     }
                 }
                 if (stitched) {
-                    setStatus('Overlay video exported: ' + specs[0].filename + ' (' + nFrames +
+                    setStatus('Overlay video exported: ' + specs[0].filename + ' (' + nFrames.toLocaleString('en-US') +
                         ' frames @ ' + fps + ' fps, ' + outW + '×' + outH + ')', 'success');
                 } else {
                     setStatus('Overlay videos exported: ' + specs.length + ' file' +
-                        (specs.length === 1 ? '' : 's') + ' (' + nFrames + ' frames @ ' +
+                        (specs.length === 1 ? '' : 's') + ' (' + nFrames.toLocaleString('en-US') + ' frames @ ' +
                         fps + ' fps)', 'success');
                 }
             } else {

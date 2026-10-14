@@ -33,8 +33,7 @@
  * project still agrees on. Nothing is written for a session no check has run on,
  * so such a project's bytes are unchanged. Reads tolerate absence and garbage.
  *
- * Imports no project modules (loads in the node test sandbox, like
- * ui/timeline-visibility.js).
+ * Imports no project modules.
  */
 
 /** A row's identity across re-runs and reopens: its check, frame and pair (by name). */
@@ -63,7 +62,13 @@ export function idSwitchEncounterCount(res) {
     return res.encounters ? res.encounters.length : (res.encounterCount || 0);
 }
 
-/** Tag every marker with its check, and link change points both checks found (same pair, within 1 s) as `agree`. */
+/**
+ * Tag every marker with its check, and link change points both checks found as
+ * `agree`: the same pair, at the same contact — their close spells overlap, give
+ * or take 1 s (the two checks merge contacts by their own evidence, so one may
+ * span a longer stretch than the other) — or, for results restored without a
+ * start, ending within 1 s.
+ */
 export function linkIdSwitchResults(results) {
     ['size', 'image'].forEach(function (cue) {
         var r = results[cue];
@@ -75,8 +80,15 @@ export function linkIdSwitchResults(results) {
     var samePair = function (a, b) {
         return (a.nameA === b.nameA && a.nameB === b.nameB) || (a.nameA === b.nameB && a.nameB === b.nameA);
     };
+    var sameContact = function (x, m) {
+        if (Math.abs(x.frame - m.frame) <= tol) return true;
+        return x.startFrame != null && m.startFrame != null && x.startFrame <= m.frame + tol && m.startFrame <= x.frame + tol;
+    };
     idSwitchPrimary(im).forEach(function (m) {
-        var hit = idSwitchPrimary(s).find(function (x) { return samePair(x, m) && Math.abs(x.frame - m.frame) <= tol; });
+        var hit = null;
+        idSwitchPrimary(s).forEach(function (x) {
+            if (!x.agree && samePair(x, m) && sameContact(x, m) && (!hit || Math.abs(x.frame - m.frame) < Math.abs(hit.frame - m.frame))) hit = x;
+        });
         if (hit) { m.agree = hit; hit.agree = m; }
     });
 }

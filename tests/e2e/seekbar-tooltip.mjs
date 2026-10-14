@@ -16,6 +16,12 @@
  *  6. Moving over the bar reads NO layout (so hovering during playback adds no
  *     forced layout to the frame), yet the cached geometry follows a bar
  *     resize that happens under a stationary pointer.
+ *  7. The hover line: shown with the tooltip, at the position of the frame a
+ *     click lands on (under the bubble), in the ID Switches tab's playhead
+ *     colours but bigger than an ID-switch tick, over the ticks and under the
+ *     thumb; it snaps onto a
+ *     tick as a click does, hides during a drag (the thumb is there) and on
+ *     leave, and comes back on release over the bar.
  *
  * Run: node tests/e2e/seekbar-tooltip.mjs
  */
@@ -136,7 +142,7 @@ try {
         await page.mouse.move(x, bar.y);
         const shown = (await tipState()).text.match(/^Frame ([\d,]+)/)[1].replace(/,/g, '');
         await page.mouse.down(); await page.mouse.up();
-        const landed = await page.evaluate(() => document.getElementById('currentFrame').textContent);
+        const landed = await page.evaluate(() => document.getElementById('currentFrame').textContent.replace(/,/g, ''));
         check(shown === landed, `after the bar resized under the pointer, tooltip said ${shown}, click landed on ${landed}`);
     }
     await page.evaluate(() => { document.querySelector('.frame-display').style.minWidth = ''; });
@@ -148,7 +154,7 @@ try {
         await page.mouse.move(xAt(frac), bar.y);
         const shown = (await tipState()).text.match(/^Frame ([\d,]+)/)[1].replace(/,/g, '');
         await page.mouse.down(); await page.mouse.up();
-        const landed = await page.evaluate(() => document.getElementById('currentFrame').textContent);
+        const landed = await page.evaluate(() => document.getElementById('currentFrame').textContent.replace(/,/g, ''));
         check(shown === landed, `at ${(frac * 100).toFixed(1)}% the tooltip said ${shown}, a click landed on ${landed}`);
     }
 
@@ -176,6 +182,96 @@ try {
         `while dragging off the bar it tracks the scrub frame: "${t.text}"`);
     await page.mouse.up();
     check((await tipState()).hidden, 'releasing off the bar hides it');
+
+    // ---- 7. the hover line -------------------------------------------------------------------
+    {
+        const lineState = () => page.evaluate(() => {
+            const l = document.getElementById('seekbarHoverLine');
+            const cs = getComputedStyle(l), r = l.getBoundingClientRect();
+            const track = document.querySelector('.seekbar-track').getBoundingClientRect();
+            return { hidden: cs.display === 'none', centre: r.left + r.width / 2, top: r.top, bottom: r.bottom,
+                     trackTop: track.top, trackBottom: track.bottom };
+        });
+        const xOfFrame = (f, total) => bar.left + f / (total - 1) * bar.width;
+
+        await page.mouse.move(xAt(0.42), bar.y);
+        let l = await lineState();
+        t = await tipState();
+        const f42 = frameAt(xAt(0.42), 1000);
+        check(!l.hidden, 'hovering shows the line');
+        check(Math.abs(l.centre - xOfFrame(f42, 1000)) < 0.5,
+            `  at the position of the frame a click lands on (${l.centre.toFixed(2)} vs ${xOfFrame(f42, 1000).toFixed(2)})`);
+        check(Math.abs(l.centre - t.centre) < 1.5, '  under the tooltip bubble');
+        check(l.top < l.trackTop - 2 && l.bottom > l.trackBottom + 2, '  standing proud of the track');
+
+        // The ID Switches tab's playhead colours, compared against the real thing —
+        // but bigger than an ID-switch tick, so it reads among them.
+        const style = await page.evaluate(() => {
+            const pick = (el) => { const c = getComputedStyle(el); return { bg: c.backgroundColor, shadow: c.boxShadow }; };
+            const size = (el) => { const r = el.getBoundingClientRect(); return { w: r.width, h: r.height }; };
+            const probe = document.createElement('div');
+            probe.className = 'id-switch-phead';
+            document.body.appendChild(probe);
+            const want = pick(probe);
+            probe.remove();
+            const tick = document.createElement('div');
+            tick.className = 'seekbar-mark cue-size';
+            const marks = document.getElementById('seekbarMarks');
+            marks.appendChild(tick);
+            const tickSize = size(tick);
+            tick.remove();
+            const line = document.getElementById('seekbarHoverLine'), thumb = document.getElementById('seekbarThumb');
+            return { got: pick(line), want, lineSize: size(line), tickSize,
+                     z: [marks, line, thumb].map(e => getComputedStyle(e).zIndex),
+                     order: !!(marks.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+                            !!(line.compareDocumentPosition(thumb) & Node.DOCUMENT_POSITION_FOLLOWING) };
+        });
+        check(JSON.stringify(style.got) === JSON.stringify(style.want),
+            `  in the ID Switches playhead colours (${JSON.stringify(style.got)})`);
+        check(style.lineSize.w > style.tickSize.w && style.lineSize.h > style.tickSize.h,
+            `  and bigger than an ID-switch tick (${style.lineSize.w}x${style.lineSize.h} vs ${style.tickSize.w}x${style.tickSize.h} px)`);
+        check(style.order && style.z[0] === style.z[1] && Number(style.z[1]) < Number(style.z[2]),
+            `  painted over the ID-switch ticks and under the thumb (z ${style.z.join(' / ')})`);
+
+        // Snaps onto an ID-switch tick, as a click does.
+        await page.evaluate(async () => {
+            (await import('./ui/seekbar-markers.js')).setSeekbarSwitchMarkers([{ frame: 400, nameA: 'a', nameB: 'b', score: -100, cue: 'size' }], 1000);
+        });
+        const tickX = xOfFrame(400, 1000);
+        await page.mouse.move(Math.round(tickX) + 3, bar.y);
+        l = await lineState();
+        t = await tipState();
+        check(Math.abs(l.centre - tickX) < 0.5 && t.text.startsWith('Frame 401 ·'),
+            `  3 px off an ID-switch tick it snaps onto it (${(l.centre - tickX).toFixed(2)} px; "${t.text.slice(0, 22)}…")`);
+        await page.mouse.down(); await page.mouse.up();
+        const landed = await page.evaluate(() => window.__lucid.state.currentFrame);
+        check(landed === 400, `  and a click there lands on that tick's frame (${landed})`);
+        await page.evaluate(async () => { (await import('./ui/seekbar-markers.js')).setSeekbarSwitchMarkers([], 1000); });
+
+        // Drag: the thumb is at the cursor's frame, so the line steps aside; back on release.
+        await page.mouse.move(xAt(0.2), bar.y);
+        await page.mouse.down();
+        check((await lineState()).hidden, '  pressing hides it (the thumb is there)');
+        await page.mouse.move(xAt(0.3), bar.y, { steps: 3 });
+        check((await lineState()).hidden, '  and it stays hidden through the drag');
+        await page.mouse.up();
+        l = await lineState();
+        check(!l.hidden && Math.abs(l.centre - xOfFrame(frameAt(xAt(0.3), 1000), 1000)) < 0.5,
+            '  releasing over the bar brings it back, at the release point');
+
+        await page.mouse.move(xAt(0.5), bar.y - 200);
+        check((await lineState()).hidden, '  leaving the bar hides it');
+        await page.evaluate(() => { window.__lucid.state.totalFrames = 0; });
+        await page.mouse.move(xAt(0.5), bar.y);
+        check((await lineState()).hidden, '  and with no frames it never shows');
+        await page.mouse.move(xAt(0.5), bar.y - 200);
+        await page.evaluate(() => { window.__lucid.state.totalFrames = 1000; });
+        if (SHOT_DIR) {
+            await page.mouse.move(xAt(0.62), bar.y);
+            await page.screenshot({ path: path.join(SHOT_DIR, 'seekbar-hover-line.png'), clip: { x: 0, y: bar.y - 70, width: 1400, height: 100 } });
+            await page.mouse.move(xAt(0.5), bar.y - 200);
+        }
+    }
 
     // ---- 4c. fps 0: no timestamp ----------------------------------------------------------
     await page.evaluate(() => { window.__lucid.state.fps = 0; });

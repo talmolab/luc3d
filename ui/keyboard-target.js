@@ -1,8 +1,8 @@
 // ui/keyboard-target.js — who owns a keystroke: the focused control, or the app?
 //
 // Dependency-free on purpose: it imports NO project modules, so it can be
-// bridged into the browser test runner (`tests/test-runner.html`) and the `vm`
-// sandbox runner without dragging `app.js` in. Every global keydown handler in
+// bridged into the browser test runner (`tests/test-runner.html`) without
+// dragging `app.js` in. Every global keydown handler in
 // the app routes its "am I allowed to act on this key?" question through here,
 // so the answer is defined once instead of ten times.
 //
@@ -15,7 +15,7 @@
 //
 // meaning "don't steal keys from someone who is typing". But `tagName` is
 // `INPUT` for a CHECKBOX too, and for a radio, a range slider and a file
-// picker. So the moment the user clicked the User / Predicted / Reproj / Errors
+// picker. So the moment the user clicked the User / Predictions / Reprojections / Errors
 // checkbox, that one test went true for every keystroke and EVERY shortcut in
 // the app went dead — spacebar toggled the checkbox instead of playing the
 // video, and the only cure was to click back onto a video pane.

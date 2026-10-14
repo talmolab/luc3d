@@ -36,18 +36,32 @@
 
 <body>
     <div class="app-container">
-        <!-- Loading overlay -->
+        <!-- Loading overlay (ui/loading-overlay.js): an opaque card styled like the image ID-switch check's
+             dialog, on a transparent layer that still blocks the app while an operation runs -->
         <div class="loading-overlay" id="loadingOverlay">
-            <div class="spinner" id="loadingSpinner"></div>
-            <div id="loadingStatus">Initializing...</div>
-            <div class="loading-eta hidden" id="loadingEta" aria-live="off"></div>
-            <!-- Determinate progress (ui/loading-overlay.js showLoadingProgress) -->
-            <div class="loading-progress hidden" id="loadingProgress" role="progressbar"
-                 aria-labelledby="loadingStatus" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-                <div class="loading-progress-fill" id="loadingProgressFill"></div>
+            <div class="loading-card" role="status" aria-labelledby="loadingTitle loadingStatus">
+                <h3 class="loading-title hidden" id="loadingTitle"></h3>
+                <!-- the spinner shows for a message with no progress bar (showLoading) -->
+                <div class="loading-line"><div class="spinner" id="loadingSpinner"></div><div id="loadingStatus">Initializing...</div></div>
+                <div class="loading-eta hidden" id="loadingEta" aria-live="off"></div>
+                <!-- Determinate progress (showLoadingProgress): the track clips the fill, the bar does not,
+                     so the playhead stands proud of it -->
+                <div class="loading-progress hidden" id="loadingProgress" role="progressbar"
+                     aria-labelledby="loadingStatus" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                    <div class="loading-progress-track"><div class="loading-progress-fill" id="loadingProgressFill"></div></div>
+                    <div class="loading-progress-head" id="loadingProgressHead"></div>
+                </div>
+                <div class="loading-pct hidden" id="loadingPct"></div>
+                <div class="loading-substatus hidden" id="loadingSubstatus"></div>
+                <!-- How busy the operation keeps the CPU: a line + a graph (setLoadingCpu) -->
+                <div class="loading-hw hidden" id="loadingHardware">
+                    <div class="load-line is-cpu" id="loadingCpu"></div>
+                    <div id="loadingGraph"></div>
+                </div>
+                <!-- Brave hiding the real core count: what to do (ui/browser-hints.js) -->
+                <div class="progress-hint" id="loadingBraveHint" hidden></div>
+                <div class="loading-actions"><button class="btn" id="loadingDismiss" data-dismiss="true" style="display:none;">Dismiss</button></div>
             </div>
-            <div class="loading-substatus hidden" id="loadingSubstatus"></div>
-            <button class="btn" id="loadingDismiss" data-dismiss="true" style="display:none;margin-top:12px;">Dismiss</button>
         </div>
 
         <!-- Tracker progress overlay -->
@@ -140,14 +154,8 @@
                     <div class="menu-dropdown-item has-submenu" id="menuTrailsParent">
                         <span>Node Trails</span>
                         <span class="submenu-arrow">▶</span>
-                        <div class="menu-dropdown submenu" id="menuTrailsSubmenu">
-                            <div class="menu-dropdown-item" id="menuTrailsOff"><span><span class="trail-check">✓</span>Off</span></div>
-                            <div class="menu-dropdown-item" id="menuTrails10"><span><span class="trail-check"></span>10 frames</span></div>
-                            <div class="menu-dropdown-item" id="menuTrails50"><span><span class="trail-check"></span>50 frames</span></div>
-                            <div class="menu-dropdown-item" id="menuTrails100"><span><span class="trail-check"></span>100 frames</span></div>
-                            <div class="menu-dropdown-item" id="menuTrails250"><span><span class="trail-check"></span>250 frames</span></div>
-                            <div class="menu-dropdown-item" id="menuTrails500"><span><span class="trail-check"></span>500 frames</span></div>
-                        </div>
+                        <!-- Items built from TRAIL_PRESETS (Length) and TRAIL_SHADES (Shade) in ui/ui-wiring.js, like the toolbar's Trails menu. -->
+                        <div class="menu-dropdown submenu" id="menuTrailsSubmenu" role="menu"></div>
                     </div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuTrackingWizard">Tracking Wizard...</div>
@@ -162,6 +170,11 @@
                             class="shortcut-hint">Ctrl/Cmd+J</span></div>
                     <div class="menu-dropdown-item" id="menuToggleInfo">Toggle Info Panel <span
                             class="shortcut-hint">I</span></div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuNativeResolution"
+                        title="Show each video at one video pixel per screen pixel, with no scaling"><span><span
+                                class="trail-check"></span>Native Resolution (1:1)</span> <span
+                            class="shortcut-hint">Shift+0</span></div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuResetView">Reset 3D View</div>
                     <div class="menu-dropdown-item" id="menuFitScene">Fit 3D to Scene</div>
@@ -195,7 +208,6 @@
                 <button class="toolbar-btn" id="tbDeleteInstance" title="Delete selected instance (Del)">-
                     Instance</button>
             </div>
-            <div class="toolbar-separator"></div>
             <div class="toolbar-group">
                 <button class="toolbar-btn" id="tbGroup" title="Group selected instances (⇧G or C)">Group</button>
                 <button class="toolbar-btn" id="tbEditGroup" title="Edit selected group membership">Edit Group</button>
@@ -213,10 +225,21 @@
                         <div class="tri-dropdown-item" data-method="ba">Ref <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
                     </div>
                 </div>
+                <!-- Inside the Triangulate group so it stays on this side of the
+                     group's divider (ui/info-panel.js updateTriangulationBadge). -->
+                <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             </div>
-            <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
-            <div class="toolbar-separator"></div>
             <div class="toolbar-group">
+                <!-- The animal count every tracking run uses. Before this it was
+                     visible only in the first-use prompt, so a user who forgot
+                     what they typed had no way to find out. Blank = auto-detect.
+                     Wired in ui/ui-wiring.js (wireAnimalCountField). FIRST in the
+                     group: the setting before the actions that use it, and
+                     after Track All it read as "Track All Animals". -->
+                <label class="toolbar-field" title="Number of animals to track. Leave blank to auto-detect it from the most instances seen in one view.">Animals
+                    <input type="number" id="tbNumAnimals" min="1" step="1" inputmode="numeric"
+                        placeholder="auto" autocomplete="off" aria-label="Number of animals">
+                </label>
                 <div class="tri-dropdown" id="trackFrameDropdown">
                     <button class="toolbar-btn" id="tbTrackFrame" title="Track current frame (Shift+T)">Track Frame <span class="tri-caret">▾</span></button>
                     <div class="tri-dropdown-menu">
@@ -225,22 +248,32 @@
                 </div>
                 <button class="toolbar-btn" id="tbTrackAll" title="Track all frames (Ctrl+Shift+T)">Track All</button>
             </div>
-            <div class="toolbar-separator"></div>
             <div class="toolbar-group toolbar-checkboxes">
                 <label><input type="checkbox" id="visUser" checked> User</label>
-                <label><input type="checkbox" id="visPredicted" checked> Predicted</label>
-                <label><input type="checkbox" id="visReprojections" checked> Reproj</label>
+                <label><input type="checkbox" id="visPredicted" checked> Predictions</label>
+                <label><input type="checkbox" id="visReprojections" checked> Reprojections</label>
                 <label><input type="checkbox" id="visErrors" checked> Errors</label>
             </div>
-            <div class="toolbar-separator"></div>
-            <div class="toolbar-group">
-                <span class="toolbar-checkboxes" style="margin-right:6px;font-weight:bold;">Color</span>
+            <div class="toolbar-group" role="group" aria-label="Color by">
                 <button class="toolbar-btn active" id="colorByTracks" title="Color instances by track">Tracks</button>
-                <button class="toolbar-btn" id="colorById" title="Color instances by identity">ID</button>
+                <button class="toolbar-btn" id="colorById" title="Color instances by identity">Identity</button>
+            </div>
+            <!-- Node Trails (issue #102). Same lengths, shades and state as Tracks ▸
+                 Node Trails; the items are built from those lists in ui/ui-wiring.js.
+                 Opens on hover, like the Triangulate menus. The label stays a bare
+                 "Trails" (the value is the menu's checkmark and the tooltip) to
+                 save toolbar width; the button turns blue (.active) while a
+                 trail is on. -->
+            <div class="toolbar-group">
+                <div class="tri-dropdown" id="trailsDropdown">
+                    <button class="toolbar-btn" id="tbTrails" aria-haspopup="menu"
+                        title="Node trails: off">Trails <span class="tri-caret">▾</span></button>
+                    <div class="tri-dropdown-menu" id="trailsMenu" role="menu"></div>
+                </div>
             </div>
             <div class="toolbar-group panel-toggles">
-                <button class="toolbar-btn panel-toggle-btn" id="viewport3dToggleBtn" title="Toggle 3D viewer (\)">Hide 3D View</button>
-                <button class="toolbar-btn panel-toggle-btn" id="infoPanelToggleBtn" title="Toggle info panel (I)">Hide Panel</button>
+                <button class="toolbar-btn panel-toggle-btn active" id="viewport3dToggleBtn" aria-pressed="true" title="Hide 3D viewer (\)">3D</button>
+                <button class="toolbar-btn panel-toggle-btn active" id="infoPanelToggleBtn" aria-pressed="true" title="Hide info panel (I)">Panel</button>
             </div>
         </div>
 
@@ -367,8 +400,7 @@
                         <table class="data-table" id="instanceGroupsTable">
                             <thead>
                                 <tr>
-                                    <th>Track</th>
-                                    <th>Identity</th>
+                                    <th>Track / Identity</th>
                                     <th>Views</th>
                                     <th>Type</th>
                                     <th class="reproj-error-col" style="display:none">Error</th>
@@ -386,8 +418,7 @@
                         <table class="data-table" id="unlinkedTable">
                             <thead>
                                 <tr>
-                                    <th>Track</th>
-                                    <th>ID</th>
+                                    <th>Track / Identity</th>
                                     <th>Type</th>
                                     <th>Points</th>
                                     <th>Score</th>
@@ -462,7 +493,7 @@
                             <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
                         </div>
                     </div>
-                    <h3>Predicted</h3>
+                    <h3>Predictions</h3>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
                         <input type="range" id="visPredNodeSize" min="1" max="50" value="6" step="1">
@@ -1298,9 +1329,15 @@
 
         <!-- Playback Controls -->
         <div class="controls-bar">
+            <!-- Frame readout (ui/frame-readout.js): a 3-column grid, so both
+                 slashes line up — time / duration above, frame / total below. -->
             <div class="frame-display">
+                <span class="frame-time" id="currentTime" title="Time of the current frame, at the playback FPS">00:00.000</span>
+                <span class="frame-time frame-sep">/</span>
+                <span class="frame-time" id="totalTime" title="Duration, at the playback FPS">00:00.000</span>
                 <span class="current-frame" id="currentFrame">1</span>
-                <span>/ <span id="totalFrames">0</span></span>
+                <span class="frame-sep">/</span>
+                <span id="totalFrames">0</span>
             </div>
 
             <div class="transport-controls">
@@ -1317,8 +1354,13 @@
                 <div class="seekbar-track">
                     <div class="seekbar-progress" id="seekbarProgress"></div>
                 </div>
+                <!-- Time ruler under the track (ui/seekbar-ticks.js) -->
+                <div class="seekbar-ruler" id="seekbarRuler" aria-hidden="true"></div>
                 <!-- Possible-ID-switch ticks (ui/seekbar-markers.js) -->
                 <div class="seekbar-marks" id="seekbarMarks"></div>
+                <!-- Hover line at the frame a click would land on (ui/seekbar-tooltip.js):
+                     after the marks, before the thumb, so it paints between the two -->
+                <div class="seekbar-hover-line" id="seekbarHoverLine" hidden></div>
                 <div class="seekbar-thumb" id="seekbarThumb"></div>
             </div>
 

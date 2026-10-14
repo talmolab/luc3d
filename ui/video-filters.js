@@ -2,8 +2,8 @@
 // contrast, rotation).
 //
 // DOM-free and dependency-free on purpose: it imports NO project modules, so it
-// can be bridged into the browser test runner (`tests/test-runner.html`) and the
-// `vm` sandbox runner without dragging `app.js` in. `ui/sessions-panes.js` owns
+// can be bridged into the browser test runner (`tests/test-runner.html`)
+// without dragging `app.js` in. `ui/sessions-panes.js` owns
 // the DOM side (the Visibility-tab tables) and calls into here for the math and
 // the per-session stores.
 //

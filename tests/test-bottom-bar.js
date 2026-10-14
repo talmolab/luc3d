@@ -17,12 +17,9 @@
     var assertEqual = TestFramework.assertEqual;
     var assertTrue  = TestFramework.assertTrue;
 
-    // Bridged as a namespace by the browser runner, left on the sandbox global
-    // by `tests/run-node.js`. Resolve through both.
+    // Bridged as a namespace (`window.__FrameCounters`) by the test runner.
     function pick(name) {
-        if (typeof window !== 'undefined' && window.__FrameCounters) return window.__FrameCounters[name];
-        if (typeof globalThis !== 'undefined' && globalThis[name] !== undefined) return globalThis[name];
-        return undefined;
+        return window.__FrameCounters[name];
     }
 
     // What the status bar shows: the live count plus the whole-project baseline,

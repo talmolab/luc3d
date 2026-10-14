@@ -11,6 +11,7 @@
     "test:save-slim": "node save-slim-metadata.mjs",
     "test:lazy-calib": "node lazy-embedded-calibration.mjs",
     "test:reopen-calib": "node reopen-project-calibration.mjs",
+    "test:reopen-folder-settings": "node reopen-folder-session-settings.mjs",
     "test:multi-session-save": "node multi-session-save-streaming.mjs",
     "test:ref-integrity": "node save-multiinstance-ref-integrity.mjs",
     "test:track-all-fresh-lazy": "node track-all-fresh-lazy-session.mjs",
