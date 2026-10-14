@@ -11,7 +11,11 @@
  * include it. A requestAnimationFrame loop runs ONLY while the frame is in the
  * interval, so the marching-ants outline moves even when paused; outside it the
  * canvases are cleared once and the loop stops. Boxes are recomputed only when
- * the frame changes.
+ * the frame changes — and, on a lazy project, when the frame on screen arrives:
+ * selecting a row jumps to a frame that is usually not resident yet, and its
+ * hydration redraws the overlays but is not a frame change, so the loop polls
+ * `frameGroups.has(frame)` while it waits (`_waiting`). Without that the box
+ * stayed empty until the frame next changed — i.e. until play was pressed.
  *
  * Kept cheap, because it runs during playback on every view: a view is repainted
  * when the frame changes and otherwise at most every `ANIM_MS` (the animation is
@@ -27,6 +31,14 @@
  * `session.getIdentityIdForUnlinkedInstance`. One box encloses both (or the one
  * visible in that view), labelled "id_a ↔ id_b" in the identities' colours.
  *
+ * The box encloses only the nodes the Tracking Wizard weights above 0 (Settings ▸
+ * Tracking Wizard ▸ Node weights), so with the tail nodes at 0 it frames the
+ * bodies and heads, not a tail sweeping across half the view. An instance none
+ * of whose weighted nodes is visible in a view falls back to all of its nodes,
+ * so an animal is never dropped from the box; so does a skeleton weighted 0
+ * throughout. Applying new weights recomputes the box at once
+ * (`refreshIdSwitchHighlight`, from ui/settings-modal.js).
+ *
  * The box takes the colour of the progress-bar SECTION the frame is in —
  * `ID_SWITCH_SECTION_RGB`, which the bar (ui/id-switch-modal.js `progressHtml`)
  * reads too, so the two cannot drift: orange over the lead-in and lead-out,
@@ -39,9 +51,11 @@
 
 import { state } from './app-state.js';
 import { makeVideoToCanvasTransform } from './overlays.js';
+import { getNodeWeightArray } from './settings.js';
 
 var _target = null;          // {nameA, nameB, p0, s, e, p1}
 var _frame = -1;             // frame the boxes were computed for
+var _waiting = false;        // that frame was not resident (lazy project): recompute once it is
 var _boxes = new Map();      // view name -> {x0, y0, x1, y1} in video px, or absent
 var _raf = 0;
 var _canvases = new WeakMap();
@@ -87,7 +101,7 @@ export function updateIdSwitchHighlight(frame) {
 
 function stop() {
     if (_raf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(_raf);
-    _raf = 0; _frame = -1; _boxes.clear();
+    _raf = 0; _frame = -1; _waiting = false; _boxes.clear();
     if (!_cleared) {
         (state.views || []).forEach(function (v) {
             var c = _canvases.get(v);
@@ -110,34 +124,56 @@ function identityName(session, inst, cam, frame, group) {
     return g ? g.name : null;
 }
 
-function extend(box, inst) {
-    var n = inst.numNodes != null ? inst.numNodes : 0;
+/**
+ * The nodes the box encloses: `mask[k]` true for a node weighted above 0 in the
+ * Tracking Wizard, or `null` (every node) when nothing is weighted 0 or nothing is left.
+ */
+export function idSwitchBoxNodeMask(nodeNames) {
+    var w = getNodeWeightArray(nodeNames);
+    if (!w || !w.length) return null;
+    var mask = w.map(function (x) { return x > 0; });
+    var kept = mask.filter(Boolean).length;
+    return kept === 0 || kept === mask.length ? null : mask;
+}
+
+/** Grow `box` by `inst`'s visible nodes in `mask` (all when null); @returns how many it took. */
+function extendBy(box, inst, mask) {
+    var n = inst.numNodes != null ? inst.numNodes : 0, used = 0;
     for (var k = 0; k < n; k++) {
+        if (mask && !mask[k]) continue;
         if (inst.hasPoint && !inst.hasPoint(k)) continue;
         var x = inst.getX(k), y = inst.getY(k);
         if (!isFinite(x) || !isFinite(y)) continue;
         if (x < box.x0) box.x0 = x; if (y < box.y0) box.y0 = y;
         if (x > box.x1) box.x1 = x; if (y > box.y1) box.y1 = y;
+        used++;
     }
+    return used;
+}
+
+function extend(box, inst, mask) {
+    if (!extendBy(box, inst, mask) && mask) extendBy(box, inst, null);   // only zero-weight nodes visible
 }
 
 function computeBoxes(frame) {
     _boxes.clear();
+    _waiting = false;
     var session = state.session;
     if (!session || !_target) return;
-    if (session.frameGroups && !session.frameGroups.has(frame)) return;     // lazy project: frame not resident
+    if (session.frameGroups && !session.frameGroups.has(frame)) { _waiting = true; return; }   // lazy: not resident yet
     var groups = (session.instanceGroups && session.instanceGroups.get(frame)) || [];
     var fg = session.getFrameGroup ? session.getFrameGroup(frame) : null;
     var names = [_target.nameA, _target.nameB];
+    var mask = idSwitchBoxNodeMask(session.skeleton && session.skeleton.nodes);
     (state.views || []).forEach(function (v) {
         var cam = v.cameraName || v.name, box = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }, found = 0;
         groups.forEach(function (g) {
             var inst = g.getInstance ? g.getInstance(cam) : null;
-            if (inst && names.indexOf(identityName(session, inst, cam, frame, g)) >= 0) { extend(box, inst); found++; }
+            if (inst && names.indexOf(identityName(session, inst, cam, frame, g)) >= 0) { extend(box, inst, mask); found++; }
         });
         if (fg && fg.getUnlinkedInstances) fg.getUnlinkedInstances(cam).forEach(function (u) {
             var inst = u && (u.instance || u);
-            if (inst && inst.getX && names.indexOf(identityName(session, inst, cam, frame, null)) >= 0) { extend(box, inst); found++; }
+            if (inst && inst.getX && names.indexOf(identityName(session, inst, cam, frame, null)) >= 0) { extend(box, inst, mask); found++; }
         });
         if (found && box.x1 >= box.x0) _boxes.set(v.name, box);
     });
@@ -168,6 +204,10 @@ function colorOf(name) {
 function tick(t) {
     _raf = 0;
     if (!_target || _frame < 0) return;
+    // the frame on screen has been hydrated since (lazy project) — a hydration is not a frame change
+    if (_waiting && state.session && state.session.frameGroups && state.session.frameGroups.has(_frame)) {
+        computeBoxes(_frame); _paintFrame = -1;
+    }
     if (_frame === _paintFrame && t - _paintT < ANIM_MS) {      // same frame, animation step not due yet
         if (typeof requestAnimationFrame === 'function') _raf = requestAnimationFrame(tick);
         return;

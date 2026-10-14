@@ -21,6 +21,7 @@
 import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, VIEW_NAMES, buildRememberedSkeleton, setProjectSkeleton,
+    isViewDocked,
 } from '../ui/app-state.js';
 
 import {
@@ -89,7 +90,7 @@ import {
 } from '../ui/ui-wiring.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from '../import-export/visibility-metadata.js';
-import { readPlaneMetadata, resetPlaneState } from '../import-export/plane-metadata.js';
+import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -1167,19 +1168,42 @@ export function fitCanvasesToCells() {
     if (viewport3d) viewport3d.resize();
 }
 
+/**
+ * Re-derive every view's zoom against its current canvas box and
+ * devicePixelRatio: preserves the scale (re-constraining the pan), except that
+ * a view at native resolution gets its 1:1 scale recomputed.
+ */
+export function reapplyAllZoom() {
+    if (!videoController) return;
+    for (var i = 0; i < state.views.length; i++) {
+        videoController.reapplyZoom(state.views[i]);
+    }
+}
+
 export var cellResizeObserver = new ResizeObserver(function (entries) {
     requestAnimationFrame(function () {
         fitCanvasesToCells();
-        // Reapply zoom for all views (preserve scale, re-constrain offsets)
-        if (videoController) {
-            for (var i = 0; i < state.views.length; i++) {
-                videoController.reapplyZoom(state.views[i]);
-            }
-        }
+        reapplyAllZoom();
     });
 });
 
 window.addEventListener('resize', fitCanvasesToCells);
+
+// A view at native resolution shows one video pixel per DEVICE pixel, so its
+// scale depends on devicePixelRatio. Dragging the window to a display with
+// another DPR changes it without resizing anything, so no ResizeObserver
+// fires; re-derive every view's zoom when it changes. (Browser zoom changes
+// DPR too, but that one also resizes the cells.)
+(function watchDevicePixelRatio() {
+    if (typeof window.matchMedia !== 'function') return;
+    var mq = window.matchMedia('(resolution: ' + window.devicePixelRatio + 'dppx)');
+    if (!mq || typeof mq.addEventListener !== 'function') return;
+    mq.addEventListener('change', function onDprChange() {
+        mq.removeEventListener('change', onDprChange);
+        reapplyAllZoom();
+        watchDevicePixelRatio();
+    });
+})();
 
 export function rebuildVideoController() {
     // Detach old interaction handlers
@@ -1191,6 +1215,7 @@ export function rebuildVideoController() {
     setVideoController(new VideoController(state, {
         updateSeekbar: updateSeekbar,
         drawOverlays: drawAllOverlays,
+        isViewShown: isViewDocked,
         onPlaybackStateChange: onPlaybackStateChange,
         log: window.logMessage,
         onZoomChange: function () {
@@ -2037,6 +2062,34 @@ export async function handleLoadSessionFolderSingleSlp() {
         var folderName = allFiles[0].webkitRelativePath ? allFiles[0].webkitRelativePath.split('/')[0] : 'Session';
         var session = new Session(cameras, skeleton, tracks, folderName);
 
+        // The session's own `metadata.lucid`: restoreGroupingAndUnlink (below)
+        // reads its grouping and identity keys, these two readers the rest —
+        // the per-session Visibility settings and the Define Planes state —
+        // exactly as the other project readers do.
+        //
+        // This loader ADDS a session to whatever is open (it is also the
+        // Sessions list's "Add session folder"), so unlike them it tears no
+        // project down — except when nothing is open, where it starts one and
+        // must start from an empty plane model: `readPlaneMetadata` only
+        // restores into an EMPTY model, so without the reset leftover planes
+        // would survive and this file's be dropped. When a project IS open its
+        // planes stay, and this session's 2D is seated onto them by node ID —
+        // unless the file's planes are not the open project's
+        // (`planeMetadataConflict`), where it would land on the wrong nodes.
+        var sessLucid = (slpData.sessions && slpData.sessions[0] && slpData.sessions[0].metadata
+            && slpData.sessions[0].metadata.lucid) || {};
+        var startsProject = state.sessions.length === 0;
+        if (startsProject) resetPlaneState();
+        readVisibilityMetadata(session, sessLucid);
+        var planeConflict = startsProject ? null : planeMetadataConflict(sessLucid);
+        if (planeConflict) {
+            console.warn('[single-slp] not reading the plane state in ' + slpFile.name +
+                ' — ' + planeConflict + '; the open project\'s planes are kept');
+            session.planePlacements = new Map();
+        } else {
+            readPlaneMetadata(session, sessLucid);
+        }
+
         // Populate frames
         showLoading('Building session...');
         for (var fri = 0; fri < slpData.frames.length; fri++) {
@@ -2049,6 +2102,7 @@ export async function handleLoadSessionFolderSingleSlp() {
                 var resolvedTrackIdx = resolveImportTrackIdx(session, instData.trackIdx, instData.type);
                 var inst = new Instance(instData.points, resolvedTrackIdx, instData.type || 'user', instData.score || 0);
                 if (instData.occluded) inst.setOccludedFrom(instData.occluded);
+                if (instData.pointScores) inst.setPointScores(instData.pointScores);
                 // Restore the occlusion flag for an unlinked user label (its
                 // occluded node was saved finite-xy + not-visible; the
                 // nulledNodes flag itself isn't persisted for ungrouped
@@ -2214,6 +2268,9 @@ export async function handleLoadSessionFolderSingleSlp() {
             setStatus('All videos failed to load: ' + failedVideos.join('; '), 'error');
         } else if (failedVideos.length > 0) {
             setStatus('Loaded ' + state.views.length + ' video(s), ' + failedVideos.length + ' failed: ' + failedVideos[0], 'warning');
+        } else if (planeConflict) {
+            setStatus('Loaded session from ' + slpFile.name + ' — its planes were not added: ' +
+                planeConflict, 'warning');
         } else {
             setStatus('Loaded session from ' + slpFile.name + ' (' + videoFiles.length + ' videos)', 'success');
         }
@@ -2579,11 +2636,11 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         }
         updateInfoPanel();
         if (videosAttached) {
-            setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size
+            setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size.toLocaleString('en-US')
                 + ' grouped frames, ' + state.views.length + ' videos', 'success');
         } else {
-            setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size
-                + ' grouped frames, ' + loader.nFrames + ' frames. File → Load Videos to show images.', 'success');
+            setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size.toLocaleString('en-US')
+                + ' grouped frames, ' + loader.nFrames.toLocaleString('en-US') + ' frames. File → Load Videos to show images.', 'success');
         }
     } catch (err) {
         console.error('[load-project-lazy] Error:', err);
@@ -2627,6 +2684,7 @@ export function addColumnarFramesToSession(session, camName, col, trackRemap) {
             var instance = new Instance(col.xy.slice(i * stride, (i + 1) * stride),
                 trackIdx, instType, col.score[i] || 1.0);
             instance.setOccludedFrom(col.occluded.subarray(i * nn, (i + 1) * nn));
+            if (col.pointScore && instType === 'predicted') instance.setPointScores(col.pointScore, i * nn);
             fg.addInstance(camName, instance);
         }
     }
@@ -3134,6 +3192,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                             var trackIdx = resolveImportTrackIdx(state.session, remappedTrackIdx, instType);
                             var instance = new Instance(inst.points || [], trackIdx, instType, inst.score || 1.0);
                             if (inst.occluded) instance.setOccludedFrom(inst.occluded);
+                            if (inst.pointScores) instance.setPointScores(inst.pointScores);
                             fg.addInstance(camName, instance);
                         }
                     }

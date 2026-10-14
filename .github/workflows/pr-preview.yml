@@ -44,6 +44,7 @@ jobs:
             | | |
             |---|---|
             | **Preview URL** | https://luc3d.sleap.ai/pr/${{ github.event.number }}/ |
+            | **Test suite** | https://luc3d.sleap.ai/pr/${{ github.event.number }}/tests/test-runner.html |
             | **Commit** | ${{ github.sha }} |
 
             Compare against the other channels (see `README.md`):

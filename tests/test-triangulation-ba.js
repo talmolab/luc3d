@@ -47,8 +47,6 @@
  * The Levenberg–Marquardt loop was strictly monotone in its own objective
  * (0/3000 sum-of-squares increases) and reached the local optimum (0/4000 trials
  * left a >1e-6 relative cost gap versus a 500-iteration/tol=1e-16 solve).
- *
- * Runs under the browser runner and the Node `vm` harness (run-node.js).
  */
 (function () {
     const { describe, it, assertTrue, assertLessThan } = TestFramework;

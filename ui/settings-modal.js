@@ -41,6 +41,7 @@ import {
 import { getActiveSession, state, timeline } from './app-state.js';
 import { drawAllOverlays } from './rendering.js';
 import { installModalGeometry } from './modal-geometry.js';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -705,6 +706,8 @@ export function showSettingsModal(initialPanel) {
         // grey out in both the video overlays and the timeline.
         try { drawAllOverlays(state.currentFrame); } catch (e) { /* no active render yet */ }
         if (timeline && typeof timeline.redraw === 'function') timeline.redraw();
+        // The ID-switch box encloses only nonzero-weight nodes: re-fit it to the new weights.
+        refreshIdSwitchHighlight();
     }
 
     function onDocKeyDown(e) {
