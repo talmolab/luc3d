@@ -1609,6 +1609,16 @@ body {
   box-sizing: border-box;
 }
 
+/* Continue stays in view while the card scrolls (as in the Track All summary). */
+.track-setup-modal .modal-actions,
+.track-range-modal .modal-actions {
+  position: sticky;
+  bottom: -24px;
+  margin-bottom: -24px;
+  padding: 10px 0 24px;
+  background: var(--bg-secondary);
+}
+
 .track-setup-animals {
   display: flex;
   align-items: center;

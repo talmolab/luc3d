@@ -10493,8 +10493,9 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   (`pose/tracker.js` `trackAll`/`trackCurrentFrame`); at least 2 views must stay
   included or tracking aborts with a warning.
 - `updateTrackingThresholds(map)` — commit SOME thresholds, keeping every other
-  stored override. Track All's first-use dialog writes the image ID-switch
-  check's settings through it (via `pose/tracker.js`).
+  stored override. Track All's first-use dialog (via `pose/tracker.js`) and the
+  Track Frame Range dialog write the image ID-switch check's settings through
+  it.
 - `getTrackingThresholdDefs()` / `getTrackingThreshold(id)` /
   `getTrackingThresholds()` / `setTrackingThresholds(map)` — read/write the
   tracker's user-editable thresholds. `getTrackingThresholdDefs` returns the
@@ -11178,8 +11179,9 @@ Wizard settings, instead of re-running a whole long recording.
 `getActiveSession`), `import-export/save-load.js` (`setStatus`),
 `pose/tracker.js` (`trackFrameRange`, `trackableFrameBounds`,
 `getTrackerNumAnimals`, `setTrackerNumAnimals`), `ui/settings.js`
-(`getNodeWeight`, `updateNodeWeights`), `ui/track-setup-modal.js`
-(`buildNodeWeightFields`, a leaf).
+(`getNodeWeight`, `updateNodeWeights`, `getTrackingThresholdDefs`,
+`updateTrackingThresholds`), `ui/track-setup-modal.js`
+(`buildNodeWeightFields`, `buildImageCheckFields`, `IMAGE_CHECK_IDS`; a leaf).
 
 **Imported by.** `ui/ui-wiring.js` (wires `#tbTrackFrameRange`, the dropdown
 item; the `#tbTrackFrame` button itself stays wired to `trackCurrentFrame` in
@@ -11195,8 +11197,12 @@ auto-detect), plus the skeleton's **node weights**, editable — the same grid
 as the first-use dialog (`buildNodeWeightFields`), since re-running a window
 under different weights is the commonest reason to be here. Continue writes
 them through `updateNodeWeights` before the run reads them; Cancel / Esc write
-nothing; a weight outside `[0, 1]` disables Continue. The card widens to
-620px for the grid and becomes the one scroller on a short window. A live
+nothing; a weight outside `[0, 1]` disables Continue. Under the weights, the
+**image ID-switch check** that runs after the range — its switch and four
+options, the same section as Track All's dialog (`buildImageCheckFields`),
+written through `updateTrackingThresholds` on Continue, before the run reads
+them. The card widens to 620px and becomes the one scroller on a short window,
+with its button row sticky to the bottom. A live
 summary line reports the range size and the effective
 animal count; a live error line explains an invalid range and disables Continue
 rather than closing on bad input. `Enter` is Continue and `Esc` is Cancel, per
@@ -11273,7 +11279,8 @@ run: its switch (`autoImageSwitchCheck`, off by default) and, while on, its four
 options (flag threshold, crops per second, views per animal, try WebNN) — the
 Tracking Wizard's own settings. It is slow when on, so the moment a run is about
 to start is when to decide. Track Frame's copy leaves it out: a single frame is
-never checked.
+never checked. The Track Frame Range dialog shows the same section, since a
+range is checked too.
 
 **Key exports.**
 - `buildNodeWeightFields(nodes)` → `{element, read, refresh}` — the node-weight
@@ -11298,7 +11305,9 @@ never checked.
   grid's compact markup, hidden while the switch is off. Labels are the
   Wizard's less its "Image check: " prefix; the Wizard's long descriptions sit
   in the labels' `title`. `read()` refuses a value outside its setting's range,
-  never clamps it. Commits nothing.
+  never clamps it. Commits nothing. `buildImageCheckFields(defs, after)` words
+  the switch "…after `after`" (default "Track All"); Track Frame Range passes
+  "tracking the range".
 
 **Imports from project modules.** None — a LEAF on purpose. It commits
 nothing: `pose/tracker.js` (`askTrackSetup`) writes the count through
@@ -11308,7 +11317,7 @@ field and the Tracking Wizard edit, so there is no second copy of any of them
 and no cycle with the tracker.
 
 **Imported by.** `pose/tracker.js`; `ui/track-range-modal.js`
-(`buildNodeWeightFields`).
+(`buildNodeWeightFields`, `buildImageCheckFields`, `IMAGE_CHECK_IDS`).
 
 **User-facing features.** The count field (focused, `placeholder="auto"`),
 then one row per skeleton node in the Tracking Wizard's own markup
@@ -11322,7 +11331,9 @@ Cancel, consumed in the capture phase so no app shortcut also sees them.
   outside `[0, 1]` show an inline error naming the node and disable Continue —
   a typed 5 is a typo, not a request for 1. The Wizard clamps on blur instead.
 - **One scroller.** The card caps its height to the window and scrolls; the
-  weight grid never does (a 40-node skeleton in a 560px window is pinned).
+  weight grid never does (a 40-node skeleton in a 560px window is pinned). Its
+  button row is `position: sticky` to the card's bottom (as in the Track All
+  summary), so Continue stays in view; so does Track Frame Range's.
   The grid is narrower than the Wizard's (`minmax(160px, 1fr)`) so a typical
   skeleton fits in three columns with its names whole.
 - **Tests answer it with `tests/e2e/fixtures/track-setup.js`**
@@ -11334,7 +11345,8 @@ Covered by `tests/e2e/track-setup-modal.mjs` (the dialog, both cancels, the
 validation, the write-through to the Wizard's setting, the merge, the
 per-session re-ask, the image-check section (hidden options, a refused
 threshold, stored on Continue and attempted by that very run, absent from
-Track Frame's copy), the same grid in Track Frame Range, the one-scroller
+Track Frame's copy), the same grid and image-check section in Track Frame
+Range (stored on Continue, attempted by the range run), the one-scroller
 rule) and `tests/test-tracker-gui.mjs`
 (the run reads the dialog's weights; Cancel writes nothing).
 
