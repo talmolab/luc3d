@@ -1604,6 +1604,110 @@ body {
   min-height: 14px;
 }
 
+/* Track All / Track Frame's first-use dialog (ui/track-setup-modal.js), and
+   Track Frame Range (ui/track-range-modal.js), which shows the same weight grid:
+   the animal count, then the node weights in the Tracking Wizard's own rows,
+   narrower here so a typical skeleton fits in three columns with its names
+   whole ("RightForepaw" was cut off at 560px). The card is the
+   ONE scroller, for a long skeleton on a short window; the weight grid never
+   scrolls by itself (no scroll-within-scroll). */
+.multi-frame-modal.track-setup-modal,
+.multi-frame-modal.track-range-modal {
+  max-width: 620px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+/* Continue stays in view while the card scrolls (as in the Track All summary). */
+.track-setup-modal .modal-actions,
+.track-range-modal .modal-actions {
+  position: sticky;
+  bottom: -24px;
+  margin-bottom: -24px;
+  padding: 10px 0 24px;
+  background: var(--bg-secondary);
+}
+
+.track-setup-animals {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.track-setup-animals input {
+  width: 72px;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  font-size: 13px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+.track-setup-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.track-setup-section-title {
+  margin: 20px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.multi-frame-modal p.track-setup-note {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+
+.multi-frame-modal p.track-setup-later {
+  margin: 12px 0 0;
+}
+
+.settings-node-weight-list.track-setup-weights {
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  column-gap: 16px;
+}
+
+.track-setup-weights .settings-num-input {
+  width: 56px;
+}
+
+/* Track All's image ID-switch check: its switch, then (while on) its options
+   in the same compact grid as the node weights. */
+.track-setup-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  margin-bottom: 4px;
+}
+
+.settings-node-weight-list.track-setup-options {
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  column-gap: 16px;
+}
+
+.track-setup-options[hidden] {
+  display: none;
+}
+
+.track-setup-options .settings-num-input {
+  width: 56px;
+}
+
+.track-setup-options .track-setup-switch-row {
+  margin: 0;
+  font-size: 12px;
+}
+
 /* Align Views to References modal (#226). The table grows with the camera
    count rather than scrolling inside the dialog (no scroll-within-scroll). */
 .align-views-modal {

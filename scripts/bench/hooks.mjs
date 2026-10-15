@@ -54,6 +54,17 @@ export function getNodeWeightArray(nodeNames) {
     });
 }
 
+// pose/tracker.js's first-use dialog reads and writes these. The bench never
+// opens it (it passes the animal count straight in), so they only link.
+export function getNodeWeight(name) { return getNodeWeightArray([name])[0]; }
+export function getNodeWeights() {
+    return Object.assign({}, (globalThis.__BENCH && globalThis.__BENCH.nodeWeights) || {});
+}
+export function setNodeWeights() {}
+export function updateNodeWeights() {}
+export function getTrackingThresholdDefs() { return []; }
+export function updateTrackingThresholds() {}
+
 export function getTrackingThreshold(id) {
     const ov = (globalThis.__BENCH && globalThis.__BENCH.thresholds) || {};
     const v = ov[id];
