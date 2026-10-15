@@ -30,8 +30,8 @@
 // fingerprinting protection on, a note under it explains that the core count is
 // a random one and how to stop that (ui/browser-hints.js).
 
-import { createLoadMeter, createBusyClock, createLoadGraph, formatCpuLoad, setLoadLine, cpuCores } from './load-graph.js?v=67978a8bed8b';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=67978a8bed8b';
+import { createLoadMeter, createBusyClock, createLoadGraph, formatCpuLoad, setLoadLine, cpuCores } from './load-graph.js?v=924e7afb95b4';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=924e7afb95b4';
 
 /** Default pacer interval. Each yield waits for one paint (~one display frame),
  *  so this bounds the overhead at roughly frame-time / interval (a few %). The

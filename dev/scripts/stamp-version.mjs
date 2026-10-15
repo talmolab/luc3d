@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // scripts/stamp-version.mjs — make a deployed copy of LUCID cache-safe.
 //
-//   node scripts/stamp-version.mjs <site-dir> <version>
+//   node scripts/stamp-version.mjs <site-dir> <version> [<release-label>]
 //
 // Rewrites, IN PLACE, every same-site code reference in <site-dir> to carry
 // `?v=<version>`: relative ES-module imports (`from`, `import()`, side-effect
@@ -30,6 +30,13 @@
 // and `tests/**/*.mjs`).
 //
 // Idempotent: a stamped specifier has a `?`, which no rule matches again.
+//
+// It also says WHICH build this is: the root index.html's `lucid-commit` and
+// `lucid-release` <meta> tags get <version> and <release-label>, which
+// ui/version-label.js shows beside the menu bar's Settings button ("v1.0.5" on
+// the live page). The workflows pick the label — the release tag when the
+// deployed ref is one, else `dev` or `PR #<n>` — and a missing tag fails the
+// stamp, so a refactor of index.html cannot silently drop the number.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -80,6 +87,19 @@ export function findUnstamped(text, isHtml) {
     return out;
 }
 
+/**
+ * Fill index.html's build-info <meta> tags (see the header). Returns {text, found},
+ * `found` false unless BOTH tags were there to fill. Re-stamping overwrites.
+ */
+export function stampBuildInfo(text, version, release = '') {
+    let n = 0;
+    for (const [name, value] of [['lucid-commit', version], ['lucid-release', release]]) {
+        text = text.replace(new RegExp('(<meta\\s+name="' + name + '"\\s+content=")[^"]*(")'),
+            (m, open, close) => { n++; return open + value + close; });
+    }
+    return { text, found: n === 2 };
+}
+
 /** Which files under the site the browser can load as code (Node-only code is skipped). */
 function shouldProcess(rel) {
     const p = rel.split(path.sep).join('/');
@@ -99,27 +119,31 @@ function walk(dir, base, out) {
 }
 
 /** Stamp a whole site directory. Returns {files, refs, problems}. */
-export function stampSite(root, version) {
+export function stampSite(root, version, release = '') {
     if (!/^[A-Za-z0-9._-]{4,64}$/.test(version)) throw new Error('version must be 4-64 chars of [A-Za-z0-9._-], got "' + version + '"');
-    let files = 0, refs = 0;
+    // It lands in an HTML attribute unescaped, so nothing that could close one.
+    if (!/^[A-Za-z0-9 #._+-]{0,40}$/.test(release)) throw new Error('release label must be at most 40 chars of [A-Za-z0-9 #._+-], got "' + release + '"');
+    let files = 0, refs = 0, buildInfo = false;
     const problems = [];
     for (const rel of walk(root, root, [])) {
         const abs = path.join(root, rel), isHtml = rel.endsWith('.html');
         const before = fs.readFileSync(abs, 'utf8');
-        const { text, count } = stampText(before, version, isHtml);
-        if (count) { fs.writeFileSync(abs, text); files++; refs += count; }
+        let { text, count } = stampText(before, version, isHtml);
+        if (rel === 'index.html') ({ text, found: buildInfo } = stampBuildInfo(text, version, release));
+        if (text !== before) { fs.writeFileSync(abs, text); files++; refs += count; }
         for (const u of findUnstamped(text, isHtml)) problems.push(rel + ': ' + u);
     }
+    if (!buildInfo) problems.push('index.html: no <meta name="lucid-commit"> + <meta name="lucid-release"> to fill (the menu bar\'s version label)');
     return { files, refs, problems };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-    const [root, version] = process.argv.slice(2);
-    if (!root || !version) { console.error('usage: node scripts/stamp-version.mjs <site-dir> <version>'); process.exit(2); }
-    const r = stampSite(path.resolve(root), version);
-    console.log(`stamp-version: ?v=${version} on ${r.refs} references in ${r.files} files under ${root}`);
+    const [root, version, release = ''] = process.argv.slice(2);
+    if (!root || !version) { console.error('usage: node scripts/stamp-version.mjs <site-dir> <version> [<release-label>]'); process.exit(2); }
+    const r = stampSite(path.resolve(root), version, release);
+    console.log(`stamp-version: ?v=${version} on ${r.refs} references in ${r.files} files under ${root}; release label "${release}"`);
     if (r.problems.length) {
-        console.error('stamp-version: relative module references left UNSTAMPED (would load those modules twice):');
+        console.error('stamp-version: relative module references left UNSTAMPED (would load those modules twice), or no build-info tags:');
         r.problems.forEach(p => console.error('  ' + p));
         process.exit(1);
     }
