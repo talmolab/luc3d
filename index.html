@@ -6,6 +6,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Multi-View Pose Proofreader</title>
+    <!-- The build this copy is: empty here, filled in the DEPLOYED copy by
+         scripts/stamp-version.mjs and shown beside Settings by ui/version-label.js. -->
+    <meta name="lucid-release" content="">
+    <meta name="lucid-commit" content="">
     <link rel="stylesheet" href="styles.css">
     <!-- Pinned: dockview-core 7.x renamed api.onUnhandledDragOverEvent →
          onUnhandledDragOver, so the unpinned /+esm import broke pane docking
@@ -198,6 +202,9 @@
                 title="Open the LUCID documentation in a new tab">Docs</div>
             <div class="menu-item menu-bar-button" id="menuBarSettings"
                 title="Settings: default triangulation, keyboard shortcuts, Tracking Wizard">Settings</div>
+            <!-- The deployed release (v1.0.5 on the live page), from the <meta> tags
+                 above. Hidden in a working tree, where nothing was stamped. -->
+            <div class="menu-bar-version" id="menuBarVersion" hidden></div>
         </div>
 
         <!-- Toolbar -->

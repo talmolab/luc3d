@@ -4165,6 +4165,38 @@ run is a no-op, Track Frame leaves it) and `tests/e2e/track-all-switches-to-id.m
 
 ---
 
+### ui/version-label.js
+
+**Purpose.** Which build this is, at the right end of the menu bar beside
+Settings (`#menuBarVersion`): `v1.0.5` on the live page. It knows no version
+itself — `scripts/stamp-version.mjs` fills the `lucid-release` and
+`lucid-commit` `<meta>` tags in the DEPLOYED copy of `index.html`, with the label
+the deploy workflow chose: the release tag when the deployed ref is one, else
+`dev` or `PR #<n>`. A tag is shown alone; any other label gets the 8-character
+commit beside it (`dev · 67978a8b`), since that is what tells two `/dev/`
+deploys — or a stale Cloudflare cache — apart. Unstamped (a working tree, both
+tags empty) the element stays `hidden`. The label is selectable
+(`user-select: text`, unlike the rest of the menu bar) because it is what a bug
+report quotes.
+
+**Key exports.** `formatVersionLabel(release, commit)` -> `{text, title}` or
+`null` (DOM-free); `showVersionLabel(doc = document)` — fills, titles and
+shows/hides `#menuBarVersion` from the `<meta>` tags; a page without the
+element is left alone.
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/ui-wiring.js` (`setupMenus`, beside the Docs / Settings
+buttons).
+
+**Coverage.** `tests/test-version-label.mjs` (every channel's label and the
+hidden case), `tests/test-stamp-version.mjs` (`stampBuildInfo`, the label
+validation, and a stamp failing when the tags are gone) and
+`tests/e2e/stamped-build.mjs` (a stamped copy shows the label right of Settings,
+selectable).
+
+---
+
 ### ui/browser-hints.js
 
 **Purpose.** Browser-specific advice for features a browser has turned off.
