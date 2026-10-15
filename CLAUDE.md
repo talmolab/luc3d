@@ -126,9 +126,9 @@ window, four consecutive cold loads of both builds each had exactly ONE of 113
 requests take 1.4–2.4 s, at Cloudflare's edge rather than GitHub's (cache HITs
 and TLS handshakes stall too, on other sites behind the same Cloudflare IPs,
 while GitHub Pages fetched directly stayed under 0.2 s). modulepreload does not
-help with those; fewer requests (bundling) would. Whether that is worth a build
-step is an open decision. Measure it with `_bench-cold-start.mjs` on the
-connection that suffers, and count the loads with a request over 1 s.
+help with those; fewer requests (bundling) would, but bundling was decided
+against: it would add a build step and make the deployed app differ from the
+tested source, for a gain that shows up only in those stall episodes.
 `h5wasm.iife.js` (~1 MB compressed, a page global read by several main-thread
 paths and e2e tests) is now the largest single item on the critical path.
 
