@@ -37,11 +37,11 @@ import {
     setCameraWeights,
     getTrackingThresholdDefs,
     setTrackingThresholds,
-} from './settings.js?v=8d3d2394ef70';
-import { getActiveSession, state, timeline } from './app-state.js?v=8d3d2394ef70';
-import { drawAllOverlays } from './rendering.js?v=8d3d2394ef70';
-import { installModalGeometry } from './modal-geometry.js?v=8d3d2394ef70';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=8d3d2394ef70';
+} from './settings.js?v=8b2b3de5fcbd';
+import { getActiveSession, state, timeline } from './app-state.js?v=8b2b3de5fcbd';
+import { drawAllOverlays } from './rendering.js?v=8b2b3de5fcbd';
+import { installModalGeometry } from './modal-geometry.js?v=8b2b3de5fcbd';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=8b2b3de5fcbd';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
