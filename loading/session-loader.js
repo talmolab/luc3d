@@ -70,7 +70,7 @@ import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/lo
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
 import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js';
+import { updateInfoPanel, promptImportSkeletonForAllSessions, adoptProjectSkeleton } from '../ui/info-panel.js';
 import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js';
 import { refreshReadoutTotals } from '../ui/frame-readout.js';
 import { parseSkeletonJSON } from '../import-export/skeleton-json.js';
@@ -1405,7 +1405,18 @@ export async function handleLoadMultiSession() {
         showLoading('Loading ' + sessionDirs.length + ' sessions...');
         console.log('[multi-session] Found sessions:', sessionDirs.map(function (d) { return d.name; }));
 
-        // Load each session — first gets full video init, rest defer decoders
+        // Load each session — first gets full video init, rest defer decoders.
+        //
+        // ONE skeleton per project, and it is the FIRST session's (the first
+        // folder by name — the one displayed below, and the same rule the
+        // per-camera loader applies to cameras). Every later session's cameras
+        // are re-ordered into its node order by name as they load, and a
+        // camera with other node names is reported. Each session used to
+        // replace the project skeleton with its own first camera's, so the
+        // LAST session named every session's columns (eager), or each kept a
+        // skeleton of its own (lazy).
+        var projectSkeleton = null, projectSkeletonFrom = null;
+        var skeletonWarnings = []; // { ref, cams: ['session/cam'] }
         for (var si = 0; si < sessionDirs.length; si++) {
             var sess = sessionDirs[si];
             showLoading('Loading session ' + (si + 1) + '/' + sessionDirs.length + ': ' + sess.name + '...');
@@ -1417,11 +1428,40 @@ export async function handleLoadMultiSession() {
 
             var sessionFiles = await enumerateDirectoryHandle(sess.handle, sess.name, null);
             console.log('[multi-session] Session', sess.name, '— files:', sessionFiles.length);
-            await handleLoadSessionFolderPerCamera(sessionFiles, si > 0);
+            var loadedSess = await handleLoadSessionFolderPerCamera(sessionFiles, si > 0, projectSkeleton
+                ? { projectSkeleton: projectSkeleton, projectSkeletonFrom: 'session ' + projectSkeletonFrom } : null);
+            if (loadedSess && loadedSess.skeletonMismatches.length > 0) {
+                skeletonWarnings.push({ ref: loadedSess.skeletonRef, cams: loadedSess.skeletonMismatches.map(function (m) {
+                    return sess.name + '/' + m.camName;
+                }) });
+            }
+            // Re-read after EVERY session, not only the first: a session
+            // folder's own skeleton.json (step 5b) replaces the project
+            // skeleton, re-ordering the sessions before it, and the sessions
+            // after it must load into that one — handing them the old object
+            // made step 4 put its names back over the re-ordered data.
+            if (loadedSess && loadedSess.session && loadedSess.session.skeleton
+                && loadedSess.session.skeleton.nodes.length > 0
+                && loadedSess.session.skeleton !== projectSkeleton) {
+                projectSkeleton = loadedSess.session.skeleton;
+                projectSkeletonFrom = sess.name;
+            }
         }
 
         hideLoading();
-        setStatus('Loaded ' + sessionDirs.length + ' sessions', 'success');
+        // The per-session status lines were each overwritten by the next
+        // session's, so the node-name warnings are gathered here.
+        var skeletonWarningText = '';
+        if (skeletonWarnings.length > 0) {
+            var camsByRef = new Map();
+            skeletonWarnings.forEach(function (w) {
+                if (!camsByRef.has(w.ref)) camsByRef.set(w.ref, []);
+                camsByRef.set(w.ref, camsByRef.get(w.ref).concat(w.cams));
+            });
+            skeletonWarningText = Array.from(camsByRef).map(function (e) {
+                return 'skeleton nodes differ from ' + e[0] + '\'s in ' + e[1].join(', ');
+            }).join('; ') + ' (node names there may be wrong)';
+        }
 
         // Display first session's grid (it has live decoders from eager load)
         if (state.sessions.length > 1) {
@@ -1430,6 +1470,9 @@ export async function handleLoadMultiSession() {
         }
 
         populateSessionStrip();
+        // After the switch, which writes its own "Switched to …" line.
+        setStatus('Loaded ' + sessionDirs.length + ' sessions' + (skeletonWarningText ? ' — ' + skeletonWarningText : ''),
+            skeletonWarningText ? 'warning' : 'success');
 
         // One skeleton per project. If the parent folder contains a skeleton
         // .json, auto-load it for every session; otherwise prompt the user for a
@@ -1453,12 +1496,17 @@ export async function handleLoadMultiSession() {
                     var skFile = await parentSkeletonHandle.getFile();
                     var parentSk = parseSkeletonJSON(await skFile.text());
                     if (parentSk && parentSk.nodes.length > 0) {
-                        setProjectSkeleton(parentSk);
+                        // Each session's keypoints are brought into its node
+                        // order by name first (`adoptProjectSkeleton`).
+                        var parentAdopted = adoptProjectSkeleton(parentSk);
                         autoLoadedSkeleton = true;
                         drawAllOverlays(state.currentFrame);
                         updateInfoPanel();
                         setStatus('Loaded skeleton from ' + parentSkeletonHandle.name +
-                            ' for all ' + state.sessions.length + ' sessions', 'success');
+                            ' for all ' + state.sessions.length + ' sessions' +
+                            (parentAdopted.text ? ' — ' + parentAdopted.text : '') +
+                            (skeletonWarningText ? ' — ' + skeletonWarningText : ''),
+                            parentAdopted.warn || skeletonWarningText ? 'warning' : 'success');
                     }
                 } catch (e) {
                     console.warn('[multi-session] parent skeleton auto-load failed:', e);
@@ -2008,16 +2056,18 @@ export async function handleLoadSessionFolderSingleSlp() {
         var skeleton = new Skeleton(skelData.name, skelData.nodes, skelData.edges);
 
         // Override skeleton if skeleton.json is present (same folder as
-        // calibration.toml). One skeleton per project — register it so it
-        // propagates to every session.
+        // calibration.toml). One skeleton per project — it is ADOPTED once the
+        // session is built (below): the `.slp`'s keypoints are stored in the
+        // `.slp`'s own node order, so they are built under that skeleton and
+        // then re-ordered into the file's by name (`adoptProjectSkeleton`).
+        // Naming them with the file's up front mis-named every column of a
+        // skeleton.json that lists the same nodes in another order.
+        var skeletonOverride = null;
         if (skeletonFile) {
             try {
                 var skelText = await skeletonFile.text();
                 var loadedSkel = parseSkeletonJSON(skelText);
-                if (loadedSkel && loadedSkel.nodes.length > 0) {
-                    skeleton = loadedSkel;
-                    setProjectSkeleton(loadedSkel);
-                }
+                if (loadedSkel && loadedSkel.nodes.length > 0) skeletonOverride = loadedSkel;
             } catch (e) { /* ignore */ }
         }
 
@@ -2145,6 +2195,13 @@ export async function handleLoadSessionFolderSingleSlp() {
         state.session = session;
         state.triangulationResults = new Map();
 
+        var skeletonOverrideNote = null;
+        if (skeletonOverride) {
+            var overrideAdopted = adoptProjectSkeleton(skeletonOverride);
+            skeletonOverrideNote = { text: 'skeleton from ' + skeletonFile.name
+                + (overrideAdopted.text ? ': ' + overrideAdopted.text : ''), warn: overrideAdopted.warn };
+        }
+
         // Load videos — match to cameras by filename
         showLoading('Loading videos...');
         state.views = [];
@@ -2265,15 +2322,17 @@ export async function handleLoadSessionFolderSingleSlp() {
         updateInfoPanel();
         if (timeline) timeline.setData(session);
         if (videoController) await videoController.seekToFrame(0);
+        var skelSuffix = skeletonOverrideNote ? ' — ' + skeletonOverrideNote.text : '';
         if (failedVideos.length > 0 && state.views.length === 0) {
-            setStatus('All videos failed to load: ' + failedVideos.join('; '), 'error');
+            setStatus('All videos failed to load: ' + failedVideos.join('; ') + skelSuffix, 'error');
         } else if (failedVideos.length > 0) {
-            setStatus('Loaded ' + state.views.length + ' video(s), ' + failedVideos.length + ' failed: ' + failedVideos[0], 'warning');
+            setStatus('Loaded ' + state.views.length + ' video(s), ' + failedVideos.length + ' failed: ' + failedVideos[0] + skelSuffix, 'warning');
         } else if (planeConflict) {
             setStatus('Loaded session from ' + slpFile.name + ' — its planes were not added: ' +
-                planeConflict, 'warning');
+                planeConflict + skelSuffix, 'warning');
         } else {
-            setStatus('Loaded session from ' + slpFile.name + ' (' + videoFiles.length + ' videos)', 'success');
+            setStatus('Loaded session from ' + slpFile.name + ' (' + videoFiles.length + ' videos)' + skelSuffix,
+                skeletonOverrideNote && skeletonOverrideNote.warn ? 'warning' : 'success');
         }
     } catch (err) {
         console.error('[single-slp] Error:', err);
@@ -2691,7 +2750,30 @@ export function addColumnarFramesToSession(session, camName, col, trackRemap) {
     }
 }
 
-export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVideos) {
+/**
+ * Load one per-camera session folder (`calibration.toml` + one subfolder per
+ * camera, each holding a video and a `.slp`/`.h5`) as a new session.
+ *
+ * `opts.projectSkeleton` — set by `handleLoadMultiSession` for every session
+ * after the first — is the skeleton the project ALREADY has. This session's
+ * cameras are then re-ordered into ITS node order by name (the same per-camera
+ * remap that reconciles the cameras of one session, `loading/slp-skeleton.js`),
+ * a camera with other node names is reported, and the session shares that
+ * skeleton object instead of replacing the project's: without it, step 4 below
+ * made the LAST session's first camera name every session's columns.
+ * `opts.projectSkeletonFrom` names where it came from in the status line.
+ *
+ * @param {File[]} [preloadedFiles] - the folder's files (else a folder picker)
+ * @param {boolean} [deferVideos]
+ * @param {{projectSkeleton?: Skeleton, projectSkeletonFrom?: string}} [opts]
+ * @returns {Promise<{session: Session, skeletonRef: string|null,
+ *   skeletonMismatches: Array<{camName: string, missing: string[], extra: string[]}>}|undefined>}
+ *   undefined when nothing was loaded
+ */
+export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVideos, opts) {
+    opts = opts || {};
+    var projectSkeleton = (opts.projectSkeleton && opts.projectSkeleton.nodes && opts.projectSkeleton.nodes.length > 0)
+        ? opts.projectSkeleton : null;
     try {
         var allFiles;
         if (preloadedFiles) {
@@ -2981,6 +3063,13 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         var skeletonFromSlp = null;
         var skeletonCam = null;     // the camera skeletonFromSlp came from
         var skeletonMismatches = []; // { camName, missing, extra } — different nodes, not remappable
+        // A later session of a multi-session load: every camera is re-ordered
+        // into the PROJECT's node order (and compared with it), not into this
+        // session's first camera's. See `opts.projectSkeleton` above.
+        if (projectSkeleton) {
+            skeletonFromSlp = { name: projectSkeleton.name, nodes: projectSkeleton.nodes, edges: projectSkeleton.edges };
+            skeletonCam = opts.projectSkeletonFrom || 'the project skeleton';
+        }
         var slpVersionsLoaded = {}; // camName -> version number loaded
 
         // Launch all SLP/H5 parses — use lazy loading for large H5 files
@@ -3112,6 +3201,12 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 return /\.slp$/i.test(job.file.name);
             });
             lazyLoader = lazyAreSlp ? new SioLazyLoader() : new LazyFrameLoader();
+            // Re-order every store into the project's node order as it opens
+            // (`SioLazyLoader.targetNodeOrder`, which the multi-session save's
+            // re-open repeats). `LazyFrameLoader` cannot; checked after the opens.
+            if (projectSkeleton && typeof lazyLoader.setTargetNodeOrder === 'function') {
+                lazyLoader.setTargetNodeOrder(projectSkeleton.nodes);
+            }
             try {
                 await Promise.all(lazyJobs.map(function (job) {
                     return lazyLoader.open(job.camName, job.file).then(function (r) {
@@ -3235,7 +3330,10 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         if (lazyLoader) {
             if (!state.session) {
                 var lazySkel = lazyLoader.skeleton || { name: 'skeleton', nodes: [], edges: [] };
-                var lazySkeleton = new Skeleton(lazySkel.name || 'skeleton', lazySkel.nodes || [], lazySkel.edges || []);
+                // A later session of a multi-session load shares the project's
+                // skeleton: its stores were re-ordered into it as they opened.
+                var lazySkeleton = projectSkeleton
+                    || new Skeleton(lazySkel.name || 'skeleton', lazySkel.nodes || [], lazySkel.edges || []);
                 // The union of every camera's own tracks, each camera's store
                 // already re-indexed into it — the same list whichever camera's
                 // file finished opening first (`_unifyTracks` in both loaders).
@@ -3250,6 +3348,17 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 }
             }
             state.session.lazyLoader = lazyLoader;
+            if (projectSkeleton && typeof lazyLoader.setTargetNodeOrder !== 'function' && lazyLoader.skeleton) {
+                // The worker-backed `.h5` reader cannot re-order its frames,
+                // so a session in another node order is reported, not re-ordered.
+                var h5Remap = nodeOrderRemap(projectSkeleton.nodes, lazyLoader.skeleton.nodes || []);
+                if (h5Remap.kind !== 'same') {
+                    for (var h5cam of lazyJobs) {
+                        skeletonMismatches.push({ camName: h5cam.camName,
+                            missing: h5Remap.missing || [], extra: h5Remap.extra || [] });
+                    }
+                }
+            }
             if (lazyLoader.nodeOrderMismatches) {
                 for (var [mmCam, mm] of lazyLoader.nodeOrderMismatches) {
                     skeletonMismatches.push({ camName: mmCam, missing: mm.missing, extra: mm.extra });
@@ -3470,7 +3579,12 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
 
         // 4. Apply skeleton from SLP if session has empty skeleton.
         // One skeleton per project: propagate to ALL sessions (shared reference).
-        if (state.session && skeletonFromSlp && state.session.skeleton.nodes.length === 0) {
+        // A later session of a multi-session load keeps the project's — its
+        // data is already in that order — rather than renaming every session's
+        // columns after this one's first camera.
+        if (state.session && projectSkeleton) {
+            setProjectSkeleton(projectSkeleton);
+        } else if (state.session && skeletonFromSlp && state.session.skeleton.nodes.length === 0) {
             setProjectSkeleton(new Skeleton(
                 skeletonFromSlp.name || 'skeleton',
                 skeletonFromSlp.nodes || [],
@@ -3499,17 +3613,22 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             console.log('[session-folder] Prepared unlinked instances:', ulUserCount, 'user,', ulPredCount, 'predicted');
         }
 
-        // 5b. Load skeleton JSON override if found in session folder
+        // 5b. Load skeleton JSON override if found in session folder. One
+        // skeleton per project, and every session's keypoints are brought into
+        // its node order by name first (`adoptProjectSkeleton`); the outcome
+        // goes in the final status line below, which would overwrite it here.
+        var skeletonFileNote = null;
         if (skeletonFile && state.session) {
             try {
                 showLoading('Loading skeleton file...');
                 var skelText = await skeletonFile.text();
                 var loadedSkeleton = parseSkeletonJSON(skelText);
                 if (loadedSkeleton && loadedSkeleton.nodes.length > 0) {
-                    setProjectSkeleton(loadedSkeleton); // one skeleton per project
+                    var skelAdopted = adoptProjectSkeleton(loadedSkeleton);
                     console.log('[session-folder] Overrode skeleton from ' + skeletonFile.name +
                         ': ' + loadedSkeleton.nodes.length + ' nodes, ' + loadedSkeleton.edges.length + ' edges');
-                    setStatus('Loaded skeleton from ' + skeletonFile.name, 'success');
+                    skeletonFileNote = { text: 'skeleton from ' + skeletonFile.name
+                        + (skelAdopted.text ? ': ' + skelAdopted.text : ''), warn: skelAdopted.warn };
                 }
             } catch (skelErr) {
                 console.error('[session-folder] Skeleton file parse error:', skelErr);
@@ -3631,7 +3750,12 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 + ' (node names there may be wrong)';
             if (statusKind === 'success') statusKind = 'warning';
         }
+        if (skeletonFileNote) {
+            statusMsg += ' — ' + skeletonFileNote.text;
+            if (skeletonFileNote.warn && statusKind === 'success') statusKind = 'warning';
+        }
         setStatus(statusMsg, statusKind);
+        return { session: state.session, skeletonRef: skeletonCam, skeletonMismatches: skeletonMismatches };
 
     } catch (err) {
         console.error('[session-folder] Error:', err);
