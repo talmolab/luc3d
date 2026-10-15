@@ -24,6 +24,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { answerTrackSetup } from './fixtures/track-setup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -51,14 +52,14 @@ try {
     const page = await browser.newPage();
     page.on('pageerror', e => { console.log(`  [${el()}] [pageerror] ` + String(e).slice(0, 300)); fails++; });
     page.on('crash', () => { console.log(`  [${el()}] *** RENDERER CRASHED ***`); fails++; });
-    // Track All asks for the animal count with a native prompt(). Playwright
-    // AUTO-DISMISSES an unhandled dialog, so prompt() returns null,
-    // promptNumAnimals() returns false, and trackAll() returns silently with no
-    // status change and no work done — which is exactly how the baseline below
-    // came back empty on the first attempt at this harness. Accept it instead.
-    // (Track Frame Range needs no handler: its modal collects the count, which
-    // is the reason runTrackingPass skips the prompt on that path.)
+    // Track All asks for the animal count in its first-use dialog
+    // (ui/track-setup-modal.js). It used to be a native prompt(), which
+    // Playwright auto-dismissed, so trackAll() returned with no work done —
+    // exactly how the baseline below came back empty on the first attempt at
+    // this harness. Answer it. (Track Frame Range needs no answer: its modal
+    // collects the count, which is why runTrackingPass skips the dialog there.)
     page.on('dialog', async d => { await d.accept(ANIMALS != null ? String(ANIMALS) : ''); });
+    await answerTrackSetup(page, ANIMALS != null ? ANIMALS : '');
 
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.SleapIO, { timeout: 30000 });

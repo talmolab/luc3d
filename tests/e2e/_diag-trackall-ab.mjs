@@ -26,6 +26,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { answerTrackSetup } from './fixtures/track-setup.js';
 import { acquireBrowserLock } from '../../scripts/browser-lock.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -86,6 +87,7 @@ const runSide = async (side, port) => {
     const page = await browser.newPage({ viewport: { width: 1480, height: 860 } });
     page.on('pageerror', (e) => log(side + ' pageerror: ' + String(e).slice(0, 300)));
     page.on('dialog', (d) => d.accept(String(NANIMALS)));
+    await answerTrackSetup(page, NANIMALS);   // Track All's first-use dialog (animal count)
     await page.goto(`http://localhost:${port}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     await page.evaluate(async (extra) => {
