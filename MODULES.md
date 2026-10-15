@@ -9794,6 +9794,12 @@ for the tab's **Show Track All summary** button — the first thing in the tab, 
 "Possible ID switches", in both the results and the empty state, shown only when the
 session has a summary from a Track All in this page, since it is not saved; it is
 how a box closed without running the image check is got back, to run it);
+`clickCheckFromSummary(menuId)` (the summary's **Check by images…** / **Check by
+body size** click the menu item through this: the check runs exactly as from the
+menu, but a one-shot flag — read and cleared by `runIdSwitchChecks` before its first
+await, so only the check that click starts sees it — makes it end by reopening the
+summary with its results (`reopenTrackSummary(session, results)`) instead of opening
+the tab; with no summary kept for the session it opens the tab as from the menu);
 `refreshIdSwitchPanel(session?)` (render the tab and put that session's
 markers on the seekbar — called after a check, from `updateInfoPanel` and from
 `switchSession`); `openIdSwitchPanel()` (show the panel, if hidden, on the tab);
@@ -10003,7 +10009,7 @@ protection on, the note under the CPU and GPU lines — `prog.braveHint(cores)`)
 `#menuCheckImageSwitches`, `setIdSwitchNavigator`, `setIdSwitchRefresher`, `updateIdSwitchProgress`), `pose/tracker.js` (the
 automatic run, `clearIdSwitchResults`), `ui/info-panel.js` and
 `ui/sessions-panes.js` (`refreshIdSwitchPanel`), `ui/track-summary-modal.js`
-(`openIdSwitchPanel`, `refreshIdSwitchPanel`, `setTrackSummaryOpener`).
+(`openIdSwitchPanel`, `refreshIdSwitchPanel`, `setTrackSummaryOpener`, `clickCheckFromSummary`).
 
 **Coverage.** `tests/e2e/size-switch-check.mjs` (size, menu path, the checklist:
 ticks, Next unreviewed, persistence across the tab / a re-run / a session switch,
@@ -11451,8 +11457,9 @@ for the ID Switches tab: a sample or a map point clicked closes the box and goes
 to that frame — the tracker that opens the box cannot import `pose/initialization.js`);
 `rememberTrackSummary(session, opts, checks, identities)` (Track All keeps what the
 box showed on `session._trackSummary` — in memory, not saved — and refreshes the
-ID Switches tab so its button appears); `reopenTrackSummary(session)` (the tab's
-**Show Track All summary**).
+ID Switches tab so its button appears); `reopenTrackSummary(session, latest?)` (the
+tab's **Show Track All summary**, and the end of a check started from the box —
+`latest` is that run's results).
 
 **Reopening.** Closing the box used to be final, which stranded a user who had not
 turned on the image check before Track All: the box is what offers it. The ID
@@ -11465,11 +11472,23 @@ closed replaces the pass's "Not run" / "Skipped" (and is no longer offered), and
 check whose results were cleared reads "Not run" again. A skip or failure is kept
 from the pass, because `runIdSwitchChecks` stores only results that ran.
 
+**A check run from the box comes back to it.** **Check by images…** / **Check by
+body size** used to close the box and leave the user on the ID Switches tab — with
+"nothing flagged" in a status line, the box's counts gone, and the next step only
+reachable through the tab's reopen button. They now go through
+`clickCheckFromSummary` (`ui/id-switch-modal.js`), and when the check ends the box
+reopens with the counts re-taken, that check's row and time filled in, and the next
+step that follows (**Review switches** when it flagged one; the tab is not opened
+behind it). A cancel, skip or failure is reported too — `reopenTrackSummary`'s
+`latest` writes that outcome into the kept summary, so the row reads "Cancelled"
+(and still offers the check) here and on a later reopen from the tab.
+
 **Notes / caveats.**
 - **A note, not a prompt.** Nothing changes until a button is pressed; Close,
   `Esc` and a backdrop click dismiss it. Each action button clicks the existing
   control — `#tbTriangulateAll`, `#menuCheckImageSwitches`,
-  `#menuCheckSizeSwitches`, `#menuTrackingWizard` — so it runs exactly what the
+  `#menuCheckSizeSwitches` (both through `clickCheckFromSummary`, so the box comes
+  back when the check ends), `#menuTrackingWizard` — so it runs exactly what the
   user would have run by hand (a disabled button, e.g. under Defining Plane Mode,
   ignores it the same way). **Review switches** opens the ID Switches tab and
   presses `#idSwitchNext`, landing on the first flagged switch.
@@ -11486,8 +11505,8 @@ from the pass, because `runIdSwitchChecks` stores only results that ran.
 
 **Imports from project modules.** `ui/track-summary.js` (`planTrackSummary`,
 `summarizeTrackedIdentities`, `describeSwitchCheck`), `ui/id-switch-modal.js`
-(`openIdSwitchPanel`, `refreshIdSwitchPanel`, `setTrackSummaryOpener`),
-`ui/identity-gallery.js` (`renderIdentityGallery`).
+(`openIdSwitchPanel`, `refreshIdSwitchPanel`, `setTrackSummaryOpener`,
+`clickCheckFromSummary`), `ui/identity-gallery.js` (`renderIdentityGallery`).
 
 **Imported by.** `pose/tracker.js`, `ui/ui-wiring.js` (`setTrackSummaryNavigator`).
 No cycle: none of its imports reaches back to the tracker.
@@ -11498,7 +11517,9 @@ replacement on a second run, no box after Track Frame Range, the nothing-tracked
 case, Review switches landing on the first switch, and §2b reopening from the ID
 Switches tab (the button's place above "Possible ID switches", the same box, a
 check run since reported rather than "Not run", Clear, and no button without a
-Track All). The Identities section: `tests/e2e/identity-gallery.mjs`. Tests that
+Track All), §2c the box's own **Check by body size** / **Check by images…**
+reopening it with the result (and not the tab) — clear, cancelled with `Esc`, and
+§8 a switch found by images turning the next step into **Review switches**. The Identities section: `tests/e2e/identity-gallery.mjs`. Tests that
 click the app after a Track All close the box first (`#trackSummaryClose`).
 
 ### ui/identity-gallery.js
