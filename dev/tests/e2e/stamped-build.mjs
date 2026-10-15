@@ -15,7 +15,12 @@
  *     `state` (one instance), and the sleap-io bridge is up.
  *  4. tests/test-runner.html on the stamped copy: every test passes, again with
  *     no file loaded twice.
- *  5. The release label the stamp wrote shows beside the menu bar's Settings
+ *  5. The modulepreload block (scripts/preload-modules.mjs, which the stamp CLI
+ *     runs next) names stamped URLs only, every one of them is requested exactly
+ *     once, and by the time the app is ready it has requested NO same-site module
+ *     outside that block and the page's own <script> tags — i.e. the whole startup
+ *     graph was fetched up front instead of discovered import by import.
+ *  6. The release label the stamp wrote shows beside the menu bar's Settings
  *     button (ui/version-label.js), right of it and inside the window.
  *
  * Run: node tests/e2e/stamped-build.mjs
@@ -48,6 +53,11 @@ const { stampSite } = await import(pathToFileURL(path.join(repoRoot, 'scripts', 
 const res = stampSite(site, TOKEN, RELEASE);
 check(res.refs > 100 && res.problems.length === 0,
     `stamped ${res.refs} references in ${res.files} files, none left unstamped${res.problems.length ? ': ' + res.problems.slice(0, 3).join(' | ') : ''}`);
+const { preloadSite } = await import(pathToFileURL(path.join(repoRoot, 'scripts', 'preload-modules.mjs')).href);
+const graph = preloadSite(site);                         // what the stamp CLI does next
+const preloads = graph.local.map(u => new URL(u, `http://localhost:${PORT}/`));
+check(preloads.length > 100 && graph.missing.length === 0 && preloads.every(u => u.searchParams.get('v') === TOKEN),
+    `modulepreload: ${preloads.length} same-site + ${graph.remote.length} CDN links, all stamped${graph.missing.length ? ' — missing: ' + graph.missing.join(', ') : ''}`);
 
 const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: site, stdio: 'ignore' });
 await new Promise(r => setTimeout(r, 1200));
@@ -76,6 +86,15 @@ try {
     page.on('request', r => urls.push({ url: r.url(), type: r.resourceType() }));
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 30000 });
+    // ---- 5: at ready, every same-site module requested is a preload or one of index.html's own tags
+    const atReady = urls.map(r => new URL(r.url)).filter(u => u.host === `localhost:${PORT}` && /\.m?js$/.test(u.pathname));
+    const tags = new Set(['/app.js', '/lib/h5wasm/h5wasm.iife.js']);
+    const pre = new Set(preloads.map(u => u.pathname + u.search));
+    const notPreloaded = atReady.filter(u => !tags.has(u.pathname) && !pre.has(u.pathname + u.search)).map(u => u.pathname);
+    const reqCount = new Map(); for (const u of atReady) reqCount.set(u.pathname + u.search, (reqCount.get(u.pathname + u.search) || 0) + 1);
+    const unused = [...pre].filter(k => reqCount.get(k) !== 1);
+    check(notPreloaded.length === 0, `preload: every startup module was preloaded${notPreloaded.length ? ' — not: ' + notPreloaded.slice(0, 5).join(', ') : ''}`);
+    check(unused.length === 0, `preload: every preload requested exactly once${unused.length ? ' — ' + unused.slice(0, 5).map(k => k + ' x' + (reqCount.get(k) || 0)).join(', ') : ''}`);
     await page.waitForTimeout(1500);                      // let lazily imported modules land too
     const a = audit(urls);
     check(a.n > 40 && a.unstamped.length === 0, `app: ${a.n} code requests, all stamped ?v=${TOKEN}${a.unstamped.length ? ' — unstamped: ' + a.unstamped.slice(0, 5).join(', ') : ''}`);
@@ -84,7 +103,7 @@ try {
     check(one, 'app: window.__lucid.state is the stamped ui/app-state.js state (one instance)');
     check(errs.length === 0, 'app: no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 
-    // ---- 5: the release beside Settings
+    // ---- 6: the release beside Settings
     const v = await page.evaluate(() => {
         const el = document.getElementById('menuBarVersion'), set = document.getElementById('menuBarSettings');
         const r = el.getBoundingClientRect(), s = set.getBoundingClientRect();

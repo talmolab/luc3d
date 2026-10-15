@@ -37,10 +37,17 @@
 // the live page). The workflows pick the label — the release tag when the
 // deployed ref is one, else `dev` or `PR #<n>` — and a missing tag fails the
 // stamp, so a refactor of index.html cannot silently drop the number.
+//
+// The CLI then runs scripts/preload-modules.mjs on the stamped index.html: one
+// `<link rel="modulepreload">` per module of the startup graph, read off the
+// stamped files so every preload names exactly the URL its importer asks for.
+// It is part of this command — not a separate workflow step — so both deploy
+// workflows get it, and it can never run on an unstamped tree by being forgotten.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { preloadSite } from './preload-modules.mjs';
 
 const ABS = '(?![a-z][\\w+.-]*:|//)';            // not a scheme URL, not protocol-relative
 const SPEC_JS = '[^\'"`?#\\s]+\\.m?js';           // a path ending .js / .mjs, no query yet
@@ -60,8 +67,10 @@ export function stampText(text, version, isHtml) {
         // R3: <script src="…js">
         text = text.replace(new RegExp('(<script\\b[^>]*?\\bsrc\\s*=\\s*)(["\'])(' + ABS + SPEC_JS + ')\\2', 'gi'),
             (m, pre, qt, spec) => bump(pre + qt + spec + q + qt));
-        // R4: <link … href="…css"> (stylesheets)
-        text = text.replace(new RegExp('(<link\\b[^>]*?\\bhref\\s*=\\s*)(["\'])(' + ABS + '[^"\'?#\\s]+\\.css)\\2', 'gi'),
+        // R4: <link … href="…css"> (stylesheets) and <link rel="modulepreload" href="…js">
+        // (scripts/preload-modules.mjs; it normally runs after this and copies stamped
+        // URLs, but a preload must name its module's exact URL whichever runs first).
+        text = text.replace(new RegExp('(<link\\b[^>]*?\\bhref\\s*=\\s*)(["\'])(' + ABS + '[^"\'?#\\s]+\\.(?:css|m?js))\\2', 'gi'),
             (m, pre, qt, spec) => bump(pre + qt + spec + q + qt));
         // R5: importmap entries pointing at relative files
         text = text.replace(/(<script\b[^>]*\btype\s*=\s*["']importmap["'][^>]*>)([\s\S]*?)(<\/script>)/gi, (m, open, body, close) =>
@@ -82,7 +91,7 @@ export function findUnstamped(text, isHtml) {
     scan(new RegExp('\\bnew\\s+URL\\(\\s*([\'"])(' + ABS + '[^\'"?#]*?\\.m?js)\\1\\s*,', 'g'));
     if (isHtml) {
         scan(new RegExp('<script\\b[^>]*?\\bsrc\\s*=\\s*(["\'])(' + ABS + '[^"\'?#]*?\\.m?js)\\1', 'gi'));
-        scan(new RegExp('<link\\b[^>]*?\\bhref\\s*=\\s*(["\'])(' + ABS + '[^"\'?#]*?\\.css)\\1', 'gi'));
+        scan(new RegExp('<link\\b[^>]*?\\bhref\\s*=\\s*(["\'])(' + ABS + '[^"\'?#]*?\\.(?:css|m?js))\\1', 'gi'));
     }
     return out;
 }
@@ -146,5 +155,14 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         console.error('stamp-version: relative module references left UNSTAMPED (would load those modules twice), or no build-info tags:');
         r.problems.forEach(p => console.error('  ' + p));
         process.exit(1);
+    }
+    if (fs.existsSync(path.join(root, 'index.html'))) {
+        const g = preloadSite(path.resolve(root));
+        console.log(`stamp-version: ${g.local.length} same-site + ${g.remote.length} CDN modulepreload links in index.html`);
+        if (g.missing.length) {
+            console.error('stamp-version: index.html statically imports files that are not in the site:');
+            g.missing.forEach(u => console.error('  ' + u));
+            process.exit(1);
+        }
     }
 }

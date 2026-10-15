@@ -90,6 +90,61 @@ since `dev` alone cannot tell two deploys apart. The tags are EMPTY in the repo
 the deploy if they are missing, so a refactor of `index.html` cannot drop the
 number silently. Nothing about the label reaches the `.slp`.
 
+**A cold start fetches the whole startup graph AT ONCE.** After stamping, the
+same command runs `scripts/preload-modules.mjs`, which walks `index.html`'s
+module scripts through every STATIC import (relative specifiers and importmap
+entries) and inserts one `<link rel="modulepreload">` per module right after the
+importmap — every same-site module of the startup graph (111 files) plus the two CDN modules (`yaml`, dockview).
+Without it the browser discovered the graph one import level at a time: six
+sequential round trips, every one a CDN miss on a cold start. And a cold start
+is the ordinary case, not the rare one: every deploy changes every `?v=` URL,
+and Cloudflare keeps a GitHub Pages object at the edge only for about the
+origin's `max-age=600` (measured: objects that were HITs came back MISS or
+EXPIRED half an hour later — the 4 hours above is the BROWSER lifetime), so
+anyone whose browser cache is cold pays it. Three rules:
+- **The list is derived from the files being deployed, never maintained by
+  hand**, so it cannot rot. It reads the STAMPED files, so each preload is the
+  exact URL its importer asks for. A preload under any other URL is a second
+  download that nothing uses, and `stamped-build.mjs` fails on it. R4 in
+  `stamp-version.mjs` also stamps a `modulepreload` link, so the order of the
+  two steps cannot leave one unstamped.
+- **Static imports only.** A dynamic `import()` is lazy on purpose, and a
+  worker is another realm. `stamped-build.mjs` asserts that, by the time the
+  app is ready, it has requested NO same-site module outside the block (besides
+  `index.html`'s own tags) and every preload exactly once — so a new static
+  import that the walker cannot see fails there, not on someone's slow
+  connection.
+- **The block goes after the importmap.** Chrome ignores an importmap that
+  arrives after module loading has started, and a modulepreload starts it.
+
+Two source changes serve the same goal. `yaml` loads as jsdelivr's single-file
+`yaml@2.8.0/+esm` bundle (the same `browser/index.js` entry, prebuilt) instead of
+the ~70-file `browser/index.js` tree, which was its own six-level waterfall on a
+second host. Offline mode maps that URL to the vendored `lib/yaml/browser/index.js`.
+The four head `<script>` tags (mp4box, three, OrbitControls, the h5wasm IIFE) are
+`defer`: they still run in document order and before any module script, so every
+global exists exactly when it used to, but they no longer block the parser, and
+the page paints while they download.
+
+Measured 2026-10-13 through the real Cloudflare path with
+`tests/e2e/_bench-cold-start.mjs`, which makes every load cold by adding a fresh
+`cb=` query to each same-site request in flight. Medians of interleaved runs:
+0.66 s → 0.40 s (24 runs each), and 2.32 s → 0.64 s with 150 ms of emulated
+latency per request (8 each; roughly a VPN). An esbuild bundle of the app
+(111 files → 8) measured 0.38 s and 0.60 s on the same runs, so it was not
+adopted here: the only case it wins is a per-REQUEST stall (simulated: one 5 s
+stall in every ~100 requests leaves the preloaded build waiting on one in most
+loads, while 8 requests rarely draw one). Such stalls are real: in one 7 s
+window, four consecutive cold loads of both builds each had exactly ONE of 113
+requests take 1.4–2.4 s, at Cloudflare's edge rather than GitHub's (cache HITs
+and TLS handshakes stall too, on other sites behind the same Cloudflare IPs,
+while GitHub Pages fetched directly stayed under 0.2 s). modulepreload does not
+help with those; fewer requests (bundling) would, but bundling was decided
+against: it would add a build step and make the deployed app differ from the
+tested source, for a gain that shows up only in those stall episodes.
+`h5wasm.iife.js` (~1 MB compressed, a page global read by several main-thread
+paths and e2e tests) is now the largest single item on the critical path.
+
 **Root is the only target that wipes — two rules keep that safe.** Every other
 channel owns its folder and can only damage itself, but root's previous output
 sits at the top of `gh-pages` beside every other channel and every PR preview:
