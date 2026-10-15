@@ -7008,6 +7008,20 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `reprojOpts.lineWidth` as its edge widths and `reprojOpts.brightness`. Covered by `tests/test-node-trails.mjs`
   (§12: the shade scale on every palette color, and the drawn strokes) and
   `tests/e2e/node-trail-shade.mjs` (the menus and the real draw path).
+  **`options.overlaySizeScale` (issue #200).** `nodeSize` and `lineWidth` are
+  expressed in BACKING-store pixels and drawn unscaled, which held them at a
+  constant on-screen size only while the backing store tracked the zoom factor
+  exactly. It no longer does (see `ui/rendering.js` ▸ overlay backing-store
+  budget), so `drawAllOverlays` passes the ratio it actually used and
+  `makeRenderOpts` — the single chokepoint building `userRender` /
+  `predictedRender` / `reprojRender` — multiplies both by it, as do all four of
+  the `drawNodeTrails` sizes (`nodeSize` and the three per-layer edge widths).
+  `reprojBrightness` is NOT a size and is passed through untouched.
+  **Absent or `1` leaves every size byte-for-byte unchanged**, which is what
+  keeps the overlay-video export path (`ui/overlay-export-modal.js`, which
+  shares this function, does its own sizing and has no zoom) untouched. The
+  defaults are applied here (4 / 2) rather than left to the drawing functions,
+  or an option nobody set would escape the scaling.
   **Reprojection node color ignored the Visibility panel on the raw-fallback
   path (luc3d #209).** Step 2 has two ways to draw a group's reprojection:
   a materialized `reprojectedInstances` `Instance` (built by
@@ -7117,10 +7131,13 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   worker-backed loader's frames arrive later and trigger one redraw. A no-op
   during playback (those frames were just played). It also computes the per-view
   **`labelDisplayScale`** (backing-store px per on-screen CSS px) that
-  `overlays.js` sizes node/track labels with: `overlayCanvas.offsetWidth` — the
-  LAYOUT width, which no CSS transform touches — times `view.zoom.scale`, which
-  must stay in because the backing store was just grown by the same factor a few
-  lines above. Deliberately **not** `getBoundingClientRect()`: `applyZoom`
+  `overlays.js` sizes node/track labels with: the real `targetW` over
+  `overlayCanvas.offsetWidth` — the LAYOUT width, which no CSS transform
+  touches — times `view.zoom.scale`. The zoom factor must stay in the
+  denominator or labels grow with zoom; deriving the numerator from `targetW`
+  rather than from the zoom scale is what makes labels **self-correcting** under
+  the overlay budget below, so they need no `overlaySizeScale` term.
+  Deliberately **not** `getBoundingClientRect()`: `applyZoom`
   rotates the whole `.canvas-wrapper`, and a rect is the transformed element's
   axis-aligned bounding box, so measuring there made labels shrink at 45° and
   grow at 90°. See `ui/overlays.js` ▸ `resolveLabelDisplayScale`.
@@ -7146,6 +7163,64 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   stop frame. `timeline.setCurrentFrame` only moves the timeline's playhead
   element now (no canvas repaint, see `ui/timeline.js`), so it is cheap either
   way; the `{ playback: true }` it is passed while playing changes nothing.
+
+  **Overlay backing-store budget (issue #200).** The overlay canvas is sized
+  `videoW * ss` where `ss` is an effective supersample, NOT the zoom scale. It
+  used to be the zoom scale exactly, which held backing-px-per-screen-px
+  constant — but grew the canvas as **zoom²** while the cell still shows only a
+  cell-sized WINDOW onto it. At zoom 10 on a 1280×1024 view that allocated
+  12800×10240 (524 MB) to display ~283×226, i.e. ~0.05% of the pixels were ever
+  visible; the rest were allocated, cleared and rasterized behind
+  `overflow: hidden`.
+
+  **It is per VIEW, and the `+` key zooms every view** (`zoomAllVideos`; only
+  the scroll wheel zooms one). So a real 8-camera session at zoom 10 allocated
+  ~**4.2 GB** of backing store, not 524 MB — which is the difference between
+  reproducing the issue and not. Measured headed on DEFAULT Chrome, GPU
+  acceleration ON, 8 cameras at 1280×1024 with every view zoomed, the pre-fix
+  build dragged a node at **120 fps → 18.5** (worst frame 9 ms → 292 ms, drag
+  wall 1351 ms → 9100 ms); after the fix it is 120 fps / 9 ms / ~1340 ms at
+  every zoom, with overlay RAM 4194 MB → 212 MB. A single zoomed view costs
+  only 524 MB, which an Apple-silicon GPU absorbs at a flat 120 fps — measuring
+  that one view is what first suggested, wrongly, that the slowdown needed
+  software canvas rasterization to appear at all. Three rules:
+  - **`ss` is bounded by what the display can RESOLVE**, not by the zoom:
+    `ss = clamp(OVERLAY_QUALITY * cssW * zs / videoW, 1, zs)`. The lower bound
+    of 1 means an unzoomed view is byte-for-byte what it was before, so this
+    cannot regress the ordinary case.
+  - **`ss` is QUANTIZED to 1/4 steps, rounded UP**, and that is not a detail.
+    It now depends on `cssW`, which `ss = zs` did not — so without the
+    quantization a pane SASH DRAG (`cssW` moving a pixel per frame) reallocates
+    the whole backing store on EVERY redraw, which the old code never did at
+    any zoom. Measured at zoom 8 with canvas acceleration off: 59 reallocations
+    over a 60-step drag at 3.49 ms per redraw, against 0.32 ms unzoomed; with
+    it, 1-2 reallocations and 0.39 ms. Rounding up is what keeps quantizing
+    from ever dropping quality below what `OVERLAY_QUALITY` asks for.
+  - **`OVERLAY_QUALITY` has a floor of 2** (`Math.max(2, devicePixelRatio)`) and
+    that floor is not cosmetic. Nodes and edges are vector shapes whose
+    smoothness comes from this ratio, and a cell showing a 1280px video in 283px
+    was supersampling 4.5× for free because it is DOWNSCALING. Bounding by
+    `devicePixelRatio` alone took a non-retina display straight to 1:1 and made
+    circles visibly chunkier the moment you zoomed (measured: on-screen node
+    radius 2.19 px → 1.75 px at zoom 4).
+  - **Sizes in BACKING pixels must be compensated.** `nodeSize` / `lineWidth`
+    are drawn unscaled, which is what held them at a constant on-screen size
+    while the backing store tracked `zs` exactly. `drawAllOverlays` therefore
+    passes **`overlaySizeScale = ss / zs`** and `ui/overlays.js` scales them by
+    it; omit that and every node and edge grows linearly with zoom.
+    `labelDisplayScale` needs no such term (see above), and
+    `drawHoverHighlight` is already invariant because it scales by its own
+    `toCanvas.scale`.
+
+  `MAX_OVERLAY_DIM` / `MAX_OVERLAY_AREA` then clamp `ss` to Chrome's canvas
+  limits (16384 px per side, 2^28 px of area). That is a **correctness** guard,
+  not a budget one: past those limits the allocation reports the requested size
+  and every draw silently no-ops, so the whole annotation overlay goes blank
+  with no error — reproduced at 2048×1536 video, zoom 10 (20480×15360). The
+  quality bound above normally keeps `ss` far below this, so the clamp is a
+  backstop for an unusually wide cell.
+  Covered by `tests/e2e/zoom-overlay-budget.mjs`; `tests/e2e/_diag-zoom-drag-perf.mjs`
+  is the headed fps harness the numbers above come from.
 
   **Lazy reprojection fill — honors the group's triangulation method.** A group
   with `points3d` but no `reprojections`/`reprojectedInstances` is re-solved here

@@ -16,26 +16,26 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=2dc001fe527c';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=2dc001fe527c';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=2dc001fe527c';
+} from './triangulation.js?v=67978a8bed8b';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=67978a8bed8b';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=67978a8bed8b';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=2dc001fe527c';
-import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=2dc001fe527c';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=2dc001fe527c';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=2dc001fe527c';
-import { startTrackerWorker } from './tracker-pool.js?v=2dc001fe527c';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=2dc001fe527c';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=2dc001fe527c';
-import { updateInfoPanel } from '../ui/info-panel.js?v=2dc001fe527c';
-import { setColorByIdentity } from '../ui/color-by.js?v=2dc001fe527c';
-import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=2dc001fe527c';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=2dc001fe527c';
-import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=2dc001fe527c';
-import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=2dc001fe527c';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=2dc001fe527c';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=2dc001fe527c';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=67978a8bed8b';
+import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=67978a8bed8b';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=67978a8bed8b';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=67978a8bed8b';
+import { startTrackerWorker } from './tracker-pool.js?v=67978a8bed8b';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=67978a8bed8b';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=67978a8bed8b';
+import { updateInfoPanel } from '../ui/info-panel.js?v=67978a8bed8b';
+import { setColorByIdentity } from '../ui/color-by.js?v=67978a8bed8b';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=67978a8bed8b';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=67978a8bed8b';
+import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=67978a8bed8b';
+import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=67978a8bed8b';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=67978a8bed8b';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=67978a8bed8b';
 
 /**
  * A frame index as the USER sees it: 1-based.
