@@ -18,6 +18,7 @@ import {
     hungarianAlgorithm
 } from './triangulation.js';
 import { CrossViewTracker, Detection } from './cross-view-tracker.js';
+import { singleCameraName, singleCameraTrackerConfig, trackSingleCamera, SINGLE_CAMERA_LAZY_REASON } from './single-camera-tracking.js';
 import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
@@ -33,7 +34,7 @@ import { setColorByIdentity } from '../ui/color-by.js';
 import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js';
 import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js';
 import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js';
-import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js';
+import { showTrackSummaryModal, rememberTrackSummary, summarySession } from '../ui/track-summary-modal.js';
 import { collapseTimeline } from '../ui/timeline-controller.js';
 import { collapseViewport3D } from '../ui/panel-visibility.js';
 
@@ -1292,6 +1293,11 @@ export function trackCurrentFrame() {
     // Honor per-view tracking inclusion from the Tracking Wizard: excluded views
     // are dropped from the association math entirely (still visible in the GUI).
     var trackedCameras = session.cameras.filter(function (c) { return isCameraTracked(c.name); });
+    if (singleCameraName(session)) {
+        // SLEAP's tracker is temporal: one frame on its own has nothing to match against.
+        setStatus('Track Frame matches views of one frame; on a single camera use Track All', 'warning');
+        return;
+    }
     if (trackedCameras.length < 2) {
         setStatus('Need at least 2 views included in tracking (check the Tracking Wizard ▸ Camera Views)', 'warning');
         return;
@@ -1448,6 +1454,15 @@ async function runTrackingPass(range) {
     if (!session || !session.cameras || session.cameras.length === 0) {
         setStatus('No session with cameras loaded', 'error');
         return bail;
+    }
+
+    // One camera: SLEAP's own tracker (pose/single-camera-tracking.js) instead of the cross-view one.
+    if (singleCameraName(session)) {
+        if (isRange) {
+            setStatus('Track Frame Range is for multi-camera sessions; on a single camera use Track All', 'warning');
+            return bail;
+        }
+        return runSingleCameraTrackAll(session, bail);
     }
 
     if (session.cameras.length < 2) {
@@ -1706,6 +1721,130 @@ async function runTrackingPass(range) {
         hideLoading();
         console.error('[' + label + '] error:', e, e.stack);
         setStatus(human + ' error: ' + e.message, 'error');
+        return bail;
+    }
+}
+
+/** What the status line says instead of running the automatic body-size check on one camera. */
+export const SINGLE_CAMERA_SIZE_SKIP_NOTE = 'ID-switch check (body size): not run automatically on one camera (optional: Tracks ▸ Check ID Switches runs it)';
+
+/**
+ * Track All on a single-camera session: SLEAP's tracker (a port of `sleap-nn
+ * track`, pose/sleap-tracker.js) with the animal count as its track cap. Writes
+ * the TRACKS, as sleap-nn does, plus one identity per track — see
+ * pose/single-camera-tracking.js. Same contract as the multi-camera pass
+ * otherwise: marks the project dirty after the last bail-out, clears the
+ * previous identities and ID-switch results, switches Color to ID, and runs
+ * the automatic image ID-switch check when it is on — but not the body-size
+ * one, which says so in the status line instead (see below).
+ */
+async function runSingleCameraTrackAll(session, bail) {
+    if (session.lazyLoader) {
+        setStatus('Track All: ' + SINGLE_CAMERA_LAZY_REASON, 'warning');
+        return bail;
+    }
+    if (!session.frameGroups || session.frameGroups.size === 0) {
+        setStatus('No frames to track', 'error');
+        return bail;
+    }
+    // The animal count lives on the session (#312), as for the multi-camera pass: ask once, then reuse.
+    if (!numAnimalsAnswered(session)) {
+        if (!promptNumAnimals(session)) return bail;
+    }
+    var userCount = sessionNumAnimals(session);
+    var numAnimals = userCount || computeMaxInstancesPerView(session);
+    var cfg = singleCameraTrackerConfig(numAnimals, {
+        windowSize: getTrackingThreshold('scWindowSize'),
+        oksStddev: getTrackingThreshold('scOksStddev'),
+        connectBreaks: getTrackingThreshold('scConnectBreaks') > 0,
+    });
+    // Opt-in: leave each frame's duplicate detections out (pose/single-camera-tracking.js DUPLICATE_DEFAULTS).
+    var duplicates = getTrackingThreshold('scRemoveDuplicates') > 0
+        ? { iou: getTrackingThreshold('scDuplicateIou'), oks: getTrackingThreshold('scDuplicateOks') } : null;
+    console.log('[TrackAll] single camera (' + session.cameras[0].name + '): SLEAP tracker', cfg,
+        userCount ? '(animal count user-set)' : '(animal count auto-detected)', duplicates ? { duplicates: duplicates } : '');
+    console.time('[TrackAll] total');
+
+    // Every bail-out is above (see runTrackingPass for why this is unconditional).
+    markDirty();
+    clearIdSwitchResults(session);
+    session.identities = [];
+    session.frameIdentityMap = new Map();
+    session._idSwitchCandidates = null;    // replaced below; never left over from an earlier run
+
+    var total = session.frameGroups.size;
+    showLoadingProgress('Tracking (SLEAP tracker)', 0, total);
+    try {
+        await yieldToPaint();
+        var trackT0 = performance.now();
+        var res = await trackSingleCamera(session, cfg, {
+            fps: state.fps,
+            duplicates: duplicates,
+            onProgress: async function (done, n) { showLoadingProgress('Tracking (SLEAP tracker)', done, n); await yieldToPaint(); },
+        });
+        var trackMs = performance.now() - trackT0;
+        hideLoading();
+        // Where else a switch could be (not saved: the input tracklets they come from are rewritten).
+        session._idSwitchCandidates = res.moments;
+        var switchedToIds = res.numIdentities > 0 && setColorByIdentity(state, true);
+        var predOnly = res.numIdentities > 0 && showPredictedOnly();
+        // ...and node trails at ¼ s if they are off, as after a multi-camera Track All (runTrackingPass).
+        var trailsOn = res.numIdentities > 0 && !(state.trailSeconds > 0) && setTrailSeconds(state, TRACK_ALL_TRAIL_SECONDS);
+        drawAllOverlays(state.currentFrame);
+        updateInfoPanel();
+        if (timeline) timeline.refreshTracks(state.session, { cap: true });
+        collapseTimeline();
+        collapseViewport3D(viewport3d);
+        console.timeEnd('[TrackAll] total');
+        var doneMsg = 'Tracked ' + res.numIdentities + ' animal' + (res.numIdentities === 1 ? '' : 's') + ' across ' +
+            res.frames.toLocaleString() + ' frames with SLEAP\'s tracker (one track per animal)' +
+            (res.untracked ? ', ' + res.untracked.toLocaleString() + ' detection' + (res.untracked === 1 ? '' : 's') +
+                ' over the animal count left without a track' : '') +
+            (res.duplicates ? ', ' + res.duplicates.toLocaleString() + ' duplicate detection' + (res.duplicates === 1 ? '' : 's') +
+                ' removed first (left without a track)' : '') +
+            (switchedToIds ? ', now coloring by ID' : '') +
+            (trailsOn ? ', node trails on (' + trailSecondsName(TRACK_ALL_TRAIL_SECONDS) + ')' : '') + (predOnly ? PREDICTED_ONLY_NOTE : '');
+        // The body-size check is OPTIONAL on one camera (the user's choice, 2026-10-12): not run here, and the
+        // menu runs it. It reads 2D bone lengths, which also change with posture and viewing angle; the
+        // label-free check (#310) measured 2026-10-12 on 87 proofread SLAP top/mid views: per-contact AUC 0.912,
+        // 32 rows at -1 (22 real, 8 false), 27 of 276 swaps found. Images run as usual.
+        // ...and runs the coat-brightness check instead (`autoBrightnessSwitchCheck`, default on): no model, no GPU.
+        var autoSize = getTrackingThreshold('autoSwitchCheck') > 0, autoImage = getTrackingThreshold('autoImageSwitchCheck') > 0;
+        var autoBrightness = getTrackingThreshold('autoBrightnessSwitchCheck') > 0;
+        if (autoSize && res.numIdentities > 1) doneMsg += ' · ' + SINGLE_CAMERA_SIZE_SKIP_NOTE;
+        setStatus(doneMsg, 'success');
+        var checkRes = null;
+        if (res.numIdentities > 1 && (autoImage || autoBrightness)) {
+            checkRes = await runIdSwitchChecks({ auto: true, statusPrefix: doneMsg, size: false, image: autoImage, brightness: autoBrightness });
+        }
+        // The summary box, as after a multi-camera Track All, planned for one camera (ui/track-summary.js
+        // `singleCamera`): tracks, the coat-brightness / image / size checks, and review or save as the next
+        // step — never Triangulate All. Counted on the single-camera stand-in session. Only logs if it fails.
+        try {
+            var summaryOpts = {
+                frames: res.frames, animals: numAnimals, animalsAuto: !userCount, elapsedMs: trackMs,
+                fps: state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 0),
+                singleCamera: session.cameras[0].name, untracked: res.untracked, duplicates: res.duplicates,
+            };
+            var summaryChecks = {
+                brightness: describeSwitchCheck(autoBrightness, checkRes && checkRes.brightness, res.numIdentities),
+                image: describeSwitchCheck(autoImage, checkRes && checkRes.image, res.numIdentities),
+                size: res.numIdentities > 1 ? { state: 'off', reason: 'not run automatically on one camera — optional: Tracks ▸ Check ID Switches (Body Size) runs it' }
+                    : describeSwitchCheck(false, null, res.numIdentities),
+            };
+            rememberTrackSummary(session, summaryOpts, summaryChecks, res.numIdentities);
+            var counted = summarySession(session);
+            if (counted) showTrackSummaryModal(summarizeTrackedIdentities(counted, summaryOpts), summaryChecks, { session: counted });
+        } catch (sumErr) {
+            console.error('[TrackAll] single camera summary failed:', sumErr);
+        }
+        var lo = Infinity, hi = -Infinity;
+        for (var f of session.frameGroups.keys()) { if (f < lo) lo = f; if (f > hi) hi = f; }
+        return { ok: true, start: lo, end: hi, identities: res.numIdentities, frames: res.frames };
+    } catch (e) {
+        hideLoading();
+        console.error('[TrackAll] single camera error:', e, e.stack);
+        setStatus('Track All error: ' + e.message, 'error');
         return bail;
     }
 }
