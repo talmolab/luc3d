@@ -11599,11 +11599,26 @@ things about it are deliberate:
   of the preview saying the same thing. A sample with no image ("no video",
   "no keypoints") has nothing to enlarge and shows none.
 
+**A map enlarges too.** Resting on a map shows it at the view's shape —
+`GALLERY_ZOOM` (320 px) tall, or `MAP_ZOOM_MAX_WIDTH` (640 px) wide when that is
+narrower, 427 × 320 for a 640 × 480 camera — in the same preview box, placed the
+same way, captioned with the identity and camera (a map has no native `title`
+either). It is not the 88 px map scaled up: the frame is copied once per map
+draw at up to that size (the same closed-frame reason as a sample), and the path
+is redrawn over it at that size, once per map on its first hover (`drawPath`,
+shared with the small map, so the two cannot disagree). The point under the
+pointer — the one whose time the small map's tip shows and a click goes to — is
+ringed in white in the preview and its time added to the caption. Changing the
+map's camera hides a preview of a map being replaced. Without a video the path
+is drawn on a dark ground and still enlarges. The preview takes its contents
+from the element's `_zoom` (`{kind, w, h, draw, color, label, frame}`): one box
+serves both kinds, resized when the shape changes.
+
 **Key exports.** `renderIdentityGallery`, `identityTracks`, `identityGroupAt`,
 `groupCentroid`, `pickSampleFrames`, `projectedBox`, `pickCamera`, `cropSquare`,
 `memberPointsByCamera`, `projectTrack`, `defaultMapCamera`, `timeColor`;
 `GALLERY_SAMPLES` (5), `GALLERY_MAX_ROWS`, `GALLERY_TILE` (88 px),
-`GALLERY_ZOOM` (320 px), `MAP_MAX_POINTS` (2,400).
+`GALLERY_ZOOM` (320 px), `MAP_ZOOM_MAX_WIDTH` (640 px), `MAP_MAX_POINTS` (2,400).
 
 **Imports from project modules.** `ui/app-state.js` (`state`),
 `pose/lazy-residency.js` (`hydrateFrameMembers2d`, `releaseFrameMembers2d`).
@@ -11617,7 +11632,10 @@ paint each animal its own colour: every image in a row shows that row's animal,
 spread over the recording and from more than one camera; the maps, the view
 selector and its time key; the hover preview — size, placement, the same
 sample and animal, its caption, hiding on leave and with the box, none on a
-"no video" tile; both clicks; no videos; and the negative control —
+"no video" tile; the map's preview — its shape, drawn at that size, its path,
+the hovered point ringed and timed, placement, the other row, hiding on leave, a
+sample square again after it, and a map still enlarging with no videos; both
+clicks; no videos; and the negative control —
 identities swapped halfway, each row then showing BOTH animals).
 
 ### ui/view-align-modal.js
