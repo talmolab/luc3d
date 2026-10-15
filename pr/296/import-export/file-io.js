@@ -12,13 +12,13 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=c440035dd16a';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=c440035dd16a';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows } from '../pose/triangulation.js?v=c440035dd16a';
+         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=a95e496d1b8b';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=a95e496d1b8b';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows } from '../pose/triangulation.js?v=a95e496d1b8b';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=c440035dd16a';
-import { writePlaneMetadata } from './plane-metadata.js?v=c440035dd16a';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=a95e496d1b8b';
+import { writePlaneMetadata } from './plane-metadata.js?v=a95e496d1b8b';
 
 // ============================================
 // Generic file picker
@@ -2644,8 +2644,8 @@ export function parseSlpH5(file, onProgress, opts) {
         // Resolve worker URL relative to the document base so this works on
         // sub-path deployments (e.g. GitHub Pages /luc3d/, /luc3d/pr/N/) as well
         // as localhost. We use document.baseURI rather than `new URL(..., import.meta.url)`
-        // because file-io.js is loaded via vm.Script in tests/run-node.js (classic-script
-        // context, where `import.meta` is a parse error). See ISSUES.md I-8.
+        // (first because a since-retired vm test runner could not parse `import.meta`).
+        // See ISSUES.md I-8.
         var workerUrl = new URL('loading/slp-import-worker.js?v=' + Date.now(), document.baseURI);
         var worker = new Worker(workerUrl, { type: 'module' });
 
@@ -2724,7 +2724,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=c440035dd16a', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=a95e496d1b8b', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },

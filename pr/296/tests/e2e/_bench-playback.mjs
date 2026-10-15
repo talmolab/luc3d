@@ -151,6 +151,7 @@ import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { answerTrackSetup } from './fixtures/track-setup.js';
 import fs from 'node:fs';
 import { acquireBrowserLock } from '../../scripts/browser-lock.mjs';
 
@@ -254,6 +255,7 @@ try {
     page.on('pageerror', e => log(`  [${el()}] [pageerror] ` + String(e).slice(0, 300)));
     page.on('crash', () => log(`  [${el()}] *** RENDERER CRASHED ***`));
     page.on('dialog', async d => { log(`  [${el()}] [dialog] ${d.message().slice(0, 120)}`); await d.accept(process.env.NANIMALS || '3'); });
+    await answerTrackSetup(page, process.env.NANIMALS || '3');   // Track All's first-use dialog (animal count)
     page.on('console', m => {
         const t = m.text();
         if (/Playback (loop|started|stopped)|\[bench\]|error/i.test(t)) log(`  [${el()}] [console] ${t.slice(0, 220)}`);
@@ -381,8 +383,8 @@ try {
     // ---------------------------------------------------------------------
     // Raw per-camera predictions carry tracks but no cross-view identities, and
     // Triangulate All needs identity-linked groups — so Track All first, exactly
-    // as a user would. Track All asks for the animal count via window.prompt(),
-    // answered by the dialog handler (NANIMALS, default 3: ~95% of frames in
+    // as a user would. Track All asks for the animal count in its first-use
+    // dialog, answered by answerTrackSetup (NANIMALS, default 3: ~95% of frames in
     // the HardFight set hold 3 instances per camera).
     if (PREP === 'none') log(`\n[${el()}] PREP=none — playing the project as loaded (no Track All / Triangulate All)`);
     if (PREP !== 'none' && ps.with3d === 0 && ps.identities === 0 && ps.groups === 0) {

@@ -56,13 +56,13 @@ import {
     serializePlaneProject, restorePlaneProject,
     serializePlanePlacements, restorePlanePlacements,
     serializeOriginFrame, restoreOriginFrame,
-} from '../pose/plane-serialization.js?v=c440035dd16a';
+} from '../pose/plane-serialization.js?v=a95e496d1b8b';
 // Circular by design, and safe for the same reason the rest of this feature's
 // cycles are: every use below is inside a function body, so the bindings are
 // resolved at call time rather than at module evaluation.
-import { planeState } from '../ui/plane-definition.js?v=c440035dd16a';
-import { originState } from '../ui/origin-definition.js?v=c440035dd16a';
-import { state } from '../ui/app-state.js?v=c440035dd16a';
+import { planeState } from '../ui/plane-definition.js?v=a95e496d1b8b';
+import { originState } from '../ui/origin-definition.js?v=a95e496d1b8b';
+import { state } from '../ui/app-state.js?v=a95e496d1b8b';
 
 /**
  * Every `metadata.lucid` key this module may write. Exported so the
@@ -165,6 +165,43 @@ export function readPlaneMetadata(session, lucid) {
     }
 
     return session;
+}
+
+/**
+ * Why `lucid`'s plane state cannot be read into the live model, or null when
+ * `readPlaneMetadata` can take it.
+ *
+ * For a loader that ADDS a session to an open project rather than replacing
+ * it. There is no reset on that path, so `readPlaneMetadata` keeps the open
+ * project's pool and seats the new session's per-view 2D onto it BY NODE ID —
+ * and IDs are minted per project from 1, so a file from another project names
+ * node 3 too. Its corners would land on this project's node 3, every point
+ * still looking valid. The 2D is safe to take only when every node and plane
+ * the file lists is already in the model under the same id AND name, or when
+ * the model is empty and the file's pool is adopted whole.
+ *
+ * @param {*} lucid - the `metadata.lucid` dict from disk (may be absent)
+ * @returns {string|null}
+ */
+export function planeMetadataConflict(lucid) {
+    var src = (lucid && typeof lucid === 'object') ? lucid : {};
+    var model = planeState.model;
+    if (!model || (!model.pool.size && !model.planes.length)) return null;
+    var nodes = Array.isArray(src.planeNodes) ? src.planeNodes : [];
+    var planes = Array.isArray(src.planes) ? src.planes : [];
+    var nodeMiss = nodes.filter(function (d) {
+        var n = d && model.pool.getNode(d.id);
+        return !n || n.name !== d.name;
+    }).length;
+    var planeMiss = planes.filter(function (d) {
+        var p = d && model.getPlane(d.id);
+        return !p || p.name !== d.name;
+    }).length;
+    if (!nodeMiss && !planeMiss) return null;
+    return (nodeMiss ? nodeMiss + ' of its ' + nodes.length + ' plane nodes' : '') +
+        (nodeMiss && planeMiss ? ' and ' : '') +
+        (planeMiss ? planeMiss + ' of its ' + planes.length + ' planes' : '') +
+        ' are not in the open project';
 }
 
 /**

@@ -5,12 +5,13 @@
 // tracking run caps identities at (`Session.numAnimals`, read and set through
 // `pose/tracker.js`). The count used to be visible only in the first-use
 // prompt, so a user who forgot what they typed had no way to find out. Blank is
-// auto-detect, as it is in the prompt and the Track Frame Range dialog.
+// auto-detect, as it is in the first-use dialog (`ui/track-setup-modal.js`) and
+// the Track Frame Range dialog.
 //
 // ## Two ways the shown value goes stale, two ways it is refreshed
 //
-//   * **The count changes** (the prompt, the Track Frame Range dialog, the
-//     field itself): `onTrackerNumAnimalsChange` repaints it at once.
+//   * **The count changes** (the first-use dialog, the Track Frame Range
+//     dialog, the field itself): `onTrackerNumAnimalsChange` repaints it at once.
 //   * **The active session changes.** Nothing announces that — the session
 //     switch and every load path assign `state.session` themselves — and the
 //     count is per SESSION, so the field would keep showing the last one.
@@ -25,11 +26,11 @@
 // Not in Defining Plane Mode's toolbar lock: it is a setting a run reads when
 // it starts, not an action on annotation.
 
-import { state } from './app-state.js?v=c440035dd16a';
-import { setStatus } from '../import-export/save-load.js?v=c440035dd16a';
+import { state } from './app-state.js?v=a95e496d1b8b';
+import { setStatus } from '../import-export/save-load.js?v=a95e496d1b8b';
 import {
     getTrackerNumAnimals, setTrackerNumAnimals, onTrackerNumAnimalsChange,
-} from '../pose/tracker.js?v=c440035dd16a';
+} from '../pose/tracker.js?v=a95e496d1b8b';
 
 // What the field last showed, so a redraw with nothing new is a no-op.
 var _shownSession;
