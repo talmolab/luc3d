@@ -17,12 +17,12 @@
          import in ui/sessions-panes.js. -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/dockview-core@6.6.1/dist/styles/dockview.css">
     <!-- MP4 demuxing -->
-    <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.js"></script>
     <!-- Three.js for 3D viewport (v0.147 is the last version with examples/js/) -->
-    <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
     <!-- h5wasm for in-browser HDF5 read/write — local vendored 0.10.3 IIFE (global `h5wasm`); see lib/h5wasm/PROVENANCE.txt -->
-    <script src="./lib/h5wasm/h5wasm.iife.js"></script>
+    <script defer src="./lib/h5wasm/h5wasm.iife.js"></script>
     <!-- Video encode AND decode both go through mediabunny (importmap below):
          export via ui/video-encode.js, decode via sleap-io.js's backend. -->
     <!-- Import map for sleap-io.js ESM dependencies -->
@@ -30,7 +30,7 @@
     {
         "imports": {
             "h5wasm": "./lib/h5wasm/hdf5_hl.js",
-            "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js",
+            "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/+esm",
             "mediabunny": "./lib/mediabunny/mediabunny.min.mjs",
             "pako": "./lib/pako/pako.esm.mjs"
         }

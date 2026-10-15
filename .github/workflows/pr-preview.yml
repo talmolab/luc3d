@@ -23,6 +23,7 @@ jobs:
       # URL gets ?v=<commit>, so Cloudflare's 4-hour .js cache can never serve
       # an earlier push's modules under this push's index.html. Rewrites only
       # this throwaway checkout; fails if any module reference is left unstamped.
+      # Also adds index.html's modulepreload links (scripts/preload-modules.mjs).
       # The label beside the menu bar's Settings button reads "PR #<n> · <commit>".
       - name: Stamp code URLs with this commit
         env:
