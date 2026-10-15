@@ -42,10 +42,10 @@
  * count as busy: at most one frame per ~250 ms chunk. Inline, the main thread
  * does it all and is busy throughout — one core.
  */
-import { triangulateAndReproject } from './triangulation-core.js?v=3cdd21e5484e';
-import { Instance } from './pose-data.js?v=3cdd21e5484e';
-import { isCameraTracked, getTrackingThreshold } from '../ui/settings.js?v=3cdd21e5484e';
-import { createBusyClock } from '../ui/load-graph.js?v=3cdd21e5484e';
+import { triangulateAndReproject } from './triangulation-core.js?v=15251f271606';
+import { Instance } from './pose-data.js?v=15251f271606';
+import { isCameraTracked, getTrackingThreshold } from '../ui/settings.js?v=15251f271606';
+import { createBusyClock } from '../ui/load-graph.js?v=15251f271606';
 
 /** Groups per worker message: big enough to amortize messaging, small enough
  *  to load-balance (~0.25 s of Refined solves, ~20 ms of DLT). */
@@ -76,7 +76,7 @@ function getPool() {
     }
     if (pool) terminatePool();
     try {
-        const url = new URL('pose/triangulation-worker.js?v=3cdd21e5484e', document.baseURI);
+        const url = new URL('pose/triangulation-worker.js?v=15251f271606', document.baseURI);
         const workers = [];
         for (let i = 0; i < n; i++) workers.push({ w: new Worker(url, { type: 'module' }), busy: false });
         pool = { workers, idleTimer: null };
@@ -113,13 +113,8 @@ export function createGroupSolver(cameras, opts) {
     // The two settings `triangulateAndReproject` would read per group, resolved
     // the way it resolves them (see triangulation-core.js), once per run — the
     // loading overlay blocks the UI, so they cannot change mid-run.
-    // (The `typeof` guards date from a since-retired flat-script test sandbox
-    // that did not load ui/settings.js; the fallbacks are the defaults
-    // triangulation-core.js uses without its hooks.)
-    const reprojErrorThreshold = typeof getTrackingThreshold === 'function'
-        ? getTrackingThreshold('reprojErrorThreshold') : 0;
-    const tracked = new Set(cameras.filter((c) =>
-        typeof isCameraTracked === 'function' ? isCameraTracked(c.name) : true).map((c) => c.name));
+    const reprojErrorThreshold = getTrackingThreshold('reprojErrorThreshold');
+    const tracked = new Set(cameras.filter((c) => isCameraTracked(c.name)).map((c) => c.name));
 
     // An explicit LUCID_TRIANGULATION_WORKERS > 0 forces the pool even for a
     // small run (tests use it to compare pool vs inline on a synthetic project).
