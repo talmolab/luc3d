@@ -148,6 +148,22 @@ function fakeLoader(storeNodeNames) {
     const R = fakeLoader(['tail', 'head', 'trunk']);
     ok(R.predictedPointScore('camA', 10, 0, 'head') === 0.12 && R.predictedPointScore('camA', 10, 0, 'tail') === 0.11,
         'lookup is by the store skeleton\'s node NAME');
+
+    // A camera whose file orders the nodes differently from the session has its rows
+    // RE-ORDERED into the session's order (`_unifyNodeOrder` -> `permuteStoreNodeRows`,
+    // talmolab/luc3d#296), while its store skeleton keeps the file's: the name must be
+    // read in the rows' CURRENT order, or every node gets its neighbour's score.
+    const U = fakeLoader(['tail', 'head', 'trunk']);   // file order; the rows are in it, as read
+    U.skeleton = { nodes: NODES.slice() };              // the session's order
+    U._nodeOrderByCam.set('camA', ['tail', 'head', 'trunk']);
+    U._unifyNodeOrder();
+    const sc = U.labelsByCam.get('camA')._lazyDataStore.predPointsData.score;
+    ok(sc[0] === 0.12 && sc[1] === 0.13 && sc[2] === 0.11, 'precondition: the rows were re-ordered into the session\'s order');
+    ok(U.predictedPointScore('camA', 10, 0, 'head') === 0.12 && U.predictedPointScore('camA', 10, 0, 'trunk') === 0.13 &&
+        U.predictedPointScore('camA', 10, 0, 'tail') === 0.11, 're-ordered rows: every node still finds its OWN score');
+    // frame 11's row reads tail 0.41, head 0.42, trunk NaN in the file's order
+    ok(U.predictedPointScore('camA', 11, 0, 'head') === 0.42 && U.predictedPointScore('camA', 11, 0, 'tail') === 0.41 &&
+        Number.isNaN(U.predictedPointScore('camA', 11, 0, 'trunk')), 're-ordered rows: on the next frame too (and the NaN score moved with its node)');
 }
 
 // ---------------------------------------------------------------------------
