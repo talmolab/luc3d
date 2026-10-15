@@ -58,6 +58,8 @@ import { wireAnimalCountField } from './animal-count-field.js';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
+// The deployed release beside the menu bar's Settings button.
+import { showVersionLabel } from './version-label.js';
 import { onColorByChange, setColorByIdentity } from './color-by.js';
 import { TRAIL_PRESETS, MAX_TRAIL_FRAMES, trailPresetFor, trailLabel, trailFrames, trailRate,
          formatTrailSeconds, trailSecondsForFrames, parseTrailSeconds, parseTrailFrames,
@@ -847,6 +849,7 @@ export function setupMenus() {
     document.getElementById('menuSettings').addEventListener('click', openSettings);
     document.getElementById('menuBarDocs').addEventListener('click', openDocs);
     document.getElementById('menuBarSettings').addEventListener('click', openSettings);
+    showVersionLabel();
 
     // Tracks ▸ Tracking Wizard: opens the same Settings modal focused on the
     // Tracking Wizard panel (node weights, etc.).
