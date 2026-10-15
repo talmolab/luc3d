@@ -44,9 +44,6 @@
     var assertEqual = TF.assertEqual;
 
     function loadSource() {
-        if (typeof __readSource === 'function') {
-            return __readSource('ui/sessions-panes.js');
-        }
         if (typeof XMLHttpRequest !== 'undefined') {
             var xhr = new XMLHttpRequest();
             xhr.open('GET', '../ui/sessions-panes.js', false);

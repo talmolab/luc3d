@@ -23,8 +23,15 @@ jobs:
       # URL gets ?v=<commit>, so Cloudflare's 4-hour .js cache can never serve
       # an earlier push's modules under this push's index.html. Rewrites only
       # this throwaway checkout; fails if any module reference is left unstamped.
+      # Also adds index.html's modulepreload links (scripts/preload-modules.mjs).
+      # The label beside the menu bar's Settings button reads "PR #<n> · <commit>".
       - name: Stamp code URLs with this commit
-        run: node scripts/stamp-version.mjs . "${GITHUB_SHA::12}"
+        env:
+          PR_NUMBER: ${{ github.event.number }}
+        # A block scalar, not a one-line `run:` value: in a plain YAML scalar
+        # ` #` starts a comment, which cut the command off at `"PR`.
+        run: |
+          node scripts/stamp-version.mjs . "${GITHUB_SHA::12}" "PR #$PR_NUMBER"
 
       - name: Deploy PR Preview
         uses: JamesIves/github-pages-deploy-action@v4
@@ -44,6 +51,7 @@ jobs:
             | | |
             |---|---|
             | **Preview URL** | https://luc3d.sleap.ai/pr/${{ github.event.number }}/ |
+            | **Test suite** | https://luc3d.sleap.ai/pr/${{ github.event.number }}/tests/test-runner.html |
             | **Commit** | ${{ github.sha }} |
 
             Compare against the other channels (see `README.md`):

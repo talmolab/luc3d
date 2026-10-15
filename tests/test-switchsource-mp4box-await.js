@@ -111,18 +111,10 @@
                 });
             };
 
-            // Mock file source. Browsers' real URL.createObjectURL (called
-            // inside switchSource) strictly validates the argument and
-            // rejects plain objects, so we use a real File. The Node sandbox
-            // (tests/run-node.js) does not expose File and stubs
-            // URL.createObjectURL as a no-op that accepts anything, so a
-            // plain duck-typed object is fine there.
-            var mockFile;
-            if (typeof File === 'function') {
-                mockFile = new File([new Uint8Array(1024)], 'mock.mp4', { type: 'video/mp4' });
-            } else {
-                mockFile = { name: 'mock.mp4', size: 1024 };
-            }
+            // Mock file source. The real URL.createObjectURL (called inside
+            // switchSource) strictly validates the argument and rejects plain
+            // objects, so we use a real File.
+            var mockFile = new File([new Uint8Array(1024)], 'mock.mp4', { type: 'video/mp4' });
 
             await decoder.switchSource(mockFile);
 

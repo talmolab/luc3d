@@ -3,9 +3,11 @@
  * overlay (`setLoadingCpu({mainThread: true})`, ui/loading-overlay.js), and the
  * thousands commas in what its popups say.
  *
- * Track All's tracker steps the frames in order on the main thread — no
- * workers — so the overlay clocks the main thread itself: busy from the start
- * of the identity pass, except while it waits in `yieldToPaint` for a paint.
+ * Track All's tracker steps the frames in order on ONE worker
+ * (pose/tracker-pool.js) while the main thread hydrates frames and commits the
+ * results, so the line sums the worker's busy time and the main thread's, which
+ * the overlay clocks itself: busy from the start of the identity pass, except
+ * while it waits in `yieldToPaint` for a paint or in `idleWhile` on the worker.
  * Asserted:
  *  1. The clock itself: an operation that only waits in `yieldToPaint` reads
  *     ~0%; one that is never in `yieldToPaint` (computing, between plain
@@ -13,8 +15,11 @@
  *     paint waits are what is left out, and nothing else.
  *  2. A real Track All (the BA rig fixture's 8 frames repeated, a windowed lazy
  *     project): the "Assigning identities: 12,345/60,000 frames" line has
- *     commas; a CPU line with its key and graph (labelled axes), no GPU series; one core's
- *     share; a tooltip saying it runs on the main thread.
+ *     commas; a CPU line with its key and graph (labelled axes), no GPU series;
+ *     MORE than one core's share and at most two (the worker plus the main
+ *     thread); a tooltip naming both. With the worker off
+ *     (`LUCID_TRACKER_WORKER = 0`, the inline fallback): one core's share, and
+ *     a tooltip saying it runs on the main thread.
  *     The popup is the image check's card (fixtures/progress-card.js): titled
  *     "Track All", opaque, the app not greyed out, the CPU line left-justified.
  *  3. When it ends the CPU row is hidden and cleared; the status line and the
@@ -73,7 +78,8 @@ try {
           `one that is never in yieldToPaint reads one core's share, ${oneCore.toFixed(1)}% ("${clockRes.computing}")`);
 
     // ---- 2. a real Track All
-    await page.evaluate(async () => {
+    const startTrackAll = (worker) => page.evaluate(async (worker) => {
+        window.LUCID_TRACKER_WORKER = worker ? undefined : 0;
         const AS = await import('/ui/app-state.js');
         const pd = await import('/pose/pose-data.js');
         const TR = await import('/pose/tracker.js');
@@ -89,10 +95,12 @@ try {
         AS.state.totalFrames = N; AS.state.currentFrame = 0; AS.state.views = []; AS.state.triangulationResults = new Map();
         TR.setTrackerNumAnimals(2);                    // no "Number of animals" prompt
         window.__done = TR.trackAll();
-    });
-    await page.waitForFunction(() => !document.getElementById('loadingHardware').classList.contains('hidden') &&
+    }, worker);
+    const firstReading = () => page.waitForFunction(() => !document.getElementById('loadingHardware').classList.contains('hidden') &&
         /· load \d+%$/.test(document.getElementById('loadingCpu').textContent), null, { timeout: 60000 });
-    // read at once: one core's share from the first measured reading, and the run lasts only seconds
+    await startTrackAll(true);
+    await firstReading();
+    // read at once: the load from the first measured reading, and the run lasts only seconds
     const run = await page.evaluate(() => {
         const line = document.getElementById('loadingCpu'), svg = document.querySelector('#loadingGraph svg');
         return { status: document.getElementById('loadingStatus').textContent, text: line.textContent, title: line.title,
@@ -118,9 +126,10 @@ try {
         const ax = await page.evaluate(async (sel) => (await import('/tests/e2e/fixtures/load-graph-axes.js')).loadGraphAxes(document.querySelector(sel)), '#loadingGraph');
         check(ax.ok, `labelled axes with out ticks: ${ax.y.map(l => l.t + ' ' + l.off.toFixed(2) + ' px off').join(', ')}; ${ax.x.map(l => '"' + l.t + '"').join(' … ')} under the plot; ${ax.ticks.length} ticks` + (ax.ok ? '' : ' — ' + ax.why));
     }
-    check(Math.abs(l2 - oneCore) <= 1.5, `one core's share: ${l2}% vs ${oneCore.toFixed(1)}% — the tracker is single-threaded`);
-    check(/kept busy over the last 5 s by Track All, which runs on the main thread: one core at most\./.test(run.title),
-          `its tooltip says so ("${run.title}")`);
+    check(l2 > oneCore + 1 && l2 <= 2 * oneCore + 1.5,
+          `more than one core's share and at most two: ${l2}% vs ${oneCore.toFixed(1)}% a core — the tracker worker plus the main thread`);
+    check(/kept busy over the last 5 s by Track All: its tracker worker, and the main thread loading frames and writing back the results\./.test(run.title),
+          `its tooltip names both ("${run.title}")`);
 
     // ---- 3. the end
     const end = await page.evaluate(async () => {
@@ -134,6 +143,18 @@ try {
     check(end.ok && end.hidden && end.cleared, 'when it ends the CPU row is hidden and cleared');
     check(/across 60,000 frames/.test(end.status), `the status line: "${end.status.slice(0, 80)}…"`);
     check(/60,000/.test(end.summary || ''), `the Track All summary box: "${(end.summary || '').replace(/\s+/g, ' ').slice(0, 120)}"`);
+
+    // ---- 4. the inline fallback (worker off): the main thread alone
+    await page.evaluate(() => { document.querySelectorAll('.track-summary-modal, .modal-overlay').forEach(e => e.remove()); });
+    await startTrackAll(false);
+    await firstReading();
+    const inl = await page.evaluate(() => { const line = document.getElementById('loadingCpu'); return { text: line.textContent, title: line.title }; });
+    const l4 = loadOf(inl.text);
+    check(Math.abs(l4 - oneCore) <= 1.5, `worker off: one core's share, ${l4}% vs ${oneCore.toFixed(1)}%`);
+    check(/kept busy over the last 5 s by Track All, which runs on the main thread: one core at most\./.test(inl.title),
+          `…and its tooltip says it runs on the main thread ("${inl.title}")`);
+    const inlDone = await page.evaluate(async () => { const r = await window.__done; return r && r.ok; });
+    check(inlDone, '…and it completes');
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {
