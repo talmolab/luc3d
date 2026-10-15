@@ -227,6 +227,8 @@ jobs:
       # publish byte-identical trees.
       - name: Stage the site
         if: steps.targets.outputs.count != '0'
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           rm -rf "$RUNNER_TEMP/site"
@@ -254,7 +256,18 @@ jobs:
           # down. It fails the deploy if any relative module reference is left
           # unstamped: a module reached under two URLs would load twice.
           # Covered by tests/test-stamp-version.mjs + tests/e2e/stamped-build.mjs.
-          node scripts/stamp-version.mjs "$RUNNER_TEMP/site" "${GITHUB_SHA::12}"
+          #
+          # The third argument is the release shown beside the menu bar's
+          # Settings button (ui/version-label.js). It is the tag only when the
+          # deployed ref IS a release tag -- a release event, or a dispatch with
+          # a tag picked in "Use workflow from" -- so the live page reads v1.0.5
+          # and /dev/ never claims a release it is not; anything else is `dev`,
+          # which the page shows with the commit beside it.
+          RELEASE_LABEL=dev
+          if printf '%s' "$REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$'; then
+            RELEASE_LABEL="$REF_NAME"
+          fi
+          node scripts/stamp-version.mjs "$RUNNER_TEMP/site" "${GITHUB_SHA::12}" "$RELEASE_LABEL"
 
       - name: Deploy to gh-pages
         if: steps.targets.outputs.count != '0'
