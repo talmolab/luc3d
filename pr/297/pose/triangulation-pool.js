@@ -42,10 +42,10 @@
  * count as busy: at most one frame per ~250 ms chunk. Inline, the main thread
  * does it all and is busy throughout — one core.
  */
-import { triangulateAndReproject } from './triangulation-core.js?v=fdc4121aed2e';
-import { Instance } from './pose-data.js?v=fdc4121aed2e';
-import { isCameraTracked, getTrackingThreshold } from '../ui/settings.js?v=fdc4121aed2e';
-import { createBusyClock } from '../ui/load-graph.js?v=fdc4121aed2e';
+import { triangulateAndReproject } from './triangulation-core.js?v=f624ceb2f81d';
+import { Instance } from './pose-data.js?v=f624ceb2f81d';
+import { isCameraTracked, getTrackingThreshold } from '../ui/settings.js?v=f624ceb2f81d';
+import { createBusyClock } from '../ui/load-graph.js?v=f624ceb2f81d';
 
 /** Groups per worker message: big enough to amortize messaging, small enough
  *  to load-balance (~0.25 s of Refined solves, ~20 ms of DLT). */
@@ -76,7 +76,7 @@ function getPool() {
     }
     if (pool) terminatePool();
     try {
-        const url = new URL('pose/triangulation-worker.js?v=fdc4121aed2e', document.baseURI);
+        const url = new URL('pose/triangulation-worker.js?v=f624ceb2f81d', document.baseURI);
         const workers = [];
         for (let i = 0; i < n; i++) workers.push({ w: new Worker(url, { type: 'module' }), busy: false });
         pool = { workers, idleTimer: null };
@@ -113,8 +113,9 @@ export function createGroupSolver(cameras, opts) {
     // The two settings `triangulateAndReproject` would read per group, resolved
     // the way it resolves them (see triangulation-core.js), once per run — the
     // loading overlay blocks the UI, so they cannot change mid-run.
-    // (`typeof` guards: the flat-script test sandbox does not load ui/settings.js
-    // — same defaults as triangulation-core.js uses without its hooks.)
+    // (The `typeof` guards date from a since-retired flat-script test sandbox
+    // that did not load ui/settings.js; the fallbacks are the defaults
+    // triangulation-core.js uses without its hooks.)
     const reprojErrorThreshold = typeof getTrackingThreshold === 'function'
         ? getTrackingThreshold('reprojErrorThreshold') : 0;
     const tracked = new Set(cameras.filter((c) =>

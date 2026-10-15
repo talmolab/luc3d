@@ -72,9 +72,6 @@
     }
 
     function loadVideoSource() {
-        if (typeof __readSource === 'function') {
-            return __readSource('loading/video.js');
-        }
         if (typeof XMLHttpRequest !== 'undefined') {
             var xhr = new XMLHttpRequest();
             xhr.open('GET', '../loading/video.js', false);

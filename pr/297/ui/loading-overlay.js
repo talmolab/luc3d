@@ -30,8 +30,8 @@
 // fingerprinting protection on, a note under it explains that the core count is
 // a random one and how to stop that (ui/browser-hints.js).
 
-import { createLoadMeter, createBusyClock, createLoadGraph, formatCpuLoad, setLoadLine, cpuCores } from './load-graph.js?v=fdc4121aed2e';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=fdc4121aed2e';
+import { createLoadMeter, createBusyClock, createLoadGraph, formatCpuLoad, setLoadLine, cpuCores } from './load-graph.js?v=f624ceb2f81d';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=f624ceb2f81d';
 
 /** Default pacer interval. Each yield waits for one paint (~one display frame),
  *  so this bounds the overhead at roughly frame-time / interval (a few %). The
@@ -186,13 +186,13 @@ var _mainClock = null, _mainYields = 0;
 /**
  * Show how busy the running operation keeps the CPU, under the detail line:
  * "CPU: 12 cores · load 92%" and a graph of the last minute, sampled every
- * CPU_SAMPLE_MS as a share of all the cores. `source` is either
- *   - `{cpuBusyMs, counts}`: busy thread-ms so far, summed over threads (e.g. a
- *     pose/triangulation-pool.js solver's), or
- *   - `{mainThread: true, counts}`: an operation that runs on the main thread
- *     alone (Track All). The overlay clocks it itself: busy from this call on,
- *     except while it waits in `yieldToPaint` for a paint (its pacer's ~4
- *     yields/s) — one core's share while it computes.
+ * CPU_SAMPLE_MS as a share of all the cores. `source` has
+ *   - `cpuBusyMs()`: busy thread-ms so far, summed over threads (e.g. a
+ *     pose/triangulation-pool.js solver's, or Track All's tracker worker), and/or
+ *   - `mainThread: true`: the overlay clocks the main thread itself — busy from
+ *     this call on, except while it waits in `yieldToPaint` for a paint (its
+ *     pacer's ~4 yields/s) or in `idleWhile` (on a worker), with `busyDuring`
+ *     counting the work a wait's handlers do. Both given: their sum.
  * `counts` finishes the tooltip's "kept busy … by". Until `hideLoading()` or
  * `setLoadingCpu(null)`; a source that throws stops it. CPU only: no GPU series
  * — the operations that report here do not use one.
@@ -209,9 +209,9 @@ export function setLoadingCpu(source) {
     if (!source || !box || !line || !gbox) return;
     var busyMs = source.cpuBusyMs;
     if (source.mainThread) {
-        var main = _mainClock = createBusyClock(function () { return _clock(); });
+        var main = _mainClock = createBusyClock(function () { return _clock(); }), other = source.cpuBusyMs;
         main.begin('main');
-        busyMs = function () { return main.ms(); };
+        busyMs = other ? function () { return main.ms() + other(); } : function () { return main.ms(); };
     }
     _cpuGraph = _cpuGraph || createLoadGraph(gbox);       // built once: the overlay's DOM is static
     _cpuGraph.clear();
@@ -318,6 +318,32 @@ function _updateEta(label, done, total, opts) {
     var text = formatRemaining(ms);
     if (opts.steps > 1) text += ' in this step';
     _setEta(text, ms);
+}
+
+/**
+ * Await `promise` as main-thread IDLE time for a `{mainThread}` CPU line — the
+ * main thread waiting on a worker is not using the CPU (counted like the waits
+ * in `yieldToPaint`; overlapping waits reopen the lane once). No line: just the
+ * promise.
+ * @template T @param {Promise<T>} promise @returns {Promise<T>}
+ */
+export function idleWhile(promise) {
+    var mc = _mainClock;
+    if (!mc) return promise;
+    if (_mainYields++ === 0) mc.close('main');
+    var reopen = function () { if (_mainClock === mc && --_mainYields === 0) mc.begin('main'); };
+    return Promise.resolve(promise).then(function (v) { reopen(); return v; }, function (e) { reopen(); throw e; });
+}
+
+/**
+ * Run `fn` counted as main-thread CPU time even inside an `idleWhile` /
+ * `yieldToPaint` wait — a worker's results being written back from its message
+ * handler is main-thread work.
+ */
+export function busyDuring(fn) {
+    var mc = _mainClock;
+    if (mc) mc.begin('main');
+    try { return fn(); } finally { if (mc && _mainClock === mc) mc.end('main'); }
 }
 
 /**

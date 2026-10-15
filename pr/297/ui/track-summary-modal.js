@@ -15,7 +15,10 @@
 // Closing it is not the end of it: Track All keeps what it showed on the session
 // (`rememberTrackSummary`), and the ID Switches tab reopens it
 // (`reopenTrackSummary`) — with each check's CURRENT result, so a check run after
-// the box was closed is reported rather than still "Not run".
+// the box was closed is reported rather than still "Not run". A check started from
+// the box's own "Check by …" buttons reopens it too, when it ends, rather than
+// leaving the user on the ID Switches tab: the counts are re-read and the check's
+// row and the next step show what it found (or that it was cancelled).
 //
 // Under the identity bars, the "Identities" section (ui/identity-gallery.js): five
 // sample images of each identity and a map of its path, so a switch between
@@ -23,11 +26,11 @@
 // a sample or a point on a map closes the box and goes to that frame.
 //
 // Depends on: ui/track-summary.js, ui/id-switch-modal.js (openIdSwitchPanel,
-// refreshIdSwitchPanel, setTrackSummaryOpener), ui/identity-gallery.js.
+// refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary), ui/identity-gallery.js.
 
-import { planTrackSummary, summarizeTrackedIdentities, describeSwitchCheck } from './track-summary.js?v=fdc4121aed2e';
-import { openIdSwitchPanel, refreshIdSwitchPanel, setTrackSummaryOpener } from './id-switch-modal.js?v=fdc4121aed2e';
-import { renderIdentityGallery } from './identity-gallery.js?v=fdc4121aed2e';
+import { planTrackSummary, summarizeTrackedIdentities, describeSwitchCheck } from './track-summary.js?v=f624ceb2f81d';
+import { openIdSwitchPanel, refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary } from './id-switch-modal.js?v=f624ceb2f81d';
+import { renderIdentityGallery } from './identity-gallery.js?v=f624ceb2f81d';
 
 // The viewer's frame navigation, registered once by ui-wiring (as the ID Switches tab's is):
 // the tracker that opens this box cannot import pose/initialization.js.
@@ -51,8 +54,9 @@ var ACTIONS = {
         if (next && !next.disabled) next.click();
     },
     triangulate: function () { clickById('tbTriangulateAll'); },
-    imageCheck: function () { clickById('menuCheckImageSwitches'); },
-    sizeCheck: function () { clickById('menuCheckSizeSwitches'); },
+    // These two come back here when the check ends, with its result in the box.
+    imageCheck: function () { clickCheckFromSummary('menuCheckImageSwitches'); },
+    sizeCheck: function () { clickCheckFromSummary('menuCheckSizeSwitches'); },
     wizard: function () { clickById('menuTrackingWizard'); },
 };
 
@@ -229,16 +233,22 @@ export function rememberTrackSummary(session, opts, checks, identities) {
  * session as it is now (a fixed switch moves the shares), the time is the pass's own,
  * and each check shows its current result: a check run since replaces the pass's
  * "Not run" / "Skipped", and one whose results were cleared reads "Not run" again.
- * A skip or a failure is not kept by the check itself, so it comes from the pass.
+ * A skip or a failure is not kept by the check itself, so it comes from the pass —
+ * or from `latest`, a check just run from this box, whose outcome (a cancel, skip or
+ * failure included) replaces the pass's from then on.
  *
+ * @param {Session} session
+ * @param {{size?: object, image?: object}|null} [latest]  `runIdSwitchChecks`'s results
+ *   for a check the box started (`clickCheckFromSummary`)
  * @returns {{close: function, overlay: HTMLElement}|null}  null when there is none
  */
-export function reopenTrackSummary(session) {
+export function reopenTrackSummary(session, latest) {
     var saved = session && session._trackSummary;
     if (!saved) return null;
     var results = (session._idSwitch && session._idSwitch.results) || {};
     var checks = {};
     ['size', 'image'].forEach(function (cue) {
+        if (latest && latest[cue]) saved.checks[cue] = describeSwitchCheck(true, latest[cue], saved.identities);
         var now = results[cue], then = saved.checks[cue];
         if (now && now.ok) checks[cue] = describeSwitchCheck(true, now, saved.identities);
         else if (then && (then.state === 'found' || then.state === 'clear')) checks[cue] = describeSwitchCheck(false, null, saved.identities);

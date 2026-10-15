@@ -923,9 +923,8 @@
         // after the draw is not enough: the draw path is wrapped in
         // save()/restore(), which puts the default font back.
         function spyFontAssignments(ctx) {
-            // Real browser: shadow the prototype accessor so the underlying
-            // context still gets the value. Stub environments (the `vm` runner)
-            // have no such accessor — record into a plain own property there.
+            // Shadow the prototype accessor so the underlying context still
+            // gets the value; without one, record into a plain own property.
             var desc = (typeof CanvasRenderingContext2D !== 'undefined')
                 ? Object.getOwnPropertyDescriptor(CanvasRenderingContext2D.prototype, 'font')
                 : null;
@@ -953,15 +952,6 @@
             };
         }
 
-        // The `vm` sandbox runner (tests/run-node.js) hands every 2D context one
-        // shared stub canvas, so `ctx.canvas` is not the element under test and
-        // the getBoundingClientRect() fallback cannot be exercised there. The
-        // rect-dependent cases below run in the browser runner
-        // (tests/test-runner.html, or headless via tests/e2e/run-unit-tests.mjs).
-        function hasRealCanvasBacking(c) {
-            return c.ctx && c.ctx.canvas === c.canvas;
-        }
-
         function drawAndGetLabelPx(c, extraOpts) {
             var skeleton = new Skeleton('test', ['nose'], []);
             var instance = new Instance([[320, 240]], 0, 'user', 1.0);
@@ -984,7 +974,6 @@
             if (typeof resolveLabelDisplayScale !== 'function') return;
 
             var c = makeCanvas(640, 480, 320, 240);
-            if (!hasRealCanvasBacking(c)) { c.cleanup(); return; }
             try {
                 assertApprox(resolveLabelDisplayScale(c.ctx, 640, {}), 2,
                     0.05, 'Unrotated fallback is backing width / rect width');
@@ -1001,7 +990,6 @@
             if (typeof resolveLabelDisplayScale !== 'function') return;
 
             var c = makeCanvas(640, 480); // never attached to the DOM
-            if (!hasRealCanvasBacking(c)) { c.cleanup(); return; }
             assertEqual(resolveLabelDisplayScale(c.ctx, 640, {}), 1,
                 'A zero-width rect must not produce Infinity or NaN');
             c.cleanup();
@@ -1017,7 +1005,6 @@
             var flat = makeCanvas(640, 480, 320, 240);
             var rotated = makeCanvas(640, 480, 320, 240);
             rotated.canvas.style.transform = 'rotate(37deg)';
-            if (!hasRealCanvasBacking(flat)) { flat.cleanup(); rotated.cleanup(); return; }
             try {
                 var scale = 2; // 640 backing px / 320 CSS px, rotation-independent
 

@@ -16,15 +16,9 @@
     const { describe, it, assertEqual, assertApprox, assertNull, assertNotNull,
         assertTrue, assertFalse, assertDeepEqual } = TestFramework;
 
-    // `ui/video-filters.js` reaches the tests two different ways: the browser
-    // runner bridges its exports onto `window`, while the `vm` sandbox runner
-    // strips `export` and leaves the declarations on the sandbox's own global
-    // (its `window` is only a stub). Resolve each name through both so one
-    // lookup path serves both runners.
+    // `ui/video-filters.js`'s exports are bridged onto `window` by the test runner.
     function pick(name) {
-        if (typeof window !== 'undefined' && window[name] !== undefined) return window[name];
-        if (typeof globalThis !== 'undefined' && globalThis[name] !== undefined) return globalThis[name];
-        return undefined;
+        return window[name];
     }
 
     function VF() {

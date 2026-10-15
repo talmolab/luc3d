@@ -33,8 +33,7 @@
  * project still agrees on. Nothing is written for a session no check has run on,
  * so such a project's bytes are unchanged. Reads tolerate absence and garbage.
  *
- * Imports no project modules (loads in the node test sandbox, like
- * ui/timeline-visibility.js).
+ * Imports no project modules.
  */
 
 /** A row's identity across re-runs and reopens: its check, frame and pair (by name). */

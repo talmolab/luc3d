@@ -25,8 +25,8 @@
 //
 // One module owns the key list so a writer and a reader cannot drift — adding a
 // setting means touching `writeVisibilityMetadata` / `readVisibilityMetadata`
-// here and nothing else. The six call sites (four writers, three readers, one
-// of which is shared) each pass the `metadata.lucid` dict straight through.
+// here and nothing else. Every call site — four writers, four readers — passes
+// the `metadata.lucid` dict straight through.
 //
 // Three invariants the callers depend on:
 //
@@ -51,9 +51,9 @@ import {
     serializeVideoContrast, ingestVideoContrast,
     serializeVideoBrightness, ingestVideoBrightness,
     serializeVideoRotation, ingestVideoRotation,
-} from '../ui/video-filters.js?v=fdc4121aed2e';
-import { serializeHiddenSets, ingestHiddenSets } from '../ui/timeline-visibility.js?v=fdc4121aed2e';
-import { serializeIdSwitchReview, ingestIdSwitchReview } from '../ui/id-switch-review.js?v=fdc4121aed2e';
+} from '../ui/video-filters.js?v=f624ceb2f81d';
+import { serializeHiddenSets, ingestHiddenSets } from '../ui/timeline-visibility.js?v=f624ceb2f81d';
+import { serializeIdSwitchReview, ingestIdSwitchReview } from '../ui/id-switch-review.js?v=f624ceb2f81d';
 
 /**
  * Every `metadata.lucid` key this module may write. Exported so tests (and the
@@ -78,7 +78,8 @@ export const VISIBILITY_METADATA_KEYS = [
 // default) writes nothing — so it is asked again on the next Track Frame /
 // Track All, exactly as before the count was saved — and anything else read
 // back is treated the same way. Kept here rather than in pose/tracker.js,
-// which this module cannot import (it is loaded in the Node test sandbox).
+// which this module cannot import: tracker.js pulls in the whole UI, and this
+// module is bridged into tests/test-runner.html, which must not load the app.
 function serializeNumAnimals(session) {
     var n = session.numAnimals;
     if (n === 'auto') return n;
