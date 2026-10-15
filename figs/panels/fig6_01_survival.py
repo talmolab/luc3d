@@ -241,12 +241,19 @@ def main(variant=False, corrected=True, fresh_arm=False):
     # step at x = 0.9 (`lint_text.py`: ON DATA, 8% of its box inked). Laid flat it
     # spends the panel's WIDTH, of which there is far more to spare: it occupies
     # x = 0.70-0.88 at y = 98, where the highest curve is still 35 points below.
-    ax.text(MARK - 0.02, 98, f"IDF1 ≥ {MARK}", color=MUTED,
-            fontsize=7 if variant else COMPACT_FS, ha="right", va="top")
-
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 100)
-    ax.set_yticks([0, 25, 50, 75, 100])
+    # 2026-10-09 (Eric): the "IDF1 >= 0.9" label is dropped from the base render
+    # (the dotted rule stays; the caption names it), and the axes zoom to the
+    # region the curves occupy -- IDF1 from 0.4, % from 24.
+    if variant:
+        ax.text(MARK - 0.02, 98, f"IDF1 ≥ {MARK}", color=MUTED, fontsize=7,
+                ha="right", va="top")
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 100)
+        ax.set_yticks([0, 25, 50, 75, 100])
+    else:
+        ax.set_xlim(0.4, 1)
+        ax.set_ylim(24, 100)
+        ax.set_yticks([25, 50, 75, 100])
     # "session mean over 6 cameras" belongs in the axis label, not the footer: the
     # unit of replication is the session, and each session's IDF1 is the mean of its
     # six per-camera scores. The legacy footer said so and it had been dropped; on the

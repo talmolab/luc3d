@@ -9,23 +9,23 @@ Everything below was checked against the file you pasted at 15:25. Each **Curren
 
 N1–N6 are must-fix (two are needed because Fig 2E changed, four are typos or reverted fixes). N7–N10 are the remaining 2A items. N11 is optional.
 
-- [ ] **N1 · L136** · **must: figure changed**
+- [X] **N1 · L136** · **must: figure changed**
   - **Why:** Figure 2E bottom now plots **both** solvers (re-rendered 2026-09-29). This sentence still says "the DLT solve". Values: DLT 2.06 → 1.71 px (−0.345), refined 1.61 → 1.52 px (−0.095), both lower in 50/50 sessions.
   - **Current:** `Reprojection error in the kept views, all views in the DLT solve compared with the same solve with the worst view dropped, mean and t-based 95\% CI (bottom).`
   - **Replace with:** `Reprojection error in the kept views, each solver's all-view solve compared with the same solver with its worst view dropped, mean and t-based 95\% CI (bottom).`
-- [ ] **N2 · L302** · **must: figure changed**
+- [X] **N2 · L302** · **must: figure changed**
   - **Why:** Same figure change. The operation also drops the worst-fitting view **per keypoint** (by reprojection error), not "the camera with the least reliable detections". Both solvers improve in 50/50 sessions.
   - **Current:** `Figure~\ref{fig2}E scores the same solve before and after dropping the camera with the least reliable detections and shows an overall decrease in reprojection error.`
   - **Replace with:** `Figure~\ref{fig2}E scores each solver before and after dropping, for each keypoint, the view that fits it worst, and shows a decrease in reprojection error for both.`
-- [ ] **N3 · L171** · must: ticked but not applied
+- [X] **N3 · L171** · must: ticked but not applied
   - **Why:** Ticked in the checklist but **not in the text**. 0.826 is the share of all displays (ties in the denominator); over initiated displays it is 0.857.
   - **Current:** `Over the 23 sessions with at least six displays, the female's median share of initiations is 0.83 (paired Wilcoxon $P = 2.7 \times 10^{-5}$, Figure~\ref{fig4}F).`
   - **Replace with:** `Over the 23 sessions with at least six displays, the female's median share of displays is 0.83 (paired Wilcoxon $P = 2.7 \times 10^{-5}$, Figure~\ref{fig4}F).`
-- [ ] **N4 · L148** · must: visible typo
+- [X] **N4 · L148** · must: visible typo
   - **Why:** **Reverted again** by a paste. The stray backtick prints as an opening quote mark.
   - **Current:** ``` The exhaustive rule is over the $\sim$22 million camera frames without missing instances.` ```
   - **Replace with:** `The exhaustive rule is over the $\sim$22 million camera frames without missing instances.`
-- [ ] **N5 · L148** · must: reverted
+- [X] **N5 · L148** · must: reverted
   - **Why:** **Reverted again** by a paste.
   - **Current:** `It is computed as the number of detections matched to the right individual divided by the average of the ground-truth and predicted detection counts weighting false positives and false negatives equally.`
   - **Replace with:** `It is computed as the number of detections matched to the right individual divided by the average of the ground-truth and predicted detection counts, which weights false positives and false negatives equally.`

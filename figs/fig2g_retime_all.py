@@ -29,6 +29,9 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "out"
+#: FIG2_SUFFIX=<v> (2026-10-14, md56 rerun) reads/writes out/fig4*_<v>.* instead of the base
+#: deposits, so a variant run never overwrites what the base figure reads.
+_SFX = ("_" + os.environ["FIG2_SUFFIX"]) if os.environ.get("FIG2_SUFFIX") else ""
 sys.path.insert(0, str(HERE))
 import fig2_solvers_anipose as fsa  # noqa: E402
 
@@ -43,7 +46,7 @@ def main():
     ap.add_argument("--rounds", type=int, default=3)
     a = ap.parse_args()
     import aniposelib, numba
-    meta = json.loads((OUT / "fig4_input.json").read_text())
+    meta = json.loads((OUT / f"fig4_input{_SFX}.json").read_text())
     K, C = meta["keypoints"], meta["n_cameras"]
     obs = np.memmap(OUT / meta["bin"], dtype="<f8", mode="r")[:K * C * 2].reshape(K, C, 2)
     cg = fsa.build_groups(meta["calibrations"])[0]
@@ -91,6 +94,7 @@ def main():
     best = {k: min(v) for k, v in runs.items()}
     out = {"generated_by": "figs/fig2g_retime_all.py", "rounds": a.rounds,
            "aniposelib": getattr(aniposelib, "__version__", "?"),
+           "opencv": __import__("cv2").__version__,   # recorded since 2026-10-14 (md56)
            "numba_threads": numba.config.NUMBA_NUM_THREADS,
            "pose_dir": POSE_DIR, "node": subprocess.run([NODE, "--version"], capture_output=True, text=True).stdout.strip(),
            "n_linear": N_LIN, "n_optim": n_opt, "runs_us_per_keypoint": runs,
@@ -100,7 +104,7 @@ def main():
            "speedup_refined_vs_anipose_optim_default": best["anipose_optim_default"] / best["luc3d_refined"],
            "published": {"anipose_linear": 29.03, "anipose_optim": 228.77, "luc3d_dlt": 6.316,
                          "luc3d_refined": 43.997, "speedups": [4.60, 5.20]}}
-    (OUT / "fig2g_retime_all.json").write_text(json.dumps(out, indent=1))
+    (OUT / f"fig2g_retime_all{_SFX}.json").write_text(json.dumps(out, indent=1))
     print(json.dumps({k: round(v, 2) for k, v in best.items()}, indent=1))
     print(f"speed-ups: DLT {out['speedup_dlt_vs_anipose_linear']:.2f}x, refined vs optim "
           f"(no smoothing) {out['speedup_refined_vs_anipose_optim_nosmooth']:.2f}x, "

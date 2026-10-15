@@ -67,6 +67,9 @@ import { register } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+// FIG2_SUFFIX=<v> (2026-10-14, md56 rerun) reads/writes out/fig4*_<v>.* instead of the base
+// deposits, so a variant run never overwrites what the base figure reads.
+const SFX = process.env.FIG2_SUFFIX ? `_${process.env.FIG2_SUFFIX}` : '';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..');
@@ -154,7 +157,7 @@ if (MERGE_AT >= 0) {
         plotted_arm: shards[0].plotted_arm, caveat: shards[0].caveat,
         merged_from: shards.length,
     });
-    const mp = process.env.OUT_JSON || path.join(HERE, 'out', 'fig4_by_views.json');
+    const mp = process.env.OUT_JSON || path.join(HERE, 'out', `fig4_by_views${SFX}.json`);
     fs.writeFileSync(mp, JSON.stringify(merged, null, 1));
     console.log(`[merge] ${shards.length} shards, ${rows.length} sessions, ` +
                 `${merged.keypoints_used} keypoints, ${merged.solves} solves`);
@@ -168,7 +171,7 @@ if (MERGE_AT >= 0) {
     process.exit(0);
 }
 
-const data = JSON.parse(fs.readFileSync(path.join(HERE, 'out', 'fig4_input.json'), 'utf8'));
+const data = JSON.parse(fs.readFileSync(path.join(HERE, 'out', `fig4_input${SFX}.json`), 'utf8'));
 if (data.format !== 'bin-v1') throw new Error('expected bin-v1 input');
 const buf = fs.readFileSync(path.join(HERE, 'out', data.bin));
 const NK = data.keypoints, C = data.n_cameras;
@@ -343,7 +346,7 @@ const out = summarize(perSession, C, {
         + 'a ranking. heldout_px_* is the reference-free arm and is what panel b '
         + 'draws.'),
 });
-const outPath = process.env.OUT_JSON || path.join(HERE, 'out', 'fig4_by_views.json');
+const outPath = process.env.OUT_JSON || path.join(HERE, 'out', `fig4_by_views${SFX}.json`);
 fs.writeFileSync(outPath, JSON.stringify(out, null, 1));
 
 console.log('\nPLOTTED ARM — across-session medians (px), held-out camera, ' +
@@ -379,7 +382,7 @@ for (let k = 2; k <= C; k++) {
 // fig2's PX arm is deliberately NOT used: it scores against the reprojected
 // reference (`gtk`), not the raw detection, so it is a different quantity.
 try {
-    const f4 = JSON.parse(fs.readFileSync(path.join(HERE, 'out', 'fig4.json'), 'utf8'));
+    const f4 = JSON.parse(fs.readFileSync(path.join(HERE, 'out', `fig4${SFX}.json`), 'utf8'));
     console.log('\ncross-check px vs fig4.json heldout_by_views (pooled there, ' +
                 'median-of-sessions here):');
     for (let k = 2; k < C; k++) {

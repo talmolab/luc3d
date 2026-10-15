@@ -68,7 +68,7 @@ Built 2026-09-29 from `PREPRINT-AUDIT-FINDINGS.md` against the 03:10 `luc3d_newe
 ## 2. Must fix: mismatches, prioritized by how likely a reviewer is to flag them (12 / 50)
 
 
-### 2A. Most serious: wrong numbers, statistics or method statements a reviewer can check (12 / 24)
+### 2A. Most serious: wrong numbers, statistics or method statements a reviewer can check (12 / 23)
 
 In priority order. Each states a number or method that the data, the figure or the code contradicts.
 
@@ -97,7 +97,7 @@ In priority order. Each states a number or method that the data, the figure or t
   - **Fix:** States the counts actually timed.
   - **Current:** `$n = 50$ Mouse-Dyad-10M sessions at every 15th frame, $\sim$17 million keypoints for LUC3D, with Anipose timed on 200,000 (linear) and 345,000 (optimized) keypoints.}`
   - **Replace with:** `$n = 50$ Mouse-Dyad-10M sessions at every 15th frame, each solver timed on the same 200,000 keypoints (345,000 for Anipose's optimized path, which solves a whole session at once).}`
-- [ ] **L136** · Must fix · caption (B54) · **#6: Fig 2E bottom now shows both solvers**
+- [X] **L136** · Must fix · caption (B54) · **#6: Fig 2E bottom now shows both solvers**
   - **Issue:** The bottom axis now plots both solvers (2026-09-29): DLT 2.06 → 1.71 px (−0.345, lower in 50/50) and refined 1.61 → 1.52 px (−0.095, lower in 50/50). Each solver drops the view that fits its own solution worst, and both are scored on the kept views. Bars are a t-based 95% CI of the mean, while the caption's CI sentence describes the median CI of the top axis. Source: `figs/fig2_solvers_robust_sessions.mjs` (refined arm added; DLT columns unchanged, gate vs `fig4.json` passed), `figs/data/fig2/` CSVs.
   - **Fix:** Names both solvers and the interval.
   - **Current:** `Reprojection error in the kept views, all views in the solve compared with the same solve with the worst view dropped (bottom).`
@@ -157,37 +157,32 @@ In priority order. Each states a number or method that the data, the figure or t
   - **Fix:** height → length.
   - **Current:** `Another alternative is that the result is an artifact of the per-animal threshold based on body height.`
   - **Replace with:** `Another alternative is that the result is an artifact of the per-animal threshold based on body length.`
-- [X] **L278** · Must fix · mismatch (B10) · **#18: describes the tracker as it was before the sync fix (code contradicts it)**
-  - **Issue:** Describes the tracker before the sync fix. Now every camera is scored against the same frame-start targets, and targets are re-triangulated at frame end (`pose/cross-view-tracker.js` L150–158, L281–287).
+- [ ] **L278** · Must fix · mismatch (B10) · **#18: describes the tracker as it was before the sync fix (code contradicts it)**
+  - **Issue:** Describes the tracker before the sync fix. Now every camera is matched against each animal's 3D estimate as it stood before the frame, and the estimates are re-triangulated only after every camera is assigned (`pose/cross-view-tracker.js` L150–158, L281–287).
   - **Fix:** Describes the shipped order.
-  - **Current:** `For each frame the application maintains a set of 3D targets and solves one Hungarian assignment per camera, committing each camera's assignment before the next is solved, at a cost of $O(C \cdot A^3)$ for $A$ animals and $C$ cameras.`
-  - **Replace with:** `For each frame the application maintains a set of 3D targets and solves one Hungarian assignment per camera against the same frame-start targets, re-triangulating once all cameras are assigned, at a cost of $O(C \cdot A^3)$ for $A$ animals and $C$ cameras.`
-- [ ] **L142** · Must fix · mismatch (B30) · **#19: same pre-sync description in the Results**
-  - **Issue:** Reads as if each camera's match changes the next camera's cost. Since the sync fix it does not: every camera in a frame sees the same frame-start targets (`pose/cross-view-tracker.js` L150–158).
-  - **Fix:** Adds the frame-start qualifier.
+  - **Current:** `For each frame the application maintains a set of 3D targets and solves one Hungarian assignment per camera against the same frame-start targets, re-triangulating once all cameras are assigned, at a cost of $O(C \cdot A^3)$ for $A$ animals and $C$ cameras.`
+  - **Replace with:** `For each frame the application maintains a 3D estimate of each animal and solves one Hungarian assignment per camera against those estimates, re-triangulating once all cameras are assigned, at a cost of $O(C \cdot A^3)$ for $A$ animals and $C$ cameras.`
+- [X] **L142** · Must fix · mismatch (B30) · **#19: same pre-sync description in the Results**
+  - **Issue:** Reads as if each camera's match changes the next camera's cost. Since the sync fix it does not: every camera is matched against each animal's most recent 3D position, and nothing is re-triangulated until every camera is assigned (`pose/cross-view-tracker.js` L150–158).
+  - **Fix:** Drops "commits it before moving on to the next" and states what each camera is matched against. ("Most recent" rather than "previous frame's": an animal no camera matched keeps an older estimate.)
   - **Current:** `Following \citet{Chen2020}, LUC3D instead solves one Hungarian assignment per camera and commits it before moving on to the next, at a cost of $C \cdot A^3$ (the greedy Hungarian approach, Figure~\ref{fig3}A).`
-  - **Replace with:** `Following \citet{Chen2020}, LUC3D instead solves one Hungarian assignment per camera and commits it before moving on to the next, with every camera scored against the same frame-start targets, at a cost of $C \cdot A^3$ (the greedy Hungarian approach, Figure~\ref{fig3}A).`
-- [ ] **L397** · Must fix · mismatch (B17) · **#20: attributes the largest improvement to eviction alone, but that arm also changed two other settings**
-  - **Issue:** Every evicting arm also changes sync and distThresh 50 → 25 (`figs/out/fig8_methods_50.json` configs), so the step is not eviction alone.
-  - **Fix:** Discloses the confound.
-  - **Current:** `The largest single step was from no eviction to $N = 1$, and the differences among the evicting windows were small at the session level ($N = 20$ versus $N = 1$, 10 and 30, two-sided Wilcoxon signed-rank test, $P = 0.24$, 0.94 and 0.29).`
-  - **Replace with:** `The largest single step was from no eviction to $N = 1$, which also turns on synchronous scoring and the tighter distance threshold, and the differences among the evicting windows were small at the session level ($N = 20$ versus $N = 1$, 10 and 30, two-sided Wilcoxon signed-rank test, $P = 0.24$, 0.94 and 0.29).`
-- [ ] **L203** · Must fix · scope (B4) · **#21: "about 30 times faster" holds only at 2 animals × 5 cameras**
+  - **Replace with:** `Following \citet{Chen2020}, LUC3D instead solves one Hungarian assignment per camera, matching that camera's detections to each animal's most recent 3D position, and re-triangulates each animal only after every camera has been assigned. This costs $C \cdot A^3$ (the greedy Hungarian approach, Figure~\ref{fig3}A).`
+- [X] **L203** · Must fix · scope (B4) · **#21: "about 30 times faster" holds only at 2 animals × 5 cameras**
   - **Issue:** 29× holds only at 2×5. The others are 40×, ~4,400× and ~8,800×, and 4×6 is intractable (`figs/data/fig3/fig3e_head_to_head.csv`). Do not write "at least 30": 2×5 is 29.2×.
   - **Fix:** Scopes the number.
   - **Current:** `On the frames where exhaustive enumeration can be run, which excludes frames with a missed or duplicated detection, greedy Hungarian matching with a 3D correspondence term misgroups fewer frames than the exhaustive strategy and runs about 30 times faster.`
   - **Replace with:** `On the frames where exhaustive enumeration can be run, which excludes frames with a missed or duplicated detection, greedy Hungarian matching with a 3D correspondence term misgroups fewer frames than the exhaustive strategy and runs about 30 times faster at two animals in five cameras and far faster in larger configurations.`
-- [ ] **L243** · Must fix · number (B11) · **#22: shortest session is 1.15 min, not 2**
+- [x] **L243** · Must fix · number (B11) · **#22: shortest session is 1.15 min, not 2**
   - **Issue:** The shortest SLAP-2M session is 1.15 min (10192022174304, master sheet `duration`).
   - **Fix:** 2 → 1.
   - **Current:** `In general, the experiments consisted of placing mice into an enclosure for 2 to 60 minutes and observing behavior.`
   - **Replace with:** `In general, the experiments consisted of placing mice into an enclosure for 1 to 60 minutes and observing behavior.`
-- [ ] **L148** · Must fix · typo (reverted) (B29) · **#23: stray backtick prints as a visible quote mark (reverted by an earlier paste)**
+- [X] **L148** · Must fix · typo (reverted) (B29) · **#23: stray backtick prints as a visible quote mark (reverted by an earlier paste)**
   - **Issue:** The stray backtick prints as an opening quote. The fix was reverted by the 03:10 paste.
   - **Fix:** Removes it.
   - **Current:** ``` The exhaustive rule is over the $\sim$22 million camera frames without missing instances.` ```
   - **Replace with:** `The exhaustive rule is over the $\sim$22 million camera frames without missing instances.`
-- [ ] **L148** · Must fix · wording (reverted) (B29b) · **#24: reverted wording fix in the IDF1 definition**
+- [X] **L148** · Must fix · wording (reverted) (B29b) · **#24: reverted wording fix in the IDF1 definition**
   - **Issue:** "counts weighting" reads as if the counts are weighted. The fix was reverted by the 03:10 paste.
   - **Fix:** Adds ", which weights".
   - **Current:** `It is computed as the number of detections matched to the right individual divided by the average of the ground-truth and predicted detection counts weighting false positives and false negatives equally.`
@@ -197,108 +192,108 @@ In priority order. Each states a number or method that the data, the figure or t
 
 A careful reviewer might notice these; none changes a result.
 
-- [ ] **L302** · Must fix · mismatch (B34)
+- [X] **L302** · Must fix · mismatch (B34)
   - **Issue:** Fig 2E bottom drops the worst-fitting view per keypoint by reprojection error (`figs/out/fig4_robust_sessions.json` claim), not a camera.
   - **Fix:** Describes the operation.
   - **Current:** `Figure~\ref{fig2}E scores the same solve before and after dropping the camera with the least reliable detections and shows an overall decrease in reprojection error.`
-  - **Replace with:** `Figure~\ref{fig2}E scores the same solve before and after dropping, for each keypoint, the worst-fitting view, and shows an overall decrease in reprojection error.`
-- [ ] **L131** · Must fix · mismatch (B12)
+  - **Replace with:** `Figure~\ref{fig2}E scores the same solve before and after dropping the worst-fitting view of each keypoint and shows a small but consistent decrease in reprojection error.`
+- [X] **L131** · Must fix · mismatch (B12)
   - **Issue:** 4.32 → 3.34 is the DLT curve. The refined curve beside it is 4.42 → 3.15 (`figs/data/fig2/fig2e_accuracy_vs_cameras.csv` dlt_p50 / ba_p50).
   - **Fix:** Names the solver.
   - **Current:** `Scored relative to a camera the solve never saw, error falls from 4.32 pixels with two cameras to 3.34 pixels with four cameras (Figure~\ref{fig2}E) (top).`
   - **Replace with:** `Scored relative to a camera the solve never saw, error in the DLT solve falls from 4.32 pixels with two cameras to 3.34 pixels with four cameras (Figure~\ref{fig2}E) (top).`
-- [ ] **L249** · Must fix · mismatch (B6)
+- [X] **L249** · Must fix · mismatch (B6)
   - **Issue:** HardFight is also Fig 3D (its caption), and only Fig 1C and D (1A shows the other two rigs).
   - **Fix:** Lists the panels that use it.
   - **Current:** `The third recording, HardFight, is a single eight-camera, three-mouse session at 60 frames per second, from which a 300-frame window was taken for Figure~\ref{fig1} and Figure~\ref{fig2}A.`
   - **Replace with:** `The third recording, HardFight, is a single eight-camera, three-mouse session at 60 frames per second, from which a 300-frame window was taken for Figure~\ref{fig1}C and D, Figure~\ref{fig2}A and Figure~\ref{fig3}D.`
-- [ ] **L118** · Must fix · mismatch (B14)
+- [X] **L118** · Must fix · mismatch (B14)
   - **Issue:** The bracket deliberately spans all 7 stages, including SLEAP's 2D detector, which L112 says LUC3D does not include (`figs/panels/fig1_01_pipeline.py` docstring).
   - **Fix:** Matches the bracket's intended meaning.
   - **Current:** `The bracket marks the stages contributed by this paper.`
   - **Replace with:** `The bracket marks the pipeline this paper presents end to end.`
-- [ ] **L118** · Must fix · mismatch (B15)
+- [X] **L118** · Must fix · mismatch (B15)
   - **Issue:** The middle tile of Fig 1D is a Blender render of the app's reconstruction (`fig1d_pose.png`), not a capture of the 3D viewport.
   - **Fix:** Names what is shown.
   - **Current:** `Middle, the 3D viewport.`
   - **Replace with:** `Middle, a render of the reconstructed 3D poses.`
-- [ ] **L180** · Must fix · mismatch (B25)
+- [X] **L180** · Must fix · mismatch (B25)
   - **Issue:** Female session medians are negative in 29 of 37 sessions (median −0.07, Wilcoxon vs 0 P = 0.004), so they are small but not zero. The Results (L169) already say "close to zero ($-0.07$)".
   - **Fix:** Matches the Results wording.
   - **Current:** `The male is approaching and the female is neither approaching nor retreating.`
   - **Replace with:** `The male is approaching and the female's score is close to zero.`
-- [ ] **L180** · Must fix · mismatch (B26)
+- [X] **L180** · Must fix · mismatch (B26)
   - **Issue:** Near and far are different onsets (2,915 near, 6,439 far).
   - **Fix:** Drops "the same".
   - **Current:** `\textbf{G}, Rear-onset coupling, both directions: the probability the other animal is rearing at each lag around a rear onset, over that animal's own chance rate, for onsets with the pair within 2 body lengths; yellow, the same onsets further apart; gray, a circular-shift null.`
   - **Replace with:** `\textbf{G}, Rear-onset coupling, both directions: the probability the other animal is rearing at each lag around a rear onset, over that animal's own chance rate, for onsets with the pair within 2 body lengths; yellow, onsets with the pair further apart; gray, a circular-shift null.`
-- [ ] **L180** · Must fix · mismatch (B27)
+- [X] **L180** · Must fix · mismatch (B27)
   - **Issue:** F's shares keep the 4 tied displays in the denominator (the 0.83 above).
   - **Fix:** Limits the exclusion to C.
   - **Current:** `Four displays in which both bouts begin on the same frame have no initiator and are excluded from C and F.`
   - **Replace with:** `Four displays in which both bouts begin on the same frame have no initiator and are excluded from C.`
-- [ ] **L340** · Must fix · incomplete (B38)
+- [X] **L340** · Must fix · incomplete (B38)
   - **Issue:** `--tracking_clean_instance_count` was also set (`figs/fig6_sleap_max2_retrack.py` CAP_FLAGS). Same as the v4 checklist "L342 Imprecise" entry.
   - **Fix:** Adds the flag.
   - **Current:** `sleap-nn (0.3.0) was run with the track count capped at the number of animals in the session, two for Mouse-Dyad-10M, using \texttt{--max\_tracks 2 --candidates\_method local\_queues}.`
   - **Replace with:** `sleap-nn (0.3.0) was run with the track count capped at the number of animals in the session, two for Mouse-Dyad-10M, using \texttt{--max\_tracks 2 --candidates\_method local\_queues --tracking\_clean\_instance\_count 2}.`
-- [ ] **L406** · Must fix · broken pointer (B21)
+- [X] **L406** · Must fix · broken pointer (B21)
   - **Issue:** That section gives neither the synthetic-rig parameters nor the held-out count (900 appears only in the Supp Fig 3 caption).
   - **Fix:** Points to where each actually is. For the synthetic-rig parameters see data item D5.
   - **Current:** `The settings changed, the synthetic-rig parameters and the held-out frame counts are given in Supplementary Section~\ref{subsec-calib}.`
   - **Replace with:** `The settings changed are given in Supplementary Section~\ref{subsec-calib} and the held-out frame count in Supplementary Figure~\ref{fig8}.`
-- [ ] **L443** · Must fix · mismatch (B20)
+- [X] **L443** · Must fix · mismatch (B20)
   - **Issue:** Camera center is a residual divided by the median true camera-pair distance (`figs/fig7_calib_gt_compare.py` L123), not a percentage of its own value.
-  - **Fix:** States the denominator.
+  - **Fix:** States the denominator. (Optional: "camera center" can be misread as the principal point; renaming it needs the Fig 7I tick label changed too, `figs/panels/fig7_05_ground_truth.py` L57.)
   - **Current:** `\textbf{I}, Focal length, camera center and rig scale recovered from a synthetic rig with an exactly planar board and known cameras, each as a percentage of its known value.`
-  - **Replace with:** `\textbf{I}, Focal length, camera center and rig scale recovered from a synthetic rig with an exactly planar board and known cameras, each as a percentage of its known value (camera center, of the median camera spacing).`
-- [ ] **L443** · Must fix · mismatch (B41)
+  - **Replace with:** `\textbf{I}, Focal length, camera center and rig scale recovered from a synthetic rig with an exactly planar board and known cameras, as percent error from ground truth. Camera center error is relative to the spacing between cameras.`
+- [Xå] **L443** · Must fix · mismatch (B41)
   - **Issue:** The "…and no rejection" row changes two (Anipose's intrinsics plus no rejection; `figs/data/fig7/fig7g_mechanism.csv`).
-  - **Fix:** one → one or two.
+  - **Fix:** Drops "one"; the next sentence names the settings.
   - **Current:** `\textbf{G}, calibrat3's solver re-run on identical detections with one setting changed, on the 18-camera rig.`
-  - **Replace with:** `\textbf{G}, calibrat3's solver re-run on identical detections with one or two settings changed, on the 18-camera rig.`
-- [ ] **L272** · Must fix · mismatch (B44)
+  - **Replace with:** `\textbf{G}, calibrat3's solver re-run on identical detections with settings changed, on the 18-camera rig.`
+- [X] **L272** · Must fix · mismatch (B44)
   - **Issue:** Fig 3E is scored only on frames where exhaustive enumeration can run (no missed or duplicated detection). *(ledger evidence)*
   - **Fix:** Scopes Fig 3E.
   - **Current:** `Behavioral analyses and tracking metrics (Figures~\ref{fig3} and~\ref{fig4} and Supplementary Figure~\ref{fig6}) were computed on every frame of each session.`
   - **Replace with:** `Behavioral analyses and tracking metrics (Figures~\ref{fig3} and~\ref{fig4} and Supplementary Figure~\ref{fig6}) were computed on every frame of each session, with Figure~\ref{fig3}E on the eligible frames.`
-- [ ] **L262** · Must fix · mismatch (B48)
+- [X] **L262** · Must fix · mismatch (B48)
   - **Issue:** The figures use floor-aligned frames (SLAP-2M `aligned_points3d.h5`; Mouse-Dyad-10M metres ×1000), not the calibration frame (`figs/DATA-LOCATIONS.md` "Frames of reference").
   - **Fix:** Drops the incorrect frame.
   - **Current:** `All 3D coordinates are expressed in the calibration's own metric frame in millimeters.`
   - **Replace with:** `All 3D coordinates are expressed in millimeters.`
-- [ ] **L451** · Must fix · unexplained (B40)
+- [X] **L451** · Must fix · unexplained (B40)
   - **Issue:** Every preview pane in panel A reads "30 fps", while acquisition is 100 fps (panel D: 9.997 ms median interval).
   - **Fix:** Explains the pane labels.
   - **Current:** `1920 $\times$ 1200 and 100\,fps, hardware-triggered by an Arduino Mega 2560.`
   - **Replace with:** `1920 $\times$ 1200 and 100\,fps, hardware-triggered by an Arduino Mega 2560 (preview panes in A display at 30 fps).`
 
-- [ ] **L326** · Must fix · overclaim (B37)
+- [X] **L326** · Must fix · overclaim (B37)
   - **Issue:** The slot-swap control compares a fixed set of paired fields, not every feature (`figs/fig4_slot_swap_control.py`).
-  - **Fix:** Adds "compared".
+  - **Fix:** Says the result directly. The script checks four fields per animal (`PAIRED`, L34: two speed forms, pursuit, peak height) for zero difference after the swap.
   - **Current:** `The output was the same set of displays with the roles reversed and every per-animal feature identical to the last digit.`
-  - **Replace with:** `The output was the same set of displays with the roles reversed and every compared per-animal feature identical to the last digit.`
+  - **Replace with:** `Swapping the slots gave identical results, with each animal keeping its own values.`
 
-### 2C. Polish (optional) (0 / 10)
+### 2C. Polish (optional) (0 / 12)
 
 Precision wording, rounding and typos. Nobody would call these wrong.
 
-- [ ] **L131** · Must fix · mismatch (B12b)
+- [X] **L131** · Must fix · mismatch (B12b)
   - **Issue:** 2 of 10 camera pairs fall outside the ±25% band, including the 13° example the next sentence cites (12.6 mm measured, 6.5 mm predicted; `figs/data/fig2/fig2d_baseline_angle.csv` `within_band`).
   - **Fix:** Adds "roughly".
   - **Current:** `Error falls as $k$ over the sine of the angle between the two cameras relative to the animal (dashed curve).`
   - **Replace with:** `Error falls roughly as $k$ over the sine of the angle between the two cameras relative to the animal (dashed curve).`
-- [ ] **L274** · Must fix · overclaim (B43)
+- [X] **L274** · Must fix · overclaim (B43)
   - **Issue:** True for the median step (0.23–0.59 mm); 26–40% of frame steps exceed 1 mm. *(ledger evidence)*
   - **Fix:** Adds "typically".
   - **Current:** `At 150 fps an animal moves less than a millimeter between consecutive frames, so sampling every 15th frame (0.1 s intervals) reduces redundant information and increases computational tractability.`
   - **Replace with:** `At 150 fps an animal typically moves less than a millimeter between consecutive frames, so sampling every 15th frame (0.1 s intervals) reduces redundant information and increases computational tractability.`
-- [ ] **L167** · Must fix · mismatch (B46)
+- [X] **L167** · Must fix · mismatch (B46)
   - **Issue:** The curves in Fig 4G are across-session medians, not averages.
   - **Fix:** Names the statistic.
   - **Current:** `Averaging the likelihood of rearing relative to the onset of the other animal's rearing demonstrates an asymmetric leader and follower relationship (Figure~\ref{fig4}G).`
   - **Replace with:** `The median likelihood of rearing relative to the onset of the other animal's rearing demonstrates an asymmetric leader and follower relationship (Figure~\ref{fig4}G).`
-- [ ] **L180** · Must fix · wording (B47)
+- [X] **L180** · Must fix · wording (B47)
   - **Issue:** Every camera sees some height cue. What only triangulation gives is metric height.
   - **Fix:** Adds "metric".
   - **Current:** `Every camera is mounted between 58 to 76 degrees above the animals, so the height axis exists only after triangulation.`
@@ -333,6 +328,16 @@ Precision wording, rounding and typos. Nobody would call these wrong.
   - **Fix:** Drops "that", adds a comma.
   - **Current:** `(A to G are scored on Anipose's own detected corners so the comparison that does not favor calibrat3.)`
   - **Replace with:** `(A to G are scored on Anipose's own detected corners, so the comparison does not favor calibrat3.)`
+- [ ] **L397** · Optional (downgraded) · mismatch (B17) · **#20: attributes the largest improvement to eviction alone, but that arm also changed two other settings**
+  - **Issue:** Every evicting arm also changes sync and distThresh 50 → 25 (`figs/out/fig8_methods_50.json` configs), so the step is not eviction alone. Already disclosed two paragraphs up (L395: "combined this with synchronous per-frame scoring and a tighter 3D distance threshold"), so this is optional. It only guards against a reviewer reading "largest single step" together with the subsection title as crediting eviction alone.
+  - **Fix:** Optional parenthetical flagging that all three changes take effect at this step. Skipping it is fine.
+  - **Current:** `The largest single step was from no eviction to $N = 1$, and the differences among the evicting windows were small at the session level ($N = 20$ versus $N = 1$, 10 and 30, two-sided Wilcoxon signed-rank test, $P = 0.24$, 0.94 and 0.29).`
+  - **Replace with:** `The largest single step was from no eviction to $N = 1$ (the step at which all three changes take effect), and the differences among the evicting windows were small at the session level ($N = 20$ versus $N = 1$, 10 and 30, two-sided Wilcoxon signed-rank test, $P = 0.24$, 0.94 and 0.29).`
+- [ ] **L304** · Optional · wording · **Anipose smoothing: "consecutive" repeated, and the reason is split over three sentences**
+  - **Issue:** "consecutive entries are consecutive video frames" reads badly, and the justification takes three sentences. The real reason is the result (smoothing on is worse than Anipose's own linear solve in 50/50 sessions); the 15th-frame sampling is why. Every Anipose non-linear number in Fig 2F and the re-timed Fig 2G is smoothing-off (`figs/fig2_solvers_anipose.py` `optim_nosmooth`; `figs/out/fig2g_retime_all.json`), so the disclosure itself stays.
+  - **Fix:** Leads with the result, keeps the cause in one clause. Three sentences become two.
+  - **Current:** `The temporal smoothing term in the non-linear path was disabled. The smoothing penalty assumes consecutive entries are consecutive video frames, but the input is sampled every 15th frame and filtered to keypoints visible in all five views. Consecutive entries are therefore separated by at least 0.1 s of real motion, and the penalty treats that motion as noise. With smoothing enabled, the library's non-linear solver has a higher held-out error than its own linear solve in all 50 sessions.`
+  - **Replace with:** `The temporal smoothing term in the non-linear path was disabled because it made the solve less accurate. With smoothing enabled, the library's non-linear solver has a higher held-out error than its own linear solve in all 50 sessions, because frames sampled 0.1 s apart violate the penalty's assumption of consecutive frames.`
 
 ## 3. Should fix: overclaims (your call) (0 / 24)
 
@@ -503,7 +508,7 @@ Precision wording, rounding and typos. Nobody would call these wrong.
 - [ ] **D3 (F3) · Calibration frame counts** (L404 "867 to 1,003"; L443 "9,029"): no per-session list is deposited.
 - [ ] **D4 (F4, C21) · HardFight proofreading** (L243 "All three recordings have been manually proofread in 3D"): every HardFight file on disk has only predicted instances, and SLAP-2M was proofread in 2D ("Manual + Automated"). **Your answer:** where is the proofread HardFight? Then describe each dataset accurately.
 - [ ] **D5 (F8) · Synthetic rig parameters** (L406, L416): off-centre principal point (median 19.7 px), fy/fx +3.5%, k2 0.05, which aniposelib's model cannot represent. Undisclosed (`figs/out/fig7_calibration.json` `synthetic.raw`).
-- [ ] **D6 (F6) · Ethics** (L253): only Princeton IACUC is cited. **Your answer:** the approval body for each dataset (SLAP-2M, HardFight).
+- [X] **D6 (F6) · Ethics** (L253): only Princeton IACUC is cited. **Your answer:** all datasets were recorded at Princeton, so the statement covers them. No change.
 - [ ] **D7 (F7) · Unreported control** (L406): the "calibrat3's detections passed to aniposelib's solver" control exists only in the old run and its result is reported nowhere. Report it or remove the sentence.
 
 ## 7. Release steps

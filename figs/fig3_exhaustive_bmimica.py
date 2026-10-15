@@ -28,13 +28,18 @@ as the reference level for the r-sweep panel (Fig 3d).
 Output: figs/out/fig3_exhaustive_bmimica.json
 """
 import json
+import os
 from pathlib import Path
 
 import numpy as np
 
 FIGS = Path(__file__).resolve().parent
-CACHE = FIGS / "out" / "tmp" / "headtohead" / "A2_C5_bmimica"
-OUT = FIGS / "out" / "fig3_exhaustive_bmimica.json"
+#: FIG3_VARIANT (2026-10-12): read the variant's head-to-head cache and write a tagged
+#: deposit, e.g. bvis5nt -> out/tmp/headtohead_bvis5nt, *_bvis5nt.json. Unset = unchanged.
+_V = os.environ.get("FIG3_VARIANT", "")
+_SFX = f"_{_V}" if _V else ""
+CACHE = FIGS / "out" / "tmp" / f"headtohead{_SFX}" / "A2_C5_bmimica"
+OUT = FIGS / "out" / f"fig3_exhaustive_bmimica{_SFX}.json"
 N_CAMERAS = 5
 
 
@@ -54,8 +59,9 @@ def main():
                      "cross_switches": s["cross_switches"],
                      "frames_computed": e["framesComputed"],
                      "frames_considered": e["framesConsidered"]})
-    if len(rows) != 50:
-        raise SystemExit(f"[exh] {len(rows)} sessions with scores, expected 50 -- "
+    expected = 56 if _V == "md56" else 50     # md56 (2026-10-14): all 56 Mouse-Dyad-10M sessions
+    if len(rows) != expected:
+        raise SystemExit(f"[exh] {len(rows)} sessions with scores, expected {expected} -- "
                          f"refusing to deposit a partial corpus as if it were whole")
 
     w = np.array([r["idf1_within"] for r in rows])
@@ -66,7 +72,7 @@ def main():
     out = {
         "generated_by": "figs/fig3_exhaustive_bmimica.py",
         "claim": "Exhaustive enumeration's IDF1 and switch count restricted to the "
-                 "50 BMimica sessions, aggregated from the head-to-head harness's own "
+                 f"{len(rows)} BMimica sessions, aggregated from the head-to-head harness's own "
                  "per-session score.json files. No new tracking or scoring.",
         "n_sessions": len(rows),
         "idf1_within_mean": float(w.mean()),

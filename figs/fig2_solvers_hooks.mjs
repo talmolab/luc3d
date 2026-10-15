@@ -55,10 +55,20 @@ export function getDefaultTriangulationMethod() {
 export const state = { session: null, currentFrame: 0, triangulationResults: new Map() };
 export const timeline = null;
 export const viewport3d = null;
+export const interactionManager = null;   // origin/main (md56, 2026-10-14)
 `],
     ['/ui/rendering.js', `
 export function setReprojErrorVisible() {}
 export function drawAllOverlays() {}
+// origin/main's triangulation.js also imports these (md56, 2026-10-14).
+export function showReprojectionsOnly() { return false; }
+export const REPROJ_ONLY_NOTE = '';
+`],
+    ['/ui/loading-overlay.js', `
+export function showLoadingProgress() {}
+export function createProgressPacer() { return () => false; }
+export async function yieldToPaint() {}
+export function setLoadingCpu() {}
 `],
     ['/ui/info-panel.js', `
 export function updateTriangulationBadge() {}

@@ -73,7 +73,9 @@ def main():
     annotate_series(ax, len(df) - 0.6, 0.02, "LUC3D", TEAL, size=6.5, va="bottom",
                     ha="right")
     hi, lo = df.exhaustive_plot_s.iloc[-1], df.luc3d_s.iloc[-1]
-    ax.text(len(df) - 0.55, hi ** 0.45 * lo ** 0.55,
+    # 0.75/0.25 since 2026-10-14 (md56): the faster shipped tracker sits lower, and the old
+    # 0.45/0.55 weighting dropped this callout onto the LUC3D label.
+    ax.text(len(df) - 0.55, hi ** 0.75 * lo ** 0.25,
             f"10{hh._sup(int(round(np.log10(hi / lo))))}×", color=SALMON,
             fontweight="bold", fontsize=6.5, ha="right", va="center")
 

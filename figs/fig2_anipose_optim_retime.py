@@ -20,12 +20,15 @@ with aniposelib 0.7.2 (the version `fig2_solvers_anipose.py` asserts).
 
 Output: figs/out/fig4_anipose_optim_retime.json
 """
-import json, sys, time
+import json, os, sys, time
 from pathlib import Path
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "out"
+#: FIG2_SUFFIX=<v> (2026-10-14, md56 rerun) reads/writes out/fig4*_<v>.* instead of the base
+#: deposits, so a variant run never overwrites what the base figure reads.
+_SFX = ("_" + os.environ["FIG2_SUFFIX"]) if os.environ.get("FIG2_SUFFIX") else ""
 sys.path.insert(0, str(HERE))
 import fig2_solvers_anipose as fsa  # noqa: E402  (build_groups, OPTIM_VARIANTS)
 
@@ -39,7 +42,7 @@ VARIANTS = {"default (smoothing on, as published)": {},
 def main():
     import aniposelib
     print("aniposelib", getattr(aniposelib, "__version__", "?"), flush=True)
-    meta = json.loads((OUT / "fig4_input.json").read_text())
+    meta = json.loads((OUT / f"fig4_input{_SFX}.json").read_text())
     K, C = meta["keypoints"], meta["n_cameras"]
     obs = np.memmap(OUT / meta["bin"], dtype="<f8", mode="r")[:K * C * 2].reshape(K, C, 2)
     cg = fsa.build_groups(meta["calibrations"])[0]
@@ -66,11 +69,12 @@ def main():
                   f"{', '.join(f'{t:.1f}' for t in ts)} s", flush=True)
     out = {"generated_by": "figs/fig2_anipose_optim_retime.py",
            "aniposelib": getattr(aniposelib, "__version__", "?"),
+           "opencv": __import__("cv2").__version__,   # recorded since 2026-10-14 (md56)
            "inputs": "out/fig4_input.json (the Fig 2G inputs)", "repeats": REPEATS,
            "variants": {v: {"kwargs": kw, "sweep": res[v],
                             "us_per_keypoint_at_largest": res[v][-1]["us_per_keypoint_best"],
                             "at_n": res[v][-1]["n"]} for v, kw in VARIANTS.items()}}
-    (OUT / "fig4_anipose_optim_retime.json").write_text(json.dumps(out, indent=1))
+    (OUT / f"fig4_anipose_optim_retime{_SFX}.json").write_text(json.dumps(out, indent=1))
     for v in VARIANTS:
         print(f"{v}: {out['variants'][v]['us_per_keypoint_at_largest']:.1f} us/kp at n={out['variants'][v]['at_n']}")
 

@@ -31,6 +31,9 @@ import { register } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+// FIG2_SUFFIX=<v> (2026-10-14, md56 rerun) reads/writes out/fig4*_<v>.* instead of the base
+// deposits, so a variant run never overwrites what the base figure reads.
+const SFX = process.env.FIG2_SUFFIX ? `_${process.env.FIG2_SUFFIX}` : '';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..');
@@ -51,7 +54,7 @@ const arg = (name, dflt) => {
 const N = arg('n', 200000);
 const REPEATS = arg('repeats', 3);
 
-const data = JSON.parse(fs.readFileSync(path.join(HERE, 'out', 'fig4_input.json'), 'utf8'));
+const data = JSON.parse(fs.readFileSync(path.join(HERE, 'out', `fig4_input${SFX}.json`), 'utf8'));
 if (data.format !== 'bin-v1') throw new Error('expected bin-v1 input');
 const buf = fs.readFileSync(path.join(HERE, 'out', data.bin));
 const C = data.n_cameras;

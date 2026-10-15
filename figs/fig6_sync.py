@@ -147,8 +147,11 @@ def build_block(outdir: Path) -> None:
     out = fitz.open()
     page = out.new_page(width=BLOCK_W * MM, height=total_h * MM)
     offsets = []
+    # The key strip sits BETWEEN the rows (Eric, 2026-10-09: "put them in between
+    # the ab row and the cd row ... centered"), so row 2 drops by KEY_STRIP_MM and
+    # the total height -- and with it the BLOCK_W solve -- is unchanged.
     for ri, row in enumerate(BLOCK_ROWS):
-        y = ri * (hs + gap)
+        y = ri * (hs + KEY_STRIP_MM + gap)
         for ci, (_f, letter, _s) in enumerate(row):
             x = ci * (ws + GUTTER)
             page.show_pdf_page(
@@ -162,10 +165,17 @@ def build_block(outdir: Path) -> None:
     hebo = fitz.Font("Helvetica-Bold")
     page.insert_font(fontname="Fig11BlockHebo", fontbuffer=hebo.buffer)
     key_pt, key_gap = 7.0, 6.0 * MM
-    ky = (total_h - KEY_STRIP_MM + 3.4) * MM
-    kx = 0.6 * MM
-    for name, hexc in (("LUC3D", TEAL), ("SLEAP", PERIWINKLE),
-                       ("ByteTrack", SALMON)):
+    keys = (("LUC3D", TEAL), ("SLEAP", PERIWINKLE), ("ByteTrack", SALMON))
+    # baseline centred VERTICALLY too (Eric, 2026-10-09): the free band runs from
+    # row 1's bottom (hs) to the c/d letters' cap tops, which assemble draws at
+    # row-2 top - 1.2 mm baseline (~3.5 mm above row 2 at 9 pt); half the key's
+    # ~1.8 mm cap height below that band's midline puts the type's centre on it.
+    band_top, band_bot = hs, hs + KEY_STRIP_MM + gap - 3.5
+    ky = ((band_top + band_bot) / 2 + 0.9) * MM
+    strip_w = (sum(hebo.text_length(n, fontsize=key_pt) for n, _c in keys)
+               + key_gap * (len(keys) - 1))
+    kx = (BLOCK_W * MM - strip_w) / 2
+    for name, hexc in keys:
         rgb = tuple(int(hexc[i:i + 2], 16) / 255 for i in (1, 3, 5))
         page.insert_text(fitz.Point(kx, ky), name, fontname="Fig11BlockHebo",
                          fontsize=key_pt, color=rgb)

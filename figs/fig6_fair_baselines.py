@@ -47,8 +47,12 @@ from pathlib import Path
 import numpy as np
 
 OUT = Path(__file__).resolve().parent / "out"
-SLEAP = OUT / "fig7_sleap_max2.json"
-BYTE = OUT / "fig7_bytetrack_max2.json"
+#: FAIR_SUFFIX=bvis5nt (2026-10-12): read the tail-free tagged SLEAP / ByteTrack deposits
+#: and write fig7_fair_baselines_bvis5nt.json. Unset = unchanged.
+import os
+_SFX = f"_{os.environ['FAIR_SUFFIX']}" if os.environ.get("FAIR_SUFFIX") else ""
+SLEAP = OUT / f"fig7_sleap_max2{_SFX}.json"
+BYTE = OUT / f"fig7_bytetrack_max2{_SFX}.json"
 #: The ByteTrack arm to plot. B1s = never-retire + the 2-identity stitch: the closest
 #: honest analogue of SLEAP's `--max_tracks 2`, since supervision's ByteTrack has no
 #: track cap of its own. B1 (its own knob alone) is carried too, because B1 is
@@ -161,7 +165,7 @@ def main():
                               "within-view score across cameras, against LUC3D's "
                               "1.00.",
     }
-    (OUT / "fig7_fair_baselines.json").write_text(json.dumps(out, indent=1))
+    (OUT / f"fig7_fair_baselines{_SFX}.json").write_text(json.dumps(out, indent=1))
 
     print(f"[fair] {len(common)} sessions")
     for name, a in out["arms"].items():

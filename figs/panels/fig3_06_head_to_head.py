@@ -303,7 +303,9 @@ def main():
     # mid-panel position tried lands on either the composition block's third
     # line or the LUC3D label (lint 20-38% overlaps); the right margin under
     # the 4x6 marker is the one place both curves and all text stay clear.
-    ax.text(len(df) - 0.55, hi ** 0.45 * lo ** 0.55,
+    # 0.75/0.25 since 2026-10-14 (md56): with the faster shipped tracker the LUC3D curve sits
+    # lower and the old 0.45/0.55 weighting dropped the callout onto the LUC3D label.
+    ax.text(len(df) - 0.55, hi ** 0.75 * lo ** 0.25,
             f"10{_sup(int(round(np.log10(hi / lo))))}×", color=SALMON,
             fontweight="bold", fontsize=7, ha="right", va="center")
 

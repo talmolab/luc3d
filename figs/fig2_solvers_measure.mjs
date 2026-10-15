@@ -62,6 +62,9 @@ import { register } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+// FIG2_SUFFIX=<v> (2026-10-14, md56 rerun) reads/writes out/fig4*_<v>.* instead of the base
+// deposits, so a variant run never overwrites what the base figure reads.
+const SFX = process.env.FIG2_SUFFIX ? `_${process.env.FIG2_SUFFIX}` : '';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..');
@@ -80,7 +83,7 @@ register(pathToFileURL(HOOKS).href, import.meta.url);
 const tri = await import(pathToFileURL(path.join(POSE_DIR, 'triangulation.js')).href);
 const pd = await import(pathToFileURL(path.join(POSE_DIR, 'pose-data.js')).href);
 
-const inPath = path.join(HERE, 'out', 'fig4_input.json');
+const inPath = path.join(HERE, 'out', `fig4_input${SFX}.json`);
 if (!fs.existsSync(inPath)) throw new Error(`run figs/fig2_solvers_export.py first (${inPath})`);
 const data = JSON.parse(fs.readFileSync(inPath, 'utf8'));
 
@@ -611,7 +614,7 @@ for (const [name, id] of [['clean', 0], ['mid', 1], ['outlier', 2]]) {
     }
     out.by_worst_view[name] = { n, dlt_mm: stats(d, n), ba_mm: stats(b, n) };
 }
-const outPath = process.env.OUT_JSON || path.join(HERE, 'out', 'fig4.json');
+const outPath = process.env.OUT_JSON || path.join(HERE, 'out', `fig4${SFX}.json`);
 fs.writeFileSync(outPath, JSON.stringify(out, null, 1));
 
 for (const m of METHODS) {

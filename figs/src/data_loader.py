@@ -34,6 +34,13 @@ FIGS = Path(__file__).resolve().parent.parent
 OUT = FIGS / "out"
 
 
+def _required() -> set:
+    """Deposit names that must be read from the FIG_VARIANT file (comma list in
+    FIG_VARIANT_REQUIRE). Empty by default, so ordinary builds are unchanged."""
+    import os
+    return {n.strip() for n in os.environ.get("FIG_VARIANT_REQUIRE", "").split(",") if n.strip()}
+
+
 def load(name: str, variant: bool = True) -> dict:
     """Read `figs/out/<name>`, or explain what to run if it is missing.
 
@@ -54,6 +61,17 @@ def load(name: str, variant: bool = True) -> dict:
         if alt.exists():
             print(f"  [variant {v}] {name} -> {alt.name}")
             p = alt
+        elif name in _required():
+            # FIG_VARIANT_REQUIRE (md56, 2026-10-14): these deposits MUST come from the
+            # variant. Falling back to the base file would silently mix measurements.
+            sys.exit(f"[variant {v}] REQUIRED {alt.name} is missing -- refusing to fall "
+                     f"back to {name}")
+        else:
+            print(f"  [variant {v}] {name}: no variant file, BASE used")
+    if os.environ.get("FIG_VARIANT_LOG"):
+        # One line per load, so a build can be audited after the fact (md56, 2026-10-14).
+        with open(os.environ["FIG_VARIANT_LOG"], "a") as fh:
+            fh.write(f"{os.path.basename(sys.argv[0])}\t{name}\t{p.name}\n")
     if not p.exists():
         sys.exit(
             f"missing figs/out/{name}\n"

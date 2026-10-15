@@ -39,6 +39,7 @@ Output: out/tmp/cams_identity/<subset>/<session>.json (tracking),
 import argparse
 import itertools
 import json
+import os
 import subprocess
 import sys
 import time
@@ -48,11 +49,21 @@ from pathlib import Path
 FIGS = Path(__file__).resolve().parent
 OUT = FIGS / "out"
 TMP = OUT / "tmp" / "cams_identity"
+#: LUCID_ROOT=<checkout> (md56, 2026-10-14): fig3_bench.mjs then runs THAT checkout's real
+#: tracker, so the cache must not be shared with runs on this branch's pose/.
+if os.environ.get("LUCID_ROOT"):
+    TMP = OUT / "tmp" / ("cams_identity_" + subprocess.run(
+        ["git", "-C", os.environ["LUCID_ROOT"], "rev-parse", "--short=8", "HEAD"],
+        capture_output=True, text=True, check=True).stdout.strip())
 DRIVER = FIGS / "fig3-bench" / "fig3_bench.mjs"
 BENCH = Path("/root/vast/eric/luc3d-bench")
 BM = BENCH / "outputs" / "bmimica"
 CAMS = ["21241563", "21369048", "21372315", "21372316", "22085397"]
 HH_CACHE = OUT / "tmp" / "headtohead" / "A2_C5_bmimica"   # session list only
+#: CAMS_HH_CACHE=<dir> (2026-10-14, md56): take the session list from another head-to-head
+#: cache, e.g. out/tmp/headtohead_md56/A2_C5_bmimica for all 56 sessions. Unset = unchanged.
+if os.environ.get("CAMS_HH_CACHE"):
+    HH_CACHE = Path(os.environ["CAMS_HH_CACHE"])
 
 #: The deposit cell the k = 5 gate must reproduce. THE SHIPPED FRESH ANCHOR
 #: (stale 20 + distanceThreshold 25 + frame-synchronous association, the app
@@ -128,6 +139,8 @@ def score_job(args):
 
 
 def main():
+    if os.environ.get("SCORE_NOTAIL") == "1" and not os.environ.get("CAMS_SUFFIX"):
+        raise SystemExit("SCORE_NOTAIL=1 needs CAMS_SUFFIX, or it would overwrite fig2_cams_identity.json")
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", choices=["track", "score"], required=True)
     ap.add_argument("--workers", type=int, default=12)
@@ -171,7 +184,8 @@ def main():
         print(f"[cams] {len(errs)} scoring failures, e.g. {errs[:2]}")
 
     # THE GATE: k5_full re-scored through this pass must match the deposit.
-    dep = json.loads((OUT / "fig8_methods_50.json").read_text())
+    _sfx = os.environ.get("CAMS_SUFFIX", "")
+    dep = json.loads((OUT / (f"fig8_methods_50_{_sfx}.json" if _sfx else "fig8_methods_50.json")).read_text())
     shipped = next(c for c in dep["cells"] if c["config"] == GATE_CONFIG)
     ref = {r["session"]: r for r in shipped["per_session"]}
     k5 = [r for r in rows if r["subset"] == "k5_full" and r["session"] in ref]
@@ -198,7 +212,7 @@ def main():
             "cross_idf1_mean": float(np.mean([r["cross_idf1"] for r in g])),
             "within_switches_total": int(sw),
         }
-    (OUT / "fig2_cams_identity.json").write_text(json.dumps({
+    (OUT / (f"fig2_cams_identity_{_sfx}.json" if _sfx else "fig2_cams_identity.json")).write_text(json.dumps({
         "generated_by": "figs/fig2_cams_identity.py",
         "claim": "The shipped fresh-anchor cross-view tracker (stale 20, "
                  "distanceThreshold 25, frame-synchronous) re-run on deterministic camera "

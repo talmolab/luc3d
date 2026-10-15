@@ -15,7 +15,7 @@ THE PURSUIT QUANTITY IS FIG 4E'S, RECOMPUTED HERE, NOT RE-INVENTED. For track a,
 `facing_a` is the unit body axis (Nose -> TTI) and `away_a` the unit vector from
 the partner to a; their dot product is negative when a's body axis points at its
 partner, and it is scaled by a's own speed so that facing without moving scores
-about zero. `fig4_upright.session_upright` computes exactly this and deposits its
+about zero. `fig5_upright.session_upright` computes exactly this and deposits its
 median over a 1.5 s pre-onset window as `pursuit_rel_t0` / `pursuit_rel_t1`.
 
     THE MIRROR IS VALIDATED, NOT ASSUMED. This script recomputes the series and
@@ -23,7 +23,7 @@ median over a 1.5 s pre-onset window as `pursuit_rel_t0` / `pursuit_rel_t1`.
     figs/out/fig5_upright.json. If that check fails it refuses to write, because a
     post-offset number is only trustworthy if the same code reproduces the
     published pre-onset one. Keep this file in step with
-    `fig4_upright.session_upright` -- it mirrors that function's geometry block.
+    `fig5_upright.session_upright` -- it mirrors that function's geometry block.
 
 SIGN CONVENTION, throughout: NEGATIVE means oriented at the partner while moving,
 i.e. pursuit. POSITIVE means oriented away while moving.
@@ -46,7 +46,7 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-import fig4_upright as UP  # noqa: E402  (loader, constants and the detector's rules)
+import fig5_upright as UP  # noqa: E402  (loader, constants and the detector's rules)
 
 OUT_JSON = HERE / "out" / "followup_pursuit_after_rear.json"
 CSV_DIR = HERE / "data" / "followup"
@@ -64,7 +64,7 @@ LATE_FROM_S, LATE_TO_S = 1.5, 3.0
 
 
 def series(t, fps):
-    """(pursuit, rear, sep, base_spd, L) mirroring fig4_upright.session_upright.
+    """(pursuit, rear, sep, base_spd, L) mirroring fig5_upright.session_upright.
 
     Returns None when the session is not a resolvable dyad, exactly as the source
     function does.
@@ -202,7 +202,7 @@ def measure():
     if hits == 0 or worst > 1e-9:
         sys.exit("REFUSING TO WRITE: this script does not reproduce the published "
                  "pre-onset pursuit medians, so its post-offset numbers cannot be "
-                 "trusted. Re-sync it with fig4_upright.session_upright.")
+                 "trusted. Re-sync it with fig5_upright.session_upright.")
 
     OUT_JSON.parent.mkdir(parents=True, exist_ok=True)
     OUT_JSON.write_text(json.dumps({

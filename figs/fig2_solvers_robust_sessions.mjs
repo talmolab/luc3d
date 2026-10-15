@@ -24,15 +24,18 @@ import { register } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+// FIG2_SUFFIX=<v> (2026-10-14, md56 rerun) reads/writes out/fig4*_<v>.* instead of the base
+// deposits, so a variant run never overwrites what the base figure reads.
+const SFX = process.env.FIG2_SUFFIX ? `_${process.env.FIG2_SUFFIX}` : '';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const POSE_DIR = path.join(HERE, '..', 'pose');
-const HOOKS = path.join(HERE, 'fig3-bench', 'probe_hooks.mjs');
+const POSE_DIR = process.env.POSE_DIR ? path.resolve(process.env.POSE_DIR) : path.join(HERE, '..', 'pose');  // POSE_DIR honoured since 2026-10-14 (md56)
+const HOOKS = path.join(HERE, 'fig2_solvers_hooks.mjs');   // was fig3-bench/probe_hooks.mjs, which lacks origin/main's UI exports (md56, 2026-10-14)
 if (fs.existsSync(HOOKS)) register(pathToFileURL(HOOKS).href, import.meta.url);
 
 const tri = await import(pathToFileURL(path.join(POSE_DIR, 'triangulation.js')).href);
 
-const inPath = path.join(HERE, 'out', 'fig4_input.json');
+const inPath = path.join(HERE, 'out', `fig4_input${SFX}.json`);
 const data = JSON.parse(fs.readFileSync(inPath, 'utf8'));
 if (data.format !== 'bin-v1') throw new Error('expects the bin-v1 export');
 
@@ -155,7 +158,7 @@ for (const b of data.blocks) {
 }
 
 // GATE against the deposit's pooled strata means.
-const dep = JSON.parse(fs.readFileSync(path.join(HERE, 'out', 'fig4.json'), 'utf8'));
+const dep = JSON.parse(fs.readFileSync(path.join(HERE, 'out', `fig4${SFX}.json`), 'utf8'));
 const gate = {};
 let ok = true;
 for (const name in strata) {
@@ -171,7 +174,7 @@ for (const name in strata) {
 }
 if (!ok) console.log('GATE FAILED -- deposited with passed:false; do NOT plot');
 
-fs.writeFileSync(path.join(HERE, 'out', 'fig4_robust_sessions.json'), JSON.stringify({
+fs.writeFileSync(path.join(HERE, 'out', `fig4_robust_sessions${SFX}.json`), JSON.stringify({
     generated_by: 'figs/fig2_solvers_robust_sessions.mjs',
     claim: 'Per-session mean reprojection error in the kept views: the all-view DLT ' +
            'solution vs the same solve with the worst-fitting view dropped. Session ' +

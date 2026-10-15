@@ -236,7 +236,7 @@ LETTER_NUDGE_MM: dict[tuple[int, str], float] = {
 #: Fig 6a is the 2x2 a-d tracker block (fig6_sync.build_block, which PRINTS
 #: these offsets on every run -- copy them here after any geometry change).
 EXTRA_LETTERS: dict[tuple[int, str], list[tuple[str, float, float]]] = {
-    (6, "a"): [("b", 43.51, 0.0), ("c", 0.0, 29.95), ("d", 43.51, 29.95)],
+    (6, "a"): [("b", 43.51, 0.0), ("c", 0.0, 34.95), ("d", 43.51, 34.95)],
 }
 
 #: figure -> [row, ...] where a row is [(letter, slug), ...].
@@ -385,7 +385,11 @@ VARIANT = os.environ.get("FIG_VARIANT", "")
 #: and 6 were retired and c became the base figures.
 TAG_LAYOUTS = {}
 TAG_TITLES = {}
-TAG_FOOTERS = {}
+#: nt (2026-10-12): the tail-free rerun proof. No footer, so the proof can stand in for
+#: the base figure once approved; the variant is named by the folder.
+TAG_FOOTERS = {(3, "nt"): None, (6, "nt"): None,
+               #: b (2026-10-14): the md56 proofs (all 56 Mouse-Dyad-10M sessions), same rule.
+               (2, "b"): None, (3, "b"): None, (6, "b"): None}
 
 
 def layout(fig_no: int):

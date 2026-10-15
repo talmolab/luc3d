@@ -340,11 +340,12 @@ def main(variant=False, corrected=True, fresh_arm=False):
     # labels reach the top band, so the key moves to the empty upper-LEFT corner
     # there (cell 1 sits at 0 with its label below). The base figure is unchanged.
     # 2026-10-09: the former Fig 3c/4c/6c variant (>= 5 visible body keypoints, tail excluded) is now the base figure: key on the left is the default.
+    # 2026-10-09 (Eric): "we dont need it to say LUC3D ahead in 6c" -- dropped from
+    # the base render; the --variant diagnostic keeps it.
     key_left = not variant
-    ax.text(0.02 if key_left else 0.98, 0.96, "LUC3D ahead", transform=ax.transAxes,
-            ha="left" if key_left else "right",
-            va="top", color=LUC3D, fontsize=6.5 if variant else COMPACT_FS,
-            fontweight="bold")
+    if variant:
+        ax.text(0.98, 0.96, "LUC3D ahead", transform=ax.transAxes, ha="right",
+                va="top", color=LUC3D, fontsize=6.5, fontweight="bold")
     # compact render: LOWER LEFT, not lower right -- the 4-animal cell's median
     # label hangs under its whisker at the bottom right and the two collided on
     # the first compact rebuild; the lower-left corner is empty (cell 1's spread
@@ -357,7 +358,7 @@ def main(variant=False, corrected=True, fresh_arm=False):
     if not variant:
         # Figs 6b/6c (key on the left): 60% headroom on top so "LUC3D ahead" clears the
         # 2-animal median label that sits under it (2026-10-08). Base figure unchanged.
-        ax.set_ylim(-lim * 1.02, lim * (1.6 if key_left else 1.02))
+        ax.set_ylim(-lim * 1.02, lim * 1.25)  # headroom for the median labels only
         ax.tick_params(labelsize=COMPACT_FS)
         ax.xaxis.label.set_fontsize(COMPACT_FS)
         ax.yaxis.label.set_fontsize(COMPACT_FS)

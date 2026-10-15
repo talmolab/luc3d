@@ -101,6 +101,13 @@ DET = BM / "det_h5"
 GT = BM / "gt"
 B0 = BM / "results" / "bytetrack"                  # shipped
 B1 = BM / "results" / "bytetrack_noretire"         # this script's run
+#: BYTE_B1_DIR (2026-10-12): write/read the never-retire arm elsewhere. With SCORE_NOTAIL=1
+#: the re-track builds ByteTrack's boxes without the four tail nodes (as the SLAP-2M arm in
+#: fig6_slap2m_fair.py) and scoring is tail-free too; it must not reuse the default dir.
+if os.environ.get("BYTE_B1_DIR"):
+    B1 = Path(os.environ["BYTE_B1_DIR"])
+elif os.environ.get("SCORE_NOTAIL") == "1":
+    raise SystemExit("SCORE_NOTAIL=1 needs BYTE_B1_DIR (a tail-free re-track directory)")
 REF_CSV = BM / "bmimica_crossview_all_eval.csv"
 SER = ["21241563", "21369048", "21372315", "21372316", "22085397"]
 #: Reproduction tolerance for the shipped arm through this scorer. Not a knob: the two
@@ -118,7 +125,11 @@ def sessions():
 def track_job(args):
     sid, cam = args
     sys.path.insert(0, str(BENCH / "scripts"))
+    sys.path.insert(0, str(REPO / "figs"))
     import h5py
+    import run_bytetrack_bench as _rbb
+    import score_notail
+    score_notail.install_fn(_rbb, "bbox_from_keypoints")   # no-op unless SCORE_NOTAIL=1
     from run_bytetrack_bench import run_camera_session
     src = DET / sid / f"{cam}_predictions.h5"
     dst = B1 / sid / f"{cam}.h5"
@@ -222,8 +233,11 @@ def score_session(sid, arms):
     """
     import h5py
     sys.path.insert(0, str(BENCH / "scripts"))
+    sys.path.insert(0, str(REPO / "figs"))
     import evaluate as ev
     import motmetrics as mm
+    import score_notail
+    score_notail.install(ev)                               # no-op unless SCORE_NOTAIL=1
 
     res = {}
     gt, arrs = {}, {a: {} for a in arms}

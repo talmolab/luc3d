@@ -116,7 +116,8 @@ DIFFICULTIES = list(range(1, 8))
 def build():
     """Per-session (session, difficulty, animals, cross_idf1) for the 42 multi-animal
     sessions, with the join guarded rather than assumed."""
-    f9 = load(IDF1_FILE, variant=False)
+    # md56 (2026-10-14): the LUC3D tracking re-run on origin/main lives in <stem>_md56.json.
+    f9 = load(IDF1_FILE, variant=os.environ.get("FIG_VARIANT") == "md56")
     print(f"  IDF1 pool: {IDF1_POOL} ({IDF1_FILE})")
     cells = {c["config"]: c for c in f9["cells"]}
     if SHIPPED not in cells:

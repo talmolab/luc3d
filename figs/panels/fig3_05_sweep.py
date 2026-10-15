@@ -246,9 +246,12 @@ def _rows(dep, arm):
 def build():
     """Both 50-session arms, denominator-checked against each other."""
     shipped = load("fig3_sweep50.json")
+    # Only the untagged fresh deposit (hash-terminated); load() then picks its
+    # FIG_VARIANT twin, so a tagged file can never be picked up by a base build.
+    import re as _re
     hits = sorted(p.name for p in
                   (Path(__file__).resolve().parent.parent / "out").glob(FRESH_GLOB)
-                  if "__f" not in p.name)
+                  if "__f" not in p.name and _re.search(r"_[0-9a-f]{8}\.json$", p.name))
     if not hits:
         sys.exit("fig3e: no fresh-anchor 50-session sweep deposit. Run:\n"
                  "  $PY figs/fig3_sweep50.py --grid-corr3d "
@@ -268,9 +271,14 @@ def build():
 
     df = pd.concat([_rows(shipped, SHIPPED_NAME), _rows(fresh, FRESH_NAME)],
                    ignore_index=True)
-    bad_n = df[df.n_sessions != 50]
+    # Every cell of both arms on the SAME, full session list (md56, 2026-10-14: 56, not 50).
+    n_sess = len(shipped["sessions"])
+    if len(fresh["sessions"]) != n_sess:
+        sys.exit(f"fig3e: the two arms list {n_sess} vs {len(fresh['sessions'])} sessions")
+    bad_n = df[df.n_sessions != n_sess]
     if len(bad_n):
-        sys.exit(f"fig3e: cells scored on != 50 sessions:\n{bad_n}")
+        sys.exit(f"fig3e: cells scored on != {n_sess} sessions:\n{bad_n}")
+    df["n_sessions_total"] = n_sess
     rs, rf = (set(df[df.arm == a].r) for a in (SHIPPED_NAME, FRESH_NAME))
     if rs != rf:
         sys.exit(f"fig3e: the two arms sample different r values: "
@@ -479,7 +487,7 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
     ax_bot.set_ylabel("cross-view IDF1", fontsize=6.5)
 
     footnote(ax_bot, "r = 0: no 3D term, left of the break\n"
-             f"rate basis: {tcf:,} camera-frames (50 sessions x 5 cameras, "
+             f"rate basis: {tcf:,} camera-frames ({int(df.n_sessions_total.iloc[0])} sessions x 5 cameras, "
              f"full length), corr2d = 1 row\n"
              f"the two flat rules are FRAME-MATCHED: exhaustive and the head-to-head "
              f"greedy arm (fig3_bench.mjs at default thresholds), both scored over "

@@ -48,7 +48,7 @@ PERNODE = {"": "fig4_recovery_pernode.json",
 
 def build():
     # default = proofread labels, tail excluded (the former Fig 4c, base since 2026-10-09)
-    v = os.environ.get("FIG_VARIANT") or "proofread_notail"
+    v = (os.environ.get("FIG_VARIANT") if os.environ.get("FIG_VARIANT") not in (None, "", "md56") else "proofread_notail")  # md56 (2026-10-14) is not a detection set
     base = v.replace("_notail", "")
     if base not in PERNODE:
         sys.exit(f"fig4c occlusion: no per-node deposit for FIG_VARIANT={v!r} "
@@ -86,7 +86,7 @@ def main():
     deposit(agg, 4, "fig4b_occlusion.csv")
 
     # k = 2 must equal 4e's per-view miss rate (same histograms, same sessions).
-    _v = os.environ.get("FIG_VARIANT") or "proofread_notail"
+    _v = (os.environ.get("FIG_VARIANT") if os.environ.get("FIG_VARIANT") not in (None, "", "md56") else "proofread_notail")  # md56 (2026-10-14) is not a detection set
     bd = load(f"fig6_detections_{_v}.json", variant=False)["by_difficulty"]
     for _, r in agg.iterrows():
         e = bd[str(int(r.difficulty))]["miss_rate"] * 100

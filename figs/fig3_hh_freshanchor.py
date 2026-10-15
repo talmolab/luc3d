@@ -114,6 +114,32 @@ VAR_ROOT = OUT_DIR / "tmp" / f"headtohead_var{VSUFFIX}"
 FRESH_METHOD = {"sync": True, "stale": 20}
 FRESH_THRESHOLDS = {"distanceThreshold": 25}
 
+#: FRESHANCHOR_LUCID_ROOT=<luc3d checkout> (2026-10-14, md56): run the greedy arm with THAT
+#: checkout's real tracker (fig3_bench.mjs + LUCID_ROOT, its own hooks defaults) instead of
+#: fig6_bench.mjs + xv_experimental.js. LUCID_ROOT is exported, so fig3_quality's
+#: fig3_rescore_frames.mjs triangulates with the same checkout. Main's association is always
+#: frame-synchronous, so the configuration is thresholds only (no method block). Cache:
+#: tmp/headtohead_var<sfx>_<commit>/; deposits go to out/md56main/ (NOT out/, where the
+#: panel's fig3_quality__*.json glob would pick them up). Unset = unchanged.
+MAIN_ROOT = os.environ.get("FRESHANCHOR_LUCID_ROOT", "")
+MAIN_COMMIT = None
+DEPOSIT_DIR = OUT_DIR
+if MAIN_ROOT:
+    MAIN_ROOT = str(Path(MAIN_ROOT).resolve())
+    MAIN_COMMIT = subprocess.run(["git", "-C", MAIN_ROOT, "rev-parse", "HEAD"],
+                                 capture_output=True, text=True, check=True).stdout.strip()
+    if subprocess.run(["git", "-C", MAIN_ROOT, "status", "--porcelain", "--untracked-files=no"],
+                      capture_output=True, text=True, check=True).stdout.strip():
+        raise SystemExit(f"FRESHANCHOR_LUCID_ROOT {MAIN_ROOT} has local changes")
+    os.environ["LUCID_ROOT"] = MAIN_ROOT
+    DRIVER = REPO / "figs" / "fig3-bench" / "fig3_bench.mjs"
+    EXPERIMENTAL = None
+    FRESH_METHOD = {}
+    FRESH_THRESHOLDS = {"distanceThreshold": 25, "stale": 20}
+    VAR_ROOT = OUT_DIR / "tmp" / f"headtohead_var{VSUFFIX}_{MAIN_COMMIT[:8]}"
+    DEPOSIT_DIR = OUT_DIR / "md56main"
+    DEPOSIT_DIR.mkdir(exist_ok=True)
+
 #: Deposits this script must never write. Asserted, not merely intended.
 FORBIDDEN = {(OUT_DIR / n).resolve() for n in (
     "fig3_trackers.json", "fig3_headtohead.json", "fig3_quality.json",
@@ -217,7 +243,7 @@ def make_driver_job(params, root, shipped_tmp, force=False):
                 pass
 
         params_path = d / "params.json"
-        params_path.write_text(json.dumps(params, sort_keys=True))
+        params_path.write_text(json.dumps(params, sort_keys=True))   # per-session dir: no race
         cmd = ["node", str(DRIVER),
                "--session-idx", str(sess["det_session_idx"]),
                "--num-animals", str(cfg["animals"]),
@@ -249,7 +275,9 @@ def make_driver_job(params, root, shipped_tmp, force=False):
             "framesProcessed": fp, "runtimeSeconds": rt,
             "seconds_per_frame_greedy_contended": (rt / fp) if fp else None,
             "wall_seconds": round(time.time() - t0, 2),
-            "driver": str(DRIVER), "experimental_tracker": str(EXPERIMENTAL),
+            "driver": str(DRIVER),
+            "experimental_tracker": str(EXPERIMENTAL) if EXPERIMENTAL else None,
+            "lucid_root": MAIN_ROOT or None, "lucid_commit": MAIN_COMMIT,
         }, indent=2))
         return key, s, []
 
@@ -293,7 +321,7 @@ def run_pipeline(tag, params, jobs, only, idf1, force_greedy, quality=True):
           f"(idf1={'on' if idf1 else 'OFF'}) ===", flush=True)
     hh.main()
     dep_hh = move_deposit(sandbox / f"fig3_headtohead{hh.SUFFIX}.json",
-                          OUT_DIR / f"fig3_headtohead__{tag}{VSUFFIX}.json")
+                          DEPOSIT_DIR / f"fig3_headtohead__{tag}{VSUFFIX}.json")
 
     dep_q = None
     if quality:
@@ -303,7 +331,7 @@ def run_pipeline(tag, params, jobs, only, idf1, force_greedy, quality=True):
         print(f"\n=== [{tag}] quality: GT grouping accuracy + cost gap ===", flush=True)
         q.main()
         dep_q = move_deposit(sandbox / f"fig3_quality{hh.SUFFIX}.json",
-                             OUT_DIR / f"fig3_quality__{tag}{VSUFFIX}.json")
+                             DEPOSIT_DIR / f"fig3_quality__{tag}{VSUFFIX}.json")
 
     for dep in (dep_hh, dep_q):
         if dep is None:
@@ -315,8 +343,12 @@ def run_pipeline(tag, params, jobs, only, idf1, force_greedy, quality=True):
             "thresholds": params["thresholds"],
             "corr3dWeight": "shipped default 6 (NOT 12 -- see FIX-PLAN-8-13 item 8)",
             "driver": str(DRIVER),
-            "experimental_tracker": str(EXPERIMENTAL),
-            "greedy_arm": "re-run through fig6_bench.mjs + xv_experimental.js",
+            "experimental_tracker": str(EXPERIMENTAL) if EXPERIMENTAL else None,
+            "lucid_root": MAIN_ROOT or None,
+            "lucid_commit": MAIN_COMMIT,
+            "greedy_arm": (f"re-run through fig3_bench.mjs on {MAIN_ROOT} ({MAIN_COMMIT})"
+                           if MAIN_ROOT else
+                           "re-run through fig6_bench.mjs + xv_experimental.js"),
             "exhaustive_arm": ("SYMLINKED from the shipped cache "
                                f"({shipped_tmp}) -- unchanged, and verified "
                                "anchor-independent by --probe"),

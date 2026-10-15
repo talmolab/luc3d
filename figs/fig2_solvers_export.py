@@ -44,7 +44,10 @@ from build_gt_reproj import (load_calibration, load_sleap_2d, undistort,  # noqa
                              ransac_align, SERIALS)
 from fig2_measure import (triangulate_batch, project, ROOT, MATCH_MAX_PX)  # noqa: E402
 
-OUT = os.path.join(HERE, "out", "fig4_input.json")
+#: FIG2_SUFFIX=<v> (2026-10-14, md56 rerun) reads/writes out/fig4*_<v>.* instead of the base
+#: deposits, so a variant run never overwrites what the base figure reads.
+_SFX = ("_" + os.environ["FIG2_SUFFIX"]) if os.environ.get("FIG2_SUFFIX") else ""
+OUT = os.path.join(HERE, "out", f"fig4_input{_SFX}.json")
 
 
 def main():

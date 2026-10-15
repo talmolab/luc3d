@@ -41,7 +41,9 @@ TMP_DIR = OUT_DIR / "tmp" / f"scale_runtime{SUFFIX}"
 MASTER = BENCH / "outputs" / "sleap_nn_master_sheet.tsv"
 KEEPTRACK = {"unfilt": OUT_DIR / "tmp" / "predslp_pool",
              "bvis4": OUT_DIR / "tmp" / "lite_pools" / "bvis4",
-             "bvis5": OUT_DIR / "tmp" / "lite_pools" / "bvis5"}.get(
+             "bvis5": OUT_DIR / "tmp" / "lite_pools" / "bvis5",
+             "bvis5nt": OUT_DIR / "tmp" / "lite_pools" / "bvis5",
+             "md56": OUT_DIR / "tmp" / "lite_pools" / "bvis5"}.get(
                  VARIANT, BENCH / "outputs" / "keeptrack_h5s")
 BM_DET = BENCH / "outputs" / "bmimica" / "det_h5"
 BM_GT = BENCH / "outputs" / "bmimica" / "gt"

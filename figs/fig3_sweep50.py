@@ -126,6 +126,27 @@ DRIVER = REPO / "figs" / "fig6-bench" / "fig6_bench.mjs"
 
 TMP_ROOT = OUT_DIR / "tmp" / "sweep50"
 
+#: SWEEP50_LUCID_ROOT=<luc3d checkout> (2026-10-14, md56): track with THAT checkout's real
+#: pose/ (its shipped tracker, its own scripts/bench/hooks.mjs defaults) through
+#: figs/fig3-bench/fig3_bench.mjs + LUCID_ROOT, instead of this branch's pose/ +
+#: xv_experimental.js. The `method` block is NOT applied in this mode (fig3_bench.mjs has
+#: none); every tracker setting must come from the checkout's defaults or `thresholds`.
+#: The cache moves to tmp/sweep50_<commit>/ so no output tracked by other code is reused.
+#: Unset = unchanged.
+LUCID_ROOT = os.environ.get("SWEEP50_LUCID_ROOT", "")
+LUCID_COMMIT = None
+if LUCID_ROOT:
+    LUCID_ROOT = str(Path(LUCID_ROOT).resolve())
+    LUCID_COMMIT = subprocess.run(["git", "-C", LUCID_ROOT, "rev-parse", "HEAD"],
+                                  capture_output=True, text=True, check=True).stdout.strip()
+    _dirty = subprocess.run(["git", "-C", LUCID_ROOT, "status", "--porcelain",
+                             "--untracked-files=no"],
+                            capture_output=True, text=True, check=True).stdout.strip()
+    if _dirty:
+        raise SystemExit(f"SWEEP50_LUCID_ROOT {LUCID_ROOT} has local changes:\n{_dirty}")
+    DRIVER = REPO / "figs" / "fig3-bench" / "fig3_bench.mjs"
+    TMP_ROOT = OUT_DIR / "tmp" / f"sweep50_{LUCID_COMMIT[:8]}"
+
 #: Fig 3e's grid, imported rather than restated so the two cannot disagree about
 #: what the full grid is.
 CORR3D_GRID = list(f3.CORR3D_GRID)
@@ -200,6 +221,16 @@ def base_params(method, thresholds):
 def cell_params(base, corr2d, corr3d):
     """`base` with this cell's two swept weights layered on. Does not mutate `base`."""
     th = dict(base["thresholds"])
+    if LUCID_ROOT and (base["method"] or not base["thresholds"]):
+        # SWEEP50_LUCID_ROOT mode: fig3_bench.mjs ignores `method`, and the empty-block
+        # pin below means the PRE-#210 tracker, which no current checkout contains.
+        raise SystemExit("SWEEP50_LUCID_ROOT: give every setting in --thresholds "
+                         "(no --method, no empty block)")
+    if not base["method"] and not base["thresholds"]:
+        # The untagged `shipped` arm is the PRE-#210 tracker ("previous default"). Its
+        # cached cells got distanceThreshold 50 from scripts/bench/hooks.mjs, which #210
+        # changed to 25; pinned here since 2026-10-14 (md56) so new sessions match them.
+        th["distanceThreshold"] = 50
     th["corr2dWeight"] = corr2d
     th["corr3dWeight"] = corr3d
     return {"method": dict(base["method"]), "thresholds": th}
@@ -242,9 +273,19 @@ def tag_for(base, max_frames, n_sessions, all_sessions):
     return "__".join(parts)
 
 
+#: SWEEP50_SUFFIX=bvis5nt (2026-10-12): tail-free re-scoring (SCORE_NOTAIL=1) of the SAME
+#: cached tracker outputs, written to a tagged deposit (fig3_sweep50_bvis5nt.json /
+#: fig3_sweep50__<tag>_bvis5nt.json) read under FIG_VARIANT=bvis5nt. Unset = unchanged.
+SWEEP50_SUFFIX = os.environ.get("SWEEP50_SUFFIX", "")
+if os.environ.get("SCORE_NOTAIL") == "1" and not SWEEP50_SUFFIX:
+    raise SystemExit("SCORE_NOTAIL=1 needs SWEEP50_SUFFIX, or it would overwrite the "
+                     "tail-counted deposits")
+
+
 def deposit_for(tag):
-    path = OUT_DIR / ("fig3_sweep50.json" if tag == "shipped"
-                      else f"fig3_sweep50__{tag}.json")
+    sfx = f"_{SWEEP50_SUFFIX}" if SWEEP50_SUFFIX else ""
+    path = OUT_DIR / (f"fig3_sweep50{sfx}.json" if tag == "shipped"
+                      else f"fig3_sweep50__{tag}{sfx}.json")
     if path.resolve() in FORBIDDEN:
         raise SystemExit(f"refusing to write {path} -- that deposit belongs to "
                          f"another script")
@@ -296,7 +337,12 @@ def run_one(cell_dir, params, session, max_frames):
         return (session, "failed", f"no det_h5 dir {det_dir}")
 
     params_path = cell_dir / "params.json"
-    params_path.write_text(json.dumps(params, sort_keys=True))
+    # Atomic (2026-10-14, md56): every session job of a cell rewrites this one shared file,
+    # and a plain write_text truncates first, so a concurrent driver could read it empty
+    # ("Unexpected end of JSON input"). Same bytes, written to a private name, then renamed.
+    _tmp = cell_dir / f".params.{session}.{os.getpid()}.json"
+    _tmp.write_text(json.dumps(params, sort_keys=True))
+    os.replace(_tmp, params_path)
 
     cmd = [
         "node", str(DRIVER),
@@ -312,7 +358,9 @@ def run_one(cell_dir, params, session, max_frames):
         cmd += ["--max-frames", str(max_frames)]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=(900 if max_frames else 7200))
+                           timeout=(900 if max_frames else 7200),
+                           env=(dict(os.environ, LUCID_ROOT=LUCID_ROOT) if LUCID_ROOT
+                                else None))
         if r.returncode != 0 or not out_path.exists():
             return (session, "failed",
                     f"driver exit {r.returncode}: " + r.stderr[-500:].replace("\n", " "))
@@ -546,7 +594,12 @@ def main(a):
         "cache_dir": str(root),
         "max_frames": a.max_frames,
         "driver": str(DRIVER),
-        "experimental_tracker": str(REPO / "figs" / "fig6-bench" / "xv_experimental.js"),
+        "experimental_tracker": (None if LUCID_ROOT else
+                                 str(REPO / "figs" / "fig6-bench" / "xv_experimental.js")),
+        "lucid_root": LUCID_ROOT or None,
+        "lucid_commit": LUCID_COMMIT,
+        "node": subprocess.run(["node", "--version"], capture_output=True,
+                               text=True).stdout.strip(),
         "metric": "IDF1 (motmetrics) + ID-switches",
         "total_camera_frames": total_cf,
         "camera_frames_by_session": cf_by_session,

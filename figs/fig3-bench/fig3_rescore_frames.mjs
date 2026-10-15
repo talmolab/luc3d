@@ -28,8 +28,11 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const POSE_DIR = path.resolve(HERE, '..', '..', 'pose');
-const HOOKS_URL = pathToFileURL(path.resolve(HERE, '..', '..', 'scripts', 'bench', 'hooks.mjs')).href;
+// LUCID_ROOT=<checkout> (2026-10-14, md56): load pose/ and scripts/bench/hooks.mjs from another
+// checkout (origin/main), as fig3_exhaustive.mjs does. Unset = this repo, unchanged.
+const LUCID_ROOT = process.env.LUCID_ROOT ? path.resolve(process.env.LUCID_ROOT) : path.resolve(HERE, '..', '..');
+const POSE_DIR = path.join(LUCID_ROOT, 'pose');
+const HOOKS_URL = pathToFileURL(path.join(LUCID_ROOT, 'scripts', 'bench', 'hooks.mjs')).href;
 
 function parseArgs(argv) {
     const o = {};

@@ -67,10 +67,14 @@ import numpy as np
 
 FIGS = Path(__file__).resolve().parent
 BENCH = Path("/root/vast/eric/luc3d-bench")
-CACHE = FIGS / "out" / "tmp" / "headtohead" / "A2_C5_bmimica"
+#: FIG3_VARIANT (2026-10-12): read the variant's head-to-head cache and write a tagged
+#: deposit, e.g. bvis5nt -> out/tmp/headtohead_bvis5nt, *_bvis5nt.json. Unset = unchanged.
+_V = os.environ.get("FIG3_VARIANT", "")
+_SFX = f"_{_V}" if _V else ""
+CACHE = FIGS / "out" / "tmp" / f"headtohead{_SFX}" / "A2_C5_bmimica"
 BM_DET = BENCH / "outputs" / "bmimica" / "det_h5"
 BM_GT = BENCH / "outputs" / "bmimica" / "gt"
-OUT = FIGS / "out" / "fig3_frame_matched_bmimica.json"
+OUT = FIGS / "out" / f"fig3_frame_matched_bmimica{_SFX}.json"
 ARMS = ("exhaustive", "greedy")
 N_CAMERAS = 5
 

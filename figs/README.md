@@ -1,5 +1,16 @@
 # `figs/` — paper figures
 
+> **FIGURES 4 AND 5 SWAPPED (2026-10-03, Eric).** The SLAP-2M datasets figure is now
+> **fig4** and social rearing is now **fig5**, so the claims and figures run in the
+> paper's order (datasets before the behavior they enable). Panel scripts, top-level
+> measurement scripts, `data/fig4`↔`data/fig5`, `figures/fig4`↔`figures/fig5`,
+> `blender-images/fig4a_scene.py`→`fig5a_scene.py` (and its render), and `assemble.py`
+> `LAYOUTS`/`TITLES` were renamed together. Both reassembled figures are
+> pixel-identical to the pre-swap ones. As in the 2026-08-26 renumbering, **the
+> `figs/out/` deposit filenames keep their historical names** (`fig5_upright.json` is
+> still social rearing; `fig6_detections.json` is still SLAP-2M). Sections of this
+> README written before 2026-10-03 use the old numbers.
+
 > **FIGURE RENUMBERING (2026-08-26, Eric).** The figure tree now carries the
 > manuscript's own numbering, six figures. The historical repo numbers map as
 > `fig1→fig1`, `fig2→fig2`, `fig13→fig3`, `fig5→fig4`, `fig6→fig5`, `fig11→fig6`;

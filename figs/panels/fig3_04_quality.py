@@ -130,7 +130,7 @@ def variant_deposit_name():
     hits = sorted(p.name for p in (Path(__file__).resolve().parent.parent / "out")
                   .glob(VARIANT_GLOB)
                   if "__shipped" not in p.name
-                  and not p.stem.endswith(("_unfilt", "_bvis4", "_bvis5")))
+                  and not p.stem.endswith(("_unfilt", "_bvis4", "_bvis5", "_bvis5nt", "_md56", "_v105")))
     if not hits:
         sys.exit("fig3d: no fresh-anchor quality deposit. Run:\n"
                  "  PY=/root/vast/eric/luc3d-bench/liezl_env/bin/python\n"

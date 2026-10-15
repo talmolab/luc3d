@@ -33,6 +33,7 @@ Run with the bench interpreter (needs scipy/numpy):
 /root/vast/eric/luc3d-bench/liezl_env/bin/python
 """
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -65,7 +66,9 @@ def harness_crosscheck(shipped):
 
 
 def main():
-    p = OUT / "fig8_methods_50.json"
+    # FIG8M_SUFFIX=<tag> (2026-10-14, md56) reports the tagged deposit. Unset = unchanged.
+    _sfx = os.environ.get("FIG8M_SUFFIX", "")
+    p = OUT / (f"fig8_methods_50_{_sfx}.json" if _sfx else "fig8_methods_50.json")
     if not p.exists():
         sys.exit(f"{p} missing -- run `$PY figs/fig6_methods.py --all-sessions ...` first")
     d = json.loads(p.read_text())

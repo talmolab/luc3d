@@ -112,6 +112,16 @@ if VARIANT in ("bvis4", "bvis5"):
 import score_notail  # noqa: E402
 if score_notail.ACTIVE:
     REF_JSON = REF_JSON.replace(".json", "_notailscore.json")
+#: md56 (2026-10-14): score LUC3D from another tracking run (e.g. origin/main's real tracker)
+#: and write tagged deposits. FAIR_LUC3D_DIR = per-session LUC3D outputs, FAIR_REF_JSON = its
+#: Fig 4D deposit (the cross-check), FAIR_OUT_SUFFIX = suffix for every file written
+#: (fig6_slap2m_fair_<s>*, fig7_variant_best_<s>.json). SLEAP/ByteTrack caches are unchanged.
+if os.environ.get("FAIR_LUC3D_DIR"):
+    LUC3D = Path(os.environ["FAIR_LUC3D_DIR"])
+if os.environ.get("FAIR_REF_JSON"):
+    REF_JSON = os.environ["FAIR_REF_JSON"]
+if os.environ.get("FAIR_OUT_SUFFIX"):
+    SUFFIX = "_" + os.environ["FAIR_OUT_SUFFIX"]
 if os.environ.get("FAIR_SLEAP_PY"):
     SLEAP_PY = Path(os.environ["FAIR_SLEAP_PY"])
 CAMS = ["back", "backL", "mid", "midL", "top", "topL"]

@@ -98,8 +98,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (GREY, INK, MUTED, PERIWINKLE, SALMON, TEAL,  # noqa: E402
-                       deposit, footnote, grid, save, text_legend, use)
+from src.style import (GREEN, GREY, PINK,  # noqa: E402
+                       deposit, footnote, grid, save, use)
 
 #: (config, label drawn on the panel, colour). Order is the drawing order.
 #:
@@ -110,12 +110,26 @@ from src.style import (GREY, INK, MUTED, PERIWINKLE, SALMON, TEAL,  # noqa: E402
 #: on the switch sub-panel where there is no room for them. M1 and distThresh 25 are
 #: common to all four candidates, so they belong in the caption; what varies between
 #: them, and the only thing the reader has to tell apart, is the staleness horizon.
+#:
+#: COLOURS SINCE 2026-10-09 (Eric: "use a different color pallete or a continued
+#: color pallate for f, and make sure it doesnt overlap with a,b,c,d,e or g"; then,
+#: rejecting a PuRd ramp, "a continued version of the color pallete from abcde").
+#: The old INK/SALMON/TEAL/PERIWINKLE/GREY reused a-d's tracker hues (teal = LUC3D,
+#: periwinkle = SLEAP, salmon = ByteTrack) for unrelated parameter sets. These are
+#: the REST of seaborn Set2 -- the same palette a-d draw from -- none of which a-d,
+#: e or g use -- grey, pink and green from Set2 itself, then a brick red and a plum
+#: at Set2's muted weight in place of its yellow and tan ("the yellow and light
+#: yellow brown is ugly", Eric, same day).
+STALE_COLOURS = [GREY, PINK, GREEN, "#D1605E", "#9E5A8F"]
+#: The no-eviction cell. Default `shipped` = the pre-#210 tracker. FIG6F_NOEVICT=stale0_dist25
+#: (v1.0.5, 2026-10-15) draws v1.0.5 itself with eviction off, so every point is one code version.
+NOEVICT = __import__("os").environ.get("FIG6F_NOEVICT", "shipped")
 SERIES = [
-    ("shipped", "stale 0", INK),
-    ("sync_stale1_dist25", "stale 1", SALMON),
-    ("sync_stale10_dist25", "stale 10", TEAL),
-    ("sync_stale20_dist25", "stale 20", PERIWINKLE),
-    ("sync_stale30_dist25", "stale 30", GREY),
+    (NOEVICT, "stale 0", STALE_COLOURS[0]),
+    ("sync_stale1_dist25", "stale 1", STALE_COLOURS[1]),
+    ("sync_stale10_dist25", "stale 10", STALE_COLOURS[2]),
+    ("sync_stale20_dist25", "stale 20", STALE_COLOURS[3]),
+    ("sync_stale30_dist25", "stale 30", STALE_COLOURS[4]),
 ]
 
 
@@ -228,7 +242,7 @@ def main(deposit_name="fig8_methods_50.json"):
                      yerr=[[r.idp_median - r.idp_q1], [r.idp_q3 - r.idp_median]],
                      fmt="o", color=r._colour, ms=4.6, mec="white", mew=0.7,
                      elinewidth=0.9, capsize=1.6, capthick=0.9,
-                     zorder=5 if r.config == "shipped" else 4)
+                     zorder=5 if r.config == NOEVICT else 4)
     axP.set_xlabel("identity recall (cross-view)", fontsize=7)
     axP.set_ylabel("identity precision (cross-view)", fontsize=7)
     axP.set_xlim(x0, x1)
@@ -253,8 +267,8 @@ def main(deposit_name="fig8_methods_50.json"):
             ys = np.empty(2 * n)
             ys[0::2] = 100.0 * (n - np.arange(n)) / n
             ys[1::2] = 100.0 * (n - np.arange(n) - 1) / n
-            ax.plot(xs, ys, color=r._colour, lw=1.9 if r.config == "shipped" else 1.2,
-                    zorder=4 if r.config == "shipped" else 3)
+            ax.plot(xs, ys, color=r._colour, lw=1.9 if r.config == NOEVICT else 1.2,
+                    zorder=4 if r.config == NOEVICT else 3)
         ax.axhline(50, color=GREY, lw=0.7, ls=(0, (1.5, 1.5)), zorder=1)
         ax.set_xlabel(xlabel, fontsize=7)
         if ylabel:
@@ -314,17 +328,29 @@ def main(deposit_name="fig8_methods_50.json"):
     # needs to be looked up by number. Laid out width-aware (draw, measure,
     # advance) rather than at guessed anchors, so a renamed parameter set cannot
     # silently overlap its neighbour.
+    # CENTRED under the three sub-plots (Eric, 2026-10-09: "put that in the center
+    # under f in the center of the left middle and right figures"): lay the strip
+    # out once from 0, measure its width, then shift every entry so the strip's
+    # midpoint sits on the midpoint of axP's left edge .. axS's right edge.
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
-    kx, fw = 0.005, fig.bbox.width
+    kx, fw = 0.0, fig.bbox.width
+    keys = []
     for _ix, r in df.iterrows():
         # y = 0.022, up from 0.012: the strip rides directly under the x labels
         # instead of hugging the panel's bottom edge with white above it
         t = fig.text(kx, 0.022, r.label, color=r._colour, fontsize=7,
                      fontweight="bold", ha="left", va="bottom")
-        kx += t.get_window_extent(renderer).width / fw + 0.022
+        w = t.get_window_extent(renderer).width / fw
+        keys.append(t)
+        kx += w + 0.022
+    strip_w = kx - 0.022
+    mid = (axP.get_position().x0 + axS.get_position().x1) / 2
+    for t in keys:
+        x0, y0 = t.get_position()
+        t.set_position((x0 + mid - strip_w / 2, y0))
 
-    ship = df[df.config == "shipped"]
+    ship = df[df.config == NOEVICT]
     best = df.loc[df.switches_pct.idxmin()]
     note = ""
     if len(ship):
@@ -336,7 +362,7 @@ def main(deposit_name="fig8_methods_50.json"):
                  f"{best.idf1_cross_median:.4f}\n")
     # The two .replace() calls that used to trim "M1 + " and " + distThresh 25" off
     # each label are gone with the long labels they existed for (see SERIES).
-    note += ("RAW switch totals over all 50 sessions (the percentage's numerator; "
+    note += (f"RAW switch totals over all {len(d['sessions'])} sessions (the percentage's numerator; "
              f"denominator {cf:,} camera-frames): "
              + ", ".join(f"{r.label} {int(r.switches):,}" for _i, r in df.iterrows())
              + "\n")
@@ -355,7 +381,7 @@ def main(deposit_name="fig8_methods_50.json"):
              f"all {len(d['sessions'])} proofread Mouse-Dyad-10M sessions x 5 cameras, full "
              f"length, {cf:,} camera-frames; sessions PAIRED across parameter sets")
     if missing:
-        note += "\nnot yet measured at 50 sessions: " + ", ".join(missing)
+        note += f"\nnot yet measured at {len(d['sessions'])} sessions: " + ", ".join(missing)
     footnote(axP, note)
     # Panel g shares this row and copies these axes' size and baseline, so the
     # two panels' plots line up (Eric, 2026-10-03: "f and G should have the

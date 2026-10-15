@@ -91,7 +91,7 @@ OUT = "/root/vast/eric/luc3d-bench/outputs/bmimica/retracked_max2"
 #: therefore writes its own directory and the results are hard-linked in afterwards --
 #: `os.link` fails on an existing path rather than clobbering, so the merge cannot race
 #: either. Same flags, same code, so the two drivers' outputs are the same computation.
-SLEAP = "/root/vast/eric/sleap_nn_030_env/bin/python"
+SLEAP = os.environ.get("SLEAP_PY", "/root/vast/eric/sleap_nn_030_env/bin/python")
 SER = ["21241563", "21369048", "21372315", "21372316", "22085397"]
 TARGET = 2
 

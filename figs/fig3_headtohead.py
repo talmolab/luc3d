@@ -78,8 +78,15 @@ VARIANT = os.environ.get("FIG3_VARIANT", "")
 #: detections with < 4 visible BODY keypoints (figs/build_lite_pools.py) -- the rule Eric
 #: chose for Figs 3b/4b/6b.
 #: FIG3_VARIANT=bvis5 (2026-10-08): the same rule at >= 5 body keypoints (Figs 3c/4c/6c).
-if VARIANT not in ("", "unfilt", "bvis4", "bvis5"):
-    raise SystemExit(f"FIG3_VARIANT={VARIANT!r}: only unfilt / bvis4 / bvis5 are defined")
+#: FIG3_VARIANT=bvis5nt (2026-10-12): bvis5's pool and greedy arm, with the EXHAUSTIVE arm
+#: run tail-free (fig3_exhaustive.mjs --exclude-tail), so both arms ignore the four tail
+#: nodes. The greedy tracker has always given them zero weight (fig3_bench.mjs excludeTail).
+#: FIG3_VARIANT=md56 (2026-10-14): bvis5nt on all 56 Mouse-Dyad-10M sessions (the six
+#: 2025-09-08 sessions added), with the greedy arm = the current (post-#210) tracker for every
+#: session and the exhaustive arm re-run on the pinned origin/main (LUCID_ROOT) for timing.
+if VARIANT not in ("", "unfilt", "bvis4", "bvis5", "bvis5nt", "md56"):
+    raise SystemExit(f"FIG3_VARIANT={VARIANT!r}: only unfilt / bvis4 / bvis5 / bvis5nt / md56 are defined")
+EXH_EXCLUDE_TAIL = VARIANT in ("bvis5nt", "md56")
 SUFFIX = f"_{VARIANT}" if VARIANT else ""
 TMP_DIR = OUT_DIR / "tmp" / f"headtohead{SUFFIX}"
 
@@ -88,7 +95,9 @@ MAX_HYPOTHESES = 1_000_000
 MASTER = BENCH / "outputs" / "sleap_nn_master_sheet.tsv"
 KEEPTRACK = {"unfilt": OUT_DIR / "tmp" / "predslp_pool",
              "bvis4": OUT_DIR / "tmp" / "lite_pools" / "bvis4",
-             "bvis5": OUT_DIR / "tmp" / "lite_pools" / "bvis5"}.get(
+             "bvis5": OUT_DIR / "tmp" / "lite_pools" / "bvis5",
+             "bvis5nt": OUT_DIR / "tmp" / "lite_pools" / "bvis5",
+             "md56": OUT_DIR / "tmp" / "lite_pools" / "bvis5"}.get(
                  VARIANT, BENCH / "outputs" / "keeptrack_h5s")
 
 BM_MASTER = BENCH / "outputs" / "bmimica" / "bmimica_master.tsv"
@@ -108,7 +117,7 @@ CONFIGS = [
     {
         "key": "A2_C5_bmimica", "animals": 2, "cameras": BM_CAMS,
         "dataset": "BMimica", "corpus": "bmimica", "clean_sample": None,
-        "note": "worked example 2x5=32 hyps/frame; ALL 50 BMimica sessions that have "
+        "note": "worked example 2x5=32 hyps/frame; ALL BMimica sessions that have "
                 "both a shared-pool detection file and proofread GT, at full session "
                 "length (no frame cap).",
     },
@@ -251,12 +260,14 @@ def driver_job(cfg, sess):
     greedy_out, exh_out = d / "greedy.json", d / "exhaustive.json"
     force = bool(os.environ.get("HH_FORCE_RERUN"))
 
-    def usable(path, want_sample):
+    def usable(path, want_sample, exhaustive=False):
         if force or not path.exists():
             return False
         try:
             p = json.loads(path.read_text())
         except Exception:
+            return False
+        if exhaustive and bool(p.get("excludeTail", False)) != EXH_EXCLUDE_TAIL:
             return False
         if p.get("numAnimals") != cfg["animals"]:
             return False
@@ -287,9 +298,11 @@ def driver_job(cfg, sess):
                     timeout=7200)
         if e:
             errs.append(f"greedy: {e}")
-    if not errs and not usable(exh_out, cfg["clean_sample"]):
+    if not errs and not usable(exh_out, cfg["clean_sample"], exhaustive=True):
         cmd = ["node", str(EXH_DRIVER)] + base + [
             "--out", str(exh_out), "--max-hypotheses", str(MAX_HYPOTHESES)]
+        if EXH_EXCLUDE_TAIL:
+            cmd += ["--exclude-tail"]
         if cfg["clean_sample"]:
             cmd += ["--clean-sample", str(cfg["clean_sample"])]
         _, e = _run(cmd, timeout=86400)

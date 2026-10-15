@@ -254,8 +254,22 @@ def main(variant=False, corrected=True, fresh_arm=False):
                 # the middle label lifts a full label-height and the orange one
                 # leans right off its bar's far flank -- the two moves that
                 # actually collided at this size.
-                side = 1 if (i == 1 and j == len(series) - 1) else 0
-                lift = 0.24 if (j == 1 and i == 1) else 0.0
+                # 2026-10-09 (Eric): every label CENTRED over its own bar ("the
+                # other text labels are not above their bytetrack and luc3d
+                # bars"). Centred, SLEAP's switch label is a few mm wider than
+                # the bar pitch allows beside green's, so it lifts by just over
+                # one label height (~0.07 of `top` at COMPACT_FS) -- a third of
+                # the old 0.24 -- and is printed ".05%".
+                # Then (same day): "bring the one on the right and left outwards
+                # a little and bring the middle one down" -- the outer two stay
+                # centred but shift outward by ~a fifth of a bar (0.25 then tucked
+                # back to 0.18, "just a little"), which frees enough
+                # room for the middle one to sit level.
+                side = 0
+                lift = 0.0
+                nudge = 0.0
+                if j == 1:
+                    nudge = {0: -0.18, nser - 1: 0.18}.get(i, 0.0) * bar_w
                 # SHORT LABELS (Eric, 2026-08-25: "lets use precision like .31%
                 # and .53% etc no need for the 0. or the 3 or 4 decimal places
                 # for 11d" -- the full-precision labels collided at COMPACT_FS).
@@ -264,9 +278,11 @@ def main(variant=False, corrected=True, fresh_arm=False):
                 # same number); leading zero stripped. Full precision stays in
                 # the deposit CSV and the caption.
                 short = (f"{v:.2f}" if v >= 0.0995 else f"{v:.3f}").lstrip("0")
-                ax.text(px + side * bar_w * 0.30, v + (0.02 + lift) * top,
+                if i == 1 and j == 1:
+                    short = f"{v:.2f}".lstrip("0")
+                ax.text(px + nudge + side * bar_w * 0.30, v + (0.02 + lift) * top,
                         f"{short}%", va="bottom", color=color,
-                        ha="left" if side else "center",
+                        ha={1: "left", -1: "right"}.get(side, "center"),
                         fontsize=COMPACT_FS, fontweight="bold")
         else:
             entries.append((f"{lab}  FP {vals[0]:.3g}% · sw {vals[1]:.3g}%", color))

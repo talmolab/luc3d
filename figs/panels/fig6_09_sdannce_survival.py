@@ -93,6 +93,10 @@ def main():
     switches = {d: [r["switches"] for r in rows if r["dataset"] == d]
                 for d in DATASETS}
     switches["all"] = [r["switches"] for r in rows]
+    # header over the counts so the n/N reads as "sessions with no switches"
+    # without the caption (Eric, 2026-10-09)
+    ax.text(0.04, 0.45, "No Switches", transform=ax.transAxes, color=INK,
+            fontsize=6.5, fontweight="bold", ha="left")
     for i, (name, vals, color, _) in enumerate(series):
         sw = switches[name]
         ax.text(0.04, 0.36 - i * 0.09,

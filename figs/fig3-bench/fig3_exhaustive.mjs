@@ -41,7 +41,7 @@
  *   node fig3_exhaustive.mjs --session-idx N --num-animals N \
  *     --calibration calib.toml --pred-h5-dir DIR --out out.json \
  *     --cameras back,backL,mid,midL,top [--max-frames N] [--max-hypotheses 1000000] \
- *     [--clean-sample N]
+ *     [--clean-sample N] [--exclude-tail]
  */
 import { register } from 'node:module';
 import * as h5 from 'h5wasm/node';
@@ -50,8 +50,15 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const POSE_DIR = path.resolve(HERE, '..', '..', 'pose');
-const HOOKS_URL = pathToFileURL(path.resolve(HERE, '..', '..', 'scripts', 'bench', 'hooks.mjs')).href;
+// LUCID_ROOT=<checkout> (2026-10-14, md56): load pose/ and scripts/bench/hooks.mjs from another
+// checkout (the pinned origin/main used for every timed number). Unset = this repo, unchanged.
+const LUCID_ROOT = process.env.LUCID_ROOT ? path.resolve(process.env.LUCID_ROOT) : path.resolve(HERE, '..', '..');
+const POSE_DIR = path.join(LUCID_ROOT, 'pose');
+const HOOKS_URL = pathToFileURL(path.join(LUCID_ROOT, 'scripts', 'bench', 'hooks.mjs')).href;
+
+// Skeleton order of the shared detection pools (same as fig3_bench.mjs NODE_NAMES):
+// TailTip = 4, Tail_0..Tail_2 = 7..9. Used only under --exclude-tail.
+const TAIL_IDX = new Set([4, 7, 8, 9]);
 
 function parseArgs(argv) {
     const o = { maxHypotheses: 1_000_000 };
@@ -67,6 +74,7 @@ function parseArgs(argv) {
         else if (a === '--max-frames') o.maxFrames = parseInt(take());
         else if (a === '--max-hypotheses') o.maxHypotheses = parseInt(take());
         else if (a === '--clean-sample') o.cleanSample = parseInt(take());
+        else if (a === '--exclude-tail') o.excludeTail = true;
     }
     return o;
 }
@@ -206,7 +214,7 @@ async function main() {
     const hypothesesPerFrame = Math.pow(permsA.length, cameras.length);
     const capped = hypothesesPerFrame > opts.maxHypotheses;
 
-    let framesConsidered = 0, framesClean = 0, framesComputed = 0;
+    let framesConsidered = 0, framesClean = 0, framesComputed = 0, tailOnlyInstances = 0;
     const frames = [];
     let prevCentroids = null; // array of A [x,y,z] from the last computed frame
     const t0 = Date.now();
@@ -251,7 +259,16 @@ async function main() {
                 const sl = camSlices[cam];
                 const insts = [];
                 for (let a = 0; a < sl.nAnimals; a++) {
-                    const pts = instancePoints(sl.data, fi, a, sl.nAnimals, sl.nNodes);
+                    let pts = instancePoints(sl.data, fi, a, sl.nAnimals, sl.nNodes);
+                    // --exclude-tail: drop the four tail nodes before triangulation, the
+                    // reprojection objective and centroid threading, matching the greedy
+                    // arm's zero tail weight. Eligibility (Pass A) is unchanged, so the frame
+                    // set is identical. A detection with ONLY tail points keeps them (it
+                    // would otherwise vanish and break the A-per-camera grouping); counted.
+                    if (pts && opts.excludeTail) {
+                        const body = pts.map((p, k) => (TAIL_IDX.has(k) ? null : p));
+                        if (body.some(p => p !== null)) pts = body; else tailOnlyInstances++;
+                    }
                     if (pts) insts.push({ slot: a, instance: new Instance(pts, a, 'predicted', 1.0) });
                 }
                 perCamInstances[cam] = insts;
@@ -355,6 +372,8 @@ async function main() {
 
     fs.mkdirSync(path.dirname(opts.out), { recursive: true });
     fs.writeFileSync(opts.out, JSON.stringify({
+        excludeTail: !!opts.excludeTail,
+        tailOnlyInstances,
         sessionIdx: opts.sessionIdx,
         numAnimals: opts.numAnimals,
         cameras,

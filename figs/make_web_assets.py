@@ -52,12 +52,13 @@ DEFAULT_PAGE_REPO = Path("/root/vast/eric/luc3d-page")
 #: (page slug, artwork PNG, artwork PDF), in the manuscript's own numbering
 #: (`figures/drafts/luc3d_newest.tex`). Main Figures 1-5 are the repo's fig1-fig5
 #: (fig4 = datasets, fig5 = social rearing since the 2026-10-03 swap). The
-#: Supplementary items map onto the tex as: Supplementary Figure 1 = \ref{fig6} =
-#: repo fig6; Supplementary Figure 2 = \ref{fig7}, the GUI screenshot, which lives
-#: only in Overleaf as `figs/fig7.png` -- exported from `figures/supp_fig2_gui/` if
-#: that file exists, skipped otherwise; Supplementary Figure 3 = \ref{fig8} = repo
-#: fig7 (calibration); Supplementary Figure 4 = \ref{fig9} = `figs/fig9.pdf`
-#: (Panopticon, no repo dir); Supplementary Table 1 = \ref{tab:datasheets}.
+#: Supplementary items map onto the tex in order of first citation:
+#: Supplementary Figure 1 = \ref{fig6} = repo fig6 (tracking comparison);
+#: Supplementary Figure 2 = \ref{fig9} = `figs/fig9.pdf` (Panopticon, no repo dir);
+#: Supplementary Figure 3 = \ref{fig8} = repo fig7 (calibration); Supplementary
+#: Figure 4 = \ref{fig7}, the GUI screenshot, which lives only in Overleaf as
+#: `figs/fig7.png` -- exported from `figures/supp_fig2_gui/` if that file exists,
+#: skipped otherwise; Supplementary Table 1 = \ref{tab:datasheets}.
 #: The page imports `src/assets/figures/<slug>.png` and links `public/pdf/luc3d-<slug>.pdf`.
 FIGURES = [
     ("figure1", "figures/fig1/fig1.png", "figures/fig1/fig1.pdf"),
@@ -66,15 +67,15 @@ FIGURES = [
     ("figure4", "figures/fig4/fig4.png", "figures/fig4/fig4.pdf"),
     ("figure5", "figures/fig5/fig5.png", "figures/fig5/fig5.pdf"),
     ("supp-figure1", "figures/fig6/fig6.png", "figures/fig6/fig6.pdf"),
-    ("supp-figure2", "figures/supp_fig2_gui/fig7.png", None),
+    ("supp-figure2", "fig9.png", "fig9.pdf"),
     ("supp-figure3", "figures/fig7/fig7.png", "figures/fig7/fig7.pdf"),
-    ("supp-figure4", "fig9.png", "fig9.pdf"),
+    ("supp-figure4", "figures/supp_fig2_gui/fig7.png", None),
     ("supp-table1", "figures/datasheets/datasheet_combined.png",
      "figures/datasheets/datasheet_combined.pdf"),
 ]
 
-#: Entries that may be absent without failing the export (see Supplementary Figure 2).
-OPTIONAL = {"supp-figure2"}
+#: Entries that may be absent without failing the export (see Supplementary Figure 4).
+OPTIONAL = {"supp-figure4"}
 
 #: The dpi the composites are rendered at by `assemble.py` (its PNG proof). Recorded
 #: rather than assumed: if the assembler's dpi changes, the manifest says so.
