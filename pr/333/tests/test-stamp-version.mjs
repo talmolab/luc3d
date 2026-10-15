@@ -5,12 +5,15 @@
  *
  * Pins each rewrite rule, what must NOT be touched (CDN URLs, bare importmap
  * specifiers, already-queried worker URLs), idempotency, and that the safety
- * scan catches a reference the rules would miss. The real-tree half — a stamped
+ * scan catches a reference the rules would miss, plus the build-info <meta> tags
+ * the menu bar's version label reads. The real-tree half — a stamped
  * copy of the app loading every module exactly once and passing the browser
  * suite — is tests/e2e/stamped-build.mjs.
  *
  * Run: node tests/test-stamp-version.mjs
  */
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -58,6 +61,9 @@ eq(html(`<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min
    `<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>`, 'CDN script untouched');
 eq(html(`<script type="importmap">{ "imports": { "h5wasm": "./lib/h5wasm/hdf5_hl.js", "yaml": "https://cdn/yaml.js" } }</script>`),
    `<script type="importmap">{ "imports": { "h5wasm": "./lib/h5wasm/hdf5_hl.js?v=${V}", "yaml": "https://cdn/yaml.js" } }</script>`, 'importmap: relative entry stamped, CDN entry not');
+eq(html(`<link rel="modulepreload" href="./pose/x.js">`), `<link rel="modulepreload" href="./pose/x.js?v=${V}">`, 'modulepreload link (must name its module\'s stamped URL)');
+eq(html(`<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/yaml@2.8.0/+esm">`), `<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/yaml@2.8.0/+esm">`, 'CDN modulepreload untouched');
+eq(html(`<script defer src="./lib/h5wasm/h5wasm.iife.js"></script>`), `<script defer src="./lib/h5wasm/h5wasm.iife.js?v=${V}"></script>`, 'deferred classic script src');
 eq(html(`<script type="module">import { a } from './lib/x.js';</script>`),
    `<script type="module">import { a } from './lib/x.js?v=${V}';</script>`, 'inline module script imports');
 
@@ -66,8 +72,41 @@ ok(S.findUnstamped(once, false).length === 0, 'a fully stamped file has no unsta
 ok(S.findUnstamped(`import x from '/ui/abs.js';`, false).length === 1, 'scan catches a root-absolute import the rules do not stamp');
 ok(S.findUnstamped(`import x from './a.js';`, false).length === 1, 'scan catches an unstamped relative import');
 ok(S.findUnstamped(`<script src="app.js"></script>`, true).length === 1, 'scan catches an unstamped script tag');
+ok(S.findUnstamped(`<link rel="modulepreload" href="./ui/a.js">`, true).length === 1, 'scan catches an unstamped modulepreload');
 let threw = false; try { S.stampSite(ROOT, 'bad version!'); } catch (e) { threw = true; }
 ok(threw, 'a version with unsafe characters is refused before touching anything');
+
+// --- the build-info <meta> tags (the menu bar's version label, ui/version-label.js)
+const HEAD = `<head>\n<meta name="lucid-release" content="">\n<meta name="lucid-commit" content="">\n</head>`;
+const bi = S.stampBuildInfo(HEAD, V, 'v1.0.5');
+ok(bi.found, 'both build-info tags found');
+eq(bi.text, `<head>\n<meta name="lucid-release" content="v1.0.5">\n<meta name="lucid-commit" content="${V}">\n</head>`, 'release label and commit written into the tags');
+eq(S.stampBuildInfo(bi.text, 'fff000fff000', 'dev').text,
+   `<head>\n<meta name="lucid-release" content="dev">\n<meta name="lucid-commit" content="fff000fff000">\n</head>`, 're-stamping overwrites, never appends');
+eq(S.stampBuildInfo(HEAD, V).text.includes('name="lucid-release" content=""'), true, 'no label: the release tag stays empty');
+ok(!S.stampBuildInfo(`<head><meta name="lucid-commit" content=""></head>`, V, 'v1.0.5').found, 'a missing tag is reported, not ignored');
+ok(!S.stampBuildInfo('<head></head>', V, 'v1.0.5').found, 'no tags at all is reported');
+const realIndex = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+ok(S.stampBuildInfo(realIndex, V, 'v1.0.5').found, "the repo's index.html carries both tags for the deploy to fill");
+ok(/<meta name="lucid-release" content="">/.test(realIndex) && /<meta name="lucid-commit" content="">/.test(realIndex),
+   "…and they are EMPTY in the repo, so a working tree shows no version");
+threw = false; try { S.stampSite(ROOT, V, 'v1"><script>'); } catch (e) { threw = true; }
+ok(threw, 'a release label that could close the attribute is refused before touching anything');
+
+// stampSite end to end on a scratch site: fills the tags, and fails when they are gone.
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lucid-stamp-'));
+try {
+    fs.writeFileSync(path.join(tmp, 'index.html'), HEAD + '<script type="module" src="app.js"></script>');
+    let r = S.stampSite(tmp, V, 'PR #12');
+    const out = fs.readFileSync(path.join(tmp, 'index.html'), 'utf8');
+    ok(r.problems.length === 0 && out.includes('content="PR #12"') && out.includes(`content="${V}"`) && out.includes(`app.js?v=${V}`),
+       'stampSite fills the tags alongside the ?v= stamp' + (r.problems.length ? ': ' + r.problems.join(' | ') : ''));
+    fs.writeFileSync(path.join(tmp, 'index.html'), '<head></head>');
+    r = S.stampSite(tmp, V, 'v1.0.5');
+    ok(r.problems.some(p => p.includes('lucid-release')), 'stampSite fails a site whose index.html lost the tags');
+} finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+}
 
 console.log(fail ? `✗ FAIL — ${pass} passed, ${fail} failed` : `✓ PASS — ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

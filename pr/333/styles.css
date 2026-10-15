@@ -175,6 +175,16 @@ body {
   cursor: pointer;
 }
 
+/* The deployed release, right of Settings (ui/version-label.js). Selectable,
+   unlike the rest of the menu bar: it is what a bug report needs to quote. */
+.menu-bar-version {
+  padding: 4px 12px 4px 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  user-select: text;
+}
+
 .menu-dropdown {
   display: none;
   position: absolute;

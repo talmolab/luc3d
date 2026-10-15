@@ -15,13 +15,15 @@
 // when the box closes. Resting the pointer on a sample shows it enlarged beside
 // the tile: the crop is copied at up to the enlarged size when it is drawn (a
 // decoder's frame may be closed by the next decode), so the preview is a sharper
-// image, not the 88 px tile scaled up.
+// image, not the 88 px tile scaled up. A map enlarges the same way — its path
+// redrawn at the larger size over a larger copy of the frame — with the point
+// under the pointer marked and its time in the caption.
 //
 // Depends on: ui/app-state.js (state), pose/lazy-residency.js
 // (hydrateFrameMembers2d, releaseFrameMembers2d).
 
-import { state } from './app-state.js?v=73cd867fa63b';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=73cd867fa63b';
+import { state } from './app-state.js?v=938fb6a334b8';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=938fb6a334b8';
 
 /** Sample images per identity. */
 export const GALLERY_SAMPLES = 5;
@@ -29,8 +31,10 @@ export const GALLERY_SAMPLES = 5;
 export const GALLERY_MAX_ROWS = 12;
 /** A sample image's side and a map's height, in CSS pixels. */
 export const GALLERY_TILE = 88;
-/** A sample's side when enlarged on hover, in CSS pixels. */
+/** A sample's side when enlarged on hover, in CSS pixels — and a map's height. */
 export const GALLERY_ZOOM = 320;
+/** An enlarged map's widest, in CSS pixels (a wider view is shown less tall). */
+export const MAP_ZOOM_MAX_WIDTH = 640;
 /** Points drawn per path, at most (thinned evenly in time). */
 export const MAP_MAX_POINTS = 2400;
 
@@ -434,12 +438,38 @@ function drawSampleDots(ctx, pts, box, size, color, radius) {
 }
 
 /**
- * The hover preview: one floating element per section, shown beside the tile
- * under the pointer. It lives in the summary's overlay (fixed, full-window), not
- * in the modal, which scrolls and would clip it; closing the box removes it.
+ * One identity's path over a camera's view, drawn `w` x `h` CSS px: the frame
+ * (`bg`, may be null) darkened — the path is the subject — then each joined step
+ * in the time colour of its later point. `path` is `projectTrack`'s, in the
+ * view's `vw` x `vh` pixels; `last` is the recording's last frame.
+ */
+function drawPath(ctx, w, h, bg, path, vw, vh, last, lineWidth) {
+    ctx.fillStyle = '#111'; ctx.fillRect(0, 0, w, h);
+    if (bg) { try { ctx.drawImage(bg, 0, 0, w, h); } catch (e) { /* a closed frame draws nothing */ } }
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)'; ctx.fillRect(0, 0, w, h);
+    var sx = w / vw, sy = h / vh;
+    ctx.lineWidth = lineWidth; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (var i = 1; i < path.frames.length; i++) {
+        if (path.breaks[i]) continue;
+        ctx.strokeStyle = timeColor(path.frames[i] / last);
+        ctx.beginPath();
+        ctx.moveTo(path.uv[2 * i - 2] * sx, path.uv[2 * i - 1] * sy);
+        ctx.lineTo(path.uv[2 * i] * sx, path.uv[2 * i + 1] * sy);
+        ctx.stroke();
+    }
+}
+
+/**
+ * The hover preview: one floating element per section, shown beside the tile or
+ * map under the pointer. It lives in the summary's overlay (fixed, full-window),
+ * not in the modal, which scrolls and would clip it; closing the box removes it.
+ *
+ * What it shows is the element's `_zoom`: `{kind, w, h, draw(ctx, w, h), color,
+ * label, frame}` — `draw` paints `w` x `h` CSS pixels. Showing the element it
+ * already shows redraws it in place (a map's marker follows the pointer).
  */
 function makeZoom(section) {
-    var box = null, canvas = null, cap = null, tile = null;
+    var box = null, canvas = null, cap = null, tile = null, cw = 0, ch = 0;
     var hide = function () { tile = null; if (box) box.style.display = 'none'; };
     var show = function (fig) {
         var z = fig._zoom;
@@ -447,7 +477,7 @@ function makeZoom(section) {
         if (!box) {
             box = el('div', 'identity-gallery-zoom');
             box.id = 'identityGalleryZoom';
-            canvas = hiDpiCanvas(GALLERY_ZOOM, GALLERY_ZOOM, 'identity-gallery-zoom-img');
+            canvas = el('canvas', 'identity-gallery-zoom-img');
             cap = el('div', 'identity-gallery-zoom-caption');
             box.appendChild(canvas);
             box.appendChild(cap);
@@ -455,14 +485,22 @@ function makeZoom(section) {
         var host = section.closest('.multi-frame-modal-overlay') || document.body;
         if (box.parentNode !== host) host.appendChild(box);
         tile = fig;
+        var dpr = pixelRatio();
+        if (z.w !== cw || z.h !== ch) {               // a sample is square, a map the view's shape
+            cw = z.w; ch = z.h;
+            canvas.width = Math.round(cw * dpr); canvas.height = Math.round(ch * dpr);
+            canvas.style.width = cw + 'px'; canvas.style.height = ch + 'px';
+            cap.style.maxWidth = cw + 'px';
+        }
         var ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, GALLERY_ZOOM, GALLERY_ZOOM);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cw, ch);
         ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(z.src, 0, 0, GALLERY_ZOOM, GALLERY_ZOOM);
-        drawSampleDots(ctx, z.pts, z.box, GALLERY_ZOOM, z.color, 3);
+        z.draw(ctx, cw, ch);
         canvas.style.borderColor = z.color || '';
         cap.textContent = z.label;
-        box.setAttribute('data-frame', fig.getAttribute('data-frame') || '');
+        box.setAttribute('data-kind', z.kind);
+        box.setAttribute('data-frame', z.frame != null ? String(z.frame) : '');
         box.style.display = 'block';
         // beside the tile — right if it fits, else left — and inside the window
         var r = fig.getBoundingClientRect(), bw = box.offsetWidth, bh = box.offsetHeight, gap = 10;
@@ -570,25 +608,27 @@ export function renderIdentityGallery(host, session, opts) {
             catch (e) { bg = null; }
         }
         if (token !== mapToken || !alive()) return;
+        var tile = zoom.tile();
+        if (tile && tile.classList.contains('identity-gallery-map-canvas')) zoom.hide();   // that map is being replaced
         var last = Math.max(1, (state.totalFrames || 1) - 1);
+        // The enlarged map: the view's shape, GALLERY_ZOOM tall unless that is wider than MAP_ZOOM_MAX_WIDTH. Its
+        // frame is copied now, at up to that size, since a decoder's frame may be closed by the next decode.
+        var ZH = GALLERY_ZOOM, ZW = Math.round(ZH * vw / vh);
+        if (ZW > MAP_ZOOM_MAX_WIDTH) { ZW = MAP_ZOOM_MAX_WIDTH; ZH = Math.max(1, Math.round(ZW * vh / vw)); }
+        var bgBig = null;
+        if (bg) {
+            var bsz = imageSize(bg), dpr = pixelRatio();
+            bgBig = el('canvas');
+            bgBig.width = Math.max(1, Math.min(bsz[0] || vw, Math.round(ZW * dpr)));
+            bgBig.height = Math.max(1, Math.min(bsz[1] || vh, Math.round(ZH * dpr)));
+            try { bgBig.getContext('2d').drawImage(bg, 0, 0, bgBig.width, bgBig.height); } catch (e) { bgBig = null; }
+        }
         rows.forEach(function (r) {
-            var c = hiDpiCanvas(W, H, 'identity-gallery-map-canvas'), ctx = c.getContext('2d');
-            ctx.fillStyle = '#111'; ctx.fillRect(0, 0, W, H);
-            if (bg) { try { ctx.drawImage(bg, 0, 0, W, H); } catch (e) { /* a closed frame draws nothing */ } }
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.55)'; ctx.fillRect(0, 0, W, H);  // darken: the path is the subject
+            var c = hiDpiCanvas(W, H, 'identity-gallery-map-canvas');
             var path = projectTrack(tracks.get(r.id.id), cam, MAP_MAX_POINTS, Math.round(2 * (state.fps || 30)));
+            drawPath(c.getContext('2d'), W, H, bg, path, vw, vh, last, 1.5);
             var sx = W / vw, sy = H / vh;
-            ctx.lineWidth = 1.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-            for (var i = 1; i < path.frames.length; i++) {
-                if (path.breaks[i]) continue;
-                ctx.strokeStyle = timeColor(path.frames[i] / last);
-                ctx.beginPath();
-                ctx.moveTo(path.uv[2 * i - 2] * sx, path.uv[2 * i - 1] * sy);
-                ctx.lineTo(path.uv[2 * i] * sx, path.uv[2 * i + 1] * sy);
-                ctx.stroke();
-            }
             c.setAttribute('data-points', String(path.frames.length));
-            c.title = r.id.name + ' over the recording, in ' + camName + ' — click the path to go there';
             // hover: the time at the nearest point; click: go there
             var nearest = function (ev) {
                 var rect = c.getBoundingClientRect(), mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
@@ -597,11 +637,35 @@ export function renderIdentityGallery(host, session, opts) {
                     var dx = path.uv[2 * k] * sx - mx, dy = path.uv[2 * k + 1] * sy - my, d = dx * dx + dy * dy;
                     if (d < bd) { bd = d; best = k; }
                 }
-                return best < 0 ? null : { frame: path.frames[best], x: path.uv[2 * best] * sx, y: path.uv[2 * best + 1] * sy };
+                return best < 0 ? null : { k: best, frame: path.frames[best], x: path.uv[2 * best] * sx, y: path.uv[2 * best + 1] * sy };
             };
+            // the enlarged map (makeZoom): the path redrawn at that size — once, on first hover — and a ring
+            // on the point under the pointer, whose time the caption gives
+            var whole = r.id.name + ' over the recording, in ' + camName + ' — click the path to go there';
+            var big = null, mark = null;
+            c._zoom = { kind: 'map', w: ZW, h: ZH, color: r.color, label: whole, frame: null,
+                draw: function (ctx, w, h) {
+                    if (!big) {
+                        big = hiDpiCanvas(w, h);
+                        drawPath(big.getContext('2d'), w, h, bgBig, path, vw, vh, last, 2);
+                    }
+                    ctx.drawImage(big, 0, 0, w, h);
+                    if (!mark) return;
+                    var mx = path.uv[2 * mark.k] * w / vw, my = path.uv[2 * mark.k + 1] * h / vh;
+                    ctx.beginPath(); ctx.arc(mx, my, 7, 0, 2 * Math.PI);
+                    ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0, 0, 0, 0.7)'; ctx.stroke();
+                    ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke();
+                } };
             var tip = el('div', 'identity-gallery-map-tip');
+            c.addEventListener('mouseenter', function () { zoom.show(c); });
             c.addEventListener('mousemove', function (ev) {
                 var p = nearest(ev);
+                if ((p && p.k) !== (mark && mark.k)) {      // the marked point changed: redraw the preview
+                    mark = p;
+                    c._zoom.frame = p ? p.frame : null;
+                    c._zoom.label = p ? r.id.name + ' · ' + fmtTime(p.frame) + ' · ' + camName + ' — click to go there' : whole;
+                    zoom.show(c);
+                }
                 if (!p) { tip.style.display = 'none'; c.style.cursor = ''; return; }
                 tip.textContent = fmtTime(p.frame);
                 tip.style.display = 'block';
@@ -609,7 +673,10 @@ export function renderIdentityGallery(host, session, opts) {
                 tip.style.top = Math.max(0, p.y - 20) + 'px';
                 c.style.cursor = 'pointer';
             });
-            c.addEventListener('mouseleave', function () { tip.style.display = 'none'; });
+            c.addEventListener('mouseleave', function () {
+                tip.style.display = 'none'; zoom.hide();
+                mark = null; c._zoom.frame = null; c._zoom.label = whole;
+            });
             c.addEventListener('click', function (ev) { var p = nearest(ev); if (p) pickFrame(p.frame); });
             r.map.textContent = '';
             r.map.appendChild(c);
@@ -675,8 +742,11 @@ export function renderIdentityGallery(host, session, opts) {
             // this animal's keypoints as small dots in its colour: which one the row means when two share a crop
             drawSampleDots(ctx, pts, box, GALLERY_TILE, r.color, 1.6);
             if (big) {
-                fig._zoom = { src: big, pts: pts, box: box, color: r.color,
-                    label: r.id.name + ' · ' + fmtTime(frame) + ' · ' + cam + ' — click to go to this frame' };
+                fig._zoom = { kind: 'sample', w: GALLERY_ZOOM, h: GALLERY_ZOOM, color: r.color, frame: frame,
+                    label: r.id.name + ' · ' + fmtTime(frame) + ' · ' + cam + ' — click to go to this frame',
+                    draw: (function (src, pts, box, color) {
+                        return function (ctx, w, h) { ctx.drawImage(src, 0, 0, w, h); drawSampleDots(ctx, pts, box, w, color, 3); };
+                    })(big, pts, box, r.color) };
                 fig.removeAttribute('title');   // the preview says it; a native tooltip would cover it
                 fig.addEventListener('mouseenter', zoom.show.bind(null, fig));
                 fig.addEventListener('mouseleave', zoom.hide);
