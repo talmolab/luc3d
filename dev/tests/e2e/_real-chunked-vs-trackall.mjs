@@ -64,6 +64,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { answerTrackSetup } from './fixtures/track-setup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -185,13 +186,12 @@ async function runPage(browser, label, body) {
     const page = await browser.newPage();
     page.on('pageerror', e => log(`[${label} pageerror]`, String(e).slice(0, 200)));
     page.on('crash', () => { log(`*** ${label} RENDERER CRASHED ***`); fails++; });
-    // Track All asks for the animal count with a native prompt(). An UNHANDLED
-    // dialog is auto-dismissed by Playwright, so prompt() returns null,
-    // promptNumAnimals() returns false, and trackAll() returns silently having
-    // done nothing at all. Accept it. (Track Frame Range needs no handler —
-    // its modal collects the count, which is why runTrackingPass skips the
-    // prompt on that path.)
+    // Track All asks for the animal count in its first-use dialog
+    // (ui/track-setup-modal.js); unanswered, trackAll() waits on it forever.
+    // Answer it. (Track Frame Range needs no answer — its modal collects the
+    // count, which is why runTrackingPass skips the dialog on that path.)
     page.on('dialog', async d => { await d.accept(ANIMALS != null ? String(ANIMALS) : ''); });
+    await answerTrackSetup(page, ANIMALS != null ? ANIMALS : '');
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.SleapIO, { timeout: 30000 });
     // The folder loader ends in interactive modals that never resolve
