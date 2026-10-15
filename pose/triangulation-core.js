@@ -132,12 +132,21 @@ export function svd3x4(A) {
 // `matTranspose` + `matMul` (fresh arrays) and the generic `jacobiEigen`, which
 // allocates four arrays per Givens rotation. Profiled on HardFight_1kModels that
 // was ~5 s of an 8.6 s DLT Triangulate All and ~5 s of Track All, mostly
-// allocation and GC. The kernel below performs EXACTLY the same floating-point
-// operations in the same order — the same A entries, the same k-ordered sums
-// for M = AᵀA (starting from 0, as matMul does), the same rotation sequence,
-// angles, row-then-column update order and skip/convergence tests, and the same
-// strict-< smallest-|eigenvalue| pick — on preallocated typed arrays, so its
-// result is bit-identical to `svd3x4(A)` (pinned by tests/test-dlt-kernel.mjs).
+// allocation and GC. The kernel below builds the same A entries and the same
+// k-ordered sums for M = AᵀA (starting from 0, as matMul does), so M is
+// bit-identical to the one `svd3x4(A)` builds (`dltNormalMatrixFlat`).
+//
+// The null vector of M is then found by INVERSE ITERATION
+// (`smallestEigvec4Inverse`), not by the Jacobi sweeps `svd3x4` uses. Jacobi
+// was 23% of a whole Track All (15.1 s of 65 s on the 5-mouse, 8-camera,
+// 108,000-frame recording, ~9M solves at ~1.7 µs — atan2/cos/sin for each of
+// ~30 rotations); inverse iteration is ~0.35 µs. It is NOT bit-identical to
+// Jacobi: on seven real recordings (228,956 frames) the two agree to under
+// 1e-9 mm and Track All groups every frame identically, and inverse iteration
+// is the MORE rotation-invariant of the two (see "Triangulation must not depend
+// on where the origin is" in CLAUDE.md). Anything it cannot settle falls back
+// to the Jacobi kernel, `smallestEigvec4Flat`, which is still bit-identical to
+// `solveSmallestEigenvector4x4`. Pinned by tests/test-triangulation-kernels.mjs.
 // ---------------------------------------------------------------------------
 let _dltA = new Float64Array(8 * 4);
 const _dltM = new Float64Array(16);
@@ -145,12 +154,15 @@ const _dltJA = new Float64Array(16);
 const _dltJV = new Float64Array(16);
 const _dltRowP = new Float64Array(4);
 const _dltRowQ = new Float64Array(4);
+const _dltL = new Float64Array(16);
+const _dltY = new Float64Array(4);
 
 /**
  * Smallest-eigenvalue eigenvector of the 4x4 symmetric `M` (flat, row-major),
  * written into `out[0..3]`. Bit-identical to
  * `solveSmallestEigenvector4x4(rows(M))` — the same Jacobi sweeps
- * (maxIter 100, tol 1e-12) as `jacobiEigen`.
+ * (maxIter 100, tol 1e-12) as `jacobiEigen`. The DLT's fallback when
+ * `smallestEigvec4Inverse` cannot settle.
  */
 function smallestEigvec4Flat(M, out) {
     const maxIter = 100, tol = 1e-12, n = 4;
@@ -217,19 +229,83 @@ function smallestEigvec4Flat(M, out) {
     return out;
 }
 
+/** Most inverse-iteration steps before `smallestEigvec4Inverse` hands over to Jacobi. */
+const INVERSE_MAX_ITER = 50;
 /**
- * DLT null vector for observations already gathered as rows: `xs[r], ys[r]`
- * with projection matrix `Ps[r]`, r < nObs. Writes the homogeneous 4-vector
- * into `out`. Same A entries and M = AᵀA sums as building A + `svd3x4`.
- *
- * The unknown is a point in the NORMALIZED world frame `X = s·X' + c` (see the
- * note on `triangulatePointDLT`), so the rows are formed from `P·T` rather than
- * `P`. Omitting `s`/`cx`/`cy`/`cz` is the identity frame, which reproduces the
- * raw rows exactly — multiplying by 1 and adding 0 are exact in IEEE 754 — so
- * `__triangulationKernelsForTest`'s bit-identity against `svd3x4(A)` is
- * unaffected.
+ * Converged when no entry of the unit vector moves by more than this in one
+ * step: ~4 roundings of a unit-length entry. Measured on realistic DLT systems
+ * (8 cameras, 2 px noise): 4–5 steps; one view ~50 px off: 5–9; a 300 px
+ * outlier or all-wild views converge slowly (their two smallest eigenvalues are
+ * close, so the null vector is barely determined) and some reach
+ * INVERSE_MAX_ITER, which is what the Jacobi fallback is for.
  */
-function dltHomogeneousFlat(xs, ys, Ps, nObs, out, s, cx, cy, cz) {
+const INVERSE_TOL = 1e-15;
+
+/**
+ * Smallest-eigenvalue eigenvector of the 4x4 symmetric positive semi-definite
+ * `M` (flat, row-major, e.g. a DLT system's AᵀA), written into `out[0..3]` as a
+ * unit vector, by inverse iteration: Cholesky-factor `M + δI` once, then solve
+ * `(M + δI)·w = v` and normalize until `v` stops moving. The shift
+ * `δ = 1e-15·trace(M)` lets an exactly singular M (noise-free observations)
+ * factor, and changes no eigenvector — each step shrinks every other direction
+ * by `(λmin + δ) / (λ + δ)`. `M + δI` is positive definite, so every step keeps
+ * the sign of `v` and the convergence test needs no sign alignment.
+ *
+ * Falls back to the Jacobi kernel `smallestEigvec4Flat` — exactly today's
+ * answer for those inputs — when M is not finite / not positive semi-definite
+ * enough to factor, or the iteration has not settled after INVERSE_MAX_ITER
+ * steps. The start vector is fixed, so the result is deterministic.
+ */
+function smallestEigvec4Inverse(M, out) {
+    const tr = M[0] + M[5] + M[10] + M[15];
+    if (!(tr > 0) || tr === Infinity) return smallestEigvec4Flat(M, out);
+    const shift = tr * 1e-15;
+    const L = _dltL, y = _dltY;
+    for (let i = 0; i < 4; i++) {
+        for (let j = 0; j <= i; j++) {
+            let sum = M[i * 4 + j];
+            if (i === j) sum += shift;
+            for (let k = 0; k < j; k++) sum -= L[i * 4 + k] * L[j * 4 + k];
+            if (i === j) {
+                if (!(sum > 0)) return smallestEigvec4Flat(M, out);   // also catches NaN
+                L[i * 5] = Math.sqrt(sum);
+            } else {
+                L[i * 4 + j] = sum / L[j * 5];
+            }
+        }
+    }
+    let v0 = 0.5, v1 = 0.5, v2 = 0.5, v3 = 0.5;
+    for (let it = 0; it < INVERSE_MAX_ITER; it++) {
+        // L·y = v (forward), then Lᵀ·w = y (back), w written into out
+        y[0] = v0 / L[0];
+        y[1] = (v1 - L[4] * y[0]) / L[5];
+        y[2] = (v2 - L[8] * y[0] - L[9] * y[1]) / L[10];
+        y[3] = (v3 - L[12] * y[0] - L[13] * y[1] - L[14] * y[2]) / L[15];
+        out[3] = y[3] / L[15];
+        out[2] = (y[2] - L[14] * out[3]) / L[10];
+        out[1] = (y[1] - L[9] * out[2] - L[13] * out[3]) / L[5];
+        out[0] = (y[0] - L[4] * out[1] - L[8] * out[2] - L[12] * out[3]) / L[0];
+        const norm = Math.sqrt(out[0] * out[0] + out[1] * out[1] + out[2] * out[2] + out[3] * out[3]);
+        if (!(norm > 0) || norm === Infinity) return smallestEigvec4Flat(M, out);
+        const a = out[0] / norm, b = out[1] / norm, c = out[2] / norm, d = out[3] / norm;
+        const moved = Math.max(Math.abs(a - v0), Math.abs(b - v1), Math.abs(c - v2), Math.abs(d - v3));
+        v0 = a; v1 = b; v2 = c; v3 = d;
+        if (moved <= INVERSE_TOL) {
+            out[0] = v0; out[1] = v1; out[2] = v2; out[3] = v3;
+            return out;
+        }
+    }
+    return smallestEigvec4Flat(M, out);
+}
+
+/**
+ * M = AᵀA of the DLT system, into `_dltM`: the same A entries and the same
+ * k-ordered sums as `matMul(matTranspose(A), A)`, so bit-identical to the M
+ * `svd3x4(A)` builds. Only the upper triangle is summed; the lower one is a
+ * copy, which is exact — each product is the same two factors, and IEEE 754
+ * multiplication commutes. Arguments as for `dltHomogeneousFlat`.
+ */
+function dltNormalMatrixFlat(xs, ys, Ps, nObs, s, cx, cy, cz) {
     if (s === undefined) { s = 1; cx = 0; cy = 0; cz = 0; }
     const rows = nObs * 2;
     if (_dltA.length < rows * 4) _dltA = new Float64Array(rows * 4 * 2);
@@ -253,15 +329,33 @@ function dltHomogeneousFlat(xs, ys, Ps, nObs, out, s, cx, cy, cz) {
     }
     const M = _dltM;
     for (let i = 0; i < 4; i++) {
-        for (let j = 0; j < 4; j++) {
+        for (let j = i; j < 4; j++) {
             let sum = 0;
             for (let k = 0; k < rows; k++) {
                 sum += A[k * 4 + i] * A[k * 4 + j];
             }
             M[i * 4 + j] = sum;
+            M[j * 4 + i] = sum;
         }
     }
-    return smallestEigvec4Flat(M, out);
+    return M;
+}
+
+/**
+ * DLT null vector for observations already gathered as rows: `xs[r], ys[r]`
+ * with projection matrix `Ps[r]`, r < nObs. Writes the homogeneous 4-vector
+ * into `out`. M = AᵀA is bit-identical to the one `svd3x4` builds
+ * (`dltNormalMatrixFlat`); its null vector comes from `smallestEigvec4Inverse`.
+ *
+ * The unknown is a point in the NORMALIZED world frame `X = s·X' + c` (see the
+ * note on `triangulatePointDLT`), so the rows are formed from `P·T` rather than
+ * `P`. Omitting `s`/`cx`/`cy`/`cz` is the identity frame, which reproduces the
+ * raw rows exactly — multiplying by 1 and adding 0 are exact in IEEE 754 — so
+ * `__triangulationKernelsForTest`'s bit-identity of M against `svd3x4(A)`'s is
+ * unaffected.
+ */
+function dltHomogeneousFlat(xs, ys, Ps, nObs, out, s, cx, cy, cz) {
+    return smallestEigvec4Inverse(dltNormalMatrixFlat(xs, ys, Ps, nObs, s, cx, cy, cz), out);
 }
 const _dltXs = [], _dltYs = [], _dltPs = [];
 const _dltOut = new Float64Array(4);
@@ -413,8 +507,8 @@ export function triangulatePointDLT(observations, projectionMatrices) {
 
     // Rows of A (2 per observation: x·P[2] − P[0], y·P[2] − P[1], taken through
     // the normalizing frame) and its null vector, via the allocation-free
-    // kernel — bit-identical to building A as row arrays and calling
-    // `svd3x4(A)` (see `dltHomogeneousFlat`).
+    // kernel — the same M = AᵀA as `svd3x4(A)`, solved by inverse iteration
+    // (see `dltHomogeneousFlat`).
     for (let idx = 0; idx < validIndices.length; idx++) {
         const i = validIndices[idx];
         _dltXs[idx] = observations[i][0];
@@ -1494,7 +1588,8 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
  * agree bit for bit. Not part of the app's API.
  */
 export const __triangulationKernelsForTest = {
-    svd3x4, dltHomogeneousFlat,
+    svd3x4, dltHomogeneousFlat, dltNormalMatrixFlat, smallestEigvec4Flat, smallestEigvec4Inverse,
+    solveSmallestEigenvector4x4, matMul, matTranspose,
     projectAndJacobianCamera, projectAndJacobian,
     _projectAndJacobianCameraInto, _projectAndJacobianInto,
 };

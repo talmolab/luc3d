@@ -3573,20 +3573,58 @@ reads (unset = every camera included, no threshold; the main thread installs
 them, a worker gets resolved values via `options.includedCameras` /
 `options.reprojErrorThreshold`) — and `__triangulationKernelsForTest`.
 
-**Allocation-free hot paths, bit-identical by construction.**
-- DLT: `dltHomogeneousFlat` + `smallestEigvec4Flat` perform the exact
-  operations of row arrays -> `matTranspose` -> `matMul` -> `jacobiEigen` ->
-  smallest-|λ| pick (same k-ordered sums from 0, same Givens sequence, angles,
-  row-then-column updates, skip/convergence tests) on preallocated typed arrays.
-  The generic path allocated four arrays per rotation.
+**Allocation-free hot paths, bit-identical by construction — except the DLT's
+null-vector solve.**
+- DLT matrix: `dltNormalMatrixFlat` builds M = AᵀA with the exact operations of
+  row arrays -> `matTranspose` -> `matMul` (same A entries, same k-ordered sums
+  from 0) on preallocated typed arrays. It sums only the upper triangle and
+  mirrors it, which is exact: each product has the same two factors, and IEEE
+  754 multiplication commutes.
+- DLT solve: `dltHomogeneousFlat` finds M's null vector with
+  `smallestEigvec4Inverse` — **inverse iteration**: Cholesky of `M + δI`
+  (`δ = 1e-15·trace`, so an exactly singular M factors; the shift changes no
+  eigenvector), then solve-and-normalize from a fixed start until no entry
+  moves by more than `INVERSE_TOL` (1e-15). This is the one deliberate break
+  from bit-identity. The Jacobi kernel it replaced, `smallestEigvec4Flat`
+  (still bit-identical to `jacobiEigen` -> smallest-|λ| pick), cost ~1.7 µs per
+  solve — atan2/cos/sin for each of ~30 rotations — and Track All runs ~9M of
+  them: **15.1 s of a 65 s Track All** on the 5-mouse, 8-camera, 108,000-frame
+  recording (23%, the largest single function in the profile). Inverse
+  iteration is ~0.35 µs (4–5 steps on clean systems; one view ~50 px off, 5–9).
+  Systems whose two smallest eigenvalues are close (a 300 px outlier, all views
+  wild) can take INVERSE_MAX_ITER (50) steps and then fall back to
+  `smallestEigvec4Flat`, as do a non-finite M and one that does not factor —
+  which is exactly today's answer for those. It must CONVERGE rather than run a
+  fixed number of steps: the start vector does not rotate with the world, so an
+  unconverged answer depends on the frame, and the frame-invariance tests catch
+  that (a 1e-5 tolerance fails two of them).
+  Agreement, measured with `tests/e2e/_diag-trackall-ab.mjs` (Track All, then
+  DLT Triangulate All, with `main` and with this solver, compared frame by
+  frame) on seven real recordings — the 5-mouse one (108,000 frames, lazy) and
+  the six proofread SLAP ground-truth sessions (18–19k frames each, 3 and 4
+  mice): **identical identity groups on all 228,956 frames** (every group's
+  identity and its exact 2D detection in every camera), and 3D within 8.6e-10 mm
+  after Track All and after Triangulate All. Track All 65.5 -> 50.4 s on the
+  5-mouse recording, 3.4–5.4 -> 2.4–3.9 s on the others (~30%). Triangulate All
+  is unchanged (27.3 vs 27.7 s): it solves in the worker pool, where the DLT was
+  not the bottleneck. The harness's negative control — the match gate switched
+  on in one build only — differs on 4,389 of 18,058 frames, so a "0 differ" is
+  a real result; a deliberately sloppy solver (tolerance 1e-4, 3D off by up to
+  53 mm) still grouped every frame identically, so the tracker is robust to
+  this kind of change by a wide margin.
 - Refinement: `triangulatePointBA` projects through
   `_projectAndJacobian(Camera)Into`, which write into one scratch object with
   the same expressions as `projectAndJacobian`, `distortJacobian` and
   `Camera.distortPoint` (including their different r²·r² vs r⁴ association). It
   was ~11.6 s of GC in an 80 s Refined run.
 Pinned by `tests/test-triangulation-kernels.mjs` (thousands of random systems,
-`Object.is` per value). **Any edit to these kernels must keep operation order,**
-or results drift in the last bits and tracker decisions can flip.
+`Object.is` per value for the bit-identical parts; for the inverse iteration:
+agreement with Jacobi, a null vector no worse than Jacobi's by Rayleigh
+quotient, rotation invariance, and the fallbacks). **Any edit to these kernels
+must keep operation order,** or results drift in the last bits and tracker
+decisions can flip — and a change to the solve itself needs a before/after
+Track All on real recordings (`tests/e2e/_diag-trackall-ab.mjs`), since a tiny
+3D difference is no proof that no association flips.
 
 **`triangulatePointDLT` SOLVES IN A CAMERA-DERIVED FRAME, and that is
 load-bearing.** DLT minimizes an ALGEBRAIC error, and `‖x‖ = 1` on a
@@ -6982,6 +7020,20 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `reprojOpts.lineWidth` as its edge widths and `reprojOpts.brightness`. Covered by `tests/test-node-trails.mjs`
   (§12: the shade scale on every palette color, and the drawn strokes) and
   `tests/e2e/node-trail-shade.mjs` (the menus and the real draw path).
+  **`options.overlaySizeScale` (issue #200).** `nodeSize` and `lineWidth` are
+  expressed in BACKING-store pixels and drawn unscaled, which held them at a
+  constant on-screen size only while the backing store tracked the zoom factor
+  exactly. It no longer does (see `ui/rendering.js` ▸ overlay backing-store
+  budget), so `drawAllOverlays` passes the ratio it actually used and
+  `makeRenderOpts` — the single chokepoint building `userRender` /
+  `predictedRender` / `reprojRender` — multiplies both by it, as do all four of
+  the `drawNodeTrails` sizes (`nodeSize` and the three per-layer edge widths).
+  `reprojBrightness` is NOT a size and is passed through untouched.
+  **Absent or `1` leaves every size byte-for-byte unchanged**, which is what
+  keeps the overlay-video export path (`ui/overlay-export-modal.js`, which
+  shares this function, does its own sizing and has no zoom) untouched. The
+  defaults are applied here (4 / 2) rather than left to the drawing functions,
+  or an option nobody set would escape the scaling.
   **Reprojection node color ignored the Visibility panel on the raw-fallback
   path (luc3d #209).** Step 2 has two ways to draw a group's reprojection:
   a materialized `reprojectedInstances` `Instance` (built by
@@ -7091,10 +7143,13 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   worker-backed loader's frames arrive later and trigger one redraw. A no-op
   during playback (those frames were just played). It also computes the per-view
   **`labelDisplayScale`** (backing-store px per on-screen CSS px) that
-  `overlays.js` sizes node/track labels with: `overlayCanvas.offsetWidth` — the
-  LAYOUT width, which no CSS transform touches — times `view.zoom.scale`, which
-  must stay in because the backing store was just grown by the same factor a few
-  lines above. Deliberately **not** `getBoundingClientRect()`: `applyZoom`
+  `overlays.js` sizes node/track labels with: the real `targetW` over
+  `overlayCanvas.offsetWidth` — the LAYOUT width, which no CSS transform
+  touches — times `view.zoom.scale`. The zoom factor must stay in the
+  denominator or labels grow with zoom; deriving the numerator from `targetW`
+  rather than from the zoom scale is what makes labels **self-correcting** under
+  the overlay budget below, so they need no `overlaySizeScale` term.
+  Deliberately **not** `getBoundingClientRect()`: `applyZoom`
   rotates the whole `.canvas-wrapper`, and a rect is the transformed element's
   axis-aligned bounding box, so measuring there made labels shrink at 45° and
   grow at 90°. See `ui/overlays.js` ▸ `resolveLabelDisplayScale`.
@@ -7120,6 +7175,64 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   stop frame. `timeline.setCurrentFrame` only moves the timeline's playhead
   element now (no canvas repaint, see `ui/timeline.js`), so it is cheap either
   way; the `{ playback: true }` it is passed while playing changes nothing.
+
+  **Overlay backing-store budget (issue #200).** The overlay canvas is sized
+  `videoW * ss` where `ss` is an effective supersample, NOT the zoom scale. It
+  used to be the zoom scale exactly, which held backing-px-per-screen-px
+  constant — but grew the canvas as **zoom²** while the cell still shows only a
+  cell-sized WINDOW onto it. At zoom 10 on a 1280×1024 view that allocated
+  12800×10240 (524 MB) to display ~283×226, i.e. ~0.05% of the pixels were ever
+  visible; the rest were allocated, cleared and rasterized behind
+  `overflow: hidden`.
+
+  **It is per VIEW, and the `+` key zooms every view** (`zoomAllVideos`; only
+  the scroll wheel zooms one). So a real 8-camera session at zoom 10 allocated
+  ~**4.2 GB** of backing store, not 524 MB — which is the difference between
+  reproducing the issue and not. Measured headed on DEFAULT Chrome, GPU
+  acceleration ON, 8 cameras at 1280×1024 with every view zoomed, the pre-fix
+  build dragged a node at **120 fps → 18.5** (worst frame 9 ms → 292 ms, drag
+  wall 1351 ms → 9100 ms); after the fix it is 120 fps / 9 ms / ~1340 ms at
+  every zoom, with overlay RAM 4194 MB → 212 MB. A single zoomed view costs
+  only 524 MB, which an Apple-silicon GPU absorbs at a flat 120 fps — measuring
+  that one view is what first suggested, wrongly, that the slowdown needed
+  software canvas rasterization to appear at all. Three rules:
+  - **`ss` is bounded by what the display can RESOLVE**, not by the zoom:
+    `ss = clamp(OVERLAY_QUALITY * cssW * zs / videoW, 1, zs)`. The lower bound
+    of 1 means an unzoomed view is byte-for-byte what it was before, so this
+    cannot regress the ordinary case.
+  - **`ss` is QUANTIZED to 1/4 steps, rounded UP**, and that is not a detail.
+    It now depends on `cssW`, which `ss = zs` did not — so without the
+    quantization a pane SASH DRAG (`cssW` moving a pixel per frame) reallocates
+    the whole backing store on EVERY redraw, which the old code never did at
+    any zoom. Measured at zoom 8 with canvas acceleration off: 59 reallocations
+    over a 60-step drag at 3.49 ms per redraw, against 0.32 ms unzoomed; with
+    it, 1-2 reallocations and 0.39 ms. Rounding up is what keeps quantizing
+    from ever dropping quality below what `OVERLAY_QUALITY` asks for.
+  - **`OVERLAY_QUALITY` has a floor of 2** (`Math.max(2, devicePixelRatio)`) and
+    that floor is not cosmetic. Nodes and edges are vector shapes whose
+    smoothness comes from this ratio, and a cell showing a 1280px video in 283px
+    was supersampling 4.5× for free because it is DOWNSCALING. Bounding by
+    `devicePixelRatio` alone took a non-retina display straight to 1:1 and made
+    circles visibly chunkier the moment you zoomed (measured: on-screen node
+    radius 2.19 px → 1.75 px at zoom 4).
+  - **Sizes in BACKING pixels must be compensated.** `nodeSize` / `lineWidth`
+    are drawn unscaled, which is what held them at a constant on-screen size
+    while the backing store tracked `zs` exactly. `drawAllOverlays` therefore
+    passes **`overlaySizeScale = ss / zs`** and `ui/overlays.js` scales them by
+    it; omit that and every node and edge grows linearly with zoom.
+    `labelDisplayScale` needs no such term (see above), and
+    `drawHoverHighlight` is already invariant because it scales by its own
+    `toCanvas.scale`.
+
+  `MAX_OVERLAY_DIM` / `MAX_OVERLAY_AREA` then clamp `ss` to Chrome's canvas
+  limits (16384 px per side, 2^28 px of area). That is a **correctness** guard,
+  not a budget one: past those limits the allocation reports the requested size
+  and every draw silently no-ops, so the whole annotation overlay goes blank
+  with no error — reproduced at 2048×1536 video, zoom 10 (20480×15360). The
+  quality bound above normally keeps `ss` far below this, so the clamp is a
+  backstop for an unusually wide cell.
+  Covered by `tests/e2e/zoom-overlay-budget.mjs`; `tests/e2e/_diag-zoom-drag-perf.mjs`
+  is the headed fps harness the numbers above come from.
 
   **Lazy reprojection fill — honors the group's triangulation method.** A group
   with `points3d` but no `reprojections`/`reprojectedInstances` is re-solved here
@@ -11460,11 +11573,28 @@ chosen view is kept on `session._galleryView` (in memory), so reopening the
 summary keeps it. Rows are capped at `GALLERY_MAX_ROWS` (12), as the identity
 bars are.
 
+**Hover to enlarge.** Resting the pointer on a sample shows it at
+`GALLERY_ZOOM` (320 px) beside the tile — right of it if that fits, else left,
+always inside the window — captioned with the identity, time and camera. Two
+things about it are deliberate:
+- **The preview is a second copy of the crop, cut when the tile is drawn**, at up
+  to 320 px × devicePixelRatio but never more than the crop's own video pixels.
+  Scaling the 88 px tile up would only show a blurrier tile, and re-decoding on
+  hover cannot be done: the decoder's frame may already be closed, and a seek per
+  hover is slow. ~60 crops of at most 320² px is a few tens of MB at worst.
+- **It lives in the summary's overlay, not the modal.** The modal scrolls and
+  would clip it; the overlay is fixed and full-window, and closing the box
+  removes the preview with it. It takes no pointer events, scrolling the box
+  hides it (the tile moves out from under a still pointer), and a drawn sample
+  drops its native `title`, which would otherwise surface a second later on top
+  of the preview saying the same thing. A sample with no image ("no video",
+  "no keypoints") has nothing to enlarge and shows none.
+
 **Key exports.** `renderIdentityGallery`, `identityTracks`, `identityGroupAt`,
 `groupCentroid`, `pickSampleFrames`, `projectedBox`, `pickCamera`, `cropSquare`,
 `memberPointsByCamera`, `projectTrack`, `defaultMapCamera`, `timeColor`;
 `GALLERY_SAMPLES` (5), `GALLERY_MAX_ROWS`, `GALLERY_TILE` (88 px),
-`MAP_MAX_POINTS` (2,400).
+`GALLERY_ZOOM` (320 px), `MAP_MAX_POINTS` (2,400).
 
 **Imports from project modules.** `ui/app-state.js` (`state`),
 `pose/lazy-residency.js` (`hydrateFrameMembers2d`, `releaseFrameMembers2d`).
@@ -11476,7 +11606,9 @@ released lazy member read through hydration with the direct-read control) and
 `tests/e2e/identity-gallery.mjs` (the real Track All on stand-in videos that
 paint each animal its own colour: every image in a row shows that row's animal,
 spread over the recording and from more than one camera; the maps, the view
-selector and its time key; both clicks; no videos; and the negative control —
+selector and its time key; the hover preview — size, placement, the same
+sample and animal, its caption, hiding on leave and with the box, none on a
+"no video" tile; both clicks; no videos; and the negative control —
 identities swapped halfway, each row then showing BOTH animals).
 
 ### ui/view-align-modal.js
