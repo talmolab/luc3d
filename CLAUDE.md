@@ -3,9 +3,9 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 110 modules are grouped into four directories:
-- `pose/` — data model, cross-view tracking, DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), the lazy project's playback eviction (`lazy-residency.js`), app initialization (22 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, the node tooltip on hover (`node-tooltip.js` — a node's name and a prediction's per-node score, as SLEAP shows them), plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip and the time ruler under it (`seekbar-ticks.js` — major/minor tick steps chosen from the video's length and the bar's width), the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames) and their shade (`TRAIL_SHADES` in `ui/overlays.js`: Very dark … Very light, default Dark, remembered in `localStorage`), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it) and its Identities section (`identity-gallery.js` — five sample images and a path map per identity), the Track group's Animals field (`animal-count-field.js`), the CPU / GPU load lines and last-minute graph shown by the image check's dialog and by the loading overlay during Triangulate All and Track All (`load-graph.js`), settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (66 files)
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 112 modules are grouped into four directories:
+- `pose/` — data model, cross-view tracking (Track All's tracker on one worker: `tracker-pool.js` + `tracker-worker.js`), DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), the lazy project's playback eviction (`lazy-residency.js`), app initialization (23 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, the node tooltip on hover (`node-tooltip.js` — a node's name and a prediction's per-node score, as SLEAP shows them), plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip and the time ruler under it (`seekbar-ticks.js` — major/minor tick steps chosen from the video's length and the bar's width), the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames) and their shade (`TRAIL_SHADES` in `ui/overlays.js`: Very dark … Very light, default Dark, remembered in `localStorage`), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it) and its Identities section (`identity-gallery.js` — five sample images and a path map per identity), the Track group's Animals field (`animal-count-field.js`), the CPU / GPU load lines and last-minute graph shown by the image check's dialog and by the loading overlay during Triangulate All and Track All (`load-graph.js`), settings, the release shown beside the menu bar's Settings button (`version-label.js`) — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (67 files)
 - `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), the `.slp` skeleton reader + per-camera node-order remap (`slp-skeleton.js`), web workers (12 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
 - `demo-data.js` — synthetic skeleton and camera data
@@ -76,6 +76,74 @@ literal and relative — a computed `import(someVar)` or a root-absolute `/x.js`
 would defeat it. Covered by `tests/test-stamp-version.mjs` and
 `tests/e2e/stamped-build.mjs` (stamps the working tree, loads the app — every
 module once — and runs the browser suite on it).
+
+**The same stamp says which build it is.** A third argument,
+`stamp-version.mjs <dir> <commit> <release-label>`, fills the
+`lucid-release` / `lucid-commit` `<meta>` tags in the copy's `index.html`, and
+`ui/version-label.js` shows them right of the menu bar's Settings button. The
+label is the release TAG only when the deployed ref IS one (`github.ref_name`
+matching `vX.Y.Z[-N]`: a release event, or a dispatch with a tag picked), so the
+live page reads `v1.0.5` and `/latest/` its pre-release tag; anything else is
+`dev`, and a PR preview `PR #<n>` — both shown with the commit beside them,
+since `dev` alone cannot tell two deploys apart. The tags are EMPTY in the repo
+(a working tree shows no version rather than a made-up one), and the stamp fails
+the deploy if they are missing, so a refactor of `index.html` cannot drop the
+number silently. Nothing about the label reaches the `.slp`.
+
+**A cold start fetches the whole startup graph AT ONCE.** After stamping, the
+same command runs `scripts/preload-modules.mjs`, which walks `index.html`'s
+module scripts through every STATIC import (relative specifiers and importmap
+entries) and inserts one `<link rel="modulepreload">` per module right after the
+importmap — every same-site module of the startup graph (111 files) plus the two CDN modules (`yaml`, dockview).
+Without it the browser discovered the graph one import level at a time: six
+sequential round trips, every one a CDN miss on a cold start. And a cold start
+is the ordinary case, not the rare one: every deploy changes every `?v=` URL,
+and Cloudflare keeps a GitHub Pages object at the edge only for about the
+origin's `max-age=600` (measured: objects that were HITs came back MISS or
+EXPIRED half an hour later — the 4 hours above is the BROWSER lifetime), so
+anyone whose browser cache is cold pays it. Three rules:
+- **The list is derived from the files being deployed, never maintained by
+  hand**, so it cannot rot. It reads the STAMPED files, so each preload is the
+  exact URL its importer asks for. A preload under any other URL is a second
+  download that nothing uses, and `stamped-build.mjs` fails on it. R4 in
+  `stamp-version.mjs` also stamps a `modulepreload` link, so the order of the
+  two steps cannot leave one unstamped.
+- **Static imports only.** A dynamic `import()` is lazy on purpose, and a
+  worker is another realm. `stamped-build.mjs` asserts that, by the time the
+  app is ready, it has requested NO same-site module outside the block (besides
+  `index.html`'s own tags) and every preload exactly once — so a new static
+  import that the walker cannot see fails there, not on someone's slow
+  connection.
+- **The block goes after the importmap.** Chrome ignores an importmap that
+  arrives after module loading has started, and a modulepreload starts it.
+
+Two source changes serve the same goal. `yaml` loads as jsdelivr's single-file
+`yaml@2.8.0/+esm` bundle (the same `browser/index.js` entry, prebuilt) instead of
+the ~70-file `browser/index.js` tree, which was its own six-level waterfall on a
+second host. Offline mode maps that URL to the vendored `lib/yaml/browser/index.js`.
+The four head `<script>` tags (mp4box, three, OrbitControls, the h5wasm IIFE) are
+`defer`: they still run in document order and before any module script, so every
+global exists exactly when it used to, but they no longer block the parser, and
+the page paints while they download.
+
+Measured 2026-10-13 through the real Cloudflare path with
+`tests/e2e/_bench-cold-start.mjs`, which makes every load cold by adding a fresh
+`cb=` query to each same-site request in flight. Medians of interleaved runs:
+0.66 s → 0.40 s (24 runs each), and 2.32 s → 0.64 s with 150 ms of emulated
+latency per request (8 each; roughly a VPN). An esbuild bundle of the app
+(111 files → 8) measured 0.38 s and 0.60 s on the same runs, so it was not
+adopted here: the only case it wins is a per-REQUEST stall (simulated: one 5 s
+stall in every ~100 requests leaves the preloaded build waiting on one in most
+loads, while 8 requests rarely draw one). Such stalls are real: in one 7 s
+window, four consecutive cold loads of both builds each had exactly ONE of 113
+requests take 1.4–2.4 s, at Cloudflare's edge rather than GitHub's (cache HITs
+and TLS handshakes stall too, on other sites behind the same Cloudflare IPs,
+while GitHub Pages fetched directly stayed under 0.2 s). modulepreload does not
+help with those; fewer requests (bundling) would, but bundling was decided
+against: it would add a build step and make the deployed app differ from the
+tested source, for a gain that shows up only in those stall episodes.
+`h5wasm.iife.js` (~1 MB compressed, a page global read by several main-thread
+paths and e2e tests) is now the largest single item on the critical path.
 
 **Root is the only target that wipes — two rules keep that safe.** Every other
 channel owns its folder and can only damage itself, but root's previous output
@@ -537,8 +605,17 @@ so a reopened session is asked again exactly as a new one is). The count is
 project state, not display taste: changing it marks the project dirty.
 Everything goes through **one** module, `import-export/visibility-metadata.js`
 (`writeVisibilityMetadata` / `readVisibilityMetadata`, `VISIBILITY_METADATA_KEYS`),
-which the four writers and three readers all call — adding a setting means
-touching that file and nothing else.
+which the four writers and four readers all call — adding a setting means
+touching that file and nothing else. The readers are `handleLoadSlpFile`
+(File ▸ Load SLP), `handleLoadProjectSlpLazy` (the lazy project reopen),
+`handleLoadSessionFolderSingleSlp` (File ▸ Load Single Session Folder in
+"single-slp" mode, also the Sessions list's "Add session folder") and the
+project-JSON reader in `save-load.js`. That folder loader builds its Session by
+hand, and until it called both readers a project reopened through it silently
+came back with every setting below — and every plane — at its default. The
+per-camera and multi-session folder loaders are NOT readers: they ignore a root
+`.slp` and read camera-folder `.slp` files as 2D only, restoring no
+`metadata.lucid` key at all.
 
 Three rules hold, and there are tests pinning each:
 - **Defaults are never written.** Every key is omitted at its default, so a
@@ -555,8 +632,10 @@ Planes / Display Legend / 3D Viewer) deliberately stay in
 `localStorage.visibilitySettings` — they are browser-local display taste, not
 project state. Do not move them into the `.slp`.
 
-Coverage: `tests/test-visibility-metadata.js` (unit) and
-`tests/e2e/visibility-settings-roundtrip.mjs` (real app, both writers);
+Coverage: `tests/test-visibility-metadata.js` (unit),
+`tests/e2e/visibility-settings-roundtrip.mjs` (real app, both writers) and
+`tests/e2e/reopen-folder-session-settings.mjs` (a real Save As reopened through
+the single-SLP folder loader);
 `tests/test-video-contrast.js` + `tests/e2e/contrast-slider-roundtrip.mjs` cover
 the contrast half.
 
@@ -578,7 +657,7 @@ the contrast half.
 The whole Define Planes pipeline persists per session in the `.slp` (and in the
 project JSON), under LUCID's own `metadata.lucid` dict, through **one** module —
 `import-export/plane-metadata.js` (`writePlaneMetadata` / `readPlaneMetadata` /
-`resetPlaneState`, `PLANE_METADATA_KEYS`), which the same four writers and three
+`resetPlaneState`, `PLANE_METADATA_KEYS`), which the same four writers and four
 readers as the Visibility settings all call. The mapping itself lives in the
 DOM-free `pose/plane-serialization.js`.
 
@@ -608,15 +687,26 @@ Rules, each with a test pinning it:
   only restores into an EMPTY model (that guard is what makes ingesting N
   sessions idempotent), so skipping the reset keeps the OLD project's planes and
   silently drops the new one's.
+- **A loader that ADDS a session does not reset — it checks.** The single-SLP
+  folder loader appends to whatever is open, so it resets only when no session
+  is open (it is then starting the project). With a project open, its planes
+  stay and the new session's 2D is seated on them BY NODE ID — and node IDs
+  restart at 1 in every project, so a folder from another project would put its
+  corners on this project's nodes. `planeMetadataConflict` gates it: the 2D is
+  read only if every node and plane the file lists is in the open model under
+  the same id AND name; otherwise it is dropped and the status bar says so.
 - **Every plane/node mutation calls `markDirty()`** — rename, re-colour, pin,
   place/un-place, membership, edges, fill, triangulate, fit, 2D/3D drags, origin
   apply/clear. Per mutation, not per repaint. The plane panel's node-size /
   edge-width / 3D-corner-size sliders are the deliberate exception: browser-local
   display taste, not written to the project, so they do not mark it dirty.
 
-Coverage: `tests/test-plane-serialization.mjs` (unit, the mapping) and
+Coverage: `tests/test-plane-serialization.mjs` (unit, the mapping),
 `tests/e2e/plane-persistence-roundtrip.mjs` (real app, both `.slp` writers, the
-dirty flag, the scope split, and both negative controls).
+dirty flag, the scope split, and both negative controls) and
+`tests/e2e/reopen-folder-session-settings.mjs` (the single-SLP folder loader:
+the reset when it starts a project, adding a session of the same project, and
+the `planeMetadataConflict` refusal with its negative control).
 
 ## A lazy project's resident frames are a WINDOW — and eviction must be lossless
 
@@ -757,9 +847,23 @@ is untouched, and the null vector maps exactly. Four rules:
 - **The allocation-free kernel takes the frame as four OPTIONAL arguments.**
   `dltHomogeneousFlat(xs, ys, Ps, n, out, s, cx, cy, cz)` omitted is the
   identity frame, which reproduces the raw rows exactly — multiplying by 1 and
-  adding 0 are exact in IEEE 754 — so the bit-identity against `svd3x4(A)` that
-  `tests/test-triangulation-kernels.mjs` pins still holds. A kernel edit that
-  changes operation ORDER breaks that test, which is the intended signal.
+  adding 0 are exact in IEEE 754 — so the bit-identity of its M = AᵀA against
+  the one `svd3x4(A)` builds, which `tests/test-triangulation-kernels.mjs` pins,
+  still holds. A kernel edit that changes operation ORDER breaks that test,
+  which is the intended signal.
+- **The null vector is found by inverse iteration, NOT bit-identically to
+  `svd3x4`'s Jacobi.** `smallestEigvec4Inverse` was a deliberate break from
+  bit-identity: the Jacobi sweeps were 23% of a whole Track All (15 s of 65 s on
+  the 5-mouse recording). It agrees with Jacobi to ~1e-10 mm on real data,
+  is MORE rotation-invariant than Jacobi (it converges to machine precision
+  rather than stopping on an absolute tolerance), and anything it cannot settle
+  falls back to the Jacobi kernel, which is still bit-identical. It must
+  CONVERGE — a fixed number of steps leaves an error that depends on the start
+  vector, which does not rotate with the world, and the invariance tests catch
+  that (`INVERSE_TOL` loosened to 1e-5 fails two of them). Before changing the
+  solve again, compare Track All's identities before and after on real
+  recordings with `tests/e2e/_diag-trackall-ab.mjs`: a tiny 3D change is not
+  proof that no association flips.
 Covered by `tests/e2e/triangulation-frame-invariant.mjs`, confirmed to fail on
 the pre-fix build (7 checks red; a mis-associated point moves 6.01 mm instead
 of 2.4e-13 mm).
@@ -1813,14 +1917,23 @@ There are **three** test populations, each with its own runner. Run all three �
 they cover disjoint code, and a green run of one says nothing about the others.
 
 ```bash
-node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1603 assertions
+node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1653 assertions
 node tests/run-mjs-tests.mjs          # tests/test-*.mjs  (native-ESM Node tests)
 node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file per behavior)
 ```
 
 - `tests/*.js` — classic scripts, run in the browser via `tests/test-runner.html`
-  (open directly) or headless via `tests/e2e/run-unit-tests.mjs`; also runnable in
-  a `vm` sandbox by `tests/run-node.js`.
+  (open directly) or headless via `tests/e2e/run-unit-tests.mjs`. **A file runs
+  only if `test-runner.html` has a `<script>` tag for it** — nothing discovers
+  it — so `tests/test-classic-tests-registered.mjs` fails on any untagged
+  `tests/test-*.js` not listed there with a reason. There is deliberately **no
+  Node runner** for these. `tests/run-node.js` used to load them in a `vm`
+  sandbox by regex-stripping `import`/`export` from a hand-ordered list of
+  modules, so every new cross-module import broke it: it was red from 2026-06-26
+  until it was removed (102 failures, 93 of them from four modules missing from
+  its list), exited 0 with no summary when handed the browser's full file list,
+  and was the only runner for four test files — one of which had tested nothing
+  since #189. Those four are tagged in `test-runner.html` now.
 - `tests/test-*.mjs` — native ES modules, run by **`tests/run-mjs-tests.mjs`**
   (one child process per file, since several install module-loader hooks). These
   were **orphaned for a long time**: no runner referenced them, so four had been

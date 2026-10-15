@@ -66,6 +66,9 @@ Contains most recent pushes to `main` branch
 https://luc3d.sleap.ai/dev/
 ```
 
+The menu bar says which one you are on, right of **Settings**: the release
+(e.g. `v1.0.5`) on the live site and `/latest/`, `dev · <commit>` on `/dev/`.
+
 
 ## Requirements
 

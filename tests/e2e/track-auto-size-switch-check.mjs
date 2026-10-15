@@ -102,7 +102,7 @@ try {
     });
     let st = await statusText();
     const markersA = await page.evaluate(async () => (await import('/ui/seekbar-markers.js')).getSeekbarSwitchMarkers().length);
-    check(/^Assigned 2 identities/.test(st) && /ID-switch check \(body size\): no possible switches/.test(st),
+    check(/^Assigned 2 identities/.test(st) && /ID-switch check \(body size\): nothing flagged/.test(st),
         `Track All: check ran, result appended to its status ("${st}")`);
     check(markersA === 0, 'Track All: the stale marker from before was cleared');
     check(!(await tabOpen()), 'Track All: the ID Switches tab is not opened when nothing is found');
@@ -114,7 +114,7 @@ try {
     //          session (65 s), so it runs even though the window itself is only 10 s
     await page.evaluate(async () => { const tr = await import('/pose/tracker.js'); await tr.trackFrameRange(600, 899); });
     st = await statusText();
-    check(/\(601–900\)/.test(st) && /ID-switch check \(body size\): no possible switches/.test(st),
+    check(/\(601–900\)/.test(st) && /ID-switch check \(body size\): nothing flagged/.test(st),
         `Track Frame Range after Track All: check ran over the whole session ("${st}")`);
     check(!/showing Predictions only/.test(st) && JSON.stringify(await boxes()) === JSON.stringify(PRED_ONLY),
         'boxes already Predicted-only: nothing changes, no note');
