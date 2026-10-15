@@ -9838,6 +9838,12 @@ for the tab's **Show Track All summary** button — the first thing in the tab, 
 "Possible ID switches", in both the results and the empty state, shown only when the
 session has a summary from a Track All in this page, since it is not saved; it is
 how a box closed without running the image check is got back, to run it);
+`clickCheckFromSummary(menuId)` (the summary's **Check by images…** / **Check by
+body size** click the menu item through this: the check runs exactly as from the
+menu, but a one-shot flag — read and cleared by `runIdSwitchChecks` before its first
+await, so only the check that click starts sees it — makes it end by reopening the
+summary with its results (`reopenTrackSummary(session, results)`) instead of opening
+the tab; with no summary kept for the session it opens the tab as from the menu);
 `refreshIdSwitchPanel(session?)` (render the tab and put that session's
 markers on the seekbar — called after a check, from `updateInfoPanel` and from
 `switchSession`); `openIdSwitchPanel()` (show the panel, if hidden, on the tab);
@@ -10047,7 +10053,7 @@ protection on, the note under the CPU and GPU lines — `prog.braveHint(cores)`)
 `#menuCheckImageSwitches`, `setIdSwitchNavigator`, `setIdSwitchRefresher`, `updateIdSwitchProgress`), `pose/tracker.js` (the
 automatic run, `clearIdSwitchResults`), `ui/info-panel.js` and
 `ui/sessions-panes.js` (`refreshIdSwitchPanel`), `ui/track-summary-modal.js`
-(`openIdSwitchPanel`, `refreshIdSwitchPanel`, `setTrackSummaryOpener`).
+(`openIdSwitchPanel`, `refreshIdSwitchPanel`, `setTrackSummaryOpener`, `clickCheckFromSummary`).
 
 **Coverage.** `tests/e2e/size-switch-check.mjs` (size, menu path, the checklist:
 ticks, Next unreviewed, persistence across the tab / a re-run / a session switch,
@@ -11495,8 +11501,9 @@ for the ID Switches tab: a sample or a map point clicked closes the box and goes
 to that frame — the tracker that opens the box cannot import `pose/initialization.js`);
 `rememberTrackSummary(session, opts, checks, identities)` (Track All keeps what the
 box showed on `session._trackSummary` — in memory, not saved — and refreshes the
-ID Switches tab so its button appears); `reopenTrackSummary(session)` (the tab's
-**Show Track All summary**).
+ID Switches tab so its button appears); `reopenTrackSummary(session, latest?)` (the
+tab's **Show Track All summary**, and the end of a check started from the box —
+`latest` is that run's results).
 
 **Reopening.** Closing the box used to be final, which stranded a user who had not
 turned on the image check before Track All: the box is what offers it. The ID
@@ -11509,11 +11516,23 @@ closed replaces the pass's "Not run" / "Skipped" (and is no longer offered), and
 check whose results were cleared reads "Not run" again. A skip or failure is kept
 from the pass, because `runIdSwitchChecks` stores only results that ran.
 
+**A check run from the box comes back to it.** **Check by images…** / **Check by
+body size** used to close the box and leave the user on the ID Switches tab — with
+"nothing flagged" in a status line, the box's counts gone, and the next step only
+reachable through the tab's reopen button. They now go through
+`clickCheckFromSummary` (`ui/id-switch-modal.js`), and when the check ends the box
+reopens with the counts re-taken, that check's row and time filled in, and the next
+step that follows (**Review switches** when it flagged one; the tab is not opened
+behind it). A cancel, skip or failure is reported too — `reopenTrackSummary`'s
+`latest` writes that outcome into the kept summary, so the row reads "Cancelled"
+(and still offers the check) here and on a later reopen from the tab.
+
 **Notes / caveats.**
 - **A note, not a prompt.** Nothing changes until a button is pressed; Close,
   `Esc` and a backdrop click dismiss it. Each action button clicks the existing
   control — `#tbTriangulateAll`, `#menuCheckImageSwitches`,
-  `#menuCheckSizeSwitches`, `#menuTrackingWizard` — so it runs exactly what the
+  `#menuCheckSizeSwitches` (both through `clickCheckFromSummary`, so the box comes
+  back when the check ends), `#menuTrackingWizard` — so it runs exactly what the
   user would have run by hand (a disabled button, e.g. under Defining Plane Mode,
   ignores it the same way). **Review switches** opens the ID Switches tab and
   presses `#idSwitchNext`, landing on the first flagged switch.
@@ -11530,8 +11549,8 @@ from the pass, because `runIdSwitchChecks` stores only results that ran.
 
 **Imports from project modules.** `ui/track-summary.js` (`planTrackSummary`,
 `summarizeTrackedIdentities`, `describeSwitchCheck`), `ui/id-switch-modal.js`
-(`openIdSwitchPanel`, `refreshIdSwitchPanel`, `setTrackSummaryOpener`),
-`ui/identity-gallery.js` (`renderIdentityGallery`).
+(`openIdSwitchPanel`, `refreshIdSwitchPanel`, `setTrackSummaryOpener`,
+`clickCheckFromSummary`), `ui/identity-gallery.js` (`renderIdentityGallery`).
 
 **Imported by.** `pose/tracker.js`, `ui/ui-wiring.js` (`setTrackSummaryNavigator`).
 No cycle: none of its imports reaches back to the tracker.
@@ -11542,7 +11561,9 @@ replacement on a second run, no box after Track Frame Range, the nothing-tracked
 case, Review switches landing on the first switch, and §2b reopening from the ID
 Switches tab (the button's place above "Possible ID switches", the same box, a
 check run since reported rather than "Not run", Clear, and no button without a
-Track All). The Identities section: `tests/e2e/identity-gallery.mjs`. Tests that
+Track All), §2c the box's own **Check by body size** / **Check by images…**
+reopening it with the result (and not the tab) — clear, cancelled with `Esc`, and
+§8 a switch found by images turning the next step into **Review switches**. The Identities section: `tests/e2e/identity-gallery.mjs`. Tests that
 click the app after a Track All close the box first (`#trackSummaryClose`).
 
 ### ui/identity-gallery.js
@@ -11622,11 +11643,26 @@ things about it are deliberate:
   of the preview saying the same thing. A sample with no image ("no video",
   "no keypoints") has nothing to enlarge and shows none.
 
+**A map enlarges too.** Resting on a map shows it at the view's shape —
+`GALLERY_ZOOM` (320 px) tall, or `MAP_ZOOM_MAX_WIDTH` (640 px) wide when that is
+narrower, 427 × 320 for a 640 × 480 camera — in the same preview box, placed the
+same way, captioned with the identity and camera (a map has no native `title`
+either). It is not the 88 px map scaled up: the frame is copied once per map
+draw at up to that size (the same closed-frame reason as a sample), and the path
+is redrawn over it at that size, once per map on its first hover (`drawPath`,
+shared with the small map, so the two cannot disagree). The point under the
+pointer — the one whose time the small map's tip shows and a click goes to — is
+ringed in white in the preview and its time added to the caption. Changing the
+map's camera hides a preview of a map being replaced. Without a video the path
+is drawn on a dark ground and still enlarges. The preview takes its contents
+from the element's `_zoom` (`{kind, w, h, draw, color, label, frame}`): one box
+serves both kinds, resized when the shape changes.
+
 **Key exports.** `renderIdentityGallery`, `identityTracks`, `identityGroupAt`,
 `groupCentroid`, `pickSampleFrames`, `projectedBox`, `pickCamera`, `cropSquare`,
 `memberPointsByCamera`, `projectTrack`, `defaultMapCamera`, `timeColor`;
 `GALLERY_SAMPLES` (5), `GALLERY_MAX_ROWS`, `GALLERY_TILE` (88 px),
-`GALLERY_ZOOM` (320 px), `MAP_MAX_POINTS` (2,400).
+`GALLERY_ZOOM` (320 px), `MAP_ZOOM_MAX_WIDTH` (640 px), `MAP_MAX_POINTS` (2,400).
 
 **Imports from project modules.** `ui/app-state.js` (`state`),
 `pose/lazy-residency.js` (`hydrateFrameMembers2d`, `releaseFrameMembers2d`).
@@ -11640,7 +11676,10 @@ paint each animal its own colour: every image in a row shows that row's animal,
 spread over the recording and from more than one camera; the maps, the view
 selector and its time key; the hover preview — size, placement, the same
 sample and animal, its caption, hiding on leave and with the box, none on a
-"no video" tile; both clicks; no videos; and the negative control —
+"no video" tile; the map's preview — its shape, drawn at that size, its path,
+the hovered point ringed and timed, placement, the other row, hiding on leave, a
+sample square again after it, and a map still enlarging with no videos; both
+clicks; no videos; and the negative control —
 identities swapped halfway, each row then showing BOTH animals).
 
 ### ui/view-align-modal.js

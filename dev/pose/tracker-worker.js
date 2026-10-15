@@ -38,8 +38,8 @@
  * live[i] is the tracker's target count after frame i (the run's `numTargets`).
  * All transferred. pose/tracker-pool.js decodes it.
  */
-import { Camera, Instance } from './pose-data.js?v=97302fdf4a8c';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=97302fdf4a8c';
+import { Camera, Instance } from './pose-data.js?v=8d3d2394ef70';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=8d3d2394ef70';
 
 let trk = null, cams = null, camIndex = null;
 

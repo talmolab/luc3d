@@ -19,13 +19,18 @@
  *     tile, inside the window, with the same animal and a caption naming the
  *     identity, time and camera; leaving hides it, and no native tooltip
  *     doubles it. Closing the box takes the preview with it.
+ *  3c. Resting on a map enlarges it the same way, at the view's shape (427 x
+ *     320 px for a 640 x 480 camera), its path redrawn at that size — not the
+ *     small map scaled up — beside the map and inside the window; the point
+ *     under the pointer is ringed in the preview and its time is in the caption;
+ *     leaving hides it.
  *  4. Clicking a sample closes the box and goes to its frame; so does clicking a
  *     point on a map (to a frame on that identity's path).
  *  5. Negative control — the identities swapped for the second half of the
  *     recording (an ID switch): the reopened summary's rows each show BOTH
  *     animals. This is what the section is for.
  *  6. Without videos the images say "no video" and the maps still draw the paths
- *     — and resting on one shows no preview.
+ *     — and resting on an image shows no preview, while a map still enlarges.
  *
  * Run: node tests/e2e/identity-gallery.mjs
  */
@@ -117,9 +122,18 @@ try {
             const z = document.getElementById('identityGalleryZoom');
             if (!z || getComputedStyle(z).display === 'none') return null;
             const r = z.getBoundingClientRect(), c = z.querySelector('canvas'), cr = c.getBoundingClientRect();
-            return { frame: +z.dataset.frame, caption: z.querySelector('.identity-gallery-zoom-caption').textContent,
+            // a map's pixels: its path (the time ramp's blues) and the white ring marking the hovered point
+            const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+            let path = 0, ring = 0;
+            for (let i = 0; i < d.length; i += 4) {
+                if (d[i] > 245 && d[i + 1] > 245 && d[i + 2] > 245) ring++;
+                else if (d[i + 2] > 150 && d[i + 2] > d[i] + 30) path++;
+            }
+            return { kind: z.dataset.kind, frame: z.dataset.frame === '' ? null : +z.dataset.frame,
+                caption: z.querySelector('.identity-gallery-zoom-caption').textContent,
                 inOverlay: !!z.closest('#trackSummaryOverlay'), size: Math.round(cr.width), color: window.__colorAt(c),
-                rect: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, vw: innerWidth, vh: innerHeight };
+                css: [parseFloat(c.style.width), parseFloat(c.style.height)], px: [c.width, c.height], dpr: devicePixelRatio,
+                path, ring, rect: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, vw: innerWidth, vh: innerHeight };
         };
         window.__gallery = () => {
             const g = document.getElementById('identityGallery');
@@ -201,6 +215,51 @@ try {
     await page.evaluate(async () => (await import('/ui/track-summary-modal.js')).reopenTrackSummary(window.__lucid.state.session));
     await settled();
 
+    // ---- 3c. resting on a map enlarges it, and rings the point under the pointer ---------------
+    const mapSel = (row) => `#identityGallery .identity-gallery-row[data-identity="${g.rows[row].id}"] .identity-gallery-map canvas`;
+    // a point of row `row`'s path, in page pixels (as §4 clicks one)
+    const pathPoint = (row, at) => page.evaluate(async ([row, at]) => {
+        const G = await import('/ui/identity-gallery.js');
+        const s = window.__lucid.state.session, cam = s.cameras.find(c => c.name === document.getElementById('identityGalleryView').value);
+        const id = s.identities[row].id, tr = G.identityTracks(s).get(id), p = G.projectTrack(tr, cam, G.MAP_MAX_POINTS, 60);
+        const c = document.querySelectorAll('.identity-gallery-row .identity-gallery-map canvas')[row], rect = c.getBoundingClientRect();
+        const k = Math.floor(p.frames.length * at), cw = parseFloat(c.style.width), chh = parseFloat(c.style.height);
+        return { x: rect.left + p.uv[2 * k] * cw / 640, y: rect.top + p.uv[2 * k + 1] * chh / 480, frames: Array.from(tr.frames) };
+    }, [row, at]);
+    check(await page.evaluate(() => Array.from(document.querySelectorAll('#identityGallery .identity-gallery-map canvas')).every(c => !c.title)),
+        'a map has no native tooltip (the preview says it)');
+    const mapBox = await page.$eval(mapSel(0), e => { const r = e.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, w: r.width, h: r.height }; });
+    await page.mouse.move(mapBox.left + 2, mapBox.top + 2);         // a corner: on the map, off the path
+    z = await page.evaluate(() => window.__zoom());
+    check(z && z.kind === 'map' && z.inOverlay && z.css[0] === 427 && z.css[1] === 320,
+        `resting on a map enlarges it at the view's shape, 427 x 320 px, in the summary's overlay (${z && z.css})`);
+    check(z && z.px[0] === Math.round(427 * z.dpr) && z.px[1] === Math.round(320 * z.dpr) && Math.round(mapBox.h) === 88,
+        `…drawn at that size (${z && z.px} device px), not the ${Math.round(mapBox.w)} x ${Math.round(mapBox.h)} map scaled up`);
+    // the fixture's animals circle in a small loop, so the path is a few hundred pixels even enlarged
+    check(z && z.path > 150, `…with the path in it (${z && z.path} path pixels)`);
+    check(z && z.frame === null && z.ring === 0 && z.caption.includes(g.rows[0].name) && z.caption.includes(other) && /over the recording/.test(z.caption),
+        `…captioned with the identity and camera, no point marked off the path ("${z && z.caption}")`);
+    check(z && (z.rect.left >= mapBox.right || z.rect.right <= mapBox.left) && z.rect.left >= 0 && z.rect.right <= z.vw && z.rect.top >= 0 && z.rect.bottom <= z.vh,
+        '…beside the map, not over it, and inside the window');
+    const pp = await pathPoint(0, 0.5);
+    await page.mouse.move(pp.x, pp.y);
+    z = await page.evaluate(() => window.__zoom());
+    check(z && z.frame !== null && pp.frames.includes(z.frame) && z.ring > 20,
+        `on the path, that point is ringed in the preview (${z && z.ring} ring pixels, frame ${z && z.frame})`);
+    check(z && /\d+:\d\d/.test(z.caption) && z.caption.includes(g.rows[0].name), `…and its time is in the caption ("${z && z.caption}")`);
+    const pp2 = await pathPoint(1, 0.25);
+    await page.mouse.move(pp2.x, pp2.y);
+    z = await page.evaluate(() => window.__zoom());
+    check(z && z.kind === 'map' && pp2.frames.includes(z.frame) && z.caption.includes(g.rows[1].name),
+        `moving to the other row's map shows that one (${z && z.caption})`);
+    await page.mouse.move(5, 5);
+    check(await page.evaluate(() => window.__zoom()) === null, 'leaving the map hides the preview');
+    await page.hover(tileSel(0, 2));
+    z = await page.evaluate(() => window.__zoom());
+    check(z && z.kind === 'sample' && z.css[0] === 320 && z.css[1] === 320 && z.color === g.rows[0].tiles[1].color,
+        `a sample after a map is square again, 320 px (${z && z.css})`);
+    await page.mouse.move(5, 5);
+
     // ---- 4. a click on a sample, and on a map point, goes there -----------------------------
     const target = g.rows[1].tiles[2].frame;
     await page.click(`#identityGallery .identity-gallery-row[data-identity="${g.rows[1].id}"] .identity-gallery-tile:nth-of-type(3)`);
@@ -245,6 +304,9 @@ try {
     check(g.rows.every(r => r.mapPoints > 100), '…and the maps still draw the paths');
     await page.hover('#identityGallery .identity-gallery-row .identity-gallery-tile:nth-of-type(2)');
     check(await page.evaluate(() => window.__zoom()) === null, '…and resting on one shows no preview (nothing to enlarge)');
+    await page.hover('#identityGallery .identity-gallery-row .identity-gallery-map canvas', { position: { x: 2, y: 2 } });
+    z = await page.evaluate(() => window.__zoom());
+    check(z && z.kind === 'map' && z.path > 150, `…while a map still enlarges, its path drawn over no frame (${z && z.path} path pixels)`);
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {
