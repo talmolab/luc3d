@@ -27,7 +27,10 @@ jobs:
       - name: Stamp code URLs with this commit
         env:
           PR_NUMBER: ${{ github.event.number }}
-        run: node scripts/stamp-version.mjs . "${GITHUB_SHA::12}" "PR #$PR_NUMBER"
+        # A block scalar, not a one-line `run:` value: in a plain YAML scalar
+        # ` #` starts a comment, which cut the command off at `"PR`.
+        run: |
+          node scripts/stamp-version.mjs . "${GITHUB_SHA::12}" "PR #$PR_NUMBER"
 
       - name: Deploy PR Preview
         uses: JamesIves/github-pages-deploy-action@v4
