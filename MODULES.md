@@ -1768,7 +1768,37 @@ session graph that holds them.
   under the new keys; instances with no identity — whether entry-less OR
   explicitly marked "no identity" (negative sentinel) — become trackless
   (`trackIdx = null`): a null identity propagates to a null track, and no
-  dedicated "No ID" track is created). **Whole-project correctness on a lazy
+  dedicated "No ID" track is created).
+  **A null TRACK is not a null identity (luc3d #111).** An instance's incoming
+  `trackIdx` is an INPUT to be replaced, not a precondition for replacing it, and
+  conflating the two made IDs→Tracks a silent no-op for every UNTRACKED
+  detection: the whole identity lookup in step 3's `remapInstance` was gated on
+  `inst.trackIdx != null`, and step 1 built its used-identity set from
+  `frameIdentityMap` alone — which is keyed by raw trackIdx and cannot represent
+  a null track, so an identity carried only by trackless instances got no track
+  minted either. Symptom, from the Grouped Instances panel on the real
+  `10072022145420_small` session: after Track All the `id_2` row reads
+  `TRACK (none)`, and after IDs→Tracks it STILL reads `(none)` while every other
+  row becomes `track_0/1/3` — 10,775 group members left trackless under a plain
+  success message. Both halves are fixed: step 1 also harvests `group.identityId`
+  and a trackless unlinked instance's `instance.identityId`, and `remapInstance`
+  now splits by whether the instance HAS a track. **The two branches have
+  opposite precedence, deliberately.** Tracked stays map-first (a single-view ID
+  switch rewrites only `frameIdentityMap` — luc3d #201 — so it must outrank the
+  group). Trackless is group-first, matching what step 2b already does for a
+  member with `rawTrk < 0`: `_fimKey` folds every trackless detection in a
+  (frame, camera) onto ONE shared slot, so the map cannot name an individual when
+  two untracked animals share a camera-frame, while the group (and, for an
+  ungrouped row, `instance.identityId`) is per-instance. That shared slot is
+  deliberately NOT consulted as a further fallback — a wrong track is worse than
+  none, and two instances on one track in one frame is invalid in SLEAP.
+  **Both spellings of "no track" must be tested:** `null` comes from the `.slp`
+  import path (`import-export/slp-import.js`, "keep it null" — File ▸ Load Single
+  Session Folder) and `-1` from the lazy columnar store (File ▸ Load Project).
+  Only `null` was broken, because `-1 != null` passed the old guard, so a
+  fixture using only `-1` PASSES against the broken build — which is why
+  `tests/test-propagate-null-track.mjs` runs its scenarios over both.
+  **Whole-project correctness on a lazy
   session:** both propagate directions used to walk only `frameGroups` — a
   lazy session's small resident window — so an unvisited frame's data was
   under-covered, and `propagateIdentitiesToTracks`'s old wholesale
