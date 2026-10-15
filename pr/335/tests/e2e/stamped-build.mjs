@@ -20,6 +20,8 @@
  *     once, and by the time the app is ready it has requested NO same-site module
  *     outside that block and the page's own <script> tags — i.e. the whole startup
  *     graph was fetched up front instead of discovered import by import.
+ *  6. The release label the stamp wrote shows beside the menu bar's Settings
+ *     button (ui/version-label.js), right of it and inside the window.
  *
  * Run: node tests/e2e/stamped-build.mjs
  */
@@ -34,6 +36,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const PORT = Number(process.env.PORT || 8277);
 const TOKEN = 'e2etest0001';
+const RELEASE = 'v9.8.7';
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
@@ -47,7 +50,7 @@ for (const f of files) {
     fs.copyFileSync(src, path.join(site, f));
 }
 const { stampSite } = await import(pathToFileURL(path.join(repoRoot, 'scripts', 'stamp-version.mjs')).href);
-const res = stampSite(site, TOKEN);
+const res = stampSite(site, TOKEN, RELEASE);
 check(res.refs > 100 && res.problems.length === 0,
     `stamped ${res.refs} references in ${res.files} files, none left unstamped${res.problems.length ? ': ' + res.problems.slice(0, 3).join(' | ') : ''}`);
 const { preloadSite } = await import(pathToFileURL(path.join(repoRoot, 'scripts', 'preload-modules.mjs')).href);
@@ -99,6 +102,19 @@ try {
     const one = await page.evaluate(async (t) => (await import('./ui/app-state.js?v=' + t)).state === window.__lucid.state, TOKEN);
     check(one, 'app: window.__lucid.state is the stamped ui/app-state.js state (one instance)');
     check(errs.length === 0, 'app: no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
+
+    // ---- 6: the release beside Settings
+    const v = await page.evaluate(() => {
+        const el = document.getElementById('menuBarVersion'), set = document.getElementById('menuBarSettings');
+        const r = el.getBoundingClientRect(), s = set.getBoundingClientRect();
+        return { text: el.textContent, title: el.title, shown: !el.hidden && r.width > 0,
+                 rightOfSettings: r.left >= s.right - 0.5 && Math.abs((r.top + r.bottom) - (s.top + s.bottom)) < 4,
+                 inWindow: r.right <= window.innerWidth, select: getComputedStyle(el).userSelect };
+    });
+    check(v.text === RELEASE && v.shown, `menu bar: shows "${v.text}" (want "${RELEASE}")`);
+    check(v.title === `LUCID ${RELEASE} (commit ${TOKEN})`, `menu bar: tooltip "${v.title}"`);
+    check(v.rightOfSettings && v.inWindow, 'menu bar: the label sits right of Settings, on its line, inside the window');
+    check(v.select === 'text', 'menu bar: the label is selectable (the rest of the bar is not)');
 
     // ---- 4: the browser suite on the stamped copy
     const tp = await browser.newPage();
