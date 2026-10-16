@@ -1880,6 +1880,16 @@ export class Session {
      * identity propagates to a null track; we do NOT create a dedicated "No ID"
      * track for explicit-none instances.
      *
+     * A null TRACK, however, is NOT a null identity, and conflating the two was
+     * luc3d #111. An instance's incoming trackIdx is an INPUT to be replaced, not
+     * a precondition for replacing it: an untracked detection that the tracker
+     * grouped and identified must come out ON that identity's track. Both halves
+     * of that had to be fixed — minting the track (step 1) and assigning it
+     * (step 3) — and both are commented where they happen. The two spellings of
+     * "no track" reach here from different load paths and are treated alike:
+     * `null` from the `.slp` import path (`import-export/slp-import.js`, "keep it
+     * null") and `-1` from the lazy columnar store.
+     *
      * This rewrites the session-level `tracks` name list to one entry per used
      * identity and rewrites `frameIdentityMap`
      * under the new trackIdx keys, so each instance's track resolves back to its
@@ -1916,6 +1926,30 @@ export class Session {
         var usedSet = new Set();
         for (var idVal of this.frameIdentityMap.values()) {
             if (idVal != null && idVal >= 0) usedSet.add(idVal);
+        }
+        // An identity carried ONLY by trackless instances has no entry of its own
+        // to be found above: `frameIdentityMap` is keyed by raw trackIdx, and a
+        // null track keys one shared per-camera slot that cannot name an
+        // individual (see `getIdentityIdForUnlinkedInstance`). So a hand-annotated
+        // animal's identity lives on its group, or — for an ungrouped row — on the
+        // instance (luc3d #201). Without these two passes no track is minted for
+        // it, `idToTrackIdx` has no entry, and step 3 has nothing to assign even
+        // once it asks: "Propagate IDs → Tracks" reported success and created no
+        // track for that ID (luc3d #111).
+        for (var [, groupsUsed] of this.instanceGroups) {
+            for (var guI = 0; guI < groupsUsed.length; guI++) {
+                var gUsed = groupsUsed[guI];
+                if (gUsed.identityId != null && gUsed.identityId >= 0) usedSet.add(gUsed.identityId);
+            }
+        }
+        for (var [, fgUsed] of this.frameGroups) {
+            for (var [, ulUsed] of fgUsed.unlinkedInstances) {
+                for (var uuI = 0; uuI < ulUsed.length; uuI++) {
+                    var instUsed = ulUsed[uuI].instance;
+                    if (!instUsed || (instUsed.trackIdx != null && instUsed.trackIdx >= 0)) continue;
+                    if (instUsed.identityId != null && instUsed.identityId >= 0) usedSet.add(instUsed.identityId);
+                }
+            }
         }
         var newTracks = [];
         var idToTrackIdx = new Map();   // identityId → new trackIdx
@@ -2095,9 +2129,10 @@ export class Session {
             if (remapped.has(inst)) return;
             remapped.add(inst);
             var ni = null;
-            if (inst.trackIdx != null) {
-                // Per-frame map FIRST — it is the source of truth every display
-                // consumer resolves first (see getGroupColor), and the ONLY
+            var id = null;
+            if (inst.trackIdx != null && inst.trackIdx >= 0) {
+                // TRACKED: per-frame map FIRST — it is the source of truth every
+                // display consumer resolves first (see getGroupColor), and the ONLY
                 // structure a single-view ID switch rewrites
                 // (`swapIdentitiesForwardInCamera` deliberately leaves the
                 // cross-view `group.identityId` alone, luc3d #201). The group
@@ -2106,14 +2141,34 @@ export class Session {
                 // Consulting the group FIRST resurrected its stale identity on
                 // the frame of a single-view switch, duplicating one ID onto
                 // both animals there.
-                var id = self.getIdentityIdForTrack(camName, inst.trackIdx, frameIdx);
+                id = self.getIdentityIdForTrack(camName, inst.trackIdx, frameIdx);
                 if (id == null && instanceToIdentity.has(inst)) {
                     id = instanceToIdentity.get(inst);
                 }
-                if (id != null && id >= 0 && idToTrackIdx.has(id)) ni = idToTrackIdx.get(id);
-                // No identity (including explicit "no identity") → trackless
-                // (null). No dedicated "No ID" track is created.
+            } else {
+                // TRACKLESS (`null` from the .slp import path, `-1` from the lazy
+                // columnar store — `_fimKey` normalizes both to one slot). A null
+                // TRACK is not a null IDENTITY, and this branch used to not exist:
+                // the whole lookup was gated on `trackIdx != null`, so every
+                // untracked detection was skipped and "Propagate IDs → Tracks"
+                // silently left it trackless while reporting success (luc3d #111).
+                //
+                // Group FIRST here, deliberately — the opposite of the tracked
+                // branch, and the same precedence step 2b already applies to a
+                // member with `rawTrk < 0`. The map's null/-1 key is ONE shared
+                // slot per (frame, camera), so it cannot name an individual when a
+                // camera-frame holds two untracked detections; the group (and, for
+                // an ungrouped row, the instance's own retained identity — luc3d
+                // #201) is per-instance and therefore unambiguous. The shared slot
+                // is deliberately NOT consulted as a further fallback: a wrong
+                // track is worse than none, and two instances on one track in one
+                // frame is invalid in SLEAP.
+                if (instanceToIdentity.has(inst)) id = instanceToIdentity.get(inst);
+                else if (inst.identityId != null && inst.identityId >= 0) id = inst.identityId;
             }
+            if (id != null && id >= 0 && idToTrackIdx.has(id)) ni = idToTrackIdx.get(id);
+            // No identity (including explicit "no identity") → trackless
+            // (null). No dedicated "No ID" track is created.
             if (inst.trackIdx !== ni) { inst.trackIdx = ni; changed++; }
         }
         function forEachInstance(cb) {
