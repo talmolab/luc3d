@@ -276,7 +276,9 @@ terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-cor
   and on `--dv-tabs-and-actions-container-height`.
 - mp4box.js
 - **transformers.js pinned to 4.3.0** (`ui/image-embedder.js`, `/+esm` from
-  jsdelivr) + the `onnx-community/dinov2-small` model from the Hugging Face CDN —
+  jsdelivr) + the `onnx-community/dinov2-small` model from the Hugging Face CDN,
+  pinned to the repo commit `IMAGE_MODEL_REVISION` (every `from_pretrained` must
+  pass it — `tests/test-image-model-revision.mjs`) —
   fetched only when the IMAGE ID-switch check first runs (opt-in, default off),
   then cached by the browser. Pinned for the dockview reason. The image check was
   calibrated against this model's embeddings of `cutCrop`'s crops: a bump of

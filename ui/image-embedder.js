@@ -50,6 +50,9 @@ export { createLoadMeter };
 
 export const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/+esm';
 export const IMAGE_MODEL_ID = 'onnx-community/dinov2-small';
+// The model repo's commit, pinned like TRANSFORMERS_URL: without it from_pretrained follows `main`, so an
+// upstream re-upload would silently change the weights the check was calibrated against (and what runs).
+export const IMAGE_MODEL_REVISION = '8b1f705a3a7f6f062f6bdd21986c1583d3ef105d';
 export const IMAGE_MODEL_MB = 44;
 
 /** Crop side (px) and model input side (px). */
@@ -119,7 +122,7 @@ export function loadImageModel(onStatus) {
         if (onStatus) onStatus('Loading the image model (' + (dtype === 'fp16' ? IMAGE_MODEL_MB : 2 * IMAGE_MODEL_MB) + ' MB on first use, cached afterwards)…');
         const T = await importTransformers();
         const model = await T.AutoModel.from_pretrained(IMAGE_MODEL_ID, {
-            device: 'webgpu', dtype: dtype,
+            revision: IMAGE_MODEL_REVISION, device: 'webgpu', dtype: dtype,
             // Keep the output ON THE GPU: the model's only output is last_hidden_state [n, 257, 384]
             // (5.9 MB for 15 crops) and the check uses 1 of those 257 tokens — clsFromGpu copies just it.
             session_options: { preferredOutputLocation: 'gpu-buffer' },
@@ -315,7 +318,7 @@ export async function loadWebNNModel(onStatus) {
     if (onStatus) onStatus('Compiling the image model for WebNN (experimental)…');
     const T = await importTransformers();
     const model = await T.AutoModel.from_pretrained(IMAGE_MODEL_ID, {
-        device: 'webnn-gpu', dtype: 'fp16',
+        revision: IMAGE_MODEL_REVISION, device: 'webnn-gpu', dtype: 'fp16',
         session_options: { freeDimensionOverrides: { batch_size: WEBNN_BATCH, num_channels: 3, height: INPUT, width: INPUT } },
     });
     await model({ pixel_values: new T.Tensor('float32', new Float32Array(WEBNN_BATCH * 3 * INPUT * INPUT), [WEBNN_BATCH, 3, INPUT, INPUT]) });

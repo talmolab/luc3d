@@ -149,7 +149,7 @@ try {
             E.writeInputTensor(E.cutCrop(window.__bmp, g, others, canvas), data.subarray(keys.length * SZ, (keys.length + 1) * SZ), 0);
             keys.push([ii, cam]); }));
         const T = await import(E.TRANSFORMERS_URL);
-        const ref = await T.AutoModel.from_pretrained(E.IMAGE_MODEL_ID, { device: 'wasm', dtype: 'fp32' });
+        const ref = await T.AutoModel.from_pretrained(E.IMAGE_MODEL_ID, { revision: E.IMAGE_MODEL_REVISION, device: 'wasm', dtype: 'fp32' });
         const res = await ref({ pixel_values: new T.Tensor('float32', data.slice(0, keys.length * SZ), [keys.length, 3, E.INPUT, E.INPUT]) });
         const hs = res.last_hidden_state, tok = hs.dims[1], dim = hs.dims[2];
         let minCos = 1, maxAbs = 0, matched = 0;

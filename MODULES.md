@@ -10691,7 +10691,7 @@ Promise<Float32Array[]>, broken, terminate()}` or null; crop helpers
 `cropGeometry` (now also `pts`: every keypoint, for the overlay — cutCrop ignores it), `cutCrop`,
 `convexHull`, `writeInputTensor`, `skeletonIndex(nodes)` (now also `n`, the node count),
 `frameCropGeometry(session, frame, items, cams, atFrames, sk)` -> `geo[view][item]`; constants
-`TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (224).
+`TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_REVISION`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (224).
 
 **The crop** (must match the calibration): rotate so the nose points right
 (Nose − TTI), centre on the mean of the body keypoints, side 1.3 x body length,
@@ -10715,7 +10715,10 @@ inflated.
 
 **Dependencies.** transformers.js **pinned to 4.3.0** (`/+esm` from jsdelivr —
 pinned for the reason dockview is) and `onnx-community/dinov2-small` from the
-Hugging Face CDN, both fetched on FIRST USE and cached by the browser; nothing
+Hugging Face CDN, **pinned to the repo commit `IMAGE_MODEL_REVISION`** (`8b1f705…`,
+2024-10-08, the weights the check was calibrated on) — every `from_pretrained`
+passes `revision`, else it follows `main` and an upstream re-upload would change
+the weights silently; `tests/test-image-model-revision.mjs` enforces it. Both fetched on FIRST USE and cached by the browser; nothing
 about the user's data is sent. fp16 (~44 MB) when the GPU has `shader-f16`, else
 fp32 (~88 MB). WebGPU only: the CPU (WASM) runtime measured ~50x slower (3 vs 155
 crops/s) and its int8 model drifts (cosine 0.953 vs the calibrated model). Re-check
@@ -10795,7 +10798,7 @@ token, read exactly as the main thread's `clsVectors` does — or `{type: 'error
 id, message}`.
 
 **Imports from project modules.** `ui/image-embedder.js` (`importTransformers`,
-`asModelDownloadFailure`, `IMAGE_MODEL_ID`, `INPUT` — so the pin stays in one
+`asModelDownloadFailure`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_REVISION`, `INPUT` — so the pin stays in one
 place), then the runtime through `importTransformers` (a dynamic cross-origin
 import of `TRANSFORMERS_URL`, which a module worker may do).
 
