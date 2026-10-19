@@ -31,6 +31,7 @@ import {
 import { OnDemandVideoDecoder, VideoController } from './video.js';
 import { videoLoadFailureText } from './video-codec-diagnosis.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
+import { confirmFolderPick } from '../ui/folder-confirm-tip.js';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
@@ -546,6 +547,7 @@ export function matchSessionFolder(folderName, sessionName) {
  *   unmatched: session names with no matching folder
  */
 export async function pickParentDirectoryForSessions(sessionNames) {
+    if (!(await confirmFolderPick())) return null;
     if (!window.showDirectoryPicker) {
         // Fall back to pickFolder (webkitdirectory) — can't enumerate subdirs individually
         var allFiles = await pickFolder();
@@ -785,6 +787,7 @@ export function forceVideoSelectionWithFolder(refInfo, sessionName, options) {
         // Folder button — scan for videos in camera subdirs
         btnFolder.addEventListener('click', async function () {
             var allFiles;
+            if (!(await confirmFolderPick())) return;
             try { allFiles = await pickFolder(); } catch (e) { return; }
             if (!allFiles || allFiles.length === 0) return;
 
@@ -1344,6 +1347,10 @@ export async function handleLoadMultiSession() {
         // the browser dropping files when webkitdirectory returns too many
         var parentHandle;
         if (window.showDirectoryPicker) {
+            if (!(await confirmFolderPick())) {
+                setStatus('No folder selected', 'warning');
+                return;
+            }
             try {
                 parentHandle = await window.showDirectoryPicker({ mode: 'read' });
             } catch (e) {
@@ -1874,6 +1881,10 @@ export function handleEmptySession() {
 
 export async function handleLoadSessionFolderSingleSlp() {
     try {
+        if (!(await confirmFolderPick())) {
+            setStatus('No folder selected', 'warning');
+            return;
+        }
         setStatus('Pick session folder...', 'warning');
         var allFiles = await pickFolder();
         if (allFiles.length === 0) {
@@ -2697,6 +2708,10 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         if (preloadedFiles) {
             allFiles = preloadedFiles;
         } else {
+            if (!(await confirmFolderPick())) {
+                setStatus('No folder selected', 'warning');
+                return;
+            }
             setStatus('Pick session folder...', 'warning');
             allFiles = await pickFolder();
             if (allFiles.length === 0) {

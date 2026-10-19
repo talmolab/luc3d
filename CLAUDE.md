@@ -3,10 +3,10 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 113 modules are grouped into four directories:
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 115 modules are grouped into four directories:
 - `pose/` — data model, cross-view tracking (Track All's tracker on one worker: `tracker-pool.js` + `tracker-worker.js`), DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), the lazy project's playback eviction (`lazy-residency.js`), app initialization (23 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, the node tooltip on hover (`node-tooltip.js` — a node's name and a prediction's per-node score, as SLEAP shows them), plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip and the time ruler under it (`seekbar-ticks.js` — major/minor tick steps chosen from the video's length and the bar's width), the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames) and their shade (`TRAIL_SHADES` in `ui/overlays.js`: Very dark … Very light, default Dark, remembered in `localStorage`), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it) and its Identities section (`identity-gallery.js` — five sample images and a path map per identity), the Track group's Animals field (`animal-count-field.js`), the dialog Track All / Track Frame open on a session's first run (`track-setup-modal.js` — the animal count, with the node weights to review and, on Track All, the image ID-switch check and its options; the weight grid and the image-check section are in the Track Frame Range dialog too), the CPU / GPU load lines and last-minute graph shown by the image check's dialog and by the loading overlay during Triangulate All and Track All (`load-graph.js`), settings, the release shown beside the menu bar's Settings button (`version-label.js`) — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (68 files)
-- `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), the `.slp` skeleton reader + per-camera node-order remap (`slp-skeleton.js`), web workers (12 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, the node tooltip on hover (`node-tooltip.js` — a node's name and a prediction's per-node score, as SLEAP shows them), plane visibility, browser-specific hints, the macOS tip shown before a folder picker (`folder-confirm-tip.js` — the browser's folder prompt defaults to Cancel, and Tab reaches Upload only with Keyboard navigation on, which no page can read), the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip and the time ruler under it (`seekbar-ticks.js` — major/minor tick steps chosen from the video's length and the bar's width), the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames) and their shade (`TRAIL_SHADES` in `ui/overlays.js`: Very dark … Very light, default Dark, remembered in `localStorage`), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it) and its Identities section (`identity-gallery.js` — five sample images and a path map per identity), the Track group's Animals field (`animal-count-field.js`), the dialog Track All / Track Frame open on a session's first run (`track-setup-modal.js` — the animal count, with the node weights to review and, on Track All, the image ID-switch check and its options; the weight grid and the image-check section are in the Track Frame Range dialog too), the CPU / GPU load lines and last-minute graph shown by the image check's dialog and by the loading overlay during Triangulate All and Track All (`load-graph.js`), settings, the release shown beside the menu bar's Settings button (`version-label.js`) — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (69 files)
+- `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), the `.slp` skeleton reader + per-camera node-order remap (`slp-skeleton.js`), Blob reads that survive a cloud file still downloading (`cold-read-guard.js`), web workers (13 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
 - `demo-data.js` — synthetic skeleton and camera data
 - `styles.css` — all styling
@@ -47,7 +47,13 @@ tree serves correctly from every path. Do not introduce origin-root-relative URL
   concurrency groups, and a merge to `main` starts the `/dev/` deploy and the
   preview cleanup in the same second; a single checkout-then-push lost that race
   so often that 23 merged/closed PRs' previews were left on the live site. Any
-  new step that pushes to `gh-pages` needs the same loop.
+  new step that pushes to `gh-pages` needs the same loop — and must **never
+  force-push**: the preview deploy's `JamesIves/github-pages-deploy-action`
+  force-pushes by default and erased other workflows' commits (#320's and #321's
+  removals), so it runs with `force: false`. The cleanup is triggered by
+  `pull_request_target: closed`, not `pull_request`, because GitHub does not run
+  `pull_request` workflows for a PR with merge conflicts (closing #278 / #286
+  never ran it). It is safe there only because it never checks out PR code.
 
 **Only a full release moves root.** A push to `main` goes to `/dev/` alone; a
 pre-release goes to `/latest/` alone; republishing an older release moves nothing
@@ -94,7 +100,7 @@ number silently. Nothing about the label reaches the `.slp`.
 same command runs `scripts/preload-modules.mjs`, which walks `index.html`'s
 module scripts through every STATIC import (relative specifiers and importmap
 entries) and inserts one `<link rel="modulepreload">` per module right after the
-importmap — every same-site module of the startup graph (111 files) plus the two CDN modules (`yaml`, dockview).
+importmap — every same-site module of the startup graph (114 files) plus the two CDN modules (`yaml`, dockview).
 Without it the browser discovered the graph one import level at a time: six
 sequential round trips, every one a CDN miss on a cold start. And a cold start
 is the ordinary case, not the rare one: every deploy changes every `?v=` URL,
@@ -364,7 +370,9 @@ terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-cor
   `-bf 3 -g 10`): 18 of 30 frames (60%) decoded wrong before this patch, 0
   after. Fixed by sorting `_frameTimes` ascending by timestamp at the end of
   `initialize()`, marked `// LUCID local patch (#115)`. **Re-apply after any
-  re-vendor** (grep the marker) and report upstream to sleap-io/mediabunny.
+  re-vendor** (grep the marker). Reported upstream as **sleap-io.js#262** (the
+  bug is sleap-io.js's, not mediabunny's: mediabunny documents decode order);
+  drop this patch once a sleap-io.js release sorts `_frameTimes`.
   Covered by `tests/e2e/mediabunny-bframe-decode-order.mjs`. Its fixture video
   is committed through a `.gitignore` exception (`*.mp4` is otherwise ignored)
   and regenerated — together with its ground-truth PNGs, never separately — by
@@ -382,7 +390,8 @@ terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-cor
   walk, `Object.is` per timestamp and in order, plus backend index == full walk
   sorted; on a generated `-bf 3` B-frame video, and with `DATASET=` on real
   files). Marked `// LUCID local patch (luc3d frame-index)`. **Re-apply after any
-  re-vendor** (grep the marker) and report upstream to sleap-io.js.
+  re-vendor** (grep the marker). Reported upstream as **sleap-io.js#262**; drop
+  this patch once a sleap-io.js release passes `metadataOnly`.
   **LOCAL PATCH (sleap-io.js#231):** `lib/sleap-io/chunk-X76PRJK6.js` writes the
   SLP `instances` table with dtype `"<d"` (h5wasm float64) instead of upstream's
   `"<f8"` — h5wasm does NOT speak numpy dtype strings and parses `"<f8"` as
@@ -563,6 +572,44 @@ terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-cor
   blind spot and now shares `loading/slp-skeleton.js`'s parser. Guarded by
   `tests/test-slp-skeleton.mjs` (fails on the unpatched chunk) and
   `tests/e2e/slp-nested-skeleton.mjs`.
+  **LOCAL PATCH (luc3d eager-save):** `lib/sleap-io/chunk-X76PRJK6.js`
+  `writeLabeledFrames` — the EAGER writer's 2D tables (`frames`, `instances`,
+  `points`, `pred_points`) — appends through #191's `LucidAppendTable` instead of
+  building one boxed JS row per keypoint and holding every one until
+  `createMatrixDataset`. That is what crashed File ▸ Save of an eagerly-loaded
+  per-camera project: on MultiCam_18 (17 cameras, 34 nodes, 36,000 frames,
+  1,390,390 predictions = 47,273,260 keypoint rows) a prediction's row was
+  ~210 B of V8 heap (`row.push(score)` grows a 4-double array's backing store to
+  22), 7.4 KB per instance. Measured with `tests/e2e/_diag-eager-save-heap.mjs`:
+  the save went from a renderer crash (even with the ungrouped predictions
+  dropped) to **1,133,683,132 bytes in 24 s, peak heap 2,234 MB**; on its first
+  3,000 frames the peak went 1,207 -> 344 MB with every dataset bit-identical
+  (h5py). Same consequences as #191: a table that never fills its buffer is
+  written one-shot and contiguous, so small files are BYTE-IDENTICAL
+  (`save-golden-digest.mjs` must not move); one that overflows becomes chunked.
+  `from_predicted` is resolved by a pre-pass (only when some user instance has
+  one), since a flushed row cannot be patched afterwards. Points are read from
+  the instance's columnar `_xy`/`_visible`/`_complete`/`_score` directly. The
+  boxed `emitInstancePoints` is kept for `SlpStreamWriter`, whose rows are
+  window-bounded. `LucidAppendTable.push` takes 10 values now (was 8). Guarded by
+  `tests/e2e/save-2d-tables-append.mjs` (every value vs the pre-patch row logic,
+  across flush boundaries; its value checks also pass on the pre-patch bundle,
+  only the layout checks fail there). Marked `// LUCID local patch (luc3d
+  eager-save)`. **Re-apply after any re-vendor** (grep the marker) and report
+  upstream.
+  **NOT A PATCH, BUT IT DEPENDS ON BUNDLE INTERNALS — the same save's 2D
+  instances:** `buildSlpLabelsAllViews` makes them with `makePooledSioInstances`
+  (`import-export/file-io.js`) — objects over `SIO.Instance` /
+  `SIO.PredictedInstance` prototypes whose `_xy`/`_visible`/`_complete`/`_score`
+  are getters onto SHARED pooled column chunks, instead of four typed arrays (and
+  a `_names` array) per instance. On MultiCam_18 (17 cameras, 1,390,390 2D
+  instances) that took the Labels graph from ~0.93 KB to ~0.2 KB of V8 heap per
+  instance and the save's peak from 2,146 to 1,057 MB, with every dataset
+  bit-identical (h5py). It reads and serves the vendored `Instance`'s private
+  column fields, so **after any re-vendor** check those fields (and `_n` /
+  `_names`) still exist under the same names, and run
+  `tests/test-sio-pooled-instances.js` — it compares every column, default and
+  the saved bytes against `new SIO.Instance({ points })`.
   **OBSOLETE PATCH (issue #134):** the old inline-points-fallback patch to
   `serializeInstanceGroup` is **gone and must NOT be re-applied.** SLP 2.8 (0.5.5)
   replaced the inline `frame_group_dicts` serializer with the columnar
@@ -1881,6 +1928,62 @@ or editing any modal/overlay dialog, wire a `keydown` listener that closes it on
 in-progress export), `Esc` should cancel/stop that operation rather than tear the
 modal down. Example: `showExport3DVideoModal` in `ui/export-modals.js`.
 
+## A File in a cloud-synced folder can read back WRONG — read it through the guard
+
+In a Google Drive for desktop folder on macOS (File Provider), a Blob read of a
+part of a file that is not downloaded yet can **fail** (`arrayBuffer()` rejects
+with NotReadableError; a Blob stream errors with `TypeError: network error`) or
+come back with a run of **zeros** and every other byte right. Drive
+fetches a video only in the ranges that are read (a "dataless" 428 MB recording
+held 12.6 MB after a session load), so this is not only the load: every seek
+into a part of a video nobody has looked at yet is such a read.
+
+Measured 2026-10-19 on cold 8-camera sessions of `TalmoLab_extra/Scratch/
+Proofreading/2022-10-07` (every Blob read logged and compared with the disk
+afterwards):
+- **On `main`** (6 sessions, 48 videos, 45,735 reads, 12.0 GB) 31 reads FAILED
+  and none came back zeroed. 2 of 48 cameras lost their frame-accurate decoder
+  at load and stepped by `<video>` seeks for the rest of the session, 3
+  requested frames fell back to a `<video>` seek, and 6 of 848 decoded frames
+  differed from a warm load. 30 of the 31 failed reads succeeded when read
+  again at once.
+- **Through the guard** (3 sessions, 24 videos, 7,189 reads, 7.4 GB) 16 reads
+  failed and 67 came back with their first 64 KiB zeroed — always a read
+  starting on a 1 MiB boundary of the file where nothing was downloaded yet;
+  reading the windows by stream instead (one more session) zeroed 24 the same
+  way. The guard rescued every failure and repaired every run, and no frame
+  differed from the warm load.
+- The `.slp` reads go through h5wasm's WORKERFS, where the zeros came as
+  16 KiB pages; that path has its own `cold-read` patch in lib/h5wasm.
+
+So **read a user's File's bytes through `loading/cold-read-guard.js`**, never
+`file.arrayBuffer()` / `slice().arrayBuffer()` directly. `readBlobRange` retries
+a read that throws (200 ms, 1 s, 3 s) and re-reads every all-zero 4 KiB block,
+using the re-read only when it is non-zero — h5wasm's `lucidColdReadGuard` rule,
+plus the retry. Three rules:
+- **The frame-accurate decoder reads through `fromRangeSource`, not `fromBlob`.**
+  `_initMediabunny` hands sleap-io.js's `MediaBunnyVideoBackend.fromRangeSource`
+  a `guardedRangeSource(file)`; mediabunny's own `BlobSource` cannot be guarded
+  from outside. Going back to `fromBlob` reopens every failure above.
+- **The range source reads whole 1 MiB windows**, not each request. mediabunny
+  asks a `StreamSource` for ~64–192 KiB at a time and a Blob read costs about
+  the same however small: one read per request read packets ~6x slower than
+  `BlobSource` (221 vs 35 ms for 46.7 MB); the windows bring it to 61 vs 29 ms,
+  ~75x what 8 cameras decoding at 60 fps need, with index build and decoding
+  unchanged. Answers are copies, so mediabunny's cache never pins a window.
+- **mp4box's index scan reads through it too** (`readChunk`). Unguarded, a
+  failed scan read silently left the `<video>` estimate (duration x 30 fps) as
+  the frame count and fps, and a zeroed page in the scanned `moov` made mp4box
+  loop on the main thread for good — the tab froze.
+Load 3D Points (`readBlobArrayBuffer`) and the codec diagnosis use it as well.
+**Not covered:** the `<video>` element reads its blob URL natively (playback,
+and stepping only when there is no frame-accurate backend), and the small
+JSON/TOML `.text()` reads fail to parse loudly. Covered by
+`tests/test-cold-read-guard.mjs` (the rule, the windows, and mediabunny's index
+and packets of the B-frame fixture through the guard, against the unguarded
+read) and `tests/e2e/video-cold-read.mjs` (the real decoder with faults injected
+under it; confirmed to fail, and to freeze, on the unguarded build).
+
 ## Native resolution (1:1) — one video pixel per DEVICE pixel
 
 View ▸ Native Resolution / `Shift+0` (`VideoController.setNativeResolution`,
@@ -1901,10 +2004,11 @@ review and obvious on screen:
 Exact at integer devicePixelRatio (and 1.25/1.5 headless); at e.g. 2.2 Chrome
 resamples regardless, so it is right-SIZED but not exact — say so, don't promise
 it. Whether it is on is DERIVED (`state.nativeResolution` = every shown view at
-1:1) so the menu tick cannot lie, and `initZoom` seeds from it so pane rebuilds
-keep 1:1. The pane badge reads the zoom as a percentage of 1:1
-(`zoomPercentLabel`), and only a view HELD at 1:1 may read exactly "100%" — a
-near miss is still resampled, so it reads "99.8%" / "≈100%". Hovering it offers
+1:1) so the menu tick cannot lie. A pane rebuild keeps each view's own zoom,
+except that while the mode is on a view coming on screen joins it at 1:1
+(`refreshPaneInteractions`), so cycling the solo camera keeps 1:1. The pane
+badge reads the zoom as a percentage of 1:1 (`zoomPercentLabel`), and only a
+view HELD at 1:1 may read exactly "100%" — a near miss is still resampled, so it reads "99.8%" / "≈100%". Hovering it offers
 presets (`ZOOM_PRESET_PERCENTS`, per pane, `setZoomPercent`); 100% there must go
 through `_enterNative`, never a plain `scale = 1:1`, or it skips both rules. The 1:1 scale depends on the box AND devicePixelRatio, so anything
 that moves either must end in `reapplyZoom` (`reapplyAllZoom` covers resize and
