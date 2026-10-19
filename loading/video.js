@@ -70,6 +70,19 @@ export function isFragmentedInfo(info) {
     return !!track && !(track.duration > 0);
 }
 
+/**
+ * The mp4box samples whose bytes lie inside a file of `fileSize` bytes. A
+ * truncated fragmented MP4's last moof can list samples past its end.
+ */
+export function samplesInFile(samples, fileSize) {
+    var out = [];
+    for (var i = 0; i < samples.length; i++) {
+        var smp = samples[i];
+        if (!(smp.offset >= 0 && smp.size >= 0) || smp.offset + smp.size <= fileSize) out.push(smp);
+    }
+    return out;
+}
+
 /** Sum of mp4box sample durations (track timescale units). */
 export function sumSampleDurations(samples) {
     var total = 0;
@@ -114,6 +127,7 @@ export class OnDemandVideoDecoder {
         this._mp4InitPromise = null;
         this._html5SeekLock = null; // Prevent concurrent HTML5 seeks
         this._html5Moved = false;   // <video> played or frame-start-seeked since _getFrameHTML5 last positioned it
+        this._frameLimit = null; // frames in a truncated fragmented MP4 (see _initMp4box), else null
         this._mbBackend = null; // Optional mediabunny frame-accurate backend (issue #115)
         this._mbUnavailable = null; // why there is no _mbBackend: { reason: 'codec'|'init', ... } (see _initMediabunny)
         this._stepCursor = null; // open decode stream for paused forward steps (see _mbGetFrame)
@@ -344,6 +358,7 @@ export class OnDemandVideoDecoder {
         // as the frame-count carrier the rest of the class reads (`.length`),
         // resizing it to match so bounds checks and the timeline agree.
         var n = this._mbBackend.numFrames;
+        if (this._frameLimit != null && n > this._frameLimit) n = this._frameLimit;   // see _initMp4box: frames past a truncated file's end
         if (n && n !== this.samples.length) {
             var resized = new Array(n);
             for (var i = 0; i < n; i++) {
@@ -429,6 +444,7 @@ export class OnDemandVideoDecoder {
      */
     async _initMp4box() {
         var self = this;
+        this._frameLimit = null;
         this.mp4boxFile = MP4Box.createFile(false);
 
         var info = null;
@@ -496,6 +512,21 @@ export class OnDemandVideoDecoder {
 
         // Get real sample table for accurate frame count and FPS
         var mp4Samples = this.mp4boxFile.getTrackSamplesInfo(videoTrackInfo.id);
+        // A recording cut off mid-write (the case campy fragments for) can end
+        // inside its last fragment's media: its moof lists frames whose bytes
+        // are not in the file. Count only the frames that are, and hold
+        // mediabunny to the same count (_initMediabunny), since it lists them
+        // too. Measured on a 1,200-frame clip cut at 47,000 / 46,000 bytes:
+        // ffprobe decodes 1,194 / 1,165, both demuxers listed 1,200 / 1,182.
+        if (fragmented && mp4Samples && mp4Samples.length > 0) {
+            var whole = samplesInFile(mp4Samples, this.fileSize);
+            if (whole.length < mp4Samples.length) {
+                videoLog("Fragmented MP4 ends mid-fragment: " + (mp4Samples.length - whole.length)
+                    + " frame(s) past the end of the file dropped", "warn");
+                mp4Samples = whole;
+                this._frameLimit = whole.length;
+            }
+        }
         if (mp4Samples && mp4Samples.length > 0) {
             // Update frame count and FPS from real sample data
             var realFrameCount = mp4Samples.length;

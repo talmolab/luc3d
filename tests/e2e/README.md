@@ -136,8 +136,10 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
   `tests/fixtures/fragmented-60/fragmented-60.mp4` (1,200 barcode frames at
   60 fps, campy's muxer flags) with small read sizes, in HTML5 and mediabunny
   modes, and asserts the frame count, the fps, `updateTotalFrames`' fps, that
-  mdat payloads were skipped, and frames past the first chunk by barcode; and
-  that a regular MP4 does no fragment scan. `RIG_VIDEO=<path>` (HEVC: with
+  mdat payloads were skipped while mp4box held no earlier chunk, frames past
+  the first chunk by barcode, that a copy cut off mid-fragment counts only the
+  frames whose bytes are in the file (1,165, as ffprobe decodes), and that a
+  regular MP4 does no fragment scan. `RIG_VIDEO=<path>` (HEVC: with
   `CHANNEL=chrome`) also loads a real recording. Fails 8 checks on the pre-fix
   build.
 - **`info-panel-many-tracks.mjs`** — the Instances panel must not cost

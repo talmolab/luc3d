@@ -23,6 +23,11 @@
  * most fragments past the first chunk, as a real recording's are past 1 MiB,
  * and `FRAGMENT_PROBE_SIZE` so the mdat-skipping path runs too.
  *
+ * A copy cut off mid-fragment, as a crash leaves it, must count only the frames
+ * whose bytes are in the file. And mp4box must not keep the media it was
+ * handed: told to keep it (`createFile()`'s default) it held all 300 MB of a
+ * 30-min recording.
+ *
  * RIG_VIDEO=<path> also loads that file (e.g. campy's 0-calibration.mp4, which
  * is HEVC — needs CHANNEL=chrome) at the real chunk size and expects
  * RIG_FRAMES (default 1200) frames at RIG_FPS (default 60).
@@ -73,14 +78,21 @@ try {
             const { OnDemandVideoDecoder } = await import('/loading/video.js');
             const { updateTotalFrames } = await import('/loading/session-loader.js');
             const st = window.__lucid.state;
-            const blob = await (await fetch(url)).blob();
+            const full = await (await fetch(url)).blob();
+            const blob = opts.truncate ? full.slice(0, opts.truncate) : full;
             const file = new File([blob], url.split('/').pop(), { type: 'video/mp4' });
             const d = new OnDemandVideoDecoder({ cacheSize: 50 });
             if (opts.chunk) d.CHUNK_SIZE = opts.chunk;
             if (opts.probe) d.FRAGMENT_PROBE_SIZE = opts.probe;
-            let bytes = 0, skips = 0, fragmentSteps = 0;
+            let bytes = 0, skips = 0, fragmentSteps = 0, held = 0;
             const rc = d.readChunk.bind(d);
-            d.readChunk = async (o, n) => { bytes += Math.min(n, file.size - o); return rc(o, n); };
+            d.readChunk = async (o, n) => {
+                // What mp4box still holds from earlier appends (it keeps every
+                // media byte unless told to discard them).
+                const st = d.mp4boxFile && d.mp4boxFile.stream;
+                if (st && st.buffers) held = Math.max(held, st.buffers.reduce((a, b) => a + b.byteLength, 0));
+                bytes += Math.min(n, file.size - o); return rc(o, n);
+            };
             if (typeof d._nextFragmentOffset === 'function') {
                 const nf = d._nextFragmentOffset.bind(d);
                 d._nextFragmentOffset = (o) => {
@@ -119,7 +131,7 @@ try {
                 frames: d.samples.length, fps: d._fps, appFps, appFrames,
                 trackSeconds: d.videoTrack && d.videoTrack.timescale ? d.videoTrack.duration / d.videoTrack.timescale : null,
                 lastKeyframe: kf.length ? kf[kf.length - 1] : null, mediabunny: !!d._mbBackend,
-                bytes, size: file.size, skips, fragmentSteps, got,
+                bytes, size: file.size, skips, fragmentSteps, held, got,
             };
             d.close();
             return out;
@@ -142,6 +154,7 @@ try {
         `updateTotalFrames: state.fps ${h.appFps}, state.totalFrames ${h.appFrames}`);
     check(h.lastKeyframe >= 1140, `keyframe estimates reach the end (last ${h.lastKeyframe})`);
     check(h.skips > 0 && h.bytes < h.size, `mdat payloads skipped: read ${h.bytes} of ${h.size} bytes in ${h.skips} jumps`);
+    check(h.held <= 4096, `mp4box holds no earlier chunk between reads (at most ${h.held} bytes)`);
     const hWrong = (h.got || []).filter(x => x.got !== x.i);
     check(h.got && hWrong.length === 0, 'frames past the first chunk decode as themselves' +
         (hWrong.length ? ` — wrong: ${JSON.stringify(hWrong)}` : ` (${FRAMES.join(', ')})`));
@@ -151,6 +164,20 @@ try {
     const p = await load('/' + CLIP, { backend: 'html5', chunk: 512, probe: 256 });
     check(p.frames === 1200 && near(p.fps, 60, 0.01) && p.skips > 0,
         `with probe reads after long jumps: ${p.frames} frames @ ${p.fps} (${p.skips} jumps, ${p.bytes} of ${p.size} bytes)`);
+
+    // A recording cut off mid-write: the last moof lists frames whose bytes are
+    // not in the file. ffprobe decodes 1,165 frames of the first 46,000 bytes
+    // (both demuxers listed 1,182). mediabunny decodes the last one; the
+    // <video> element itself shows 1,160 for 1,162-1,164 (the cut B-frame
+    // tail), so HTML5 mode reads back a frame short of the end.
+    for (const backend of ['html5', 'mediabunny']) {
+        const last = backend === 'html5' ? 1100 : 1164;
+        const t = await load('/' + CLIP, { backend, chunk: 4096, probe: 256, truncate: 46000, frames: [0, last] });
+        const tWrong = (t.got || []).filter(x => x.got !== x.i);
+        check(t.frames === 1165 && near(t.fps, 60, 0.01) && near(t.appFps, 60, 0.01) && t.got && tWrong.length === 0,
+            `${backend}, file cut at 46,000 bytes: ${t.frames} frames (want 1,165, what ffprobe decodes) @ ${t.fps}, ` +
+            `state.fps ${t.appFps}` + (tWrong.length ? ` — wrong: ${JSON.stringify(tWrong)}` : `, frame ${last} decodes`));
+    }
 
     console.log('Default mode (mediabunny):');
     const m = await load('/' + CLIP, { backend: 'mediabunny', chunk: 4096, probe: 256, frames: FRAMES });

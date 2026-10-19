@@ -14945,9 +14945,17 @@ How it behaves:
   asks for that offset again forever, so the loop throws if it stops advancing.
   A regular MP4 still stops at `onReady`. Measured locally: a 30-min 60 fps file
   of 90 KB fragments scans in ~0.15 s; a 1 GB one of 8.7 MB fragments in ~25 ms,
-  reading 1.9 MB. Covered by `tests/e2e/fragmented-mp4-load.mjs`.
+  reading 1.9 MB — and mp4box holds no chunk between reads (told to keep media,
+  it held all 300 MB of the 30-min file). **A file cut off mid-write** (what
+  campy fragments for) can end inside its last fragment, whose moof lists frames
+  past the end: `samplesInFile` drops them and `_frameLimit` holds mediabunny's
+  count to the same number, since it lists them too (a clip cut at 46,000 bytes:
+  1,165 frames, as ffprobe decodes, not 1,182). Covered by
+  `tests/e2e/fragmented-mp4-load.mjs`.
 - `isFragmentedInfo(info)` — whether mp4box's `onReady` info is a fragmented MP4
   (`isFragmented`, or a video track with duration 0).
+- `samplesInFile(samples, fileSize)` — the mp4box samples whose bytes lie
+  inside the file (drops a truncated last fragment's missing frames).
 - `sumSampleDurations(samples)` — sum of mp4box sample durations (track
   timescale units).
 - `PlaybackSchedule` — class; `update(now, capturedIdx, framesPerMs)` → the
