@@ -9,7 +9,7 @@
 
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline, VIEW_NAMES,
-         getActiveSession, hasRealVideo, setInstanceClipboard, getInstanceClipboard } from './app-state.js?v=f624ceb2f81d';
+         getActiveSession, hasRealVideo, setInstanceClipboard, getInstanceClipboard } from './app-state.js?v=a152d6740e56';
 // Block 1 (Prompt 4): the timeline collapse/fit/sync helpers and the
 // Ctrl/Cmd+J keyboard shortcut installer live in `timeline-controller.js`.
 // Import them explicitly so the local call sites in this file (menu
@@ -21,76 +21,76 @@ import {
     installTimelineShortcuts,
     getCachedTimelineHeight,
     setCachedTimelineHeight,
-} from './timeline-controller.js?v=f624ceb2f81d';
+} from './timeline-controller.js?v=a152d6740e56';
 import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance, Identity, Session,
-         someValidPoint3d } from '../pose/pose-data.js?v=f624ceb2f81d';
+         someValidPoint3d } from '../pose/pose-data.js?v=a152d6740e56';
 import { ensureLazyFrameData, batchLoadLazyFrames, getInstanceGroupsForFrame, evictLazyFrames,
          loadAllLazyFrames, updateTimelineForFrame, triangulateAndReproject,
-         resolveTriangulationMethod } from '../pose/triangulation.js?v=f624ceb2f81d';
-import { LAZY_PLAYBACK_AHEAD } from '../pose/lazy-residency.js?v=f624ceb2f81d';
-import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js?v=f624ceb2f81d';
+         resolveTriangulationMethod } from '../pose/triangulation.js?v=a152d6740e56';
+import { LAZY_PLAYBACK_AHEAD } from '../pose/lazy-residency.js?v=a152d6740e56';
+import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js?v=a152d6740e56';
 import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          populateVideosTable, populateCamerasTable, populateSkeletonTable,
          setupPanelTabs, setupSkeletonEditing, exportSkeletonJSON,
          ensureSession, populateSessionAssignTable, populateUnassignedVideos,
-         populateTimelineVisibility } from './info-panel.js?v=f624ceb2f81d';
-import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js?v=f624ceb2f81d';
+         populateTimelineVisibility } from './info-panel.js?v=a152d6740e56';
+import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js?v=a152d6740e56';
 // Block 2 (Prompt 4): rename migration for the per-session hidden-track
 // / hidden-identity Sets when the user renames an entity.
-import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js?v=f624ceb2f81d';
+import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js?v=a152d6740e56';
 // View ▸ Define Planes — "Defining Plane Mode".
-import { togglePlaneMode, syncPlanes3D } from './plane-definition.js?v=f624ceb2f81d';
+import { togglePlaneMode, syncPlanes3D } from './plane-definition.js?v=a152d6740e56';
 // The Visibility panel's `Planes` section — the four ids, named from the one
 // module that reads them so this file cannot drift from it.
-import { PLANE_VIS_IDS } from './plane-visibility.js?v=f624ceb2f81d';
+import { PLANE_VIS_IDS } from './plane-visibility.js?v=a152d6740e56';
 import { newProject, markDirty, clearDirty, quickSave, saveAs, saveProjectSlp, saveProject,
-         handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=f624ceb2f81d';
-import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js?v=f624ceb2f81d';
-import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js?v=f624ceb2f81d';
+         handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=a152d6740e56';
+import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js?v=a152d6740e56';
+import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js?v=a152d6740e56';
 import { handleLoadCalibration, handleLoadVideos, handleLoadMultiSession,
-         loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js?v=f624ceb2f81d';
-import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=f624ceb2f81d';
+         loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js?v=a152d6740e56';
+import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=a152d6740e56';
 
 // Pass 3i-1: tracker functions moved out of app.js.
-import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js?v=f624ceb2f81d';
+import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js?v=a152d6740e56';
 // The toolbar's Animals field, beside Track Frame / Track All.
-import { wireAnimalCountField } from './animal-count-field.js?v=f624ceb2f81d';
+import { wireAnimalCountField } from './animal-count-field.js?v=a152d6740e56';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
-import { showTrackRangeModal } from './track-range-modal.js?v=f624ceb2f81d';
-import { showAlignViewsModal } from './view-align-modal.js?v=f624ceb2f81d';
+import { showTrackRangeModal } from './track-range-modal.js?v=a152d6740e56';
+import { showAlignViewsModal } from './view-align-modal.js?v=a152d6740e56';
 // The deployed release beside the menu bar's Settings button.
-import { showVersionLabel } from './version-label.js?v=f624ceb2f81d';
-import { onColorByChange, setColorByIdentity } from './color-by.js?v=f624ceb2f81d';
+import { showVersionLabel } from './version-label.js?v=a152d6740e56';
+import { onColorByChange, setColorByIdentity } from './color-by.js?v=a152d6740e56';
 import { TRAIL_PRESETS, MAX_TRAIL_FRAMES, trailPresetFor, trailLabel, trailFrames, trailRate,
          formatTrailSeconds, trailSecondsForFrames, parseTrailSeconds, parseTrailFrames,
-         setTrailSeconds, onTrailSecondsChange } from './trail-presets.js?v=f624ceb2f81d';
-import { TRAIL_SHADES, TRACK_COLORS, trailShadeFor, trailColor } from './overlays.js?v=f624ceb2f81d';
-import { installSeekbarTooltip } from './seekbar-tooltip.js?v=f624ceb2f81d';
-import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js?v=f624ceb2f81d';
-import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js?v=f624ceb2f81d';
-import { installSeekbarTicks, refreshSeekbarTicks } from './seekbar-ticks.js?v=f624ceb2f81d';
+         setTrailSeconds, onTrailSecondsChange } from './trail-presets.js?v=a152d6740e56';
+import { TRAIL_SHADES, TRACK_COLORS, trailShadeFor, trailColor } from './overlays.js?v=a152d6740e56';
+import { installSeekbarTooltip } from './seekbar-tooltip.js?v=a152d6740e56';
+import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js?v=a152d6740e56';
+import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js?v=a152d6740e56';
+import { installSeekbarTicks, refreshSeekbarTicks } from './seekbar-ticks.js?v=a152d6740e56';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
-import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js?v=f624ceb2f81d';
+import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js?v=a152d6740e56';
 // User settings: default triangulation method + editable keyboard bindings.
-import { getDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler, dispatchEvent, getActions, formatBinding } from './settings.js?v=f624ceb2f81d';
-import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js?v=f624ceb2f81d';
-import { showSettingsModal } from './settings-modal.js?v=f624ceb2f81d';
+import { getDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler, dispatchEvent, getActions, formatBinding } from './settings.js?v=a152d6740e56';
+import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js?v=a152d6740e56';
+import { showSettingsModal } from './settings-modal.js?v=a152d6740e56';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
-import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js?v=f624ceb2f81d';
-import { runIdSwitchChecks, setIdSwitchNavigator, setIdSwitchRefresher, updateIdSwitchProgress } from './id-switch-modal.js?v=f624ceb2f81d';
-import { setTrackSummaryNavigator } from './track-summary-modal.js?v=f624ceb2f81d';
+import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js?v=a152d6740e56';
+import { runIdSwitchChecks, setIdSwitchNavigator, setIdSwitchRefresher, updateIdSwitchProgress } from './id-switch-modal.js?v=a152d6740e56';
+import { setTrackSummaryNavigator } from './track-summary-modal.js?v=a152d6740e56';
 // Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
 // (`swapTracks` joined this module in 3i-4; `seekToLabeledFrame` is now in-module.)
 import {
     assignTrackToSelected, assignIdentityToSelected, propagateIdentityForward, swapAssignTrack,
     startEditGroup, finishEditGroup,
-    startManualAssignment, runSingleFrameTriangulation, showMultiFrameModal,
+    startManualAssignment,
     purgeTriangulationDataForGroup,
     swapTracks,
-} from './identity-assignment.js?v=f624ceb2f81d';
+} from './identity-assignment.js?v=a152d6740e56';
 // Custom Instance Delete: DOM-free matching/cascade/durability logic. Imports no
 // project modules itself, which is why it can also be unit tested in isolation.
-import { collectDeletionTargets, executeDeletion, deleteTargetsFromStore, groupMemberTargets } from './custom-delete-ops.js?v=f624ceb2f81d';
+import { collectDeletionTargets, executeDeletion, deleteTargetsFromStore, groupMemberTargets } from './custom-delete-ops.js?v=a152d6740e56';
 // Pass 3g: export-modals workflow symbols moved out of app.js.
 import {
     exportLabels, exportPoints3dH5, exportReprojH5,
@@ -98,19 +98,19 @@ import {
     showSlpExportPerSessionModal,
     showTriangulateMultiFrameModal,
     showGroupByTrackModal, groupByIdentityAndTriangulateAll, showExport3DVideoModal,
-} from './export-modals.js?v=f624ceb2f81d';
-import { showOverlayExportModal } from './overlay-export-modal.js?v=f624ceb2f81d';
+} from './export-modals.js?v=a152d6740e56';
+import { showOverlayExportModal } from './overlay-export-modal.js?v=a152d6740e56';
 // Pass 3h: sessions-panes workflow symbols moved out of app.js.
 import {
     panelRenderers, multiSelectViews, activatePanelForView, scrollViewStripTo,
     refreshPaneInteractions, clearMultiSelect, clampRotation, syncRotationUI,
     populateViewStrip, populateSessionsPanel, populateSessionStrip,
     showMoveVideoModal, removeSession, switchSession,
-} from './sessions-panes.js?v=f624ceb2f81d';
+} from './sessions-panes.js?v=a152d6740e56';
 import {
     nameExists, countNulledByCamera, deleteTrackAt, deleteIdentityAt,
-} from './track-identity-ops.js?v=f624ceb2f81d';
-import { setSessionRotation } from './video-filters.js?v=f624ceb2f81d';
+} from './track-identity-ops.js?v=a152d6740e56';
+import { setSessionRotation } from './video-filters.js?v=a152d6740e56';
 
 // ============================================
 // Rename Track / Identity modal
@@ -2391,7 +2391,7 @@ export function setupUI() {
             case 'Enter': {
                 // Click the visible Continue/Group button in any active modal/toast
                 var continueBtn = null;
-                ['mfContinue', 'tfContinue', 'autoAssignContinue', 'manualAssignGroup'].forEach(function (id) {
+                ['tfContinue', 'manualAssignGroup'].forEach(function (id) {
                     if (continueBtn) return;
                     var btn = document.getElementById(id);
                     if (btn && btn.offsetParent !== null) continueBtn = btn;
@@ -2413,7 +2413,7 @@ export function setupUI() {
             case 'Escape': {
                 // Click the visible Cancel button in any active modal/toast
                 var cancelBtn = null;
-                ['mfCancel', 'tfCancel', 'autoAssignCancel', 'manualAssignCancel'].forEach(function (id) {
+                ['tfCancel', 'manualAssignCancel'].forEach(function (id) {
                     if (cancelBtn) return;
                     var btn = document.getElementById(id);
                     if (btn && btn.offsetParent !== null) cancelBtn = btn;
@@ -3360,14 +3360,9 @@ export function setGridMode() {
     // including ones that have since been removed.
     if (savedGridLayout && !savedGridLayoutMatchesViews()) savedGridLayout = null;
     if (savedGridLayout && paneManager.api) {
-        // Restore saved grid layout
-        var savedZoom = {};
-        for (var zi = 0; zi < state.views.length; zi++) {
-            var zv = state.views[zi];
-            if (zv.zoom) {
-                savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY, native: !!zv.zoom.native };
-            }
-        }
+        // Restore saved grid layout. Each view's zoom rides through the rebuild
+        // on the view itself (`refreshPaneInteractions` keeps it and rescales
+        // its pan to the new cell).
         paneManager.clearAll();
         paneManager.api.fromJSON(savedGridLayout);
         // `fromJSON` builds panels behind `addVideoPanel`'s back, so the docked
@@ -3376,23 +3371,6 @@ export function setGridMode() {
         var emptyMsg = document.getElementById('videoDockEmpty');
         if (emptyMsg) emptyMsg.classList.add('hidden');
         refreshPaneInteractions();
-        // Restore zoom state
-        for (var ri = 0; ri < state.views.length; ri++) {
-            var rv = state.views[ri];
-            if (savedZoom[rv.name] && rv.zoom) {
-                rv.zoom.scale = savedZoom[rv.name].scale;
-                rv.zoom.offsetX = savedZoom[rv.name].offsetX;
-                rv.zoom.offsetY = savedZoom[rv.name].offsetY;
-                // A 1:1 scale belongs to the OLD canvas box: re-derive it. Keep
-                // the flag `initZoom` set from View ▸ Native Resolution, too.
-                rv.zoom.native = savedZoom[rv.name].native || !!rv.zoom.native;
-                rv.zoom.scaleY = undefined;
-                if (videoController) {
-                    if (rv.zoom.native) videoController.reapplyZoom(rv);
-                    else videoController.applyZoom(rv);
-                }
-            }
-        }
     } else {
         updateVideoGridDisplay();
     }
@@ -3401,14 +3379,9 @@ export function setGridMode() {
 
 export function updateVideoGridDisplay() {
     if (state.views.length === 0) return;
-    // Preserve zoom state across panel recreation
-    var savedZoom = {};
-    for (var zi = 0; zi < state.views.length; zi++) {
-        var zv = state.views[zi];
-        if (zv.zoom) {
-            savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY, native: !!zv.zoom.native };
-        }
-    }
+    // No zoom save/restore around the rebuild: the zoom lives on the view, and
+    // `refreshPaneInteractions` keeps it and rescales its pan to the new cell.
+    // Writing saved offsets back afterwards would undo that rescale.
     if (state.viewMode === 'single') {
         // Show only the selected view
         var targetView = state.views[state.singleViewIndex];
@@ -3422,23 +3395,6 @@ export function updateVideoGridDisplay() {
         paneManager.clearAll();
         paneManager.addAllViewsAsGrid();
         refreshPaneInteractions();
-    }
-    // Restore zoom state
-    for (var ri = 0; ri < state.views.length; ri++) {
-        var rv = state.views[ri];
-        if (savedZoom[rv.name] && rv.zoom) {
-            rv.zoom.scale = savedZoom[rv.name].scale;
-            rv.zoom.offsetX = savedZoom[rv.name].offsetX;
-            rv.zoom.offsetY = savedZoom[rv.name].offsetY;
-            // A 1:1 scale belongs to the OLD canvas box: re-derive it. Keep
-            // the flag `initZoom` set from View ▸ Native Resolution, too.
-            rv.zoom.native = savedZoom[rv.name].native || !!rv.zoom.native;
-            rv.zoom.scaleY = undefined;
-            if (videoController) {
-                if (rv.zoom.native) videoController.reapplyZoom(rv);
-                else videoController.applyZoom(rv);
-            }
-        }
     }
 }
 

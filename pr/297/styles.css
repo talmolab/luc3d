@@ -1370,7 +1370,8 @@ body {
   color: var(--text-muted);
 }
 
-/* Multi-frame assignment modal */
+/* Shared modal overlay + card. Named for the multi-frame assignment modal it
+   was first written for; every LUCID dialog uses it now. */
 .multi-frame-modal-overlay {
   position: fixed;
   inset: 0;
@@ -3943,7 +3944,7 @@ input[type="range"]::-moz-range-track {
   display: none;
 }
 
-/* Auto-assignment toast — centered in menu bar with highlight */
+/* Assignment toast (manual assignment, Edit Group) — centered in menu bar with highlight */
 .auto-assign-toast {
   position: absolute;
   left: 50%;
@@ -3978,22 +3979,6 @@ input[type="range"]::-moz-range-track {
   background: var(--accent-dim);
   color: var(--accent);
   border-color: var(--accent);
-}
-
-/* Red highlight for auto-assignment view selection */
-.video-cell.auto-assign-selected:not(.zoomed) .canvas-wrapper {
-  outline: 3px solid #ef4444;
-  outline-offset: -3px;
-}
-
-/* When zoomed: red highlight via pseudo-element overlay */
-.video-cell.auto-assign-selected.zoomed::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border: 3px solid #ef4444;
-  pointer-events: none;
-  z-index: 18;
 }
 
 /* Ghost line shown during split handle drag */
@@ -6358,6 +6343,21 @@ kbd {
 
 .plane-confirm-modal button:hover {
   filter: brightness(1.15);
+}
+
+/* The macOS folder-confirm tip (ui/folder-confirm-tip.js). */
+.folder-tip-modal .plane-confirm-message + .plane-confirm-message {
+  margin-top: 8px;
+}
+
+.folder-tip-dontshow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
 }
 
 /* ============================================
