@@ -37,7 +37,7 @@ import {
     getInstanceGroupsForFrame,
     ensureLazyFrameData,
     ensureLazyTrailWindow,
-    triangulateAndReproject,
+    deriveDisplayReprojections,
     storeReprojectedInstances,
     sessionHasCalibration,
 } from '../pose/triangulation.js';
@@ -170,12 +170,11 @@ function ensureReprojections(groups, session) {
         if (points3dNodeCount(g.points3d) > 0 &&
             (!g.reprojectedInstances || g.reprojectedInstances.size === 0) &&
             (!g.reprojections || Object.keys(g.reprojections).length === 0)) {
-            // Resolve the method from the group, exactly as `rendering.js`'s lazy
-            // fill does. Omitting it silently re-solves with DLT, which would burn
-            // DLT reprojections into the video while the app displays BA's —
-            // breaking the "exported 3D == displayed 3D" invariant (#113).
-            var _m = (g.triangulationMethod === 'ba') ? 'ba' : 'dlt';
-            var res = triangulateAndReproject(g, session.cameras, { method: _m });
+            // The same rule `rendering.js`'s lazy fill uses, so the video shows
+            // what the app shows ("exported 3D == displayed 3D", #113): the
+            // stored 3D when it is current, else a re-solve with the group's
+            // own method.
+            var res = deriveDisplayReprojections(g, session.cameras);
             g.reprojections = res.reprojections;
             storeReprojectedInstances(g, res, session.cameras);
         }

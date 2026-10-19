@@ -28,7 +28,7 @@ export function getNodeWeightArray(nodeNames) {
 }
 const DEFAULTS = { epipolarDecay:10, reprojSigma:20, epipolarWeight:0.4, reprojWeight:0.6,
     minMatchScore:0.05, prevIdentityBonus:0.3, reprojGate2:100, reprojGate3:140, reprojGate4:180,
-    track3dWeight:1, filterMinVisibleNodes:0, filterMinInstanceScore:0 };
+    track3dWeight:1, filterMinVisibleNodes:0, filterMinInstanceScore:0, reprojErrorThreshold:50 };
 export function getTrackingThreshold(id) {
     const ov = (globalThis.__GUI && globalThis.__GUI.thresholds) || {};
     const v = ov[id];

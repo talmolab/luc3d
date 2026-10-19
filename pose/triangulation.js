@@ -1045,6 +1045,33 @@ export function planesInvalidatedByFit(movedNodeIds, planes, excludePlaneId) {
 // ============================================
 
 /**
+ * The reprojections and errors a DISPLAY derives for a group that has 3D but
+ * none derived yet: `ui/rendering.js`'s lazy fill and the overlay export's
+ * `ensureReprojections`. One rule for both, so the exported video always shows
+ * what the app shows (#113).
+ *
+ * A group whose 3D is CURRENT — triangulated (`triangulationMethod` set, which
+ * a reopened project's groups are) and not edited since (`dirty` clear) — has
+ * its STORED 3D reprojected (`reprojectStoredPoints3d`), whatever the
+ * reprojection error threshold. Re-solving it instead drew the overlay, the
+ * errors and the exported video from a different 3D than the 3D view and the
+ * saved file whenever the solve's inputs had changed since: a project solved
+ * with the threshold off and reopened at its 50 px default re-solved to a
+ * different 3D in every group with an outlier view. The one figure that cannot
+ * be reproduced from the stored 3D is the UNDISTORTED error, which then counts
+ * the observations a threshold left out of the solve.
+ *
+ * Any other group — Track All's provisional 3D, an edited group, 3D imported
+ * from a points `.h5` — is re-solved with the group's own method, as before:
+ * never `triangulateAndReproject`'s silent DLT default, which is how
+ * "Triangulate All ▸ Bundle Adjustment" once appeared to do nothing.
+ */
+export function deriveDisplayReprojections(group, cameras) {
+    if (group.triangulationMethod != null && !group.dirty) return reprojectStoredPoints3d(group, cameras);
+    return triangulateAndReproject(group, cameras, { method: group.triangulationMethod === 'ba' ? 'ba' : 'dlt' });
+}
+
+/**
  * Persist reprojected 2D instances onto an InstanceGroup. Reprojects against
  * every camera that has calibration data (not just those used for triangulation).
  */

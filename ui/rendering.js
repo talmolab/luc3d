@@ -10,12 +10,12 @@ import { state, interactionManager, timeline, isViewDocked } from './app-state.j
 import { points3dNodeCount } from '../pose/pose-data.js';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
-    triangulateAndReproject, reprojectStoredPoints3d, storeReprojectedInstances,
+    deriveDisplayReprojections, storeReprojectedInstances,
 } from '../pose/triangulation.js';
 import { dropDerivedReprojections } from '../pose/lazy-residency.js';
 import { drawFrameOverlays } from './overlays.js';
 import { syncViewLegends } from './view-legend.js';
-import { isCameraTracked, getTrackingThreshold } from './settings.js';
+import { isCameraTracked } from './settings.js';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
@@ -193,12 +193,10 @@ const MAX_OVERLAY_AREA = 268435456; // 2^28 px
 // the project (see `sweepTriangulateAllFrames`' docstring in
 // pose/triangulation.js), so after one this fill is what produces them, one
 // shown frame at a time. Two things keep that cheap:
-//  - **It reprojects the stored 3D rather than re-solving**
-//    (`reprojectStoredPoints3d`) whenever that 3D is current: the group was
-//    triangulated (`triangulationMethod` set), has not been edited since
-//    (`dirty` clear), and no reprojection-error threshold is set (with one the
-//    solve drops observations the stored 3D does not record, and its
-//    undistorted error leaves them out). Measured on a 17-camera project:
+//  - **It reprojects the stored 3D rather than re-solving** whenever that 3D
+//    is current — triangulated and not edited since — whatever the
+//    reprojection error threshold (`deriveDisplayReprojections`, shared with
+//    the overlay export, which says why). Measured on a 17-camera project:
 //    0.1 ms per frame with one animal and 0.2 ms with three, against 2.4 and
 //    5.0 ms to re-solve Refined — at 120 fps a frame has 8.3 ms. Any other
 //    group (Track All's provisional 3D, an edited group) is re-solved, as
@@ -210,30 +208,12 @@ const MAX_OVERLAY_AREA = 268435456; // 2^28 px
 function fillLazyReprojections(fi, instanceGroups) {
     if (instanceGroups && state.session.cameras.length >= 2) {
         var _lazyFrameResults = null;
-        var _threshold = null;
         for (var _rg = 0; _rg < instanceGroups.length; _rg++) {
             var _grp = instanceGroups[_rg];
             if (points3dNodeCount(_grp.points3d) > 0 &&
                 (!_grp.reprojectedInstances || _grp.reprojectedInstances.size === 0) &&
                 (!_grp.reprojections || Object.keys(_grp.reprojections).length === 0)) {
-                if (_threshold == null) _threshold = getTrackingThreshold('reprojErrorThreshold') || 0;
-                var _triRes;
-                if (_grp.triangulationMethod != null && !_grp.dirty && !(_threshold > 0)) {
-                    _triRes = reprojectStoredPoints3d(_grp, state.session.cameras);
-                } else {
-                    // Re-solve with WHICHEVER METHOD this group was last triangulated
-                    // with — same precondition as `reTriangulateGroup`. Passing no
-                    // options makes the dispatcher silently default to 'dlt', which is
-                    // how "Triangulate All ▸ Bundle Adjustment" appeared to do nothing:
-                    // the windowed sweep deliberately drops `reprojections` /
-                    // `state.triangulationResults` project-wide (~1.9 GB at 531,799
-                    // groups — see sweepTriangulateAllFrames' docstring), so this fill
-                    // is the ONLY thing that repopulates them, and a DLT re-solve here
-                    // overwrote BA's error with DLT's while `group.triangulationMethod`
-                    // still made the panel label it "Bundle Adjustment".
-                    var _m = (_grp.triangulationMethod === 'ba') ? 'ba' : 'dlt';
-                    _triRes = triangulateAndReproject(_grp, state.session.cameras, { method: _m });
-                }
+                var _triRes = deriveDisplayReprojections(_grp, state.session.cameras);
                 _grp.reprojections = _triRes.reprojections;
                 storeReprojectedInstances(_grp, _triRes, state.session.cameras);
                 // Store in triangulationResults for info panel. `method` is carried

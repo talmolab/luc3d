@@ -25,7 +25,10 @@
  *      group, which keeps its old reprojections until re-triangulated, and is
  *      re-solved rather than reprojected. A dropped frame shown again gets the
  *      same numbers back.
- *   4. With a reprojection-error threshold set, the fill re-solves.
+ *   4. With a reprojection-error threshold set, the fill STILL reprojects the
+ *      stored 3D. It used to re-solve, which drew a different 3D than the one
+ *      in the 3D view and the saved file (review of PR #289); see
+ *      `deriveDisplayReprojections` in pose/triangulation.js.
  *   5. Save Reprojections (`buildReprojH5`) writes every frame, shown or not
  *      — it used to skip any group with no stored reprojections.
  *
@@ -198,14 +201,14 @@ try {
     RND.drawAllOverlays(10);
     res.revisitBad = verifyFrame(10, expected, true);
 
-    // ---- 4. a reprojection-error threshold re-solves --------------------------
+    // ---- 4. a reprojection-error threshold still shows the stored 3D ----------
     SET.setTrackingThresholds(Object.assign({}, prevThr, { reprojErrorThreshold: 5 }));
     res.thresholdSet = SET.getTrackingThreshold('reprojErrorThreshold');
     AS.state.currentFrame = 20;
     RND.drawAllOverlays(20);
     const g20 = groupsOf(20)[0];
     const r20 = (AS.state.triangulationResults.get(20) || []).find(x => x.group === g20);
-    res.thresholdResolved = !!r20 && r20.points3d !== g20.points3d;
+    res.thresholdStored = !!r20 && r20.points3d === g20.points3d;
     SET.setTrackingThresholds(prevThr);
 
     // ---- 5. Save Reprojections writes every frame ----------------------------
@@ -307,8 +310,8 @@ try {
     `after showing all ${out.NF} frames, kept exactly the last ${out.KEEP} and the dirty frame ` +
     `(results ${out.resultFramesAfter.length}, reprojections ${out.derivedAfter.length}; first kept ${out.resultFramesAfter.slice(0, 3)})`);
   check(out.revisitBad.length === 0, `a dropped frame shown again gets the same numbers back (${JSON.stringify(out.revisitBad)})`);
-  check(out.thresholdSet === 5 && out.thresholdResolved === true,
-    `with a reprojection-error threshold (${out.thresholdSet} px) the fill re-solves`);
+  check(out.thresholdSet === 5 && out.thresholdStored === true,
+    `with a reprojection-error threshold (${out.thresholdSet} px) the fill still shows the stored 3D, not a re-solve`);
   check(out.exportFrames === out.NF && out.expEntries > 0 && out.exportMissing === 0 && out.exportWrong === 0,
     `Save Reprojections writes every frame, shown or not (${out.exportFrames} frames, ${out.expEntries} points, ` +
     `${out.exportMissing} missing, ${out.exportWrong} wrong)`);
