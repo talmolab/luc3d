@@ -451,6 +451,138 @@ try {
     check(await modalOpen() === true, 'and the dialog is back');
     await page.keyboard.press('Escape');
 
+    // ---- 10. The edit reaches the sessions on THIS skeleton, and no others --
+    //
+    // A multi-session project can hold two shapes: the load-time prompt
+    // (`promptImportSkeletonForAllSessions`) lets the user Skip, leaving each
+    // session on the skeleton it arrived with. The confirmation already counts
+    // only the sessions on the OPEN session's skeleton and names the rest
+    // separately, so the apply has to be scoped the same way — otherwise the
+    // dialog states one edit's arithmetic while a larger one happens, and the
+    // odd session is left with instances at a node count its own skeleton does
+    // not describe.
+    console.log('\n--- 10. The apply is scoped to the sessions on this skeleton ---');
+    await page.evaluate(async () => {
+        const pd = await import('/pose/pose-data.js');
+        const AS = await import('/ui/app-state.js');
+        const IP = await import('/ui/info-panel.js');
+        const { Skeleton, Camera, Instance, FrameGroup, UnlinkedInstance, Session } = pd;
+        const mtx = [[1000, 0, 255.5], [0, 1000, 255.5], [0, 0, 1]];
+        const cams = () => ['cam1', 'cam2'].map((n, i) =>
+            new Camera(n, mtx, [0, 0, 0, 0, 0], [0, 0.1 * i, 0], [10 * i, 0, 0], [512, 512]));
+
+        const shared = new Skeleton('mouse', ['nose', 'tail'], [[0, 1]]);
+        const other = new Skeleton('fly', ['head', 'thorax', 'abdomen'], [[0, 1]]);
+
+        const mkSession = (name, skel) => {
+            const S = new Session(cams(), skel, ['t0'], name);
+            const fg = new FrameGroup(0); S.addFrameGroup(fg);
+            const inst = new Instance(skel.nodes.map((_, k) => [10 + k, 20 + k]), 0, 'user', 1);
+            fg.addUnlinkedInstance('cam1', new UnlinkedInstance(inst, 'cam1'));
+            return { S, inst };
+        };
+        const a = mkSession('onSharedA', shared);
+        const b = mkSession('onSharedB', shared);
+        const c = mkSession('onItsOwn', other);
+
+        AS.state.sessions = [a.S, b.S, c.S];
+        AS.state.session = a.S;
+        AS.state.activeSessionIdx = 0;
+        AS.setProjectSkeleton(shared);
+        // setProjectSkeleton re-points EVERY session; put the odd one back, as
+        // a Skipped load-time prompt leaves it.
+        c.S.skeleton = other;
+        IP.populateSkeletonTable();
+        window.__m = { shared, other, a, b, c };
+    });
+    await page.waitForTimeout(150);
+
+    const mShape = () => page.evaluate(() => {
+        const m = window.__m;
+        return {
+            sharedNodes: m.shared.nodes.join(','),
+            otherNodes: m.other.nodes.join(','),
+            aInst: m.a.inst.numNodes,
+            bInst: m.b.inst.numNodes,
+            cInst: m.c.inst.numNodes,
+            cStillOnOwn: m.c.S.skeleton === m.other,
+        };
+    });
+    const mBefore = await mShape();
+    check(mBefore.aInst === 2 && mBefore.bInst === 2 && mBefore.cInst === 3,
+        'two sessions on the shared 2-node skeleton, one on its own 3-node skeleton');
+
+    await openAddNode('ear2');
+    check(await modalOpen() === true, 'the dialog opens');
+    check((await rowValue('skeletonEditTotals', 'Sessions on this skeleton')) === '2',
+        'and counts the TWO sessions on this skeleton, not all three');
+    await page.click('#btnSkeletonEditConfirm');
+    await page.waitForTimeout(250);
+
+    const mAfter = await mShape();
+    check(mAfter.sharedNodes === 'nose,tail,ear2', 'the shared skeleton gained the node');
+    check(mAfter.aInst === 3 && mAfter.bInst === 3,
+        'BOTH sessions on it were re-shaped, not just the open one');
+    check(mAfter.otherNodes === 'head,thorax,abdomen',
+        'the odd session keeps its OWN skeleton, unedited');
+    check(mAfter.cInst === 3,
+        'and its instances keep their node count — the edit never reached them');
+    check(mAfter.cStillOnOwn === true,
+        'and it is still POINTED at its own skeleton, not silently adopted');
+
+    // ---- 11. A node edit drops the stale triangulationResults ---------------
+    //
+    // That map is a per-frame SNAPSHOT of the last solve — each group's
+    // points3d, reprojections and per-node errors — all of which a node edit
+    // has just re-shaped. Left behind, `ui/rendering.js`'s fill CONCATENATES
+    // the fresh entry onto it and the info panel's per-instance breakdown
+    // renders one table per entry, so every animal appears TWICE, the first
+    // copy stopping at the old node count. Measured on the real
+    // slap_GT/10072022145420 session: four animals, eight tables.
+    console.log('\n--- 11. A node edit drops the stale triangulationResults ---');
+    const seedResults = () => page.evaluate(() => {
+        const s = window.__lucid.state;
+        const g = (s.session.instanceGroups.get(0) || [])[0] || { id: 1 };
+        s.triangulationResults.set(0, [{ group: g, points3d: null,
+            reprojections: {}, errors: { cam1: [1, 2] }, meanError: 1.5 }]);
+        for (const sess of (s.sessions || [])) {
+            if (sess.triangulationResults) {
+                sess.triangulationResults.set(0, [{ group: g, errors: { cam1: [1, 2] } }]);
+            }
+        }
+        return s.triangulationResults.size;
+    });
+    const resultSizes = () => page.evaluate(() => {
+        const s = window.__lucid.state;
+        return {
+            global: s.triangulationResults.size,
+            perSession: (s.sessions || []).map(x => x.triangulationResults
+                ? x.triangulationResults.size : -1),
+        };
+    });
+
+    check(await seedResults() === 1, 'a frame carries a triangulation result');
+    await openAddNode('tip2');
+    if (await modalOpen()) await page.click('#btnSkeletonEditConfirm');
+    await page.waitForTimeout(250);
+    let sizes = await resultSizes();
+    check(sizes.global === 0, 'adding a node drops the stale per-frame results');
+    check(sizes.perSession.every(n => n === 0 || n === -1),
+        'including each session\'s own copy, which survives a pane switch');
+
+    // The removal path has its own propagation helper, so it needs its own check.
+    await seedResults();
+    await page.evaluate(() => {
+        const rows = document.querySelectorAll('#skeletonNodesTable tbody tr');
+        const last = rows[rows.length - 1];
+        if (last) last.querySelector('button').click();
+    });
+    await page.waitForTimeout(200);
+    if (await modalOpen()) await page.click('#btnSkeletonEditConfirm');
+    await page.waitForTimeout(250);
+    sizes = await resultSizes();
+    check(sizes.global === 0, 'removing a node drops them too');
+
     console.log(fails === 0 ? '\nPASS — 0 failure(s)' : `\nFAIL — ${fails} failure(s)`);
 } catch (err) {
     console.log('  ✗ threw: ' + (err && err.message ? err.message : String(err)));

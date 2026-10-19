@@ -57,10 +57,10 @@
 // `ui/calibration-notice.js` shares them: it is the same kind of dialog — a
 // stack of titled blocks whose height depends on the project.
 
-import { state } from './app-state.js?v=f5959d6183d4';
+import { state } from './app-state.js?v=727565249dd9';
 import {
     splitSessionsBySkeleton, countSkeletonEditImpact, skeletonEditNeedsConfirmation,
-} from '../pose/skeleton-edit-impact.js?v=f5959d6183d4';
+} from '../pose/skeleton-edit-impact.js?v=727565249dd9';
 
 /** `1,234` rather than `1234`, because these numbers get large. */
 function n(v) {
@@ -168,7 +168,7 @@ export function describeSkeletonEdit(edit) {
 }
 
 /**
- * Show the confirmation and run `onConfirm()` if the user accepts.
+ * Show the confirmation and run `onConfirm(sessions)` if the user accepts.
  *
  * Applies the edit immediately, without a dialog, in two cases: when there is
  * nothing to warn about (`skeletonEditNeedsConfirmation`), and when the user
@@ -179,24 +179,39 @@ export function describeSkeletonEdit(edit) {
  * lazy project's whole columnar store, and a user who has turned the dialog off
  * should not keep paying for a dialog that will not open.
  *
+ * `onConfirm` receives the sessions the edit APPLIES TO — those on this
+ * skeleton, which is what every count in the dialog is taken over. A session on
+ * a differently-shaped skeleton is excluded from the counts, named separately
+ * in `#skeletonEditOtherSkeletons`, and must be left alone by the caller too,
+ * or the dialog's arithmetic describes one edit while another one happens.
+ *
  * @param {{kind: string, label?: string}} edit
- * @param {Function} onConfirm
+ * @param {function(Session[]): void} onConfirm
  */
 export function confirmSkeletonEdit(edit, onConfirm) {
-    if (isSkeletonEditWarningSuppressed()) {
-        if (onConfirm) onConfirm();
-        return;
-    }
-
+    // The SCOPE of the edit, settled here and handed to `onConfirm` in every
+    // path — including the two that never open the dialog. It has to be taken
+    // BEFORE the caller mutates the skeleton: afterwards every session either
+    // already points at the mutated object or has a node count that no longer
+    // matches it, so "which sessions are on this skeleton?" is a question that
+    // can only be answered now. Cheap (one `compatibilityKey` per session), so
+    // it runs ahead of the suppression check; the expensive project walk
+    // (`countSkeletonEditImpact`) stays behind it.
     var sessions = (state.sessions && state.sessions.length)
         ? state.sessions
         : (state.session ? [state.session] : []);
     var skeleton = state.session && state.session.skeleton;
     var split = splitSessionsBySkeleton(sessions, skeleton);
+
+    if (isSkeletonEditWarningSuppressed()) {
+        if (onConfirm) onConfirm(split.shared);
+        return;
+    }
+
     var t = countSkeletonEditImpact(split.shared);
 
     if (!skeletonEditNeedsConfirmation(t)) {
-        if (onConfirm) onConfirm();
+        if (onConfirm) onConfirm(split.shared);
         return;
     }
 
@@ -357,7 +372,7 @@ export function confirmSkeletonEdit(edit, onConfirm) {
     ok.addEventListener('click', function () {
         if (againBox.checked) setSkeletonEditWarningSuppressed(true);
         close();
-        if (onConfirm) onConfirm();
+        if (onConfirm) onConfirm(split.shared);
     });
     buttons.appendChild(ok);
 

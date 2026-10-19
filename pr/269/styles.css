@@ -7154,6 +7154,7 @@ details[open] > summary.origin-rebase-block-title::before {
    after every skeleton mutation. */
 #skeletonWarnOffNote {
   margin-top: 8px;
+  margin-bottom: 12px;
   padding: 6px 8px;
   border-radius: 3px;
   font-size: 11px;
