@@ -8,8 +8,8 @@
 //
 // Extracted from app.js per the consolidated Pass 3 plan, Module 13.
 
-import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=ec8b8bc75b49';
-import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=ec8b8bc75b49';
+import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=2961b82f7b27';
+import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=2961b82f7b27';
 import {
     triangulateAndReproject,
     frameHasGroupedUserInstances,
@@ -24,33 +24,33 @@ import {
     adoptPrior3d,
     triangulationMethodLabel,
     dropAllDerivedTriangulationState,
-} from '../pose/triangulation.js?v=ec8b8bc75b49';
-import { Viewport3D } from './viewport3d.js?v=ec8b8bc75b49';
-import { getTrackColor, getGroupColor } from './overlays.js?v=ec8b8bc75b49';
-import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=ec8b8bc75b49';
-import { updateInfoPanel } from './info-panel.js?v=ec8b8bc75b49';
-import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=ec8b8bc75b49';
-import { showLoadingProgress, yieldToPaint } from './loading-overlay.js?v=ec8b8bc75b49';
-import { createGroupSolver } from '../pose/triangulation-pool.js?v=ec8b8bc75b49';
+} from '../pose/triangulation.js?v=2961b82f7b27';
+import { Viewport3D } from './viewport3d.js?v=2961b82f7b27';
+import { getTrackColor, getGroupColor } from './overlays.js?v=2961b82f7b27';
+import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=2961b82f7b27';
+import { updateInfoPanel } from './info-panel.js?v=2961b82f7b27';
+import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=2961b82f7b27';
+import { showLoadingProgress, yieldToPaint } from './loading-overlay.js?v=2961b82f7b27';
+import { createGroupSolver } from '../pose/triangulation-pool.js?v=2961b82f7b27';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
     findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
-} from '../import-export/file-io.js?v=ec8b8bc75b49';
+} from '../import-export/file-io.js?v=2961b82f7b27';
 
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from '../pose/initialization.js?v=ec8b8bc75b49';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=ec8b8bc75b49';
-import { fileSystemAccessHint } from './browser-hints.js?v=ec8b8bc75b49';
+import { update3DViewport } from '../pose/initialization.js?v=2961b82f7b27';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=2961b82f7b27';
+import { fileSystemAccessHint } from './browser-hints.js?v=2961b82f7b27';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
 // private copies of all four and had silently drifted apart (a 2x bitrate floor
 // gap at the smallest tier, and two disagreeing level tables).
 import {
     RES_PRESETS, bitrateFor, estimatedBytes, h264CodecFor, shouldStreamToDisk,
-} from './overlay-export-layout.js?v=ec8b8bc75b49';
+} from './overlay-export-layout.js?v=2961b82f7b27';
 
 // ============================================
 // Group by Track & Triangulate All
@@ -625,6 +625,14 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
     // Memory-bounded sweep over every frame (windows + release on lazy sessions);
     // also fixes the prior silent-drop (only resident frames were grouped before).
     await sweepTriangulationFrames(session, function (frameIdx, fg) {
+        // `fg` is undefined for a frame that has 3D grouping but no 2D (the
+        // sweep's contract — see `sweepLazyFrameWindows`). Without this guard the
+        // first `fg.instances` below throws, which aborts the whole operation
+        // PART-WAY THROUGH: every earlier frame's groups have already been
+        // deleted and rebuilt, every later frame's have not. Such a frame has no
+        // 2D to group by track, so its groups are left as they are — as in
+        // `groupByIdentityAndTriangulateAll`.
+        if (!fg) return;
 
         // 1. Collect ALL instances across all cameras, keyed by trackIdx
         //    trackIdx -> { camName -> Instance }
@@ -2521,11 +2529,16 @@ export function showTriangulateMultiFrameModal() {
     });
 
     document.getElementById('tfContinue').addEventListener('click', function () {
-        var startFrame = parseInt(inputStart.value);
-        var endFrame = parseInt(inputEnd.value);
-        if (isNaN(startFrame) || isNaN(endFrame) || startFrame > endFrame) {
-            return;
-        }
+        // The boxes show 1-based frame numbers (`syncSliders` writes `s + 1`);
+        // everything below is 0-based. Reading them as indices made the default
+        // full range (1 … N) check index N, which does not exist, so the modal
+        // refused its own defaults — and ran every typed range one frame late.
+        var startFrame = parseInt(inputStart.value) - 1;
+        var endFrame = parseInt(inputEnd.value) - 1;
+        if (isNaN(startFrame) || isNaN(endFrame)) return;
+        startFrame = Math.max(0, startFrame);
+        endFrame = Math.min(maxFrame, endFrame);
+        if (startFrame > endFrame) return;
 
         // Validate: check all frames in range have identity assignment
         var missingFrames = [];
@@ -2565,11 +2578,19 @@ async function runMultiFrameTriangulation(startFrame, endFrame, overlayEl) {
     var progressLabel = document.getElementById('tfProgressLabel');
     var progressFill = document.getElementById('tfProgressFill');
 
+    // THE method for the whole range: Settings ▸ Default Triangulation, as for
+    // Group by Track. This modal has no method picker, so the configured default
+    // is the user's instruction; it used to pass none, which solved with DLT
+    // whatever the setting said. Named in the progress, summary and status text
+    // so the method — and its cost, Refined running ~3x-6x DLT — is visible.
+    var method = resolveTriangulationMethod(null);
+    var methodLabel = triangulationMethodLabel(method);
+
     var result = await triangulateMultiFrameInstances(startFrame, endFrame, function (completed, total) {
         var pct = Math.round((completed / total) * 100);
-        if (progressLabel) progressLabel.textContent = completed.toLocaleString('en-US') + ' / ' + total.toLocaleString('en-US') + ' frames';
+        if (progressLabel) progressLabel.textContent = completed.toLocaleString('en-US') + ' / ' + total.toLocaleString('en-US') + ' frames via ' + methodLabel;
         if (progressFill) progressFill.style.width = pct + '%';
-    });
+    }, method);
 
     // Update display for current frame
     drawAllOverlays(state.currentFrame);
@@ -2580,7 +2601,7 @@ async function runMultiFrameTriangulation(startFrame, endFrame, overlayEl) {
 
     // Show summary and close button
     if (progressLabel) {
-        progressLabel.textContent = 'Done — triangulated ' + result.triangulated.toLocaleString('en-US') + ' frames (' + result.totalGroups.toLocaleString('en-US') + ' groups, avg error: ' + avgError + 'px)';
+        progressLabel.textContent = 'Done — triangulated ' + result.triangulated.toLocaleString('en-US') + ' frames (' + result.totalGroups.toLocaleString('en-US') + ' groups, avg error: ' + avgError + 'px) via ' + methodLabel;
     }
 
     var actionsEl = document.getElementById('tfActions');
@@ -2592,7 +2613,7 @@ async function runMultiFrameTriangulation(startFrame, endFrame, overlayEl) {
         });
     }
 
-    setStatus('Multi-frame triangulation complete: ' + result.triangulated.toLocaleString('en-US') + '/' + totalFrames.toLocaleString('en-US') + ' frames, avg error: ' + avgError + 'px', 'success');
+    setStatus('Multi-frame triangulation complete: ' + result.triangulated.toLocaleString('en-US') + '/' + totalFrames.toLocaleString('en-US') + ' frames via ' + methodLabel + ', avg error: ' + avgError + 'px', 'success');
 
     // Update timeline: mark frames with grouped UserInstances, refresh track
     // bars. The frames re-solved are `result.frames`: `state.triangulationResults`
