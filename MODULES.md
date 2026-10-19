@@ -2250,7 +2250,7 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   count, both before `createTrackerRun` snapshots them; Cancel writes nothing
   and the run bails. Track All's copy (`askTrackSetup(..., withImageCheck)`)
   also offers the image ID-switch check that runs after the pass — its switch
-  and five options (`IMAGE_CHECK_IDS`, from `getTrackingThresholdDefs()`),
+  and six options (`IMAGE_CHECK_IDS`, from `getTrackingThresholdDefs()`),
   written through `updateTrackingThresholds`; the pass reads
   `autoImageSwitchCheck` when it ends, so the answer applies to this run. Track
   Frame's copy leaves it out. `trackCurrentFrame` is `async` for this (its callers
@@ -10183,7 +10183,7 @@ HEVC, 150 frames 32 apart ≈ the 2 Hz default, Chrome fp16 on an M-series Mac):
 time scales with views per animal x `imageCheckHz`; decoding + cropping alone
 would allow ~270 crops/s.
 Reads `imageCheckMaxViews` (default 3) and passes it as `maxViewsPerAnimal`,
-`imageCheckMaxLoad` (default 75) as `maxLoadPct`, and
+`imageCheckMaxGpu` / `imageCheckMaxCpu` (default 50 each) as `maxGpuPct` / `maxCpuPct`, and
 `imageCheckWebNN` (default 0) as `webnn`; the embedder's `backend()` outcome is
 attached to the result as `model` and its note shown under "About these flags";
 `embedder.stats()` is attached as `timing`, logged to the console and shown there
@@ -10506,20 +10506,35 @@ run at a time, each taking every crop queued meanwhile (up to `EMBED_MAX_BATCH`
 = 64), with the check keeping `EMBED_IN_FLIGHT` = 8 frames in flight
 (`inFlight` on the provider) so batches fill while the GPU works. M2 Pro, 150
 real frames: 104 -> **155 crops/s**, GPU busy 66% -> 98%, batches ~15 -> ~55,
-embeddings identical. **The compute guardrail** (`opts.maxLoadPct`, the
-`imageCheckMaxLoad` setting, default 75%): no browser API caps a page's share of
-the GPU, so after each model run the queue RESTS for `paceRestMs(runMs, pct)` =
-`runMs × (100/pct − 1)` before the next one starts, holding the model busy at most
-`pct` of the time (busy / (busy + rest) = pct; 100 = no rest, the unpaced check;
-floor `IMAGE_MAX_LOAD_MIN` = 10). It paces the CPU model workers the same way.
-Rests are not counted in `busyMs()`, so the progress dialog's load line reads at
-most the cap. `releaseFrames` ends a rest in progress — LAST, after the CPU
-workers are terminated, because `createCpuModelPool.terminate()` does not reject a
-job in flight: ended first, the rest would start a run on a worker about to be
-killed and that run would never settle. `stats()` adds `maxLoadPct` and `restS`,
-and `formatEmbedTiming` ends a capped run's summary "load capped at N% (S s
-resting)". The whole-run GPU busy % only approaches the cap over many batches:
-the last rest falls after the last crop, outside the run's timed window. (3) `stats()` / `summarizeEmbedTiming` /
+embeddings identical. **The compute caps** (`opts.maxGpuPct` / `opts.maxCpuPct`,
+the `imageCheckMaxGpu` / `imageCheckMaxCpu` settings, default 50% each): how much
+of the GPU and of the CPU the check may take is the USER's to set, and what it
+does not take stays free for other work on the machine — even when nothing else
+wants it (a deliberate allocation, not an adaptive back-off). No browser API gives
+a page a share of either, so the check takes its share by how it runs:
+- **GPU** — smaller batches, `gpuMaxBatch(pct)` = `EMBED_MAX_BATCH × pct/100`
+  (50% -> 32), so the GPU is held in short slices and other work waits less for
+  each; and after each run a rest, `paceRestMs(runMs, pct)` = `runMs × (100/pct − 1)`,
+  so busy / (busy + rest) = pct. Both live in `createModelQueue` (the batch
+  queue, a factory so it can be tested without a GPU), which also splits a frame
+  with more crops than a batch across runs. Not applied on the CPU path.
+- **CPU** — fewer worker threads, all kept working, never resting:
+  `imageCheckThreads(cores, memoryGB, pct, onCpu)` -> `{model, crop, budget}`, a
+  budget of floor(cores × pct/100) threads; on the CPU path the model takes all
+  but one (still within `cpuModelWorkerCount`'s memory limit), cropping the rest;
+  on the GPU path cropping takes it all. At least one of each. 10 cores at 50%:
+  4 model + 1 crop (uncapped 4 + 8). Video decoding (WebCodecs) and the main
+  thread are the browser's and not counted.
+100% is the old uncapped behaviour for both; floor `IMAGE_CAP_MIN` = 10. Rests are
+not counted in `busyMs()`, so the dialog's GPU line reads at most the cap.
+`releaseFrames` ends a rest in progress (`endRest`) LAST, after the CPU workers
+are terminated — `createCpuModelPool.terminate()` does not reject a job in flight,
+so a run started on a worker about to be killed would never settle. `stats()`
+adds `maxGpuPct` (null on the CPU path), `batchLimit`, `restS`, `maxCpuPct` and
+`threads`, and `formatEmbedTiming` ends a capped run's summary with "GPU capped at
+N% (batches of ≤B, S s resting)" and/or "CPU capped at N% (T worker threads)". The
+whole-run GPU busy % only approaches the cap over many batches: the last rest
+falls after the last crop, outside the run's timed window. (3) `stats()` / `summarizeEmbedTiming` /
 `formatEmbedTiming`: crops/s, GPU busy % (model call + result wait over wall
 time), batches, ms/crop, and per-frame decode / crop / queue latency — logged
 to the console and shown under "About these flags", so a slow run says where it
@@ -10664,7 +10679,7 @@ the same request, since a fragment is never sent, but a new module-map entry.
 of the runtime. `createImageEmbedder`'s two preflight throws (no videos, no
 Nose/TTI) are `cannotRun` errors too.
 
-**Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, maxLoadPct, webnn, keyframes})` ->
+**Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, maxGpuPct, maxCpuPct, webnn, keyframes})` ->
 `{getEmbeddings, prepareFrames, releaseFrames, backend, device, busyMs, cpuBusyMs, stats, inFlight, views}` (the provider
 `checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and the
 CPU model workers and disposes a WebNN model; `device()` -> `{backend: 'webgpu'|'webnn'|'cpu',
@@ -10685,7 +10700,10 @@ after a failure); `cannotRun(reason, cause)` (an Error whose message is the reas
 the check cannot run, flagged `cannotRun`); `asModelDownloadFailure(err)` (a failed
 download as `MODEL_OFFLINE_REASON`, else `err` unchanged); `MODEL_OFFLINE_REASON`;
 `selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
-`paceRestMs(runMs, maxLoadPct)` and `IMAGE_MAX_LOAD_MIN` (the compute guardrail),
+the compute caps `capPct(pct)`, `gpuMaxBatch(pct)`, `paceRestMs(runMs, pct)`,
+`imageCheckThreads(cores, memoryGB, pct, onCpu)`, `IMAGE_CAP_MIN` and
+`createModelQueue(embed, sz, tm, {maxBatch, maxGpuPct})` -> `{enqueue, endRest}`;
+`createCropPool(clock?, count?)` (count: the CPU cap's crop workers),
 `summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`;
 `describeAdapter(info)`, `gpuAdapterInfo(device, adapter)` -> `{name, fallback}`,
 `createLoadMeter` (re-exported from ui/load-graph.js, where it now lives), `GPU_LOAD_WINDOW_MS` (=
@@ -10901,9 +10919,9 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
   0/1, the image check likewise, default 0; `imageChangeThreshold` -0.8;
-  `imageCheckHz` 2; `imageCheckMaxViews` 3; `imageCheckMaxLoad` 75 — the most
-  of the time the image model may keep the GPU (or the CPU model workers) busy,
-  10..100, 100 = unpaced; `imageCheckWebNN` — 0/1, try WebNN,
+  `imageCheckHz` 2; `imageCheckMaxViews` 3; `imageCheckMaxGpu` 50 and
+  `imageCheckMaxCpu` 50 — the share of the GPU / the CPU cores the image check
+  may use, 10..100, 100 = uncapped; `imageCheckWebNN` — 0/1, try WebNN,
   default 0). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
   `reprojWeight`, `minMatchScore`, `prevIdentityBonus`, `reprojGate2/3/4`,
   `track3dWeight`) drive the bench-only luc3d matcher and are hidden from the UI

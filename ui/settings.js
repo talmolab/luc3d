@@ -393,9 +393,14 @@ const TRACKING_THRESHOLDS = [
         desc: 'Embed only each animal\'s N views where it appears largest (0 = every view it is visible in). The model is the slow part, so time scales with this: 3 views ran 2.5x faster than all 8 with the same accuracy; 2 starts to cost accuracy.',
     },
     {
-        id: 'imageCheckMaxLoad', label: 'Image check: max GPU load (%)', default: 75,
+        id: 'imageCheckMaxGpu', label: 'Image check: max GPU use (%)', default: 50,
         min: 10, max: 100, step: 5,
-        desc: 'The most of the time the image model may keep the GPU (or, without one, the CPU model workers) busy: the check rests between batches to stay under it. 100 = no limit, fastest; 75 runs about a third longer with the GPU idle a quarter of the time.',
+        desc: 'The share of the GPU the image check may use, leaving the rest for other work: it runs smaller batches and rests after each. 100 = no limit, fastest.',
+    },
+    {
+        id: 'imageCheckMaxCpu', label: 'Image check: max CPU use (%)', default: 50,
+        min: 10, max: 100, step: 5,
+        desc: 'The share of the CPU cores the image check may use, leaving the rest for other work: it runs fewer worker threads. 100 = no limit, fastest.',
     },
     {
         id: 'imageCheckWebNN', label: 'Image check: try WebNN (experimental)', default: 0,
@@ -421,7 +426,7 @@ const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
     'stale', 'matchGate',
-    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckMaxLoad', 'imageCheckWebNN',
+    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckMaxGpu', 'imageCheckMaxCpu', 'imageCheckWebNN',
     'reprojErrorThreshold',
 ]);
 
