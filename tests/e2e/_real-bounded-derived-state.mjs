@@ -491,6 +491,9 @@ try {
     out(crashed ? 'RESULT: CRASHED' : 'RESULT: completed');
     if (OUT) fs.writeFileSync(OUT, JSON.stringify(result, null, 2));
 }
+// Exit explicitly: after an export the CDP sessions / download kept the event
+// loop alive, so the run logged its result and then never exited.
+process.exit(crashed || result.fatal ? 1 : 0);
 
 // Largest absolute difference between two spot dumps, per quantity.
 function compareSpots(a, b) {
