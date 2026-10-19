@@ -6,33 +6,33 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=5e3cfc4c9f06';
-import { points3dNodeCount } from '../pose/pose-data.js?v=5e3cfc4c9f06';
+import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=ff154791a920';
+import { points3dNodeCount, isPoints3dFromFile } from '../pose/pose-data.js?v=ff154791a920';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
     triangulateAndReproject, reprojectStoredPoints3d, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=5e3cfc4c9f06';
-import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=5e3cfc4c9f06';
-import { drawFrameOverlays } from './overlays.js?v=5e3cfc4c9f06';
-import { syncViewLegends } from './view-legend.js?v=5e3cfc4c9f06';
-import { isCameraTracked, getTrackingThreshold } from './settings.js?v=5e3cfc4c9f06';
+} from '../pose/triangulation.js?v=ff154791a920';
+import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=ff154791a920';
+import { drawFrameOverlays } from './overlays.js?v=ff154791a920';
+import { syncViewLegends } from './view-legend.js?v=ff154791a920';
+import { isCameraTracked, getTrackingThreshold } from './settings.js?v=ff154791a920';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=5e3cfc4c9f06';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=ff154791a920';
 // The toolbar's Animals field shows the ACTIVE session's count. Circular
 // (it reaches pose/tracker.js, which imports this module) — safe for the same
 // reason: the call site is inside drawAllOverlays' body.
-import { syncAnimalCountField } from './animal-count-field.js?v=5e3cfc4c9f06';
-import { syncNodeTooltipFrame } from './node-tooltip.js?v=5e3cfc4c9f06';
+import { syncAnimalCountField } from './animal-count-field.js?v=ff154791a920';
+import { syncNodeTooltipFrame } from './node-tooltip.js?v=ff154791a920';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=5e3cfc4c9f06';
-import { updateFrameInfo } from './info-panel.js?v=5e3cfc4c9f06';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=ff154791a920';
+import { updateFrameInfo } from './info-panel.js?v=ff154791a920';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
-} from './frame-counters.js?v=5e3cfc4c9f06';
+} from './frame-counters.js?v=ff154791a920';
 
 // ============================================
 // Reproj/Error visibility
@@ -200,14 +200,23 @@ const MAX_OVERLAY_AREA = 268435456; // 2^28 px
 //    solve drops observations the stored 3D does not record, and its
 //    undistorted error leaves them out). Measured on a 17-camera project:
 //    0.1 ms per frame with one animal and 0.2 ms with three, against 2.4 and
-//    5.0 ms to re-solve Refined — at 120 fps a frame has 8.3 ms. Any other
-//    group (Track All's provisional 3D, an edited group) is re-solved, as
-//    before.
+//    5.0 ms to re-solve Refined — at 120 fps a frame has 8.3 ms. 3D READ
+//    FROM A FILE (`isPoints3dFromFile`: a loaded `.slp`'s, an imported
+//    points3d `.h5`'s) is reprojected whenever the group is clean, threshold
+//    or not, and with or without a method: a re-solve would show LUCID's
+//    answer rather than the 3D the project holds. Any other group (Track
+//    All's provisional 3D, an edited group) is re-solved, as before.
 //  - **It keeps what it made for at most DERIVED_FRAMES_KEEP frames per
 //    session** (`noteDerivedFrame`), dropping the least recently filled
 //    beyond that, so playing through the whole recording does not rebuild
 //    the per-frame state Triangulate All no longer keeps.
-function fillLazyReprojections(fi, instanceGroups) {
+//
+// The paths that used to derive this state for EVERY frame they touched now
+// leave it to this fill: both Triangulate All paths, the `.slp` load
+// (`handleLoadSlpFile`), moving a view between sessions
+// (`moveVideosToSession`), and the overlay video export, which calls it for
+// each frame it draws so the video shows exactly what the app shows.
+export function fillLazyReprojections(fi, instanceGroups) {
     if (instanceGroups && state.session.cameras.length >= 2) {
         var _lazyFrameResults = null;
         var _threshold = null;
@@ -218,7 +227,8 @@ function fillLazyReprojections(fi, instanceGroups) {
                 (!_grp.reprojections || Object.keys(_grp.reprojections).length === 0)) {
                 if (_threshold == null) _threshold = getTrackingThreshold('reprojErrorThreshold') || 0;
                 var _triRes;
-                if (_grp.triangulationMethod != null && !_grp.dirty && !(_threshold > 0)) {
+                if (!_grp.dirty && (isPoints3dFromFile(_grp.points3d) ||
+                    (_grp.triangulationMethod != null && !(_threshold > 0)))) {
                     _triRes = reprojectStoredPoints3d(_grp, state.session.cameras);
                 } else {
                     // Re-solve with WHICHEVER METHOD this group was last triangulated
