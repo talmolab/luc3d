@@ -137,7 +137,7 @@ the old `app.js` entry point.
 - `../ui/timeline.js` — `Timeline`.
 - `../ui/interaction.js` — `InteractionManager`.
 
-**Imported by.** `app.js`, `pose/triangulation.js`, `ui/identity-assignment.js`,
+**Imported by.** `app.js`, `pose/triangulation.js`,
 `ui/export-modals.js`, `ui/sessions-panes.js`, `ui/ui-wiring.js`,
 `loading/session-loader.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`.
@@ -2960,12 +2960,11 @@ implement it, all in this module:
   method wins; otherwise the user's global **Settings ▸ Triangulation Method**
   (`getDefaultTriangulationMethod`). Never a bare `'dlt'` literal. Used by
   `reTriangulateGroup`, both grouping sweeps in `ui/export-modals.js`,
-  `ui/sessions-panes.js`'s move-view re-triangulate, `ui/ui-wiring.js`'s
-  environment-skeleton solve, and `ui/identity-assignment.js`'s two group-writing
-  loops. **Deliberately NOT used by `ui/rendering.js`'s lazy reprojection fill:**
-  that path re-derives reprojections for 3D it does not own and does not write
-  back, so it must REPRODUCE the recorded solve exactly rather than fall back to a
-  global default. Rule of thumb — *writes* `points3d` → `resolveTriangulationMethod`;
+  `ui/sessions-panes.js`'s move-view re-triangulate and `ui/ui-wiring.js`'s
+  environment-skeleton solve. **Deliberately NOT used by `ui/rendering.js`'s
+  lazy reprojection fill:** that path re-derives reprojections for 3D it does
+  not own and does not write back, so it must REPRODUCE the recorded solve
+  exactly rather than fall back to a global default. Rule of thumb — *writes* `points3d` → `resolveTriangulationMethod`;
   only *reads* it → match `triangulationMethod` exactly.
 - `findEquivalentPriorGroup(priorGroups, group)` → the prior group with identical
   membership (camera for camera, by `Instance` object identity), or null.
@@ -3017,19 +3016,18 @@ common case, which makes the correct behavior *cheaper* than the old one rather
 than paying BA's ~3x-6x cost per group project-wide. Both sweeps report 3D
 provenance ("N kept existing 3D, N solved via Refined, N via DLT") in
 their progress text and status line, so a method's cost is visible rather than
-hidden. The one deliberate DLT caller is the O(n×m) Hungarian cost matrix in
-`ui/identity-assignment.js`, whose temporary groups' 3D is discarded and where only
-the relative ordering of errors matters. It passes `{ method: 'dlt' }` **explicitly**,
-so the invariant is the checkable one — *every* call site states its method — rather
-than the uncheckable "every caller that forgot happened to want DLT".
+hidden. No caller hardcodes DLT: the last one that did, an O(n×m) Hungarian cost
+matrix in `ui/identity-assignment.js`'s automatic assignment, was deleted with the
+rest of that unreachable chain. The invariant is the checkable one — *every* call
+site states its method, and states it by resolving it — rather than the
+uncheckable "every caller that forgot happened to want DLT".
 `tests/test-triangulation-method-propagation.mjs` enforces that by scanning the app
 source: it fails, naming file and line, on any call that omits the options object,
-omits `method`, hardcodes `'dlt'` outside the cost matrix, or passes something that
-is neither a resolver nor a threaded-in method (confirmed to catch the original
-`ui/rendering.js` bug). A runtime assert inside `triangulateAndReproject` was
-considered and REJECTED: it runs once per candidate PAIR inside that cost matrix, so
-a warning would fire O(n*m) times per auto-assign — noise in a legitimate path,
-which is exactly what the guard must not create.
+omits `method`, hardcodes `'dlt'`, or passes something that is neither a resolver
+nor a threaded-in method (confirmed to catch the original `ui/rendering.js` bug).
+A source scan rather than a runtime assert inside `triangulateAndReproject`,
+because a runtime check fires only on the paths something happens to execute,
+while the scan covers every call site on every run.
 
 **Distortion handling.** 2D keypoints on disk are lens-distorted. **DLT** runs in
 ideal pinhole space: observations are undistorted first (`Camera.undistortPoint`),
@@ -3043,8 +3041,7 @@ must be **re-distorted** back to native pixel space
 `Camera.distortPoint`). Comparing ideal reprojections against raw distorted
 keypoints previously produced spurious error that grew toward the frame edges
 ("fisheyed coordinates", issue #85) and could drive cross-view identity
-switches. The temporal-identity cost in `ui/identity-assignment.js` likewise
-projects 3D targets with distortion before measuring distance to raw detections.
+switches.
 
 `triangulateAndReproject` reports the reprojection error in **both** spaces:
 `meanError`/`errors` (distorted — what is drawn and broken down per view/node)
@@ -4927,8 +4924,7 @@ Group-by-Identity, Multi-Frame Triangulate modal.
 ### ui/identity-assignment.js
 
 **Purpose.** All workflows for grouping instances into identities — manual
-assignment, edit-group mode, automatic assignment, single-frame
-triangulation, multi-frame assignment modal, track/identity helpers.
+assignment, edit-group mode, track/identity helpers.
 
 **Key exports.**
 - Track helpers: `swapAssignTrack`, `assignTrackToSelected`,
@@ -5000,49 +4996,34 @@ triangulation, multi-frame assignment modal, track/identity helpers.
   `cleanupManualAssignment`, `startManualAssignment`.
 - Edit group: `editGroupState`, `startEditGroup`, `cancelEditGroup`,
   `finishEditGroup`, `cleanupEditGroup`, `updateEditGroupToast`.
-- Auto assign: `autoAssignState`, `cleanupAutoAssignment`,
-  `runAutomaticAssignment`, `runTrackedAssignment`.
-- Triangulation flows: `runSingleFrameTriangulation`,
-  `showMultiFrameModal`, `startViewSelectionForFrames`,
-  `showMultiFrameProgressModal`, `runMultiFrameAssignment`.
 
 **Imports from project modules.**
-- `./app-state.js` — `state`, `videoController`, `interactionManager`,
-  `viewport3d`, `timeline`, `paneManager`.
-- `../pose/pose-data.js` — `InstanceGroup`, `UnlinkedInstance`.
-- `../pose/triangulation.js` — `frameHasGroupedUserInstances`,
-  `getInstanceGroupsForFrame`, `triangulateAndReproject`,
-  `storeReprojectedInstances`, `reprojectPoints`,
-  `computeInstanceDistance`, `hungarianAlgorithm`,
-  `updateTimelineForFrame`, `triangulateCurrentFrame`,
-  `resolveTriangulationMethod`.
-
-**Three `triangulateAndReproject` call sites, two of which write 3D.** The two
-that write it (`autoAssign`'s "auto-triangulate all groups for this frame" loop
-and `autoAssignAcrossFrames`' per-new-group solve) now pass
-`resolveTriangulationMethod(group)`. The first is the load-bearing one: it sweeps
-**every** group on the frame, including pre-existing bundle-adjusted ones, and
-passing no method silently re-solved them with DLT and overwrote `points3d` —
-which is what save/export read. The third, the O(nRef × nOther) **Hungarian cost
-matrix**, is deliberately DLT — its temporary groups' 3D is discarded, only the
-relative ordering of the errors matters, and BA's ~3x-6x cost would buy nothing —
-and it passes `{ method: 'dlt' }` explicitly rather than relying on the default, so
-that no call site in the app depends on that default (enforced by
-`tests/test-triangulation-method-propagation.mjs`). (This module already used `getDefaultTriangulationMethod()` for its
-`triangulateCurrentFrame` call, so honoring the user's method here is consistent
-rather than new policy.)
-- `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`.
+- `./app-state.js` — `state`, `interactionManager`, `viewport3d`, `timeline`.
+- `../pose/pose-data.js` — `UnlinkedInstance`.
+- `../pose/triangulation.js` — `getInstanceGroupsForFrame`,
+  `updateTimelineForFrame`.
+- `./rendering.js` — `drawAllOverlays`.
 - `./info-panel.js` — `updateInfoPanel`.
 - `../import-export/save-load.js` — `markDirty`, `setStatus`.
-- `../pose/initialization.js` — `update3DViewport`.
-- `./sessions-panes.js` — `panelRenderers`.
+
+**No automatic assignment, and no `triangulateAndReproject` call.** The
+automatic-assignment chain that used to live here — `runSingleFrameTriangulation`
+and `showMultiFrameModal`, and behind them `startViewSelectionForFrames`,
+`showMultiFrameProgressModal`, `runMultiFrameAssignment`,
+`runAutomaticAssignment`, `runTrackedAssignment`, `autoAssignState` /
+`cleanupAutoAssignment` and `state.lastAutoAssignViews` / `lastAutoAssignFrame` —
+was deleted once commit `5612c920` left it with no caller. It held all three of
+this module's `triangulateAndReproject` calls, among them the app's one hardcoded
+`{ method: 'dlt' }` (an O(nRef × nOther) Hungarian cost matrix with a fixed
+`< 50` px acceptance cutoff), so `tests/test-triangulation-method-propagation.mjs`
+now requires that NO caller hardcodes DLT. Cross-view grouping is Track All /
+Track Frame's job (`pose/tracker.js`).
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`,
-`ui/rendering.js`, `ui/sessions-panes.js`, `ui/ui-wiring.js`.
+`ui/rendering.js`, `ui/ui-wiring.js`.
 
 **User-facing features.** Manual identity assignment toast workflow,
-Edit Group mode, Auto-Assign / Tracked Assign, single-frame and
-multi-frame triangulation modals, track-swap dialogs.
+Edit Group mode, track-swap dialogs.
 
 ---
 
@@ -9739,11 +9720,10 @@ multi-video docking layout.
 - `./info-panel.js` — `updateInfoPanel`.
 - `./frame-readout.js` — `clearReadout` (session removed),
   `refreshReadoutTotals` (`switchSession` restoring a cached frame count / fps).
-- `./identity-assignment.js` — `autoAssignState`.
 - `../pose/initialization.js` — `setup3DViewport`.
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`,
-`ui/identity-assignment.js`, `ui/ui-wiring.js`, `ui/view-align-modal.js`
+`ui/ui-wiring.js`, `ui/view-align-modal.js`
 (`syncRotationUI`), `loading/session-loader.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`.
 
@@ -10770,8 +10750,7 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
 `dispatchEvent` applies). That module imports nothing itself, so this one stays
 bridgeable.
 
-**Imported by.** `ui/ui-wiring.js`, `ui/identity-assignment.js`,
-`ui/settings-modal.js`, `pose/tracker.js`.
+**Imported by.** `ui/ui-wiring.js`, `ui/settings-modal.js`, `pose/tracker.js`.
 
 ---
 
@@ -12496,7 +12475,9 @@ header for the full list. Notable ones: `app-state.js`,
 (incl. `evictLazyFrames`), `lazy-residency.js` (`LAZY_PLAYBACK_AHEAD`),
 `rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`,
 `file-io.js`, `session-loader.js`, `video.js`, `tracker.js`,
-`initialization.js`, `identity-assignment.js`, `export-modals.js`,
+`initialization.js`, `identity-assignment.js` (the track/identity helpers,
+Edit Group, `startManualAssignment`, `purgeTriangulationDataForGroup`,
+`swapTracks`), `export-modals.js`,
 `sessions-panes.js`, `settings.js`, `settings-modal.js`,
 `track-range-modal.js` (`showTrackRangeModal`, wired to the Track Frame split
 button's `#tbTrackFrameRange` dropdown item — #212),
@@ -12560,8 +12541,7 @@ document listener that closes the toolbar menus — which is why the focus-relea
 listener in `ui/keyboard-target.js` has to run in the **capture** phase (#230):
 in the bubble phase these two buttons kept focus after a click and swallowed
 `Space`/`Enter`. Implicit triangulation — the `t` shortcut, the Edit ▸
-Triangulate menu item, and the auto-assign flow in `identity-assignment.js` —
-also uses the default method. The **environment-skeleton** solve (Load
+Triangulate menu item — also uses the default method. The **environment-skeleton** solve (Load
 Environment) likewise takes it, via `resolveTriangulationMethod(group)` on a
 brand-new group; it used to hardcode DLT, so a BA user's environment 3D
 silently disagreed with the method they had selected.
@@ -13901,7 +13881,7 @@ prompt for tests/automation. Covered by `tests/test-lazy-reopen.js`.
 Before drawing the first grouped frame, calls `setReprojErrorVisible(true)`
 (`ui/rendering.js`) whenever the reconstructed session has any
 `instanceGroups` — every OTHER path that populates 3D/reprojection data
-(Triangulate All, slp-import.js, save-load.js, identity-assignment.js, …)
+(Triangulate All, slp-import.js, save-load.js, …)
 already did this, but the lazy-reopen path didn't, so `#reprojErrorSection`
 stayed at its HTML `display:none` default forever after a reopen even though
 `drawAllOverlays`'s lazy-reproject block was silently computing a real error

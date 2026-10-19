@@ -5,7 +5,7 @@
  * "Load Project" path for a merged multi-camera .slp) never revealed
  * #reprojErrorSection, which defaults to `style="display:none"` in
  * index.html. Every OTHER code path that populates 3D/reprojection data
- * (Triangulate All, slp-import.js, save-load.js, identity-assignment.js, …)
+ * (Triangulate All, slp-import.js, save-load.js, …)
  * calls setReprojErrorVisible(true), but the lazy-reopen path did not — so
  * after reopening a project that already has real 3D + reprojections (e.g.
  * saved right after Track All + Triangulate All), the Instance panel's
