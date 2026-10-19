@@ -4,15 +4,18 @@
  * feeds it (`sweepLazyFrameWindows`, pose/triangulation.js).
  *
  * Pins:
- *   - `showLoadingProgress` writes "<label>: done/total frames (pct%)…" (the
- *     format Track All always used, now shared by Triangulate All), sets the bar
+ *   - `showLoadingProgress` writes "<label>: done/total frames…" (the format
+ *     Track All always used, now shared by Triangulate All; the counts with
+ *     thousands commas, "2,000,000/2,000,000"), the percentage under the bar
+ *     (the image check's dialog style — so the line no longer repeats it), the
+ *     card's title (kept to hideLoading), the playhead with the fill, sets the bar
  *     fraction, and puts "Step k of n" / detail on the line under the bar;
  *   - a new stage SNAPS the bar (no transition) instead of animating backwards;
  *   - `showLoading` / `hideLoading` hide the bar again;
  *   - the second line estimates the time remaining from the recent rate, says
  *     "Estimating…" until it has data, resets per stage, and clears at 100%;
- *   - `createProgressPacer().due()` is clock-gated, and `yield()` resolves with
- *     no rAF / document (the Node path);
+ *   - `createProgressPacer().due()` is clock-gated, and `yield()` never waits on
+ *     an animation frame unless the page is visible (Node, a hidden tab);
  *   - the sweep reports monotonic positions that end exactly at `total`, in both
  *     branches, even when most frames have no data.
  *
@@ -58,6 +61,10 @@ const els = {
     loadingProgress: fakeEl('loadingProgress', ['hidden']),
     loadingProgressFill: fakeEl('loadingProgressFill'),
     loadingSubstatus: fakeEl('loadingSubstatus', ['hidden']),
+    loadingTitle: fakeEl('loadingTitle', ['hidden']),
+    loadingSpinner: fakeEl('loadingSpinner'),
+    loadingPct: fakeEl('loadingPct', ['hidden']),
+    loadingProgressHead: fakeEl('loadingProgressHead'),
 };
 globalThis.__BENCH = { nodeWeights: {}, thresholds: {} };
 globalThis.document = { getElementById: (id) => els[id] || null };
@@ -79,8 +86,8 @@ const snapped = () => els.loadingProgressFill.classList.contains('no-anim');
 group('showLoadingProgress — text, bar, step line');
 {
     showLoadingProgress('Assigning identities', 9000, 36000);
-    eq(els.loadingStatus.textContent, 'Assigning identities: 9000/36000 frames (25%)…',
-        'Track All keeps its exact text');
+    eq(els.loadingStatus.textContent, 'Assigning identities: 9,000/36,000 frames…',
+        'Track All keeps its exact text, the counts with thousands commas');
     ok(!hidden('loadingOverlay'), 'overlay shown');
     ok(!hidden('loadingProgress'), 'bar shown');
     eq(frac(), 0.25, 'bar fraction = done/total');
@@ -89,9 +96,13 @@ group('showLoadingProgress — text, bar, step line');
     ok(hidden('loadingSubstatus'), 'no step/detail line for a single-stage run with no detail');
 
     showLoadingProgress('Triangulating', 12000, 36000, { detail: 'Refined · 36,000 groups' });
-    eq(els.loadingStatus.textContent, 'Triangulating: 12000/36000 frames (33%)…',
+    eq(els.loadingStatus.textContent, 'Triangulating: 12,000/36,000 frames…',
         'Triangulate All uses the same format');
     eq(els.loadingSubstatus.textContent, 'Refined · 36,000 groups', 'detail goes under the bar');
+    showLoadingProgress('Triangulating', 2000000, 2000000);
+    eq(els.loadingStatus.textContent, 'Triangulating: 2,000,000/2,000,000 frames…', 'a comma every three digits, however big');
+    showLoadingProgress('Triangulating', 999, 1000);
+    eq(els.loadingStatus.textContent, 'Triangulating: 999/1,000 frames…', '…and none below a thousand');
 
     showLoadingProgress('Assigning identities', 1, 2, { step: 2, steps: 2 });
     eq(els.loadingSubstatus.textContent, 'Step 2 of 2', 'multi-stage runs label the step');
@@ -99,7 +110,10 @@ group('showLoadingProgress — text, bar, step line');
     ok(hidden('loadingSubstatus'), '"Step 1 of 1" is never shown');
 
     showLoadingProgress('X', 35999, 36000);
-    eq(els.loadingStatus.textContent, 'X: 35999/36000 frames (99%)…', 'percentage is floored — 100% only when done');
+    eq(els.loadingStatus.textContent, 'X: 35,999/36,000 frames…', 'no percentage on the line: it is the number under the bar');
+    eq(els.loadingPct.textContent, '99%', 'the percentage under the bar is floored — 100% only when done');
+    ok(!hidden('loadingPct') && hidden('loadingSpinner'), 'with a bar: the percentage shows, the spinner does not');
+    eq(els.loadingProgressHead.style.transform, 'translateX(' + (100 * 35999 / 36000) + '%)', 'the playhead moves with the fill');
     showLoadingProgress('X', 5, 0);
     eq(frac(), 0, 'total 0 does not divide by zero');
 }
@@ -123,11 +137,32 @@ group('showLoading / hideLoading hide the bar');
     showLoading('Loading videos…');
     ok(hidden('loadingProgress'), 'indeterminate showLoading hides the bar');
     ok(hidden('loadingSubstatus'), '…and the detail line');
+    ok(hidden('loadingPct') && !hidden('loadingSpinner'), '…and the percentage, and shows the spinner instead');
     eq(els.loadingStatus.textContent, 'Loading videos…', 'text replaced');
     showLoadingProgress('Triangulating', 10, 100);
     hideLoading();
     ok(hidden('loadingOverlay') && hidden('loadingProgress'), 'hideLoading hides overlay and bar');
     eq(frac(), 0, 'hideLoading resets the fill');
+    eq(els.loadingProgressHead.style.transform, 'translateX(0%)', '…and the playhead');
+}
+
+group('the card\'s title: set by an operation, kept to hideLoading');
+{
+    hideLoading();
+    ok(hidden('loadingTitle'), 'no title unless an operation gives one');
+    showLoadingProgress('Triangulating', 0, 100, { title: 'Triangulate All', detail: 'DLT' });
+    ok(!hidden('loadingTitle') && els.loadingTitle.textContent === 'Triangulate All', 'an operation names itself');
+    showLoadingProgress('Triangulating', 50, 100, { detail: 'DLT' });
+    eq(els.loadingTitle.textContent, 'Triangulate All', 'progress calls deep in the run need not repeat it');
+    showLoading('Loading frames…');
+    eq(els.loadingTitle.textContent, 'Triangulate All', '…nor does a message mid-run');
+    showLoading('Checking…', { title: 'Checking ID switches (body size)' });
+    eq(els.loadingTitle.textContent, 'Checking ID switches (body size)', 'another title replaces it');
+    hideLoading();
+    ok(hidden('loadingTitle') && els.loadingTitle.textContent === '', 'hideLoading clears it, so the next operation starts untitled');
+    showLoading('Loading project…');
+    ok(hidden('loadingTitle'), '…as a load that names none shows none');
+    hideLoading();
 }
 
 group('time remaining — formatting');
@@ -189,10 +224,35 @@ group('createProgressPacer');
     while (performance.now() - t < 45) { /* spin */ }
     ok(p.due(), 'due once the interval has passed');
     ok(!p.due(), 'due() resets the clock');
-    const y0 = performance.now();
-    await p.yield();
-    ok(performance.now() - y0 < 50, 'yield() resolves promptly without rAF (Node / hidden tab path)');
-    ok(!p.due(), 'the interval restarts after a yield');
+
+    // yield() must not wait for an animation frame unless the page is visible: a
+    // hidden tab suspends rAF, so a yield that asked for one would sit on the
+    // 100 ms fallback timer, which a background tab throttles to >= 1 s. Pinned by
+    // mechanism — a rAF stub that records calls and never fires — not by elapsed
+    // time, which flaked under CPU load. The 5 s limit only turns a hang into a
+    // failure.
+    const settle = (promise) => {
+        let timer;
+        const hang = new Promise((r) => { timer = setTimeout(() => r('timed out'), 5000); });
+        return Promise.race([promise.then(() => 'resolved'), hang]).finally(() => clearTimeout(timer));
+    };
+    const rafCalls = [];
+    globalThis.requestAnimationFrame = (cb) => rafCalls.push(cb);
+    try {
+        eq(await settle(p.yield()), 'resolved', 'yield() resolves with no visibilityState (the Node path)');
+        ok(!p.due(), 'the interval restarts after a yield');
+        document.visibilityState = 'hidden';
+        eq(await settle(p.yield()), 'resolved', 'yield() resolves in a hidden tab, whose rAF never fires');
+        eq(rafCalls.length, 0, 'neither path asked for an animation frame');
+        // Control: a visible page DOES ask for one (so the 0 above is not
+        // vacuous), and resolves on the fallback timer when it never comes.
+        document.visibilityState = 'visible';
+        eq(await settle(p.yield()), 'resolved', 'a visible page resolves on the fallback timer when rAF never fires');
+        eq(rafCalls.length, 1, 'a visible page asks for an animation frame (control)');
+    } finally {
+        delete globalThis.requestAnimationFrame;
+        delete document.visibilityState;
+    }
 }
 
 // ---------------------------------------------------------------------------

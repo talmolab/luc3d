@@ -11,7 +11,7 @@
  *
  * Usage (main thread):
  *
- *     const solver = createGroupSolver(cameras, { method, triangulateOnly, expectedGroups });
+ *     const solver = createGroupSolver(cameras, { method, triangulateOnly, summaryOnly, expectedGroups });
  *     for (...) {
  *         solver.submit(group, groupCameras, (result) => { ...apply... });
  *         solver.mark(() => { ...per-frame bookkeeping... });
@@ -31,10 +31,21 @@
  * `window.LUCID_TRIANGULATION_WORKERS === 0` (kill switch / A-B testing). Set it
  * to N > 0 to force an N-worker pool regardless of size. A batch a worker fails
  * on is re-solved inline, from the same captured inputs.
+ *
+ * `cpuBusyMs()` is the run's CPU time so far, summed over threads, for the
+ * loading overlay's CPU line (ui/loading-overlay.js `setLoadingCpu`): each
+ * worker while it holds a batch, plus the main thread from `createGroupSolver`
+ * to `finish` / `cancel` EXCEPT while it waits on the workers in `throttle` /
+ * `finish` — it prepares and applies batches the rest of the time. A worker's
+ * reply is handled during such a wait, so that handler counts as main-thread
+ * time again. The main thread's waits for a paint (the caller's pacer) still
+ * count as busy: at most one frame per ~250 ms chunk. Inline, the main thread
+ * does it all and is busy throughout — one core.
  */
-import { triangulateAndReproject } from './triangulation-core.js?v=31b08ec83d84';
-import { Instance } from './pose-data.js?v=31b08ec83d84';
-import { isCameraTracked, getTrackingThreshold } from '../ui/settings.js?v=31b08ec83d84';
+import { triangulateAndReproject, triangulationSummary } from './triangulation-core.js?v=9e7754c6085c';
+import { Instance } from './pose-data.js?v=9e7754c6085c';
+import { isCameraTracked, getTrackingThreshold } from '../ui/settings.js?v=9e7754c6085c';
+import { createBusyClock } from '../ui/load-graph.js?v=9e7754c6085c';
 
 /** Groups per worker message: big enough to amortize messaging, small enough
  *  to load-balance (~0.25 s of Refined solves, ~20 ms of DLT). */
@@ -65,7 +76,7 @@ function getPool() {
     }
     if (pool) terminatePool();
     try {
-        const url = new URL('pose/triangulation-worker.js?v=31b08ec83d84', document.baseURI);
+        const url = new URL('pose/triangulation-worker.js?v=9e7754c6085c', document.baseURI);
         const workers = [];
         for (let i = 0; i < n; i++) workers.push({ w: new Worker(url, { type: 'module' }), busy: false });
         pool = { workers, idleTimer: null };
@@ -93,21 +104,21 @@ function serializeCamera(c) {
 
 /**
  * @param {Camera[]} cameras  every camera a submitted group may use
- * @param {{method?: 'dlt'|'ba', triangulateOnly?: boolean, expectedGroups?: number}} [opts]
+ * @param {{method?: 'dlt'|'ba', triangulateOnly?: boolean, summaryOnly?: boolean, expectedGroups?: number}} [opts]
+ *   `summaryOnly`: each result is `triangulationSummary(result)` — the 3D and the
+ *   mean errors, no per-camera reprojections or errors (solved and scored as
+ *   usual, then dropped before the reply), for a sweep that keeps only those.
  */
 export function createGroupSolver(cameras, opts) {
     opts = opts || {};
     const method = opts.method === 'ba' ? 'ba' : 'dlt';
     const triangulateOnly = !!opts.triangulateOnly;
+    const summaryOnly = !!opts.summaryOnly;
     // The two settings `triangulateAndReproject` would read per group, resolved
     // the way it resolves them (see triangulation-core.js), once per run — the
     // loading overlay blocks the UI, so they cannot change mid-run.
-    // (`typeof` guards: the flat-script test sandbox does not load ui/settings.js
-    // — same defaults as triangulation-core.js uses without its hooks.)
-    const reprojErrorThreshold = typeof getTrackingThreshold === 'function'
-        ? getTrackingThreshold('reprojErrorThreshold') : 0;
-    const tracked = new Set(cameras.filter((c) =>
-        typeof isCameraTracked === 'function' ? isCameraTracked(c.name) : true).map((c) => c.name));
+    const reprojErrorThreshold = getTrackingThreshold('reprojErrorThreshold');
+    const tracked = new Set(cameras.filter((c) => isCameraTracked(c.name)).map((c) => c.name));
 
     // An explicit LUCID_TRIANGULATION_WORKERS > 0 forces the pool even for a
     // small run (tests use it to compare pool vs inline on a synthetic project).
@@ -119,6 +130,14 @@ export function createGroupSolver(cameras, opts) {
     const P = (useWorkers && !poolOwner) ? getPool() : null;
     const owner = {};
     if (P) poolOwner = owner;
+    // CPU time (cpuBusyMs): a lane per worker slot while it holds a batch, and 'main' (see the header)
+    const clock = createBusyClock();
+    clock.begin('main');
+    // the main thread waits on the workers: not busy until it resumes
+    const waitOn = function (promise) {
+        clock.end('main');
+        return promise.then(function (v) { clock.begin('main'); return v; }, function (e) { clock.begin('main'); throw e; });
+    };
 
     // Ordered entries: { kind: 'job'|'mark', cb, result?, done }
     const entries = [];
@@ -139,16 +158,18 @@ export function createGroupSolver(cameras, opts) {
             includedCameras: groupCameras.filter((c) => tracked.has(c.name)).map((c) => c.name),
             reprojErrorThreshold: reprojErrorThreshold,
             triangulateOnly: triangulateOnly || undefined,
+            summaryOnly: summaryOnly || undefined,
         };
     }
     // Every call below spells the options out, `method: method` included, so the
     // source-level guard in tests/test-triangulation-method-propagation.mjs can
     // see that the method is threaded in rather than defaulted.
     function solve(group, groupCameras, o) {
-        return triangulateAndReproject(group, groupCameras, {
+        const r = triangulateAndReproject(group, groupCameras, {
             method: method, includedCameras: o.includedCameras,
             reprojErrorThreshold: o.reprojErrorThreshold, triangulateOnly: o.triangulateOnly,
         });
+        return o.summaryOnly ? triangulationSummary(r) : r;
     }
 
     function drain() {
@@ -184,8 +205,13 @@ export function createGroupSolver(cameras, opts) {
     function onWorkerMessage(slot, m) {
         const b = batchesById.get(m.id);
         if (!b) return;
+        clock.begin('main');
+        try { handleReply(slot, b, m); } finally { clock.end('main'); }
+    }
+    function handleReply(slot, b, m) {
         batchesById.delete(m.id);
         slot.busy = false;
+        clock.end(slot);
         if (m.type === 'solved') {
             for (let i = 0; i < b.items.length; i++) {
                 b.items[i].entry.result = m.results[i];
@@ -207,6 +233,7 @@ export function createGroupSolver(cameras, opts) {
             if (slot.busy) continue;
             const b = queue.shift();
             slot.busy = true;
+            clock.begin(slot);
             batchesById.set(b.id, b);
             slot.w.postMessage({ type: 'solve', id: b.id, jobs: b.items.map((it) => it.job) });
         }
@@ -230,6 +257,7 @@ export function createGroupSolver(cameras, opts) {
             slot.w.onerror = (ev) => {
                 // A worker that died (e.g. failed to load): re-solve its batch inline.
                 ev.preventDefault && ev.preventDefault();
+                clock.close(slot);
                 for (const [id, b] of batchesById) {
                     batchesById.delete(id);
                     try { solveInline(b); } catch (e) { failure = failure || e; }
@@ -247,6 +275,9 @@ export function createGroupSolver(cameras, opts) {
         /** True when solving on workers (false = inline). */
         get parallel() { return !!P; },
         get workers() { return P ? P.workers.length : 0; },
+
+        /** CPU time so far, in thread-ms summed over the workers and the main thread (see the header). */
+        cpuBusyMs() { return clock.ms(); },
 
         /** Queue `group` (with its usable `groupCameras`); `cb(result)` runs in order. */
         submit(group, groupCameras, cb) {
@@ -283,10 +314,10 @@ export function createGroupSolver(cameras, opts) {
         throttle() {
             if (failure) return Promise.reject(failure);
             if (!P || inFlight < P.workers.length * 2) return Promise.resolve();
-            return new Promise((resolve) => {
+            return waitOn(new Promise((resolve) => {
                 const check = () => (inFlight < P.workers.length * 2 || failure) ? resolve() : waiters.push(check);
                 waiters.push(check);
-            });
+            }));
         },
 
         /** Abandon the run (caller hit an error): drop pending work and free the
@@ -294,6 +325,7 @@ export function createGroupSolver(cameras, opts) {
         cancel() {
             batch = [];
             queue.length = 0;
+            clock.close();
             if (P) {
                 if (pool === P) terminatePool();
                 if (poolOwner === owner) poolOwner = null;
@@ -306,9 +338,10 @@ export function createGroupSolver(cameras, opts) {
             drain();
             while (P && (inFlight > 0 || head < entries.length)) {
                 if (failure) break;
-                await new Promise((resolve) => waiters.push(resolve));
+                await waitOn(new Promise((resolve) => waiters.push(resolve)));
             }
             drain();
+            clock.close();
             if (P) {
                 for (const slot of P.workers) { slot.w.onmessage = null; slot.w.onerror = null; slot.busy = false; }
                 clearTimeout(P.idleTimer);

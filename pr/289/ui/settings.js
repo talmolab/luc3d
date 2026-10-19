@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=31b08ec83d84';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=9e7754c6085c';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -90,6 +90,7 @@ const ACTION_CATALOG = [
     { id: 'zoomIn', label: 'Zoom in videos', category: 'View', binding: '+ / =', editable: false, dispatched: false },
     { id: 'zoomOut', label: 'Zoom out videos', category: 'View', binding: '− / _', editable: false, dispatched: false },
     { id: 'zoomReset', label: 'Reset video zoom', category: 'View', binding: '0', editable: false, dispatched: false },
+    { id: 'nativeResolution', label: 'Native video resolution (1:1) on / off', category: 'View', binding: 'Shift+0', editable: false, dispatched: false },
     { id: 'rotateVideo', label: 'Rotate active video (hold)', category: 'View', binding: 'Shift+R + ← / →', editable: false, dispatched: false },
     { id: 'toggleUser', label: 'Toggle User keypoints', category: 'View', binding: 'u', editable: true, dispatched: true },
     { id: 'togglePredicted', label: 'Toggle Predictions', category: 'View', binding: 'p', editable: true, dispatched: true },
@@ -205,6 +206,13 @@ export function setNodeWeights(map) {
     persist();
 }
 
+// Commit SOME nodes' weights (Track All's first-use dialog, Track Frame Range),
+// keeping every other stored override: weights are keyed by node name per
+// browser, so another skeleton's must survive an edit to this one's.
+export function updateNodeWeights(map) {
+    setNodeWeights(Object.assign(getNodeWeights(), map || {}));
+}
+
 // --- Camera tracking inclusion ---------------------------------------------
 
 // Clamp an arbitrary value to a binary include/exclude weight (0 or 1), or null
@@ -260,6 +268,10 @@ export function setCameraWeights(map) {
 // Tracking Wizard's "Tracking Thresholds" section AND the default the tracker
 // falls back to. `min`/`max`/`step` drive the number field; `desc` is the inline
 // explanation shown under the label.
+//
+// The reprojection error threshold's default (px), named because its `desc`
+// quotes it too, and two hand-written copies of one number drift apart.
+const REPROJ_ERROR_THRESHOLD_DEFAULT = 50;
 const TRACKING_THRESHOLDS = [
     {
         id: 'epipolarDecay', label: 'Epipolar error decay', default: 10,
@@ -360,7 +372,7 @@ const TRACKING_THRESHOLDS = [
     {
         id: 'autoSwitchCheck', label: 'Check ID switches after tracking (body size)', default: 1,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
-        desc: 'After Track All or Track Frame Range, flag close encounters where the animals leaving it match each other\'s body size better than their own (Tracks ▸ Check ID Switches; pose/id-switch-check.js). Checks every tracked frame in the session (needs at least 60 s of tracking). Results are marked on the seekbar and listed in the ID Switches tab, which opens only when a possible switch is found.',
+        desc: 'After Track All or Track Frame Range, flag contacts after which each animal\'s body size matches the other\'s before better than its own (Tracks ▸ Check ID Switches; pose/id-switch-check.js). Checks every tracked frame in the session (needs at least 60 s of tracking). Results are marked on the seekbar and listed in the ID Switches tab, which opens only when a possible switch is found.',
     },
     {
         id: 'autoImageSwitchCheck', label: 'Check ID switches after tracking (image detection)', default: 0,
@@ -368,9 +380,11 @@ const TRACKING_THRESHOLDS = [
         desc: 'After Track All or Track Frame Range, also check close encounters by APPEARANCE: crops of each animal in every camera are embedded with an image model on the GPU (Tracks ▸ Check ID Switches (Images)). Catches animals of similar size that look different (e.g. coat colour), which the size check cannot. Slow — minutes for a long recording — and needs the videos loaded; the model (~44 MB) downloads on first use. Without a GPU (WebGPU) it still runs, on the CPU: about 15x slower, so a long recording can take hours.',
     },
     {
-        id: 'imageCheckThreshold', label: 'Image check: flag threshold', default: -25,
-        min: -500, max: 0, step: 5,
-        desc: 'An encounter starts a possible image switch when its score falls below this. Closer to 0 catches more swaps between similar-sized animals but flags more clean encounters: on a 30-min, 5-mouse recording, -25 gave 18 false marks and caught the real switch; 0 gave 42; -50 gave 15 and missed it. Marks that the size check also finds ("Both") were almost always real.',
+        // A new id, not 'imageCheckThreshold': the score's scale changed (2026-10-09, -4..+4 instead of summed
+        // log-probabilities), and an old saved -25 would otherwise be clamped to -4 and flag almost nothing.
+        id: 'imageChangeThreshold', label: 'Image check: flag threshold', default: -0.8,
+        min: -4, max: 0, step: 0.1,
+        desc: 'A contact is a possible switch when its score falls below this. The score compares how each animal looks just before and just after the contact: about +2 means each still looks like itself, about -2 that they look like each other, near 0 that they cannot be told apart there. Closer to 0 catches more but flags more clean contacts: over 8 proofread or tail-marked recordings (1 h 45 min), -0.8 caught 10 of 12 real relabels with 2 false marks; -0.5 caught the same with 6; -1.2 caught 8 with none.',
     },
     {
         id: 'imageCheckHz', label: 'Image check: crops per second', default: 2,
@@ -388,9 +402,9 @@ const TRACKING_THRESHOLDS = [
         desc: 'Also try the browser\'s WebNN API, which on Windows can use NVIDIA tensor cores (Chrome: enable chrome://flags/#web-machine-learning-neural-network). The first frames are embedded both ways; WebNN is kept only if it is faster and its embeddings match the calibrated WebGPU model. "About these flags" in the ID Switches tab says which was used. On macOS (Chrome 154) it measured ~10x slower, CPU only, so the trial keeps WebGPU there.',
     },
     {
-        id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 50,
+        id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: REPROJ_ERROR_THRESHOLD_DEFAULT,
         min: 0, max: 500, step: 1,
-        desc: 'Robust triangulation: after an initial 3D solve, drop any 2D node whose reprojection error in a view exceeds this many pixels, then re-triangulate that node from the remaining reliable views. A node left with fewer than 2 reliable views is dropped from 3D. Default 50; 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless.',
+        desc: 'Robust triangulation: after an initial 3D solve, drop any 2D node whose reprojection error in a view exceeds this many pixels, then re-triangulate that node from the remaining reliable views. A node left with fewer than 2 reliable views is dropped from 3D. Default ' + REPROJ_ERROR_THRESHOLD_DEFAULT + '; 0 = disabled (use all views). It is in image pixels, so the same number is a tighter tolerance on high-resolution video than on low-resolution video. Views excluded in the Camera Views panel never contribute to triangulation regardless.',
     },
 ];
 
@@ -406,7 +420,7 @@ const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
     'stale', 'matchGate',
-    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageCheckThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckWebNN',
+    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckWebNN',
     'reprojErrorThreshold',
 ]);
 
@@ -451,20 +465,33 @@ export function getTrackingThresholds() {
 }
 
 // Commit an { id: value } override map (from the Tracking Wizard's Apply button).
-// Values are clamped to each threshold's range; entries equal to the default are
-// dropped so the stored set stays minimal.
-export function setTrackingThresholds(map) {
+// Values are clamped to each threshold's range. A value equal to its default is
+// dropped, so it keeps following the default if that ever changes — unless the
+// user CHOSE it: `edited` lists the ids changed in this dialog, and a value
+// already stored was an earlier choice. Dropping every default-valued entry is
+// what moved users who had deliberately set the reprojection error threshold to
+// 0 onto 50 when 50 became the default: with 0 the default, nothing was stored.
+export function setTrackingThresholds(map, edited) {
+    var prev = _settings.trackingThresholds || {};
+    var chosen = new Set(edited || []);
     var next = {};
     if (map && typeof map === 'object') {
         Object.keys(map).forEach(function (id) {
             var def = _thrById.get(id);
             if (!def) return;
             var v = clampThreshold(def, map[id]);
-            if (v != null && v !== def.default) next[id] = v;
+            if (v == null) return;
+            if (v !== def.default || chosen.has(id) || Object.prototype.hasOwnProperty.call(prev, id)) next[id] = v;
         });
     }
     _settings.trackingThresholds = next;
     persist();
+}
+
+// Commit SOME thresholds (Track All's first-use dialog: the image check's
+// settings), keeping every other stored override.
+export function updateTrackingThresholds(map) {
+    setTrackingThresholds(Object.assign({}, _settings.trackingThresholds, map || {}));
 }
 
 // --- Keyboard catalog ------------------------------------------------------

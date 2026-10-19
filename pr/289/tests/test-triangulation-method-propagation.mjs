@@ -21,15 +21,18 @@
  * forgets is the whole failure mode, and it arrives silently — no crash, no wrong
  * shape, just quietly worse 3D — so a static check is the cheap guard.
  *
- * The one intentionally-DLT caller (the O(nRef x nOther) Hungarian cost matrix in
- * `ui/identity-assignment.js`, whose temporary 3D is discarded) passes
- * `{ method: 'dlt' }` explicitly for this reason.
+ * No caller hardcodes `method: 'dlt'` either. The last one that did — the
+ * O(nRef x nOther) Hungarian cost matrix in `ui/identity-assignment.js`'s
+ * automatic assignment, whose temporary 3D was discarded — was deleted with the
+ * rest of that unreachable chain, so a hardcoded DLT is now always a caller
+ * ignoring both the group's recorded method and the user's Settings choice. A
+ * future caller that genuinely wants DLT whatever the setting has to change that
+ * check, and say why, in the same commit.
  *
  * Deliberately a source scan rather than a runtime assert/warn inside
- * `triangulateAndReproject`: that function is called once per candidate PAIR
- * inside the cost matrix, so a runtime warning would fire O(n*m) times per
- * auto-assign — noise in a legitimate path, which is exactly what the guard must
- * not create.
+ * `triangulateAndReproject`: a runtime check fires only on the paths something
+ * happens to execute, into a console nobody is watching, while the scan covers
+ * every call site on every run — including the ones no behavior test reaches.
  *
  * Run:  node tests/test-triangulation-method-propagation.mjs
  */
@@ -108,7 +111,7 @@ for (const rel of sourceFiles()) {
     for (const c of callsIn(text)) all.push({ file: rel, ...c });
 }
 
-check(all.length >= 10,
+check(all.length >= 8,
     `found the call sites to audit (${all.length}) — if this collapses the scan ` +
     `has stopped matching and the guard is dead`);
 
@@ -123,14 +126,14 @@ check(noMethod.length === 0,
     `...and every options object names a \`method\` ` +
     `(offenders: ${JSON.stringify(noMethod.map(c => `${c.file}:${c.line} -> ${c.third.slice(0, 60)}`))})`);
 
-// Exactly one caller may hardcode 'dlt': the cost matrix, whose 3D is discarded.
+// No caller may hardcode 'dlt' (see the header: the cost matrix that did is gone).
 const hardcodedDlt = all.filter(c => /method:\s*'dlt'/.test(c.third));
-check(hardcodedDlt.length === 1 && hardcodedDlt[0].file === 'ui/identity-assignment.js',
-    `exactly ONE caller hardcodes method:'dlt' — the Hungarian cost matrix, whose ` +
-    `temporary 3D is discarded (got ${JSON.stringify(hardcodedDlt.map(c => `${c.file}:${c.line}`))})`);
+check(hardcodedDlt.length === 0,
+    `NO caller hardcodes method:'dlt' — it would ignore the group's own method and ` +
+    `the user's Settings choice (got ${JSON.stringify(hardcodedDlt.map(c => `${c.file}:${c.line}`))})`);
 
-// Everyone else must RESOLVE the method: from the group's own recorded method,
-// from the user's Settings default, or from one threaded in by their caller.
+// Every other caller must RESOLVE the method: from the group's own recorded
+// method, from the user's Settings default, or from one threaded in by their caller.
 const RESOLVERS = /resolveTriangulationMethod|triangulationMethod|method:\s*(method|_m|prefMethod|prefMethodT|triMethod)\b/;
 const unresolved = all.filter(c =>
     !/method:\s*'dlt'/.test(c.third) && !RESOLVERS.test(c.third));

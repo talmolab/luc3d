@@ -37,10 +37,11 @@ import {
     setCameraWeights,
     getTrackingThresholdDefs,
     setTrackingThresholds,
-} from './settings.js?v=31b08ec83d84';
-import { getActiveSession, state, timeline } from './app-state.js?v=31b08ec83d84';
-import { drawAllOverlays } from './rendering.js?v=31b08ec83d84';
-import { installModalGeometry } from './modal-geometry.js?v=31b08ec83d84';
+} from './settings.js?v=9e7754c6085c';
+import { getActiveSession, state, timeline } from './app-state.js?v=9e7754c6085c';
+import { drawAllOverlays } from './rendering.js?v=9e7754c6085c';
+import { installModalGeometry } from './modal-geometry.js?v=9e7754c6085c';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=9e7754c6085c';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -155,8 +156,11 @@ export function showSettingsModal(initialPanel) {
     cameraNames.forEach(function (name) { working.cameraWeights[name] = getCameraWeight(name); });
 
     // Seed the working tracking-threshold map from the catalog's effective values.
+    // `editedThresholds` records which ones the user changed here: Apply stores
+    // those even when they equal the default (see `setTrackingThresholds`).
     const thresholdDefs = getTrackingThresholdDefs();
     thresholdDefs.forEach(function (def) { working.thresholds[def.id] = def.value; });
+    const editedThresholds = new Set();
 
     // An on/off switch (the app's standard .toggle-switch) for a 0/1 setting.
     function makeToggle(checked, ariaLabel, onChange) {
@@ -604,7 +608,7 @@ export function showSettingsModal(initialPanel) {
 
         if (def.kind === 'toggle') {             // on/off settings: a switch, stored as 1 / 0
             row.appendChild(labelWrap);
-            row.appendChild(makeToggle(working.thresholds[def.id] > 0, def.label, function (on) { working.thresholds[def.id] = on ? 1 : 0; }));
+            row.appendChild(makeToggle(working.thresholds[def.id] > 0, def.label, function (on) { working.thresholds[def.id] = on ? 1 : 0; editedThresholds.add(def.id); }));
             thSection.body.appendChild(row);
             return;
         }
@@ -620,6 +624,7 @@ export function showSettingsModal(initialPanel) {
         input.addEventListener('input', function () {
             const v = parseFloat(input.value);
             if (isFinite(v)) working.thresholds[def.id] = v;
+            editedThresholds.add(def.id);
         });
         input.addEventListener('blur', function () {
             let v = parseFloat(input.value);
@@ -699,12 +704,14 @@ export function showSettingsModal(initialPanel) {
         applyBindings(working.keyMap);
         setNodeWeights(working.nodeWeights);
         setCameraWeights(working.cameraWeights);
-        setTrackingThresholds(working.thresholds);
+        setTrackingThresholds(working.thresholds, editedThresholds);
         teardown();
         // Reflect committed camera-inclusion changes immediately: excluded views
         // grey out in both the video overlays and the timeline.
         try { drawAllOverlays(state.currentFrame); } catch (e) { /* no active render yet */ }
         if (timeline && typeof timeline.redraw === 'function') timeline.redraw();
+        // The ID-switch box encloses only nonzero-weight nodes: re-fit it to the new weights.
+        refreshIdSwitchHighlight();
     }
 
     function onDocKeyDown(e) {
