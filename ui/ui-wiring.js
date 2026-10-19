@@ -85,7 +85,7 @@ import { setTrackSummaryNavigator } from './track-summary-modal.js';
 import {
     assignTrackToSelected, assignIdentityToSelected, propagateIdentityForward, swapAssignTrack,
     startEditGroup, finishEditGroup,
-    startManualAssignment, runSingleFrameTriangulation, showMultiFrameModal,
+    startManualAssignment,
     purgeTriangulationDataForGroup,
     swapTracks,
 } from './identity-assignment.js';
@@ -2411,7 +2411,7 @@ export function setupUI() {
             case 'Enter': {
                 // Click the visible Continue/Group button in any active modal/toast
                 var continueBtn = null;
-                ['mfContinue', 'tfContinue', 'autoAssignContinue', 'manualAssignGroup'].forEach(function (id) {
+                ['tfContinue', 'manualAssignGroup'].forEach(function (id) {
                     if (continueBtn) return;
                     var btn = document.getElementById(id);
                     if (btn && btn.offsetParent !== null) continueBtn = btn;
@@ -2433,7 +2433,7 @@ export function setupUI() {
             case 'Escape': {
                 // Click the visible Cancel button in any active modal/toast
                 var cancelBtn = null;
-                ['mfCancel', 'tfCancel', 'autoAssignCancel', 'manualAssignCancel'].forEach(function (id) {
+                ['tfCancel', 'manualAssignCancel'].forEach(function (id) {
                     if (cancelBtn) return;
                     var btn = document.getElementById(id);
                     if (btn && btn.offsetParent !== null) cancelBtn = btn;

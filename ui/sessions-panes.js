@@ -64,10 +64,6 @@ import { setSoloView } from './ui-wiring.js';
 import { clearReadout, refreshReadoutTotals } from './frame-readout.js';
 import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js';
 import { refreshIdSwitchPanel } from './id-switch-modal.js';
-// `autoAssignState` is a mutable binding tracked via ESM live binding.
-// The cycle (identity-assignment imports panelRenderers from here) is
-// hoist-safe because both reads are inside function bodies.
-import { autoAssignState } from './identity-assignment.js';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
 import { setup3DViewport } from '../pose/initialization.js';
@@ -355,8 +351,8 @@ const _paneManagerImpl = {
             if (activeViewName && interactionManager) {
                 interactionManager.lastInteractedView = activeViewName;
             }
-            // Highlight corresponding camera in 3D viewer (skip during auto-assignment)
-            if (viewport3d && !autoAssignState) {
+            // Highlight corresponding camera in 3D viewer
+            if (viewport3d) {
                 viewport3d.highlightCamera(activeViewName);
                 viewport3d.selectedCamera = activeViewName;
             }

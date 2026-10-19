@@ -194,7 +194,7 @@ export function frameEvictionBlocker(session, frameIdx, fg, refs) {
  * `sweepTriangulateAllFrames` drops project-wide before it starts. The draw
  * path (`fillLazyReprojections`) re-derives them when the frame is shown.
  */
-function dropDerivedReprojections(session, frameIdx, triangulationResults) {
+export function dropDerivedReprojections(session, frameIdx, triangulationResults) {
     var groups = session.instanceGroups ? session.instanceGroups.get(frameIdx) : null;
     if (groups) {
         for (var gi = 0; gi < groups.length; gi++) {
