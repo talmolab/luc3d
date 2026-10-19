@@ -17,7 +17,7 @@
  * requires the shared accessors rather than array indexing.
  */
 
-import { points3dNodeCount, getPoint3d } from '../pose/pose-data.js?v=81505277b575';
+import { points3dNodeCount, getPoint3d } from '../pose/pose-data.js?v=571770b4d9d3';
 
 // ============================================
 // Deferred work (hidden viewport)
@@ -337,6 +337,16 @@ export class Viewport3D {
          *  thunk, not 10,000. */
         this._deferred = new Map();
 
+        /** @type {boolean} The last `fitToScene` framed no skeleton (cameras
+         *  and origin only) and nothing has moved the view since, so the first
+         *  `updateSkeleton` that adds node markers re-fits once. Without this a
+         *  fit taken on an empty frame — a lazy project whose current frame
+         *  has no 3D yet, or a session opened before triangulation — framed the
+         *  camera rig alone, and skeletons standing ~1 m off it were out of
+         *  view until View ▸ Fit 3D to Scene. Cleared by any user orbit / pan /
+         *  zoom (`start`), a camera view, or Reset Camera. */
+        this._refitWhenSkeletonAppears = false;
+
         this._init();
     }
 
@@ -369,6 +379,9 @@ export class Viewport3D {
         // Declutter: check distance to the viewed camera on orbit changes. Lives
         // here, not in `_setupCameraPicking`, so a rebuild keeps it.
         controls.addEventListener('change', () => { this._checkDeclutter(); });
+        // 'start' fires only for user input (drag, wheel, keys) — once the user
+        // has moved the view, a skeleton appearing must not yank it away.
+        controls.addEventListener('start', () => { this._refitWhenSkeletonAppears = false; });
         // What the orbit axis actually is, as opposed to what `camera.up` says
         // — `_rebaseControls` compares against this to know when a rebuild is
         // the only way to move the axis.
@@ -1225,6 +1238,7 @@ export class Viewport3D {
      * @param {string} cameraName - Name of the camera to match
      */
     animateToCameraPerspective(cameraName) {
+        this._refitWhenSkeletonAppears = false;
         // Find the camera object
         let cam = null;
         for (let i = 0; i < this.cameras.length; i++) {
@@ -1406,6 +1420,7 @@ export class Viewport3D {
         const showEdges = this.showSkeletonEdges && edgeRadius > 0;
         const dir = pool.tmpDir, yAxis = pool.yAxis;
         let slotIdx = 0;
+        let nodeMarkers = 0;
 
         for (let g = 0; g < instanceGroups.length; g++) {
             const group = instanceGroups[g];
@@ -1481,6 +1496,7 @@ export class Viewport3D {
                     nodeObj.scale.setScalar(scale);
                     nodeObj.name = 'node_' + (nodes[n] || n);
                     instanceGroup3D.add(nodeObj);
+                    nodeMarkers++;
                 }
             }
 
@@ -1532,6 +1548,12 @@ export class Viewport3D {
         }
 
         if (_dbg3d) console.log('[3D] updateSkeleton complete:', this._skeletonGroup.children.length, 'instance groups in scene');
+
+        // First skeleton since a fit that framed none: fit once more so it is
+        // in view (`fitToScene` measures exactly these `node_*` markers).
+        if (this._refitWhenSkeletonAppears && nodeMarkers > 0 && !this._viewingCamera) {
+            this.fitToScene();
+        }
     }
 
     /**
@@ -2830,6 +2852,7 @@ export class Viewport3D {
      * Positions the camera to see all camera pyramids and the skeleton.
      */
     resetCamera() {
+        this._refitWhenSkeletonAppears = false;
         // Relative to the DISPLAYED frame: with a user origin applied, "the
         // default view" means the same angle onto their grid, not onto the
         // calibration's.
@@ -2888,6 +2911,7 @@ export class Viewport3D {
                 }
             });
         }
+        const skeletonPoints = points.length - this.cameras.length;
 
         // Annotated planes (View ▸ Define Planes) count too — they are the
         // reference geometry the mode exists to create, so "Fit 3D to Scene"
@@ -2913,6 +2937,10 @@ export class Viewport3D {
         points.push([pivot.x, pivot.y, pivot.z]);
 
         if (points.length === 0) return;
+
+        // A fit with no skeleton in it is provisional — see
+        // `_refitWhenSkeletonAppears`.
+        this._refitWhenSkeletonAppears = skeletonPoints === 0;
 
         // Compute bounding sphere center and radius
         let cx = 0, cy = 0, cz = 0;

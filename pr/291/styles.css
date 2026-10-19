@@ -175,6 +175,16 @@ body {
   cursor: pointer;
 }
 
+/* The deployed release, right of Settings (ui/version-label.js). Selectable,
+   unlike the rest of the menu bar: it is what a bug report needs to quote. */
+.menu-bar-version {
+  padding: 4px 12px 4px 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  user-select: text;
+}
+
 .menu-dropdown {
   display: none;
   position: absolute;
@@ -1360,7 +1370,8 @@ body {
   color: var(--text-muted);
 }
 
-/* Multi-frame assignment modal */
+/* Shared modal overlay + card. Named for the multi-frame assignment modal it
+   was first written for; every LUCID dialog uses it now. */
 .multi-frame-modal-overlay {
   position: fixed;
   inset: 0;
@@ -1592,6 +1603,110 @@ body {
   font-size: 12px;
   color: var(--text-secondary);
   min-height: 14px;
+}
+
+/* Track All / Track Frame's first-use dialog (ui/track-setup-modal.js), and
+   Track Frame Range (ui/track-range-modal.js), which shows the same weight grid:
+   the animal count, then the node weights in the Tracking Wizard's own rows,
+   narrower here so a typical skeleton fits in three columns with its names
+   whole ("RightForepaw" was cut off at 560px). The card is the
+   ONE scroller, for a long skeleton on a short window; the weight grid never
+   scrolls by itself (no scroll-within-scroll). */
+.multi-frame-modal.track-setup-modal,
+.multi-frame-modal.track-range-modal {
+  max-width: 620px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+/* Continue stays in view while the card scrolls (as in the Track All summary). */
+.track-setup-modal .modal-actions,
+.track-range-modal .modal-actions {
+  position: sticky;
+  bottom: -24px;
+  margin-bottom: -24px;
+  padding: 10px 0 24px;
+  background: var(--bg-secondary);
+}
+
+.track-setup-animals {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.track-setup-animals input {
+  width: 72px;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  font-size: 13px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+.track-setup-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.track-setup-section-title {
+  margin: 20px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.multi-frame-modal p.track-setup-note {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+
+.multi-frame-modal p.track-setup-later {
+  margin: 12px 0 0;
+}
+
+.settings-node-weight-list.track-setup-weights {
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  column-gap: 16px;
+}
+
+.track-setup-weights .settings-num-input {
+  width: 56px;
+}
+
+/* Track All's image ID-switch check: its switch, then (while on) its options
+   in the same compact grid as the node weights. */
+.track-setup-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  margin-bottom: 4px;
+}
+
+.settings-node-weight-list.track-setup-options {
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  column-gap: 16px;
+}
+
+.track-setup-options[hidden] {
+  display: none;
+}
+
+.track-setup-options .settings-num-input {
+  width: 56px;
+}
+
+.track-setup-options .track-setup-switch-row {
+  margin: 0;
+  font-size: 12px;
 }
 
 /* Align Views to References modal (#226). The table grows with the camera
@@ -3832,7 +3947,7 @@ input[type="range"]::-moz-range-track {
   display: none;
 }
 
-/* Auto-assignment toast — centered in menu bar with highlight */
+/* Assignment toast (manual assignment, Edit Group) — centered in menu bar with highlight */
 .auto-assign-toast {
   position: absolute;
   left: 50%;
@@ -3867,22 +3982,6 @@ input[type="range"]::-moz-range-track {
   background: var(--accent-dim);
   color: var(--accent);
   border-color: var(--accent);
-}
-
-/* Red highlight for auto-assignment view selection */
-.video-cell.auto-assign-selected:not(.zoomed) .canvas-wrapper {
-  outline: 3px solid #ef4444;
-  outline-offset: -3px;
-}
-
-/* When zoomed: red highlight via pseudo-element overlay */
-.video-cell.auto-assign-selected.zoomed::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border: 3px solid #ef4444;
-  pointer-events: none;
-  z-index: 18;
 }
 
 /* Ghost line shown during split handle drag */
@@ -6249,6 +6348,21 @@ kbd {
   filter: brightness(1.15);
 }
 
+/* The macOS folder-confirm tip (ui/folder-confirm-tip.js). */
+.folder-tip-modal .plane-confirm-message + .plane-confirm-message {
+  margin-top: 8px;
+}
+
+.folder-tip-dontshow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
 /* ============================================
    Set Angle Between Two Planes (ui/plane-angle.js)
    ============================================ */
@@ -7228,6 +7342,10 @@ div.track-summary-steps { padding-left: 0; }
 .identity-gallery-tile.is-empty { visibility: hidden; }
 .identity-gallery-tile figcaption { font-size: 10px; color: var(--text-muted); text-align: center; font-variant-numeric: tabular-nums; margin-top: 2px; }
 .identity-gallery-tile:hover canvas { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* the hover preview of a sample: in the overlay (fixed), beside the tile; never takes the pointer */
+.identity-gallery-zoom { display: none; position: fixed; z-index: 1; pointer-events: none; padding: 6px; border-radius: 6px; background: var(--bg-primary); border: 1px solid var(--border-color); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); }
+.identity-gallery-zoom-img { display: block; border-radius: 3px; border-top: 3px solid transparent; }
+.identity-gallery-zoom-caption { margin-top: 4px; max-width: 320px; font-size: 11px; color: var(--text-secondary); text-align: center; font-variant-numeric: tabular-nums; }
 .identity-gallery-map { position: relative; min-height: 88px; }
 .identity-gallery-map-canvas { display: block; border-radius: 3px; }
 .identity-gallery-map-tip { display: none; position: absolute; pointer-events: none; font-size: 10px; padding: 1px 4px; border-radius: 3px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-color); font-variant-numeric: tabular-nums; }

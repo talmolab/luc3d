@@ -8,9 +8,9 @@
  * ES module. Exports `Timeline`.
  */
 
-import { getTrackColor, NULL_ID_COLOR } from './overlays.js?v=81505277b575';
-import { someValidPoint3d, points3dNodeCount, hasPoint3d } from '../pose/pose-data.js?v=81505277b575';
-import { isCameraTracked } from './settings.js?v=81505277b575';
+import { getTrackColor, NULL_ID_COLOR } from './overlays.js?v=571770b4d9d3';
+import { someValidPoint3d, points3dNodeCount, hasPoint3d } from '../pose/pose-data.js?v=571770b4d9d3';
+import { isCameraTracked } from './settings.js?v=571770b4d9d3';
 
 /**
  * Parse a `session.frameIdentityMap` key ("frameIdx:camName:trackIdx") into
@@ -573,7 +573,7 @@ export class Timeline {
      * arrive before it. For a change to the timeline's data that is not itself
      * followed by a redraw (`setFrameModified`): frame steps no longer repaint
      * the canvas, so nothing else would show it. Synchronous where there is no
-     * `requestAnimationFrame` (Node test sandboxes).
+     * `requestAnimationFrame`.
      * @private
      */
     _requestRedraw() {

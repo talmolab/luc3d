@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=81505277b575';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=571770b4d9d3';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -204,6 +204,13 @@ export function setNodeWeights(map) {
     }
     _settings.nodeWeights = next;
     persist();
+}
+
+// Commit SOME nodes' weights (Track All's first-use dialog, Track Frame Range),
+// keeping every other stored override: weights are keyed by node name per
+// browser, so another skeleton's must survive an edit to this one's.
+export function updateNodeWeights(map) {
+    setNodeWeights(Object.assign(getNodeWeights(), map || {}));
 }
 
 // --- Camera tracking inclusion ---------------------------------------------
@@ -516,6 +523,12 @@ export function setTrackingThresholds(map) {
     }
     _settings.trackingThresholds = next;
     persist();
+}
+
+// Commit SOME thresholds (Track All's first-use dialog: the image check's
+// settings), keeping every other stored override.
+export function updateTrackingThresholds(map) {
+    setTrackingThresholds(Object.assign({}, _settings.trackingThresholds, map || {}));
 }
 
 // --- Keyboard catalog ------------------------------------------------------

@@ -29,6 +29,7 @@
  * browser lock (scripts/browser-lock.mjs).
  */
 import { chromium } from 'playwright';
+import { answerTrackSetup } from './fixtures/track-setup.js';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -57,7 +58,8 @@ try {
     const page = await browser.newPage({ viewport: { width: 1600, height: 950 } });
     await page.addInitScript(() => { delete window.showOpenFilePicker; delete window.showDirectoryPicker; delete window.showSaveFilePicker; });
     page.on('pageerror', e => log('[pageerror] ' + String(e).slice(0, 300)));
-    page.on('dialog', d => { log('[dialog] ' + d.message().slice(0, 100)); d.accept(N); });
+    page.on('dialog', d => { log('[dialog] ' + d.message().slice(0, 100)); d.accept(); });
+    await answerTrackSetup(page, N);   // Track All's first-run dialog: the animal count
     page.on('console', m => { const t = m.text(); if (/TrackAll|id-switch|error/i.test(t)) log('[console] ' + t.slice(0, 200)); });
     if (process.env.ROUTE_CHECK) {
         const body = fs.readFileSync(process.env.ROUTE_CHECK, 'utf8');

@@ -16,11 +16,12 @@
  *   { type: 'cameras', cameras: [{ name, matrix, dist, rvec, tvec, size, R, Rt, P }] }
  *   { type: 'solve', id, jobs: [{ camNames, insts: [{ xy, nulled } | null], options }] }
  * Messages out:
- *   { type: 'solved', id, results: [triangulateAndReproject result] }  (points3d transferred)
+ *   { type: 'solved', id, results: [triangulateAndReproject result] }  (points3d transferred;
+ *     `triangulationSummary(result)` when the job's options say `summaryOnly`)
  *   { type: 'error', id, message }
  */
-import { Camera, Instance } from './pose-data.js?v=81505277b575';
-import { triangulateAndReproject } from './triangulation-core.js?v=81505277b575';
+import { Camera, Instance } from './pose-data.js?v=571770b4d9d3';
+import { triangulateAndReproject, triangulationSummary } from './triangulation-core.js?v=571770b4d9d3';
 
 let cameras = new Map();
 
@@ -48,10 +49,11 @@ function solveJob(job) {
     // triangulateAndReproject's silent DLT default — see
     // tests/test-triangulation-method-propagation.mjs).
     const o = job.options, method = o.method;
-    return triangulateAndReproject(group, cams, {
+    const r = triangulateAndReproject(group, cams, {
         method: method, includedCameras: o.includedCameras,
         reprojErrorThreshold: o.reprojErrorThreshold, triangulateOnly: o.triangulateOnly,
     });
+    return o.summaryOnly ? triangulationSummary(r) : r;
 }
 
 self.onmessage = (e) => {

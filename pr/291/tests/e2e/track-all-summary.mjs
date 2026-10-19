@@ -19,6 +19,12 @@
  *     run after it was closed is reported there (not "Not run", and no longer
  *     offered); after Clear both read "Not run" and the button stays; a session
  *     with no Track All has no button.
+ *  2c. A check started from the box's own buttons comes BACK to the box when it
+ *     ends, instead of leaving the user on the ID Switches tab: "Check by body
+ *     size" (the real menu item) reopens it with that row filled in and its time;
+ *     "Check by images…" cancelled with Esc reopens it reading "Cancelled" and
+ *     still offering the check; run again, it reopens with the image row filled
+ *     in and "Neither check flagged an ID switch." The tab is never opened.
  *  3. Enter presses the focused primary: the box closes and Triangulate All runs.
  *  4. A second Track All replaces the box rather than stacking another.
  *  5. Track Frame Range does not open it.
@@ -28,6 +34,9 @@
  * Fixture C (labels swapped after one encounter, as in track-auto-size-switch-check):
  *  7. With a switch found, the primary is "Review switches": it closes the box,
  *     shows the ID Switches tab and lands on the first flagged switch.
+ *  8. With neither check run by the pass, the box's "Check by images…" finds the
+ *     switch: the box comes back saying so, with "Review switches" as its primary
+ *     (the tab still shut until that is pressed).
  *
  * Run: node tests/e2e/track-all-summary.mjs
  */
@@ -35,6 +44,7 @@ import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { answerTrackSetup } from './fixtures/track-setup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -51,7 +61,7 @@ try {
     const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
-    page.on('dialog', d => d.accept('2'));   // Track All asks for the animal count the first time
+    await answerTrackSetup(page, 2);   // Track All asks for the animal count the first time
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
 
@@ -87,6 +97,30 @@ try {
             AS.state.triangulationResults = new Map();
             if (AS.timeline) { AS.timeline.setTotalFrames(FRAMES); AS.timeline.setData(s); }
             return FRAMES;
+        };
+        // A stand-in for the image model (no GPU, no download): a seeded appearance vector per animal plus
+        // noise, from 4 cameras. The animal is the fixture's truth (`_animal`, Fixture C) or else the identity.
+        // While `__gate` is a pending promise it waits before the check starts, so a test can cancel it.
+        window.__gate = null;
+        window.__fakeImg = async () => {
+            if (window.__gate) await window.__gate;
+            let seed = 11; const r = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+            const g = () => Math.sqrt(-2 * Math.log(r() + 1e-12)) * Math.cos(2 * Math.PI * r());
+            const proto = new Map(), cams = ['c0', 'c1', 'c2', 'c3'];
+            const look = (grp) => { const key = grp._animal != null ? grp._animal : 'id' + grp.identityId;
+                if (!proto.has(key)) proto.set(key, Float32Array.from({ length: 64 }, g)); return proto.get(key); };
+            return { views: cams, getEmbeddings: async (frame, items) => items.map(it => { const p = look(it.group);
+                return cams.map(cam => ({ camera: cam, vector: Float32Array.from(p, v => v + 1.2 * g()) })); }) };
+        };
+        // Tracks ▸ Check ID Switches (Images) wired as ui/ui-wiring.js wires it, with the stand-in model: the
+        // summary's button clicks the menu item, so this is the only part of that path a test replaces.
+        window.__useFakeImageMenu = async (on) => {
+            const M = await import('/ui/id-switch-modal.js');
+            const item = document.getElementById('menuCheckImageSwitches');
+            if (!on) { if (window.__realImageMenu) item.replaceWith(window.__realImageMenu); window.__realImageMenu = null; return; }
+            const copy = item.cloneNode(true);
+            copy.addEventListener('click', () => { window.__imgDone = M.runIdSwitchChecks({ image: true, inject: { createEmbedder: window.__fakeImg } }); });
+            window.__realImageMenu = item; item.replaceWith(copy);
         };
     });
 
@@ -202,6 +236,64 @@ try {
     await page.click('#idSwitchTrackSummary');
     s = await summary();
     check(s.checks.every(c => c.text === 'Not run'), `after Clear, both checks read "Not run": ${JSON.stringify(s.checks.map(c => c.text))}`);
+
+    // ---- 2c. a check run from the box comes back to the box ------------------------------------
+    check(JSON.stringify(s.buttons) === JSON.stringify(['Check by body size', 'Check by images…', 'Close', 'Triangulate All']),
+        `precondition: the reopened box offers both checks (${JSON.stringify(s.buttons)})`);
+    const onTab = () => page.evaluate(() => !!document.querySelector('#tabIdSwitches.active'));
+    const leaveTab = () => page.evaluate(() => document.querySelector('.panel-tab:not([data-tab="tabIdSwitches"])').click());
+    // whether the box came back, with `cue`'s row no longer reading `was` (before this, the tab opened instead)
+    const backWith = (cue, was) => page.waitForFunction(([c, w]) => {
+        const r = document.querySelector('#trackSummaryOverlay .track-summary-check[data-cue="' + c + '"] .track-summary-check-text');
+        return !!r && r.textContent !== w;
+    }, [cue, was], { timeout: 30000 }).then(() => true, () => false);
+    await leaveTab();
+    // body size: the real menu item, the real check
+    await page.click('#trackSummaryOverlay [data-action="sizeCheck"]');
+    check(await backWith('size', 'Not run'), 'the box comes back when "Check by body size" ends');
+    s = await summary();
+    let szc = s.checks.find(c => c.cue === 'size'), imc = s.checks.find(c => c.cue === 'image');
+    check(s.count === 1 && szc.text === 'No close encounters to check' && /is-clear/.test(szc.cls) && /^(<0\.1|\d+(\.\d)?) s$/.test(szc.time),
+        `"Check by body size" ends back in the box, its row filled in with its time: "${szc.text}" (${szc.time})`);
+    check(imc.text === 'Not run' && JSON.stringify(s.buttons) === JSON.stringify(['Check by images…', 'Close', 'Triangulate All']),
+        `…the image check still not run and still offered (${JSON.stringify(s.buttons)})`);
+    check(JSON.stringify(s.ids) === JSON.stringify(first.ids) && s.stats[1] === first.stats[1] && s.stats[3] === first.stats[3],
+        '…with the counts and tracking time re-shown');
+    check(!(await onTab()), '…and the ID Switches tab was not opened');
+    // images, cancelled: the box comes back saying so, and still offers it
+    await page.evaluate(async () => { await window.__useFakeImageMenu(true);
+        window.__gate = new Promise(res => { window.__openGate = res; }); });
+    await page.click('#trackSummaryOverlay [data-action="imageCheck"]');
+    await page.waitForSelector('.id-switch-progress', { timeout: 10000 });
+    check((await summary()).count === 0, 'while the image check runs the box is closed (its progress dialog is up)');
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => { window.__gate = null; window.__openGate(); return window.__imgDone; });
+    check(await backWith('image', 'Not run'), 'the box comes back when the image check is cancelled');
+    s = await summary();
+    imc = s.checks.find(c => c.cue === 'image');
+    check(s.count === 1 && imc.text === 'Cancelled' && /is-cancelled/.test(imc.cls),
+        `cancelled with Esc, the box comes back reading "${imc.text}"`);
+    check(s.buttons.includes('Check by images…') && !(await onTab()), `…still offering the check, the tab not opened (${JSON.stringify(s.buttons)})`);
+    // images, run to the end
+    await page.click('#trackSummaryOverlay [data-action="imageCheck"]');
+    check(await backWith('image', 'Cancelled'), 'the box comes back when "Check by images…" ends');
+    await page.evaluate(() => window.__imgDone);
+    s = await summary();
+    imc = s.checks.find(c => c.cue === 'image');
+    check(s.count === 1 && imc.text === 'No close encounters to check' && /is-clear/.test(imc.cls) && /s$/.test(imc.time),
+        `"Check by images…" ends back in the box, its row filled in: "${imc.text}" (${imc.time})`);
+    check(s.headline === 'Neither check flagged an ID switch.' && JSON.stringify(s.buttons) === JSON.stringify(['Close', 'Triangulate All']),
+        `…the next step follows from it ("${s.headline}", ${JSON.stringify(s.buttons)})`);
+    check(s.focused === 'trackSummaryPrimary' && !(await onTab()), '…its primary focused, and the tab not opened');
+    check(/^Check ID Switches \(images\): nothing flagged/.test(await statusText()), 'the status line still reports the check');
+    await page.keyboard.press('Escape');
+    // reopened from the tab, it says the same
+    await page.evaluate(async () => (await import('/ui/id-switch-modal.js')).openIdSwitchPanel());
+    await page.click('#idSwitchTrackSummary');
+    s = await summary();
+    check(JSON.stringify(s.checks.map(c => c.text)) === JSON.stringify(['No close encounters to check', 'No close encounters to check']),
+        `reopened from the tab, it reports both checks the same way (${JSON.stringify(s.checks.map(c => c.text))})`);
+    await page.evaluate(() => window.__useFakeImageMenu(false));
     await page.keyboard.press('Escape');
     // a session that never ran Track All has no button
     await page.evaluate(async () => { await window.__buildTrackable('noTrackAll', { frames: 30 });
@@ -250,7 +342,7 @@ try {
     await page.evaluate(() => { const o = document.querySelector('.settings-overlay'); if (o) o.remove(); });
 
     // ---- 7. a switch found -> Review switches ------------------------------------------------
-    const fx = await page.evaluate(async () => {
+    await page.evaluate(() => { window.__buildSwap = async () => {
         const pd = await import('/pose/pose-data.js'); const AS = await import('/ui/app-state.js');
         const NODES = ['Nose', 'Ear_R', 'Ear_L', 'TTI', 'TailTip', 'Head', 'Trunk', 'Tail_0', 'Tail_1', 'Tail_2',
             'Shoulder_left', 'Shoulder_right', 'Haunch_left', 'Haunch_right', 'Neck'];
@@ -277,12 +369,16 @@ try {
                 const f = d < 40 ? d / 40 : d <= 60 ? 1 : 1 - (d - 60) / 40;
                 for (const [k, side] of [[a, -1], [b, 1]]) pos[k] = [home[k][0] + f * (mid[0] + side * 10 - home[k][0]), home[k][1] + f * (mid[1] - home[k][1])]; }
             session.instanceGroups.set(t * STEP, [0, 1, 2].map(k => { const g = new pd.InstanceGroup(gid++, session.identities[label[k]].id);
-                g.points3d = pose(SCALES[k], pos[k][0], pos[k][1], (t / 50 + k) % (2 * Math.PI)); return g; }));
+                g.points3d = pose(SCALES[k], pos[k][0], pos[k][1], (t / 50 + k) % (2 * Math.PI)); g._animal = k; return g; }));
             if (t === events[SWAP].t0 + 60) { const [a, b] = events[SWAP].pair; [label[a], label[b]] = [label[b], label[a]]; }
         }
         AS.state.sessions = [session]; AS.state.activeSessionIdx = 0; AS.state.session = session;
         AS.state.totalFrames = T * STEP; AS.state.currentFrame = 0; AS.state.fps = 60;
         if (AS.timeline) { AS.timeline.setTotalFrames(T * STEP); AS.timeline.setData(session); }
+        return { session, T };
+    }; });
+    const fx = await page.evaluate(async () => {
+        const { session, T } = await window.__buildSwap();
         // What runTrackingPass does after the tracker: the automatic checks, then the summary.
         const M = await import('/ui/id-switch-modal.js');
         const res = await M.runSizeSwitchCheck({ auto: true, statusPrefix: 'Assigned 3 identities' });
@@ -309,6 +405,33 @@ try {
     check((await summary()).count === 0, 'Review switches closes the summary');
     check(after.tab, 'and shows the ID Switches tab');
     check(after.current && after.frame === fx.firstGo, `and lands on the first switch (frame ${after.frame}, want ${fx.firstGo})`);
+
+    // ---- 8. the box's "Check by images…" finds the switch -> back to the box, Review switches ----
+    await page.evaluate(async () => {
+        const { session, T } = await window.__buildSwap();
+        (await import('/ui/id-switch-modal.js')).clearIdSwitchResults(session);
+        // As Track All leaves it when neither check runs on its own
+        const TS = await import('/ui/track-summary.js'), TSM = await import('/ui/track-summary-modal.js');
+        const opts = { frames: T, animals: 3 };
+        const checks = { size: TS.describeSwitchCheck(false, null, 3), image: TS.describeSwitchCheck(false, null, 3) };
+        TSM.rememberTrackSummary(session, opts, checks, 3);
+        TSM.showTrackSummaryModal(TS.summarizeTrackedIdentities(session, opts), checks, { session });
+        await window.__useFakeImageMenu(true);
+    });
+    await leaveTab();
+    await page.click('#trackSummaryOverlay [data-action="imageCheck"]');
+    check(await backWith('image', 'Not run'), 'the box comes back when the image check that found the switch ends');
+    await page.evaluate(() => window.__imgDone);
+    s = await summary();
+    const im8 = s.checks.find(c => c.cue === 'image');
+    check(im8 && /^1 possible switch in \d+ close encounters$/.test(im8.text) && /is-found/.test(im8.cls),
+        `the image check run from the box comes back reporting the switch: "${im8 && im8.text}"`);
+    check(s.headline === 'Review the possible ID switches.' && s.primary === 'Review switches' && s.focused === 'trackSummaryPrimary',
+        `…and the next step is to review it ("${s.headline}" / "${s.primary}")`);
+    check(!(await onTab()), '…with the ID Switches tab still shut');
+    await page.click('#trackSummaryPrimary');
+    check((await summary()).count === 0 && await onTab(), 'Review switches then closes the box and shows the tab');
+    await page.evaluate(() => window.__useFakeImageMenu(false));
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

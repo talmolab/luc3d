@@ -44,6 +44,7 @@
  * Run: node tests/e2e/single-camera-track-all.mjs
  */
 import { chromium } from 'playwright';
+import { answerTrackSetup } from './fixtures/track-setup.js';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,7 +64,7 @@ try {
     const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push(String(e).slice(0, 300)));
-    page.on('dialog', d => d.accept('3'));   // Track All asks for the animal count
+    await answerTrackSetup(page, 3);   // Track All's first-run dialog: the animal count
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
 

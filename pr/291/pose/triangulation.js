@@ -9,26 +9,26 @@
 
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
-         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d } from './pose-data.js?v=81505277b575';
+         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d } from './pose-data.js?v=571770b4d9d3';
 // The Jacobi eigensolver and the least-squares plane fit live in
 // `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
 // importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
 // re-exported unchanged, because every existing caller and test reads it here.
-import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=81505277b575';
+import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=571770b4d9d3';
 export { fitPlaneToPoints3d };
-import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=81505277b575';
+import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=571770b4d9d3';
 // Pass 3i-2: triangulation orchestration moved out of app.js
-import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=81505277b575';
-import { updateTriangulationBadge } from '../ui/info-panel.js?v=81505277b575';
-import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=81505277b575';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=81505277b575';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=81505277b575';
-import { createGroupSolver } from './triangulation-pool.js?v=81505277b575';
-import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=81505277b575';
+import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=571770b4d9d3';
+import { updateTriangulationBadge } from '../ui/info-panel.js?v=571770b4d9d3';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=571770b4d9d3';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=571770b4d9d3';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=571770b4d9d3';
+import { createGroupSolver } from './triangulation-pool.js?v=571770b4d9d3';
+import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=571770b4d9d3';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
-         LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=81505277b575';
+         dropDerivedReprojections, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=571770b4d9d3';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from './initialization.js?v=81505277b575';
+import { update3DViewport } from './initialization.js?v=571770b4d9d3';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -43,31 +43,27 @@ import {
     reprojectPoint, reprojectPoints, reprojectPointCamera, reprojectPointsCamera,
     cameraDepth,
     computeReprojectionError, computeReprojectionErrors, computeMeanReprojectionError,
-    invert3x3, triangulateAndReproject, __triangulationKernelsForTest,
+    invert3x3, triangulateAndReproject, reprojectStoredPoints3d, __triangulationKernelsForTest,
     setTriangulationSettingsHooks,
     hungarianAlgorithm, cameraCenter, backProjectToRay, backProjectToRays,
     pointToRayDistance, pointsToRayDistances,
     computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
-} from './triangulation-core.js?v=81505277b575';
+} from './triangulation-core.js?v=571770b4d9d3';
 export {
     triangulatePointDLT, triangulatePoints, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,
     reprojectPoint, reprojectPoints, reprojectPointCamera, reprojectPointsCamera,
     cameraDepth,
     computeReprojectionError, computeReprojectionErrors, computeMeanReprojectionError,
-    invert3x3, triangulateAndReproject, __triangulationKernelsForTest,
+    invert3x3, triangulateAndReproject, reprojectStoredPoints3d, __triangulationKernelsForTest,
     // the cross-view tracker's geometry (moved to the core so the tracker runs in a worker)
     hungarianAlgorithm, cameraCenter, backProjectToRay, backProjectToRays,
     pointToRayDistance, pointsToRayDistances,
     computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
 };
 // The core reads these two settings through hooks (it cannot import ui/settings.js
-// and stay worker-loadable). `typeof` keeps the flat-script test sandbox working,
-// where ui/settings.js is not loaded.
-setTriangulationSettingsHooks({
-    isCameraTracked: typeof isCameraTracked === 'function' ? isCameraTracked : null,
-    getTrackingThreshold: typeof getTrackingThreshold === 'function' ? getTrackingThreshold : null,
-});
+// and stay worker-loadable).
+setTriangulationSettingsHooks({ isCameraTracked, getTrackingThreshold });
 
 /**
  * Compute mean Euclidean distance between two sets of 2D keypoints.
@@ -1091,6 +1087,13 @@ export function storeReprojectedInstances(group, triangulationResult, allCameras
  *
  * Only reprojections are added. The 3D, the per-camera errors and the mean are
  * untouched: a camera with no instance has no observation to compare against.
+ *
+ * No bulk sweep calls it any more: Triangulate All, Triangulate Range and
+ * Group by Track keep only the 3D, and the display derives every camera's
+ * reprojection from it (`reprojectStoredPoints3d`). It stays as the statement
+ * of what those sweeps used to store, which the tests compare the derived
+ * state against (`tests/test-reproject-stored-3d.mjs`,
+ * `tests/e2e/triangulate-all-bounded-derived-state.mjs`).
  */
 export function reprojectIntoEveryCamera(reprojections, points3d, cameras) {
     if (!reprojections || !points3d || !cameras) return reprojections;
@@ -1113,8 +1116,9 @@ export function reprojectIntoEveryCamera(reprojections, points3d, cameras) {
  * own `occluded` array) per camera per group for the WHOLE project was a
  * major, provably-unneeded memory cost (nothing in the SLP save/export path
  * reads `reprojectedInstances`; only live 2D/3D display and the opt-in
- * "Save Reprojections" export do, and both can be served from the much
- * cheaper `.reprojections` raw-points object those sweeps still populate).
+ * "Save Reprojections" export do). Those sweeps now store no `.reprojections`
+ * either: the display fill (`ui/rendering.js`) sets it for the frames it
+ * shows, and Save Reprojections projects the stored 3D for the rest.
  * Single-frame paths (`triangulateCurrentFrame`, `reTriangulateGroup`) still
  * call `storeReprojectedInstances` eagerly — bounded cost, immediate feedback
  * while the user is actively working on that frame — so this only needs to
@@ -1278,8 +1282,8 @@ export class LazyFrameLoader {
             // Resolve worker URL relative to the document base so this works on
             // sub-path deployments (e.g. GitHub Pages /luc3d/, /luc3d/pr/N/) as well
             // as localhost. We use document.baseURI rather than `new URL(..., import.meta.url)`
-            // because triangulation.js is loaded via vm.Script in tests/run-node.js
-            // (classic-script context, where `import.meta` is a parse error). See ISSUES.md I-8.
+            // (first because a since-retired vm test runner could not parse `import.meta`).
+            // See ISSUES.md I-8.
             var workerUrl = new URL('loading/slp-import-worker.js?v=' + Date.now(), document.baseURI);
             var worker = new Worker(workerUrl, { type: 'module' });
             worker.onmessage = function (e) {
@@ -1957,9 +1961,23 @@ export function updateTimelineForFrame(frameIdx) {
  * and is responsible for DOM updates, post-loop redraws, and timeline syncs.
  *
  * `onProgress(completed, total)` is invoked per frame; pass it to drive a
- * progress bar.
+ * progress bar. `method` (`'ba'|'dlt'`) governs every solve; omitted is DLT, so
+ * callers name it (`tests/test-triangulation-method-propagation.mjs`) — the
+ * modal passes Settings ▸ Default Triangulation.
  *
- * Returns `{triangulated, totalGroups, totalErrors}`.
+ * Keeps only the 3D (`points3d`, `usedCameras`, `triangulationMethod`) and
+ * the error stats, as both Triangulate All paths do (see
+ * `sweepTriangulateAllFrames`' docstring). It used to keep every re-solved
+ * group's reprojections into every camera and every frame's per-camera errors
+ * in `state.triangulationResults` — ~52 KB per group on a 17-camera, 34-node
+ * project, and the range can be the whole project. A frame it re-solves has
+ * its derived state dropped (`dropDerivedReprojections`), so the draw path
+ * derives it again from the new 3D when the frame is shown; a frame outside
+ * the range, or one with no group it could solve, is left as it was.
+ *
+ * Returns `{triangulated, totalGroups, errSum, errN, frames}`: the frames and
+ * groups re-solved, the sum and count of their groups' mean errors (for the
+ * average), and the re-solved frame indices in order.
  */
 export async function triangulateMultiFrameInstances(startFrame, endFrame, onProgress, method) {
     method = (method === 'ba') ? 'ba' : 'dlt';
@@ -1967,9 +1985,9 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
     var session = state.session;
     var cameras = session.cameras;
     var completed = 0;
-    var triangulated = 0;
     var totalGroups = 0;
-    var totalErrors = [];
+    var errSum = 0, errN = 0;
+    var frames = [];
 
     // MEMORY / CORRECTNESS (luc3d #195): sweep the range through
     // `sweepLazyFrameWindows` so each frame's 2D is HYDRATED before it is
@@ -1982,7 +2000,7 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
     await sweepLazyFrameWindows(session, function (f) {
         var frameGroupsList2 = session.instanceGroups.get(f);
         if (!frameGroupsList2) return;
-        var frameResults = [];
+        var solvedAny = false;
 
         for (var gi = 0; gi < frameGroupsList2.length; gi++) {
             var group = frameGroupsList2[gi];
@@ -1991,37 +2009,22 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
             // `_triangulateGroupStep`).
             var step = _triangulateGroupStep(group, cameras, method);
             if (!step) continue;
-            var result = step.result;
-
-            // The solve covered the group's own cameras; reproject into the rest.
-            group.reprojections = reprojectIntoEveryCamera(result.reprojections, result.points3d, cameras);
-            // NOT storeReprojectedInstances here — this is a bulk sweep (the range
-            // can span the entire project); eagerly building a full Instance (+ its
-            // own `occluded` array) per camera per group here was a major memory
-            // cost never needed by SLP save/export. Display and export instead
-            // resolve on demand via getOrComputeReprojectedInstance.
             group.markClean();
             totalGroups++;
-
-            frameResults.push({
-                group: group,
-                points3d: result.points3d,
-                reprojections: result.reprojections,
-                errors: result.errors,
-                errorsUndistorted: result.errorsUndistorted,
-                meanError: result.meanError,
-                meanErrorUndistorted: result.meanErrorUndistorted,
-                method: result.method,
-            });
-
-            if (result.meanError != null) {
-                totalErrors.push(result.meanError);
+            solvedAny = true;
+            if (step.result.meanError != null) {
+                errSum += step.result.meanError;
+                errN++;
             }
         }
 
-        if (frameResults.length > 0) {
-            state.triangulationResults.set(f, frameResults);
-            triangulated++;
+        // The frame's reprojections and results were derived from the 3D just
+        // replaced. Dropped for EVERY group on the frame, not only the re-solved
+        // ones: the frame's results entry is one list, and the fill re-derives
+        // all of it (see the docstring).
+        if (solvedAny) {
+            dropDerivedReprojections(session, f, state.triangulationResults);
+            frames.push(f);
         }
         completed++;
     }, {
@@ -2030,7 +2033,7 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
         onProgress: function () { if (onProgress) onProgress(completed, totalFrames); },
     });
 
-    return { triangulated: triangulated, totalGroups: totalGroups, totalErrors: totalErrors };
+    return { triangulated: frames.length, totalGroups: totalGroups, errSum: errSum, errN: errN, frames: frames };
 }
 
 // ============================================
@@ -2051,10 +2054,6 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
  *      which is what an explicit user action on a brand-new group should honor.
  *      Never a bare `'dlt'` literal.
  *
- * `typeof` guard on the settings getter for the flat-script test harness
- * (`tests/run-node.js`), which does not resolve the ES import — same pattern as
- * `isCameraTracked` / `getTrackingThreshold` above.
- *
  * NOT used by `ui/rendering.js`'s lazy reprojection fill, deliberately. That
  * path re-derives reprojections for 3D it does NOT own and does not write back,
  * so it must REPRODUCE the existing solve (`=== 'ba' ? 'ba' : 'dlt'`); falling
@@ -2069,9 +2068,7 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
 export function resolveTriangulationMethod(group) {
     if (group && group.triangulationMethod === 'ba') return 'ba';
     if (group && group.triangulationMethod === 'dlt') return 'dlt';
-    var pref = (typeof getDefaultTriangulationMethod === 'function')
-        ? getDefaultTriangulationMethod() : 'dlt';
-    return pref === 'ba' ? 'ba' : 'dlt';
+    return getDefaultTriangulationMethod() === 'ba' ? 'ba' : 'dlt';
 }
 
 /**
@@ -2875,7 +2872,11 @@ async function _sweepLazyFrameWindowsHeld(session, onFrame, opts) {
  * `ensureLazyFrameData` has hydrated that frame's real 2D). So this sweep
  * stores only `points3d` (a flat Float64Array, ~191 MB total, the same
  * representation the file uses) plus `usedCameras`, and keeps scalar error
- * stats for the summary.
+ * stats for the summary. The eager path (`triangulateAllFrames`) stores exactly
+ * the same: it used to keep both, which on a 17-camera, 36,000-frame project
+ * was +1.9 GB and ran the renderer out of memory. Both ask the solver for
+ * `summaryOnly` results, so the workers do not send the per-camera arrays back
+ * either.
  *
  * Stale derived state IS cleared up front — that is the "wipe the previous
  * triangulations first" part, and it is safe precisely because it is derived.
@@ -2900,10 +2901,14 @@ function showSolverCpu(solver) {
     });
 }
 
-async function sweepTriangulateAllFrames(session, cameras, method) {
-    // Windowing/hydration/release all live in `sweepLazyFrameWindows`.
-
-    // Clear derived state project-wide before starting (see docstring).
+/**
+ * Drop every group's derived reprojection state and every frame's
+ * `state.triangulationResults` entry — what both Triangulate All paths and
+ * Tracks ▸ Group by Track (`ui/export-modals.js`) do before they start (see
+ * `sweepTriangulateAllFrames`' docstring). The draw path re-derives a frame's
+ * when it is shown (`ui/rendering.js`'s reprojection fill).
+ */
+export function dropAllDerivedTriangulationState(session) {
     state.triangulationResults.clear();
     for (var [, clrGroups] of session.instanceGroups) {
         for (var cgi = 0; cgi < clrGroups.length; cgi++) {
@@ -2912,6 +2917,13 @@ async function sweepTriangulateAllFrames(session, cameras, method) {
             if (cg.reprojectedInstances && cg.reprojectedInstances.size) cg.reprojectedInstances.clear();
         }
     }
+}
+
+async function sweepTriangulateAllFrames(session, cameras, method) {
+    // Windowing/hydration/release all live in `sweepLazyFrameWindows`.
+
+    // Clear derived state project-wide before starting (see docstring).
+    dropAllDerivedTriangulationState(session);
 
     var stats = { frames: 0, groups: 0, skipped: 0, errSum: 0, errN: 0 };
     // Solves run on the worker pool (pose/triangulation-pool.js). Each job's
@@ -2919,7 +2931,7 @@ async function sweepTriangulateAllFrames(session, cameras, method) {
     // groups are still being solved; results are applied in submission order,
     // so `errSum` accumulates in the same order as the old inline loop.
     var loader = session.lazyLoader;
-    var solver = createGroupSolver(cameras, { method: method,
+    var solver = createGroupSolver(cameras, { method: method, summaryOnly: true,
         expectedGroups: loader && loader.nFrames ? loader.nFrames : session.instanceGroups.size });
     showSolverCpu(solver);
     function applyResult(group, prep, frameState, result) {
@@ -3020,6 +3032,9 @@ export async function triangulateAllFrames(method) {
     }
 
     markDirty();
+    // Derived state is not kept for the whole project (see
+    // `sweepTriangulateAllFrames`' docstring): only the 3D and the error stats.
+    dropAllDerivedTriangulationState(state.session);
     var methodLabel = triangulationMethodLabel(method);
     var stageOpts = function (detail) { return { detail: detail }; };
     showLoadingProgress('Triangulating', 0, frameIndices.length,
@@ -3027,10 +3042,10 @@ export async function triangulateAllFrames(method) {
     // Paint the 0% overlay before the first chunk starts.
     await yieldToPaint();
     var pacer = createProgressPacer();
-    var totalTriangulated = 0;
     var totalGroups = 0;
-    var totalErrors = [];
+    var errSum = 0, errN = 0;
     var framesApplied = 0;
+    var triangulatedFrames = [];
 
     // Solve on a worker pool (pose/triangulation-pool.js): the main thread
     // prepares each group (camera fix-ups, >=2-usable-views gate) and applies
@@ -3038,42 +3053,33 @@ export async function triangulateAllFrames(method) {
     // Callbacks run in submission order, so every store below happens in the
     // same order as the old inline loop. Frame count is the size proxy for the
     // inline-vs-pool decision (every frame here has >= 1 group).
-    var solver = createGroupSolver(cameras, { method: method, expectedGroups: frameIndices.length });
+    var solver = createGroupSolver(cameras, { method: method, summaryOnly: true, expectedGroups: frameIndices.length });
     showSolverCpu(solver);
 
     // Per-group apply: the old loop body after `_triangulateGroupStep`.
-    function applyGroupResult(group, prep, frameResults, result) {
+    //
+    // Only the 3D (and the error stats) is kept, as in the windowed sweep. This
+    // path used to keep every group's reprojections and every frame's
+    // per-camera errors in `state.triangulationResults`, "safe because this
+    // path handles projects small enough to be fully resident" — but resident
+    // is not small: on a 17-camera, 34-node, 36,000-frame project that was
+    // ~52 KB per group, +1.9 GB of the renderer's ~4 GB JS heap with one
+    // animal, and with three the renderer ran out of memory 55% of the way
+    // through. The draw path derives a frame's reprojections from its stored 3D
+    // when the frame is shown (`ui/rendering.js`'s reprojection fill), in
+    // 0.1-0.2 ms, and keeps them for a bounded number of frames.
+    function applyGroupResult(group, prep, frameState, result) {
         _applyGroupStep(group, prep, result);
-        // Eager-path-only: retain the derived reprojections. Safe here
-        // because this path handles projects small enough to be fully
-        // resident; the windowed sweep deliberately does NOT (~1.9 GB at
-        // 531,799 groups) and lets `drawAllOverlays` recompute per frame.
-        // The solve covered the group's own cameras; reproject into the rest.
-        group.reprojections = reprojectIntoEveryCamera(result.reprojections, result.points3d, cameras);
-        // NOT storeReprojectedInstances here — "Triangulate All" sweeps
-        // the WHOLE project; eagerly building a full Instance (+ its
-        // own `occluded` array) per camera per group here was a major
-        // memory cost never needed by SLP save/export (see
-        // getOrComputeReprojectedInstance's doc comment). Display and
-        // export instead resolve on demand from `.reprojections` above.
         group.markClean();
         totalGroups++;
-        frameResults.push({
-            group: group,
-            points3d: result.points3d,
-            reprojections: result.reprojections,
-            errors: result.errors,
-            errorsUndistorted: result.errorsUndistorted,
-            meanError: result.meanError,
-            meanErrorUndistorted: result.meanErrorUndistorted,
-            method: result.method,
-        });
+        frameState.any = true;
         if (result.meanError != null) {
-            totalErrors.push(result.meanError);
+            errSum += result.meanError;
+            errN++;
         }
     }
     function submitFrame(frameIdx, frameGroupsList) {
-        var frameResults = [];
+        var frameState = { any: false };
         for (var gi = 0; gi < frameGroupsList.length; gi++) {
             var group = frameGroupsList[gi];
             // Camera-name fixup + >=2-usable-view gate, shared with the windowed
@@ -3081,13 +3087,10 @@ export async function triangulateAllFrames(method) {
             var prep = _prepareGroupStep(group, cameras);
             if (!prep) continue;
             solver.submit(group, prep.groupCameras,
-                applyGroupResult.bind(null, group, prep, frameResults));
+                applyGroupResult.bind(null, group, prep, frameState));
         }
         solver.mark(function () {
-            if (frameResults.length > 0) {
-                state.triangulationResults.set(frameIdx, frameResults);
-                totalTriangulated++;
-            }
+            if (frameState.any) triangulatedFrames.push(frameIdx);
         });
     }
 
@@ -3136,17 +3139,16 @@ export async function triangulateAllFrames(method) {
     if (viewport3d) viewport3d.fitToScene();
 
     hideLoading();
-    var avgError = totalErrors.length > 0
-        ? (totalErrors.reduce(function (a, b) { return a + b; }, 0) / totalErrors.length).toFixed(2)
-        : 'N/A';
+    var avgError = errN > 0 ? (errSum / errN).toFixed(2) : 'N/A';
+    var totalTriangulated = triangulatedFrames.length;
     setStatus('Triangulated ' + totalTriangulated.toLocaleString('en-US') + ' frames via ' + triangulationMethodLabel(method) +
         ' (' + totalGroups.toLocaleString('en-US') + ' groups, avg error: ' + avgError + 'px)' + (reprojOnly ? REPROJ_ONLY_NOTE : ''), 'success');
     console.log('[triangulate-all] Done:', totalTriangulated, 'frames,', totalGroups, 'groups, avg error:', avgError);
 
     // Update timeline: mark frames with grouped UserInstances, refresh track bars
     if (timeline) {
-        for (var [fIdx] of state.triangulationResults) {
-            timeline.setFrameModified(fIdx, frameHasGroupedUserInstances(fIdx));
+        for (var tfi = 0; tfi < triangulatedFrames.length; tfi++) {
+            timeline.setFrameModified(triangulatedFrames[tfi], frameHasGroupedUserInstances(triangulatedFrames[tfi]));
         }
         timeline.refreshTracks(state.session, { cap: true });
     }
