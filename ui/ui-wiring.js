@@ -58,6 +58,8 @@ import { wireAnimalCountField } from './animal-count-field.js';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
+// The deployed release beside the menu bar's Settings button.
+import { showVersionLabel } from './version-label.js';
 import { onColorByChange, setColorByIdentity } from './color-by.js';
 import { TRAIL_PRESETS, MAX_TRAIL_FRAMES, trailPresetFor, trailLabel, trailFrames, trailRate,
          formatTrailSeconds, trailSecondsForFrames, parseTrailSeconds, parseTrailFrames,
@@ -82,7 +84,7 @@ import { setTrackSummaryNavigator } from './track-summary-modal.js';
 import {
     assignTrackToSelected, assignIdentityToSelected, propagateIdentityForward, swapAssignTrack,
     startEditGroup, finishEditGroup,
-    startManualAssignment, runSingleFrameTriangulation, showMultiFrameModal,
+    startManualAssignment,
     purgeTriangulationDataForGroup,
     swapTracks,
 } from './identity-assignment.js';
@@ -847,6 +849,7 @@ export function setupMenus() {
     document.getElementById('menuSettings').addEventListener('click', openSettings);
     document.getElementById('menuBarDocs').addEventListener('click', openDocs);
     document.getElementById('menuBarSettings').addEventListener('click', openSettings);
+    showVersionLabel();
 
     // Tracks ▸ Tracking Wizard: opens the same Settings modal focused on the
     // Tracking Wizard panel (node weights, etc.).
@@ -2388,7 +2391,7 @@ export function setupUI() {
             case 'Enter': {
                 // Click the visible Continue/Group button in any active modal/toast
                 var continueBtn = null;
-                ['mfContinue', 'tfContinue', 'autoAssignContinue', 'manualAssignGroup'].forEach(function (id) {
+                ['tfContinue', 'manualAssignGroup'].forEach(function (id) {
                     if (continueBtn) return;
                     var btn = document.getElementById(id);
                     if (btn && btn.offsetParent !== null) continueBtn = btn;
@@ -2410,7 +2413,7 @@ export function setupUI() {
             case 'Escape': {
                 // Click the visible Cancel button in any active modal/toast
                 var cancelBtn = null;
-                ['mfCancel', 'tfCancel', 'autoAssignCancel', 'manualAssignCancel'].forEach(function (id) {
+                ['tfCancel', 'manualAssignCancel'].forEach(function (id) {
                     if (cancelBtn) return;
                     var btn = document.getElementById(id);
                     if (btn && btn.offsetParent !== null) cancelBtn = btn;
@@ -3357,14 +3360,9 @@ export function setGridMode() {
     // including ones that have since been removed.
     if (savedGridLayout && !savedGridLayoutMatchesViews()) savedGridLayout = null;
     if (savedGridLayout && paneManager.api) {
-        // Restore saved grid layout
-        var savedZoom = {};
-        for (var zi = 0; zi < state.views.length; zi++) {
-            var zv = state.views[zi];
-            if (zv.zoom) {
-                savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY, native: !!zv.zoom.native };
-            }
-        }
+        // Restore saved grid layout. Each view's zoom rides through the rebuild
+        // on the view itself (`refreshPaneInteractions` keeps it and rescales
+        // its pan to the new cell).
         paneManager.clearAll();
         paneManager.api.fromJSON(savedGridLayout);
         // `fromJSON` builds panels behind `addVideoPanel`'s back, so the docked
@@ -3373,23 +3371,6 @@ export function setGridMode() {
         var emptyMsg = document.getElementById('videoDockEmpty');
         if (emptyMsg) emptyMsg.classList.add('hidden');
         refreshPaneInteractions();
-        // Restore zoom state
-        for (var ri = 0; ri < state.views.length; ri++) {
-            var rv = state.views[ri];
-            if (savedZoom[rv.name] && rv.zoom) {
-                rv.zoom.scale = savedZoom[rv.name].scale;
-                rv.zoom.offsetX = savedZoom[rv.name].offsetX;
-                rv.zoom.offsetY = savedZoom[rv.name].offsetY;
-                // A 1:1 scale belongs to the OLD canvas box: re-derive it. Keep
-                // the flag `initZoom` set from View ▸ Native Resolution, too.
-                rv.zoom.native = savedZoom[rv.name].native || !!rv.zoom.native;
-                rv.zoom.scaleY = undefined;
-                if (videoController) {
-                    if (rv.zoom.native) videoController.reapplyZoom(rv);
-                    else videoController.applyZoom(rv);
-                }
-            }
-        }
     } else {
         updateVideoGridDisplay();
     }
@@ -3398,14 +3379,9 @@ export function setGridMode() {
 
 export function updateVideoGridDisplay() {
     if (state.views.length === 0) return;
-    // Preserve zoom state across panel recreation
-    var savedZoom = {};
-    for (var zi = 0; zi < state.views.length; zi++) {
-        var zv = state.views[zi];
-        if (zv.zoom) {
-            savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY, native: !!zv.zoom.native };
-        }
-    }
+    // No zoom save/restore around the rebuild: the zoom lives on the view, and
+    // `refreshPaneInteractions` keeps it and rescales its pan to the new cell.
+    // Writing saved offsets back afterwards would undo that rescale.
     if (state.viewMode === 'single') {
         // Show only the selected view
         var targetView = state.views[state.singleViewIndex];
@@ -3419,23 +3395,6 @@ export function updateVideoGridDisplay() {
         paneManager.clearAll();
         paneManager.addAllViewsAsGrid();
         refreshPaneInteractions();
-    }
-    // Restore zoom state
-    for (var ri = 0; ri < state.views.length; ri++) {
-        var rv = state.views[ri];
-        if (savedZoom[rv.name] && rv.zoom) {
-            rv.zoom.scale = savedZoom[rv.name].scale;
-            rv.zoom.offsetX = savedZoom[rv.name].offsetX;
-            rv.zoom.offsetY = savedZoom[rv.name].offsetY;
-            // A 1:1 scale belongs to the OLD canvas box: re-derive it. Keep
-            // the flag `initZoom` set from View ▸ Native Resolution, too.
-            rv.zoom.native = savedZoom[rv.name].native || !!rv.zoom.native;
-            rv.zoom.scaleY = undefined;
-            if (videoController) {
-                if (rv.zoom.native) videoController.reapplyZoom(rv);
-                else videoController.applyZoom(rv);
-            }
-        }
     }
 }
 

@@ -35,8 +35,9 @@ export const STEP_CURSOR_IDLE_MS = 3000;
 /**
  * Frames decoded and kept per backward step (OnDemandVideoDecoder._decodeBackChunk):
  * a step back must decode from the keyframe anyway, so it keeps up to this many
- * frames ending at the target and the next steps back are cache hits. Must stay
- * well under the decoder's frame cache (60 in the app). `window.LUCID_STEP_BACK_CHUNK`
+ * frames ending at the target and the next steps back are cache hits. Capped at
+ * 40% of the decoder's frame cache (`_backChunkSize`), which the budget sets to
+ * FRAME_CACHE_MIN–FRAME_CACHE_MAX frames. `window.LUCID_STEP_BACK_CHUNK`
  * overrides it; 0 or 1 turns it off.
  */
 export const STEP_BACK_CHUNK = 24;
@@ -48,6 +49,46 @@ export const STEP_BACK_CHUNK = 24;
  */
 export const STEP_BACK_WARM_MS = 250;
 
+/**
+ * Decoded-frame cache budget, in MB, shared by the views on screen
+ * (`VideoController._applyFrameCacheBudget`). Every decoder caches decoded
+ * frames as ImageBitmaps for paused stepping, and those are big: 8 MB each at
+ * 1680×1200. With 17 cameras at the old fixed 60 frames apiece that was ~8 GB
+ * alive at once, and Chrome then spent 62–69% of the main thread
+ * garbage-collecting — grid playback at ~5 redraws/s, steps at ~170 ms. Each
+ * decoder now gets `budget / (sum of the shown views' frame sizes)` frames,
+ * within [FRAME_CACHE_MIN, FRAME_CACHE_MAX]: 19 frames for those 17 cameras
+ * (2.6 GB), 60 for one solo'd camera or for 8 cameras at 1280×1024. Measured
+ * on that project, grid mode (sweep table in MODULES.md `loading/video.js`):
+ * stepping stops garbage-collecting below ~5 GB of cached frames, playback
+ * below ~3.3 GB, and under 12 frames held back-stepping falls off.
+ * `window.LUCID_FRAME_CACHE_MB` overrides it.
+ */
+export const FRAME_CACHE_BUDGET_MB = 2560;
+/** Most frames a decoder caches: the old fixed size, still what a few small views get. */
+export const FRAME_CACHE_MAX = 60;
+/**
+ * Fewest frames a decoder caches, budget or not: below this the backward
+ * chunk (40% of the cache, `_backChunkSize`) is too short to step back through
+ * without a keyframe decode every few frames.
+ */
+export const FRAME_CACHE_MIN = 12;
+
+/**
+ * Frames per decoder so that views of these frame sizes stay within
+ * `budgetMB` together, clamped to [FRAME_CACHE_MIN, FRAME_CACHE_MAX].
+ * @param {number} budgetMB
+ * @param {number[]} frameBytes - one decoded frame's bytes per view (w × h × 4)
+ * @returns {number}
+ */
+export function frameCacheFrames(budgetMB, frameBytes) {
+    var total = 0;
+    for (var i = 0; i < frameBytes.length; i++) total += frameBytes[i] > 0 ? frameBytes[i] : 0;
+    if (!(total > 0)) return FRAME_CACHE_MAX;
+    var n = Math.floor(budgetMB * 1024 * 1024 / total);
+    return Math.max(FRAME_CACHE_MIN, Math.min(FRAME_CACHE_MAX, n));
+}
+
 /** Index of the frame nearest timestamp `t` in the sorted `times` (within half a frame), or -1. */
 function frameNearTime(times, t) {
     var lo = 0, hi = times.length - 1;
@@ -55,6 +96,39 @@ function frameNearTime(times, t) {
     if (lo > 0 && Math.abs(times[lo - 1] - t) < Math.abs(times[lo] - t)) lo--;
     var half = times.length > 1 ? (times[times.length - 1] - times[0]) / (times.length - 1) / 2 : Infinity;
     return Math.abs(times[lo] - t) <= half ? lo : -1;
+}
+
+/**
+ * Whether mp4box's `onReady` info describes a FRAGMENTED MP4, whose samples are
+ * listed in the fragments still to come rather than in the moov. `isFragmented`
+ * is mp4box's own answer (the moov has an `mvex`); a video track whose duration
+ * is 0 says the same thing about a file that answer misses.
+ */
+export function isFragmentedInfo(info) {
+    if (!info) return false;
+    if (info.isFragmented) return true;
+    var track = (info.tracks || []).find(function (t) { return t.type === 'video'; });
+    return !!track && !(track.duration > 0);
+}
+
+/**
+ * The mp4box samples whose bytes lie inside a file of `fileSize` bytes. A
+ * truncated fragmented MP4's last moof can list samples past its end.
+ */
+export function samplesInFile(samples, fileSize) {
+    var out = [];
+    for (var i = 0; i < samples.length; i++) {
+        var smp = samples[i];
+        if (!(smp.offset >= 0 && smp.size >= 0) || smp.offset + smp.size <= fileSize) out.push(smp);
+    }
+    return out;
+}
+
+/** Sum of mp4box sample durations (track timescale units). */
+export function sumSampleDurations(samples) {
+    var total = 0;
+    for (var i = 0; i < samples.length; i++) total += samples[i].duration || 0;
+    return total;
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +153,11 @@ export class OnDemandVideoDecoder {
         this.isDecoding = false;
         this.pendingFrame = null;
         this.CHUNK_SIZE = 1024 * 1024; // 1 MB
+        // Read size after skipping more than a chunk of a fragment's mdat
+        // (_nextFragmentOffset): room for the next moof (~0.5 KB per second of
+        // 60 fps video; a bigger one costs one more read) without reading much
+        // of the next mdat.
+        this.FRAGMENT_PROBE_SIZE = 8 * 1024;
 
         // HTML5 video element for fast loading and fallback frame extraction
         this._videoEl = null;
@@ -89,6 +168,7 @@ export class OnDemandVideoDecoder {
         this._mp4InitPromise = null;
         this._html5SeekLock = null; // Prevent concurrent HTML5 seeks
         this._html5Moved = false;   // <video> played or frame-start-seeked since _getFrameHTML5 last positioned it
+        this._frameLimit = null; // frames in a truncated fragmented MP4 (see _initMp4box), else null
         this._mbBackend = null; // Optional mediabunny frame-accurate backend (issue #115)
         this._mbUnavailable = null; // why there is no _mbBackend: { reason: 'codec'|'init', ... } (see _initMediabunny)
         this._stepCursor = null; // open decode stream for paused forward steps (see _mbGetFrame)
@@ -319,6 +399,7 @@ export class OnDemandVideoDecoder {
         // as the frame-count carrier the rest of the class reads (`.length`),
         // resizing it to match so bounds checks and the timeline agree.
         var n = this._mbBackend.numFrames;
+        if (this._frameLimit != null && n > this._frameLimit) n = this._frameLimit;   // see _initMp4box: frames past a truncated file's end
         if (n && n !== this.samples.length) {
             var resized = new Array(n);
             for (var i = 0; i < n; i++) {
@@ -386,33 +467,63 @@ export class OnDemandVideoDecoder {
     /**
      * Background mp4box initialization for WebCodecs precise decoding.
      * Does not block the UI - video is already usable via HTML5 element.
+     *
+     * A FRAGMENTED MP4 (what campy writes by default: `empty_moov` +
+     * `frag_keyframe`, so a crash leaves the file readable up to its last
+     * fragment) lists its samples in the fragments (`moof`/`trun`), not in the
+     * `moov`, and its `moov` says duration 0. mp4box fires `onReady` as soon as
+     * the `moov` is parsed, so stopping there counted only the fragments in the
+     * first chunk: a 1,200-frame 60 fps rig video loaded as 420 frames at 21 fps
+     * (420 / the `<video>` element's 20 s). So for a fragmented file the scan
+     * goes on to the end of the file and the fps comes from the sample
+     * durations. It jumps over `mdat` payloads (`_nextFragmentOffset`), and
+     * `createFile(false)` lets mp4box drop media bytes it was handed, since
+     * this pass never extracts a sample. A regular MP4 still stops at
+     * `onReady`. Measured locally (Chrome): a 30-min 60 fps file of 90 KB
+     * fragments scans in ~0.15 s; a 1 GB 1-min one of 8.7 MB fragments in
+     * ~25 ms, reading 1.9 MB of it.
      */
     async _initMp4box() {
         var self = this;
-        this.mp4boxFile = MP4Box.createFile();
+        this._frameLimit = null;
+        this.mp4boxFile = MP4Box.createFile(false);
 
+        var info = null;
         var ready = new Promise(function (resolve, reject) {
             self.mp4boxFile.onError = reject;
-            self.mp4boxFile.onReady = resolve;
+            self.mp4boxFile.onReady = function (i) { info = i; resolve(i); };
         });
 
         var offset = 0;
-        var moovParsed = false;
-        ready.then(function () { moovParsed = true; });
+        var fragmented = false;   // decided once, by the append that parses the moov
+        var jumped = 0;           // mdat bytes the last step skipped
 
-        while (offset < this.fileSize && !moovParsed) {
-            var chunkSize = Math.min(this.CHUNK_SIZE, this.fileSize - offset);
+        while (offset < this.fileSize && !(info && !fragmented)) {
+            var start = offset;
+            var chunkSize = Math.min(jumped > this.CHUNK_SIZE ? this.FRAGMENT_PROBE_SIZE : this.CHUNK_SIZE,
+                this.fileSize - offset);
             var buffer = await this.readChunk(offset, chunkSize);
             buffer.fileStart = offset;
             var next = this.mp4boxFile.appendBuffer(buffer);
             offset = (next !== undefined) ? next : (offset + chunkSize);
+            if (info && !fragmented) fragmented = isFragmentedInfo(info);
+            if (fragmented) {
+                var after = this._nextFragmentOffset(offset);
+                jumped = after - offset;
+                offset = after;
+            }
+            // mp4box asking again for bytes it was already given would loop
+            // here forever (it does exactly that if handed the rest of an mdat
+            // whose start it has discarded — see _nextFragmentOffset).
+            if (offset <= start) throw new Error("MP4 parse stalled at byte " + start);
             await new Promise(function (r) { setTimeout(r, 0); });
             if (typeof self._onProgress === 'function') {
                 self._onProgress({ phase: 'mp4box', ratio: Math.min(offset / self.fileSize, 0.999) });
             }
         }
+        if (fragmented) this.mp4boxFile.flush();
 
-        var info = await ready;
+        info = await ready;
 
         var videoTrackInfo = info.tracks.find(function (t) { return t.type === "video"; });
         if (!videoTrackInfo) {
@@ -442,10 +553,34 @@ export class OnDemandVideoDecoder {
 
         // Get real sample table for accurate frame count and FPS
         var mp4Samples = this.mp4boxFile.getTrackSamplesInfo(videoTrackInfo.id);
+        // A recording cut off mid-write (the case campy fragments for) can end
+        // inside its last fragment's media: its moof lists frames whose bytes
+        // are not in the file. Count only the frames that are, and hold
+        // mediabunny to the same count (_initMediabunny), since it lists them
+        // too. Measured on a 1,200-frame clip cut at 47,000 / 46,000 bytes:
+        // ffprobe decodes 1,194 / 1,165, both demuxers listed 1,200 / 1,182.
+        if (fragmented && mp4Samples && mp4Samples.length > 0) {
+            var whole = samplesInFile(mp4Samples, this.fileSize);
+            if (whole.length < mp4Samples.length) {
+                videoLog("Fragmented MP4 ends mid-fragment: " + (mp4Samples.length - whole.length)
+                    + " frame(s) past the end of the file dropped", "warn");
+                mp4Samples = whole;
+                this._frameLimit = whole.length;
+            }
+        }
         if (mp4Samples && mp4Samples.length > 0) {
             // Update frame count and FPS from real sample data
             var realFrameCount = mp4Samples.length;
-            if (this._videoEl && this._videoEl.duration > 0) {
+            // A fragmented MP4's container duration is 0 (empty moov, usually
+            // no mehd): take the fps from the samples' own durations, and give
+            // `videoTrack` the duration they add up to, since the fps readers
+            // (updateTotalFrames, playback's nativeFps) divide by it and fall
+            // back to 30 when it is 0.
+            var sampleSpan = (videoTrackInfo.duration > 0) ? 0 : sumSampleDurations(mp4Samples);
+            if (sampleSpan > 0 && videoTrackInfo.timescale > 0) {
+                this._fps = realFrameCount / (sampleSpan / videoTrackInfo.timescale);
+                videoTrackInfo = Object.assign({}, videoTrackInfo, { duration: sampleSpan });
+            } else if (this._videoEl && this._videoEl.duration > 0) {
                 this._fps = realFrameCount / this._videoEl.duration;
             }
 
@@ -482,7 +617,8 @@ export class OnDemandVideoDecoder {
             // handles B-frame reordering natively and gives correct frames.
             // We only use mp4box for accurate FPS and frame count.
 
-            videoLog("MP4Box ready: " + realFrameCount + " frames, fps=" + this._fps.toFixed(2) + " (using HTML5 decode with accurate FPS)");
+            videoLog("MP4Box ready: " + realFrameCount + " frames, fps=" + this._fps.toFixed(2)
+                + (fragmented ? " (fragmented MP4, every fragment read)" : "") + " (using HTML5 decode with accurate FPS)");
         } else {
             videoLog("MP4Box returned no samples, keeping HTML5 mode", "warn");
         }
@@ -491,6 +627,30 @@ export class OnDemandVideoDecoder {
         }
         // Release mp4box resources - we only needed it for metadata
         this.mp4boxFile = null;
+    }
+
+    /**
+     * Where a fragmented-MP4 scan reads next, given the offset mp4box asked
+     * for. When a read ends inside an `mdat`, mp4box asks for the bytes right
+     * after it, i.e. the rest of the media; the next `moof` starts at the
+     * `mdat`'s end, so the scan jumps there (mp4box finds a buffer that starts
+     * there by position, `MultiBufferStream.seek`, as it does for a
+     * moov-at-end file whose leading mdat it skips). The jump is also what
+     * keeps the scan going at all: with `createFile(false)` mp4box drops the
+     * mdat bytes it has used, and handed the rest of that mdat it asks for an
+     * offset it already had, forever. `parsingMdat` is internal to mp4box
+     * (0.5.2, pinned in index.html and offline-deps.json); without it the
+     * scan's stall check throws and the decoder keeps its HTML5 estimate.
+     * After a jump of more than a chunk the next read is a small probe, room
+     * for the next moof; small fragments are still read a chunk at a time.
+     */
+    _nextFragmentOffset(offset) {
+        var mdat = this.mp4boxFile && this.mp4boxFile.parsingMdat;
+        if (mdat && mdat.start >= 0 && mdat.size > 0) {
+            var end = Math.min(mdat.start + mdat.size, this.fileSize);
+            if (end > offset) return end;
+        }
+        return offset;
     }
 
     async readChunk(offset, size) {
@@ -809,6 +969,45 @@ export class OnDemandVideoDecoder {
             if (entry[1] && typeof entry[1].close === 'function') entry[1].close();
         }
         this.cache.clear();
+    }
+
+    /**
+     * Change how many decoded frames this decoder keeps (the mediabunny
+     * backend's cache and the HTML5/WebCodecs one), evicting at once down to
+     * the new size: the backend cache's frames FARTHEST from the last stepped
+     * frame go first, as `_cacheNear` evicts. Set by
+     * `VideoController._applyFrameCacheBudget`; the backward chunk follows the
+     * size by itself (`_backChunkSize`).
+     * @param {number} n - frames, at least 1
+     */
+    setCacheSize(n) {
+        n = Math.max(1, Math.floor(n));
+        this.cacheSize = n;
+        while (this.cache.size > n) {
+            var oldest = this.cache.keys().next().value;
+            var old = this.cache.get(oldest);
+            if (old && typeof old.close === 'function') old.close();
+            this.cache.delete(oldest);
+        }
+        var be = this._mbBackend;
+        if (!be || !be.cache) return;
+        be.cacheSize = n;
+        var here = this._lastStepFrame;
+        while (be.cache.size > n) {
+            var far = null, farD = -1;
+            if (here == null) {
+                far = be.cache.keys().next().value;   // no stepped frame yet: the oldest entry
+            } else {
+                be.cache.forEach(function (_, k) {
+                    var d = Math.abs(k - here);
+                    if (d > farD) { farD = d; far = k; }
+                });
+            }
+            if (far == null) break;
+            var bm = be.cache.get(far);
+            if (bm && typeof bm.close === 'function') bm.close();
+            be.cache.delete(far);
+        }
     }
 
     /** Close just the forward-stepping stream (reopened at a jump, or idle). */
@@ -2175,22 +2374,60 @@ export class VideoController {
      * garbage-collecting so often that the one view still shown stutters.
      * Compared by decoder, not view object: decoders are pooled and reused
      * across session switches, and one still in use must keep its frames.
+     * Any change of the shown decoders also re-sizes every frame cache from
+     * the shared budget (`_applyFrameCacheBudget`).
      */
     _shownViews() {
         var all = this.state.views.filter(function (v) { return v.decoder; });
         var isShown = this.callbacks.isViewShown;
-        if (typeof isShown !== 'function') return all;
-        var shown = all.filter(function (v) { return isShown(v); });
+        var shown = typeof isShown === 'function' ? all.filter(function (v) { return isShown(v); }) : all;
         if (!shown.length) shown = all;
         var prev = this._lastShownDecoders;
         var now = new Set(shown.map(function (v) { return v.decoder; }));
         this._lastShownDecoders = now;
+        var changed = !prev || prev.size !== now.size;
         if (prev) {
             prev.forEach(function (d) {
-                if (!now.has(d) && typeof d.releaseFrames === 'function') d.releaseFrames();
+                if (now.has(d)) return;
+                changed = true;
+                if (typeof d.releaseFrames === 'function') d.releaseFrames();
             });
         }
+        if (changed) this._applyFrameCacheBudget(all, now);
         return shown;
+    }
+
+    /**
+     * Size every decoder's frame cache from the shared budget
+     * (`FRAME_CACHE_BUDGET_MB`, or `window.LUCID_FRAME_CACHE_MB`): a shown
+     * view gets `frameCacheFrames(budget, shown views' frame sizes)`, so the
+     * views on screen together stay within it — 60 frames for one solo'd
+     * camera, 19 each for 17 cameras at 1680×1200. A hidden view gets the
+     * share it would have with EVERY view shown: nothing steps it, but the
+     * overlay-export preview decodes every view, and that must not refill 17
+     * full caches either. Run whenever the set of shown decoders changes
+     * (`_shownViews`), including the first call after a load.
+     *
+     * @param {Array} all - views with a decoder
+     * @param {Set} shownDecoders
+     */
+    _applyFrameCacheBudget(all, shownDecoders) {
+        var budget = FRAME_CACHE_BUDGET_MB;
+        try {
+            if (typeof window !== 'undefined' && window.LUCID_FRAME_CACHE_MB > 0) budget = +window.LUCID_FRAME_CACHE_MB;
+        } catch (_) { /* ignore */ }
+        var bytes = function (v) { return (v.videoWidth || 0) * (v.videoHeight || 0) * 4; };
+        var shownBytes = [], allBytes = [];
+        for (var i = 0; i < all.length; i++) {
+            allBytes.push(bytes(all[i]));
+            if (shownDecoders.has(all[i].decoder)) shownBytes.push(bytes(all[i]));
+        }
+        var nShown = frameCacheFrames(budget, shownBytes);
+        var nAll = frameCacheFrames(budget, allBytes);
+        for (var j = 0; j < all.length; j++) {
+            var d = all[j].decoder;
+            if (typeof d.setCacheSize === 'function') d.setCacheSize(shownDecoders.has(d) ? nShown : nAll);
+        }
     }
 
     /**
@@ -2539,8 +2776,18 @@ export class VideoController {
 
         this.state.isPlaying = true;
         var self = this;
-        // playback decodes on its own; free the paused-stepping streams' decoders
-        this.state.views.forEach(function (v) { if (v.decoder && v.decoder.releaseStepCursor) v.decoder.releaseStepCursor(); });
+        // Playback decodes on its own: free the paused-stepping streams' decoders
+        // AND every cached decoded frame. Playback never reads the caches, and
+        // by the time it stops they hold frames from wherever stepping last
+        // was. Held through playback they are what made it garbage-collect
+        // most of the time: 17 cameras x 36 cached frames (4.9 GB) played at
+        // ~13 redraws/s with 64% of the main thread in GC, 24 frames at ~54/s.
+        this.state.views.forEach(function (v) {
+            var d = v.decoder;
+            if (!d) return;
+            if (typeof d.releaseFrames === 'function') d.releaseFrames();
+            else if (d.releaseStepCursor) d.releaseStepCursor();
+        });
 
         // ------------------------------------------------------------------
         // Buffered mediabunny playback (issue #115 follow-up) — OPT-IN.
@@ -3182,9 +3429,9 @@ export class VideoController {
             offsetY: 0,
             baseW: 0,   // wrapper base display size the offsets are valid for;
             baseH: 0,   // set by applyZoom, used by reapplyZoom to anchor on resize
-            // Held at native resolution (1:1). A pane rebuild re-inits every
-            // view, so a view comes back at 1:1 while the mode is on; its scale
-            // is computed by the next reapplyZoom, once the canvas is laid out.
+            // Held at native resolution (1:1). A view's first zoom state
+            // starts there while the mode is on; its scale is computed by the
+            // next reapplyZoom, once the canvas is laid out.
             native: !!(this.state && this.state.nativeResolution),
             scaleY: undefined, // vertical scale, set only while `native` (see nativeZoomScales)
         };
@@ -3314,16 +3561,14 @@ export class VideoController {
     }
 
     /**
-     * Rescale `view` to (sx, sy), keeping the video point under container
-     * point (qx, qy) — CSS px from the cell's top-left — exactly where it is.
-     * Accounts for the wrapper's flex-centring offset and its rotation about
-     * its own centre, i.e. the whole `applyZoom` transform: a point u of the
-     * canvas box is drawn at `flex + off + c + R·(u∘s − c)`. Without a laid-out
-     * cell both terms are zero and this is the plain `q − (q − off)·s/s0`.
-     * Sets `z.scale` (and `z.scaleY`); the caller constrains and applies.
+     * The geometry `applyZoom` draws `view` with, minus the zoom itself: the
+     * canvas box's centre c = (cX, cY), the wrapper's flex-centring offset in
+     * its `.video-cell` f = (fx, fy), and the rotation R as (ca, sa). A point
+     * u of the canvas box is drawn at container point `f + off + c + R·(u∘s − c)`
+     * (CSS px from the cell's top-left). Without a laid-out cell c and f are
+     * zero, which reduces that to the plain `off + u∘s` when unrotated.
      */
-    _zoomAbout(view, sx, sy, qx, qy) {
-        var z = view.zoom;
+    _zoomFrame(view) {
         var canvas = view.canvas;
         var container = canvas && canvas.closest ? canvas.closest('.video-cell') : null;
         var wW = 0, wH = 0, fx = 0, fy = 0;
@@ -3333,17 +3578,47 @@ export class VideoController {
             fx = (container.clientWidth - wW) / 2;
             fy = (container.clientHeight - wH) / 2;
         }
-        var cX = wW / 2, cY = wH / 2;
-        var a = (view.rotation || 0) * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a);
-        var osx = z.scale, osy = this._scaleY(z);
-        // The box point under q, through the inverse of the current transform.
-        var dx = qx - fx - z.offsetX - cX, dy = qy - fy - z.offsetY - cY;
-        var ux = (ca * dx + sa * dy + cX) / osx;
-        var uy = (-sa * dx + ca * dy + cY) / osy;
-        // ...and the pan that draws it at q under the new scale.
-        var vx = ux * sx - cX, vy = uy * sy - cY;
-        z.offsetX = qx - fx - cX - (ca * vx - sa * vy);
-        z.offsetY = qy - fy - cY - (sa * vx + ca * vy);
+        var a = (view.rotation || 0) * Math.PI / 180;
+        return { cX: wW / 2, cY: wH / 2, fx: fx, fy: fy, ca: Math.cos(a), sa: Math.sin(a) };
+    }
+
+    /**
+     * The canvas-box point `view` currently draws at container point (qx, qy):
+     * the inverse of the whole `applyZoom` transform (see `_zoomFrame`),
+     * per-axis scale included.
+     */
+    _boxPointAt(view, qx, qy, fr) {
+        var z = view.zoom;
+        var dx = qx - fr.fx - z.offsetX - fr.cX, dy = qy - fr.fy - z.offsetY - fr.cY;
+        return [(fr.ca * dx + fr.sa * dy + fr.cX) / z.scale,
+            (-fr.sa * dx + fr.ca * dy + fr.cY) / this._scaleY(z)];
+    }
+
+    /**
+     * Set `view`'s pan so that, at scale (sx, sy), canvas-box point (ux, uy)
+     * is drawn at container point (qx, qy). Writes the offsets only.
+     */
+    _panToDraw(view, ux, uy, sx, sy, qx, qy, fr) {
+        var z = view.zoom;
+        var vx = ux * sx - fr.cX, vy = uy * sy - fr.cY;
+        z.offsetX = qx - fr.fx - fr.cX - (fr.ca * vx - fr.sa * vy);
+        z.offsetY = qy - fr.fy - fr.cY - (fr.sa * vx + fr.ca * vy);
+    }
+
+    /**
+     * Rescale `view` to (sx, sy), keeping the video point under container
+     * point (qx, qy) — CSS px from the cell's top-left — exactly where it is.
+     * Accounts for the wrapper's flex-centring offset and its rotation about
+     * its own centre, i.e. the whole `applyZoom` transform (`_zoomFrame`).
+     * Without a laid-out cell both terms are zero and this is the plain
+     * `q − (q − off)·s/s0`. Sets `z.scale` (and `z.scaleY`); the caller
+     * constrains and applies.
+     */
+    _zoomAbout(view, sx, sy, qx, qy) {
+        var z = view.zoom;
+        var fr = this._zoomFrame(view);
+        var u = this._boxPointAt(view, qx, qy, fr);
+        this._panToDraw(view, u[0], u[1], sx, sy, qx, qy, fr);
         z.scale = sx;
         z.scaleY = sy;
     }
@@ -3370,8 +3645,9 @@ export class VideoController {
      * Native resolution is ON exactly when every shown view is at 1:1. Derived
      * rather than latched, so the menu tick cannot disagree with the screen: a
      * wheel zoom that snaps the solo view to 1:1 turns it on, one that leaves
-     * turns it off. It is also what `initZoom` reads, so a pane rebuild
-     * (switching the solo camera, grid ↔ solo) keeps every view at 1:1.
+     * turns it off. A pane rebuild (switching the solo camera, grid ↔ solo)
+     * reads it too: while it is on, a view coming on screen joins it at 1:1
+     * (`refreshPaneInteractions`, which then re-derives it).
      */
     _syncNativeMode() {
         var views = this._zoomableViews();
@@ -3414,10 +3690,10 @@ export class VideoController {
      * @returns {boolean} whether native resolution is now on
      */
     setNativeResolution(on) {
-        // Every view, shown or not: a pane rebuild restores the zoom of views
-        // that were hidden (`updateVideoGridDisplay`), so a hidden view left
-        // flagged would come back at 1:1 after OFF, and one left unflagged
-        // would come back fitted while ON. Hidden views get their scale from
+        // Every view, shown or not: a hidden view keeps its zoom through a
+        // pane rebuild (`refreshPaneInteractions`), so one left flagged would
+        // come back at 1:1 after OFF. ON flags them too, so they are already
+        // 1:1 when they come back. Hidden views get their scale from
         // `reapplyZoom` once they are laid out again.
         var shown = this._zoomableViews();
         for (var i = 0; i < this.state.views.length; i++) {
@@ -3729,6 +4005,16 @@ export class VideoController {
         if (nativeMoved && this.callbacks.onZoomChange) this.callbacks.onZoomChange();
     }
 
+    /**
+     * Box zoom: fit the rectangle (x1, y1)–(x2, y2) — container CSS px, as the
+     * drag handler reports it — to `container`, its centre at the container's
+     * centre. The rectangle goes through the inverse of the whole `applyZoom`
+     * transform (`_boxPointAt`): flex-centring offset, rotation and a per-axis
+     * 1:1 scale. The plain `(x − off) / s` ignored the first two, so along a
+     * letterboxed axis the rectangle's centre landed f·(1 − s) px off the
+     * centre (f = that axis's flex offset; ~900 px for f = 304, s = 4), and a
+     * rotated view zoomed somewhere else entirely.
+     */
     zoomToRect(view, x1, y1, x2, y2, container) {
         if (!view.zoom) this.initZoom(view);
 
@@ -3740,22 +4026,29 @@ export class VideoController {
         var containerW = container.clientWidth;
         var containerH = container.clientHeight;
 
-        var scaleY = this._scaleY(z);
-        var contentX1 = (Math.min(x1, x2) - z.offsetX) / z.scale;
-        var contentY1 = (Math.min(y1, y2) - z.offsetY) / scaleY;
-        var contentX2 = (Math.max(x1, x2) - z.offsetX) / z.scale;
-        var contentY2 = (Math.max(y1, y2) - z.offsetY) / scaleY;
-        var contentW = contentX2 - contentX1;
-        var contentH = contentY2 - contentY1;
+        // The box points under the rectangle's corners, turned back into screen
+        // axes: at one uniform scale S a box point u is drawn at a fixed point
+        // plus S·R·u, so the rectangle is drawn S × the extent of R·u wide/tall.
+        var fr = this._zoomFrame(view);
+        var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        var corners = [[x1, y1], [x2, y1], [x1, y2], [x2, y2]];
+        for (var i = 0; i < 4; i++) {
+            var u = this._boxPointAt(view, corners[i][0], corners[i][1], fr);
+            var rx = fr.ca * u[0] - fr.sa * u[1];
+            var ry = fr.sa * u[0] + fr.ca * u[1];
+            if (rx < minX) minX = rx;
+            if (rx > maxX) maxX = rx;
+            if (ry < minY) minY = ry;
+            if (ry > maxY) maxY = ry;
+        }
 
-        var newScale = Math.min(containerW / contentW, containerH / contentH);
+        var newScale = Math.min(containerW / (maxX - minX), containerH / (maxY - minY));
         var minScale = this._getMinScale(view);
         var clampedScale = Math.max(minScale, Math.min(10, newScale));
 
-        var contentCenterX = (contentX1 + contentX2) / 2;
-        var contentCenterY = (contentY1 + contentY2) / 2;
-        z.offsetX = containerW / 2 - contentCenterX * clampedScale;
-        z.offsetY = containerH / 2 - contentCenterY * clampedScale;
+        var centre = this._boxPointAt(view, (x1 + x2) / 2, (y1 + y2) / 2, fr);
+        this._panToDraw(view, centre[0], centre[1], clampedScale, clampedScale,
+            containerW / 2, containerH / 2, fr);
         z.scale = clampedScale;
         z.native = false;
         z.scaleY = undefined;
