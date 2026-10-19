@@ -8,8 +8,8 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
-import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=15251f271606';
-import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=15251f271606';
+import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=36446c3f93f0';
+import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=36446c3f93f0';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -3314,16 +3314,14 @@ export class VideoController {
     }
 
     /**
-     * Rescale `view` to (sx, sy), keeping the video point under container
-     * point (qx, qy) — CSS px from the cell's top-left — exactly where it is.
-     * Accounts for the wrapper's flex-centring offset and its rotation about
-     * its own centre, i.e. the whole `applyZoom` transform: a point u of the
-     * canvas box is drawn at `flex + off + c + R·(u∘s − c)`. Without a laid-out
-     * cell both terms are zero and this is the plain `q − (q − off)·s/s0`.
-     * Sets `z.scale` (and `z.scaleY`); the caller constrains and applies.
+     * The geometry `applyZoom` draws `view` with, minus the zoom itself: the
+     * canvas box's centre c = (cX, cY), the wrapper's flex-centring offset in
+     * its `.video-cell` f = (fx, fy), and the rotation R as (ca, sa). A point
+     * u of the canvas box is drawn at container point `f + off + c + R·(u∘s − c)`
+     * (CSS px from the cell's top-left). Without a laid-out cell c and f are
+     * zero, which reduces that to the plain `off + u∘s` when unrotated.
      */
-    _zoomAbout(view, sx, sy, qx, qy) {
-        var z = view.zoom;
+    _zoomFrame(view) {
         var canvas = view.canvas;
         var container = canvas && canvas.closest ? canvas.closest('.video-cell') : null;
         var wW = 0, wH = 0, fx = 0, fy = 0;
@@ -3333,17 +3331,47 @@ export class VideoController {
             fx = (container.clientWidth - wW) / 2;
             fy = (container.clientHeight - wH) / 2;
         }
-        var cX = wW / 2, cY = wH / 2;
-        var a = (view.rotation || 0) * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a);
-        var osx = z.scale, osy = this._scaleY(z);
-        // The box point under q, through the inverse of the current transform.
-        var dx = qx - fx - z.offsetX - cX, dy = qy - fy - z.offsetY - cY;
-        var ux = (ca * dx + sa * dy + cX) / osx;
-        var uy = (-sa * dx + ca * dy + cY) / osy;
-        // ...and the pan that draws it at q under the new scale.
-        var vx = ux * sx - cX, vy = uy * sy - cY;
-        z.offsetX = qx - fx - cX - (ca * vx - sa * vy);
-        z.offsetY = qy - fy - cY - (sa * vx + ca * vy);
+        var a = (view.rotation || 0) * Math.PI / 180;
+        return { cX: wW / 2, cY: wH / 2, fx: fx, fy: fy, ca: Math.cos(a), sa: Math.sin(a) };
+    }
+
+    /**
+     * The canvas-box point `view` currently draws at container point (qx, qy):
+     * the inverse of the whole `applyZoom` transform (see `_zoomFrame`),
+     * per-axis scale included.
+     */
+    _boxPointAt(view, qx, qy, fr) {
+        var z = view.zoom;
+        var dx = qx - fr.fx - z.offsetX - fr.cX, dy = qy - fr.fy - z.offsetY - fr.cY;
+        return [(fr.ca * dx + fr.sa * dy + fr.cX) / z.scale,
+            (-fr.sa * dx + fr.ca * dy + fr.cY) / this._scaleY(z)];
+    }
+
+    /**
+     * Set `view`'s pan so that, at scale (sx, sy), canvas-box point (ux, uy)
+     * is drawn at container point (qx, qy). Writes the offsets only.
+     */
+    _panToDraw(view, ux, uy, sx, sy, qx, qy, fr) {
+        var z = view.zoom;
+        var vx = ux * sx - fr.cX, vy = uy * sy - fr.cY;
+        z.offsetX = qx - fr.fx - fr.cX - (fr.ca * vx - fr.sa * vy);
+        z.offsetY = qy - fr.fy - fr.cY - (fr.sa * vx + fr.ca * vy);
+    }
+
+    /**
+     * Rescale `view` to (sx, sy), keeping the video point under container
+     * point (qx, qy) — CSS px from the cell's top-left — exactly where it is.
+     * Accounts for the wrapper's flex-centring offset and its rotation about
+     * its own centre, i.e. the whole `applyZoom` transform (`_zoomFrame`).
+     * Without a laid-out cell both terms are zero and this is the plain
+     * `q − (q − off)·s/s0`. Sets `z.scale` (and `z.scaleY`); the caller
+     * constrains and applies.
+     */
+    _zoomAbout(view, sx, sy, qx, qy) {
+        var z = view.zoom;
+        var fr = this._zoomFrame(view);
+        var u = this._boxPointAt(view, qx, qy, fr);
+        this._panToDraw(view, u[0], u[1], sx, sy, qx, qy, fr);
         z.scale = sx;
         z.scaleY = sy;
     }
@@ -3729,6 +3757,16 @@ export class VideoController {
         if (nativeMoved && this.callbacks.onZoomChange) this.callbacks.onZoomChange();
     }
 
+    /**
+     * Box zoom: fit the rectangle (x1, y1)–(x2, y2) — container CSS px, as the
+     * drag handler reports it — to `container`, its centre at the container's
+     * centre. The rectangle goes through the inverse of the whole `applyZoom`
+     * transform (`_boxPointAt`): flex-centring offset, rotation and a per-axis
+     * 1:1 scale. The plain `(x − off) / s` ignored the first two, so along a
+     * letterboxed axis the rectangle's centre landed f·(1 − s) px off the
+     * centre (f = that axis's flex offset; ~900 px for f = 304, s = 4), and a
+     * rotated view zoomed somewhere else entirely.
+     */
     zoomToRect(view, x1, y1, x2, y2, container) {
         if (!view.zoom) this.initZoom(view);
 
@@ -3740,22 +3778,29 @@ export class VideoController {
         var containerW = container.clientWidth;
         var containerH = container.clientHeight;
 
-        var scaleY = this._scaleY(z);
-        var contentX1 = (Math.min(x1, x2) - z.offsetX) / z.scale;
-        var contentY1 = (Math.min(y1, y2) - z.offsetY) / scaleY;
-        var contentX2 = (Math.max(x1, x2) - z.offsetX) / z.scale;
-        var contentY2 = (Math.max(y1, y2) - z.offsetY) / scaleY;
-        var contentW = contentX2 - contentX1;
-        var contentH = contentY2 - contentY1;
+        // The box points under the rectangle's corners, turned back into screen
+        // axes: at one uniform scale S a box point u is drawn at a fixed point
+        // plus S·R·u, so the rectangle is drawn S × the extent of R·u wide/tall.
+        var fr = this._zoomFrame(view);
+        var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        var corners = [[x1, y1], [x2, y1], [x1, y2], [x2, y2]];
+        for (var i = 0; i < 4; i++) {
+            var u = this._boxPointAt(view, corners[i][0], corners[i][1], fr);
+            var rx = fr.ca * u[0] - fr.sa * u[1];
+            var ry = fr.sa * u[0] + fr.ca * u[1];
+            if (rx < minX) minX = rx;
+            if (rx > maxX) maxX = rx;
+            if (ry < minY) minY = ry;
+            if (ry > maxY) maxY = ry;
+        }
 
-        var newScale = Math.min(containerW / contentW, containerH / contentH);
+        var newScale = Math.min(containerW / (maxX - minX), containerH / (maxY - minY));
         var minScale = this._getMinScale(view);
         var clampedScale = Math.max(minScale, Math.min(10, newScale));
 
-        var contentCenterX = (contentX1 + contentX2) / 2;
-        var contentCenterY = (contentY1 + contentY2) / 2;
-        z.offsetX = containerW / 2 - contentCenterX * clampedScale;
-        z.offsetY = containerH / 2 - contentCenterY * clampedScale;
+        var centre = this._boxPointAt(view, (x1 + x2) / 2, (y1 + y2) / 2, fr);
+        this._panToDraw(view, centre[0], centre[1], clampedScale, clampedScale,
+            containerW / 2, containerH / 2, fr);
         z.scale = clampedScale;
         z.native = false;
         z.scaleY = undefined;
