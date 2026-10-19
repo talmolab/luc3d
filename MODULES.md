@@ -14460,6 +14460,78 @@ loaded over the network or from disk.
 
 ---
 
+### loading/cold-read-guard.js
+
+**Purpose.** Blob reads that survive a file still downloading from a
+cloud-synced folder. In a Google Drive for desktop folder on macOS (File
+Provider), a read of a part of a file that is not downloaded yet can FAIL
+(`arrayBuffer()` rejects with NotReadableError, a Blob stream errors with
+`TypeError: network error`) or come back with a run of ZEROS and every other
+byte right — the failure lib/h5wasm's `LUCID local patch (cold-read)` guards
+for every h5wasm reader. Drive fetches a video only in the ranges that are read
+(a "dataless" 428 MB recording held 12.6 MB after a session load), so the load
+AND every seek into an unvisited part of a video read parts not downloaded yet.
+Measured 2026-10-19 on cold 8-camera sessions, every Blob read logged and
+compared with the disk afterwards (CLAUDE.md has the numbers): on `main` the
+video reads FAILED (31 in 45,735) and none came back zeroed; 2 of 48 cameras
+lost their frame-accurate decoder at load (they stepped by `<video>` seeks for
+the rest of the session), 3 requested frames fell back to a `<video>` seek, and
+most other failures hit the back-step prefetch, which gave up. Read through the
+guard's 1 MiB windows, 67 of 7,189 reads came back with their first 64 KiB
+zeroed — a read starting on a 1 MiB boundary of the file where nothing was
+downloaded yet, by `arrayBuffer()` or by stream alike — and every one was
+repaired, as was every failure rescued.
+
+**The rule.** `readBlobRange(blob, start, end)` retries a read that throws,
+after `COLD_READ_RETRY_MS` (200 ms, 1 s, 3 s), then rethrows the last error;
+and re-reads every all-zero part of a read (per 4 KiB block of the FILE,
+clipped to the read, neighbours merged — `zeroRuns`), using the re-read only
+when it holds a non-zero byte, so the guard cannot make a read worse. A re-read
+is checked the same way, at most three deep. That is h5wasm's
+`lucidColdReadGuard` rule exactly, plus the retry (WORKERFS reads are
+synchronous, so that patch has none). Repairs and rescues log a `[cold-read]`
+console warning and are counted in `coldReadStats`.
+
+**Key exports.**
+- `readBlobRange(blob, start, end)` → `Promise<Uint8Array>`.
+- `readBlobArrayBuffer(blob)` — the whole blob, guarded; a stand-in for
+  `blob.arrayBuffer()`.
+- `guardedRangeSource(blob, opts?)` → `{ size, readRange(start, length) }`, the
+  shape sleap-io.js's `MediaBunnyVideoBackend.fromRangeSource` takes (it drives
+  mediabunny's `StreamSource` with it). mediabunny asks a `StreamSource` for
+  ~64–192 KiB at a time and a Blob read costs about the same however small it
+  is, so one read per request read packets ~6x slower than mediabunny's own
+  streaming `BlobSource` (221 vs 35 ms for 46.7 MB). It reads whole
+  `RANGE_WINDOW_BYTES` (1 MiB) aligned windows instead, keeps the most recent
+  `RANGE_CACHE_BYTES` (4 MiB), and answers with copies so mediabunny's cache
+  never pins a window: 61 vs 29 ms for the same 46.7 MB, ~75x what 8 cameras
+  decoding at 60 fps need, and index build and decoding measure the same as
+  `BlobSource` (20 ms, 66 ms per 60 frames). A failed window is dropped, so the
+  next request reads again.
+- `zeroRuns(bytes, position)`, `repairZeroRuns(blob, bytes, position)`,
+  `coldReadStats`, `COLD_READ_BLOCK`, `COLD_READ_RETRY_MS`.
+
+**Imports from project modules.** None, so a Node test can load it.
+
+**Imported by.** `loading/video.js` (mediabunny via `guardedRangeSource`;
+mp4box's scan via `readChunk`), `loading/video-codec-diagnosis.js`
+(`readRange`), `import-export/slp-import.js` (`handleLoadPoints3dH5`).
+
+**Not covered.** The `<video>` element reads its blob URL natively, where no
+page code can reach (playback, and stepping only when there is no
+frame-accurate backend); the small JSON / TOML `.text()` reads (a zeroed or
+failed read of those fails to parse, loudly).
+
+**Tests.** `tests/test-cold-read-guard.mjs` (the rule over a fake Blob with
+injected holes and failures; mediabunny's index and every packet of the
+committed B-frame clip through the guard, with the unguarded read as the
+negative control) and `tests/e2e/video-cold-read.mjs` (the real
+OnDemandVideoDecoder in Chromium with faults injected under it: frame count,
+fps, index and every frame's pixels equal a clean load; on the unguarded build
+a failed read leaves mp4box's scan at the `<video>` estimate — 90 frames at
+30 fps for a 30-frame 10 fps clip — the frame-accurate backend fails to start,
+and a zeroed first page freezes the page, mp4box looping on it).
+
 ### loading/video-codec-diagnosis.js
 
 **Purpose.** Explain WHY the browser refused a video. A `<video>` load
@@ -14486,7 +14558,8 @@ error then stands (e.g. a corrupt file).
 - `videoLoadFailureText(name, err)` — one-line reason for loaders' status
   messages: `err.codecDiagnosis.message` when present, else the error text.
 
-**Imports from project modules.** None.
+**Imports from project modules.** `loading/cold-read-guard.js`
+(`readBlobRange`: a cloud file still downloading).
 
 **Imported by.** `loading/video.js` (`OnDemandVideoDecoder._awaitPlayable`),
 `loading/session-loader.js` (`videoLoadFailureText`).
@@ -15273,7 +15346,15 @@ a rotation in progress. Removing the line alone turns the margin check in
 `shouldIgnoreShortcut` guard its `setupKeyboardHandlers` keydown listener
 applies (issue #163); that module imports nothing itself — and
 `loading/video-codec-diagnosis.js` (`diagnoseUnplayableVideo`, for
-`_awaitPlayable`). `mediabunny` (`EncodedPacketSink`) is imported lazily by
+`_awaitPlayable`) — and `loading/cold-read-guard.js`: `_initMediabunny` builds
+the frame-accurate backend with `MediaBunnyVideoBackend.fromRangeSource` over
+`guardedRangeSource(file)` (falling back to `fromBlob` when a bundle lacks it),
+and `readChunk` (mp4box's index scan) reads through `readBlobRange`, so both
+retry a failed read and re-read zeroed pages of a cloud file still downloading
+(see that module). Without the guard a failed scan read silently left the
+`<video>` estimate (duration x 30 fps) as the frame count and fps, and a zeroed
+page in the scanned `moov` made mp4box loop for good on the main thread.
+`mediabunny` (`EncodedPacketSink`) is imported lazily by
 `_keyTimestamp`. Otherwise none (uses the global `MP4Box` from script tag, and
 `window.SleapIO.MediaBunnyVideoBackend`).
 
@@ -16301,7 +16382,9 @@ typed group.
   `../pose/initialization.js`, `../ui/ui-wiring.js`,
   `../ui/frame-readout.js` (`refreshReadoutTotals`, when a video-less import
   sets the frame count), `../ui/sessions-panes.js`, `./visibility-metadata.js`
-  (`readVisibilityMetadata`). Also spawns
+  (`readVisibilityMetadata`), `../loading/cold-read-guard.js`
+  (`readBlobArrayBuffer`: Load 3D Points reads its `.h5` into memory, outside
+  h5wasm's guarded WORKERFS). Also spawns
   `../loading/frame-worker.js` (twice) via `new Worker(new URL(...))`.
 
 **Imported by.** `import-export/save-load.js`, `ui/ui-wiring.js`.

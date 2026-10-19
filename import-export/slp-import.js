@@ -33,6 +33,7 @@ import {
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
 } from '../loading/session-loader.js';
 import { preferNonCalibrationVideos } from '../loading/video-file-pick.js';
+import { readBlobArrayBuffer } from '../loading/cold-read-guard.js';
 import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js';
 import {
     showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
@@ -2114,7 +2115,8 @@ export async function handleLoadPoints3dH5() {
         }
 
         showLoading('Reading 3D points file...');
-        var arrayBuffer = await files[0].arrayBuffer();
+        // Not files[0].arrayBuffer(): a cloud file still downloading reads back with zeroed pages (cold-read-guard.js)
+        var arrayBuffer = await readBlobArrayBuffer(files[0]);
 
         showLoading('Parsing 3D points...');
         var ptsData = await parsePoints3dH5(arrayBuffer);
