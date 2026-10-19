@@ -4,7 +4,7 @@ Multi-view pose annotation GUI. No build system — pure vanilla JS served as st
 
 ## Architecture
 ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 110 modules are grouped into four directories:
-- `pose/` — data model, cross-view tracking (Track All's tracker on one worker: `tracker-pool.js` + `tracker-worker.js`), DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), the lazy project's playback eviction (`lazy-residency.js`), app initialization (23 files)
+- `pose/` — data model, cross-view tracking (Track All's tracker on one worker: `tracker-pool.js` + `tracker-worker.js`), DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), Track All's 2D pose check (`pose-check.js` — common / uncommon / outlier, per camera — and its session glue `pose-check-session.js`), the lazy project's playback eviction (`lazy-residency.js`), app initialization (25 files)
 - `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, the node tooltip on hover (`node-tooltip.js` — a node's name and a prediction's per-node score, as SLEAP shows them), plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip and the time ruler under it (`seekbar-ticks.js` — major/minor tick steps chosen from the video's length and the bar's width), the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames) and their shade (`TRAIL_SHADES` in `ui/overlays.js`: Very dark … Very light, default Dark, remembered in `localStorage`), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it) and its Identities section (`identity-gallery.js` — five sample images and a path map per identity), the Track group's Animals field (`animal-count-field.js`), the CPU / GPU load lines and last-minute graph shown by the image check's dialog and by the loading overlay during Triangulate All and Track All (`load-graph.js`), settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (66 files)
 - `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), web workers (11 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
@@ -723,6 +723,50 @@ pins the worker's scores against a Python-written SLEAP file.
 are read and dropped, so their nodes show a name and no score. What adding them
 would take — and why the lazy `.h5` path is the hard part — is in the NOTE in
 `loading/slp-import-worker.js` `parseAnalysisH5`.
+
+## Track All's 2D pose check: common, uncommon, outlier
+
+Every tracking pass scores every 2D PREDICTION by how common its shape is among
+its own camera's poses (`pose/pose-check.js`, applied by
+`pose/pose-check-session.js`): Procrustes-aligned to the camera's mean shape,
+then a Mahalanobis distance normalized by its degrees of freedom — the "pose
+score", about 0 when typical. ≥ `poseUncommonZ` (10) is **uncommon**,
+≥ `poseOutlierZ` (15) **outlier**; both are counted in the Track All summary
+("2D poses"), marked in the views (amber ?, red ✕ on a dashed box) and named in
+the node tooltip. User instances are never checked. Rules, each measured:
+
+- **Leaving outliers out of tracking is OPT-IN (`poseExcludeOutliers`, default
+  off).** A garbled pose is usually still the right animal, and with the match
+  gate off the assignment is forced: on the 5-mouse flippers recording,
+  excluding outliers caused a NEW lasting swap (relabels 4 → 6, time on the wrong
+  identity 17.8% → 32.2%), while on proofread SLAP it fixed one 3½-minute swap
+  (190807); with the match gate on it fixed 144215 (+8.6 points) and broke
+  150448 (98.7 → 80.9%). Two fixed, two caused, the rest only unlabelled the
+  outliers — the same failure mode as the instance-score filter. Do not turn it on
+  by default without a benchmark that says otherwise. When it is on, both input builders (`buildTrackerInputs`,
+  `buildTrackerDetections`) drop outliers at the same point, so worker == inline.
+- **The residual is NOT projected off the mean shape's direction.** A pose that
+  resembles nothing gets a best-fit scale near 0 and a residual equal to minus
+  the mean shape; projecting that out scored the worst poses as the most typical.
+- **Missing nodes get their own visibility pattern's covariance**, from complete
+  fit poses RE-ALIGNED on those nodes — not the sub-block of the full one.
+- **The fit set is picked by a hash of each pose's coordinates**, so an eager
+  load and the lazy store (which list a frame's instances in different orders)
+  give the same model. A lazy project is sampled through `getFrameSync` and each
+  frame released again unless it was already cached or resident.
+- **`session.poseCheck` is transient** — never saved. The views and the tooltip
+  score the instance they draw against its models (about a microsecond); nothing
+  is written onto an Instance.
+- **The thresholds are calibrated on real data and a model change voids them.**
+  At 10, 1 good pose in 542 is flagged (65% of flags are wrong poses); at 15, 1
+  in 13,312 (92%) — against the reprojection of the proofread 3D on six SLAP
+  sessions. Re-measure before changing the model or the defaults; proofreaders'
+  deletions are NOT the yardstick (they are mostly well-shaped extras and
+  fragments, which a shape test cannot and should not see).
+
+Coverage: `tests/test-pose-check.mjs`, `tests/test-track-summary.mjs` and
+`tests/e2e/track-all-pose-check.mjs` (planted outliers: the summary, the marks,
+the tooltip, exclusion on and off, and negative controls).
 
 ## Triangulation must not depend on where the origin is
 

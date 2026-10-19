@@ -15,6 +15,8 @@ import {
 import { drawFrameOverlays } from './overlays.js';
 import { syncViewLegends } from './view-legend.js';
 import { isCameraTracked } from './settings.js';
+import { poseCheckOf } from '../pose/pose-check-session.js';
+
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
@@ -32,6 +34,11 @@ import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
 } from './frame-counters.js';
+
+// A view's verdict function for drawFrameOverlays' pose-check marks.
+function poseCheckOfView(session, viewName) {
+    return function (inst) { return poseCheckOf(session, viewName, inst); };
+}
 
 // ============================================
 // Reproj/Error visibility
@@ -462,6 +469,9 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             selectedUnlinkedId: selectedUnlinked ? selectedUnlinked.id : null,
             editGroupTarget: editGroupTarget,
             trackingExcluded: !isCameraTracked(view.name),
+            // The 2D pose check's verdicts (after Track All), for its marks.
+            poseCheckOf: state.session && state.session.poseCheck
+                ? poseCheckOfView(state.session, view.name) : null,
         });
 
         // Annotated planes (View ▸ Define Planes). Frame-independent, so they

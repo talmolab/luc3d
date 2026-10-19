@@ -2,7 +2,7 @@
  * test-track-summary.mjs — what the Track All summary box says
  * (ui/track-summary.js): the per-identity counts, how each ID-switch check's
  * outcome is described, how long tracking and each check took, and the next
- * step recommended for each case. The DOM
+ * step recommended for each case, and the 2D pose check's row. The DOM
  * half is covered by tests/e2e/track-all-summary.mjs.
  *
  * Run:  node tests/test-track-summary.mjs
@@ -12,7 +12,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ui = (f) => pathToFileURL(path.join(HERE, '..', 'ui', f)).href;
-const { formatShare, formatDuration, formatTrackingSpeed, summarizeTrackedIdentities, describeSwitchCheck, planTrackSummary, MAX_IDENTITY_ROWS } =
+const { formatShare, formatDuration, formatTrackingSpeed, summarizeTrackedIdentities, describeSwitchCheck, planTrackSummary, MAX_IDENTITY_ROWS, summarizePoseCheck } =
     await import(ui('track-summary.js'));
 
 let passed = 0, failed = 0; const failures = [];
@@ -243,6 +243,33 @@ eq(p.identities.length, MAX_IDENTITY_ROWS, 'identity rows capped');
 eq(p.moreIdentities, 5, 'the rest are counted');
 p = plan(two, C('off'), C('off'));
 eq(p.identities[0].share + '|' + p.identities[0].frac, '50.0%|0.5', 'identity share and bar fraction');
+
+// ---- the 2D pose check's row (pose/pose-check-session.js finishPoseCheckRun) --------------
+const pc = (cams, excluded) => {
+    const total = { checked: 0, untested: 0, common: 0, uncommon: 0, outliers: 0 };
+    cams.forEach((c) => { for (const k in total) total[k] += c[k] || 0; });
+    return { outlierAt: 15, excluded: !!excluded, total, cameras: cams, models: new Map(), flags: [] };
+};
+const cam = (name, checked, uncommon, outliers, extra) => Object.assign({ name, modelled: true, checked, uncommon, outliers, common: checked - uncommon - outliers, untested: 0 }, extra || {});
+const poseRow = (p) => plan(summarizeTrackedIdentities({ identities: mkIds(2), instanceGroups: new Map() }, { frames: 10, animals: 2, poses: p }),
+    C('off'), C('off')).stats.find((r) => r.label === '2D poses');
+eq(summarizePoseCheck(null), null, 'no pose check: nothing to summarize');
+eq(poseRow(null), undefined, 'no pose check: no row');
+let pr = poseRow(pc([cam('c0', 1000, 0, 0), cam('c1', 2000, 0, 0)]));
+eq(pr.value + '|' + pr.detail, 'None flagged|of 3,000', 'nothing flagged');
+pr = poseRow(pc([cam('c0', 10000, 12, 3), cam('c1', 2000, 1, 0, { untested: 40 })]));
+eq(pr.value + '|' + pr.detail, '13 uncommon, 3 outliers|of 12,000', 'flagged (outliers still tracked, the default)');
+pr = poseRow(pc([cam('c0', 10000, 12, 3), cam('c1', 2000, 1, 0, { untested: 40 })], true));
+eq(pr.value + '|' + pr.detail, '13 uncommon, 3 outliers|of 12,000 · outliers not tracked', 'flagged, and outliers left out of tracking');
+eq(pr.title, 'c0: 12 uncommon, 3 outliers of 10,000\nc1: 1 uncommon, 0 outliers of 2,000\n40 with too few nodes to check', 'hover: a line per camera, and the untested');
+eq(poseRow(pc([cam('c0', 500, 4, 0)], true)).value + '|' + poseRow(pc([cam('c0', 500, 4, 0)], true)).detail, '4 uncommon|of 500', 'no outliers: nothing said about tracking, even when outliers would be left out');
+pr = poseRow(pc([cam('c0', 0, 0, 0, { modelled: false }), cam('c1', 0, 0, 0, { modelled: false })]));
+eq(pr.value + '|' + pr.detail, 'Not checked|too few complete poses to learn from', 'no camera could be modelled: not checked');
+pr = poseRow(pc([cam('c0', 900, 2, 1), cam('c1', 0, 0, 0, { modelled: false })]));
+ok(/c1: not checked \(too few complete poses to learn from\)/.test(pr.title), 'a camera without a model says so on hover');
+const notes = (p) => plan(summarizeTrackedIdentities({ identities: mkIds(2), instanceGroups: new Map() }, { frames: 10, animals: 2, poses: p }), C('off'), C('off')).notes;
+ok(notes(pc([cam('c0', 900, 2, 1)])).some((t) => /Flagged 2D poses are marked/.test(t)), 'flagged poses: a note says where to see them');
+ok(!notes(pc([cam('c0', 900, 0, 0)])).some((t) => /2D poses/.test(t)), 'nothing flagged: no note');
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) { failures.forEach(f => console.error('  ✗ ' + f)); process.exit(1); }
