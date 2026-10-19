@@ -1158,7 +1158,9 @@ function submitTrackerFrame(session, run, fi) {
 // Commit one frame the worker tracked: `targets` as tracker-worker.js returns
 // them, rebuilt into the shape commitTrackedFrame reads off a CrossViewTracker
 // (targets in order; each one's this-frame members in its detsByCam order), so
-// the commit itself is the inline one, unchanged.
+// the commit itself is the inline one, unchanged. The shim holds no stale view,
+// so its `points3d` must already be the members' — the worker sends
+// `membersPoints3d`, not the target's own 3D.
 function commitWorkerFrame(session, run, fi, targets) {
     var metas = run.pending.get(fi);
     run.pending.delete(fi);

@@ -1962,13 +1962,16 @@ never one object or buffer per detection — serializing ~2,400 small arrays per
   — per frame, what `commitTrackedFrame` reads, in tracker order: `nT[i]`
   targets holding a detection from >= 2 cameras THIS frame, each with its
   `trackId`, `nMem` (camera index, slot) pairs in `mem` in its `detsByCam` order,
-  and a copy of its 3D as the next `p3len` values of `p3` (-1: none); `live[i]`
+  and a copy of its MEMBERS' 3D (`membersPoints3d` — not `target.points3d`,
+  which also fuses stale views the main thread never sees) as the next `p3len`
+  values of `p3` (-1: none); `live[i]`
   = the tracker's target count after the frame (the run's `numTargets`). All
   transferred.
 - Any throw → `{type: 'error', id, message}`.
 
 **Imports from project modules.** `./pose-data.js` (`Camera`, `Instance`),
-`./cross-view-tracker.js` (`CrossViewTracker`, `Detection`) — both worker-safe.
+`./cross-view-tracker.js` (`CrossViewTracker`, `Detection`, `membersPoints3d`) —
+both worker-safe.
 
 **Imported by.** Spawned by `pose/tracker-pool.js` via
 `new Worker(new URL('pose/tracker-worker.js', document.baseURI), {type: 'module'})`.
@@ -2686,7 +2689,12 @@ holds); fewer than two members ⇒ null. It shares `triangulateDetections` with
 sessions 30.0% of committed groups held a stale view (median 1, age median 5
 frames); the stored 3D moved per node by a median 1.0 mm, p90 27 mm, p99 135 mm,
 and 2.8% of those nodes had 3D only thanks to the stale view (NaN now, as
-Triangulate All gives). See `pose/tracker.js`.
+Triangulate All gives). See `pose/tracker.js`. On a worker run
+(`pose/tracker-worker.js`) the worker calls it and sends THAT 3D back: the main
+thread rebuilds each target from its this-frame members only, so a stale view
+is no longer visible by the time `commitTrackedFrame` runs. That half is pinned
+by `tests/e2e/track-all-worker.mjs` (worker == inline, bit for bit): with the
+worker sending `target.points3d` instead, 3 of its checks fail.
 
 **Exports.** `CrossViewTracker` (class: `trackFrame(detsByCam, camsOrder)`,
 maintains `.targets`), `Detection` (2D observation: `pointsNorm`/`pointsPixel` +
