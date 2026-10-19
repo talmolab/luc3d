@@ -11,7 +11,7 @@
  * `writeInputTensor` the main thread would, so its output is identical.
  */
 
-import { cutCrop, writeInputTensor, CROP, INPUT } from './image-embedder.js?v=a69a92051b02';
+import { cutCrop, writeInputTensor, CROP, INPUT } from './image-embedder.js?v=6deeda0e8fb1';
 
 let canvas = null;
 

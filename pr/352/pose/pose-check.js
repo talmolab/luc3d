@@ -65,6 +65,14 @@ export const POSE_RIDGE = 0.01;
 export const POSE_FIT_ENOUGH = 1000;
 /** Frames sampled (evenly spaced) to fit the models — every frame when fewer. */
 export const POSE_SAMPLE_FRAMES = 3000;
+/**
+ * Visibility patterns a model keeps cached once a check is done (`trimPosePatterns`):
+ * its most-used ones. On the 5-mouse recording a full check builds 9,022 across
+ * 8 cameras — 34 MB of heap kept for as long as the verdicts are — while the top
+ * ~100 per camera cover ~94% of poses, and a rare one rebuilds in ~0.1 ms when a
+ * view draws it.
+ */
+export const POSE_PATTERN_KEEP = 128;
 
 /** Default thresholds on the pose score (Tracking Wizard `poseUncommonZ` / `poseOutlierZ`). */
 export const POSE_UNCOMMON_DEFAULT = 10;
@@ -269,7 +277,7 @@ function getPattern(model, key, slots) {
     for (i = 0; i < v; i++) { mcRe[i] = model.muRe[idx[i]]; mcIm[i] = model.muIm[idx[i]]; mr += mcRe[i]; mi += mcIm[i]; }
     mr /= v; mi /= v;
     for (i = 0; i < v; i++) { mcRe[i] -= mr; mcIm[i] -= mi; }
-    pat = { idx: idx, v: v, mcRe: mcRe, mcIm: mcIm, L: null, df: 2 * v - 4 };
+    pat = { idx: idx, v: v, mcRe: mcRe, mcIm: mcIm, L: null, df: 2 * v - 4, uses: 0 };
     var C = new Float64Array(d * d), r = new Float64Array(d);
     var count = Math.min(model.nFit, POSE_PATTERN_SAMPLE);
     for (var p = 0; p < count; p++) {
@@ -382,8 +390,27 @@ export function poseScore(model, xy) {
     var sl = slots.subarray(0, v);
     var key = patternKey(model, sl);
     var pat = model.patterns.get(key) || getPattern(model, key, Int32Array.from(sl));
+    pat.uses++;
     // Row of the pose on core slots (missing slots unread): reuse two buffers.
     var re = model._rowRe, im = model._rowIm;
     for (c = 0; c < n; c++) { re[c] = xy[2 * model.core[c]]; im[c] = xy[2 * model.core[c] + 1]; }
     return wilsonHilferty(residualD2(model, pat, re, im, 0), pat.df);
+}
+
+/**
+ * Drop all but a model's `keep` most-used visibility patterns (scores do not
+ * change: a dropped pattern is rebuilt, identically, the next time a pose needs
+ * it). Called once a check is done (`finishPoseCheckRun`), never during one — a
+ * full scan meets every pattern again and again, and rebuilding the rare ones
+ * each time would cost seconds.
+ * @param {Object|null} model
+ * @param {number} [keep]  default POSE_PATTERN_KEEP
+ */
+export function trimPosePatterns(model, keep) {
+    if (!model) return;
+    var n = keep == null ? POSE_PATTERN_KEEP : keep;
+    if (model.patterns.size <= n) return;
+    var entries = Array.from(model.patterns.entries());
+    entries.sort(function (a, b) { return b[1].uses - a[1].uses; });
+    model.patterns = new Map(entries.slice(0, n));
 }
