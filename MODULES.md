@@ -14813,6 +14813,28 @@ dropped the flex term, so in a letterboxed axis the picture slid out from under
 the cursor by 10% of that offset per notch (14 video px per notch, measured).
 An axis whose picture still FITS its pane is re-centred by `_constrainOffsets`
 on every step regardless — anchoring can only hold along an overflowing axis.
+The transform is split into three helpers every zoom shares: `_zoomFrame(view)`
+(c, the flex offset f and R, read from the canvas box and its `.video-cell`),
+`_boxPointAt(view, qx, qy, frame)` (screen → box, the inverse, per-axis scale
+included) and `_panToDraw(view, ux, uy, sx, sy, qx, qy, frame)` (the pan that
+draws box point u at screen point q). `_zoomAbout` is the last two in a row.
+
+**A box zoom shows the box — through the same transform.**
+`zoomToRect(view, x1, y1, x2, y2, container)` maps the dragged rectangle's
+corners and centre through `_boxPointAt`, sizes the new uniform scale from the
+corners' extent in SCREEN axes (`R·u` — at one scale S the rectangle is drawn
+S × that wide/tall, for any rotation, and a per-axis 1:1 start state included),
+then `_panToDraw`s the centre to the container centre. It used to compute
+`(x − off) / s`, which drops the flex term and the rotation: along a
+letterboxed axis the rectangle's centre landed `f·(1 − s)` px off the pane
+centre before the edge clamp (318 video px measured for f = 144.5, s = 4), and a
+rotated view zoomed somewhere else entirely. Unrotated, the scale it picks is
+the old `min(cW·sx/w, cH·sy/h)` exactly. Covered by
+`tests/e2e/box-zoom-letterbox.mjs` — real drags, letterboxed on each axis,
+rotated 90° and 30°, plus a direct call from a panned 1:1 state; each asserts
+the zoomed picture overflows the pane on all four sides, so the clamp cannot be
+what lands it. Its quarter-pixel tolerance is what lets it also catch the
+vertical axis divided by the horizontal 1:1 scale (off by 1.1 video px).
 
 **Native resolution (1:1).** View ▸ Native Resolution / `Shift+0`
 (`setNativeResolution`, `toggleNativeResolution`) shows a view at ONE VIDEO
