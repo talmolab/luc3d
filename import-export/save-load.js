@@ -351,7 +351,8 @@ function serializeSessionFrames(session) {
 
 async function ensureSleapIO() {
     if (window.SleapIO) return window.SleapIO;
-    var mod = await import('./lib/sleap-io/index.browser.js');
+    // Relative to THIS module (import-export/), not the page — hence `../`.
+    var mod = await import('../lib/sleap-io/index.browser.js');
     window.SleapIO = mod;
     return mod;
 }
