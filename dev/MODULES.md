@@ -14559,6 +14559,7 @@ re-vendor that only renamed the chunk) — this was a latent bug from day one
 of #141, not a regression from anything touched later. Fixed by sorting
 `_frameTimes` ascending by timestamp at the end of `initialize()` — see
 CLAUDE.md's sleap-io.js "LOCAL PATCH (issue #115, decode-order)" entry.
+Reported upstream as sleap-io.js#262.
 Verified with a real ffmpeg-generated B-frame video (`-bf 3 -g 10`,
 `tests/fixtures/bframes-test/`): 18 of 30 frames (60%) decoded wrong before
 the patch, 0 after. Covered by `tests/e2e/mediabunny-bframe-decode-order.mjs`
@@ -14572,7 +14573,8 @@ It now passes `{ metadataOnly: true }` (identical packets/order/timestamps,
 pinned by `tests/e2e/mediabunny-frame-index-metadata-only.mjs`), so
 `_initMediabunny` drops from ~120 ms to ~28 ms per HardFight camera, and the
 8-camera session-folder load's parallel decoder opens finish in ~0.46 s instead
-of ~1.04 s. See CLAUDE.md's "LOCAL PATCH (luc3d frame-index)".
+of ~1.04 s. See CLAUDE.md's "LOCAL PATCH (luc3d frame-index)". Reported
+upstream as sleap-io.js#262.
 
 **`switchSource()` must refresh `_mbBackend` too (issue #115 regression,
 `eric/seeking-regression`).** `switchSource(source)` — used by the pooled-
