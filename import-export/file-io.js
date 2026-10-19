@@ -2190,9 +2190,6 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
     var numNodes = session.skeleton.nodes.length;
     var allFrameIndices = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
 
-    // Map to look up labeled frames by (videoIdx, frameIdx)
-    var lfLookup = new Map(); // "videoIdx:frameIdx" → LabeledFrame
-
     for (var fi = 0; fi < allFrameIndices.length; fi++) {
         var frameIdx = allFrameIndices[fi];
         var fg = session.frameGroups.get(frameIdx);
@@ -2246,7 +2243,6 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
                 var lf = new SIO.LabeledFrame({ video: video, frameIdx: frameIdx, instances: frameInstances });
                 labeledFrames.push(lf);
                 lfByCamera.set(sioCam, lf);
-                lfLookup.set(camIdx + ':' + frameIdx, lf);
             }
         }
         // Handle ungrouped instances for cameras that had no grouped instances
@@ -2264,7 +2260,6 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
                 var ulLf = new SIO.LabeledFrame({ video: ulVideo, frameIdx: frameIdx, instances: ulFrameInsts });
                 labeledFrames.push(ulLf);
                 lfByCamera.set(ulSioCam, ulLf);
-                lfLookup.set(ulCamIdx + ':' + frameIdx, ulLf);
             }
         }
 

@@ -16032,6 +16032,13 @@ loading-overlay/status-text UI helpers.
   eager `buildSlpLabelsAllViews` + `saveSlpToBytes` (which would re-OOM and
   silently drop every unvisited frame). A mixed project (any session without a
   `lazyLoader`, e.g. hand-labeled) still falls through to the eager path.
+  **The eager path's peak is the `Labels` graph, not the writer** (luc3d
+  eager-save): the vendored `writeLabeledFrames` now appends the four 2D tables
+  through fixed-size buffers instead of one boxed row per keypoint, which is
+  what ran a 17-camera × 34-node × 36,000-frame project (1,390,390 instances)
+  out of memory. What is left is `buildSlpLabelsAllViews`' `SIO.Instance` per
+  2D instance, ~0.93 KB of V8 heap each while the save runs (1.29 GB there; the
+  whole save peaked at 2,234 MB). Measured by `tests/e2e/_diag-eager-save-heap.mjs`.
   **Large-project size warning:** before entering the streaming path,
   `estimateLazySaveRiskBytes(sessionsToExport)` computes a rough proxy for
   PASS-1's peak JS memory (total frame x camera pairs across every lazy
