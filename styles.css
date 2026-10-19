@@ -6360,6 +6360,21 @@ kbd {
   filter: brightness(1.15);
 }
 
+/* The macOS folder-confirm tip (ui/folder-confirm-tip.js). */
+.folder-tip-modal .plane-confirm-message + .plane-confirm-message {
+  margin-top: 8px;
+}
+
+.folder-tip-dontshow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
 /* ============================================
    Set Angle Between Two Planes (ui/plane-angle.js)
    ============================================ */
