@@ -57,6 +57,26 @@ function frameNearTime(times, t) {
     return Math.abs(times[lo] - t) <= half ? lo : -1;
 }
 
+/**
+ * Whether mp4box's `onReady` info describes a FRAGMENTED MP4, whose samples are
+ * listed in the fragments still to come rather than in the moov. `isFragmented`
+ * is mp4box's own answer (the moov has an `mvex`); a video track whose duration
+ * is 0 says the same thing about a file that answer misses.
+ */
+export function isFragmentedInfo(info) {
+    if (!info) return false;
+    if (info.isFragmented) return true;
+    var track = (info.tracks || []).find(function (t) { return t.type === 'video'; });
+    return !!track && !(track.duration > 0);
+}
+
+/** Sum of mp4box sample durations (track timescale units). */
+export function sumSampleDurations(samples) {
+    var total = 0;
+    for (var i = 0; i < samples.length; i++) total += samples[i].duration || 0;
+    return total;
+}
+
 // ---------------------------------------------------------------------------
 // OnDemandVideoDecoder
 // ---------------------------------------------------------------------------
@@ -79,6 +99,11 @@ export class OnDemandVideoDecoder {
         this.isDecoding = false;
         this.pendingFrame = null;
         this.CHUNK_SIZE = 1024 * 1024; // 1 MB
+        // Read size after skipping more than a chunk of a fragment's mdat
+        // (_nextFragmentOffset): room for the next moof (~0.5 KB per second of
+        // 60 fps video; a bigger one costs one more read) without reading much
+        // of the next mdat.
+        this.FRAGMENT_PROBE_SIZE = 8 * 1024;
 
         // HTML5 video element for fast loading and fallback frame extraction
         this._videoEl = null;
@@ -386,33 +411,62 @@ export class OnDemandVideoDecoder {
     /**
      * Background mp4box initialization for WebCodecs precise decoding.
      * Does not block the UI - video is already usable via HTML5 element.
+     *
+     * A FRAGMENTED MP4 (what campy writes by default: `empty_moov` +
+     * `frag_keyframe`, so a crash leaves the file readable up to its last
+     * fragment) lists its samples in the fragments (`moof`/`trun`), not in the
+     * `moov`, and its `moov` says duration 0. mp4box fires `onReady` as soon as
+     * the `moov` is parsed, so stopping there counted only the fragments in the
+     * first chunk: a 1,200-frame 60 fps rig video loaded as 420 frames at 21 fps
+     * (420 / the `<video>` element's 20 s). So for a fragmented file the scan
+     * goes on to the end of the file and the fps comes from the sample
+     * durations. It jumps over `mdat` payloads (`_nextFragmentOffset`), and
+     * `createFile(false)` lets mp4box drop media bytes it was handed, since
+     * this pass never extracts a sample. A regular MP4 still stops at
+     * `onReady`. Measured locally (Chrome): a 30-min 60 fps file of 90 KB
+     * fragments scans in ~0.15 s; a 1 GB 1-min one of 8.7 MB fragments in
+     * ~25 ms, reading 1.9 MB of it.
      */
     async _initMp4box() {
         var self = this;
-        this.mp4boxFile = MP4Box.createFile();
+        this.mp4boxFile = MP4Box.createFile(false);
 
+        var info = null;
         var ready = new Promise(function (resolve, reject) {
             self.mp4boxFile.onError = reject;
-            self.mp4boxFile.onReady = resolve;
+            self.mp4boxFile.onReady = function (i) { info = i; resolve(i); };
         });
 
         var offset = 0;
-        var moovParsed = false;
-        ready.then(function () { moovParsed = true; });
+        var fragmented = false;   // decided once, by the append that parses the moov
+        var jumped = 0;           // mdat bytes the last step skipped
 
-        while (offset < this.fileSize && !moovParsed) {
-            var chunkSize = Math.min(this.CHUNK_SIZE, this.fileSize - offset);
+        while (offset < this.fileSize && !(info && !fragmented)) {
+            var start = offset;
+            var chunkSize = Math.min(jumped > this.CHUNK_SIZE ? this.FRAGMENT_PROBE_SIZE : this.CHUNK_SIZE,
+                this.fileSize - offset);
             var buffer = await this.readChunk(offset, chunkSize);
             buffer.fileStart = offset;
             var next = this.mp4boxFile.appendBuffer(buffer);
             offset = (next !== undefined) ? next : (offset + chunkSize);
+            if (info && !fragmented) fragmented = isFragmentedInfo(info);
+            if (fragmented) {
+                var after = this._nextFragmentOffset(offset);
+                jumped = after - offset;
+                offset = after;
+            }
+            // mp4box asking again for bytes it was already given would loop
+            // here forever (it does exactly that if handed the rest of an mdat
+            // whose start it has discarded — see _nextFragmentOffset).
+            if (offset <= start) throw new Error("MP4 parse stalled at byte " + start);
             await new Promise(function (r) { setTimeout(r, 0); });
             if (typeof self._onProgress === 'function') {
                 self._onProgress({ phase: 'mp4box', ratio: Math.min(offset / self.fileSize, 0.999) });
             }
         }
+        if (fragmented) this.mp4boxFile.flush();
 
-        var info = await ready;
+        info = await ready;
 
         var videoTrackInfo = info.tracks.find(function (t) { return t.type === "video"; });
         if (!videoTrackInfo) {
@@ -445,7 +499,16 @@ export class OnDemandVideoDecoder {
         if (mp4Samples && mp4Samples.length > 0) {
             // Update frame count and FPS from real sample data
             var realFrameCount = mp4Samples.length;
-            if (this._videoEl && this._videoEl.duration > 0) {
+            // A fragmented MP4's container duration is 0 (empty moov, usually
+            // no mehd): take the fps from the samples' own durations, and give
+            // `videoTrack` the duration they add up to, since the fps readers
+            // (updateTotalFrames, playback's nativeFps) divide by it and fall
+            // back to 30 when it is 0.
+            var sampleSpan = (videoTrackInfo.duration > 0) ? 0 : sumSampleDurations(mp4Samples);
+            if (sampleSpan > 0 && videoTrackInfo.timescale > 0) {
+                this._fps = realFrameCount / (sampleSpan / videoTrackInfo.timescale);
+                videoTrackInfo = Object.assign({}, videoTrackInfo, { duration: sampleSpan });
+            } else if (this._videoEl && this._videoEl.duration > 0) {
                 this._fps = realFrameCount / this._videoEl.duration;
             }
 
@@ -482,7 +545,8 @@ export class OnDemandVideoDecoder {
             // handles B-frame reordering natively and gives correct frames.
             // We only use mp4box for accurate FPS and frame count.
 
-            videoLog("MP4Box ready: " + realFrameCount + " frames, fps=" + this._fps.toFixed(2) + " (using HTML5 decode with accurate FPS)");
+            videoLog("MP4Box ready: " + realFrameCount + " frames, fps=" + this._fps.toFixed(2)
+                + (fragmented ? " (fragmented MP4, every fragment read)" : "") + " (using HTML5 decode with accurate FPS)");
         } else {
             videoLog("MP4Box returned no samples, keeping HTML5 mode", "warn");
         }
@@ -491,6 +555,30 @@ export class OnDemandVideoDecoder {
         }
         // Release mp4box resources - we only needed it for metadata
         this.mp4boxFile = null;
+    }
+
+    /**
+     * Where a fragmented-MP4 scan reads next, given the offset mp4box asked
+     * for. When a read ends inside an `mdat`, mp4box asks for the bytes right
+     * after it, i.e. the rest of the media; the next `moof` starts at the
+     * `mdat`'s end, so the scan jumps there (mp4box finds a buffer that starts
+     * there by position, `MultiBufferStream.seek`, as it does for a
+     * moov-at-end file whose leading mdat it skips). The jump is also what
+     * keeps the scan going at all: with `createFile(false)` mp4box drops the
+     * mdat bytes it has used, and handed the rest of that mdat it asks for an
+     * offset it already had, forever. `parsingMdat` is internal to mp4box
+     * (0.5.2, pinned in index.html and offline-deps.json); without it the
+     * scan's stall check throws and the decoder keeps its HTML5 estimate.
+     * After a jump of more than a chunk the next read is a small probe, room
+     * for the next moof; small fragments are still read a chunk at a time.
+     */
+    _nextFragmentOffset(offset) {
+        var mdat = this.mp4boxFile && this.mp4boxFile.parsingMdat;
+        if (mdat && mdat.start >= 0 && mdat.size > 0) {
+            var end = Math.min(mdat.start + mdat.size, this.fileSize);
+            if (end > offset) return end;
+        }
+        return offset;
     }
 
     async readChunk(offset, size) {
