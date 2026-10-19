@@ -22,12 +22,28 @@
  * project's instances come and go — so the UI scores the instance it is drawing
  * against the run's models instead (`poseCheckOf`), which costs about a
  * microsecond.
+ *
+ * ## Two ways to run it
+ *
+ * A tracking pass scores each detection as it is offered to the tracker
+ * (`poseCheckExcludes`). Tracks ▸ Check Poses (`checkSessionPoses`) scores every
+ * prediction of the whole project without tracking anything — the way back to
+ * the marks after a reopen, since the verdicts are never saved. On a lazy
+ * project it reads each RESIDENT frame from the session (what is on screen,
+ * edits included) and every other frame from the loader, released again
+ * unless it was already cached.
  */
 
 import {
-    createPoseSample, fitPoseModel, poseScore, poseClassOf, poseSampleStride,
+    createPoseSample, fitPoseModel, poseScore, poseClassOf, poseSampleStride, trimPosePatterns,
     POSE_UNCOMMON, POSE_OUTLIER, POSE_COMMON,
 } from './pose-check.js';
+
+// A windowed lazy loader — `session.frameGroups` is then only the resident window.
+function isWindowedLoader(loader) {
+    return !!(loader && loader.isSync && typeof loader.releaseWindow === 'function' &&
+        typeof loader.getFrameSync === 'function');
+}
 
 // A lazy-loader frame entry's `points` ([x, y] | null per node) as interleaved xy.
 function pointsToXY(points, out) {
@@ -50,9 +66,7 @@ export function fitSessionPoseModels(session, cameras) {
     var samples = new Map();
     for (var c = 0; c < cameras.length; c++) samples.set(cameras[c].name, createPoseSample(K));
     var loader = session.lazyLoader;
-    var windowed = loader && loader.isSync && typeof loader.releaseWindow === 'function' &&
-        typeof loader.getFrameSync === 'function';
-    if (windowed) {
+    if (isWindowedLoader(loader)) {
         var xy = new Float64Array(2 * K);
         var stride = poseSampleStride(loader.nFrames);
         for (var fi = 0; fi < loader.nFrames; fi += stride) {
@@ -122,17 +136,121 @@ export function createPoseCheckRun(models, uncommonAt, outlierAt, exclude) {
  */
 export function poseCheckExcludes(run, camName, inst, frameIdx) {
     if (!run || !inst || inst.type !== 'predicted') return false;
+    return recordPose(run, camName, inst._xy, frameIdx) === POSE_OUTLIER && run.exclude;
+}
+
+// Score one predicted pose (interleaved xy), count it and flag it; its class.
+function recordPose(run, camName, xy, frameIdx) {
     var c = run.counts.get(camName);
     if (!c) { c = emptyCounts(); run.counts.set(camName, c); }
     var model = run.models.get(camName);
-    var z = model ? poseScore(model, inst._xy) : NaN;
+    var z = model ? poseScore(model, xy) : NaN;
     var cls = poseClassOf(z, run.uncommonAt, run.outlierAt);
-    if (cls === POSE_COMMON) { c.checked++; c.common++; return false; }
-    if (cls < 0) { c.untested++; return false; }
+    if (cls === POSE_COMMON) { c.checked++; c.common++; return cls; }
+    if (cls < 0) { c.untested++; return cls; }
     c.checked++;
     if (cls === POSE_UNCOMMON) c.uncommon++; else c.outliers++;
     run.flags.push({ frame: frameIdx, camera: camName, score: z, cls: cls });
-    return cls === POSE_OUTLIER && run.exclude;
+    return cls;
+}
+
+// Score every prediction of a FrameGroup in the given cameras.
+function recordFrameGroup(run, fg, cameraNames, frameIdx) {
+    cameraNames.forEach(function (camName) {
+        var linked = fg.getInstances(camName);
+        if (linked) for (var i = 0; i < linked.length; i++) {
+            if (linked[i].type === 'predicted') recordPose(run, camName, linked[i]._xy, frameIdx);
+        }
+        var unlinked = fg.getUnlinkedInstances(camName);
+        if (unlinked) for (var j = 0; j < unlinked.length; j++) {
+            if (unlinked[j].instance.type === 'predicted') recordPose(run, camName, unlinked[j].instance._xy, frameIdx);
+        }
+    });
+}
+
+/** Frames between progress reports in `checkSessionPoses`. */
+var CHECK_PROGRESS_FRAMES = 256;
+
+/**
+ * Tracks ▸ Check Poses: fit every camera's model and score EVERY prediction of
+ * the project, tracking nothing. The result is what a tracking pass leaves
+ * (`finishPoseCheckRun`), with `excluded` false: nothing was left out.
+ *
+ * A windowed lazy project is read frame by frame from its loader, except the
+ * resident frames, which are read from the session; a frame the scan loaded is
+ * released again unless it was already cached. Any other session must hold
+ * every frame in `frameGroups` (the caller materializes a non-windowed lazy one
+ * first, as Track All does).
+ *
+ * @param {Object} session
+ * @param {Array<{name:string}>} cameras
+ * @param {number} uncommonAt  Tracking Wizard `poseUncommonZ`
+ * @param {number} outlierAt   Tracking Wizard `poseOutlierZ`
+ * @param {{onProgress?: function(number, number): (Promise|void)}} [opts]  called
+ *   every few hundred frames with (frames done, frames in all), and awaited, so
+ *   the caller can paint a progress bar
+ */
+export async function checkSessionPoses(session, cameras, uncommonAt, outlierAt, opts) {
+    var onProgress = opts && opts.onProgress;
+    var run = createPoseCheckRun(fitSessionPoseModels(session, cameras), uncommonAt, outlierAt, false);
+    var names = cameras.map(function (c) { return c.name; });
+    var wanted = new Set(names);
+    var loader = session.lazyLoader;
+    var total;
+    if (isWindowedLoader(loader)) {
+        total = loader.nFrames;
+        var K = session.skeleton && session.skeleton.nodes ? session.skeleton.nodes.length : 0;
+        var xy = new Float64Array(2 * K);
+        for (var fi = 0; fi < total; fi++) {
+            var fg = session.frameGroups.has(fi) ? session.getFrameGroup(fi) : null;
+            if (fg) {
+                recordFrameGroup(run, fg, names, fi);
+            } else {
+                var wasCached = !!(loader.cache && loader.cache.has(fi));
+                var data = loader.getFrameSync(fi);
+                if (data) {
+                    data.forEach(function (list, camName) {
+                        if (!wanted.has(camName) || !list) return;
+                        for (var i = 0; i < list.length; i++) {
+                            var d = list[i];
+                            if (d && d.type === 'predicted') recordPose(run, camName, pointsToXY(d.points, xy), fi);
+                        }
+                    });
+                }
+                if (!wasCached && !session.frameGroups.has(fi) && typeof loader.releaseFrame === 'function') {
+                    loader.releaseFrame(fi);
+                }
+            }
+            if (onProgress && (fi + 1) % CHECK_PROGRESS_FRAMES === 0) await onProgress(fi + 1, total);
+        }
+    } else {
+        var frames = session.frameIndices || [];
+        total = frames.length;
+        for (var f = 0; f < total; f++) {
+            var g = session.getFrameGroup(frames[f]);
+            if (g) recordFrameGroup(run, g, names, frames[f]);
+            if (onProgress && (f + 1) % CHECK_PROGRESS_FRAMES === 0) await onProgress(f + 1, total);
+        }
+    }
+    if (onProgress) await onProgress(total, total);
+    return finishPoseCheckRun(run);
+}
+
+/**
+ * The status line for a finished check (`session.poseCheck`):
+ * "2D poses: 13 uncommon, 3 outliers of 431,112 checked — marked ? and ✕ in the
+ * views; hover a node for its score".
+ */
+export function describePoseCheck(pc) {
+    var n = function (v) { return (v || 0).toLocaleString('en-US'); };
+    if (!pc || !pc.cameras || !pc.cameras.some(function (c) { return c.modelled; })) {
+        return '2D poses: not checked — too few complete poses to learn from';
+    }
+    var t = pc.total;
+    var flagged = [t.uncommon ? n(t.uncommon) + ' uncommon' : '',
+        t.outliers ? n(t.outliers) + (t.outliers === 1 ? ' outlier' : ' outliers') : ''].filter(Boolean).join(', ');
+    return '2D poses: ' + (flagged || 'none flagged') + ' of ' + n(t.checked) + ' checked' +
+        (flagged ? ' — marked ? and ✕ in the views; hover a node for its score' : '');
 }
 
 /**
@@ -140,10 +258,13 @@ export function poseCheckExcludes(run, camName, inst, frameIdx) {
  * (so the views can score what they draw), the thresholds it used, whether it
  * left outliers out of tracking (`excluded`), the counts per camera and in total,
  * and the flagged detections in frame order. Transient: never saved with the project.
+ * Each model's pattern cache is trimmed to its most-used patterns first
+ * (`trimPosePatterns`), since the result is kept for as long as the session is.
  */
 export function finishPoseCheckRun(run) {
     var total = emptyCounts(), cameras = [];
     run.models.forEach(function (model, name) {
+        trimPosePatterns(model);
         var c = run.counts.get(name) || emptyCounts();
         cameras.push(Object.assign({ name: name, modelled: !!model }, c));
         for (var k in total) total[k] += c[k];

@@ -14,7 +14,9 @@
  * fit set; the fit does not depend on the order the poses were offered in; and
  * the session glue — the eager and lazy samplers agree, the lazy one releases
  * only frames it loaded itself, a tracking run counts and flags, never touches a
- * user instance, and leaves outlier out.
+ * user instance, and leaves outliers out only when asked — and Tracks ▸ Check
+ * Poses, which scores every prediction (a lazy project's resident frames from
+ * the session, the rest from the store) and tracks nothing.
  *
  * The tracker side (a outlier detection is not grouped, the summary row) is
  * covered by tests/e2e/track-all-pose-check.mjs.
@@ -353,6 +355,62 @@ ok(/^Pose: common \(score -?\d+\.\d\)$/.test(PS.poseTooltipLine(PS.poseCheckOf(s
     'tooltip of a typical pose');
 ok(PS.poseCheckOf(session, 'A', frames.get(100).get('A')[2]) === null, 'no verdict on a user instance');
 ok(PS.poseCheckOf({}, 'A', g) === null && PS.poseCheckOf(session, 'Z', g) === null, 'no verdict without a check or a model');
+
+// ---- 11. Tracks ▸ Check Poses: every prediction, nothing left out -------------------------
+{
+    const progress = [];
+    const resE = await PS.checkSessionPoses(eager, cams, POSE_UNCOMMON_DEFAULT, POSE_OUTLIER_DEFAULT,
+        { onProgress: (done, total) => { progress.push([done, total]); } });
+    ok(resE.total.checked + resE.total.untested === 4 * NF, `check: every prediction of every frame, no user instance (${resE.total.checked + resE.total.untested})`);
+    ok(resE.excluded === false, '...and nothing is left out (nothing is tracked)');
+    ok(resE.flags.filter((f) => f.cls === POSE_OUTLIER).map((f) => f.frame).join() === OUTLIERS_AT.join(), 'the planted outliers are found');
+    ok(progress.length > 1 && progress.every((p, i) => i === 0 || p[0] > progress[i - 1][0]) &&
+        progress[progress.length - 1][0] === NF && progress[progress.length - 1][1] === NF, 'progress is reported, rising, ending at the total');
+    ok(/^2D poses: (\d+ uncommon, )?3 outliers of [\d,]+ checked — marked \? and ✕ in the views; hover a node for its score$/.test(PS.describePoseCheck(resE)),
+        `status line: "${PS.describePoseCheck(resE)}"`);
+    ok(PS.describePoseCheck(Object.assign({}, resE, { total: Object.assign({}, resE.total, { uncommon: 0, outliers: 0 }) })) ===
+        '2D poses: none flagged of ' + resE.total.checked.toLocaleString('en-US') + ' checked', 'status line: nothing flagged');
+    ok(PS.describePoseCheck({ cameras: [{ name: 'A', modelled: false }], total: {} }) ===
+        '2D poses: not checked — too few complete poses to learn from', 'status line: nothing could be modelled');
+
+    // A lazy project: frame 700 is RESIDENT, and there its planted outlier has been
+    // edited back to a typical pose in memory — the store still holds the outlier.
+    // The check must read the resident frame from the session, the rest from the store.
+    const edited = new Map([...frames.get(700)].map(([cam, list]) => [cam, list.slice()]));
+    edited.get('A')[0] = inst(makePose(rng(12)));
+    const released2 = [];
+    const lazy2 = {
+        skeleton: eager.skeleton,
+        frameGroups: new Map([[700, true]]),
+        getFrameGroup: (f) => f === 700 ? {
+            getInstances: (cam) => edited.get(cam).slice(0, 1),
+            getUnlinkedInstances: (cam) => edited.get(cam).slice(1).map((i, j) => ({ id: j, instance: i })),
+        } : undefined,
+        lazyLoader: Object.assign({}, lazy.lazyLoader, { cache: new Map([[3, true]]), releaseFrame(f) { released2.push(f); } }),
+    };
+    const resL = await PS.checkSessionPoses(lazy2, cams, POSE_UNCOMMON_DEFAULT, POSE_OUTLIER_DEFAULT);
+    ok(resL.total.checked + resL.total.untested === 4 * NF, 'lazy check: every prediction, the same count');
+    ok(resL.flags.filter((f) => f.cls === POSE_OUTLIER).map((f) => f.frame).join() === '7,70',
+        `lazy check: the resident frame is read from the session (its edit is seen), the rest from the store (${resL.flags.filter((f) => f.cls === POSE_OUTLIER).map((f) => f.frame)})`);
+    const rel = new Set(released2);
+    ok(!rel.has(700) && !rel.has(3) && rel.size === NF - 2, 'lazy check: releases every frame it loaded, never a resident or cached one');
+}
+
+// ---- 12. once a check is done its pattern cache is trimmed — and no score changes ---------
+{
+    const m = fitPoseModel(sample.poses, K);
+    const rp = rng(13), poses = [];
+    for (let i = 0; i < 3000; i++) poses.push(dropNodes(makePose(rp), rp, 0.25));
+    const before = poses.map((p) => poseScore(m, p));
+    const n0 = m.patterns.size;
+    const complete = (1 << K) - 1;
+    PC.trimPosePatterns(m, 16);
+    ok(n0 > 16 && m.patterns.size === 16, `trimmed to the 16 most-used patterns (from ${n0})`);
+    ok(m.patterns.has(complete), '...the complete pattern, the most used, is kept');
+    const after = poses.map((p) => poseScore(m, p));
+    ok(after.every((z, i) => Object.is(z, before[i])), '...and every score is bit-identical (dropped patterns rebuild exactly)');
+    ok(PC.POSE_PATTERN_KEEP === 128, 'a finished check keeps 128 per camera');
+}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) { failures.forEach((f) => console.error('  ✗ ' + f)); process.exit(1); }

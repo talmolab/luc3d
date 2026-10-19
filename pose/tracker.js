@@ -1333,10 +1333,11 @@ export async function trackCurrentFrame() {
         // frame's prior tracker groups so repeated runs don't stack.
         session.instanceGroups.set(state.currentFrame, []);
         // The 2D pose check, with the models and thresholds of the last Track All
-        // (it needs the whole session to fit them, and one frame is not that).
+        // or Check Poses (it needs the whole session to fit them, and one frame is
+        // not that); whether outliers are left out follows the Tracking Wizard.
         var pc = session.poseCheck;
         var poseRun = pc && getTrackingThreshold('poseCheck') > 0
-            ? createPoseCheckRun(pc.models, pc.uncommonAt, pc.outlierAt, pc.excluded) : null;
+            ? createPoseCheckRun(pc.models, pc.uncommonAt, pc.outlierAt, getTrackingThreshold('poseExcludeOutliers') > 0) : null;
         var lr = runCrossViewTracker(session, trackedCameras, [state.currentFrame], false, effectiveNumAnimals,
             undefined, poseRun);
         // Show what tracking produced: the predictions only (User, Reproj, Errors off).

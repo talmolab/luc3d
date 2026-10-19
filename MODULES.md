@@ -2058,8 +2058,11 @@ dropped before the tracker sees it when the run excludes outliers
 (`tests/e2e/track-all-worker.mjs`). At the
 end the result goes on `session.poseCheck` (cleared at the start, so a failed
 pass leaves no stale verdicts) and into the summary (`summaryOpts.poses`). Track
-Frame reuses the last pass's models, thresholds and exclusion choice
-(`runCrossViewTracker`'s `poseRun`): one frame is too little to learn from. A failure to fit only logs —
+Frame reuses the models and thresholds of the last Track All or Check Poses
+(`runCrossViewTracker`'s `poseRun`): one frame is too little to learn from.
+Whether it leaves outliers out follows the Tracking Wizard now, not the earlier
+pass — a Check Poses leaves `excluded: false` on the session, and that is not a
+statement about how Track Frame should track. A failure to fit only logs —
 tracking goes ahead unchecked. Covered by `tests/e2e/track-all-pose-check.mjs`.
 
 **Every tracking pass marks the project dirty.** Track Frame, Track Frame Range
@@ -4110,9 +4113,18 @@ A model change means re-running that measurement.
 **Speed.** ~0.65 µs per pose once its pattern is cached, ~0.085 ms per new
 pattern (about 1,000–2,000 per camera on SLAP).
 
+**Memory: the pattern cache is trimmed once a check is done.** Each pattern
+counts its uses; `trimPosePatterns(model, keep)` keeps the `POSE_PATTERN_KEEP`
+(128) most-used and drops the rest, which rebuild bit-identically when a view
+draws a pose that needs one. On the 5-mouse recording a full check built 9,022
+patterns across 8 cameras — 34 MB of the 41 MB the verdicts held for as long as
+the session does; trimmed, the verdicts hold 12 MB. Never trim DURING a check: a
+scan meets the rare patterns again and again, and rebuilding each one every time
+would cost seconds.
+
 **Key exports.** `createPoseSample(numNodes)` (`offer(xy)` keeps poses with ≥ 4
 nodes), `fitPoseModel(poses, numNodes)` → model | null, `poseScore(model, xy)` →
-number | NaN, `poseClassOf(score, uncommonAt, outlierAt)` (outlierAt ≤ 0: nothing
+number | NaN, `trimPosePatterns(model, keep)` (above), `poseClassOf(score, uncommonAt, outlierAt)` (outlierAt ≤ 0: nothing
 is an outlier) and `poseClassName`, `wilsonHilferty(d2, df)`,
 `poseSampleStride(nFrames)` (every Nth frame for ~`POSE_SAMPLE_FRAMES` = 3,000),
 the tunables above and `POSE_UNTESTED` / `POSE_COMMON` / `POSE_UNCOMMON` /
@@ -4179,6 +4191,23 @@ So over 46 runs it fixed two lasting swaps and caused two, whichever way the
 gate is set — the same failure mode as the instance-score filter. By default
 outliers are therefore flagged and counted but still tracked.
 
+**Tracks ▸ Check Poses: `checkSessionPoses(session, cameras, uncommonAt,
+outlierAt, {onProgress})`.** Fits every camera's model and scores EVERY
+prediction of the project, tracking nothing — the way a reopened project gets its
+marks back, since verdicts are never saved. Its result is a finished run with
+`excluded: false`. On a windowed lazy project it reads each RESIDENT frame from
+the session (what is on screen, edits included) and every other frame from the
+loader (`getFrameSync`), releasing each frame it loaded unless it was already in
+the loader's cache; anything else must hold every frame in `frameGroups` (the
+caller materializes a non-windowed lazy session first). `onProgress(done, total)`
+is called every 256 frames and awaited. `describePoseCheck(poseCheck)` is its
+status line: "2D poses: 13 uncommon, 3 outliers of 431,112 checked — marked ? and
+✕ in the views; hover a node for its score" ("none flagged", or "not checked —
+too few complete poses to learn from"). Measured on the real lazy 5-mouse
+recording: the same 4,220,071 / 40,907 / 14,242 counts Track All's own check
+reports, in 17 s, with the resident window and the loader cache unchanged after
+it and no heap growth across repeated runs.
+
 **The views score what they draw.** Nothing is written onto an Instance (a lazy
 project's instances come and go), so `poseCheckOf(session, camName, inst)` scores
 the instance against the run's models on demand (about a microsecond) →
@@ -4188,15 +4217,19 @@ tracked", "Pose: too few nodes to check".
 
 **Imports from project modules.** `./pose-check.js`.
 
-**Imported by.** `pose/tracker.js`, `ui/rendering.js`, `ui/interaction.js`.
+**Imported by.** `pose/tracker.js`, `ui/rendering.js`, `ui/interaction.js`,
+`ui/pose-check-command.js`.
 
 **User-facing features.** The "2D poses" row of the Track All summary, the ?/✕
-marks in the views, the tooltip line, and (opt-in) outliers left out of tracking.
+marks in the views, the tooltip line, (opt-in) outliers left out of tracking, and
+Tracks ▸ Check Poses.
 
 Covered by `tests/test-pose-check.mjs` (§10: eager and lazy sampling agree, the
 lazy sampler's release rule, the run's counts and flags, user instances, the
-default keeping outliers, outlier threshold 0) and
-`tests/e2e/track-all-pose-check.mjs`.
+default keeping outliers, outlier threshold 0; §11: Check Poses on an eager and a
+lazy session, resident frames read from the session, the release rule, the
+status line; §12: trimming leaves every score bit-identical),
+`tests/e2e/track-all-pose-check.mjs` and `tests/e2e/check-poses-command.mjs`.
 
 ---
 
@@ -11828,6 +11861,46 @@ a 100 fps recording and nearly 2 s of a 30 fps one. DOM-free and import-free, so
 
 **Imported by.** `ui/app-state.js`, `ui/ui-wiring.js`, `pose/tracker.js`.
 
+### ui/pose-check-command.js
+
+**Purpose.** Tracks ▸ **Check Poses**: the 2D pose check (`pose/pose-check.js`)
+on its own, tracking nothing. Track All's verdicts are never saved, so a reopened
+project has no ?/✕ marks, no tooltip line and no counts until the next Track All;
+this brings them back. `checkPoses()` fits each camera's model and scores every
+prediction of the project (`checkSessionPoses`), with the Tracking Wizard's
+CURRENT thresholds, on a progress card titled "Check Poses" (a worker-backed lazy
+loader holds every frame first, as Track All does for it), then sets
+`session.poseCheck`, redraws the views and puts `describePoseCheck`'s line in the
+status bar. Returns the result, or null when there was nothing to check or it
+failed (the status bar says which).
+
+**Rules.**
+- **It does NOT mark the project dirty.** It changes no annotation and no
+  identity, and the verdicts are not saved.
+- **It runs whatever the "Check 2D poses during tracking" toggle says.** That
+  toggle governs Track All; this is an explicit request.
+- **It leaves outliers in whatever state tracking left them** — it only scores.
+  After a Track All that left outliers out, those detections stay ungrouped, and
+  the tooltip stops saying "not tracked" because this check did not track.
+
+**Key exports.** `checkPoses()`.
+
+**Imports from project modules.** `./app-state.js` (`state`, `getActiveSession`),
+`./settings.js` (`getTrackingThreshold`), `../import-export/save-load.js`
+(`setStatus`), `./loading-overlay.js` (`showLoadingProgress`,
+`createProgressPacer`, `yieldToPaint`, `hideLoading`), `./rendering.js`
+(`drawAllOverlays`), `../pose/triangulation.js` (`loadAllLazyFrames`),
+`../pose/pose-check-session.js` (`checkSessionPoses`, `describePoseCheck`).
+
+**Imported by.** `ui/ui-wiring.js` (`#menuCheckPoses`).
+
+**User-facing features.** Tracks ▸ Check Poses.
+
+Covered by `tests/e2e/check-poses-command.mjs` (no session; the real menu item on
+an untracked session — status line, flags, badges, tooltip; nothing tracked,
+nothing moved, not dirty; the Wizard's thresholds read at run time; after a Track
+All that left outliers out) and `tests/test-pose-check.mjs` §11.
+
 ### ui/track-summary.js
 
 **Purpose.** What the Track All summary box says, DOM-free so the decision tree is
@@ -12323,6 +12396,8 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `setIdSwitchRefresher` (the repaint after the tab fixes a switch) are called
   once at setup, as is `setTrackSummaryNavigator` (`ui/track-summary-modal.js`:
   the Track All summary's Identities samples and maps go to a frame).
+  Tracks ▸ **Check Poses** (`menuCheckPoses`) calls `checkPoses()`
+  (`ui/pose-check-command.js`): the 2D pose check on its own, tracking nothing.
 - Color-by toggle: the Tracks / Identity control lives in the top
   toolbar (buttons `colorByTracks` / `colorById`, next to the Errors
   checkbox), not the Tracks menu. It has no visible "Color" label (the group

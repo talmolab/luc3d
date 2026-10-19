@@ -78,6 +78,7 @@ import { showSettingsModal } from './settings-modal.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
 import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js';
 import { runIdSwitchChecks, setIdSwitchNavigator, setIdSwitchRefresher, updateIdSwitchProgress } from './id-switch-modal.js';
+import { checkPoses } from './pose-check-command.js';
 import { setTrackSummaryNavigator } from './track-summary-modal.js';
 // Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
 // (`swapTracks` joined this module in 3i-4; `seekToLabeledFrame` is now in-module.)
@@ -891,6 +892,12 @@ export function setupMenus() {
     document.getElementById('menuCheckImageSwitches').addEventListener('click', function () {
         closeMenus();
         runIdSwitchChecks({ image: true, navigateToFrame: navigateToFrame });
+    });
+    // Tracks ▸ Check Poses: the 2D pose check on its own, tracking nothing — how a
+    // reopened project gets its ?/✕ marks back (ui/pose-check-command.js).
+    document.getElementById('menuCheckPoses').addEventListener('click', function () {
+        closeMenus();
+        checkPoses();
     });
 
     // Propagate Tracks → IDs (one-shot): each track label becomes an identity,
