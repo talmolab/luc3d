@@ -554,6 +554,19 @@ terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-cor
   pass in both states — so it pins the memory shape, not just current behavior.
   Two patched sites, marked `// LUCID local patch (luc3d #193)`. **Re-apply after
   any re-vendor** (grep the marker) and report upstream.
+  **NOT A PATCH, BUT IT DEPENDS ON BUNDLE INTERNALS — the eager Save's 2D
+  instances:** `buildSlpLabelsAllViews` makes them with `makePooledSioInstances`
+  (`import-export/file-io.js`) — objects over `SIO.Instance` /
+  `SIO.PredictedInstance` prototypes whose `_xy`/`_visible`/`_complete`/`_score`
+  are getters onto SHARED pooled column chunks, instead of four typed arrays (and
+  a `_names` array) per instance. On MultiCam_18 (17 cameras, 1,390,390 2D
+  instances) that took the Labels graph from ~0.93 KB to ~0.2 KB of V8 heap per
+  instance and the save's peak from 2,146 to 1,057 MB, with every dataset
+  bit-identical (h5py). It reads and serves the vendored `Instance`'s private
+  column fields, so **after any re-vendor** check those fields (and `_n` /
+  `_names`) still exist under the same names, and run
+  `tests/test-sio-pooled-instances.js` — it compares every column, default and
+  the saved bytes against `new SIO.Instance({ points })`.
   **OBSOLETE PATCH (issue #134):** the old inline-points-fallback patch to
   `serializeInstanceGroup` is **gone and must NOT be re-applied.** SLP 2.8 (0.5.5)
   replaced the inline `frame_group_dicts` serializer with the columnar
