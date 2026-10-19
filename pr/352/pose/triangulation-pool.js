@@ -42,10 +42,10 @@
  * count as busy: at most one frame per ~250 ms chunk. Inline, the main thread
  * does it all and is busy throughout — one core.
  */
-import { triangulateAndReproject, triangulationSummary } from './triangulation-core.js?v=400e65ec9232';
-import { Instance } from './pose-data.js?v=400e65ec9232';
-import { isCameraTracked, getTrackingThreshold } from '../ui/settings.js?v=400e65ec9232';
-import { createBusyClock } from '../ui/load-graph.js?v=400e65ec9232';
+import { triangulateAndReproject, triangulationSummary } from './triangulation-core.js?v=faf76ab3ae52';
+import { Instance } from './pose-data.js?v=faf76ab3ae52';
+import { isCameraTracked, getTrackingThreshold } from '../ui/settings.js?v=faf76ab3ae52';
+import { createBusyClock } from '../ui/load-graph.js?v=faf76ab3ae52';
 
 /** Groups per worker message: big enough to amortize messaging, small enough
  *  to load-balance (~0.25 s of Refined solves, ~20 ms of DLT). */
@@ -76,7 +76,7 @@ function getPool() {
     }
     if (pool) terminatePool();
     try {
-        const url = new URL('pose/triangulation-worker.js?v=400e65ec9232', document.baseURI);
+        const url = new URL('pose/triangulation-worker.js?v=faf76ab3ae52', document.baseURI);
         const workers = [];
         for (let i = 0; i < n; i++) workers.push({ w: new Worker(url, { type: 'module' }), busy: false });
         pool = { workers, idleTimer: null };

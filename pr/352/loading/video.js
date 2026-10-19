@@ -8,8 +8,9 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
-import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=400e65ec9232';
-import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=400e65ec9232';
+import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=faf76ab3ae52';
+import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=faf76ab3ae52';
+import { readBlobRange, guardedRangeSource } from './cold-read-guard.js?v=faf76ab3ae52';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -393,7 +394,13 @@ export class OnDemandVideoDecoder {
             throw new Error('MediaBunnyVideoBackend unavailable (sleap-io.js not loaded)');
         }
         var name = (source && source.name) ? source.name : 'video.mp4';
-        this._mbBackend = await Backend.fromBlob(source, name, { cacheSize: this.cacheSize });
+        // Through the cold-read guard rather than mediabunny's own BlobSource:
+        // a File in a cloud-synced folder (Google Drive for desktop) reads
+        // parts not downloaded yet as errors or zeros, and every seek into an
+        // unvisited part of a video is such a read (see cold-read-guard.js).
+        this._mbBackend = typeof Backend.fromRangeSource === 'function'
+            ? await Backend.fromRangeSource(guardedRangeSource(source), name, { cacheSize: this.cacheSize })
+            : await Backend.fromBlob(source, name, { cacheSize: this.cacheSize });
 
         // Adopt mediabunny's authoritative frame count + fps. Keep `this.samples`
         // as the frame-count carrier the rest of the class reads (`.length`),
@@ -655,9 +662,8 @@ export class OnDemandVideoDecoder {
 
     async readChunk(offset, size) {
         if (this.sourceType === "file") {
-            var slice = this.file.slice(offset, offset + size);
-            var arrayBuffer = await slice.arrayBuffer();
-            return arrayBuffer;
+            // cold-read guard: retries a failed read, re-reads zeroed pages (cold-read-guard.js)
+            return (await readBlobRange(this.file, offset, offset + size)).buffer;
         }
 
         // URL source

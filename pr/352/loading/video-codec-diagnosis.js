@@ -21,6 +21,8 @@
  * claims to support it — then the original error stands (e.g. a corrupt file).
  */
 
+import { readBlobRange } from './cold-read-guard.js?v=faf76ab3ae52';
+
 // Video sample-entry fourcc -> human name.
 const VIDEO_ENTRIES = {
     avc1: 'H.264', avc3: 'H.264', hev1: 'HEVC (H.265)', hvc1: 'HEVC (H.265)',
@@ -51,7 +53,7 @@ async function sourceSize(source) {
 
 async function readRange(source, start, end) {
     if (typeof Blob !== 'undefined' && source instanceof Blob) {
-        return new Uint8Array(await source.slice(start, end).arrayBuffer());
+        return readBlobRange(source, start, end);   // a cloud file still downloading (cold-read-guard.js)
     }
     if (typeof source === 'string') {
         const r = await fetch(source, { headers: { Range: 'bytes=' + start + '-' + (end - 1) } });
