@@ -15873,6 +15873,12 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   Visibility settings in the legacy v2/v3 project JSON — the same keys and the
   same omit-the-defaults rule as the `.slp` writers, just at the session-dict
   level rather than under a `metadata.lucid`).
+- `../lib/sleap-io/index.browser.js` — dynamic `import()` in the private
+  `ensureSleapIO()`, a fallback taken only when the `window.SleapIO` bridge in
+  `index.html` is missing. The specifier resolves against THIS module, hence
+  `../`; it read `./lib/…` (i.e. `import-export/lib/…`, a 404) until
+  `tests/test-module-specifiers-resolve.mjs` was added to check every relative
+  module reference in the app.
 
 **Imported by.** `pose/triangulation.js`, `pose/tracker.js`,
 `pose/initialization.js`, `import-export/slp-import.js`,
