@@ -30,9 +30,9 @@ import {
     setVideoController, setPaneManager,
 } from './app-state.js';
 import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js';
+import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js';
 import {
-    triangulateAndReproject, storeReprojectedInstances, getInstanceGroupsForFrame,
+    triangulateAndReproject, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod,
 } from '../pose/triangulation.js';
 import {
@@ -1486,6 +1486,10 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
     var fromSession = state.sessions[fromIdx];
     var toSession = state.sessions[toIdx];
     var totalRetriangulated = 0;
+    // The origin session's per-frame results: the live map while it is the
+    // session on screen, its own stash otherwise (see switchToSession).
+    var fromResults = fromSession === state.session
+        ? state.triangulationResults : fromSession.triangulationResults;
 
     var originHasCalib = fromSession.cameras.some(function (c) {
         var r = c.rotation || c.rvec;
@@ -1542,7 +1546,18 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
                 var group = groups[gi];
                 if (group.instances.has(viewName) || group.reprojectedInstances.has(viewName)) {
                     group.instances.delete(viewName);
-                    group.reprojectedInstances.delete(viewName);
+                    // Whatever happens to its 3D below, the group's derived
+                    // state — its reprojections, reprojected instances and its
+                    // entry in this frame's results — described the group WITH
+                    // the moved view, so it goes. The display fill re-derives it
+                    // from the new 3D when the frame is shown
+                    // (`fillLazyReprojections`, ui/rendering.js). This used to
+                    // store the re-solve's reprojections and a reprojected
+                    // Instance per camera for EVERY group holding the view —
+                    // every frame of the session, ~75 KB per frame per animal
+                    // on a 17-camera, 34-node project — and left the frame's
+                    // results naming the moved view's errors.
+                    dropGroupDerivedReprojections(group, frameIdx2, fromResults);
 
                     if (group.cameraNames.length >= 2) {
                         var groupCameras = fromSession.cameras.filter(function (c) {
@@ -1562,16 +1577,12 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
                             if (valid) {
                                 group.points3d = pooledPoints3d(result.points3d);
                                 group.triangulationMethod = result.method;
-                                group.reprojections = result.reprojections;
-                                storeReprojectedInstances(group, result, fromSession.cameras);
                             }
                             group.markClean();
                             totalRetriangulated++;
                         }
                     } else if (group.cameraNames.length < 2) {
                         group.points3d = null;
-                        group.reprojections = null;
-                        group.reprojectedInstances.clear();
                     }
                 }
             }
