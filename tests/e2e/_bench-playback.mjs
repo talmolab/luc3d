@@ -151,6 +151,7 @@ import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { answerTrackSetup } from './fixtures/track-setup.js';
 import fs from 'node:fs';
 import { acquireBrowserLock } from '../../scripts/browser-lock.mjs';
 
@@ -254,6 +255,7 @@ try {
     page.on('pageerror', e => log(`  [${el()}] [pageerror] ` + String(e).slice(0, 300)));
     page.on('crash', () => log(`  [${el()}] *** RENDERER CRASHED ***`));
     page.on('dialog', async d => { log(`  [${el()}] [dialog] ${d.message().slice(0, 120)}`); await d.accept(process.env.NANIMALS || '3'); });
+    await answerTrackSetup(page, process.env.NANIMALS || '3');   // Track All's first-use dialog (animal count)
     page.on('console', m => {
         const t = m.text();
         if (/Playback (loop|started|stopped)|\[bench\]|error/i.test(t)) log(`  [${el()}] [console] ${t.slice(0, 220)}`);
@@ -381,8 +383,8 @@ try {
     // ---------------------------------------------------------------------
     // Raw per-camera predictions carry tracks but no cross-view identities, and
     // Triangulate All needs identity-linked groups — so Track All first, exactly
-    // as a user would. Track All asks for the animal count via window.prompt(),
-    // answered by the dialog handler (NANIMALS, default 3: ~95% of frames in
+    // as a user would. Track All asks for the animal count in its first-use
+    // dialog, answered by answerTrackSetup (NANIMALS, default 3: ~95% of frames in
     // the HardFight set hold 3 instances per camera).
     if (PREP === 'none') log(`\n[${el()}] PREP=none — playing the project as loaded (no Track All / Triangulate All)`);
     if (PREP !== 'none' && ps.with3d === 0 && ps.identities === 0 && ps.groups === 0) {
@@ -1409,6 +1411,29 @@ try {
     // view's camera? (Seeks to START, then fits the view like the app does.)
     if (process.env.DIAG3D === '1') {
         await seekStart();
+        // What the user sees: Track All collapses the 3D viewer (#257), so open
+        // it the way they would — the toolbar button — and measure BEFORE any
+        // explicit fit; then again after a seek elsewhere.
+        const wasVisible = await page.evaluate(() => !!(window.__lucid.viewport3d && window.__lucid.viewport3d._visible));
+        // Close the Track All summary (or any modal) first, as a user would.
+        for (let i = 0; i < 3 && await page.locator('.multi-frame-modal-overlay:visible').count(); i++) {
+            await page.keyboard.press('Escape'); await sleep(300);
+        }
+        if (!wasVisible) { await page.click('#viewport3dToggleBtn'); await sleep(1500); }
+        const inViewNow = () => page.evaluate(() => {
+            const vp = window.__lucid.viewport3d;
+            const nodes = [];
+            vp._skeletonGroup.traverse(o => { if (o.name && o.name.indexOf('node_') === 0) nodes.push(o.position.clone()); });
+            vp.threeCamera.updateMatrixWorld(); vp.threeCamera.updateProjectionMatrix();
+            const fr = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(vp.threeCamera.projectionMatrix, vp.threeCamera.matrixWorldInverse));
+            return { frame: window.__lucid.state.currentFrame, visible: vp._visible, nodes: nodes.filter(p => fr.containsPoint(p)).length + '/' + nodes.length };
+        });
+        const onOpen = await inViewNow();
+        await seekStart(START + 600);
+        const afterSeek = await inViewNow();
+        await seekStart();
+        log(`\n[${el()}] DIAG3D user view: viewer ${wasVisible ? 'already open' : 'opened via toolbar'} | on open ${JSON.stringify(onOpen)} | after seek ${JSON.stringify(afterSeek)}`);
+        summary.diag3dUserView = { wasVisible, onOpen, afterSeek };
         const d = await page.evaluate(() => {
             const vp = window.__lucid.viewport3d, st = window.__lucid.state;
             if (!vp) return { err: 'no viewport3d' };

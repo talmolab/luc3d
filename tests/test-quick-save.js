@@ -2,9 +2,8 @@
  * test-quick-save.js - Tests for quick save (Ctrl+S) feature
  *
  * `markDirty`, `clearDirty`, `quickSave`, `saveAs`, and the shared
- * `state` object live inside index.html's inline <script>. Neither the
- * Node runner (run-node.js) nor the browser test runner loads that
- * script, so every test in this file is effectively a "full-page
+ * `state` object live inside index.html's inline <script>. The test
+ * runner does not load that script, so every test in this file is effectively a "full-page
  * context only" test — each guard below short-circuits when the
  * required globals aren't defined, matching the pre-existing pattern
  * in `dirty indicator dot visibility toggles`.

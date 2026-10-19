@@ -16,12 +16,9 @@
  *   all external dependencies stubbed. Observe `state.currentFrame`
  *   immediately after `await switchSession(newIdx)` resolves.
  *
- *   Source loading is environment-aware:
- *     - Node (via `tests/run-node.js`): uses the sandbox-injected
- *       `__readSource` helper.
- *     - Browser (via `tests/test-runner.html`): uses synchronous XHR (the
- *       only synchronous fetch primitive) so describe/it can register tests
- *       before TestFramework.runAll() is called.
+ *   The source is read with synchronous XHR (the only synchronous fetch
+ *   primitive) so describe/it can register tests before
+ *   TestFramework.runAll() is called.
  */
 
 (function () {
@@ -32,12 +29,8 @@
     var assertTrue = TF.assertTrue;
 
     function loadSource() {
-        if (typeof __readSource === 'function') {
-            // Node path — see tests/run-node.js
-            return __readSource('ui/sessions-panes.js');
-        }
         if (typeof XMLHttpRequest !== 'undefined') {
-            // Browser path — synchronous XHR so we can extract the function
+            // Synchronous XHR so we can extract the function
             // body before TestFramework.runAll() is invoked.
             var xhr = new XMLHttpRequest();
             xhr.open('GET', '../ui/sessions-panes.js', false);

@@ -1046,10 +1046,8 @@ try {
     const trackRes = await runOp('TRACK ALL', async () => {
         // The animal count is saved with the session now, so answering it
         // marks the project dirty by itself — set it BEFORE starting clean, or
-        // the prompt would hide a tracker that never marks the project. The
-        // stubbed prompt stays as a backstop: if it ever fires, it answers.
-        const origPrompt = window.prompt;
-        window.prompt = () => '2';
+        // the first-use dialog would hide a tracker that never marks the
+        // project. Setting it also keeps that dialog from opening at all.
         const tk = await import('/pose/tracker.js');
         tk.setTrackerNumAnimals(2);
         // Start clean, so the dirty flag afterwards is Track All's own doing.
@@ -1070,7 +1068,6 @@ try {
         } catch (e) {
             return { err: String(e && e.stack || e).slice(0, 400) };
         } finally {
-            window.prompt = origPrompt;
             settings.setTrackingThresholds(prevThresholds);
         }
     });

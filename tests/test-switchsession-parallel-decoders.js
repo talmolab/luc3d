@@ -21,8 +21,8 @@
  *
  * Strategy mirrors test-session-switch-frame-reset.js (Bug B): load the
  * sessions-panes.js source, brace-walk switchSession, evaluate via
- * `new Function(...)` with stubbed deps. Source-loader is environment-aware
- * (Node __readSource vs. synchronous XHR in browser).
+ * `new Function(...)` with stubbed deps. The source is read with synchronous
+ * XHR.
  */
 
 (function () {
@@ -33,9 +33,6 @@
     var assertTrue = TF.assertTrue;
 
     function loadSource() {
-        if (typeof __readSource === 'function') {
-            return __readSource('ui/sessions-panes.js');
-        }
         if (typeof XMLHttpRequest !== 'undefined') {
             var xhr = new XMLHttpRequest();
             xhr.open('GET', '../ui/sessions-panes.js', false);

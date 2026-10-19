@@ -3,10 +3,10 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 113 modules are grouped into four directories:
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 117 modules are grouped into four directories:
 - `pose/` — data model, cross-view tracking (Track All's tracker on one worker: `tracker-pool.js` + `tracker-worker.js`), DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), the lazy project's playback eviction (`lazy-residency.js`), SLEAP's single-camera tracker ported from sleap-nn (`sleap-tracker.js`) and single-camera Track All + its ID-switch checks (`single-camera-tracking.js`), app initialization (25 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, the node tooltip on hover (`node-tooltip.js` — a node's name and a prediction's per-node score, as SLEAP shows them), plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip and the time ruler under it (`seekbar-ticks.js` — major/minor tick steps chosen from the video's length and the bar's width), the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames) and their shade (`TRAIL_SHADES` in `ui/overlays.js`: Very dark … Very light, default Dark, remembered in `localStorage`), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, its coat-brightness sampler, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it) and its Identities section (`identity-gallery.js` — five sample images and a path map per identity), the Track group's Animals field (`animal-count-field.js`), the CPU / GPU load lines and last-minute graph shown by the image check's dialog and by the loading overlay during Triangulate All and Track All (`load-graph.js`), settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (67 files)
-- `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), web workers (11 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, the node tooltip on hover (`node-tooltip.js` — a node's name and a prediction's per-node score, as SLEAP shows them), plane visibility, browser-specific hints, the macOS tip shown before a folder picker (`folder-confirm-tip.js` — the browser's folder prompt defaults to Cancel, and Tab reaches Upload only with Keyboard navigation on, which no page can read), the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip and the time ruler under it (`seekbar-ticks.js` — major/minor tick steps chosen from the video's length and the bar's width), the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames) and their shade (`TRAIL_SHADES` in `ui/overlays.js`: Very dark … Very light, default Dark, remembered in `localStorage`), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, its coat-brightness sampler, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it) and its Identities section (`identity-gallery.js` — five sample images and a path map per identity), the Track group's Animals field (`animal-count-field.js`), the dialog Track All / Track Frame open on a session's first run (`track-setup-modal.js` — the animal count, with the node weights to review and, on Track All, the image ID-switch check and its options; the weight grid and the image-check section are in the Track Frame Range dialog too), the CPU / GPU load lines and last-minute graph shown by the image check's dialog and by the loading overlay during Triangulate All and Track All (`load-graph.js`), settings, the release shown beside the menu bar's Settings button (`version-label.js`) — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (70 files)
+- `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), Blob reads that survive a cloud file still downloading (`cold-read-guard.js`), web workers (12 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
 - `demo-data.js` — synthetic skeleton and camera data
 - `styles.css` — all styling
@@ -47,7 +47,13 @@ tree serves correctly from every path. Do not introduce origin-root-relative URL
   concurrency groups, and a merge to `main` starts the `/dev/` deploy and the
   preview cleanup in the same second; a single checkout-then-push lost that race
   so often that 23 merged/closed PRs' previews were left on the live site. Any
-  new step that pushes to `gh-pages` needs the same loop.
+  new step that pushes to `gh-pages` needs the same loop — and must **never
+  force-push**: the preview deploy's `JamesIves/github-pages-deploy-action`
+  force-pushes by default and erased other workflows' commits (#320's and #321's
+  removals), so it runs with `force: false`. The cleanup is triggered by
+  `pull_request_target: closed`, not `pull_request`, because GitHub does not run
+  `pull_request` workflows for a PR with merge conflicts (closing #278 / #286
+  never ran it). It is safe there only because it never checks out PR code.
 
 **Only a full release moves root.** A push to `main` goes to `/dev/` alone; a
 pre-release goes to `/latest/` alone; republishing an older release moves nothing
@@ -76,6 +82,74 @@ literal and relative — a computed `import(someVar)` or a root-absolute `/x.js`
 would defeat it. Covered by `tests/test-stamp-version.mjs` and
 `tests/e2e/stamped-build.mjs` (stamps the working tree, loads the app — every
 module once — and runs the browser suite on it).
+
+**The same stamp says which build it is.** A third argument,
+`stamp-version.mjs <dir> <commit> <release-label>`, fills the
+`lucid-release` / `lucid-commit` `<meta>` tags in the copy's `index.html`, and
+`ui/version-label.js` shows them right of the menu bar's Settings button. The
+label is the release TAG only when the deployed ref IS one (`github.ref_name`
+matching `vX.Y.Z[-N]`: a release event, or a dispatch with a tag picked), so the
+live page reads `v1.0.5` and `/latest/` its pre-release tag; anything else is
+`dev`, and a PR preview `PR #<n>` — both shown with the commit beside them,
+since `dev` alone cannot tell two deploys apart. The tags are EMPTY in the repo
+(a working tree shows no version rather than a made-up one), and the stamp fails
+the deploy if they are missing, so a refactor of `index.html` cannot drop the
+number silently. Nothing about the label reaches the `.slp`.
+
+**A cold start fetches the whole startup graph AT ONCE.** After stamping, the
+same command runs `scripts/preload-modules.mjs`, which walks `index.html`'s
+module scripts through every STATIC import (relative specifiers and importmap
+entries) and inserts one `<link rel="modulepreload">` per module right after the
+importmap — every same-site module of the startup graph (114 files) plus the two CDN modules (`yaml`, dockview).
+Without it the browser discovered the graph one import level at a time: six
+sequential round trips, every one a CDN miss on a cold start. And a cold start
+is the ordinary case, not the rare one: every deploy changes every `?v=` URL,
+and Cloudflare keeps a GitHub Pages object at the edge only for about the
+origin's `max-age=600` (measured: objects that were HITs came back MISS or
+EXPIRED half an hour later — the 4 hours above is the BROWSER lifetime), so
+anyone whose browser cache is cold pays it. Three rules:
+- **The list is derived from the files being deployed, never maintained by
+  hand**, so it cannot rot. It reads the STAMPED files, so each preload is the
+  exact URL its importer asks for. A preload under any other URL is a second
+  download that nothing uses, and `stamped-build.mjs` fails on it. R4 in
+  `stamp-version.mjs` also stamps a `modulepreload` link, so the order of the
+  two steps cannot leave one unstamped.
+- **Static imports only.** A dynamic `import()` is lazy on purpose, and a
+  worker is another realm. `stamped-build.mjs` asserts that, by the time the
+  app is ready, it has requested NO same-site module outside the block (besides
+  `index.html`'s own tags) and every preload exactly once — so a new static
+  import that the walker cannot see fails there, not on someone's slow
+  connection.
+- **The block goes after the importmap.** Chrome ignores an importmap that
+  arrives after module loading has started, and a modulepreload starts it.
+
+Two source changes serve the same goal. `yaml` loads as jsdelivr's single-file
+`yaml@2.8.0/+esm` bundle (the same `browser/index.js` entry, prebuilt) instead of
+the ~70-file `browser/index.js` tree, which was its own six-level waterfall on a
+second host. Offline mode maps that URL to the vendored `lib/yaml/browser/index.js`.
+The four head `<script>` tags (mp4box, three, OrbitControls, the h5wasm IIFE) are
+`defer`: they still run in document order and before any module script, so every
+global exists exactly when it used to, but they no longer block the parser, and
+the page paints while they download.
+
+Measured 2026-10-13 through the real Cloudflare path with
+`tests/e2e/_bench-cold-start.mjs`, which makes every load cold by adding a fresh
+`cb=` query to each same-site request in flight. Medians of interleaved runs:
+0.66 s → 0.40 s (24 runs each), and 2.32 s → 0.64 s with 150 ms of emulated
+latency per request (8 each; roughly a VPN). An esbuild bundle of the app
+(111 files → 8) measured 0.38 s and 0.60 s on the same runs, so it was not
+adopted here: the only case it wins is a per-REQUEST stall (simulated: one 5 s
+stall in every ~100 requests leaves the preloaded build waiting on one in most
+loads, while 8 requests rarely draw one). Such stalls are real: in one 7 s
+window, four consecutive cold loads of both builds each had exactly ONE of 113
+requests take 1.4–2.4 s, at Cloudflare's edge rather than GitHub's (cache HITs
+and TLS handshakes stall too, on other sites behind the same Cloudflare IPs,
+while GitHub Pages fetched directly stayed under 0.2 s). modulepreload does not
+help with those; fewer requests (bundling) would, but bundling was decided
+against: it would add a build step and make the deployed app differ from the
+tested source, for a gain that shows up only in those stall episodes.
+`h5wasm.iife.js` (~1 MB compressed, a page global read by several main-thread
+paths and e2e tests) is now the largest single item on the critical path.
 
 **Root is the only target that wipes — two rules keep that safe.** Every other
 channel owns its folder and can only damage itself, but root's previous output
@@ -296,7 +370,9 @@ terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-cor
   `-bf 3 -g 10`): 18 of 30 frames (60%) decoded wrong before this patch, 0
   after. Fixed by sorting `_frameTimes` ascending by timestamp at the end of
   `initialize()`, marked `// LUCID local patch (#115)`. **Re-apply after any
-  re-vendor** (grep the marker) and report upstream to sleap-io/mediabunny.
+  re-vendor** (grep the marker). Reported upstream as **sleap-io.js#262** (the
+  bug is sleap-io.js's, not mediabunny's: mediabunny documents decode order);
+  drop this patch once a sleap-io.js release sorts `_frameTimes`.
   Covered by `tests/e2e/mediabunny-bframe-decode-order.mjs`. Its fixture video
   is committed through a `.gitignore` exception (`*.mp4` is otherwise ignored)
   and regenerated — together with its ground-truth PNGs, never separately — by
@@ -314,7 +390,8 @@ terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-cor
   walk, `Object.is` per timestamp and in order, plus backend index == full walk
   sorted; on a generated `-bf 3` B-frame video, and with `DATASET=` on real
   files). Marked `// LUCID local patch (luc3d frame-index)`. **Re-apply after any
-  re-vendor** (grep the marker) and report upstream to sleap-io.js.
+  re-vendor** (grep the marker). Reported upstream as **sleap-io.js#262**; drop
+  this patch once a sleap-io.js release passes `metadataOnly`.
   **LOCAL PATCH (sleap-io.js#231):** `lib/sleap-io/chunk-X76PRJK6.js` writes the
   SLP `instances` table with dtype `"<d"` (h5wasm float64) instead of upstream's
   `"<f8"` — h5wasm does NOT speak numpy dtype strings and parses `"<f8"` as
@@ -477,6 +554,44 @@ terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-cor
   pass in both states — so it pins the memory shape, not just current behavior.
   Two patched sites, marked `// LUCID local patch (luc3d #193)`. **Re-apply after
   any re-vendor** (grep the marker) and report upstream.
+  **LOCAL PATCH (luc3d eager-save):** `lib/sleap-io/chunk-X76PRJK6.js`
+  `writeLabeledFrames` — the EAGER writer's 2D tables (`frames`, `instances`,
+  `points`, `pred_points`) — appends through #191's `LucidAppendTable` instead of
+  building one boxed JS row per keypoint and holding every one until
+  `createMatrixDataset`. That is what crashed File ▸ Save of an eagerly-loaded
+  per-camera project: on MultiCam_18 (17 cameras, 34 nodes, 36,000 frames,
+  1,390,390 predictions = 47,273,260 keypoint rows) a prediction's row was
+  ~210 B of V8 heap (`row.push(score)` grows a 4-double array's backing store to
+  22), 7.4 KB per instance. Measured with `tests/e2e/_diag-eager-save-heap.mjs`:
+  the save went from a renderer crash (even with the ungrouped predictions
+  dropped) to **1,133,683,132 bytes in 24 s, peak heap 2,234 MB**; on its first
+  3,000 frames the peak went 1,207 -> 344 MB with every dataset bit-identical
+  (h5py). Same consequences as #191: a table that never fills its buffer is
+  written one-shot and contiguous, so small files are BYTE-IDENTICAL
+  (`save-golden-digest.mjs` must not move); one that overflows becomes chunked.
+  `from_predicted` is resolved by a pre-pass (only when some user instance has
+  one), since a flushed row cannot be patched afterwards. Points are read from
+  the instance's columnar `_xy`/`_visible`/`_complete`/`_score` directly. The
+  boxed `emitInstancePoints` is kept for `SlpStreamWriter`, whose rows are
+  window-bounded. `LucidAppendTable.push` takes 10 values now (was 8). Guarded by
+  `tests/e2e/save-2d-tables-append.mjs` (every value vs the pre-patch row logic,
+  across flush boundaries; its value checks also pass on the pre-patch bundle,
+  only the layout checks fail there). Marked `// LUCID local patch (luc3d
+  eager-save)`. **Re-apply after any re-vendor** (grep the marker) and report
+  upstream.
+  **NOT A PATCH, BUT IT DEPENDS ON BUNDLE INTERNALS — the same save's 2D
+  instances:** `buildSlpLabelsAllViews` makes them with `makePooledSioInstances`
+  (`import-export/file-io.js`) — objects over `SIO.Instance` /
+  `SIO.PredictedInstance` prototypes whose `_xy`/`_visible`/`_complete`/`_score`
+  are getters onto SHARED pooled column chunks, instead of four typed arrays (and
+  a `_names` array) per instance. On MultiCam_18 (17 cameras, 1,390,390 2D
+  instances) that took the Labels graph from ~0.93 KB to ~0.2 KB of V8 heap per
+  instance and the save's peak from 2,146 to 1,057 MB, with every dataset
+  bit-identical (h5py). It reads and serves the vendored `Instance`'s private
+  column fields, so **after any re-vendor** check those fields (and `_n` /
+  `_names`) still exist under the same names, and run
+  `tests/test-sio-pooled-instances.js` — it compares every column, default and
+  the saved bytes against `new SIO.Instance({ points })`.
   **OBSOLETE PATCH (issue #134):** the old inline-points-fallback patch to
   `serializeInstanceGroup` is **gone and must NOT be re-applied.** SLP 2.8 (0.5.5)
   replaced the inline `frame_group_dicts` serializer with the columnar
@@ -519,8 +634,17 @@ so a reopened session is asked again exactly as a new one is). The count is
 project state, not display taste: changing it marks the project dirty.
 Everything goes through **one** module, `import-export/visibility-metadata.js`
 (`writeVisibilityMetadata` / `readVisibilityMetadata`, `VISIBILITY_METADATA_KEYS`),
-which the four writers and three readers all call — adding a setting means
-touching that file and nothing else.
+which the four writers and four readers all call — adding a setting means
+touching that file and nothing else. The readers are `handleLoadSlpFile`
+(File ▸ Load SLP), `handleLoadProjectSlpLazy` (the lazy project reopen),
+`handleLoadSessionFolderSingleSlp` (File ▸ Load Single Session Folder in
+"single-slp" mode, also the Sessions list's "Add session folder") and the
+project-JSON reader in `save-load.js`. That folder loader builds its Session by
+hand, and until it called both readers a project reopened through it silently
+came back with every setting below — and every plane — at its default. The
+per-camera and multi-session folder loaders are NOT readers: they ignore a root
+`.slp` and read camera-folder `.slp` files as 2D only, restoring no
+`metadata.lucid` key at all.
 
 Three rules hold, and there are tests pinning each:
 - **Defaults are never written.** Every key is omitted at its default, so a
@@ -537,8 +661,10 @@ Planes / Display Legend / 3D Viewer) deliberately stay in
 `localStorage.visibilitySettings` — they are browser-local display taste, not
 project state. Do not move them into the `.slp`.
 
-Coverage: `tests/test-visibility-metadata.js` (unit) and
-`tests/e2e/visibility-settings-roundtrip.mjs` (real app, both writers);
+Coverage: `tests/test-visibility-metadata.js` (unit),
+`tests/e2e/visibility-settings-roundtrip.mjs` (real app, both writers) and
+`tests/e2e/reopen-folder-session-settings.mjs` (a real Save As reopened through
+the single-SLP folder loader);
 `tests/test-video-contrast.js` + `tests/e2e/contrast-slider-roundtrip.mjs` cover
 the contrast half.
 
@@ -560,7 +686,7 @@ the contrast half.
 The whole Define Planes pipeline persists per session in the `.slp` (and in the
 project JSON), under LUCID's own `metadata.lucid` dict, through **one** module —
 `import-export/plane-metadata.js` (`writePlaneMetadata` / `readPlaneMetadata` /
-`resetPlaneState`, `PLANE_METADATA_KEYS`), which the same four writers and three
+`resetPlaneState`, `PLANE_METADATA_KEYS`), which the same four writers and four
 readers as the Visibility settings all call. The mapping itself lives in the
 DOM-free `pose/plane-serialization.js`.
 
@@ -590,15 +716,26 @@ Rules, each with a test pinning it:
   only restores into an EMPTY model (that guard is what makes ingesting N
   sessions idempotent), so skipping the reset keeps the OLD project's planes and
   silently drops the new one's.
+- **A loader that ADDS a session does not reset — it checks.** The single-SLP
+  folder loader appends to whatever is open, so it resets only when no session
+  is open (it is then starting the project). With a project open, its planes
+  stay and the new session's 2D is seated on them BY NODE ID — and node IDs
+  restart at 1 in every project, so a folder from another project would put its
+  corners on this project's nodes. `planeMetadataConflict` gates it: the 2D is
+  read only if every node and plane the file lists is in the open model under
+  the same id AND name; otherwise it is dropped and the status bar says so.
 - **Every plane/node mutation calls `markDirty()`** — rename, re-colour, pin,
   place/un-place, membership, edges, fill, triangulate, fit, 2D/3D drags, origin
   apply/clear. Per mutation, not per repaint. The plane panel's node-size /
   edge-width / 3D-corner-size sliders are the deliberate exception: browser-local
   display taste, not written to the project, so they do not mark it dirty.
 
-Coverage: `tests/test-plane-serialization.mjs` (unit, the mapping) and
+Coverage: `tests/test-plane-serialization.mjs` (unit, the mapping),
 `tests/e2e/plane-persistence-roundtrip.mjs` (real app, both `.slp` writers, the
-dirty flag, the scope split, and both negative controls).
+dirty flag, the scope split, and both negative controls) and
+`tests/e2e/reopen-folder-session-settings.mjs` (the single-SLP folder loader:
+the reset when it starts a project, adding a session of the same project, and
+the `planeMetadataConflict` refusal with its negative control).
 
 ## A lazy project's resident frames are a WINDOW — and eviction must be lossless
 
@@ -866,9 +1003,23 @@ is untouched, and the null vector maps exactly. Four rules:
 - **The allocation-free kernel takes the frame as four OPTIONAL arguments.**
   `dltHomogeneousFlat(xs, ys, Ps, n, out, s, cx, cy, cz)` omitted is the
   identity frame, which reproduces the raw rows exactly — multiplying by 1 and
-  adding 0 are exact in IEEE 754 — so the bit-identity against `svd3x4(A)` that
-  `tests/test-triangulation-kernels.mjs` pins still holds. A kernel edit that
-  changes operation ORDER breaks that test, which is the intended signal.
+  adding 0 are exact in IEEE 754 — so the bit-identity of its M = AᵀA against
+  the one `svd3x4(A)` builds, which `tests/test-triangulation-kernels.mjs` pins,
+  still holds. A kernel edit that changes operation ORDER breaks that test,
+  which is the intended signal.
+- **The null vector is found by inverse iteration, NOT bit-identically to
+  `svd3x4`'s Jacobi.** `smallestEigvec4Inverse` was a deliberate break from
+  bit-identity: the Jacobi sweeps were 23% of a whole Track All (15 s of 65 s on
+  the 5-mouse recording). It agrees with Jacobi to ~1e-10 mm on real data,
+  is MORE rotation-invariant than Jacobi (it converges to machine precision
+  rather than stopping on an absolute tolerance), and anything it cannot settle
+  falls back to the Jacobi kernel, which is still bit-identical. It must
+  CONVERGE — a fixed number of steps leaves an error that depends on the start
+  vector, which does not rotate with the world, and the invariance tests catch
+  that (`INVERSE_TOL` loosened to 1e-5 fails two of them). Before changing the
+  solve again, compare Track All's identities before and after on real
+  recordings with `tests/e2e/_diag-trackall-ab.mjs`: a tiny 3D change is not
+  proof that no association flips.
 Covered by `tests/e2e/triangulation-frame-invariant.mjs`, confirmed to fail on
 the pre-fix build (7 checks red; a mis-associated point moves 6.01 mm instead
 of 2.4e-13 mm).
@@ -1886,6 +2037,62 @@ or editing any modal/overlay dialog, wire a `keydown` listener that closes it on
 in-progress export), `Esc` should cancel/stop that operation rather than tear the
 modal down. Example: `showExport3DVideoModal` in `ui/export-modals.js`.
 
+## A File in a cloud-synced folder can read back WRONG — read it through the guard
+
+In a Google Drive for desktop folder on macOS (File Provider), a Blob read of a
+part of a file that is not downloaded yet can **fail** (`arrayBuffer()` rejects
+with NotReadableError; a Blob stream errors with `TypeError: network error`) or
+come back with a run of **zeros** and every other byte right. Drive
+fetches a video only in the ranges that are read (a "dataless" 428 MB recording
+held 12.6 MB after a session load), so this is not only the load: every seek
+into a part of a video nobody has looked at yet is such a read.
+
+Measured 2026-10-19 on cold 8-camera sessions of `TalmoLab_extra/Scratch/
+Proofreading/2022-10-07` (every Blob read logged and compared with the disk
+afterwards):
+- **On `main`** (6 sessions, 48 videos, 45,735 reads, 12.0 GB) 31 reads FAILED
+  and none came back zeroed. 2 of 48 cameras lost their frame-accurate decoder
+  at load and stepped by `<video>` seeks for the rest of the session, 3
+  requested frames fell back to a `<video>` seek, and 6 of 848 decoded frames
+  differed from a warm load. 30 of the 31 failed reads succeeded when read
+  again at once.
+- **Through the guard** (3 sessions, 24 videos, 7,189 reads, 7.4 GB) 16 reads
+  failed and 67 came back with their first 64 KiB zeroed — always a read
+  starting on a 1 MiB boundary of the file where nothing was downloaded yet;
+  reading the windows by stream instead (one more session) zeroed 24 the same
+  way. The guard rescued every failure and repaired every run, and no frame
+  differed from the warm load.
+- The `.slp` reads go through h5wasm's WORKERFS, where the zeros came as
+  16 KiB pages; that path has its own `cold-read` patch in lib/h5wasm.
+
+So **read a user's File's bytes through `loading/cold-read-guard.js`**, never
+`file.arrayBuffer()` / `slice().arrayBuffer()` directly. `readBlobRange` retries
+a read that throws (200 ms, 1 s, 3 s) and re-reads every all-zero 4 KiB block,
+using the re-read only when it is non-zero — h5wasm's `lucidColdReadGuard` rule,
+plus the retry. Three rules:
+- **The frame-accurate decoder reads through `fromRangeSource`, not `fromBlob`.**
+  `_initMediabunny` hands sleap-io.js's `MediaBunnyVideoBackend.fromRangeSource`
+  a `guardedRangeSource(file)`; mediabunny's own `BlobSource` cannot be guarded
+  from outside. Going back to `fromBlob` reopens every failure above.
+- **The range source reads whole 1 MiB windows**, not each request. mediabunny
+  asks a `StreamSource` for ~64–192 KiB at a time and a Blob read costs about
+  the same however small: one read per request read packets ~6x slower than
+  `BlobSource` (221 vs 35 ms for 46.7 MB); the windows bring it to 61 vs 29 ms,
+  ~75x what 8 cameras decoding at 60 fps need, with index build and decoding
+  unchanged. Answers are copies, so mediabunny's cache never pins a window.
+- **mp4box's index scan reads through it too** (`readChunk`). Unguarded, a
+  failed scan read silently left the `<video>` estimate (duration x 30 fps) as
+  the frame count and fps, and a zeroed page in the scanned `moov` made mp4box
+  loop on the main thread for good — the tab froze.
+Load 3D Points (`readBlobArrayBuffer`) and the codec diagnosis use it as well.
+**Not covered:** the `<video>` element reads its blob URL natively (playback,
+and stepping only when there is no frame-accurate backend), and the small
+JSON/TOML `.text()` reads fail to parse loudly. Covered by
+`tests/test-cold-read-guard.mjs` (the rule, the windows, and mediabunny's index
+and packets of the B-frame fixture through the guard, against the unguarded
+read) and `tests/e2e/video-cold-read.mjs` (the real decoder with faults injected
+under it; confirmed to fail, and to freeze, on the unguarded build).
+
 ## Native resolution (1:1) — one video pixel per DEVICE pixel
 
 View ▸ Native Resolution / `Shift+0` (`VideoController.setNativeResolution`,
@@ -1906,10 +2113,11 @@ review and obvious on screen:
 Exact at integer devicePixelRatio (and 1.25/1.5 headless); at e.g. 2.2 Chrome
 resamples regardless, so it is right-SIZED but not exact — say so, don't promise
 it. Whether it is on is DERIVED (`state.nativeResolution` = every shown view at
-1:1) so the menu tick cannot lie, and `initZoom` seeds from it so pane rebuilds
-keep 1:1. The pane badge reads the zoom as a percentage of 1:1
-(`zoomPercentLabel`), and only a view HELD at 1:1 may read exactly "100%" — a
-near miss is still resampled, so it reads "99.8%" / "≈100%". Hovering it offers
+1:1) so the menu tick cannot lie. A pane rebuild keeps each view's own zoom,
+except that while the mode is on a view coming on screen joins it at 1:1
+(`refreshPaneInteractions`), so cycling the solo camera keeps 1:1. The pane
+badge reads the zoom as a percentage of 1:1 (`zoomPercentLabel`), and only a
+view HELD at 1:1 may read exactly "100%" — a near miss is still resampled, so it reads "99.8%" / "≈100%". Hovering it offers
 presets (`ZOOM_PRESET_PERCENTS`, per pane, `setZoomPercent`); 100% there must go
 through `_enterNative`, never a plain `scale = 1:1`, or it skips both rules. The 1:1 scale depends on the box AND devicePixelRatio, so anything
 that moves either must end in `reapplyZoom` (`reapplyAllZoom` covers resize and
@@ -1922,14 +2130,23 @@ There are **three** test populations, each with its own runner. Run all three �
 they cover disjoint code, and a green run of one says nothing about the others.
 
 ```bash
-node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1603 assertions
+node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1653 assertions
 node tests/run-mjs-tests.mjs          # tests/test-*.mjs  (native-ESM Node tests)
 node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file per behavior)
 ```
 
 - `tests/*.js` — classic scripts, run in the browser via `tests/test-runner.html`
-  (open directly) or headless via `tests/e2e/run-unit-tests.mjs`; also runnable in
-  a `vm` sandbox by `tests/run-node.js`.
+  (open directly) or headless via `tests/e2e/run-unit-tests.mjs`. **A file runs
+  only if `test-runner.html` has a `<script>` tag for it** — nothing discovers
+  it — so `tests/test-classic-tests-registered.mjs` fails on any untagged
+  `tests/test-*.js` not listed there with a reason. There is deliberately **no
+  Node runner** for these. `tests/run-node.js` used to load them in a `vm`
+  sandbox by regex-stripping `import`/`export` from a hand-ordered list of
+  modules, so every new cross-module import broke it: it was red from 2026-06-26
+  until it was removed (102 failures, 93 of them from four modules missing from
+  its list), exited 0 with no summary when handed the browser's full file list,
+  and was the only runner for four test files — one of which had tested nothing
+  since #189. Those four are tagged in `test-runner.html` now.
 - `tests/test-*.mjs` — native ES modules, run by **`tests/run-mjs-tests.mjs`**
   (one child process per file, since several install module-loader hooks). These
   were **orphaned for a long time**: no runner referenced them, so four had been

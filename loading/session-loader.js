@@ -31,6 +31,7 @@ import {
 import { OnDemandVideoDecoder, VideoController } from './video.js';
 import { videoLoadFailureText } from './video-codec-diagnosis.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
+import { confirmFolderPick } from '../ui/folder-confirm-tip.js';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
@@ -90,7 +91,7 @@ import {
 } from '../ui/ui-wiring.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from '../import-export/visibility-metadata.js';
-import { readPlaneMetadata, resetPlaneState } from '../import-export/plane-metadata.js';
+import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -545,6 +546,7 @@ export function matchSessionFolder(folderName, sessionName) {
  *   unmatched: session names with no matching folder
  */
 export async function pickParentDirectoryForSessions(sessionNames) {
+    if (!(await confirmFolderPick())) return null;
     if (!window.showDirectoryPicker) {
         // Fall back to pickFolder (webkitdirectory) — can't enumerate subdirs individually
         var allFiles = await pickFolder();
@@ -784,6 +786,7 @@ export function forceVideoSelectionWithFolder(refInfo, sessionName, options) {
         // Folder button — scan for videos in camera subdirs
         btnFolder.addEventListener('click', async function () {
             var allFiles;
+            if (!(await confirmFolderPick())) return;
             try { allFiles = await pickFolder(); } catch (e) { return; }
             if (!allFiles || allFiles.length === 0) return;
 
@@ -1343,6 +1346,10 @@ export async function handleLoadMultiSession() {
         // the browser dropping files when webkitdirectory returns too many
         var parentHandle;
         if (window.showDirectoryPicker) {
+            if (!(await confirmFolderPick())) {
+                setStatus('No folder selected', 'warning');
+                return;
+            }
             try {
                 parentHandle = await window.showDirectoryPicker({ mode: 'read' });
             } catch (e) {
@@ -1873,6 +1880,10 @@ export function handleEmptySession() {
 
 export async function handleLoadSessionFolderSingleSlp() {
     try {
+        if (!(await confirmFolderPick())) {
+            setStatus('No folder selected', 'warning');
+            return;
+        }
         setStatus('Pick session folder...', 'warning');
         var allFiles = await pickFolder();
         if (allFiles.length === 0) {
@@ -2062,6 +2073,34 @@ export async function handleLoadSessionFolderSingleSlp() {
         var folderName = allFiles[0].webkitRelativePath ? allFiles[0].webkitRelativePath.split('/')[0] : 'Session';
         var session = new Session(cameras, skeleton, tracks, folderName);
 
+        // The session's own `metadata.lucid`: restoreGroupingAndUnlink (below)
+        // reads its grouping and identity keys, these two readers the rest —
+        // the per-session Visibility settings and the Define Planes state —
+        // exactly as the other project readers do.
+        //
+        // This loader ADDS a session to whatever is open (it is also the
+        // Sessions list's "Add session folder"), so unlike them it tears no
+        // project down — except when nothing is open, where it starts one and
+        // must start from an empty plane model: `readPlaneMetadata` only
+        // restores into an EMPTY model, so without the reset leftover planes
+        // would survive and this file's be dropped. When a project IS open its
+        // planes stay, and this session's 2D is seated onto them by node ID —
+        // unless the file's planes are not the open project's
+        // (`planeMetadataConflict`), where it would land on the wrong nodes.
+        var sessLucid = (slpData.sessions && slpData.sessions[0] && slpData.sessions[0].metadata
+            && slpData.sessions[0].metadata.lucid) || {};
+        var startsProject = state.sessions.length === 0;
+        if (startsProject) resetPlaneState();
+        readVisibilityMetadata(session, sessLucid);
+        var planeConflict = startsProject ? null : planeMetadataConflict(sessLucid);
+        if (planeConflict) {
+            console.warn('[single-slp] not reading the plane state in ' + slpFile.name +
+                ' — ' + planeConflict + '; the open project\'s planes are kept');
+            session.planePlacements = new Map();
+        } else {
+            readPlaneMetadata(session, sessLucid);
+        }
+
         // Populate frames
         showLoading('Building session...');
         for (var fri = 0; fri < slpData.frames.length; fri++) {
@@ -2240,6 +2279,9 @@ export async function handleLoadSessionFolderSingleSlp() {
             setStatus('All videos failed to load: ' + failedVideos.join('; '), 'error');
         } else if (failedVideos.length > 0) {
             setStatus('Loaded ' + state.views.length + ' video(s), ' + failedVideos.length + ' failed: ' + failedVideos[0], 'warning');
+        } else if (planeConflict) {
+            setStatus('Loaded session from ' + slpFile.name + ' — its planes were not added: ' +
+                planeConflict, 'warning');
         } else {
             setStatus('Loaded session from ' + slpFile.name + ' (' + videoFiles.length + ' videos)', 'success');
         }
@@ -2665,6 +2707,10 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         if (preloadedFiles) {
             allFiles = preloadedFiles;
         } else {
+            if (!(await confirmFolderPick())) {
+                setStatus('No folder selected', 'warning');
+                return;
+            }
             setStatus('Pick session folder...', 'warning');
             allFiles = await pickFolder();
             if (allFiles.length === 0) {

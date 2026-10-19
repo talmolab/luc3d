@@ -141,6 +141,23 @@ var _openSummary = null;
 /** Register what the tab's "Show Track All summary" button runs (called once from ui/track-summary-modal.js). */
 export function setTrackSummaryOpener(fn) { _openSummary = fn; }
 
+// True only while the Track All summary's check button clicks its menu item (`clickCheckFromSummary`):
+// `runIdSwitchChecks` reads and clears it before its first await, so only the check that click starts sees it.
+var _backToSummary = false;
+
+/**
+ * Click a check's menu item (`menuId`) for the Track All summary's "Check by …" buttons. The check runs
+ * exactly as it does from the menu, but ends by reopening the summary with its result — and the next step
+ * that follows from it — instead of opening the ID Switches tab; the box's "Review switches" goes there
+ * when something was flagged.
+ */
+export function clickCheckFromSummary(menuId) {
+    var item = typeof document !== 'undefined' && document.getElementById(menuId);
+    if (!item) return;
+    _backToSummary = true;
+    try { item.click(); } finally { _backToSummary = false; }
+}
+
 /**
  * Above "Possible ID switches": a button that reopens the session's Track All summary
  * once its box was closed — the box offers the checks not run yet. Only after a Track All
@@ -452,7 +469,9 @@ async function runBrightness(session, rate, inject, moments, single) {
 /**
  * Run the selected checks, mark the results on the seekbar and report them.
  *
- * From the menu (`auto` false) the ID Switches tab always opens. After Track All
+ * From the menu (`auto` false) the ID Switches tab always opens — unless the
+ * Track All summary started the check (`clickCheckFromSummary`): then the summary
+ * reopens with the result instead. After Track All
  * or Track Frame Range (`auto: true`, pose/tracker.js) the results are appended
  * to the pass's own status line (`statusPrefix`), the tab opens only when a
  * possible switch was found, and a check that cannot run is reported as skipped —
@@ -466,6 +485,8 @@ async function runBrightness(session, rate, inject, moments, single) {
  */
 export async function runIdSwitchChecks(opts) {
     opts = opts || {};
+    var backToSummary = !opts.auto && _backToSummary;   // started by the Track All summary (clickCheckFromSummary)
+    _backToSummary = false;
     var auto = !!opts.auto, cues = ID_SWITCH_CUES.filter(function (c) { return opts[c]; });
     if (!cues.length) return null;
     var deps = { navigateToFrame: opts.navigateToFrame || null };
@@ -476,6 +497,7 @@ export async function runIdSwitchChecks(opts) {
         if (auto) setStatus((opts.statusPrefix ? opts.statusPrefix + ' · ' : '') + head(cues[0]) + ': skipped — no tracked ' +
             (single ? 'identities' : '3D skeletons'), 'success');
         else setStatus('Check ID Switches needs tracked identities' + (single ? '' : ' with 3D') + ' — run Track All first', 'warning');
+        if (backToSummary && _openSummary) _openSummary(session);
         return null;
     }
     // A single-camera session has no 3D: the checks read a stand-in built from its 2D (see the module doc).
@@ -485,6 +507,7 @@ export async function runIdSwitchChecks(opts) {
         if (target.fail) {
             setStatus((auto && opts.statusPrefix ? opts.statusPrefix + ' · ' : '') + head(cues[0]) + ': ' +
                 (auto ? 'skipped — ' : '') + target.fail, auto ? 'success' : 'warning');
+            if (backToSummary && _openSummary) _openSummary(session);
             return null;
         }
     }
@@ -539,7 +562,10 @@ export async function runIdSwitchChecks(opts) {
     var anyFound = ran.some(function (c) { return countOnsets(results[c]) > 0; });
     setStatus((auto && opts.statusPrefix ? opts.statusPrefix + ' · ' : '') + parts.join('; ') +
         (anyFound ? ' — listed in the ID Switches tab' : ''), level);
-    if ((!auto && ran.length) || anyFound) openIdSwitchPanel();
+    // Started from the Track All summary: back to it, with this outcome — a cancel or a skip included — in
+    // its row. Without one to reopen (the box is not kept for this session), as from the menu.
+    var reopened = backToSummary && _openSummary ? _openSummary(session, results) : null;
+    if (!reopened && ((!auto && ran.length) || anyFound)) openIdSwitchPanel();
     return results;
 }
 

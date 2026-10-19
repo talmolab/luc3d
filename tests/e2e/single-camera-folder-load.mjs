@@ -21,6 +21,9 @@
  *  4. Negative control — TWO camera directories and no calibration load as they
  *     always did: views, no cameras, the "load calibration" status.
  *
+ * Track All's first-run dialog on one camera (ui/track-setup-modal.js) asks the
+ * animal count and offers the image check, but shows no node weights.
+ *
  * Run: node tests/e2e/single-camera-folder-load.mjs
  */
 import { chromium } from 'playwright';
@@ -44,7 +47,6 @@ try {
     const errs = [];
     page.on('pageerror', e => errs.push(String(e).slice(0, 300)));
     if (process.env.DEBUG) page.on('console', m => console.log('   [page] ' + m.text().slice(0, 160)));
-    page.on('dialog', d => d.accept('2'));   // Track All asks for the animal count
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
 
@@ -94,6 +96,15 @@ try {
         `the view and all ${r1.poses} poses are on it (views ${JSON.stringify(r1.views)}, poses on ${JSON.stringify(r1.poseCams)})`);
     check(/single-camera session: no calibration needed/.test(r1.status), 'the status says it is a single-camera session: ' + r1.status.slice(0, 120));
     await page.evaluate(() => document.getElementById('tbTrackAll').click());
+    // Its first run asks the animal count, with the image check that can follow it, but no node
+    // weights: SLEAP's tracker does not read them.
+    const setup = await page.waitForSelector('.track-setup-modal', { timeout: 20000 });
+    const dlg = await setup.evaluate(m => ({ weights: !!m.querySelector('.track-weights-block'),
+        image: !!m.querySelector('[data-setting="autoImageSwitchCheck"]'), note: m.querySelector('.track-setup-later').textContent }));
+    check(!dlg.weights && dlg.image, `the first-run dialog asks the count and offers the image check, without node weights (weights ${dlg.weights}, image ${dlg.image})`);
+    check(!/node weights/i.test(dlg.note) && /The image check is saved/.test(dlg.note), 'and its note names only what it shows: ' + dlg.note);
+    await page.fill('#trackSetupAnimals', '2');
+    await page.click('#trackSetupContinue');
     await page.waitForFunction(() => /Tracked \d+ animal|Track All error|No session/.test(document.getElementById('statusText').textContent), { timeout: 60000 });
     const st = await page.evaluate(() => document.getElementById('statusText').textContent);
     check(/^Tracked 2 animals across 30 frames with SLEAP's tracker/.test(st), 'Track All runs SLEAP\'s tracker on it: ' + st.slice(0, 90));
