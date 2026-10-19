@@ -307,6 +307,26 @@ terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-cor
   still just download (`shouldStreamToDisk`, 256 MB).
 - h5wasm 0.10.3 (WebAssembly HDF5) — **vendored locally** at `lib/h5wasm/`
   (ESM `hdf5_hl.js` + IIFE `h5wasm.iife.js`; no CDN fetch). See its `PROVENANCE.txt`.
+  **LOCAL PATCH (cold-read):** WORKERFS's read in BOTH builds (`hdf5_util.js`,
+  `h5wasm.iife.js`) re-reads any part of a read that came back all zero
+  (`lucidColdReadGuard`). Why: Track All gave different identities for the same
+  session loaded cold vs warm from Google Drive for desktop (21 of the 22
+  proofread SLAP sessions). Measured 2026-10-19: while a File Provider file is
+  still downloading, a slice Chrome reads from it can come back with a 16 KiB
+  page of ZEROS mid-read and every other byte right, with no error — so the
+  `.slp` parse put 630 keypoints per hole at (0, 0), and the tracker diverged
+  at the first such frame. Python/h5py reads of cold files were clean, and
+  replaying the parser's exact reads did not reproduce it, so it needs the
+  parser's timing; the zeros are the signature, so the guard keys on them. An
+  immediate re-read returned the real bytes for every hole measured (17 of 17
+  in 12 cold files; really-zero bytes cost ~8 small re-reads per 25 MB file).
+  Every h5wasm File reader goes through it: the SLP worker (eager parse, lazy
+  analysis `.h5`), `frame-worker.js`, and sleap-io.js's streaming worker (lazy
+  `.slp`, which `importScripts` the IIFE). **Not** covered: reads that bypass
+  WORKERFS — Load 3D Points (`file.arrayBuffer()`), the small JSON/TOML reads,
+  and video (mediabunny reads the File itself). **Re-apply after any h5wasm
+  re-vendor** (grep the marker); `tests/test-workerfs-cold-read.mjs` fails
+  without it.
 - sleap-io.js — vendored browser bundle in `lib/sleap-io/`, pinned to **0.5.5**,
   **built from source** at `talmolab/sleap-io.js@e8dbaef8c` (the `0.5.5` release-bump
   commit) via `scripts/revendor-sleap-io.sh e8dbaef8ccc8` — 0.5.5 was **not yet on

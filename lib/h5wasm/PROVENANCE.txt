@@ -23,4 +23,25 @@ dist/node/* (Node build).
 Rebuild/bump: `npm pack h5wasm@<version>`, then copy dist/esm/{hdf5_hl,hdf5_util}.js
 and dist/iife/h5wasm.js here; re-verify every reader (points3d R/W, analysis-H5,
 embedded-frame extraction, SLP) since 0.10.x changed some APIs (e.g. removed
-`create_compound_dataset`).
+`create_compound_dataset`). Then RE-APPLY the local patch below.
+
+LOCAL PATCH (cold-read), in hdf5_util.js AND h5wasm.iife.js:
+  WORKERFS's `stream_ops.read` reads a File one slice at a time with
+  FileReaderSync. In a folder synced by Google Drive for desktop on macOS (File
+  Provider), a file whose download is still in progress can hand back a slice
+  with one or two 16 KiB pages of ZEROS and every other byte right (measured
+  2026-10-19 on the proofread SLAP sessions; a warm read of the same file is
+  always right). Nothing fails, so HDF5 parsed the zeros as data. The patch
+  adds `lucidColdReadGuard`, called right after the slice is copied: every part
+  of the read that came back all zero (per 4 KiB block, clipped to the read) is
+  read again, and re-read bytes replace the zeros only when they are not zero
+  themselves; a re-read that still holds an all-zero part is checked the same
+  way, at most three re-reads deep. A hole comes back as the real bytes; bytes that
+  really are zero cost one small re-read. Counts are kept on
+  `WORKERFS.lucidColdRead` ({rereads, recovered}); each recovery logs a
+  `[h5wasm WORKERFS] … were read again` console warning.
+  Grep `LUCID local patch (cold-read)`: one BEGIN/END block (the function,
+  byte-identical in both files) plus the one-line call in each WORKERFS read.
+  `tests/test-workerfs-cold-read.mjs` asserts both, exercises both builds, and
+  fails on the unpatched files. Note `git diff` shows hdf5_util.js as binary
+  (embedded wasm); the IIFE carries the same block in readable form.
