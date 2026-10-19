@@ -212,11 +212,6 @@ export class LoadingProgressModal {
         this._listEl = document.createElement('div');
         this._listEl.className = 'lpm-list';
         this.root.appendChild(this._listEl);
-        // Keep root.innerHTML in sync with header text for headless DOM
-        // sandboxes whose appendChild does not mirror children into
-        // innerHTML/textContent. Tests inspect getRootHtml() which reads
-        // outerHTML/innerHTML/textContent on root.
-        this._rebuildRootSnapshot();
         document.body.appendChild(this.root);
         this._shownAt = Date.now();
         this.dismissed = false;
@@ -274,7 +269,6 @@ export class LoadingProgressModal {
         this._groupRowMap.clear();
         this._childContainerMap.clear();
         this._explicitHeader = null;
-        if (this.root) this._rebuildRootSnapshot();
     }
 
     getTaskState(id) {
@@ -287,9 +281,7 @@ export class LoadingProgressModal {
 
     _renderRow(task) {
         if (!this._listEl) return;
-        // Cache rows on a private map so we don't depend on host querySelector
-        // capabilities (a since-retired Node test sandbox only supported tag-name
-        // selectors).
+        // Cache rows on a private map rather than re-querying the list for them.
         if (!this._rowMap) this._rowMap = new Map();
         let row = this._rowMap.get(task.id) || null;
         if (!row && typeof this._listEl.querySelector === 'function') {
@@ -364,7 +356,6 @@ export class LoadingProgressModal {
         } else if (task.phase === 'canplay') {
             addClass('lpm-phase-canplay');
         }
-        this._rebuildRootSnapshot();
     }
 
     /**
@@ -447,7 +438,6 @@ export class LoadingProgressModal {
         } else {
             groupEl.title = '';
         }
-        this._rebuildRootSnapshot();
     }
 
     /**
@@ -461,7 +451,6 @@ export class LoadingProgressModal {
             const visible = (gid === this._currentGroupId);
             if (childrenEl.style) childrenEl.style.display = visible ? '' : 'none';
         }
-        this._rebuildRootSnapshot();
     }
 
     /**
@@ -489,74 +478,6 @@ export class LoadingProgressModal {
             text = this.title + ' - Session ' + current + ' of ' + total;
         }
         this._headerEl.textContent = text;
-        this._rebuildRootSnapshot();
-    }
-
-    /**
-     * Mirror status text into root.innerHTML so headless DOM sandboxes (where
-     * appendChild does not propagate child content into parent innerHTML/
-     * textContent) can still expose the rendered content for inspection.
-     *
-     * Real browser DOMs already reflect appendChild into innerHTML, and the
-     * simplified snapshot here intentionally omits progress-bar markup that
-     * _renderRow appends (it's verbose and tests only care about text). So
-     * we MUST skip this in browsers — running it would replace the real
-     * progress-bar DOM with label-only HTML and hide every bar.
-     */
-    _rebuildRootSnapshot() {
-        if (!this.root) return;
-        // Skip in real browser environments. Only a DOM stub without a real
-        // HTMLElement constructor (the since-retired Node test sandbox) gets
-        // past this check.
-        if (typeof window !== 'undefined' &&
-            typeof window.HTMLElement === 'function' &&
-            this.root instanceof window.HTMLElement) {
-            return;
-        }
-        const parts = [];
-        const headerText = (this._headerEl && this._headerEl.textContent) || this.title;
-        parts.push('<div class="lpm-header">' + this._escape(headerText) + '</div>');
-        // Render groups + their children.
-        for (const [gid, group] of this.groups) {
-            const visible = (gid === this._currentGroupId);
-            const cls = 'lpm-group lpm-group-' + group.status;
-            let iconLabel = 'clock';
-            let iconChar = '⧗';
-            if (group.status === 'loading') { iconLabel = 'loading'; iconChar = '◐'; }
-            else if (group.status === 'complete') { iconLabel = 'check'; iconChar = '✓'; }
-            else if (group.status === 'error') { iconLabel = 'error'; iconChar = '✗'; }
-            parts.push(
-                '<div class="' + cls + '">' +
-                '<div class="lpm-group-row">' +
-                '<span class="lpm-icon lpm-icon-' + iconLabel + (group.status === 'loading' ? ' lpm-icon-spinner lpm-icon-loading' : '') + '" aria-label="' + iconLabel + '">' + iconChar + '</span>' +
-                '<span class="lpm-group-label">' + this._escape(group.label) + '</span>' +
-                '</div>'
-            );
-            if (visible) {
-                // Inline visible child rows.
-                parts.push('<div class="lpm-group-children">');
-                for (const task of this.tasks.values()) {
-                    if (task.parentId !== gid) continue;
-                    parts.push('<div class="lpm-row" data-task-id="' + task.id + '"><div class="lpm-label">' + this._escape(task.label) + '</div></div>');
-                }
-                parts.push('</div>');
-            } else {
-                parts.push('<div class="lpm-group-children" style="display:none"></div>');
-            }
-            parts.push('</div>');
-        }
-        // Render any orphan (flat) tasks not attached to a group.
-        for (const task of this.tasks.values()) {
-            if (task.parentId) continue;
-            parts.push('<div class="lpm-row" data-task-id="' + task.id + '"><div class="lpm-label">' + this._escape(task.label) + '</div></div>');
-        }
-        this.root.innerHTML = parts.join('');
-        // Also mirror into textContent so tests reading root.textContent see content.
-        if ('textContent' in this.root) {
-            // Approximate plain-text view (strip tags from parts).
-            let txt = parts.join(' ').replace(/<[^>]+>/g, ' ');
-            this.root.textContent = txt;
-        }
     }
 
     _maybeAutoDismiss() {
@@ -625,12 +546,6 @@ export class LoadingProgressModal {
             '.lpm-icon-spinner { animation: lpm-spin 1.4s linear infinite; }' +
             '@keyframes lpm-spin { to { transform: rotate(360deg); } }';
         target.appendChild(style);
-    }
-
-    _escape(s) {
-        return String(s).replace(/[&<>"']/g, function (c) {
-            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-        });
     }
 }
 

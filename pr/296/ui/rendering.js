@@ -6,32 +6,33 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=a95e496d1b8b';
-import { points3dNodeCount } from '../pose/pose-data.js?v=a95e496d1b8b';
+import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=edf9db6937ba';
+import { points3dNodeCount, isPoints3dFromFile } from '../pose/pose-data.js?v=edf9db6937ba';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
-    triangulateAndReproject, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=a95e496d1b8b';
-import { drawFrameOverlays } from './overlays.js?v=a95e496d1b8b';
-import { syncViewLegends } from './view-legend.js?v=a95e496d1b8b';
-import { isCameraTracked } from './settings.js?v=a95e496d1b8b';
+    triangulateAndReproject, reprojectStoredPoints3d, storeReprojectedInstances,
+} from '../pose/triangulation.js?v=edf9db6937ba';
+import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=edf9db6937ba';
+import { drawFrameOverlays } from './overlays.js?v=edf9db6937ba';
+import { syncViewLegends } from './view-legend.js?v=edf9db6937ba';
+import { isCameraTracked, getTrackingThreshold } from './settings.js?v=edf9db6937ba';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=a95e496d1b8b';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=edf9db6937ba';
 // The toolbar's Animals field shows the ACTIVE session's count. Circular
 // (it reaches pose/tracker.js, which imports this module) — safe for the same
 // reason: the call site is inside drawAllOverlays' body.
-import { syncAnimalCountField } from './animal-count-field.js?v=a95e496d1b8b';
-import { syncNodeTooltipFrame } from './node-tooltip.js?v=a95e496d1b8b';
+import { syncAnimalCountField } from './animal-count-field.js?v=edf9db6937ba';
+import { syncNodeTooltipFrame } from './node-tooltip.js?v=edf9db6937ba';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=a95e496d1b8b';
-import { updateFrameInfo } from './info-panel.js?v=a95e496d1b8b';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=edf9db6937ba';
+import { updateFrameInfo } from './info-panel.js?v=edf9db6937ba';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
-} from './frame-counters.js?v=a95e496d1b8b';
+} from './frame-counters.js?v=edf9db6937ba';
 
 // ============================================
 // Reproj/Error visibility
@@ -187,26 +188,62 @@ const MAX_OVERLAY_AREA = 268435456; // 2^28 px
 // reprojected instances, on frame `fi` (whose groups are `instanceGroups`).
 // Runs for every frame drawAllOverlays draws — during playback the views can
 // be on different frames (see its `viewFrames`).
-function fillLazyReprojections(fi, instanceGroups) {
+//
+// Neither Triangulate All path keeps reprojections or per-frame results for
+// the project (see `sweepTriangulateAllFrames`' docstring in
+// pose/triangulation.js), so after one this fill is what produces them, one
+// shown frame at a time. Two things keep that cheap:
+//  - **It reprojects the stored 3D rather than re-solving**
+//    (`reprojectStoredPoints3d`) whenever that 3D is current: the group was
+//    triangulated (`triangulationMethod` set), has not been edited since
+//    (`dirty` clear), and no reprojection-error threshold is set (with one the
+//    solve drops observations the stored 3D does not record, and its
+//    undistorted error leaves them out). Measured on a 17-camera project:
+//    0.1 ms per frame with one animal and 0.2 ms with three, against 2.4 and
+//    5.0 ms to re-solve Refined — at 120 fps a frame has 8.3 ms. 3D READ
+//    FROM A FILE (`isPoints3dFromFile`: a loaded `.slp`'s, an imported
+//    points3d `.h5`'s) is reprojected whenever the group is clean, threshold
+//    or not, and with or without a method: a re-solve would show LUCID's
+//    answer rather than the 3D the project holds. Any other group (Track
+//    All's provisional 3D, an edited group) is re-solved, as before.
+//  - **It keeps what it made for at most DERIVED_FRAMES_KEEP frames per
+//    session** (`noteDerivedFrame`), dropping the least recently filled
+//    beyond that, so playing through the whole recording does not rebuild
+//    the per-frame state Triangulate All no longer keeps.
+//
+// The paths that used to derive this state for EVERY frame they touched now
+// leave it to this fill: both Triangulate All paths, the `.slp` load
+// (`handleLoadSlpFile`), moving a view between sessions
+// (`moveVideosToSession`), and the overlay video export, which calls it for
+// each frame it draws so the video shows exactly what the app shows.
+export function fillLazyReprojections(fi, instanceGroups) {
     if (instanceGroups && state.session.cameras.length >= 2) {
         var _lazyFrameResults = null;
+        var _threshold = null;
         for (var _rg = 0; _rg < instanceGroups.length; _rg++) {
             var _grp = instanceGroups[_rg];
             if (points3dNodeCount(_grp.points3d) > 0 &&
                 (!_grp.reprojectedInstances || _grp.reprojectedInstances.size === 0) &&
                 (!_grp.reprojections || Object.keys(_grp.reprojections).length === 0)) {
-                // Re-solve with WHICHEVER METHOD this group was last triangulated
-                // with — same precondition as `reTriangulateGroup`. Passing no
-                // options makes the dispatcher silently default to 'dlt', which is
-                // how "Triangulate All ▸ Bundle Adjustment" appeared to do nothing:
-                // the windowed sweep deliberately drops `reprojections` /
-                // `state.triangulationResults` project-wide (~1.9 GB at 531,799
-                // groups — see sweepTriangulateAllFrames' docstring), so this fill
-                // is the ONLY thing that repopulates them, and a DLT re-solve here
-                // overwrote BA's error with DLT's while `group.triangulationMethod`
-                // still made the panel label it "Bundle Adjustment".
-                var _m = (_grp.triangulationMethod === 'ba') ? 'ba' : 'dlt';
-                var _triRes = triangulateAndReproject(_grp, state.session.cameras, { method: _m });
+                if (_threshold == null) _threshold = getTrackingThreshold('reprojErrorThreshold') || 0;
+                var _triRes;
+                if (!_grp.dirty && (isPoints3dFromFile(_grp.points3d) ||
+                    (_grp.triangulationMethod != null && !(_threshold > 0)))) {
+                    _triRes = reprojectStoredPoints3d(_grp, state.session.cameras);
+                } else {
+                    // Re-solve with WHICHEVER METHOD this group was last triangulated
+                    // with — same precondition as `reTriangulateGroup`. Passing no
+                    // options makes the dispatcher silently default to 'dlt', which is
+                    // how "Triangulate All ▸ Bundle Adjustment" appeared to do nothing:
+                    // the windowed sweep deliberately drops `reprojections` /
+                    // `state.triangulationResults` project-wide (~1.9 GB at 531,799
+                    // groups — see sweepTriangulateAllFrames' docstring), so this fill
+                    // is the ONLY thing that repopulates them, and a DLT re-solve here
+                    // overwrote BA's error with DLT's while `group.triangulationMethod`
+                    // still made the panel label it "Bundle Adjustment".
+                    var _m = (_grp.triangulationMethod === 'ba') ? 'ba' : 'dlt';
+                    _triRes = triangulateAndReproject(_grp, state.session.cameras, { method: _m });
+                }
                 _grp.reprojections = _triRes.reprojections;
                 storeReprojectedInstances(_grp, _triRes, state.session.cameras);
                 // Store in triangulationResults for info panel. `method` is carried
@@ -229,8 +266,49 @@ function fillLazyReprojections(fi, instanceGroups) {
         if (_lazyFrameResults) {
             var _existing = state.triangulationResults.get(fi) || [];
             state.triangulationResults.set(fi, _existing.concat(_lazyFrameResults));
+            noteDerivedFrame(state.session, fi);
         }
     }
+}
+
+/**
+ * Most frames whose derived reprojection state the fill keeps per session.
+ * About 75 KB a frame per animal on a 17-camera, 34-node project (the
+ * reprojections, the reprojected instances and the per-camera errors), so 600
+ * frames is ~45 MB per animal there — 5 s of 120 fps playback, and every frame
+ * stepped through recently is still a cache hit.
+ */
+export const DERIVED_FRAMES_KEEP = 600;
+// session -> Map(frameIdx -> true), least recently filled first
+const _derivedFrames = new WeakMap();
+
+/**
+ * Record that the fill derived reprojection state for frame `fi`, and drop
+ * the least recently filled frames' beyond DERIVED_FRAMES_KEEP
+ * (`dropDerivedReprojections`; the fill re-derives a frame's when it is shown
+ * again). Never drops the frame on screen, nor a frame holding an edited
+ * group (`dirty`): an edited group deliberately keeps showing its old
+ * reprojections until it is re-triangulated, and a re-derive would replace
+ * them with a fresh solve. Exported for tests.
+ */
+export function noteDerivedFrame(session, fi) {
+    var lru = _derivedFrames.get(session);
+    if (!lru) { lru = new Map(); _derivedFrames.set(session, lru); }
+    lru.delete(fi);
+    lru.set(fi, true);
+    if (lru.size <= DERIVED_FRAMES_KEEP) return;
+    for (var old of lru.keys()) {
+        if (lru.size <= DERIVED_FRAMES_KEEP) break;
+        if (old === fi || old === state.currentFrame) continue;
+        lru.delete(old);
+        if (!frameHasDirtyGroup(session, old)) dropDerivedReprojections(session, old, state.triangulationResults);
+    }
+}
+
+function frameHasDirtyGroup(session, fi) {
+    var groups = session.instanceGroups ? session.instanceGroups.get(fi) : null;
+    if (groups) for (var i = 0; i < groups.length; i++) if (groups[i].dirty) return true;
+    return false;
 }
 
 /**

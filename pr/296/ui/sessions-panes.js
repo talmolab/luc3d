@@ -28,22 +28,22 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js?v=a95e496d1b8b';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=a95e496d1b8b';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=a95e496d1b8b';
+} from './app-state.js?v=edf9db6937ba';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=edf9db6937ba';
+import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=edf9db6937ba';
 import {
-    triangulateAndReproject, storeReprojectedInstances, getInstanceGroupsForFrame,
+    triangulateAndReproject, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod,
-} from '../pose/triangulation.js?v=a95e496d1b8b';
+} from '../pose/triangulation.js?v=edf9db6937ba';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js?v=a95e496d1b8b';
-import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js?v=a95e496d1b8b';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=a95e496d1b8b';
+} from '../loading/session-loader.js?v=edf9db6937ba';
+import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js?v=edf9db6937ba';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=edf9db6937ba';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -51,27 +51,23 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js?v=a95e496d1b8b';
+} from './video-filters.js?v=edf9db6937ba';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=a95e496d1b8b';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=edf9db6937ba';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js?v=a95e496d1b8b';
-import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=a95e496d1b8b';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=a95e496d1b8b';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=a95e496d1b8b';
-// `autoAssignState` is a mutable binding tracked via ESM live binding.
-// The cycle (identity-assignment imports panelRenderers from here) is
-// hoist-safe because both reads are inside function bodies.
-import { autoAssignState } from './identity-assignment.js?v=a95e496d1b8b';
+import { setSoloView } from './ui-wiring.js?v=edf9db6937ba';
+import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=edf9db6937ba';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=edf9db6937ba';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=edf9db6937ba';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=a95e496d1b8b';
-import { getLoadingProgressModal } from './loading-progress-modal.js?v=a95e496d1b8b';
+import { setup3DViewport } from '../pose/initialization.js?v=edf9db6937ba';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=edf9db6937ba';
 
 // ============================================
 // Dockview Pane Manager
@@ -355,8 +351,8 @@ const _paneManagerImpl = {
             if (activeViewName && interactionManager) {
                 interactionManager.lastInteractedView = activeViewName;
             }
-            // Highlight corresponding camera in 3D viewer (skip during auto-assignment)
-            if (viewport3d && !autoAssignState) {
+            // Highlight corresponding camera in 3D viewer
+            if (viewport3d) {
                 viewport3d.highlightCamera(activeViewName);
                 viewport3d.selectedCamera = activeViewName;
             }
@@ -619,13 +615,16 @@ export function refreshPaneInteractions() {
     if (interactionManager && state.views.length > 0) {
         interactionManager.attach(state.views);
     }
-    // Initialize zoom and set up handlers for each docked view
-    // Only re-setup if the cell element changed (panel was recreated)
+    // Give a view a zoom state the first time it is docked, and re-wire the
+    // zoom handlers whenever its cell changed (the panel was recreated). An
+    // EXISTING zoom is kept: it belongs to the view, not the pane. Every new
+    // pane's `init` calls this a frame later, so re-initialising here reset
+    // every view to fit one frame after a grid ↔ solo switch.
     if (videoController) {
         for (var i = 0; i < state.views.length; i++) {
             var view = state.views[i];
             if (view.canvas) {
-                videoController.initZoom(view);
+                if (!view.zoom) videoController.initZoom(view);
                 var cell = view.canvas.closest('.video-cell');
                 if (cell && cell !== view._zoomCell) {
                     view._zoomCell = cell;
@@ -638,13 +637,28 @@ export function refreshPaneInteractions() {
     // Render current frame to newly created canvases and fit sizes
     fitCanvasesToCells();
     if (videoController) {
-        // `initZoom` above put every view back at fit — or, while View ▸
-        // Native Resolution is on, flagged it 1:1 with its scale still to be
-        // derived from the box `fitCanvasesToCells` just laid out.
-        for (var ni = 0; ni < state.views.length; ni++) {
-            var nv = state.views[ni];
-            if (nv.zoom && nv.zoom.native) videoController.reapplyZoom(nv);
+        // Carry each shown view's zoom onto its (possibly new) canvas box, as a
+        // cell resize does: `reapplyZoom` rescales the pan by the change in
+        // box size, so the same region of the video stays centred, and
+        // re-derives a 1:1 view's scale for the new box. The one exception is
+        // View ▸ Native Resolution: while it is on, a view coming on screen
+        // joins it at 1:1 rather than keeping its own zoom. A view that is not
+        // docked keeps a detached canvas; one whose cell is not laid out yet
+        // is left to the ResizeObserver.
+        var nativeOn = !!state.nativeResolution;
+        for (var ri = 0; ri < state.views.length; ri++) {
+            var rv = state.views[ri];
+            if (!rv.zoom || !rv.canvas || !rv.canvas.isConnected) continue;
+            var rcell = rv.canvas.closest('.video-cell');
+            if (!rcell || rcell.clientWidth <= 0 || rcell.clientHeight <= 0) continue;
+            if (nativeOn && !rv.zoom.native) rv.zoom.native = true;
+            videoController.reapplyZoom(rv);
         }
+        // Re-derive the mode for the views now on screen. It is otherwise only
+        // refreshed by a zoom or by opening the View menu, so a solo'd view
+        // already at 1:1 would turn it on — and pull the next camera to 1:1 —
+        // only if the user happened to open the menu in between.
+        videoController.nativeResolutionActive();
         videoController.seekToFrame(state.currentFrame);
     }
     drawAllOverlays(state.currentFrame);
@@ -1472,6 +1486,10 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
     var fromSession = state.sessions[fromIdx];
     var toSession = state.sessions[toIdx];
     var totalRetriangulated = 0;
+    // The origin session's per-frame results: the live map while it is the
+    // session on screen, its own stash otherwise (see switchToSession).
+    var fromResults = fromSession === state.session
+        ? state.triangulationResults : fromSession.triangulationResults;
 
     var originHasCalib = fromSession.cameras.some(function (c) {
         var r = c.rotation || c.rvec;
@@ -1528,7 +1546,18 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
                 var group = groups[gi];
                 if (group.instances.has(viewName) || group.reprojectedInstances.has(viewName)) {
                     group.instances.delete(viewName);
-                    group.reprojectedInstances.delete(viewName);
+                    // Whatever happens to its 3D below, the group's derived
+                    // state — its reprojections, reprojected instances and its
+                    // entry in this frame's results — described the group WITH
+                    // the moved view, so it goes. The display fill re-derives it
+                    // from the new 3D when the frame is shown
+                    // (`fillLazyReprojections`, ui/rendering.js). This used to
+                    // store the re-solve's reprojections and a reprojected
+                    // Instance per camera for EVERY group holding the view —
+                    // every frame of the session, ~75 KB per frame per animal
+                    // on a 17-camera, 34-node project — and left the frame's
+                    // results naming the moved view's errors.
+                    dropGroupDerivedReprojections(group, frameIdx2, fromResults);
 
                     if (group.cameraNames.length >= 2) {
                         var groupCameras = fromSession.cameras.filter(function (c) {
@@ -1548,16 +1577,12 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
                             if (valid) {
                                 group.points3d = pooledPoints3d(result.points3d);
                                 group.triangulationMethod = result.method;
-                                group.reprojections = result.reprojections;
-                                storeReprojectedInstances(group, result, fromSession.cameras);
                             }
                             group.markClean();
                             totalRetriangulated++;
                         }
                     } else if (group.cameraNames.length < 2) {
                         group.points3d = null;
-                        group.reprojections = null;
-                        group.reprojectedInstances.clear();
                     }
                 }
             }

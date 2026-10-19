@@ -22,76 +22,77 @@ import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, VIEW_NAMES, buildRememberedSkeleton, setProjectSkeleton,
     isViewDocked,
-} from '../ui/app-state.js?v=a95e496d1b8b';
+} from '../ui/app-state.js?v=edf9db6937ba';
 
 import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
-} from '../pose/pose-data.js?v=a95e496d1b8b';
+} from '../pose/pose-data.js?v=edf9db6937ba';
 
-import { OnDemandVideoDecoder, VideoController } from './video.js?v=a95e496d1b8b';
-import { videoLoadFailureText } from './video-codec-diagnosis.js?v=a95e496d1b8b';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=a95e496d1b8b';
+import { OnDemandVideoDecoder, VideoController } from './video.js?v=edf9db6937ba';
+import { videoLoadFailureText } from './video-codec-diagnosis.js?v=edf9db6937ba';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=edf9db6937ba';
+import { confirmFolderPick } from '../ui/folder-confirm-tip.js?v=edf9db6937ba';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
     parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO,
     loadCalibrationFile,
-} from '../import-export/file-io.js?v=a95e496d1b8b';
+} from '../import-export/file-io.js?v=edf9db6937ba';
 
-import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=a95e496d1b8b';
+import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=edf9db6937ba';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
 // the browser test runner (session-loader itself pulls app.js) — same reason
 // and same shape as `resolveImportTrackIdx` above.
-import { chooseCameraSlp } from './percam-slp-choice.js?v=a95e496d1b8b';
+import { chooseCameraSlp } from './percam-slp-choice.js?v=edf9db6937ba';
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js?v=a95e496d1b8b';
-import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=a95e496d1b8b';
+import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js?v=edf9db6937ba';
+import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=edf9db6937ba';
 import {
     isCalibrationImagesVideo, preferNonCalibrationVideos, matchVideoToCamera,
-} from './video-file-pick.js?v=a95e496d1b8b';
+} from './video-file-pick.js?v=edf9db6937ba';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,
     ensureLazyFrameData,
-} from '../pose/triangulation.js?v=a95e496d1b8b';
-import { SioLazyLoader } from './sio-lazy-loader.js?v=a95e496d1b8b';
-import { unionTrackNames, remapTrackIdx } from './track-union.js?v=a95e496d1b8b';
-import { nodeOrderRemap, permuteColumnarNodes, permuteInstanceNodes } from './slp-skeleton.js?v=a95e496d1b8b';
+} from '../pose/triangulation.js?v=edf9db6937ba';
+import { SioLazyLoader } from './sio-lazy-loader.js?v=edf9db6937ba';
+import { unionTrackNames, remapTrackIdx } from './track-union.js?v=edf9db6937ba';
+import { nodeOrderRemap, permuteColumnarNodes, permuteInstanceNodes } from './slp-skeleton.js?v=edf9db6937ba';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
     setStatus, showLoading, hideLoading, ensureNo3dImportBlockingLoad,
-} from '../import-export/save-load.js?v=a95e496d1b8b';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=a95e496d1b8b';
+} from '../import-export/save-load.js?v=edf9db6937ba';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=edf9db6937ba';
 
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=a95e496d1b8b';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=a95e496d1b8b';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=a95e496d1b8b';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=a95e496d1b8b';
-import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=a95e496d1b8b';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=edf9db6937ba';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=edf9db6937ba';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=edf9db6937ba';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=edf9db6937ba';
+import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=edf9db6937ba';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, setupTimeline,
     updateFpsDisplay,
     hideWelcomeOverlay,
-} from '../pose/initialization.js?v=a95e496d1b8b';
+} from '../pose/initialization.js?v=edf9db6937ba';
 // Pass 3h: populateViewStrip / populateSessionStrip / switchSession moved to sessions-panes.js.
 import {
     populateViewStrip, populateSessionStrip, switchSession, multiSelectViews,
-} from '../ui/sessions-panes.js?v=a95e496d1b8b';
+} from '../ui/sessions-panes.js?v=edf9db6937ba';
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
 import {
     updateSeekbar, fitTimelineToData, onPlaybackStateChange, updateVideoGridDisplay,
-} from '../ui/ui-wiring.js?v=a95e496d1b8b';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=a95e496d1b8b';
-import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=a95e496d1b8b';
-import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js?v=a95e496d1b8b';
+} from '../ui/ui-wiring.js?v=edf9db6937ba';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=edf9db6937ba';
+import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=edf9db6937ba';
+import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js?v=edf9db6937ba';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -546,6 +547,7 @@ export function matchSessionFolder(folderName, sessionName) {
  *   unmatched: session names with no matching folder
  */
 export async function pickParentDirectoryForSessions(sessionNames) {
+    if (!(await confirmFolderPick())) return null;
     if (!window.showDirectoryPicker) {
         // Fall back to pickFolder (webkitdirectory) — can't enumerate subdirs individually
         var allFiles = await pickFolder();
@@ -785,6 +787,7 @@ export function forceVideoSelectionWithFolder(refInfo, sessionName, options) {
         // Folder button — scan for videos in camera subdirs
         btnFolder.addEventListener('click', async function () {
             var allFiles;
+            if (!(await confirmFolderPick())) return;
             try { allFiles = await pickFolder(); } catch (e) { return; }
             if (!allFiles || allFiles.length === 0) return;
 
@@ -1344,6 +1347,10 @@ export async function handleLoadMultiSession() {
         // the browser dropping files when webkitdirectory returns too many
         var parentHandle;
         if (window.showDirectoryPicker) {
+            if (!(await confirmFolderPick())) {
+                setStatus('No folder selected', 'warning');
+                return;
+            }
             try {
                 parentHandle = await window.showDirectoryPicker({ mode: 'read' });
             } catch (e) {
@@ -1874,6 +1881,10 @@ export function handleEmptySession() {
 
 export async function handleLoadSessionFolderSingleSlp() {
     try {
+        if (!(await confirmFolderPick())) {
+            setStatus('No folder selected', 'warning');
+            return;
+        }
         setStatus('Pick session folder...', 'warning');
         var allFiles = await pickFolder();
         if (allFiles.length === 0) {
@@ -2697,6 +2708,10 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         if (preloadedFiles) {
             allFiles = preloadedFiles;
         } else {
+            if (!(await confirmFolderPick())) {
+                setStatus('No folder selected', 'warning');
+                return;
+            }
             setStatus('Pick session folder...', 'warning');
             allFiles = await pickFolder();
             if (allFiles.length === 0) {

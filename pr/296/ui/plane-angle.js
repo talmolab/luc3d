@@ -58,13 +58,13 @@
 import {
     planeModel, planeState, refreshPlanePanel, syncPlanes3D,
     showPlaneDialog, refreshTriangulationErrors,
-} from './plane-definition.js?v=a95e496d1b8b';
-import { writePoints3dForPlane, usablePlaneFit } from '../pose/plane-data.js?v=a95e496d1b8b';
-import { reprojectPointCamera } from '../pose/triangulation.js?v=a95e496d1b8b';
-import { planAngleEdit, planeAngleDeg } from '../pose/plane-angle.js?v=a95e496d1b8b';
-import { state, viewport3d } from './app-state.js?v=a95e496d1b8b';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=a95e496d1b8b';
-import { drawAllOverlays } from './rendering.js?v=a95e496d1b8b';
+} from './plane-definition.js?v=edf9db6937ba';
+import { writePoints3dForPlane, usablePlaneFit } from '../pose/plane-data.js?v=edf9db6937ba';
+import { reprojectPointCamera } from '../pose/triangulation.js?v=edf9db6937ba';
+import { planAngleEdit, planeAngleDeg } from '../pose/plane-angle.js?v=edf9db6937ba';
+import { state, viewport3d } from './app-state.js?v=edf9db6937ba';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=edf9db6937ba';
+import { drawAllOverlays } from './rendering.js?v=edf9db6937ba';
 
 /** The angle the dialog opens on. 90 is what "square this up" means. */
 const DEFAULT_TARGET_DEG = 90;
