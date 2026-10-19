@@ -1,24 +1,21 @@
 /**
- * bulk-triangulation-bounded-derived-state.mjs — Group by Track, Triangulate
- * Range and the multi-frame identity assignment keep only the 3D; a frame's
- * reprojections and errors are derived from it when the frame is shown.
+ * bulk-triangulation-bounded-derived-state.mjs — Group by Track and Triangulate
+ * Range keep only the 3D; a frame's reprojections and errors are derived from
+ * it when the frame is shown.
  *
  * ## The bug
  * Triangulate All's in-memory path kept every group's reprojections into every
  * camera and every frame's per-camera errors in `state.triangulationResults` —
  * ~52 KB per group on a 17-camera, 34-node project, +1.9 GB on 36,000 frames,
  * and with three animals the renderer ran out of memory at 56% (fixed by
- * #351; `tests/e2e/triangulate-all-bounded-derived-state.mjs`). Three other
+ * #351; `tests/e2e/triangulate-all-bounded-derived-state.mjs`). Two other
  * bulk paths kept the same state for every frame they processed:
  *   * Tracks ▸ Group by Track (`ui/export-modals.js`);
  *   * Triangulate Range (`triangulateMultiFrameInstances`), whose range can be
- *     the whole project;
- *   * the multi-frame identity assignment (`runMultiFrameAssignment`,
- *     `ui/identity-assignment.js`), which kept each frame's reprojections AND a
- *     reprojected `Instance` per camera per group.
+ *     the whole project.
  * And each ended by walking `state.triangulationResults` to update the
  * timeline, so with that map no longer holding every frame the walk would
- * have missed them (the assignment never wrote it at all).
+ * have missed them.
  *
  * ## What this pins (synthetic eager project, DERIVED_FRAMES_KEEP + 100 frames)
  *   G. Group by Track, through its real modal: every group's 3D is
@@ -34,10 +31,6 @@
  *      frames and the error sums; a shown frame derives the new solve's numbers.
  *      Then through its real modal: the timeline marks are the frames it
  *      re-solved, and only the frame on screen has derived state.
- *   M. Multi-frame identity assignment over every frame: at most
- *      DERIVED_FRAMES_KEEP frames keep derived state (the last ones); every
- *      assigned frame's timeline mark is updated; a dropped frame shown again
- *      is reprojected from its stored 3D.
  *
  * Fixture: `fixtures/ba-rig-fixture.js` (3 cameras with real k1 distortion,
  * 2 animals). Read its header before editing the geometry.
@@ -70,8 +63,6 @@ try {
     const RND = await import('/ui/rendering.js');
     const SET = await import('/ui/settings.js');
     const EM = await import('/ui/export-modals.js');
-    const IA = await import('/ui/identity-assignment.js');
-    const PD = await import('/pose/pose-data.js');
     const { buildBaRigFixture } = await import('/tests/e2e/fixtures/ba-rig-fixture.js');
     const KEEP = RND.DERIVED_FRAMES_KEEP || 600;   // (|| for running this on an older build)
     const NF = KEEP + 100;
@@ -300,46 +291,6 @@ try {
       res.r2Groups = expR2.size;
       const closeBtn = document.getElementById('tfClose');
       if (closeBtn) closeBtn.click();
-
-      // ---- M. multi-frame identity assignment, every frame --------------------
-      const sM = F.mkSession('M', { eager: true });
-      for (const [, fg] of sM.frameGroups) {
-        for (const cam of cams) {
-          const list = fg.instances.get(cam.name) || [];
-          fg.instances.set(cam.name, []);
-          for (const inst of list) fg.addUnlinkedInstance(cam.name, new PD.UnlinkedInstance(inst, cam.name));
-        }
-      }
-      boot(sM);
-      SET.setDefaultTriangulationMethod('dlt');   // brand-new groups take the default; DLT keeps the run short
-      tl = spyTimeline();
-      const overlayEl = document.createElement('div');
-      document.body.appendChild(overlayEl);
-      await IA.runMultiFrameAssignment(0, NF - 1, cams.map(c => c.name), overlayEl);
-      overlayEl.remove();
-      const mGroups = allGroups(sM);
-      Object.assign(res, {
-        mFramesWith2: [...sM.instanceGroups.values()].filter(gs => gs.length === 2).length,
-        mGroups: mGroups.length,
-        mGood3d: mGroups.filter(g => g.cameraNames.length === 3 && PD.points3dNodeCount(g.points3d) === F.NNODE).length,
-        mDirty: mGroups.filter(g => g.dirty).length,
-        mDerived: derivedFrames(sM),
-        mWantDerived: range(NF - KEEP, NF - 1),
-        mTimelineOk: setEq(tl, range(0, NF - 1)), mTimelineCalls: new Set(tl).size,
-      });
-      // a dropped frame shown again: reprojected from its stored 3D
-      AS.state.currentFrame = 10;
-      RND.drawAllOverlays(10);
-      const results10 = AS.state.triangulationResults.get(10) || [];
-      res.mRevisitBad = [];
-      for (const g of groupsOf(10)) {
-        const rr = results10.find(x => x.group === g);
-        if (!rr) { res.mRevisitBad.push('no result'); continue; }
-        if (rr.points3d !== g.points3d) res.mRevisitBad.push('re-solved instead of reprojecting');
-        for (const c of cams) {
-          if (!sameArr(g.reprojections && g.reprojections[c.name], TRI.reprojectPointsCamera(g.points3d, c))) res.mRevisitBad.push('reprojection ' + c.name);
-        }
-      }
     } finally {
       AS.setTimeline(origTimeline);
       SET.setDefaultTriangulationMethod(prevPref);
@@ -401,15 +352,6 @@ try {
   check(JSON.stringify(out.r2ResultFrames) === '[0]' && JSON.stringify(out.r2Derived) === '[0]',
     `R2: only the frame on screen has results or reprojections (results ${JSON.stringify(out.r2ResultFrames)}, ` +
     `reprojections ${out.r2Derived.length} frames)`);
-
-  // ---- M ---------------------------------------------------------------------
-  check(out.mFramesWith2 === NF && out.mGood3d === 2 * NF && out.mDirty === 0,
-    `M precondition: the assignment grouped both animals in all 3 cameras on every frame, with 3D ` +
-    `(${out.mFramesWith2}/${NF} frames, ${out.mGood3d}/${out.mGroups} groups)`);
-  check(JSON.stringify(out.mDerived) === JSON.stringify(out.mWantDerived),
-    `M: only the last ${out.KEEP} frames keep derived state (${out.mDerived.length} frames, first ${out.mDerived[0]})`);
-  check(out.mTimelineOk, `M: the timeline mark of every assigned frame is updated (${out.mTimelineCalls} of ${NF} frames)`);
-  check(out.mRevisitBad.length === 0, `M: a dropped frame shown again is reprojected from its stored 3D (${JSON.stringify(out.mRevisitBad)})`);
 
   check(errs.length === 0, `no page errors (${errs.length})${errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''}`);
   await browser.close();

@@ -137,7 +137,7 @@ the old `app.js` entry point.
 - `../ui/timeline.js` — `Timeline`.
 - `../ui/interaction.js` — `InteractionManager`.
 
-**Imported by.** `app.js`, `pose/triangulation.js`, `ui/identity-assignment.js`,
+**Imported by.** `app.js`, `pose/triangulation.js`,
 `ui/export-modals.js`, `ui/sessions-panes.js`, `ui/ui-wiring.js`,
 `loading/session-loader.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`.
@@ -2859,7 +2859,7 @@ rather than `state.triangulationResults`. Covered by
 `tests/e2e/triangulate-all-bounded-derived-state.mjs` (fails on the old build
 on the memory shape).
 
-**Nor does any other bulk path.** Three more kept that state for every frame
+**Nor does any other bulk path.** Two more kept that state for every frame
 they processed, and each now keeps only the 3D and the error stats:
 - **Tracks ▸ Group by Track** (`ui/export-modals.js`) calls
   `dropAllDerivedTriangulationState` before its sweep — every frame's groups
@@ -2869,19 +2869,12 @@ they processed, and each now keeps only the 3D and the error stats:
 - **Triangulate Range** (`triangulateMultiFrameInstances`) drops a frame's
   derived state (`dropDerivedReprojections`) when it re-solves a group there,
   and leaves every other frame's alone: the range need not be the project.
-- **The multi-frame identity assignment** (`runMultiFrameAssignment`,
-  `ui/identity-assignment.js`) runs the single-frame assignment, which keeps
-  reprojections AND a reprojected `Instance` per camera per group, on every
-  frame of its range; each frame now joins the display's bounded set
-  (`noteDerivedFrame`, ui/rendering.js), so at most `DERIVED_FRAMES_KEEP`
-  frames keep it.
-All three ended with a timeline pass over `state.triangulationResults`, which
-no longer lists the frames they processed (and which the assignment never
-wrote at all); each now walks its own list — the frames Group by Track
-regrouped, the frames the range re-solved (`result.frames`), the frames the
-assignment grouped. Covered by
-`tests/e2e/bulk-triangulation-bounded-derived-state.mjs` (12 checks fail on
-the old build: every memory-shape and timeline check).
+Both ended with a timeline pass over `state.triangulationResults`, which no
+longer lists the frames they processed; each now walks its own list — the
+frames Group by Track regrouped, the frames the range re-solved
+(`result.frames`). Covered by
+`tests/e2e/bulk-triangulation-bounded-derived-state.mjs` (fails on the old
+build on every memory-shape and timeline check).
 
 The windowed path stores only `points3d` (flat `Float64Array`, the file's own
 representation) plus `usedCameras`; it does **not** set `group.reprojections` and
@@ -2999,12 +2992,11 @@ implement it, all in this module:
   method wins; otherwise the user's global **Settings ▸ Triangulation Method**
   (`getDefaultTriangulationMethod`). Never a bare `'dlt'` literal. Used by
   `reTriangulateGroup`, both grouping sweeps in `ui/export-modals.js`,
-  `ui/sessions-panes.js`'s move-view re-triangulate, `ui/ui-wiring.js`'s
-  environment-skeleton solve, and `ui/identity-assignment.js`'s two group-writing
-  loops. **Deliberately NOT used by `ui/rendering.js`'s lazy reprojection fill:**
-  that path re-derives reprojections for 3D it does not own and does not write
-  back, so it must REPRODUCE the recorded solve exactly rather than fall back to a
-  global default. Rule of thumb — *writes* `points3d` → `resolveTriangulationMethod`;
+  `ui/sessions-panes.js`'s move-view re-triangulate and `ui/ui-wiring.js`'s
+  environment-skeleton solve. **Deliberately NOT used by `ui/rendering.js`'s
+  lazy reprojection fill:** that path re-derives reprojections for 3D it does
+  not own and does not write back, so it must REPRODUCE the recorded solve
+  exactly rather than fall back to a global default. Rule of thumb — *writes* `points3d` → `resolveTriangulationMethod`;
   only *reads* it → match `triangulationMethod` exactly.
 - `findEquivalentPriorGroup(priorGroups, group)` → the prior group with identical
   membership (camera for camera, by `Instance` object identity), or null.
@@ -3056,19 +3048,18 @@ common case, which makes the correct behavior *cheaper* than the old one rather
 than paying BA's ~3x-6x cost per group project-wide. Both sweeps report 3D
 provenance ("N kept existing 3D, N solved via Refined, N via DLT") in
 their progress text and status line, so a method's cost is visible rather than
-hidden. The one deliberate DLT caller is the O(n×m) Hungarian cost matrix in
-`ui/identity-assignment.js`, whose temporary groups' 3D is discarded and where only
-the relative ordering of errors matters. It passes `{ method: 'dlt' }` **explicitly**,
-so the invariant is the checkable one — *every* call site states its method — rather
-than the uncheckable "every caller that forgot happened to want DLT".
+hidden. No caller hardcodes DLT: the last one that did, an O(n×m) Hungarian cost
+matrix in `ui/identity-assignment.js`'s automatic assignment, was deleted with the
+rest of that unreachable chain. The invariant is the checkable one — *every* call
+site states its method, and states it by resolving it — rather than the
+uncheckable "every caller that forgot happened to want DLT".
 `tests/test-triangulation-method-propagation.mjs` enforces that by scanning the app
 source: it fails, naming file and line, on any call that omits the options object,
-omits `method`, hardcodes `'dlt'` outside the cost matrix, or passes something that
-is neither a resolver nor a threaded-in method (confirmed to catch the original
-`ui/rendering.js` bug). A runtime assert inside `triangulateAndReproject` was
-considered and REJECTED: it runs once per candidate PAIR inside that cost matrix, so
-a warning would fire O(n*m) times per auto-assign — noise in a legitimate path,
-which is exactly what the guard must not create.
+omits `method`, hardcodes `'dlt'`, or passes something that is neither a resolver
+nor a threaded-in method (confirmed to catch the original `ui/rendering.js` bug).
+A source scan rather than a runtime assert inside `triangulateAndReproject`,
+because a runtime check fires only on the paths something happens to execute,
+while the scan covers every call site on every run.
 
 **Distortion handling.** 2D keypoints on disk are lens-distorted. **DLT** runs in
 ideal pinhole space: observations are undistorted first (`Camera.undistortPoint`),
@@ -3082,8 +3073,7 @@ must be **re-distorted** back to native pixel space
 `Camera.distortPoint`). Comparing ideal reprojections against raw distorted
 keypoints previously produced spurious error that grew toward the frame edges
 ("fisheyed coordinates", issue #85) and could drive cross-view identity
-switches. The temporal-identity cost in `ui/identity-assignment.js` likewise
-projects 3D targets with distortion before measuring distance to raw detections.
+switches.
 
 `triangulateAndReproject` reports the reprojection error in **both** spaces:
 `meanError`/`errors` (distorted — what is drawn and broken down per view/node)
@@ -5019,8 +5009,7 @@ Group-by-Identity, Multi-Frame Triangulate modal.
 ### ui/identity-assignment.js
 
 **Purpose.** All workflows for grouping instances into identities — manual
-assignment, edit-group mode, automatic assignment, single-frame
-triangulation, multi-frame assignment modal, track/identity helpers.
+assignment, edit-group mode, track/identity helpers.
 
 **Key exports.**
 - Track helpers: `swapAssignTrack`, `assignTrackToSelected`,
@@ -5092,62 +5081,34 @@ triangulation, multi-frame assignment modal, track/identity helpers.
   `cleanupManualAssignment`, `startManualAssignment`.
 - Edit group: `editGroupState`, `startEditGroup`, `cancelEditGroup`,
   `finishEditGroup`, `cleanupEditGroup`, `updateEditGroupToast`.
-- Auto assign: `autoAssignState`, `cleanupAutoAssignment`,
-  `runAutomaticAssignment`, `runTrackedAssignment`.
-- Triangulation flows: `runSingleFrameTriangulation`,
-  `showMultiFrameModal`, `startViewSelectionForFrames`,
-  `showMultiFrameProgressModal`, `runMultiFrameAssignment`.
-  **`runMultiFrameAssignment` keeps derived state for a bounded number of
-  frames.** It runs the single-frame assignment on every frame of its range,
-  and that keeps each group's reprojections and a reprojected `Instance` per
-  camera — right for the frame on screen, gigabytes over a whole 17-camera
-  project. Each frame it processes joins the display's bounded set
-  (`noteDerivedFrame`, ui/rendering.js), so only the last `DERIVED_FRAMES_KEEP`
-  keep it; a dropped frame is re-derived from its 3D when shown. The next frame
-  reads only the previous groups' `points3d`, never their reprojections. Its
-  timeline pass walks the frames it grouped — it used to walk
-  `state.triangulationResults`, which the assignment never writes. Covered by
-  `tests/e2e/bulk-triangulation-bounded-derived-state.mjs` §M.
 
 **Imports from project modules.**
-- `./app-state.js` — `state`, `videoController`, `interactionManager`,
-  `viewport3d`, `timeline`, `paneManager`.
-- `../pose/pose-data.js` — `InstanceGroup`, `UnlinkedInstance`.
-- `../pose/triangulation.js` — `frameHasGroupedUserInstances`,
-  `getInstanceGroupsForFrame`, `triangulateAndReproject`,
-  `storeReprojectedInstances`, `reprojectPoints`,
-  `computeInstanceDistance`, `hungarianAlgorithm`,
-  `updateTimelineForFrame`, `triangulateCurrentFrame`,
-  `resolveTriangulationMethod`.
-- `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`,
-  `noteDerivedFrame` (`runMultiFrameAssignment`'s bound on derived state).
-
-**Three `triangulateAndReproject` call sites, two of which write 3D.** The two
-that write it (`autoAssign`'s "auto-triangulate all groups for this frame" loop
-and `autoAssignAcrossFrames`' per-new-group solve) now pass
-`resolveTriangulationMethod(group)`. The first is the load-bearing one: it sweeps
-**every** group on the frame, including pre-existing bundle-adjusted ones, and
-passing no method silently re-solved them with DLT and overwrote `points3d` —
-which is what save/export read. The third, the O(nRef × nOther) **Hungarian cost
-matrix**, is deliberately DLT — its temporary groups' 3D is discarded, only the
-relative ordering of the errors matters, and BA's ~3x-6x cost would buy nothing —
-and it passes `{ method: 'dlt' }` explicitly rather than relying on the default, so
-that no call site in the app depends on that default (enforced by
-`tests/test-triangulation-method-propagation.mjs`). (This module already used `getDefaultTriangulationMethod()` for its
-`triangulateCurrentFrame` call, so honoring the user's method here is consistent
-rather than new policy.)
-- `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`.
+- `./app-state.js` — `state`, `interactionManager`, `viewport3d`, `timeline`.
+- `../pose/pose-data.js` — `UnlinkedInstance`.
+- `../pose/triangulation.js` — `getInstanceGroupsForFrame`,
+  `updateTimelineForFrame`.
+- `./rendering.js` — `drawAllOverlays`.
 - `./info-panel.js` — `updateInfoPanel`.
 - `../import-export/save-load.js` — `markDirty`, `setStatus`.
-- `../pose/initialization.js` — `update3DViewport`.
-- `./sessions-panes.js` — `panelRenderers`.
+
+**No automatic assignment, and no `triangulateAndReproject` call.** The
+automatic-assignment chain that used to live here — `runSingleFrameTriangulation`
+and `showMultiFrameModal`, and behind them `startViewSelectionForFrames`,
+`showMultiFrameProgressModal`, `runMultiFrameAssignment`,
+`runAutomaticAssignment`, `runTrackedAssignment`, `autoAssignState` /
+`cleanupAutoAssignment` and `state.lastAutoAssignViews` / `lastAutoAssignFrame` —
+was deleted once commit `5612c920` left it with no caller. It held all three of
+this module's `triangulateAndReproject` calls, among them the app's one hardcoded
+`{ method: 'dlt' }` (an O(nRef × nOther) Hungarian cost matrix with a fixed
+`< 50` px acceptance cutoff), so `tests/test-triangulation-method-propagation.mjs`
+now requires that NO caller hardcodes DLT. Cross-view grouping is Track All /
+Track Frame's job (`pose/tracker.js`).
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`,
-`ui/rendering.js`, `ui/sessions-panes.js`, `ui/ui-wiring.js`.
+`ui/rendering.js`, `ui/ui-wiring.js`.
 
 **User-facing features.** Manual identity assignment toast workflow,
-Edit Group mode, Auto-Assign / Tracked Assign, single-frame and
-multi-frame triangulation modals, track-swap dialogs.
+Edit Group mode, track-swap dialogs.
 
 ---
 
@@ -7300,9 +7261,7 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `opts.checkBoxes === false`.
 - `DERIVED_FRAMES_KEEP` (600), `noteDerivedFrame(session, frameIdx)` — the
   reprojection fill's cap on frames with derived state (see the lazy
-  reprojection fill under `drawAllOverlays`); exported for tests and for
-  `ui/identity-assignment.js`'s `runMultiFrameAssignment`, whose frames join
-  the same bounded set.
+  reprojection fill under `drawAllOverlays`); exported for tests.
 - `showReprojectionsOnly()` -> `boolean` — after Triangulate All (#243): User,
   Predictions, Errors off, Reprojections on, each changed box firing its own `change`
   event (so the deselect-hidden-instance handler and redraw run as for a
@@ -7494,10 +7453,7 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   34 nodes, so ~45 MB per animal there. Never dropped: the frame on screen, and
   a frame holding a `dirty` group — an edited group keeps showing its old
   reprojections until it is re-triangulated (`pose/initialization.js`), and a
-  re-derive would replace them with a fresh solve. The multi-frame identity
-  assignment (`ui/identity-assignment.js`) puts each frame it processes in the
-  same set, since it keeps the same state for every frame of its range.
-  Covered by `tests/e2e/triangulate-all-bounded-derived-state.mjs` and
+  re-derive would replace them with a fresh solve. Covered by `tests/e2e/triangulate-all-bounded-derived-state.mjs` and
   `tests/e2e/bulk-triangulation-bounded-derived-state.mjs`.
 
   This fill stays **outside** the collapsed-info-panel gate (see
@@ -9879,11 +9835,10 @@ multi-video docking layout.
 - `./info-panel.js` — `updateInfoPanel`.
 - `./frame-readout.js` — `clearReadout` (session removed),
   `refreshReadoutTotals` (`switchSession` restoring a cached frame count / fps).
-- `./identity-assignment.js` — `autoAssignState`.
 - `../pose/initialization.js` — `setup3DViewport`.
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`,
-`ui/identity-assignment.js`, `ui/ui-wiring.js`, `ui/view-align-modal.js`
+`ui/ui-wiring.js`, `ui/view-align-modal.js`
 (`syncRotationUI`), `loading/session-loader.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`.
 
@@ -10910,8 +10865,7 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
 `dispatchEvent` applies). That module imports nothing itself, so this one stays
 bridgeable.
 
-**Imported by.** `ui/ui-wiring.js`, `ui/identity-assignment.js`,
-`ui/settings-modal.js`, `pose/tracker.js`.
+**Imported by.** `ui/ui-wiring.js`, `ui/settings-modal.js`, `pose/tracker.js`.
 
 ---
 
@@ -12636,7 +12590,9 @@ header for the full list. Notable ones: `app-state.js`,
 (incl. `evictLazyFrames`), `lazy-residency.js` (`LAZY_PLAYBACK_AHEAD`),
 `rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`,
 `file-io.js`, `session-loader.js`, `video.js`, `tracker.js`,
-`initialization.js`, `identity-assignment.js`, `export-modals.js`,
+`initialization.js`, `identity-assignment.js` (the track/identity helpers,
+Edit Group, `startManualAssignment`, `purgeTriangulationDataForGroup`,
+`swapTracks`), `export-modals.js`,
 `sessions-panes.js`, `settings.js`, `settings-modal.js`,
 `track-range-modal.js` (`showTrackRangeModal`, wired to the Track Frame split
 button's `#tbTrackFrameRange` dropdown item — #212),
@@ -12700,8 +12656,7 @@ document listener that closes the toolbar menus — which is why the focus-relea
 listener in `ui/keyboard-target.js` has to run in the **capture** phase (#230):
 in the bubble phase these two buttons kept focus after a click and swallowed
 `Space`/`Enter`. Implicit triangulation — the `t` shortcut, the Edit ▸
-Triangulate menu item, and the auto-assign flow in `identity-assignment.js` —
-also uses the default method. The **environment-skeleton** solve (Load
+Triangulate menu item — also uses the default method. The **environment-skeleton** solve (Load
 Environment) likewise takes it, via `resolveTriangulationMethod(group)` on a
 brand-new group; it used to hardcode DLT, so a BA user's environment 3D
 silently disagreed with the method they had selected.
@@ -14041,7 +13996,7 @@ prompt for tests/automation. Covered by `tests/test-lazy-reopen.js`.
 Before drawing the first grouped frame, calls `setReprojErrorVisible(true)`
 (`ui/rendering.js`) whenever the reconstructed session has any
 `instanceGroups` — every OTHER path that populates 3D/reprojection data
-(Triangulate All, slp-import.js, save-load.js, identity-assignment.js, …)
+(Triangulate All, slp-import.js, save-load.js, …)
 already did this, but the lazy-reopen path didn't, so `#reprojErrorSection`
 stayed at its HTML `display:none` default forever after a reopen even though
 `drawAllOverlays`'s lazy-reproject block was silently computing a real error
@@ -15178,6 +15133,9 @@ How it behaves:
 - `ZOOM_PRESET_PERCENTS` (`[50, 100, 150, 200]`) — the badge menu's presets.
 - `zoomRatioLabel(pct)` — a percentage as screen:video pixels in lowest terms
   (`200` → `"2:1"`, `150` → `"3:2"`), the hint beside each preset.
+- `FRAME_CACHE_BUDGET_MB` (2560), `FRAME_CACHE_MAX` (60), `FRAME_CACHE_MIN` (12),
+  `frameCacheFrames(budgetMB, frameBytes[])` — the decoded-frame cache budget
+  (see "The decoded-frame caches share a budget" below).
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
   `getFrame(frameIndex)` (mediabunny: via `_mbGetFrame`, the open stepping
   stream), `releaseStepCursor()`, `releaseFrames()` (closes and drops every
@@ -15185,7 +15143,9 @@ How it behaves:
   the stepping streams, keeping the decoder open; called by
   `VideoController._shownViews` for a view that went off screen, since 17
   cameras' full 60-frame caches at 1680×1200 are ~8 GB of ImageBitmaps and keep
-  Chrome garbage-collecting), `_initMediabunny(source)` /
+  Chrome garbage-collecting), `setCacheSize(n)` (re-sizes both frame caches,
+  evicting at once — the backend's frames farthest from the last stepped frame
+  first; set by the controller's budget), `_initMediabunny(source)` /
   `_mediabunnyEnabled()` (default-on frame-accurate backend, issue #115),
   `_mbCannotDecode(backend)` (null, or `{reason: 'codec', codec, codecString}`
   when WebCodecs cannot decode the track — the backend is then dropped and
@@ -15204,6 +15164,35 @@ How it behaves:
   and fps WITHOUT a WebCodecs support check (it never decodes with WebCodecs):
   an early return when WebCodecs couldn't decode the codec (Firefox + HEVC)
   left `_fps` at the 30 fps placeholder, halving every frame index.
+  **A fragmented MP4 is read to its end** (campy writes them by default:
+  `empty_moov` + `frag_keyframe`). Its samples are in the fragments
+  (`moof`/`trun`), its moov says duration 0, and mp4box fires `onReady` on the
+  moov, so stopping there counted only the first chunk's fragments: a 1,200-frame
+  60 fps rig video loaded as 420 frames at 21 fps in HTML5 mode, and with
+  mediabunny as 1,200 frames at `state.fps` 30 (`updateTotalFrames` divides by
+  `videoTrack.duration` and falls back to 30 at 0). When `isFragmentedInfo(info)`
+  the scan goes on, jumping over each `mdat` payload (`_nextFragmentOffset`, from
+  mp4box's internal `parsingMdat`; an 8 KiB `FRAGMENT_PROBE_SIZE` read after a
+  jump longer than a chunk), then `flush()`es; the fps comes from the sample
+  durations and `videoTrack.duration` becomes their sum. `createFile(false)`
+  drops media bytes (this pass never extracts a sample) — which is also why the
+  jump is required: handed the rest of an mdat whose start it dropped, mp4box
+  asks for that offset again forever, so the loop throws if it stops advancing.
+  A regular MP4 still stops at `onReady`. Measured locally: a 30-min 60 fps file
+  of 90 KB fragments scans in ~0.15 s; a 1 GB one of 8.7 MB fragments in ~25 ms,
+  reading 1.9 MB — and mp4box holds no chunk between reads (told to keep media,
+  it held all 300 MB of the 30-min file). **A file cut off mid-write** (what
+  campy fragments for) can end inside its last fragment, whose moof lists frames
+  past the end: `samplesInFile` drops them and `_frameLimit` holds mediabunny's
+  count to the same number, since it lists them too (a clip cut at 46,000 bytes:
+  1,165 frames, as ffprobe decodes, not 1,182). Covered by
+  `tests/e2e/fragmented-mp4-load.mjs`.
+- `isFragmentedInfo(info)` — whether mp4box's `onReady` info is a fragmented MP4
+  (`isFragmented`, or a video track with duration 0).
+- `samplesInFile(samples, fileSize)` — the mp4box samples whose bytes lie
+  inside the file (drops a truncated last fragment's missing frames).
+- `sumSampleDurations(samples)` — sum of mp4box sample durations (track
+  timescale units).
 - `PlaybackSchedule` — class; `update(now, capturedIdx, framesPerMs)` → the
   frame index that should be on screen this refresh; `reset()`.
 - `pickScheduledFrame(target, shownIdx, pendingIdx, capIdx)` →
@@ -15263,6 +15252,56 @@ every cost of the full grid in place (jumps ~2.1 s, steps ~170 ms, playback ~11
 new pictures/s), because the 16 hidden decoders still decoded every step and
 played. Covered by `tests/test-video-controller.js` ("Only shown views") and
 `tests/e2e/solo-view-decodes-shown-only.mjs`.
+
+**The decoded-frame caches share a budget** — `FRAME_CACHE_BUDGET_MB` (2560;
+`window.LUCID_FRAME_CACHE_MB` overrides). Each decoder caches decoded frames as
+ImageBitmaps for paused stepping, 8 MB apiece at 1680×1200, and every decoder
+used to keep a fixed 60. On 17 cameras that is ~8 GB alive at once, and Chrome
+then garbage-collects most of the time. `_applyFrameCacheBudget` (run by
+`_shownViews` whenever the shown decoders change) gives each SHOWN decoder
+`frameCacheFrames(budget, shown frame sizes)` frames, clamped to
+[`FRAME_CACHE_MIN` 12, `FRAME_CACHE_MAX` 60], and each hidden one the share it
+would have with every view shown (the overlay-export preview decodes every
+view). The result: 19 frames on 17 cameras at 1680×1200, 60 for one solo'd
+camera, and 60 — unchanged — for 8 cameras at 1280×1024. `startPlayback` also
+`releaseFrames()` every decoder: playback never reads the caches, and after it
+they hold frames from wherever stepping last was.
+
+Grid-mode sweep on the 17-camera MultiCam_18 project (headed Chrome, fixed
+cache sizes forced after load; GC = share of main-thread samples):
+
+| frames/camera | cache | jump (median) | step fwd p90 | step back p90 | hold → / ← frames/s | playback redraws/s | GC stepping / playing |
+|---|---|---|---|---|---|---|---|
+| 60 (old) | 8.2 GB | 2,563 ms | 1,187 ms | 104 ms | 5.3 / 7.7 | 6.4 | 62% / 69% |
+| 36 | 4.9 GB | 1,351 ms | 36 ms | 45 ms | 14.3 / 12.3 | 13.3 | 2% / 64% |
+| 24 | 3.3 GB | 1,297 ms | 27 ms | 32 ms | 16.3 / 11.3 | 53.6 | 0% / 1% |
+| 12 | 1.6 GB | 1,273 ms | 32 ms | 588 ms | 14.7 / 7.0 | 56.1 | 0% / 1% |
+| 6 | 0.8 GB | 1,288 ms | 27 ms | 1,481 ms | 15.3 / 3.7 | 57.2 | 0% / 2% |
+| **19 (budget)** | 2.6 GB | 1,460 ms | 30 ms | 32 ms | 15.3 / 9.0 | 53.7 | ~0% / ~0% |
+
+The same sweep on the 5-camera Mimica project (H.264 with B-frames,
+1280×1024 at 150 fps, lazy; caches never reach 1.6 GB, so GC is ~0% throughout
+and only stepping BACK depends on the size; the budget gives it 60):
+
+| frames/camera | cache | jump (median) | step fwd p90 | step back p90 | hold → / ← frames/s | playback new pictures/s |
+|---|---|---|---|---|---|---|
+| 60 (old = budget) | 1.6 GB | 258 ms | 7 ms | 12 ms | 33 / 32 | 120 |
+| 36 | 0.9 GB | 255 ms | 7 ms | 13 ms | 33 / 32 | 120 |
+| 24 | 0.6 GB | 261 ms | 7 ms | 12 ms | 33 / 32 | 120 |
+| 12 | 0.3 GB | 256 ms | 7 ms | 253 ms | 33 / 20 | 120 |
+| 6 | 0.2 GB | 259 ms | 7 ms | 322 ms | 33 / 11 | 120 |
+
+(33 frames/s is the 30 ms key repeat and 120 the 120 Hz display: both ceilings.)
+With the budget, Mimica and the 8-camera HardFight_1kModels both measure the
+same as before it, grid and solo.
+
+Stepping stops garbage-collecting below ~5 GB of cached frames and playback
+below ~3.3 GB; under 12 frames the backward chunk (40% of the cache,
+`_backChunkSize`) gets so short that held back-stepping falls off. Grid
+playback above ~54 redraws/s is decode-bound (17 × 120 fps of 2-MP HEVC; ~35%
+of frames dropped by the `<video>`s), and a jump is a keyframe decode of up to
+249 frames in 17 views. Covered by `tests/test-video-controller.js`
+("decoded-frame cache budget").
 
 **`setupZoomHandlers`'s wheel-to-zoom stands down while Alt is held.** Alt
 turns the wheel into the instance-rotation control (`ui/interaction.js`
