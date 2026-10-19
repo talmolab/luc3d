@@ -12,13 +12,13 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=52360c812228';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=52360c812228';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=52360c812228';
+         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=347cbeb5a7c8';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=347cbeb5a7c8';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=347cbeb5a7c8';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=52360c812228';
-import { writePlaneMetadata } from './plane-metadata.js?v=52360c812228';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=347cbeb5a7c8';
+import { writePlaneMetadata } from './plane-metadata.js?v=347cbeb5a7c8';
 
 // ============================================
 // Generic file picker
@@ -2298,9 +2298,6 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
     var allFrameIndices = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
     var newSioInstance = makePooledSioInstances(SIO, skeleton, numNodes);
 
-    // Map to look up labeled frames by (videoIdx, frameIdx)
-    var lfLookup = new Map(); // "videoIdx:frameIdx" → LabeledFrame
-
     for (var fi = 0; fi < allFrameIndices.length; fi++) {
         var frameIdx = allFrameIndices[fi];
         var fg = session.frameGroups.get(frameIdx);
@@ -2347,7 +2344,6 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
                 var lf = new SIO.LabeledFrame({ video: video, frameIdx: frameIdx, instances: frameInstances });
                 labeledFrames.push(lf);
                 lfByCamera.set(sioCam, lf);
-                lfLookup.set(camIdx + ':' + frameIdx, lf);
             }
         }
         // Handle ungrouped instances for cameras that had no grouped instances
@@ -2365,7 +2361,6 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
                 var ulLf = new SIO.LabeledFrame({ video: ulVideo, frameIdx: frameIdx, instances: ulFrameInsts });
                 labeledFrames.push(ulLf);
                 lfByCamera.set(ulSioCam, ulLf);
-                lfLookup.set(ulCamIdx + ':' + frameIdx, ulLf);
             }
         }
 
@@ -2831,7 +2826,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=52360c812228', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=347cbeb5a7c8', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },
