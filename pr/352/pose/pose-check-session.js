@@ -37,7 +37,7 @@
 import {
     createPoseSample, fitPoseModel, poseScore, poseClassOf, poseSampleStride, trimPosePatterns,
     POSE_UNCOMMON, POSE_OUTLIER, POSE_COMMON,
-} from './pose-check.js?v=6deeda0e8fb1';
+} from './pose-check.js?v=400e65ec9232';
 
 // A windowed lazy loader — `session.frameGroups` is then only the resident window.
 function isWindowedLoader(loader) {
@@ -304,3 +304,71 @@ export function poseTooltipLine(v, pc) {
     return 'Pose: ' + word + ' (score ' + v.score.toFixed(1) + ')' +
         (v.cls === POSE_OUTLIER && pc && pc.excluded ? ', not tracked' : '');
 }
+
+// ---- Stepping through the flagged poses (Navigation: `]` / `[`) ----------------
+
+/**
+ * The distinct frames holding a flagged (uncommon or outlier) pose, ascending —
+ * the stops of Next / Previous Flagged Pose. Read off `flags`, which a finished
+ * run keeps in frame order; cached on the result.
+ * @param {Object|null} pc  `session.poseCheck`
+ * @returns {number[]}
+ */
+export function flaggedFrames(pc) {
+    if (!pc || !pc.flags) return [];
+    if (pc._flaggedFrames && pc._flaggedFramesOf === pc.flags) return pc._flaggedFrames;
+    var out = [];
+    for (var i = 0; i < pc.flags.length; i++) {
+        var f = pc.flags[i].frame;
+        if (!out.length || out[out.length - 1] !== f) out.push(f);
+    }
+    pc._flaggedFrames = out;
+    pc._flaggedFramesOf = pc.flags;
+    return out;
+}
+
+/**
+ * The next flagged frame strictly after `frame` (dir > 0), or the previous one
+ * strictly before it (dir < 0); -1 when there is none. No wrap-around: the end
+ * of the list says so rather than jumping back to its start unannounced.
+ * @returns {number} a 0-based frame, or -1
+ */
+export function nextFlaggedFrame(pc, frame, dir) {
+    var frames = flaggedFrames(pc);
+    var lo = 0, hi = frames.length;     // first index whose frame > `frame`
+    while (lo < hi) { var mid = (lo + hi) >> 1; if (frames[mid] <= frame) lo = mid + 1; else hi = mid; }
+    if (dir > 0) return lo < frames.length ? frames[lo] : -1;
+    var j = lo - 1;
+    if (j >= 0 && frames[j] === frame) j--;
+    return j >= 0 ? frames[j] : -1;
+}
+
+/**
+ * The status line after stepping to a flagged frame (0-based `frame`), naming
+ * what the check flagged there:
+ * "Flagged frame 3 of 412 (frame 1,235): outlier in Camera1_topC (score 18.2),
+ * uncommon in Camera0_topB (score 12.1)". Frames are shown 1-based, as everywhere.
+ */
+export function describeFlaggedFrame(pc, frame) {
+    var frames = flaggedFrames(pc);
+    var n = function (v) { return v.toLocaleString('en-US'); };
+    var at = (pc && pc.flags ? pc.flags : []).filter(function (f) { return f.frame === frame; });
+    var what = at.map(function (f) {
+        return (f.cls === POSE_OUTLIER ? 'outlier' : 'uncommon') + ' in ' + f.camera + ' (score ' + f.score.toFixed(1) + ')';
+    }).join(', ');
+    return 'Flagged frame ' + n(frames.indexOf(frame) + 1) + ' of ' + n(frames.length) +
+        ' (frame ' + n(frame + 1) + ')' + (what ? ': ' + what : '');
+}
+
+/**
+ * The status line when there is nowhere to step: no check yet, nothing
+ * flagged, or no flagged frame past `frame` in that direction.
+ */
+export function describeNoFlaggedFrame(pc, frame, dir) {
+    if (!pc) return 'No pose check on this session — run Track All or Tracks ▸ Check Poses first';
+    var count = flaggedFrames(pc).length;
+    if (!count) return 'No flagged poses: the last pose check flagged nothing';
+    return 'No flagged pose ' + (dir > 0 ? 'after' : 'before') + ' frame ' + (frame + 1).toLocaleString('en-US') +
+        ' (' + count.toLocaleString('en-US') + ' flagged frame' + (count === 1 ? '' : 's') + ')';
+}
+

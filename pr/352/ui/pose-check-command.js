@@ -1,6 +1,8 @@
 /**
  * ui/pose-check-command.js — Tracks ▸ Check Poses: the 2D pose check
- * (pose/pose-check.js) on its own, without tracking anything.
+ * (pose/pose-check.js) on its own, without tracking anything; and Next /
+ * Previous Flagged Pose (`]` / `[`, Tracks menu), which step through the
+ * frames the last check flagged.
  *
  * Track All scores every prediction it offers the tracker, but its verdicts are
  * never saved, so a reopened project has no ?/✕ marks, no tooltip line and no
@@ -16,15 +18,48 @@
  * about Track All, and this is an explicit request.
  */
 
-import { state, getActiveSession } from './app-state.js?v=6deeda0e8fb1';
-import { getTrackingThreshold } from './settings.js?v=6deeda0e8fb1';
-import { setStatus } from '../import-export/save-load.js?v=6deeda0e8fb1';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, hideLoading } from './loading-overlay.js?v=6deeda0e8fb1';
-import { drawAllOverlays } from './rendering.js?v=6deeda0e8fb1';
-import { loadAllLazyFrames } from '../pose/triangulation.js?v=6deeda0e8fb1';
-import { checkSessionPoses, describePoseCheck } from '../pose/pose-check-session.js?v=6deeda0e8fb1';
+import { state, getActiveSession } from './app-state.js?v=400e65ec9232';
+import { getTrackingThreshold } from './settings.js?v=400e65ec9232';
+import { setStatus } from '../import-export/save-load.js?v=400e65ec9232';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, hideLoading } from './loading-overlay.js?v=400e65ec9232';
+import { drawAllOverlays } from './rendering.js?v=400e65ec9232';
+import { loadAllLazyFrames } from '../pose/triangulation.js?v=400e65ec9232';
+import {
+    checkSessionPoses, describePoseCheck, nextFlaggedFrame, describeFlaggedFrame, describeNoFlaggedFrame,
+} from '../pose/pose-check-session.js?v=400e65ec9232';
 
 var TITLE = 'Check Poses';
+
+// The viewer's frame navigation, registered once by ui-wiring (as the ID Switches
+// tab's is): this module cannot import pose/initialization.js, which imports it.
+var _navigate = null;
+
+/** Register `navigateToFrame` for Next / Previous Flagged Pose (called once from ui/ui-wiring.js). */
+export function setPoseCheckNavigator(fn) { _navigate = fn; }
+
+/**
+ * Next / Previous Flagged Pose: go to the next (dir > 0) or previous (dir < 0)
+ * frame where the last pose check (Track All or Check Poses) flagged a pose, and
+ * say in the status bar what it flagged there. At either end, with nothing
+ * flagged, or with no check yet, it stays put and says why — it never wraps.
+ * The stops are the check's own (`session.poseCheck.flags`); a pose edited since
+ * is still a stop until the next check.
+ * @param {number} dir  +1 next, -1 previous
+ * @returns {number} the 0-based frame it went to, or -1
+ */
+export function gotoFlaggedPose(dir) {
+    var session = getActiveSession();
+    var pc = session ? session.poseCheck : null;
+    var from = state.currentFrame || 0;
+    var to = pc ? nextFlaggedFrame(pc, from, dir) : -1;
+    if (to < 0) {
+        setStatus(describeNoFlaggedFrame(pc, from, dir), 'warning');
+        return -1;
+    }
+    if (_navigate) _navigate(to);
+    setStatus(describeFlaggedFrame(pc, to), 'info');
+    return to;
+}
 
 /**
  * Run Tracks ▸ Check Poses on the active session.

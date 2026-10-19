@@ -137,23 +137,34 @@ export const badgePixels = (page, cam, frame, which, color) => page.evaluate(asy
     for (let i = 0; i < data.length; i += 4) if (data[i + 3] > 200 && Math.abs(data[i] - cr) < 12 && Math.abs(data[i + 1] - cg) < 12 && Math.abs(data[i + 2] - cb) < 12) n++;
     return n;
 }, [cam, frame, which, color]);
-// The node tooltip after real mouse moves onto a node of the planted (or a clean) pose.
+// The node tooltip after real mouse moves onto a node of the planted (or a clean)
+// pose. The view's box is read only once it has held still for two animation
+// frames — Track All closes the timeline and the 3D viewer, and the panes resize
+// after it returns — and the hover is retried (up to 3 times, re-reading the box)
+// if no tip appeared, so a layout settling late cannot point the mouse at a stale
+// position.
 export const tipOn = async (page, cam, frame, which) => {
-    const xy = await page.evaluate(async ([cam, frame, which]) => {
-        const AS = await import('/ui/app-state.js'), R = await import('/ui/rendering.js');
-        AS.state.currentFrame = frame; R.drawAllOverlays(frame);
-        const v = AS.state.views.find(w => w.name === cam);
-        const fg = AS.state.session.getFrameGroup(frame);
-        const all = (fg.getInstances(cam) || []).concat((fg.getUnlinkedInstances(cam) || []).map(u => u.instance));
-        const inst = which === 'planted' ? all.find(i => i.__planted) : all.find(i => !i.__planted);
-        const k = 5;   // Head: on the planted c0 poses it is the animal's own (the tip names whichever node is nearest)
-        const r = v.overlayCanvas.getBoundingClientRect();
-        return [r.left + inst.getX(k) / v.videoWidth * r.width, r.top + inst.getY(k) / v.videoHeight * r.height];
-    }, [cam, frame, which]);
-    await page.mouse.move(xy[0] + 30, xy[1] + 30);
-    await page.mouse.move(xy[0], xy[1]);
-    await page.waitForTimeout(900);
-    const t = await page.evaluate(() => { const el = document.getElementById('nodeTip'); return el && !el.hidden ? el.innerText : ''; });
-    await page.mouse.move(5, 5); await page.waitForTimeout(300);
+    let t = '';
+    for (let attempt = 0; attempt < 3 && !t; attempt++) {
+        const xy = await page.evaluate(async ([cam, frame, which]) => {
+            const AS = await import('/ui/app-state.js'), R = await import('/ui/rendering.js');
+            AS.state.currentFrame = frame; R.drawAllOverlays(frame);
+            const v = AS.state.views.find(w => w.name === cam);
+            const raf = () => new Promise(res => requestAnimationFrame(res));
+            const key = () => { const q = v.overlayCanvas.getBoundingClientRect(); return [q.left, q.top, q.width, q.height].join(','); };
+            for (let i = 0, last = '', still = 0; i < 60 && still < 2; i++) { await raf(); const k = key(); still = k === last ? still + 1 : 0; last = k; }
+            const fg = AS.state.session.getFrameGroup(frame);
+            const all = (fg.getInstances(cam) || []).concat((fg.getUnlinkedInstances(cam) || []).map(u => u.instance));
+            const inst = which === 'planted' ? all.find(i => i.__planted) : all.find(i => !i.__planted);
+            const k = 5;   // Head: on the planted c0 poses it is the animal's own (the tip names whichever node is nearest)
+            const r = v.overlayCanvas.getBoundingClientRect();
+            return [r.left + inst.getX(k) / v.videoWidth * r.width, r.top + inst.getY(k) / v.videoHeight * r.height];
+        }, [cam, frame, which]);
+        await page.mouse.move(xy[0] + 30, xy[1] + 30);
+        await page.mouse.move(xy[0], xy[1]);
+        await page.waitForTimeout(900);
+        t = await page.evaluate(() => { const el = document.getElementById('nodeTip'); return el && !el.hidden ? el.innerText : ''; });
+        await page.mouse.move(5, 5); await page.waitForTimeout(300);
+    }
     return t;
 };

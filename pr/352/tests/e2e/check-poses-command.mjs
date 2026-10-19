@@ -19,6 +19,11 @@
  *     replaces the verdicts without touching the tracking: the left-out
  *     detections stay ungrouped, and the tooltip no longer claims "not tracked"
  *     for a check that tracked nothing.
+ *  6. Next / Previous Flagged Pose: real `]` / `[` presses step through exactly
+ *     the planted frames, each with a status line naming what was flagged there;
+ *     past the last one it stays put and says so (no wrap); the Tracks menu items
+ *     do the same; both are in Settings ▸ Keyboard Shortcuts, rebindable; and on
+ *     a session with no check yet the key says to run one and goes nowhere.
  *
  * Run: node tests/e2e/check-poses-command.mjs
  */
@@ -121,6 +126,39 @@ try {
     await showViews(300);
     t = await tipOn('c0', 300, 'planted');
     check(/\nPose: outlier \(score \d+\.\d\)$/.test(t), `...and the tooltip makes no "not tracked" claim for a check that tracked nothing: ${JSON.stringify(t)}`);
+
+    // ---- 6. ] / [ : step through the flagged frames ---------------------------------------------
+    const frame = () => page.evaluate(() => window.__lucid.state.currentFrame);
+    const press = async (key) => {
+        await page.evaluate(() => { if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur(); });
+        await page.keyboard.press(key);
+        return { frame: await frame(), status: await status() };
+    };
+    await page.evaluate(async () => { (await import('/ui/app-state.js')).state.currentFrame = 0; });
+    const stops = [];
+    let r;
+    for (let i = 0; i < 4; i++) { r = await press(']'); stops.push(r.frame); if (i === 0) check(/^Flagged frame 1 of 4 \(frame 301\): outlier in c0 \(score \d+\.\d\)$/.test(r.status), `] status: "${r.status}"`); }
+    check(JSON.stringify(stops) === JSON.stringify([300, 900, 1200, 1500]), `] steps through exactly the planted frames: ${JSON.stringify(stops)}`);
+    check(/^Flagged frame 3 of 4 \(frame 1,201\)/.test((await page.evaluate(async () => {
+        const PS = await import('/pose/pose-check-session.js');
+        return PS.describeFlaggedFrame(window.__lucid.state.session.poseCheck, 1200);
+    }))), 'the c1 stop is flagged frame 3 of 4, with thousands commas');
+    r = await press(']');
+    check(r.frame === 1500 && r.status === 'No flagged pose after frame 1,501 (4 flagged frames)', `past the last: stays put and says so (${r.frame}, "${r.status}")`);
+    r = await press('[');
+    check(r.frame === 1200 && /^Flagged frame 3 of 4 \(frame 1,201\): outlier in c1/.test(r.status), `[ steps back (${r.frame}, "${r.status}")`);
+    await page.evaluate(() => document.getElementById('menuPrevFlaggedPose').click());
+    check(await frame() === 900, 'Tracks ▸ Previous Flagged Pose steps back too');
+    await page.evaluate(() => document.getElementById('menuNextFlaggedPose').click());
+    check(await frame() === 1200, 'Tracks ▸ Next Flagged Pose steps forward');
+    const cat = await page.evaluate(async () => (await import('/ui/settings.js')).getActions()
+        .filter(a => a.id === 'nextFlaggedPose' || a.id === 'prevFlaggedPose').map(a => a.id + '=' + a.binding + (a.editable ? ' editable' : '')));
+    check(JSON.stringify(cat) === JSON.stringify(['nextFlaggedPose=] editable', 'prevFlaggedPose=[ editable']), `listed in Settings ▸ Keyboard Shortcuts: ${JSON.stringify(cat)}`);
+    await page.evaluate(() => window.__build());
+    await page.evaluate(async () => { (await import('/ui/app-state.js')).state.currentFrame = 10; });
+    r = await press(']');
+    check(r.frame === 10 && r.status === 'No pose check on this session — run Track All or Tracks ▸ Check Poses first',
+        `no check yet: says to run one, goes nowhere (${r.frame}, "${r.status}")`);
 
     check(errs.length === 0, 'no page errors', errs);
 } finally {

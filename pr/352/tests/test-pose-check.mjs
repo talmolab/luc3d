@@ -412,5 +412,32 @@ ok(PS.poseCheckOf({}, 'A', g) === null && PS.poseCheckOf(session, 'Z', g) === nu
     ok(PC.POSE_PATTERN_KEEP === 128, 'a finished check keeps 128 per camera');
 }
 
+// ---- 13. Next / Previous Flagged Pose: the stops, and what the status bar says ------------
+{
+    const pcF = { flags: [
+        { frame: 5, camera: 'A', cls: POSE_UNCOMMON, score: 11.24 },
+        { frame: 5, camera: 'B', cls: POSE_OUTLIER, score: 18.04 },
+        { frame: 9, camera: 'A', cls: POSE_OUTLIER, score: 22.5 },
+        { frame: 1234, camera: 'B', cls: POSE_UNCOMMON, score: 10.0 },
+    ] };
+    ok(JSON.stringify(PS.flaggedFrames(pcF)) === '[5,9,1234]', 'the stops are the distinct flagged frames, in order');
+    ok(PS.nextFlaggedFrame(pcF, 0, 1) === 5 && PS.nextFlaggedFrame(pcF, 5, 1) === 9 && PS.nextFlaggedFrame(pcF, 6, 1) === 9 &&
+        PS.nextFlaggedFrame(pcF, 1234, 1) === -1, 'next: strictly after the current frame; none past the last');
+    ok(PS.nextFlaggedFrame(pcF, 9, -1) === 5 && PS.nextFlaggedFrame(pcF, 8, -1) === 5 && PS.nextFlaggedFrame(pcF, 5, -1) === -1 &&
+        PS.nextFlaggedFrame(pcF, 99999, -1) === 1234, 'previous: strictly before; none before the first');
+    ok(PS.describeFlaggedFrame(pcF, 5) === 'Flagged frame 1 of 3 (frame 6): uncommon in A (score 11.2), outlier in B (score 18.0)',
+        `status at a stop, 1-based and naming each flag: "${PS.describeFlaggedFrame(pcF, 5)}"`);
+    ok(PS.describeFlaggedFrame(pcF, 1234) === 'Flagged frame 3 of 3 (frame 1,235): uncommon in B (score 10.0)', 'thousands commas');
+    ok(PS.describeNoFlaggedFrame(pcF, 1234, 1) === 'No flagged pose after frame 1,235 (3 flagged frames)', 'past the last');
+    ok(PS.describeNoFlaggedFrame(pcF, 5, -1) === 'No flagged pose before frame 6 (3 flagged frames)', 'before the first');
+    ok(PS.describeNoFlaggedFrame(null, 0, 1) === 'No pose check on this session — run Track All or Tracks ▸ Check Poses first', 'no check yet');
+    ok(PS.describeNoFlaggedFrame({ flags: [] }, 0, 1) === 'No flagged poses: the last pose check flagged nothing', 'nothing flagged');
+    const pc1 = { flags: [{ frame: 3, camera: 'A', cls: POSE_OUTLIER, score: 16 }] };
+    ok(PS.describeNoFlaggedFrame(pc1, 3, 1) === 'No flagged pose after frame 4 (1 flagged frame)', 'one flagged frame: singular');
+    // the cache follows the flags array it was built from
+    pcF.flags = pcF.flags.slice(0, 1);
+    ok(JSON.stringify(PS.flaggedFrames(pcF)) === '[5]', 'a new flags array is re-read, not served stale from the cache');
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) { failures.forEach((f) => console.error('  ✗ ' + f)); process.exit(1); }

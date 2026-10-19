@@ -12,13 +12,13 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=6deeda0e8fb1';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=6deeda0e8fb1';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows } from '../pose/triangulation.js?v=6deeda0e8fb1';
+         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=400e65ec9232';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=400e65ec9232';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=400e65ec9232';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=6deeda0e8fb1';
-import { writePlaneMetadata } from './plane-metadata.js?v=6deeda0e8fb1';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=400e65ec9232';
+import { writePlaneMetadata } from './plane-metadata.js?v=400e65ec9232';
 
 // ============================================
 // Generic file picker
@@ -2494,10 +2494,16 @@ export async function buildReprojH5(session) {
         for (var group of groups) {
             var idIdx = group.identityId;
             if (idIdx < 0 || idIdx >= nTracks) continue;
-            if (!group.reprojections) continue;
+            // A group's reprojections are derived and kept only for frames
+            // that have been shown (Triangulate All stores none — see
+            // `sweepTriangulateAllFrames` in pose/triangulation.js), so
+            // project its stored 3D for the rest rather than skipping them.
+            var stored = group.reprojections;
+            if (!stored && points3dNodeCount(group.points3d) === 0) continue;
             for (var ci = 0; ci < nCameras; ci++) {
                 var camName = cameraNames[ci];
-                var reprojPts = group.reprojections[camName];
+                var reprojPts = stored ? stored[camName]
+                    : (cameras[ci].projectionMatrix ? reprojectPointsCamera(group.points3d, cameras[ci]) : null);
                 if (!reprojPts) continue;
                 for (var ni = 0; ni < Math.min(nNodes, reprojPts.length); ni++) {
                     var rpt = reprojPts[ni];
@@ -2724,7 +2730,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=6deeda0e8fb1', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=400e65ec9232', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },
