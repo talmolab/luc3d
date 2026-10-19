@@ -12987,6 +12987,20 @@ annotated plane — the whole reason for the mode — sits off screen. The
 `planeNode_` prefix deliberately does not match the `node_` test, so nothing is
 double-counted, and `_planeGroup` is empty until a plane is triangulated, so
 framing is unchanged for projects with no planes.
+
+**A fit with no skeleton in it re-fits once when one appears.** `fitToScene`
+measures only the CURRENT frame's `node_*` markers, so a fit taken on a frame
+with no 3D (a lazy project whose current frame isn't triangulated yet, a session
+opened before triangulation) framed the camera rig alone, and skeletons standing
+off it (~1 m away on the Mimica 150 fps rig) stayed out of view until View ▸
+Fit 3D to Scene. `fitToScene` now sets `_refitWhenSkeletonAppears` when it
+counted no skeleton points, and the next `updateSkeleton` that adds a node
+marker calls `fitToScene` again — once, since that fit includes the skeleton.
+Anything that moved the view first cancels it: an OrbitControls `start` (user
+drag / wheel / keys only — the listener is in `_createControls`, so a
+`_rebaseControls` rebuild keeps it), `animateToCameraPerspective`, and
+`resetCamera`; it is also skipped while `_viewingCamera` is set. Guarded by
+`tests/test-viewport3d-autofit.js`.
 - Constructor options `skeletonNodeShape` (`'circle'` sphere / `'square'` cube /
   `'triangle'` tetrahedron / `'x'` crossed bars — `updateSkeleton` builds the
   matching node geometry) and `preserveDrawingBuffer` (keeps the WebGL buffer
