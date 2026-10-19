@@ -32,16 +32,13 @@ import {
     drawFrameOverlays, drawLegend, drawViewNameLabel, getTrackColor, getGroupColor,
     TRAIL_SHADES, DEFAULT_TRAIL_SHADE, trailShadeFor,
 } from './overlays.js';
-import { getVisibilitySettings } from './rendering.js';
+import { getVisibilitySettings, fillLazyReprojections } from './rendering.js';
 import {
     getInstanceGroupsForFrame,
     ensureLazyFrameData,
     ensureLazyTrailWindow,
-    triangulateAndReproject,
-    storeReprojectedInstances,
     sessionHasCalibration,
 } from '../pose/triangulation.js';
-import { points3dNodeCount } from '../pose/pose-data.js';
 import { setStatus } from '../import-export/save-load.js';
 
 import {
@@ -159,27 +156,29 @@ export function loadOverlayExportSettings() {
 }
 
 /**
- * Fill the reprojection cache for `groups` — the same lazy fill `drawAllOverlays`
- * does on the live path, so an export of a triangulated-but-never-viewed frame
- * range still shows reprojections.
+ * Fill frame `f`'s reprojection state — its groups' reprojections, reprojected
+ * instances and per-camera errors — so an export of a triangulated-but-never-
+ * viewed frame range still shows reprojections and error lines.
+ *
+ * It IS the live display's fill (`fillLazyReprojections`, ui/rendering.js),
+ * not a copy of it, for two reasons:
+ *  - **Same numbers.** It reprojects a group's stored 3D whenever that 3D is
+ *    current or was read from a file, so the video shows the 3D the project
+ *    holds, exactly as the app does. This used to re-solve every group instead
+ *    — 2.4-5.0 ms per frame on a 17-camera project, for numbers the stored 3D
+ *    already determines, and, with a reprojection-error threshold set or on a
+ *    file's 3D, numbers the app does not show.
+ *  - **Bounded memory.** It keeps derived state for at most
+ *    DERIVED_FRAMES_KEEP frames, dropping the least recently filled. This used
+ *    to keep every exported frame's: exporting a 36,000-frame range of a
+ *    17-camera, 34-node project would rebuild the ~75 KB per frame per animal
+ *    that Triangulate All and the `.slp` load no longer keep.
+ * A no-op for a session that is not the one on screen (the fill reads
+ * `state.session`); the export only ever draws that one.
  */
-function ensureReprojections(groups, session) {
-    if (!groups || !session || !session.cameras || session.cameras.length < 2) return;
-    for (var i = 0; i < groups.length; i++) {
-        var g = groups[i];
-        if (points3dNodeCount(g.points3d) > 0 &&
-            (!g.reprojectedInstances || g.reprojectedInstances.size === 0) &&
-            (!g.reprojections || Object.keys(g.reprojections).length === 0)) {
-            // Resolve the method from the group, exactly as `rendering.js`'s lazy
-            // fill does. Omitting it silently re-solves with DLT, which would burn
-            // DLT reprojections into the video while the app displays BA's —
-            // breaking the "exported 3D == displayed 3D" invariant (#113).
-            var _m = (g.triangulationMethod === 'ba') ? 'ba' : 'dlt';
-            var res = triangulateAndReproject(g, session.cameras, { method: _m });
-            g.reprojections = res.reprojections;
-            storeReprojectedInstances(g, res, session.cameras);
-        }
-    }
+function ensureReprojections(f, groups, session) {
+    if (!groups || session !== state.session) return;
+    fillLazyReprojections(f, groups);
 }
 
 /** `frameGroup` in the plain-object shape `drawFrameOverlays` expects. */
@@ -945,7 +944,7 @@ export function showOverlayExportModal() {
 
         var frameGroup = session.getFrameGroup(f);
         var groups = getInstanceGroupsForFrame(f);
-        if (settings.layers.reproj || settings.layers.errors) ensureReprojections(groups, session);
+        if (settings.layers.reproj || settings.layers.errors) ensureReprojections(f, groups, session);
         var ofg = toOverlayFrameGroup(frameGroup);
 
         // Decode every docked 2D view in parallel.
@@ -1958,7 +1957,7 @@ export function showOverlayExportModal() {
                 }
                 var frameGroup = session.getFrameGroup(f);
                 var groups = getInstanceGroupsForFrame(f);
-                if (settings.layers.reproj || settings.layers.errors) ensureReprojections(groups, session);
+                if (settings.layers.reproj || settings.layers.errors) ensureReprojections(f, groups, session);
                 var ofg = toOverlayFrameGroup(frameGroup);
 
                 // Decode every 2D tile's frame in parallel.
