@@ -16,7 +16,7 @@ import {
     triangulateCurrentFrame,
 } from '../pose/triangulation.js';
 import { getDefaultTriangulationMethod } from './settings.js';
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
+import { drawAllOverlays, setReprojErrorVisible, noteDerivedFrame } from './rendering.js';
 import { updateInfoPanel } from './info-panel.js';
 import { markDirty, setStatus } from '../import-export/save-load.js';
 
@@ -1488,6 +1488,8 @@ export async function runMultiFrameAssignment(startFrame, endFrame, viewNames, o
 
     // Track previous frame's groups for temporal consistency
     var prevGroups = null;
+    // Frames whose grouping this run changed, for the timeline below.
+    var changedFrames = [];
 
     for (var f = startFrame; f <= endFrame; f++) {
         // Seek to frame
@@ -1508,9 +1510,22 @@ export async function runMultiFrameAssignment(startFrame, endFrame, viewNames, o
         if (groupsCreated > 0) {
             prevGroups = state.session.getInstanceGroupsForFrame(state.currentFrame);
             assigned++;
+            changedFrames.push(f);
         }
         // If no groups created, keep prevGroups from last successful frame
         // so tracking can recover
+
+        // The assignment triangulates every group it makes and keeps its
+        // reprojections and reprojected instances (`runAutomaticAssignment` /
+        // `runTrackedAssignment`) — right for the one frame on screen, but this
+        // loop runs them on every frame of the range, which can be the whole
+        // project — tens of KB a group on a 17-camera, 34-node project, so
+        // gigabytes over one. So the frame joins the display's bounded set of
+        // frames with derived state (`noteDerivedFrame`, ui/rendering.js): the least
+        // recently shown beyond DERIVED_FRAMES_KEEP are dropped, and re-derived
+        // from their 3D if shown again. Only the 3D is read from a previous
+        // frame (`prevGroups[i].points3d`), never its reprojections.
+        noteDerivedFrame(state.session, f);
 
         completed++;
         var pct = Math.round((completed / totalFrames) * 100);
@@ -1540,9 +1555,11 @@ export async function runMultiFrameAssignment(startFrame, endFrame, viewNames, o
 
     // Update timeline: mark frames with grouped UserInstances, refresh track
     // bars, and re-apply the 30% cap (a bulk assignment can add many rows).
+    // The frames are the ones assigned above: this walked
+    // `state.triangulationResults`, which the assignment never writes.
     if (timeline) {
-        for (var [fIdx] of state.triangulationResults) {
-            timeline.setFrameModified(fIdx, frameHasGroupedUserInstances(fIdx));
+        for (var cfi = 0; cfi < changedFrames.length; cfi++) {
+            timeline.setFrameModified(changedFrames[cfi], frameHasGroupedUserInstances(changedFrames[cfi]));
         }
         timeline.refreshTracks(state.session, { cap: true });
     }
