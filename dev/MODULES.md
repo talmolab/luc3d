@@ -4119,9 +4119,10 @@ Calibration and `envSkeleton` remain per-session.
   replaces it at startup with the one remembered in `localStorage`.
   `state.nativeResolution` is View ▸ Native Resolution (Shift+0): true exactly
   when every shown view is at one video pixel per device pixel. Written only by
-  `VideoController._syncNativeMode` (derived from the views, never latched), and
-  read by `VideoController.initZoom` so a pane rebuild keeps every view at 1:1
-  (see `loading/video.js`).
+  `VideoController._syncNativeMode` (derived from the views, never latched).
+  Read by `VideoController.initZoom` (a view's first zoom state starts at 1:1
+  while it is on) and by `refreshPaneInteractions` (a view coming on screen
+  while it is on joins it at 1:1 — see `ui/sessions-panes.js`).
 - `videoController`, `interactionManager`, `viewport3d`, `timeline`,
   `paneManager` — live `let` bindings.
 - `setVideoController`, `setInteractionManager`, `setViewport3D`,
@@ -9599,12 +9600,28 @@ multi-video docking layout.
   above the view legend (z 8 vs 7); the cell clips it, so a very short pane
   can cut the menu off.
 - `multiSelectViews`, `clearMultiSelect`.
-- `refreshPaneInteractions` — re-inits every view's zoom (`initZoom`), fits the
-  canvases, then re-derives the 1:1 scale of every view `initZoom` flagged
-  native (View ▸ Native Resolution on), since that scale depends on the box
-  `fitCanvasesToCells` just laid out. A pane's `init` schedules a second call
-  one frame later, which re-inits zoom AGAIN — so after any pane rebuild every
-  view is either fitted or, with the mode on, at 1:1.
+- `refreshPaneInteractions()` — after any pane rebuild: re-attach the
+  interaction manager, give a view a zoom state the FIRST time it is docked
+  (`initZoom` only when `view.zoom` is missing), re-wire the zoom handlers when
+  its cell changed, fit the canvases, then `reapplyZoom` every docked view so its
+  zoom lands on the new canvas box with the pan rescaled (the same region stays
+  centred, as on a cell resize) and a 1:1 view's scale re-derived for the new
+  box, and seek + redraw. Every new pane's `init` also schedules it for the next
+  frame. **It must not re-init an existing zoom:** it used to call `initZoom`
+  unconditionally, so one frame after a grid ↔ solo switch every view was back
+  at fit, and the save/restore that `setGridMode` / `updateVideoGridDisplay`
+  wrapped around the rebuild was dead code. The `reapplyZoom` runs here rather
+  than only in the ResizeObserver so the new cell's FIRST paint is zoomed, not
+  fitted for a frame.
+  **The one exception is View ▸ Native Resolution:** while it is on, a view
+  coming on screen joins it at 1:1 instead of keeping its own zoom (its
+  `zoom.native` is set before the `reapplyZoom` that derives the scale). The
+  mode is read as it stood BEFORE the rebuild, then re-derived for the views
+  now on screen (`nativeResolutionActive()`): it is otherwise refreshed only by
+  a zoom or by opening the View menu, so whether the next camera joined 1:1
+  would have depended on whether the menu had been opened in between. Covered
+  by `tests/e2e/zoom-survives-pane-rebuild.mjs` (kept zoom, and the rule) and
+  `tests/e2e/native-resolution-zoom.mjs` §12.
 - `scrollViewStripTo(viewName)` — scroll that view's strip item into sight.
   `.view-strip-list` is `overflow-y: auto`, so on a project with more cameras
   than fit the column, arrow-cycling the solo view would otherwise move the
@@ -12346,6 +12363,24 @@ reads `params.viewName` off the SERIALIZED panel records — the `params` every
 pane is added with, part of dockview's documented `toJSON` shape, not one of the
 private internals `ui/overlay-export-modal.js` depends on.
 
+**A view's zoom and pan survive every one of these rebuilds** — grid → solo,
+cycling or clicking to another solo camera, and `g` back to the grid (cached
+layout or fresh). The zoom lives on the view, not the pane, and a rebuild is
+treated like a resize of the box it is drawn in: same magnification, same
+region of the video centred, so the pan offsets are rescaled to the new cell
+(`refreshPaneInteractions` → `reapplyZoom`). A view hidden while another is
+solo'd keeps its zoom too; `0` (Reset All Zoom) is how it is taken back. The one
+exception is View ▸ Native Resolution: while it is on, a camera coming on screen
+joins it at 1:1 rather than keeping its own zoom. There
+is deliberately **no save/restore of the zoom around the rebuild** in
+`setGridMode` / `updateVideoGridDisplay`: there used to be, it was undone a
+frame later by `refreshPaneInteractions` re-initialising every view, and now
+that the zoom is kept it would be actively wrong — writing the OLD cell's pan
+offsets back over the rescaled ones shifts the view to a different region.
+Covered by `tests/e2e/zoom-survives-pane-rebuild.mjs`, with both of those
+confirmed to fail it; the Native Resolution exception by its §7 and by
+`tests/e2e/native-resolution-zoom.mjs` §12.
+
 Covered end to end by `tests/e2e/solo-view-navigation.mjs` (real keyboard/mouse
 events against the real dock and strip) and `tests/e2e/videos-panel-buttons.mjs`
 §7 (the stale snapshot, the positional drift of `singleViewIndex`, and removing
@@ -14802,7 +14837,11 @@ smoothness can only be validated on real hardware.
 screen-space px relative to the wrapper's base display size, which `applyZoom`
 records as `zoom.baseW/baseH`. When a cell is resized, `reapplyZoom` rescales the
 offset by the base-size ratio (`offset *= newBase/oldBase`) before re-clamping, so
-a zoomed-in image keeps the same region centered instead of jumping.
+a zoomed-in image keeps the same region centered instead of jumping. A pane
+rebuild (grid ↔ solo) is the same case on a NEW canvas: the view keeps its
+`zoom` (with the old base) and `refreshPaneInteractions` calls `reapplyZoom`
+once the new box is fitted (see `ui/sessions-panes.js`, including the one
+exception, View ▸ Native Resolution).
 
 **Wheel zoom stays under the cursor — through the WHOLE transform.**
 `zoomVideo(view, factor, cssX, cssY)` anchors through `_zoomAbout`, which
@@ -14868,18 +14907,21 @@ only the size at fractional DPRs and prints the exact share.
 How it behaves:
 - **Derived, not latched.** `state.nativeResolution` is true exactly when every
   shown view (`_zoomableViews`: laid out and `isViewShown`) has `zoom.native`;
-  `_syncNativeMode` recomputes it after every zoom change, so the menu tick
-  cannot disagree with the screen. A wheel snap that puts the solo view at 1:1
-  turns it on; zooming away turns it off.
+  `_syncNativeMode` recomputes it after every zoom change and every pane
+  rebuild (`refreshPaneInteractions`), so the menu tick cannot disagree with
+  the screen. A wheel snap that puts the solo view at 1:1 turns it on; zooming
+  away turns it off.
 - **Held across everything that moves the 1:1 scale** — it depends on the box
   and on devicePixelRatio. `reapplyZoom` re-derives it about the cell centre
   for a native view (cell resize, `reapplyAllZoom` on a DPR change). A pane
-  rebuild re-inits every view: `initZoom` seeds `zoom.native` from
-  `state.nativeResolution`, and `refreshPaneInteractions` then re-derives the
-  scale for the new box — so cycling the solo camera keeps 1:1.
-- **OFF clears every view**, shown or hidden: a pane rebuild restores hidden
-  views' saved zoom (`updateVideoGridDisplay`), and a stale flag would bring one
-  back at 1:1. ON flags hidden views for the same reason.
+  rebuild KEEPS each view's zoom (`refreshPaneInteractions`), except that while
+  the mode is on a view coming on screen joins it: its `zoom.native` is set and
+  `reapplyZoom` derives the scale for the new box — so cycling the solo camera
+  keeps 1:1, even onto a camera that had a zoom of its own. A view's first zoom
+  state (`initZoom`) also starts flagged while the mode is on.
+- **OFF clears every view**, shown or hidden: a hidden view keeps its zoom
+  through a pane rebuild, so a stale flag would bring one back at 1:1. ON flags
+  hidden views for the same reason.
 - **The snap.** `zoomVideo` passes each step through `snapZoomToNative`: a step
   that crosses the view's 1:1 scale, or ends within `NATIVE_SNAP_TOL` (2%) of
   it, lands exactly on it (`zoom.native` set) and returns true; a step from 1:1

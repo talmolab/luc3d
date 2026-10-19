@@ -28,22 +28,22 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js?v=36446c3f93f0';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=36446c3f93f0';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=36446c3f93f0';
+} from './app-state.js?v=613ea07bb7e4';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=613ea07bb7e4';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=613ea07bb7e4';
 import {
     triangulateAndReproject, storeReprojectedInstances, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod,
-} from '../pose/triangulation.js?v=36446c3f93f0';
+} from '../pose/triangulation.js?v=613ea07bb7e4';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js?v=36446c3f93f0';
-import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js?v=36446c3f93f0';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=36446c3f93f0';
+} from '../loading/session-loader.js?v=613ea07bb7e4';
+import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js?v=613ea07bb7e4';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=613ea07bb7e4';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -51,27 +51,27 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js?v=36446c3f93f0';
+} from './video-filters.js?v=613ea07bb7e4';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=36446c3f93f0';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=613ea07bb7e4';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js?v=36446c3f93f0';
-import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=36446c3f93f0';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=36446c3f93f0';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=36446c3f93f0';
+import { setSoloView } from './ui-wiring.js?v=613ea07bb7e4';
+import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=613ea07bb7e4';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=613ea07bb7e4';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=613ea07bb7e4';
 // `autoAssignState` is a mutable binding tracked via ESM live binding.
 // The cycle (identity-assignment imports panelRenderers from here) is
 // hoist-safe because both reads are inside function bodies.
-import { autoAssignState } from './identity-assignment.js?v=36446c3f93f0';
+import { autoAssignState } from './identity-assignment.js?v=613ea07bb7e4';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=36446c3f93f0';
-import { getLoadingProgressModal } from './loading-progress-modal.js?v=36446c3f93f0';
+import { setup3DViewport } from '../pose/initialization.js?v=613ea07bb7e4';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=613ea07bb7e4';
 
 // ============================================
 // Dockview Pane Manager
@@ -619,13 +619,16 @@ export function refreshPaneInteractions() {
     if (interactionManager && state.views.length > 0) {
         interactionManager.attach(state.views);
     }
-    // Initialize zoom and set up handlers for each docked view
-    // Only re-setup if the cell element changed (panel was recreated)
+    // Give a view a zoom state the first time it is docked, and re-wire the
+    // zoom handlers whenever its cell changed (the panel was recreated). An
+    // EXISTING zoom is kept: it belongs to the view, not the pane. Every new
+    // pane's `init` calls this a frame later, so re-initialising here reset
+    // every view to fit one frame after a grid ↔ solo switch.
     if (videoController) {
         for (var i = 0; i < state.views.length; i++) {
             var view = state.views[i];
             if (view.canvas) {
-                videoController.initZoom(view);
+                if (!view.zoom) videoController.initZoom(view);
                 var cell = view.canvas.closest('.video-cell');
                 if (cell && cell !== view._zoomCell) {
                     view._zoomCell = cell;
@@ -638,13 +641,28 @@ export function refreshPaneInteractions() {
     // Render current frame to newly created canvases and fit sizes
     fitCanvasesToCells();
     if (videoController) {
-        // `initZoom` above put every view back at fit — or, while View ▸
-        // Native Resolution is on, flagged it 1:1 with its scale still to be
-        // derived from the box `fitCanvasesToCells` just laid out.
-        for (var ni = 0; ni < state.views.length; ni++) {
-            var nv = state.views[ni];
-            if (nv.zoom && nv.zoom.native) videoController.reapplyZoom(nv);
+        // Carry each shown view's zoom onto its (possibly new) canvas box, as a
+        // cell resize does: `reapplyZoom` rescales the pan by the change in
+        // box size, so the same region of the video stays centred, and
+        // re-derives a 1:1 view's scale for the new box. The one exception is
+        // View ▸ Native Resolution: while it is on, a view coming on screen
+        // joins it at 1:1 rather than keeping its own zoom. A view that is not
+        // docked keeps a detached canvas; one whose cell is not laid out yet
+        // is left to the ResizeObserver.
+        var nativeOn = !!state.nativeResolution;
+        for (var ri = 0; ri < state.views.length; ri++) {
+            var rv = state.views[ri];
+            if (!rv.zoom || !rv.canvas || !rv.canvas.isConnected) continue;
+            var rcell = rv.canvas.closest('.video-cell');
+            if (!rcell || rcell.clientWidth <= 0 || rcell.clientHeight <= 0) continue;
+            if (nativeOn && !rv.zoom.native) rv.zoom.native = true;
+            videoController.reapplyZoom(rv);
         }
+        // Re-derive the mode for the views now on screen. It is otherwise only
+        // refreshed by a zoom or by opening the View menu, so a solo'd view
+        // already at 1:1 would turn it on — and pull the next camera to 1:1 —
+        // only if the user happened to open the menu in between.
+        videoController.nativeResolutionActive();
         videoController.seekToFrame(state.currentFrame);
     }
     drawAllOverlays(state.currentFrame);

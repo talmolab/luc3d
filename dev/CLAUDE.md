@@ -1883,10 +1883,11 @@ review and obvious on screen:
 Exact at integer devicePixelRatio (and 1.25/1.5 headless); at e.g. 2.2 Chrome
 resamples regardless, so it is right-SIZED but not exact — say so, don't promise
 it. Whether it is on is DERIVED (`state.nativeResolution` = every shown view at
-1:1) so the menu tick cannot lie, and `initZoom` seeds from it so pane rebuilds
-keep 1:1. The pane badge reads the zoom as a percentage of 1:1
-(`zoomPercentLabel`), and only a view HELD at 1:1 may read exactly "100%" — a
-near miss is still resampled, so it reads "99.8%" / "≈100%". Hovering it offers
+1:1) so the menu tick cannot lie. A pane rebuild keeps each view's own zoom,
+except that while the mode is on a view coming on screen joins it at 1:1
+(`refreshPaneInteractions`), so cycling the solo camera keeps 1:1. The pane
+badge reads the zoom as a percentage of 1:1 (`zoomPercentLabel`), and only a
+view HELD at 1:1 may read exactly "100%" — a near miss is still resampled, so it reads "99.8%" / "≈100%". Hovering it offers
 presets (`ZOOM_PRESET_PERCENTS`, per pane, `setZoomPercent`); 100% there must go
 through `_enterNative`, never a plain `scale = 1:1`, or it skips both rules. The 1:1 scale depends on the box AND devicePixelRatio, so anything
 that moves either must end in `reapplyZoom` (`reapplyAllZoom` covers resize and
