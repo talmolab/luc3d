@@ -21,6 +21,9 @@
  *     embeds frames, shows a real sample crop and a measured CPU line with the CPU
  *     alone in the load graph, and cancels. (The sample crops are
  *     also checked bit for bit against the inputs embedded, under 2-4.)
+ *  6. The compute guardrail (`maxLoadPct`, ui/image-embedder.js `paceRestMs`): at
+ *     a 50% cap the model rests as long as it runs, the summary says so, and
+ *     `releaseFrames` ends a rest with work queued behind it at once.
  *
  * Run: node tests/e2e/image-check-cpu.mjs   (downloads the ~88 MB fp32 model)
  */
@@ -183,6 +186,33 @@ try {
     check(emb.samples.every(c => c.pts), 'each sample crop carries its animal\'s keypoints in crop pixels, for the skeleton overlay');
     check(emb.samples.length === 4 && emb.samples.every(c => c.same) && new Set(emb.samples.map(c => c.id + c.camera)).size === 4,
           `one sample crop per frame, each bit-identical to the input embedded, rotating animal/camera (${emb.samples.map(c => 'f' + c.frame + ' id' + c.id + ' ' + c.camera).join(', ')})`);
+
+    // ---- 6. the compute guardrail (paceRestMs, `imageCheckMaxLoad`): the same work, capped at 50%
+    check(!/capped/.test(emb.timing), 'with no max load given the embedder is unpaced (nothing capped in its summary)');
+    const paced = await page.evaluate(async () => {
+        const E = await import('/ui/image-embedder.js'), AS = await import('/ui/app-state.js');
+        const session = AS.state.session, itemsAt = (f) => session.instanceGroups.get(f).map((g, k) => ({ k, group: g }));
+        const e = await E.createImageEmbedder(session, { cpuWorkers: 2, maxViewsPerAnimal: 0, maxLoadPct: 50 });
+        await Promise.all([0, 4, 8, 12].map(f => e.getEmbeddings(f, itemsAt(f))));
+        const busy = e.busyMs();
+        await new Promise(r => setTimeout(r, busy + 500));   // let the last rest (as long as the last run) finish by itself
+        const s = e.stats(), timing = E.formatEmbedTiming(s);
+        // a rest with work queued behind it, ended by releaseFrames: 10% rests 9x the run, so frame 4 waits ~seconds
+        const e2 = await E.createImageEmbedder(session, { cpuWorkers: 1, maxViewsPerAnimal: 0, maxLoadPct: 10 });
+        await e2.getEmbeddings(0, itemsAt(0));
+        const run0 = e2.busyMs(), queued = e2.getEmbeddings(4, itemsAt(4)).then(() => 'ran', err => err.message);
+        await new Promise(r => setTimeout(r, 200));
+        const t0 = performance.now();
+        e2.releaseFrames();
+        const after = await queued, settledMs = performance.now() - t0;
+        e.releaseFrames();
+        return { busy, restMs: s.restS * 1000, maxLoadPct: s.maxLoadPct, timing, run0, settledMs, after };
+    });
+    check(paced.maxLoadPct === 50 && / · load capped at 50% \(\d+ s resting\)/.test(paced.timing), `a 50% cap is reported: "${paced.timing}"`);
+    check(paced.restMs >= 0.95 * paced.busy && paced.restMs <= 1.3 * paced.busy,
+          `…and the model rested as long as it ran: ${(paced.restMs / 1000).toFixed(2)} s resting vs ${(paced.busy / 1000).toFixed(2)} s busy (busy ${Math.round(100 * paced.busy / (paced.busy + paced.restMs))}%)`);
+    check(paced.settledMs < Math.max(1000, 0.5 * 9 * paced.run0) && /no CPU model worker is running/.test(paced.after),
+          `releaseFrames ends a rest at once: queued work settled ${Math.round(paced.settledMs)} ms later (a 10% rest is ~${((9 * paced.run0) / 1000).toFixed(1)} s) — "${paced.after}"`);
 
     // ---- 5. the real dialog, nothing injected: runs on the CPU instead of refusing
     await page.evaluate(async () => {

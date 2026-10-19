@@ -393,6 +393,11 @@ const TRACKING_THRESHOLDS = [
         desc: 'Embed only each animal\'s N views where it appears largest (0 = every view it is visible in). The model is the slow part, so time scales with this: 3 views ran 2.5x faster than all 8 with the same accuracy; 2 starts to cost accuracy.',
     },
     {
+        id: 'imageCheckMaxLoad', label: 'Image check: max GPU load (%)', default: 75,
+        min: 10, max: 100, step: 5,
+        desc: 'The most of the time the image model may keep the GPU (or, without one, the CPU model workers) busy: the check rests between batches to stay under it. 100 = no limit, fastest; 75 runs about a third longer with the GPU idle a quarter of the time.',
+    },
+    {
         id: 'imageCheckWebNN', label: 'Image check: try WebNN (experimental)', default: 0,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
         desc: 'Also try the browser\'s WebNN API, which on Windows can use NVIDIA tensor cores (Chrome: enable chrome://flags/#web-machine-learning-neural-network). The first frames are embedded both ways; WebNN is kept only if it is faster and its embeddings match the calibrated WebGPU model. "About these flags" in the ID Switches tab says which was used. On macOS (Chrome 154) it measured ~10x slower, CPU only, so the trial keeps WebGPU there.',
@@ -416,7 +421,7 @@ const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
     'stale', 'matchGate',
-    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckWebNN',
+    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckMaxLoad', 'imageCheckWebNN',
     'reprojErrorThreshold',
 ]);
 

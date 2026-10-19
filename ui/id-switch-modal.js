@@ -314,6 +314,7 @@ async function runImage(session, rate, inject) {
     try {
         embedder = await (inject.createEmbedder || createImageEmbedder)(session, { onStatus: function (t) { prog.update(t, 0); },
             maxViewsPerAnimal: getTrackingThreshold('imageCheckMaxViews'),
+            maxLoadPct: getTrackingThreshold('imageCheckMaxLoad'),
             webnn: getTrackingThreshold('imageCheckWebNN') > 0 });
         // What runs the model, and — once embedding starts, every second — how busy the check keeps the CPU and
         // the GPU, as two lines and a graph. The CPU's busy time is the embedder's threads plus the fit, which runs

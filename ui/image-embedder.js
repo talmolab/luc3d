@@ -701,6 +701,22 @@ export const EMBED_MAX_BATCH = 64;
  */
 export const EMBED_IN_FLIGHT = 8;
 
+/** The lowest max load the image check takes (%, the `imageCheckMaxLoad` setting's minimum): 10% is a 10x longer run. */
+export const IMAGE_MAX_LOAD_MIN = 10;
+
+/**
+ * The compute guardrail: how long to rest after a model run of `runMs` so the
+ * model is busy at most `maxLoadPct`% of the time — busy / (busy + rest) = pct.
+ * No browser API caps a page's share of the GPU, so pacing the runs is the only
+ * lever; it is also what bounds the heat, fan and battery cost. 100 (or more, or
+ * not a number) rests 0 ms: the unpaced check. Applies to the CPU workers too.
+ */
+export function paceRestMs(runMs, maxLoadPct) {
+    const p = Number(maxLoadPct);
+    if (!(p > 0) || p >= 100 || !(runMs > 0)) return 0;
+    return runMs * (100 / Math.max(IMAGE_MAX_LOAD_MIN, p) - 1);
+}
+
 /**
  * A run's timing as numbers a person can act on. `gpuBusyPct` is the share of the
  * run's wall time spent inside model runs + readback: near 100% means the GPU is
@@ -784,7 +800,8 @@ export function formatEmbedTiming(t) {
     return Math.round(t.cropsPerS) + ' crops/s over ' + t.seconds.toFixed(0) + ' s · ' + (cpu ? 'model busy ' : 'GPU busy ') + Math.round(t.gpuBusyPct) + '% (' +
         t.batches + ' batches of ~' + Math.round(t.avgBatch) + ', ' + t.modelMsPerCrop.toFixed(1) + ' ms/crop) · per frame: decode ' +
         Math.round(t.decodeMsPerFrame) + ' ms, crop ' + Math.round(t.cropMsPerFrame) + ' ms, queue ' + Math.round(t.queueMsPerFrame) + ' ms' +
-        ' · ' + (cpu ? 'CPU (' + t.workers + ' workers)' : t.backend === 'webnn' ? 'WebNN' : 'WebGPU') + (t.dtype ? ' ' + t.dtype : '') + formatKeyframes(t.keyframes);
+        ' · ' + (cpu ? 'CPU (' + t.workers + ' workers)' : t.backend === 'webnn' ? 'WebNN' : 'WebGPU') + (t.dtype ? ' ' + t.dtype : '') +
+        (t.maxLoadPct < 100 ? ' · load capped at ' + Math.round(t.maxLoadPct) + '% (' + Math.round(t.restS || 0) + ' s resting)' : '') + formatKeyframes(t.keyframes);
 }
 
 function formatKeyframes(k) {
@@ -869,7 +886,9 @@ export function createCropPool(clock) {
  * streamed, so time scales with the number of crops.
  * @param {Session} session
  * @param {{onStatus?: function(string), maxViewsPerAnimal?: number, webnn?: boolean|'force',
- *          device?: 'auto'|'webgpu'|'cpu', cpuWorkers?: number}} [opts]
+ *          device?: 'auto'|'webgpu'|'cpu', cpuWorkers?: number, maxLoadPct?: number}} [opts]
+ *   `maxLoadPct`: the most of the time the model may be busy (%, IMAGE_MAX_LOAD_MIN..100; default 100 = unpaced) —
+ *   the compute guardrail, see paceRestMs.
  * @returns {Promise<{getEmbeddings: function, prepareFrames: function, releaseFrames: function, backend: function,
  *          device: function, busyMs: function, cpuBusyMs: function, sampleCrops: function, views: string[]}>}
  */
@@ -908,7 +927,7 @@ export async function createImageEmbedder(session, opts) {
     const dropWebNN = function () { if (nnModel) { try { nnModel.dispose(); } catch (e) { /* ignore */ } } nnModel = null; };
     const SZ = 3 * INPUT * INPUT;
     // timing breakdown for this run (stats()): where the time goes, measured on the user's machine
-    const tm = { frames: 0, crops: 0, batches: 0, t0: 0, t1: 0, decodeMs: 0, cropMs: 0, queueMs: 0, runMs: 0, readMs: 0, maxBatch: 0, busySince: 0 };
+    const tm = { frames: 0, crops: 0, batches: 0, t0: 0, t1: 0, decodeMs: 0, cropMs: 0, queueMs: 0, runMs: 0, readMs: 0, maxBatch: 0, busySince: 0, restMs: 0 };
     // busySince: when the model run in flight started (0: none) — busyMs() counts it while it runs
     const runWebGPU = async function (data, n) {
         const a = tm.busySince = performance.now();
@@ -981,6 +1000,9 @@ export async function createImageEmbedder(session, opts) {
     // gets the next batch as soon as it finishes one instead of waiting on one frame's decode + crop.
     const queue = [];
     let running = false;
+    // the compute guardrail (paceRestMs): the model's busy share is held at most this, by resting between runs
+    const maxLoadPct = opts.maxLoadPct > 0 ? Math.min(100, Math.max(IMAGE_MAX_LOAD_MIN, opts.maxLoadPct)) : 100;
+    let restTimer = null, restResume = null;   // the rest in progress, and what ends it (releaseFrames ends it early)
     const pump = function () {
         if (running || !queue.length) return;
         const take = [];
@@ -993,12 +1015,24 @@ export async function createImageEmbedder(session, opts) {
         let at = 0;
         take.forEach(function (q) { q.tensors.forEach(function (t) { data.set(t, at); at += SZ; }); });
         tm.batches++; tm.maxBatch = Math.max(tm.maxBatch, n);
+        const runFrom = performance.now();
         embed(data, n).then(function (vecs) {
             let k = 0;
             take.forEach(function (q) { q.resolve(vecs.slice(k, k + q.tensors.length)); k += q.tensors.length; });
         }, function (err) {
             take.forEach(function (q) { q.reject(err); });
-        }).then(function () { running = false; pump(); });
+        }).then(function () {
+            // the guardrail: the next run waits out a rest that keeps the model busy at most maxLoadPct% (paceRestMs)
+            const rest = paceRestMs(performance.now() - runFrom, maxLoadPct);
+            if (!(rest > 0)) { running = false; pump(); return; }
+            const restFrom = performance.now();
+            restResume = function () {
+                clearTimeout(restTimer); restTimer = null; restResume = null;
+                tm.restMs += performance.now() - restFrom;
+                running = false; pump();
+            };
+            restTimer = setTimeout(restResume, rest);
+        });
     };
     const enqueue = function (tensors) {
         return new Promise(function (resolve, reject) { queue.push({ tensors: tensors, resolve: resolve, reject: reject, at: performance.now() }); pump(); });
@@ -1106,6 +1140,7 @@ export async function createImageEmbedder(session, opts) {
         stats: function () {
             const t = summarizeEmbedTiming(tm, backend, backend === 'webnn' ? 'fp16' : dtype);
             t.keyframes = summarizeKeyframePlans(plans);
+            t.maxLoadPct = maxLoadPct; t.restS = tm.restMs / 1000;
             if (cpu) t.workers = cpuWorkers;
             return t;
         },
@@ -1128,6 +1163,10 @@ export async function createImageEmbedder(session, opts) {
             if (trial) { const d = chooseBackend(trial); note = d.note.replace(/ — using WebNN/, ' — WebNN would have been used'); trial = null; }
             dropWebNN();
             if (cpu) cpu.terminate();                      // ~600 MB each: not kept between runs (reloading is ~1 s from cache)
+            // a rest in progress ends now, so work queued behind it settles instead of waiting out the timer. LAST:
+            // ended before the CPU workers are terminated, it would start a run on a worker terminate() then
+            // kills — and the pool does not reject a job in flight, so that run would never settle
+            if (restResume) restResume();
         },
         /** Which model backend embedded the crops, and why (for the dialog). */
         backend: function () { return { name: backend, note: note }; },
