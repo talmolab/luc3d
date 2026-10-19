@@ -7,7 +7,10 @@
  * overlay shows the CPU alone — no GPU line, no GPU series. The project is the
  * shared BA rig fixture's 8 valid frames repeated (fixtures/ba-rig-fixture.js;
  * its own `frames` option drifts the animals out of the cameras' valid range),
- * big enough that a Refined run lasts a few seconds. Asserted:
+ * big enough that a Refined run lasts a few seconds. The windowed run is the
+ * longer one (WINDOWED_FRAMES): it keeps only the 3D (`summaryOnly`, #351), and
+ * at 60,000 frames it could finish inside the 1.5 s the test waits before
+ * reading the line, leaving it empty. Asserted:
  *  1. Windowed (lazy) project, worker pool: a "CPU: N cores · load X%" line with
  *     the CPU legend key appears under the detail line, its graph to the right,
  *     with a CPU series and no GPU series, labelled axes (0/50/100%, "60 s ago" …
@@ -34,6 +37,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const PORT = Number(process.env.PORT || 8284);
+const WINDOWED_FRAMES = 200000;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
@@ -116,7 +120,7 @@ try {
     check(plain, 'an operation that reports no CPU time (Track All\'s progress) shows no CPU line');
 
     // ---- 1. windowed project on the worker pool
-    await page.evaluate(() => window.__start(60000, false));
+    await page.evaluate((n) => window.__start(n, false), WINDOWED_FRAMES);
     await waitLoad();
     await page.waitForTimeout(1500);
     const r1 = await readRow();
@@ -157,7 +161,8 @@ try {
         return { hidden: document.getElementById('loadingHardware').classList.contains('hidden') && document.getElementById('loadingOverlay').classList.contains('hidden'),
                  cleared: text === '' && document.getElementById('loadingCpu').textContent === '', status: document.getElementById('statusText').textContent };
     });
-    check(/^Triangulated 60,000 frames via Refined \(120,000 groups/.test(after.status), `the run completes ("${after.status}")`);
+    check(new RegExp(`^Triangulated ${WINDOWED_FRAMES.toLocaleString('en-US')} frames via Refined \\(${(2 * WINDOWED_FRAMES).toLocaleString('en-US')} groups`).test(after.status),
+          `the run completes ("${after.status}")`);
     check(after.hidden && after.cleared, 'the CPU line hides with the overlay, cleared, and stays so (its timer stopped)');
 
     // ---- 3. the in-memory project's path
