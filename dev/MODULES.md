@@ -4307,6 +4307,57 @@ note in both popups with default Shields, not on a popup without a CPU line,
 gone with the popup; none with the per-site exception (which also gives the
 true core count); none in Chromium.
 
+### ui/folder-confirm-tip.js
+
+**Purpose.** On a Mac, say how to confirm the browser's folder prompt from the
+keyboard, just before a folder picker opens. After a folder is picked,
+Chromium-based browsers ask again — "Upload N files to this site?" for
+`<input webkitdirectory>`, "Let site view files?" for `showDirectoryPicker` —
+and both are built with Cancel as the focused AND default button plus input
+protection (`chrome/browser/file_select_helper.cc`,
+`chrome/browser/ui/file_system_access/file_system_access_permission_dialog.cc`),
+so Return cancels the load and no page can change that. On macOS, Tab reaches
+the other button only with System Settings ▸ Keyboard ▸ Keyboard navigation
+on (off by default); then Space presses it. **No web API exposes that
+setting**, so the tip goes to every Mac user of a Chromium browser before each
+folder pick until they tick "Don't show this again" (`localStorage`
+`folderConfirmTipDismissed` — browser-local display preference, never project
+state). Chromium is recognised by `navigator.userAgentData` (Safari and Firefox
+never see it). An automated browser (`navigator.webdriver`) never sees it
+either: the e2e suites run on Macs and drive these loaders.
+
+The tip GATES the picker (Cancel / Continue) rather than sitting beside it:
+the browser's prompt is tab-modal, so nothing on the page is clickable while it
+is up. Continue — or Return — is fresh user activation for the picker, which
+matters once the menu click's own (5 s in Chromium) has expired while the user
+reads. Esc cancels. Return anywhere but a focused button means Continue, so a
+pointer click on the checkbox (which releases focus to the page) does not
+strand it.
+
+**Key exports.**
+- `confirmFolderPick()` -> `Promise<boolean>` — what callers await before a
+  folder picker: true at once where the tip does not apply, otherwise the
+  tip's answer (false = cancelled).
+- `shouldShowFolderConfirmTip(nav?, storage?)` — Chromium on macOS, not
+  automated, not dismissed; storage that throws counts as not dismissed.
+- `isChromiumOnMac(nav?)` — `navigator.userAgentData.platform === 'macOS'`.
+- `showFolderConfirmTip()` -> `Promise<boolean>` — the modal itself
+  (`#folderTipOverlay`, `.plane-confirm-modal.folder-tip-modal`, checkbox
+  `#folderTipDontShow`, buttons `#btnFolderTipCancel` / `#btnFolderTipContinue`).
+- `FOLDER_TIP_STORAGE_KEY`.
+
+**Imports from project modules.** None. No DOM at load, so Node can import it.
+
+**Imported by.** `loading/session-loader.js`.
+
+**Tests.** `tests/test-folder-confirm-tip.mjs` (who sees it) and
+`tests/e2e/folder-confirm-tip.mjs` (the real menu items: the tip before the
+picker, Esc / Cancel end the load, Return opens the real file chooser, "Don't
+show this again" with focus released, the multi-session and per-camera gates,
+user activation still present when the picker is called 5.5 s after the menu
+click — with an untrusted click as the negative control — and Windows /
+automated macOS never seeing it).
+
 ### ui/custom-delete-ops.js
 
 **Purpose.** Pure, DOM-free logic behind "Custom Instance Delete…" — LUCID's
@@ -13849,7 +13900,11 @@ blank until the user manually re-ran Triangulate All. Covered by
 - `../ui/app-state.js` (incl. `buildRememberedSkeleton`, and `isViewDocked` as the
   rebuilt video controller's `isViewShown`), `../pose/pose-data.js`,
   `../ui/browser-hints.js` (`fileSystemAccessHint` — Brave hint in the
-  multi-session "needs a folder picker" message), `./video.js`, `../import-export/file-io.js`, `../pose/triangulation.js`
+  multi-session "needs a folder picker" message),
+  `../ui/folder-confirm-tip.js` (`confirmFolderPick` — awaited before every
+  folder picker: the single-.slp, per-camera and multi-session loaders,
+  `pickParentDirectoryForSessions` and the video overlay's Select Session
+  Folder; a cancel ends the load with "No folder selected"), `./video.js`, `../import-export/file-io.js`, `../pose/triangulation.js`
   (`shouldUseLazyH5`, `shouldUseLazySlp`, `LazyFrameLoader`),
   `./sio-lazy-loader.js` (`SioLazyLoader`),
   `./track-union.js` (`unionTrackNames`, `remapTrackIdx`),
