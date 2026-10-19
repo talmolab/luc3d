@@ -15064,6 +15064,35 @@ How it behaves:
   and fps WITHOUT a WebCodecs support check (it never decodes with WebCodecs):
   an early return when WebCodecs couldn't decode the codec (Firefox + HEVC)
   left `_fps` at the 30 fps placeholder, halving every frame index.
+  **A fragmented MP4 is read to its end** (campy writes them by default:
+  `empty_moov` + `frag_keyframe`). Its samples are in the fragments
+  (`moof`/`trun`), its moov says duration 0, and mp4box fires `onReady` on the
+  moov, so stopping there counted only the first chunk's fragments: a 1,200-frame
+  60 fps rig video loaded as 420 frames at 21 fps in HTML5 mode, and with
+  mediabunny as 1,200 frames at `state.fps` 30 (`updateTotalFrames` divides by
+  `videoTrack.duration` and falls back to 30 at 0). When `isFragmentedInfo(info)`
+  the scan goes on, jumping over each `mdat` payload (`_nextFragmentOffset`, from
+  mp4box's internal `parsingMdat`; an 8 KiB `FRAGMENT_PROBE_SIZE` read after a
+  jump longer than a chunk), then `flush()`es; the fps comes from the sample
+  durations and `videoTrack.duration` becomes their sum. `createFile(false)`
+  drops media bytes (this pass never extracts a sample) — which is also why the
+  jump is required: handed the rest of an mdat whose start it dropped, mp4box
+  asks for that offset again forever, so the loop throws if it stops advancing.
+  A regular MP4 still stops at `onReady`. Measured locally: a 30-min 60 fps file
+  of 90 KB fragments scans in ~0.15 s; a 1 GB one of 8.7 MB fragments in ~25 ms,
+  reading 1.9 MB — and mp4box holds no chunk between reads (told to keep media,
+  it held all 300 MB of the 30-min file). **A file cut off mid-write** (what
+  campy fragments for) can end inside its last fragment, whose moof lists frames
+  past the end: `samplesInFile` drops them and `_frameLimit` holds mediabunny's
+  count to the same number, since it lists them too (a clip cut at 46,000 bytes:
+  1,165 frames, as ffprobe decodes, not 1,182). Covered by
+  `tests/e2e/fragmented-mp4-load.mjs`.
+- `isFragmentedInfo(info)` — whether mp4box's `onReady` info is a fragmented MP4
+  (`isFragmented`, or a video track with duration 0).
+- `samplesInFile(samples, fileSize)` — the mp4box samples whose bytes lie
+  inside the file (drops a truncated last fragment's missing frames).
+- `sumSampleDurations(samples)` — sum of mp4box sample durations (track
+  timescale units).
 - `PlaybackSchedule` — class; `update(now, capturedIdx, framesPerMs)` → the
   frame index that should be on screen this refresh; `reset()`.
 - `pickScheduledFrame(target, shownIdx, pendingIdx, capIdx)` →
