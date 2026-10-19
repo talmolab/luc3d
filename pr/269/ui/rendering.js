@@ -6,32 +6,33 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=8be1dbca2728';
-import { points3dNodeCount } from '../pose/pose-data.js?v=8be1dbca2728';
+import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=f5959d6183d4';
+import { points3dNodeCount, isPoints3dFromFile } from '../pose/pose-data.js?v=f5959d6183d4';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
-    triangulateAndReproject, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=8be1dbca2728';
-import { drawFrameOverlays } from './overlays.js?v=8be1dbca2728';
-import { syncViewLegends } from './view-legend.js?v=8be1dbca2728';
-import { isCameraTracked } from './settings.js?v=8be1dbca2728';
+    triangulateAndReproject, reprojectStoredPoints3d, storeReprojectedInstances,
+} from '../pose/triangulation.js?v=f5959d6183d4';
+import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=f5959d6183d4';
+import { drawFrameOverlays } from './overlays.js?v=f5959d6183d4';
+import { syncViewLegends } from './view-legend.js?v=f5959d6183d4';
+import { isCameraTracked, getTrackingThreshold } from './settings.js?v=f5959d6183d4';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=8be1dbca2728';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=f5959d6183d4';
 // The toolbar's Animals field shows the ACTIVE session's count. Circular
 // (it reaches pose/tracker.js, which imports this module) — safe for the same
 // reason: the call site is inside drawAllOverlays' body.
-import { syncAnimalCountField } from './animal-count-field.js?v=8be1dbca2728';
-import { syncNodeTooltipFrame } from './node-tooltip.js?v=8be1dbca2728';
+import { syncAnimalCountField } from './animal-count-field.js?v=f5959d6183d4';
+import { syncNodeTooltipFrame } from './node-tooltip.js?v=f5959d6183d4';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=8be1dbca2728';
-import { updateFrameInfo } from './info-panel.js?v=8be1dbca2728';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=f5959d6183d4';
+import { updateFrameInfo } from './info-panel.js?v=f5959d6183d4';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
-} from './frame-counters.js?v=8be1dbca2728';
+} from './frame-counters.js?v=f5959d6183d4';
 
 // ============================================
 // Reproj/Error visibility
@@ -175,30 +176,74 @@ export function getVisibilitySettings() {
 let _lastAuxUpdate = 0;
 const AUX_UPDATE_MS = 100;
 
+// Hard limits on the overlay backing store (luc3d #200). Chrome refuses a
+// canvas past 16384 px on a side or 2^28 px of area, and refuses it SILENTLY:
+// `canvas.width` reads back as the size you asked for, every draw call
+// succeeds, and the pixels come back transparent — so the entire annotation
+// overlay disappears with nothing in the console. Clamped in drawAllOverlays.
+const MAX_OVERLAY_DIM = 16384;
+const MAX_OVERLAY_AREA = 268435456; // 2^28 px
+
 // Lazily compute reprojections for groups that have points3d but no
 // reprojected instances, on frame `fi` (whose groups are `instanceGroups`).
 // Runs for every frame drawAllOverlays draws — during playback the views can
 // be on different frames (see its `viewFrames`).
-function fillLazyReprojections(fi, instanceGroups) {
+//
+// Neither Triangulate All path keeps reprojections or per-frame results for
+// the project (see `sweepTriangulateAllFrames`' docstring in
+// pose/triangulation.js), so after one this fill is what produces them, one
+// shown frame at a time. Two things keep that cheap:
+//  - **It reprojects the stored 3D rather than re-solving**
+//    (`reprojectStoredPoints3d`) whenever that 3D is current: the group was
+//    triangulated (`triangulationMethod` set), has not been edited since
+//    (`dirty` clear), and no reprojection-error threshold is set (with one the
+//    solve drops observations the stored 3D does not record, and its
+//    undistorted error leaves them out). Measured on a 17-camera project:
+//    0.1 ms per frame with one animal and 0.2 ms with three, against 2.4 and
+//    5.0 ms to re-solve Refined — at 120 fps a frame has 8.3 ms. 3D READ
+//    FROM A FILE (`isPoints3dFromFile`: a loaded `.slp`'s, an imported
+//    points3d `.h5`'s) is reprojected whenever the group is clean, threshold
+//    or not, and with or without a method: a re-solve would show LUCID's
+//    answer rather than the 3D the project holds. Any other group (Track
+//    All's provisional 3D, an edited group) is re-solved, as before.
+//  - **It keeps what it made for at most DERIVED_FRAMES_KEEP frames per
+//    session** (`noteDerivedFrame`), dropping the least recently filled
+//    beyond that, so playing through the whole recording does not rebuild
+//    the per-frame state Triangulate All no longer keeps.
+//
+// The paths that used to derive this state for EVERY frame they touched now
+// leave it to this fill: both Triangulate All paths, the `.slp` load
+// (`handleLoadSlpFile`), moving a view between sessions
+// (`moveVideosToSession`), and the overlay video export, which calls it for
+// each frame it draws so the video shows exactly what the app shows.
+export function fillLazyReprojections(fi, instanceGroups) {
     if (instanceGroups && state.session.cameras.length >= 2) {
         var _lazyFrameResults = null;
+        var _threshold = null;
         for (var _rg = 0; _rg < instanceGroups.length; _rg++) {
             var _grp = instanceGroups[_rg];
             if (points3dNodeCount(_grp.points3d) > 0 &&
                 (!_grp.reprojectedInstances || _grp.reprojectedInstances.size === 0) &&
                 (!_grp.reprojections || Object.keys(_grp.reprojections).length === 0)) {
-                // Re-solve with WHICHEVER METHOD this group was last triangulated
-                // with — same precondition as `reTriangulateGroup`. Passing no
-                // options makes the dispatcher silently default to 'dlt', which is
-                // how "Triangulate All ▸ Bundle Adjustment" appeared to do nothing:
-                // the windowed sweep deliberately drops `reprojections` /
-                // `state.triangulationResults` project-wide (~1.9 GB at 531,799
-                // groups — see sweepTriangulateAllFrames' docstring), so this fill
-                // is the ONLY thing that repopulates them, and a DLT re-solve here
-                // overwrote BA's error with DLT's while `group.triangulationMethod`
-                // still made the panel label it "Bundle Adjustment".
-                var _m = (_grp.triangulationMethod === 'ba') ? 'ba' : 'dlt';
-                var _triRes = triangulateAndReproject(_grp, state.session.cameras, { method: _m });
+                if (_threshold == null) _threshold = getTrackingThreshold('reprojErrorThreshold') || 0;
+                var _triRes;
+                if (!_grp.dirty && (isPoints3dFromFile(_grp.points3d) ||
+                    (_grp.triangulationMethod != null && !(_threshold > 0)))) {
+                    _triRes = reprojectStoredPoints3d(_grp, state.session.cameras);
+                } else {
+                    // Re-solve with WHICHEVER METHOD this group was last triangulated
+                    // with — same precondition as `reTriangulateGroup`. Passing no
+                    // options makes the dispatcher silently default to 'dlt', which is
+                    // how "Triangulate All ▸ Bundle Adjustment" appeared to do nothing:
+                    // the windowed sweep deliberately drops `reprojections` /
+                    // `state.triangulationResults` project-wide (~1.9 GB at 531,799
+                    // groups — see sweepTriangulateAllFrames' docstring), so this fill
+                    // is the ONLY thing that repopulates them, and a DLT re-solve here
+                    // overwrote BA's error with DLT's while `group.triangulationMethod`
+                    // still made the panel label it "Bundle Adjustment".
+                    var _m = (_grp.triangulationMethod === 'ba') ? 'ba' : 'dlt';
+                    _triRes = triangulateAndReproject(_grp, state.session.cameras, { method: _m });
+                }
                 _grp.reprojections = _triRes.reprojections;
                 storeReprojectedInstances(_grp, _triRes, state.session.cameras);
                 // Store in triangulationResults for info panel. `method` is carried
@@ -221,8 +266,49 @@ function fillLazyReprojections(fi, instanceGroups) {
         if (_lazyFrameResults) {
             var _existing = state.triangulationResults.get(fi) || [];
             state.triangulationResults.set(fi, _existing.concat(_lazyFrameResults));
+            noteDerivedFrame(state.session, fi);
         }
     }
+}
+
+/**
+ * Most frames whose derived reprojection state the fill keeps per session.
+ * About 75 KB a frame per animal on a 17-camera, 34-node project (the
+ * reprojections, the reprojected instances and the per-camera errors), so 600
+ * frames is ~45 MB per animal there — 5 s of 120 fps playback, and every frame
+ * stepped through recently is still a cache hit.
+ */
+export const DERIVED_FRAMES_KEEP = 600;
+// session -> Map(frameIdx -> true), least recently filled first
+const _derivedFrames = new WeakMap();
+
+/**
+ * Record that the fill derived reprojection state for frame `fi`, and drop
+ * the least recently filled frames' beyond DERIVED_FRAMES_KEEP
+ * (`dropDerivedReprojections`; the fill re-derives a frame's when it is shown
+ * again). Never drops the frame on screen, nor a frame holding an edited
+ * group (`dirty`): an edited group deliberately keeps showing its old
+ * reprojections until it is re-triangulated, and a re-derive would replace
+ * them with a fresh solve. Exported for tests.
+ */
+export function noteDerivedFrame(session, fi) {
+    var lru = _derivedFrames.get(session);
+    if (!lru) { lru = new Map(); _derivedFrames.set(session, lru); }
+    lru.delete(fi);
+    lru.set(fi, true);
+    if (lru.size <= DERIVED_FRAMES_KEEP) return;
+    for (var old of lru.keys()) {
+        if (lru.size <= DERIVED_FRAMES_KEEP) break;
+        if (old === fi || old === state.currentFrame) continue;
+        lru.delete(old);
+        if (!frameHasDirtyGroup(session, old)) dropDerivedReprojections(session, old, state.triangulationResults);
+    }
+}
+
+function frameHasDirtyGroup(session, fi) {
+    var groups = session.instanceGroups ? session.instanceGroups.get(fi) : null;
+    if (groups) for (var i = 0; i < groups.length; i++) if (groups[i].dirty) return true;
+    return false;
 }
 
 /**
@@ -366,25 +452,9 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             if (vSelected && (!vGroups || vGroups.indexOf(vSelected) < 0)) vSelected = null;
         }
 
-        // Resize overlay canvas to match zoom level for sharp rendering.
-        // Higher internal resolution at higher zoom keeps sizes constant
-        // in screen pixels: the CSS transform scales the display, and the
-        // increased resolution compensates so drawn sizes don't change.
-        var zs = view.zoom ? view.zoom.scale : 1;
-        var targetW = Math.round(view.videoWidth * zs);
-        var targetH = Math.round(view.videoHeight * zs);
-        if (view.overlayCanvas.width !== targetW || view.overlayCanvas.height !== targetH) {
-            view.overlayCanvas.width = targetW;
-            view.overlayCanvas.height = targetH;
-        }
-
-        // Backing pixels per CSS pixel, for labels (the one screen-relative
-        // size). Derived from the canvas's LAYOUT width times the zoom scale —
-        // deliberately NOT getBoundingClientRect(), which reports the rotated
-        // element's axis-aligned bounding box and so would shrink every label
-        // whenever Video Rotation is non-zero. The zoom factor must stay in:
-        // the backing store already grew by `zs` above, so dropping it would
-        // make labels grow with zoom instead of holding a fixed point size.
+        // The canvas's LAYOUT width — deliberately NOT getBoundingClientRect(),
+        // which reports the rotated element's axis-aligned bounding box and so
+        // would shrink every label whenever Video Rotation is non-zero.
         var cssW = view.overlayCanvas.offsetWidth;
         if (!cssW) {
             // Detached / not laid out yet. Only an explicit px inline width is
@@ -393,6 +463,75 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             var inlineW = view.overlayCanvas.style.width || '';
             if (/px\s*$/.test(inlineW)) cssW = parseFloat(inlineW) || 0;
         }
+
+        // Resize the overlay backing store for sharp rendering under zoom.
+        //
+        // The wrapper's CSS transform magnifies this canvas by `zs`, so what
+        // governs sharpness is backing pixels per SCREEN pixel. Supersampling by
+        // the full `zs` held that constant — but it grew the canvas as zs^2 while
+        // the cell still shows only a cell-sized WINDOW onto it, so at zs=10 on a
+        // 1280x1024 view it allocated 12800x10240 (524 MB) to display ~283x226
+        // (luc3d #200). Off a GPU-accelerated 2D canvas that is enough to drop a
+        // node drag from 120 to 74 fps, which is what the issue reports.
+        //
+        // So bound the supersample by what the display can actually resolve,
+        // never below the video's own resolution. `ss === zs` whenever the cell
+        // is wide enough to need it, so an unzoomed view is byte-for-byte what it
+        // was before this change.
+        //
+        // OVERLAY_QUALITY is backing pixels per screen pixel, and the floor of 2
+        // is not cosmetic: nodes and edges are vector shapes whose smoothness
+        // comes from this ratio. A cell showing a 1280px video in 283px was
+        // supersampling 4.5x for free (it is downscaling), so dropping straight
+        // to 1:1 on a non-retina display made circles visibly chunkier the moment
+        // you zoomed. 2x holds normal anti-aliasing on every display.
+        var OVERLAY_QUALITY = Math.max(2, window.devicePixelRatio || 1);
+        var zs = view.zoom ? view.zoom.scale : 1;
+        var ss = zs;
+        if (cssW > 0) {
+            // QUANTIZED to 1/4 steps, and that is not a detail. `ss` depends on
+            // `cssW`, which the old `ss = zs` did not — so without this a pane
+            // SASH DRAG (cssW changing by a pixel per frame) reallocates the
+            // whole backing store on every redraw, which the old code never did
+            // at any zoom. Measured at zoom 8 with canvas acceleration off: 59
+            // reallocations over a 60-step drag, 3.49 ms per redraw against 0.32
+            // unzoomed. Rounded UP so quantizing can never drop quality below
+            // what OVERLAY_QUALITY asks for.
+            var want = (OVERLAY_QUALITY * cssW * zs) / view.videoWidth;
+            ss = Math.min(zs, Math.max(1, Math.ceil(want * 4) / 4));
+        }
+
+        // Correctness backstop, NOT a budget one. Past Chrome's canvas limits the
+        // allocation reports the size you asked for and every draw silently
+        // no-ops, so the whole annotation overlay goes blank with no error — the
+        // old `ss = zs` reached that at 2048x1536 video and zoom 10
+        // (20480x15360). The quality bound above normally keeps `ss` far under
+        // this, so the clamp only bites for an unusually wide cell.
+        var vwPx = view.videoWidth || 1;
+        var vhPx = view.videoHeight || 1;
+        ss = Math.min(ss, MAX_OVERLAY_DIM / vwPx, MAX_OVERLAY_DIM / vhPx,
+                      Math.sqrt(MAX_OVERLAY_AREA / (vwPx * vhPx)));
+
+        // `Math.floor`, not `round`: rounding up at the clamp is what would put
+        // the canvas back over the limit it was just clamped to.
+        var targetW = Math.max(1, Math.floor(view.videoWidth * ss));
+        var targetH = Math.max(1, Math.floor(view.videoHeight * ss));
+        if (view.overlayCanvas.width !== targetW || view.overlayCanvas.height !== targetH) {
+            view.overlayCanvas.width = targetW;
+            view.overlayCanvas.height = targetH;
+        }
+
+        // Node radii and line widths are expressed in BACKING pixels and drawn
+        // unscaled, which is what held them at a constant on-screen size while
+        // the backing store tracked `zs` exactly. Now that it does not, they have
+        // to be scaled by the ratio actually used or they grow with zoom.
+        // Labels need no such term: `labelDisplayScale` below is derived from the
+        // real `targetW`, so it self-corrects.
+        var overlaySizeScale = zs > 0 ? ss / zs : 1;
+
+        // Backing pixels per CSS pixel, for labels (the one screen-relative
+        // size). The zoom factor must stay in the denominator: dropping it would
+        // make labels grow with zoom instead of holding a fixed point size.
         var displayW = cssW * zs;
         var labelDisplayScale = displayW > 0 ? targetW / displayW : 1;
 
@@ -450,6 +589,9 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             canvasHeight: view.overlayCanvas.height,
             labelDisplayScale: labelDisplayScale,
             labelRotation: labelRotation,
+            // Backing store no longer tracks `zs` exactly (luc3d #200); 1 at
+            // zoom 1, so an unzoomed view draws exactly as it did.
+            overlaySizeScale: overlaySizeScale,
             selectedInstanceGroup: vSelected,
             selectedReprojected: interactionManager ? interactionManager.selectedReprojected : false,
             selectedNodeIdx: selectedNodeIdx,

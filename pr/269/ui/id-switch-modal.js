@@ -28,20 +28,20 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=8be1dbca2728';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=8be1dbca2728';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=8be1dbca2728';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=8be1dbca2728';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=8be1dbca2728';
-import { getTrackingThreshold } from './settings.js?v=8be1dbca2728';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=8be1dbca2728';
+import { state, getActiveSession } from './app-state.js?v=f5959d6183d4';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=f5959d6183d4';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=f5959d6183d4';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=f5959d6183d4';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=f5959d6183d4';
+import { getTrackingThreshold } from './settings.js?v=f5959d6183d4';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=f5959d6183d4';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=8be1dbca2728';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=8be1dbca2728';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=8be1dbca2728';
+         inputTensorToPixels, INPUT } from './image-embedder.js?v=f5959d6183d4';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=f5959d6183d4';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=f5959d6183d4';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=8be1dbca2728';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=f5959d6183d4';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -117,6 +117,23 @@ var _openSummary = null;
 
 /** Register what the tab's "Show Track All summary" button runs (called once from ui/track-summary-modal.js). */
 export function setTrackSummaryOpener(fn) { _openSummary = fn; }
+
+// True only while the Track All summary's check button clicks its menu item (`clickCheckFromSummary`):
+// `runIdSwitchChecks` reads and clears it before its first await, so only the check that click starts sees it.
+var _backToSummary = false;
+
+/**
+ * Click a check's menu item (`menuId`) for the Track All summary's "Check by …" buttons. The check runs
+ * exactly as it does from the menu, but ends by reopening the summary with its result — and the next step
+ * that follows from it — instead of opening the ID Switches tab; the box's "Review switches" goes there
+ * when something was flagged.
+ */
+export function clickCheckFromSummary(menuId) {
+    var item = typeof document !== 'undefined' && document.getElementById(menuId);
+    if (!item) return;
+    _backToSummary = true;
+    try { item.click(); } finally { _backToSummary = false; }
+}
 
 /**
  * Above "Possible ID switches": a button that reopens the session's Track All summary
@@ -384,7 +401,9 @@ async function runImage(session, rate, inject) {
 /**
  * Run the selected checks, mark the results on the seekbar and report them.
  *
- * From the menu (`auto` false) the ID Switches tab always opens. After Track All
+ * From the menu (`auto` false) the ID Switches tab always opens — unless the
+ * Track All summary started the check (`clickCheckFromSummary`): then the summary
+ * reopens with the result instead. After Track All
  * or Track Frame Range (`auto: true`, pose/tracker.js) the results are appended
  * to the pass's own status line (`statusPrefix`), the tab opens only when a
  * possible switch was found, and a check that cannot run is reported as skipped —
@@ -398,6 +417,8 @@ async function runImage(session, rate, inject) {
  */
 export async function runIdSwitchChecks(opts) {
     opts = opts || {};
+    var backToSummary = !opts.auto && _backToSummary;   // started by the Track All summary (clickCheckFromSummary)
+    _backToSummary = false;
     var auto = !!opts.auto, cues = ['size', 'image'].filter(function (c) { return opts[c]; });
     if (!cues.length) return null;
     var deps = { navigateToFrame: opts.navigateToFrame || null };
@@ -406,6 +427,7 @@ export async function runIdSwitchChecks(opts) {
     if (!hasTrackedIdentities(session)) {
         if (auto) setStatus((opts.statusPrefix ? opts.statusPrefix + ' · ' : '') + head(cues[0]) + ': skipped — no tracked 3D skeletons', 'success');
         else setStatus('Check ID Switches needs tracked identities with 3D — run Track All first', 'warning');
+        if (backToSummary && _openSummary) _openSummary(session);
         return null;
     }
     var rate = recordingFps(session), results = {}, parts = [], level = 'success';
@@ -450,7 +472,10 @@ export async function runIdSwitchChecks(opts) {
     var anyFound = ran.some(function (c) { return countOnsets(results[c]) > 0; });
     setStatus((auto && opts.statusPrefix ? opts.statusPrefix + ' · ' : '') + parts.join('; ') +
         (anyFound ? ' — listed in the ID Switches tab' : ''), level);
-    if ((!auto && ran.length) || anyFound) openIdSwitchPanel();
+    // Started from the Track All summary: back to it, with this outcome — a cancel or a skip included — in
+    // its row. Without one to reopen (the box is not kept for this session), as from the menu.
+    var reopened = backToSummary && _openSummary ? _openSummary(session, results) : null;
+    if (!reopened && ((!auto && ran.length) || anyFound)) openIdSwitchPanel();
     return results;
 }
 

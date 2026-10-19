@@ -3937,6 +3937,35 @@ export function isPooledPoints3d(points3d) {
     return !!points3d && ArrayBuffer.isView(points3d) && _p3SlabBuffers.has(points3d.buffer);
 }
 
+// --------------------------------------------------------------------------
+// 3D read from a file
+// --------------------------------------------------------------------------
+
+/** `points3d` arrays the loaders read from a file (see `markPoints3dFromFile`). */
+var _filePoints3d = new WeakSet();
+
+/**
+ * Record that `points3d` is a group's 3D as READ FROM A FILE (an `.slp`'s
+ * stored 3D, LUCID's own or another tool's), so `ui/rendering.js`'s
+ * reprojection fill always reprojects it rather than re-solving — even with a
+ * reprojection-error threshold set, the one case in which the fill otherwise
+ * re-solves a clean group. A re-solve would show LUCID's answer instead of the
+ * file's: the reprojections and errors of 3D the project does not hold.
+ *
+ * Keyed by the ARRAY, not the group, so it lapses by itself: every path that
+ * re-solves or edits a group's 3D assigns a new array (nothing writes a
+ * group's `points3d` in place), and that array is not in the set.
+ * @param {Float64Array|null} points3d
+ */
+export function markPoints3dFromFile(points3d) {
+    if (points3d) _filePoints3d.add(points3d);
+}
+
+/** Is `points3d` a group's 3D as read from a file? (`markPoints3dFromFile`) */
+export function isPoints3dFromFile(points3d) {
+    return !!points3d && _filePoints3d.has(points3d);
+}
+
 
 // --------------------------------------------------------------------------
 // Linear algebra helpers (module-level utility functions)

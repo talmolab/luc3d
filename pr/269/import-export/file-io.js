@@ -12,13 +12,13 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=8be1dbca2728';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=8be1dbca2728';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows } from '../pose/triangulation.js?v=8be1dbca2728';
+         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=f5959d6183d4';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=f5959d6183d4';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=f5959d6183d4';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=8be1dbca2728';
-import { writePlaneMetadata } from './plane-metadata.js?v=8be1dbca2728';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=f5959d6183d4';
+import { writePlaneMetadata } from './plane-metadata.js?v=f5959d6183d4';
 
 // ============================================
 // Generic file picker
@@ -2047,6 +2047,113 @@ function assertExportCoversProject(selections) {
     );
 }
 
+/** Keypoints per pooled column chunk in `makePooledSioInstances`. */
+var SIO_POOL_CHUNK_POINTS = 65536;
+
+/**
+ * Make the sleap-io.js instances of one `buildSlpLabelsAllViews` build with
+ * their keypoints in SHARED column chunks — one object per instance and
+ * nothing else in V8's heap.
+ *
+ * A plain `new SIO.Instance({ points })` costs ~0.93 KB of V8 heap per 2D
+ * instance (1,289 MB for the 1,390,390 of a 17-camera recording, held for the
+ * whole save): an object with 17 fields, four typed arrays each with its own
+ * ArrayBuffer, and a `_names` array of `undefined`s, because the points
+ * `_buildSioPoints` hands it carry no `name`. Building those points first
+ * allocated another ~3.7 KB of garbage per instance. Here the values go
+ * straight into pooled `Float64Array`/`Uint8Array` chunks, and the instance is
+ * an object holding its track, its score, its chunk and its offset; `_xy`,
+ * `_visible`, `_complete` and `_score` are getters on the prototype that return
+ * a view of its slice — what the vendored writer reads (`emitInstancePointsInto`,
+ * LUCID local patch luc3d eager-save), and what `points`' PointViews read and
+ * write through.
+ *
+ * The VALUES are exactly `_buildSioPoints`' followed by `Instance._ingest`, so
+ * the written file is unchanged: a missing node is NaN/invisible/incomplete, a
+ * nulled one keeps its position and is invisible but complete, and a
+ * prediction's node carries its own score, else the instance score (1 when it
+ * has none). A user instance has no score column, as before.
+ *
+ * The prototypes inherit from the real `SIO.Instance` / `SIO.PredictedInstance`
+ * (so `instanceof` and every method work), and take every field default from a
+ * real instance built with `new` — so a field a future sleap-io.js adds still
+ * starts at its own default rather than `undefined`. Assigning one of the four
+ * columns (a `points =` setter) gives that instance its own array, as usual.
+ *
+ * @returns {(inst: Instance, track: Object|null) => Object}
+ */
+export function makePooledSioInstances(SIO, skeleton, numNodes) {
+    function viewProp(proto, name, get) {
+        Object.defineProperty(proto, name, {
+            configurable: true,
+            get: get,
+            set: function (v) {
+                Object.defineProperty(this, name, { value: v, writable: true, enumerable: true, configurable: true });
+            },
+        });
+    }
+    function makeProto(Base, predicted) {
+        var proto = Object.create(Base.prototype);
+        var template = new Base({ points: [], skeleton: skeleton });
+        var keys = Object.keys(template);
+        for (var k = 0; k < keys.length; k++) proto[keys[k]] = template[keys[k]];
+        proto.skeleton = skeleton;
+        proto._n = numNodes;
+        proto._names = null;
+        viewProp(proto, '_xy', function () { var o = this._o; return this._c.xy.subarray(o << 1, (o + numNodes) << 1); });
+        viewProp(proto, '_visible', function () { var o = this._o; return this._c.visible.subarray(o, o + numNodes); });
+        viewProp(proto, '_complete', function () { var o = this._o; return this._c.complete.subarray(o, o + numNodes); });
+        if (predicted) {
+            viewProp(proto, '_score', function () { var o = this._o; return numNodes > 0 ? this._c.score.subarray(o, o + numNodes) : null; });
+        } else {
+            proto._score = null;
+        }
+        return proto;
+    }
+    var userProto = makeProto(SIO.Instance, false);
+    var predProto = makeProto(SIO.PredictedInstance, true);
+
+    var chunk = null;
+    return function (inst, track) {
+        var predicted = inst.type !== 'user';
+        if (!chunk || chunk.used + numNodes > chunk.cap) {
+            var cap = Math.max(SIO_POOL_CHUNK_POINTS, numNodes);
+            chunk = {
+                xy: new Float64Array(2 * cap), visible: new Uint8Array(cap),
+                complete: new Uint8Array(cap), score: null, cap: cap, used: 0,
+            };
+        }
+        if (predicted && !chunk.score) chunk.score = new Float64Array(chunk.cap);
+        var off = chunk.used;
+        chunk.used += numNodes;
+        var xy = chunk.xy, vis = chunk.visible, comp = chunk.complete;
+        var sc = predicted ? chunk.score : null;
+        var nulled = inst.nulledNodes || null;
+        var perPointScore = inst.score != null ? inst.score : 1.0;
+        var ownScores = typeof inst.pointScore === 'function';
+        for (var n = 0; n < numNodes; n++) {
+            var p = off + n, j = p << 1;
+            if (!inst.hasPoint(n)) {
+                xy[j] = NaN; xy[j + 1] = NaN; vis[p] = 0; comp[p] = 0;
+            } else {
+                xy[j] = inst.getX(n); xy[j + 1] = inst.getY(n);
+                vis[p] = (nulled && nulled.has(n)) || inst.isOccluded(n) ? 0 : 1;
+                comp[p] = 1;
+            }
+            if (sc) {
+                var own = ownScores ? inst.pointScore(n) : NaN;
+                sc[p] = Number.isFinite(own) ? own : perPointScore;
+            }
+        }
+        var out = Object.create(predicted ? predProto : userProto);
+        out.track = track;
+        if (predicted) out.score = inst.score || 0;
+        out._c = chunk;
+        out._o = off;
+        return out;
+    };
+}
+
 /**
  * Build a sleap-io.js Labels object for all camera views.
  *
@@ -2189,9 +2296,7 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
     var labeledFrames = [];
     var numNodes = session.skeleton.nodes.length;
     var allFrameIndices = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
-
-    // Map to look up labeled frames by (videoIdx, frameIdx)
-    var lfLookup = new Map(); // "videoIdx:frameIdx" → LabeledFrame
+    var newSioInstance = makePooledSioInstances(SIO, skeleton, numNodes);
 
     for (var fi = 0; fi < allFrameIndices.length; fi++) {
         var frameIdx = allFrameIndices[fi];
@@ -2208,17 +2313,10 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
             // instance score, as the other two writers do. Without one the
             // file stored 0 for every node, so a reopened project's node
             // tooltip said `(score: 0.00)` for every prediction.
-            var perPointScore = inst.type === 'user' ? undefined : (inst.score != null ? inst.score : 1.0);
-            var pts = _buildSioPoints(inst, numNodes, perPointScore);
             // `null >= 0` is true in JS; explicit guard prevents tracks[null]
             // = undefined leaking into SIO.Instance for trackless instances.
             var track = (inst.trackIdx != null && inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
-            var sioInst;
-            if (inst.type === 'user') {
-                sioInst = new SIO.Instance({ points: pts, skeleton: skeleton, track: track });
-            } else {
-                sioInst = new SIO.PredictedInstance({ points: pts, skeleton: skeleton, track: track, score: inst.score || 0 });
-            }
+            var sioInst = newSioInstance(inst, track);
             lucidToSio.set(inst, sioInst);
             return sioInst;
         }
@@ -2246,7 +2344,6 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
                 var lf = new SIO.LabeledFrame({ video: video, frameIdx: frameIdx, instances: frameInstances });
                 labeledFrames.push(lf);
                 lfByCamera.set(sioCam, lf);
-                lfLookup.set(camIdx + ':' + frameIdx, lf);
             }
         }
         // Handle ungrouped instances for cameras that had no grouped instances
@@ -2264,7 +2361,6 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
                 var ulLf = new SIO.LabeledFrame({ video: ulVideo, frameIdx: frameIdx, instances: ulFrameInsts });
                 labeledFrames.push(ulLf);
                 lfByCamera.set(ulSioCam, ulLf);
-                lfLookup.set(ulCamIdx + ':' + frameIdx, ulLf);
             }
         }
 
@@ -2494,10 +2590,16 @@ export async function buildReprojH5(session) {
         for (var group of groups) {
             var idIdx = group.identityId;
             if (idIdx < 0 || idIdx >= nTracks) continue;
-            if (!group.reprojections) continue;
+            // A group's reprojections are derived and kept only for frames
+            // that have been shown (Triangulate All stores none — see
+            // `sweepTriangulateAllFrames` in pose/triangulation.js), so
+            // project its stored 3D for the rest rather than skipping them.
+            var stored = group.reprojections;
+            if (!stored && points3dNodeCount(group.points3d) === 0) continue;
             for (var ci = 0; ci < nCameras; ci++) {
                 var camName = cameraNames[ci];
-                var reprojPts = group.reprojections[camName];
+                var reprojPts = stored ? stored[camName]
+                    : (cameras[ci].projectionMatrix ? reprojectPointsCamera(group.points3d, cameras[ci]) : null);
                 if (!reprojPts) continue;
                 for (var ni = 0; ni < Math.min(nNodes, reprojPts.length); ni++) {
                     var rpt = reprojPts[ni];
@@ -2724,7 +2826,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=8be1dbca2728', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=f5959d6183d4', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },
