@@ -47,7 +47,13 @@ tree serves correctly from every path. Do not introduce origin-root-relative URL
   concurrency groups, and a merge to `main` starts the `/dev/` deploy and the
   preview cleanup in the same second; a single checkout-then-push lost that race
   so often that 23 merged/closed PRs' previews were left on the live site. Any
-  new step that pushes to `gh-pages` needs the same loop.
+  new step that pushes to `gh-pages` needs the same loop — and must **never
+  force-push**: the preview deploy's `JamesIves/github-pages-deploy-action`
+  force-pushes by default and erased other workflows' commits (#320's and #321's
+  removals), so it runs with `force: false`. The cleanup is triggered by
+  `pull_request_target: closed`, not `pull_request`, because GitHub does not run
+  `pull_request` workflows for a PR with merge conflicts (closing #278 / #286
+  never ran it). It is safe there only because it never checks out PR code.
 
 **Only a full release moves root.** A push to `main` goes to `/dev/` alone; a
 pre-release goes to `/latest/` alone; republishing an older release moves nothing
