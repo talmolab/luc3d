@@ -554,6 +554,31 @@ terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-cor
   pass in both states — so it pins the memory shape, not just current behavior.
   Two patched sites, marked `// LUCID local patch (luc3d #193)`. **Re-apply after
   any re-vendor** (grep the marker) and report upstream.
+  **LOCAL PATCH (luc3d eager-save):** `lib/sleap-io/chunk-X76PRJK6.js`
+  `writeLabeledFrames` — the EAGER writer's 2D tables (`frames`, `instances`,
+  `points`, `pred_points`) — appends through #191's `LucidAppendTable` instead of
+  building one boxed JS row per keypoint and holding every one until
+  `createMatrixDataset`. That is what crashed File ▸ Save of an eagerly-loaded
+  per-camera project: on MultiCam_18 (17 cameras, 34 nodes, 36,000 frames,
+  1,390,390 predictions = 47,273,260 keypoint rows) a prediction's row was
+  ~210 B of V8 heap (`row.push(score)` grows a 4-double array's backing store to
+  22), 7.4 KB per instance. Measured with `tests/e2e/_diag-eager-save-heap.mjs`:
+  the save went from a renderer crash (even with the ungrouped predictions
+  dropped) to **1,133,683,132 bytes in 24 s, peak heap 2,234 MB**; on its first
+  3,000 frames the peak went 1,207 -> 344 MB with every dataset bit-identical
+  (h5py). Same consequences as #191: a table that never fills its buffer is
+  written one-shot and contiguous, so small files are BYTE-IDENTICAL
+  (`save-golden-digest.mjs` must not move); one that overflows becomes chunked.
+  `from_predicted` is resolved by a pre-pass (only when some user instance has
+  one), since a flushed row cannot be patched afterwards. Points are read from
+  the instance's columnar `_xy`/`_visible`/`_complete`/`_score` directly. The
+  boxed `emitInstancePoints` is kept for `SlpStreamWriter`, whose rows are
+  window-bounded. `LucidAppendTable.push` takes 10 values now (was 8). Guarded by
+  `tests/e2e/save-2d-tables-append.mjs` (every value vs the pre-patch row logic,
+  across flush boundaries; its value checks also pass on the pre-patch bundle,
+  only the layout checks fail there). Marked `// LUCID local patch (luc3d
+  eager-save)`. **Re-apply after any re-vendor** (grep the marker) and report
+  upstream.
   **OBSOLETE PATCH (issue #134):** the old inline-points-fallback patch to
   `serializeInstanceGroup` is **gone and must NOT be re-applied.** SLP 2.8 (0.5.5)
   replaced the inline `frame_group_dicts` serializer with the columnar
