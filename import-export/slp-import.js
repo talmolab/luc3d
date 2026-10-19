@@ -8,10 +8,10 @@ import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
     asPoints3d, points3dNodeCount, someValidPoint3d, lazyPlaceholderXY, pooledPoints3d,
+    markPoints3dFromFile,
 } from '../pose/pose-data.js';
 import {
-    reprojectPointsCamera, reprojectPoints, computeReprojectionErrors,
-    storeReprojectedInstances, getInstanceGroupsForFrame,
+    getInstanceGroupsForFrame,
 } from '../pose/triangulation.js';
 import {
     parseSlpH5, parseSlpViaSleapIO, instanceMatchesPoints, parsePoints3dH5, pickFiles,
@@ -34,6 +34,7 @@ import {
 } from '../loading/session-loader.js';
 import { preferNonCalibrationVideos } from '../loading/video-file-pick.js';
 import { readBlobArrayBuffer } from '../loading/cold-read-guard.js';
+import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js';
 import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js';
 import {
     showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
@@ -249,6 +250,7 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
                 // reprojections with DLT and displays DLT's error for BA points,
                 // and `adoptPrior3d` can never match so every regroup re-solves.
                 group.triangulationMethod = (igLucid.triangulationMethod === 'ba') ? 'ba' : 'dlt';
+                markPoints3dFromFile(group.points3d);
             }
 
             groups.push(group);
@@ -446,6 +448,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
                 // reprojections with DLT and displays DLT's error for BA points,
                 // and `adoptPrior3d` can never match so every regroup re-solves.
                 group.triangulationMethod = (igLucid.triangulationMethod === 'ba') ? 'ba' : 'dlt';
+                markPoints3dFromFile(group.points3d);
             }
 
             groups.push(group);
@@ -598,6 +601,7 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
                 // reprojections with DLT and displays DLT's error for BA points,
                 // and `adoptPrior3d` can never match so every regroup re-solves.
                 group.triangulationMethod = (igLucid.triangulationMethod === 'ba') ? 'ba' : 'dlt';
+                markPoints3dFromFile(group.points3d);
             }
 
             groups.push(group);
@@ -933,6 +937,8 @@ export async function handleLoadSlpFile(slpFile) {
             });
         }
 
+        // Whether the session loaded last — the one left active — has 3D.
+        var lastSessionHas3d = false;
         for (var slpSessIdx = 0; slpSessIdx < numSlpSessions; slpSessIdx++) {
         showLoading('Building session ' + (slpSessIdx + 1) + '/' + numSlpSessions + '...');
         await new Promise(function (r) { setTimeout(r, 0); });
@@ -1124,105 +1130,28 @@ export async function handleLoadSlpFile(slpFile) {
         await restoreGroupingAndUnlink(session, slpData, slpSessIdx,
             { onProgress: function (msg) { showLoading(msg); }, batch: BATCH });
 
-        // Recompute reprojections from stored 3D points + calibration
-        if (session.cameras.length >= 2) {
-            var hasAny3d = false;
-            for (var [, groups3d] of session.instanceGroups) {
-                for (var g3d of groups3d) {
-                    if (someValidPoint3d(g3d.points3d)) {
-                        hasAny3d = true;
-                        break;
-                    }
+        // A session's stored 3D is all this load keeps: no reprojections, no
+        // reprojected instances, no per-frame `triangulationResults`. It used
+        // to reproject every group into every camera and score it here — ~75 KB
+        // per frame per animal on a 17-camera, 34-node project, so an eager
+        // 36,000-frame project spent gigabytes of the renderer's ~4 GB heap on
+        // frames nobody had looked at. `ui/rendering.js`'s reprojection fill
+        // now derives a frame's when it is shown, from this same stored 3D
+        // (`reprojectStoredPoints3d`), and keeps at most DERIVED_FRAMES_KEEP
+        // frames' worth. The restore marked every group's 3D as read from the
+        // file (`markPoints3dFromFile`), so the fill reprojects it even with a
+        // reprojection-error threshold set — it never re-solves the file's 3D.
+        var sessionHas3d = false;
+        for (var [, groups3d] of session.instanceGroups) {
+            for (var g3d of groups3d) {
+                if (someValidPoint3d(g3d.points3d)) {
+                    sessionHas3d = true;
+                    g3d.markClean();
                 }
-                if (hasAny3d) break;
-            }
-            if (hasAny3d) {
-                showLoading('Recomputing reprojections from 3D data...');
-                await new Promise(function (r) { setTimeout(r, 0); });
-                var sessTriResults = new Map();
-                for (var [frameIdx3, groups3] of session.instanceGroups) {
-                    var frameTriResults = [];
-                    for (var grp of groups3) {
-                        if (!someValidPoint3d(grp.points3d)) continue;
-                        // Build reprojections from 3D points for each camera
-                        var reprojResult = { reprojections: {}, points3d: grp.points3d };
-                        for (var ci2 = 0; ci2 < session.cameras.length; ci2++) {
-                            var cam2 = session.cameras[ci2];
-                            if (cam2.projectionMatrix) {
-                                // Native (distorted) pixel space to match raw keypoints.
-                                reprojResult.reprojections[cam2.name] = reprojectPointsCamera(grp.points3d, cam2);
-                            }
-                        }
-                        grp.reprojections = reprojResult.reprojections;
-                        storeReprojectedInstances(grp, reprojResult, session.cameras);
-
-                        // `observedPoints` is derived from grp.instances — hoist
-                        // it once, it allocates per access (luc3d #189).
-                        var grpObserved = grp.observedPoints;
-
-                        // Compute per-camera reprojection errors (distorted/native
-                        // pixel space): re-distorted reprojection vs raw observation.
-                        var trErrors = {};
-                        var trTotalErr = 0, trTotalCount = 0;
-                        for (var trCamName in grp.reprojections) {
-                            var trObs = grpObserved[trCamName];
-                            var trRep = grp.reprojections[trCamName];
-                            if (trObs && trRep) {
-                                trErrors[trCamName] = computeReprojectionErrors(trObs, trRep);
-                                for (var ei = 0; ei < trErrors[trCamName].length; ei++) {
-                                    if (trErrors[trCamName][ei] != null) {
-                                        trTotalErr += trErrors[trCamName][ei];
-                                        trTotalCount++;
-                                    }
-                                }
-                            }
-                        }
-
-                        // Undistorted-space errors (mirror triangulateAndReproject
-                        // Step 5): ideal pinhole reprojection vs undistorted
-                        // observation. Without this the Undistorted headline reads
-                        // "-" for groups loaded from an SLP project.
-                        var trErrorsUndist = {};
-                        var trTotalErrU = 0, trTotalCountU = 0;
-                        for (var ciu = 0; ciu < session.cameras.length; ciu++) {
-                            var camU = session.cameras[ciu];
-                            if (!camU.projectionMatrix) continue;
-                            var rawObsU = grpObserved[camU.name];
-                            if (!rawObsU) continue;
-                            var idealRep = reprojectPoints(grp.points3d, camU.projectionMatrix);
-                            var obsUndist = [];
-                            for (var ku = 0; ku < rawObsU.length; ku++) {
-                                obsUndist.push(rawObsU[ku] != null ? camU.undistortPoint(rawObsU[ku]) : null);
-                            }
-                            trErrorsUndist[camU.name] = computeReprojectionErrors(obsUndist, idealRep);
-                            for (var eiu = 0; eiu < trErrorsUndist[camU.name].length; eiu++) {
-                                if (trErrorsUndist[camU.name][eiu] != null) {
-                                    trTotalErrU += trErrorsUndist[camU.name][eiu];
-                                    trTotalCountU++;
-                                }
-                            }
-                        }
-
-                        frameTriResults.push({
-                            group: grp,
-                            points3d: grp.points3d,
-                            reprojections: grp.reprojections,
-                            errors: trErrors,
-                            errorsUndistorted: trErrorsUndist,
-                            meanError: trTotalCount > 0 ? trTotalErr / trTotalCount : null,
-                            meanErrorUndistorted: trTotalCountU > 0 ? trTotalErrU / trTotalCountU : null
-                        });
-
-                        grp.markClean();
-                    }
-                    if (frameTriResults.length > 0) {
-                        sessTriResults.set(frameIdx3, frameTriResults);
-                    }
-                }
-                session.triangulationResults = sessTriResults;
-                console.log('[load-slp] Recomputed reprojections from 3D data (' + sessTriResults.size + ' frames with results)');
             }
         }
+        session.triangulationResults = new Map();
+        lastSessionHas3d = sessionHas3d && session.cameras.length >= 2;
 
         console.log('[load-slp] Session', slpSessIdx, 'name:', session.name,
             'skeleton:', session.skeleton.nodes.length, 'nodes,', session.skeleton.edges.length, 'edges');
@@ -1608,8 +1537,10 @@ export async function handleLoadSlpFile(slpFile) {
         }
 
         // 4. Restore triangulation results for the active session
+        // (nothing is derived yet — the first draw fills the frame on screen —
+        // so whether the active session has 3D, not the map's size, says so)
         state.triangulationResults = (state.session && state.session.triangulationResults) || new Map();
-        if (state.triangulationResults.size > 0) {
+        if (state.triangulationResults.size > 0 || lastSessionHas3d) {
             setReprojErrorVisible(true);
         }
 
@@ -2162,11 +2093,15 @@ export async function handleLoadPoints3dH5() {
                 if (existingGroup) {
                     // Assign 3D points to existing group
                     existingGroup.points3d = pooledPoints3d(pts3d);
+                    markPoints3dFromFile(existingGroup.points3d);
+                    // its reprojections were of the 3D just replaced
+                    dropGroupDerivedReprojections(existingGroup, frameIdx, state.triangulationResults);
                     existingGroup.markClean();
                 } else {
                     // Create a new InstanceGroup with just 3D data
                     var newGroup = new InstanceGroup(Date.now() + frameIdx * 100 + trackIdx, trackIdx); // identityId = trackIdx
                     newGroup.points3d = pooledPoints3d(pts3d);
+                    markPoints3dFromFile(newGroup.points3d);
                     newGroup.markClean();
                     frameGroupsList.push(newGroup);
                 }
