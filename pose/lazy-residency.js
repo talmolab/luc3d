@@ -207,6 +207,25 @@ export function dropDerivedReprojections(session, frameIdx, triangulationResults
 }
 
 /**
+ * Drop ONE group's derived reprojection caches on `frameIdx` — its
+ * reprojections, its reprojected instances and its entry in the frame's
+ * `triangulationResults` — leaving the frame's other groups as they are. For a
+ * path that replaces or re-solves some of a frame's groups' 3D (moving a view
+ * out of a session, importing 3D points): the draw path re-derives the
+ * dropped state from the new 3D when the frame is shown.
+ */
+export function dropGroupDerivedReprojections(group, frameIdx, triangulationResults) {
+    if (!group) return;
+    group.reprojections = null;
+    if (group.reprojectedInstances && group.reprojectedInstances.size) group.reprojectedInstances.clear();
+    var existing = triangulationResults ? triangulationResults.get(frameIdx) : null;
+    if (!existing) return;
+    var kept = existing.filter(function (r) { return r.group !== group; });
+    if (kept.length === 0) triangulationResults.delete(frameIdx);
+    else if (kept.length !== existing.length) triangulationResults.set(frameIdx, kept);
+}
+
+/**
  * Evict every resident frame of a lazy session that is outside the protected
  * windows and provably rebuildable (`frameEvictionBlocker`).
  *

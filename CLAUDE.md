@@ -3,10 +3,10 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 116 modules are grouped into four directories:
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 117 modules are grouped into four directories:
 - `pose/` — data model, cross-view tracking (Track All's tracker on one worker: `tracker-pool.js` + `tracker-worker.js`), DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), Track All's 2D pose check (`pose-check.js` — common / uncommon / outlier, per camera — and its session glue `pose-check-session.js`), the lazy project's playback eviction (`lazy-residency.js`), app initialization (25 files)
 - `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, the node tooltip on hover (`node-tooltip.js` — a node's name and a prediction's per-node score, as SLEAP shows them), plane visibility, browser-specific hints, the macOS tip shown before a folder picker (`folder-confirm-tip.js` — the browser's folder prompt defaults to Cancel, and Tab reaches Upload only with Keyboard navigation on, which no page can read), the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip and the time ruler under it (`seekbar-ticks.js` — major/minor tick steps chosen from the video's length and the bar's width), the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames) and their shade (`TRAIL_SHADES` in `ui/overlays.js`: Very dark … Very light, default Dark, remembered in `localStorage`), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it), Tracks ▸ Check Poses (`pose-check-command.js` — the 2D pose check without tracking) and its Identities section (`identity-gallery.js` — five sample images and a path map per identity), the Track group's Animals field (`animal-count-field.js`), the dialog Track All / Track Frame open on a session's first run (`track-setup-modal.js` — the animal count, with the node weights to review and, on Track All, the image ID-switch check and its options; the weight grid and the image-check section are in the Track Frame Range dialog too), the CPU / GPU load lines and last-minute graph shown by the image check's dialog and by the loading overlay during Triangulate All and Track All (`load-graph.js`), settings, the release shown beside the menu bar's Settings button (`version-label.js`) — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (70 files)
-- `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), web workers (11 files)
+- `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), Blob reads that survive a cloud file still downloading (`cold-read-guard.js`), web workers (12 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
 - `demo-data.js` — synthetic skeleton and camera data
 - `styles.css` — all styling
@@ -100,7 +100,7 @@ number silently. Nothing about the label reaches the `.slp`.
 same command runs `scripts/preload-modules.mjs`, which walks `index.html`'s
 module scripts through every STATIC import (relative specifiers and importmap
 entries) and inserts one `<link rel="modulepreload">` per module right after the
-importmap — every same-site module of the startup graph (111 files) plus the two CDN modules (`yaml`, dockview).
+importmap — every same-site module of the startup graph (114 files) plus the two CDN modules (`yaml`, dockview).
 Without it the browser discovered the graph one import level at a time: six
 sequential round trips, every one a CDN miss on a cold start. And a cold start
 is the ordinary case, not the rare one: every deploy changes every `?v=` URL,
@@ -1925,6 +1925,62 @@ or editing any modal/overlay dialog, wire a `keydown` listener that closes it on
 `Escape` (and removes the listener on close). For a modal mid-operation (e.g. an
 in-progress export), `Esc` should cancel/stop that operation rather than tear the
 modal down. Example: `showExport3DVideoModal` in `ui/export-modals.js`.
+
+## A File in a cloud-synced folder can read back WRONG — read it through the guard
+
+In a Google Drive for desktop folder on macOS (File Provider), a Blob read of a
+part of a file that is not downloaded yet can **fail** (`arrayBuffer()` rejects
+with NotReadableError; a Blob stream errors with `TypeError: network error`) or
+come back with a run of **zeros** and every other byte right. Drive
+fetches a video only in the ranges that are read (a "dataless" 428 MB recording
+held 12.6 MB after a session load), so this is not only the load: every seek
+into a part of a video nobody has looked at yet is such a read.
+
+Measured 2026-10-19 on cold 8-camera sessions of `TalmoLab_extra/Scratch/
+Proofreading/2022-10-07` (every Blob read logged and compared with the disk
+afterwards):
+- **On `main`** (6 sessions, 48 videos, 45,735 reads, 12.0 GB) 31 reads FAILED
+  and none came back zeroed. 2 of 48 cameras lost their frame-accurate decoder
+  at load and stepped by `<video>` seeks for the rest of the session, 3
+  requested frames fell back to a `<video>` seek, and 6 of 848 decoded frames
+  differed from a warm load. 30 of the 31 failed reads succeeded when read
+  again at once.
+- **Through the guard** (3 sessions, 24 videos, 7,189 reads, 7.4 GB) 16 reads
+  failed and 67 came back with their first 64 KiB zeroed — always a read
+  starting on a 1 MiB boundary of the file where nothing was downloaded yet;
+  reading the windows by stream instead (one more session) zeroed 24 the same
+  way. The guard rescued every failure and repaired every run, and no frame
+  differed from the warm load.
+- The `.slp` reads go through h5wasm's WORKERFS, where the zeros came as
+  16 KiB pages; that path has its own `cold-read` patch in lib/h5wasm.
+
+So **read a user's File's bytes through `loading/cold-read-guard.js`**, never
+`file.arrayBuffer()` / `slice().arrayBuffer()` directly. `readBlobRange` retries
+a read that throws (200 ms, 1 s, 3 s) and re-reads every all-zero 4 KiB block,
+using the re-read only when it is non-zero — h5wasm's `lucidColdReadGuard` rule,
+plus the retry. Three rules:
+- **The frame-accurate decoder reads through `fromRangeSource`, not `fromBlob`.**
+  `_initMediabunny` hands sleap-io.js's `MediaBunnyVideoBackend.fromRangeSource`
+  a `guardedRangeSource(file)`; mediabunny's own `BlobSource` cannot be guarded
+  from outside. Going back to `fromBlob` reopens every failure above.
+- **The range source reads whole 1 MiB windows**, not each request. mediabunny
+  asks a `StreamSource` for ~64–192 KiB at a time and a Blob read costs about
+  the same however small: one read per request read packets ~6x slower than
+  `BlobSource` (221 vs 35 ms for 46.7 MB); the windows bring it to 61 vs 29 ms,
+  ~75x what 8 cameras decoding at 60 fps need, with index build and decoding
+  unchanged. Answers are copies, so mediabunny's cache never pins a window.
+- **mp4box's index scan reads through it too** (`readChunk`). Unguarded, a
+  failed scan read silently left the `<video>` estimate (duration x 30 fps) as
+  the frame count and fps, and a zeroed page in the scanned `moov` made mp4box
+  loop on the main thread for good — the tab froze.
+Load 3D Points (`readBlobArrayBuffer`) and the codec diagnosis use it as well.
+**Not covered:** the `<video>` element reads its blob URL natively (playback,
+and stepping only when there is no frame-accurate backend), and the small
+JSON/TOML `.text()` reads fail to parse loudly. Covered by
+`tests/test-cold-read-guard.mjs` (the rule, the windows, and mediabunny's index
+and packets of the B-frame fixture through the guard, against the unguarded
+read) and `tests/e2e/video-cold-read.mjs` (the real decoder with faults injected
+under it; confirmed to fail, and to freeze, on the unguarded build).
 
 ## Native resolution (1:1) — one video pixel per DEVICE pixel
 
