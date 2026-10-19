@@ -36,7 +36,7 @@ const THRESHOLD_DEFAULTS = {
     matchGate: 0,
     autoSwitchCheck: 1,
     autoImageSwitchCheck: 0,
-    imageCheckThreshold: -25,
+    imageChangeThreshold: -0.8,
     imageCheckHz: 2,
     imageCheckMaxViews: 3,
     imageCheckWebNN: 0,
@@ -53,6 +53,17 @@ export function getNodeWeightArray(nodeNames) {
         return (typeof w === 'number' && isFinite(w)) ? Math.max(0, Math.min(1, w)) : 1;
     });
 }
+
+// pose/tracker.js's first-use dialog reads and writes these. The bench never
+// opens it (it passes the animal count straight in), so they only link.
+export function getNodeWeight(name) { return getNodeWeightArray([name])[0]; }
+export function getNodeWeights() {
+    return Object.assign({}, (globalThis.__BENCH && globalThis.__BENCH.nodeWeights) || {});
+}
+export function setNodeWeights() {}
+export function updateNodeWeights() {}
+export function getTrackingThresholdDefs() { return []; }
+export function updateTrackingThresholds() {}
 
 export function getTrackingThreshold(id) {
     const ov = (globalThis.__BENCH && globalThis.__BENCH.thresholds) || {};

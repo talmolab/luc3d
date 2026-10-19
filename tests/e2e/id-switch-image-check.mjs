@@ -10,13 +10,20 @@
  * after one encounter, as in tests/e2e/size-switch-check.mjs. Asserted:
  *  1. Animals of different size: both checks find the swap; the ID Switches tab
  *     lists it ONCE, as "Both", and the timeline carries size (amber) and image (cyan) markers.
- *  2. Animals of IDENTICAL size: only the image check finds it ("Images" row).
- *  3. A cancellable progress dialog, with a playhead line, a percentage, the GPU
- *     running the model with its live load, and a sample of the crops above
- *     Cancel: Esc mid-run stops it, reports "cancelled" and adds no image markers.
+ *  2. Animals of IDENTICAL size: only the image check finds it ("Images" row); the
+ *     size check runs but cannot flag the switch.
+ *  3. A cancellable progress dialog, with a playhead line, a percentage, the CPU
+ *     line over the GPU running the model, each with its live load, a graph of
+ *     both loads to their right (legend keys, labelled axes, its newest points
+ *     equal to the lines, a hover readout), and a sample of the crops above Cancel
+ *     (the model input as given, captioned with its animal's label and camera, a
+ *     new one every 0.4 s while the embedder's list sits still, as it does between
+ *     the CPU's bursts): Esc mid-run stops it, reports "cancelled" and adds no
+ *     image markers.
  *  4. Without a GPU the after-tracking image check (Tracking Wizard) still RUNS,
- *     on the CPU, says so in the dialog, and finds the switch — it used to be
- *     "skipped — needs WebGPU". (The real CPU embedder: tests/e2e/image-check-cpu.mjs.)
+ *     on the CPU, says so in the dialog (and graphs the CPU alone), and finds the
+ *     switch — it used to be "skipped — needs WebGPU". (The real CPU embedder:
+ *     tests/e2e/image-check-cpu.mjs.)
  *  5. The menu item exists, and the after-tracking image check defaults to OFF.
  *
  * Run: node tests/e2e/id-switch-image-check.mjs
@@ -82,8 +89,14 @@ try {
             return { swapFrame, pair: events[SWAP].pair.map(k => 'id_' + k) };
         };
         // Synthetic embedder: per-animal appearance vector + noise, 4 cameras; optional per-frame delay, and
-        // optionally a `device` to report (with busyMs = the time any request was in its delay, and
-        // sampleCrops = one uniform-grey crop per frame, 60 + 60 x the animal, from camera c<frame mod 4>).
+        // optionally a `device` to report (with busyMs = the time any request was in its delay, cpuBusyMs = two
+        // threads busy for that time, and sampleCrops = one uniform-grey crop per frame, 60 + 60 x the animal).
+        // Sample k is animal k mod 3 from camera c<k mod 4>, so the first SAMPLE_CROPS (12) carry 12 different
+        // captions — and only those are kept: the list then sits still, as it does between the CPU's bursts, so
+        // the dialog's crop changes only because the dialog cycles through it. A list that kept rolling made the
+        // crop each 400 ms tick landed on depend on the embedding rate: at ~20 frames a tick the list moved 20
+        // while the dialog's index moved 1, and 21 is a multiple of 3 — the same animal on every tick. (Not
+        // c<frame mod 4>: every frame here is a multiple of 4, so that was always c0.)
         const E = await import('/ui/image-embedder.js');
         const greyCrop = (g) => { const t = new Float32Array(3 * E.INPUT * E.INPUT); E.writeInputTensor(new Uint8ClampedArray(E.CROP * E.CROP).fill(g), t, 0); return t; };
         const CROPS = [0, 1, 2].map(k => greyCrop(60 + 60 * k));
@@ -94,17 +107,18 @@ try {
             const cams = ['c0', 'c1', 'c2', 'c3'];
             let busy = 0, since = 0, active = 0, n = 0; const samples = [];
             const e = { views: cams, getEmbeddings: async (frame, items) => {
-                const it = items[n++ % items.length];
+                const k = n++, it = items[k % items.length];
                 // a cross of keypoints around the centre, so the overlay has something to draw (the fixture skeleton has no edges)
-                samples.push({ tensor: CROPS[it.group._animal], frame, camera: cams[frame % 4], identityId: it.group.identityId,
-                               points: Float32Array.from([112, 112, 150, 112, 74, 112, 112, 150, 112, 74]) });
-                if (samples.length > 12) samples.shift();
+                if (samples.length < E.SAMPLE_CROPS)
+                    samples.push({ tensor: CROPS[it.group._animal], frame, camera: cams[k % cams.length], identityId: it.group.identityId,
+                                   points: Float32Array.from([112, 112, 150, 112, 74, 112, 112, 150, 112, 74]) });
                 if (active++ === 0) since = performance.now();
                 if (delayMs) await new Promise(res => setTimeout(res, delayMs));
                 if (--active === 0) busy += performance.now() - since;
                 return items.map(it => cams.map(cam => ({ camera: cam, vector: Float32Array.from(proto[it.group._animal], v => v + 1.2 * g()) })));
             } };
-            if (device) { e.device = () => device; e.busyMs = () => busy + (active ? performance.now() - since : 0); e.sampleCrops = () => samples; }
+            if (device) { e.device = () => device; e.busyMs = () => busy + (active ? performance.now() - since : 0); e.sampleCrops = () => samples;
+                          e.cpuBusyMs = () => 2 * e.busyMs(); }
             return e;
         };
     });
@@ -163,7 +177,12 @@ try {
     const imgRow = R.find(r => Math.abs(r.frame - fx.swapFrame) <= 60);
     check(!!imgRow && /· images/.test(imgRow.text) && !/Both/.test(imgRow.text), `identical sizes: found by images only ("${imgRow && imgRow.text}")`);
     const st2 = await page.evaluate(() => document.getElementById('statusText').textContent);
-    check(/Check ID Switches: no possible switches.*; Check ID Switches \(images\): 1 possible switch/.test(st2), `status reports each check ("${st2}")`);
+    // With every animal the same size the bone lengths carry no identity, so the size check cannot see the
+    // switch; the cosine of noise-only window means can still dip just past its threshold elsewhere (two
+    // contacts at -1.0 and -1.15 in this fixture), so its count is not asserted — only that it ran.
+    check(/Check ID Switches: (nothing flagged|\d+ possible switch).*; Check ID Switches \(images\): 1 possible switch/.test(st2), `status reports each check ("${st2}")`);
+    const sizeAtSwitch = await page.evaluate((f) => { const r = window.__res.size; return r.flags.filter(x => x.startFrame <= f + 60 && x.frame >= f - 60).length; }, fx.swapFrame);
+    check(sizeAtSwitch === 0, `the size check does not flag the switch itself (${sizeAtSwitch})`);
 
     // ---- 3. cancel mid-run with Esc
     await page.evaluate(async () => {
@@ -181,9 +200,77 @@ try {
     await page.waitForFunction(() => /· load \d+%$/.test(document.querySelector('.id-switch-progress-gpu').textContent), null, { timeout: 10000 });
     const g1 = await gpuLine(), load = +g1.text.match(/load (\d+)%/)[1];
     check(load > 0 && load <= 100 && /other apps/.test(g1.title), `…and its load while embedding, with a tooltip saying what that measures ("${g1.text}")`);
-    // the sample crop: what the embedder was given, drawn and captioned with the animal's CURRENT label and camera
+    // the CPU line, ABOVE the GPU line, and the load graph to the right of both
+    const hw = await page.evaluate(() => {
+        const WIDEST_GPU_LINE = 'GPU: WebGPU, fp16 · load 100%';
+        const q = (c) => document.querySelector('.id-switch-progress ' + c), box = (el) => el.getBoundingClientRect();
+        const cpu = q('.id-switch-progress-cpu'), gpu = q('.id-switch-progress-gpu'), graph = q('.id-switch-progress-graph'), svg = graph.querySelector('svg');
+        const key = (el) => getComputedStyle(el, '::before').backgroundColor;
+        const stroke = (k) => getComputedStyle(svg.querySelector('path.is-' + k)).stroke;
+        // the newest point of each series: the path's last coordinates, in the plot (the <g>'s translate is the inset)
+        const g = svg.querySelector('g'), pad = +g.getAttribute('transform').match(/translate\(0 ([\d.]+)\)/)[1];
+        const plotH = svg.viewBox.baseVal.height - 2 * pad;
+        const newest = (k) => { const m = svg.querySelector('path.is-' + k).getAttribute('d').match(/([\d.]+) ([\d.]+)$/);
+            return m ? { x: +m[1], pct: 100 * (plotH - m[2]) / plotH } : null; };
+        return { cpuText: cpu.textContent, cpuTitle: cpu.title, gpuText: gpu.textContent, cpuHidden: cpu.hidden,
+                 cpuAbove: box(cpu).bottom <= box(gpu).top + 0.5, keys: [cpu.classList.contains('has-series'), gpu.classList.contains('has-series')],
+                 keyColours: [key(cpu), key(gpu)], strokes: [stroke('cpu'), stroke('gpu')],
+                 shown: getComputedStyle(graph).visibility, right: box(svg).left >= Math.max(box(cpu).right, box(gpu).right),
+                 topAligned: Math.abs(box(svg).top - box(cpu).top) <= 3, leftOfCrop: box(svg).right <= box(q('.id-switch-progress-crop')).left,
+                 width: svg.viewBox.baseVal.width, newest: { cpu: newest('cpu'), gpu: newest('gpu') },
+                 gpuOneLine: (() => {   // the widest common line (no adapter name — a named one wraps after its key by design)
+                     const saved = gpu.textContent; gpu.textContent = WIDEST_GPU_LINE;
+                     const one = box(gpu).height < 1.5 * parseFloat(getComputedStyle(gpu).lineHeight);
+                     gpu.textContent = saved; return one; })() };
+    });
+    const cores = await page.evaluate(() => navigator.hardwareConcurrency);
+    const cpuLoad = +((hw.cpuText.match(/load (\d+)%$/) || [])[1]);
+    check(!hw.cpuHidden && hw.cpuAbove && new RegExp('^CPU: ' + cores + ' cores? · load \\d+%$').test(hw.cpuText) && cpuLoad >= 0 && cpuLoad <= 100,
+          `a CPU line ABOVE the GPU line, with the core count and its load ("${hw.cpuText}" over "${hw.gpuText}")`);
+    check(/cores kept busy over the last 5 s by this check/.test(hw.cpuTitle) && /video decoding/.test(hw.cpuTitle), `…with a tooltip saying what it counts ("${hw.cpuTitle}")`);
+    check(hw.shown === 'visible' && hw.right && hw.topAligned && hw.leftOfCrop, 'the load graph sits to the right of both lines, level with them, left of the sample crop');
+    check(hw.gpuOneLine, '…and "GPU: WebGPU, fp16 · load 100%" still fits on one line beside it');
+    {   // the card every progress popup now shares: opaque, the app not greyed out, the CPU line left-justified
+        const st = await page.evaluate(async () => {
+            const { progressCardStyle } = await import('/tests/e2e/fixtures/progress-card.js');
+            const card = document.querySelector('.id-switch-progress');
+            return progressCardStyle(card, card.parentElement, card.querySelector('.id-switch-progress-cpu'));
+        });
+        check(st.ok, 'the dialog is opaque, its backdrop does not grey the app out (but still blocks it), the CPU line is left-justified' +
+              (st.ok ? '' : ' — ' + st.why));
+    }
+    {   // its axes: "100%" / "50%" / "0%" level with what they label, "60 s ago" … "now" under it, each with a tick
+        // pointing out of the plot (fixtures/load-graph-axes.js)
+        const ax = await page.evaluate(async (sel) => (await import('/tests/e2e/fixtures/load-graph-axes.js')).loadGraphAxes(document.querySelector(sel)), '.id-switch-progress-graph');
+        check(ax.ok, `labelled axes with out ticks: ${ax.y.map(l => l.t + ' ' + l.off.toFixed(2) + ' px off').join(', ')}; ${ax.x.map(l => '"' + l.t + '"').join(' … ')} under the plot; ${ax.ticks.length} ticks` + (ax.ok ? '' : ' — ' + ax.why));
+    }
+    check(hw.keys.every(Boolean) && hw.keyColours[0] === hw.strokes[0] && hw.keyColours[1] === hw.strokes[1] && hw.strokes[0] !== hw.strokes[1],
+          `each line wears its series colour as a legend key (CPU ${hw.keyColours[0]}, GPU ${hw.keyColours[1]})`);
+    {   // the graph's newest points are the loads the lines show (same tick), at the right edge
+        const n = hw.newest, gl = +hw.gpuText.match(/load (\d+)%/)[1];
+        check(n.cpu && n.gpu && Math.abs(n.cpu.x - hw.width) < 0.05 && Math.abs(n.gpu.x - hw.width) < 0.05 &&
+              Math.abs(n.cpu.pct - cpuLoad) <= 1 && Math.abs(n.gpu.pct - gl) <= 1,
+              `the graph's newest points, at its right edge, are the lines' loads (CPU ${n.cpu && n.cpu.pct.toFixed(1)}% vs ${cpuLoad}%, GPU ${n.gpu && n.gpu.pct.toFixed(1)}% vs ${gl}%)`);
+    }
+    {   // hovering: a readout of the sample under the pointer; leaving hides it
+        const r = await page.evaluate(() => { const b = document.querySelector('.id-switch-progress-graph svg').getBoundingClientRect(); return { x: b.right - 2, y: b.top + b.height / 2 }; });
+        await page.mouse.move(r.x, r.y);
+        const tip = await page.evaluate(() => { const t = document.querySelector('.load-graph-tip');
+            return { hidden: t.hidden, text: t.textContent, cursor: document.querySelector('.load-graph-cursor').classList.contains('is-on'),
+                     dots: document.querySelectorAll('.load-graph-dot.is-on').length }; });
+        check(!tip.hidden && /^(now|\d+ s ago) · CPU \d+% · GPU \d+%$/.test(tip.text) && tip.cursor && tip.dots === 2,
+              `hovering the graph reads out the sample under the pointer ("${tip.text}"), with a cursor and a dot per series`);
+        await page.mouse.move(5, 5);
+        check(await page.evaluate(() => document.querySelector('.load-graph-tip').hidden && !document.querySelector('.load-graph-cursor.is-on')),
+              '…and leaving it hides the readout and the cursor');
+    }
+    // the sample crop: what the embedder was given, drawn and captioned with the animal's CURRENT label and camera.
+    // Every draw rewrites the caption (assigning textContent replaces its text node even with the same text), so
+    // an observer on it times each new crop.
     const crop = await page.evaluate(async () => {
         const AS = await import('/ui/app-state.js'), el = document.querySelector('.id-switch-progress-crop');
+        const draws = [], mo = new MutationObserver(() => draws.push(performance.now()));
+        mo.observe(el.querySelector('figcaption'), { childList: true });
         const seen = new Set(), ok = [];
         for (let i = 0; i < 6; i++) {
             await new Promise(r => setTimeout(r, 420));
@@ -193,16 +280,23 @@ try {
             ok.push(!!id || id === 0 ? [60, 120, 180].includes(px[0]) && px[0] === px[1] && px[1] === px[2] && /^c[0-3]$/.test(cam) : false);
             seen.add(cap);
         }
+        mo.disconnect();
+        const gaps = draws.slice(1).map((t, i) => t - draws[i]).sort((a, b) => a - b);
         // the skeleton is drawn in the animal's identity colour: the node at (150, 112) is coloured, not grey
         const [name] = el.querySelector('figcaption').textContent.split(' · ');
         const colour = (AS.state.session.identities.find(x => x.name === name) || {}).color;
         const node = el.querySelector('canvas').getContext('2d').getImageData(150, 112, 1, 1).data;
         const hex = '#' + [0, 1, 2].map(i => node[i].toString(16).padStart(2, '0')).join('');
-        return { hidden: el.hidden, has: el.classList.contains('has-crop'), ok, seen: [...seen], aria: el.querySelector('canvas').getAttribute('aria-label'), colour, hex };
+        return { hidden: el.hidden, has: el.classList.contains('has-crop'), ok, seen: [...seen], aria: el.querySelector('canvas').getAttribute('aria-label'), colour, hex,
+                 draws: draws.length, gap: gaps.length ? gaps[gaps.length >> 1] : NaN };
     });
     check(crop.hex === crop.colour, `the skeleton is drawn over the crop in the animal's identity colour (${crop.hex} vs ${crop.colour})`);
-    check(!crop.hidden && crop.has && crop.ok.every(Boolean) && crop.seen.length >= 3 && /^Sample crop: id_\d · c\d$/.test(crop.aria),
-          `a sample crop above Cancel, changing every 0.4 s, drawn as given (${crop.seen.join(' | ')})`);
+    // 6 looks 420 ms apart at a list of 12 different captions: each look is a new one, unless a late tick repeats one
+    const seenCams = new Set(crop.seen.map(c => c.split(' · ')[1]));
+    check(!crop.hidden && crop.has && crop.ok.every(Boolean) && crop.seen.length >= 4 && seenCams.size >= 2 && /^Sample crop: id_\d · c\d$/.test(crop.aria),
+          `a sample crop above Cancel, drawn as given, captioned with its label and camera (${crop.seen.join(' | ')})`);
+    check(crop.draws >= 5 && crop.gap >= 300 && crop.gap <= 600,
+          `…changing every 0.4 s (${crop.draws} crops in 2.5 s, median ${Math.round(crop.gap)} ms apart)`);
     await page.waitForFunction(() => /frame \d/.test(document.querySelector('.id-switch-progress-text').textContent), null, { timeout: 10000 });
     // Embedding is the first 90% of the bar, so frame i of n reads round(90 i / n)%.
     await page.waitForFunction(() => parseInt(document.querySelector('.id-switch-progress-pct').textContent, 10) > 0, null, { timeout: 10000 });
@@ -237,6 +331,13 @@ try {
     const cpuLine = await gpuLine();
     check(cpuLine.warn && cpuLine.text === 'No GPU: running on the CPU (4 workers) — slow' && /no WebGPU/.test(cpuLine.title),
           `without a GPU the dialog says it runs on the CPU, in the warning colour ("${cpuLine.text}")`);
+    const noGpuGraph = await page.evaluate(() => ({ cpu: document.querySelector('.id-switch-progress-cpu').textContent,
+        cpuKey: document.querySelector('.id-switch-progress-cpu').classList.contains('has-series'),
+        gpuKey: document.querySelector('.id-switch-progress-gpu').classList.contains('has-series'),
+        cpuPath: document.querySelector('.id-switch-progress-graph path.is-cpu').getAttribute('d') || '',
+        gpuPath: document.querySelector('.id-switch-progress-graph path.is-gpu').getAttribute('d') || '' }));
+    check(/· load \d+%$/.test(noGpuGraph.cpu) && noGpuGraph.cpuKey && !noGpuGraph.gpuKey && noGpuGraph.cpuPath && !noGpuGraph.gpuPath,
+          `…and graphs the CPU alone: no GPU series, no key on the warning line ("${noGpuGraph.cpu}")`);
     const noGpu = await page.evaluate(async () => { const r = await window.__done;
         return { ok: r && r.image && r.image.ok, status: document.getElementById('statusText').textContent }; });
     R = await rows();

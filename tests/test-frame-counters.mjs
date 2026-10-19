@@ -19,6 +19,12 @@
  * no `_rawInstIndex`, frames with no rows), since those are the cases where a
  * baseline that guessed instead of mirroring would be off.
  *
+ * The EAGER half (every frame resident, no lazy loader) is the second half of
+ * this file: there the count is a per-frame baseline built from the
+ * FrameGroups, kept exact by re-counting the drawn frame into it
+ * (`refreshCountedFrame`) instead of walking every frame on every step. Its
+ * oracle is the plain walk, `countFrameCounters(session, cam, null)`.
+ *
  * Run:  node tests/test-frame-counters.mjs
  */
 import { register } from 'node:module';
@@ -381,6 +387,164 @@ group('a loader that cannot enumerate rows falls back to the resident count');
     eq(c.labeled, FC.countFrameCounters(s, 'c0', null).labeled, 'Labeled Frames = resident count');
     eq(c.triangulated, FC.countFrameCounters(s, 'c0', base).triangulated,
         'Triangulated still covers the whole project (it never needed the store)');
+}
+
+// ===========================================================================
+// EAGER projects: the baseline alone, re-counted at the drawn frame.
+// ===========================================================================
+
+/** A fully-resident session with no lazy loader — what an eager load gives. */
+async function makeEager() {
+    const s = makeSession();
+    await hydrate(s, 0, N_FRAMES);
+    s.lazyLoader = null;
+    return s;
+}
+// The oracle: Labeled Frames / Instances from the old per-step walk (every
+// frame is resident, so it is exact); Triangulated straight off
+// `instanceGroups`. The walk only reaches frames that have a FrameGroup, so it
+// never counted the fixture's 3D-only frame — the baseline does, as it always
+// has on a lazy project. `walkMisses3dOnly` pins that difference.
+const walk = (s, cam) => {
+    const c = FC.countFrameCounters(s, cam, null);
+    let tri = 0;
+    for (const [, gs] of s.instanceGroups) if (gs.some(g => g.points3d)) tri++;
+    return { labeled: c.labeled, instances: c.instances, triangulated: tri };
+};
+{
+    const s = await makeEager();
+    group('eager: the old walk missed a frame with 3D but no 2D; the baseline counts it');
+    const old = FC.countFrameCounters(s, 'c0', null).triangulated;
+    const now = FC.countFrameCounters(s, 'c0', FC.computeFrameCounterBaseline(s, 'c0')).triangulated;
+    ok(!s.frameGroups.has(N_FRAMES + 5) && FC.groupsHaveTriangulation(s.instanceGroups.get(N_FRAMES + 5)),
+        'precondition: frame N+5 has 3D and no FrameGroup');
+    eq(now, old + 1, 'Triangulated now includes the 3D-only frame');
+}
+
+// ---------------------------------------------------------------------------
+group('eager: a baseline built from the FrameGroups counts what the walk counts');
+for (const cam of CAMS) {
+    const s = await makeEager();
+    const base = FC.computeFrameCounterBaseline(s, cam);
+    ok(base.eager === true && base.cams.has(cam), `${cam}: an eager baseline with a camera half`);
+    eqCounts(FC.countFrameCounters(s, cam, base), walk(s, cam), `${cam}: baseline totals = full walk`);
+}
+
+// ---------------------------------------------------------------------------
+group('eager: counting from the baseline walks nothing');
+{
+    const s = await makeEager();
+    const base = FC.computeFrameCounterBaseline(s, 'c0');
+    let walked = 0;
+    const realForEach = s.frameGroups.forEach.bind(s.frameGroups);
+    s.frameGroups.forEach = (fn, thisArg) => { walked++; return realForEach(fn, thisArg); };
+    FC.countFrameCounters(s, 'c0', base);
+    FC.refreshCountedFrame(s, base, 31);
+    eq(walked, 0, 'neither the count nor the re-count iterates the frames');
+}
+
+// ---------------------------------------------------------------------------
+group('eager: an edit on the drawn frame shows once that frame is re-counted');
+{
+    const s = await makeEager();
+    const base = FC.computeFrameCounterBaseline(s, 'c0');
+    base.cams.set('c1', FC.computeLazyCameraBaseline(s, 'c1'));   // a second view's half, from a view switch
+    const before = FC.countFrameCounters(s, 'c0', base);
+    s.addUnlinkedInstance(31, 'c0', new Instance([[1, 2], [3, 4]], null, 'user', 1));
+    // Negative control: until frame 31 is re-counted the baseline cannot know —
+    // proof the count really is the baseline, not a walk in disguise.
+    eqCounts(FC.countFrameCounters(s, 'c0', base), before, 'before the re-count: the old totals');
+    FC.refreshCountedFrame(s, base, 31);
+    eqCounts(FC.countFrameCounters(s, 'c0', base), walk(s, 'c0'), 'after re-counting frame 31: = full walk');
+    eq(FC.countFrameCounters(s, 'c0', base).instances, before.instances + 1, 'Instances +1');
+
+    // One edit, several cameras (grouping does this): every half is re-counted.
+    s.addUnlinkedInstance(31, 'c1', new Instance([[5, 6], [7, 8]], null, 'user', 1));
+    s.addUnlinkedInstance(31, 'c0', new Instance([[5, 6], [7, 8]], null, 'user', 1));
+    FC.refreshCountedFrame(s, base, 31);
+    eqCounts(FC.countFrameCounters(s, 'c0', base), walk(s, 'c0'), 'c0 after a two-camera edit');
+    eqCounts(FC.countFrameCounters(s, 'c1', base), walk(s, 'c1'), 'c1 after a two-camera edit (not the active view)');
+
+    // Un-labeling a frame: remove every c0 instance on frame 31.
+    const fg = s.frameGroups.get(31);
+    fg.instances.delete('c0');
+    if (fg.unlinkedInstances) fg.unlinkedInstances.delete('c0');
+    FC.refreshCountedFrame(s, base, 31);
+    eqCounts(FC.countFrameCounters(s, 'c0', base), walk(s, 'c0'), 'after clearing c0 on frame 31');
+
+    // Re-counting a frame that did not change is a no-op, however often.
+    const now = FC.countFrameCounters(s, 'c0', base);
+    for (let i = 0; i < 5; i++) FC.refreshCountedFrame(s, base, 31);
+    eqCounts(FC.countFrameCounters(s, 'c0', base), now, 're-counting an unchanged frame changes nothing');
+}
+
+// ---------------------------------------------------------------------------
+group('eager: Triangulated follows the drawn frame');
+{
+    const s = await makeEager();
+    const base = FC.computeFrameCounterBaseline(s, 'c2');
+    const groups = s.instanceGroups.get(33);
+    const had3d = FC.groupsHaveTriangulation(groups);
+    for (const g of groups) g.points3d = had3d ? null : new Float64Array(NODES * 3);
+    FC.refreshCountedFrame(s, base, 33);
+    let tri = 0;
+    for (const [, gs] of s.instanceGroups) if (gs.some(g => g.points3d)) tri++;
+    eq(FC.countFrameCounters(s, 'c2', base).triangulated, tri, 'Triangulated = frames with 3D');
+}
+
+// ---------------------------------------------------------------------------
+group('eager: a frame past the end of the baseline arrays');
+{
+    const s = await makeEager();
+    const base = FC.computeFrameCounterBaseline(s, 'c0');
+    const far = N_FRAMES + 500;
+    s.addUnlinkedInstance(far, 'c0', new Instance([[1, 2], [3, 4]], null, 'user', 1));
+    const g = new InstanceGroup(9999, 0);
+    g.points3d = new Float64Array(NODES * 3);
+    s.instanceGroups.set(far, [g]);
+    FC.refreshCountedFrame(s, base, far);
+    eqCounts(FC.countFrameCounters(s, 'c0', base), walk(s, 'c0'), 'the arrays grow and the new frame is counted');
+    let tri = 0;
+    for (const [, gs] of s.instanceGroups) if (gs.some(x => x.points3d)) tri++;
+    eq(FC.countFrameCounters(s, 'c0', base).triangulated, tri, 'and its 3D');
+}
+
+// ---------------------------------------------------------------------------
+group('eager: a sliced build equals a one-shot build');
+{
+    const s = await makeEager();
+    const whole = FC.computeFrameCounterBaseline(s, 'c1');
+    const builder = FC.createFrameCounterBaselineBuilder(s, 'c1');
+    let steps = 0;
+    while (!builder.step(7)) steps++;
+    ok(steps > 10, `the build really was sliced (${steps} steps)`);
+    const a = builder.result.cams.get('c1'), b = whole.cams.get('c1');
+    ok(builder.result.eager, 'eager flag');
+    eq(a.labeledTotal, b.labeledTotal, 'same Labeled total');
+    eq(a.usersTotal, b.usersTotal, 'same Instances total');
+    eqCounts(FC.countFrameCounters(s, 'c1', builder.result), walk(s, 'c1'), 'sliced = full walk');
+}
+
+// ---------------------------------------------------------------------------
+group('eager: a baseline without this camera\'s half falls back to the (exact) walk');
+{
+    const s = await makeEager();
+    const baseC0 = FC.computeFrameCounterBaseline(s, 'c0');
+    eqCounts(FC.countFrameCounters(s, 'c2', baseC0), walk(s, 'c2'), "c0's baseline never answers for c2");
+    eqCounts(FC.countFrameCounters(s, null, baseC0), walk(s, null), 'no active camera');
+}
+
+// ---------------------------------------------------------------------------
+group('refreshCountedFrame leaves a LAZY baseline alone');
+{
+    const s = makeSession();
+    await hydrate(s, 30, 3);
+    const base = FC.computeFrameCounterBaseline(s, 'c0');
+    ok(base.eager === false, 'a lazy baseline is not eager');
+    const snap = JSON.stringify([...base.cams.get('c0').byFrame]) + base.tri.total;
+    s.addUnlinkedInstance(31, 'c0', new Instance([[1, 2], [3, 4]], null, 'user', 1));
+    FC.refreshCountedFrame(s, base, 31);
+    eq(JSON.stringify([...base.cams.get('c0').byFrame]) + base.tri.total, snap, 'unchanged (resident frames are counted live there)');
 }
 
 // ---------------------------------------------------------------------------

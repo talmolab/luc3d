@@ -6,7 +6,7 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline } from './app-state.js';
+import { state, interactionManager, timeline, isViewDocked } from './app-state.js';
 import { points3dNodeCount } from '../pose/pose-data.js';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
@@ -19,13 +19,18 @@ import { isCameraTracked } from './settings.js';
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
 import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js';
+// The toolbar's Animals field shows the ACTIVE session's count. Circular
+// (it reaches pose/tracker.js, which imports this module) — safe for the same
+// reason: the call site is inside drawAllOverlays' body.
+import { syncAnimalCountField } from './animal-count-field.js';
+import { syncNodeTooltipFrame } from './node-tooltip.js';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
 import { editGroupState, finishEditGroup } from './identity-assignment.js';
 import { updateFrameInfo } from './info-panel.js';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
-    countFrameCounters, nonResidentCameraCounts,
+    countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
 } from './frame-counters.js';
 
 // ============================================
@@ -170,6 +175,14 @@ export function getVisibilitySettings() {
 let _lastAuxUpdate = 0;
 const AUX_UPDATE_MS = 100;
 
+// Hard limits on the overlay backing store (luc3d #200). Chrome refuses a
+// canvas past 16384 px on a side or 2^28 px of area, and refuses it SILENTLY:
+// `canvas.width` reads back as the size you asked for, every draw call
+// succeeds, and the pixels come back transparent — so the entire annotation
+// overlay disappears with nothing in the console. Clamped in drawAllOverlays.
+const MAX_OVERLAY_DIM = 16384;
+const MAX_OVERLAY_AREA = 268435456; // 2^28 px
+
 // Lazily compute reprojections for groups that have points3d but no
 // reprojected instances, on frame `fi` (whose groups are `instanceGroups`).
 // Runs for every frame drawAllOverlays draws — during playback the views can
@@ -236,6 +249,10 @@ function fillLazyReprojections(fi, instanceGroups) {
  */
 export function drawAllOverlays(frameIdx, viewFrames) {
     if (!state.session) return;
+
+    // A node tooltip names a node on the frame it was hovered on; on any other
+    // frame that node has moved out from under the pointer.
+    syncNodeTooltipFrame(frameIdx);
 
     // Lazy H5: fetch frame data on demand if not yet loaded
     if (state.session.lazyLoader && !state.session.frameGroups.has(frameIdx)) {
@@ -319,6 +336,11 @@ export function drawAllOverlays(frameIdx, viewFrames) {
     // here rather than only at `enterPlaneMode`, where it would survive until
     // the first mouse move. A no-op when the mode is off.
     applyPlaneModeToolbarLock();
+    // Nothing announces a session change (each load path and the session
+    // switch assign `state.session` themselves), and every one of them ends in
+    // a draw — so the per-session Animals field catches up here. O(1) when the
+    // session and its count are the ones already shown.
+    syncAnimalCountField();
 
     var editGroupTarget = interactionManager ? interactionManager.editGroupTarget : null;
 
@@ -326,8 +348,16 @@ export function drawAllOverlays(frameIdx, viewFrames) {
     // frames), each needing the same lazy reprojection fill — done once each.
     var filledFrames = null;
 
+    // Views not on screen (another camera is solo'd, or the pane was closed)
+    // have detached overlay canvases: skip them. Docking one again creates a
+    // new canvas and redraws (`refreshPaneInteractions`), so nothing stale is
+    // ever shown. With NO view docked, draw them all — the same fallback as
+    // `VideoController._shownViews`.
+    const anyDocked = state.views.some(isViewDocked);
+
     for (const view of state.views) {
         if (!view.overlayCtx || !view.overlayCanvas) continue;
+        if (anyDocked && !isViewDocked(view)) continue;
 
         // This view's frame: during playback, the frame ITS canvas shows
         // (`viewFrames`); otherwise — or if that frame isn't hydrated in a lazy
@@ -344,25 +374,9 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             if (vSelected && (!vGroups || vGroups.indexOf(vSelected) < 0)) vSelected = null;
         }
 
-        // Resize overlay canvas to match zoom level for sharp rendering.
-        // Higher internal resolution at higher zoom keeps sizes constant
-        // in screen pixels: the CSS transform scales the display, and the
-        // increased resolution compensates so drawn sizes don't change.
-        var zs = view.zoom ? view.zoom.scale : 1;
-        var targetW = Math.round(view.videoWidth * zs);
-        var targetH = Math.round(view.videoHeight * zs);
-        if (view.overlayCanvas.width !== targetW || view.overlayCanvas.height !== targetH) {
-            view.overlayCanvas.width = targetW;
-            view.overlayCanvas.height = targetH;
-        }
-
-        // Backing pixels per CSS pixel, for labels (the one screen-relative
-        // size). Derived from the canvas's LAYOUT width times the zoom scale —
-        // deliberately NOT getBoundingClientRect(), which reports the rotated
-        // element's axis-aligned bounding box and so would shrink every label
-        // whenever Video Rotation is non-zero. The zoom factor must stay in:
-        // the backing store already grew by `zs` above, so dropping it would
-        // make labels grow with zoom instead of holding a fixed point size.
+        // The canvas's LAYOUT width — deliberately NOT getBoundingClientRect(),
+        // which reports the rotated element's axis-aligned bounding box and so
+        // would shrink every label whenever Video Rotation is non-zero.
         var cssW = view.overlayCanvas.offsetWidth;
         if (!cssW) {
             // Detached / not laid out yet. Only an explicit px inline width is
@@ -371,6 +385,75 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             var inlineW = view.overlayCanvas.style.width || '';
             if (/px\s*$/.test(inlineW)) cssW = parseFloat(inlineW) || 0;
         }
+
+        // Resize the overlay backing store for sharp rendering under zoom.
+        //
+        // The wrapper's CSS transform magnifies this canvas by `zs`, so what
+        // governs sharpness is backing pixels per SCREEN pixel. Supersampling by
+        // the full `zs` held that constant — but it grew the canvas as zs^2 while
+        // the cell still shows only a cell-sized WINDOW onto it, so at zs=10 on a
+        // 1280x1024 view it allocated 12800x10240 (524 MB) to display ~283x226
+        // (luc3d #200). Off a GPU-accelerated 2D canvas that is enough to drop a
+        // node drag from 120 to 74 fps, which is what the issue reports.
+        //
+        // So bound the supersample by what the display can actually resolve,
+        // never below the video's own resolution. `ss === zs` whenever the cell
+        // is wide enough to need it, so an unzoomed view is byte-for-byte what it
+        // was before this change.
+        //
+        // OVERLAY_QUALITY is backing pixels per screen pixel, and the floor of 2
+        // is not cosmetic: nodes and edges are vector shapes whose smoothness
+        // comes from this ratio. A cell showing a 1280px video in 283px was
+        // supersampling 4.5x for free (it is downscaling), so dropping straight
+        // to 1:1 on a non-retina display made circles visibly chunkier the moment
+        // you zoomed. 2x holds normal anti-aliasing on every display.
+        var OVERLAY_QUALITY = Math.max(2, window.devicePixelRatio || 1);
+        var zs = view.zoom ? view.zoom.scale : 1;
+        var ss = zs;
+        if (cssW > 0) {
+            // QUANTIZED to 1/4 steps, and that is not a detail. `ss` depends on
+            // `cssW`, which the old `ss = zs` did not — so without this a pane
+            // SASH DRAG (cssW changing by a pixel per frame) reallocates the
+            // whole backing store on every redraw, which the old code never did
+            // at any zoom. Measured at zoom 8 with canvas acceleration off: 59
+            // reallocations over a 60-step drag, 3.49 ms per redraw against 0.32
+            // unzoomed. Rounded UP so quantizing can never drop quality below
+            // what OVERLAY_QUALITY asks for.
+            var want = (OVERLAY_QUALITY * cssW * zs) / view.videoWidth;
+            ss = Math.min(zs, Math.max(1, Math.ceil(want * 4) / 4));
+        }
+
+        // Correctness backstop, NOT a budget one. Past Chrome's canvas limits the
+        // allocation reports the size you asked for and every draw silently
+        // no-ops, so the whole annotation overlay goes blank with no error — the
+        // old `ss = zs` reached that at 2048x1536 video and zoom 10
+        // (20480x15360). The quality bound above normally keeps `ss` far under
+        // this, so the clamp only bites for an unusually wide cell.
+        var vwPx = view.videoWidth || 1;
+        var vhPx = view.videoHeight || 1;
+        ss = Math.min(ss, MAX_OVERLAY_DIM / vwPx, MAX_OVERLAY_DIM / vhPx,
+                      Math.sqrt(MAX_OVERLAY_AREA / (vwPx * vhPx)));
+
+        // `Math.floor`, not `round`: rounding up at the clamp is what would put
+        // the canvas back over the limit it was just clamped to.
+        var targetW = Math.max(1, Math.floor(view.videoWidth * ss));
+        var targetH = Math.max(1, Math.floor(view.videoHeight * ss));
+        if (view.overlayCanvas.width !== targetW || view.overlayCanvas.height !== targetH) {
+            view.overlayCanvas.width = targetW;
+            view.overlayCanvas.height = targetH;
+        }
+
+        // Node radii and line widths are expressed in BACKING pixels and drawn
+        // unscaled, which is what held them at a constant on-screen size while
+        // the backing store tracked `zs` exactly. Now that it does not, they have
+        // to be scaled by the ratio actually used or they grow with zoom.
+        // Labels need no such term: `labelDisplayScale` below is derived from the
+        // real `targetW`, so it self-corrects.
+        var overlaySizeScale = zs > 0 ? ss / zs : 1;
+
+        // Backing pixels per CSS pixel, for labels (the one screen-relative
+        // size). The zoom factor must stay in the denominator: dropping it would
+        // make labels grow with zoom instead of holding a fixed point size.
         var displayW = cssW * zs;
         var labelDisplayScale = displayW > 0 ? targetW / displayW : 1;
 
@@ -408,6 +491,7 @@ export function drawAllOverlays(frameIdx, viewFrames) {
         drawFrameOverlays(view.overlayCtx, view.name, overlayFrameGroup, vGroups, state.session, {
             colorByIdentity: state.colorByIdentity,
             trailLength: state.trailLength,
+            trailShade: state.trailShade,
             // NOT vis.showLegend: the live legend is pane chrome now
             // (`syncViewLegends`, below), because anything painted on this
             // canvas rotates with the view. `drawFrameOverlays` keeps the
@@ -427,6 +511,9 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             canvasHeight: view.overlayCanvas.height,
             labelDisplayScale: labelDisplayScale,
             labelRotation: labelRotation,
+            // Backing store no longer tracks `zs` exactly (luc3d #200); 1 at
+            // zoom 1, so an unzoomed view draws exactly as it did.
+            overlaySizeScale: overlaySizeScale,
             selectedInstanceGroup: vSelected,
             selectedReprojected: interactionManager ? interactionManager.selectedReprojected : false,
             selectedNodeIdx: selectedNodeIdx,
@@ -458,10 +545,11 @@ export function drawAllOverlays(frameIdx, viewFrames) {
 
     // Update info panel with current frame stats + the timeline playhead.
     // During playback these are THROTTLED to ~10 Hz: `updateFrameInfo` rebuilds
-    // info-panel DOM and re-aggregates reprojection errors, and
-    // `timeline.setCurrentFrame` does a full timeline-canvas `redraw()` — both
-    // per frame. A human can't read either at playback speed, and doing them
-    // every frame is a major per-frame cost that caps buffered playback fps.
+    // info-panel DOM and re-aggregates reprojection errors per frame — a human
+    // can't read it at playback speed, and doing it every frame is a major
+    // per-frame cost that caps buffered playback fps. (`timeline.setCurrentFrame`
+    // only moves the playhead element now, ui/timeline.js, so it is cheap; it
+    // shares the throttle because it always has.)
     // The skeleton overlays + video above still update every frame, so tracking
     // stays smooth and frame-accurate; only these two auxiliary updates coalesce.
     // When paused (seek/step) they always run so the panel/playhead are exact.
@@ -469,8 +557,6 @@ export function drawAllOverlays(frameIdx, viewFrames) {
     if (!state.isPlaying || (_auxNow - _lastAuxUpdate) >= AUX_UPDATE_MS) {
         _lastAuxUpdate = _auxNow;
         updateFrameInfo(frameIdx, instanceGroups);
-        // While playing, only the playhead moves: let the timeline blit its
-        // cached track/marker layer instead of a full redraw (ui/timeline.js).
         if (timeline) timeline.setCurrentFrame(frameIdx, state.isPlaying ? { playback: true } : undefined);
     }
 }
@@ -503,11 +589,15 @@ function counterCamera() {
 
 /**
  * Give `baseline` a camera half for `cam` if it has none — synchronously, since
- * without it the count would be the resident window, the very number this
- * replaces. Once per view per session, or after a bulk change dropped it.
+ * without it a lazy count would be the resident window, the very number this
+ * replaces, and an eager one a walk of every frame on every step. Once per view
+ * per session, or after a rebuild dropped it. Not for a lazy loader that cannot
+ * enumerate rows: it has no camera half to build.
  */
 function ensureCameraHalf(session, baseline, cam) {
-    if (!cam || !session.lazyLoader || baseline.cams.has(cam)) return;
+    if (!cam || baseline.cams.has(cam)) return;
+    var loader = session.lazyLoader;
+    if (loader && typeof loader.forEachInstanceRow !== 'function') return;
     var half = computeLazyCameraBaseline(session, cam);
     if (half) baseline.cams.set(cam, half);
 }
@@ -517,9 +607,9 @@ function renderFrameCounters(session, activeCam, baseline) {
     var labeledEl = document.getElementById('statusLabeledFrames');
     var triangulatedEl = document.getElementById('statusTriangulatedFrames');
     var instancesEl = document.getElementById('statusInstances');
-    if (labeledEl) labeledEl.textContent = 'Labeled Frames: ' + c.labeled;
-    if (instancesEl) instancesEl.textContent = 'Instances: ' + c.instances;
-    if (triangulatedEl) triangulatedEl.textContent = 'Triangulated: ' + c.triangulated;
+    if (labeledEl) labeledEl.textContent = 'Labeled Frames: ' + c.labeled.toLocaleString('en-US');
+    if (instancesEl) instancesEl.textContent = 'Instances: ' + c.instances.toLocaleString('en-US');
+    if (triangulatedEl) triangulatedEl.textContent = 'Triangulated: ' + c.triangulated.toLocaleString('en-US');
 }
 
 function requestCounterRebuild() {
@@ -555,7 +645,14 @@ function runCounterRebuild() {
         var prev = _counterBaselines.get(session);
         var next = builder.result;
         next.loader = session.lazyLoader;
-        if (prev && prev.loader === next.loader) {
+        if (prev && prev.loader === next.loader && next.eager) {
+            // Eager: the other views' halves are DROPPED, each rebuilt (one
+            // walk, ~10 ms on 36,000 frames x 17 cameras) when its view is next
+            // active. A rebuild follows an edit or a bulk change, and on an
+            // eager project nothing cheap can tell which: every frame is
+            // resident, so `nonResidentCameraCounts` says nothing.
+            next.lastFrame = prev.lastFrame;
+        } else if (prev && prev.loader === next.loader) {
             next.lastFrame = prev.lastFrame;
             // The other views' halves can only be behind on frames that changed
             // while NOT resident — a bulk operation. If this view's own
@@ -577,6 +674,7 @@ function runCounterRebuild() {
         _counterBaselines.set(session, next);
         var shownCam = counterCamera();   // the view may have changed mid-build
         ensureCameraHalf(session, next, shownCam);
+        refreshCountedFrame(session, next, state.currentFrame);   // an edit made mid-build
         renderFrameCounters(session, shownCam, next);
         if (_counterRebuild.again) requestCounterRebuild();
     };
@@ -590,8 +688,12 @@ function runCounterRebuild() {
  * On a lazy project most frames are not resident, so the count is the live
  * count of the resident frames plus a cached whole-project baseline for the
  * rest (`countFrameCounters`) — O(resident frames) per call, like the
- * resident-only count it replaced. Building the baseline is a walk of every
- * frame's groups (~100 ms on a 108,000-frame x 8-camera project), so:
+ * resident-only count it replaced. On an eager project every frame is resident,
+ * so that would be a walk of the whole project per step (~10 ms at 36,000
+ * frames x 17 cameras); there the count is the baseline alone, kept exact by
+ * re-counting the drawn frame into it each call (`refreshCountedFrame`) — O(1).
+ * Building the baseline is a walk of every frame's groups (~100 ms on a
+ * 108,000-frame x 8-camera project), so:
  *
  * - It is built SYNCHRONOUSLY only when there is none: the first update of a
  *   session (or after its lazy loader changes), and the first time a view
@@ -604,7 +706,8 @@ function runCounterRebuild() {
  *   dirty). A redraw on a NEW frame is navigation, which changes no data:
  *   stepping and scrubbing cost no whole-project work at all.
  * - An edit to the current frame needs no rebuild to show: the current frame is
- *   resident, and resident frames are always counted live.
+ *   resident, and resident frames are always counted live (on an eager
+ *   project, re-counted into the baseline).
  */
 export function updateFrameCounters() {
     var session = state.session;
@@ -624,6 +727,9 @@ export function updateFrameCounters() {
     } else {
         ensureCameraHalf(session, baseline, activeCam);
     }
+    // Eager: re-count the drawn frame into the baseline (O(1); a no-op on a
+    // lazy project, whose resident frames are counted live).
+    refreshCountedFrame(session, baseline, state.currentFrame);
     renderFrameCounters(session, activeCam, baseline);
 
     var sameFrame = baseline.lastFrame === state.currentFrame;

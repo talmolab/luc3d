@@ -6,6 +6,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Multi-View Pose Proofreader</title>
+    <!-- The build this copy is: empty here, filled in the DEPLOYED copy by
+         scripts/stamp-version.mjs and shown beside Settings by ui/version-label.js. -->
+    <meta name="lucid-release" content="">
+    <meta name="lucid-commit" content="">
     <link rel="stylesheet" href="styles.css">
     <!-- Pinned: dockview-core 7.x renamed api.onUnhandledDragOverEvent →
          onUnhandledDragOver, so the unpinned /+esm import broke pane docking
@@ -13,12 +17,12 @@
          import in ui/sessions-panes.js. -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/dockview-core@6.6.1/dist/styles/dockview.css">
     <!-- MP4 demuxing -->
-    <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.js"></script>
     <!-- Three.js for 3D viewport (v0.147 is the last version with examples/js/) -->
-    <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
     <!-- h5wasm for in-browser HDF5 read/write — local vendored 0.10.3 IIFE (global `h5wasm`); see lib/h5wasm/PROVENANCE.txt -->
-    <script src="./lib/h5wasm/h5wasm.iife.js"></script>
+    <script defer src="./lib/h5wasm/h5wasm.iife.js"></script>
     <!-- Video encode AND decode both go through mediabunny (importmap below):
          export via ui/video-encode.js, decode via sleap-io.js's backend. -->
     <!-- Import map for sleap-io.js ESM dependencies -->
@@ -26,7 +30,7 @@
     {
         "imports": {
             "h5wasm": "./lib/h5wasm/hdf5_hl.js",
-            "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js",
+            "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/+esm",
             "mediabunny": "./lib/mediabunny/mediabunny.min.mjs",
             "pako": "./lib/pako/pako.esm.mjs"
         }
@@ -36,18 +40,32 @@
 
 <body>
     <div class="app-container">
-        <!-- Loading overlay -->
+        <!-- Loading overlay (ui/loading-overlay.js): an opaque card styled like the image ID-switch check's
+             dialog, on a transparent layer that still blocks the app while an operation runs -->
         <div class="loading-overlay" id="loadingOverlay">
-            <div class="spinner" id="loadingSpinner"></div>
-            <div id="loadingStatus">Initializing...</div>
-            <div class="loading-eta hidden" id="loadingEta" aria-live="off"></div>
-            <!-- Determinate progress (ui/loading-overlay.js showLoadingProgress) -->
-            <div class="loading-progress hidden" id="loadingProgress" role="progressbar"
-                 aria-labelledby="loadingStatus" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-                <div class="loading-progress-fill" id="loadingProgressFill"></div>
+            <div class="loading-card" role="status" aria-labelledby="loadingTitle loadingStatus">
+                <h3 class="loading-title hidden" id="loadingTitle"></h3>
+                <!-- the spinner shows for a message with no progress bar (showLoading) -->
+                <div class="loading-line"><div class="spinner" id="loadingSpinner"></div><div id="loadingStatus">Initializing...</div></div>
+                <div class="loading-eta hidden" id="loadingEta" aria-live="off"></div>
+                <!-- Determinate progress (showLoadingProgress): the track clips the fill, the bar does not,
+                     so the playhead stands proud of it -->
+                <div class="loading-progress hidden" id="loadingProgress" role="progressbar"
+                     aria-labelledby="loadingStatus" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                    <div class="loading-progress-track"><div class="loading-progress-fill" id="loadingProgressFill"></div></div>
+                    <div class="loading-progress-head" id="loadingProgressHead"></div>
+                </div>
+                <div class="loading-pct hidden" id="loadingPct"></div>
+                <div class="loading-substatus hidden" id="loadingSubstatus"></div>
+                <!-- How busy the operation keeps the CPU: a line + a graph (setLoadingCpu) -->
+                <div class="loading-hw hidden" id="loadingHardware">
+                    <div class="load-line is-cpu" id="loadingCpu"></div>
+                    <div id="loadingGraph"></div>
+                </div>
+                <!-- Brave hiding the real core count: what to do (ui/browser-hints.js) -->
+                <div class="progress-hint" id="loadingBraveHint" hidden></div>
+                <div class="loading-actions"><button class="btn" id="loadingDismiss" data-dismiss="true" style="display:none;">Dismiss</button></div>
             </div>
-            <div class="loading-substatus hidden" id="loadingSubstatus"></div>
-            <button class="btn" id="loadingDismiss" data-dismiss="true" style="display:none;margin-top:12px;">Dismiss</button>
         </div>
 
         <!-- Tracker progress overlay -->
@@ -140,14 +158,8 @@
                     <div class="menu-dropdown-item has-submenu" id="menuTrailsParent">
                         <span>Node Trails</span>
                         <span class="submenu-arrow">▶</span>
-                        <div class="menu-dropdown submenu" id="menuTrailsSubmenu">
-                            <div class="menu-dropdown-item" id="menuTrailsOff"><span><span class="trail-check">✓</span>Off</span></div>
-                            <div class="menu-dropdown-item" id="menuTrails10"><span><span class="trail-check"></span>10 frames</span></div>
-                            <div class="menu-dropdown-item" id="menuTrails50"><span><span class="trail-check"></span>50 frames</span></div>
-                            <div class="menu-dropdown-item" id="menuTrails100"><span><span class="trail-check"></span>100 frames</span></div>
-                            <div class="menu-dropdown-item" id="menuTrails250"><span><span class="trail-check"></span>250 frames</span></div>
-                            <div class="menu-dropdown-item" id="menuTrails500"><span><span class="trail-check"></span>500 frames</span></div>
-                        </div>
+                        <!-- Items built from TRAIL_PRESETS (Length) and TRAIL_SHADES (Shade) in ui/ui-wiring.js, like the toolbar's Trails menu. -->
+                        <div class="menu-dropdown submenu" id="menuTrailsSubmenu" role="menu"></div>
                     </div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuTrackingWizard">Tracking Wizard...</div>
@@ -162,6 +174,11 @@
                             class="shortcut-hint">Ctrl/Cmd+J</span></div>
                     <div class="menu-dropdown-item" id="menuToggleInfo">Toggle Info Panel <span
                             class="shortcut-hint">I</span></div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuNativeResolution"
+                        title="Show each video at one video pixel per screen pixel, with no scaling"><span><span
+                                class="trail-check"></span>Native Resolution (1:1)</span> <span
+                            class="shortcut-hint">Shift+0</span></div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuResetView">Reset 3D View</div>
                     <div class="menu-dropdown-item" id="menuFitScene">Fit 3D to Scene</div>
@@ -185,6 +202,9 @@
                 title="Open the LUCID documentation in a new tab">Docs</div>
             <div class="menu-item menu-bar-button" id="menuBarSettings"
                 title="Settings: default triangulation, keyboard shortcuts, Tracking Wizard">Settings</div>
+            <!-- The deployed release (v1.0.5 on the live page), from the <meta> tags
+                 above. Hidden in a working tree, where nothing was stamped. -->
+            <div class="menu-bar-version" id="menuBarVersion" hidden></div>
         </div>
 
         <!-- Toolbar -->
@@ -217,6 +237,16 @@
                 <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             </div>
             <div class="toolbar-group">
+                <!-- The animal count every tracking run uses. Before this it was
+                     visible only in the first-use prompt, so a user who forgot
+                     what they typed had no way to find out. Blank = auto-detect.
+                     Wired in ui/ui-wiring.js (wireAnimalCountField). FIRST in the
+                     group: the setting before the actions that use it, and
+                     after Track All it read as "Track All Animals". -->
+                <label class="toolbar-field" title="Number of animals to track. Leave blank to auto-detect it from the most instances seen in one view.">Animals
+                    <input type="number" id="tbNumAnimals" min="1" step="1" inputmode="numeric"
+                        placeholder="auto" autocomplete="off" aria-label="Number of animals">
+                </label>
                 <div class="tri-dropdown" id="trackFrameDropdown">
                     <button class="toolbar-btn" id="tbTrackFrame" title="Track current frame (Shift+T)">Track Frame <span class="tri-caret">▾</span></button>
                     <div class="tri-dropdown-menu">
@@ -235,11 +265,12 @@
                 <button class="toolbar-btn active" id="colorByTracks" title="Color instances by track">Tracks</button>
                 <button class="toolbar-btn" id="colorById" title="Color instances by identity">Identity</button>
             </div>
-            <!-- Node Trails (issue #102). Same presets and state as Tracks ▸ Node
-                 Trails; the items are built from that one list in ui/ui-wiring.js.
+            <!-- Node Trails (issue #102). Same lengths, shades and state as Tracks ▸
+                 Node Trails; the items are built from those lists in ui/ui-wiring.js.
                  Opens on hover, like the Triangulate menus. The label stays a bare
                  "Trails" (the value is the menu's checkmark and the tooltip) to
-                 save toolbar width. -->
+                 save toolbar width; the button turns blue (.active) while a
+                 trail is on. -->
             <div class="toolbar-group">
                 <div class="tri-dropdown" id="trailsDropdown">
                     <button class="toolbar-btn" id="tbTrails" aria-haspopup="menu"
@@ -1330,8 +1361,13 @@
                 <div class="seekbar-track">
                     <div class="seekbar-progress" id="seekbarProgress"></div>
                 </div>
+                <!-- Time ruler under the track (ui/seekbar-ticks.js) -->
+                <div class="seekbar-ruler" id="seekbarRuler" aria-hidden="true"></div>
                 <!-- Possible-ID-switch ticks (ui/seekbar-markers.js) -->
                 <div class="seekbar-marks" id="seekbarMarks"></div>
+                <!-- Hover line at the frame a click would land on (ui/seekbar-tooltip.js):
+                     after the marks, before the thumb, so it paints between the two -->
+                <div class="seekbar-hover-line" id="seekbarHoverLine" hidden></div>
                 <div class="seekbar-thumb" id="seekbarThumb"></div>
             </div>
 
