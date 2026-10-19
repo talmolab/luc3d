@@ -15881,6 +15881,25 @@ exports via the eager path; partially-resident refuses and says so).
   reload — the canonical `identity_idx`/`ig.identity` resolve against the file-level
   concat and mis-scope for multi-session files). The file-level `identities_json` is
   a cross-session concatenation, NOT the per-session source of truth on reload.
+  **Its 2D instances come from `makePooledSioInstances(SIO, skeleton, numNodes)`**
+  (exported), not `new SIO.Instance({ points: _buildSioPoints(...) })`. That
+  construction cost ~0.93 KB of V8 heap per 2D instance, held for the whole save
+  (1,289 MB on the 17-camera MultiCam_18 recording, 1,390,390 instances): a
+  17-field object, four typed arrays with an ArrayBuffer each, and a `_names`
+  array of `undefined`s (the point objects carry no `name`, so `_ingest` built a
+  per-instance override). The factory writes the same values straight into
+  pooled column chunks (`SIO_POOL_CHUNK_POINTS` = 65,536 keypoints) and returns
+  `Object.create(prototype)` with `track`, `score`, its chunk and offset; the
+  prototype inherits from the real `SIO.Instance` / `SIO.PredictedInstance`,
+  copies every field default from a real `new` instance (so a field a future
+  sleap-io.js adds keeps its default), and serves `_xy` / `_visible` /
+  `_complete` / `_score` as getters returning a view of the slice — what the
+  vendored writer's `emitInstancePointsInto` reads. A `points =` assignment
+  gives that one instance its own columns. Measured on that recording: retained
+  1,289 → 298 MB; the real File ▸ Save's peak 2,146 → 1,057 MB (build 5.1 → 1.6 s), every
+  dataset bit-identical (h5py).
+  Pinned against the old construction — every column, score, default, and the
+  saved bytes — by `tests/test-sio-pooled-instances.js`.
 - Skeleton validation: `findSkeletonMismatch(selections)` — returns `null` when
   all selected sessions share a skeleton (node count + names, in order),
   otherwise a human-readable mismatch message. Pure (no SleapIO); used both to
