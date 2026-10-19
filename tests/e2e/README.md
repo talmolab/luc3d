@@ -128,6 +128,20 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
   onto the next camera along; removing the solo'd view itself (c) closed the
   only pane and left the dock empty. Every behavioural assertion was confirmed
   to fail on the pre-fix build.
+- **`fragmented-mp4-load.mjs`** — a FRAGMENTED MP4 (campy's default output)
+  loads whole. `_initMp4box` stopped at mp4box's `onReady`, which fires on the
+  empty moov, so only the first chunk's fragments were counted (a 1,200-frame
+  60 fps rig video: 420 frames at 21 fps in HTML5 mode; 1,200 frames but
+  `state.fps` 30 with mediabunny). Loads
+  `tests/fixtures/fragmented-60/fragmented-60.mp4` (1,200 barcode frames at
+  60 fps, campy's muxer flags) with small read sizes, in HTML5 and mediabunny
+  modes, and asserts the frame count, the fps, `updateTotalFrames`' fps, that
+  mdat payloads were skipped while mp4box held no earlier chunk, frames past
+  the first chunk by barcode, that a copy cut off mid-fragment counts only the
+  frames whose bytes are in the file (1,165, as ffprobe decodes), and that a
+  regular MP4 does no fragment scan. `RIG_VIDEO=<path>` (HEVC: with
+  `CHANNEL=chrome`) also loads a real recording. Fails 8 checks on the pre-fix
+  build.
 - **`info-panel-many-tracks.mjs`** — the Instances panel must not cost
   O(rows x tracks) per update. Its Track `<select>`s are rebuilt on every
   `updateFrameInfo` (~10 Hz in playback), and each used to hold an `<option>`

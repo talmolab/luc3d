@@ -30,6 +30,7 @@ import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { answerTrackSetup } from './fixtures/track-setup.js';
 import fs from 'node:fs';
 import { acquireBrowserLock } from '../../scripts/browser-lock.mjs';
 
@@ -64,6 +65,7 @@ try {
     page.on('pageerror', e => log('pageerror: ' + String(e).slice(0, 300)));
     page.on('console', m => { const t = m.text(); if (/\[ID switches|\[image-embedder|\[diag\]/.test(t)) log('console: ' + t.slice(0, 400)); });
     page.on('dialog', d => d.accept(NANIMALS));
+    await answerTrackSetup(page, NANIMALS);   // Track All's first-use dialog (animal count)
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     await page.evaluate(async (gate) => {
@@ -73,7 +75,7 @@ try {
         inp.type = 'file'; inp.multiple = true; inp.webkitdirectory = true; inp.id = '__dir';
         inp.style.cssText = 'position:fixed;left:-9999px';
         document.body.appendChild(inp);
-        // Continue/OK confirmations (Track All's animal count is a window.prompt: page.on('dialog'))
+        // Continue/OK confirmations (Track All's animal count is answered by answerTrackSetup, first)
         setInterval(() => {
             for (const b of document.querySelectorAll('button')) {
                 const t = b.textContent.trim();

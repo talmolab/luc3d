@@ -3,9 +3,9 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 110 modules are grouped into four directories:
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 115 modules are grouped into four directories:
 - `pose/` — data model, cross-view tracking (Track All's tracker on one worker: `tracker-pool.js` + `tracker-worker.js`), DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), Track All's 2D pose check (`pose-check.js` — common / uncommon / outlier, per camera — and its session glue `pose-check-session.js`), the lazy project's playback eviction (`lazy-residency.js`), app initialization (25 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, the node tooltip on hover (`node-tooltip.js` — a node's name and a prediction's per-node score, as SLEAP shows them), plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip and the time ruler under it (`seekbar-ticks.js` — major/minor tick steps chosen from the video's length and the bar's width), the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames) and their shade (`TRAIL_SHADES` in `ui/overlays.js`: Very dark … Very light, default Dark, remembered in `localStorage`), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it) and its Identities section (`identity-gallery.js` — five sample images and a path map per identity), the Track group's Animals field (`animal-count-field.js`), the CPU / GPU load lines and last-minute graph shown by the image check's dialog and by the loading overlay during Triangulate All and Track All (`load-graph.js`), settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (66 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, the node tooltip on hover (`node-tooltip.js` — a node's name and a prediction's per-node score, as SLEAP shows them), plane visibility, browser-specific hints, the macOS tip shown before a folder picker (`folder-confirm-tip.js` — the browser's folder prompt defaults to Cancel, and Tab reaches Upload only with Keyboard navigation on, which no page can read), the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip and the time ruler under it (`seekbar-ticks.js` — major/minor tick steps chosen from the video's length and the bar's width), the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames) and their shade (`TRAIL_SHADES` in `ui/overlays.js`: Very dark … Very light, default Dark, remembered in `localStorage`), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it) and its Identities section (`identity-gallery.js` — five sample images and a path map per identity), the Track group's Animals field (`animal-count-field.js`), the dialog Track All / Track Frame open on a session's first run (`track-setup-modal.js` — the animal count, with the node weights to review and, on Track All, the image ID-switch check and its options; the weight grid and the image-check section are in the Track Frame Range dialog too), the CPU / GPU load lines and last-minute graph shown by the image check's dialog and by the loading overlay during Triangulate All and Track All (`load-graph.js`), settings, the release shown beside the menu bar's Settings button (`version-label.js`) — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (69 files)
 - `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), web workers (11 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
 - `demo-data.js` — synthetic skeleton and camera data
@@ -47,7 +47,13 @@ tree serves correctly from every path. Do not introduce origin-root-relative URL
   concurrency groups, and a merge to `main` starts the `/dev/` deploy and the
   preview cleanup in the same second; a single checkout-then-push lost that race
   so often that 23 merged/closed PRs' previews were left on the live site. Any
-  new step that pushes to `gh-pages` needs the same loop.
+  new step that pushes to `gh-pages` needs the same loop — and must **never
+  force-push**: the preview deploy's `JamesIves/github-pages-deploy-action`
+  force-pushes by default and erased other workflows' commits (#320's and #321's
+  removals), so it runs with `force: false`. The cleanup is triggered by
+  `pull_request_target: closed`, not `pull_request`, because GitHub does not run
+  `pull_request` workflows for a PR with merge conflicts (closing #278 / #286
+  never ran it). It is safe there only because it never checks out PR code.
 
 **Only a full release moves root.** A push to `main` goes to `/dev/` alone; a
 pre-release goes to `/latest/` alone; republishing an older release moves nothing
@@ -76,6 +82,74 @@ literal and relative — a computed `import(someVar)` or a root-absolute `/x.js`
 would defeat it. Covered by `tests/test-stamp-version.mjs` and
 `tests/e2e/stamped-build.mjs` (stamps the working tree, loads the app — every
 module once — and runs the browser suite on it).
+
+**The same stamp says which build it is.** A third argument,
+`stamp-version.mjs <dir> <commit> <release-label>`, fills the
+`lucid-release` / `lucid-commit` `<meta>` tags in the copy's `index.html`, and
+`ui/version-label.js` shows them right of the menu bar's Settings button. The
+label is the release TAG only when the deployed ref IS one (`github.ref_name`
+matching `vX.Y.Z[-N]`: a release event, or a dispatch with a tag picked), so the
+live page reads `v1.0.5` and `/latest/` its pre-release tag; anything else is
+`dev`, and a PR preview `PR #<n>` — both shown with the commit beside them,
+since `dev` alone cannot tell two deploys apart. The tags are EMPTY in the repo
+(a working tree shows no version rather than a made-up one), and the stamp fails
+the deploy if they are missing, so a refactor of `index.html` cannot drop the
+number silently. Nothing about the label reaches the `.slp`.
+
+**A cold start fetches the whole startup graph AT ONCE.** After stamping, the
+same command runs `scripts/preload-modules.mjs`, which walks `index.html`'s
+module scripts through every STATIC import (relative specifiers and importmap
+entries) and inserts one `<link rel="modulepreload">` per module right after the
+importmap — every same-site module of the startup graph (111 files) plus the two CDN modules (`yaml`, dockview).
+Without it the browser discovered the graph one import level at a time: six
+sequential round trips, every one a CDN miss on a cold start. And a cold start
+is the ordinary case, not the rare one: every deploy changes every `?v=` URL,
+and Cloudflare keeps a GitHub Pages object at the edge only for about the
+origin's `max-age=600` (measured: objects that were HITs came back MISS or
+EXPIRED half an hour later — the 4 hours above is the BROWSER lifetime), so
+anyone whose browser cache is cold pays it. Three rules:
+- **The list is derived from the files being deployed, never maintained by
+  hand**, so it cannot rot. It reads the STAMPED files, so each preload is the
+  exact URL its importer asks for. A preload under any other URL is a second
+  download that nothing uses, and `stamped-build.mjs` fails on it. R4 in
+  `stamp-version.mjs` also stamps a `modulepreload` link, so the order of the
+  two steps cannot leave one unstamped.
+- **Static imports only.** A dynamic `import()` is lazy on purpose, and a
+  worker is another realm. `stamped-build.mjs` asserts that, by the time the
+  app is ready, it has requested NO same-site module outside the block (besides
+  `index.html`'s own tags) and every preload exactly once — so a new static
+  import that the walker cannot see fails there, not on someone's slow
+  connection.
+- **The block goes after the importmap.** Chrome ignores an importmap that
+  arrives after module loading has started, and a modulepreload starts it.
+
+Two source changes serve the same goal. `yaml` loads as jsdelivr's single-file
+`yaml@2.8.0/+esm` bundle (the same `browser/index.js` entry, prebuilt) instead of
+the ~70-file `browser/index.js` tree, which was its own six-level waterfall on a
+second host. Offline mode maps that URL to the vendored `lib/yaml/browser/index.js`.
+The four head `<script>` tags (mp4box, three, OrbitControls, the h5wasm IIFE) are
+`defer`: they still run in document order and before any module script, so every
+global exists exactly when it used to, but they no longer block the parser, and
+the page paints while they download.
+
+Measured 2026-10-13 through the real Cloudflare path with
+`tests/e2e/_bench-cold-start.mjs`, which makes every load cold by adding a fresh
+`cb=` query to each same-site request in flight. Medians of interleaved runs:
+0.66 s → 0.40 s (24 runs each), and 2.32 s → 0.64 s with 150 ms of emulated
+latency per request (8 each; roughly a VPN). An esbuild bundle of the app
+(111 files → 8) measured 0.38 s and 0.60 s on the same runs, so it was not
+adopted here: the only case it wins is a per-REQUEST stall (simulated: one 5 s
+stall in every ~100 requests leaves the preloaded build waiting on one in most
+loads, while 8 requests rarely draw one). Such stalls are real: in one 7 s
+window, four consecutive cold loads of both builds each had exactly ONE of 113
+requests take 1.4–2.4 s, at Cloudflare's edge rather than GitHub's (cache HITs
+and TLS handshakes stall too, on other sites behind the same Cloudflare IPs,
+while GitHub Pages fetched directly stayed under 0.2 s). modulepreload does not
+help with those; fewer requests (bundling) would, but bundling was decided
+against: it would add a build step and make the deployed app differ from the
+tested source, for a gain that shows up only in those stall episodes.
+`h5wasm.iife.js` (~1 MB compressed, a page global read by several main-thread
+paths and e2e tests) is now the largest single item on the critical path.
 
 **Root is the only target that wipes — two rules keep that safe.** Every other
 channel owns its folder and can only damage itself, but root's previous output
@@ -296,7 +370,9 @@ terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-cor
   `-bf 3 -g 10`): 18 of 30 frames (60%) decoded wrong before this patch, 0
   after. Fixed by sorting `_frameTimes` ascending by timestamp at the end of
   `initialize()`, marked `// LUCID local patch (#115)`. **Re-apply after any
-  re-vendor** (grep the marker) and report upstream to sleap-io/mediabunny.
+  re-vendor** (grep the marker). Reported upstream as **sleap-io.js#262** (the
+  bug is sleap-io.js's, not mediabunny's: mediabunny documents decode order);
+  drop this patch once a sleap-io.js release sorts `_frameTimes`.
   Covered by `tests/e2e/mediabunny-bframe-decode-order.mjs`. Its fixture video
   is committed through a `.gitignore` exception (`*.mp4` is otherwise ignored)
   and regenerated — together with its ground-truth PNGs, never separately — by
@@ -314,7 +390,8 @@ terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-cor
   walk, `Object.is` per timestamp and in order, plus backend index == full walk
   sorted; on a generated `-bf 3` B-frame video, and with `DATASET=` on real
   files). Marked `// LUCID local patch (luc3d frame-index)`. **Re-apply after any
-  re-vendor** (grep the marker) and report upstream to sleap-io.js.
+  re-vendor** (grep the marker). Reported upstream as **sleap-io.js#262**; drop
+  this patch once a sleap-io.js release passes `metadataOnly`.
   **LOCAL PATCH (sleap-io.js#231):** `lib/sleap-io/chunk-X76PRJK6.js` writes the
   SLP `instances` table with dtype `"<d"` (h5wasm float64) instead of upstream's
   `"<f8"` — h5wasm does NOT speak numpy dtype strings and parses `"<f8"` as
@@ -1859,10 +1936,11 @@ review and obvious on screen:
 Exact at integer devicePixelRatio (and 1.25/1.5 headless); at e.g. 2.2 Chrome
 resamples regardless, so it is right-SIZED but not exact — say so, don't promise
 it. Whether it is on is DERIVED (`state.nativeResolution` = every shown view at
-1:1) so the menu tick cannot lie, and `initZoom` seeds from it so pane rebuilds
-keep 1:1. The pane badge reads the zoom as a percentage of 1:1
-(`zoomPercentLabel`), and only a view HELD at 1:1 may read exactly "100%" — a
-near miss is still resampled, so it reads "99.8%" / "≈100%". Hovering it offers
+1:1) so the menu tick cannot lie. A pane rebuild keeps each view's own zoom,
+except that while the mode is on a view coming on screen joins it at 1:1
+(`refreshPaneInteractions`), so cycling the solo camera keeps 1:1. The pane
+badge reads the zoom as a percentage of 1:1 (`zoomPercentLabel`), and only a
+view HELD at 1:1 may read exactly "100%" — a near miss is still resampled, so it reads "99.8%" / "≈100%". Hovering it offers
 presets (`ZOOM_PRESET_PERCENTS`, per pane, `setZoomPercent`); 100% there must go
 through `_enterNative`, never a plain `scale = 1:1`, or it skips both rules. The 1:1 scale depends on the box AND devicePixelRatio, so anything
 that moves either must end in `reapplyZoom` (`reapplyAllZoom` covers resize and
