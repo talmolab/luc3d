@@ -1405,7 +1405,7 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     let points3d = triangulateFrom(allObservations);
 
     // Robust triangulation (the Tracking Wizard's "Reprojection error threshold
-    // (px)", default 50; 0 turns it off): iteratively drop any 2D node whose
+    // (px)" — default in ui/settings.js; 0 turns it off): iteratively drop any 2D node whose
     // reprojection error in a view exceeds the threshold, then re-triangulate that
     // node from the remaining reliable views. A node left with <2 views
     // triangulates to null (DLT returns null) — i.e. it is dropped from 3D rather

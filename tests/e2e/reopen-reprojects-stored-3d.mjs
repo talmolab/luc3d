@@ -13,8 +13,10 @@
  * re-solved to a DIFFERENT 3D in every group with an outlier view, so the
  * overlay, the panel and the exported video described a 3D that was not the one
  * in the 3D view or the saved file (found in review of PR #289: 173 of 500
- * synthetic groups, up to 80 mm on a node). Both now call
- * `reprojectStoredPoints3d`.
+ * synthetic groups, up to 80 mm on a node). #351 then made the main window
+ * reproject the stored 3D, but only with the threshold OFF. Both paths now go
+ * through `deriveDisplayReprojections` (pose/triangulation.js), which
+ * reprojects a current group's stored 3D whatever the threshold.
  *
  * ## What this pins, in the real app
  *   - Precondition: the setting is at its 50 px default, and the fixture's 3D

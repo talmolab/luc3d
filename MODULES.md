@@ -3188,9 +3188,13 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `options.reprojErrorThreshold`; returns
   `.method`, `.meanError`/`.errors` distorted-space and
   `.meanErrorUndistorted`/`.errorsUndistorted` ideal-pinhole-space),
-  `reprojectStoredPoints3d(instanceGroup, cameras, points3d, options)` (the same
-  result for 3D the group already holds, with no solve — see
-  `pose/triangulation-core.js`),
+  `reprojectStoredPoints3d(group, cameras, options?)` (the same result for the
+  3D the group already holds, with no solve — see `pose/triangulation-core.js`),
+  `deriveDisplayReprojections(group, cameras)` (the one rule both display paths
+  use — `ui/rendering.js`'s lazy fill and the overlay export's
+  `ensureReprojections`: a CURRENT group — `triangulationMethod` set, not
+  `dirty` — has its stored 3D reprojected, whatever the reprojection error
+  threshold; anything else is re-solved with its own method),
   `storeReprojectedInstances(group, triangulationResult, allCameras)`.
   **`storeReprojectedInstances` eagerly builds a full `Instance` (+ its own
   `occluded` array) per camera per group — a real memory cost when called for
@@ -3632,7 +3636,10 @@ group whose 3D is that solve's output the numbers are identical (Object.is) —
 except, with a reprojection-error threshold, the UNDISTORTED errors: the solve
 leaves out the observations it dropped, which the stored 3D does not record.
 0.1-0.2 ms per frame on a 17-camera project vs 2.4-5.0 ms to re-solve Refined.
-Used by `ui/rendering.js`'s reprojection fill. **`triangulationSummary(result)`**
+Used, through `deriveDisplayReprojections` (`pose/triangulation.js`), by
+`ui/rendering.js`'s reprojection fill and the overlay export — with a threshold
+too: the display accepts the undistorted-error difference rather than re-solve
+to a different 3D than the stored one. **`triangulationSummary(result)`**
 — `{points3d, meanError, meanErrorUndistorted, method}`, what a pool reply
 carries under `summaryOnly`. Covered by `tests/test-reproject-stored-3d.mjs`
 (incl. the threshold negative control).
@@ -6406,12 +6413,14 @@ every file, with each tile letterboxed into it.
 
 **Reprojection fill.** `ensureReprojections()` is the export-side mirror of
 `ui/rendering.js`'s lazy fill, so exporting a triangulated-but-never-viewed range
-still draws reprojections. Like that fill it **reprojects the stored 3D**
-(`reprojectStoredPoints3d`) and never re-solves: a re-solve burns into the video
-the reprojections of a different 3D than the one displayed and saved whenever
-the solve's inputs changed since (the reprojection error threshold, Camera
-Views, the method), breaking the "exported 3D == displayed 3D" invariant (#113).
-The group's `triangulationMethod` only labels the result.
+still draws reprojections. It uses the same rule as that fill,
+`deriveDisplayReprojections` (`pose/triangulation.js`): a current group's stored
+3D is reprojected, anything else is re-solved with the group's own method. One
+rule is what keeps the "exported 3D == displayed 3D" invariant (#113): it used
+to re-solve every group, which burned into the video the reprojections of a
+different 3D than the one displayed and saved whenever the solve's inputs had
+changed since — the reprojection error threshold, Camera Views, or the method.
+Covered by `tests/e2e/reopen-reprojects-stored-3d.mjs`.
 
 **Still-frame previewer, no playback.** The modal has **no transport**: no
 play/pause, no frame stepping, no `setPlaying`/`playTimer`. Scrubbing the track is
@@ -6652,7 +6661,7 @@ exported but the amber `?` editing prompt is not.
 - `../pose/triangulation.js` — `getInstanceGroupsForFrame`,
   `ensureLazyFrameData`, `ensureLazyTrailWindow` (the frames behind the first
   exported frame and the preview frame that the node trails draw),
-  `reprojectStoredPoints3d`, `storeReprojectedInstances`,
+  `deriveDisplayReprojections`, `storeReprojectedInstances`,
   `sessionHasCalibration`.
 - `../pose/pose-data.js` — `points3dNodeCount`.
 - `../import-export/save-load.js` — `setStatus`.
@@ -7397,10 +7406,16 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `tests/e2e/triangulate-all-ba-display.mjs` asserts directly.
 
   **It reprojects the stored 3D instead of re-solving when that 3D is current**
-  — `reprojectStoredPoints3d` (`pose/triangulation-core.js`) when the group has a
-  `triangulationMethod`, is not `dirty`, and no reprojection-error threshold is
-  set (with one, the solve's undistorted error leaves out observations the
-  stored 3D does not record). Same numbers, value for value; 0.1 / 0.2 ms per
+  — `deriveDisplayReprojections` (`pose/triangulation.js`, shared with the
+  overlay export): when the group has a `triangulationMethod` and is not
+  `dirty`, WHATEVER the reprojection error threshold. #351 first re-solved
+  whenever a threshold was set, because the solve's undistorted error leaves out
+  observations the stored 3D does not record; but that re-solve drew a
+  different 3D than the 3D view and the saved file — under the 50 px default,
+  every reopened group with an outlier view (review of PR #289). The
+  undistorted error is now the one figure that can differ from a fresh solve's.
+  Covered by `tests/e2e/reopen-reprojects-stored-3d.mjs` and §4 of
+  `tests/e2e/triangulate-all-bounded-derived-state.mjs`. Same numbers, value for value; 0.1 / 0.2 ms per
   frame on a 17-camera project with one / three animals, against 2.4 / 5.0 ms
   to re-solve Refined. Since neither Triangulate All path keeps derived state
   any more, this runs once for every frame shown after one, so at 120 fps the
@@ -7501,13 +7516,12 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 **Imports from project modules.**
 - `./app-state.js` — `state`, `interactionManager`, `timeline`, `isViewDocked`.
 - `../pose/triangulation.js` — `ensureLazyFrameData`,
-  `getInstanceGroupsForFrame`, `triangulateAndReproject`,
-  `reprojectStoredPoints3d`, `storeReprojectedInstances`.
+  `getInstanceGroupsForFrame`, `deriveDisplayReprojections`,
+  `storeReprojectedInstances`.
 - `../pose/lazy-residency.js` — `dropDerivedReprojections`.
 - `./overlays.js` — `drawFrameOverlays`.
 - `./settings.js` — `isCameraTracked` (passed to `drawFrameOverlays` as
-  `trackingExcluded` so views excluded in the Tracking Wizard render grey),
-  `getTrackingThreshold` (the reprojection fill's threshold check).
+  `trackingExcluded` so views excluded in the Tracking Wizard render grey).
 - `./identity-assignment.js` — `editGroupState`, `finishEditGroup`.
 - `./info-panel.js` — `updateFrameInfo`.
 - `./frame-counters.js` — `computeFrameCounterBaseline`,
