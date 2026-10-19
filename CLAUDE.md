@@ -810,7 +810,9 @@ then a Mahalanobis distance normalized by its degrees of freedom — the "pose
 score", about 0 when typical. ≥ `poseUncommonZ` (10) is **uncommon**,
 ≥ `poseOutlierZ` (15) **outlier**; both are counted in the Track All summary
 ("2D poses"), marked in the views (amber ?, red ✕ on a dashed box) and named in
-the node tooltip. User instances are never checked. Rules, each measured:
+the node tooltip, and **`]` / `[`** (Tracks ▸ Next / Previous Flagged Pose) step
+through the frames the last check flagged. User instances are never checked.
+Rules, each measured:
 
 - **Leaving outliers out of tracking is OPT-IN (`poseExcludeOutliers`, default
   off).** A garbled pose is usually still the right animal, and with the match

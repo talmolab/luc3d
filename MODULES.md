@@ -4208,6 +4208,16 @@ recording: the same 4,220,071 / 40,907 / 14,242 counts Track All's own check
 reports, in 17 s, with the resident window and the loader cache unchanged after
 it and no heap growth across repeated runs.
 
+**Stepping through the flags (`]` / `[`).** `flaggedFrames(poseCheck)` — the
+distinct frames holding a flagged pose, ascending, read off `flags` and cached on
+the result (against the `flags` array it came from, so a replaced array is
+re-read); `nextFlaggedFrame(poseCheck, frame, dir)` — the next one strictly after
+`frame` (dir > 0) or the previous strictly before it, -1 when there is none (no
+wrap-around); `describeFlaggedFrame(poseCheck, frame)` — "Flagged frame 3 of 412
+(frame 1,235): outlier in Camera1_topC (score 18.2), uncommon in …", frames shown
+1-based; `describeNoFlaggedFrame(poseCheck, frame, dir)` — no check yet, nothing
+flagged, or nothing past `frame` that way.
+
 **The views score what they draw.** Nothing is written onto an Instance (a lazy
 project's instances come and go), so `poseCheckOf(session, camName, inst)` scores
 the instance against the run's models on demand (about a microsecond) →
@@ -4228,7 +4238,8 @@ Covered by `tests/test-pose-check.mjs` (§10: eager and lazy sampling agree, the
 lazy sampler's release rule, the run's counts and flags, user instances, the
 default keeping outliers, outlier threshold 0; §11: Check Poses on an eager and a
 lazy session, resident frames read from the session, the release rule, the
-status line; §12: trimming leaves every score bit-identical),
+status line; §12: trimming leaves every score bit-identical; §13: the stops and
+their status lines),
 `tests/e2e/track-all-pose-check.mjs` and `tests/e2e/check-poses-command.mjs`.
 
 ---
@@ -10904,8 +10915,10 @@ the association math but still shown in the GUI), the cross-view **tracking thre
 and the benchmark-derived levers `track3dWeight` / `filterMinVisibleNodes` /
 `filterMinInstanceScore`; see `pose/tracker.js`), plus a comprehensive **catalog
 of every keyboard shortcut**
-(`ACTION_CATALOG`). Settings persist to `localStorage` (`lucid.settings.v1`) and
-survive reloads. The catalog is the single source of truth for the Settings ▸
+(`ACTION_CATALOG`; the Navigation group includes `nextFlaggedPose` `]` and
+`prevFlaggedPose` `[`, editable and dispatched — the 2D pose check's flagged
+frames, see `ui/pose-check-command.js`). Settings persist to `localStorage`
+(`lucid.settings.v1`) and survive reloads. The catalog is the single source of truth for the Settings ▸
 Keyboard Shortcuts panel — see the keyboard-shortcuts note in `CLAUDE.md`.
 
 **Catalog entries.** `{ id, label, category, binding, editable, dispatched }`.
@@ -11883,23 +11896,38 @@ failed (the status bar says which).
   After a Track All that left outliers out, those detections stay ungrouped, and
   the tooltip stops saying "not tracked" because this check did not track.
 
-**Key exports.** `checkPoses()`.
+**Next / Previous Flagged Pose.** `gotoFlaggedPose(dir)` goes to the next
+(+1) or previous (−1) frame the last check (Track All or Check Poses) flagged and
+puts `describeFlaggedFrame`'s line in the status bar; at either end, with nothing
+flagged or with no check yet, it stays put and says why — it never wraps. Bound to
+`]` / `[` (catalog `nextFlaggedPose` / `prevFlaggedPose`, rebindable) and the
+Tracks menu. The stops are the check's own flags, so a pose edited since is still
+a stop until the next check. It navigates through `setPoseCheckNavigator`'s
+`navigateToFrame` (registered by `ui/ui-wiring.js`), because this module cannot
+import `pose/initialization.js`, which imports it.
+
+**Key exports.** `checkPoses()`, `gotoFlaggedPose(dir)`, `setPoseCheckNavigator(fn)`.
 
 **Imports from project modules.** `./app-state.js` (`state`, `getActiveSession`),
 `./settings.js` (`getTrackingThreshold`), `../import-export/save-load.js`
 (`setStatus`), `./loading-overlay.js` (`showLoadingProgress`,
 `createProgressPacer`, `yieldToPaint`, `hideLoading`), `./rendering.js`
 (`drawAllOverlays`), `../pose/triangulation.js` (`loadAllLazyFrames`),
-`../pose/pose-check-session.js` (`checkSessionPoses`, `describePoseCheck`).
+`../pose/pose-check-session.js` (`checkSessionPoses`, `describePoseCheck`,
+`nextFlaggedFrame`, `describeFlaggedFrame`, `describeNoFlaggedFrame`).
 
-**Imported by.** `ui/ui-wiring.js` (`#menuCheckPoses`).
+**Imported by.** `ui/ui-wiring.js` (`#menuCheckPoses`, `#menuNextFlaggedPose`,
+`#menuPrevFlaggedPose`, the `]` / `[` handlers).
 
-**User-facing features.** Tracks ▸ Check Poses.
+**User-facing features.** Tracks ▸ Check Poses; Next / Previous Flagged Pose
+(`]` / `[`).
 
 Covered by `tests/e2e/check-poses-command.mjs` (no session; the real menu item on
 an untracked session — status line, flags, badges, tooltip; nothing tracked,
 nothing moved, not dirty; the Wizard's thresholds read at run time; after a Track
-All that left outliers out) and `tests/test-pose-check.mjs` §11.
+All that left outliers out; real `]` / `[` presses stepping through exactly the
+planted frames, the end of the list, the menu items, the catalog entries, and no
+check yet) and `tests/test-pose-check.mjs` §11 and §13.
 
 ### ui/track-summary.js
 
@@ -12398,6 +12426,11 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   the Track All summary's Identities samples and maps go to a frame).
   Tracks ▸ **Check Poses** (`menuCheckPoses`) calls `checkPoses()`
   (`ui/pose-check-command.js`): the 2D pose check on its own, tracking nothing.
+  Tracks ▸ **Next / Previous Flagged Pose** (`menuNextFlaggedPose` /
+  `menuPrevFlaggedPose`) and their catalog shortcuts **`]`** / **`[`**
+  (`nextFlaggedPose` / `prevFlaggedPose`, `setHandler`) call
+  `gotoFlaggedPose(±1)`; `setPoseCheckNavigator(navigateToFrame)` is called once
+  at setup, beside `setTrackSummaryNavigator`.
 - Color-by toggle: the Tracks / Identity control lives in the top
   toolbar (buttons `colorByTracks` / `colorById`, next to the Errors
   checkbox), not the Tracks menu. It has no visible "Color" label (the group

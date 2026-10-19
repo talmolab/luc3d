@@ -53,6 +53,9 @@ const ACTION_CATALOG = [
     { id: 'firstLastFrame', label: 'First / Last frame', category: 'Navigation', binding: 'Home / End', editable: false, dispatched: false },
     { id: 'playPause', label: 'Play / Pause', category: 'Navigation', binding: 'Space', editable: false, dispatched: false },
     { id: 'gotoFrame', label: 'Go to frame number', category: 'Navigation', binding: 'Mod+Shift+J', editable: false, dispatched: false },
+    // The frames the last 2D pose check flagged (ui/pose-check-command.js `gotoFlaggedPose`).
+    { id: 'nextFlaggedPose', label: 'Next flagged pose (2D pose check)', category: 'Navigation', binding: ']', editable: true, dispatched: true },
+    { id: 'prevFlaggedPose', label: 'Previous flagged pose (2D pose check)', category: 'Navigation', binding: '[', editable: true, dispatched: true },
 
     // --- Editing ---
     { id: 'addInstanceSmart', label: 'Add instance (smart init)', category: 'Editing', binding: 'Mod+I', editable: true, dispatched: true },
