@@ -16,8 +16,8 @@
  * `options.reprojErrorThreshold` instead.
  */
 
-import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js?v=6238e5d7fd74';
-import { jacobiEigen } from './plane-fit.js?v=6238e5d7fd74';
+import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js?v=701497025107';
+import { jacobiEigen } from './plane-fit.js?v=701497025107';
 export { jacobiEigen };
 
 // Settings readers for `triangulateAndReproject` (see the header). Unset means
@@ -1322,15 +1322,10 @@ export function invert3x3(M) {
  *   meanError: scalar mean error across all cameras and keypoints
  */
 export function triangulateAndReproject(instanceGroup, cameras, options) {
-    // Build ordered list of camera names and their projection matrices
     const cameraNames = [];
     const projMatrices = [];
     const cameraMap = {};
-    for (let c = 0; c < cameras.length; c++) {
-        cameraNames.push(cameras[c].name);
-        projMatrices.push(cameras[c].projectionMatrix);
-        cameraMap[cameras[c].name] = cameras[c];
-    }
+    _indexCameras(cameras, cameraNames, projMatrices, cameraMap);
 
     // Feature: views excluded in the Tracking Wizard's Camera Views panel never
     // CONTRIBUTE to the 3D solve — but we still reproject INTO them below, so an
@@ -1340,20 +1335,10 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     // Source: `options.includedCameras` (explicit list, for tests) else the live
     // Camera Views setting, reached through a hook — unset in a worker, where
     // every view is included (the pool passes `includedCameras` explicitly).
-    const included = cameraNames.map(function (n) {
-        if (options && options.includedCameras) return options.includedCameras.indexOf(n) >= 0;
-        return _settingsHooks.isCameraTracked ? _settingsHooks.isCameraTracked(n) : true;
-    });
+    const included = _includedCameras(cameraNames, options);
 
     // Determine number of keypoints from the first available instance
-    let numKeypoints = 0;
-    for (let c = 0; c < cameraNames.length; c++) {
-        const inst = instanceGroup.getInstance(cameraNames[c]);
-        if (inst && inst.numNodes > 0) {
-            numKeypoints = inst.numNodes;
-            break;
-        }
-    }
+    const numKeypoints = _groupNumKeypoints(instanceGroup, cameraNames);
 
     if (numKeypoints === 0) {
         return {
@@ -1374,32 +1359,9 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     //   the undistorted form (it is a linear method in ideal pinhole
     //   coordinates); the 'ba' refinement needs the raw form, because it
     //   minimizes in the space the reported error is measured in (issue #113).
-    const allObservations = [];
-    const allObservationsRaw = [];
-    for (let k = 0; k < numKeypoints; k++) {
-        const obsForKeypoint = [];
-        const rawForKeypoint = [];
-        for (let c = 0; c < cameraNames.length; c++) {
-            const inst = instanceGroup.getInstance(cameraNames[c]);
-            // Skip nulled nodes — they are excluded from triangulation
-            const isNulled = inst && inst.nulledNodes && inst.nulledNodes.has(k);
-            if (included[c] && inst && inst.hasPoint(k) && !isNulled) {
-                const cam = cameraMap[cameraNames[c]];
-                const raw2d = inst.getPoint(k);
-                rawForKeypoint.push(raw2d);
-                if (cam && cam.undistortPoint) {
-                    obsForKeypoint.push(cam.undistortPoint(raw2d));
-                } else {
-                    obsForKeypoint.push(raw2d);
-                }
-            } else {
-                obsForKeypoint.push(null);
-                rawForKeypoint.push(null);
-            }
-        }
-        allObservations.push(obsForKeypoint);
-        allObservationsRaw.push(rawForKeypoint);
-    }
+    const obs = _collectObservations(instanceGroup, cameraNames, cameraMap, included, numKeypoints);
+    const allObservations = obs.allObservations;
+    const allObservationsRaw = obs.allObservationsRaw;
 
     // Step 2: Triangulate.
     //   'dlt' (default) — fast linear DLT.
@@ -1504,6 +1466,169 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         return { points3d: points3d, reprojections: {}, errors: {}, meanError: null, method: method };
     }
 
+    // Steps 3-5: reproject into every camera and score (`_reprojectAndScore`,
+    // shared with `reprojectStoredPoints3d`, which runs them on a group's
+    // already-solved 3D).
+    const scored = _reprojectAndScore(instanceGroup, cameraNames, cameraMap, projMatrices,
+        points3d, allObservations, numKeypoints);
+    return {
+        points3d: points3d,
+        reprojections: scored.reprojections,
+        errors: scored.errors,
+        errorsUndistorted: scored.errorsUndistorted,
+        meanError: scored.meanError,
+        meanErrorUndistorted: scored.meanErrorUndistorted,
+        method: method
+    };
+}
+
+/**
+ * The reprojection half of `triangulateAndReproject` (its steps 3-5), run on
+ * the 3D a group ALREADY has (`instanceGroup.points3d`) instead of a fresh
+ * solve: reprojections into every camera, per-camera errors in native and
+ * undistorted pixels, and their means — the same result object, with
+ * `method` = the group's `triangulationMethod`.
+ *
+ * Errors are measured in the cameras the group has an instance in — the
+ * cameras the bulk solves use (`prep.groupCameras` in pose/triangulation.js)
+ * — and the reprojections cover every camera, as `reprojectIntoEveryCamera`
+ * does after such a solve; a camera with no instance has nothing to measure.
+ *
+ * It is `triangulateAndReproject`'s own code (`_collectObservations` +
+ * `_reprojectAndScore`), so for a group whose stored 3D IS that solve's output
+ * the two return the same numbers — except for one input the stored 3D does
+ * not record: with a reprojection-error threshold set, the solve drops
+ * over-threshold observations, and its UNDISTORTED errors leave those out.
+ * Callers that need that figure exactly re-solve instead (see
+ * `ui/rendering.js`'s reprojection fill).
+ *
+ * Why it exists: re-solving to get numbers the stored 3D already determines is
+ * what the display used to do for every frame Triangulate All had not kept
+ * results for — 2.4 ms per frame with one animal Refined on 17 cameras, 5.0 ms
+ * with three, against 0.1-0.2 ms for this.
+ *
+ * @param {InstanceGroup} instanceGroup - with `points3d` (flat [X,Y,Z] per node)
+ * @param {Camera[]} cameras - every camera to reproject into
+ * @param {{includedCameras?: string[]}} [options] - as `triangulateAndReproject`
+ * @returns {Object} the `triangulateAndReproject` result shape
+ */
+export function reprojectStoredPoints3d(instanceGroup, cameras, options) {
+    const members = cameras.filter(function (c) { return !!instanceGroup.getInstance(c.name); });
+    const cameraNames = [];
+    const projMatrices = [];
+    const cameraMap = {};
+    _indexCameras(members, cameraNames, projMatrices, cameraMap);
+    const included = _includedCameras(cameraNames, options);
+    const numKeypoints = _groupNumKeypoints(instanceGroup, cameraNames);
+    const method = instanceGroup.triangulationMethod === 'ba' ? 'ba' : 'dlt';
+    const points3d = instanceGroup.points3d;
+    if (numKeypoints === 0 || !points3d) {
+        return { points3d: points3d || makePoints3d(0), reprojections: {}, errors: {}, meanError: null, method: method };
+    }
+    const obs = _collectObservations(instanceGroup, cameraNames, cameraMap, included, numKeypoints);
+    const scored = _reprojectAndScore(instanceGroup, cameraNames, cameraMap, projMatrices,
+        points3d, obs.allObservations, numKeypoints);
+    const reprojections = {};
+    for (let c = 0; c < cameras.length; c++) {
+        const name = cameras[c].name;
+        reprojections[name] = scored.reprojections[name] || reprojectPointsCamera(points3d, cameras[c]);
+    }
+    return {
+        points3d: points3d,
+        reprojections: reprojections,
+        errors: scored.errors,
+        errorsUndistorted: scored.errorsUndistorted,
+        meanError: scored.meanError,
+        meanErrorUndistorted: scored.meanErrorUndistorted,
+        method: method
+    };
+}
+
+/**
+ * The keep-only-the-summary form of a solve's result, for the bulk sweeps
+ * (`createGroupSolver`'s `summaryOnly`): the 3D and the mean errors, without
+ * the per-camera reprojections and errors. Those are ~52 KB of small arrays per
+ * group at 17 cameras x 34 nodes, and a worker's reply would otherwise clone
+ * them all onto the main thread only for the sweep to drop them.
+ */
+export function triangulationSummary(result) {
+    return {
+        points3d: result.points3d,
+        meanError: result.meanError,
+        meanErrorUndistorted: result.meanErrorUndistorted,
+        method: result.method,
+    };
+}
+
+/** Fill `cameraNames` / `projMatrices` / `cameraMap` from `cameras`, in order. */
+function _indexCameras(cameras, cameraNames, projMatrices, cameraMap) {
+    for (let c = 0; c < cameras.length; c++) {
+        cameraNames.push(cameras[c].name);
+        projMatrices.push(cameras[c].projectionMatrix);
+        cameraMap[cameras[c].name] = cameras[c];
+    }
+}
+
+/** `included[c]`: whether camera c may CONTRIBUTE observations (see `triangulateAndReproject`). */
+function _includedCameras(cameraNames, options) {
+    return cameraNames.map(function (n) {
+        if (options && options.includedCameras) return options.includedCameras.indexOf(n) >= 0;
+        return _settingsHooks.isCameraTracked ? _settingsHooks.isCameraTracked(n) : true;
+    });
+}
+
+/** Node count of the group's first camera instance that has nodes, else 0. */
+function _groupNumKeypoints(instanceGroup, cameraNames) {
+    for (let c = 0; c < cameraNames.length; c++) {
+        const inst = instanceGroup.getInstance(cameraNames[c]);
+        if (inst && inst.numNodes > 0) return inst.numNodes;
+    }
+    return 0;
+}
+
+/**
+ * Step 1 of `triangulateAndReproject`: per keypoint, per camera, the
+ * undistorted observation and the raw one (or null) — see the comment there.
+ * @returns {{allObservations: Array, allObservationsRaw: Array}}
+ */
+function _collectObservations(instanceGroup, cameraNames, cameraMap, included, numKeypoints) {
+    const allObservations = [];
+    const allObservationsRaw = [];
+    for (let k = 0; k < numKeypoints; k++) {
+        const obsForKeypoint = [];
+        const rawForKeypoint = [];
+        for (let c = 0; c < cameraNames.length; c++) {
+            const inst = instanceGroup.getInstance(cameraNames[c]);
+            // Skip nulled nodes — they are excluded from triangulation
+            const isNulled = inst && inst.nulledNodes && inst.nulledNodes.has(k);
+            if (included[c] && inst && inst.hasPoint(k) && !isNulled) {
+                const cam = cameraMap[cameraNames[c]];
+                const raw2d = inst.getPoint(k);
+                rawForKeypoint.push(raw2d);
+                if (cam && cam.undistortPoint) {
+                    obsForKeypoint.push(cam.undistortPoint(raw2d));
+                } else {
+                    obsForKeypoint.push(raw2d);
+                }
+            } else {
+                obsForKeypoint.push(null);
+                rawForKeypoint.push(null);
+            }
+        }
+        allObservations.push(obsForKeypoint);
+        allObservationsRaw.push(rawForKeypoint);
+    }
+
+    return { allObservations: allObservations, allObservationsRaw: allObservationsRaw };
+}
+
+/**
+ * Steps 3-5 of `triangulateAndReproject`: reproject `points3d` into every
+ * camera and score it against the group's 2D. `allObservations` is the
+ * undistorted observations Step 1 collected (after any outlier rejection) —
+ * what the undistorted error is measured against.
+ */
+function _reprojectAndScore(instanceGroup, cameraNames, cameraMap, projMatrices, points3d, allObservations, numKeypoints) {
     // Step 3: Reproject to each camera, in the camera's native (distorted) pixel
     // space so reprojections align with the raw observed keypoints (the error in
     // Step 4 compares against the raw, still-distorted observations).
@@ -1572,13 +1697,11 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     const meanErrorUndistorted = totalCountUndist > 0 ? totalErrorUndist / totalCountUndist : null;
 
     return {
-        points3d: points3d,
         reprojections: reprojections,
         errors: errorsPerCamera,
         errorsUndistorted: errorsPerCameraUndistorted,
         meanError: meanError,
         meanErrorUndistorted: meanErrorUndistorted,
-        method: method
     };
 }
 
