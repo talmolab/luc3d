@@ -23,6 +23,7 @@ import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { answerTrackSetup } from './fixtures/track-setup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -50,6 +51,7 @@ try {
     page.on('pageerror', e => log('[pageerror] ' + String(e).slice(0, 300)));
     page.on('crash', () => log('*** RENDERER CRASHED ***'));
     page.on('dialog', d => d.accept(NANIMALS));
+    await answerTrackSetup(page, NANIMALS);   // Track All's first-use dialog (animal count)
 
     const measure = async (label) => {
         await page.evaluate(() => { gc(); gc(); });

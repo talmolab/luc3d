@@ -21,8 +21,7 @@
  *   - Stays open on error until the user dismisses.
  *
  * This test does NOT import any video-specific module — that's the whole
- * point of the modal being reusable. It runs in both the Node sandbox
- * (which provides DOM stubs in tests/run-node.js) and the browser sandbox.
+ * point of the modal being reusable.
  *
  * Pre-fix: ALL assertions fail because ui/loading-progress-modal.js does
  * not yet exist — the import / global resolution throws.

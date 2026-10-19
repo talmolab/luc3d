@@ -1,8 +1,8 @@
 // ui/keyboard-target.js — who owns a keystroke: the focused control, or the app?
 //
 // Dependency-free on purpose: it imports NO project modules, so it can be
-// bridged into the browser test runner (`tests/test-runner.html`) and the `vm`
-// sandbox runner without dragging `app.js` in. Every global keydown handler in
+// bridged into the browser test runner (`tests/test-runner.html`) without
+// dragging `app.js` in. Every global keydown handler in
 // the app routes its "am I allowed to act on this key?" question through here,
 // so the answer is defined once instead of ten times.
 //

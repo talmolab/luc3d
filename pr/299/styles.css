@@ -175,6 +175,16 @@ body {
   cursor: pointer;
 }
 
+/* The deployed release, right of Settings (ui/version-label.js). Selectable,
+   unlike the rest of the menu bar: it is what a bug report needs to quote. */
+.menu-bar-version {
+  padding: 4px 12px 4px 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  user-select: text;
+}
+
 .menu-dropdown {
   display: none;
   position: absolute;
@@ -935,6 +945,25 @@ body {
   z-index: 18;
 }
 
+/* The zoom badge: the button below plus its hover menu of presets (50% /
+   100% / 150% / 200% / Fit, ui/sessions-panes.js), a `.tri-dropdown` like the
+   Triangulate split buttons. It owns the position, so the menu hangs from it.
+   Above the view legend (z 7), which sits just under it while zoomed. */
+.video-cell .zoom-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 8;
+}
+
+/* Hung from the badge's RIGHT edge: the badge is in the pane's top-right
+   corner, and the cell clips anything that runs past it. */
+.video-cell .zoom-preset-menu {
+  left: auto;
+  right: 0;
+  min-width: 110px;
+}
+
 .unzoom-btn {
   position: absolute;
   top: 8px;
@@ -945,6 +974,7 @@ body {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.8px;
+  font-variant-numeric: tabular-nums; /* the zoom % read-out, steady while wheel-zooming */
   border: 1px solid var(--accent);
   border-radius: 3px;
   cursor: pointer;
@@ -955,6 +985,10 @@ body {
 .unzoom-btn:hover {
   background: var(--accent);
   color: #ffffff;
+}
+
+.zoom-badge .unzoom-btn {
+  position: static;
 }
 
 /* Visibility ▸ Display Legend, as pane chrome (ui/view-legend.js).
@@ -1015,7 +1049,6 @@ body {
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 4px;
   height: var(--toolbar-height);
   padding: 0 8px;
   background: var(--bg-secondary);
@@ -1029,7 +1062,10 @@ body {
 /* Each group's right border is the ONE divider between groups. There used to
    be a `.toolbar-separator` line beside it as well, which drew every boundary
    twice and cost ~13px apiece — enough to push the panel toggles off a 1440px
-   window once the labels were spelled out. */
+   window once the labels were spelled out. The `.toolbar`'s 4px flex gap was
+   that separator's spacing and outlived it, setting every divider 4px off
+   centre; it is gone too, so the padding below is the whole space either side
+   of a divider (and the 24px went to the Track group's Animals field). */
 .toolbar-group {
   display: flex;
   align-items: center;
@@ -1079,6 +1115,42 @@ body {
 .toolbar-btn.active {
   background: var(--accent-dim);
   color: var(--accent);
+}
+
+/* A labelled value in the toolbar — the Track group's Animals field. Sized to
+   the checkbox labels' 11px and kept narrow: the whole toolbar has to fit a
+   1440px window (tests/e2e/toolbar-3d-toggle-button.mjs §7), and one or two
+   digits or the "auto" placeholder is all it ever holds. */
+.toolbar-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.toolbar-field input {
+  width: 26px;
+  height: 22px;
+  padding: 0 1px;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 11px;
+  text-align: center;
+}
+
+.toolbar-field input::placeholder {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.toolbar-field input:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 /* The two panel-visibility toggles (3D viewer + info panel) sit together at
@@ -1232,9 +1304,14 @@ body {
 }
 
 /* The toolbar's Trails menu (ui/ui-wiring.js): narrower, with a checkmark
-   column like Tracks ▸ Node Trails. */
+   column like Tracks ▸ Node Trails. Hung from the button's RIGHT edge: Trails
+   is the last control before the panel toggles, and a menu opening rightwards
+   from it ran past the window edge at 1440px — even closed, as scroll overflow
+   on the toolbar. */
 #trailsMenu {
   min-width: 120px;
+  left: auto;
+  right: 0;
 }
 
 .tri-dropdown-item .trail-check {
@@ -1242,6 +1319,33 @@ body {
   width: 14px;
   color: var(--accent, #4ea1ff);
   font-weight: bold;
+}
+
+/* Both trail menus hold two radio groups, Length and Shade, each under a small
+   heading. The heading lines up with the checkmark column. */
+.trail-menu-heading {
+  padding: 4px 12px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.menu-dropdown .trail-menu-heading {
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+/* A shade's sample: track color running into the trail in that shade. */
+.trail-shade-swatch {
+  flex: none;
+  align-self: center;
+  width: 30px;
+  height: 6px;
+  margin-left: 12px;
+  border-radius: 3px;
 }
 
 .tri-dropdown-item {
@@ -1498,6 +1602,110 @@ body {
   font-size: 12px;
   color: var(--text-secondary);
   min-height: 14px;
+}
+
+/* Track All / Track Frame's first-use dialog (ui/track-setup-modal.js), and
+   Track Frame Range (ui/track-range-modal.js), which shows the same weight grid:
+   the animal count, then the node weights in the Tracking Wizard's own rows,
+   narrower here so a typical skeleton fits in three columns with its names
+   whole ("RightForepaw" was cut off at 560px). The card is the
+   ONE scroller, for a long skeleton on a short window; the weight grid never
+   scrolls by itself (no scroll-within-scroll). */
+.multi-frame-modal.track-setup-modal,
+.multi-frame-modal.track-range-modal {
+  max-width: 620px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+/* Continue stays in view while the card scrolls (as in the Track All summary). */
+.track-setup-modal .modal-actions,
+.track-range-modal .modal-actions {
+  position: sticky;
+  bottom: -24px;
+  margin-bottom: -24px;
+  padding: 10px 0 24px;
+  background: var(--bg-secondary);
+}
+
+.track-setup-animals {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.track-setup-animals input {
+  width: 72px;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  font-size: 13px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+.track-setup-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.track-setup-section-title {
+  margin: 20px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.multi-frame-modal p.track-setup-note {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+
+.multi-frame-modal p.track-setup-later {
+  margin: 12px 0 0;
+}
+
+.settings-node-weight-list.track-setup-weights {
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  column-gap: 16px;
+}
+
+.track-setup-weights .settings-num-input {
+  width: 56px;
+}
+
+/* Track All's image ID-switch check: its switch, then (while on) its options
+   in the same compact grid as the node weights. */
+.track-setup-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  margin-bottom: 4px;
+}
+
+.settings-node-weight-list.track-setup-options {
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  column-gap: 16px;
+}
+
+.track-setup-options[hidden] {
+  display: none;
+}
+
+.track-setup-options .settings-num-input {
+  width: 56px;
+}
+
+.track-setup-options .track-setup-switch-row {
+  margin: 0;
+  font-size: 12px;
 }
 
 /* Align Views to References modal (#226). The table grows with the camera
@@ -2682,11 +2890,18 @@ body {
   cursor: not-allowed;
 }
 
-/* Seekbar */
+/* Seekbar. The 24px box is the bar itself; the time ruler hangs below it
+   (.seekbar-ruler), and margin-bottom reserves that room so the controls bar
+   centres bar + ruler together. The side margins are room for the ruler's
+   first and last labels — "00:00" and the duration — which are centred on
+   the bar's ends and so hang half a label past them (~17px for "14:23",
+   ~23px for "1:23:45"): with the controls bar's gap (16px) they keep both
+   clear of the transport buttons and the FPS pill. */
 .seekbar-container {
   flex: 1;
   position: relative;
   height: 24px;
+  margin: 0 12px 11px;
   display: flex;
   align-items: center;
   cursor: pointer;
@@ -2735,6 +2950,27 @@ body {
   height: 8px;
 }
 
+/* Time ruler under the seekbar (ui/seekbar-ticks.js): ticks just below the
+   track, labels below the major ones. A child of #seekbar, so a click on a
+   label scrubs there and hovering it shows the tooltip; painted under the
+   ID-switch marks and the thumb. */
+.seekbar-ruler { position: absolute; left: 0; right: 0; top: 17px; height: 17px; }
+.seekbar-tick {
+  position: absolute; top: 0; width: 1px; height: 3px;
+  transform: translateX(-50%); background: var(--text-muted);
+}
+.seekbar-tick.is-major { height: 5px; background: var(--text-secondary); }
+.seekbar-tick-label {
+  position: absolute; top: 5px; transform: translateX(-50%);
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 11px; line-height: 13px; font-variant-numeric: tabular-nums;
+  color: var(--text-secondary); white-space: nowrap;
+}
+/* The duration, at the bar's end: bold like the readout's current frame. A
+   monospace font keeps its advance width across weights, so the measured
+   character width still holds. */
+.seekbar-tick-label.is-end { font-weight: 600; }
+
 /* Possible-ID-switch ticks on the seekbar (ui/seekbar-markers.js): over the
    track, under the thumb; they never take the pointer (the seekbar's handlers
    snap to them instead). */
@@ -2748,6 +2984,18 @@ body {
 .seekbar-mark.is-follow { opacity: 0.7; height: 12px; }
 .seekbar-mark.is-repeat { opacity: 0.4; width: 2px; height: 10px; box-shadow: none; }
 .seekbar-mark.is-reviewed { opacity: 0.3; }
+
+/* The frame a click would land on, while hovering the seekbar
+   (ui/seekbar-tooltip.js): the ID Switches tab's playhead colours
+   (.id-switch-phead — white, dark outline), but BIGGER than an ID-switch mark
+   (3 x 16px) so it reads clearly among them: 4px wide, the bar's full 24px
+   tall. Over the marks, under the thumb; `left` is set in px. */
+.seekbar-hover-line {
+  position: absolute; top: 0; height: 24px; width: 4px; transform: translateX(-50%);
+  background: var(--text-primary); border-radius: 2px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+  pointer-events: none; z-index: 1;
+}
+.seekbar-hover-line[hidden] { display: none; }
 
 /* Seekbar hover tooltip (#142): frame + timestamp under the cursor. Sits
    above the bar, over the timeline; `left` is set in px by
@@ -3657,6 +3905,12 @@ input[type="range"]::-moz-range-track {
   border: 1px solid var(--border-color);
 }
 
+/* The widest menu item sets the menu's width, and its hint would otherwise
+   sit flush against its label. */
+.menu-dropdown-item .shortcut-hint {
+  margin-left: 16px;
+}
+
 /* --------------------------------------------------------------------------
    Split Pane Handle
    -------------------------------------------------------------------------- */
@@ -3779,24 +4033,49 @@ input[type="range"]::-moz-range-track {
    Loading Overlay
    -------------------------------------------------------------------------- */
 
+/* The progress popup of every long operation (Track All, Triangulate All, the
+   body-size ID-switch check, loading, exports): an opaque card styled exactly
+   like the image ID-switch check's dialog (.id-switch-progress, below — the
+   shared values are written once, in rules naming both), on a TRANSPARENT
+   layer: the app stays visible, not greyed, but cannot be clicked while the
+   operation runs (Triangulate All resolves its settings once and relies on
+   that). `overflow: hidden` keeps the playhead's transformed wrapper (see
+   .loading-progress-head) from adding scrollable area. */
 .loading-overlay {
   position: fixed;
   inset: 0;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 16px;
-  background: rgba(26, 26, 26, 0.88);
+  background: transparent;
+  overflow: hidden;
   z-index: 1000;
-  color: var(--text-secondary);
-  font-size: 14px;
 }
 
+.loading-card {
+  width: 540px;
+  max-width: calc(100vw - 32px);
+  box-sizing: border-box;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 24px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  color: var(--text-primary);
+  text-align: left;
+}
+.loading-title { margin: 0 0 16px 0; font-size: 15px; font-weight: 600; }
+
+/* The message, with a small spinner before it only when there is no bar to
+   show progress (showLoading); a determinate run hides it. */
+.loading-line { display: flex; align-items: center; gap: 8px; }
+#loadingStatus { font-size: 13px; overflow-wrap: anywhere; }
+
 .spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid var(--border-color);
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-color);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -3808,49 +4087,100 @@ input[type="range"]::-moz-range-track {
   }
 }
 
-/* Determinate progress bar under #loadingStatus (ui/loading-overlay.js).
-   The fill is scaled with `transform`, not `width`: a transform transition runs
-   on the compositor thread, so the bar keeps gliding between the pacer's
-   ~250 ms updates even while the main thread is busy with the next chunk. The
-   transition length matches PROGRESS_INTERVAL_MS. The overlay's `gap: 16px`
-   would push the bar too far from its label, hence the negative margins. */
-.loading-progress {
-  width: min(360px, 70vw);
-  height: 6px;
-  margin-top: -6px;
-  border-radius: 3px;
-  background: var(--border-color);
-  overflow: hidden;
-}
-
-.loading-progress-fill {
-  width: 100%;
-  height: 100%;
-  background: var(--accent);
-  transform-origin: left center;
-  transform: scaleX(0);
-  transition: transform 250ms linear;
-  will-change: transform;
-}
-
-.loading-progress-fill.no-anim {
-  transition: none;
-}
-
-/* Second text line: estimated time remaining (ui/loading-overlay.js). Tucked
-   up against #loadingStatus so the two read as one block of text. */
+/* Second text line: estimated time remaining (ui/loading-overlay.js). */
 .loading-eta {
-  margin-top: -12px;
+  margin-top: 2px;
   font-size: 13px;
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
 }
 
+/* Determinate progress bar (ui/loading-overlay.js), the image check's bar: a
+   track that clips the fill, and a playhead line at the fill's leading edge
+   standing proud of it. Both move with `transform`, not `width` / `left`: a
+   transform transition runs on the compositor thread, so the bar keeps gliding
+   between the pacer's ~250 ms updates even while the main thread is busy with
+   the next chunk. The transition length matches PROGRESS_INTERVAL_MS. The
+   playhead is a full-width wrapper translated by the fraction (a percentage
+   translate is of its own width, i.e. the bar's), its line at its left edge. */
+.loading-progress { position: relative; height: 6px; margin: 12px 0 0; }
+.loading-progress-track { position: absolute; inset: 0; border-radius: 3px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+.loading-progress-fill {
+  width: 100%;
+  height: 100%;
+  background: #4cc9f0;
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform 250ms linear;
+  will-change: transform;
+}
+.loading-progress-head {
+  position: absolute; top: -4px; bottom: -4px; left: 0; width: 100%;
+  transform: translateX(0); transition: transform 250ms linear; will-change: transform; pointer-events: none;
+}
+.loading-progress-head::before {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 2px; transform: translateX(-50%);
+  background: var(--text-primary); border-radius: 1px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+.loading-progress-fill.no-anim, .loading-progress-head.no-anim {
+  transition: none;
+}
+
+/* The percentage under the bar — the same rule as the image check's. */
+.loading-pct, .id-switch-progress-pct { margin-top: 8px; font-size: 24px; opacity: 0.75; font-variant-numeric: tabular-nums; }
+
 .loading-substatus {
-  margin-top: -8px;
+  margin-top: 2px;
   font-size: 12px;
   color: var(--text-muted, var(--text-secondary));
 }
+
+/* The CPU line, left-justified, and its load graph to its right, under the
+   detail line while an operation reports its CPU time (setLoadingCpu:
+   Triangulate All, Track All). CPU only — what uses it never touches the GPU.
+   Laid out like the image check's CPU/GPU lines (.load-line / .load-graph,
+   ui/load-graph.js). */
+.loading-hw {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 6px;
+}
+.loading-hw.hidden { display: none; }
+.loading-hw .load-line {
+  flex: 1;
+  min-width: 0;
+  min-height: 1.4em;
+  line-height: 1.4;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.loading-hw .load-graph { flex: none; }
+
+/* A note under the CPU line in both progress popups (ui/browser-hints.js):
+   Brave's fingerprinting protection hides the real core count — what to do.
+   Advice, not an error: muted text, a warning-coloured edge to catch the eye. */
+.progress-hint {
+  margin-top: 14px;
+  padding: 8px 10px 8px 12px;
+  border-left: 3px solid var(--warning-color);
+  border-radius: 3px;
+  background: var(--bg-primary);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+.progress-hint[hidden] { display: none; }
+.progress-hint p { margin: 0; font-size: inherit; color: inherit; line-height: inherit; }   /* not .multi-frame-modal p's */
+.progress-hint strong { color: var(--text-primary); font-weight: 600; }
+.progress-hint ol { margin: 6px 0; padding-left: 18px; }
+.progress-hint li + li { margin-top: 2px; }
+
+/* Dismiss (a startup error, pose/initialization.js) — right-aligned, as the
+   image check's Cancel. */
+.loading-actions { display: flex; justify-content: flex-end; }
+.loading-actions #loadingDismiss { margin-top: 16px; }
 
 /* --------------------------------------------------------------------------
    Keyboard Key
@@ -3926,6 +4256,13 @@ kbd {
     height: 30px;
     font-size: 12px;
   }
+
+  /* The controls bar's gap halves here, so the seekbar's side margins grow
+     to keep the ruler's end labels clear of their neighbours. */
+  .seekbar-container {
+    margin-left: 16px;
+    margin-right: 16px;
+  }
 }
 
 /* Visibility tab */
@@ -3949,7 +4286,7 @@ kbd {
 /* Toolbar checkboxes */
 .toolbar-checkboxes {
     font-size: 11px;
-    gap: 8px;
+    gap: 6px;
     color: var(--text-secondary);
     align-items: center;
 }
@@ -5776,6 +6113,15 @@ kbd {
   display: none;
 }
 
+/* The node tooltip (ui/node-tooltip.js) reuses the ⓘ tip's look. Its text is
+   SLEAP's two lines — the node name, then "(score: 0.94)" — split on "\n".
+   The left stripe is the hovered instance's drawn color (`--node-tip-color`,
+   set per tip), which is what tells overlapping skeletons apart. */
+.node-tip {
+  white-space: pre-line;
+  border-left: 5px solid var(--node-tip-color, var(--border-light));
+}
+
 /* The two ⓘ buttons: the Pinned column's, in the header where the word "Pin"
    used to be, and a major section's, beside its heading.
 
@@ -6012,6 +6358,21 @@ kbd {
 
 .plane-confirm-modal button:hover {
   filter: brightness(1.15);
+}
+
+/* The macOS folder-confirm tip (ui/folder-confirm-tip.js). */
+.folder-tip-modal .plane-confirm-message + .plane-confirm-message {
+  margin-top: 8px;
+}
+
+.folder-tip-dontshow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
 }
 
 /* ============================================
@@ -6787,6 +7148,9 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-next:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .id-switch-repeats { flex-basis: 100%; font-size: 11px; color: var(--text-secondary); }
 .id-switch-run { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+/* Above "Possible ID switches": reopens the last Track All summary (one full-width button) */
+.id-switch-track-summary { padding: 10px 16px; }
+.id-switch-track-summary .panel-btn { display: block; width: 100%; padding: 6px 8px; }
 .id-switch-row {
   display: flex; gap: 8px; align-items: flex-start; cursor: pointer;
   padding: 6px 16px 6px 13px; border-bottom: 1px solid var(--border-color);
@@ -6858,14 +7222,18 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-fix-tip { font-size: 12px !important; color: var(--text-muted) !important; }
 
 /* Image ID-switch check — progress dialog (ui/id-switch-modal.js) */
-.id-switch-progress { max-width: 520px; }
+/* Its backdrop does not grey the app out — as the loading overlay's does not — but still blocks it. */
+.multi-frame-modal-overlay.id-switch-progress-overlay { background: transparent; }
+/* A fixed width — room for "GPU: WebGPU, fp16 · load 100%" beside the load graph and its axes — so the
+   dialog does not change width as its progress text changes. */
+.id-switch-progress { width: 540px; max-width: calc(100vw - 32px); }
 .id-switch-progress-text { margin: 8px 0; font-size: 13px; min-height: 2.6em; }
 /* As .id-switch-pbar: the track clips the fill, the bar does not, so the playhead (.id-switch-phead) stands proud. */
 .id-switch-progress-bar { position: relative; height: 6px; }
 .id-switch-progress-track { position: absolute; inset: 0; border-radius: 3px; background: rgba(255,255,255,0.12); overflow: hidden; }
 .id-switch-progress-fill { height: 100%; width: 0; background: #4cc9f0; transition: width 0.2s; }
 .id-switch-progress-bar .id-switch-phead { left: 0; transition: left 0.2s; }   /* keep pace with the fill */
-.id-switch-progress-pct { margin-top: 8px; font-size: 24px; opacity: 0.75; font-variant-numeric: tabular-nums; }
+/* .id-switch-progress-pct: one rule with .loading-pct (Loading Overlay, above). */
 /* The percentage and device line on the left, a sample crop on the right, above Cancel. */
 .id-switch-progress-row { display: flex; align-items: flex-start; gap: 16px; }
 .id-switch-progress-info { flex: 1; min-width: 0; }
@@ -6874,9 +7242,56 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-progress-crop canvas { display: block; width: 128px; height: 128px; border-radius: 4px; background: #000; border: 1px solid var(--border-color); }
 .id-switch-progress-crop figcaption { margin-top: 4px; font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .id-switch-progress-crop:not(.has-crop) figcaption { color: var(--text-muted); font-style: italic; }
-/* What runs the model, and its load: reserves its line so the dialog does not jump when it appears. */
-.id-switch-progress-gpu { margin-top: 2px; min-height: 1.4em; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+/* The CPU line over the GPU line (what runs the model), each with its load, and their load graph to the right
+   (.load-line / .load-graph, ui/load-graph.js). The GPU line reserves its height so the dialog does not jump
+   when it appears, and so does the graph (visibility, not display). */
+.id-switch-progress-hw { display: flex; align-items: flex-start; gap: 10px; margin-top: 2px; }
+.id-switch-progress-lines { flex: 1; min-width: 0; }
+.id-switch-progress-cpu, .id-switch-progress-gpu { min-height: 1.4em; line-height: 1.4; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.id-switch-progress-cpu[hidden] { display: none; }
 .id-switch-progress-gpu.is-warn { color: var(--warning-color); }
+.id-switch-progress-graph { flex: none; }
+
+/* Load lines and graph (ui/load-graph.js) — the image check's progress dialog and the loading overlay.
+   The series colours are the first two slots of a CVD-validated categorical palette (dark steps; checked
+   against --bg-primary, the plot's background); text stays in text colours, and a line that has a series
+   wears its colour as a short legend key, with a hanging indent so a wrapped line continues after it. */
+:root { --load-cpu: #3987e5; --load-gpu: #d95926; }
+.load-line.has-series { padding-left: 16px; text-indent: -16px; }
+.load-line.has-series::before {
+  content: ''; display: inline-block; width: 10px; height: 2px; margin: 0 6px 0 0; border-radius: 1px;
+  vertical-align: middle; text-indent: 0; background: var(--load-gpu);
+}
+.load-line.is-cpu.has-series::before { background: var(--load-cpu); }
+.load-graph { position: relative; visibility: hidden; display: flex; align-items: flex-start; }   /* column gap: createLoadGraph */
+.load-graph.is-on { visibility: visible; }
+.load-graph svg {
+  display: block; overflow: hidden; background: var(--bg-primary); border: 1px solid var(--border-color);
+  box-sizing: content-box;   /* square corners: an axes box, whose corner ticks continue its edges */
+}
+.load-graph-grid { stroke: rgba(255, 255, 255, 0.08); stroke-width: 1; }
+.load-graph-line { fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.load-graph-line.is-cpu, .load-graph-dot.is-cpu { stroke: var(--load-cpu); }
+.load-graph-line.is-gpu, .load-graph-dot.is-gpu { stroke: var(--load-gpu); }
+.load-graph-cursor { stroke: var(--text-muted); stroke-width: 1; visibility: hidden; }
+.load-graph-dot { fill: var(--bg-primary); stroke-width: 1.5; visibility: hidden; }
+.load-graph-cursor.is-on, .load-graph-dot.is-on { visibility: visible; }
+/* The axes, recessive: 0/50/100% left of the plot (zero-height boxes spread over the plot's 0-100% span by
+   createLoadGraph, so each label's text centres on its level) and "60 s ago" … "now" under it. */
+.load-graph-y, .load-graph-x { font-size: 9px; color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.load-graph-y { display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; line-height: 0; }
+.load-graph-y span { display: block; height: 0; }
+.load-graph-x { display: flex; justify-content: space-between; line-height: 1; }   /* margin-top: createLoadGraph */
+/* The ticks, pointing out of the plot (MATLAB's TickDir 'out'), one per label; placed by createLoadGraph. */
+.load-graph-plot { position: relative; }
+.load-graph-tick { position: absolute; background: var(--text-muted); }
+/* The hover readout, above the graph and flush with its right edge. */
+.load-graph-tip {
+  position: absolute; right: 0; bottom: calc(100% + 4px); z-index: 1; white-space: nowrap; pointer-events: none;
+  padding: 3px 7px; border: 1px solid var(--border-light); border-radius: 4px; background: var(--bg-tertiary);
+  color: var(--text-primary); font-size: 11px; font-variant-numeric: tabular-nums; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+.load-graph-tip[hidden] { display: none; }
 
 /* Track All summary (ui/track-summary-modal.js). One column of label / value
    rows; no inner scroller — the identity list is capped instead
@@ -6899,7 +7314,8 @@ details[open] > summary.origin-rebase-block-title::before {
 .multi-frame-modal p.track-summary-note { margin: 8px 0 0; font-size: 12px; color: var(--warning-color); }
 .track-summary-section-title { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-secondary); margin: 14px 0 4px; }
 .track-summary-check.is-found .track-summary-check-text { color: var(--warning-color); }
-.track-summary-check.is-clear .track-summary-check-text { color: var(--success-color); }
+/* A clear check is neutral, not a pass: "nothing flagged" does not mean no switch */
+.track-summary-check.is-clear .track-summary-check-text { color: var(--text-primary); }
 .track-summary-check.is-failed .track-summary-check-text { color: var(--error-color); }
 .track-summary-check.is-off .track-summary-check-text,
 .track-summary-check.is-cancelled .track-summary-check-text,
@@ -6912,3 +7328,34 @@ details[open] > summary.origin-rebase-block-title::before {
 div.track-summary-steps { padding-left: 0; }
 .multi-frame-modal .track-summary-steps p { margin: 0; font-size: 12px; }
 .track-summary-modal .modal-actions { margin-top: 16px; flex-wrap: wrap; }
+/* With the Identities section the box widens, and its buttons stay in view while it scrolls (one scroller) */
+.track-summary-modal.has-gallery { width: 780px; }
+.track-summary-modal.has-gallery .modal-actions { position: sticky; bottom: -24px; margin-bottom: -24px; padding: 10px 0 24px; background: var(--bg-secondary); }
+/* Identities: per identity, five samples and a map of its path (ui/identity-gallery.js) */
+.identity-gallery { margin: 8px 0 4px; padding-top: 4px; border-top: 1px solid var(--border-color); }
+.identity-gallery-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-bottom: 4px; }
+.identity-gallery-head .track-summary-section-title { margin: 10px 0 2px; flex-basis: 100%; }
+.identity-gallery-view { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+.identity-gallery-view select { font-size: 12px; max-width: 200px; }
+.identity-gallery-key { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.identity-gallery-key-bar { width: 96px; height: 6px; border-radius: 3px; }
+.identity-gallery-row { display: grid; grid-template-columns: 64px auto 1fr; gap: 8px; align-items: start; padding: 6px 0; border-top: 1px solid var(--border-color); }
+.identity-gallery-head + .identity-gallery-row { border-top: 0; }
+.identity-gallery-name { font-size: 12px; font-weight: 600; padding-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.identity-gallery-tiles { display: flex; gap: 4px; }
+.identity-gallery-tile { margin: 0; width: 88px; cursor: pointer; border-top: 2px solid transparent; }
+.identity-gallery-tile canvas, .identity-gallery-blank { display: block; width: 88px; height: 88px; border-radius: 3px; }
+.identity-gallery-blank { background: rgba(255, 255, 255, 0.05); color: var(--text-muted); font-size: 10px; display: flex; align-items: center; justify-content: center; text-align: center; }
+.identity-gallery-tile.is-pending .identity-gallery-blank { animation: identity-gallery-wait 1.2s ease-in-out infinite alternate; }
+@keyframes identity-gallery-wait { from { opacity: 0.4; } to { opacity: 1; } }
+.identity-gallery-tile.is-empty { visibility: hidden; }
+.identity-gallery-tile figcaption { font-size: 10px; color: var(--text-muted); text-align: center; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.identity-gallery-tile:hover canvas { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* the hover preview of a sample: in the overlay (fixed), beside the tile; never takes the pointer */
+.identity-gallery-zoom { display: none; position: fixed; z-index: 1; pointer-events: none; padding: 6px; border-radius: 6px; background: var(--bg-primary); border: 1px solid var(--border-color); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); }
+.identity-gallery-zoom-img { display: block; border-radius: 3px; border-top: 3px solid transparent; }
+.identity-gallery-zoom-caption { margin-top: 4px; max-width: 320px; font-size: 11px; color: var(--text-secondary); text-align: center; font-variant-numeric: tabular-nums; }
+.identity-gallery-map { position: relative; min-height: 88px; }
+.identity-gallery-map-canvas { display: block; border-radius: 3px; }
+.identity-gallery-map-tip { display: none; position: absolute; pointer-events: none; font-size: 10px; padding: 1px 4px; border-radius: 3px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-color); font-variant-numeric: tabular-nums; }
+@media (max-width: 820px) { .identity-gallery-row { grid-template-columns: 1fr; } }

@@ -37,10 +37,11 @@ import {
     setCameraWeights,
     getTrackingThresholdDefs,
     setTrackingThresholds,
-} from './settings.js?v=c7dfbda309cd';
-import { getActiveSession, state, timeline } from './app-state.js?v=c7dfbda309cd';
-import { drawAllOverlays } from './rendering.js?v=c7dfbda309cd';
-import { installModalGeometry } from './modal-geometry.js?v=c7dfbda309cd';
+} from './settings.js?v=1b0a222473eb';
+import { getActiveSession, state, timeline } from './app-state.js?v=1b0a222473eb';
+import { drawAllOverlays } from './rendering.js?v=1b0a222473eb';
+import { installModalGeometry } from './modal-geometry.js?v=1b0a222473eb';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=1b0a222473eb';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -705,6 +706,8 @@ export function showSettingsModal(initialPanel) {
         // grey out in both the video overlays and the timeline.
         try { drawAllOverlays(state.currentFrame); } catch (e) { /* no active render yet */ }
         if (timeline && typeof timeline.redraw === 'function') timeline.redraw();
+        // The ID-switch box encloses only nonzero-weight nodes: re-fit it to the new weights.
+        refreshIdSwitchHighlight();
     }
 
     function onDocKeyDown(e) {
