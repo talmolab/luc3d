@@ -156,8 +156,11 @@ export function showSettingsModal(initialPanel) {
     cameraNames.forEach(function (name) { working.cameraWeights[name] = getCameraWeight(name); });
 
     // Seed the working tracking-threshold map from the catalog's effective values.
+    // `editedThresholds` records which ones the user changed here: Apply stores
+    // those even when they equal the default (see `setTrackingThresholds`).
     const thresholdDefs = getTrackingThresholdDefs();
     thresholdDefs.forEach(function (def) { working.thresholds[def.id] = def.value; });
+    const editedThresholds = new Set();
 
     // An on/off switch (the app's standard .toggle-switch) for a 0/1 setting.
     function makeToggle(checked, ariaLabel, onChange) {
@@ -605,7 +608,7 @@ export function showSettingsModal(initialPanel) {
 
         if (def.kind === 'toggle') {             // on/off settings: a switch, stored as 1 / 0
             row.appendChild(labelWrap);
-            row.appendChild(makeToggle(working.thresholds[def.id] > 0, def.label, function (on) { working.thresholds[def.id] = on ? 1 : 0; }));
+            row.appendChild(makeToggle(working.thresholds[def.id] > 0, def.label, function (on) { working.thresholds[def.id] = on ? 1 : 0; editedThresholds.add(def.id); }));
             thSection.body.appendChild(row);
             return;
         }
@@ -621,6 +624,7 @@ export function showSettingsModal(initialPanel) {
         input.addEventListener('input', function () {
             const v = parseFloat(input.value);
             if (isFinite(v)) working.thresholds[def.id] = v;
+            editedThresholds.add(def.id);
         });
         input.addEventListener('blur', function () {
             let v = parseFloat(input.value);
@@ -700,7 +704,7 @@ export function showSettingsModal(initialPanel) {
         applyBindings(working.keyMap);
         setNodeWeights(working.nodeWeights);
         setCameraWeights(working.cameraWeights);
-        setTrackingThresholds(working.thresholds);
+        setTrackingThresholds(working.thresholds, editedThresholds);
         teardown();
         // Reflect committed camera-inclusion changes immediately: excluded views
         // grey out in both the video overlays and the timeline.

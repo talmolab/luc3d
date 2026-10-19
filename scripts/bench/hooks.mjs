@@ -40,6 +40,7 @@ const THRESHOLD_DEFAULTS = {
     imageCheckHz: 2,
     imageCheckMaxViews: 3,
     imageCheckWebNN: 0,
+    reprojErrorThreshold: 50,
 };
 
 const SETTINGS_STUB = `

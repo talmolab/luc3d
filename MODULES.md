@@ -2836,8 +2836,13 @@ triangulation (aniposelib's `bundle_adjust_iter`, the one that also moves the
 cameras, is its *calibration* path). Costs 4.6–6.1x DLT: ~310 µs per keypoint
 versus ~54 µs, on a 5-camera / 15-node rig.
 
-**`'ba'` is guaranteed never worse than DLT on the reported error (issue #113).**
-Three properties make that true, and all three were wrong before:
+**With the reprojection error threshold off, `'ba'` is guaranteed never worse
+than DLT on the reported error (issue #113).** With it on — the Tracking Wizard
+default — almost: each method excludes views on its OWN solution, and
+`meanError` still counts the excluded observations, which BA's guard never sees.
+Measured at 1 group in 150, 1.005x, in `tests/test-triangulation-ba.js`'s
+gross-outlier sweep, which pins the threshold off for that reason. Three
+properties make the threshold-off guarantee true, and all three were wrong before:
 
 1. *Residual space.* Residuals are formed in the camera's **native (distorted)**
    pixel space — where the detections live, where the noise is i.i.d., and the
@@ -2928,10 +2933,10 @@ implement it, all in this module:
   `reTriangulateGroup`, both grouping sweeps in `ui/export-modals.js`,
   `ui/sessions-panes.js`'s move-view re-triangulate, `ui/ui-wiring.js`'s
   environment-skeleton solve, and `ui/identity-assignment.js`'s two group-writing
-  loops. **Deliberately NOT used by `ui/rendering.js`'s lazy reprojection fill:**
-  that path re-derives reprojections for 3D it does not own and does not write
-  back, so it must REPRODUCE the recorded solve exactly rather than fall back to a
-  global default. Rule of thumb — *writes* `points3d` → `resolveTriangulationMethod`;
+  loops. **Not used by the display fills** (`ui/rendering.js`'s lazy reprojection
+  fill, `ui/overlay-export-modal.js`'s `ensureReprojections`): they do not solve
+  at all. They reproject the stored 3D (`reprojectStoredPoints3d`) and only LABEL
+  the result with the group's recorded `triangulationMethod`. Rule of thumb — *writes* `points3d` → `resolveTriangulationMethod`;
   only *reads* it → match `triangulationMethod` exactly.
 - `findEquivalentPriorGroup(priorGroups, group)` → the prior group with identical
   membership (camera for camera, by `Instance` object identity), or null.
@@ -3137,6 +3142,9 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `options.reprojErrorThreshold`; returns
   `.method`, `.meanError`/`.errors` distorted-space and
   `.meanErrorUndistorted`/`.errorsUndistorted` ideal-pinhole-space),
+  `reprojectStoredPoints3d(instanceGroup, cameras, points3d, options)` (the same
+  result for 3D the group already holds, with no solve — see
+  `pose/triangulation-core.js`),
   `storeReprojectedInstances(group, triangulationResult, allCameras)`.
   **`storeReprojectedInstances` eagerly builds a full `Instance` (+ its own
   `occluded` array) per camera per group — a real memory cost when called for
@@ -3548,7 +3556,12 @@ reprojection (`reprojectPoint(s)`, `reprojectPointCamera(s)`, `cameraDepth` —
 the homogeneous `w`, POSITIVE in front of the camera, which any caller
 reprojecting into a camera it did not choose must gate on), errors
 (`computeReprojectionError(s)`, `computeMeanReprojectionError`), `invert3x3`,
-the full per-group pipeline `triangulateAndReproject`, and the cross-view
+the full per-group pipeline `triangulateAndReproject` (its camera setup + Step 1
+in the private `prepareGroupObservations`, its Steps 3-5 in the private
+`reprojectAndMeasure`), `reprojectStoredPoints3d` — the same result shape for a
+group's STORED 3D, reprojected and measured with no solve, through those same two
+helpers so a solved group and a stored one are scored by the same arithmetic —
+and the cross-view
 tracker's geometry — `hungarianAlgorithm`, `cameraCenter`, `backProjectToRay`,
 `backProjectToRays` (with their `_pGeometry` / `_pseudoInverse` WeakMap memo),
 `pointToRayDistance`, `pointsToRayDistances`, `computeFundamentalMatrix`,
@@ -3560,6 +3573,20 @@ isCameraTracked, getTrackingThreshold })` — the only app state the pipeline
 reads (unset = every camera included, no threshold; the main thread installs
 them, a worker gets resolved values via `options.includedCameras` /
 `options.reprojErrorThreshold`) — and `__triangulationKernelsForTest`.
+
+**Display paths reproject the stored 3D; they never re-solve it.** A reopened
+project stores 3D but not reprojections, and the windowed Triangulate All drops
+them, so `ui/rendering.js`'s lazy fill and `ui/overlay-export-modal.js`'s
+`ensureReprojections` derive them. They used to call `triangulateAndReproject`
+and keep the FILE's `points3d`, which drew the overlay, the per-node errors, the
+Info Panel's numbers and the exported video from a DIFFERENT 3D than the 3D view
+and the saved file whenever the solve's inputs had changed since — the
+reprojection error threshold (a project solved at 0 and reopened at the 50 px
+default), the Camera Views inclusion, or the method. `reprojectStoredPoints3d`
+gives the same errors `triangulateAndReproject` would for that 3D, except that
+its undistorted errors count every included view's observation: nothing records
+which ones a threshold left out of the solve. Covered by
+`tests/e2e/reopen-reprojects-stored-3d.mjs`.
 
 **Allocation-free hot paths, bit-identical by construction — except the DLT's
 null-vector solve.**
@@ -4909,7 +4936,12 @@ matrix**, is deliberately DLT — its temporary groups' 3D is discarded, only th
 relative ordering of the errors matters, and BA's ~3x-6x cost would buy nothing —
 and it passes `{ method: 'dlt' }` explicitly rather than relying on the default, so
 that no call site in the app depends on that default (enforced by
-`tests/test-triangulation-method-propagation.mjs`). (This module already used `getDefaultTriangulationMethod()` for its
+`tests/test-triangulation-method-propagation.mjs`). It also passes
+`reprojErrorThreshold: 0`: the threshold nulls every node over it before the mean
+is taken, so with the setting's 50 px default every cost came out under 50 and the
+`< 50` acceptance could never reject a wrong pairing (same test). The cost matrix
+is unreachable from the UI today — `runSingleFrameTriangulation` /
+`showMultiFrameModal` lost their callers in `5612c920`. (This module already used `getDefaultTriangulationMethod()` for its
 `triangulateCurrentFrame` call, so honoring the user's method here is consistent
 rather than new policy.)
 - `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`.
@@ -6258,13 +6290,12 @@ every file, with each tile letterboxed into it.
 
 **Reprojection fill.** `ensureReprojections()` is the export-side mirror of
 `ui/rendering.js`'s lazy fill, so exporting a triangulated-but-never-viewed range
-still draws reprojections. It **resolves the method from the group**
-(`triangulationMethod === 'ba' ? 'ba' : 'dlt'`) exactly as the display path does:
-omitting the option silently re-solves with DLT, which would burn DLT
-reprojections into the video while the app shows BA's, breaking the
-"exported 3D == displayed 3D" invariant. Guarded by
-`tests/test-triangulation-method-propagation.mjs`, which scans every
-`triangulateAndReproject` call site in the repo.
+still draws reprojections. Like that fill it **reprojects the stored 3D**
+(`reprojectStoredPoints3d`) and never re-solves: a re-solve burns into the video
+the reprojections of a different 3D than the one displayed and saved whenever
+the solve's inputs changed since (the reprojection error threshold, Camera
+Views, the method), breaking the "exported 3D == displayed 3D" invariant (#113).
+The group's `triangulationMethod` only labels the result.
 
 **Still-frame previewer, no playback.** The modal has **no transport**: no
 play/pause, no frame stepping, no `setPlaying`/`playTimer`. Scrubbing the track is
@@ -6505,7 +6536,7 @@ exported but the amber `?` editing prompt is not.
 - `../pose/triangulation.js` — `getInstanceGroupsForFrame`,
   `ensureLazyFrameData`, `ensureLazyTrailWindow` (the frames behind the first
   exported frame and the preview frame that the node trails draw),
-  `triangulateAndReproject`, `storeReprojectedInstances`,
+  `reprojectStoredPoints3d`, `storeReprojectedInstances`,
   `sessionHasCalibration`.
 - `../pose/pose-data.js` — `points3dNodeCount`.
 - `../import-export/save-load.js` — `setStatus`.
@@ -7147,29 +7178,26 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   element now (no canvas repaint, see `ui/timeline.js`), so it is cheap either
   way; the `{ playback: true }` it is passed while playing changes nothing.
 
-  **Lazy reprojection fill — honors the group's triangulation method.** A group
-  with `points3d` but no `reprojections`/`reprojectedInstances` is re-solved here
-  and the result is written into `state.triangulationResults` (which is what the
-  Info Panel's headline error, per-camera rows and per-instance breakdown read).
-  That re-solve passes
-  `{ method: group.triangulationMethod === 'ba' ? 'ba' : 'dlt' }` — the same
-  method-preserving rule as `reTriangulateGroup`
-  (`pose/triangulation.js`) — and carries `method` through into the stored
-  result. It previously passed **no options**, and
-  `triangulateAndReproject`'s `options.method === 'ba' ? 'ba' : 'dlt'` default is
-  SILENT, so it re-solved with DLT. That is why **"Triangulate All ▸ Bundle
-  Adjustment" appeared to do nothing:** the windowed sweep
-  (`sweepTriangulateAllFrames`) deliberately drops `reprojections` and
-  `state.triangulationResults` project-wide (~1.9 GB at 531,799 groups — see its
-  docstring), so this fill is the ONLY thing that repopulates them, and the DLT
-  re-solve overwrote BA's error with DLT's while `group.triangulationMethod`
-  still read `'ba'` — so the panel labelled the number "Bundle Adjustment" and
-  showed DLT's value. The single-frame `triangulateCurrentFrame` path was
-  unaffected because it stores its own result AND populates `reprojections`, so
-  this condition is false. `points3d` is deliberately **not** written back
-  (the group already holds the authoritative 3D from the sweep); with the method
-  honored the two are bit-identical, which
-  `tests/e2e/triangulate-all-ba-display.mjs` asserts directly.
+  **Lazy reprojection fill — reprojects the STORED 3D, never re-solves it.** A
+  group with `points3d` but no `reprojections`/`reprojectedInstances` (a reopened
+  project, or after the windowed sweep, `sweepTriangulateAllFrames`, which
+  deliberately drops `reprojections` and `state.triangulationResults`
+  project-wide — ~1.9 GB at 531,799 groups, see its docstring) gets them from
+  `reprojectStoredPoints3d(group, cameras, group.points3d, { method })`, and the
+  result is written into `state.triangulationResults` (which is what the Info
+  Panel's headline error, per-camera rows and per-instance breakdown read). This
+  fill is the ONLY thing that repopulates them. It used to RE-SOLVE with
+  `triangulateAndReproject` and keep the stored `points3d`, so the numbers came
+  from a different 3D than the 3D view and the saved file whenever the solve's
+  inputs had changed — the reprojection error threshold, Camera Views, or the
+  method. The method case is the one that showed first: passing no options
+  re-solved BA groups with DLT, which is why **"Triangulate All ▸ Bundle
+  Adjustment" appeared to do nothing** (the panel labelled DLT's number "Bundle
+  Adjustment"). `method` — `group.triangulationMethod === 'ba' ? 'ba' : 'dlt'` —
+  now only LABELS the result. The single-frame `triangulateCurrentFrame` path
+  stores its own result AND populates `reprojections`, so this condition is
+  false there. Covered by `tests/e2e/triangulate-all-ba-display.mjs` and
+  `tests/e2e/reopen-reprojects-stored-3d.mjs`.
 
   This fill stays **outside** the collapsed-info-panel gate (see
   `ui/panel-visibility.js`). It is shared, not panel-only: the canvas
@@ -7253,7 +7281,7 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 **Imports from project modules.**
 - `./app-state.js` — `state`, `interactionManager`, `timeline`, `isViewDocked`.
 - `../pose/triangulation.js` — `ensureLazyFrameData`,
-  `getInstanceGroupsForFrame`, `triangulateAndReproject`,
+  `getInstanceGroupsForFrame`, `reprojectStoredPoints3d`,
   `storeReprojectedInstances`.
 - `./overlays.js` — `drawFrameOverlays`.
 - `./settings.js` — `isCameraTracked` (passed to `drawFrameOverlays` as
@@ -10500,7 +10528,7 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   (`pose/tracker.js` `trackAll`/`trackCurrentFrame`); at least 2 views must stay
   included or tracking aborts with a warning.
 - `getTrackingThresholdDefs()` / `getTrackingThreshold(id)` /
-  `getTrackingThresholds()` / `setTrackingThresholds(map)` — read/write the
+  `getTrackingThresholds()` / `setTrackingThresholds(map, edited)` — read/write the
   tracker's user-editable thresholds. `getTrackingThresholdDefs` returns the
   wizard's render catalog `[{ id, label, default, value, min, max, step, desc, kind }]`
   (`kind`: `'toggle'` for on/off settings, drawn as a switch; else `'number'`),
@@ -10508,7 +10536,8 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   only (`filterMinVisibleNodes`, `filterMinInstanceScore`, `corr2dWeight`,
   `corr3dWeight`, `velocityThreshold`, `distanceThreshold`, `timePenalty`,
   `stale`, `matchGate` (0/1 toggle for the CrossViewTracker match gate),
-  `reprojErrorThreshold` (px, default 50; 0 = off), `autoSwitchCheck` — 0/1, run the body-size ID-switch
+  `reprojErrorThreshold` (px, default `REPROJ_ERROR_THRESHOLD_DEFAULT` = 50, which
+  its `desc` quotes; 0 = off), `autoSwitchCheck` — 0/1, run the body-size ID-switch
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
   0/1, the image check likewise, default 0; `imageChangeThreshold` -0.8;
   `imageCheckHz` 2; `imageCheckMaxViews` 3; `imageCheckWebNN` — 0/1, try WebNN,
@@ -10516,8 +10545,14 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   `reprojWeight`, `minMatchScore`, `prevIdentityBonus`, `reprojGate2/3/4`,
   `track3dWeight`) drive the bench-only luc3d matcher and are hidden from the UI
   but still resolve via `getTrackingThreshold`. `getTrackingThresholds` returns
-  the effective `{ id: value }` map the tracker snapshots per run; values clamp to
-  range and entries equal to the default are dropped.
+  the effective `{ id: value }` map the tracker snapshots per run. On
+  `setTrackingThresholds` values clamp to range, and an entry equal to its
+  default is dropped — it then follows the default if that ever changes — UNLESS
+  the user chose it: its id is in `edited` (the ids changed in the dialog) or it
+  was already stored. Dropping every default-valued entry is what moved users
+  who had deliberately set the reprojection error threshold to 0 onto 50 when 50
+  became the default: with 0 the default, nothing had been stored. Covered by
+  `tests/e2e/settings-wizard-toggles.mjs`.
 - `getActions()` — catalog snapshot `[{ id, label, category, binding,
   defaultBinding, editable, dispatched }]` with effective bindings, for the modal.
 - `getBinding(id)` — effective binding string (user override or catalog default).
@@ -10608,7 +10643,9 @@ switch stored as `1`/`0` (`makeToggle`). Covered by
 `tests/e2e/settings-wizard-toggles.mjs`. All edits mutate a local `working`
 state only (only editable bindings are tracked); nothing commits until **Apply**
 (`setDefaultTriangulationMethod` + `applyBindings` + `setNodeWeights` +
-`setCameraWeights` + `setTrackingThresholds`), which then repaints overlays +
+`setCameraWeights` + `setTrackingThresholds`, passed `editedThresholds` — the ids
+of every threshold field or switch the user changed, which are stored even when
+they equal the default), which then repaints overlays +
 timeline so excluded views grey immediately, and re-fits the ID-switch box
 (`refreshIdSwitchHighlight`), which encloses only nonzero-weight nodes. Cancel / close `×` / backdrop click
 / Escape discard. A

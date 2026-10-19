@@ -261,6 +261,10 @@ export function setCameraWeights(map) {
 // Tracking Wizard's "Tracking Thresholds" section AND the default the tracker
 // falls back to. `min`/`max`/`step` drive the number field; `desc` is the inline
 // explanation shown under the label.
+//
+// The reprojection error threshold's default (px), named because its `desc`
+// quotes it too, and two hand-written copies of one number drift apart.
+const REPROJ_ERROR_THRESHOLD_DEFAULT = 50;
 const TRACKING_THRESHOLDS = [
     {
         id: 'epipolarDecay', label: 'Epipolar error decay', default: 10,
@@ -391,9 +395,9 @@ const TRACKING_THRESHOLDS = [
         desc: 'Also try the browser\'s WebNN API, which on Windows can use NVIDIA tensor cores (Chrome: enable chrome://flags/#web-machine-learning-neural-network). The first frames are embedded both ways; WebNN is kept only if it is faster and its embeddings match the calibrated WebGPU model. "About these flags" in the ID Switches tab says which was used. On macOS (Chrome 154) it measured ~10x slower, CPU only, so the trial keeps WebGPU there.',
     },
     {
-        id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 50,
+        id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: REPROJ_ERROR_THRESHOLD_DEFAULT,
         min: 0, max: 500, step: 1,
-        desc: 'Robust triangulation: after an initial 3D solve, drop any 2D node whose reprojection error in a view exceeds this many pixels, then re-triangulate that node from the remaining reliable views. A node left with fewer than 2 reliable views is dropped from 3D. Default 50; 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless.',
+        desc: 'Robust triangulation: after an initial 3D solve, drop any 2D node whose reprojection error in a view exceeds this many pixels, then re-triangulate that node from the remaining reliable views. A node left with fewer than 2 reliable views is dropped from 3D. Default ' + REPROJ_ERROR_THRESHOLD_DEFAULT + '; 0 = disabled (use all views). It is in image pixels, so the same number is a tighter tolerance on high-resolution video than on low-resolution video. Views excluded in the Camera Views panel never contribute to triangulation regardless.',
     },
 ];
 
@@ -454,16 +458,23 @@ export function getTrackingThresholds() {
 }
 
 // Commit an { id: value } override map (from the Tracking Wizard's Apply button).
-// Values are clamped to each threshold's range; entries equal to the default are
-// dropped so the stored set stays minimal.
-export function setTrackingThresholds(map) {
+// Values are clamped to each threshold's range. A value equal to its default is
+// dropped, so it keeps following the default if that ever changes — unless the
+// user CHOSE it: `edited` lists the ids changed in this dialog, and a value
+// already stored was an earlier choice. Dropping every default-valued entry is
+// what moved users who had deliberately set the reprojection error threshold to
+// 0 onto 50 when 50 became the default: with 0 the default, nothing was stored.
+export function setTrackingThresholds(map, edited) {
+    var prev = _settings.trackingThresholds || {};
+    var chosen = new Set(edited || []);
     var next = {};
     if (map && typeof map === 'object') {
         Object.keys(map).forEach(function (id) {
             var def = _thrById.get(id);
             if (!def) return;
             var v = clampThreshold(def, map[id]);
-            if (v != null && v !== def.default) next[id] = v;
+            if (v == null) return;
+            if (v !== def.default || chosen.has(id) || Object.prototype.hasOwnProperty.call(prev, id)) next[id] = v;
         });
     }
     _settings.trackingThresholds = next;
