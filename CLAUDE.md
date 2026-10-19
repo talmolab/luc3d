@@ -364,7 +364,9 @@ terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-cor
   `-bf 3 -g 10`): 18 of 30 frames (60%) decoded wrong before this patch, 0
   after. Fixed by sorting `_frameTimes` ascending by timestamp at the end of
   `initialize()`, marked `// LUCID local patch (#115)`. **Re-apply after any
-  re-vendor** (grep the marker) and report upstream to sleap-io/mediabunny.
+  re-vendor** (grep the marker). Reported upstream as **sleap-io.js#262** (the
+  bug is sleap-io.js's, not mediabunny's: mediabunny documents decode order);
+  drop this patch once a sleap-io.js release sorts `_frameTimes`.
   Covered by `tests/e2e/mediabunny-bframe-decode-order.mjs`. Its fixture video
   is committed through a `.gitignore` exception (`*.mp4` is otherwise ignored)
   and regenerated — together with its ground-truth PNGs, never separately — by
@@ -382,7 +384,8 @@ terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-cor
   walk, `Object.is` per timestamp and in order, plus backend index == full walk
   sorted; on a generated `-bf 3` B-frame video, and with `DATASET=` on real
   files). Marked `// LUCID local patch (luc3d frame-index)`. **Re-apply after any
-  re-vendor** (grep the marker) and report upstream to sleap-io.js.
+  re-vendor** (grep the marker). Reported upstream as **sleap-io.js#262**; drop
+  this patch once a sleap-io.js release passes `metadataOnly`.
   **LOCAL PATCH (sleap-io.js#231):** `lib/sleap-io/chunk-X76PRJK6.js` writes the
   SLP `instances` table with dtype `"<d"` (h5wasm float64) instead of upstream's
   `"<f8"` — h5wasm does NOT speak numpy dtype strings and parses `"<f8"` as
