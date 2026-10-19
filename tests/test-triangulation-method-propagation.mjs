@@ -67,16 +67,17 @@ function sourceFiles() {
  * balanced scan from the opening paren, so a nested call or an object literal in
  * an earlier argument cannot fool the comma splitting.
  */
-function callsIn(text) {
+function callsIn(text, fn = 'triangulateAndReproject') {
     const calls = [];
-    const needle = 'triangulateAndReproject(';
+    const needle = fn + '(';
+    const defn = new RegExp('function\\s+' + fn + '\\b');
     let i = 0;
     while ((i = text.indexOf(needle, i)) !== -1) {
         // Skip the definition itself and any comment/doc mention.
         const lineStart = text.lastIndexOf('\n', i) + 1;
         const lineEnd = text.indexOf('\n', i);
         const line = text.slice(lineStart, lineEnd < 0 ? text.length : lineEnd);
-        if (/^\s*(\*|\/\/)/.test(line) || /function\s+triangulateAndReproject/.test(line)) {
+        if (/^\s*(\*|\/\/)/.test(line) || defn.test(line)) {
             i += needle.length;
             continue;
         }
@@ -97,6 +98,7 @@ function callsIn(text) {
             line: text.slice(0, i).split('\n').length,
             nArgs: args.length,
             third: (args[2] || '').trim(),
+            fourth: (args[3] || '').trim(),
         });
         i = j > i ? j : i + needle.length;
     }
@@ -141,6 +143,22 @@ check(unresolved.length === 0,
     `every other caller RESOLVES its method (the group's own method, the Settings ` +
     `default, or one threaded in) rather than inventing one ` +
     `(offenders: ${JSON.stringify(unresolved.map(c => `${c.file}:${c.line} -> ${c.third.slice(0, 60)}`))})`);
+
+// `triangulateMultiFrameInstances(start, end, onProgress, method)` has the same
+// silent default — an omitted 4th argument is DLT — and Triangulate Multiple
+// Frames omitted it, solving with DLT whatever Settings ▸ Default Triangulation
+// said. Its callers must name a method too.
+const ranged = [];
+for (const rel of sourceFiles()) {
+    const text = fs.readFileSync(path.join(repoRoot, rel), 'utf8');
+    for (const c of callsIn(text, 'triangulateMultiFrameInstances')) ranged.push({ file: rel, ...c });
+}
+check(ranged.length >= 1,
+    `found the triangulateMultiFrameInstances call sites (${ranged.length})`);
+const rangedNoMethod = ranged.filter(c => c.nArgs < 4 || !c.fourth || /^'dlt'$/.test(c.fourth));
+check(rangedNoMethod.length === 0,
+    `EVERY triangulateMultiFrameInstances call passes a resolved method, never none or a bare 'dlt' ` +
+    `(offenders: ${JSON.stringify(rangedNoMethod.map(c => `${c.file}:${c.line}`))})`);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 console.log(failed === 0 ? 'PASS' : 'FAIL');

@@ -4756,7 +4756,12 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   (`dropAllDerivedTriangulationState`) and stores no reprojections or
   `state.triangulationResults`; its timeline pass walks the frames it
   regrouped (see "Nor does any other bulk path" under
-  `pose/triangulation.js`).
+  `pose/triangulation.js`). Solves with Settings ▸ Default Triangulation
+  (`resolveTriangulationMethod(null)`). A frame the sweep visits with no
+  FrameGroup (3D grouping, no 2D — `sweepLazyFrameWindows`' contract) is
+  skipped and its groups left as they are, as in Group by Identity: without
+  that guard it threw part-way through, after every earlier frame had been
+  regrouped and before any later one was.
 - `groupByIdentityAndTriangulateAll(explicitMethod)` — bulk-group then
   triangulate. `explicitMethod` (`'ba'|'dlt'`) is the user's explicit pick when
   there was one — "Triangulate All ▸ DLT" routes here and passes `'dlt'`; omitting
@@ -4959,6 +4964,14 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `showTriangulateMultiFrameModal()` — frame-range triangulation modal
   (`triangulateMultiFrameInstances`); its average error comes from the
   returned `errSum` / `errN`, and its timeline pass walks `result.frames`.
+  Its Start / End boxes show **1-based** frame numbers; Continue converts them
+  to 0-based indices before validating and solving (reading them as indices
+  made the default full range check a frame past the end and refuse, and ran
+  every typed range one frame late). It solves with Settings ▸ Default
+  Triangulation (`resolveTriangulationMethod(null)` — the modal has no method
+  picker) and names the method in its progress, summary and status text.
+  Covered by `tests/e2e/triangulate-range-modal.mjs` (also Group by Track's
+  3D-only-frame guard).
 - `exportLabels()` — JSON labels export.
 - `exportPoints3dH5()` — points3d H5 export.
 - `exportReprojH5()` — reprojection H5 export.

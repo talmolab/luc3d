@@ -625,6 +625,14 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
     // Memory-bounded sweep over every frame (windows + release on lazy sessions);
     // also fixes the prior silent-drop (only resident frames were grouped before).
     await sweepTriangulationFrames(session, function (frameIdx, fg) {
+        // `fg` is undefined for a frame that has 3D grouping but no 2D (the
+        // sweep's contract — see `sweepLazyFrameWindows`). Without this guard the
+        // first `fg.instances` below throws, which aborts the whole operation
+        // PART-WAY THROUGH: every earlier frame's groups have already been
+        // deleted and rebuilt, every later frame's have not. Such a frame has no
+        // 2D to group by track, so its groups are left as they are — as in
+        // `groupByIdentityAndTriangulateAll`.
+        if (!fg) return;
 
         // 1. Collect ALL instances across all cameras, keyed by trackIdx
         //    trackIdx -> { camName -> Instance }
@@ -2521,11 +2529,16 @@ export function showTriangulateMultiFrameModal() {
     });
 
     document.getElementById('tfContinue').addEventListener('click', function () {
-        var startFrame = parseInt(inputStart.value);
-        var endFrame = parseInt(inputEnd.value);
-        if (isNaN(startFrame) || isNaN(endFrame) || startFrame > endFrame) {
-            return;
-        }
+        // The boxes show 1-based frame numbers (`syncSliders` writes `s + 1`);
+        // everything below is 0-based. Reading them as indices made the default
+        // full range (1 … N) check index N, which does not exist, so the modal
+        // refused its own defaults — and ran every typed range one frame late.
+        var startFrame = parseInt(inputStart.value) - 1;
+        var endFrame = parseInt(inputEnd.value) - 1;
+        if (isNaN(startFrame) || isNaN(endFrame)) return;
+        startFrame = Math.max(0, startFrame);
+        endFrame = Math.min(maxFrame, endFrame);
+        if (startFrame > endFrame) return;
 
         // Validate: check all frames in range have identity assignment
         var missingFrames = [];
@@ -2565,11 +2578,19 @@ async function runMultiFrameTriangulation(startFrame, endFrame, overlayEl) {
     var progressLabel = document.getElementById('tfProgressLabel');
     var progressFill = document.getElementById('tfProgressFill');
 
+    // THE method for the whole range: Settings ▸ Default Triangulation, as for
+    // Group by Track. This modal has no method picker, so the configured default
+    // is the user's instruction; it used to pass none, which solved with DLT
+    // whatever the setting said. Named in the progress, summary and status text
+    // so the method — and its cost, Refined running ~3x-6x DLT — is visible.
+    var method = resolveTriangulationMethod(null);
+    var methodLabel = triangulationMethodLabel(method);
+
     var result = await triangulateMultiFrameInstances(startFrame, endFrame, function (completed, total) {
         var pct = Math.round((completed / total) * 100);
-        if (progressLabel) progressLabel.textContent = completed.toLocaleString('en-US') + ' / ' + total.toLocaleString('en-US') + ' frames';
+        if (progressLabel) progressLabel.textContent = completed.toLocaleString('en-US') + ' / ' + total.toLocaleString('en-US') + ' frames via ' + methodLabel;
         if (progressFill) progressFill.style.width = pct + '%';
-    });
+    }, method);
 
     // Update display for current frame
     drawAllOverlays(state.currentFrame);
@@ -2580,7 +2601,7 @@ async function runMultiFrameTriangulation(startFrame, endFrame, overlayEl) {
 
     // Show summary and close button
     if (progressLabel) {
-        progressLabel.textContent = 'Done — triangulated ' + result.triangulated.toLocaleString('en-US') + ' frames (' + result.totalGroups.toLocaleString('en-US') + ' groups, avg error: ' + avgError + 'px)';
+        progressLabel.textContent = 'Done — triangulated ' + result.triangulated.toLocaleString('en-US') + ' frames (' + result.totalGroups.toLocaleString('en-US') + ' groups, avg error: ' + avgError + 'px) via ' + methodLabel;
     }
 
     var actionsEl = document.getElementById('tfActions');
@@ -2592,7 +2613,7 @@ async function runMultiFrameTriangulation(startFrame, endFrame, overlayEl) {
         });
     }
 
-    setStatus('Multi-frame triangulation complete: ' + result.triangulated.toLocaleString('en-US') + '/' + totalFrames.toLocaleString('en-US') + ' frames, avg error: ' + avgError + 'px', 'success');
+    setStatus('Multi-frame triangulation complete: ' + result.triangulated.toLocaleString('en-US') + '/' + totalFrames.toLocaleString('en-US') + ' frames via ' + methodLabel + ', avg error: ' + avgError + 'px', 'success');
 
     // Update timeline: mark frames with grouped UserInstances, refresh track
     // bars. The frames re-solved are `result.frames`: `state.triangulationResults`

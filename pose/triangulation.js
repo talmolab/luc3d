@@ -1961,7 +1961,9 @@ export function updateTimelineForFrame(frameIdx) {
  * and is responsible for DOM updates, post-loop redraws, and timeline syncs.
  *
  * `onProgress(completed, total)` is invoked per frame; pass it to drive a
- * progress bar.
+ * progress bar. `method` (`'ba'|'dlt'`) governs every solve; omitted is DLT, so
+ * callers name it (`tests/test-triangulation-method-propagation.mjs`) — the
+ * modal passes Settings ▸ Default Triangulation.
  *
  * Keeps only the 3D (`points3d`, `usedCameras`, `triangulationMethod`) and
  * the error stats, as both Triangulate All paths do (see
