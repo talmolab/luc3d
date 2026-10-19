@@ -5527,9 +5527,27 @@ project looking saved. Three details:
   and asking the user to approve something that then does nothing makes the
   dialog read as noise. The `addEdge` call inside the callback keeps its own
   guard, since the dialog is dismissible and the model can move under it.
-- **`propagateNodeAddedAllSessions` passes `{hidden: true}`** — this is the
+- **`propagateNodeAddedToSessions` passes `{hidden: true}`** — this is the
   INTERACTIVE path, so the new node has to be reachable. See
   `Session.propagateNodeAdded`.
+- **The callback's `sessions` argument is the SCOPE, and the handlers honour
+  it.** `confirmSkeletonEdit` settles which sessions are on this skeleton
+  before the mutation and passes them in. `adoptEditedSkeleton(sk, sessions)`
+  re-points exactly those and remembers `sk` as the project default;
+  `propagateNodeAddedToSessions` / `propagateNodeRemovedFromSessions` re-shape
+  exactly those. Deliberately NOT `setProjectSkeleton`, which re-points every
+  loaded session — a session on a differently-shaped skeleton is excluded from
+  the dialog's counts and named separately, so adopting it here would discard
+  the skeleton it was loaded with. The two whole-project paths,
+  `applyProjectSkeleton` and the Load Skeleton file reader, still call
+  `setProjectSkeleton`: replacing every session's skeleton is what they are
+  for.
+- **`dropDerivedTriangulationResults()` runs after both node propagations.**
+  `state.triangulationResults` (and each session's own copy) is a per-frame
+  snapshot of the last solve at the OLD node count; `ui/rendering.js`'s fill
+  concatenates onto whatever is stored, so a surviving entry makes the
+  per-instance breakdown list every animal twice. Node edits only — a rename or
+  an edge edit moves no coordinates.
 - **`#skeletonWarnOffNote` is the way back from "Do not show again."**
   `populateSkeletonTable` sets its `display` from
   `isSkeletonEditWarningSuppressed()` (so it costs nothing in the ordinary
@@ -13543,7 +13561,10 @@ Six things about it:
   beside the control it belongs to.
 
 **Key exports.**
-- `confirmSkeletonEdit(edit, onConfirm)` — `edit` is
+- `confirmSkeletonEdit(edit, onConfirm)` — `onConfirm` is called with the
+  sessions the edit applies to (those on the open session's skeleton), in every
+  path including the two that never open the dialog. The split is taken BEFORE
+  the callback mutates, which is the only moment it can be. `edit` is
   `{kind: 'add-node'|'remove-node'|'rename-node'|'add-edge'|'remove-edge', label}`.
 - `isSkeletonEditWarningSuppressed()` / `setSkeletonEditWarningSuppressed(off)` —
   the "Do not show again" preference, read and cleared by `ui/info-panel.js`'s

@@ -1586,7 +1586,7 @@ sees.
 
 All five edits — add node, remove node, rename node, add edge, remove edge —
 now go through `confirmSkeletonEdit` (`ui/skeleton-edit-warning.js`), counting
-with `pose/skeleton-edit-impact.js`. Eight things are load-bearing:
+with `pose/skeleton-edit-impact.js`. Ten things are load-bearing:
 
 - **The dialog is a title, ONE SENTENCE and the counts.** A bulleted
   `What changes` block and an always-on `There is no undo…` caution were both
@@ -1607,8 +1607,32 @@ with `pose/skeleton-edit-impact.js`. Eight things are load-bearing:
   and the by-session block deliberately carries **no `Total` row**, because
   that is the headline restated a few rows down and two copies of one number
   invite the reader to check them against each other instead of reading either.
-  A session on a DIFFERENT-shaped skeleton is NOT counted — the edit does not
-  reach it — and is named separately instead of silently shortening the total.
+  A session on a DIFFERENT-shaped skeleton is NOT counted and is named
+  separately instead of silently shortening the total.
+- **The APPLY is scoped the same way the counts are.** `confirmSkeletonEdit`
+  settles which sessions are on this skeleton BEFORE the caller mutates it —
+  afterwards every session either already points at the mutated object or has a
+  node count that no longer matches it, so the question is only answerable then
+  — and hands that list to `onConfirm`. The handlers re-point and propagate to
+  exactly those sessions (`adoptEditedSkeleton`), never
+  `setProjectSkeleton`, which re-points EVERY loaded session: a project really
+  can hold two shapes, since `promptImportSkeletonForAllSessions` lets the user
+  Skip, and adopting the odd session here would discard the skeleton it was
+  loaded with and leave its instances at a count its skeleton does not
+  describe. A dialog that counts two sessions must not edit three.
+- **A node edit drops `state.triangulationResults`.** That map is a per-frame
+  SNAPSHOT of the last solve — each group's `points3d`, `reprojections` and
+  per-node `errors` — and a node edit has just re-shaped all three, so every
+  entry describes the project at the previous node count. It is dropped rather
+  than re-shaped, exactly as `ui/origin-rebase.js`'s `finishRebase` drops it
+  after the 3D moves; the draw path re-derives a frame's entry when it is
+  shown. Left behind, that fill CONCATENATES the fresh entry onto the stale one
+  and the info panel's per-instance node breakdown renders one table per entry,
+  so every animal is listed TWICE with the first copy stopping at the old node
+  count (measured on the real `slap_GT/10072022145420` session: four animals,
+  eight tables). Both the live map and each session's own copy go. Only the
+  NODE edits need it — a rename and an edge edit move no coordinates, so
+  nothing in the snapshot goes stale.
 - **A lazy project is told, loudly, not to do this.** Both propagation methods
   are RESIDENT-ONLY by necessity: the columnar store has a fixed node count
   per instance, so a skeleton edit cannot be expressed in it at all and a
