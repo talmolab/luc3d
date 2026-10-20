@@ -15,7 +15,12 @@
  * Both vendored h5wasm builds now re-read any all-zero part of a WORKERFS read
  * (`lucidColdReadGuard`, between the `LUCID local patch (cold-read)` markers):
  * a hole comes back as the real bytes, and bytes that really are zero cost one
- * small re-read. Every reader of a File through h5wasm goes through it — the
+ * small re-read. The re-read also covers the 4 KiB block on each side of the
+ * all-zero run, because a run of zeros need not end on a block boundary: on
+ * 167 MB .slp files read cold (2026-10-19) every byte the first version of the
+ * guard left wrong was a zero in the partly-zero block right after the run it
+ * had re-read (93 of 93 such blocks). §2b and §4b pin that, with the
+ * all-zero-blocks-only rule as their negative control. Every reader of a File through h5wasm goes through it — the
  * app's SLP worker (eager parse, lazy analysis .h5), frame-worker.js, and
  * sleap-io.js's streaming worker (lazy .slp), which loads the IIFE build.
  *
@@ -64,10 +69,12 @@ function fakeContents(bytes, name) {
  * A FileReaderSync stand-in over `bytes`. Each page start in `holes` reads as
  * zeros the first time a read covers it (a page not yet downloaded) — or the
  * first `k` times, given as `[page, k]` — and as the real bytes after that.
- * `persistent` pages read as zeros every time.
+ * `{ from, to }` zeroes any byte range instead of one page, also on the first
+ * read only. `persistent` pages read as zeros every time.
  */
 function fakeReader(bytes, holes, persistent) {
-    const left = new Map((holes || []).map(h => Array.isArray(h) ? h : [h, 1]));
+    const ranges = (holes || []).filter(h => h && h.to !== undefined).map(h => ({ ...h, k: h.k || 1 }));
+    const left = new Map((holes || []).filter(h => !(h && h.to !== undefined)).map(h => Array.isArray(h) ? h : [h, 1]));
     const r = {
         calls: 0,
         readAsArrayBuffer(blob) {
@@ -78,6 +85,11 @@ function fakeReader(bytes, holes, persistent) {
                 if (k <= 0 || p + PAGE <= blob.start || p >= blob.end) continue;
                 left.set(p, k - 1);
                 zero(p);
+            }
+            for (const h of ranges) {
+                if (h.k <= 0 || h.to <= blob.start || h.from >= blob.end) continue;
+                h.k--;
+                out.fill(0, Math.max(0, h.from - blob.start), Math.min(out.length, h.to - blob.start));
             }
             for (const p of persistent || []) if (p + PAGE > blob.start && p < blob.end) zero(p);
             return out.buffer;
@@ -96,6 +108,28 @@ function readVia(W, bytes, reader, position, length) {
 }
 
 const sameBytes = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+/**
+ * The FIRST version of the guard, as a negative control: it re-read only the
+ * all-zero 4 KiB blocks, so zeros in a block that also holds real bytes stayed.
+ */
+function blocksOnlyRead(W) {
+    return function (stream, buffer, offset, length, position) {
+        if (position >= stream.node.size) return 0;
+        const chunk = stream.node.contents.slice(position, position + length);
+        buffer.set(new Uint8Array(W.reader.readAsArrayBuffer(chunk)), offset);
+        const end = position + chunk.size;
+        for (let b = position - position % 4096; b < end; b += 4096) {
+            const lo = Math.max(b, position), hi = Math.min(b + 4096, end);
+            let zero = true;
+            for (let q = offset + lo - position; q < offset + hi - position; q++) if (buffer[q] !== 0) { zero = false; break; }
+            if (!zero) continue;
+            const again = new Uint8Array(W.reader.readAsArrayBuffer(stream.node.contents.slice(lo, hi)));
+            if (again.some(v => v !== 0)) buffer.set(again, offset + lo - position);
+        }
+        return chunk.size;
+    };
+}
 
 // ---------------------------------------------------------------------------
 console.log('\n1. Both builds carry the same guard, and their WORKERFS read calls it');
@@ -153,6 +187,38 @@ for (const [label, W] of BUILDS) {
         const { got } = readVia(W, data, r, 0, 4 * PAGE);
         check(sameBytes(got, data.subarray(0, 4 * PAGE)), 'a hole the re-read still carries is read once more');
         check(r.calls === 3, `reader calls ${r.calls} (read, re-read, re-read of what was still zero)`);
+    }
+
+    console.log(`\n2b. ${label}: a run of zeros that ends (or starts) part-way into a 4 KiB block`);
+    {
+        // The measured shape: an all-zero run, then a block whose first bytes are zero and the rest right.
+        const hole = { from: 2 * PAGE, to: 2 * PAGE + 3 * 4096 + 1500 };
+        const at = 2 * PAGE - 3000, len = 2 * PAGE;
+        const r = fakeReader(data, [hole]);
+        const { got } = readVia(W, data, r, at, len);
+        check(sameBytes(got, data.subarray(at, at + len)), 'bytes equal the file, the partly-zero block included');
+        check(r.calls === 2, `still one re-read (reader calls ${r.calls})`);
+        const r0 = fakeReader(data, [hole]);
+        const ctlW = { reader: null, stream_ops: {} };
+        ctlW.stream_ops.read = blocksOnlyRead(ctlW);
+        const ctl = readVia(ctlW, data, r0, at, len).got;
+        let left = 0;
+        for (let i = 0; i < len; i++) if (ctl[i] !== data[at + i]) left++;
+        check(left === 1500, `negative control — re-reading only all-zero blocks leaves ${left} bytes zeroed (expected 1,500)`);
+    }
+    {
+        const hole = { from: PAGE + 2500, to: 3 * PAGE };
+        const r = fakeReader(data, [hole]);
+        const { got } = readVia(W, data, r, PAGE, 3 * PAGE);
+        check(sameBytes(got, data.subarray(PAGE, 4 * PAGE)), 'a run that starts part-way into a block is recovered too');
+    }
+    {
+        // Zeros next to the run that are really zero stay zero; right bytes are never touched.
+        const d2 = data.slice();
+        d2.fill(0, 3 * PAGE, 3 * PAGE + 700);           // real zeros at the start of the block after the hole
+        const r = fakeReader(d2, [{ from: 2 * PAGE, to: 3 * PAGE }]);
+        const { got } = readVia(W, d2, r, 2 * PAGE - 100, PAGE + 5000);
+        check(sameBytes(got, d2.subarray(2 * PAGE - 100, 3 * PAGE + 4900)), 'really-zero bytes beside a hole stay zero');
     }
 
     console.log(`\n3. ${label}: what is not a hole costs nothing or one small re-read`);
@@ -230,6 +296,15 @@ const c = diff2d(warm, cold);
 check(c.d === 0, `with the guard the cold parse equals the warm one (${c.d} points differ)`);
 check(cold.nInstances === warm.nInstances && sameBytes(new Uint8Array(cold.trackIdx.buffer), new Uint8Array(warm.trackIdx.buffer)),
     'same instances and tracks');
+
+console.log('\n4b. ... also when a hole ends part-way into a block');
+// Two all-zero 4 KiB blocks of pred_points, then 2,000 zeroed bytes of the next block.
+const PARTIAL = [{ from: 2 * PAGE, to: 2 * PAGE + 2 * 4096 + 2000 }];
+const blocksOnly = await parse(PARTIAL, blocksOnlyRead(W));
+const b = diff2d(warm, blocksOnly);
+check(b.d > 0, `negative control — re-reading only all-zero blocks leaves ${b.d} points wrong`);
+const coldPartial = await parse(PARTIAL);
+check(diff2d(warm, coldPartial).d === 0, 'with the guard the cold parse equals the warm one');
 
 console.warn = realWarn;
 console.log(`\n${passed} passed, ${failed} failed`);

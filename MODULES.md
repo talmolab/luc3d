@@ -14525,12 +14525,14 @@ that a warm parse did not, and Track All's identities differed from the first
 such frame on (21 of the 22 proofread SLAP sessions, 2026-10-19). WORKERFS's
 read is guarded in the vendored h5wasm itself (`lucidColdReadGuard`, the
 `LUCID local patch (cold-read)` in both builds — see `lib/h5wasm/PROVENANCE.txt`):
-any all-zero part of a read is read again, which brings back the real bytes.
-That covers this worker's eager parse and lazy analysis `.h5`, `frame-worker.js`
+any all-zero part of a read is read again, with the 4 KiB block on each side
+of it (a run of zeros can end part-way into a block), and only the bytes that
+came back zero are filled in, which brings back the real bytes. That covers this worker's eager parse and lazy analysis `.h5`, `frame-worker.js`
 and sleap-io.js's streaming worker alike. A recovery logs `[h5wasm WORKERFS]
 bytes … were read again` to the console. `tests/test-workerfs-cold-read.mjs`
-runs this worker in Node over a File with injected holes (with the unguarded
-read as the negative control).
+runs this worker in Node over a File with injected holes, including one that
+ends part-way into a block (with the unguarded read, and the all-zero-blocks-only
+rule, as negative controls).
 
 **Imports from project modules.** None.
 
@@ -14598,9 +14600,11 @@ after `COLD_READ_RETRY_MS` (200 ms, 1 s, 3 s), then rethrows the last error;
 and re-reads every all-zero part of a read (per 4 KiB block of the FILE,
 clipped to the read, neighbours merged — `zeroRuns`), using the re-read only
 when it holds a non-zero byte, so the guard cannot make a read worse. A re-read
-is checked the same way, at most three deep. That is h5wasm's
-`lucidColdReadGuard` rule exactly, plus the retry (WORKERFS reads are
-synchronous, so that patch has none). Repairs and rescues log a `[cold-read]`
+is checked the same way, at most three deep. That is the first version of
+h5wasm's `lucidColdReadGuard` rule, plus the retry (WORKERFS reads are
+synchronous, so that patch has none). h5wasm's now also re-reads the block on
+each side of a run, because a run of zeros was seen to end part-way into a
+block; `zeroRuns` does not do that yet. Repairs and rescues log a `[cold-read]`
 console warning and are counted in `coldReadStats`.
 
 **Key exports.**

@@ -34,10 +34,18 @@ LOCAL PATCH (cold-read), in hdf5_util.js AND h5wasm.iife.js:
   always right). Nothing fails, so HDF5 parsed the zeros as data. The patch
   adds `lucidColdReadGuard`, called right after the slice is copied: every part
   of the read that came back all zero (per 4 KiB block, clipped to the read) is
-  read again, and re-read bytes replace the zeros only when they are not zero
-  themselves; a re-read that still holds an all-zero part is checked the same
-  way, at most three re-reads deep. A hole comes back as the real bytes; bytes that
-  really are zero cost one small re-read. Counts are kept on
+  read again TOGETHER WITH THE 4 KiB BLOCK ON EACH SIDE OF IT, and re-read bytes
+  are copied in only where the first read gave a zero byte; a re-read that
+  still holds an all-zero part is checked the same way, at most three re-reads
+  deep. A hole comes back as the real bytes; bytes that really are zero cost
+  one small re-read. The neighbouring blocks are there because a run of zeros
+  need not end on a block boundary: on 167 MB .slp files read cold (5-camera
+  BM_JJ arena sessions, 2026-10-19) the first version of this patch, which
+  re-read only the all-zero blocks, still parsed 15 of 15 files wrong, and all
+  93 wrong blocks examined were the partly-zero block right after the run it
+  had re-read. With the neighbours, 15 of 15 cold parses on three more sessions
+  matched the file. Reads that THROW were never seen here (0 in ~645,000 cold
+  reads, ~10 GB), so the patch has no retry for them. Counts are kept on
   `WORKERFS.lucidColdRead` ({rereads, recovered}); each recovery logs a
   `[h5wasm WORKERFS] … were read again` console warning.
   Grep `LUCID local patch (cold-read)`: one BEGIN/END block (the function,
