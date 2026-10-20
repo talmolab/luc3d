@@ -22,7 +22,7 @@
  *     outlying observation, and its UNDISTORTED errors leave it out, which the
  *     stored 3D cannot reproduce. The display accepts that rather than
  *     re-solve to a different 3D than the stored one
- *     (`deriveDisplayReprojections`). The native-pixel errors still agree.
+ *     (`fillLazyReprojections`, ui/rendering.js). The native-pixel errors still agree.
  *   * `triangulationSummary` keeps the 3D and the means, nothing else.
  *
  * Run: node tests/test-reproject-stored-3d.mjs

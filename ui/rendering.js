@@ -7,10 +7,10 @@
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
 import { state, interactionManager, timeline, isViewDocked } from './app-state.js';
-import { points3dNodeCount } from '../pose/pose-data.js';
+import { points3dNodeCount, isPoints3dFromFile } from '../pose/pose-data.js';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
-    deriveDisplayReprojections, storeReprojectedInstances,
+    triangulateAndReproject, reprojectStoredPoints3d, storeReprojectedInstances,
 } from '../pose/triangulation.js';
 import { dropDerivedReprojections } from '../pose/lazy-residency.js';
 import { drawFrameOverlays } from './overlays.js';
@@ -195,17 +195,26 @@ const MAX_OVERLAY_AREA = 268435456; // 2^28 px
 // shown frame at a time. Two things keep that cheap:
 //  - **It reprojects the stored 3D rather than re-solving** whenever that 3D
 //    is current — triangulated and not edited since — whatever the
-//    reprojection error threshold (`deriveDisplayReprojections`, shared with
-//    the overlay export, which says why). Measured on a 17-camera project:
+//    reprojection error threshold: a re-solve drew a different 3D than the 3D
+//    view and the saved file once the threshold was on by default. Measured on a 17-camera project:
 //    0.1 ms per frame with one animal and 0.2 ms with three, against 2.4 and
-//    5.0 ms to re-solve Refined — at 120 fps a frame has 8.3 ms. Any other
-//    group (Track All's provisional 3D, an edited group) is re-solved, as
-//    before.
+//    5.0 ms to re-solve Refined — at 120 fps a frame has 8.3 ms. 3D READ
+//    FROM A FILE (`isPoints3dFromFile`: a loaded `.slp`'s, an imported
+//    points3d `.h5`'s) is reprojected whenever the group is clean, threshold
+//    or not, and with or without a method: a re-solve would show LUCID's
+//    answer rather than the 3D the project holds. Any other group (Track
+//    All's provisional 3D, an edited group) is re-solved, as before.
 //  - **It keeps what it made for at most DERIVED_FRAMES_KEEP frames per
 //    session** (`noteDerivedFrame`), dropping the least recently filled
 //    beyond that, so playing through the whole recording does not rebuild
 //    the per-frame state Triangulate All no longer keeps.
-function fillLazyReprojections(fi, instanceGroups) {
+//
+// The paths that used to derive this state for EVERY frame they touched now
+// leave it to this fill: both Triangulate All paths, the `.slp` load
+// (`handleLoadSlpFile`), moving a view between sessions
+// (`moveVideosToSession`), and the overlay video export, which calls it for
+// each frame it draws so the video shows exactly what the app shows.
+export function fillLazyReprojections(fi, instanceGroups) {
     if (instanceGroups && state.session.cameras.length >= 2) {
         var _lazyFrameResults = null;
         for (var _rg = 0; _rg < instanceGroups.length; _rg++) {
@@ -213,7 +222,29 @@ function fillLazyReprojections(fi, instanceGroups) {
             if (points3dNodeCount(_grp.points3d) > 0 &&
                 (!_grp.reprojectedInstances || _grp.reprojectedInstances.size === 0) &&
                 (!_grp.reprojections || Object.keys(_grp.reprojections).length === 0)) {
-                var _triRes = deriveDisplayReprojections(_grp, state.session.cameras);
+                // The stored 3D, whenever it is the project's own: read from a
+                // file, or triangulated and not edited since — WHATEVER the
+                // reprojection error threshold. Re-solving such a group drew a
+                // different 3D than the 3D view and the saved file once the
+                // threshold was on by default (review of #289). Anything else
+                // (Track All's provisional 3D, an edited group) is re-solved.
+                var _triRes;
+                if (!_grp.dirty && (isPoints3dFromFile(_grp.points3d) || _grp.triangulationMethod != null)) {
+                    _triRes = reprojectStoredPoints3d(_grp, state.session.cameras);
+                } else {
+                    // Re-solve with WHICHEVER METHOD this group was last triangulated
+                    // with — same precondition as `reTriangulateGroup`. Passing no
+                    // options makes the dispatcher silently default to 'dlt', which is
+                    // how "Triangulate All ▸ Bundle Adjustment" appeared to do nothing:
+                    // the windowed sweep deliberately drops `reprojections` /
+                    // `state.triangulationResults` project-wide (~1.9 GB at 531,799
+                    // groups — see sweepTriangulateAllFrames' docstring), so this fill
+                    // is the ONLY thing that repopulates them, and a DLT re-solve here
+                    // overwrote BA's error with DLT's while `group.triangulationMethod`
+                    // still made the panel label it "Bundle Adjustment".
+                    var _m = (_grp.triangulationMethod === 'ba') ? 'ba' : 'dlt';
+                    _triRes = triangulateAndReproject(_grp, state.session.cameras, { method: _m });
+                }
                 _grp.reprojections = _triRes.reprojections;
                 storeReprojectedInstances(_grp, _triRes, state.session.cameras);
                 // Store in triangulationResults for info panel. `method` is carried

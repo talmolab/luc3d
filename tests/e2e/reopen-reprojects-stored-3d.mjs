@@ -13,10 +13,13 @@
  * re-solved to a DIFFERENT 3D in every group with an outlier view, so the
  * overlay, the panel and the exported video described a 3D that was not the one
  * in the 3D view or the saved file (found in review of PR #289: 173 of 500
- * synthetic groups, up to 80 mm on a node). #351 then made the main window
- * reproject the stored 3D, but only with the threshold OFF. Both paths now go
- * through `deriveDisplayReprojections` (pose/triangulation.js), which
- * reprojects a current group's stored 3D whatever the threshold.
+ * synthetic groups, up to 80 mm on a node). #351 made the main window
+ * reproject the stored 3D, but for a triangulated group only with the threshold
+ * OFF; #356 made the export call that same fill, and always reproject 3D read
+ * from a file. The fill (`fillLazyReprojections`, ui/rendering.js) now
+ * reprojects a triangulated, unedited group's stored 3D whatever the threshold
+ * — which is the case this fixture builds: 3D solved in the session, not read
+ * from a file.
  *
  * ## What this pins, in the real app
  *   - Precondition: the setting is at its 50 px default, and the fixture's 3D
@@ -29,9 +32,8 @@
  *     `state.triangulationResults` are that 3D's errors, the Info Panel headline
  *     agrees, and the stored 3D is untouched.
  *   - The overlay export: opening Export Video Overlays on a frame the main
- *     window never drew fills it with the stored 3D's reprojections — and
- *     `state.triangulationResults` stays empty there, which proves it was the
- *     export's fill, not the main window's, that did it.
+ *     window never drew fills it with the stored 3D's reprojections, with the
+ *     main window's redraw disconnected so the export is what asked for it.
  */
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -235,7 +237,7 @@ try {
     // (`VideoController.seekToFrame` -> `drawAllOverlays`), and either fill may
     // get there first; once one has, the other finds the reprojections present
     // and skips. So the main window's redraw callback is disconnected while the
-    // modal opens, leaving the export's fill the only one that can reach FE.
+    // modal opens, leaving the export the only caller that can reach FE.
     const opened = await page.evaluate(async () => {
         const AS = await import('/ui/app-state.js');
         const cb = AS.videoController && AS.videoController.callbacks;
@@ -263,12 +265,10 @@ try {
             filled: gs.filter(g => g.reprojections && Object.keys(g.reprojections).length > 0).length,
             exact: gs.filter(g => g.reprojections && cams.every(c => JSON.stringify(g.reprojections[c.name]) ===
                 JSON.stringify(TRI.reprojectPointsCamera(g.points3d, c)))).length,
-            noResults: !AS.state.triangulationResults.has(FE),
         };
     }, FE);
     check(exp.filled === exp.groups, `export: opening the modal filled frame ${FE + 1}'s reprojections (${exp.filled}/${exp.groups})`);
     check(exp.exact === exp.groups, `...with the STORED 3D's reprojections (${exp.exact}/${exp.groups})`);
-    check(exp.noResults, '...and through the export\'s own fill: the main window\'s, which writes triangulationResults, never ran there');
 
     await page.keyboard.press('Escape');
     await page.evaluate(async () => {
