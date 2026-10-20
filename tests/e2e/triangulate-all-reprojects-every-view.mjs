@@ -33,6 +33,14 @@
  * Confirmed to fail on the pre-fix build: phases A, B and C draw nothing in
  * camC, while the reference and phase D pass.
  *
+ * None of the three sweeps stores reprojections any more — they keep only the
+ * 3D, and the display derives every camera's reprojection and the per-camera
+ * errors from it when a frame is shown (`ui/rendering.js`'s reprojection fill;
+ * see `tests/e2e/triangulate-all-bounded-derived-state.mjs` and
+ * `tests/e2e/bulk-triangulation-bounded-derived-state.mjs`). So each phase
+ * draws frame 0 (`drawAllOverlays(0)`) before reading the group, as the app
+ * does after every sweep, and the checks are on what that draw produces.
+ *
  * Fixture: `fixtures/ba-rig-fixture.js` (3 cameras with real k1 distortion,
  * 2 animals). Read its header before editing the geometry.
  */
@@ -179,6 +187,8 @@ try {
     for (const g of TRI.getInstanceGroupsForFrame(0)) { g.reprojections = null; g.reprojectedInstances.clear(); }
     AS.state.triangulationResults = new Map();
     await TRI.triangulateMultiFrameInstances(0, F.NF - 1, null, 'ba');
+    // The backend draws nothing (its modal does, `runMultiFrameTriangulation`).
+    RND.drawAllOverlays(0);
     const B = record(sB, blueOf());
 
     // ---- C: Tracks ▸ Group by Track, through its real modal -----------------
@@ -189,6 +199,7 @@ try {
     for (let i = 0; i < 200 && document.getElementById('gbtGo'); i++) {
       await new Promise(r => setTimeout(r, 50));
     }
+    RND.drawAllOverlays(0);
     const C = record(sC, blueOf());
     C.modalGone = !document.getElementById('gbtGo');
 
@@ -242,7 +253,7 @@ try {
       `${label[k]}: at the same pixels as single-frame Triangulate (max |delta| ${out.deltas[k]} px)`);
   }
   // The added camera carries no error: only cameras with an instance are measured.
-  for (const k of ['A', 'B']) {
+  for (const k of ['A', 'B', 'C']) {
     check(JSON.stringify(out[k].errorCams) === '["camA","camB"]',
       `${label[k]}: errors are still reported for camA and camB only ` +
       `(got ${JSON.stringify(out[k].errorCams)})`);

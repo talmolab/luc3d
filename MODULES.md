@@ -137,7 +137,7 @@ the old `app.js` entry point.
 - `../ui/timeline.js` — `Timeline`.
 - `../ui/interaction.js` — `InteractionManager`.
 
-**Imported by.** `app.js`, `pose/triangulation.js`, `ui/identity-assignment.js`,
+**Imported by.** `app.js`, `pose/triangulation.js`,
 `ui/export-modals.js`, `ui/sessions-panes.js`, `ui/ui-wiring.js`,
 `loading/session-loader.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`.
@@ -903,7 +903,9 @@ resident-only hazard (#194/#195): nothing this module reads can be absent.
 
 **Imports from project modules.** `./origin-frame.js` (`applyOriginFrame`,
 `mulMat3Vec3`, `rebaseExtrinsics`), `./pose-data.js` (`pooledPoints3d` — `applyOriginRebase` stores each re-based group in the slab pool — `points3dNodeCount`,
-`hasPoint3d`). DOM-free.
+`hasPoint3d`, `isPoints3dFromFile` / `markPoints3dFromFile` — a group whose 3D
+was read from a file keeps that mark across the re-base, so the display still
+reprojects it rather than re-solving). DOM-free.
 
 **Imported by.** `ui/origin-rebase.js`.
 
@@ -1285,6 +1287,16 @@ origin contributes zero however it is wound — a unit cube at `[0,1]³` measure
 ---
 
 ### pose/pose-data.js
+
+**3D read from a file is marked.** `markPoints3dFromFile(points3d)` /
+`isPoints3dFromFile(points3d)` — a `WeakSet` of `points3d` arrays the loaders
+read from a file (`import-export/slp-import.js`'s three restore sites and its
+points3d `.h5` import). `ui/rendering.js`'s reprojection fill reprojects marked
+3D rather than re-solving it, even with a reprojection-error threshold set,
+since a re-solve would show LUCID's answer instead of the file's. Keyed by the
+ARRAY so it lapses by itself: every path that re-solves or edits a group's 3D
+assigns a new array, and nothing writes a group's `points3d` in place. The
+origin re-base (`applyOriginRebase`) carries the mark to the re-based array.
 
 **`InstanceGroup.points3d` on the bulk paths lives in a slab pool.**
 `pooledPoints3d(points)` copies a group's flat 3D into a 1 MB slab and returns a
@@ -2844,6 +2856,38 @@ columns. Windowed: **180,210 frames / 531,799 groups, 0 skipped, 105 s.**
 `loadAllLazyFrames` is deliberately NOT used — materializing 2D for 180,210
 frames × 5 cameras at once is the OOM the memory work exists to prevent.
 
+**Neither Triangulate All path keeps derived state.** Both clear every group's
+reprojections and `state.triangulationResults` up front
+(`dropAllDerivedTriangulationState`, exported for Group by Track) and store only `points3d`,
+`usedCameras`, the method and the error stats, asking the pool for
+`summaryOnly` results. The in-memory path used to keep every group's
+reprojections and every frame's per-camera errors — on an eagerly loaded
+17-camera, 34-node, 36,000-frame project ~52 KB per group, +1.9 GB of the
+renderer's ~4 GB JS heap, so Refined ran the renderer out of memory at ~80%
+with one animal and ~55% with three. The display derives a shown frame's from
+its 3D (`ui/rendering.js`'s reprojection fill, `reprojectStoredPoints3d`) and
+keeps a bounded number. Its timeline pass walks the frames it triangulated
+rather than `state.triangulationResults`. Covered by
+`tests/e2e/triangulate-all-bounded-derived-state.mjs` (fails on the old build
+on the memory shape).
+
+**Nor does any other bulk path.** Two more kept that state for every frame
+they processed, and each now keeps only the 3D and the error stats:
+- **Tracks ▸ Group by Track** (`ui/export-modals.js`) calls
+  `dropAllDerivedTriangulationState` before its sweep — every frame's groups
+  are rebuilt, so the old groups' derived state is stale anyway (a re-run that
+  ADOPTS every group used to leave the frames shown before holding results for
+  the groups it replaced) — and stores no reprojections or results.
+- **Triangulate Range** (`triangulateMultiFrameInstances`) drops a frame's
+  derived state (`dropDerivedReprojections`) when it re-solves a group there,
+  and leaves every other frame's alone: the range need not be the project.
+Both ended with a timeline pass over `state.triangulationResults`, which no
+longer lists the frames they processed; each now walks its own list — the
+frames Group by Track regrouped, the frames the range re-solved
+(`result.frames`). Covered by
+`tests/e2e/bulk-triangulation-bounded-derived-state.mjs` (fails on the old
+build on every memory-shape and timeline check).
+
 The windowed path stores only `points3d` (flat `Float64Array`, the file's own
 representation) plus `usedCameras`; it does **not** set `group.reprojections` and
 does **not** accumulate `state.triangulationResults`. Retaining reprojections for
@@ -2960,12 +3004,11 @@ implement it, all in this module:
   method wins; otherwise the user's global **Settings ▸ Triangulation Method**
   (`getDefaultTriangulationMethod`). Never a bare `'dlt'` literal. Used by
   `reTriangulateGroup`, both grouping sweeps in `ui/export-modals.js`,
-  `ui/sessions-panes.js`'s move-view re-triangulate, `ui/ui-wiring.js`'s
-  environment-skeleton solve, and `ui/identity-assignment.js`'s two group-writing
-  loops. **Deliberately NOT used by `ui/rendering.js`'s lazy reprojection fill:**
-  that path re-derives reprojections for 3D it does not own and does not write
-  back, so it must REPRODUCE the recorded solve exactly rather than fall back to a
-  global default. Rule of thumb — *writes* `points3d` → `resolveTriangulationMethod`;
+  `ui/sessions-panes.js`'s move-view re-triangulate and `ui/ui-wiring.js`'s
+  environment-skeleton solve. **Deliberately NOT used by `ui/rendering.js`'s
+  lazy reprojection fill:** that path re-derives reprojections for 3D it does
+  not own and does not write back, so it must REPRODUCE the recorded solve
+  exactly rather than fall back to a global default. Rule of thumb — *writes* `points3d` → `resolveTriangulationMethod`;
   only *reads* it → match `triangulationMethod` exactly.
 - `findEquivalentPriorGroup(priorGroups, group)` → the prior group with identical
   membership (camera for camera, by `Instance` object identity), or null.
@@ -3017,19 +3060,18 @@ common case, which makes the correct behavior *cheaper* than the old one rather
 than paying BA's ~3x-6x cost per group project-wide. Both sweeps report 3D
 provenance ("N kept existing 3D, N solved via Refined, N via DLT") in
 their progress text and status line, so a method's cost is visible rather than
-hidden. The one deliberate DLT caller is the O(n×m) Hungarian cost matrix in
-`ui/identity-assignment.js`, whose temporary groups' 3D is discarded and where only
-the relative ordering of errors matters. It passes `{ method: 'dlt' }` **explicitly**,
-so the invariant is the checkable one — *every* call site states its method — rather
-than the uncheckable "every caller that forgot happened to want DLT".
+hidden. No caller hardcodes DLT: the last one that did, an O(n×m) Hungarian cost
+matrix in `ui/identity-assignment.js`'s automatic assignment, was deleted with the
+rest of that unreachable chain. The invariant is the checkable one — *every* call
+site states its method, and states it by resolving it — rather than the
+uncheckable "every caller that forgot happened to want DLT".
 `tests/test-triangulation-method-propagation.mjs` enforces that by scanning the app
 source: it fails, naming file and line, on any call that omits the options object,
-omits `method`, hardcodes `'dlt'` outside the cost matrix, or passes something that
-is neither a resolver nor a threaded-in method (confirmed to catch the original
-`ui/rendering.js` bug). A runtime assert inside `triangulateAndReproject` was
-considered and REJECTED: it runs once per candidate PAIR inside that cost matrix, so
-a warning would fire O(n*m) times per auto-assign — noise in a legitimate path,
-which is exactly what the guard must not create.
+omits `method`, hardcodes `'dlt'`, or passes something that is neither a resolver
+nor a threaded-in method (confirmed to catch the original `ui/rendering.js` bug).
+A source scan rather than a runtime assert inside `triangulateAndReproject`,
+because a runtime check fires only on the paths something happens to execute,
+while the scan covers every call site on every run.
 
 **Distortion handling.** 2D keypoints on disk are lens-distorted. **DLT** runs in
 ideal pinhole space: observations are undistorted first (`Camera.undistortPoint`),
@@ -3043,8 +3085,7 @@ must be **re-distorted** back to native pixel space
 `Camera.distortPoint`). Comparing ideal reprojections against raw distorted
 keypoints previously produced spurious error that grew toward the frame edges
 ("fisheyed coordinates", issue #85) and could drive cross-view identity
-switches. The temporal-identity cost in `ui/identity-assignment.js` likewise
-projects 3D targets with distortion before measuring distance to raw detections.
+switches.
 
 `triangulateAndReproject` reports the reprojection error in **both** spaces:
 `meanError`/`errors` (distorted — what is drawn and broken down per view/node)
@@ -3175,9 +3216,11 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   **`storeReprojectedInstances` eagerly builds a full `Instance` (+ its own
   `occluded` array) per camera per group — a real memory cost when called for
   the WHOLE project.** `triangulateAllFrames` and `triangulateMultiFrameInstances`
-  (both whole/large-range bulk sweeps) no longer call it — they still set
-  `group.reprojections`/`.points3d` (needed by `buildReprojH5` and the display
-  fallback below), just not the heavier `reprojectedInstances` Map. Single-frame
+  (both whole/large-range bulk sweeps) no longer call it — they set
+  `.points3d` and neither `group.reprojections` nor the heavier
+  `reprojectedInstances` Map (see "Neither Triangulate All path keeps
+  derived state" above; `buildReprojH5` projects the stored 3D of a group
+  with no reprojections). Single-frame
   paths (`triangulateCurrentFrame`, `reTriangulateGroup`) and the identity-based
   bulk path (`groupByIdentityAndTriangulateAll`, `ui/export-modals.js` — already
   only stores `.points3d` via `triangulateOnly`, was never part of this cost)
@@ -3189,12 +3232,12 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   through this instead: `import-export/file-io.js`'s three export sites,
   `pose/initialization.js`'s double-click-to-promote and
   `onClonePredictedGroup`, `ui/interaction.js`'s click hit-testing and
-  `_convertToUserInstance`. `ui/rendering.js`'s `drawAllOverlays` already had
-  its own independent, coarser-grained lazy-fill (computes AND permanently
-  caches `reprojectedInstances`/`.reprojections`/`state.triangulationResults`
-  for whatever frame is currently being viewed) — unchanged, still the reason
-  scrubbing to any frame shows correct reprojections regardless of which sweep
-  triangulated it. `ui/overlays.js`'s 2D-display code already had its own
+  `_convertToUserInstance`. `ui/rendering.js`'s `drawAllOverlays` has its own
+  independent, coarser-grained lazy-fill (computes and caches
+  `reprojectedInstances`/`.reprojections`/`state.triangulationResults` for
+  whatever frame is being viewed, for the last `DERIVED_FRAMES_KEEP` such
+  frames) — the reason scrubbing to any frame shows correct reprojections
+  regardless of which sweep triangulated it. `ui/overlays.js`'s 2D-display code already had its own
   fallback straight to `.reprojections[viewName]` (via `drawReprojectedSkeleton`,
   no Instance wrapper needed) — also unchanged. Covered by
   `tests/test-reprojection-lifecycle.js`'s "getOrComputeReprojectedInstance" block.
@@ -3208,13 +3251,20 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   whose reprojections are EMPTY, so it never added the missing camera. On a
   real 8-camera recording, a mouse hidden behind another in one side view lost
   its reprojection there after Triangulate All ▸ Refined, though it had shown
-  right after Track All. All three now pass their result through this helper,
+  right after Track All. All three passed their result through this helper,
   which adds `reprojectPointsCamera(points3d, cam)` for each missing camera, in
   place. It adds reprojections only: the 3D, the per-camera errors and the
   mean are untouched, since a camera with no instance has nothing to measure
-  against. Covered by `tests/e2e/triangulate-all-reprojects-every-view.mjs`
+  against. **No sweep calls it any more**: none stores reprojections (see
+  "Nor does any other bulk path" above), and the display fill reprojects the
+  stored 3D into every camera (`reprojectStoredPoints3d`). It stays exported
+  as the statement of what the sweeps used to store, which
+  `tests/test-reproject-stored-3d.mjs` and
+  `tests/e2e/triangulate-all-bounded-derived-state.mjs` compare the derived
+  state against. Covered by `tests/e2e/triangulate-all-reprojects-every-view.mjs`
   (all three paths plus the windowed sweep, against single-frame Triangulate,
-  on a real overlay canvas; confirmed to fail on the pre-fix build).
+  on a real overlay canvas, each read after drawing the frame as the app does;
+  confirmed to fail on the pre-fix build).
   **Two robustness features:** (1) views excluded in the Tracking Wizard's Camera
   Views panel (`isCameraTracked`, or `options.includedCameras` override) never
   contribute to the 3D solve, but are still reprojected INTO — an excluded view
@@ -3408,7 +3458,13 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `triangulationMethod` / `usedCameras` instead of re-solving (not
   `reprojections`, deliberately). The latter two exist for the regrouping sweeps,
   which rebuild `InstanceGroup` objects around unchanged `Instance`s.
-- Orchestration: `triangulateMultiFrameInstances(start, end, onProgress, method)`,
+- Orchestration: `triangulateMultiFrameInstances(start, end, onProgress, method)`
+  -> `{ triangulated, totalGroups, errSum, errN, frames }` (keeps only the 3D;
+  drops the derived state of each frame it re-solves — see "Nor does any other
+  bulk path" above),
+  `dropAllDerivedTriangulationState(session)` (every group's reprojections and
+  reprojected instances, and `state.triangulationResults`; both Triangulate All
+  paths and Group by Track call it before they start),
   `reTriangulateGroup` (preserves the group's existing method via
   `resolveTriangulationMethod`),
   `triangulateCurrentFrame(method)`, `triangulateAllFrames(method)`
@@ -3437,7 +3493,9 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
 - `../ui/app-state.js` — `state`, `timeline`, `viewport3d`, `interactionManager`
   (the objects `evictLazyFrames` must not drop out from under the UI).
 - `./lazy-residency.js` — `evictLazyFrameGroups`, `holdLazyResidency`,
-  `releaseLazyResidency`, `LAZY_RESIDENT_CAP`, `LAZY_KEEP_BEHIND`.
+  `releaseLazyResidency`, `LAZY_RESIDENT_CAP`, `LAZY_KEEP_BEHIND`,
+  `dropDerivedReprojections` (Triangulate Range drops each re-solved frame's
+  derived state).
 - `../ui/rendering.js` — `setReprojErrorVisible`, `showReprojectionsOnly`,
   `REPROJ_ONLY_NOTE` (Triangulate All ends Reproj-only — #243), `drawAllOverlays`.
 - `../ui/info-panel.js` — `updateTriangulationBadge`.
@@ -3490,7 +3548,13 @@ membersReleased }` or null (no lazy loader, at/under `cap`, or held);
 `releaseFrameMembers2d(session, frameIdx, { refs })` -> members released;
 `hydrateFrameMembers2d(session, frameIdx)` -> members hydrated;
 `member2dReleaseBlocker(member, desc, numNodes, refs)` -> a reason or null;
-`holdLazyResidency` /
+`dropDerivedReprojections(session, frameIdx, triangulationResults)` — clear one
+frame's groups' reprojections / reprojected instances and its results entry
+(also used by `ui/rendering.js`'s cap on derived frames and by Triangulate
+Range, `triangulateMultiFrameInstances`, for each frame it re-solves);
+`dropGroupDerivedReprojections(group, frameIdx, triangulationResults)` — the same
+for ONE group, leaving the frame's other groups and their results entries alone
+(moving a view between sessions, the points3d `.h5` import); `holdLazyResidency` /
 `releaseLazyResidency` / `isLazyResidencyHeld` (nestable); `lastLazyEvictionPass()`
 (diagnostics); `LAZY_PLAYBACK_AHEAD` (600, the playback loader's lookahead),
 `LAZY_KEEP_BEHIND` (512, > the 500-frame maximum node trail),
@@ -3582,7 +3646,8 @@ reprojection (`reprojectPoint(s)`, `reprojectPointCamera(s)`, `cameraDepth` —
 the homogeneous `w`, POSITIVE in front of the camera, which any caller
 reprojecting into a camera it did not choose must gate on), errors
 (`computeReprojectionError(s)`, `computeMeanReprojectionError`), `invert3x3`,
-the full per-group pipeline `triangulateAndReproject`, and the cross-view
+the full per-group pipeline `triangulateAndReproject`, its reprojection half
+on already-solved 3D (`reprojectStoredPoints3d`), `triangulationSummary`, and the cross-view
 tracker's geometry — `hungarianAlgorithm`, `cameraCenter`, `backProjectToRay`,
 `backProjectToRays` (with their `_pGeometry` / `_pseudoInverse` WeakMap memo),
 `pointToRayDistance`, `pointsToRayDistances`, `computeFundamentalMatrix`,
@@ -3594,6 +3659,23 @@ isCameraTracked, getTrackingThreshold })` — the only app state the pipeline
 reads (unset = every camera included, no threshold; the main thread installs
 them, a worker gets resolved values via `options.includedCameras` /
 `options.reprojErrorThreshold`) — and `__triangulationKernelsForTest`.
+
+**`reprojectStoredPoints3d(group, cameras, options?)`** — steps 3-5 of
+`triangulateAndReproject` (reproject, per-camera errors in native and
+undistorted pixels, both means) run on `group.points3d` instead of a fresh
+solve; same result shape, `points3d` IS the group's array, `method` = the
+group's `triangulationMethod`. Errors are measured in the cameras the group
+has an instance in (what the bulk solves use, `prep.groupCameras`) and the
+reprojections cover every camera (as `reprojectIntoEveryCamera` makes them).
+The two functions share `_collectObservations` / `_reprojectAndScore`, so for a
+group whose 3D is that solve's output the numbers are identical (Object.is) —
+except, with a reprojection-error threshold, the UNDISTORTED errors: the solve
+leaves out the observations it dropped, which the stored 3D does not record.
+0.1-0.2 ms per frame on a 17-camera project vs 2.4-5.0 ms to re-solve Refined.
+Used by `ui/rendering.js`'s reprojection fill. **`triangulationSummary(result)`**
+— `{points3d, meanError, meanErrorUndistorted, method}`, what a pool reply
+carries under `summaryOnly`. Covered by `tests/test-reproject-stored-3d.mjs`
+(incl. the threshold negative control).
 
 **Allocation-free hot paths, bit-identical by construction — except the DLT's
 null-vector solve.**
@@ -3711,8 +3793,13 @@ independent (cameras fixed), but the solve ran on one main thread (~1 of 12
 cores busy).
 
 **Key exports.** `createGroupSolver(cameras, { method, triangulateOnly,
-expectedGroups })` -> `{ submit(group, groupCameras, cb), mark(cb), throttle(),
+summaryOnly, expectedGroups })` -> `{ submit(group, groupCameras, cb), mark(cb), throttle(),
 finish(), cancel(), cpuBusyMs(), parallel, workers }`; `MIN_GROUPS_FOR_WORKERS` (2000).
+`summaryOnly`: each result is `triangulationSummary(result)` (3D + mean errors),
+dropped to that inline and in the worker before the reply — both Triangulate
+All paths keep nothing else, and the per-camera arrays are ~52 KB per group at
+17 cameras x 34 nodes, so without it every reply cloned them onto the main
+thread only to be thrown away.
 
 **Contract.**
 - **Callbacks run in submission order** (jobs and `mark`s interleaved as
@@ -3746,7 +3833,7 @@ finish(), cancel(), cpuBusyMs(), parallel, workers }`; `MIN_GROUPS_FOR_WORKERS` 
   91.7% on their own, so the main thread mostly waits on them.
 
 **Imports from project modules.** `./triangulation-core.js`
-(`triangulateAndReproject`), `./pose-data.js` (`Instance`), `../ui/settings.js`
+(`triangulateAndReproject`, `triangulationSummary`), `./pose-data.js` (`Instance`), `../ui/settings.js`
 (`isCameraTracked`, `getTrackingThreshold`, read once per run in
 `createGroupSolver`), `../ui/load-graph.js` (`createBusyClock`). The pool runs on
 the main thread only — the worker loads `./triangulation-core.js`, never this
@@ -3773,10 +3860,11 @@ group (real `Instance`s from flat `_xy` + nulled nodes) and cameras (with the
 main thread's cached matrices installed) and runs the same
 `triangulateAndReproject` from `./triangulation-core.js`. Messages: in
 `{type:'cameras'}`, `{type:'solve', id, jobs}`; out `{type:'solved', id,
-results}` (points3d buffers transferred) or `{type:'error', id, message}`.
+results}` (points3d buffers transferred; `triangulationSummary(result)` per job
+whose options say `summaryOnly`) or `{type:'error', id, message}`.
 
 **Imports from project modules.** `./pose-data.js` (`Camera`, `Instance`),
-`./triangulation-core.js` (`triangulateAndReproject`).
+`./triangulation-core.js` (`triangulateAndReproject`, `triangulationSummary`).
 
 **Imported by.** Spawned by `pose/triangulation-pool.js` via
 `new Worker(new URL('pose/triangulation-worker.js', document.baseURI), {type:'module'})`.
@@ -4677,7 +4765,18 @@ Group-by-Identity, multi-frame triangulation, SLP per-session, SLP by-camera,
 SLP all-sessions, JSON labels, points3d H5, reproj H5).
 
 **Key exports.**
-- `showGroupByTrackModal()` — modal that bulk-groups by trackIdx.
+- `showGroupByTrackModal()` — modal that bulk-groups by trackIdx, then
+  triangulates (`groupByTrackAndTriangulateAll`). Keeps only the 3D: it drops
+  every frame's derived state before regrouping
+  (`dropAllDerivedTriangulationState`) and stores no reprojections or
+  `state.triangulationResults`; its timeline pass walks the frames it
+  regrouped (see "Nor does any other bulk path" under
+  `pose/triangulation.js`). Solves with Settings ▸ Default Triangulation
+  (`resolveTriangulationMethod(null)`). A frame the sweep visits with no
+  FrameGroup (3D grouping, no 2D — `sweepLazyFrameWindows`' contract) is
+  skipped and its groups left as they are, as in Group by Identity: without
+  that guard it threw part-way through, after every earlier frame had been
+  regrouped and before any later one was.
 - `groupByIdentityAndTriangulateAll(explicitMethod)` — bulk-group then
   triangulate. `explicitMethod` (`'ba'|'dlt'`) is the user's explicit pick when
   there was one — "Triangulate All ▸ DLT" routes here and passes `'dlt'`; omitting
@@ -4877,7 +4976,17 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   since buffering was the thing being avoided); a short clip just downloads.
   Requires WebCodecs — error status otherwise. Covered by
   `tests/e2e/export-3d-video.mjs`.
-- `showTriangulateMultiFrameModal()` — frame-range triangulation modal.
+- `showTriangulateMultiFrameModal()` — frame-range triangulation modal
+  (`triangulateMultiFrameInstances`); its average error comes from the
+  returned `errSum` / `errN`, and its timeline pass walks `result.frames`.
+  Its Start / End boxes show **1-based** frame numbers; Continue converts them
+  to 0-based indices before validating and solving (reading them as indices
+  made the default full range check a frame past the end and refuse, and ran
+  every typed range one frame late). It solves with Settings ▸ Default
+  Triangulation (`resolveTriangulationMethod(null)` — the modal has no method
+  picker) and names the method in its progress, summary and status text.
+  Covered by `tests/e2e/triangulate-range-modal.mjs` (also Group by Track's
+  3D-only-frame guard).
 - `exportLabels()` — JSON labels export.
 - `exportPoints3dH5()` — points3d H5 export.
 - `exportReprojH5()` — reprojection H5 export.
@@ -4895,8 +5004,9 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   `getInstanceGroupsForFrame`, `sweepLazyFrameWindows`,
   `resolveTriangulationMethod`, `findEquivalentPriorGroup`, `adoptPrior3d`,
   `triangulationMethodLabel` (the last four for the adopt-don't-downgrade rule),
-  `reprojectIntoEveryCamera` (Group by Track reprojects each solve into every
-  camera, not only the cameras it has instances in or the run's camera filter).
+  `dropAllDerivedTriangulationState` (Group by Track keeps only the 3D: it drops
+  every frame's derived state before regrouping, and the display derives a
+  shown frame's reprojections into every camera from the new 3D).
 - `./viewport3d.js` — `Viewport3D` (Export 3D Video modal).
 - `./overlays.js` — `getTrackColor`, `getGroupColor` (Export 3D Video modal).
 - `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`,
@@ -4927,8 +5037,7 @@ Group-by-Identity, Multi-Frame Triangulate modal.
 ### ui/identity-assignment.js
 
 **Purpose.** All workflows for grouping instances into identities — manual
-assignment, edit-group mode, automatic assignment, single-frame
-triangulation, multi-frame assignment modal, track/identity helpers.
+assignment, edit-group mode, track/identity helpers.
 
 **Key exports.**
 - Track helpers: `swapAssignTrack`, `assignTrackToSelected`,
@@ -5000,49 +5109,34 @@ triangulation, multi-frame assignment modal, track/identity helpers.
   `cleanupManualAssignment`, `startManualAssignment`.
 - Edit group: `editGroupState`, `startEditGroup`, `cancelEditGroup`,
   `finishEditGroup`, `cleanupEditGroup`, `updateEditGroupToast`.
-- Auto assign: `autoAssignState`, `cleanupAutoAssignment`,
-  `runAutomaticAssignment`, `runTrackedAssignment`.
-- Triangulation flows: `runSingleFrameTriangulation`,
-  `showMultiFrameModal`, `startViewSelectionForFrames`,
-  `showMultiFrameProgressModal`, `runMultiFrameAssignment`.
 
 **Imports from project modules.**
-- `./app-state.js` — `state`, `videoController`, `interactionManager`,
-  `viewport3d`, `timeline`, `paneManager`.
-- `../pose/pose-data.js` — `InstanceGroup`, `UnlinkedInstance`.
-- `../pose/triangulation.js` — `frameHasGroupedUserInstances`,
-  `getInstanceGroupsForFrame`, `triangulateAndReproject`,
-  `storeReprojectedInstances`, `reprojectPoints`,
-  `computeInstanceDistance`, `hungarianAlgorithm`,
-  `updateTimelineForFrame`, `triangulateCurrentFrame`,
-  `resolveTriangulationMethod`.
-
-**Three `triangulateAndReproject` call sites, two of which write 3D.** The two
-that write it (`autoAssign`'s "auto-triangulate all groups for this frame" loop
-and `autoAssignAcrossFrames`' per-new-group solve) now pass
-`resolveTriangulationMethod(group)`. The first is the load-bearing one: it sweeps
-**every** group on the frame, including pre-existing bundle-adjusted ones, and
-passing no method silently re-solved them with DLT and overwrote `points3d` —
-which is what save/export read. The third, the O(nRef × nOther) **Hungarian cost
-matrix**, is deliberately DLT — its temporary groups' 3D is discarded, only the
-relative ordering of the errors matters, and BA's ~3x-6x cost would buy nothing —
-and it passes `{ method: 'dlt' }` explicitly rather than relying on the default, so
-that no call site in the app depends on that default (enforced by
-`tests/test-triangulation-method-propagation.mjs`). (This module already used `getDefaultTriangulationMethod()` for its
-`triangulateCurrentFrame` call, so honoring the user's method here is consistent
-rather than new policy.)
-- `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`.
+- `./app-state.js` — `state`, `interactionManager`, `viewport3d`, `timeline`.
+- `../pose/pose-data.js` — `UnlinkedInstance`.
+- `../pose/triangulation.js` — `getInstanceGroupsForFrame`,
+  `updateTimelineForFrame`.
+- `./rendering.js` — `drawAllOverlays`.
 - `./info-panel.js` — `updateInfoPanel`.
 - `../import-export/save-load.js` — `markDirty`, `setStatus`.
-- `../pose/initialization.js` — `update3DViewport`.
-- `./sessions-panes.js` — `panelRenderers`.
+
+**No automatic assignment, and no `triangulateAndReproject` call.** The
+automatic-assignment chain that used to live here — `runSingleFrameTriangulation`
+and `showMultiFrameModal`, and behind them `startViewSelectionForFrames`,
+`showMultiFrameProgressModal`, `runMultiFrameAssignment`,
+`runAutomaticAssignment`, `runTrackedAssignment`, `autoAssignState` /
+`cleanupAutoAssignment` and `state.lastAutoAssignViews` / `lastAutoAssignFrame` —
+was deleted once commit `5612c920` left it with no caller. It held all three of
+this module's `triangulateAndReproject` calls, among them the app's one hardcoded
+`{ method: 'dlt' }` (an O(nRef × nOther) Hungarian cost matrix with a fixed
+`< 50` px acceptance cutoff), so `tests/test-triangulation-method-propagation.mjs`
+now requires that NO caller hardcodes DLT. Cross-view grouping is Track All /
+Track Frame's job (`pose/tracker.js`).
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`,
-`ui/rendering.js`, `ui/sessions-panes.js`, `ui/ui-wiring.js`.
+`ui/rendering.js`, `ui/ui-wiring.js`.
 
 **User-facing features.** Manual identity assignment toast workflow,
-Edit Group mode, Auto-Assign / Tracked Assign, single-frame and
-multi-frame triangulation modals, track-swap dialogs.
+Edit Group mode, track-swap dialogs.
 
 ---
 
@@ -5086,9 +5180,10 @@ for freshly-triangulated AND reopened projects alike.
   `state.triangulationResults` is derived state that outlives the groups it
   describes: "Triangulate All" routes to `groupByIdentityAndTriangulateAll`
   whenever identities exist, which DELETES and rebuilds each frame's
-  `instanceGroups` but — unlike every other bulk path, which either `set()`s per
-  frame (`groupByTrackAndTriangulateAll`, `triangulateAllFrames`) or `clear()`s
-  wholesale (`sweepTriangulateAllFrames`) — never prunes the results map, and
+  `instanceGroups` but — unlike every other bulk path, which either `clear()`s
+  it wholesale (`groupByTrackAndTriangulateAll`, both `triangulateAllFrames`
+  paths: `dropAllDerivedTriangulationState`) or deletes the entry of each frame
+  it re-solves (`triangulateMultiFrameInstances`) — never prunes the results map, and
   `ui/rendering.js`'s lazy fill then CONCATENATES its freshly-computed entries
   onto whatever was already stored. A frame the user had already triangulated
   therefore holds results for both the deleted groups and their replacements,
@@ -6372,15 +6467,20 @@ WYSIWYG: dock aspect and output aspect agree again, so `computeTileRects` fills
 the frame instead of letterboxing it. In individual mode a custom size applies to
 every file, with each tile letterboxed into it.
 
-**Reprojection fill.** `ensureReprojections()` is the export-side mirror of
-`ui/rendering.js`'s lazy fill, so exporting a triangulated-but-never-viewed range
-still draws reprojections. It **resolves the method from the group**
-(`triangulationMethod === 'ba' ? 'ba' : 'dlt'`) exactly as the display path does:
-omitting the option silently re-solves with DLT, which would burn DLT
-reprojections into the video while the app shows BA's, breaking the
-"exported 3D == displayed 3D" invariant. Guarded by
-`tests/test-triangulation-method-propagation.mjs`, which scans every
-`triangulateAndReproject` call site in the repo.
+**Reprojection fill.** `ensureReprojections(f, groups, session)` fills frame
+`f`'s reprojections and errors, so exporting a triangulated-but-never-viewed
+range still draws them. It **is** `ui/rendering.js`'s display fill
+(`fillLazyReprojections`), not a copy: it used to be a mirror that re-solved
+every group of every exported frame and kept the result, which (a) drew a
+re-solve's reprojections where the app shows the stored 3D's — with a
+reprojection-error threshold set, or on a file's 3D — and (b) kept
+reprojections and reprojected instances for EVERY exported frame, ~75 KB per
+frame per animal on a 17-camera, 34-node project. Sharing the fill gives the
+video the app's numbers ("exported 3D == displayed 3D", including the method a
+re-solve uses) and its cap of `DERIVED_FRAMES_KEEP` frames. A no-op for a
+session other than `state.session` (the fill reads it; the export only draws
+that one). Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs`
+(E).
 
 **Still-frame previewer, no playback.** The modal has **no transport**: no
 play/pause, no frame stepping, no `setPlaying`/`playTimer`. Scrubbing the track is
@@ -6621,9 +6721,9 @@ exported but the amber `?` editing prompt is not.
 - `../pose/triangulation.js` — `getInstanceGroupsForFrame`,
   `ensureLazyFrameData`, `ensureLazyTrailWindow` (the frames behind the first
   exported frame and the preview frame that the node trails draw),
-  `triangulateAndReproject`, `storeReprojectedInstances`,
   `sessionHasCalibration`.
-- `../pose/pose-data.js` — `points3dNodeCount`.
+- `./rendering.js` — `getVisibilitySettings`, `fillLazyReprojections` (the
+  reprojection fill, see above).
 - `../import-export/save-load.js` — `setStatus`.
 
 **Imported by.** `ui/ui-wiring.js` (`menuExportOverlayVideo`).
@@ -7192,6 +7292,9 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 - `setReprojErrorVisible(visible, opts?)` — show/hide the reproj-error info
   column. Showing it ticks the Reprojections and Errors boxes unless
   `opts.checkBoxes === false`.
+- `DERIVED_FRAMES_KEEP` (600), `noteDerivedFrame(session, frameIdx)` — the
+  reprojection fill's cap on frames with derived state (see the lazy
+  reprojection fill under `drawAllOverlays`); exported for tests.
 - `showReprojectionsOnly()` -> `boolean` — after Triangulate All (#243): User,
   Predictions, Errors off, Reprojections on, each changed box firing its own `change`
   event (so the deselect-hidden-instance handler and redraw run as for a
@@ -7236,9 +7339,10 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   overlay and video agree per camera even when cameras are a frame or two
   apart; a view whose frame isn't hydrated (lazy) falls back to `frameIdx`, and
   the selection highlight only shows where the selected group exists on that
-  view's frame. The lazy reprojection fill is the private
+  view's frame. The lazy reprojection fill is
   `fillLazyReprojections(fi, groups)`, run for `frameIdx` and once for each
-  other per-view frame. Threads
+  other per-view frame — exported for the overlay video export, which calls it
+  for every frame it draws (`ui/overlay-export-modal.js`). Threads
   `state.colorByIdentity`, `state.trailLength` (node-trail length, issue #102)
   and `state.trailShade` into each `drawFrameOverlays` call. With trails on in a lazy project it first
   calls `ensureLazyTrailWindow(frameIdx, state.trailLength)`
@@ -7362,6 +7466,38 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   honored the two are bit-identical, which
   `tests/e2e/triangulate-all-ba-display.mjs` asserts directly.
 
+  **It reprojects the stored 3D instead of re-solving when that 3D is current**
+  — `reprojectStoredPoints3d` (`pose/triangulation-core.js`) when the group has a
+  `triangulationMethod`, is not `dirty`, and no reprojection-error threshold is
+  set (with one, the solve's undistorted error leaves out observations the
+  stored 3D does not record). Same numbers, value for value; 0.1 / 0.2 ms per
+  frame on a 17-camera project with one / three animals, against 2.4 / 5.0 ms
+  to re-solve Refined. Since no bulk triangulation path (Triangulate All,
+  Triangulate Range, Group by Track) keeps derived state any more, this runs
+  once for every frame shown after one, so at 120 fps the
+  re-solve would have used most of a frame's 8.3 ms. **3D read from a file**
+  (`isPoints3dFromFile`, `pose/pose-data.js`: a loaded `.slp`'s, an imported
+  points3d `.h5`'s) is reprojected whenever the group is clean, threshold or
+  not, method or not — a re-solve would show LUCID's answer instead of the 3D
+  the project holds, which is what the `.slp` load showed when it derived every
+  frame itself. Anything else (Track All's provisional 3D, an edited group) is
+  re-solved as above. The other paths that used to keep derived state for every
+  frame they touched leave it to this fill: the `.slp` load, moving a view
+  between sessions and the overlay video export
+  (`tests/e2e/load-export-move-bounded-derived-state.mjs`).
+
+  **What it makes is kept for at most `DERIVED_FRAMES_KEEP` (600) frames per
+  session** (`noteDerivedFrame`, an LRU in a `WeakMap` by session): beyond that,
+  the least recently filled frame's state is dropped
+  (`dropDerivedReprojections`, `pose/lazy-residency.js`) and re-derived if it is
+  shown again — otherwise playing the whole recording would rebuild the 1.9 GB
+  Triangulate All no longer keeps. ~75 KB per frame per animal at 17 cameras x
+  34 nodes, so ~45 MB per animal there. Never dropped: the frame on screen, and
+  a frame holding a `dirty` group — an edited group keeps showing its old
+  reprojections until it is re-triangulated (`pose/initialization.js`), and a
+  re-derive would replace them with a fresh solve. Covered by `tests/e2e/triangulate-all-bounded-derived-state.mjs` and
+  `tests/e2e/bulk-triangulation-bounded-derived-state.mjs`.
+
   This fill stays **outside** the collapsed-info-panel gate (see
   `ui/panel-visibility.js`). It is shared, not panel-only: the canvas
   reprojection markers, the 3D viewport and the `.slp` export all read the
@@ -7445,10 +7581,13 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 - `./app-state.js` — `state`, `interactionManager`, `timeline`, `isViewDocked`.
 - `../pose/triangulation.js` — `ensureLazyFrameData`,
   `getInstanceGroupsForFrame`, `triangulateAndReproject`,
-  `storeReprojectedInstances`.
+  `reprojectStoredPoints3d`, `storeReprojectedInstances`.
+- `../pose/lazy-residency.js` — `dropDerivedReprojections`.
+- `../pose/pose-data.js` — `points3dNodeCount`, `isPoints3dFromFile`.
 - `./overlays.js` — `drawFrameOverlays`.
 - `./settings.js` — `isCameraTracked` (passed to `drawFrameOverlays` as
-  `trackingExcluded` so views excluded in the Tracking Wizard render grey).
+  `trackingExcluded` so views excluded in the Tracking Wizard render grey),
+  `getTrackingThreshold` (the reprojection fill's threshold check).
 - `./identity-assignment.js` — `editGroupState`, `finishEditGroup`.
 - `./info-panel.js` — `updateFrameInfo`.
 - `./frame-counters.js` — `computeFrameCounterBaseline`,
@@ -9699,7 +9838,15 @@ multi-video docking layout.
 - `./app-state.js` — `state`, controllers + setters.
 - `../pose/pose-data.js` — `FrameGroup`, `UnlinkedInstance`, `Camera`,
   `pooledPoints3d` (the re-solved groups' 3D).
-- `../pose/lazy-residency.js` — `hydrateFrameMembers2d`, `releaseFrameMembers2d`.
+- `../pose/lazy-residency.js` — `hydrateFrameMembers2d`, `releaseFrameMembers2d`,
+  `dropGroupDerivedReprojections`. **The move keeps only the re-solved 3D**: each
+  group losing the view drops its reprojections, reprojected instances and its
+  entry in the frame's results (which named the moved view's errors), and the
+  display fill (`ui/rendering.js`) re-derives them from the new 3D when the
+  frame is shown. It used to keep the re-solve's for every group holding the
+  view — every frame of the session, ~75 KB per frame per animal on a
+  17-camera, 34-node project. Covered by
+  `tests/e2e/load-export-move-bounded-derived-state.mjs` (M).
   `moveVideosToSession` re-solves every origin-session group that loses the
   moved view, and on a lazy project a member of a non-resident frame is a
   `_lazy2d` placeholder (after a reopen, and since #280 after Track All /
@@ -9712,7 +9859,7 @@ multi-video docking layout.
   moves the moved camera's 2D for RESIDENT frames only — its rows for every other
   frame stay in the origin session's lazy store.
 - `../pose/triangulation.js` — `triangulateAndReproject`,
-  `storeReprojectedInstances`, `getInstanceGroupsForFrame`,
+  `getInstanceGroupsForFrame`,
   `sessionHasCalibration`, `resolveTriangulationMethod`. Moving a view between
   sessions strips that camera from every group in the origin session, which
   genuinely invalidates their 3D — so those groups ARE re-solved, but with
@@ -9739,11 +9886,10 @@ multi-video docking layout.
 - `./info-panel.js` — `updateInfoPanel`.
 - `./frame-readout.js` — `clearReadout` (session removed),
   `refreshReadoutTotals` (`switchSession` restoring a cached frame count / fps).
-- `./identity-assignment.js` — `autoAssignState`.
 - `../pose/initialization.js` — `setup3DViewport`.
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`,
-`ui/identity-assignment.js`, `ui/ui-wiring.js`, `ui/view-align-modal.js`
+`ui/ui-wiring.js`, `ui/view-align-modal.js`
 (`syncRotationUI`), `loading/session-loader.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`.
 
@@ -10770,8 +10916,7 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
 `dispatchEvent` applies). That module imports nothing itself, so this one stays
 bridgeable.
 
-**Imported by.** `ui/ui-wiring.js`, `ui/identity-assignment.js`,
-`ui/settings-modal.js`, `pose/tracker.js`.
+**Imported by.** `ui/ui-wiring.js`, `ui/settings-modal.js`, `pose/tracker.js`.
 
 ---
 
@@ -12496,7 +12641,9 @@ header for the full list. Notable ones: `app-state.js`,
 (incl. `evictLazyFrames`), `lazy-residency.js` (`LAZY_PLAYBACK_AHEAD`),
 `rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`,
 `file-io.js`, `session-loader.js`, `video.js`, `tracker.js`,
-`initialization.js`, `identity-assignment.js`, `export-modals.js`,
+`initialization.js`, `identity-assignment.js` (the track/identity helpers,
+Edit Group, `startManualAssignment`, `purgeTriangulationDataForGroup`,
+`swapTracks`), `export-modals.js`,
 `sessions-panes.js`, `settings.js`, `settings-modal.js`,
 `track-range-modal.js` (`showTrackRangeModal`, wired to the Track Frame split
 button's `#tbTrackFrameRange` dropdown item — #212),
@@ -12560,8 +12707,7 @@ document listener that closes the toolbar menus — which is why the focus-relea
 listener in `ui/keyboard-target.js` has to run in the **capture** phase (#230):
 in the bubble phase these two buttons kept focus after a click and swallowed
 `Space`/`Enter`. Implicit triangulation — the `t` shortcut, the Edit ▸
-Triangulate menu item, and the auto-assign flow in `identity-assignment.js` —
-also uses the default method. The **environment-skeleton** solve (Load
+Triangulate menu item — also uses the default method. The **environment-skeleton** solve (Load
 Environment) likewise takes it, via `resolveTriangulationMethod(group)` on a
 brand-new group; it used to hardcode DLT, so a BA user's environment 3D
 silently disagreed with the method they had selected.
@@ -13901,7 +14047,7 @@ prompt for tests/automation. Covered by `tests/test-lazy-reopen.js`.
 Before drawing the first grouped frame, calls `setReprojErrorVisible(true)`
 (`ui/rendering.js`) whenever the reconstructed session has any
 `instanceGroups` — every OTHER path that populates 3D/reprojection data
-(Triangulate All, slp-import.js, save-load.js, identity-assignment.js, …)
+(Triangulate All, slp-import.js, save-load.js, …)
 already did this, but the lazy-reopen path didn't, so `#reprojErrorSection`
 stayed at its HTML `display:none` default forever after a reopen even though
 `drawAllOverlays`'s lazy-reproject block was silently computing a real error
@@ -14425,6 +14571,78 @@ loaded over the network or from disk.
 
 ---
 
+### loading/cold-read-guard.js
+
+**Purpose.** Blob reads that survive a file still downloading from a
+cloud-synced folder. In a Google Drive for desktop folder on macOS (File
+Provider), a read of a part of a file that is not downloaded yet can FAIL
+(`arrayBuffer()` rejects with NotReadableError, a Blob stream errors with
+`TypeError: network error`) or come back with a run of ZEROS and every other
+byte right — the failure lib/h5wasm's `LUCID local patch (cold-read)` guards
+for every h5wasm reader. Drive fetches a video only in the ranges that are read
+(a "dataless" 428 MB recording held 12.6 MB after a session load), so the load
+AND every seek into an unvisited part of a video read parts not downloaded yet.
+Measured 2026-10-19 on cold 8-camera sessions, every Blob read logged and
+compared with the disk afterwards (CLAUDE.md has the numbers): on `main` the
+video reads FAILED (31 in 45,735) and none came back zeroed; 2 of 48 cameras
+lost their frame-accurate decoder at load (they stepped by `<video>` seeks for
+the rest of the session), 3 requested frames fell back to a `<video>` seek, and
+most other failures hit the back-step prefetch, which gave up. Read through the
+guard's 1 MiB windows, 67 of 7,189 reads came back with their first 64 KiB
+zeroed — a read starting on a 1 MiB boundary of the file where nothing was
+downloaded yet, by `arrayBuffer()` or by stream alike — and every one was
+repaired, as was every failure rescued.
+
+**The rule.** `readBlobRange(blob, start, end)` retries a read that throws,
+after `COLD_READ_RETRY_MS` (200 ms, 1 s, 3 s), then rethrows the last error;
+and re-reads every all-zero part of a read (per 4 KiB block of the FILE,
+clipped to the read, neighbours merged — `zeroRuns`), using the re-read only
+when it holds a non-zero byte, so the guard cannot make a read worse. A re-read
+is checked the same way, at most three deep. That is h5wasm's
+`lucidColdReadGuard` rule exactly, plus the retry (WORKERFS reads are
+synchronous, so that patch has none). Repairs and rescues log a `[cold-read]`
+console warning and are counted in `coldReadStats`.
+
+**Key exports.**
+- `readBlobRange(blob, start, end)` → `Promise<Uint8Array>`.
+- `readBlobArrayBuffer(blob)` — the whole blob, guarded; a stand-in for
+  `blob.arrayBuffer()`.
+- `guardedRangeSource(blob, opts?)` → `{ size, readRange(start, length) }`, the
+  shape sleap-io.js's `MediaBunnyVideoBackend.fromRangeSource` takes (it drives
+  mediabunny's `StreamSource` with it). mediabunny asks a `StreamSource` for
+  ~64–192 KiB at a time and a Blob read costs about the same however small it
+  is, so one read per request read packets ~6x slower than mediabunny's own
+  streaming `BlobSource` (221 vs 35 ms for 46.7 MB). It reads whole
+  `RANGE_WINDOW_BYTES` (1 MiB) aligned windows instead, keeps the most recent
+  `RANGE_CACHE_BYTES` (4 MiB), and answers with copies so mediabunny's cache
+  never pins a window: 61 vs 29 ms for the same 46.7 MB, ~75x what 8 cameras
+  decoding at 60 fps need, and index build and decoding measure the same as
+  `BlobSource` (20 ms, 66 ms per 60 frames). A failed window is dropped, so the
+  next request reads again.
+- `zeroRuns(bytes, position)`, `repairZeroRuns(blob, bytes, position)`,
+  `coldReadStats`, `COLD_READ_BLOCK`, `COLD_READ_RETRY_MS`.
+
+**Imports from project modules.** None, so a Node test can load it.
+
+**Imported by.** `loading/video.js` (mediabunny via `guardedRangeSource`;
+mp4box's scan via `readChunk`), `loading/video-codec-diagnosis.js`
+(`readRange`), `import-export/slp-import.js` (`handleLoadPoints3dH5`).
+
+**Not covered.** The `<video>` element reads its blob URL natively, where no
+page code can reach (playback, and stepping only when there is no
+frame-accurate backend); the small JSON / TOML `.text()` reads (a zeroed or
+failed read of those fails to parse, loudly).
+
+**Tests.** `tests/test-cold-read-guard.mjs` (the rule over a fake Blob with
+injected holes and failures; mediabunny's index and every packet of the
+committed B-frame clip through the guard, with the unguarded read as the
+negative control) and `tests/e2e/video-cold-read.mjs` (the real
+OnDemandVideoDecoder in Chromium with faults injected under it: frame count,
+fps, index and every frame's pixels equal a clean load; on the unguarded build
+a failed read leaves mp4box's scan at the `<video>` estimate — 90 frames at
+30 fps for a 30-frame 10 fps clip — the frame-accurate backend fails to start,
+and a zeroed first page freezes the page, mp4box looping on it).
+
 ### loading/video-codec-diagnosis.js
 
 **Purpose.** Explain WHY the browser refused a video. A `<video>` load
@@ -14451,7 +14669,8 @@ error then stands (e.g. a corrupt file).
 - `videoLoadFailureText(name, err)` — one-line reason for loaders' status
   messages: `err.codecDiagnosis.message` when present, else the error text.
 
-**Imports from project modules.** None.
+**Imports from project modules.** `loading/cold-read-guard.js`
+(`readBlobRange`: a cloud file still downloading).
 
 **Imported by.** `loading/video.js` (`OnDemandVideoDecoder._awaitPlayable`),
 `loading/session-loader.js` (`videoLoadFailureText`).
@@ -15054,6 +15273,9 @@ How it behaves:
 - `ZOOM_PRESET_PERCENTS` (`[50, 100, 150, 200]`) — the badge menu's presets.
 - `zoomRatioLabel(pct)` — a percentage as screen:video pixels in lowest terms
   (`200` → `"2:1"`, `150` → `"3:2"`), the hint beside each preset.
+- `FRAME_CACHE_BUDGET_MB` (2560), `FRAME_CACHE_MAX` (60), `FRAME_CACHE_MIN` (12),
+  `frameCacheFrames(budgetMB, frameBytes[])` — the decoded-frame cache budget
+  (see "The decoded-frame caches share a budget" below).
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
   `getFrame(frameIndex)` (mediabunny: via `_mbGetFrame`, the open stepping
   stream), `releaseStepCursor()`, `releaseFrames()` (closes and drops every
@@ -15061,7 +15283,9 @@ How it behaves:
   the stepping streams, keeping the decoder open; called by
   `VideoController._shownViews` for a view that went off screen, since 17
   cameras' full 60-frame caches at 1680×1200 are ~8 GB of ImageBitmaps and keep
-  Chrome garbage-collecting), `_initMediabunny(source)` /
+  Chrome garbage-collecting), `setCacheSize(n)` (re-sizes both frame caches,
+  evicting at once — the backend's frames farthest from the last stepped frame
+  first; set by the controller's budget), `_initMediabunny(source)` /
   `_mediabunnyEnabled()` (default-on frame-accurate backend, issue #115),
   `_mbCannotDecode(backend)` (null, or `{reason: 'codec', codec, codecString}`
   when WebCodecs cannot decode the track — the backend is then dropped and
@@ -15169,6 +15393,56 @@ new pictures/s), because the 16 hidden decoders still decoded every step and
 played. Covered by `tests/test-video-controller.js` ("Only shown views") and
 `tests/e2e/solo-view-decodes-shown-only.mjs`.
 
+**The decoded-frame caches share a budget** — `FRAME_CACHE_BUDGET_MB` (2560;
+`window.LUCID_FRAME_CACHE_MB` overrides). Each decoder caches decoded frames as
+ImageBitmaps for paused stepping, 8 MB apiece at 1680×1200, and every decoder
+used to keep a fixed 60. On 17 cameras that is ~8 GB alive at once, and Chrome
+then garbage-collects most of the time. `_applyFrameCacheBudget` (run by
+`_shownViews` whenever the shown decoders change) gives each SHOWN decoder
+`frameCacheFrames(budget, shown frame sizes)` frames, clamped to
+[`FRAME_CACHE_MIN` 12, `FRAME_CACHE_MAX` 60], and each hidden one the share it
+would have with every view shown (the overlay-export preview decodes every
+view). The result: 19 frames on 17 cameras at 1680×1200, 60 for one solo'd
+camera, and 60 — unchanged — for 8 cameras at 1280×1024. `startPlayback` also
+`releaseFrames()` every decoder: playback never reads the caches, and after it
+they hold frames from wherever stepping last was.
+
+Grid-mode sweep on the 17-camera MultiCam_18 project (headed Chrome, fixed
+cache sizes forced after load; GC = share of main-thread samples):
+
+| frames/camera | cache | jump (median) | step fwd p90 | step back p90 | hold → / ← frames/s | playback redraws/s | GC stepping / playing |
+|---|---|---|---|---|---|---|---|
+| 60 (old) | 8.2 GB | 2,563 ms | 1,187 ms | 104 ms | 5.3 / 7.7 | 6.4 | 62% / 69% |
+| 36 | 4.9 GB | 1,351 ms | 36 ms | 45 ms | 14.3 / 12.3 | 13.3 | 2% / 64% |
+| 24 | 3.3 GB | 1,297 ms | 27 ms | 32 ms | 16.3 / 11.3 | 53.6 | 0% / 1% |
+| 12 | 1.6 GB | 1,273 ms | 32 ms | 588 ms | 14.7 / 7.0 | 56.1 | 0% / 1% |
+| 6 | 0.8 GB | 1,288 ms | 27 ms | 1,481 ms | 15.3 / 3.7 | 57.2 | 0% / 2% |
+| **19 (budget)** | 2.6 GB | 1,460 ms | 30 ms | 32 ms | 15.3 / 9.0 | 53.7 | ~0% / ~0% |
+
+The same sweep on the 5-camera Mimica project (H.264 with B-frames,
+1280×1024 at 150 fps, lazy; caches never reach 1.6 GB, so GC is ~0% throughout
+and only stepping BACK depends on the size; the budget gives it 60):
+
+| frames/camera | cache | jump (median) | step fwd p90 | step back p90 | hold → / ← frames/s | playback new pictures/s |
+|---|---|---|---|---|---|---|
+| 60 (old = budget) | 1.6 GB | 258 ms | 7 ms | 12 ms | 33 / 32 | 120 |
+| 36 | 0.9 GB | 255 ms | 7 ms | 13 ms | 33 / 32 | 120 |
+| 24 | 0.6 GB | 261 ms | 7 ms | 12 ms | 33 / 32 | 120 |
+| 12 | 0.3 GB | 256 ms | 7 ms | 253 ms | 33 / 20 | 120 |
+| 6 | 0.2 GB | 259 ms | 7 ms | 322 ms | 33 / 11 | 120 |
+
+(33 frames/s is the 30 ms key repeat and 120 the 120 Hz display: both ceilings.)
+With the budget, Mimica and the 8-camera HardFight_1kModels both measure the
+same as before it, grid and solo.
+
+Stepping stops garbage-collecting below ~5 GB of cached frames and playback
+below ~3.3 GB; under 12 frames the backward chunk (40% of the cache,
+`_backChunkSize`) gets so short that held back-stepping falls off. Grid
+playback above ~54 redraws/s is decode-bound (17 × 120 fps of 2-MP HEVC; ~35%
+of frames dropped by the `<video>`s), and a jump is a keyframe decode of up to
+249 frames in 17 views. Covered by `tests/test-video-controller.js`
+("decoded-frame cache budget").
+
 **`setupZoomHandlers`'s wheel-to-zoom stands down while Alt is held.** Alt
 turns the wheel into the instance-rotation control (`ui/interaction.js`
 `onWheel`, issue #198), whose listener is on the OVERLAY CANVAS — which does
@@ -15183,7 +15457,15 @@ a rotation in progress. Removing the line alone turns the margin check in
 `shouldIgnoreShortcut` guard its `setupKeyboardHandlers` keydown listener
 applies (issue #163); that module imports nothing itself — and
 `loading/video-codec-diagnosis.js` (`diagnoseUnplayableVideo`, for
-`_awaitPlayable`). `mediabunny` (`EncodedPacketSink`) is imported lazily by
+`_awaitPlayable`) — and `loading/cold-read-guard.js`: `_initMediabunny` builds
+the frame-accurate backend with `MediaBunnyVideoBackend.fromRangeSource` over
+`guardedRangeSource(file)` (falling back to `fromBlob` when a bundle lacks it),
+and `readChunk` (mp4box's index scan) reads through `readBlobRange`, so both
+retry a failed read and re-read zeroed pages of a cloud file still downloading
+(see that module). Without the guard a failed scan read silently left the
+`<video>` estimate (duration x 30 fps) as the frame count and fps, and a zeroed
+page in the scanned `moov` made mp4box loop for good on the main thread.
+`mediabunny` (`EncodedPacketSink`) is imported lazily by
 `_keyTimestamp`. Otherwise none (uses the global `MP4Box` from script tag, and
 `window.SleapIO.MediaBunnyVideoBackend`).
 
@@ -15615,6 +15897,25 @@ exports via the eager path; partially-resident refuses and says so).
   reload — the canonical `identity_idx`/`ig.identity` resolve against the file-level
   concat and mis-scope for multi-session files). The file-level `identities_json` is
   a cross-session concatenation, NOT the per-session source of truth on reload.
+  **Its 2D instances come from `makePooledSioInstances(SIO, skeleton, numNodes)`**
+  (exported), not `new SIO.Instance({ points: _buildSioPoints(...) })`. That
+  construction cost ~0.93 KB of V8 heap per 2D instance, held for the whole save
+  (1,289 MB on the 17-camera MultiCam_18 recording, 1,390,390 instances): a
+  17-field object, four typed arrays with an ArrayBuffer each, and a `_names`
+  array of `undefined`s (the point objects carry no `name`, so `_ingest` built a
+  per-instance override). The factory writes the same values straight into
+  pooled column chunks (`SIO_POOL_CHUNK_POINTS` = 65,536 keypoints) and returns
+  `Object.create(prototype)` with `track`, `score`, its chunk and offset; the
+  prototype inherits from the real `SIO.Instance` / `SIO.PredictedInstance`,
+  copies every field default from a real `new` instance (so a field a future
+  sleap-io.js adds keeps its default), and serves `_xy` / `_visible` /
+  `_complete` / `_score` as getters returning a view of the slice — what the
+  vendored writer's `emitInstancePointsInto` reads. A `points =` assignment
+  gives that one instance its own columns. Measured on that recording: retained
+  1,289 → 298 MB; the real File ▸ Save's peak 2,146 → 1,057 MB (build 5.1 → 1.6 s), every
+  dataset bit-identical (h5py).
+  Pinned against the old construction — every column, score, default, and the
+  saved bytes — by `tests/test-sio-pooled-instances.js`.
 - Skeleton validation: `findSkeletonMismatch(selections)` — returns `null` when
   all selected sessions share a skeleton (node count + names, in order),
   otherwise a human-readable mismatch message. Pure (no SleapIO); used both to
@@ -15640,7 +15941,11 @@ exports via the eager path; partially-resident refuses and says so).
   byte-parity with `parseSlpH5` + full 2.8 round-trip (calibration / 3D incl. NaN /
   identity / occlusion) verified in-browser.
 - H5 build/parse: `buildPoints3dH5`, `buildReprojH5`,
-  `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`.
+  `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`. `buildReprojH5`
+  (Save Reprojections) projects a group's stored 3D into each camera when it has
+  no `reprojections` — they are derived, kept only for frames that have been
+  shown, and Triangulate All stores none; it used to skip such groups, which on a
+  lazy project (and now an eager one) left every unshown frame NaN.
 - Misc: `downloadJSON`, `downloadBytes` (the binary sibling, for the STL/GLB
   mesh exports; the Blob is handed the VIEW, never `bytes.buffer`, which on a
   subarray would write the neighbouring bytes too), `instancePointsMatch`,
@@ -15881,6 +16186,13 @@ loading-overlay/status-text UI helpers.
   eager `buildSlpLabelsAllViews` + `saveSlpToBytes` (which would re-OOM and
   silently drop every unvisited frame). A mixed project (any session without a
   `lazyLoader`, e.g. hand-labeled) still falls through to the eager path.
+  **The eager path's peak is the `Labels` graph, not the writer** (luc3d
+  eager-save): the vendored `writeLabeledFrames` now appends the four 2D tables
+  through fixed-size buffers instead of one boxed row per keypoint, which is
+  what ran a 17-camera × 34-node × 36,000-frame project (1,390,390 instances)
+  out of memory. What is left is `buildSlpLabelsAllViews`' `SIO.Instance` per
+  2D instance, ~0.93 KB of V8 heap each while the save runs (1.29 GB there; the
+  whole save peaked at 2,234 MB). Measured by `tests/e2e/_diag-eager-save-heap.mjs`.
   **Large-project size warning:** before entering the streaming path,
   `estimateLazySaveRiskBytes(sessionsToExport)` computes a rough proxy for
   PASS-1's peak JS memory (total frame x camera pairs across every lazy
@@ -16196,8 +16508,33 @@ Every restored group's 3D goes into the slab pool (`pooledPoints3d`,
 group, outside V8's pointer cage, and the reader's array is released with its
 typed group.
 
+**The load keeps only the 3D.** `handleLoadSlpFile` used to reproject every
+group of a file with 3D into every camera at load — reprojections, a
+reprojected `Instance` per camera, and every frame's per-camera errors in
+`session.triangulationResults` ("Recomputing reprojections from 3D data...") —
+~75 KB per frame per animal on a 17-camera, 34-node project, for frames nobody
+had looked at. It now only marks those groups clean; `ui/rendering.js`'s
+reprojection fill derives a frame's when it is shown, from the same stored 3D,
+and keeps at most `DERIVED_FRAMES_KEEP` frames' worth. Two things keep that the
+same as before:
+- **The file's 3D is reprojected, never re-solved.** The three restore sites
+  (`reconstructInstanceGroupsFromDicts`, `...FromSession`,
+  `...FromSessionLazy`) and `handleLoadPoints3dH5` mark each group's 3D with
+  `markPoints3dFromFile` (`pose/pose-data.js`), and the fill reprojects marked
+  3D whenever the group is clean — also with a reprojection-error threshold
+  set, the one case in which it otherwise re-solves, and also for the `.h5`
+  import's groups, which have no `triangulationMethod`. `handleLoadPoints3dH5`
+  also drops a replaced group's derived state
+  (`dropGroupDerivedReprojections`), which used to keep showing the old 3D's.
+- **The Reprojections and Errors layers still switch on** when the active
+  session has 3D (`setReprojErrorVisible(true)`), which used to be keyed on the
+  results map being non-empty — empty now until the first draw.
+Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
+
 **Imports from project modules.**
-- `../pose/pose-data.js` (incl. `lazyPlaceholderXY`), `../pose/triangulation.js`, `./file-io.js`,
+- `../pose/pose-data.js` (incl. `lazyPlaceholderXY`, `markPoints3dFromFile`),
+  `../pose/triangulation.js` (`getInstanceGroupsForFrame`),
+  `../pose/lazy-residency.js` (`dropGroupDerivedReprojections`), `./file-io.js`,
   `./slp-merge.js`, `../loading/video.js`, `../ui/app-state.js`,
   `../loading/session-loader.js`, `./save-load.js`,
   `../ui/rendering.js`, `../ui/info-panel.js`,
@@ -16207,7 +16544,9 @@ typed group.
   `../pose/initialization.js`, `../ui/ui-wiring.js`,
   `../ui/frame-readout.js` (`refreshReadoutTotals`, when a video-less import
   sets the frame count), `../ui/sessions-panes.js`, `./visibility-metadata.js`
-  (`readVisibilityMetadata`). Also spawns
+  (`readVisibilityMetadata`), `../loading/cold-read-guard.js`
+  (`readBlobArrayBuffer`: Load 3D Points reads its `.h5` into memory, outside
+  h5wasm's guarded WORKERFS). Also spawns
   `../loading/frame-worker.js` (twice) via `new Worker(new URL(...))`.
 
 **Imported by.** `import-export/save-load.js`, `ui/ui-wiring.js`.
