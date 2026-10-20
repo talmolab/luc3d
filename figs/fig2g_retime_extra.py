@@ -15,16 +15,29 @@ obs = np.memmap(OUT / meta["bin"], dtype="<f8", mode="r")[:K * C * 2].reshape(K,
 cg = fsa.build_groups(meta["calibrations"])[0]
 def pts(n):
     p = np.ascontiguousarray(obs[:n].transpose(1, 0, 2)).astype(np.float64); p[~np.isfinite(p)] = np.nan; return p
-p200, p5 = pts(200_000), pts(5_000)
+N_UND = int(os.environ["FIG2G_FRAMES"]) * 15 if os.environ.get("FIG2G_FRAMES") else 200_000   # same keypoints as fig2g_retime_all
+SAME_N = bool(os.environ.get("FIG2G_FRAMES"))
+p200, p5 = pts(N_UND), pts(5_000)
 cg.triangulate_ransac(p5[:, :200], progress=False)   # numba warm-up
 und, ran = [], []
 for _ in range(5):
     t0 = time.perf_counter()
     for ci, cam in enumerate(cg.cameras): cam.undistort_points(np.copy(p200[ci]))
-    und.append(1e6 * (time.perf_counter() - t0) / 200_000)
-    t0 = time.perf_counter(); cg.triangulate_ransac(p5, progress=False); ran.append(1e6 * (time.perf_counter() - t0) / 5_000)
+    und.append(1e6 * (time.perf_counter() - t0) / N_UND)
+    if not SAME_N:
+        t0 = time.perf_counter(); cg.triangulate_ransac(p5, progress=False); ran.append(1e6 * (time.perf_counter() - t0) / 5_000)
+#: FIG2G_FRAMES set (2026-10-15, C4): RANSAC on the SAME keypoints as every other bar, on the
+#: pre-undistorted points with undistort=False (undistortion outside the timer, as for linear).
+#: 3 rounds, best kept (one round is ~7 min at ~2.2 ms/keypoint).
+if SAME_N:
+    und_pts = np.empty_like(p200)
+    for ci, cam in enumerate(cg.cameras): und_pts[ci] = cam.undistort_points(np.copy(p200[ci]))
+    cg.triangulate_ransac(und_pts[:, :200], undistort=False, progress=False)   # numba warm-up
+    for _ in range(3):
+        t0 = time.perf_counter(); cg.triangulate_ransac(und_pts, undistort=False, progress=False)
+        ran.append(1e6 * (time.perf_counter() - t0) / N_UND)
 d = json.loads((OUT / f"fig2g_retime_all{_SFX}.json").read_text())
-d["anipose_undistort_runs"] = und; d["anipose_ransac_runs"] = ran
+d["n_undistort"] = N_UND; d["n_ransac"] = N_UND if SAME_N else 5_000; d["ransac_scope"] = "pre-undistorted, undistort=False, same keypoints as linear" if SAME_N else "5,000 keypoints, undistortion inside"; d["anipose_undistort_runs"] = und; d["anipose_ransac_runs"] = ran
 d["best_us_per_keypoint"]["anipose_undistort"] = min(und); d["best_us_per_keypoint"]["anipose_ransac"] = min(ran)
 d["ransac_over_linear"] = min(ran) / d["best_us_per_keypoint"]["anipose_linear"]
 (OUT / f"fig2g_retime_all{_SFX}.json").write_text(json.dumps(d, indent=1))

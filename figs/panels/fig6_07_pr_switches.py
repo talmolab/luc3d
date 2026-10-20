@@ -230,7 +230,8 @@ def main(deposit_name="fig8_methods_50.json"):
     # curve request still stand and are kept: no iso-IDF1 contours, and no raw
     # switch counts on the lollipop labels.)
     x0 = min(df.idr_q1.min(), df.idr_median.min()) - 0.03
-    x1 = max(df.idr_q3.max(), df.idr_median.max()) + 0.03
+    # capped like y1 (2026-10-15, b3): recall cannot exceed 1, so no 1.025 tick
+    x1 = min(1.012, max(df.idr_q3.max(), df.idr_median.max()) + 0.03)
     y0 = min(df.idp_q1.min(), df.idp_median.min()) - 0.03
     # the candidates' median precision IS 1.0 (the distribution is skewed -- half
     # the sessions are perfect), so the top limit leaves a hair of air or the

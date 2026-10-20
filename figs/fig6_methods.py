@@ -315,6 +315,12 @@ ROUND7 = [
     ("sync_stale30_dist25", {"method": {"sync": True, "stale": 30},
                              "thresholds": {"distanceThreshold": 25}},
      "30-frame horizon — one second at 30 fps"),
+    ("sync_stale40_dist25", {"method": {"sync": True, "stale": 40},
+                             "thresholds": {"distanceThreshold": 25}},
+     "40-frame horizon (2026-10-16, b3: the curve recovers toward stale 0 by 30; go past it)"),
+    ("sync_stale50_dist25", {"method": {"sync": True, "stale": 50},
+                             "thresholds": {"distanceThreshold": 25}},
+     "50-frame horizon (2026-10-16, b3)"),
     ("sync_stale100_dist25", {"method": {"sync": True, "stale": 100},
                               "thresholds": {"distanceThreshold": 25}},
      "100-frame horizon: only the extreme tail"),
@@ -402,6 +408,18 @@ def config_map():
 #: race), and `shipped` -- the pre-#210 tracker, which no current checkout contains -- is
 #: symlinked from the fork's tmp/fig8m50/shipped/. Unset = unchanged.
 MAIN_ROOT = os.environ.get("FIG8M_LUCID_ROOT", "")
+#: MD_CFG=b3 (2026-10-15, Eric): Mouse-Dyad on the body>=5 pool (det_h5_bvis5/) with the tail
+#: INCLUDED in tracking (--no-exclude-tail), as mdb_experiment.py b3. Scoring stays tail-free.
+#: Needs FIG8M_LUCID_ROOT and FIG8M_SUFFIX=b3; cache tmp/fig8m50_<commit>_b3/, and no `shipped`
+#: cell (that one is the pre-#210 fork on det_h5). Unset = unchanged.
+MD_CFG = os.environ.get("MD_CFG", "")
+POOL, TAIL_ARGS = f3.DET, []
+if MD_CFG:
+    if MD_CFG != "b3":
+        raise SystemExit(f"MD_CFG={MD_CFG!r}: only b3 is defined")
+    if not MAIN_ROOT or not os.environ.get("FIG8M_SUFFIX", "").startswith("b3"):
+        raise SystemExit("MD_CFG=b3 needs FIG8M_LUCID_ROOT and a FIG8M_SUFFIX starting with b3")
+    POOL, TAIL_ARGS = f3.DET.parent / "det_h5_bvis5", ["--no-exclude-tail"]
 MAIN_COMMIT = None
 if MAIN_ROOT:
     MAIN_ROOT = str(Path(MAIN_ROOT).resolve())
@@ -503,7 +521,7 @@ def run_one(cell, overrides, session):
     calib = f3.calib_for(session)
     if not calib:
         return (session, "failed", f"no calibration.toml for {session}")
-    det_dir = f3.DET / session
+    det_dir = POOL / session
     if not det_dir.exists():
         return (session, "failed", f"no det_h5 dir {det_dir}")
 
@@ -522,7 +540,7 @@ def run_one(cell, overrides, session):
         "--out", str(out_path),
         "--cameras", ",".join(f3.CAMERAS),
         "--params", str(params_path),
-    ]
+    ] + TAIL_ARGS
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
         if r.returncode != 0 or not out_path.exists():
@@ -542,7 +560,7 @@ def score_one(cell, session):
         return (session, "failed", "no result JSON (driver run failed)", None)
     import fig3_score as fs  # noqa: E402
     try:
-        s = fs.score_session(str(result_path), str(f3.DET / session),
+        s = fs.score_session(str(result_path), str(POOL / session),
                              str(f3.GT / session), f3.CAMERAS, f3.NUM_ANIMALS,
                              max_frames=None)
         return (session, "ok", s, f8.payload_digest(result_path))
@@ -636,7 +654,7 @@ def use_all_bmimica_sessions():
     """
     global TMP_DIR, DEPOSIT, SHIPPED_SRC
     from glob import glob as _glob
-    det, gt = f3.DET, f3.GT
+    det, gt = POOL, f3.GT
     sessions = []
     for s in sorted(os.listdir(det)):
         if not (det / s).is_dir() or not (gt / s).is_dir():
@@ -651,11 +669,12 @@ def use_all_bmimica_sessions():
     if MAIN_ROOT:
         global DRIVER
         fork_tmp = TMP_DIR
-        TMP_DIR = OUT_DIR / "tmp" / f"fig8m50_{MAIN_COMMIT[:8]}"
+        TMP_DIR = OUT_DIR / "tmp" / f"fig8m50_{MAIN_COMMIT[:8]}{'_b3' if MD_CFG else ''}"
         DRIVER = REPO / "figs" / "fig3-bench" / "fig3_bench.mjs"
         os.environ["LUCID_ROOT"] = MAIN_ROOT
-        (TMP_DIR / "shipped").mkdir(parents=True, exist_ok=True)
-        for s in sessions:
+        if not MD_CFG:                           # b3: no paper-pool `shipped` cell linked in
+            (TMP_DIR / "shipped").mkdir(parents=True, exist_ok=True)
+        for s in (sessions if not MD_CFG else []):
             src, dst = fork_tmp / "shipped" / f"{s}.json", TMP_DIR / "shipped" / f"{s}.json"
             if src.exists() and not (dst.exists() or dst.is_symlink()):
                 dst.symlink_to(src)
@@ -888,7 +907,7 @@ def main(names):
                   "measured on Fig 8's measurement. Not placed in any manuscript "
                   "figure.",
         "dataset": "BMimica",
-        "detection_pool": str(f3.DET),
+        "detection_pool": str(POOL), "tail_in_tracking": bool(TAIL_ARGS),
         "sessions": f3.SESSIONS,
         "cameras": f3.CAMERAS,
         "num_animals": f3.NUM_ANIMALS,
@@ -925,6 +944,18 @@ def main(names):
         ],
         "cells": ordered,
     }
+    if MAIN_ROOT:
+        # X6 (2026-10-20): under FIG8M_LUCID_ROOT the cells run that checkout's REAL tracker
+        # through fig3_bench.mjs, so the fork caveats above (the 8-session `shipped`
+        # symlink, the empty-method-block proof, the xv_experimental.js loader hook) do not
+        # describe this deposit. Record the checkout instead.
+        out["lucid_root"], out["lucid_commit"] = MAIN_ROOT, MAIN_COMMIT
+        out["experimental_tracker"] = None
+        out["caveats"][2:5] = [
+            f"Every cell runs the unmodified tracker of {MAIN_ROOT} at commit "
+            f"{MAIN_COMMIT} through figs/fig3-bench/fig3_bench.mjs, on all "
+            f"{len(f3.SESSIONS)} sessions. There is no `shipped` (pre-#210) cell and no "
+            "experimental fork in this deposit."]
     path.write_text(json.dumps(out, indent=2))
     print(f"[fig8m] wrote {path} ({time.time()-t0:.0f}s total)", flush=True)
 

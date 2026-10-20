@@ -207,6 +207,8 @@ def make_driver_job(params, root, shipped_tmp, force=False):
 
     def driver_job(cfg, sess):
         key, s = cfg["key"], sess["session"]
+        # FIG3_VARIANT=b3 (2026-10-15): Mouse-Dyad greedy tracks WITH the tail (fig3_headtohead).
+        tail = VARIANT == "b3" and key == "A2_C5_bmimica"
         d = root / key / s
         d.mkdir(parents=True, exist_ok=True)
         errs = []
@@ -237,7 +239,8 @@ def make_driver_job(params, root, shipped_tmp, force=False):
                 if (m.get("params_digest") == pd_want
                         and list(m.get("cameras", [])) == list(cfg["cameras"])
                         and m.get("num_animals") == cfg["animals"]
-                        and m.get("max_frames") == sess["max_frames"]):
+                        and m.get("max_frames") == sess["max_frames"]
+                        and m.get("exclude_tail", True) == (not tail)):
                     return key, s, []
             except Exception:  # noqa: BLE001
                 pass
@@ -251,7 +254,7 @@ def make_driver_job(params, root, shipped_tmp, force=False):
                "--pred-h5-dir", sess["det_dir"],
                "--cameras", ",".join(cfg["cameras"]),
                "--params", str(params_path),
-               "--out", str(out)]
+               "--out", str(out)] + (["--no-exclude-tail"] if tail else [])
         if sess["max_frames"]:
             cmd += ["--max-frames", str(sess["max_frames"])]
         t0 = time.time()
@@ -271,7 +274,7 @@ def make_driver_job(params, root, shipped_tmp, force=False):
         meta.write_text(json.dumps({
             "params_digest": pd_want, "params": params,
             "cameras": cfg["cameras"], "num_animals": cfg["animals"],
-            "max_frames": sess["max_frames"],
+            "max_frames": sess["max_frames"], "exclude_tail": not tail,
             "framesProcessed": fp, "runtimeSeconds": rt,
             "seconds_per_frame_greedy_contended": (rt / fp) if fp else None,
             "wall_seconds": round(time.time() - t0, 2),

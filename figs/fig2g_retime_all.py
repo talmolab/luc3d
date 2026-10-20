@@ -39,6 +39,10 @@ NODE = os.environ.get("NODE", "/root/vast/eric/node22_env/bin/node")
 POSE_DIR = os.environ.get("POSE_DIR", "/root/vast/eric/lucid-main-timing/pose")
 N_LIN = 200_000
 OPT_FRAMES, JOINTS = 23_000, 15
+#: FIG2G_FRAMES=<f> (2026-10-15): time EVERY solver on the same first f frames x 15 joints, so all
+#: bars share one keypoint set (f = 13,334 gives 200,010). Unset = the old 200,000 / 345,000 split.
+if os.environ.get("FIG2G_FRAMES"):
+    OPT_FRAMES = int(os.environ["FIG2G_FRAMES"]); N_LIN = OPT_FRAMES * JOINTS
 
 
 def main():

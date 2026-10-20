@@ -107,6 +107,7 @@ denominator; with `--as-shipped`, figs/out/fig3_trackers.json `slap2m` (pre-#131
     python3 figs/panels/fig7_02_by_animals.py --as-shipped  # retired arm, _pre131 slug
 """
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -157,7 +158,21 @@ def pooled_multi(pv, counts):
     bootstrap interval is printed for it."""
     multi = [v for a in counts if a >= 2 for v in pv[str(a)]["per_session"]]
     w = sum(1 for v in multi if v > 0)
+    if TIES_EXCLUDED:
+        lo = sum(1 for v in multi if v < 0)
+        return sum(multi) / len(multi), w, len(multi), sign_p(w, w + lo)
     return sum(multi) / len(multi), w, len(multi), sign_p(w, len(multi))
+
+
+#: SIGN_TIES_EXCLUDED=1 (2026-10-15, audit; opt-in, unset = unchanged): the sign tests
+#: this panel PRINTS drop tied sessions (the standard exact sign test, and the one the
+#: manuscript quotes: >= 2 animals 29 vs 12 with 1 tie, P = 0.012). Unset, ties count as
+#: losses (29/42, P = 0.02), fig3_trackers' convention. Labels then read "W vs L".
+TIES_EXCLUDED = os.environ.get("SIGN_TIES_EXCLUDED") == "1"
+
+
+def _wl(per):
+    return sum(1 for v in per if v > 0), sum(1 for v in per if v < 0)
 
 
 #: fig11-compact type size, source pt (see the COMPACT PASS comment in main):
@@ -207,6 +222,7 @@ def main(variant=False, corrected=True, fresh_arm=False):
             6, "fig6c_by_animals_variant.csv")
 
     m_mean, m_wins, m_n, m_p = pooled_multi(pv, counts)
+    m_n_loss = sum(1 for a in counts if a >= 2 for v in pv[str(a)]["per_session"] if v < 0)
 
     fig, ax = panel("half", ROW_H, key=4 if variant else 0)
     x = np.arange(len(df))
@@ -394,7 +410,8 @@ def main(variant=False, corrected=True, fresh_arm=False):
                 color=INK, fontsize=6, ha="left", va="top", linespacing=1.35)
         ax.text(1.15, ty,
             (f"≥ 2 animals pooled: {m_mean:+.3f}\n"
-             f"(n = {m_n}, {m_wins}/{m_n}, P = {m_p:.2f})") if not variant else
+             + (f"(n = {m_n}, {m_wins} vs {m_n_loss}, P = {m_p:.3f})" if TIES_EXCLUDED
+                else f"(n = {m_n}, {m_wins}/{m_n}, P = {m_p:.2f})")) if not variant else
             # THREE SHORT LINES, NOT TWO LONG ONES, AND THE WIDTH IS THE BINDING
             # CONSTRAINT. This note is anchored at x = 1.15 in data coordinates, i.e.
             # ~40% across the axes, and "SLEAP ahead" is right-aligned at 0.98 on the
@@ -414,6 +431,9 @@ def main(variant=False, corrected=True, fresh_arm=False):
             color=INK, fontsize=6, ha="left", va="top", linespacing=1.35)
 
     a = pv["all"]
+    if TIES_EXCLUDED:      # recompute from the deposited per-session differences
+        _w, _l = _wl(a["per_session"])
+        a = dict(a, sign_p=sign_p(_w, _w + _l), wins=_w, losses_excl_ties=_l)
     # `P < 0.001` RATHER THAN `P = 0.000`, which is what `.3f` prints for this cell on
     # the shipped tracker (3.4e-05). A rounded-to-zero P reads as a typesetting slip
     # and invites "P = 0", which is never a true statement about a sign test.
@@ -429,8 +449,9 @@ def main(variant=False, corrected=True, fresh_arm=False):
     # claim the data has stopped supporting.
     note = (f"all {a['n_sessions']} sessions: {a['mean']:+.3f} "
             f"[{a['ci95_lo']:+.3f}, {a['ci95_hi']:+.3f}], "
-            f"{a['wins']}/{a['n_sessions']}, {ap}\n"
-            f"mostly the 1-animal cell: {pv['1']['mean']:+.3f} vs {m_mean:+.3f} for ≥ 2")
+            + (f"{a['wins']} vs {a['losses_excl_ties']}, {ap}\n" if TIES_EXCLUDED else
+               f"{a['wins']}/{a['n_sessions']}, {ap}\n")
+            + f"mostly the 1-animal cell: {pv['1']['mean']:+.3f} vs {m_mean:+.3f} for ≥ 2")
     if variant:
         ar = ref["paired_vs_sleap"]["all"]
         af = fresh["paired_vs_sleap"]["all"]

@@ -774,13 +774,17 @@ def main(variant=False, fair=True):
     ax.set_xticks([0, 1])
     ax.set_xticklabels(["within view", "cross view"])
     ax.set_ylabel("IDF1")
-    ax.set_ylim(0, 0.95)
+    # Headroom follows the data (2026-10-15, b3: LUC3D at 0.968 was clipped off the top);
+    # every value <= 0.91 keeps the original 0.95, so existing builds are unchanged.
+    import numpy as _np
+    _top = max([0.95] + [float(_np.nanmax(_np.asarray(l.get_ydata(), float))) + 0.04 for l in ax.get_lines() if len(l.get_ydata())])
+    ax.set_ylim(0, min(_top, 1.04))
     if variant:
         ax.tick_params(labelsize=COMPACT_FS)
         ax.yaxis.label.set_fontsize(COMPACT_FS)
     # Explicit: the shorter plot made matplotlib fall back to 0.0 / 0.5 alone, and
     # a reader cannot place the 0.20 rule against two ticks.
-    ax.set_yticks([0, 0.2, 0.4, 0.6, 0.8])
+    ax.set_yticks([0, 0.2, 0.4, 0.6, 0.8] + ([1.0] if ax.get_ylim()[1] >= 1.0 else []))
     # "full" distinguishes these from Fig 3d's 6,000-frame leading windows over the
     # same corpus. `drift_abs_max` and the cross-view win counts are deposited and
     # were on the legacy panel; both had been dropped.

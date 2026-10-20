@@ -208,7 +208,9 @@ BREAK_DEC = 0.20
 #: earlier version also labelled 0.5, whose glyphs ended 0.80 mm (2.3 pt) from the
 #: "1" beside it, i.e. one space width: PyMuPDF read the two as a single "0.5 1" span
 #: and so would a reader. The remaining gaps are 3.2 / 2.0 / 4.1 / 4.7 mm.
-LABELLED_R = (0.0, 1.0, 2.0, 6.0, 24.0)
+LABELLED_R = (0.0, 0.01, 0.1, 1.0, 2.0, 6.0, 24.0)
+#: (0.01 and 0.1 label the low-r extension, 2026-10-16, r down to 0.001. They are
+#: dropped below the smallest sampled r, so a sweep starting at 0.25 is unchanged.)
 
 #: The fresh-anchor sweep deposit (fig3_sweep50.py's digest-tagged filename). Globbed
 #: so the digest is not duplicated here; smoke-test tags (`__f<cap>__s<n>`) excluded.
@@ -219,7 +221,9 @@ FRESH_GLOB = "fig3_sweep50__distanceThreshold25-stale20-sync_*.json"
 #: association, stale 20, distanceThreshold 25, corr3dWeight 6) is now the
 #: SHIPPED configuration, and the arm that shipped before it is the previous
 #: default. The mechanism words stay; only the status tag moved.
-SHIPPED_NAME = "previous default"
+#: 2026-10-15: on v1.0.5 this arm is distanceThreshold 50 + stale 0 with sync always on, not the
+#: pre-#210 tracker, so it is labelled by its settings, not as the old default.
+SHIPPED_NAME = "previous settings"
 FRESH_NAME = "greedy (LUC3D)"
 
 
@@ -288,6 +292,47 @@ def build():
     return df, tcf_s
 
 
+def build_framematched():
+    """The fresh arm ALONE, re-scored on the exhaustive arm's frames, or None.
+
+    2026-10-19 (Eric, Fig 3c build): g/h plot the greedy curve frame-matched, i.e.
+    every cell scored on exactly the frames exhaustive computed
+    (figs/fig3_sweep_framematched.py), so the curve and the frame-matched exhaustive
+    rule share one denominator. The previous-settings arm is dropped: it has no
+    frame-matched deposit, and build()'s two-arm gate exists only to put both arms
+    on one axis. Reads `<fresh deposit stem>_framematched.json` (its FIG_VARIANT
+    twin under a variant build); returns None when this build has none, so builds
+    without one keep build()'s full-session curve unchanged.
+    """
+    import os
+    import re as _re
+    out = Path(__file__).resolve().parent.parent / "out"
+    hits = sorted(p.name for p in out.glob(FRESH_GLOB)
+                  if "__f" not in p.name and _re.search(r"_[0-9a-f]{8}\.json$", p.name))
+    if not hits:
+        return None
+    name = hits[-1][:-5] + "_framematched.json"
+    v = os.environ.get("FIG_VARIANT")
+    if not (out / name).exists() and not (v and (out / f"{name[:-5]}_{v}.json").exists()):
+        return None
+    dep = load(name)
+    if "frame_matched" not in dep:
+        sys.exit(f"fig3e: {name} is not a frame-matched deposit (no 'frame_matched' key)")
+    tcf = dep.get("total_camera_frames")
+    if not tcf:
+        sys.exit(f"fig3e: {name} has no total_camera_frames")
+    df = _rows(dep, FRESH_NAME)
+    n_sess = len(dep["sessions"])
+    bad_n = df[df.n_sessions != n_sess]
+    if len(bad_n):
+        sys.exit(f"fig3e: frame-matched cells scored on != {n_sess} sessions:\n{bad_n}")
+    df["n_sessions_total"] = n_sess
+    df["camera_frames"] = tcf
+    df["switches_per_100k_camera_frames"] = df.switches / tcf * PER
+    print(f"  frame-matched sweep: {name}, {len(df)} r values, {tcf:,} camera-frames")
+    return df, tcf
+
+
 def _axes_setup(ax, rate_min, rate_max, zero_x, first, has_zero):
     """The shared r-axis machinery: log x with the r = 0 break, log rate y."""
     ax.set_yscale("log")
@@ -305,7 +350,7 @@ def _axes_setup(ax, rate_min, rate_max, zero_x, first, has_zero):
 
     ax.set_xscale("log")
     ax.set_xlim((zero_x if has_zero else first) * 10 ** -0.22, 24 * 10 ** 0.11)
-    ticks = [v for v in LABELLED_R if v > 0 or has_zero]
+    ticks = [v for v in LABELLED_R if (v == 0 and has_zero) or v >= first]
     ax.set_xticks([zero_x if v == 0 else v for v in ticks])
     ax.set_xticklabels([f"{v:g}" for v in ticks])
     ax.xaxis.set_minor_locator(NullLocator())
@@ -469,6 +514,12 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
     ax_bot.yaxis.set_major_formatter(FixedFormatter(["0.4", "0.6", "0.8"]))
     ax_bot.yaxis.set_minor_locator(NullLocator())
     ax_bot.set_ylim(0.35, 0.92)
+    # 2026-10-15: above 0.89 (frame-matched sweep reaches 0.931) the axis runs to 1.0 with
+    # a 1.0 tick, matching fig3_17_sweep_split.py; lower builds are unchanged.
+    if float(df.idf1.max()) > 0.89:
+        ax_bot.set_ylim(0.35, 1.0)
+        ax_bot.yaxis.set_major_locator(FixedLocator([0.4, 0.6, 0.8, 1.0]))
+        ax_bot.yaxis.set_major_formatter(FixedFormatter(["0.4", "0.6", "0.8", "1.0"]))
     sweep_line(ax_bot, "idf1")
     exh_line(ax_bot, fm_e["idf1_cross_mean"], 5)
     # THE RULES ARE DRAWN, SO THE RULES ARE DEPOSITED. Their values live in
@@ -660,7 +711,7 @@ def main_legacy8():
     # the spines. Minor ticks off: on a log axis they are a grey haze at this size,
     # and every sampled r already carries a marker.
     ax.set_xlim((zero_x if has_zero else first) * 10 ** -0.22, 24 * 10 ** 0.11)
-    ticks = [v for v in LABELLED_R if v > 0 or has_zero]
+    ticks = [v for v in LABELLED_R if (v == 0 and has_zero) or v >= first]
     ax.set_xticks([zero_x if v == 0 else v for v in ticks])
     ax.set_xticklabels([f"{v:g}" for v in ticks])
     ax.xaxis.set_minor_locator(NullLocator())

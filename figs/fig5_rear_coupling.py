@@ -87,6 +87,21 @@ NEAR_BL = 2.0          # "near" = TTI-TTI within 2 body lengths
 #: be nothing when the sessions that could actually measure it all agree it is not.
 MIN_ONSETS = 20
 
+#: PER-DIRECTION FAR AND NULL (FIG5G_PERDIR=1 or --per-direction; 2026-10-15 audit).
+#: Off by default, and then the output is byte-identical to before. The published
+#: Fig 5G draws the per-direction near curves (near_i0 / near_i1, admitted on their
+#: OWN onset counts: 13 and 32 sessions) against a `far` line and a circular-shift
+#: `null` that pool BOTH directions over all 56 sessions, and draws that same pooled
+#: null in both sub-axes. With this switch on, each session additionally deposits
+#:   far_i0 / far_i1         far onsets (> NEAR_BL) by track 0 / track 1
+#:   null_i0 / null_i1       the circular-shift null for that direction, all of the
+#:                           initiator's onsets (the SAME shifts as `null` -- no
+#:                           extra RNG draws, so `null` itself does not move)
+#:   null_near_i0 / _i1      the same shifts read out at the NEAR onsets only
+#: and summarise() admits all of them on the SAME sessions as the matching near
+#: curve (n_onsets["near_iX"] >= MIN_ONSETS), so each sub-axis compares like with like.
+PER_DIRECTION = os.environ.get("FIG5G_PERDIR") == "1"
+
 
 def runs(mask, min_len, merge_gap):
     m = np.asarray(mask, bool)
@@ -146,6 +161,11 @@ def session_coupling(tracks_mm, fps, seed=0):
            "near_i0": [], "near_i1": []}
     n_on = {"all": 0, "near": 0, "far": 0, "near_q": 0, "far_q": 0,
             "near_i0": 0, "near_i1": 0}
+    perdir = PER_DIRECTION and A == 2
+    if perdir:
+        for dk in ("i0", "i1"):
+            acc[f"far_{dk}"], acc[f"null_{dk}"], acc[f"null_near_{dk}"] = [], [], []
+            n_on[f"far_{dk}"] = 0
     # ALREADY-MID-BOUT AT ONSET, per direction: of animal i's near rear onsets, how
     # many happen while j is ALREADY mid-rear (j's bout started strictly before i's
     # onset) rather than not-yet-rearing. This is what actually explains near_i0 vs
@@ -190,6 +210,10 @@ def session_coupling(tracks_mm, fps, seed=0):
             if (~near).any():
                 acc["far"].append(obs[~near].mean(axis=0) / base)
                 n_on["far"] += int((~near).sum())
+                if perdir:
+                    dk = "i0" if i == 0 else "i1"
+                    acc[f"far_{dk}"].append(obs[~near].mean(axis=0) / base)
+                    n_on[f"far_{dk}"] += int((~near).sum())
             # SELF-NORMALISING SPLIT: this session's own separation tertiles.
             # The fixed NEAR_BL cut is not comparable across the corpora -- BMimica's
             # arena is 6.9 body lengths across and SLAP-2M's is 3.2, so "within 2 body
@@ -212,7 +236,13 @@ def session_coupling(tracks_mm, fps, seed=0):
             # destroys only its alignment to i.
             for _ in range(N_SHIFTS):
                 r = rng.integers(lag, F - lag)
-                acc["null"].append(np.roll(rear[:, j], r)[win].mean(axis=0) / base)
+                sh = np.roll(rear[:, j], r)[win]
+                acc["null"].append(sh.mean(axis=0) / base)
+                if perdir:
+                    dk = "i0" if i == 0 else "i1"
+                    acc[f"null_{dk}"].append(sh.mean(axis=0) / base)
+                    if near.any():
+                        acc[f"null_near_{dk}"].append(sh[near].mean(axis=0) / base)
     if not acc["all"]:
         return None
     out = {"fps": float(fps), "n_animals": int(A), "lag_frames": int(lag),
@@ -304,6 +334,10 @@ def summarise(rows, corpus):
                                      if r["already_tot"].get(akey, 0) >= 10),
                } for akey in ("i0", "i1")
            } if all("already_mid_bout" in r for r in rows) else None}
+    if PER_DIRECTION:
+        for dk in ("i0", "i1"):
+            out["n_onsets"][f"far_{dk}"] = int(sum(r["n_onsets"].get(f"far_{dk}", 0)
+                                                   for r in rows))
     for key in ("all", "near", "far", "near_q", "far_q", "null",
                 "near_i0", "near_i1"):
         cur, dropped = [], 0
@@ -329,6 +363,35 @@ def summarise(rows, corpus):
                     "p25": np.nanpercentile(a, 25, axis=0).tolist(),
                     "p50": np.nanmedian(a, axis=0).tolist(),
                     "p75": np.nanpercentile(a, 75, axis=0).tolist()}
+    if PER_DIRECTION:
+        # Admission = the SAME sessions as the near curve of that direction, so the
+        # far line and the null in each Fig 5G sub-axis are drawn over exactly the
+        # sessions whose near curve is drawn there.
+        for dk in ("i0", "i1"):
+            keep = [r for r in rows if r["n_onsets"].get(f"near_{dk}", 0) >= MIN_ONSETS]
+            for key in (f"far_{dk}", f"null_{dk}", f"null_near_{dk}"):
+                cur, sess, missing = [], [], []
+                for r in keep:
+                    c = r.get(key)
+                    if c is None:
+                        missing.append(r["session"])
+                        continue
+                    lr = r["lag_frames"]
+                    cur.append(np.interp(t, np.arange(-lr, lr + 1) / r["fps"],
+                                         np.asarray(c, float)))
+                    sess.append(r["session"])
+                if not cur:
+                    out[key] = None
+                    continue
+                a = np.asarray(cur)
+                far_n = [r["n_onsets"].get(f"far_{dk}", 0) for r in keep]
+                out[key] = {"n_sessions": int(a.shape[0]),
+                            "admitted_on": f"near_{dk} >= {MIN_ONSETS} onsets",
+                            "sessions": sess, "sessions_without_curve": missing,
+                            "min_far_onsets_in_admitted": int(min(far_n)) if far_n else 0,
+                            "p25": np.nanpercentile(a, 25, axis=0).tolist(),
+                            "p50": np.nanmedian(a, axis=0).tolist(),
+                            "p75": np.nanpercentile(a, 75, axis=0).tolist()}
     return out
 
 
@@ -346,13 +409,24 @@ def main():
                     help="restrict SLAP-2M to sessions with exactly this many "
                          "animals (0 = every multi-animal session)")
     ap.add_argument("--out", type=Path, default=OUT / "fig5_rear_coupling.json")
+    ap.add_argument("--per-direction", action="store_true",
+                    help="also deposit far/null per direction (= FIG5G_PERDIR=1)")
+    ap.add_argument("--skip-slap", action="store_true",
+                    help="BMimica only (SLAP-2M summary left null); opt-in")
     args = ap.parse_args()
+    if args.per_direction:
+        global PER_DIRECTION
+        PER_DIRECTION = True
+        os.environ["FIG5G_PERDIR"] = "1"      # inherited by the worker processes
 
     bm = [d for d in sorted(glob.glob(f"{BMIMICA}/*")) if os.path.isdir(d)]
-    m = pd.read_excel(f"{SLAP}/master_sheet.xlsx")
-    fps_of = slap_fps(m)
-    sel = (m["animals"] == args.slap_animals) if args.slap_animals else (m["animals"] > 1)
-    sl = [(r.session_path, fps_of[r.session_path]) for r in m[sel].itertuples()]
+    if args.skip_slap:
+        sl = []
+    else:
+        m = pd.read_excel(f"{SLAP}/master_sheet.xlsx")
+        fps_of = slap_fps(m)
+        sel = (m["animals"] == args.slap_animals) if args.slap_animals else (m["animals"] > 1)
+        sl = [(r.session_path, fps_of[r.session_path]) for r in m[sel].itertuples()]
     if args.limit:
         bm, sl = bm[:args.limit], sl[:args.limit]
     print(f"BMimica {len(bm)} dirs, SLAP-2M {len(sl)} sessions"
@@ -373,6 +447,10 @@ def main():
                     "onset: a social effect should be larger when near, a shared drive "
                     "should not."),
            "corpora": {}}
+    if PER_DIRECTION:
+        res["per_direction"] = ("far_iX / null_iX / null_near_iX: far line and circular-"
+                                "shift null for onsets BY track X only, admitted on the "
+                                "same sessions as near_iX (>= MIN_ONSETS near onsets)")
     for name, rows in (("BMimica", bm_rows), ("SLAP-2M", sl_rows)):
         res["corpora"][name] = summarise(rows, name)
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -390,8 +468,10 @@ def main():
         print(f"  separation at onset (body lengths): p33 {s['sep_bl']['33']:.2f}  "
               f"p50 {s['sep_bl']['50']:.2f}  p67 {s['sep_bl']['67']:.2f}")
         for key in ("all", "near", "far", "near_q", "far_q", "null",
-                    "near_i0", "near_i1"):
-            g = s[key]
+                    "near_i0", "near_i1") + (("far_i0", "null_i0", "null_near_i0",
+                                              "far_i1", "null_i1", "null_near_i1")
+                                             if PER_DIRECTION else ()):
+            g = s.get(key)
             if not g:
                 continue
             mu = np.asarray(g["p50"])

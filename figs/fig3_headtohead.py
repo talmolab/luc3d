@@ -84,11 +84,29 @@ VARIANT = os.environ.get("FIG3_VARIANT", "")
 #: FIG3_VARIANT=md56 (2026-10-14): bvis5nt on all 56 Mouse-Dyad-10M sessions (the six
 #: 2025-09-08 sessions added), with the greedy arm = the current (post-#210) tracker for every
 #: session and the exhaustive arm re-run on the pinned origin/main (LUCID_ROOT) for timing.
-if VARIANT not in ("", "unfilt", "bvis4", "bvis5", "bvis5nt", "md56"):
-    raise SystemExit(f"FIG3_VARIANT={VARIANT!r}: only unfilt / bvis4 / bvis5 / bvis5nt / md56 are defined")
-EXH_EXCLUDE_TAIL = VARIANT in ("bvis5nt", "md56")
+#: FIG3_VARIANT=b3 (2026-10-15, Eric): md56, but Mouse-Dyad (A2_C5_bmimica) uses the body>=5
+#: pool (det_h5_bvis5/) with the tail INCLUDED in BOTH arms' tracking (greedy
+#: --no-exclude-tail, exhaustive without --exclude-tail), as mdb_experiment.py b3. SLAP-2M
+#: cells are md56's, unchanged (tail-free). Scoring stays tail-free.
+if VARIANT not in ("", "unfilt", "bvis4", "bvis5", "bvis5nt", "md56", "b3"):
+    raise SystemExit(f"FIG3_VARIANT={VARIANT!r}: only unfilt / bvis4 / bvis5 / bvis5nt / md56 / b3 are defined")
+EXH_EXCLUDE_TAIL = VARIANT in ("bvis5nt", "md56", "b3")
+
+
+def tail_in_tracking(cfg):
+    """b3: the Mouse-Dyad config tracks WITH the tail (both arms); everything else as before."""
+    return VARIANT == "b3" and cfg["key"] == "A2_C5_bmimica"
 SUFFIX = f"_{VARIANT}" if VARIANT else ""
 TMP_DIR = OUT_DIR / "tmp" / f"headtohead{SUFFIX}"
+#: HH_RUN_TAG=<tag> (2026-10-15; opt-in): a fresh run (e.g. a clean timing sitting) that must
+#: not reuse or overwrite the variant's cache or deposit: tmp/headtohead<SUFFIX>_<tag>/ and
+#: fig3_headtohead<SUFFIX>_<tag>.json. Unset = unchanged.
+RUN_TAG = os.environ.get("HH_RUN_TAG", "")
+if RUN_TAG:
+    TMP_DIR = OUT_DIR / "tmp" / f"headtohead{SUFFIX}_{RUN_TAG}"
+    if TMP_DIR.exists():
+        raise SystemExit(f"HH_RUN_TAG={RUN_TAG}: {TMP_DIR} exists; a tagged run must be fresh")
+OUT_SUFFIX = SUFFIX + (f"_{RUN_TAG}" if RUN_TAG else "")
 
 MAX_HYPOTHESES = 1_000_000
 
@@ -97,11 +115,12 @@ KEEPTRACK = {"unfilt": OUT_DIR / "tmp" / "predslp_pool",
              "bvis4": OUT_DIR / "tmp" / "lite_pools" / "bvis4",
              "bvis5": OUT_DIR / "tmp" / "lite_pools" / "bvis5",
              "bvis5nt": OUT_DIR / "tmp" / "lite_pools" / "bvis5",
-             "md56": OUT_DIR / "tmp" / "lite_pools" / "bvis5"}.get(
+             "md56": OUT_DIR / "tmp" / "lite_pools" / "bvis5",
+             "b3": OUT_DIR / "tmp" / "lite_pools" / "bvis5"}.get(
                  VARIANT, BENCH / "outputs" / "keeptrack_h5s")
 
 BM_MASTER = BENCH / "outputs" / "bmimica" / "bmimica_master.tsv"
-BM_DET = BENCH / "outputs" / "bmimica" / "det_h5"
+BM_DET = BENCH / "outputs" / "bmimica" / ("det_h5_bvis5" if VARIANT == "b3" else "det_h5")
 BM_GT = BENCH / "outputs" / "bmimica" / "gt"
 BM_CAMS = ["21241563", "21369048", "21372315", "21372316", "22085397"]
 
@@ -267,7 +286,9 @@ def driver_job(cfg, sess):
             p = json.loads(path.read_text())
         except Exception:
             return False
-        if exhaustive and bool(p.get("excludeTail", False)) != EXH_EXCLUDE_TAIL:
+        if exhaustive and bool(p.get("excludeTail", False)) != (EXH_EXCLUDE_TAIL and not tail_in_tracking(cfg)):
+            return False
+        if not exhaustive and tail_in_tracking(cfg) and p.get("excludeTail", True) is not False:
             return False
         if p.get("numAnimals") != cfg["animals"]:
             return False
@@ -294,14 +315,15 @@ def driver_job(cfg, sess):
 
     errs = []
     if not usable(greedy_out, None):
-        _, e = _run(["node", str(GREEDY_DRIVER)] + base + ["--out", str(greedy_out)],
+        _, e = _run(["node", str(GREEDY_DRIVER)] + base + ["--out", str(greedy_out)]
+                    + (["--no-exclude-tail"] if tail_in_tracking(cfg) else []),
                     timeout=7200)
         if e:
             errs.append(f"greedy: {e}")
     if not errs and not usable(exh_out, cfg["clean_sample"], exhaustive=True):
         cmd = ["node", str(EXH_DRIVER)] + base + [
             "--out", str(exh_out), "--max-hypotheses", str(MAX_HYPOTHESES)]
-        if EXH_EXCLUDE_TAIL:
+        if EXH_EXCLUDE_TAIL and not tail_in_tracking(cfg):
             cmd += ["--exclude-tail"]
         if cfg["clean_sample"]:
             cmd += ["--clean-sample", str(cfg["clean_sample"])]
@@ -622,8 +644,8 @@ def main():
         },
     }
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    (OUT_DIR / f"fig3_headtohead{SUFFIX}.json").write_text(json.dumps(out, indent=2))
-    print(f"\nwrote {OUT_DIR / f'fig3_headtohead{SUFFIX}.json'}", flush=True)
+    (OUT_DIR / f"fig3_headtohead{OUT_SUFFIX}.json").write_text(json.dumps(out, indent=2))
+    print(f"\nwrote {OUT_DIR / f'fig3_headtohead{OUT_SUFFIX}.json'}", flush=True)
     print(f"total: {total_agree:,}/{total_frames_compared:,} frames agree "
           f"({(total_agree / total_frames_compared if total_frames_compared else 0):.6%})",
           flush=True)

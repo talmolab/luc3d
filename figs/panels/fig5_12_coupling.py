@@ -89,6 +89,7 @@ Source: figs/out/fig5_rear_coupling_2animal.json (figs/fig5_rear_coupling.py
 
     python3 figs/panels/fig5_12_coupling.py
 """
+import os
 import sys
 from pathlib import Path
 
@@ -112,10 +113,37 @@ PANELS = [("near_i1", CM, "male rear to female onset", "male", "female"),
           ("near_i0", CFEM, "female rear to male onset", "female", "male")]
 
 
+#: FIG5G_PERDIR=1 (2026-10-15 audit, opt-in; unset = the published panel, unchanged):
+#: read `fig5_rear_coupling_2animal_perdir.json` (fig5_rear_coupling.py
+#: --per-direction) and draw, in each sub-axis, the far line and the circular-shift
+#: null OF THAT DIRECTION, over the same sessions as its near curve -- instead of the
+#: both-direction, all-56-session `far` / `null` drawn identically in both sub-axes.
+#: FIG5G_NULL=near uses the null read out at the near onsets only (`null_near_iX`);
+#: the default is the null over all of the initiator's onsets (`null_iX`).
+PERDIR = os.environ.get("FIG5G_PERDIR") == "1"
+NULL_KIND = "null_near" if os.environ.get("FIG5G_NULL") == "near" else "null"
+
+
+def _ref(d, key, which):
+    """far / null curve for the sub-axis whose near curve is `key` (near_i0/near_i1)."""
+    if not PERDIR:
+        return d[which]
+    dk = key.split("_")[-1]
+    return d[f"{'far' if which == 'far' else NULL_KIND}_{dk}"]
+
+
 def main():
     use()
-    d = load("fig5_rear_coupling_2animal.json")["corpora"]["BMimica"]
+    d = load("fig5_rear_coupling_2animal_perdir.json" if PERDIR
+             else "fig5_rear_coupling_2animal.json")["corpora"]["BMimica"]
     t = np.asarray(d["t"], float)
+    extra = {}
+    if PERDIR:
+        for key, who in (("near_i1", "male"), ("near_i0", "female")):
+            f, n = _ref(d, key, "far"), _ref(d, key, "null")
+            extra.update({f"{who}_far_p50": f["p50"], f"{who}_null_p25": n["p25"],
+                          f"{who}_null_p50": n["p50"], f"{who}_null_p75": n["p75"],
+                          f"{who}_n_sessions": d[key]["n_sessions"]})
     deposit(pd.DataFrame({
         "lag_s": t,
         # his rearing probability, aligned to her onset
@@ -126,7 +154,8 @@ def main():
         "female_p75": d["near_i0"]["p75"],
         "far_p50": d["far"]["p50"], "null_p50": d["null"]["p50"],
         "null_p25": d["null"]["p25"], "null_p75": d["null"]["p75"],
-    }), 5, "fig5g_rear_coupling.csv")
+        **extra,
+    }), 5, "fig5g_rear_coupling_perdir.csv" if PERDIR else "fig5g_rear_coupling.csv")
 
     # TWO-THIRDS, up from half (2026-08-19): 5f became a narrow two-box panel, so
     # this one takes the freed width. 57.3 + 117.3 + the 4 mm gutter is the page.
@@ -135,12 +164,13 @@ def main():
     # third of the axis and hard to read; each panel now scales to its own data.
     fig, axes = grid(1, 2, span="two-thirds", row="short", sharey=False)
     for ax, (key, col, title, who, anchor) in zip(axes, PANELS):
-        ax.fill_between(t, d["null"]["p25"], d["null"]["p75"], color=CX, alpha=0.55,
+        nul, far = _ref(d, key, "null"), _ref(d, key, "far")
+        ax.fill_between(t, nul["p25"], nul["p75"], color=CX, alpha=0.55,
                         lw=0, zorder=1)
         ax.fill_between(t, d[key]["p25"], d[key]["p75"], color=col, alpha=0.18,
                         lw=0, zorder=2)
-        ax.plot(t, d["far"]["p50"], color=CF, lw=1.6, zorder=3)
-        ax.plot(t, d["null"]["p50"], color=CX, lw=1.2, ls=(0, (3, 1.6)), zorder=3)
+        ax.plot(t, far["p50"], color=CF, lw=1.6, zorder=3)
+        ax.plot(t, nul["p50"], color=CX, lw=1.2, ls=(0, (3, 1.6)), zorder=3)
         ax.plot(t, d[key]["p50"], color=col, lw=1.8, zorder=4)
         ax.axhline(1.0, color=INK, lw=0.7, ls=":", alpha=0.6, zorder=1)
         ax.axvline(0, color=INK, lw=0.7, ls="--", alpha=0.5, zorder=1)

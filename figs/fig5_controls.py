@@ -38,7 +38,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fig5_upright as U  # noqa: E402
 from src.style import deposit  # noqa: E402
 
-MIN_DISPLAYS = 5
+#: FIG5_MIN_DISPLAYS (2026-10-15, audit): the text (Results L183, Methods L319/L323,
+#: Supp L403) and the Fig 5F panel (panels/fig5_10_leader.py MIN_DISPLAYS = 6) use
+#: sessions with AT LEAST SIX displays (23 sessions); this script defaulted to five
+#: (24). Default left at 5 so an unset run is unchanged; FIG5_MIN_DISPLAYS=6 prints
+#: the numbers the text quotes. The deposited CSV is per-session and does not depend
+#: on this threshold.
+MIN_DISPLAYS = int(os.environ.get("FIG5_MIN_DISPLAYS", "5"))
 
 
 def _init(mode):

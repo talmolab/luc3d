@@ -114,7 +114,7 @@ def build() -> pd.DataFrame:
         row("refined", "refined", "ours", "non-linear", "luc3d_refined",
             "LUC3D refinement, soft-L1 + L1 polish, DLT-seeded"),
         row("Anipose optim", "Anipose\noptim", "anipose", "non-linear", "anipose_optim_nosmooth",
-            "CameraGroup.optim_points (optim: true), scale_smooth=0, n = 345,000"),
+            f"CameraGroup.optim_points (optim: true), scale_smooth=0, n = {d['n_optim']:,}"),
     ])
 
 def main():

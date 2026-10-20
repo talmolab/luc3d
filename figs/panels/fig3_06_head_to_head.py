@@ -109,7 +109,13 @@ from src.style import (MUTED, SALMON, TEAL, annotate_series, deposit,  # noqa: E
 #: new bench session must be classified deliberately rather than defaulted.
 #: SLAP-2M's acquisition rate, used only to express the extrapolated per-frame cost
 #: as video time. The 4x6 configuration is a SLAP-2M rig.
-FPS = 50.0
+FPS = 30.0   # SLAP-2M is 30 fps (13 sessions 60), Methods L254. Was 50 until 2026-10-20.
+
+#: FIG3F_CLEAN=1 (2026-10-20, CONSISTENCY-PLAN T1): read the clean timing deposits
+#: (`fig3_headtohead_clean`, `fig3_runtime_clean`, `fig3_runtime_clean_a4c6`) instead of
+#: the earlier ones. Unset = unchanged.
+import os  # noqa: E402
+CLEAN = os.environ.get("FIG3F_CLEAN") == "1"
 
 CORPUS = {
     "10072022131531": "SLAP-2M",
@@ -158,18 +164,39 @@ def luc3d_for(measured, animals, cameras, dataset):
     return hits[0]["seconds_per_frame"], hits[0]["session"]
 
 
+def clean_luc3d(measured, animals, cameras, dataset):
+    """LUC3D seconds/frame from the clean sitting (CONSISTENCY-PLAN T1), exactly one row."""
+    hits = [m for m in measured if m["animals"] == animals
+            and m["cameras"] == cameras and m["dataset"] == dataset]
+    if len(hits) != 1:
+        sys.exit(f"fig3f: {len(hits)} clean LUC3D rows for {animals}a x {cameras}c on "
+                 f"{dataset} -- expected exactly 1.")
+    return hits[0]["seconds_per_frame"], f"{hits[0]['n_sessions']} sessions"
+
+
 def build():
-    h = load("fig3_headtohead.json")
-    r = load("fig3_runtime.json")
-    unknown = set(r["sessions"]) - set(CORPUS)
-    if unknown:
-        sys.exit(f"fig3f: unclassified bench session(s) {sorted(unknown)} in "
-                 "fig3_runtime.json -- add them to CORPUS with their corpus.")
+    if CLEAN:
+        # 2026-10-20: the clean sitting. Both arms on identical frames, one process at a
+        # time, 3 rounds. The 4x6 greedy value is its own greedy-only sitting (no
+        # exhaustive run exists there).
+        h = load("fig3_headtohead_clean.json")
+        measured = (load("fig3_runtime_clean.json")["measured"]
+                    + load("fig3_runtime_clean_a4c6.json")["measured"])
+    else:
+        h = load("fig3_headtohead.json")
+        r = load("fig3_runtime.json")
+        unknown = set(r["sessions"]) - set(CORPUS)
+        if unknown:
+            sys.exit(f"fig3f: unclassified bench session(s) {sorted(unknown)} in "
+                     "fig3_runtime.json -- add them to CORPUS with their corpus.")
 
     rows = []
     for c in h["configs"]:
-        spf, sess = luc3d_for(r["measured"], c["animals"], c["cameras"],
-                              c.get("dataset"))
+        if CLEAN:
+            spf, sess = clean_luc3d(measured, c["animals"], c["cameras"], c.get("dataset"))
+        else:
+            spf, sess = luc3d_for(r["measured"], c["animals"], c["cameras"],
+                                  c.get("dataset"))
         rows.append({
             "label": f"{c['animals']}×{c['cameras']}",
             "animals": c["animals"], "cameras": c["cameras"],
@@ -330,7 +357,6 @@ def main():
     # video is 50 frames. Computed from the FLOOR and stated as ">=", so it is the
     # weakest form of the claim -- the ceiling would read "38 days" and the point
     # does not need it.
-    days_per_s_video = df.exhaustive_lo_s.iloc[-1] * FPS / 86400.0
     lo_h = df.exhaustive_lo_s.iloc[-1] / 3600.0
     hi_h = df.exhaustive_hi_s.iloc[-1] / 3600.0
     footnote(ax, "○ not run; lower bound:\n"
@@ -338,7 +364,7 @@ def main():
                  f"{meta['rate_lo'] * 1e6:.0f} µs = {lo_h:.1f} h\n"
                  f"bar → {df.hypotheses.iloc[-1] / 1e8:.1f}×10⁸ × "
                  f"{meta['rate'] * 1e6:.0f} µs = {hi_h:.0f} h\n"
-                 f"1 s of {FPS:g} fps video ≥ {days_per_s_video:.0f} day")
+                 f"1 s of {FPS:g} fps video ≥ {lo_h * FPS:.1f} h")
     save(fig, 3, "f", "head_to_head_src")
 
 

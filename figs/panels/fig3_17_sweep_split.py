@@ -33,14 +33,17 @@ from matplotlib.ticker import FixedFormatter, FixedLocator, NullLocator
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import GREY, MUTED, SALMON, TEAL, panel, save, use  # noqa: E402
+from src.style import GREY, MUTED, SALMON, TEAL, deposit, panel, save, use  # noqa: E402
 from fig3_sync import CELL_H, CELL_W, place_cell_axes  # noqa: E402
 import panels.fig3_05_sweep as sw  # noqa: E402
 
 
 def main():
     use(7.0)
-    df, tcf = sw.build()
+    # 2026-10-19: the frame-matched greedy curve when this build has one (see
+    # sw.build_framematched); the full-session two-arm build otherwise.
+    fmd = sw.build_framematched()
+    df, tcf = fmd if fmd else sw.build()
 
     r = np.sort(df.r.unique()).astype(float)
     first = float(r[r > 0].min())
@@ -61,6 +64,11 @@ def main():
     if fm_e["camera_frames_scored"] != fm_g["camera_frames_scored"]:
         sys.exit("fig13g/h: the two frame-matched arms were scored over different "
                  "camera-frame counts -- the rules would not be comparable")
+    if fmd and fm_e["camera_frames_scored"] != tcf:
+        sys.exit(f"fig13g/h: the frame-matched sweep covers {tcf:,} camera-frames, the "
+                 f"exhaustive rule {fm_e['camera_frames_scored']:,} -- not the same frames")
+    if fmd:
+        deposit(df, 3, "fig3g_sweep_framematched.csv")
     if fm_e["camera_frames_scored"] > tcf:
         sys.exit(f"fig13g/h: the frame-matched arms cover "
                  f"{fm_e['camera_frames_scored']:,} camera-frames, more than "
@@ -81,28 +89,39 @@ def main():
         axis.axhline(yval, color=SALMON, lw=1.8, zorder=2)
         axis.plot([zero_x, r[-1]], [yval] * 2, "s", color=SALMON, ms=3.4,
                   mec="white", mew=0.7, zorder=3, clip_on=False)
+        # Eric 2026-10-17: no "frames without missing detections only" label on the
+        # artwork (it was added 2026-10-15); the Methods/legend carry that caveat.
 
     def app_default(axis, in_band=True):
         axis.axvline(sw.SHIPPED_R, color=GREY, lw=0.8, ls=(0, (1.5, 1.5)), zorder=1)
         if in_band:
-            axis.annotate(f"app default r = {sw.SHIPPED_R:g}", (sw.SHIPPED_R, 1.0),
-                          xycoords=("data", "axes fraction"), xytext=(0, 8),
-                          textcoords="offset points", color=MUTED, fontsize=6,
-                          ha="center", va="bottom")
+            t = axis.annotate(f"app default r = {sw.SHIPPED_R:g}", (sw.SHIPPED_R, 1.0),
+                              xycoords=("data", "axes fraction"), xytext=(0, 8),
+                              textcoords="offset points", color=MUTED, fontsize=6,
+                              ha="center", va="bottom")
+            # Centred on the line unless that runs past the right spine (the low-r
+            # extension pushes r = 6 right); then end the label at the spine.
+            r = axis.figure.canvas.get_renderer()
+            if t.get_window_extent(r).x1 > axis.get_window_extent(r).x1:
+                t.xy = (1.0, 1.0)
+                t.set_annotation_clip(False)
+                t.xycoords = "axes fraction"
+                t.set_ha("right")
 
     # ---- 13g: the ID-switch rate ----
     fig, ax = panel(CELL_W, CELL_H, key=1)
     sw._axes_setup(ax, min(float(df.rate.min()), exh_rate),
                    max(float(df.rate.max()), exh_rate), zero_x, first, has_zero)
-    ax.yaxis.set_major_locator(FixedLocator([1, 10, 100]))
-    ax.yaxis.set_major_formatter(FixedFormatter(["1", "10", "100"]))
+    # Eric 2026-10-17: a 0.1 tick too, with the floor extended to show it.
+    ax.yaxis.set_major_locator(FixedLocator([0.1, 1, 10, 100]))
+    ax.yaxis.set_major_formatter(FixedFormatter(["0.1", "1", "10", "100"]))
+    _b, _t = ax.get_ylim()
+    ax.set_ylim(min(_b, 0.1 * 10 ** -0.08), _t)
     sweep_line(ax, "rate")
     exh_line(ax, exh_rate)
-    app_default(ax)
+    # Eric 2026-10-18: no app-default r = 6 rule or label on g/h.
     ax.set_ylabel("ID switches /100k")
-    # h sits directly below in the block column and carries the shared r axis.
-    ax.tick_params(labelbottom=False)
-    ax.set_xlabel("")
+    # g carries its own r tick labels and axis title too (Eric, 2026-10-17), not just h.
     # the key band names both series once, for the g/h pair together.
     fig.text(0.22, 0.985, "exhaustive", ha="left", va="top", color=SALMON,
              fontsize=7, fontweight="bold")
@@ -115,13 +134,19 @@ def main():
     fig, ax = panel(CELL_W, CELL_H)
     sw._axes_setup(ax, 1.0, 10.0, zero_x, first, has_zero)  # x machinery
     ax.set_yscale("linear")
-    ax.yaxis.set_major_locator(FixedLocator([0.4, 0.6, 0.8]))
-    ax.yaxis.set_major_formatter(FixedFormatter(["0.4", "0.6", "0.8"]))
-    ax.yaxis.set_minor_locator(NullLocator())
-    ax.set_ylim(0.35, 0.92)
     sweep_line(ax, "idf1")
     exh_line(ax, fm_e["idf1_cross_mean"])
-    app_default(ax, in_band=False)
+    # Eric 2026-10-17: y zoomed to the data rather than a fixed 0.35 floor. Bottom is
+    # the lowest plotted value rounded down to 0.1 (with a small margin), top IDF1's
+    # ceiling, ticks every 0.1.
+    _ys = np.append(df[df.arm == sw.FRESH_NAME].idf1.to_numpy(dtype=float),
+                    float(fm_e["idf1_cross_mean"]))
+    _lo = np.floor((float(np.min(_ys)) - 0.02) * 10) / 10
+    _ticks = np.round(np.arange(_lo, 1.0001, 0.1), 1)
+    ax.yaxis.set_major_locator(FixedLocator(_ticks))
+    ax.yaxis.set_major_formatter(FixedFormatter([f"{v:.1f}" for v in _ticks]))
+    ax.yaxis.set_minor_locator(NullLocator())
+    ax.set_ylim(_lo - 0.01, 1.0)
     ax.set_ylabel("cross-view IDF1")
     place_cell_axes(fig, ax, "sweep_col")   # ...and h lands on exactly g's x
     save(fig, 3, "h", "sweep_idf1")

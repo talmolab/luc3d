@@ -20,6 +20,11 @@ from pathlib import Path
 
 FIGS = Path(__file__).resolve().parent.parent
 AGG = FIGS / "fig10-bench" / "results" / "agg"
+#: opt-in (2026-10-15, SDV105): FIG6_SDANNCE_AGG points g/h/i at another agg
+#: dir (e.g. the v1.0.5 rerun). Unset = the deposited results/agg.
+import os as _os  # noqa: E402
+if _os.environ.get("FIG6_SDANNCE_AGG"):
+    AGG = Path(_os.environ["FIG6_SDANNCE_AGG"])
 
 #: deposit family -> printed dataset name
 FAMILY = {"triads": "TRIADS", "bedding": "BEDDING", "soc1": "SCN2A", "soc3": "SCN2A"}

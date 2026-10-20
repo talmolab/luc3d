@@ -56,6 +56,12 @@ function parseArgs(argv) {
         else if (a === '--no-exclude-tail') o.excludeTail = false;
         else if (a === '--no-cap') o.noCap = true;
         else if (a === '--params') o.params = take();
+        // --frame-list <json array of frame indices> (2026-10-15): track ONLY these frames, e.g. the exact
+        // frames an exhaustive run computed, so both arms of a timing comparison see identical frames.
+        else if (a === '--frame-list') o.frameList = take();
+        // --tail-nan (2026-10-15): drop the tail nodes from the tracker INPUT (null keypoints), not
+        // only weight 0, because target creation (epipolarErrorMatrix) ignores nodeWeights.
+        else if (a === '--tail-nan') o.tailNan = true;
     }
     return o;
 }
@@ -103,10 +109,12 @@ function sliceCamSession(h5File, sessionIdx) {
     const data = ds.slice([[sessionIdx, sessionIdx + 1], [0, nF], [0, nA], [0, nN], [0, two]]);
     return { data, nFrames: nF, nAnimals: nA, nNodes: nN };
 }
+let TAIL_NAN_IDX = null;   // set in main() when --tail-nan
 function instancePoints(sub, fi, animal, nAnimals, nNodes) {
     const pts = new Array(nNodes);
     let allNull = true;
     for (let k = 0; k < nNodes; k++) {
+        if (TAIL_NAN_IDX && TAIL_NAN_IDX.has(k)) { pts[k] = null; continue; }
         const base = (((fi * nAnimals) + animal) * nNodes + k) * 2;
         const x = sub[base], y = sub[base + 1];
         if (!Number.isFinite(x) || !Number.isFinite(y)) pts[k] = null;
@@ -124,6 +132,7 @@ async function main() {
 
     const nodeWeights = Object.assign({}, params.nodeWeights || {});
     if (opts.excludeTail) for (const n of TAIL_NODES) if (!(n in nodeWeights)) nodeWeights[n] = 0;
+    if (opts.tailNan) TAIL_NAN_IDX = new Set(TAIL_NODES.map(n => NODE_NAMES.indexOf(n)));
     globalThis.__BENCH = { nodeWeights, thresholds: params.thresholds || {} };
     globalThis.document = { getElementById: () => null };
     globalThis.window = globalThis;
@@ -165,6 +174,14 @@ async function main() {
             if (any) break;
         }
         if (any) usedFrames.push(fi);
+    }
+    if (opts.frameList) {
+        const keep = new Set(JSON.parse(fs.readFileSync(opts.frameList, 'utf8')));
+        const before = usedFrames.length;
+        const kept = usedFrames.filter((fi) => keep.has(fi));   // no spread: sessions exceed the call-stack limit
+        usedFrames.length = 0;
+        for (const fi of kept) usedFrames.push(fi);
+        if (usedFrames.length !== keep.size) process.stderr.write(`[fig3_bench] frame-list: ${keep.size} listed, ${usedFrames.length} found (of ${before})\n`);
     }
 
     const tracks = Array.from({ length: opts.numAnimals }, (_, i) => 'track_' + i);
@@ -215,6 +232,7 @@ async function main() {
         numAnimals: opts.numAnimals,
         cameras,
         excludeTail: opts.excludeTail,
+        tailNan: !!opts.tailNan,
         capped: !opts.noCap,
         params,
         identities,

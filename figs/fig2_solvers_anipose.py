@@ -258,14 +258,26 @@ def _block_optim(args):
     # from a 9,000-keypoint subsample cannot sit beside three columns drawn from
     # 85,000 without the reader silently comparing different keypoint sets.
     n = b["count"] if nf <= 0 else min(nf * joints, b["count"])
-    nf = n // joints                     # truncate to a whole number of "frames"
-    n = nf * joints
+    #: FIG2_OPTIM_PAD=1 (2026-10-15; opt-in, unset = unchanged): instead of TRUNCATING the
+    #: session to a whole number of `joints`-blocks (which drops up to joints-1 trailing
+    #: keypoints, so Fig 2F's optim arm was scored on fewer keypoints than the other three),
+    #: PAD the last block with all-NaN observations. They carry no residual in optim_points,
+    #: are NaN in every solve, and are excluded from every score, so all variants are scored
+    #: on exactly the session's real keypoints -- the same set as LUC3D (fig4.json).
+    pad = os.environ.get("FIG2_OPTIM_PAD") == "1"
+    n_real = n
+    nf = -(-n // joints) if pad else n // joints
+    n = nf * joints if pad else nf * joints
+    if not pad:
+        n_real = n
     if nf < 20:
         return None
     lo = b["offset"]
-    sl = np.ascontiguousarray(_G["obs"][lo:lo + n]).astype(np.float64)
+    sl = np.full((n, C, 2), np.nan)
+    sl[:n_real] = np.asarray(_G["obs"][lo:lo + n_real], dtype=np.float64)
     pts = np.ascontiguousarray(sl.transpose(1, 0, 2))
     pts[~np.isfinite(pts)] = np.nan
+    real = np.zeros(n, bool); real[:n_real] = True
 
     def solve(p, variant, kw):
         """3D for one variant on 2D array `p` (C, n, 2)."""
@@ -288,17 +300,22 @@ def _block_optim(args):
 
     variants = [("linear", {})] + OPTIM_VARIANTS
     row = {"session": b["session"], "calibration": b.get("calibration", 0),
-           "n_frames": int(nf), "n_joints": int(joints), "n": int(n)}
+           "n_frames": int(nf), "n_joints": int(joints), "n": int(n_real),
+           "padded": int(n - n_real)}
     seen = np.isfinite(pts[:, :, 0])
     nviews = seen.sum(axis=0)
     for name, kw in variants:
         X = solve(pts, name, kw)
         e = native_error(cg, X, pts)
+        if pad:
+            assert np.isfinite(e[real]).sum() == np.isfinite(e).sum(), "a padded keypoint was scored"
         e = e[np.isfinite(e)]
         # leave-one-camera-out, same protocol as the linear pass
         ho = []
         for h in range(C):
             use = seen[h] & ((nviews - 1) >= 2)
+            if pad:
+                use = use | ~real            # padded slots are empty, not a partial mask
             if not use.all():
                 # optim_points needs the (frames, joints) grid intact, so a partial
                 # mask cannot be compacted away as the linear path does. Every
@@ -314,7 +331,7 @@ def _block_optim(args):
             held = sub[h].copy()
             sub[h] = np.nan
             Xh = solve(sub, name, kw)
-            ok = np.isfinite(Xh).all(axis=1)
+            ok = np.isfinite(Xh).all(axis=1) & real
             if not ok.any():
                 continue
             proj = cg.cameras[h].project(Xh[ok].astype(np.float64)).reshape(-1, 2)

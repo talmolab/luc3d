@@ -33,6 +33,8 @@ ROW_H = 55.0
 XMIN = 0.6
 #: mm kept clear right of the axes, for the 1.0 tick label and end markers
 RIGHT_PAD = 4.0
+#: mm kept clear left of the axes, for the tick labels and the two-line y label
+LEFT_ROOM = 15.0
 FIGS_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -44,12 +46,18 @@ def main():
     # geometry when it saves; g copies the width, height and baseline, and is
     # right-aligned in its slot so the y label has room on the left.
     import json
-    geo = json.loads((FIGS_DIR / "figures" / "fig6" / "fig6f_axes.json").read_text())
+    import os
+    geo = json.loads((FIGS_DIR / "figures" / f"fig6{os.environ.get('FIG_TAG', '')}"
+                      / "fig6f_axes.json").read_text())
     _x, y0, aw, ah = geo["axes_mm"][0]
     if abs(geo["fig_mm"][1] - ROW_H) > 0.01:
         raise SystemExit("fig6g ROW_H must equal panel f's height "
                          f"({geo['fig_mm'][1]} mm); re-run fig6_07 first")
     W = SPAN["third"]
+    # f's sub-plots became two (2026-10-19, switch-reduction panel) and so wider; at
+    # full copied width the y label fell off the left edge. Keep the height and
+    # baseline, cap the width to leave LEFT_ROOM for tick labels + y label.
+    aw = min(aw, W - RIGHT_PAD - LEFT_ROOM)
     fig.set_layout_engine("none")
     x0 = W - aw - RIGHT_PAD
     ax.set_position([x0 / W, y0 / ROW_H, aw / W, ah / ROW_H])
@@ -81,10 +89,11 @@ def main():
     deposit(pd.DataFrame(out), 6, "fig6g_sdannce_survival.csv")
 
     ax.set_xlim(XMIN, 1.0)
-    # 0-100, the same as panel f's survival curve beside it (Eric, 2026-10-03).
-    # A 50-100 axis doubled every drop and made the curves look choppy.
-    ax.set_ylim(0, 102)
-    ax.set_yticks([0, 25, 50, 75, 100])
+    # ZOOMED to 60-100 (Eric, 2026-10-19: "zoom in on the y axis for 6c G", then
+    # "60 - 100 instead of 80"). Every curve stays above 83%, so 0-100 left them as
+    # flat lines along the top. Reverses the 2026-10-03 choice of 0-100.
+    ax.set_ylim(60, 101)
+    ax.set_yticks([60, 70, 80, 90, 100])
     ax.set_xlabel("cross-view IDF1")
     ax.set_ylabel("% of sessions\nat or above")
     # counts are sessions with ZERO identity switches, the number the text

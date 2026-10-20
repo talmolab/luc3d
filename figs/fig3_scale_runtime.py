@@ -43,9 +43,11 @@ KEEPTRACK = {"unfilt": OUT_DIR / "tmp" / "predslp_pool",
              "bvis4": OUT_DIR / "tmp" / "lite_pools" / "bvis4",
              "bvis5": OUT_DIR / "tmp" / "lite_pools" / "bvis5",
              "bvis5nt": OUT_DIR / "tmp" / "lite_pools" / "bvis5",
-             "md56": OUT_DIR / "tmp" / "lite_pools" / "bvis5"}.get(
+             "md56": OUT_DIR / "tmp" / "lite_pools" / "bvis5",
+             "b3": OUT_DIR / "tmp" / "lite_pools" / "bvis5"}.get(
                  VARIANT, BENCH / "outputs" / "keeptrack_h5s")
-BM_DET = BENCH / "outputs" / "bmimica" / "det_h5"
+#: FIG3_VARIANT=b3 (2026-10-15): the Mouse-Dyad cell runs on the body>=5 pool with the tail IN tracking.
+BM_DET = BENCH / "outputs" / "bmimica" / ("det_h5_bvis5" if VARIANT == "b3" else "det_h5")
 BM_GT = BENCH / "outputs" / "bmimica" / "gt"
 BM_SESSION = "20250827_141755"
 BM_CAMS = ["21241563", "21369048", "21372315", "21372316", "22085397"]
@@ -71,7 +73,7 @@ def run_one(cell_key, calib, det_dir, det_session_idx, cameras, num_animals, max
         "--calibration", calib, "--pred-h5-dir", det_dir,
         "--out", str(out_path), "--cameras", ",".join(cameras),
         "--max-frames", str(max_frames),
-    ]
+    ] + (["--no-exclude-tail"] if VARIANT == "b3" and det_dir.startswith(str(BM_DET)) else [])
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if r.returncode != 0 or not out_path.exists():

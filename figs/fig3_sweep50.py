@@ -152,6 +152,24 @@ if LUCID_ROOT:
 CORR3D_GRID = list(f3.CORR3D_GRID)
 CORR2D_GRID = list(f3.CORR2D_GRID)
 
+#: MD_CFG=b3 (2026-10-15, Eric): Mouse-Dyad on the body>=5 pool (det_h5_bvis5/, no sleap-nn
+#: filters) with the tail INCLUDED in tracking (--no-exclude-tail), as in mdb_experiment.py b3.
+#: Scoring stays tail-free. Needs SWEEP50_LUCID_ROOT mode and a SWEEP50_SUFFIX ending in "b3"; the
+#: cache moves to tmp/sweep50_<commit>_b3/. Unset = unchanged.
+MD_CFG = os.environ.get("MD_CFG", "")
+POOL = f3.DET
+TAIL_ARGS = []
+if MD_CFG:
+    if MD_CFG != "b3":
+        raise SystemExit(f"MD_CFG={MD_CFG!r}: only b3 is defined")
+    if not LUCID_ROOT:
+        raise SystemExit("MD_CFG=b3 needs SWEEP50_LUCID_ROOT (fig3_bench.mjs takes --no-exclude-tail)")
+    if not os.environ.get("SWEEP50_SUFFIX", "").endswith("b3"):
+        raise SystemExit("MD_CFG=b3 needs a SWEEP50_SUFFIX ending in b3")
+    POOL = f3.DET.parent / "det_h5_bvis5"
+    TAIL_ARGS = ["--no-exclude-tail"]
+    TMP_ROOT = OUT_DIR / "tmp" / f"sweep50_{LUCID_COMMIT[:8]}_b3"
+
 WORKERS = int(os.environ.get("FIG3_SWEEP50_WORKERS", "16"))
 
 #: Measured cost constants for --dry-run, from the 50-session Fig 8 pass
@@ -332,7 +350,7 @@ def run_one(cell_dir, params, session, max_frames):
     calib = f3.calib_for(session)
     if not calib:
         return (session, "failed", f"no calibration.toml for {session}")
-    det_dir = f3.DET / session
+    det_dir = POOL / session
     if not det_dir.exists():
         return (session, "failed", f"no det_h5 dir {det_dir}")
 
@@ -352,7 +370,7 @@ def run_one(cell_dir, params, session, max_frames):
         "--out", str(out_path),
         "--cameras", ",".join(f3.CAMERAS),
         "--params", str(params_path),
-    ]
+    ] + TAIL_ARGS
     # Omitted entirely for a full-session run; the driver guards on truthiness.
     if max_frames:
         cmd += ["--max-frames", str(max_frames)]
@@ -378,7 +396,7 @@ def score_one(cell_dir, session, max_frames):
         return (session, "failed", "no result JSON (driver run failed)")
     import fig3_score as fs  # noqa: E402
     try:
-        s = fs.score_session(str(result_path), str(f3.DET / session),
+        s = fs.score_session(str(result_path), str(POOL / session),
                              str(f3.GT / session), f3.CAMERAS, f3.NUM_ANIMALS,
                              max_frames=max_frames)
         return (session, "ok", s)
@@ -582,7 +600,7 @@ def main(a):
                       if (base["method"] or base["thresholds"]) else
                       ", shipped tracker")),
         "dataset": "BMimica",
-        "detection_pool": str(f3.DET),
+        "detection_pool": str(POOL), "tail_in_tracking": bool(TAIL_ARGS),
         "sessions": sessions,
         "cameras": f3.CAMERAS,
         "num_animals": f3.NUM_ANIMALS,

@@ -139,7 +139,10 @@ TITLES = {
     (6, "c"): "Per-session paired difference",
     (6, "d"): "Error composition",
     (6, "e"): "The tracker's 2D and 3D anchor correspondence",
-    (6, "f"): "Staleness horizon sweep on Mouse-Dyad-10M sessions",
+    # Eric 2026-10-19: the staleness sweep is back as f, now on SLAP-2M and drawn as
+    # % switch reduction from stale 0 (panels/fig6slapstale_reduction.py); the
+    # 2026-10-18 thirds layout is undone (patch kept outside the repo).
+    (6, "f"): "Staleness horizon sweep on SLAP-2M sessions",
     (6, "g"): "Cross-View IDF1 for s-DANNCE rats",
     # Fig 7 (calibration benchmark; calibrat3 vs Anipose on two real rigs).
     (7, "a"): "Reprojection error, SLAP-2M rig",
@@ -276,8 +279,10 @@ LAYOUTS = {
     # added noise), restored from the deleted Fig 10. It shares f's row, which
     # was re-laid out at two-thirds width for it. The camera-count and contact
     # panels (fig6_10, fig6_11) still render and deposit but are not placed.
+    # 2026-10-19: back to the pre-10-18 arrangement (Eric: "go back to how we used to
+    # have the figure layout wise"), with f now the SLAP-2M switch-reduction panel.
     6: [[("a", "block"), ("e", "chen_style")],
-        [("f", "pr_switches"), ("g", "sdannce_survival")]],
+        [("f", "switch_reduction"), ("g", "sdannce_survival")]],
     # Fig 7 (calibration benchmark, added 2026-09-15). Rows 1 and 2 are the SAME
     # two panels on two rigs -- pooled distribution at a third, per-camera boxes at
     # two-thirds -- so the reader can read straight down a camera column from the
@@ -389,7 +394,16 @@ TAG_TITLES = {}
 #: the base figure once approved; the variant is named by the folder.
 TAG_FOOTERS = {(3, "nt"): None, (6, "nt"): None,
                #: b (2026-10-14): the md56 proofs (all 56 Mouse-Dyad-10M sessions), same rule.
-               (2, "b"): None, (3, "b"): None, (6, "b"): None}
+               (2, "b"): None, (3, "b"): None, (6, "b"): None,
+               #: b again (2026-10-15 evening): the corrected v1.0.5 set (run_BUILD_B.sh), all of 2-6.
+               (4, "b"): None, (5, "b"): None,
+               #: c (2026-10-15): the complete corrected v1.0.5 set (run_FINALBUILD.sh), no footer.
+               (2, "c"): None, (3, "c"): None, (4, "c"): None, (5, "c"): None, (6, "c"): None}
+
+
+#: Deposit sets the MAIN figures are built from (2026-10-15, b series promoted). A base build
+#: (no FIG_TAG) from one of these is the published figure, so it gets no variant footer.
+PUBLISHED_VARIANTS = {"md56", "v105", "final"}
 
 
 def layout(fig_no: int):
@@ -492,7 +506,7 @@ def assemble(fig_no: int) -> Path | None:
         if TAG_FOOTERS[(fig_no, TAG)] is not None:
             foot.append(f"Variant fig{fig_no}{TAG}: "
                         + TAG_FOOTERS[(fig_no, TAG)].format(v=VARIANT))
-    elif TAG or VARIANT:
+    elif (TAG or VARIANT) and not (not TAG and VARIANT in PUBLISHED_VARIANTS):
         note = "proofread per-camera 2D labels in place of the detector"
         if "notail" in VARIANT:
             note += ", tail nodes (TailTip, Tail_0-2) excluded"

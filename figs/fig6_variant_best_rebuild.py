@@ -24,6 +24,7 @@ Everything outside the Mouse-Dyad block (the SLAP-2M sections) is copied from --
 """
 import argparse
 import json
+import os
 import math
 import sys
 from pathlib import Path
@@ -70,7 +71,10 @@ def build(tag, base_tag):
     f8 = json.loads((OUT / f"fig8_methods_50_{tag}.json").read_text())
     fair = json.loads((OUT / f"fig7_fair_baselines_{tag}.json").read_text())
     cells = {c["config"]: c for c in f8["cells"]}
-    fresh, ship = cells[FRESH], cells["shipped"]
+    # VB_SHIPPED_CELL (2026-10-15, b3): the "previous default" cell. b3 has no pre-#210 `shipped`
+    # cell (that is the fork on det_h5), so it uses stale0_dist25 (v1.0.5, eviction off), the
+    # same stand-in Supp 6F uses via FIG6F_NOEVICT. Unset = `shipped`, unchanged.
+    fresh, ship = cells[FRESH], cells[os.environ.get("VB_SHIPPED_CELL", "shipped")]
     for c in (fresh, ship):
         if c.get("status") != "ok":
             raise SystemExit(f"cell {c['config']} status {c.get('status')}")

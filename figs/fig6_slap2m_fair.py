@@ -124,7 +124,37 @@ if os.environ.get("FAIR_OUT_SUFFIX"):
     SUFFIX = "_" + os.environ["FAIR_OUT_SUFFIX"]
 if os.environ.get("FAIR_SLEAP_PY"):
     SLEAP_PY = Path(os.environ["FAIR_SLEAP_PY"])
+#: S6SMALL (2026-10-15, audit; all opt-in, unset = unchanged):
+#:   FAIR_BYTE_OUT            write/read the stitched ByteTrack files here instead of BYTE_OUT
+#:                            (stage bytetrack writes it, stage score reads it).
+#:   FAIR_BYTE_RESTITCH_FROM  stage bytetrack does NOT re-run ByteTrack: it reads each file's
+#:                            `tracks_raw` from this directory (the existing never-retire run)
+#:                            and only re-applies `stitch_to_2` -- e.g. with STITCH_DEDUPE=1.
+#:   FAIR_INSTALL_CSV         stage install aggregates this per-camera CSV instead of
+#:                            fig6_slap2m_fair<SUFFIX>_percam.csv (e.g. re-install the md56
+#:                            CSV under F3_TRUE_MEDIAN=1 into a new FAIR_OUT_SUFFIX).
+BYTE_RESTITCH_FROM = None
+if os.environ.get("FAIR_BYTE_OUT"):
+    BYTE_OUT = Path(os.environ["FAIR_BYTE_OUT"])
+if os.environ.get("FAIR_BYTE_RESTITCH_FROM"):
+    BYTE_RESTITCH_FROM = Path(os.environ["FAIR_BYTE_RESTITCH_FROM"])
 CAMS = ["back", "backL", "mid", "midL", "top", "topL"]
+#: FAIR_SLEAP_NOTAIL=1 (2026-10-15; opt-in, unset = unchanged). Supp Fig 6B-D's SLEAP arm
+#: must not see the four tail nodes at TRACKING time (LUC3D and ByteTrack did not; scoring
+#: was already tail-free). Stage sleapsrc then also sets the tail (nodes 4, 7, 8, 9) to NaN
+#: in every instance it keeps -- the body>=N rule, the sleap-nn version and every flag are
+#: unchanged -- and the arm reads/writes its own directories src_notail / sleap_cap_notail.
+SLEAP_NOTAIL = os.environ.get("FAIR_SLEAP_NOTAIL") == "1"
+TAIL = (4, 7, 8, 9)
+if SLEAP_NOTAIL:
+    if SLEAP_SRC is None:
+        raise SystemExit("FAIR_SLEAP_NOTAIL=1 needs FAIR_VARIANT=bvis4/bvis5 (the sleapsrc stage)")
+    SLEAP_SRC = FAIR / "src_notail"
+    SLEAP_OUT = FAIR / "sleap_cap_notail"
+#: FAIR_SLEAP_OUT_DIR (2026-10-15; opt-in): write/read the SLEAP arm here instead, e.g. a
+#: control re-run of the published arm that must reproduce sleap_cap/ exactly.
+if os.environ.get("FAIR_SLEAP_OUT_DIR"):
+    SLEAP_OUT = Path(os.environ["FAIR_SLEAP_OUT_DIR"])
 
 #: Copied from `scripts/sleap_nn/retrack_one.py` (the flags that BUILT the pool).
 #: If these drift, SLEAP's detections stop being the pool's.
@@ -174,12 +204,18 @@ def sleapsrc_job(args):
     dst.parent.mkdir(parents=True, exist_ok=True)
     L = sio.load_slp(src)
     body = [i for i in range(len(L.skeletons[0].nodes)) if i not in (4, 7, 8, 9)]
+    if SLEAP_NOTAIL:
+        names = [nd.name for nd in L.skeletons[0].nodes]
+        assert [names[i] for i in TAIL] == ["TailTip", "Tail_0", "Tail_1", "Tail_2"], names
     kept = dropped = 0
     for lf in L.labeled_frames:
         keep = []
         for inst in lf.instances:
             pts = inst.numpy()
             if np.isfinite(pts[body, 0]).sum() >= BODY_MIN:
+                if SLEAP_NOTAIL:
+                    inst.points["xy"][list(TAIL)] = np.nan
+                    inst.points["visible"][list(TAIL)] = False
                 keep.append(inst)
             else:
                 dropped += 1
@@ -290,7 +326,11 @@ def byte_job(args):
     src = POOL / f"{cam}_predictions.h5"
     with h5py.File(src, "r") as f:
         nf = int(f["tracks"].shape[1])
-    raw = run_camera_session(src, idx, lost_track_buffer=nf)
+    if BYTE_RESTITCH_FROM is not None:      # re-stitch only; ByteTrack itself is not re-run
+        with h5py.File(BYTE_RESTITCH_FROM / sid / f"{cam}.h5", "r") as f:
+            raw = f["tracks_raw"][:]
+    else:
+        raw = run_camera_session(src, idx, lost_track_buffer=nf)
     st = stitch_to_2(raw, n_slots=n)
     tmp = dst.with_suffix(".partial.h5")
     with h5py.File(tmp, "w") as f:
@@ -298,6 +338,10 @@ def byte_job(args):
         f.create_dataset("tracks_raw", data=raw)
         f.attrs["lost_track_buffer"] = nf
         f.attrs["n_slots"] = n
+        if os.environ.get("STITCH_DEDUPE") == "1":
+            f.attrs["stitch_dedupe"] = "per-frame slot dedupe: longer tracklet, then score"
+        if BYTE_RESTITCH_FROM is not None:
+            f.attrs["restitched_from"] = str(BYTE_RESTITCH_FROM)
     tmp.rename(dst)
     return sid, cam, "ok"
 
@@ -485,6 +529,8 @@ def stage_install():
     sys.path.insert(0, str(REPO / "figs"))
     import fig3_trackers as f3
     csv_path = OUT / f"fig6_slap2m_fair{SUFFIX}_percam.csv"
+    if os.environ.get("FAIR_INSTALL_CSV"):
+        csv_path = Path(os.environ["FAIR_INSTALL_CSV"])
     old = f3.SLAP2M
     try:
         f3.SLAP2M = str(csv_path)

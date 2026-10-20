@@ -59,7 +59,7 @@ def main():
                      "cross_switches": s["cross_switches"],
                      "frames_computed": e["framesComputed"],
                      "frames_considered": e["framesConsidered"]})
-    expected = 56 if _V == "md56" else 50     # md56 (2026-10-14): all 56 Mouse-Dyad-10M sessions
+    expected = 56 if _V in ("md56", "b3") else 50     # md56 (2026-10-14): all 56 Mouse-Dyad-10M sessions
     if len(rows) != expected:
         raise SystemExit(f"[exh] {len(rows)} sessions with scores, expected {expected} -- "
                          f"refusing to deposit a partial corpus as if it were whole")
@@ -82,10 +82,12 @@ def main():
         "frames_computed_total": int(frames),
         "camera_frames_computed": int(camframes),
         "switches_per_100k_camera_frames": float(sw / camframes * 1e5),
-        "denominator_note": "clean frames only (every camera holds exactly 2 "
-                            "detections): 4.32M of 9.00M video frames. The sweep "
-                            "panel's greedy curves use the full-session 45,021,960 "
-                            "camera-frame denominator; the two rates are labelled.",
+        # X6 (2026-10-20): computed, not hard-coded (the old text quoted the 50-session
+        # pool's 4.32M / 9.00M / 45,021,960).
+        "denominator_note": f"clean frames only (every camera holds exactly 2 "
+                            f"detections): {int(frames):,} video frames = "
+                            f"{int(camframes):,} camera-frames. Fig 3 G/H score the "
+                            "greedy sweep frame-matched on these same frames.",
         "per_session": rows,
     }
     OUT.write_text(json.dumps(out, indent=1))

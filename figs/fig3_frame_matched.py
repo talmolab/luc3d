@@ -72,7 +72,7 @@ BENCH = Path("/root/vast/eric/luc3d-bench")
 _V = os.environ.get("FIG3_VARIANT", "")
 _SFX = f"_{_V}" if _V else ""
 CACHE = FIGS / "out" / "tmp" / f"headtohead{_SFX}" / "A2_C5_bmimica"
-BM_DET = BENCH / "outputs" / "bmimica" / "det_h5"
+BM_DET = BENCH / "outputs" / "bmimica" / ("det_h5_bvis5" if _V == "b3" else "det_h5")  # b3: body>=5 pool
 BM_GT = BENCH / "outputs" / "bmimica" / "gt"
 OUT = FIGS / "out" / f"fig3_frame_matched_bmimica{_SFX}.json"
 ARMS = ("exhaustive", "greedy")

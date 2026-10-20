@@ -104,7 +104,18 @@ B1 = BM / "results" / "bytetrack_noretire"         # this script's run
 #: BYTE_B1_DIR (2026-10-12): write/read the never-retire arm elsewhere. With SCORE_NOTAIL=1
 #: the re-track builds ByteTrack's boxes without the four tail nodes (as the SLAP-2M arm in
 #: fig6_slap2m_fair.py) and scoring is tail-free too; it must not reuse the default dir.
-if os.environ.get("BYTE_B1_DIR"):
+#: BYTE_B3=1 (2026-10-15, Fig 6c): the Mouse-Dyad b3 rules -- detections from the body >= 5
+#: pool (`det_h5_bvis5/`, no sleap-nn score/overlap filters) and the tail INCLUDED in
+#: ByteTrack's boxes at tracking time. Scoring stays tail-free (SCORE_NOTAIL=1 required at
+#: the score stage): each output row is mapped back to the pool slot it came from (recorded
+#: at track time as `src_slot`) and re-boxed from that detection's keypoints through the same
+#: tail-free `ev.bbox_from_kpts` the GT boxes use. The stitch still runs on ByteTrack's own
+#: (tail-included) boxes, since it is part of the method.
+B3 = os.environ.get("BYTE_B3") == "1"
+if B3:
+    DET = BM / "det_h5_bvis5"
+    B1 = Path(os.environ.get("BYTE_B1_DIR", BM / "results" / "bytetrack_noretire_b3"))
+elif os.environ.get("BYTE_B1_DIR"):
     B1 = Path(os.environ["BYTE_B1_DIR"])
 elif os.environ.get("SCORE_NOTAIL") == "1":
     raise SystemExit("SCORE_NOTAIL=1 needs BYTE_B1_DIR (a tail-free re-track directory)")
@@ -129,7 +140,11 @@ def track_job(args):
     import h5py
     import run_bytetrack_bench as _rbb
     import score_notail
-    score_notail.install_fn(_rbb, "bbox_from_keypoints")   # no-op unless SCORE_NOTAIL=1
+    if B3:
+        if os.environ.get("SCORE_NOTAIL") == "1":
+            raise SystemExit("BYTE_B3 track stage: unset SCORE_NOTAIL (the tail is IN tracking)")
+    else:
+        score_notail.install_fn(_rbb, "bbox_from_keypoints")   # no-op unless SCORE_NOTAIL=1
     from run_bytetrack_bench import run_camera_session
     src = DET / sid / f"{cam}_predictions.h5"
     dst = B1 / sid / f"{cam}.h5"
@@ -147,9 +162,14 @@ def track_job(args):
         # it with frame_rate=30, so `lost_track_buffer = n_frames` means a lost track is
         # never retired within the session.
         arr = run_camera_session(src, 0, lost_track_buffer=n_frames)
+        slot = b3_src_slots(src, arr, _rbb.bbox_from_keypoints) if B3 else None
         with h5py.File(dst, "w") as f:
             f.create_dataset("tracks", data=arr, dtype="float64",
                              compression="gzip", compression_opts=4)
+            if slot is not None:
+                f.create_dataset("src_slot", data=slot, compression="gzip", compression_opts=4)
+                f.attrs["pool"] = str(DET)
+                f.attrs["tail_in_tracking"] = True
             f.attrs["columns"] = "track_id,x1,y1,x2,y2,score"
             f.attrs["lost_track_buffer"] = n_frames
             f.attrs["note"] = ("never-retire arm for Fig 7a's ByteTrack fairness fix; "
@@ -157,6 +177,50 @@ def track_job(args):
         return (sid, cam, "ok", time.time() - t0)
     except Exception as e:  # noqa: BLE001
         return (sid, cam, "ERR:" + repr(e)[:300], time.time() - t0)
+
+
+def b3_src_slots(src, arr, boxfn):
+    """`(n_frames, n_rows)` int8: the pool slot each ByteTrack output row came from (-1 = none).
+
+    supervision returns the matched INPUT detections, so every output box equals, in float32,
+    the box `run_camera_session` built for one pool slot. Matched exactly; an unmatched or
+    ambiguous row raises rather than guessing."""
+    import h5py
+    with h5py.File(src, "r") as f:
+        kp = f["tracks"][0]
+    nf, na = arr.shape[:2]
+    slot = np.full((nf, na), -1, dtype=np.int8)
+    for fi in range(nf):
+        rows = [j for j in range(na) if np.isfinite(arr[fi, j, 0])]
+        if not rows:
+            continue
+        cand = {}
+        for a in range(kp.shape[1]):
+            b = boxfn(kp[fi, a])
+            if b is not None:
+                cand[a] = np.asarray(b[:4], dtype=np.float32)
+        for j in range(na):
+            if not np.isfinite(arr[fi, j, 0]):
+                continue
+            hit = [a for a, b in cand.items() if np.array_equal(b, arr[fi, j, 1:5].astype(np.float32))]
+            if not hit:
+                raise RuntimeError(f"frame {fi} row {j}: output box matches no pool detection")
+            if len(hit) > 1 and not all(np.array_equal(kp[fi, hit[0]], kp[fi, h], equal_nan=True) for h in hit):
+                raise RuntimeError(f"frame {fi} row {j}: box matches {len(hit)} different detections")
+            slot[fi, j] = hit[0]
+    return slot
+
+
+def b3_rebox(arr, slot, kp, bbox):
+    """Replace each row's box with the tail-free box of its source detection (scoring only)."""
+    out = arr.copy()
+    for fi, j in zip(*np.nonzero(slot >= 0)):
+        b = bbox(kp[fi, slot[fi, j]])
+        if b is None:
+            out[fi, j, :] = np.nan
+        else:
+            out[fi, j, 1:5] = b
+    return out
 
 
 # ---------------------------------------------------------------- the stitch
@@ -220,6 +284,51 @@ def stitch_to_2(arr, n_slots=2):
             last_box[s] = box
             last_frame[s] = fi
             alive_until[tid] = fi
+    if os.environ.get("STITCH_DEDUPE") == "1":
+        dedupe_slots(out, arr)
+    return out
+
+
+def dedupe_slots(out, arr):
+    """STITCH_DEDUPE=1 (2026-10-15, audit). Opt-in; unset = the published stitch.
+
+    The no-free-slot fallback in `stitch_to_2` binds a new tracklet to a slot that a
+    tracklet alive in the same frame already holds, so one identity can appear TWICE in
+    one frame. motmetrics then credits both rows to that identity and IDF1 can exceed 1
+    (10 of 444 SLAP-2M camera-sessions; the 1-animal sessions, where n_slots = 1, are
+    the usual case). Rule, applied per frame and per slot, no ground truth:
+
+      keep the row whose ByteTrack tracklet is LONGER (more frames present in the
+      whole camera-session); tie -> higher detection score (column 5); tie -> lower
+      pool slot index. Every other row on that slot in that frame is blanked (NaN),
+      i.e. treated as a detection the method left unassigned in that frame.
+
+    Tracklet length rather than per-frame score first, so the same tracklet wins every
+    frame of an overlap instead of the slot flickering between two tracklets. The
+    tracklet keeps its slot binding outside the clash frames. Edits `out` in place.
+    """
+    ids = arr[:, :, 0]
+    fin = np.isfinite(ids)
+    tids, counts = np.unique(ids[fin].astype(np.int64), return_counts=True)
+    length = dict(zip(tids.tolist(), counts.tolist()))
+    slots = out[:, :, 0]
+    for fi in np.nonzero((np.isfinite(slots).sum(1) > 1))[0]:
+        seen = {}
+        for j in range(out.shape[1]):
+            if not np.isfinite(out[fi, j, 0]):
+                continue
+            seen.setdefault(int(out[fi, j, 0]), []).append(j)
+        for s, js in seen.items():
+            if len(js) < 2:
+                continue
+            def key(j):
+                sc = arr[fi, j, 5]
+                return (length.get(int(arr[fi, j, 0]), 0),
+                        float(sc) if np.isfinite(sc) else -np.inf, -j)
+            keep = max(js, key=key)
+            for j in js:
+                if j != keep:
+                    out[fi, j, :] = np.nan
     return out
 
 
@@ -253,7 +362,14 @@ def score_session(sid, arms):
                 return None
             with h5py.File(src, "r") as f:
                 raw = f["tracks"][:]
+                sl = f["src_slot"][:] if B3 else None
             arrs[a][c] = stitch_to_2(raw) if a.endswith("s") else raw
+            if B3:
+                if not getattr(ev, "_score_notail", False):
+                    raise SystemExit("BYTE_B3 scoring must be tail-free: set SCORE_NOTAIL=1")
+                with h5py.File(DET / sid / f"{c}_predictions.h5", "r") as f:
+                    kp = f["tracks"][0]
+                arrs[a][c] = b3_rebox(arrs[a][c], sl, kp, ev.bbox_from_kpts)
 
     for a in arms:
         percam, sw2d, ids = [], 0, set()

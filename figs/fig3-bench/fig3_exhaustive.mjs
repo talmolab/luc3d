@@ -75,6 +75,15 @@ function parseArgs(argv) {
         else if (a === '--max-hypotheses') o.maxHypotheses = parseInt(take());
         else if (a === '--clean-sample') o.cleanSample = parseInt(take());
         else if (a === '--exclude-tail') o.excludeTail = true;
+        // --frame-list <json array of frame indices> (2026-10-19, opt-in; unset = unchanged):
+        // enumerate ONLY these frames, e.g. the exact frames fig3_bench.mjs is timed on
+        // (figs/fig3f_timing_clean.py). Every listed frame must be eligible, or this throws.
+        else if (a === '--frame-list') o.frameList = take();
+        // --eligible-only (2026-10-20, opt-in; unset = unchanged): run Pass A, write the
+        // eligible frame indices as `eligibleFrames`, enumerate nothing. Ignores the
+        // hypothesis cap, so the intractable A4_C6 cell can get its eligible frames for
+        // the greedy-only clean timing (figs/fig3f_timing_clean.py T_A4C6=1).
+        else if (a === '--eligible-only') o.eligibleOnly = true;
     }
     return o;
 }
@@ -212,7 +221,7 @@ async function main() {
 
     const permsA = permutations(A);
     const hypothesesPerFrame = Math.pow(permsA.length, cameras.length);
-    const capped = hypothesesPerFrame > opts.maxHypotheses;
+    const capped = hypothesesPerFrame > opts.maxHypotheses && !opts.eligibleOnly;
 
     let framesConsidered = 0, framesClean = 0, framesComputed = 0, tailOnlyInstances = 0;
     const frames = [];
@@ -248,6 +257,13 @@ async function main() {
         cleanSampleStride = cleanFrames.length / N;
         selected = [];
         for (let i = 0; i < N; i++) selected.push(cleanFrames[Math.floor(i * cleanSampleStride)]);
+    }
+    if (opts.eligibleOnly) selected = [];
+    if (opts.frameList) {
+        const keep = new Set(JSON.parse(fs.readFileSync(opts.frameList, 'utf8')));
+        selected = cleanFrames.filter(fi => keep.has(fi));
+        if (selected.length !== keep.size)
+            throw new Error(`--frame-list: ${keep.size} listed, only ${selected.length} eligible`);
     }
     const tEnum = Date.now();
 
@@ -394,6 +410,7 @@ async function main() {
         secondsPerComputedFrame: framesComputed > 0 ? runtimeSeconds / framesComputed : null,
         secondsPerComputedFrameEnum: framesComputed > 0 ? enumerationSeconds / framesComputed : null,
         frames,
+        ...(opts.eligibleOnly ? { eligibleFrames: cleanFrames } : {}),
     }));
     process.stderr.write(
         `[fig3_exhaustive] A=${A} C=${cameras.length} hyps/frame=${hypothesesPerFrame} capped=${capped} ` +

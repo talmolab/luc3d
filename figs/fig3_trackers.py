@@ -155,8 +155,12 @@ def summarise(vals):
     lo, hi = boot_ci(vals)
     s = sorted(vals)
     n = len(s)
+    #: F3_TRUE_MEDIAN=1 (2026-10-15, audit): `s[n // 2]` is the UPPER-middle value for even
+    #: n (74 SLAP-2M sessions), not the median. Opt-in so every existing deposit is
+    #: reproducible; quartiles keep their index convention either way.
+    med = st.median(s) if os.environ.get("F3_TRUE_MEDIAN") == "1" else s[n // 2]
     return dict(n_sessions=n, mean=mean(s), sd=(st.stdev(s) if n > 1 else 0.0),
-                median=s[n // 2], q25=s[int(0.25 * n)], q75=s[int(0.75 * n)],
+                median=med, q25=s[int(0.25 * n)], q75=s[int(0.75 * n)],
                 min=s[0], max=s[-1], ci95_lo=lo, ci95_hi=hi)
 
 

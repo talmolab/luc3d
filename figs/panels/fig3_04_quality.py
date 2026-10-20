@@ -83,6 +83,7 @@ by construction, greedy happens not to. (An even earlier version printed "each
 method misgroups exactly one of the 137,266 clean frames"; the corpus-scale deposit
 says otherwise, and both counts are read from the data at draw time.)
 """
+import re
 import sys
 from pathlib import Path
 
@@ -130,7 +131,11 @@ def variant_deposit_name():
     hits = sorted(p.name for p in (Path(__file__).resolve().parent.parent / "out")
                   .glob(VARIANT_GLOB)
                   if "__shipped" not in p.name
-                  and not p.stem.endswith(("_unfilt", "_bvis4", "_bvis5", "_bvis5nt", "_md56", "_v105")))
+                  # Only BASE names, i.e. stems ending in the 8-hex config hash. The old
+                  # list of known variant suffixes missed `_c6b3`, which then sorted last
+                  # and paired a b3 greedy arm with an md56 exhaustive arm (2026-10-19
+                  # audit); any future tag would do the same.
+                  and re.search(r"_[0-9a-f]{8}$", p.stem))
     if not hits:
         sys.exit("fig3d: no fresh-anchor quality deposit. Run:\n"
                  "  PY=/root/vast/eric/luc3d-bench/liezl_env/bin/python\n"

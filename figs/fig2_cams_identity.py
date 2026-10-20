@@ -64,6 +64,15 @@ HH_CACHE = OUT / "tmp" / "headtohead" / "A2_C5_bmimica"   # session list only
 #: cache, e.g. out/tmp/headtohead_md56/A2_C5_bmimica for all 56 sessions. Unset = unchanged.
 if os.environ.get("CAMS_HH_CACHE"):
     HH_CACHE = Path(os.environ["CAMS_HH_CACHE"])
+#: MD_CFG=b3 (2026-10-15, Eric): body>=5 pool (det_h5_bvis5/) with the tail INCLUDED in
+#: tracking, as mdb_experiment.py b3; scoring stays tail-free. Needs LUCID_ROOT and
+#: CAMS_SUFFIX=b3 (the k=5 gate is then against fig8_methods_50_b3.json); cache gets _b3.
+POOL, TAIL_ARGS = BM / "det_h5", []
+if os.environ.get("MD_CFG"):
+    if os.environ["MD_CFG"] != "b3" or os.environ.get("CAMS_SUFFIX") != "b3" or not os.environ.get("LUCID_ROOT"):
+        raise SystemExit("MD_CFG=b3 needs LUCID_ROOT and CAMS_SUFFIX=b3")
+    POOL, TAIL_ARGS = BM / "det_h5_bvis5", ["--no-exclude-tail"]
+    TMP = TMP.parent / (TMP.name + "_b3")
 
 #: The deposit cell the k = 5 gate must reproduce. THE SHIPPED FRESH ANCHOR
 #: (stale 20 + distanceThreshold 25 + frame-synchronous association, the app
@@ -108,12 +117,12 @@ def track_job(args):
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists() and dst.stat().st_size > 1000:
         return tag, sid, "skip", 0.0
-    det = BM / "det_h5" / sid
+    det = POOL / sid
     t0 = time.time()
     cmd = ["node", str(DRIVER), "--pred-h5-dir", str(det), "--session-idx", "0",
            "--num-animals", "2", "--cameras", ",".join(cams),
            "--calibration", _calib(sid),
-           "--out", str(dst)]
+           "--out", str(dst)] + TAIL_ARGS
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
     if r.returncode != 0 or not dst.exists():
         return tag, sid, "FAIL:" + r.stderr[-300:].replace("\n", " "), time.time() - t0
@@ -130,7 +139,7 @@ def score_job(args):
     # to 4 cells would have compared two tracker generations across the x axis.
     src = TMP / tag / f"{sid}.json"
     try:
-        r = fs.score_session(str(src), str(BM / "det_h5" / sid),
+        r = fs.score_session(str(src), str(POOL / sid),
                              str(BM / "gt" / sid), cams, 2)
         r["session"], r["subset"], r["cameras"] = sid, tag, cams
         return r, None
@@ -190,7 +199,7 @@ def main():
     ref = {r["session"]: r for r in shipped["per_session"]}
     k5 = [r for r in rows if r["subset"] == "k5_full" and r["session"] in ref]
     dmax = max(abs(r["within_idf1"] - ref[r["session"]]["within_idf1"]) for r in k5)
-    print(f"[cams] GATE k5_full vs fig8_methods_50.json {GATE_CONFIG}: "
+    print(f"[cams] GATE k5_full vs fig8_methods_50{'_' + _sfx if _sfx else ''}.json {GATE_CONFIG}: "
           f"{len(k5)} sessions, max |diff| {dmax:.3e}")
     gate_ok = dmax < 1e-9
     if not gate_ok:
@@ -220,7 +229,8 @@ def main():
                  "number of cameras available.",
         "subsets": {t: c for t, c in subs.items()},
         "gate": {"passed": bool(gate_ok), "max_abs_diff_idf1": dmax,
-                 "reference": f"fig8_methods_50.json config={GATE_CONFIG}"},
+                 "reference": (f"fig8_methods_50_{_sfx}.json" if _sfx else "fig8_methods_50.json")
+                              + f" config={GATE_CONFIG}"},
         "summary": summary,
         "per_run": rows,
     }, indent=1))
