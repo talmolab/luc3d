@@ -14580,11 +14580,18 @@ repaired, as was every failure rescued.
 **The rule.** `readBlobRange(blob, start, end)` retries a read that throws,
 after `COLD_READ_RETRY_MS` (200 ms, 1 s, 3 s), then rethrows the last error;
 and re-reads every all-zero part of a read (per 4 KiB block of the FILE,
-clipped to the read, neighbours merged — `zeroRuns`), using the re-read only
-when it holds a non-zero byte, so the guard cannot make a read worse. A re-read
-is checked the same way, at most three deep. That is h5wasm's
-`lucidColdReadGuard` rule exactly, plus the retry (WORKERFS reads are
-synchronous, so that patch has none). Repairs and rescues log a `[cold-read]`
+clipped to the read, neighbours merged — `zeroRuns`) TOGETHER WITH THE 4 KiB
+BLOCK ON EACH SIDE OF IT, copying re-read bytes in only where the first read
+gave a zero byte, so the guard cannot make a read worse: bytes that were right,
+and bytes that really are zero, stay as they are. The neighbours are there
+because a run of zeros need not start or end on a block boundary — the
+partly-zero block at its edge is not all zero, so re-reading only the all-zero
+blocks left its zeros wrong (on cold 167 MB `.slp` files through h5wasm's first
+version of the rule, 93 of 93 wrong blocks were that one; the video zeros
+measured so far were whole 64 KiB). The repaired range is checked again the
+same way, at most three re-reads deep. That is h5wasm's `lucidColdReadGuard`
+rule exactly, plus the retry (WORKERFS reads are synchronous, so that patch has
+none). Repairs and rescues log a `[cold-read]`
 console warning and are counted in `coldReadStats`.
 
 **Key exports.**
@@ -14618,7 +14625,8 @@ frame-accurate backend); the small JSON / TOML `.text()` reads (a zeroed or
 failed read of those fails to parse, loudly).
 
 **Tests.** `tests/test-cold-read-guard.mjs` (the rule over a fake Blob with
-injected holes and failures; mediabunny's index and every packet of the
+injected holes and failures, including runs that start and end part-way into a
+block, with the all-zero-blocks-only rule as the negative control; mediabunny's index and every packet of the
 committed B-frame clip through the guard, with the unguarded read as the
 negative control) and `tests/e2e/video-cold-read.mjs` (the real
 OnDemandVideoDecoder in Chromium with faults injected under it: frame count,

@@ -1940,9 +1940,14 @@ afterwards):
 
 So **read a user's File's bytes through `loading/cold-read-guard.js`**, never
 `file.arrayBuffer()` / `slice().arrayBuffer()` directly. `readBlobRange` retries
-a read that throws (200 ms, 1 s, 3 s) and re-reads every all-zero 4 KiB block,
-using the re-read only when it is non-zero — h5wasm's `lucidColdReadGuard` rule,
-plus the retry. Three rules:
+a read that throws (200 ms, 1 s, 3 s) and re-reads every all-zero 4 KiB block
+together with the block on each side of it, copying re-read bytes in only where
+the first read gave a zero — h5wasm's `lucidColdReadGuard` rule, plus the retry.
+The neighbours matter: a run of zeros can start or end part-way into a block,
+which is then not all zero; on cold 167 MB `.slp` files read through h5wasm's
+first version of the rule, every wrong block was that one (93 of 93). The video
+zeros measured so far were whole 64 KiB, so this is the same fix applied before
+it is needed here. Three rules:
 - **The frame-accurate decoder reads through `fromRangeSource`, not `fromBlob`.**
   `_initMediabunny` hands sleap-io.js's `MediaBunnyVideoBackend.fromRangeSource`
   a `guardedRangeSource(file)`; mediabunny's own `BlobSource` cannot be guarded
