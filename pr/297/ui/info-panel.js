@@ -5,42 +5,42 @@
 
 import {
     Skeleton, Camera, Session,
-} from '../pose/pose-data.js?v=a152d6740e56';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=a152d6740e56';
-import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=a152d6740e56';
-import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=a152d6740e56';
-import { isInteractiveClickTarget } from './interaction.js?v=a152d6740e56';
-import { persistSectionState } from './section-state.js?v=a152d6740e56';
-import { buildLazySelect } from './lazy-select.js?v=a152d6740e56';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=a152d6740e56';
-import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=a152d6740e56';
+} from '../pose/pose-data.js?v=1e2cdb437e86';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=1e2cdb437e86';
+import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=1e2cdb437e86';
+import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=1e2cdb437e86';
+import { isInteractiveClickTarget } from './interaction.js?v=1e2cdb437e86';
+import { persistSectionState } from './section-state.js?v=1e2cdb437e86';
+import { buildLazySelect } from './lazy-select.js?v=1e2cdb437e86';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=1e2cdb437e86';
+import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=1e2cdb437e86';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
-         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=a152d6740e56';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=a152d6740e56';
-import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=a152d6740e56';
-import { adoptSkeletonNodeOrder, describeSkeletonAdoption } from '../pose/session-node-order.js?v=a152d6740e56';
+         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=1e2cdb437e86';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=1e2cdb437e86';
+import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=1e2cdb437e86';
+import { adoptSkeletonNodeOrder, describeSkeletonAdoption } from '../pose/session-node-order.js?v=1e2cdb437e86';
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
     loadSingleSessionFromCache, removeVideoFile,
-} from '../loading/session-loader.js?v=a152d6740e56';
+} from '../loading/session-loader.js?v=1e2cdb437e86';
 
 // Circular import — these are still defined in app.js for now. They will be
 // retargeted as later passes land:
 // - swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu
 //   → ui/identity-assignment.js (Pass 3f)
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
-import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=a152d6740e56';
+import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=1e2cdb437e86';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
 // luc3d #172: every manual identity switch routes through applyIdentitySwitch,
 // which subsumes this file's former direct propagateIdentityForward calls.
 import {
     swapAssignTrack, applyIdentitySwitch, describeIdentitySwitch,
-} from './identity-assignment.js?v=a152d6740e56';
+} from './identity-assignment.js?v=1e2cdb437e86';
 // Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import {
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
-} from './sessions-panes.js?v=a152d6740e56';
+} from './sessions-panes.js?v=1e2cdb437e86';
 // Block 2 (Prompt 4): per-session timeline visibility toggles.
 import {
     toggleCameraVisibility,
@@ -49,7 +49,7 @@ import {
     getCameraVisibilityList,
     getTrackVisibilityList,
     getIdentityVisibilityList,
-} from './timeline-visibility.js?v=a152d6740e56';
+} from './timeline-visibility.js?v=1e2cdb437e86';
 
 // ============================================
 // Inline name entry for "+ New Track" / "+ New Identity"

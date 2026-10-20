@@ -28,20 +28,20 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=a152d6740e56';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=a152d6740e56';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=a152d6740e56';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=a152d6740e56';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=a152d6740e56';
-import { getTrackingThreshold } from './settings.js?v=a152d6740e56';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=a152d6740e56';
+import { state, getActiveSession } from './app-state.js?v=1e2cdb437e86';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=1e2cdb437e86';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=1e2cdb437e86';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=1e2cdb437e86';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=1e2cdb437e86';
+import { getTrackingThreshold } from './settings.js?v=1e2cdb437e86';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=1e2cdb437e86';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=a152d6740e56';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=a152d6740e56';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=a152d6740e56';
+         inputTensorToPixels, INPUT } from './image-embedder.js?v=1e2cdb437e86';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=1e2cdb437e86';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=1e2cdb437e86';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=a152d6740e56';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=1e2cdb437e86';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
