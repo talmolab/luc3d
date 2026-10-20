@@ -3,9 +3,9 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 117 modules are grouped into four directories:
-- `pose/` — data model, cross-view tracking (Track All's tracker on one worker: `tracker-pool.js` + `tracker-worker.js`), DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), Track All's 2D pose check (`pose-check.js` — common / uncommon / outlier, per camera — and its session glue `pose-check-session.js`), the lazy project's playback eviction (`lazy-residency.js`), app initialization (25 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, the node tooltip on hover (`node-tooltip.js` — a node's name and a prediction's per-node score, as SLEAP shows them), plane visibility, browser-specific hints, the macOS tip shown before a folder picker (`folder-confirm-tip.js` — the browser's folder prompt defaults to Cancel, and Tab reaches Upload only with Keyboard navigation on, which no page can read), the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip and the time ruler under it (`seekbar-ticks.js` — major/minor tick steps chosen from the video's length and the bar's width), the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames) and their shade (`TRAIL_SHADES` in `ui/overlays.js`: Very dark … Very light, default Dark, remembered in `localStorage`), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it), Tracks ▸ Check Poses (`pose-check-command.js` — the 2D pose check without tracking) and its Identities section (`identity-gallery.js` — five sample images and a path map per identity), the Track group's Animals field (`animal-count-field.js`), the dialog Track All / Track Frame open on a session's first run (`track-setup-modal.js` — the animal count, with the node weights to review and, on Track All, the image ID-switch check and its options; the weight grid and the image-check section are in the Track Frame Range dialog too), the CPU / GPU load lines and last-minute graph shown by the image check's dialog and by the loading overlay during Triangulate All and Track All (`load-graph.js`), settings, the release shown beside the menu bar's Settings button (`version-label.js`) — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (70 files)
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 119 modules are grouped into four directories:
+- `pose/` — data model, cross-view tracking (Track All's tracker on one worker: `tracker-pool.js` + `tracker-worker.js`), DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), Track All's 2D pose check (`pose-check.js` — common / uncommon / outlier, per camera — and its session glue `pose-check-session.js`), the lazy project's playback eviction (`lazy-residency.js`), the skeleton-edit impact tally (`skeleton-edit-impact.js`), app initialization (26 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, the node tooltip on hover (`node-tooltip.js` — a node's name and a prediction's per-node score, as SLEAP shows them), plane visibility, browser-specific hints, the macOS tip shown before a folder picker (`folder-confirm-tip.js` — the browser's folder prompt defaults to Cancel, and Tab reaches Upload only with Keyboard navigation on, which no page can read), the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip and the time ruler under it (`seekbar-ticks.js` — major/minor tick steps chosen from the video's length and the bar's width), the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames) and their shade (`TRAIL_SHADES` in `ui/overlays.js`: Very dark … Very light, default Dark, remembered in `localStorage`), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it), Tracks ▸ Check Poses (`pose-check-command.js` — the 2D pose check without tracking) and its Identities section (`identity-gallery.js` — five sample images and a path map per identity), the Track group's Animals field (`animal-count-field.js`), the dialog Track All / Track Frame open on a session's first run (`track-setup-modal.js` — the animal count, with the node weights to review and, on Track All, the image ID-switch check and its options; the weight grid and the image-check section are in the Track Frame Range dialog too), the CPU / GPU load lines and last-minute graph shown by the image check's dialog and by the loading overlay during Triangulate All and Track All (`load-graph.js`), the skeleton-edit confirmation (`skeleton-edit-warning.js`), settings, the release shown beside the menu bar's Settings button (`version-label.js`) — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (71 files)
 - `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), Blob reads that survive a cloud file still downloading (`cold-read-guard.js`), web workers (12 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
 - `demo-data.js` — synthetic skeleton and camera data
@@ -307,6 +307,33 @@ terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-cor
   still just download (`shouldStreamToDisk`, 256 MB).
 - h5wasm 0.10.3 (WebAssembly HDF5) — **vendored locally** at `lib/h5wasm/`
   (ESM `hdf5_hl.js` + IIFE `h5wasm.iife.js`; no CDN fetch). See its `PROVENANCE.txt`.
+  **LOCAL PATCH (cold-read):** WORKERFS's read in BOTH builds (`hdf5_util.js`,
+  `h5wasm.iife.js`) re-reads any part of a read that came back all zero,
+  plus the 4 KiB block on each side of it, and fills in only the bytes that
+  were zero (`lucidColdReadGuard`). Why: Track All gave different identities for the same
+  session loaded cold vs warm from Google Drive for desktop (21 of the 22
+  proofread SLAP sessions). Measured 2026-10-19: while a File Provider file is
+  still downloading, a slice Chrome reads from it can come back with a 16 KiB
+  page of ZEROS mid-read and every other byte right, with no error — so the
+  `.slp` parse put 630 keypoints per hole at (0, 0), and the tracker diverged
+  at the first such frame. Python/h5py reads of cold files were clean, and
+  replaying the parser's exact reads did not reproduce it, so it needs the
+  parser's timing; the zeros are the signature, so the guard keys on them. An
+  immediate re-read returned the real bytes for every hole measured (17 of 17
+  in 12 cold files; really-zero bytes cost ~8 small re-reads per 25 MB file).
+  **The neighbouring blocks matter:** a run of zeros need not end on a block
+  boundary, and re-reading only the all-zero blocks still left 15 of 15 cold
+  167 MB `.slp` files parsing wrong — every wrong block was the partly-zero one
+  right after the re-read run (93 of 93). With them, 15 of 15 matched the file.
+  Reads that THROW were never seen on this path (0 in ~645,000 cold reads,
+  ~10 GB, though some took 13 s), so it has no retry — unlike
+  `loading/cold-read-guard.js`, where video reads did fail. Every h5wasm File reader goes through it: the SLP worker (eager parse, lazy
+  analysis `.h5`), `frame-worker.js`, and sleap-io.js's streaming worker (lazy
+  `.slp`, which `importScripts` the IIFE). Reads that bypass WORKERFS — video
+  and Load 3D Points — go through `loading/cold-read-guard.js` instead (see
+  "A File in a cloud-synced folder can read back WRONG"). **Re-apply after any h5wasm
+  re-vendor** (grep the marker); `tests/test-workerfs-cold-read.mjs` fails
+  without it.
 - sleap-io.js — vendored browser bundle in `lib/sleap-io/`, pinned to **0.5.5**,
   **built from source** at `talmolab/sleap-io.js@e8dbaef8c` (the `0.5.5` release-bump
   commit) via `scripts/revendor-sleap-io.sh e8dbaef8ccc8` — 0.5.5 was **not yet on
@@ -554,6 +581,44 @@ terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-cor
   pass in both states — so it pins the memory shape, not just current behavior.
   Two patched sites, marked `// LUCID local patch (luc3d #193)`. **Re-apply after
   any re-vendor** (grep the marker) and report upstream.
+  **LOCAL PATCH (luc3d eager-save):** `lib/sleap-io/chunk-X76PRJK6.js`
+  `writeLabeledFrames` — the EAGER writer's 2D tables (`frames`, `instances`,
+  `points`, `pred_points`) — appends through #191's `LucidAppendTable` instead of
+  building one boxed JS row per keypoint and holding every one until
+  `createMatrixDataset`. That is what crashed File ▸ Save of an eagerly-loaded
+  per-camera project: on MultiCam_18 (17 cameras, 34 nodes, 36,000 frames,
+  1,390,390 predictions = 47,273,260 keypoint rows) a prediction's row was
+  ~210 B of V8 heap (`row.push(score)` grows a 4-double array's backing store to
+  22), 7.4 KB per instance. Measured with `tests/e2e/_diag-eager-save-heap.mjs`:
+  the save went from a renderer crash (even with the ungrouped predictions
+  dropped) to **1,133,683,132 bytes in 24 s, peak heap 2,234 MB**; on its first
+  3,000 frames the peak went 1,207 -> 344 MB with every dataset bit-identical
+  (h5py). Same consequences as #191: a table that never fills its buffer is
+  written one-shot and contiguous, so small files are BYTE-IDENTICAL
+  (`save-golden-digest.mjs` must not move); one that overflows becomes chunked.
+  `from_predicted` is resolved by a pre-pass (only when some user instance has
+  one), since a flushed row cannot be patched afterwards. Points are read from
+  the instance's columnar `_xy`/`_visible`/`_complete`/`_score` directly. The
+  boxed `emitInstancePoints` is kept for `SlpStreamWriter`, whose rows are
+  window-bounded. `LucidAppendTable.push` takes 10 values now (was 8). Guarded by
+  `tests/e2e/save-2d-tables-append.mjs` (every value vs the pre-patch row logic,
+  across flush boundaries; its value checks also pass on the pre-patch bundle,
+  only the layout checks fail there). Marked `// LUCID local patch (luc3d
+  eager-save)`. **Re-apply after any re-vendor** (grep the marker) and report
+  upstream.
+  **NOT A PATCH, BUT IT DEPENDS ON BUNDLE INTERNALS — the same save's 2D
+  instances:** `buildSlpLabelsAllViews` makes them with `makePooledSioInstances`
+  (`import-export/file-io.js`) — objects over `SIO.Instance` /
+  `SIO.PredictedInstance` prototypes whose `_xy`/`_visible`/`_complete`/`_score`
+  are getters onto SHARED pooled column chunks, instead of four typed arrays (and
+  a `_names` array) per instance. On MultiCam_18 (17 cameras, 1,390,390 2D
+  instances) that took the Labels graph from ~0.93 KB to ~0.2 KB of V8 heap per
+  instance and the save's peak from 2,146 to 1,057 MB, with every dataset
+  bit-identical (h5py). It reads and serves the vendored `Instance`'s private
+  column fields, so **after any re-vendor** check those fields (and `_n` /
+  `_names`) still exist under the same names, and run
+  `tests/test-sio-pooled-instances.js` — it compares every column, default and
+  the saved bytes against `new SIO.Instance({ points })`.
   **OBSOLETE PATCH (issue #134):** the old inline-points-fallback patch to
   `serializeInstanceGroup` is **gone and must NOT be re-applied.** SLP 2.8 (0.5.5)
   replaced the inline `frame_group_dicts` serializer with the columnar
@@ -1591,6 +1656,116 @@ on a build that simply ignores the frame). The axis claim was
 additionally confirmed against **real Blender** (`--background`, gltf + stl
 importers): both files put the tracked corner at (0, 0, 300).
 
+## A skeleton edit re-shapes every annotation in the project
+
+The Skeleton tab's node/edge controls look like settings and are not.
+`Instance` stores one flat `Float64Array(2N)` keyed by node INDEX, and
+**one skeleton per project** means every `state.sessions[*].skeleton` is the
+SAME object — so a node typed into that box re-shapes every instance in every
+loaded session at once. The only signal used to be a `console.warn` nobody
+sees.
+
+All five edits — add node, remove node, rename node, add edge, remove edge —
+now go through `confirmSkeletonEdit` (`ui/skeleton-edit-warning.js`), counting
+with `pose/skeleton-edit-impact.js`. Ten things are load-bearing:
+
+- **The dialog is a title, ONE SENTENCE and the counts.** A bulleted
+  `What changes` block and an always-on `There is no undo…` caution were both
+  removed: four paragraphs of prose above the one thing a reader can act on,
+  restating per edit what the lead already said, plus a box that by its third
+  appearance is scenery — which costs the lazy warning its weight too. Keep the
+  per-edit detail in MODULES.md; `tests/e2e/skeleton-edit-warning.mjs` asserts
+  both are absent, because copy like that creeps back one paragraph at a time.
+- **The counts are the WHOLE project, and the enumeration is the same one
+  `pose/origin-rebase.js` uses.** Never `frameGroups` alone on a lazy project
+  (a resident window — 31 of 180,210 frames on the real project, so the tally
+  comes out plausible, tiny and wrong), and never group members alone (most of
+  an imported `.slp` is ungrouped predictions in `unlinkedInstances`). Lazy →
+  `lazyLoader.forEachInstanceRow`; eager → frame-group instances plus the
+  unlinked pool, which are disjoint by construction.
+- **The headline block IS the total; the by-session block says WHICH session.**
+  Every headline number is a FOLD of `perSession`, so the two cannot disagree —
+  and the by-session block deliberately carries **no `Total` row**, because
+  that is the headline restated a few rows down and two copies of one number
+  invite the reader to check them against each other instead of reading either.
+  A session on a DIFFERENT-shaped skeleton is NOT counted and is named
+  separately instead of silently shortening the total.
+- **The APPLY is scoped the same way the counts are.** `confirmSkeletonEdit`
+  settles which sessions are on this skeleton BEFORE the caller mutates it —
+  afterwards every session either already points at the mutated object or has a
+  node count that no longer matches it, so the question is only answerable then
+  — and hands that list to `onConfirm`. The handlers re-point and propagate to
+  exactly those sessions (`adoptEditedSkeleton`), never
+  `setProjectSkeleton`, which re-points EVERY loaded session: a project really
+  can hold two shapes, since `promptImportSkeletonForAllSessions` lets the user
+  Skip, and adopting the odd session here would discard the skeleton it was
+  loaded with and leave its instances at a count its skeleton does not
+  describe. A dialog that counts two sessions must not edit three.
+- **A node edit drops `state.triangulationResults`.** That map is a per-frame
+  SNAPSHOT of the last solve — each group's `points3d`, `reprojections` and
+  per-node `errors` — and a node edit has just re-shaped all three, so every
+  entry describes the project at the previous node count. It is dropped rather
+  than re-shaped, exactly as `ui/origin-rebase.js`'s `finishRebase` drops it
+  after the 3D moves; the draw path re-derives a frame's entry when it is
+  shown. Left behind, that fill CONCATENATES the fresh entry onto the stale one
+  and the info panel's per-instance node breakdown renders one table per entry,
+  so every animal is listed TWICE with the first copy stopping at the old node
+  count (measured on the real `slap_GT/10072022145420` session: four animals,
+  eight tables). Both the live map and each session's own copy go. Only the
+  NODE edits need it — a rename and an edge edit move no coordinates, so
+  nothing in the snapshot goes stale.
+- **A lazy project is told, loudly, not to do this.** Both propagation methods
+  are RESIDENT-ONLY by necessity: the columnar store has a fixed node count
+  per instance, so a skeleton edit cannot be expressed in it at all and a
+  non-resident frame comes back on the PREVIOUS skeleton — no error, no
+  symptom, until a save writes two node counts into one project. The red
+  warning names `nonResidentFrames` and says what to do instead. A project
+  that merely HAS a `lazyLoader` but is fully resident does not get it: a
+  warning that fires when nothing is wrong is a warning nobody reads.
+- **No annotations, no dialog.** Building the first skeleton is N node names
+  typed into a box; `skeletonEditNeedsConfirmation` applies the edit straight
+  through when there are no instances, no groups and nothing lazy.
+- **"Do not show again" is the user's own version of that gate**, cached in
+  `localStorage.skeletonEditWarningOff`. Browser-local display taste, so it
+  must NOT reach the `.slp` — it is a property of this browser, not the
+  project, and opening a colleague's project must not silence their warnings.
+  It is checked BEFORE the tally (which walks a lazy project's whole columnar
+  store), recorded **only when the edit is APPLIED** (ticked and then cancelled
+  it does nothing — guessing which of two opposite intentions won would silence
+  a data-loss warning on the strength of a dialog the user rejected), and
+  storage failures fall back to WARNING, never to skipping. The way back on is
+  `#skeletonWarnOffNote` in the Skeleton tab, shown only while it is set: a
+  setting a user can switch off and never find again is a trap.
+- **A new node arrives HIDDEN on hand-labelled instances** — placed beside the
+  animal (fanned off the centroid of its placed points) and added to
+  `nulledNodes`, so it draws a grey, CLICKABLE marker. An empty slot draws
+  nothing, and a node that draws nothing can never be clicked, so the node the
+  user just added would be permanently unplaceable on every instance that
+  already existed. `nulledNodes` round-trips through the `.slp` (finite xy +
+  `visible: false`), so the hidden state survives a save. **PREDICTED
+  instances get an empty slot**: their points are model output and nothing is
+  invented for them — `_convertToUserInstance` fills them when they become
+  editable.
+- **The 2D, `nulledNodes` and `InstanceGroup.points3d` move TOGETHER**, all
+  three being on one node index space. A removal splices the 3D rather than
+  nulling it: discarding the array cost the project every triangulated
+  keypoint it had because one node was deleted. Both paths drop the group's
+  cached `reprojections` / `reprojectedInstances`, which are per-node arrays
+  at the old count, and mark it dirty. The re-shaped array goes back through
+  `pooledPoints3d` and the emptied `reprojectedInstances` back to the shared
+  `NO_REPROJECTED_INSTANCES`: this walks every group in the project, so doing
+  neither would un-pool the project's whole 3D as the price of one edit.
+
+Every edit also calls `markDirty()` — they did not before, so a skeleton edit
+used to leave the project looking saved.
+
+Coverage: `tests/test-skeleton-edit-impact.mjs` (the tally, with negative
+controls for the fully-resident loader, the differently-shaped skeleton and the
+no-mutation guarantee), the `Session` block of `tests/test-pose-data.js` (the
+hidden placement, the predicted carve-out, the 3D splice, the `nulledNodes`
+re-seat) and `tests/e2e/skeleton-edit-warning.mjs` (all five edits in the real
+app over a two-session project, both cancels leaving it byte-identical).
+
 ## UI Conventions
 **No scroll-within-scroll.** A panel or modal gets ONE scroller. Do not give an
 inner widget its own `max-height` + `overflow-y: auto` inside something that
@@ -1952,13 +2127,16 @@ afterwards):
   way. The guard rescued every failure and repaired every run, and no frame
   differed from the warm load.
 - The `.slp` reads go through h5wasm's WORKERFS, where the zeros came as
-  16 KiB pages; that path has its own `cold-read` patch in lib/h5wasm.
+  16 KiB pages; that path has its own `cold-read` patch in lib/h5wasm. There,
+  a run of zeros was also seen to end part-way into a 4 KiB block, so that
+  patch re-reads the block on each side of a run too; `zeroRuns` here does not
+  yet.
 
 So **read a user's File's bytes through `loading/cold-read-guard.js`**, never
 `file.arrayBuffer()` / `slice().arrayBuffer()` directly. `readBlobRange` retries
 a read that throws (200 ms, 1 s, 3 s) and re-reads every all-zero 4 KiB block,
-using the re-read only when it is non-zero — h5wasm's `lucidColdReadGuard` rule,
-plus the retry. Three rules:
+using the re-read only when it is non-zero — the first version of h5wasm's
+`lucidColdReadGuard` rule (without its neighbouring blocks), plus the retry. Three rules:
 - **The frame-accurate decoder reads through `fromRangeSource`, not `fromBlob`.**
   `_initMediabunny` hands sleap-io.js's `MediaBunnyVideoBackend.fromRangeSource`
   a `guardedRangeSource(file)`; mediabunny's own `BlobSource` cannot be guarded
@@ -2019,7 +2197,7 @@ There are **three** test populations, each with its own runner. Run all three �
 they cover disjoint code, and a green run of one says nothing about the others.
 
 ```bash
-node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1653 assertions
+node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1700 assertions
 node tests/run-mjs-tests.mjs          # tests/test-*.mjs  (native-ESM Node tests)
 node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file per behavior)
 ```
