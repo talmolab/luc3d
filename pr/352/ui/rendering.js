@@ -6,35 +6,35 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=faf76ab3ae52';
-import { points3dNodeCount, isPoints3dFromFile } from '../pose/pose-data.js?v=faf76ab3ae52';
+import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=f36ecac769a4';
+import { points3dNodeCount, isPoints3dFromFile } from '../pose/pose-data.js?v=f36ecac769a4';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
     triangulateAndReproject, reprojectStoredPoints3d, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=faf76ab3ae52';
-import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=faf76ab3ae52';
-import { drawFrameOverlays } from './overlays.js?v=faf76ab3ae52';
-import { syncViewLegends } from './view-legend.js?v=faf76ab3ae52';
-import { isCameraTracked, getTrackingThreshold } from './settings.js?v=faf76ab3ae52';
-import { poseCheckOf } from '../pose/pose-check-session.js?v=faf76ab3ae52';
+} from '../pose/triangulation.js?v=f36ecac769a4';
+import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=f36ecac769a4';
+import { drawFrameOverlays } from './overlays.js?v=f36ecac769a4';
+import { syncViewLegends } from './view-legend.js?v=f36ecac769a4';
+import { isCameraTracked, getTrackingThreshold } from './settings.js?v=f36ecac769a4';
+import { poseCheckOf } from '../pose/pose-check-session.js?v=f36ecac769a4';
 
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=faf76ab3ae52';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=f36ecac769a4';
 // The toolbar's Animals field shows the ACTIVE session's count. Circular
 // (it reaches pose/tracker.js, which imports this module) — safe for the same
 // reason: the call site is inside drawAllOverlays' body.
-import { syncAnimalCountField } from './animal-count-field.js?v=faf76ab3ae52';
-import { syncNodeTooltipFrame } from './node-tooltip.js?v=faf76ab3ae52';
+import { syncAnimalCountField } from './animal-count-field.js?v=f36ecac769a4';
+import { syncNodeTooltipFrame } from './node-tooltip.js?v=f36ecac769a4';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=faf76ab3ae52';
-import { updateFrameInfo } from './info-panel.js?v=faf76ab3ae52';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=f36ecac769a4';
+import { updateFrameInfo } from './info-panel.js?v=f36ecac769a4';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
-} from './frame-counters.js?v=faf76ab3ae52';
+} from './frame-counters.js?v=f36ecac769a4';
 
 // A view's verdict function for drawFrameOverlays' pose-check marks.
 function poseCheckOfView(session, viewName) {
