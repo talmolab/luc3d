@@ -3,8 +3,8 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 115 modules are grouped into four directories:
-- `pose/` — data model, cross-view tracking (Track All's tracker on one worker: `tracker-pool.js` + `tracker-worker.js`), DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), the lazy project's playback eviction (`lazy-residency.js`), app initialization (23 files)
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 116 modules are grouped into four directories:
+- `pose/` — data model, cross-view tracking (Track All's tracker on one worker: `tracker-pool.js` + `tracker-worker.js`), DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), the lazy project's playback eviction (`lazy-residency.js`), re-ordering a session's keypoints into another skeleton's node order by name (`session-node-order.js`), app initialization (24 files)
 - `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, the node tooltip on hover (`node-tooltip.js` — a node's name and a prediction's per-node score, as SLEAP shows them), plane visibility, browser-specific hints, the macOS tip shown before a folder picker (`folder-confirm-tip.js` — the browser's folder prompt defaults to Cancel, and Tab reaches Upload only with Keyboard navigation on, which no page can read), the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip and the time ruler under it (`seekbar-ticks.js` — major/minor tick steps chosen from the video's length and the bar's width), the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames) and their shade (`TRAIL_SHADES` in `ui/overlays.js`: Very dark … Very light, default Dark, remembered in `localStorage`), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it) and its Identities section (`identity-gallery.js` — five sample images and a path map per identity), the Track group's Animals field (`animal-count-field.js`), the dialog Track All / Track Frame open on a session's first run (`track-setup-modal.js` — the animal count, with the node weights to review and, on Track All, the image ID-switch check and its options; the weight grid and the image-check section are in the Track Frame Range dialog too), the CPU / GPU load lines and last-minute graph shown by the image check's dialog and by the loading overlay during Triangulate All and Track All (`load-graph.js`), settings, the release shown beside the menu bar's Settings button (`version-label.js`) — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (69 files)
 - `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), the `.slp` skeleton reader + per-camera node-order remap (`slp-skeleton.js`), Blob reads that survive a cloud file still downloading (`cold-read-guard.js`), web workers (13 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
@@ -840,6 +840,53 @@ post-Track-All playback degrading run over run. Three more rules:
   with `hydrateFrameMembers2d` / `releaseFrameMembers2d`. The image ID-switch
   check was the one such reader (`frameCropGeometry`, `ui/image-embedder.js`);
   reading the members directly found no keypoints on every such frame.
+
+## One skeleton per project: replacing it re-orders by NAME
+
+Every keypoint is stored by COLUMN (an Instance's `_xy`, a group's
+`points3d`, a reprojection, a lazy store's point rows) and the ONE project
+skeleton (`setProjectSkeleton`) is what names column `k`. So replacing that
+skeleton with one from outside the project must never just swap names: a
+session stored in another node order comes out silently mis-named — geometry by
+column is fine, so tracking and triangulation look right, and everything BY
+NAME (labels, Tracking Wizard node weights, the size/image ID-switch checks) is
+wrong. Four rules:
+
+- **A skeleton from OUTSIDE goes through `adoptProjectSkeleton`**
+  (`ui/info-panel.js`, over `pose/session-node-order.js`): Load Skeleton, the
+  multi-session "Import skeleton for all sessions" prompt, a parent-folder or
+  session-folder `skeleton.json`, the single-`.slp` folder load's. It compares
+  each session's OWN `session.skeleton.nodes` with the new one: the same names
+  in another order are re-ordered (every Instance — per-node scores included —
+  `points3d`, reprojection, `triangulationResults` entry, and a lazy session's
+  store, whose `pred_points.score` moves with its rows); different names
+  are applied by column, as before, and NAMED in the status line. The skeleton
+  editor's rename / add / remove keep calling `setProjectSkeleton` directly —
+  they change what a column is called, not which column holds which node.
+- **The multi-session loader keeps the FIRST session's skeleton** (first folder
+  by name, the one displayed) and loads every later session INTO it
+  (`handleLoadSessionFolderPerCamera`'s `opts.projectSkeleton`) — re-read
+  after every session, because a session folder's own `skeleton.json` replaces
+  it mid-load. It used to let
+  each session replace the project skeleton, so the LAST session's first camera
+  named every session's columns (eager), or each session kept its own (lazy).
+- **A re-ordered lazy store must stay re-ordered across a re-open.**
+  `SioLazyLoader.targetNodeOrder` records the order, and the multi-session
+  save's pass 2 sets it on the loader it re-opens from the source files
+  (`handle.pending[].nodeOrder`). A NEW path that re-opens a session's files
+  needs the same, or it appends the file's order under the project's names.
+- **Re-order in place, ONCE per buffer.** The lazy hydration path shares one
+  `_xy` between a group member and its resident instance, and a result entry
+  shares its group's arrays; `Instance.permuteNodes` and
+  `permuteSessionNodes` thread one `seen` set through the whole walk. A buffer
+  moved twice is a wrong answer that still looks plausible.
+
+Coverage: `tests/test-session-node-order.mjs` (unit, with a negative control
+that renaming without re-ordering fails its checker) and
+`tests/e2e/multi-session-skeleton-order.mjs` (every real path, eager and lazy,
+and the save's re-open with a negative control; 26 checks fail on the pre-fix
+build). The per-camera half — cameras of ONE session — is
+`loading/slp-skeleton.js`'s `nodeOrderRemap`, which both halves share.
 
 ## A prediction's per-node scores: kept, shown, and saved
 
