@@ -14516,6 +14516,24 @@ files**, deliberately: `parseAnalysisH5` reads `point_scores` and drops them, an
 the NOTE there says what showing them would take (the lazy `.h5` path being the
 hard part).
 
+**A File that is still downloading can read back with zeros.** In a folder
+synced by Google Drive for desktop (macOS File Provider), a slice Chrome reads
+from a file whose download is still in progress can come back with one or two
+16 KiB pages of ZEROS and every other byte right. Nothing fails, so HDF5 took
+the zeros as data: a cold parse put 630 `pred_points` rows per hole at (0, 0)
+that a warm parse did not, and Track All's identities differed from the first
+such frame on (21 of the 22 proofread SLAP sessions, 2026-10-19). WORKERFS's
+read is guarded in the vendored h5wasm itself (`lucidColdReadGuard`, the
+`LUCID local patch (cold-read)` in both builds — see `lib/h5wasm/PROVENANCE.txt`):
+any all-zero part of a read is read again, with the 4 KiB block on each side
+of it (a run of zeros can end part-way into a block), and only the bytes that
+came back zero are filled in, which brings back the real bytes. That covers this worker's eager parse and lazy analysis `.h5`, `frame-worker.js`
+and sleap-io.js's streaming worker alike. A recovery logs `[h5wasm WORKERFS]
+bytes … were read again` to the console. `tests/test-workerfs-cold-read.mjs`
+runs this worker in Node over a File with injected holes, including one that
+ends part-way into a block (with the unguarded read, and the all-zero-blocks-only
+rule, as negative controls).
+
 **Imports from project modules.** None.
 
 **Imported by.** Spawned via
