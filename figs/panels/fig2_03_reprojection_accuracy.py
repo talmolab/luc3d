@@ -96,6 +96,9 @@ def _curve(ps, key) -> pd.DataFrame:
 
 
 def main_cdf():
+    # RETIRED 2026-10-20 (LUC3D-JS plan): fig2.json is fig2_measure.py's NumPy DLT, not
+    # LUC3D. Never placed (make_figures does not pass --cdf); refuse rather than plot it.
+    sys.exit("main_cdf read fig2.json (NumPy DLT, not LUC3D) and is retired")
     use()
     ps = load("fig2.json")["per_session"]
     obs, obs_agg = _curve(ps, "held_out_vs_observation")

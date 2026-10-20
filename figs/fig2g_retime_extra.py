@@ -24,6 +24,12 @@ for _ in range(5):
     t0 = time.perf_counter()
     for ci, cam in enumerate(cg.cameras): cam.undistort_points(np.copy(p200[ci]))
     und.append(1e6 * (time.perf_counter() - t0) / N_UND)
+    # J16b (2026-10-20): FIG2G_PASSES-1 more back-to-back passes (one pass is ~0.08 s), every
+    # one recorded, so the median is not one short window's luck. Unset = unchanged.
+    for _p in range(int(os.environ.get('FIG2G_PASSES', 1)) - 1):
+        t0 = time.perf_counter()
+        for ci, cam in enumerate(cg.cameras): cam.undistort_points(np.copy(p200[ci]))
+        und.append(1e6 * (time.perf_counter() - t0) / N_UND)
     if not SAME_N:
         t0 = time.perf_counter(); cg.triangulate_ransac(p5, progress=False); ran.append(1e6 * (time.perf_counter() - t0) / 5_000)
 #: FIG2G_FRAMES set (2026-10-15, C4): RANSAC on the SAME keypoints as every other bar, on the
@@ -40,5 +46,13 @@ d = json.loads((OUT / f"fig2g_retime_all{_SFX}.json").read_text())
 d["n_undistort"] = N_UND; d["n_ransac"] = N_UND if SAME_N else 5_000; d["ransac_scope"] = "pre-undistorted, undistort=False, same keypoints as linear" if SAME_N else "5,000 keypoints, undistortion inside"; d["anipose_undistort_runs"] = und; d["anipose_ransac_runs"] = ran
 d["best_us_per_keypoint"]["anipose_undistort"] = min(und); d["best_us_per_keypoint"]["anipose_ransac"] = min(ran)
 d["ransac_over_linear"] = min(ran) / d["best_us_per_keypoint"]["anipose_linear"]
+if "median_us_per_keypoint" in d:   # J16b: medians alongside, and the ratio from medians
+    d["median_us_per_keypoint"]["anipose_undistort"] = float(np.median(und))
+    d["median_us_per_keypoint"]["anipose_ransac"] = float(np.median(ran))
+    for k, v in (("anipose_undistort", und), ("anipose_ransac", ran)):
+        d["spread_us_per_keypoint"][k] = {"p25": float(np.percentile(v, 25)), "p75": float(np.percentile(v, 75)),
+                                         "min": min(v), "max": max(v), "n": len(v)}
+    if d.get("passes", 1) > 1:
+        d["ransac_over_linear"] = float(np.median(ran)) / d["median_us_per_keypoint"]["anipose_linear"]
 (OUT / f"fig2g_retime_all{_SFX}.json").write_text(json.dumps(d, indent=1))
 print("undistort", [round(x, 3) for x in und], "ransac", [round(x) for x in ran], "ratio", round(d["ransac_over_linear"], 1))

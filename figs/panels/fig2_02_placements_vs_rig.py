@@ -90,17 +90,18 @@ TAU_STRICT = 5.0
 
 
 def build():
-    ps = load("fig2.json")["per_session"]
+    # LUC3D-JS plan J2 (2026-10-20): p comes from LUC3D v1.0.5's own two-camera DLT
+    # (fig2_solvers_by_views.mjs `heldout_acc_by_k`), not fig2_measure.py's NumPy DLT.
+    # Same quantity: solve from each camera pair, reproject into every held-out camera,
+    # score against that camera's own detection; accN is the share within N px.
+    j = load("fig4_by_views.json")
+    ps = j["per_session"]
+    if not str(j.get("lucid_commit", "")).startswith("2dc001fe"):
+        sys.exit("fig4_by_views.json is not stamped LUC3D v1.0.5; refusing to plot 2B")
     # Asserted, not assumed: `ncam` is the rig size p was measured at, and the panel
-    # marks exactly that C. If a future run mixed rig sizes, the right fix would be
-    # several markers with several p values, not one marker quietly standing for a
-    # mixture -- so the mixture has to fail loudly here rather than be averaged.
-    cams = {s["cameras"] for s in ps}
-    if len(cams) != 1:
-        sys.exit(f"fig2.json mixes rig sizes {sorted(cams)}; p is a single number "
-                 "and this panel would mislabel which C it belongs to")
-    ncam = cams.pop()
-    acc = {t: median([s["held_out_vs_observation"][f"acc{int(t)}"] for s in ps])
+    # marks exactly that C.
+    ncam = int(j["cameras"])
+    acc = {t: median([s["heldout_acc_by_k"]["2"]["dlt"][f"acc{int(t)}"] for s in ps])
            for t in (TAU_STRICT, TAU_MAIN)}
     p = {t: 1 - a for t, a in acc.items()}
 

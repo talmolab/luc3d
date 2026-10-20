@@ -49,10 +49,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, "/root/vast/eric/luc3d-bench/scripts/bartul")
 
-import cv2                                                        # noqa: E402
 from build_gt_reproj import (SERIALS, load_calibration,            # noqa: E402
-                             load_sleap_2d, ransac_align, undistort)
-from fig2_measure import triangulate_batch                         # noqa: E402
+                             load_sleap_2d, ransac_align)
+# LUC3D-JS plan J4 (2026-10-20): the alignment triangulation and the five 2D projections are
+# LUC3D v1.0.5's own JavaScript (lucid_geom: Camera.undistortPoint + triangulatePointDLT,
+# reprojectPoint + distortPoint), not fig2_measure.py's NumPy DLT and cv2.
+import lucid_geom                                                  # noqa: E402
+from lucid_v105 import lucid_pose                                  # noqa: E402
 
 BMIMICA = "/root/vast/eric/BMimica"
 NODES = ["Nose", "Ear_R", "Ear_L", "TTI", "TailTip", "Head", "Trunk", "Tail_0",
@@ -109,16 +112,21 @@ def main():
     raw = {c: load_sleap_2d(glob.glob(f"{sd}/{c}/*.analysis.h5")[0])[:, :2]
            for c in SERIALS}
     C = len(SERIALS)
-    Ps = np.stack([cams_all[c]["P"] for c in SERIALS], 0)
+    _, LUCID = lucid_pose()
+    # The arguments of LUC3D's Camera constructor, as fig2_solvers_export.py writes them.
+    cameras = [dict(name=c, matrix=[[float(v) for v in row] for row in cams_all[c]["K"]],
+                    distortions=[float(v) for v in np.asarray(cams_all[c]["dist"]).ravel()[:5]],
+                    rvec=[float(v) for v in np.asarray(cams_all[c]["rvec"]).ravel()],
+                    tvec=[float(v) for v in np.asarray(cams_all[c]["t"]).ravel()],
+                    size=[1280, 1024]) for c in SERIALS]
 
-    # --- P-frame -> calibration frame, the Fig 2 / Fig 4 recipe ---------------
+    # --- P-frame -> calibration frame, the Fig 2 recipe, triangulated by LUC3D ---
     Fm = min(F, min(v.shape[0] for v in raw.values()))
     samp = np.arange(0, Fm, max(1, Fm // 4000))
-    und = np.stack([undistort(raw[c][samp], cams_all[c]["K"], cams_all[c]["dist"])
-                    for c in SERIALS], 0)                     # (C, S, T, N, 2)
     S = len(samp)
-    flat = und.reshape(C, -1, 2)
-    Xc = triangulate_batch(flat, Ps, ~np.isnan(flat).any(-1)).reshape(S, A, -1, 3)
+    raw_s = np.stack([raw[c][samp] for c in SERIALS], 0)       # (C, S, T, N, 2) raw px
+    Xc, _ = lucid_geom.triangulate(cameras, raw_s.reshape(C, -1, 2))
+    Xc = Xc.reshape(S, A, -1, 3)
     both = (~np.isnan(Xc).any(-1)) & (~np.isnan(Xp[samp]).any(-1))
     # ransac_align returns (s, R, t), RESIDUALS, INLIER MASK -- in that order. An
     # earlier version took the second return for the inlier mask and reported a
@@ -171,7 +179,11 @@ def main():
     def to_p(X_cal):
         return ((R_.T @ (np.atleast_2d(X_cal) - t_).T).T / s_) * 1000.0
 
-    out = {"session": sess, "frame": k, "fps": fps, "n_animals": int(A),
+    # The five views of the pose: LUC3D's reprojectPoint + distortPoint, (C, A*N, 2).
+    proj_all, _ = lucid_geom.project(cameras, pose_cal.reshape(-1, 3).astype(np.float64))
+
+    out = {"generated_by": "figs/fig5_views.py", "driver": "figs/lucid_geom.mjs", **LUCID,
+           "session": sess, "frame": k, "fps": fps, "n_animals": int(A),
            "nodes": NODES, "edges": EDGES,
            "body_length_mm": Lm, "mm_per_unit": mm_per_unit,
            "alignment_inlier_frac": inlier_frac,
@@ -183,13 +195,11 @@ def main():
 
     for ci, c in enumerate(SERIALS):
         cam = cams_all[c]
-        R, t, K, dist = cam["R"], cam["t"], cam["K"], cam["dist"]
+        R, t = cam["R"], cam["t"]
         centre_cal = (-R.T @ t)                                 # calibration units
         centre = to_p(centre_cal)[0]                            # P-frame mm
         # rows of R are the camera's right / down / forward axes in world coords
-        proj, _ = cv2.projectPoints(pose_cal.reshape(-1, 3).astype(np.float64),
-                                    cam["rvec"], t, K, dist)
-        proj = proj.reshape(A, -1, 2)
+        proj = proj_all[ci].reshape(A, -1, 2)
         out["cameras"].append({
             "name": c, "index": ci,
             "centre_mm": centre.tolist(),               # P-frame, mm

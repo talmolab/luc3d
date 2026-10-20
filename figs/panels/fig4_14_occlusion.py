@@ -48,7 +48,11 @@ PERNODE = {"": "fig4_recovery_pernode.json",
 
 def build():
     # default = proofread labels, tail excluded (the former Fig 4c, base since 2026-10-09)
-    v = (os.environ.get("FIG_VARIANT") if os.environ.get("FIG_VARIANT") not in (None, "", "md56") else "proofread_notail")  # md56 (2026-10-14) is not a detection set
+    # Only a variant that NAMES a detection pool picks one; any other variant (md56, the
+    # 2026-10-20 single-variant final build x7, ...) is a deposit set, not a detection
+    # set, and gets the default, exactly as md56 always did.
+    fv = os.environ.get("FIG_VARIANT") or ""
+    v = fv if fv.replace("_notail", "") in PERNODE and fv else "proofread_notail"
     base = v.replace("_notail", "")
     if base not in PERNODE:
         sys.exit(f"fig4c occlusion: no per-node deposit for FIG_VARIANT={v!r} "

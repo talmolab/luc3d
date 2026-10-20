@@ -29,7 +29,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const SFX = process.env.FIG2_SUFFIX ? `_${process.env.FIG2_SUFFIX}` : '';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const POSE_DIR = process.env.POSE_DIR ? path.resolve(process.env.POSE_DIR) : path.join(HERE, '..', 'pose');  // POSE_DIR honoured since 2026-10-14 (md56)
+import { lucidPose } from './lucid_v105.mjs';
+// LUC3D-JS plan R1/R4 (2026-10-20): POSE_DIR is required and must be the clean v1.0.5
+// checkout. The old default (../lucid-bundle-adj or the working tree) is gone.
+const { poseDir: POSE_DIR, stamp: LUCID } = lucidPose();
 const HOOKS = path.join(HERE, 'fig2_solvers_hooks.mjs');   // was fig3-bench/probe_hooks.mjs, which lacks origin/main's UI exports (md56, 2026-10-14)
 if (fs.existsSync(HOOKS)) register(pathToFileURL(HOOKS).href, import.meta.url);
 
@@ -174,8 +177,13 @@ for (const name in strata) {
 }
 if (!ok) console.log('GATE FAILED -- deposited with passed:false; do NOT plot');
 
-fs.writeFileSync(path.join(HERE, 'out', `fig4_robust_sessions${SFX}.json`), JSON.stringify({
-    generated_by: 'figs/fig2_solvers_robust_sessions.mjs',
+// OUT_JSON (2026-10-20): write elsewhere, so a stamped rerun never overwrites the deposit a
+// figure reads. Unset = unchanged.
+const OUT_PATH = process.env.OUT_JSON ? path.resolve(process.env.OUT_JSON)
+    : path.join(HERE, 'out', `fig4_robust_sessions${SFX}.json`);
+fs.writeFileSync(OUT_PATH, JSON.stringify({
+    generated_by: 'figs/fig2_solvers_robust_sessions.mjs', ...LUCID,
+    driver: 'figs/fig2_solvers_robust_sessions.mjs',
     claim: 'Per-session mean reprojection error in the kept views: the all-view DLT ' +
            'solution vs the same solve with the worst-fitting view dropped. Session ' +
            'capture of the same computation fig4.json pools into disagreement strata. ' +
@@ -184,4 +192,4 @@ fs.writeFileSync(path.join(HERE, 'out', `fig4_robust_sessions${SFX}.json`), JSON
     gate: { passed: ok, ...gate },
     per_session: perSession,
 }, null, 1));
-console.log(`wrote out/fig4_robust_sessions.json (gate ${ok ? 'PASSED' : 'FAILED'})`);
+console.log(`wrote ${OUT_PATH} (gate ${ok ? 'PASSED' : 'FAILED'})`);

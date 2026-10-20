@@ -398,7 +398,9 @@ TAG_FOOTERS = {(3, "nt"): None, (6, "nt"): None,
                #: b again (2026-10-15 evening): the corrected v1.0.5 set (run_BUILD_B.sh), all of 2-6.
                (4, "b"): None, (5, "b"): None,
                #: c (2026-10-15): the complete corrected v1.0.5 set (run_FINALBUILD.sh), no footer.
-               (2, "c"): None, (3, "c"): None, (4, "c"): None, (5, "c"): None, (6, "c"): None}
+               (2, "c"): None, (3, "c"): None, (4, "c"): None, (5, "c"): None, (6, "c"): None,
+               #: x7 (2026-10-20): the single-input final set (LUC3D JS plan), published, no footer.
+               (2, "x7"): None, (3, "x7"): None, (4, "x7"): None, (5, "x7"): None, (6, "x7"): None, (7, "x7"): None}
 
 
 #: Deposit sets the MAIN figures are built from (2026-10-15, b series promoted). A base build

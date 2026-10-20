@@ -7,7 +7,8 @@ real lens distortion against a real reference 3D -- not on synthetic points, whe
 the distortion model used to synthesise is the same one being solved and the
 comparison is partly circular.
 
-Reuses figs/fig2_measure.py's pipeline (calibration load, P-frame -> calibration
+Pipeline (2026-10-20: every geometric step is LUC3D v1.0.5's JavaScript via
+lucid_geom.mjs, no NumPy DLT or cv2): calibration load, P-frame -> calibration
 alignment, per-view identity matching against the proofread 3D) and writes, for one
 BMimica session:
 
@@ -40,9 +41,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, "/root/vast/eric/luc3d-bench/scripts/bartul")
 
-from build_gt_reproj import (load_calibration, load_sleap_2d, undistort,  # noqa: E402
+from build_gt_reproj import (load_calibration, load_sleap_2d,  # noqa: E402
                              ransac_align, SERIALS)
-from fig2_measure import (triangulate_batch, project, ROOT, MATCH_MAX_PX)  # noqa: E402
+# LUC3D-JS plan J3 (2026-10-20): every geometric step here (undistort, triangulate, reproject)
+# is LUC3D v1.0.5's own JavaScript via lucid_geom, not fig2_measure.py's NumPy DLT + cv2.
+import lucid_geom  # noqa: E402
+from lucid_v105 import lucid_pose  # noqa: E402
+_POSE, LUCID = lucid_pose()
+ROOT = os.environ.get("BMIMICA_ROOT", "/root/vast/eric/BMimica")
+MATCH_MAX_PX = 60.0     # a raw track further than this from every GT animal is unmatched
 
 #: FIG2_SUFFIX=<v> (2026-10-14, md56 rerun) reads/writes out/fig4*_<v>.* instead of the base
 #: deposits, so a variant run never overwrites what the base figure reads.
@@ -118,7 +125,8 @@ def main():
         keypoints=int(total), n_cameras=int(OBS.shape[1]),
         cameras=CAMERAS_OUT, calibrations=CALIBRATIONS, blocks=blocks,
         stride=int(args.stride), sessions=[b["session"] for b in blocks],
-        skipped=SKIPPED,
+        skipped=SKIPPED, generated_by="figs/fig2_solvers_export.py",
+        driver="figs/lucid_geom.mjs", **LUCID,
         note=("obs are RAW distorted detections matched to the proofread animal in "
               "every view; gt3d is the proofread 3D in that session's calibration "
               "frame. Layout: float64 obs (K,C,2) then float64 gt3d (K,3), C order. "
@@ -140,6 +148,16 @@ CALIBRATIONS = []
 SKIPPED = []
 
 
+def camera_block(cams_all):
+    """The arguments of LUC3D's `Camera` constructor, one per camera."""
+    return [dict(name=c,
+                 matrix=[[float(v) for v in row] for row in cams_all[c]["K"]],
+                 distortions=[float(v) for v in np.asarray(cams_all[c]["dist"]).ravel()[:5]],
+                 rvec=[float(v) for v in np.asarray(cams_all[c]["rvec"]).ravel()],
+                 tvec=[float(v) for v in np.asarray(cams_all[c]["t"]).ravel()],
+                 size=[1280, 1024]) for c in SERIALS]
+
+
 def export_session(sid, stride, max_keypoints):
     global CAMERAS_OUT
     sd = f"{ROOT}/{sid}"
@@ -151,16 +169,15 @@ def export_session(sid, stride, max_keypoints):
            for c in SERIALS}
     F = min(Xp.shape[0], min(v.shape[0] for v in raw.values()))
     A, N, C = Xp.shape[1], Xp.shape[2], len(SERIALS)
-    Ps = np.stack([cams_all[c]["P"] for c in SERIALS], 0)
 
-    # P-frame -> calibration frame, same recipe as fig2_measure
+    cameras = camera_block(cams_all)
+    # P-frame -> calibration frame: LUC3D v1.0.5 undistorts and triangulates a frame
+    # sample of the raw 2D (lucid_geom, J3), and the proofread 3D is fitted to it.
     samp = np.arange(0, F, max(1, F // 4000))
-    und_s = np.stack([undistort(raw[c][samp], cams_all[c]["K"], cams_all[c]["dist"])
-                      for c in SERIALS], 0)
     S = len(samp)
-    Xc = triangulate_batch(und_s.reshape(C, -1, 2),
-                          Ps, ~np.isnan(und_s.reshape(C, -1, 2)).any(-1)
-                          ).reshape(S, A, N, 3)
+    raw_s = np.stack([raw[c][samp] for c in SERIALS], 0).reshape(C, -1, 2)
+    Xc, _ = lucid_geom.triangulate(cameras, raw_s)
+    Xc = Xc.reshape(S, A, N, 3)
     both = (~np.isnan(Xc).any(-1)) & (~np.isnan(Xp[samp]).any(-1))
     (s, R, t), _, _ = ransac_align(Xp[samp][both], Xc[both], thresh=8.0)
     mm_per_unit = (1.0 / s) * 1000.0
@@ -171,7 +188,7 @@ def export_session(sid, stride, max_keypoints):
     good = ~np.isnan(Xg).any(1)
     Xcal = np.full_like(Xg, np.nan)
     Xcal[good] = (s * (R @ Xg[good].T).T + t)
-    gt2d = np.stack([project(Xcal, cams_all[c]) for c in SERIALS], 0)
+    gt2d, _ = lucid_geom.project(cameras, Xcal)      # LUC3D reprojectPoint + distortPoint
 
     # per-view identity matching against the proofread reprojection
     M = Xcal.shape[0]
@@ -211,17 +228,6 @@ def export_session(sid, stride, max_keypoints):
     if len(idx) < 200:
         return None
 
-    cameras = []
-    for c in SERIALS:
-        cc = cams_all[c]
-        cameras.append(dict(
-            name=c,
-            matrix=[[float(v) for v in row] for row in cc["K"]],
-            distortions=[float(v) for v in np.asarray(cc["dist"]).ravel()[:5]],
-            rvec=[float(v) for v in np.asarray(cc["rvec"]).ravel()],
-            tvec=[float(v) for v in np.asarray(cc["t"]).ravel()],
-            size=[1280, 1024],
-        ))
     # Every BMimica session shares one rig, so the camera block is written once. If a
     # session ever disagreed the reader would silently use the wrong intrinsics, so
     # assert instead of assuming.

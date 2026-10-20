@@ -68,16 +68,12 @@ const SFX = process.env.FIG2_SUFFIX ? `_${process.env.FIG2_SUFFIX}` : '';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..');
-const POSE_DIR = process.env.POSE_DIR
-    ? path.resolve(process.env.POSE_DIR)
-    : path.resolve(REPO, '..', 'lucid-bundle-adj', 'pose');
+import { lucidPose } from './lucid_v105.mjs';
+// LUC3D-JS plan R1/R4 (2026-10-20): POSE_DIR is required and must be the clean v1.0.5
+// checkout. The old default (../lucid-bundle-adj) is gone.
+const { poseDir: POSE_DIR, stamp: LUCID } = lucidPose();
 // Our own hooks, not the branch's: see figs/fig2_solvers_hooks.mjs for why.
 const HOOKS = path.join(HERE, 'fig2_solvers_hooks.mjs');
-
-if (!fs.existsSync(POSE_DIR)) {
-    throw new Error(`no pose dir at ${POSE_DIR} — set POSE_DIR or create the ` +
-                    `eric/bundle-adj worktree`);
-}
 register(pathToFileURL(HOOKS).href, import.meta.url);
 
 const tri = await import(pathToFileURL(path.join(POSE_DIR, 'triangulation.js')).href);
@@ -451,7 +447,7 @@ const out = {
     n_calibrations: calSets.length,
     keypoints: compared, cameras: C, stride: data.stride || null,
     limit: process.env.LIMIT ? NK : null,
-    poseDir: POSE_DIR,
+    poseDir: POSE_DIR, ...LUCID, driver: 'figs/fig2_solvers_measure.mjs',
     methods: {},
     // The headline #113 result: with the fix, the reported error is never worse
     // than the DLT it started from; with the pre-fix option set it often is.

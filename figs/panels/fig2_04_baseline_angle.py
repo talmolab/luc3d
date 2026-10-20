@@ -143,10 +143,16 @@ def rig_geometry():
 
 
 def build():
-    ps = load("fig2.json")["per_session"]
+    # LUC3D-JS plan J2 (2026-10-20): per-pair 3D error from LUC3D v1.0.5's own DLT
+    # (fig2_solvers_by_views.mjs `pairs_dlt_err3d_mm`; baseline angle from LUC3D's Camera
+    # centres), not fig2_measure.py's NumPy DLT.
+    j = load("fig4_by_views.json")
+    ps = j["per_session"]
+    if not str(j.get("lucid_commit", "")).startswith("2dc001fe"):
+        sys.exit("fig4_by_views.json is not stamped LUC3D v1.0.5; refusing to plot 2D")
     rows = {}
     for s in ps:
-        for k, v in (s.get("err3d_mm_by_pair") or {}).items():
+        for k, v in (s.get("pairs_dlt_err3d_mm") or {}).items():
             r = rows.setdefault(k, {"baseline": [], "p50": [], "n": 0})
             r["baseline"].append(v["baseline_deg"])
             r["p50"].append(v["p50"])
@@ -161,7 +167,7 @@ def build():
         for k, r in rows.items()
     ]).sort_values("baseline_deg").reset_index(drop=True)
 
-    floor = median([s["err3d_mm_by_anchor_count"]["5"]["p50"] for s in ps])
+    floor = median([s["by_k"]["5"]["dlt"]["p50"] for s in ps])
     k = median([e * math.sin(math.radians(b))
                 for b, e in zip(df.baseline_deg, df.err3d_mm)])
     df["law_mm"] = k / np.sin(np.radians(df.baseline_deg))

@@ -111,7 +111,37 @@ def build(tag, base_tag):
                            f"fig7_fair_baselines_{tag}.json over {len(sess)} sessions; "
                            f"SLAP-2M sections copied from fig7_variant_best_{base_tag}.json")
     out["bmimica_sessions"] = sess
+    # 2026-10-20 (LUC3D-JS plan J11): provenance comes from the source deposit. The base
+    # file's `luc3d_is_experimental` named the fig8-bench xv_experimental.js fork, which
+    # is not where these cells come from.
+    out.update(provenance_fields(f8, tag, fresh["config"], ship["config"]))
+    out.pop("luc3d_is_experimental", None)
     return out
+
+
+#: The base file's SLAP-2M sections and their notes, copied unchanged. Placed Supp Fig 6
+#: B-D read only `slap2m_fair` (panels/fig6_variant_common.py FAIR_KEY).
+LEGACY_NOTE = ("`slap2m`, `slap2m_fresh_anchor`, `slap2m_pre131_reference`, "
+               "`slap2m_arm_comparison`, `provenance` and `slap2m_luc3d_is_substituted` are "
+               "copied unchanged from the base file. They describe LEGACY SLAP-2M arms "
+               "(luc3d-bench runs and the fig8-bench xv_experimental.js fork) that no placed "
+               "panel reads. Placed Supp Fig 6 B-D read `slap2m_fair` only; its `source` "
+               "names its inputs.")
+
+
+def provenance_fields(f8, tag, fresh_cell, ship_cell):
+    if f8.get("experimental_tracker"):
+        raise SystemExit(f"fig8_methods_50_{tag}.json names an experimental tracker "
+                         f"({f8['experimental_tracker']}) -- not LUC3D")
+    return {
+        "lucid_root": f8.get("lucid_root"), "lucid_commit": f8.get("lucid_commit"),
+        "driver": f8.get("driver"),
+        "luc3d_source": (f"bmimica_50_sessions `LUC3D` = fig8_methods_50_{tag}.json cell "
+                         f"{fresh_cell}; `LUC3D (shipped)` = cell {ship_cell}. LUC3D "
+                         f"{f8.get('lucid_commit')} at {f8.get('lucid_root')}, driven by "
+                         f"{f8.get('driver')}."),
+        "legacy_blocks_note": LEGACY_NOTE,
+    }
 
 
 def check(tag):

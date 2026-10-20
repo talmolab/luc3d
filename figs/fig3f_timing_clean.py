@@ -49,8 +49,12 @@ sys.path.insert(0, str(HERE))
 import fig3_headtohead as hh  # noqa: E402
 
 OUT = HERE / "out"
+#: T_TAG=<tag> (2026-10-20, J17): a fresh sitting written under its own names
+#: (tmp/timing_clean<_variant><tag>/, fig3_*_clean<_variant><tag>*.json); nothing earlier
+#: is overwritten. Frames are drawn by the same seeded rule, so they are identical.
+TAG = os.environ.get("T_TAG", "")
 SFX = hh.SUFFIX
-TMP = OUT / "tmp" / f"timing_clean{SFX}"
+TMP = OUT / "tmp" / f"timing_clean{SFX}{TAG}"
 ROUNDS = int(os.environ.get("T_ROUNDS", "3"))
 #: frames per session: cheap cells get more, A>=3 cells (seconds per frame) fewer
 K = {"A2_C5_bmimica": 1000, "A2_C6_slap2m": 1000, "A3_C5_slap2m": 100, "A4_C3_slap2m": 100}
@@ -87,6 +91,63 @@ def others_running():
         if any(m in cmd for m in BENCH_MARKERS) and "fig3f_timing_clean" not in cmd:
             hits.append((d, cmd[:120]))
     return hits
+
+
+def _my_tree():
+    mine, p = {os.getpid()}, os.getppid()
+    while p > 1:
+        mine.add(p)
+        try:
+            p = int(open(f"/proc/{p}/stat").read().split(")")[1].split()[1])
+        except Exception:
+            break
+    return mine
+
+
+def _cpu_ticks():
+    out = {}
+    for d in os.listdir("/proc"):
+        if d.isdigit():
+            try:
+                f = open(f"/proc/{d}/stat").read().split(")")[1].split()
+                out[int(d)] = int(f[11]) + int(f[12])     # utime + stime
+            except Exception:
+                pass
+    return out
+
+
+#: 2026-10-20: the marker list above only knows OUR bench scripts. Anything else in this
+#: container (an audit's grep, a build, a render) also competes for the CPU, so every
+#: process outside this sitting's own tree is now MEASURED: cores it used over `secs`.
+#: Load from outside the container is not visible here and stays in the loadavg record.
+MAX_OTHER_CORES = float(os.environ.get("T_MAX_OTHER_CORES", "1.0"))
+
+
+def other_cores(secs=2.0):
+    a = _cpu_ticks()
+    time.sleep(secs)
+    b = _cpu_ticks()
+    mine = _my_tree()
+    hz = os.sysconf("SC_CLK_TCK")
+    return sum(b[p] - a.get(p, b[p]) for p in b if p not in mine) / hz / secs
+
+
+#: T_QUIET_WAIT seconds (default 1800): a busy container is WAITED out, never timed through.
+QUIET_WAIT = float(os.environ.get("T_QUIET_WAIT", "1800"))
+
+
+def require_quiet(where):
+    t0 = time.time()
+    while True:
+        busy = others_running()
+        oc = None if busy else other_cores()
+        if not busy and oc <= MAX_OTHER_CORES:
+            return oc
+        if time.time() - t0 > QUIET_WAIT:
+            raise SystemExit(f"[timing] {where}: not quiet for {QUIET_WAIT:.0f} s "
+                             f"(bench {busy[:3]}, other cores {oc}) -- refusing to time")
+        print(f"[timing] {where}: waiting for quiet (bench {busy[:1]}, other cores {oc})", flush=True)
+        time.sleep(10)
 
 
 def load():
@@ -131,10 +192,7 @@ def main():
                             capture_output=True, text=True, check=True).stdout.strip()
     if not commit.startswith("2dc001fe"):
         sys.exit(f"LUCID_ROOT is at {commit[:8]}, not v1.0.5 (2dc001fe)")
-    busy = others_running()
-    if busy:
-        sys.exit("[timing] other bench processes are running:\n" +
-                 "\n".join(f"  {p} {c}" for p, c in busy))
+    print(f"[timing] container quiet: other processes {require_quiet('start'):.2f} cores", flush=True)
     TMP.mkdir(parents=True, exist_ok=True)
     if os.environ.get("T_A4C6") == "1":
         return main_a4c6(commit)
@@ -159,11 +217,20 @@ def main():
 
     rounds = 1 if SMOKE else ROUNDS
     res = {}   # (key, session) -> list of {round, greedy_s, exh_s, frames, loads}
+    #: T_RESUME=1 (J17): calls already in calls.jsonl (each passed the quiet gate when it
+    #: was timed) are kept and not re-timed; the interleaving and order rule are unchanged.
+    done = set()
+    if os.environ.get("T_RESUME") == "1" and not SMOKE:
+        for line in open(TMP / "calls.jsonl"):
+            r = json.loads(line)
+            done.add((r["round"], r["config"], r["session"]))
+            res.setdefault((r["config"], r["session"]), []).append(r)
+        print(f"[timing] resume: {len(done)} calls kept from calls.jsonl", flush=True)
     for rd in range(rounds):
         for i, (cfg, sess, fr, fl) in enumerate(cells):
-            busy = others_running()
-            if busy:
-                raise SystemExit(f"[timing] another bench process appeared mid-sitting: {busy[:3]}")
+            if (rd, cfg["key"], sess["session"]) in done:
+                continue
+            oc = require_quiet(f"round {rd} cell {i}")
             d = TMP / cfg["key"] / sess["session"]
             base = ["--session-idx", str(sess["det_session_idx"]),
                     "--num-animals", str(cfg["animals"]),
@@ -183,7 +250,8 @@ def main():
             if (rd + i) % 2:
                 order.reverse()
             rec = {"round": rd, "config": cfg["key"], "session": sess["session"],
-                   "frames_listed": len(fr), "order": [o for o, _ in order]}
+                   "frames_listed": len(fr), "order": [o for o, _ in order],
+                   "other_cores_before": oc}
             for name, cmd in order:
                 l0, l1, wall = run(cmd)
                 rec[f"{name}_load_before"], rec[f"{name}_load_after"] = l0, l1
@@ -255,11 +323,11 @@ def main():
             f"{commit}; host 1-min load at call start median {st.median(all_loads):.1f}, "
             f"max {max(all_loads):.1f} (includes load from outside this container).")
     h["clean_timing_note"] = note
-    (OUT / f"fig3_headtohead_clean{SFX}.json").write_text(json.dumps(h, indent=1))
-    (OUT / f"fig3_runtime_clean{SFX}.json").write_text(json.dumps(
+    (OUT / f"fig3_headtohead_clean{SFX}{TAG}.json").write_text(json.dumps(h, indent=1))
+    (OUT / f"fig3_runtime_clean{SFX}{TAG}.json").write_text(json.dumps(
         {"generated_by": "figs/fig3f_timing_clean.py", "lucid_commit": commit, "note": note,
          "variant": hh.VARIANT, "seed": SEED, "k": K, "measured": measured}, indent=1))
-    print(f"[timing] wrote fig3_runtime_clean{SFX}.json and fig3_headtohead_clean{SFX}.json")
+    print(f"[timing] wrote fig3_runtime_clean{SFX}{TAG}.json and fig3_headtohead_clean{SFX}{TAG}.json")
 
 
 def main_a4c6(commit, k=100):
@@ -280,11 +348,9 @@ def main_a4c6(commit, k=100):
         print(f"[a4c6] {sess['session']}: {len(pool):,} eligible, timing {len(fr)}", flush=True)
     per_round, loads = [], []
     for rd in range(ROUNDS):
-        busy = others_running()
-        if busy:
-            raise SystemExit(f"[a4c6] another bench process is running: {busy[:3]}")
         tot_s = tot_f = 0
         for sess, fr, fl, _ in cells:
+            oc = require_quiet(f"a4c6 round {rd}")
             out = TMP / cfg["key"] / sess["session"] / f"greedy_r{rd}.json"
             cmd = ["node", str(hh.GREEDY_DRIVER), "--session-idx", str(sess["det_session_idx"]),
                    "--num-animals", str(cfg["animals"]), "--calibration", str(sess["calibration"]),
@@ -301,6 +367,7 @@ def main_a4c6(commit, k=100):
                 raise SystemExit(f"[a4c6] tail must be OUT for SLAP-2M ({sess['session']})")
             rec = {"round": rd, "session": sess["session"], "frames": len(fr),
                    "greedy_s": g["runtimeSeconds"], "load_before": l0, "load_after": l1,
+                   "other_cores_before": oc,
                    "wall_s": wall}
             log.write(json.dumps(rec) + "\n")
             log.flush()
@@ -315,7 +382,7 @@ def main_a4c6(commit, k=100):
             f"time, {ROUNDS} rounds, median over rounds; solve time only (runCrossViewTracker); "
             f"LUC3D {commit}; host 1-min load at call start median {st.median(loads):.1f}, "
             f"max {max(loads):.1f} (includes load from outside this container).")
-    (OUT / f"fig3_runtime_clean{SFX}_a4c6.json").write_text(json.dumps(
+    (OUT / f"fig3_runtime_clean{SFX}{TAG}_a4c6.json").write_text(json.dumps(
         {"generated_by": "figs/fig3f_timing_clean.py (T_A4C6=1)", "lucid_commit": commit,
          "note": note, "variant": hh.VARIANT, "seed": SEED, "k": k,
          "measured": [{"key": cfg["key"], "animals": cfg["animals"],
@@ -324,7 +391,7 @@ def main_a4c6(commit, k=100):
                        "eligible_frames": {s["session"]: n for s, _, _, n in cells},
                        "frames_per_round": per_round[0]["frames"],
                        "seconds_per_frame": g, "rounds": per_round}]}, indent=1))
-    print(f"[a4c6] greedy {g * 1e3:.4f} ms/frame -> fig3_runtime_clean{SFX}_a4c6.json")
+    print(f"[a4c6] greedy {g * 1e3:.4f} ms/frame -> fig3_runtime_clean{SFX}{TAG}_a4c6.json")
 
 
 if __name__ == "__main__":

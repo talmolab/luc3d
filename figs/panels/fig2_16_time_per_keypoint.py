@@ -103,10 +103,17 @@ def build() -> pd.DataFrame:
     one was the range over session sizes and was never described in the caption.
     """
     d = load("fig2g_retime_all.json")
-    b = d["best_us_per_keypoint"]
+    # J16b (2026-10-20): a sitting with many timed passes reports the MEDIAN of every pass,
+    # and the whisker is the interquartile range of those passes. Older best-of deposits
+    # plot as before (best round, no whisker).
+    med = d.get("statistic", "").startswith("median")
+    b = d["median_us_per_keypoint"] if med else d["best_us_per_keypoint"]
+    sp = d.get("spread_us_per_keypoint", {}) if med else {}
     row = lambda solver, label, who, kind, key, cfg: {
         "solver": solver, "label": label, "who": who, "kind": kind,
-        "us_per_keypoint": b[key], "lo": None, "hi": None, "config": cfg}
+        "us_per_keypoint": b[key],
+        "lo": sp[key]["p25"] if key in sp else None, "hi": sp[key]["p75"] if key in sp else None,
+        "config": cfg}
     return pd.DataFrame([
         row("DLT", "DLT", "ours", "linear", "luc3d_dlt", "LUC3D, closed form"),
         row("Anipose", "Anipose", "anipose", "linear", "anipose_linear",

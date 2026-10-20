@@ -73,7 +73,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, "/root/vast/eric/luc3d-bench/scripts/bartul")
 from build_gt_reproj import load_calibration  # noqa: E402
-from fig2_measure import triangulate_batch  # noqa: E402
+#: FIG4_PY_TRIAGE=1 (opt-in since 2026-10-20, LUC3D-JS plan J9): part B, the triage
+#: analysis. It triangulates and reprojects with a NumPy DLT + OpenCV, i.e. NOT LUC3D's
+#: JavaScript, so it is off by default and nothing it writes may be presented as LUC3D.
+#: No placed panel or tex sentence reads its fields (signal, target, spearman, capture_*).
+TRIAGE = os.environ.get("FIG4_PY_TRIAGE") == "1"
 
 BENCH = "/root/vast/eric/luc3d-bench"
 MASTER = f"{BENCH}/outputs/detections_only_master_sheet.tsv"
@@ -235,7 +239,20 @@ def measure_session(row, sidx, stride):
         return None
     err = np.concatenate(err_all)
 
-    # ---------- B. triage signal vs target ----------
+    out = dict(
+        session=row["session"], session_idx=sidx,
+        difficulty=int(row["difficulty"]), bedding=row["bedding"],
+        animals=int(row["animals"]), cameras_used=len(use),
+        frames_total=int(row["frames"] or 0),
+        det_error=q(err), miss_rate=float(miss_n / tot_n) if tot_n else None,
+        frac_over_tau=float((err > TAU_PX).mean()),
+        n_keypoints=int(len(err)),
+    )
+    if not TRIAGE:
+        return out
+
+    # ---------- B. triage signal vs target (opt-in, NumPy/OpenCV, not LUC3D) ----------
+    from fig2_measure import triangulate_batch  # noqa: E402
     # triangulate the RAW matched detections across cameras (no ground truth used
     # beyond the identity assignment), then measure how far each view's raw detection
     # sits from that consensus -- the signal -- against how far it sits from the
@@ -291,13 +308,7 @@ def measure_session(row, sidx, stride):
 
     finite = np.isfinite(conf)
     return dict(
-        session=row["session"], session_idx=sidx,
-        difficulty=int(row["difficulty"]), bedding=row["bedding"],
-        animals=int(row["animals"]), cameras_used=len(use),
-        frames_total=int(row["frames"] or 0),
-        det_error=q(err), miss_rate=float(miss_n / tot_n) if tot_n else None,
-        frac_over_tau=float((err > TAU_PX).mean()),
-        n_keypoints=int(len(err)),
+        out,
         # B
         signal=q(sig), target=q(tgt),
         spearman=float(_spearman(sig, tgt)),
@@ -307,6 +318,10 @@ def measure_session(row, sidx, stride):
         capture_by_oracle=capture(tgt, tgt),
         n_triage=int(len(sig)),
     )
+
+
+def _f(v):
+    return float("nan") if v is None else v
 
 
 def _spearman(a, b):
@@ -383,9 +398,9 @@ def main():
         print(f"  [{sidx}] {r['session']}: diff {r['difficulty']} "
               f"err mean {r['det_error']['mean']:6.2f} p95 {r['det_error']['p95']:6.2f} "
               f"miss {r['miss_rate'] * 100:5.1f}%  "
-              f"rho {r['spearman']:.3f}  "
-              f"reproj@10% {r['capture_by_reproj'].get('0.1', float('nan')):.3f} "
-              f"vs lowconf {r['capture_by_lowconf'].get('0.1', float('nan')):.3f}")
+              f"rho {r.get('spearman', float('nan')):.3f}  "
+              f"reproj@10% {r.get('capture_by_reproj', {}).get('0.1', float('nan')):.3f} "
+              f"vs lowconf {r.get('capture_by_lowconf', {}).get('0.1', float('nan')):.3f}")
 
     if not done:
         raise SystemExit("nothing measured")
@@ -460,9 +475,9 @@ def main():
     for k, v in payload["by_difficulty"].items():
         print(f"  {k:>4} {v['n_sessions']:>3} {v['err_mean']:>9.2f} "
               f"{v['err_p95']:>8.2f} {v['miss_rate'] * 100:>7.1f} "
-              f"{v['spearman']:>6.3f} {v['capture_reproj_10']:>11.3f} "
-              f"{(v['capture_lowconf_10'] or float('nan')):>12.3f} "
-              f"{v['capture_oracle_10']:>11.3f}")
+              f"{_f(v['spearman']):>6.3f} {_f(v['capture_reproj_10']):>11.3f} "
+              f"{_f(v['capture_lowconf_10']):>12.3f} "
+              f"{_f(v['capture_oracle_10']):>11.3f}")
     print(f"[json] {args.out}")
 
 

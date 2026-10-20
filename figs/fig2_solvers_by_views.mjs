@@ -73,10 +73,10 @@ const SFX = process.env.FIG2_SUFFIX ? `_${process.env.FIG2_SUFFIX}` : '';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..');
-const POSE_DIR = process.env.POSE_DIR
-    ? path.resolve(process.env.POSE_DIR)
-    : path.resolve(REPO, '..', 'lucid-bundle-adj', 'pose');
-if (!fs.existsSync(POSE_DIR)) throw new Error(`no pose dir at ${POSE_DIR}`);
+import { lucidPose } from './lucid_v105.mjs';
+// LUC3D-JS plan R1/R4 (2026-10-20): POSE_DIR is required and must be the clean v1.0.5
+// checkout. The old default (../lucid-bundle-adj or the working tree) is gone.
+const { poseDir: POSE_DIR, stamp: LUCID } = lucidPose();
 register(pathToFileURL(path.join(HERE, 'fig2_solvers_hooks.mjs')).href, import.meta.url);
 const tri = await import(pathToFileURL(path.join(POSE_DIR, 'triangulation.js')).href);
 const pd = await import(pathToFileURL(path.join(POSE_DIR, 'pose-data.js')).href);
@@ -137,7 +137,8 @@ if (MERGE_AT >= 0) {
     const C_ = shards[0].cameras;
     for (const s of shards) {
         if (s.cameras !== C_ || s.stride_within_export !== shards[0].stride_within_export
-            || s.export_stride !== shards[0].export_stride) {
+            || s.export_stride !== shards[0].export_stride
+            || s.lucid_commit !== shards[0].lucid_commit) {
             throw new Error('shards disagree on cameras/stride — refusing to merge');
         }
     }
@@ -153,6 +154,8 @@ if (MERGE_AT >= 0) {
         export_stride: shards[0].export_stride,
         keypoints_used: rows.reduce((a, r) => a + r.n_keypoints, 0),
         subsets_per_k: shards[0].subsets_per_k, poseDir: shards[0].poseDir,
+        lucid_root: shards[0].lucid_root, lucid_commit: shards[0].lucid_commit, pose_dir: shards[0].pose_dir,
+        driver: shards[0].driver,
         solves: shards.reduce((a, s) => a + s.solves, 0),
         plotted_arm: shards[0].plotted_arm, caveat: shards[0].caveat,
         merged_from: shards.length,
@@ -209,6 +212,13 @@ for (let k = 2; k <= C; k++) {
 }
 const NSUB = {};
 for (let k = 2; k <= C; k++) NSUB[k] = SUBSETS[k].length;
+// J2 (LUC3D-JS plan, 2026-10-20): Fig 2B / 2D used to come from fig2_measure.py's NumPy DLT.
+// They are now this driver's own k = 2 solves: per camera PAIR 3D error (2D) and the
+// share of held-out reprojections within TAU_PX of that camera's own detection (2B's
+// accN, fig2_measure.py's `held_out_vs_observation`). Pair keys are 'i-j' over camera
+// index, i < j, as fig2_measure.py wrote them. Everything deposited before is unchanged.
+const TAU_PX = [2, 5, 10, 20, 40];
+const PAIRS = SUBSETS[2].map(m => m.map((v, c) => (v ? c : -1)).filter(c => c >= 0).join('-'));
 console.log(`[protocol] subsets per k: ` +
             Object.entries(NSUB).map(([k, v]) => `k=${k}:${v}`).join(' '));
 
@@ -254,6 +264,9 @@ for (let bi = BLO; bi < BHI; bi++) {
         N[m] = {}; NP[m] = {};
         for (let k = 2; k <= C; k++) { N[m][k] = 0; NP[m][k] = 0; }
     }
+    // J2: DLT 3D error per pair (mm), and the reference centroid the baseline angle uses.
+    const PAIR = PAIRS.map(() => new Float64Array(nkp).fill(NaN)), NPAIR = PAIRS.map(() => 0);
+    let vx = 0, vy = 0, vz = 0, vn = 0;
 
     for (let kk = lo; kk < hi; kk += STRIDE) {
         const raw = new Array(C), und = new Array(C);
@@ -265,6 +278,7 @@ for (let bi = BLO; bi < BHI; bi++) {
         }
         const gx = GT[kk * 3], gy = GT[kk * 3 + 1], gz = GT[kk * 3 + 2];
         if (!Number.isFinite(gx)) continue;
+        vx += gx; vy += gy; vz += gz; vn++;
 
         for (let k = 2; k <= C; k++) {
             for (const m of SUBSETS[k]) {
@@ -281,6 +295,10 @@ for (let bi = BLO; bi < BHI; bi++) {
                 if (!Xd) continue;
                 ACC.dlt[k][N.dlt[k]++] =
                     Math.hypot(Xd[0] - gx, Xd[1] - gy, Xd[2] - gz) * MM;
+                if (k === 2) {
+                    const pi = SUBSETS[2].indexOf(m);
+                    PAIR[pi][NPAIR[pi]++] = Math.hypot(Xd[0] - gx, Xd[1] - gy, Xd[2] - gz) * MM;
+                }
                 const Xb = tri.triangulatePointBA(rk, Ps, Xd, { cameras });
                 solves++;
                 if (Xb) {
@@ -320,6 +338,35 @@ for (let bi = BLO; bi < BHI; bi++) {
             for (const m of METHODS) row.heldout_px_by_k[k][m] = stats(PX[m][k], NP[m][k]);
         }
     }
+    // J2 fields. accN over the finite held-out residuals at each k (as fig2_measure.py's
+    // `(v <= t).mean()`), per method.
+    row.heldout_acc_by_k = {};
+    for (let k = 2; k < C; k++) {
+        row.heldout_acc_by_k[k] = {};
+        for (const m of METHODS) {
+            const v = PX[m][k].subarray(0, NP[m][k]).filter(Number.isFinite);
+            const a = { n: v.length };
+            for (const t of TAU_PX) { let c = 0; for (const x of v) if (x <= t) c++; a[`acc${t}`] = v.length ? c / v.length : null; }
+            row.heldout_acc_by_k[k][m] = a;
+        }
+    }
+    // Baseline angle at the animals: the angle two camera centres subtend at the mean
+    // reference point, centres from LUC3D's own Camera (-R^T t).
+    const ctr = [vx / vn, vy / vn, vz / vn];
+    const centre = cam => { const R = cam.rotationMatrix, t = cam.tvec;
+        return [0, 1, 2].map(r => -(R[0][r] * t[0] + R[1][r] * t[1] + R[2][r] * t[2])); };
+    const cen = cameras.map(centre);
+    row.pairs_dlt_err3d_mm = {};
+    PAIRS.forEach((key, pi) => {
+        const [i, j] = key.split('-').map(Number);
+        const va = cen[i].map((x, d) => x - ctr[d]), vb = cen[j].map((x, d) => x - ctr[d]);
+        const dot = va[0] * vb[0] + va[1] * vb[1] + va[2] * vb[2];
+        const cosang = Math.max(-1, Math.min(1, dot / (Math.hypot(...va) * Math.hypot(...vb))));
+        const st = stats(PAIR[pi], NPAIR[pi]);
+        const v = PAIR[pi].subarray(0, NPAIR[pi]).filter(Number.isFinite).sort();
+        row.pairs_dlt_err3d_mm[key] = st && { ...st, p90: v[Math.min(v.length - 1, Math.floor(v.length * 0.9))],
+            baseline_deg: Math.acos(cosang) * 180 / Math.PI };
+    });
     perSession.push(row);
     const el = (Date.now() - t0) / 1000;
     const h4 = row.heldout_px_by_k[C - 1];
@@ -333,7 +380,7 @@ const out = summarize(perSession, C, {
     stride_within_export: STRIDE,
     export_stride: data.stride,
     keypoints_used: perSession.reduce((a, r) => a + r.n_keypoints, 0),
-    subsets_per_k: NSUB, poseDir: POSE_DIR, solves,
+    subsets_per_k: NSUB, poseDir: POSE_DIR, ...LUCID, driver: 'figs/fig2_solvers_by_views.mjs', solves,
     blocks_measured: [BLO, BHI],
     plotted_arm: 'heldout_px_across_sessions',
     caveat: ('err3d_mm_* is 3D distance to the proofread reference and is DEPOSITED '

@@ -37,10 +37,10 @@ const SFX = process.env.FIG2_SUFFIX ? `_${process.env.FIG2_SUFFIX}` : '';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..');
-const POSE_DIR = process.env.POSE_DIR
-    ? path.resolve(process.env.POSE_DIR)
-    : path.resolve(REPO, '..', 'lucid-bundle-adj', 'pose');
-if (!fs.existsSync(POSE_DIR)) throw new Error(`no pose dir at ${POSE_DIR}`);
+import { lucidPose } from './lucid_v105.mjs';
+// LUC3D-JS plan R1/R4 (2026-10-20): POSE_DIR is required and must be the clean v1.0.5
+// checkout. The old default (../lucid-bundle-adj or the working tree) is gone.
+const { poseDir: POSE_DIR, stamp: LUCID } = lucidPose();
 register(pathToFileURL(path.join(HERE, 'fig2_solvers_hooks.mjs')).href, import.meta.url);
 
 const tri = await import(pathToFileURL(path.join(POSE_DIR, 'triangulation.js')).href);
@@ -53,6 +53,11 @@ const arg = (name, dflt) => {
 };
 const N = arg('n', 200000);
 const REPEATS = arg('repeats', 3);
+// J16b (2026-10-20): --passes P times the two fast steps (undistort, DLT) P times back to
+// back and records EVERY pass. One DLT pass over 200,010 keypoints is ~0.2 s, so a single
+// pass per process was at the mercy of one GC pause or migration (1.08-2.01 us across the
+// J16 rounds). Refinement is ~5 s per pass and keeps one. Default 1 = unchanged.
+const PASSES = arg('passes', 1);
 
 const data = JSON.parse(fs.readFileSync(path.join(HERE, 'out', `fig4_input${SFX}.json`), 'utf8'));
 if (data.format !== 'bin-v1') throw new Error('expected bin-v1 input');
@@ -93,7 +98,9 @@ for (let k = 0; k < n; k++) RAW.push(rawAt(k));
 // roughly the gap between this script's numbers and the whole-corpus run's, where
 // 4.25 M iterations amortise the warm-up to nothing.
 {
-    const w = Math.min(n, 20000);
+    // --warm-full (J16b): warm on EVERY keypoint once, so V8 has tiered the hot calls
+    // before the clock starts. Default: the old 20k prefix.
+    const w = process.argv.includes('--warm-full') ? n : Math.min(n, 20000);
     for (let k = 0; k < w; k++) {
         const raw = RAW[k];
         const und = raw.map((p, ci) => (p ? cameras[ci].undistortPoint(p) : null));
@@ -103,14 +110,20 @@ for (let k = 0; k < n; k++) RAW.push(rawAt(k));
 }
 
 const best = { undistort: Infinity, dlt: Infinity, ba: Infinity };
+const PASS_MS = { undistort: [], dlt: [], ba: [] };
 for (let r = 0; r < REPEATS; r++) {
-    const UND = new Array(n);
-    let t0 = performance.now();
-    for (let k = 0; k < n; k++) {
-        const raw = RAW[k];
-        UND[k] = raw.map((p, ci) => (p ? cameras[ci].undistortPoint(p) : null));
+    let UND = new Array(n);
+    let t0;
+    for (let ps = 0; ps < PASSES; ps++) {
+        UND = new Array(n);
+        t0 = performance.now();
+        for (let k = 0; k < n; k++) {
+            const raw = RAW[k];
+            UND[k] = raw.map((p, ci) => (p ? cameras[ci].undistortPoint(p) : null));
+        }
+        const ms = performance.now() - t0;
+        PASS_MS.undistort.push(ms); best.undistort = Math.min(best.undistort, ms);
     }
-    best.undistort = Math.min(best.undistort, performance.now() - t0);
 
     // KEEP THE RESULT IN A LOCAL, exactly as fig2_solvers_measure.mjs does. Storing each
     // solve into an `Array(n)` instead measured 13 us/kp against fig2_solvers_measure.mjs's
@@ -119,12 +132,15 @@ for (let r = 0; r < REPEATS; r++) {
     // have reported the harness's bookkeeping as the solver's cost. `sink` keeps
     // the call from being optimised away without retaining anything.
     let sink = 0;
-    t0 = performance.now();
-    for (let k = 0; k < n; k++) {
-        const X = tri.triangulatePointDLT(UND[k], Ps);
-        if (X) sink += X[0];
+    for (let ps = 0; ps < PASSES; ps++) {
+        t0 = performance.now();
+        for (let k = 0; k < n; k++) {
+            const X = tri.triangulatePointDLT(UND[k], Ps);
+            if (X) sink += X[0];
+        }
+        const ms = performance.now() - t0;
+        PASS_MS.dlt.push(ms); best.dlt = Math.min(best.dlt, ms);
     }
-    best.dlt = Math.min(best.dlt, performance.now() - t0);
 
     // The BA step needs a seed, so build the seeds UNTIMED and time only the
     // refinement -- which is what fig2_solvers_measure.mjs's `ba` number is.
@@ -135,15 +151,18 @@ for (let r = 0; r < REPEATS; r++) {
         const X = tri.triangulatePointBA(RAW[k], Ps, SEED[k], { cameras });
         if (X) sink += X[0];
     }
-    best.ba = Math.min(best.ba, performance.now() - t0);
+    { const ms = performance.now() - t0; PASS_MS.ba.push(ms); best.ba = Math.min(best.ba, ms); }
     if (!Number.isFinite(sink)) throw new Error('non-finite solves in the timing run');
 }
 
 process.stdout.write(JSON.stringify({
-    n, repeats: REPEATS, poseDir: POSE_DIR, node: process.version,
+    n, repeats: REPEATS, poseDir: POSE_DIR, ...LUCID, node: process.version,
     undistort_us_per_keypoint: (best.undistort * 1000) / n,
     dlt_us_per_keypoint: (best.dlt * 1000) / n,
     ba_us_per_keypoint: (best.ba * 1000) / n,
+    passes: PASSES,
+    pass_us_per_keypoint: Object.fromEntries(Object.entries(PASS_MS).map(
+        ([k, v]) => [k, v.map(ms => (ms * 1000) / n)])),
     note: ('best-of-repeats, single-threaded, JIT warmed on a 20k prefix. Scope '
            + 'matches fig2_solvers_measure.mjs: undistortion is timed SEPARATELY and is '
            + 'not part of dlt/ba. ba is the refinement step alone, seeded by the '

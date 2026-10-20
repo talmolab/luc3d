@@ -36,7 +36,11 @@ sys.path.insert(0, str(HERE))
 import fig2_solvers_anipose as fsa  # noqa: E402
 
 NODE = os.environ.get("NODE", "/root/vast/eric/node22_env/bin/node")
-POSE_DIR = os.environ.get("POSE_DIR", "/root/vast/eric/lucid-main-timing/pose")
+# LUC3D-JS plan R1/R4 (2026-10-20): POSE_DIR is required and must be the clean v1.0.5 checkout.
+# The old default (lucid-main-timing) is gone.
+from lucid_v105 import lucid_pose  # noqa: E402
+_POSE, LUCID = lucid_pose()
+POSE_DIR = str(_POSE)
 N_LIN = 200_000
 OPT_FRAMES, JOINTS = 23_000, 15
 #: FIG2G_FRAMES=<f> (2026-10-15): time EVERY solver on the same first f frames x 15 joints, so all
@@ -48,6 +52,9 @@ if os.environ.get("FIG2G_FRAMES"):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rounds", type=int, default=3)
+    # J16b (2026-10-20): LUC3D DLT / undistort passes per round (each ~0.2 s); every pass is
+    # recorded and every arm is reported as the MEDIAN of its timed passes.
+    ap.add_argument("--passes", type=int, default=1)
     a = ap.parse_args()
     import aniposelib, numba
     meta = json.loads((OUT / f"fig4_input{_SFX}.json").read_text())
@@ -82,34 +89,45 @@ def main():
                         scale_smooth=0, n_deriv_smooth=1)
         runs["anipose_optim_nosmooth"].append(1e6 * (time.perf_counter() - t0) / n_opt)
         p = subprocess.run([NODE, str(HERE / "fig2_solvers_time_luc3d.mjs"), "--n", str(N_LIN),
-                            "--repeats", "1"], capture_output=True, text=True,
+                            "--repeats", "1", "--passes", str(a.passes), "--warm-full"],
+                           capture_output=True, text=True,
                            cwd=str(HERE.parent), env={**os.environ, "POSE_DIR": POSE_DIR})
         if p.returncode != 0:
             raise SystemExit("luc3d timer failed:\n" + p.stderr[-2000:])
         j = json.loads(p.stdout)
-        runs["luc3d_dlt"].append(j["dlt_us_per_keypoint"])
-        runs["luc3d_refined"].append(j["ba_us_per_keypoint"])
-        runs["luc3d_undistort"].append(j["undistort_us_per_keypoint"])
+        if j.get("lucid_commit") != LUCID["lucid_commit"]:
+            raise SystemExit(f"luc3d timer ran {j.get('lucid_commit')}, not {LUCID['lucid_commit']}")
+        pp = j["pass_us_per_keypoint"]
+        runs["luc3d_dlt"].extend(pp["dlt"])
+        runs["luc3d_refined"].extend(pp["ba"])
+        runs["luc3d_undistort"].extend(pp["undistort"])
         t0 = time.perf_counter()
         cg.optim_points(po.reshape(C, OPT_FRAMES, JOINTS, 2), Xo.reshape(OPT_FRAMES, JOINTS, 3))
         runs["anipose_optim_default"].append(1e6 * (time.perf_counter() - t0) / n_opt)
-        print(f"round {r + 1}: " + "  ".join(f"{k} {v[-1]:.2f}" for k, v in runs.items()), flush=True)
+        print(f"round {r + 1}: " + "  ".join(f"{k} {np.median(v):.3f}" for k, v in runs.items()), flush=True)
 
     best = {k: min(v) for k, v in runs.items()}
+    q = lambda v, p: float(np.percentile(v, p))
+    med = {k: q(v, 50) for k, v in runs.items()}
+    spread = {k: {"p25": q(v, 25), "p75": q(v, 75), "min": min(v), "max": max(v), "n": len(v)}
+              for k, v in runs.items()}
     out = {"generated_by": "figs/fig2g_retime_all.py", "rounds": a.rounds,
            "aniposelib": getattr(aniposelib, "__version__", "?"),
            "opencv": __import__("cv2").__version__,   # recorded since 2026-10-14 (md56)
            "numba_threads": numba.config.NUMBA_NUM_THREADS,
-           "pose_dir": POSE_DIR, "node": subprocess.run([NODE, "--version"], capture_output=True, text=True).stdout.strip(),
+           "pose_dir": POSE_DIR, **LUCID, "node": subprocess.run([NODE, "--version"], capture_output=True, text=True).stdout.strip(),
            "n_linear": N_LIN, "n_optim": n_opt, "runs_us_per_keypoint": runs,
+           "statistic": ("median of every timed pass" if a.passes > 1 else "best round"),
+           "passes": a.passes, "median_us_per_keypoint": med, "spread_us_per_keypoint": spread,
            "best_us_per_keypoint": best,
-           "speedup_dlt_vs_anipose_linear": best["anipose_linear"] / best["luc3d_dlt"],
-           "speedup_refined_vs_anipose_optim_nosmooth": best["anipose_optim_nosmooth"] / best["luc3d_refined"],
-           "speedup_refined_vs_anipose_optim_default": best["anipose_optim_default"] / best["luc3d_refined"],
+           "speedup_dlt_vs_anipose_linear": (med if a.passes > 1 else best)["anipose_linear"] / (med if a.passes > 1 else best)["luc3d_dlt"],
+           "speedup_refined_vs_anipose_optim_nosmooth": (med if a.passes > 1 else best)["anipose_optim_nosmooth"] / (med if a.passes > 1 else best)["luc3d_refined"],
+           "speedup_refined_vs_anipose_optim_default": (med if a.passes > 1 else best)["anipose_optim_default"] / (med if a.passes > 1 else best)["luc3d_refined"],
+           "speedup_range_dlt_vs_anipose_linear": [spread["anipose_linear"]["p25"] / spread["luc3d_dlt"]["p75"], spread["anipose_linear"]["p75"] / spread["luc3d_dlt"]["p25"]],
            "published": {"anipose_linear": 29.03, "anipose_optim": 228.77, "luc3d_dlt": 6.316,
                          "luc3d_refined": 43.997, "speedups": [4.60, 5.20]}}
     (OUT / f"fig2g_retime_all{_SFX}.json").write_text(json.dumps(out, indent=1))
-    print(json.dumps({k: round(v, 2) for k, v in best.items()}, indent=1))
+    print(json.dumps({k: round(v, 3) for k, v in med.items()}, indent=1))
     print(f"speed-ups: DLT {out['speedup_dlt_vs_anipose_linear']:.2f}x, refined vs optim "
           f"(no smoothing) {out['speedup_refined_vs_anipose_optim_nosmooth']:.2f}x, "
           f"(default) {out['speedup_refined_vs_anipose_optim_default']:.2f}x")
