@@ -940,6 +940,9 @@ function crossViewHyperparams() {
         stale: thr('stale'),
         // Match gate (pose/cross-view-tracker.js, 2026-10-03).
         matchGate: thr('matchGate'),
+        // Misplaced-node robustness (pose/cross-view-tracker.js, 2026-10-20), off by default.
+        maxPenalty: thr('maxPenalty'),
+        matchReproj: thr('matchReproj'),
     };
 }
 

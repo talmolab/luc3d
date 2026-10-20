@@ -94,6 +94,34 @@
  *      before, forced. That is how an animal that vanished and reappeared
  *      elsewhere is re-acquired; gating them too would orphan it for good.
  *
+ * -----------------------------------------------------------------------
+ * MISPLACED NODES (2026-10-20) — three opt-in changes, all off by default
+ * -----------------------------------------------------------------------
+ * Ported from campy's live port of this tracker (olinesn/campy#85). When the
+ * 2D model puts a node in the wrong place, that node triangulates far from its
+ * animal — on a 3-camera rig with a model trained elsewhere, 5% of target
+ * nodes were over 2 m away (the cage is 0.44 m) — and the per-node 3D term
+ * `corr3d * (1 - d / distanceThreshold)` has no floor, so that one node's term
+ * differs by thousands between detections while a good node's differs by
+ * tens: it alone decides the Hungarian, the target takes the wrong detection,
+ * and its next 3D is built from it.
+ *   - **`maxPenalty`** (× corr3d; 0 = off): the per-node 3D term is never below
+ *     `-maxPenalty × corr3d`. 4 = flat beyond 5 × distanceThreshold.
+ *   - **`matchReproj`** (px; 0 = off): the target's `match3d` — what the cost
+ *     terms read — is `points3d` solved again so every node's views agree
+ *     within it (`checkedPoints3d`). `points3d`, written to the groups, stays
+ *     the plain DLT.
+ *   - **`birthMedian`** (0/1): births pair detections by the MEDIAN epipolar
+ *     distance over nodes instead of the mean.
+ * Measured with an exact offline replay of Track All (8 cameras): on 22
+ * proofread SLAP sessions, maxPenalty 4 + matchReproj 20 took lasting
+ * identity switches 360 → 168 and mean accuracy 88.2% → 90.5% (every
+ * combination of 1–8 and 10–40 px halved the switches), but on the 5-mouse
+ * recording no combination beat the default (4 lasting relabels → 4–14).
+ * With 3 of the cameras at a time (3 triples × 22 sessions) the gain was
+ * larger: switches 1,598 → 704, mean accuracy 82.8% → 89.8%. birthMedian
+ * changed nothing, with 8 cameras or 3. Hence opt-in.
+ *
  * Faithful-port quirks still preserved from the reference (do NOT "fix" these
  * without new measurement — they were not implicated by the fig8-bench search):
  *   - `velocity_threshold` / `distance_threshold` are SOFT (drive the cost term
@@ -135,6 +163,7 @@
 // the UI, and this one must load in a worker (pose/tracker-worker.js).
 import {
     triangulatePoints,
+    triangulatePointDLT,
     reprojectPoint,
     backProjectToRays,
     pointsToRayDistances,
@@ -203,6 +232,7 @@ function Target(trackId) {
     this.trackId = trackId;
     this.detsByCam = new Map();   // camName -> Detection (one current det per view)
     this.points3d = null;         // Float64Array(3N) world coords, all-NaN = missing
+    this.match3d = null;          // points3d with the reprojection check (matchReproj), or null = points3d
     this.identityId = null;       // filled at commit time
     this._touched = false;        // got a matched detection this frame (sync: re-fuse at frame end)
     this._snapMean = null;        // frame-start frameIdxMean() snapshot (sync); null outside a frame
@@ -218,7 +248,7 @@ function Target(trackId) {
 // sync fix), so this runs once per (target, view) rather than once per (target,
 // detection). Same function on the same inputs, so the numbers are identical.
 function targetProjection(target, ext) {
-    var c = target._proj, p3 = target.points3d;
+    var c = target._proj, p3 = matchPoints3d(target);
     if (c !== null && c.p3 === p3 && c.ext === ext) return c.pts;
     var n = points3dNodeCount(p3), pts = new Array(n), tp = [0, 0, 0];
     for (var k = 0; k < n; k++) pts[k] = readPoint3d(p3, k, tp) ? projectNorm(tp, ext) : null;
@@ -234,9 +264,9 @@ Target.prototype.frameIdxMean = function () {
 
 // Immediate fuse: used for births, where the target does not exist yet at
 // frame start and so has nothing for `_endFrame` to defer.
-Target.prototype.addDetection = function (det) {
+Target.prototype.addDetection = function (det, matchReproj) {
     this.detsByCam.set(det.cam.name, det);
-    this._retriangulate();
+    this._retriangulate(matchReproj);
 };
 
 // Frame-synchronous fuse: record the match but defer `_retriangulate()` to
@@ -247,7 +277,11 @@ Target.prototype._deferDetection = function (det) {
     this._touched = true;
 };
 
-Target.prototype._retriangulate = function () {
+// `matchReproj` (px, 0 = off) is the tracker's: with it, `match3d` — what the
+// next frame is matched against — is solved again with the reprojection check
+// (`checkedPoints3d`). `points3d`, what Track All writes to the group, is the
+// plain DLT either way.
+Target.prototype._retriangulate = function (matchReproj) {
     var dets = Array.from(this.detsByCam.values());
     if (dets.length < 2) {
         // Single view: keep whatever we had (can't triangulate). Reference
@@ -263,7 +297,79 @@ Target.prototype._retriangulate = function () {
         allObs.push(dets.map(function (d) { return d.pointsNorm[k]; }));
     }
     this.points3d = triangulatePoints(allObs, exts);   // DLT, world coords
+    this.match3d = matchReproj > 0
+        ? checkedPoints3d(this.points3d, allObs, exts, dets, matchReproj)
+        : null;
 };
+
+// The target's 3D the cost terms read: the checked solve when there is one.
+function matchPoints3d(target) {
+    return target.match3d != null ? target.match3d : target.points3d;
+}
+
+// One node's reprojection error in each view it has (undistorted pixels:
+// the normalized offset scaled by that camera's focal lengths), or -1 for a
+// view it does not use. Infinity when the point could not be solved.
+function viewErrors(p, obs, exts, dets, use, out) {
+    for (var v = 0; v < obs.length; v++) {
+        if (!use[v]) { out[v] = -1; continue; }
+        if (p == null) { out[v] = Infinity; continue; }
+        var q = projectNorm(p, exts[v]), K = dets[v].cam.matrix;
+        var dx = (q[0] - obs[v][0]) * K[0][0], dy = (q[1] - obs[v][1]) * K[1][1];
+        var e = Math.sqrt(dx * dx + dy * dy);
+        out[v] = isFinite(e) ? e : Infinity;
+    }
+    return out;
+}
+
+function maxOf(a) {
+    var m = -1;
+    for (var i = 0; i < a.length; i++) if (a[i] > m) m = a[i];
+    return m;
+}
+
+// `points3d` solved again so that every node's views agree within `thresh` px
+// (campy's TriangulateChecked, olinesn/campy#85). While a node's worst view is
+// over it and it has more than 2 views, it loses the view WITHOUT which its
+// other views fit best — the DLT spreads one bad view's error over the rest,
+// so the view with the largest error is not always the bad one. A node still
+// over it with 2 views is dropped (NaN). A misplaced 2D node triangulates
+// far from its animal, often metres away; matched against, that one node can
+// decide which detection the target takes.
+function checkedPoints3d(points3d, allObs, exts, dets, thresh) {
+    var out = new Float64Array(points3d), V = dets.length;
+    var use = new Array(V), err = new Array(V), trialErr = new Array(V), p = [0, 0, 0];
+    for (var k = 0; k < allObs.length; k++) {
+        var obs = allObs[k], n = 0;
+        for (var v = 0; v < V; v++) { use[v] = obs[v] != null; if (use[v]) n++; }
+        var X = readPoint3d(points3d, k, p) ? [p[0], p[1], p[2]] : null;
+        if (X == null) continue;                                  // already NaN
+        viewErrors(X, obs, exts, dets, use, err);
+        while (n > 2 && maxOf(err) > thresh) {
+            var best = -1, bestErr = Infinity, bestX = null;
+            for (var drop = 0; drop < V; drop++) {
+                if (!use[drop]) continue;
+                use[drop] = false;
+                var trial = obs.map(function (o, i) { return use[i] ? o : null; });
+                var Xt = triangulatePointDLT(trial, exts);
+                var e = maxOf(viewErrors(Xt, obs, exts, dets, use, trialErr));
+                if (Xt == null) e = Infinity;
+                use[drop] = true;
+                if (e < bestErr) { bestErr = e; best = drop; bestX = Xt; }
+            }
+            if (best < 0) break;                                  // no solve without any one view
+            use[best] = false; n--;
+            X = bestX;
+            viewErrors(X, obs, exts, dets, use, err);
+        }
+        if (X == null || maxOf(err) > thresh) {
+            out[3 * k] = out[3 * k + 1] = out[3 * k + 2] = NaN;
+        } else {
+            out[3 * k] = X[0]; out[3 * k + 1] = X[1]; out[3 * k + 2] = X[2];
+        }
+    }
+    return out;
+}
 
 // ---------------------------------------------------------------------------
 // CrossViewTracker
@@ -293,6 +399,8 @@ export class CrossViewTracker {
      *   matchGate (0) — THE MATCH GATE (see file header). A tracked target only
      *   takes a detection it scores positively on; lost targets re-acquire
      *   ungated. 0 (the default since #285) is the pre-gate forced assignment.
+     *   maxPenalty (0), matchReproj (0), birthMedian (0) — MISPLACED NODES (see
+     *   file header). 0 = today's tracker exactly.
      */
     constructor(hp) {
         hp = hp || {};
@@ -311,6 +419,10 @@ export class CrossViewTracker {
         this.stale = Math.max(0, Math.floor(num(hp.stale, 20)));
         // Match gate (see file header). Default off (#285); 1 = on.
         this.matchGate = num(hp.matchGate, 0) > 0;
+        // Misplaced-node robustness (see file header). All three off by default.
+        this.maxPenalty = Math.max(0, num(hp.maxPenalty, 0));
+        this.matchReproj = Math.max(0, num(hp.matchReproj, 0));
+        this.birthMedian = num(hp.birthMedian, 0) > 0;
 
         this.targets = [];                 // list of live Target
         this.unmatchedByCam = new Map();   // camName -> Detection[] (births buffer)
@@ -379,7 +491,7 @@ export class CrossViewTracker {
     _endFrame() {
         for (var t = 0; t < this.targets.length; t++) {
             var tg = this.targets[t];
-            if (tg._touched) tg._retriangulate();
+            if (tg._touched) tg._retriangulate(this.matchReproj);
             tg._touched = false;
             tg._snapMean = null;
             tg._lost = false;
@@ -493,14 +605,16 @@ export class CrossViewTracker {
         if (target.points3d == null) return 0;
         var ext = det.cam.extrinsicMatrix;
         var ray = detectionRays(det, ext);                       // origin + per-node dirs, cast once per detection
-        var dists = pointsToRayDistances(target.points3d, ray.origin, ray.directions);
+        var dists = pointsToRayDistances(matchPoints3d(target), ray.origin, ray.directions);
+        var floor = this.maxPenalty > 0 ? -this.maxPenalty : -Infinity;
         var sum = 0;
         for (var k = 0; k < dists.length; k++) {
             var w = this._nodeWeight(k);
             if (w === 0) continue;                               // node dropped from matching
             if (dists[k] == null || !isFinite(dists[k])) continue;  // np.nansum: skip NaN/degenerate
             var distanceWeight = dists[k] / this.distThresh;
-            var correspondence = this.corr3d * (1 - distanceWeight);  // may go negative
+            // May go negative; with maxPenalty, never below -maxPenalty.
+            var correspondence = this.corr3d * Math.max(1 - distanceWeight, floor);
             sum += w * correspondence;                           // decay factor exp(0)=1
         }
         return sum;
@@ -531,7 +645,9 @@ export class CrossViewTracker {
         var F = this._fundamental(camA, camB);
         var ptsA = listA.map(function (d) { return d.pointsPixel; });
         var ptsB = listB.map(function (d) { return d.pointsPixel; });
-        var cost = epipolarErrorMatrix(ptsA, ptsB, F);           // minimize epipolar error
+        var cost = this.birthMedian                              // minimize epipolar error
+            ? epipolarMedianMatrix(ptsA, ptsB, F)
+            : epipolarErrorMatrix(ptsA, ptsB, F);
         var assign = hungarianAlgorithm(cost);
 
         var usedA = new Set(), usedB = new Set();
@@ -541,8 +657,8 @@ export class CrossViewTracker {
             var j = assign[i];
             if (j == null || j < 0 || j >= listB.length) continue;
             var target = new Target(this._nextTrackId++);
-            target.addDetection(listA[i]);
-            target.addDetection(listB[j]);
+            target.addDetection(listA[i], this.matchReproj);
+            target.addDetection(listB[j], this.matchReproj);
             this.targets.push(target);
             usedA.add(i); usedB.add(j);
         }
@@ -556,6 +672,33 @@ export class CrossViewTracker {
         if (!this._fCache[key]) this._fCache[key] = computeFundamentalMatrix(camA, camB);
         return this._fCache[key];
     }
+}
+
+// Birth pairing cost with `birthMedian`: the MEDIAN over nodes of the epipolar
+// distance (`epipolarError` takes the mean), the middle two averaged for an
+// even count. One misplaced node can make the mean larger for the right pair
+// than for a wrong one. Infinity when no node is in both.
+function epipolarMedian(points1, points2, F) {
+    var d = [], len = Math.min(points1.length, points2.length);
+    for (var i = 0; i < len; i++) {
+        if (points1[i] == null || points2[i] == null) continue;
+        var x1 = points1[i][0], y1 = points1[i][1];
+        var la = F[0][0] * x1 + F[0][1] * y1 + F[0][2];
+        var lb = F[1][0] * x1 + F[1][1] * y1 + F[1][2];
+        var lc = F[2][0] * x1 + F[2][1] * y1 + F[2][2];
+        var den = Math.sqrt(la * la + lb * lb);
+        if (den > 1e-15) d.push(Math.abs(points2[i][0] * la + points2[i][1] * lb + lc) / den);
+    }
+    if (d.length === 0) return Infinity;
+    d.sort(function (a, b) { return a - b; });
+    var h = d.length >> 1;
+    return d.length % 2 ? d[h] : (d[h - 1] + d[h]) / 2;
+}
+
+function epipolarMedianMatrix(detections1, detections2, F) {
+    return detections1.map(function (a) {
+        return detections2.map(function (b) { return epipolarMedian(a, b, F); });
+    });
 }
 
 function num(v, dflt) {
