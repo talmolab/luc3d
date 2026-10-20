@@ -66,8 +66,8 @@
 //
 // DOM-free, so it is testable directly.
 
-import { applyOriginFrame, mulMat3Vec3, rebaseExtrinsics } from './origin-frame.js?v=5d3c6d812a14';
-import { points3dNodeCount, hasPoint3d, pooledPoints3d } from './pose-data.js?v=5d3c6d812a14';
+import { applyOriginFrame, mulMat3Vec3, rebaseExtrinsics } from './origin-frame.js?v=ebfd38da91f7';
+import { points3dNodeCount, hasPoint3d, pooledPoints3d, isPoints3dFromFile, markPoints3dFromFile } from './pose-data.js?v=ebfd38da91f7';
 
 /**
  * The SESSION-scoped tally fields — exactly what one `perSession` record
@@ -515,7 +515,12 @@ export function applyOriginRebase(plan) {
     for (i = 0; i < plan.groups.length; i++) {
         // Into the slab pool (pose-data.js `pooledPoints3d`), not one
         // ArrayBuffer per group. The plan's own buffers are left for the GC.
-        plan.groups[i].group.points3d = pooledPoints3d(plan.groups[i].next);
+        var g = plan.groups[i].group;
+        var fromFile = isPoints3dFromFile(g.points3d);
+        g.points3d = pooledPoints3d(plan.groups[i].next);
+        // The same 3D in the new frame: still the file's, not a solve's (see
+        // `markPoints3dFromFile` — the display reprojects it, never re-solves).
+        if (fromFile) markPoints3dFromFile(g.points3d);
     }
     for (i = 0; i < plan.nodes.length; i++) {
         var node = plan.nodes[i].node, nn = plan.nodes[i].next;

@@ -11,7 +11,7 @@
  *
  * Usage (main thread):
  *
- *     const solver = createGroupSolver(cameras, { method, triangulateOnly, expectedGroups });
+ *     const solver = createGroupSolver(cameras, { method, triangulateOnly, summaryOnly, expectedGroups });
  *     for (...) {
  *         solver.submit(group, groupCameras, (result) => { ...apply... });
  *         solver.mark(() => { ...per-frame bookkeeping... });
@@ -42,10 +42,10 @@
  * count as busy: at most one frame per ~250 ms chunk. Inline, the main thread
  * does it all and is busy throughout — one core.
  */
-import { triangulateAndReproject } from './triangulation-core.js?v=5d3c6d812a14';
-import { Instance } from './pose-data.js?v=5d3c6d812a14';
-import { isCameraTracked, getTrackingThreshold } from '../ui/settings.js?v=5d3c6d812a14';
-import { createBusyClock } from '../ui/load-graph.js?v=5d3c6d812a14';
+import { triangulateAndReproject, triangulationSummary } from './triangulation-core.js?v=ebfd38da91f7';
+import { Instance } from './pose-data.js?v=ebfd38da91f7';
+import { isCameraTracked, getTrackingThreshold } from '../ui/settings.js?v=ebfd38da91f7';
+import { createBusyClock } from '../ui/load-graph.js?v=ebfd38da91f7';
 
 /** Groups per worker message: big enough to amortize messaging, small enough
  *  to load-balance (~0.25 s of Refined solves, ~20 ms of DLT). */
@@ -76,7 +76,7 @@ function getPool() {
     }
     if (pool) terminatePool();
     try {
-        const url = new URL('pose/triangulation-worker.js?v=5d3c6d812a14', document.baseURI);
+        const url = new URL('pose/triangulation-worker.js?v=ebfd38da91f7', document.baseURI);
         const workers = [];
         for (let i = 0; i < n; i++) workers.push({ w: new Worker(url, { type: 'module' }), busy: false });
         pool = { workers, idleTimer: null };
@@ -104,12 +104,16 @@ function serializeCamera(c) {
 
 /**
  * @param {Camera[]} cameras  every camera a submitted group may use
- * @param {{method?: 'dlt'|'ba', triangulateOnly?: boolean, expectedGroups?: number}} [opts]
+ * @param {{method?: 'dlt'|'ba', triangulateOnly?: boolean, summaryOnly?: boolean, expectedGroups?: number}} [opts]
+ *   `summaryOnly`: each result is `triangulationSummary(result)` — the 3D and the
+ *   mean errors, no per-camera reprojections or errors (solved and scored as
+ *   usual, then dropped before the reply), for a sweep that keeps only those.
  */
 export function createGroupSolver(cameras, opts) {
     opts = opts || {};
     const method = opts.method === 'ba' ? 'ba' : 'dlt';
     const triangulateOnly = !!opts.triangulateOnly;
+    const summaryOnly = !!opts.summaryOnly;
     // The two settings `triangulateAndReproject` would read per group, resolved
     // the way it resolves them (see triangulation-core.js), once per run — the
     // loading overlay blocks the UI, so they cannot change mid-run.
@@ -154,16 +158,18 @@ export function createGroupSolver(cameras, opts) {
             includedCameras: groupCameras.filter((c) => tracked.has(c.name)).map((c) => c.name),
             reprojErrorThreshold: reprojErrorThreshold,
             triangulateOnly: triangulateOnly || undefined,
+            summaryOnly: summaryOnly || undefined,
         };
     }
     // Every call below spells the options out, `method: method` included, so the
     // source-level guard in tests/test-triangulation-method-propagation.mjs can
     // see that the method is threaded in rather than defaulted.
     function solve(group, groupCameras, o) {
-        return triangulateAndReproject(group, groupCameras, {
+        const r = triangulateAndReproject(group, groupCameras, {
             method: method, includedCameras: o.includedCameras,
             reprojErrorThreshold: o.reprojErrorThreshold, triangulateOnly: o.triangulateOnly,
         });
+        return o.summaryOnly ? triangulationSummary(r) : r;
     }
 
     function drain() {
