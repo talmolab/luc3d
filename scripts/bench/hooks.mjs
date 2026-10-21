@@ -27,6 +27,7 @@ const THRESHOLD_DEFAULTS = {
     track3dWeight: 1,
     filterMinVisibleNodes: 0,
     filterMinInstanceScore: 0,
+    filterMinMeanNodeScore: 0,
     corr2dWeight: 1,
     corr3dWeight: 6,
     velocityThreshold: 10,

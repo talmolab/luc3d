@@ -742,6 +742,100 @@ centroid/normal split, §11 the SUBSET case) and
 
 ---
 
+### pose/detection-filter-stats.js
+
+**Purpose.** The tracker's three detection filters (`filterMinVisibleNodes`,
+`filterMinInstanceScore`, `filterMinMeanNodeScore`) — the rule itself, which
+`pose/tracker.js` imports — and the count of what they would remove, per camera
+and in total, before anyone runs tracking, so the Tracking Wizard can show it
+while the values are being chosen (`ui/detection-filter-preview.js`). DOM-free,
+no imports.
+
+**Why it exists.** The filters drop detections silently, and they do not hit
+every camera alike: on a real 3-camera rig the low side camera's detections
+scored far below the other two (median mean node score 0.64), so a value that
+is harmless for two cameras empties the third.
+
+**Key exports.**
+- `failsMinVisibleNodes(visible, min)`, `failsMinInstanceScore(score, min)`,
+  `failsMinMeanNodeScore(mean, min)` — the three primitives. An instance score
+  that is null/undefined/NaN never fails (the tracker's rule); a score of 0
+  does. A NaN mean node score (no node scores) never fails.
+- `meanNodeScore(inst, session?, camName?, frameIdx?)` — sleap-nn's "mean node
+  score": the sum of the PRESENT nodes' scores over ALL the skeleton's nodes, a
+  missing node counting as 0. Averaging the present nodes only understated the
+  real stressTest sideC rerun (36.7% below 0.75 instead of sleap-nn's 43.8%).
+  That is sleap-nn 0.3.3's definition; 0.2.0 averaged the present nodes only,
+  so a file it filtered still shows a few detections below its own value here.
+  NaN for a user instance (only a prediction was scored) and for a prediction
+  with no node scores. Eager: `Instance.pointScore`. Lazy: straight from the
+  store row the instance was hydrated from (`_rawInstIndex`), presence from the
+  instance, no name lookup (a mean does not depend on node order) — cheap
+  enough for every detection of a Track All.
+- `passesDetectionFilter(inst, minVis, minScore, minMeanNode?, session?,
+  camName?, frameIdx?)` — **the tracker's filter**; every minimum 0 is a no-op,
+  and the node score is computed only when its minimum is set.
+- `collectDetectionStats(session)` / `collectDetectionStatsAsync(session,
+  {isCancelled})` — walk the session ONCE into flat typed columns. The async
+  one walks each camera in windows of `ASYNC_WINDOW_FRAMES` (4,000) frames with
+  a yield between them: one task per CAMERA held the page ~300 ms per camera on
+  the real 5-mouse project (108,000 frames x 8 cameras, 4.2M detections, lazy),
+  where the whole walk now takes ~2.7 s with no task over ~0.1 s. Columns: camera index, present-node count, instance
+  score (Float64 — a stored 0.9 must still pass a minimum of 0.9), mean node
+  score (the same arithmetic as `meanNodeScore`, store rows included),
+  predicted flag; plus per-camera `detections` / `predicted` /
+  `predictedWithScore` / `withNodeScores`, and `hasInstanceScores` /
+  `hasNodeScores`.
+- `countDetectionFilters(stats, {minVisibleNodes, minInstanceScore,
+  minMeanNodeScore}, included?)` — per camera and over the `included` cameras:
+  `failVisible`, `failScore`, `failNodeScore`, `removed` (any — what tracking
+  drops) and `failsMultiple` (two or more). One pass over the columns; this is
+  what a keystroke costs.
+- `detectionHistograms(stats, bins)` — per camera, how each filtered quantity
+  is spread: `visible` (one bin per node count, 0 … the largest in the
+  session), `score` (predictions only) and `nodeScore` (detections with node
+  scores), the last two in equal-width bins over [0, 1] (above 1 lands in the
+  last), each with its median. One pass, no sort: the score medians come from
+  1,000 bins per unit (exact to 0.001, finer than the two decimals shown) —
+  sorting each camera's values held the page ~0.9 s on that same project.
+- `flagOutlierCameras(rows, partKey, wholeKey?)` — the cameras that lose MUCH
+  more than the rest, which the total row hides (real HardFight, sideC
+  unfiltered, at the inference values 12 / 0.35 / 0.6: sideC 24.8%, the other
+  cameras 0.7–2.2%, total 2.4%). Each tracked camera with detections is compared
+  with the MEDIAN share of the OTHER tracked cameras (never with the total,
+  which it is part of) and flagged when it is at least `OUTLIER_MIN_EXCESS`
+  (5 points) above it AND at least `OUTLIER_MIN_RATIO` (2x) it — so 0.4%
+  against 0.1% is not news, and when every camera loses a lot none is singled
+  out. Fewer than two such cameras flag nothing; excluded cameras are neither
+  flagged nor compared with. Used per filter and for `removed`.
+
+**Rules.**
+- **The population is the WHOLE session.** Eager: every frame group's
+  instances plus its unlinked pool (what `buildTrackerDetections` sees). Lazy:
+  every non-resident frame straight from the columnar store via
+  `forEachInstanceRow`, with the values hydration would give it (a prediction's
+  score `|| 0`, a user row's 0, a node present when x and y are finite), and
+  every RESIDENT frame from memory (it may carry edits), never both.
+- **Missing scores are reported, not shown as 0%.** Loaders write 0 for an
+  absent instance score, and the tracker then drops that detection at any
+  minimum above 0 — so "no instance scores" means no prediction has a positive
+  score, and the readout says so (overall and per camera) beside the count.
+  Missing NODE scores remove nothing, and the readout says that too.
+
+Covered by `tests/test-detection-filter-stats.mjs` (the primitives; eager and
+lazy counts against `passesDetectionFilter` over a three-filter sweep of
+values, lazy node scores read from the store; missing scores; an empty pool;
+excluded cameras; histograms; the flag; the async walk),
+`tests/test-tracker-luc3d.mjs` and `tests/test-crossview-populate.mjs` (the
+node-score filter keeps a weak animal out of the legacy matcher and the real
+`runCrossViewTracker`), and `tests/e2e/detection-filter-preview.mjs`.
+
+**Imports from project modules.** None.
+
+**Imported by.** `pose/tracker.js`, `ui/detection-filter-preview.js`.
+
+---
+
 ### pose/skeleton-edit-impact.js
 
 **Purpose.** Count what a skeleton node/edge edit is about to re-shape, so
@@ -1727,10 +1821,15 @@ constants exactly.
 - *`track3dWeight` (default 1).* Weight of Signal 2 (3D-position distance) in
   `reorderGroupsByPrevTargets`' weighted average; ≈6 makes 3D continuity
   dominate (the reference's `correspondence_weight_3d`).
-- *`filterMinVisibleNodes`/`filterMinInstanceScore` (both default 0 = off).*
-  `collectInstances` gates every instance through `passesDetectionFilter`:
-  fewer than N present keypoints (`inst.countPoints()`), or — when a per-instance
-  `score` exists — below the score. Full parity (mean-node-score, OKS dedup, gap
+- *`filterMinVisibleNodes`/`filterMinInstanceScore`/`filterMinMeanNodeScore`
+  (all default 0 = off).* `collectInstances`, `buildTrackerDetections` and
+  `buildTrackerInputs` (the last two given the session, which a lazy project's
+  node scores need) gate every instance through `passesDetectionFilter`
+  (`pose/detection-filter-stats.js`, which the Tracking Wizard's readout also
+  counts with, so the two cannot disagree): fewer than N present keypoints
+  (`inst.countPoints()`), or — when a per-instance `score` exists — below the
+  score, or a prediction whose mean node score (sleap-nn's, a missing node
+  counting as 0) is below `filterMinMeanNodeScore`. Full parity (OKS dedup, gap
   recovery) is not implemented.
 
 Covered by `tests/test-tracker-luc3d.mjs` (filter + weight on the real
@@ -1843,6 +1942,8 @@ drifts upward.
   readers set `numAnimals` directly, so a reopened project is not dirty.
 
 **Imports from project modules.**
+- `./detection-filter-stats.js` — `passesDetectionFilter` (the detection-pool
+  filter; see above).
 - `./pose-data.js` — `InstanceGroup`, `points3dNodeCount`, `hasPoint3d`,
   `readPoint3d`, `pooledPoints3d` (`commitTrackedFrame` stores a COPY of the
   target's 3D in the slab pool, so the group does not share the target's live
@@ -8417,7 +8518,7 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   wizard's render catalog `[{ id, label, default, value, min, max, step, desc, kind }]`
   (`kind`: `'toggle'` for on/off settings, drawn as a switch; else `'number'`),
   **filtered to `WIZARD_THRESHOLD_IDS`** — the CrossViewTracker's free parameters
-  only (`filterMinVisibleNodes`, `filterMinInstanceScore`, `corr2dWeight`,
+  only (`filterMinVisibleNodes`, `filterMinInstanceScore`, `filterMinMeanNodeScore`, `corr2dWeight`,
   `corr3dWeight`, `velocityThreshold`, `distanceThreshold`, `timePenalty`,
   `stale`, `matchGate` (0/1 toggle for the CrossViewTracker match gate),
   `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
@@ -8459,6 +8560,54 @@ bridgeable.
 `ui/track-range-modal.js`, `ui/id-switch-modal.js`, `ui/id-switch-highlight.js`,
 `ui/rendering.js`, `ui/timeline.js`, `pose/tracker.js`, `pose/triangulation.js`,
 `pose/triangulation-pool.js`.
+
+---
+
+### ui/detection-filter-preview.js
+
+**Purpose.** The Tracking Wizard's readout, right under the three detection-
+filter fields: what share of the active session's detections each filter
+would remove at the values being typed — too few nodes, low instance score,
+low mean node score — per camera and over the tracked cameras, with the share
+the three remove together ("Removed") and the share failing more than one
+("Fail 2+"). Below it, "How the detections are spread": per camera, a small
+bar chart of each of the three quantities with its median, the bars below the
+filter's minimum in orange.
+
+**Key exports.**
+- `buildDetectionFilterPreview({session, getValues, isCameraIncluded})` →
+  `{root, start, update, dispose}`. `getValues()` returns `{minVisibleNodes,
+  minInstanceScore, minMeanNodeScore}`. `start()` begins the one walk
+  (`collectDetectionStatsAsync`, one camera per task) and is idempotent;
+  `update()` re-counts from the recorded columns and re-renders;
+  `dispose()` cancels a walk in flight.
+- `fmtShare(part, whole)` — `12.3%`; `<0.1%` / `>99.9%` so a sliver is never
+  rounded to 0% or 100%; `—` with nothing to divide by.
+
+**Behavior.** Counts read `getValues()` (the wizard's unsaved `working`
+values), so they move before Apply. A camera that loses far more than the
+others (`flagOutlierCameras`) is flagged in each filter's own column, and — for
+"Removed" — its row is coloured, tagged `loses far more`, and named in a
+sentence under the table that also says what the total shows ("… The total
+(2.4%) hides this."). A camera switched off in Camera Views is greyed, tagged
+`excluded`, and left out of the total and of every comparison. Missing scores
+are said, never shown as 0%: `no scores` / `no node scores` tags per camera, a
+note for each (all-zero instance scores: a minimum above 0 removes every
+prediction; no node scores: the node-score filter removes nothing), and the
+chart says it instead of drawing bars. An empty session, no session, and a
+failed walk each get a sentence instead of a table. Counts carry thousands
+commas. One scroller: the block grows to its full height.
+
+**Imports from project modules.** `../pose/detection-filter-stats.js`
+(`collectDetectionStatsAsync`, `countDetectionFilters`, `detectionHistograms`,
+`flagOutlierCameras`).
+
+**Imported by.** `ui/settings-modal.js`.
+
+**User-facing features.** Settings ▸ Tracking Wizard ▸ Tracking Thresholds:
+"What these filters would remove". Covered by
+`tests/e2e/detection-filter-preview.mjs` and
+`tests/test-detection-filter-stats.mjs`.
 
 ---
 
@@ -8504,14 +8653,20 @@ only; nothing commits until **Apply** (`setDefaultTriangulationMethod` +
 `applyBindings` + `setNodeWeights` + `setCameraWeights` +
 `setTrackingThresholds`), which repaints overlays + timeline and re-fits the
 ID-switch box (`refreshIdSwitchHighlight`, which encloses only nonzero-weight
-nodes). Cancel / × / backdrop / Escape discard. A capture-phase document keydown
+nodes). Cancel / × / backdrop / Escape discard. Under the three
+detection-filter fields sits `ui/detection-filter-preview.js`'s per-camera
+readout of what they would remove; it re-counts on every `input` and camera
+switch (it reads `working`, so it moves before Apply), and its one walk of the
+session starts the first time the wizard panel is SHOWN (`selectPanel`), so
+Settings opened for anything else walks nothing. Teardown disposes it. A capture-phase document keydown
 listener keeps background shortcuts from firing while it is open, and is
 removed on teardown.
 
 **Imports from project modules.** `./settings.js` (`getDefaultTriangulationMethod`,
 `setDefaultTriangulationMethod`, `getActions`, `applyBindings`, `formatBinding`,
 `getNodeWeight`, `setNodeWeights`, `getCameraWeight`, `setCameraWeights`,
-`getTrackingThresholdDefs`, `setTrackingThresholds`); `./app-state.js`
+`getTrackingThresholdDefs`, `setTrackingThresholds`); `./detection-filter-preview.js`
+(`buildDetectionFilterPreview`); `./app-state.js`
 (`getActiveSession`, `state`, `timeline`); `./rendering.js` (`drawAllOverlays`,
 for the post-Apply repaint); `./modal-geometry.js` (`installModalGeometry`);
 `./id-switch-highlight.js` (`refreshIdSwitchHighlight`, on Apply).
@@ -10698,6 +10853,22 @@ filesystem enumeration, decoder rebuild.
   `options.allowSkip` (a "Skip — Load Videos Later" button; used by the lazy
   reopen) and closes on `Esc`; both resolve `null`, which every caller treats as
   "no videos picked".
+  `forceVideoSelection(refInfo, options)` (Load Project on a V2/legacy `.json`,
+  Add SLP with no embedded video) is NOT blocking: a **Continue Without Video**
+  button and `Esc` both resolve `[]`, which both callers treat as "no videos"
+  (#337); a cancelled picker leaves it up. `options.title` names what was
+  loaded, and the "Expected:" line is omitted when `refInfo` is empty — callers
+  pass `''`, not a `'(unknown)'` placeholder.
+- `adoptLabeledFrameCount()` — sizes a labeled project that has NO view:
+  `totalFrames = last labeled frame + 1`, plus the readout and the timeline;
+  returns the first labeled frame (or -1 when it did nothing). Called right
+  after `updateTotalFrames()`, whose no-decoder branch resets the count to 0 on
+  purpose (so one session's length cannot leak into another) — which is why this
+  is a separate step rather than a change to `updateTotalFrames`, whose many
+  callers rely on that reset. Callers: `handleLoadProject` (a load continued
+  without video) and `handleLoadVideos` (a Load Videos where nothing decoded).
+  A no-op with any view, and on a LAZY session, whose resident `frameGroups`
+  would give a plausible, too-small count.
 - `isCalibrationVideoFile(file)` — a thin wrapper of `isCalibrationImagesVideo`
   (`loading/video-file-pick.js`): true for clips under a `calibration_images/`
   path segment. The folder scans recurse into camera subfolders and those
@@ -10709,7 +10880,8 @@ filesystem enumeration, decoder rebuild.
   `attachVideosForLazyReopen`, SLP import).
 - View/grid: `createViewForVideoFile`, `removeVideoFile`, `updateGridLayout`,
   `createVideoPromptCell`, `fitCanvasesToCells`, `cellResizeObserver`,
-  `reapplyAllZoom`, `rebuildVideoController`, `updateTotalFrames`.
+  `reapplyAllZoom`, `rebuildVideoController`, `updateTotalFrames`,
+  `adoptLabeledFrameCount` (see Video assignment above).
   `reapplyAllZoom()` runs `videoController.reapplyZoom` on every view — after
   `fitCanvasesToCells` in `cellResizeObserver`, and on a devicePixelRatio change
   via a module-level `matchMedia('(resolution: Ndppx)')` watcher (re-armed each
@@ -12372,7 +12544,11 @@ loading-overlay/status-text UI helpers.
   `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject` (routes a
   large `.slp` — over 200 MB, `LARGE_SLP_BYTES` — to the memory-bounded
   `handleLoadProjectSlpLazy` in `loading/session-loader.js` instead of the
-  eager parse, freeing any previously loaded project first).
+  eager parse, freeing any previously loaded project first). A `.json` loaded
+  WITHOUT video (Continue Without Video / `Esc` on `forceVideoSelection`) has no
+  decoder to size it, so `state.totalFrames` comes from the last labeled frame
+  (`adoptLabeledFrameCount`), the view opens on the first, and the status line
+  says to attach videos via File ▸ Load Videos.
 - `buildSlpBytes` (internal) assembles the multi-session SLP. **When EVERY
   session in `state.sessions` has an open `lazyLoader`, it routes to the
   memory-bounded streaming path** — `buildSessionSlpBytesStreaming`

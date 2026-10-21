@@ -4,7 +4,7 @@ Multi-view pose annotation GUI. Vanilla JS ES modules served as static files —
 
 ## Architecture
 `index.html` loads `app.js` (`<script type="module">`), which only imports `pose/initialization.js`. Per-module purpose/exports/dependents: **`MODULES.md`** (repo root).
-- `pose/` — data model, cross-view tracking, DLT triangulation, plane/mesh/origin models, ID-switch checks, lazy residency, app init (pure logic, mostly DOM-free). Workers: Track All runs on one (`tracker-pool.js`); triangulation math is `triangulation-core.js`, solved in parallel by `triangulation-pool.js`.
+- `pose/` — data model, cross-view tracking, DLT triangulation, plane/mesh/origin models, ID-switch checks, lazy residency, the tracker's detection-filter rule (`detection-filter-stats.js`, also what the Tracking Wizard counts with), app init (pure logic, mostly DOM-free). Workers: Track All runs on one (`tracker-pool.js`); triangulation math is `triangulation-core.js`, solved in parallel by `triangulation-pool.js`.
 - `ui/` — rendering, interaction, panels, modals, timeline, 3D viewport, settings, exports.
 - `loading/` — video decoding, session/SLP loading, file selection, web workers.
 - `import-export/` — save/load, SLP import/merge, `metadata.lucid` serializers, mesh export.
