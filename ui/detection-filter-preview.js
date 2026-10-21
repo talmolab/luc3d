@@ -204,14 +204,13 @@ export function buildDetectionFilterPreview(opts) {
         return hist;
     }
 
-    function renderDistributions(v) {
+    function renderDistributions(v, counts) {
         const sec = el('div', 'dfp-dist');
         sec.appendChild(el('div', 'dfp-subtitle', 'How the detections are spread'));
         sec.appendChild(el('div', 'dfp-note',
             'Orange bars fall below the minimum you set, so tracking would drop those detections. ' +
             'Mean node score is the average of a detection\'s node scores over every node of the skeleton, ' +
             'a missing node counting as 0 (sleap-nn\'s "mean node score", as 0.3 computes it; 0.2 averaged the found nodes only).'));
-        const counts = countDetectionFilters(stats, v, included);
         const table = el('table', 'dfp-table dfp-dist-table');
         const head = el('tr');
         ['Camera', 'Visible nodes (0 → ' + hists.maxNodes + ')', 'Instance score (0 → 1)', 'Mean node score (0 → 1)']
@@ -259,8 +258,9 @@ export function buildDetectionFilterPreview(opts) {
             return;
         }
         const v = values();
-        renderFilters(countDetectionFilters(stats, v, included), v);
-        renderDistributions(v);
+        const counts = countDetectionFilters(stats, v, included);   // the one pass over every detection
+        renderFilters(counts, v);
+        renderDistributions(v, counts);
     }
 
     // The walk starts when the wizard is first SHOWN (`start`), not when the

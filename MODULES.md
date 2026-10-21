@@ -955,8 +955,11 @@ is harmless for two cameras empties the third.
   camName?, frameIdx?)` — **the tracker's filter**; every minimum 0 is a no-op,
   and the node score is computed only when its minimum is set.
 - `collectDetectionStats(session)` / `collectDetectionStatsAsync(session,
-  {isCancelled})` — walk the session ONCE (the async one yields between
-  cameras) into flat typed columns: camera index, present-node count, instance
+  {isCancelled})` — walk the session ONCE into flat typed columns. The async
+  one walks each camera in windows of `ASYNC_WINDOW_FRAMES` (4,000) frames with
+  a yield between them: one task per CAMERA held the page ~300 ms per camera on
+  the real 5-mouse project (108,000 frames x 8 cameras, 4.2M detections, lazy),
+  where the whole walk now takes ~2.7 s with no task over ~0.1 s. Columns: camera index, present-node count, instance
   score (Float64 — a stored 0.9 must still pass a minimum of 0.9), mean node
   score (the same arithmetic as `meanNodeScore`, store rows included),
   predicted flag; plus per-camera `detections` / `predicted` /
@@ -971,7 +974,9 @@ is harmless for two cameras empties the third.
   is spread: `visible` (one bin per node count, 0 … the largest in the
   session), `score` (predictions only) and `nodeScore` (detections with node
   scores), the last two in equal-width bins over [0, 1] (above 1 lands in the
-  last), each with its median.
+  last), each with its median. One pass, no sort: the score medians come from
+  1,000 bins per unit (exact to 0.001, finer than the two decimals shown) —
+  sorting each camera's values held the page ~0.9 s on that same project.
 - `flagOutlierCameras(rows, partKey, wholeKey?)` — the cameras that lose MUCH
   more than the rest, which the total row hides (real HardFight, sideC
   unfiltered, at the inference values 12 / 0.35 / 0.6: sideC 24.8%, the other

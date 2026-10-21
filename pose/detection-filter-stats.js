@@ -233,9 +233,16 @@ function pushInstance(sink, ci, session, camName, frameIdx, inst) {
 
 // Every in-memory detection of one camera: what `buildTrackerDetections` sees
 // for each resident frame (group members + the unlinked pool, disjoint).
-function collectResident(sink, ci, session, camName) {
+// `entries` (optional) is `[...session.frameGroups]`, walked over [i0, i1) —
+// how the async walk splits a long eager session into short tasks.
+function collectResident(sink, ci, session, camName, entries, i0, i1) {
     if (!session.frameGroups) return;
-    for (var entry of session.frameGroups) {
+    var list = entries || session.frameGroups;
+    var from = entries ? i0 : 0, to = entries ? i1 : Infinity, pos = -1;
+    for (var entry of list) {
+        pos++;
+        if (pos < from) continue;
+        if (pos >= to) break;
         var frameIdx = entry[0], fg = entry[1];
         if (!fg) continue;
         var linked = fg.getInstances(camName);
@@ -249,8 +256,9 @@ function collectResident(sink, ci, session, camName) {
 
 // One camera's NON-resident frames, read from the lazy store's columns with the
 // values hydration would produce (see the header). A camera the loader does
-// not back has no store rows.
-function collectStore(sink, ci, session, camName) {
+// not back has no store rows. `range` ({start, end}, frame indices) narrows it
+// to one window, for the async walk.
+function collectStore(sink, ci, session, camName, range) {
     var loader = session.lazyLoader;
     var labels = loader.labelsByCam && loader.labelsByCam.get(camName);
     var store = labels && labels._lazyDataStore;
@@ -278,7 +286,7 @@ function collectStore(sink, ci, session, camName) {
         var score = isPred ? (Number(idn.score ? idn.score[j] : 0) || 0) : 0;
         // The arithmetic `meanNodeScore` uses on a hydrated instance of this row.
         sink.push(ci, vis, score, isPred ? storeRowMeanNodeScore(pred, p0, p1, numNodes) : NaN, isPred);
-    }, { camera: camName });
+    }, range ? { camera: camName, start: range.start, end: range.end } : { camera: camName });
 }
 
 function sessionCameraNames(session) {
@@ -305,9 +313,15 @@ export function collectDetectionStats(session) {
     return finishSink(sink);
 }
 
+/** Frames per task in the async walk: ~20,000 detections at 5 animals, a few ms. */
+export const ASYNC_WINDOW_FRAMES = 4000;
+
 /**
- * The same, one camera per task, so a large project never blocks the page for
- * longer than one camera's walk. `isCancelled()` stops it early (returns null).
+ * The same, in short tasks: each camera is walked in windows of
+ * `ASYNC_WINDOW_FRAMES` frames with a yield between them, so a large project
+ * (108,000 frames x 8 cameras, 4.2M detections, measured) never blocks the
+ * page for more than a few milliseconds at a time — one task per CAMERA held
+ * it ~300 ms per camera. `isCancelled()` stops it early (returns null).
  * @param {Object} session
  * @param {{isCancelled?: () => boolean}} [opts]
  * @returns {Promise<Object|null>}
@@ -315,11 +329,33 @@ export function collectDetectionStats(session) {
 export async function collectDetectionStatsAsync(session, opts) {
     var cancelled = (opts && opts.isCancelled) || function () { return false; };
     var sink = makeSink(sessionCameraNames(session));
+    var pause = function () { return new Promise(function (r) { setTimeout(r, 0); }); };
+    var loader = session && session.lazyLoader;
+    var lazy = !!loader && typeof loader.forEachInstanceRow === 'function';
+    var nFrames = lazy ? (loader.nFrames || 0) : 0;
+    var entries = session && session.frameGroups ? Array.from(session.frameGroups) : [];
     for (var ci = 0; ci < sink.cameras.length; ci++) {
-        await new Promise(function (r) { setTimeout(r, 0); });
-        if (cancelled()) return null;
-        collectCamera(sink, ci, session);
+        var camName = sink.cameras[ci];
+        if (lazy) {
+            if (nFrames > 0) {
+                for (var f = 0; f < nFrames; f += ASYNC_WINDOW_FRAMES) {
+                    await pause();
+                    if (cancelled()) return null;
+                    collectStore(sink, ci, session, camName, { start: f, end: Math.min(nFrames, f + ASYNC_WINDOW_FRAMES) });
+                }
+            } else {
+                await pause();
+                if (cancelled()) return null;
+                collectStore(sink, ci, session, camName);
+            }
+        }
+        for (var i = 0; i < entries.length; i += ASYNC_WINDOW_FRAMES) {
+            await pause();
+            if (cancelled()) return null;
+            collectResident(sink, ci, session, camName, entries, i, i + ASYNC_WINDOW_FRAMES);
+        }
     }
+    await pause();
     if (cancelled()) return null;
     return finishSink(sink);
 }
@@ -416,34 +452,50 @@ export function flagOutlierCameras(rows, partKey, wholeKey) {
     return out;
 }
 
-// Equal-width histogram of `list` over [0, 1] (above 1 lands in the last bin)
-// plus its median; NaN median for an empty list.
-function unitHistogram(list, nb) {
-    var h = new Uint32Array(nb);
-    for (var j = 0; j < list.length; j++) {
-        var b = Math.floor(list[j] * nb);
-        h[b < 0 ? 0 : (b >= nb ? nb - 1 : b)]++;
-    }
-    return { count: list.length, median: medianOf(list), bins: h };
+// Bins per unit for the medians: 1,000 resolves a median to 0.001, finer than
+// the two decimals the wizard prints, with no sort — sorting each camera's
+// values held the page ~0.9 s on a 4.2M-detection project.
+var FINE_BINS = 1000;
+
+function fineBin(v) {
+    var b = Math.floor(v * FINE_BINS);
+    return b < 0 ? 0 : (b >= FINE_BINS ? FINE_BINS - 1 : b);
 }
 
-function medianOf(list) {
-    if (!list.length) return NaN;
-    var sorted = Float64Array.from(list).sort();
-    var mid = sorted.length >> 1;
-    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+// Median of a histogram whose bin b holds values in [b·w, (b+1)·w): the centre
+// of the bin holding the middle value (the mean of the two middle bins' centres
+// for an even count). `w` = 1 makes integer bins exact. NaN for no values.
+function histMedian(h, total, w, offset) {
+    if (!total) return NaN;
+    var lo = (total - 1) >> 1, hi = total >> 1;      // 0-based ranks of the middle value(s)
+    var seen = 0, bLo = -1, bHi = -1;
+    for (var b = 0; b < h.length; b++) {
+        seen += h[b];
+        if (bLo < 0 && seen > lo) bLo = b;
+        if (seen > hi) { bHi = b; break; }
+    }
+    return ((bLo + bHi) / 2) * w + offset;
+}
+
+// Fold `FINE_BINS` fine bins into `nb` display bins over [0, 1].
+function foldBins(fine, nb) {
+    var h = new Uint32Array(nb);
+    for (var b = 0; b < FINE_BINS; b++) h[Math.min(nb - 1, Math.floor(b * nb / FINE_BINS))] += fine[b];
+    return h;
 }
 
 /**
  * Per camera, how the three filtered quantities are spread — what the
  * wizard draws so each filter's cut can be seen against its own data:
  * - `visible`: one bin per present-node count, 0 … `maxNodes` (the largest
- *   count in the session), over every detection;
+ *   count in the session), over every detection; its median is exact;
  * - `score`: instance score, `bins` equal-width bins over [0, 1], over the
  *   PREDICTIONS (a user instance's score is not a model score);
  * - `nodeScore`: mean node score, the same bins, over the detections that
  *   carry node scores.
- * Each is `{count, median, bins}`.
+ * Each is `{count, median, bins}`; a value above 1 lands in the last bin. The
+ * two score medians come from 1,000 bins per unit, so they are exact to 0.001.
+ * One pass over the columns, no sorting.
  * @param {Object} stats
  * @param {number} [bins=10]
  * @returns {{maxNodes: number, cameras: Array<{name, visible, score, nodeScore}>}}
@@ -453,26 +505,28 @@ export function detectionHistograms(stats, bins) {
     if (!stats) return { maxNodes: 0, cameras: [] };
     var maxNodes = 0;
     for (var i = 0; i < stats.n; i++) if (stats.visible[i] > maxNodes) maxNodes = stats.visible[i];
-    var vis = stats.cameras.map(function () { return []; });
-    var sc = stats.cameras.map(function () { return []; });
-    var ns = stats.cameras.map(function () { return []; });
-    for (var k = 0; k < stats.n; k++) {
-        var c = stats.cam[k];
-        vis[c].push(stats.visible[k]);
-        if (stats.predicted[k] && stats.score[k] === stats.score[k]) sc[c].push(stats.score[k]);
-        var m = stats.meanNodeScore[k];
-        if (m === m) ns[c].push(m);
+    var nc = stats.cameras.length;
+    var vis = [], sc = [], ns = [], nSc = new Uint32Array(nc), nNs = new Uint32Array(nc), nVis = new Uint32Array(nc);
+    for (var c = 0; c < nc; c++) {
+        vis.push(new Uint32Array(maxNodes + 1)); sc.push(new Uint32Array(FINE_BINS)); ns.push(new Uint32Array(FINE_BINS));
     }
+    for (var k = 0; k < stats.n; k++) {
+        var ci = stats.cam[k];
+        vis[ci][stats.visible[k]]++; nVis[ci]++;
+        var s = stats.score[k];
+        if (stats.predicted[k] && s === s) { sc[ci][fineBin(s)]++; nSc[ci]++; }
+        var m = stats.meanNodeScore[k];
+        if (m === m) { ns[ci][fineBin(m)]++; nNs[ci]++; }
+    }
+    var half = 0.5 / FINE_BINS;
     return {
         maxNodes: maxNodes,
         cameras: stats.cameras.map(function (name, ci) {
-            var h = new Uint32Array(maxNodes + 1);
-            for (var j = 0; j < vis[ci].length; j++) h[vis[ci][j]]++;
             return {
                 name: name,
-                visible: { count: vis[ci].length, median: medianOf(vis[ci]), bins: h },
-                score: unitHistogram(sc[ci], nb),
-                nodeScore: unitHistogram(ns[ci], nb),
+                visible: { count: nVis[ci], median: histMedian(vis[ci], nVis[ci], 1, 0), bins: vis[ci] },
+                score: { count: nSc[ci], median: histMedian(sc[ci], nSc[ci], 1 / FINE_BINS, half), bins: foldBins(sc[ci], nb) },
+                nodeScore: { count: nNs[ci], median: histMedian(ns[ci], nNs[ci], 1 / FINE_BINS, half), bins: foldBins(ns[ci], nb) },
             };
         }),
     };
