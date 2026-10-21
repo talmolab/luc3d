@@ -56,13 +56,13 @@ import {
     serializePlaneProject, restorePlaneProject,
     serializePlanePlacements, restorePlanePlacements,
     serializeOriginFrame, restoreOriginFrame,
-} from '../pose/plane-serialization.js?v=932ea1979150';
+} from '../pose/plane-serialization.js?v=3f3db23497b5';
 // Circular by design, and safe for the same reason the rest of this feature's
 // cycles are: every use below is inside a function body, so the bindings are
 // resolved at call time rather than at module evaluation.
-import { planeState } from '../ui/plane-definition.js?v=932ea1979150';
-import { originState } from '../ui/origin-definition.js?v=932ea1979150';
-import { state } from '../ui/app-state.js?v=932ea1979150';
+import { planeState } from '../ui/plane-definition.js?v=3f3db23497b5';
+import { originState } from '../ui/origin-definition.js?v=3f3db23497b5';
+import { state } from '../ui/app-state.js?v=3f3db23497b5';
 
 /**
  * Every `metadata.lucid` key this module may write. Exported so the

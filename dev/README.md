@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/luc3d-wordmark.png" alt="LUC3D" width="320">
+</p>
+
 # luc3d (Label Unification and Correspondence in 3D Annotation GUI)
 Label Unification and Correspondence in 3D Annotation GUI in Web Browser
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
