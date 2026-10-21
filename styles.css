@@ -5044,6 +5044,9 @@ kbd {
   border-bottom: none;
   border-top: 1px solid var(--border-light);
 }
+.dfp-table tr.dfp-flagged td {
+  color: var(--warning-color);
+}
 .dfp-table tr.dfp-excluded td {
   opacity: 0.5;
 }

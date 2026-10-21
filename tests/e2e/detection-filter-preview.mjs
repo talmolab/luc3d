@@ -11,6 +11,8 @@
  *  3. Typing a minimum instance score updates the per-camera and total shares
  *     live, before Apply; "Fail both" counts detections failing both filters.
  *  4. Switching a camera off greys its row and drops it from the total.
+ *  4b. A camera losing far more than the others is flagged — row tag and a
+ *     sentence naming it — and the flag goes when it no longer applies.
  *  5. The mean-point-confidence preview shows per-camera medians and the share
  *     below its own (non-persisted) threshold.
  *  6. Cancel stores nothing; the filters keep their old values.
@@ -130,6 +132,17 @@ try {
     check(r[1].cells[2] === '12.5% (100)' && r[1].cells[4] === '50.0% (400)' && r[1].cells[5] === '12.5% (100)',
         `side: too few nodes 12.5%, removed 50%, fail both 12.5% (${r[1].cells.join(' | ')})`);
     check(r[2].cells[4] === '25.0% (400)', 'total removed follows');
+    const flag = () => page.evaluate(() => {
+        const root = document.querySelector('[data-testid="detection-filter-preview"]');
+        const t = root.querySelector('.dfp-filters');
+        const n = Array.from(root.querySelectorAll('.dfp-outlier-note')).map(e => e.textContent);
+        return { rows: Array.from(t.querySelectorAll('tr.dfp-flagged')).map(tr => tr.getAttribute('data-camera')),
+            tags: Array.from(t.querySelectorAll('.dfp-tag-warn')).map(e => e.textContent), note: n[0] || '' };
+    });
+    let fl = await flag();
+    check(fl.rows.join() === 'side' && fl.tags.includes('loses far more'), `the camera losing far more is flagged (${fl.rows.join()})`);
+    check(/^side loses 50\.0% of its detections, against 0% for the other cameras \(median\)\. The total \(25\.0%\) hides this\.$/.test(fl.note),
+        `and named in a sentence: "${fl.note}"`);
     const stored = await page.evaluate(async () => (await import('/ui/settings.js')).getTrackingThreshold('filterMinInstanceScore'));
     check(stored === 0, 'the readout moves before Apply; nothing is stored yet');
 
@@ -137,6 +150,8 @@ try {
     await page.evaluate(() => document.querySelector('.settings-toggle input[aria-label="Include view side in tracking"]').click());
     r = await rows();
     check(r[1].excluded && /excluded/.test(r[1].cells[0]), 'an excluded camera is greyed and tagged');
+    fl = await flag();
+    check(fl.rows.length === 0 && !fl.note, 'an excluded camera is not flagged');
     check(r[2].cells[1] === '800' && r[2].cells[4].startsWith('0%'), `it leaves the total (${r[2].cells.join(' | ')})`);
     await page.evaluate(() => document.querySelector('.settings-toggle input[aria-label="Include view side in tracking"]').click());
 
@@ -149,9 +164,21 @@ try {
     check(mps.rows.length === 2 && mps.rows[0][1] === '0.90' && mps.rows[1][1] === '0.75', `medians per camera (${mps.rows.map(x => x[1]).join(' / ')})`);
     check(mps.rows[1][3] === '50.0% (400)' && mps.rows[0][3] === '0%', `share below 0.75: side 50%, top 0% (${mps.rows.map(x => x[3]).join(' / ')})`);
     check(mps.bars === 20 && mps.below > 0, 'a ten-bar distribution per camera, bars under the threshold marked');
+    const mpsFlag = await page.evaluate(() => {
+        const sec = document.querySelector('[data-testid="detection-filter-preview"] .dfp-mps');
+        return { rows: Array.from(sec.querySelectorAll('tr.dfp-flagged')).map(tr => tr.getAttribute('data-camera')),
+            note: (sec.querySelector('.dfp-outlier-note') || {}).textContent || '' };
+    });
+    check(mpsFlag.rows.join() === 'side' && /^side has 50\.0% below 0\.75, against 0% for the other cameras \(median\)\.$/.test(mpsFlag.note),
+        `the confidence preview flags it too: "${mpsFlag.note}"`);
     await type('Preview mean point confidence threshold', 0.95);
     const mps2 = await page.evaluate(() => Array.from(document.querySelectorAll('.dfp-mps-table tbody tr')).map(tr => tr.lastChild.textContent.trim()));
     check(mps2[0] === '100% (800)' && mps2[1] === '100% (800)', `the preview threshold updates its column (${mps2.join(' / ')})`);
+
+    // Back to 0 / 0: nothing removed, nothing flagged.
+    await type('Min instance score (filter)', 0); await type('Min visible nodes (filter)', 0);
+    fl = await flag();
+    check(fl.rows.length === 0 && !fl.note, 'at 0 / 0 nothing is flagged');
 
     // ---- 6. Cancel ----
     await page.click('.settings-btn-cancel');

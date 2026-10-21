@@ -961,6 +961,16 @@ is harmless for two cameras empties the third.
   over the columns; this is what a keystroke costs.
 - `meanPointScoreHistograms(stats, bins)` — per camera, equal-width bins over
   [0, 1] (above 1 lands in the last) and the median.
+- `flagOutlierCameras(rows, partKey, wholeKey?)` — the cameras that lose MUCH
+  more than the rest, which the total row hides (real HardFight, sideC
+  unfiltered, at the inference values: sideC 13.7%, every other camera 0%,
+  total 0.6%). Each tracked camera with detections is compared with the
+  MEDIAN share of the OTHER tracked cameras (never with the total, which it is
+  part of) and flagged when it is at least `OUTLIER_MIN_EXCESS` (5 points)
+  above it AND at least `OUTLIER_MIN_RATIO` (2x) it — so 0.4% against 0.1% is
+  not news, and when every camera loses a lot none is singled out. Fewer than
+  two such cameras flag nothing; excluded cameras are neither flagged nor
+  compared with.
 
 **Rules.**
 - **The population is the WHOLE session.** Eager: every frame group's
@@ -11139,9 +11149,13 @@ bridgeable.
 **Purpose.** The Tracking Wizard's readout, right under the two detection-filter
 fields: what share of the active session's detections each filter would remove
 at the values being typed, per camera and over the tracked cameras, with the
-share the two remove together ("Removed") and the share failing both. Below it,
+share the two remove together ("Removed") and the share failing both. A camera
+that loses far more than the others (`flagOutlierCameras`) is coloured, tagged
+`loses far more`, and named in a sentence under the table that also says what
+the total shows ("… The total (0.6%) hides this."). Below it,
 each camera's mean per-point confidence — median and a ten-bar distribution —
-with a preview-only "share below" field (default 0.75, not stored): LUCID has
+with a preview-only "share below" field (default 0.75, not stored) and the same
+flag (`far more below`): LUCID has
 no such filter, but sleap-nn's inference filter on it is what removed most of a
 low side camera's detections in our data.
 

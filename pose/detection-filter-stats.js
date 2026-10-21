@@ -311,6 +311,46 @@ export function countDetectionFilters(stats, values, included) {
     return { perCamera: rows, total: total };
 }
 
+/** A camera is flagged when it loses at least this much more than the others… */
+export const OUTLIER_MIN_EXCESS = 0.05;
+/** …and at least this many times their median share. */
+export const OUTLIER_MIN_RATIO = 2;
+
+/**
+ * The cameras that lose MUCH more than the rest — what the total row hides.
+ *
+ * On the real HardFight session (sideC unfiltered), the filters at the values
+ * used at inference removed 13.7% of sideC's detections and 0% of each of the
+ * other seven, and the total read 0.6%. So a camera is compared with the
+ * MEDIAN share of the other tracked cameras, never with the total (which it
+ * is part of), and flagged when it is both at least `OUTLIER_MIN_EXCESS`
+ * (5 percentage points) above that median — so 0.4% against 0.1% is not news
+ * — and at least `OUTLIER_MIN_RATIO` times it — so when every camera loses a
+ * lot, none is singled out. Needs two tracked cameras with detections;
+ * excluded cameras are neither flagged nor part of anyone's comparison.
+ *
+ * @param {Array} rows - `countDetectionFilters(...).perCamera`
+ * @param {string} partKey - e.g. 'removed' or 'failMeanPointScore'
+ * @param {string} [wholeKey='detections'] - the share's denominator
+ * @returns {Array<{name: string, share: number, othersMedian: number}>}
+ */
+export function flagOutlierCameras(rows, partKey, wholeKey) {
+    var wk = wholeKey || 'detections';
+    var live = (rows || []).filter(function (r) { return r.included !== false && r[wk] > 0; });
+    if (live.length < 2) return [];
+    var shares = live.map(function (r) { return r[partKey] / r[wk]; });
+    var out = [];
+    for (var i = 0; i < live.length; i++) {
+        var others = shares.filter(function (_, j) { return j !== i; }).sort(function (a, b) { return a - b; });
+        var mid = others.length >> 1;
+        var med = others.length % 2 ? others[mid] : (others[mid - 1] + others[mid]) / 2;
+        if (shares[i] - med >= OUTLIER_MIN_EXCESS - 1e-12 && shares[i] >= OUTLIER_MIN_RATIO * med) {
+            out.push({ name: live[i].name, share: shares[i], othersMedian: med });
+        }
+    }
+    return out;
+}
+
 /**
  * Distribution of mean per-point confidence, per camera: `bins` equal-width
  * bins over [0, 1] (a value above 1 lands in the last), plus the median.

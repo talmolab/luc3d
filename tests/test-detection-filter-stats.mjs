@@ -17,6 +17,8 @@
  *  7. The mean-point-confidence preview and histograms.
  *  8. The async walk equals the sync one, and stops when cancelled.
  *  9. `fmtShare` (ui/detection-filter-preview.js).
+ * 10. `flagOutlierCameras`: the camera losing far more than the rest, with
+ *     the real HardFight shape, and the cases it must NOT flag.
  *
  * Run:  node tests/test-detection-filter-stats.mjs
  */
@@ -303,6 +305,45 @@ function eagerSession() {
 {
     ok(fmtShare(0, 0) === '—' && fmtShare(0, 10) === '0%' && fmtShare(1, 4) === '25.0%', 'plain shares');
     ok(fmtShare(1, 10000) === '<0.1%' && fmtShare(9999, 10000) === '>99.9%' && fmtShare(5, 5) === '100%', 'slivers are never rounded to 0% or 100%');
+}
+
+// ---------------------------------------------------------------------------
+// 10. Flag the camera that loses far more than the others
+// ---------------------------------------------------------------------------
+{
+    const row = (name, removed, detections, extra) => Object.assign({ name, removed, detections, included: true }, extra || {});
+    const names = (f) => f.map((x) => x.name).join();
+    // The real HardFight shape: sideC 984 of 7,204 removed, every other camera 0.
+    const fight = [row('mid', 0, 20390), row('topB', 0, 21006), row('topC', 0, 20731), row('sideC', 984, 7204),
+        row('topR', 0, 22208), row('topL', 0, 21118), row('sideL', 0, 20199), row('sideR', 0, 20510)];
+    const f = F.flagOutlierCameras(fight, 'removed');
+    ok(names(f) === 'sideC' && near(f[0].share, 984 / 7204) && f[0].othersMedian === 0, `HardFight: sideC flagged (${names(f)})`);
+
+    ok(F.flagOutlierCameras([row('a', 4, 1000), row('b', 1, 1000), row('c', 1, 1000)], 'removed').length === 0,
+        '0.4% against 0.1% is not "far more" (under 5 points)');
+    ok(F.flagOutlierCameras([row('a', 500, 1000), row('b', 400, 1000), row('c', 450, 1000)], 'removed').length === 0,
+        'when every camera loses a lot, none is singled out (under 2x)');
+    ok(names(F.flagOutlierCameras([row('a', 60, 1000), row('b', 10, 1000), row('c', 10, 1000)], 'removed')) === 'a',
+        'exactly 5 points above and 6x the others is flagged');
+    ok(F.flagOutlierCameras([row('a', 140, 1000), row('b', 80, 1000), row('c', 80, 1000)], 'removed').length === 0,
+        '6 points above but under 2x is not');
+    ok(F.flagOutlierCameras([row('a', 900, 1000)], 'removed').length === 0, 'one camera: nothing to compare with');
+    ok(F.flagOutlierCameras([row('a', 900, 1000), row('b', 0, 0)], 'removed').length === 0,
+        'a camera with no detections is not a comparison');
+    ok(F.flagOutlierCameras([row('a', 900, 1000), row('b', 0, 1000, { included: false })], 'removed').length === 0 &&
+        F.flagOutlierCameras([row('a', 900, 1000, { included: false }), row('b', 0, 1000), row('c', 0, 1000)], 'removed').length === 0,
+        'an excluded camera is neither flagged nor compared with');
+    ok(names(F.flagOutlierCameras([row('a', 300, 1000), row('b', 250, 1000), row('c', 0, 1000), row('d', 0, 1000), row('e', 10, 1000)], 'removed')) === 'a,b',
+        'two cameras can both be flagged');
+    const mp = F.flagOutlierCameras([{ name: 'a', failMeanPointScore: 2559, withPointScores: 5848, included: true },
+        { name: 'b', failMeanPointScore: 348, withPointScores: 17559, included: true },
+        { name: 'c', failMeanPointScore: 170, withPointScores: 17805, included: true }], 'failMeanPointScore', 'withPointScores');
+    ok(names(mp) === 'a', 'the confidence preview is flagged over the detections that have point scores');
+    ok(F.flagOutlierCameras(null, 'removed').length === 0, 'no rows');
+
+    // Through the real counter: the eager fixture at 3 nodes / 0.5.
+    const c = F.countDetectionFilters(F.collectDetectionStats(eagerSession()), { minVisibleNodes: 3, minInstanceScore: 0.5 });
+    ok(names(F.flagOutlierCameras(c.perCamera, 'removed')) === 'side', 'from countDetectionFilters: side (2/3) against top (1/3)');
 }
 
 console.log(`\ntest-detection-filter-stats: ${passed} passed, ${failed} failed`);

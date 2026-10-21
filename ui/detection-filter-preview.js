@@ -20,6 +20,7 @@ import {
     collectDetectionStatsAsync,
     countDetectionFilters,
     meanPointScoreHistograms,
+    flagOutlierCameras,
 } from '../pose/detection-filter-stats.js';
 
 const HIST_BINS = 10;
@@ -35,6 +36,20 @@ export function fmtShare(part, whole) {
     if (p < 0.1) return '<0.1%';
     if (p > 99.9 && part < whole) return '>99.9%';
     return (p >= 99.95 ? '100' : p.toFixed(1)) + '%';
+}
+
+// One sentence per flagged camera — "sideC loses 13.7% of its detections,
+// against 0% for the other cameras (median)" — and, given the total's share,
+// that the total row hides it.
+function outlierNote(flags, verb, qualifier, totalShare) {
+    if (!flags.length) return null;
+    const parts = flags.map(function (f) {
+        return f.name + ' ' + verb + ' ' + fmtShare(f.share, 1) + qualifier + ', against ' +
+            fmtShare(f.othersMedian, 1) + ' for the other cameras (median)';
+    });
+    let text = parts.join('; ') + '.';
+    if (totalShare != null) text += ' The total (' + fmtShare(totalShare, 1) + ') hides this.';
+    return el('div', 'dfp-note dfp-warn dfp-outlier-note', text);
 }
 
 function el(tag, cls, text) {
@@ -98,11 +113,17 @@ export function buildDetectionFilterPreview(opts) {
         const tb = el('tbody');
         table.appendChild(tb);
 
+        // The camera(s) losing far more than the rest: what the total hides.
+        const flags = flagOutlierCameras(counts.perCamera, 'removed');
+        const flagged = new Set(flags.map(function (f) { return f.name; }));
+
         function row(r, isTotal) {
-            const tr = el('tr', isTotal ? 'dfp-total' : (r.included ? '' : 'dfp-excluded'));
+            const isFlagged = !isTotal && flagged.has(r.name);
+            const tr = el('tr', isTotal ? 'dfp-total' : (r.included ? (isFlagged ? 'dfp-flagged' : '') : 'dfp-excluded'));
             tr.setAttribute('data-camera', isTotal ? '' : r.name);
             const name = el('td', 'dfp-cam', isTotal ? 'All tracked cameras' : r.name);
             if (!isTotal && !r.included) name.appendChild(el('span', 'dfp-tag', 'excluded'));
+            if (isFlagged) name.appendChild(el('span', 'dfp-tag dfp-tag-warn', 'loses far more'));
             tr.appendChild(name);
             tr.appendChild(el('td', 'dfp-num', fmtCount(r.detections)));
             tr.appendChild(shareCell(r.failVisible, r.detections));
@@ -123,6 +144,8 @@ export function buildDetectionFilterPreview(opts) {
         counts.perCamera.forEach(function (r) { row(r, false); });
         if (counts.perCamera.length > 1) row(t, true);
         body.appendChild(table);
+        const note = outlierNote(flags, 'loses', ' of its detections', t.detections ? t.removed / t.detections : null);
+        if (note) body.appendChild(note);
 
         // Scores the file never had: say so, rather than let a column of
         // numbers read as a verdict.
@@ -165,6 +188,8 @@ export function buildDetectionFilterPreview(opts) {
         function renderMpsTable() {
             holder.textContent = '';
             const counts = countDetectionFilters(stats, { minMeanPointScore: previewMps }, included);
+            const mpsFlags = flagOutlierCameras(counts.perCamera, 'failMeanPointScore', 'withPointScores');
+            const mpsFlagged = new Set(mpsFlags.map(function (f) { return f.name; }));
             const table = el('table', 'dfp-table dfp-mps-table');
             const head = el('tr');
             ['Camera', 'Median', 'Distribution (0 → 1)', 'Below ' + previewMps].forEach(function (h) { head.appendChild(el('th', null, h)); });
@@ -173,9 +198,12 @@ export function buildDetectionFilterPreview(opts) {
             table.appendChild(tb);
             hists.forEach(function (h, i) {
                 const r = counts.perCamera[i];
-                const tr = el('tr', r.included ? '' : 'dfp-excluded');
+                const isFlagged = mpsFlagged.has(h.name);
+                const tr = el('tr', r.included ? (isFlagged ? 'dfp-flagged' : '') : 'dfp-excluded');
                 tr.setAttribute('data-camera', h.name);
-                tr.appendChild(el('td', 'dfp-cam', h.name));
+                const nameTd = el('td', 'dfp-cam', h.name);
+                if (isFlagged) nameTd.appendChild(el('span', 'dfp-tag dfp-tag-warn', 'far more below'));
+                tr.appendChild(nameTd);
                 if (!h.count) {
                     tr.appendChild(el('td', 'dfp-num', '—'));
                     const td = el('td', null, 'no point scores');
@@ -201,6 +229,8 @@ export function buildDetectionFilterPreview(opts) {
                 tb.appendChild(tr);
             });
             holder.appendChild(table);
+            const note = outlierNote(mpsFlags, 'has', ' below ' + previewMps, null);
+            if (note) holder.appendChild(note);
         }
         renderMpsTable();
     }
