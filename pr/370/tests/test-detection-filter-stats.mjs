@@ -265,6 +265,11 @@ function eagerSession() {
         if (exp !== got) { agree = false; console.error(`    lazy vis ${mv} score ${ms} node ${mn}: ${got} vs ${exp}`); }
     }
     ok(agree, 'lazy counts equal the tracker\'s verdict on the hydrated instances, node scores read from the store');
+    // The async walk takes the store in frame windows: same detections.
+    loader.nFrames = 12;
+    const as = await F.collectDetectionStatsAsync(s);
+    const key = (x) => { const r = []; for (let i = 0; i < x.n; i++) r.push([x.cam[i], x.visible[i], x.score[i], x.meanNodeScore[i], x.predicted[i]].join(':')); return r.sort().join(); };
+    ok(as.n === st.n && key(as) === key(st), 'lazy: the windowed async walk records exactly what the one-pass walk does');
     ok(near(F.meanNodeScore(hydrated[0], s, 'camA', 10), 0.7) && Number.isNaN(F.meanNodeScore(hydrated[0], s, 'camA', 12)) &&
         Number.isNaN(F.meanNodeScore(hydrated[0], null, 'camA', 10)), 'a lazy node score needs the session and an existing store row');
 }
@@ -287,15 +292,23 @@ function eagerSession() {
     const H = F.detectionHistograms(st, 10);
     const h = H.cameras.map((c) => c.nodeScore);
     ok(h.length === 2 && h[0].count === 2 && h[1].count === 3, 'node score: user instances and score-less detections are left out');
-    ok(h[0].bins[8] === 1 && h[0].bins[2] === 1 && near(h[0].median, 0.55), `top: bins and median (${h[0].median})`);
-    ok(h[1].bins[0] === 1 && h[1].bins[6] === 1 && h[1].bins[9] === 1 && near(h[1].median, 0.65), 'side: bins and median');
+    ok(h[0].bins[8] === 1 && h[0].bins[2] === 1 && near(h[0].median, 0.55, 1e-3), `top: bins and median, exact to 0.001 (${h[0].median})`);
+    ok(h[1].bins[0] === 1 && h[1].bins[6] === 1 && h[1].bins[9] === 1 && near(h[1].median, 0.65, 1e-3), `side: bins and median (${h[1].median})`);
     // visible nodes: top 4, 2, 3 (user) | side 4, 1, 4 — one bin per count, 0..4
     ok(H.maxNodes === 4 && Array.from(H.cameras[0].visible.bins).join() === '0,0,1,1,1' &&
         Array.from(H.cameras[1].visible.bins).join() === '0,1,0,0,2' && H.cameras[1].visible.median === 4,
         'visible nodes: one bin per count, every detection');
     // instance score: predictions only — top 0.9, 0.3 | side 0.4, 0.2, 0.95
     ok(H.cameras[0].score.count === 2 && H.cameras[0].score.bins[9] === 1 && H.cameras[0].score.bins[3] === 1 &&
-        H.cameras[1].score.count === 3 && near(H.cameras[1].score.median, 0.4), 'instance score: predictions only');
+        H.cameras[1].score.count === 3 && near(H.cameras[1].score.median, 0.4, 1e-3), 'instance score: predictions only');
+
+    // The medians come from 1,000 bins per unit — exact to 0.001 — against a sort.
+    const rs = makeSession(['a']);
+    const vals = [];
+    for (let f = 0; f < 999; f++) { const v = ((f * 7919) % 1000) / 1000 * 0.8 + 0.1; vals.push(v); frame(rs, f).addUnlinkedInstance('a', new UnlinkedInstance(pred(4, v), 'a')); }
+    vals.sort((x, y) => x - y);
+    const rm = F.detectionHistograms(F.collectDetectionStats(rs)).cameras[0].score.median;
+    ok(near(rm, vals[499], 1e-3), `the instance-score median is within 0.001 of the sorted median (${rm} vs ${vals[499]})`);
 
     const s = makeSession(['a']);
     frame(s, 0).addUnlinkedInstance('a', new UnlinkedInstance(pred(4, 0.9, [1.4, 1.4, 1.4, 1.4]), 'a'));
@@ -321,6 +334,18 @@ function eagerSession() {
     for (let f = 0; f < 1500; f++) frame(big, f).addUnlinkedInstance('a', new UnlinkedInstance(pred(1 + (f % 4), f / 1500), 'a'));
     const bs = F.collectDetectionStats(big);
     ok(bs.n === 1500 && bs.visible[1499] === 4 && near(bs.score[1499], 1499 / 1500), 'columns grow past their first capacity');
+
+    // An eager session longer than one async window, over two cameras.
+    const long = makeSession(['a', 'b']);
+    const N = F.ASYNC_WINDOW_FRAMES * 2 + 123;
+    for (let f = 0; f < N; f++) {
+        frame(long, f).addUnlinkedInstance('a', new UnlinkedInstance(pred(1 + (f % 4), (f % 97) / 97), 'a'));
+        if (f % 3 === 0) frame(long, f).addUnlinkedInstance('b', new UnlinkedInstance(pred(4, 0.5, [0.1, 0.2, 0.3, 0.4]), 'b'));
+    }
+    const ls = F.collectDetectionStats(long), la = await F.collectDetectionStatsAsync(long);
+    const same = la.n === ls.n && ['cam', 'visible', 'score', 'meanNodeScore', 'predicted'].every((k) =>
+        Array.from(la[k]).every((v, i) => Object.is(v, ls[k][i])));
+    ok(same && la.n === N + Math.ceil(N / 3), `eager: the windowed walk equals the one-pass walk across ${N} frames`);
 }
 
 // ---------------------------------------------------------------------------
