@@ -13,10 +13,10 @@
  *  4. Switching a camera off greys its row and drops it from the total.
  *  4b. A camera losing far more than the others is flagged — row tag and a
  *     sentence naming it — and the flag goes when it no longer applies.
- *  5. The mean-point-confidence preview shows per-camera medians and the share
+ *  5. The mean-node-confidence preview shows per-camera medians and the share
  *     below its own (non-persisted) threshold.
  *  6. Cancel stores nothing; the filters keep their old values.
- *  7. Missing instance scores and point scores are SAID, not shown as 0%.
+ *  7. Missing instance scores and node scores are SAID, not shown as 0%.
  *  8. An empty session and no session each get a sentence, not a table.
  *
  * Run: node tests/e2e/detection-filter-preview.mjs
@@ -155,7 +155,7 @@ try {
     check(r[2].cells[1] === '800' && r[2].cells[4].startsWith('0%'), `it leaves the total (${r[2].cells.join(' | ')})`);
     await page.evaluate(() => document.querySelector('.settings-toggle input[aria-label="Include view side in tracking"]').click());
 
-    // ---- 5. mean point confidence preview ----
+    // ---- 5. mean node confidence preview ----
     const mps = await page.evaluate(() => {
         const t = document.querySelector('[data-testid="detection-filter-preview"] .dfp-mps-table');
         const read = () => Array.from(t.querySelectorAll('tbody tr')).map(tr => Array.from(tr.children).map(td => td.textContent.trim()));
@@ -171,7 +171,7 @@ try {
     });
     check(mpsFlag.rows.join() === 'side' && /^side has 50\.0% below 0\.75, against 0% for the other cameras \(median\)\.$/.test(mpsFlag.note),
         `the confidence preview flags it too: "${mpsFlag.note}"`);
-    await type('Preview mean point confidence threshold', 0.95);
+    await type('Preview mean node confidence threshold', 0.95);
     const mps2 = await page.evaluate(() => Array.from(document.querySelectorAll('.dfp-mps-table tbody tr')).map(tr => tr.lastChild.textContent.trim()));
     check(mps2[0] === '100% (800)' && mps2[1] === '100% (800)', `the preview threshold updates its column (${mps2.join(' / ')})`);
 
@@ -199,7 +199,7 @@ try {
     });
     check(/no instance scores/.test(miss.text) && miss.tags.filter(t => t === 'no scores').length === 2,
         'missing instance scores are said, overall and per camera');
-    check(/no per-point confidence/.test(miss.text) && !miss.mpsTable, 'missing point scores are said instead of a table');
+    check(/no per-node confidence/.test(miss.text) && !miss.mpsTable, 'missing node scores are said instead of a table');
     await type('Min instance score (filter)', 0.5);
     r = await rows();
     check(r[2].cells[3] === '100% (1,600)' && r[1].cells[3] === '100% (800)no scores' && /removes every predicted detection/.test(await page.evaluate(() =>

@@ -8,7 +8,7 @@
 // score far below the others', so a value that is harmless for most cameras
 // can empty one of them — the per-camera rows are the point.
 //
-// Below that, the distribution of each camera's mean per-point confidence, with
+// Below that, the distribution of each camera's mean node confidence, with
 // a preview-only threshold: LUCID has no such filter, but sleap-nn's inference
 // filter on it is what removed most of a low camera's detections in our data.
 //
@@ -160,11 +160,11 @@ export function buildDetectionFilterPreview(opts) {
 
     function renderPointScores() {
         const sec = el('div', 'dfp-mps');
-        sec.appendChild(el('div', 'dfp-subtitle', 'Mean point confidence (preview only — not a filter)'));
+        sec.appendChild(el('div', 'dfp-subtitle', 'Mean node confidence (preview only — not a filter)'));
         body.appendChild(sec);
         if (!stats.hasPointScores) {
             sec.appendChild(el('div', 'dfp-note dfp-warn',
-                'The loaded predictions carry no per-point confidence, so its distribution cannot be shown.'));
+                'The loaded predictions carry no per-node confidence, so its distribution cannot be shown.'));
             return;
         }
         const ctl = el('label', 'dfp-mps-ctl');
@@ -172,7 +172,7 @@ export function buildDetectionFilterPreview(opts) {
         const input = el('input', 'settings-num-input dfp-mps-input');
         input.type = 'number'; input.min = '0'; input.max = '1'; input.step = '0.05';
         input.value = String(previewMps);
-        input.setAttribute('aria-label', 'Preview mean point confidence threshold');
+        input.setAttribute('aria-label', 'Preview mean node confidence threshold');
         input.addEventListener('input', function () {
             const x = parseFloat(input.value);
             if (isFinite(x)) { previewMps = Math.max(0, Math.min(1, x)); renderMpsTable(); }
@@ -180,7 +180,7 @@ export function buildDetectionFilterPreview(opts) {
         ctl.appendChild(input);
         sec.appendChild(ctl);
         sec.appendChild(el('div', 'dfp-note',
-            'LUCID does not filter on this. A detection\'s mean point confidence is the average of its keypoints\' scores, a missing keypoint counting as 0 (as sleap-nn 0.3 computes it; 0.2 averaged the found keypoints only); ' +
+            'LUCID does not filter on this. A detection\'s mean node confidence is the average of its nodes\' scores, a missing node counting as 0 (sleap-nn\'s "mean node score", as 0.3 computes it; 0.2 averaged the found nodes only); ' +
             'sleap-nn can drop detections below a minimum of it before LUCID ever sees them, which hits a camera whose values sit low hardest.'));
         const holder = el('div');
         sec.appendChild(holder);
@@ -206,7 +206,7 @@ export function buildDetectionFilterPreview(opts) {
                 tr.appendChild(nameTd);
                 if (!h.count) {
                     tr.appendChild(el('td', 'dfp-num', '—'));
-                    const td = el('td', null, 'no point scores');
+                    const td = el('td', null, 'no node scores');
                     td.colSpan = 2;
                     tr.appendChild(td);
                     tb.appendChild(tr);

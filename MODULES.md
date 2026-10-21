@@ -931,7 +931,7 @@ imports.
 
 **Why it exists.** The filters drop detections silently, and they do not hit
 every camera alike: on a real 3-camera rig the low side camera's detections
-scored far below the other two (median mean point score 0.64), so a value that
+scored far below the other two (median mean node score 0.64), so a value that
 is harmless for two cameras empties the third.
 
 **Key exports.**
@@ -945,7 +945,7 @@ is harmless for two cameras empties the third.
   {isCancelled})` — walk the session ONCE (the async one yields between
   cameras) into flat typed columns: camera index, present-keypoint count,
   instance score (Float64 — a stored 0.9 must still pass a minimum of 0.9),
-  mean per-point confidence as sleap-nn computes its "mean node score" — over
+  mean node confidence as sleap-nn computes its "mean node score" — over
   ALL nodes, a missing node counting as 0 (NaN with no point scores at all;
   averaging the present nodes only understated the real stressTest sideC
   rerun, 36.7% below 0.75 instead of sleap-nn's 43.8%). That is sleap-nn
@@ -11153,7 +11153,7 @@ share the two remove together ("Removed") and the share failing both. A camera
 that loses far more than the others (`flagOutlierCameras`) is coloured, tagged
 `loses far more`, and named in a sentence under the table that also says what
 the total shows ("… The total (0.6%) hides this."). Below it,
-each camera's mean per-point confidence — median and a ten-bar distribution —
+each camera's mean node confidence — median and a ten-bar distribution —
 with a preview-only "share below" field (default 0.75, not stored) and the same
 flag (`far more below`): LUCID has
 no such filter, but sleap-nn's inference filter on it is what removed most of a

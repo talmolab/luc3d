@@ -14,7 +14,7 @@
 //
 // - `collectDetectionStats(session)` walks the session ONCE and records, per
 //   detection, its camera, its present-keypoint count, its instance score and
-//   its mean per-point confidence (sleap-nn's "mean node score"), in flat
+//   its mean node confidence (sleap-nn's "mean node score"), in flat
 //   typed arrays.
 // - `countDetectionFilters(stats, values)` counts failures at given values.
 //   O(detections), allocation-free apart from the result.
@@ -37,7 +37,7 @@
 // an absent instance score into 0, and the tracker then drops that detection at
 // any minimum above 0. So "no instance scores" is a property the readout must
 // state — `predictedWithScore === 0` — rather than a column of numbers that
-// look like a verdict. Per-point confidence has no filter in LUCID; it is
+// look like a verdict. Mean node confidence has no filter in LUCID; it is
 // recorded so the wizard can show its distribution and preview a threshold.
 
 /** Does a detection with `visible` present keypoints fail a minimum of `min`? */
@@ -352,7 +352,7 @@ export function flagOutlierCameras(rows, partKey, wholeKey) {
 }
 
 /**
- * Distribution of mean per-point confidence, per camera: `bins` equal-width
+ * Distribution of mean node confidence, per camera: `bins` equal-width
  * bins over [0, 1] (a value above 1 lands in the last), plus the median.
  * Detections without point scores are left out.
  * @param {Object} stats
