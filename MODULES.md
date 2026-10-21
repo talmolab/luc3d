@@ -10183,7 +10183,8 @@ HEVC, 150 frames 32 apart ≈ the 2 Hz default, Chrome fp16 on an M-series Mac):
 time scales with views per animal x `imageCheckHz`; decoding + cropping alone
 would allow ~270 crops/s.
 Reads `imageCheckMaxViews` (default 3) and passes it as `maxViewsPerAnimal`,
-`imageCheckMaxGpu` / `imageCheckMaxCpu` (default 50 each) as `maxGpuPct` / `maxCpuPct`, and
+`imageCheckGpuTime` / `imageCheckCpuCores` (fractions, default 0.50 each) as `maxGpuPct` /
+`maxCpuPct` (× 100: the embedder works in percent), and
 `imageCheckWebNN` (default 0) as `webnn`; the embedder's `backend()` outcome is
 attached to the result as `model` and its note shown under "About these flags";
 `embedder.stats()` is attached as `timing`, logged to the console and shown there
@@ -10507,7 +10508,8 @@ run at a time, each taking every crop queued meanwhile (up to `EMBED_MAX_BATCH`
 (`inFlight` on the provider) so batches fill while the GPU works. M2 Pro, 150
 real frames: 104 -> **155 crops/s**, GPU busy 66% -> 98%, batches ~15 -> ~55,
 embeddings identical. **The compute caps** (`opts.maxGpuPct` / `opts.maxCpuPct`,
-the `imageCheckMaxGpu` / `imageCheckMaxCpu` settings, default 50% each): how much
+the "GPU time (%)" / "CPU cores (%)" settings `imageCheckGpuTime` / `imageCheckCpuCores`,
+fractions 0.10–1.00 shown to 2 places, default 0.50 each): how much
 of the GPU and of the CPU the check may take is the USER's to set, and what it
 does not take stays free for other work on the machine — even when nothing else
 wants it (a deliberate allocation, not an adaptive back-off). No browser API gives
@@ -10531,8 +10533,8 @@ not counted in `busyMs()`, so the dialog's GPU line reads at most the cap.
 are terminated — `createCpuModelPool.terminate()` does not reject a job in flight,
 so a run started on a worker about to be killed would never settle. `stats()`
 adds `maxGpuPct` (null on the CPU path), `batchLimit`, `restS`, `maxCpuPct` and
-`threads`, and `formatEmbedTiming` ends a capped run's summary with "GPU capped at
-N% (batches of ≤B, S s resting)" and/or "CPU capped at N% (T worker threads)". The
+`threads`, and `formatEmbedTiming` ends a capped run's summary with "GPU time capped at
+0.NN (batches of ≤B, S s idle)" and/or "CPU capped at T of C cores". The
 whole-run GPU busy % only approaches the cap over many batches: the last rest
 falls after the last crop, outside the run's timed window. (3) `stats()` / `summarizeEmbedTiming` /
 `formatEmbedTiming`: crops/s, GPU busy % (model call + result wait over wall
@@ -10907,6 +10909,8 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   stored override. Track All's first-use dialog (via `pose/tracker.js`) and the
   Track Frame Range dialog write the image ID-switch check's settings through
   it.
+- `ID_SWITCH_SETTING_IDS` — the Wizard settings shown in its "ID Switches"
+  section (not under Tracking Thresholds), in display order.
 - `getTrackingThresholdDefs()` / `getTrackingThreshold(id)` /
   `getTrackingThresholds()` / `setTrackingThresholds(map)` — read/write the
   tracker's user-editable thresholds. `getTrackingThresholdDefs` returns the
@@ -10919,9 +10923,16 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
   0/1, the image check likewise, default 0; `imageChangeThreshold` -0.8;
-  `imageCheckHz` 2; `imageCheckMaxViews` 3; `imageCheckMaxGpu` 50 and
-  `imageCheckMaxCpu` 50 — the share of the GPU / the CPU cores the image check
-  may use, 10..100, 100 = uncapped; `imageCheckWebNN` — 0/1, try WebNN,
+  `imageCheckHz` 2; `imageCheckMaxViews` 3; `imageCheckGpuTime` 0.5 and
+  `imageCheckCpuCores` 0.5 — labelled "GPU time (%)" / "CPU cores (%)": the share
+  of GPU time / of the CPU cores the image check may use, 0.10..1.00, 1 = uncapped.
+  New ids for the unreleased percentage-scale `imageCheckMaxGpu`/`Cpu`, so a stored
+  50 is never read on the 0–1 scale. A catalog entry may carry `decimals` (its
+  field shows that many places, `formatThresholdValue`) and `note(value)` (a live
+  hint beside the field, in the Wizard and the Track dialogs; `cpuCoresNote` ->
+  "5 of 10 cores", the same budget as `imageCheckThreads`) and `tip` (a one-line
+  ⓘ in the Track dialogs: "Fraction of GPU time to run image check, idling the remaining time." /
+  "Fraction of CPU cores to run image check, the remaining cores are left free."); `imageCheckWebNN` — 0/1, try WebNN,
   default 0). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
   `reprojWeight`, `minMatchScore`, `prevIdentityBonus`, `reprojGate2/3/4`,
   `track3dWeight`) drive the bench-only luc3d matcher and are hidden from the UI
@@ -11008,12 +11019,16 @@ drops the node from the CrossViewTracker's association cost and greys the row
 Views** — one row per camera of the active session with an on/off switch
 (the app's `.toggle-switch`, `role="switch"`; stored as a `0/1` weight) seeded
 from `getCameraWeight(name)`; off excludes that view from tracking and greys the
-row, with a hint when no cameras are loaded; and **Tracking Thresholds** — one
+row, with a hint when no cameras are loaded; **Tracking Thresholds** — one
 labelled+described number field per `getTrackingThresholdDefs()` entry (the
 CrossViewTracker's free parameters only; legacy luc3d thresholds are filtered
 out), range/step from the catalog — or, for a `kind: 'toggle'` entry (the match
-gate, the two after-tracking ID-switch checks, the WebNN opt-in), an on/off
-switch stored as `1`/`0` (`makeToggle`). Covered by
+gate), an on/off switch stored as `1`/`0` (`makeToggle`); and **ID Switches** —
+the entries in `ID_SWITCH_SETTING_IDS`, in that order (the two after-tracking
+checks, the image check's options and the WebNN opt-in), taken OUT of Tracking
+Thresholds because they configure the checks run after tracking, not the
+tracker's matching. Both sections draw their rows with one `renderThresholdRow`
+(each row carries `data-setting="<id>"`), so they cannot drift apart. Covered by
 `tests/e2e/settings-wizard-toggles.mjs`. All edits mutate a local `working`
 state only (only editable bindings are tracked); nothing commits until **Apply**
 (`setDefaultTriangulationMethod` + `applyBindings` + `setNodeWeights` +
@@ -11593,7 +11608,7 @@ Wizard settings, instead of re-running a whole long recording.
 `getTrackerNumAnimals`, `setTrackerNumAnimals`), `ui/settings.js`
 (`getNodeWeight`, `updateNodeWeights`, `getTrackingThresholdDefs`,
 `updateTrackingThresholds`), `ui/track-setup-modal.js`
-(`buildNodeWeightFields`, `buildImageCheckFields`, `IMAGE_CHECK_IDS`; a leaf).
+(`buildNodeWeightFields`, `buildImageCheckFields`, `IMAGE_CHECK_IDS`; imports only `ui/info-tip.js`).
 
 **Imported by.** `ui/ui-wiring.js` (wires `#tbTrackFrameRange`, the dropdown
 item; the `#tbTrackFrame` button itself stays wired to `trackCurrentFrame` in
@@ -11711,7 +11726,13 @@ range is checked too.
   Continue / Enter, and `null` on Cancel / Esc / a backdrop click. A second
   call while one is open resolves `null` at once.
 - `IMAGE_CHECK_IDS` — the image check's settings in dialog order, the switch
-  first.
+  first. In the options grid each row carries `data-row="<setting id>"`, and
+  styles.css starts a new row at `imageCheckGpuTime` and at `imageCheckWebNN`, so
+  GPU time and CPU cores share a row with Try WebNN under them (the cell beside
+  Views per animal stays empty). A setting's `tip` puts a short ⓘ after its label
+  (`setInfoTip`) in place of the label's long native `title`; its `note` ("5 of
+  10 cores") follows the label inside `.track-setup-option-head`, so the note —
+  not the label — is what an ellipsis shortens in a narrow cell.
 - `buildImageCheckFields(defs)` → `{element, read, refresh}` — the image-check
   section: the switch, a one-line caution, and the options in the weight
   grid's compact markup, hidden while the switch is off. Labels are the
@@ -11721,7 +11742,9 @@ range is checked too.
   the switch "…after `after`" (default "Track All"); Track Frame Range passes
   "tracking the range".
 
-**Imports from project modules.** None — a LEAF on purpose. It commits
+**Imports from project modules.** Only `ui/info-tip.js` (`setInfoTip`,
+`ICON_INFO`), itself import-free, for the ⓘ on a setting with a `tip` — so this
+stays a leaf in every sense that matters below. It commits
 nothing: `pose/tracker.js` (`askTrackSetup`) writes the count through
 `setTrackerNumAnimals`, the weights through `updateNodeWeights` and the image
 check through `updateTrackingThresholds` — the settings the toolbar's Animals
@@ -13267,6 +13290,17 @@ a caller, and several of those already import each other.
   (`pose/initialization.js`, before any panel renders). Further calls are
   no-ops, so a second caller cannot double every handler.
 - `hideInfoTip()` — put it away.
+- `ICON_INFO` — the ⓘ icon (13 px inline SVG, `currentColor`). Defined here, not
+  in the plane hub, so a module outside the plane panel can use it without
+  importing that panel; `ui/plane-definition.js` re-exports it for the plane
+  modules that take it from the hub. Outside the plane panel the button is
+  `.info-tip-btn` (styles.css), with a `.multi-frame-modal .info-tip-btn` rule
+  undoing the dialogs' generic button padding, border and fill.
+- **The tip is above every layer** (`.info-tip` z-index 30001, over the modal
+  overlays at 20000/30000): an ⓘ inside a dialog otherwise showed its tip
+  behind the dialog. Safe because it takes no pointer events and lives only as
+  long as the hover. Pinned by `tests/e2e/track-setup-modal.mjs`, which fails at
+  the old 10000.
 - `placeTipNear(el, x, y)` — the placement rule below (beside the pointer,
   flipped at the viewport edges), for any `position: fixed` popover. Shared with
   the node tooltip (`ui/node-tooltip.js`) so the app has one rule for where a tip
@@ -13321,8 +13355,9 @@ Leaving the icon, clicking elsewhere, `Esc`, blur, a scroll or a resize all
 dismiss.
 
 **Imported by.** `ui/plane-definition.js` (the Pinned column's ⓘ and the four
-major sections' ⓘ), `pose/initialization.js` (`installInfoTips`),
-`ui/node-tooltip.js` (`placeTipNear`).
+major sections' ⓘ; re-exports `ICON_INFO`), `pose/initialization.js` (`installInfoTips`),
+`ui/node-tooltip.js` (`placeTipNear`), `ui/track-setup-modal.js` (`setInfoTip`,
+`ICON_INFO`: the image check's GPU time / CPU cores ⓘ).
 
 Coverage: `tests/e2e/info-tip.mjs` — placement beside the cursor, the viewport
 clamp and the flip, hover/click/Esc/outside-click dismissal, that `title` is

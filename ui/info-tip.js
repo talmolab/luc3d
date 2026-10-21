@@ -141,6 +141,14 @@ function targetFrom(node) {
     return node.closest('[data-infotip]');
 }
 
+/** The ⓘ icon an info button wears (13 px, `currentColor`); styled by `.plane-pin-info` / `.info-tip-btn`. */
+export const ICON_INFO =
+    '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" ' +
+    'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+    'aria-hidden="true"><circle cx="12" cy="12" r="9"/>' +
+    '<path d="M12 11.2v5"/>' +
+    '<circle cx="12" cy="7.6" r="1.1" fill="currentColor" stroke="none"/></svg>';
+
 /**
  * Give `el` an explanation shown beside the pointer.
  *
