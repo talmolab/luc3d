@@ -1,8 +1,20 @@
 #!/usr/bin/env python3
 """
-Fig 1e -- where LUC3D sits among existing multi-camera pose tools. (Was 1d
-until 2026-08-16, when the cage render became the figure's opening panel --
-Eric.)
+Fig 1s1 -- where LUC3D sits among existing multi-camera pose tools.
+
+NOT PLACED SINCE 2026-10-09 (Talmo): the table is coming out of Fig 1 and will
+become a supplementary table, but it is left out of the first submission
+entirely. It is KEPT, not deleted, in case it is restored: this script still runs
+under `make_figures.py`, still renders `figures/fig1/fig1s1_tool_table.pdf` and
+still deposits `data/fig1/fig1s1_tool_table.csv` (the s-prefix is the fig7s1/s2
+convention for a rendered-but-unplaced panel). To put it back on Fig 1, append
+`[("s1", "tool_table")]` to `assemble.LAYOUTS[1]`, or give it a real letter here
+and there. Was Fig 1e from 2026-08-16 to 2026-10-09 and Fig 1d before that.
+
+WHILE IT IS OUT, NOTHING ON FIG 1 NAMES THE PRIOR TOOLS. The rows of
+`src/tools_table.TOOLS` are where they were credited on the figure itself (Fig 2a's
+docstring leans on that for JARVIS and Label3D); the main text has to carry those
+citations now.
 
 The cells and every claim behind them live in `src/tools_table.py`; read its
 docstring before changing anything here. This module only draws.
@@ -130,7 +142,7 @@ def main():
             f"or restore the two-stroke drawn tick (see git history).")
 
     use()
-    deposit(pd.DataFrame(TOOLS, columns=COLS), 1, "fig1e_tool_table.csv")
+    deposit(pd.DataFrame(TOOLS, columns=COLS), 1, "fig1s1_tool_table.csv")
 
     nrow, ncol = len(TOOLS), len(COLS)
     # Column widths in axes units, sized to the longest string each column carries
@@ -207,7 +219,7 @@ def main():
                 f"re-verify before submission", color=SALMON, fontsize=NOTE_PT,
                 va="center")
 
-    save(fig, 1, "e", "tool_table")
+    save(fig, 1, "s1", "tool_table")
 
 
 if __name__ == "__main__":

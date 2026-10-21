@@ -188,7 +188,13 @@ def icon(ax, kind, x, y, s=1.0, color=INK, lw=None):
     x + s/2, and return their own (x, y, w, h).
 
     kinds: camera, cameras, skeleton, ids, triangulate, cube, check, checkerboard,
-    file, mouse, pose2d, pose3d, instances3d
+    file, mouse, pose2d, pose3d, instances3d, tiles2d, tilesid, volume3d, videos
+
+    `videos` (2026-10-09) is the multi-view tile frame of `tiles2d` with a play
+    mark in each tile instead of poses: the same N camera views, before any
+    detector has run, so the row reads videos -> 2D pose -> identities as one set of
+    tiles filling in. `pose3d` is the Fig 1b OUTPUT tile ("3D pose") since that
+    date, and its ground plane is drawn GREY like `instances3d`'s.
 
     The last three are the Fig 1b pipeline glyphs (review 2026-08: the pipeline's
     icons should show THIS pipeline's objects, not generic marks): `pose2d` is two
@@ -338,7 +344,7 @@ def icon(ax, kind, x, y, s=1.0, color=INK, lw=None):
             pose(0.00, 0.02, 0.58, color)
             pose(0.40, 0.42, 0.58, color)
         elif kind == "pose3d":
-            plane(color)
+            plane(GREY)
             pose(0.10, 0.02, 0.80, color)
         else:  # instances3d
             # The identity palette's first two hues, not the chevron's colour:
@@ -352,7 +358,7 @@ def icon(ax, kind, x, y, s=1.0, color=INK, lw=None):
             plane(GREY)
             pose(0.00, 0.00, 0.58, _id(0))
             pose(0.40, 0.34, 0.58, _id(4))
-    elif kind in ("tiles2d", "tilesid", "volume3d"):
+    elif kind in ("tiles2d", "tilesid", "volume3d", "videos"):
         # ##################################################################
         # THE PIPELINE'S ACTUAL SHAPE (review 2026-08-13). The three glyphs
         # before this one drew ONE pose per stage, so Fig 1b asserted a
@@ -405,7 +411,21 @@ def icon(ax, kind, x, y, s=1.0, color=INK, lw=None):
         # the un-contributed 2D-pose stage's grey is 2.1:1 on white, and at ~2 mm the
         # one-colour "before" state of the collapse story vanished in print (review
         # 2026-08-14). The tile FRAMES keep the stage colour; the animals must read.
-        if kind in ("tiles2d", "tilesid"):
+        if kind == "videos":
+            # The tiles2d frames, each holding a filled play mark in INK (the
+            # stage itself is GREY data, and a grey mark at ~2 mm vanishes -- same
+            # reason tiles2d's mice are INK).
+            for t in range(n_tiles):
+                bx = x0 + t * (tw + gap)
+                ax.add_patch(Rectangle((bx, y), tw, s, fill=False, ec=color,
+                                       lw=lw * 0.9, zorder=3))
+                th, tx = s * 0.36, bx + tw * 0.5
+                ax.add_patch(Polygon([(tx - th * 0.38, y + s / 2 - th / 2),
+                                      (tx - th * 0.38, y + s / 2 + th / 2),
+                                      (tx + th * 0.48, y + s / 2)],
+                                     closed=True, facecolor=INK, edgecolor="none",
+                                     zorder=4))
+        elif kind in ("tiles2d", "tilesid"):
             # Two animals per tile at DIFFERENT positions in each tile: the same
             # pair seen from three viewpoints, not three copies of one picture.
             # Pulled apart: a mini pose fills ~half the tile, so the old

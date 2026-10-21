@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fig 1d, 3D tiles: the HardFight pose + rig, measured out of the session's own data.
+Fig 1c, 3D tiles: the HardFight pose + rig, measured out of the session's own data.
 
 Eric, 2026-08-25: "for the 3d views in fig1d lets do nice blender renders of the
 pose (center) and the camera rig (right) more like our other blender rigs with the
@@ -12,7 +12,7 @@ So this is `fig1_bmimica_scene.py` for the OTHER Fig 1 dataset: everything
 `blender-images/fig1d_scene.py` needs to build a Blender scene that is entirely
 measurement and contains no hand-placed geometry.
 
-  * `arena` -- the movement-fitted box, exactly Fig 1a's BMimica recipe: HardFight
+  * `arena` -- the movement-fitted box, exactly Fig 1d's BMimica recipe: HardFight
     ships no arena reconstruction (`hardfight_common.py`: no alignment.toml, no
     cage points), so the FOOTPRINT is the 0.1-99.9 percentile span of x and y over
     every LUC3D-triangulated keypoint of all three mice across the whole 36,000-frame
@@ -22,13 +22,13 @@ measurement and contains no hand-placed geometry.
     is NOT squared up -- Eric: "it is also a rectangular prism or cube like
     volume" -- the measured x/y spans are kept as the box's sides, and HEIGHT
     defaults to extruding by the footprint's SHORTER side (the in-code comment at
-    the height rule says why that beats Fig 1a's cube-on-the-larger-side here;
+    the height rule says why that beats Fig 1d's cube-on-the-larger-side here;
     `--height-mode cube|movement` recover the alternatives, and
     `movement_height_mm` is deposited alongside).
 
   * `cameras` -- the eight real cameras from the session's `calibration.toml`,
     carried into the aligned frame by the SAME cached alignment (centres via
-    Alignment.point, axes via Alignment.direction), so Fig 1d's cameras sit
+    Alignment.point, axes via Alignment.direction), so Fig 1c's cameras sit
     exactly where the hyp/idswitch illustration figures put them.
 
   * `pose` -- the APP'S OWN reconstruction at the panel's frame, read from
@@ -70,7 +70,7 @@ POSE_JSON = os.path.join(HERE, "out", "fig1d_pose.json")
 #: build_fig_session.py's default trim start (the trim itself records nothing;
 #: verified against the data by the frame-offset cross-check below).
 CLIP_START = 24551
-#: footprint percentiles + sampling stride, Fig 1a's BMimica values
+#: footprint percentiles + sampling stride, Fig 1d's BMimica values
 PCT = (0.1, 99.9)
 SAMPLE_STEP = 100
 
@@ -84,7 +84,7 @@ def main():
     ap.add_argument("--height-mode", choices=["short-side", "cube", "movement"],
                     default="short-side",
                     help="box height: the footprint's SHORTER side (default), the "
-                         "larger side (Fig 1a's cube rule), or the movement extent")
+                         "larger side (Fig 1d's cube rule), or the movement extent")
     ap.add_argument("--check-mm", type=float, default=25.0,
                     help="fail if the app pose vs offline pose median keypoint "
                          "distance exceeds this (frame-offset cross-check)")
@@ -140,7 +140,7 @@ def main():
     x_span, y_span = float(lo[1] - lo[0]), float(hi[1] - hi[0])
     centre = [float((lo[0] + lo[1]) / 2), float((hi[0] + hi[1]) / 2)]
     movement_height = float(np.nanmax(C[:, 2]))
-    # SHORT-SIDE, not Fig 1a's cube-on-the-larger-side: the footprint is a
+    # SHORT-SIDE, not Fig 1d's cube-on-the-larger-side: the footprint is a
     # RECTANGLE here (496 x 321), so "extrude by its own side" has two readings,
     # and the larger one (496) runs the box rim into the measured overhead camera
     # ring (lowest overhead z = 523 mm -- 27 mm of clearance; the rendered rim

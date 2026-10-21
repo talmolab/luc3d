@@ -68,13 +68,13 @@ PRODUCERS = {
     "fig4.json": "figs/fig4_measure.mjs (+ figs/fig4_anipose.py, figs/fig4_by_views.mjs)",
     "fig6.json": "figs/fig4_measure.py (+ figs/fig4_pose.py, figs/fig4_app.mjs)",
     "fig5_views.json": "figs/fig5_views.py",
-    # Not a figs/out JSON: Fig 1a is a Blender render, and the "measurement pass"
+    # Not a figs/out JSON: Fig 1d is a Blender render, and the "measurement pass"
     # that produced it is the scene script that placed the session's calibration,
     # cage corners and tracked poses (see panels/fig1_00_render.py). Since
     # 2026-08-19 the panel reads the video-frame framings under fig1_renders/.
     "blender-images/renders/fig1_renders/slap2m-4mice_f06020.png":
         "blender-images/cage_scene.py",
-    # The Mouse-Dyad-10M half of Fig 1a takes TWO scripts: the deposit script measures
+    # The Mouse-Dyad-10M half of Fig 1d takes TWO scripts: the deposit script measures
     # the arena footprint, picks the frame and carries the calibration into the 3D
     # frame; the scene script only draws what it deposited.
     "blender-images/renders/fig1_renders/mouse-dyad_f55701.png":
@@ -83,7 +83,7 @@ PRODUCERS = {
     # as the representative, and the scene script is the measurement pass for all.
     "blender-images/renders/enrich_a1_o0.png":
         "blender-images/enrichment_scene.py",
-    # Fig 1d's two 3D tiles: the pose export dumps the app's own reconstruction,
+    # Fig 1c's two 3D tiles: the pose export dumps the app's own reconstruction,
     # the deposit script fits the arena + carries the cameras, the scene script
     # draws both renders (--mode pose / --mode rig).
     "fig1_hardfight_scene.json":
@@ -91,7 +91,7 @@ PRODUCERS = {
     "blender-images/renders/fig1d_pose.png":
         "blender-images/fig1d_scene.py",
     # Fig 2a's "3D from the 2 anchors" tile: the protocol driver dumps the
-    # two-anchor 3D, the deposit script aligns it + fits the floor, and Fig 1d's
+    # two-anchor 3D, the deposit script aligns it + fits the floor, and Fig 1c's
     # scene script renders it (--mode pose --scene out/fig2a_scene.json).
     "fig2a_scene.json":
         "figs/fig2_protocol.mjs, figs/fig2a_scene.py",
@@ -194,7 +194,7 @@ def facts(src: Path) -> dict:
                         + re.findall(r'load\(\s*"([^"]+\.json)"', t)
                         + re.findall(r'OUT\s*/\s*"([^"]+\.json)"', t)))
     # Image panels that read a rendered/exported image directly rather than a
-    # figs/out JSON (Fig 1a's Blender render). Named in the docstring's Source
+    # figs/out JSON (Fig 1d's Blender render). Named in the docstring's Source
     # line; kept separate from `inputs` so render() does not prefix them `out/`.
     images = sorted(set(re.findall(
         r"blender-images/renders/[A-Za-z0-9_.\-/]+\.png", doc)))

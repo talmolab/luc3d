@@ -8,11 +8,10 @@ Build order for any figure is: run the measurement pass (column *measured by*) �
 
 | Panel | Title | Drawn by | Reads | Measured by | Deposits |
 |---|---|---|---|---|---|
-| **a** | Dataset arena visualizations with camera rigs and poses | `panels/fig1_00_render.py` | `blender-images/renders/fig1_renders/mouse-dyad_f55701.png`, `blender-images/renders/fig1_renders/slap2m-4mice_f06020.png` | `blender-images/cage_scene.py`, `figs/fig1_bmimica_scene.py (+ blender-images/bmimica_scene.py)` | — |
+| **a** | Cross-view association | `panels/fig1_02_tracking.py` | `out/fig1.json` | `figs/fig1_gui.mjs, figs/fig1_rig.mjs, figs/fig1_tracking.mjs` | — |
 | **b** | Pipeline | `panels/fig1_01_pipeline.py` | — (drawn) | — | — |
-| **c** | Cross-view re-identification | `panels/fig1_02_tracking.py` | `out/fig1.json` | `figs/fig1_gui.mjs, figs/fig1_rig.mjs, figs/fig1_tracking.mjs` | — |
-| **d** | Triangulated 3D | `panels/fig1_03_reconstruction.py` | `out/fig1.json`, `out/fig1_hardfight_scene.json`, `blender-images/renders/fig1d_pose.png` | `blender-images/fig1d_scene.py`, `figs/fig1_gui.mjs, figs/fig1_rig.mjs, figs/fig1_tracking.mjs`, `figs/fig1d_pose_export.mjs, figs/fig1_hardfight_scene.py` | — |
-| **e** | Capability comparison | `panels/fig1_04_tool_table.py` | — (drawn) | — | `data/fig1/fig1e_tool_table.csv` |
+| **c** | Triangulated 3D | `panels/fig1_03_reconstruction.py` | `out/fig1.json`, `out/fig1_hardfight_scene.json`, `blender-images/renders/fig1d_pose.png` | `blender-images/fig1d_scene.py`, `figs/fig1_gui.mjs, figs/fig1_rig.mjs, figs/fig1_tracking.mjs`, `figs/fig1d_pose_export.mjs, figs/fig1_hardfight_scene.py` | — |
+| **d** | Dataset arena visualizations with camera rigs and poses | `panels/fig1_00_render.py` | `blender-images/renders/fig1_renders/mouse-dyad_f55701.png`, `blender-images/renders/fig1_renders/slap2m-4mice_f06020.png` | `blender-images/cage_scene.py`, `figs/fig1_bmimica_scene.py (+ blender-images/bmimica_scene.py)` | — |
 
 ## Figure 2
 
@@ -96,6 +95,7 @@ These still run under `make_figures.py` and still deposit their CSVs; they are n
 
 | Script | What it draws |
 |---|---|
+| `panels/fig1_04_tool_table.py` | where LUC3D sits among existing multi-camera pose tools. |
 | `panels/fig2_12_accuracy_vs_cameras.py` | held-out reprojection error vs the number of cameras in the solve, BOTH. |
 | `panels/fig2_13_worst_camera.py` | per-session reprojection error: all views in the solve vs the worst view. |
 | `panels/fig2_15_per_session.py` | reprojection error per session, THREE solvers, paired. |

@@ -5,7 +5,7 @@ Fig 2a, "3D from the 2 anchors" tile: the TWO-ANCHOR pose, measured for Blender.
 Eric, 2026-08-25: "lets do a blender style render like we just did for fig 1d
 (center) for fig2a2 (bottom)". The tile used to be the app's own three.js canvas
 (dark viewport, unlit skeletons); it becomes the same ball-and-stick render as
-Fig 1d's centre tile, standing on the movement-fitted arena floor plane.
+Fig 1c's centre tile, standing on the movement-fitted arena floor plane.
 
 THE POSE IS THE TWO-ANCHOR SOLVE, NOT AN EIGHT-VIEW SOLVE RELABELLED. The panel's
 claim is "3D from the 2 anchors": fig2_protocol.mjs zeroes every other view's
@@ -13,18 +13,18 @@ weight through the app's own Camera Views panel, triangulates, and dumps that
 per-identity 3D (plus, for the cross-check below, the same frame's all-views
 solve) into figs/out/fig2a_pose.json. Nothing is re-triangulated here.
 
-Same session as Fig 1d (figs/session = the trimmed 8-camera HardFight clip), so:
+Same session as Fig 1c (figs/session = the trimmed 8-camera HardFight clip), so:
 
   * ALIGNMENT -- calib-world -> floor z=0, +z up, in mm -- is the SAME cached fit
     every HardFight figure uses (hardfight_common.load_alignment,
     blender-images/renders/hardfight_alignment.json). HardFight ships no
     alignment.toml; that cache is fit_alignment's cloud fit (thin axis = up,
     floor = 2nd percentile of heights).
-  * ARENA RULE -- the floor plane's footprint is Fig 1d's movement rule verbatim
-    (fig1_hardfight_scene.py, itself Fig 1a's BMimica recipe): the 0.1-99.9
+  * ARENA RULE -- the floor plane's footprint is Fig 1c's movement rule verbatim
+    (fig1_hardfight_scene.py, itself Fig 1d's BMimica recipe): the 0.1-99.9
     percentile span of x and y over every LUC3D-triangulated keypoint (figs/out/hardfight_luc3d.npz) of all three mice
     across the whole 36,000-frame session, sampled every SAMPLE_STEP frames.
-    Recomputed here rather than read out of Fig 1d's deposit so the two figures'
+    Recomputed here rather than read out of Fig 1c's deposit so the two figures'
     builds stay independent; the rule (and so the plane) is identical.
 
 CROSS-CHECKS, all fail-loud:

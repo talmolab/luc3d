@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-Fig 1a -- BOTH rigs, each rendered from its own session's data.
+Fig 1d -- BOTH rigs, each rendered from its own session's data.
+(Was 1a, the opening panel, from 2026-08-16 until 2026-10-09, when Fig 1 was
+reordered to re-ID, pipeline, triangulated 3D, then this panel -- Talmo.)
 
 TWO TILES SINCE 2026-08-17 (Eric): the SLAP-2M cage render, which had this panel
 to itself, now sits beside the same render for Mouse-Dyad-10M -- the corpus the tracking
@@ -242,7 +244,7 @@ def main():
         p = ax.get_position()
         fig.text((p.x0 + p.x1) / 2, (y / 72.0) / mm(h), label, color=INK,
                  fontsize=LABEL_PT, fontweight="bold", ha="center", va="baseline")
-    save(fig, 1, "a", "render")
+    save(fig, 1, "d", "render")
 
 
 if __name__ == "__main__":

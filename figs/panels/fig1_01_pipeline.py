@@ -3,24 +3,42 @@
 Fig 1b -- what LUC3D does, end to end. (Was 1a until 2026-08-16, when the cage
 render became the figure's opening panel -- Eric.)
 
-Seven stages, left to right, and as of 2026-09-07 ALL SEVEN are marked as this
-work: the "this work" bracket spans the entire row (Eric: "i want to edit figure 1b
-to include video accquisition ... so that way the 'this work' part includes the whole
-pipeline ... so that means this paper will span the whole pipeline from end-to-end
-now"). Everything downstream of acquisition runs in the browser with no install,
-which is the claim the Fig 1e table's "Install: none / Runs in: browser" row makes
-and this panel visualises.
+EIGHT TILES SINCE 2026-10-09 (Talmo), and "this work" is a COLOUR, not a bracket:
 
-THE BRACKET NOW SPANS EVERYTHING, WHICH IS A DELIBERATE CLAIM CHANGE. It used to
-stop short on purpose: `videos` and `2D pose` were drawn grey, because the detector
-is SLEAP's and the panel was not to read as a claim over the whole pipeline. The
-scope changed when acquisition and calibration each got a named tool of their own --
-`Panopticon App` for the multi-camera capture and `Calibrat3 App` for the browser
-calibration -- so the paper covers capture, detection, calibration, association,
-triangulation, proofreading and export. The 2D detector is still SLEAP (named in its
-own sub-label, and cited as such in the Results prose); it is inside the bracket
-because it is part of the pipeline this paper presents end to end, not because this
-paper introduces the detector.
+  video acquisition -> videos -> 2D pose -> calibrate ->
+      [ cross-view association -> triangulate -> proofread 3D ]  -> 3D pose
+      |_________________________ LUC3D App _____________________|
+
+  * Every stage this paper contributes is TEAL; the two DATA tiles (`videos`, the
+    `3D pose` output) and the SLEAP tile (`2D pose`) are GREY. A small teal key at
+    the left of the bracket band says what teal means.
+  * `videos` is its own tile, between acquisition and the detector, and `export` is
+    gone: the last tile is the thing exported, `3D pose`, with its formats under it
+    (`.slp / H5` -- the SLP version number came off the artwork).
+  * `cross-view re-ID` is renamed `cross-view association`, and it, `triangulate`
+    and `proofread 3D` -- the three stages that run INSIDE the LUC3D app -- are
+    grouped under one teal "LUC3D App" bracket, parallel to the `Panopticon App` and
+    `Calibrat3 App` sub-labels on the two other tools this paper contributes.
+
+This supersedes the 2026-09-07 framing below, under which every stage (SLEAP's
+detector included) was teal and one "this work" bracket spanned the whole row.
+Acquisition (Panopticon) and calibration (Calibrat3) are still this work; the
+detector and the two data tiles are not. Everything downstream of acquisition runs
+in the browser with no install, which is the claim the capability table's "Install:
+none / Runs in: browser" row makes and this panel visualises. (That table was Fig 1e
+until 2026-10-09; it is now held out of the first submission for a supplementary
+table -- see fig1_04_tool_table.py -- so on the submitted Fig 1 this panel carries
+the claim alone.)
+
+HISTORY (2026-09-07, superseded 2026-10-09). The bracket used to stop short on
+purpose: `videos` and `2D pose` were drawn grey, because the detector is SLEAP's and
+the panel was not to read as a claim over the whole pipeline. Then acquisition and
+calibration each got a named tool of their own -- `Panopticon App` for the
+multi-camera capture and `Calibrat3 App` for the browser calibration -- and the
+bracket was widened to the full row, the detector included (Eric: "i want to edit
+figure 1b to include video accquisition ... so that way the 'this work' part
+includes the whole pipeline"). The 2026-10-09 colouring takes the detector back
+out, which is the narrower and more accurate claim.
 
 Drawn as flat chevrons at one stroke weight, Cheese3D-style: no gradients, no
 drop shadows, no 3D boxes.
@@ -35,136 +53,126 @@ from matplotlib.patches import FancyArrowPatch, Polygon
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.diagram import blank, icon  # noqa: E402
-from src.style import MUTED, grid, GREY, INK, SALMON, TEAL, save, use  # noqa: E402
+from src.style import MUTED, grid, GREY, INK, TEAL, save, use  # noqa: E402
 
-#: label, sub-label, is-a-contribution-of-this-paper
-#: SIX stages, matching the legacy figure. Export is not decoration: emitting SLP
-#: 2.8 with the columnar /session_data is what makes the 3D readable by SLEAP, and
-#: dropping it made the pipeline look like a dead end.
-#: Icons are the pipeline's own objects (review 2026-08), not generic marks:
-#: "2D pose" is two animals' poses in ONE colour (identity does not exist yet),
-#: "triangulate" is one animal's 3D pose over a ground plane, and "proofread 3D"
-#: is the two re-identified instances in the identity palette -- the same mini
-#: pose at three stages, so the row reads as one object moving through the
-#: pipeline. The glyphs live in src/diagram.py `icon()`.
-#: EXPORT IS OURS (review 2026-08-13). It was marked False, which made the pipeline
-#: read as ending in someone else's format. Emitting SLP 2.8 with the columnar
-#: `/session_data` is this work -- it is what makes the 3D and the identities readable
-#: by SLEAP at all -- so it joins the contributed run, and the "this work" bracket
-#: (drawn from the contiguous run of contributed stages) now reaches the end of the row.
+#: label, sub-label, role, icon kind, group
 #:
-#: ACQUISITION AND 2D POSE ARE OURS TOO (2026-09-07), so every flag below is True and
-#: the bracket spans the full row -- see the module docstring for why the earlier,
-#: deliberately narrower claim was widened. Because the run is contiguous from stage 0
-#: the bracket arithmetic is unchanged; the only thing that moves is that no chevron is
-#: drawn in GREY any more.
+#: ROLE IS ONE OF "ours", "data", "external" (2026-10-09). "ours" is drawn TEAL and
+#: is what the key's "this work" means; "data" (a thing that flows between stages:
+#: the raw videos, the exported 3D pose) and "external" (SLEAP's detector) are GREY.
+#: The colour is the whole claim now, so it is set here per stage and nowhere else.
+#:
+#: GROUP names the app a stage runs inside, and consecutive stages sharing one are
+#: bracketed together under that name. Only the LUC3D app's three are grouped: the
+#: other two tools this paper contributes are one stage each and are already named in
+#: their own sub-labels.
+#:
+#: Icons are the pipeline's own objects (review 2026-08), not generic marks: the same
+#: camera tiles run through `videos` (play marks -- no detector has run), `2D pose`
+#: (two animals in ONE colour -- identity does not exist yet) and `cross-view
+#: association` (each animal in its own identity colour); `triangulate` collapses them
+#: into one volume; `proofread 3D` is the re-identified instances; `3D pose` is the
+#: output, one animal over the ground plane. The glyphs live in src/diagram.py `icon()`.
+#:
+#: THE OUTPUT TILE IS THE 3D POSE, NOT "export" (2026-10-09). Export was added
+#: 2026-08-13 because emitting SLP with the columnar `/session_data` is what makes the
+#: 3D and the identities readable by SLEAP at all, and dropping it made the pipeline
+#: look like a dead end. The tile now names WHAT comes out rather than the act of
+#: writing it, and keeps the formats as its sub-label.
 #:
 #: THE TOOLS ARE NAMED (2026-09-07, Eric): acquisition is the `Panopticon App` and
 #: calibration the `Calibrat3 App`, each in place of a generic description --
 #: `videos` read "N cameras" and `calibrate` read "OpenCV.js browser tool" before.
-#: Naming them is what earns those two stages their place inside the bracket, and it
-#: also UN-WRAPS `calibrate`'s sub-label, which is why YLIM and the bracket baseline
-#: move back to their one-line values below.
+#: `N cameras` is back since 2026-10-09 as the sub-label of the `videos` data tile.
 #:
 #: `video acquisition` WRAPS TO TWO LINES, on Eric's instruction ("we should call it
 #: 'Video Acquisition' with video on top of acquisition"). It is set lowercase like
-#: every other stage label in the row; the two App names keep their capitals because
+#: every other stage label in the row; the App names keep their capitals because
 #: they are proper names, not descriptions.
 #:
-#: CALIBRATION: SIDE INPUT -> STAGE, TWICE (2026-08-13, then 2026-08-17). It began
-#: glued to "videos", which implied it arrives with them; review 2026-08-13 ("just
-#: videos and make calibration separate?") made it a labelled arrow entering
-#: `triangulate`, which is where it is actually consumed -- a detector needs no
-#: calibration. Then Eric added a browser calibration tool and asked for it in the
-#: schematic; it was drawn as a box ABOVE the row, and then (same day) as a SEVENTH
-#: CHEVRON IN the row: "lets add the calibration as another tab in the pipeline in line
-#: with the others not as a separate thing, then we should called in an OpenCV.js
-#: browser tool and then include it in the green 'this work' underlining".
-#:
-#: SO IT SITS IMMEDIATELY BEFORE `cross-view re-ID` (Eric, correcting a first pass that
-#: put it before `triangulate`: "calibration goes before cross-view re-ID!"). That is
-#: also the technically right edge, and the reason is easy to miss: the cross-view
-#: tracker is the FIRST stage that consumes calibration, not triangulation. Its cost
-#: model carries a 3D term -- the one Fig 3d ablates, where switching it off costs 632
-#: switches per 100,000 -- and a 3D term means triangulating candidate groupings, which
-#: needs the calibration. Calibration before re-ID is therefore the real data
-#: dependency, and `.toml` is named on the arrow between those two.
-#:
-#: It also kept the contributed stages a CONTIGUOUS run, which is what the "this work"
-#: bracket is drawn from: at position 1 the bracket would have had to span `2D pose`
-#: (SLEAP's, and at the time not ours) to reach the rest. That constraint is moot since
-#: 2026-09-07 -- every stage is contributed, so any ordering leaves the run contiguous
-#: -- but the DATA DEPENDENCY argument above is not, and it is the reason calibration
-#: stays here rather than drifting next to `triangulate`.
+#: CALIBRATION SITS IMMEDIATELY BEFORE CROSS-VIEW ASSOCIATION (Eric, 2026-08-17,
+#: correcting a first pass that put it before `triangulate`: "calibration goes before
+#: cross-view re-ID!"). That is the technically right edge, and the reason is easy to
+#: miss: the cross-view tracker is the FIRST stage that consumes calibration, not
+#: triangulation. Its cost model carries a 3D term -- the one Fig 3 ablates, where
+#: switching it off costs 632 switches per 100,000 -- and a 3D term means
+#: triangulating candidate groupings, which needs the calibration. (It began glued to
+#: "videos", then became a labelled arrow into `triangulate`, then a box above the
+#: row, then a chevron in it: "lets add the calibration as another tab in the pipeline
+#: in line with the others not as a separate thing".) It also keeps the LUC3D app's
+#: three stages contiguous, which the group bracket needs.
 STAGES = [
-    ("video\nacquisition", "Panopticon App", True, "cameras"),
-    ("2D pose", "SLEAP or similar", True, "tiles2d"),
-    ("calibrate", "Calibrat3 App", True, "checkerboard"),
-    ("cross-view\nre-ID", "1 identity / animal", True, "tilesid"),
-    ("triangulate", "DLT, N ≥ 2 views", True, "volume3d"),
-    ("proofread 3D", "3D + reproj.", True, "instances3d"),
-    ("export", ".slp 2.8 / H5", True, "file"),
+    ("video\nacquisition", "Panopticon App", "ours", "cameras", None),
+    ("videos", "N cameras", "data", "videos", None),
+    ("2D pose", "SLEAP or similar", "external", "tiles2d", None),
+    ("calibrate", "Calibrat3 App", "ours", "checkerboard", None),
+    ("cross-view\nassociation", "1 ID / animal", "ours", "tilesid", "LUC3D App"),
+    ("triangulate", "DLT, N ≥ 2 views", "ours", "volume3d", "LUC3D App"),
+    ("proofread 3D", "3D + reproj.", "ours", "instances3d", "LUC3D App"),
+    ("3D pose", ".slp / H5", "data", "pose3d", None),
 ]
+ROLE_COLOR = {"ours": TEAL, "data": GREY, "external": GREY}
 
 #: Chevron geometry. The box holds the ICON ONLY and the label sits under it --
 #: see `main()` for why the label is no longer inside the chevron.
 W, H, GAP, NOTCH = 2.05, 1.05, 0.36, 0.24
-
-#: Vertical extent of the drawing, in data units, cut to the INK. Top: the chevron's
-#: top edge at H/2 plus half of its 1.1 pt stroke (0.02 units). Bottom: the baseline
-#: of the "this work" label, which sits at about -2.18 -- measured off the render, not
-#: guessed. The panel used to declare (-2.22, H/2 + 0.30), i.e. 0.28 units of pure
-#: white above the chevrons, which is 2.8 mm of the figure at the scale below.
-#: `calibrate`'s sub-label WRAPPED to a second line while it read "OpenCV.js browser
-#: tool", which the "this work" bracket had to clear -- hence a bottom of -2.45 and a
-#: bracket at -2.05 in that era. Renaming it to `Calibrat3 App` (2026-09-07) puts every
-#: sub-label back on ONE line, so both return to their one-line values, -2.20 and -1.80;
-#: leaving them at the wrapped values would be 0.25 units, 2.6 mm, of pure white under
-#: the row. The top was H/2 + 0.46 while the `.toml` label sat above the row; with that
-#: label cut (see main()) nothing is drawn above the chevrons again, so the top is back
-#: to the ink: the chevron's top edge plus its stroke and a hair.
-YLIM = (-2.20, H / 2 + 0.06)
+#: Horizontal margin each side of the row, in data units.
+XPAD = 0.35
 
 #: Millimetres per data unit. THIS, NOT THE PANEL HEIGHT, IS THE FIXED QUANTITY.
-#: `blank()` sets aspect='equal' and the drawing is 14.8 units wide against 2.8 tall,
-#: so 180 mm of width is never the constraint: the axes is HEIGHT-bound and the scale
-#: is axes_height / (YLIM range). Every chevron, icon, arrow and bracket therefore
-#: prints at (panel height) x (this scale) -- but the TEXT does not, because fontsize
-#: is in points. So shrinking the panel closes the gaps BETWEEN the label lines in
-#: millimetres while the type stays 7.5/6.5 pt, and at the old 32 mm the sub-label
-#: baseline already cleared the two-line labels ("videos + / calibration") by only
-#: 0.6 mm. The height is consequently derived from the scale and the ink, and the
-#: only thing that came out of it is dead margin. 9.85 was the value the 32 mm version
-#: rendered at.
+#: `blank()` sets aspect='equal' and the drawing is much wider than it is tall, so
+#: the axes is HEIGHT-bound and the scale is axes_height / (YLIM range). Every chevron,
+#: icon, arrow and bracket therefore prints at (panel height) x (this scale) -- but
+#: the TEXT does not, because fontsize is in points.
 #:
-#: RAISED 9.85 -> 11.60 -> 10.35 on 2026-08-17 (Eric: "make the images and text a bit
-#: bigger for legibility", then calibration moved INTO the row). At 9.85 the headroom
-#: was real and unused: the drawing was 14.80 x 9.85 = 145.8 mm wide inside a 180 mm
-#: full-span axes, i.e. 34 mm of the row was empty, because with `aspect='equal'` the
-#: axes is HEIGHT-bound and 180 mm of width was never the constraint. 11.60 took 96% of
-#: the 12.11 ceiling that 6 stages allowed.
+#: IT HAS A CEILING SET BY THE STAGE COUNT, and above it the aspect fit silently
+#: SHRINKS the drawing instead of enlarging it. N chevrons and N-1 gaps span
+#: N*W + (N-1)*GAP units, plus 2*XPAD of margin, inside a 179.3 mm axes: 7 stages gave
+#: 10.42 (and shipped at 10.35); the 8 stages since 2026-10-09 give 179.3 / 19.62 =
+#: 9.14. 9.10 is that ceiling with a rounding margin. The marks are 12% smaller than
+#: at seven stages; the type is not.
+MM_PER_UNIT = 9.10
+
+def _mm(v):
+    """Millimetres -> data units."""
+    return v / MM_PER_UNIT
+
+
+#: EVERYTHING UNDER THE CHEVRONS IS TEXT, SO IT IS PLACED IN MILLIMETRES (2026-10-09).
+#: These used to be data-unit constants (-1.42 for the sub-labels, -1.80 for the
+#: bracket, -2.20 for the bottom), tuned at one MM_PER_UNIT. But text is sized in
+#: points, so when the eighth stage dropped the scale by 12% the two-line labels
+#: ("video / acquisition", "cross-view / association") grew 14% in data units and ran
+#: into the sub-label baseline. Measured from the chevrons' bottom edge in mm, the
+#: layout is the one that shipped at 10.35 and survives any stage count:
+#:   label tops 1.66 mm down; sub-labels 9.26 mm down, which clears a two-line 8.5 pt
+#:   label; the bracket rule 13.2 mm down; its label 1.0 mm under the rule; and the
+#:   ink ends 17.3 mm down.
+LABEL_DROP_MM, SUB_DROP_MM, BRACKET_DROP_MM, BRACKET_LABEL_MM, BOTTOM_DROP_MM = (
+    1.66, 9.26, 13.2, 1.0, 17.3)
+Y_LABEL = -H / 2 - _mm(LABEL_DROP_MM)
+Y_SUB = -H / 2 - _mm(SUB_DROP_MM)
+Y_BRACKET = -H / 2 - _mm(BRACKET_DROP_MM)
+
+#: Vertical extent of the drawing, in data units, cut to the INK. Top: the chevron's
+#: top edge at H/2 plus half of its 1.1 pt stroke and a hair. Bottom: the bracket
+#: label's baseline. Nothing is drawn above the chevrons (the `.toml` label that once
+#: sat there is gone -- see main()).
+YLIM = (-H / 2 - _mm(BOTTOM_DROP_MM), H / 2 + 0.06)
+
+#: Type sizes. Raised on 2026-08-17 (7.5 / 6.5 / 7.0 before, Eric: "make the images
+#: and text a bit bigger for legibility") so the text grows with the marks rather
+#: than shrinking against them. Fontsize is in POINTS, so it does NOT fall with
+#: MM_PER_UNIT.
 #:
-#: THE SEVENTH STAGE SPENDS MOST OF THAT BACK, and it is arithmetic, not a choice: 7
-#: chevrons and 6 gaps span 7W + 6*GAP = 16.51 units, +0.70 of margin, so the ceiling
-#: falls to 179.3 / 17.21 = 10.42 mm per unit. Above it the aspect fit silently SHRINKS
-#: the drawing instead of enlarging it, so a bigger number here would make the panel
-#: smaller. 10.35 is that ceiling with a rounding margin -- still +5% on every mark
-#: against the 9.85 the panel shipped at, and the type stays at the raised sizes below,
-#: which is where most of the legibility gain lives.
-MM_PER_UNIT = 10.35
-#: Type sizes. Raised on 2026-08-17 (7.5 / 6.5 / 7.0 before) so the text grows with the
-#: marks rather than shrinking against them. Fontsize is in POINTS, so it does NOT fall
-#: with MM_PER_UNIT -- the seventh stage cost the marks 11% and the type nothing.
-#:
-#: THE STAGE PITCH IS THE CONSTRAINT AND IT IS NOW FIXED: 7 stages across 179.3 mm is
-#: 24.9 mm each, whatever W and GAP are set to. One sub-label does not fit in it at
-#: 7.5 pt -- "OpenCV.js browser tool" measures 29.6 mm on one line -- so it WRAPS, to
-#: 15.4 mm on two. Wrapping rather than shrinking keeps one type size across the row.
-#: Every other label clears the pitch: the widest is "1 identity / animal" at 21.9 mm
-#: (88%), then "SLEAP or similar" 21.5 and "DLT, N >= 2 views" 21.0. All of those are
-#: MEASURED off the rendered text, not estimated from a characters-times-average-width
-#: rule, which had "OpenCV.js browser tool" wrong by 4 mm; `_check_text_fits` re-measures
-#: them on every build and fails it if one outgrows its pitch.
+#: THE STAGE PITCH IS THE CONSTRAINT: 8 stages across 179.3 mm is ~22 mm each. The
+#: widest sub-labels are "SLEAP or similar" at 21.5 mm and "DLT, N >= 2 views" 21.0,
+#: MEASURED off the rendered text. At 8 stages they no longer each fit their own
+#: pitch, so `_check_text_fits` tests what actually matters -- the clear air between
+#: NEIGHBOURS -- rather than each label against a whole pitch. "1 identity / animal"
+#: (21.9 mm) became "1 ID / animal" on 2026-10-09 because it sat 1.3 mm from
+#: "DLT, N >= 2 views" and the two read as one string; "ID" is the word the identity
+#: chips in Fig 1a already use, so the claim is unchanged.
 LABEL_PT, SUB_PT, BRACKET_PT = 8.5, 7.5, 8.0
 #: Icon size in data units. 0.50 before 2026-08-17; the multi-view glyphs are
 #: `TILES_W * s` wide (see src/diagram.icon), so this is what sets how much of the
@@ -174,44 +182,54 @@ ICON_S = 0.56
 #: the assembler already leaves 4.5 mm of lead above every row for the panel letter,
 #: so the default 1.06 mm on each side is 2.1 mm of dead figure.
 PAD_MM = 0.35
-#: Panel height in mm: the ink, at the scale above, plus the outer pad. Was 32.0.
+#: Panel height in mm: the ink, at the scale above, plus the outer pad.
 ROW_MM = MM_PER_UNIT * (YLIM[1] - YLIM[0]) + 2 * PAD_MM
-
+#: Minimum clear air between two neighbouring texts on one line, in mm. 2, not 1:
+#: at 1.3 mm two adjacent sub-labels already read as one run of text at print size.
+MIN_AIR_MM = 2.0
 
 
 def _check_text_fits(fig, ax, texts):
-    """Fail the build if any label or sub-label is wider than its stage pitch.
+    """Fail the build if two texts on the same line come within MIN_AIR_MM of each
+    other, or if any text runs off the axes.
 
-    The pitch is fixed by arithmetic (7 stages across the full span), so a label that
-    outgrows it does not look tight -- it touches its neighbour's, and at 7.5 pt in a
-    grey that is exactly the kind of collision nobody notices in a 285 mm figure. This
-    measures the rendered extents instead of trusting a characters-times-average-width
-    estimate, which is what got "OpenCV.js browser tool" wrong by 3 mm on the first
-    pass. Tolerance: 96% of the pitch, i.e. at least 1 mm of clear air between
-    neighbours."""
+    Measured off the RENDERED extents, not estimated from a characters-times-width
+    rule, which got "OpenCV.js browser tool" wrong by 3 mm on the first pass. Until
+    2026-10-09 this demanded that every text fit 96% of ONE stage pitch, which is
+    sufficient but not necessary: at 8 stages "SLEAP or similar" (21.5 mm) failed a
+    21.0 mm allowance while sitting between "N cameras" and "Calibrat3 App" with 5 mm
+    of air on each side. Neighbour clearance is the actual collision condition, so
+    that is what is checked -- and it still catches the case that matters, two long
+    sub-labels side by side."""
     fig.canvas.draw()
-    per_unit = (ax.transData.transform((1, 0))[0]
-                - ax.transData.transform((0, 0))[0])            # px per data unit
-    pitch_px = (W + GAP) * per_unit
+    r = fig.canvas.get_renderer()
+    per_mm = (ax.transData.transform((1, 0))[0]
+              - ax.transData.transform((0, 0))[0]) / MM_PER_UNIT   # px per mm
+    ax_x0, ax_x1 = ax.get_window_extent(r).x0, ax.get_window_extent(r).x1
+    boxes = [(t.get_text(), t.get_window_extent(r)) for t in texts]
     bad = []
-    for t in texts:
-        w = t.get_window_extent(fig.canvas.get_renderer()).width
-        if w > 0.96 * pitch_px:
-            bad.append(f"{t.get_text()!r} {w / per_unit * MM_PER_UNIT:.1f} mm")
+    for name, b in boxes:
+        if b.x0 < ax_x0 - 0.5 or b.x1 > ax_x1 + 0.5:
+            bad.append(f"{name!r} runs off the axes")
+    for i, (n1, b1) in enumerate(boxes):
+        for n2, b2 in boxes[i + 1:]:
+            if min(b1.y1, b2.y1) <= max(b1.y0, b2.y0):
+                continue                                  # not on the same line
+            air = max(b2.x0 - b1.x1, b1.x0 - b2.x1) / per_mm
+            if air < MIN_AIR_MM:
+                bad.append(f"{n1!r} / {n2!r} {air:.1f} mm apart")
     if bad:
         raise SystemExit(
-            f"text wider than the {(W + GAP) * MM_PER_UNIT:.1f} mm stage pitch: "
-            + "; ".join(bad) + " -- wrap it with \\n or shorten it; do NOT shrink the "
-            "type, which would break the row's single size")
+            "pipeline text collides: " + "; ".join(bad) + f" (need {MIN_AIR_MM} mm) "
+            "-- wrap it with \\n or shorten it; do NOT shrink the type, which would "
+            "break the row's single size")
 
 
-def chevron(ax, x, y, ours):
-    color = TEAL if ours else GREY
-    pts = [(x, y - H / 2), (x + W - NOTCH, y - H / 2), (x + W, y),
-           (x + W - NOTCH, y + H / 2), (x, y + H / 2), (x + NOTCH, y)]
+def chevron(ax, x, y, color, h=H, w=W, notch=NOTCH, lw=1.1):
+    pts = [(x, y - h / 2), (x + w - notch, y - h / 2), (x + w, y),
+           (x + w - notch, y + h / 2), (x, y + h / 2), (x + notch, y)]
     ax.add_patch(Polygon(pts, closed=True, facecolor="none", edgecolor=color,
-                         lw=1.1, joinstyle="miter"))
-    return color
+                         lw=lw, joinstyle="miter"))
 
 
 def main():
@@ -223,25 +241,27 @@ def main():
     blank(ax)
 
     texts = []
-    for i, (label, sub, ours, kind) in enumerate(STAGES):
+    for i, (label, sub, role, kind, _g) in enumerate(STAGES):
         x = i * (W + GAP)
-        color = chevron(ax, x, 0.0, ours)
+        color = ROLE_COLOR[role]
+        chevron(ax, x, 0.0, color)
         # ICON INSIDE THE CHEVRON, LABEL UNDER IT. The label used to sit inside the
         # chevron too, and it did not fit: a chevron is narrowest exactly where the
-        # notch cuts it, so the two-line labels ("videos + / calibration",
-        # "cross-view / re-ID") dropped through the bottom edge and the widest
-        # one-line label ("proofread 3D") ran out through the right point. Under the
-        # box there is the whole pitch to write in, so nothing has to be shrunk
-        # below the 7.5 pt this row already uses.
-        # The three multi-view glyphs are WIDE (see src/diagram.icon): they are
-        # centred on the same point and spend the chevron's spare width, which is what
-        # lets three camera tiles stay legible at this scale.
-        icon(ax, kind, x + W / 2 - ICON_S / 2, -ICON_S / 2, s=ICON_S, color=color)
-        texts.append(ax.text(x + W / 2, -H / 2 - 0.16, label, ha="center", va="top",
+        # notch cuts it, so the two-line labels dropped through the bottom edge and
+        # the widest one-line label ("proofread 3D") ran out through the right point.
+        # The three multi-view glyphs (and `videos`) are WIDE (see src/diagram.icon):
+        # they are centred on the same point and spend the chevron's spare width,
+        # which is what lets three camera tiles stay legible at this scale.
+        # The output pose is drawn in INK inside its GREY data chevron, for the
+        # reason tiles2d's mice are: grey is 2.1:1 on white and a ~2 mm pose in it
+        # vanishes in print. The chevron carries the role; the glyph has to read.
+        icon(ax, kind, x + W / 2 - ICON_S / 2, -ICON_S / 2, s=ICON_S,
+             color=INK if kind == "pose3d" else color)
+        texts.append(ax.text(x + W / 2, Y_LABEL, label, ha="center", va="top",
                              color=INK, fontsize=LABEL_PT, linespacing=1.25))
         # Sub-labels are all on ONE baseline rather than hung off their own label,
         # so the row reads as a row even though some labels wrap and some do not.
-        texts.append(ax.text(x + W / 2, -1.42, sub, ha="center", va="top",
+        texts.append(ax.text(x + W / 2, Y_SUB, sub, ha="center", va="top",
                              color=MUTED, fontsize=SUB_PT, linespacing=1.25))
 
         if i:
@@ -250,32 +270,42 @@ def main():
                 mutation_scale=7, color=GREY, lw=0.9, shrinkA=0, shrinkB=0))
 
     # THE `.toml` LABEL IS GONE (Eric, 2026-08-19: "why does it just say .toml above
-    # calibrate ... maybe just get rid of that"). It named the calibration artefact on
-    # the arrow OUT of `calibrate` and into `cross-view re-ID`, the first stage that
-    # consumes it -- but a file extension floating over the chevron row reads as a
-    # label for `calibrate` itself rather than for the edge, and at panel size the
-    # distinction between "above the arrow" and "above the stage" does not survive.
-    # Nothing else on the row names its artefact, so this one was the odd mark out;
-    # `export`'s sub-label still names the output format, which is where a reader
-    # looks for file types. If it ever comes back, it belongs ON the arrow (a
-    # horizontal rule with the word set into it), not floating above the row.
+    # calibrate ... maybe just get rid of that"). A file extension floating over the
+    # chevron row reads as a label for `calibrate` itself rather than for the edge out
+    # of it. The output tile's sub-label still names the formats, which is where a
+    # reader looks for file types. If it ever comes back, it belongs ON the arrow.
 
-    # ONE bracket under the stages this paper contributes, as in the legacy figure.
-    # Per-stage "this paper" tags said the same thing several times over and did not
-    # show that the contributed stages are a single contiguous run. Since 2026-09-07
-    # that run is EVERY stage, so this spans the whole row -- the code is unchanged
-    # because it was always derived from the flags rather than hard-coded, which is
-    # also why it stays correct if a stage is ever handed back.
-    ours = [i for i, (_, _, o, _k) in enumerate(STAGES) if o]
-    x0 = ours[0] * (W + GAP)
-    x1 = ours[-1] * (W + GAP) + W
-    yb = -1.80
-    ax.plot([x0, x0, x1, x1], [yb + 0.14, yb, yb, yb + 0.14], color=TEAL, lw=0.9)
-    ax.text((x0 + x1) / 2, yb - 0.10, "this work", ha="center", va="top",
-            color=TEAL, fontsize=BRACKET_PT, fontweight="bold")
+    # THE APP BRACKET: one teal bracket under each run of consecutive stages that share
+    # a group, in the band where the full-row "this work" bracket used to be. Derived
+    # from STAGES rather than hard-coded, so it follows a stage that moves.
+    runs, start = [], 0
+    for i in range(1, len(STAGES) + 1):
+        if i == len(STAGES) or STAGES[i][4] != STAGES[start][4]:
+            if STAGES[start][4]:
+                runs.append((STAGES[start][4], start, i - 1))
+            start = i
+    for name, a, b in runs:
+        x0, x1 = a * (W + GAP), b * (W + GAP) + W
+        ax.plot([x0, x0, x1, x1], [Y_BRACKET + 0.14, Y_BRACKET, Y_BRACKET,
+                                   Y_BRACKET + 0.14], color=TEAL, lw=0.9)
+        texts.append(ax.text((x0 + x1) / 2, Y_BRACKET - _mm(BRACKET_LABEL_MM), name,
+                             ha="center", va="top", color=TEAL, fontsize=BRACKET_PT,
+                             fontweight="bold"))
+
+    # THE "this work" KEY, at the left of the same band. Since 2026-10-09 the
+    # contributed stages are not one contiguous run (acquisition, then calibration and
+    # the LUC3D app, with data and SLEAP's detector between), so a bracket cannot say
+    # "this work" any more and the colour has to. A miniature of the chevron itself is
+    # the swatch, so the key shows exactly the mark it explains.
+    kh = _mm(2.6)
+    ky = Y_BRACKET - _mm(BRACKET_LABEL_MM) - _mm(BRACKET_PT * 25.4 / 72) * 0.55
+    chevron(ax, 0.0, ky, TEAL, h=kh, w=kh * 1.9, notch=kh * 0.24, lw=0.9)
+    texts.append(ax.text(kh * 1.9 + _mm(1.2), ky, "this work", ha="left",
+                         va="center", color=TEAL, fontsize=BRACKET_PT,
+                         fontweight="bold"))
+
     span = len(STAGES) * (W + GAP) - GAP
-
-    ax.set_xlim(-0.35, span + 0.35)
+    ax.set_xlim(-XPAD, span + XPAD)
     ax.set_ylim(*YLIM)
     _check_text_fits(fig, ax, texts)
     save(fig, 1, "b", "pipeline")

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Fig 1d -- the triangulated 3D next to the image it came from, then the whole rig.
-(Was 1c until 2026-08-16, when the cage render became the figure's opening
-panel -- Eric.)
+Fig 1c -- the triangulated 3D next to the image it came from, then the whole rig.
+(Was 1d from 2026-08-16, when the cage render became the figure's opening panel
+-- Eric -- until 2026-10-09, when Fig 1 was reordered to re-ID, pipeline, this
+panel, arena renders -- Talmo. 1c before 2026-08-16 as well.)
 
 THREE TILES, AND THE ORDER IS THE ARGUMENT: the camera's video with the tracked
 overlays, the triangulated 3D pose those overlays produce, and the apparatus that
@@ -22,7 +23,7 @@ re-measured content bboxes that silently slid off the content on every re-export
 All of that is gone: the tiles are now `blender-images/renders/fig1d_pose.png` and
 `fig1d_rig.png`, rendered by `blender-images/fig1d_scene.py` from the deposit
 `figs/fig1_hardfight_scene.py` writes -- the same cage_scene.py house aesthetic as
-Fig 1a's two arena renders, framed COMPUTATIONALLY at exactly this panel's cell
+Fig 1d's two arena renders, framed COMPUTATIONALLY at exactly this panel's cell
 aspects, so they are placed full-frame with no crop constants to re-measure.
 
 WHAT KEEPS THE TILES HONEST. The pose render is the app's OWN reconstruction at
@@ -32,7 +33,7 @@ per-identity 3D with its identity colours, so the mice match the overlays by
 construction (deposit cross-check: app-vs-offline median keypoint distance ~1 mm).
 It is no longer drawn from cam 0's calibrated viewpoint (that comparability was
 the old center tile's argument, and it cost legibility: cam 0 looks straight
-down, so the pose read as a flat smear); the render uses the Fig 1a family's
+down, so the pose read as a flat smear); the render uses the Fig 1d family's
 corner view instead, and the ARENA FLOOR PLANE under the mice ties it to the rig
 tile, whose box floor is the same fitted rectangle.
 
@@ -49,8 +50,8 @@ since 2026-08-25 it is a CLEAN frame (`exportViews` with `overlay: false`) and
 the identity-coloured skeletons are drawn HERE, in matplotlib, with
 `src.skeleton_style.draw_pose_overlay` from the manifest's per-node
 `details[].points` -- the same Fig 13c/d photo-overlay style, at the same stroke
-weights as Fig 1c's after-tiles (keep POSE_* in sync with fig1_02_tracking.py),
-so 1c-after and this tile read as the same drawing.
+weights as Fig 1a's after-tiles (keep POSE_* in sync with fig1_02_tracking.py),
+so 1a-after and this tile read as the same drawing.
 
 TILE SIZE. The row is 180 mm wide but only ~32 mm tall, so the tiles are
 HEIGHT-limited: the crops are tight on the content vertically and open out to a
@@ -191,7 +192,7 @@ def main():
     print(f"  {j['stats']['groupsThisFrame']} animals from "
           f"{j['stats']['nCameras']} cameras, "
           f"{j['stats']['nodes3dFilled']}/{j['stats']['nodes3d']} 3D nodes filled")
-    save(fig, 1, "d", "reconstruction")
+    save(fig, 1, "c", "reconstruction")
 
 
 if __name__ == "__main__":

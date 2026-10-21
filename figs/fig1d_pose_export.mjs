@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Fig 1d's 3D pose, exported as NUMBERS instead of pixels.
+ * Fig 1c's 3D pose, exported as NUMBERS instead of pixels.
  *
- * The Blender re-render of Fig 1d's two 3D tiles (fig1_hardfight_scene.py ->
+ * The Blender re-render of Fig 1c's two 3D tiles (fig1_hardfight_scene.py ->
  * blender-images/fig1d_scene.py) needs the app's OWN reconstruction at the
  * panel's frame -- the same trackAll + triangulateAll the video-tile overlays
  * come from, with each animal tagged by the same identity (and identity

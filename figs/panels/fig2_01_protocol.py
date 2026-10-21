@@ -25,7 +25,10 @@ AnnotationTool already "leverages the multi camera recordings by projecting your
 manual annotations on a subset of those cameras to the remaining ones" and shows a
 reprojection error bar; Label3D is the direct predecessor for reprojection-aided
 multi-camera 3D labelling. What is new here is the browser implementation and, above
-all, the QUANTIFICATION in panels b-d. Both are named in Fig 1d and must be cited.
+all, the QUANTIFICATION in panels b-d. Both must be cited. They used to be named on
+the artwork too, in Fig 1's capability table, but that table is held out of the
+first submission since 2026-10-09 (panels/fig1_04_tool_table.py), so for now the
+citation in the text is the only credit they get.
 
 Source: figs/out/fig2-protocol.json + figs/out/fig2p-*.png
         (node figs/fig2_protocol.mjs)
@@ -86,7 +89,7 @@ def cam_label(name):
 
     The camera INDEX is load-bearing here: the panel's whole claim is about which
     views were labelled and which were only reprojected into, so a badge reading
-    just `topB` is unattributable. Fig 1b badges its tiles the same way.
+    just `topB` is unattributable. Fig 1a badges its tiles the same way.
     """
     idx, view = name.removeprefix("Camera").split("_", 1)
     return f"cam {idx} {view}"
@@ -286,7 +289,7 @@ def chevron(fig, x, y, *, h=0.023, w=0.010, color=GREY, lw=1.2):
 
     The four tiles columns sit in 12.4 mm gutters, so a 1.8 x 3.6 mm chevron has
     room in the middle of one without coming near a tile. Drawn as a polyline
-    rather than a `>` glyph because Fig 1a's typeset chevrons are the reason
+    rather than a `>` glyph because Fig 1b's typeset chevrons are the reason
     `lint_text.py` reports text ON DATA there -- noise that hides real hits.
     """
     fig.add_artist(Line2D([x - w / 2, x + w / 2, x - w / 2], [y + h, y, y - h],

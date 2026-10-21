@@ -176,7 +176,7 @@ session), SLAP-2M 3D is millimetres. Every figure script multiplies Mouse-Dyad-1
 on load.
 
 **No cage geometry exists for Mouse-Dyad-10M.** There is no `aligned_cage_points3d.h5`
-equivalent, which is why Fig 1a draws a box fitted to the animals' own movement
+equivalent, which is why Fig 1d draws a box fitted to the animals' own movement
 footprint rather than a measured enclosure (`figs/fig1_bmimica_scene.py`).
 
 ### `BMimica/scratch/` — an independent DLT re-triangulation (40 GB)
@@ -383,7 +383,7 @@ The figures never read raw data at draw time. Everything lands in `figs/out/` fi
   `aligned_cage_points3d.h5`.
 - **Analysis HDF5 `/tracks` is `(tracks, xy, nodes, frames)`** — frames LAST, unlike
   every 3D file here, which is frames FIRST.
-- **No cage geometry for Mouse-Dyad-10M**, so Fig 1a's box is a movement footprint and must
+- **No cage geometry for Mouse-Dyad-10M**, so Fig 1d's box is a movement footprint and must
   never be captioned as an enclosure.
 
 ## Not covered here

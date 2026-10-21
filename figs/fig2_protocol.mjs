@@ -265,7 +265,7 @@ try {
     // and zoom in a bit"). This tile sits directly under the "cam 6 sideL - anchor"
     // video in the panel, so putting the 3D at that camera's real pose lets a reader
     // check the reconstruction against the pixels it came from -- the same reasoning
-    // Fig 1d's middle tile uses. `showCameraView` is the app's own "Show Camera
+    // Fig 1c's middle tile uses. `showCameraView` is the app's own "Show Camera
     // View" button, so the pose and FOV are the session's calibrated extrinsics.
     await showCameraView(page, ANCHORS[1]);
     const near = await zoomOnAnimals(page, FIT3D_PAD);

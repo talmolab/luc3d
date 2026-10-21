@@ -41,7 +41,7 @@
  * the two timelines, and figs/out/fig1.json.
  *
  * SINCE 2026-08-25 the two 3D exports (tri3d-camview.png / tri3d-rig.png) are NO
- * LONGER ON THE PANEL: Fig 1d's 3D tiles are Blender renders (Eric: "nice blender
+ * LONGER ON THE PANEL: Fig 1c's 3D tiles are Blender renders (Eric: "nice blender
  * renders ... i think they look like a mess atm") -- see figs/fig1d_pose_export.mjs
  * -> figs/fig1_hardfight_scene.py -> blender-images/fig1d_scene.py. The exports and
  * their manifest fields are still written (they document the app's own viewport and
@@ -58,7 +58,7 @@ import {
 } from './_drive.mjs';
 
 // FRAME 276, NOT 150 -- AND THE CHOICE IS THE PANEL'S ARGUMENT.
-// Panel b exists to show 3 x 8 = 24 detections collapsing to 3 identities, one per
+// Panel a exists to show 3 x 8 = 24 detections collapsing to 3 identities, one per
 // animal in every view. At frame 150 two views (Camera3_sideC, Camera7_sideR) each
 // carried a FOURTH detection in a 3-animal scene -- a duplicate of an animal already
 // matched in that view -- and re-ID's per-view assignment is one-to-one, so the

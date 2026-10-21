@@ -87,12 +87,19 @@ TITLES = {
     # onto the repo's former numbering as 1, 2, 13, 5, 6, 11 -> 1, 2, 3, 4, 5, 6.
     # Figures 3(old), 4(old), 7-13 no longer exist as their own compositions;
     # their design history lives in git (eric/figs before this commit).
-    # Fig 1 re-lettered 2026-08-16 (Eric: cage render leads the figure).
-    (1, "a"): "Dataset arena visualizations with camera rigs and poses",
+    # Fig 1 re-lettered 2026-08-16 (Eric: cage render leads the figure), and
+    # again 2026-10-09 (Talmo: order c -> b -> d -> a, so re-identification
+    # leads and the arena renders close). The capability table, e until then, is
+    # held out of the first submission and slated for a supplementary table: it
+    # still renders as fig1s1_tool_table but is not placed (see LAYOUTS). Its
+    # title is kept under s1 so restoring it is a one-line change there.
+    # "association", not "re-identification", since 2026-10-09 (Talmo) -- the
+    # same name as Fig 1b's stage tile, so panel and pipeline agree.
+    (1, "a"): "Cross-view association",
     (1, "b"): "Pipeline",
-    (1, "c"): "Cross-view re-identification",
-    (1, "d"): "Triangulated 3D",
-    (1, "e"): "Capability comparison",
+    (1, "c"): "Triangulated 3D",
+    (1, "d"): "Dataset arena visualizations with camera rigs and poses",
+    (1, "s1"): "Capability comparison",
     (2, "a"): "Protocol",
     (2, "b"): "Placements vs rig size",
     (2, "c"): "Error vs cameras in the solve",
@@ -251,11 +258,16 @@ LAYOUTS = {
     # MANUSCRIPT RENUMBERING 2026-08-26: see the note atop TITLES. Rows are
     # carried over verbatim from the figures they renumber (1<-1, 2<-2, 3<-13,
     # 4<-5, 5<-6, 6<-11); the per-figure design history lives in git.
-    1: [[("a", "render")],
+    # 2026-10-09 (Talmo): re-ID, pipeline, triangulated 3D, arena renders -- the
+    # former c, b, d, a. The former e (tool table, panels/fig1_04_tool_table.py)
+    # still renders and deposits as fig1s1_tool_table, the fig7s1/s2 convention,
+    # but is not placed: it is out of the first submission and headed for a
+    # supplementary table. Restore it by appending [("s1", "tool_table")] here
+    # (or re-lettering it in its script and here).
+    1: [[("a", "tracking")],
         [("b", "pipeline")],
-        [("c", "tracking")],
-        [("d", "reconstruction")],
-        [("e", "tool_table")]],
+        [("c", "reconstruction")],
+        [("d", "render")]],
     2: [[("a", "protocol")],
         [("b", "placements_vs_rig"), ("c", "reprojection_accuracy"),
          ("d", "baseline_angle")],
@@ -305,7 +317,7 @@ def axes_extent(pdf: Path) -> tuple[float, float] | None:
 
     A SPINE, not merely a long horizontal line: the stroke must have a vertical
     stroke meeting one of its ends, which is what separates an x axis from a table
-    rule (`fig1e`, `fig6f` and `fig6h` are full-width rules with no verticals at
+    rule (`fig1s1`, `fig6f` and `fig6h` are full-width rules with no verticals at
     all, and they keep the flush title). The extent is the union over every such
     spine, so a panel holding a row of sub-plots -- `fig6g`'s three, `fig11j`'s
     three -- centres over the whole row rather than over its first axes.

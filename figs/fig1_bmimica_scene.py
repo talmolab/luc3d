@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fig 1a, right half: the BMimica rig, measured out of one session's own data.
+Fig 1d, right half: the BMimica rig, measured out of one session's own data.
 
 WHAT THIS DEPOSITS. Everything `blender-images/bmimica_scene.py` needs to build a
 Blender scene that is entirely measurement and contains no hand-placed geometry:
@@ -82,7 +82,7 @@ ONE of them with the two animals within NEAR_BL of each other -- no mutual displ
 draw. 20250827_152238, another session of that same family, has 3,263 both-rearing
 frames, 1,945 of them close together, 857 surviving the whole rule. It is also the
 session Fig 5a's own upright-display render comes from (`out/fig5_views.json`), so
-Fig 1a and Fig 5a now show the same behaviour in the same arena -- a DIFFERENT frame
+Fig 1d and Fig 5a now show the same behaviour in the same arena -- a DIFFERENT frame
 of it (56,806 here against 93,021 there), so nothing is printed twice.
 
 Needs the bench env for cv2/toml/scipy (as `fig5_views.py` does):
