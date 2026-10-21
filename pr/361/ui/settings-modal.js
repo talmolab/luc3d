@@ -36,12 +36,14 @@ import {
     getCameraWeight,
     setCameraWeights,
     getTrackingThresholdDefs,
+    formatThresholdValue,
+    ID_SWITCH_SETTING_IDS,
     setTrackingThresholds,
-} from './settings.js?v=7cafa1239fd9';
-import { getActiveSession, state, timeline } from './app-state.js?v=7cafa1239fd9';
-import { drawAllOverlays } from './rendering.js?v=7cafa1239fd9';
-import { installModalGeometry } from './modal-geometry.js?v=7cafa1239fd9';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=7cafa1239fd9';
+} from './settings.js?v=f6ee765f7f64';
+import { getActiveSession, state, timeline } from './app-state.js?v=f6ee765f7f64';
+import { drawAllOverlays } from './rendering.js?v=f6ee765f7f64';
+import { installModalGeometry } from './modal-geometry.js?v=f6ee765f7f64';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=f6ee765f7f64';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -577,7 +579,11 @@ export function showSettingsModal(initialPanel) {
     // or an on/off switch for a `kind: 'toggle'` setting, with an inline
     // description. Edits mutate working.thresholds; numbers are clamped to the
     // catalog range on blur and on Apply.
-    const thSection = buildSection('Tracking Thresholds', thresholdDefs.length || null);
+    // The ID-switch checks' settings get their own section after this one (ID_SWITCH_SETTING_IDS).
+    const idSwitchDefs = ID_SWITCH_SETTING_IDS.map(function (id) { return thresholdDefs.find(function (d) { return d.id === id; }); })
+        .filter(Boolean);
+    const trackerDefs = thresholdDefs.filter(function (d) { return ID_SWITCH_SETTING_IDS.indexOf(d.id) < 0; });
+    const thSection = buildSection('Tracking Thresholds', trackerDefs.length || null);
     wizPanel.appendChild(thSection.root);
 
     const thHint = document.createElement('div');
@@ -588,9 +594,11 @@ export function showSettingsModal(initialPanel) {
         'Defaults are tuned values — change them only if tracking under/over-matches. Changes apply when you click Apply.';
     thSection.body.appendChild(thHint);
 
-    thresholdDefs.forEach(function (def) {
+    // One setting's row — a labelled number field or, for a `kind: 'toggle'`, a switch — into `body`.
+    function renderThresholdRow(def, body) {
         const row = document.createElement('div');
         row.className = 'settings-threshold-row';
+        row.dataset.setting = def.id;
 
         const labelWrap = document.createElement('div');
         labelWrap.className = 'settings-threshold-label-wrap';
@@ -606,7 +614,7 @@ export function showSettingsModal(initialPanel) {
         if (def.kind === 'toggle') {             // on/off settings: a switch, stored as 1 / 0
             row.appendChild(labelWrap);
             row.appendChild(makeToggle(working.thresholds[def.id] > 0, def.label, function (on) { working.thresholds[def.id] = on ? 1 : 0; }));
-            thSection.body.appendChild(row);
+            body.appendChild(row);
             return;
         }
         const input = document.createElement('input');
@@ -615,12 +623,16 @@ export function showSettingsModal(initialPanel) {
         input.min = String(def.min);
         input.max = String(def.max);
         input.step = String(def.step);
-        input.value = String(working.thresholds[def.id]);
+        input.value = formatThresholdValue(def, working.thresholds[def.id]);
         input.setAttribute('aria-label', def.label);
+        // what the value means on this machine (`note`, e.g. "5 of 10 cores"), kept in step as it is typed
+        const note = def.note ? document.createElement('span') : null;
+        if (note) { note.className = 'settings-threshold-note'; note.textContent = def.note(working.thresholds[def.id]); }
 
         input.addEventListener('input', function () {
             const v = parseFloat(input.value);
             if (isFinite(v)) working.thresholds[def.id] = v;
+            if (note) note.textContent = def.note(working.thresholds[def.id]);
         });
         input.addEventListener('blur', function () {
             let v = parseFloat(input.value);
@@ -628,13 +640,35 @@ export function showSettingsModal(initialPanel) {
             if (v < def.min) v = def.min;
             if (v > def.max) v = def.max;
             working.thresholds[def.id] = v;
-            input.value = String(v);
+            input.value = formatThresholdValue(def, v);
+            if (note) note.textContent = def.note(v);
         });
 
         row.appendChild(labelWrap);
-        row.appendChild(input);
-        thSection.body.appendChild(row);
-    });
+        if (note) {              // under its field, so the fields stay in one column
+            const field = document.createElement('div');
+            field.className = 'settings-threshold-field';
+            field.appendChild(input);
+            field.appendChild(note);
+            row.appendChild(field);
+        } else row.appendChild(input);
+        body.appendChild(row);
+    }
+    trackerDefs.forEach(function (def) { renderThresholdRow(def, thSection.body); });
+
+    // ID Switches: the checks that run after Track All / Track Frame Range, and the image check's options.
+    if (idSwitchDefs.length) {
+        const idSection = buildSection('ID Switches', idSwitchDefs.length);
+        idSection.root.classList.add('settings-section-id-switches');
+        wizPanel.appendChild(idSection.root);
+        const idHint = document.createElement('div');
+        idHint.className = 'settings-kbd-hint';
+        idHint.style.marginTop = '0';
+        idHint.style.marginBottom = '8px';
+        idHint.textContent = 'Checks for identity switches after Track All or Track Frame Range. Changes apply when you click Apply.';
+        idSection.body.appendChild(idHint);
+        idSwitchDefs.forEach(function (def) { renderThresholdRow(def, idSection.body); });
+    }
 
     // Docs link at the bottom of the thresholds.
     const docsNote = document.createElement('div');

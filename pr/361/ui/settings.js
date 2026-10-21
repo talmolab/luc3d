@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=7cafa1239fd9';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=f6ee765f7f64';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -393,14 +393,18 @@ const TRACKING_THRESHOLDS = [
         desc: 'Embed only each animal\'s N views where it appears largest (0 = every view it is visible in). The model is the slow part, so time scales with this: 3 views ran 2.5x faster than all 8 with the same accuracy; 2 starts to cost accuracy.',
     },
     {
-        id: 'imageCheckMaxGpu', label: 'Image check: max GPU use (%)', default: 50,
-        min: 10, max: 100, step: 5,
-        desc: 'The share of the GPU the image check may use, leaving the rest for other work: it runs smaller batches and rests after each. 100 = no limit, fastest.',
+        // A fraction (0.10-1.00), not a percentage: new ids rather than the unreleased imageCheckMaxGpu/Cpu
+        // (stored 10-100), so a value saved on the old scale cannot be read as 1.00 = uncapped.
+        id: 'imageCheckGpuTime', label: 'Image check: GPU time (%)', default: 0.5,
+        min: 0.1, max: 1, step: 0.05, decimals: 2,
+        desc: 'The share of time the image check may use the GPU (or WebNN device); the rest is left for other apps.',
+        tip: 'Fraction of GPU time to run image check, idling the remaining time.',
     },
     {
-        id: 'imageCheckMaxCpu', label: 'Image check: max CPU use (%)', default: 50,
-        min: 10, max: 100, step: 5,
-        desc: 'The share of the CPU cores the image check may use, leaving the rest for other work: it runs fewer worker threads. 100 = no limit, fastest.',
+        id: 'imageCheckCpuCores', label: 'Image check: CPU cores (%)', default: 0.5,
+        min: 0.1, max: 1, step: 0.05, decimals: 2, note: cpuCoresNote,
+        desc: 'The share of this computer\'s cores the image check may use; the rest are left for other apps.',
+        tip: 'Fraction of CPU cores to run image check, the remaining cores are left free.',
     },
     {
         id: 'imageCheckWebNN', label: 'Image check: try WebNN (experimental)', default: 0,
@@ -414,6 +418,23 @@ const TRACKING_THRESHOLDS = [
     },
 ];
 
+/**
+ * What an `imageCheckCpuCores` value means on this machine, for the note beside
+ * its field: "5 of 10 cores" — floor(cores x value), at least one, the budget
+ * ui/image-embedder.js `imageCheckThreads` gives the check.
+ */
+export function cpuCoresNote(value, cores) {
+    const c = cores > 0 ? cores : (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 0;
+    const v = Number(value);
+    if (!(c > 0) || !isFinite(v)) return '';
+    return Math.max(1, Math.floor(c * Math.min(1, Math.max(0, v)))) + ' of ' + c + ' cores';
+}
+
+/** A setting's value as its field shows it: `decimals` places when the setting has them (0.50), else as is. */
+export function formatThresholdValue(def, v) {
+    return def && def.decimals > 0 && typeof v === 'number' && isFinite(v) ? v.toFixed(def.decimals) : String(v);
+}
+
 const _thrById = new Map();
 TRACKING_THRESHOLDS.forEach(function (t) { _thrById.set(t.id, t); });
 
@@ -426,9 +447,20 @@ const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
     'stale', 'matchGate',
-    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckMaxGpu', 'imageCheckMaxCpu', 'imageCheckWebNN',
+    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckGpuTime', 'imageCheckCpuCores', 'imageCheckWebNN',
     'reprojErrorThreshold',
 ]);
+
+/**
+ * The Tracking Wizard settings shown in its own "ID Switches" section rather than
+ * under Tracking Thresholds, in this order: the two after-tracking checks, then the
+ * image check's options. They configure the checks run AFTER tracking, not the
+ * tracker's matching.
+ */
+export const ID_SWITCH_SETTING_IDS = [
+    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz',
+    'imageCheckMaxViews', 'imageCheckGpuTime', 'imageCheckCpuCores', 'imageCheckWebNN',
+];
 
 // Clamp a value to a threshold's [min, max] range, or null if not a number.
 function clampThreshold(def, v) {
@@ -449,6 +481,7 @@ export function getTrackingThresholdDefs() {
             id: t.id, label: t.label, default: t.default,
             value: getTrackingThreshold(t.id),
             min: t.min, max: t.max, step: t.step, desc: t.desc, kind: t.kind || 'number',
+            decimals: t.decimals || 0, note: t.note || null, tip: t.tip || '',
         };
     });
 }

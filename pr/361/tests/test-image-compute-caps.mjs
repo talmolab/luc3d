@@ -1,7 +1,7 @@
 /**
  * test-image-compute-caps.mjs — the image ID-switch check's two compute caps
- * (ui/image-embedder.js; settings `imageCheckMaxGpu`, `imageCheckMaxCpu`, both 50%
- * by default). The share of the GPU and of the CPU the check may take is the
+ * (ui/image-embedder.js; settings `imageCheckGpuTime`, `imageCheckCpuCores`: fractions,
+ * both 0.50 by default, handed to the embedder as percentages). The share of the GPU and of the CPU the check may take is the
  * user's to set, and held even when nothing else wants the rest:
  *  - GPU: smaller batches (`gpuMaxBatch`) and a rest after each run
  *    (`paceRestMs`), so busy / (busy + rest) = the cap, taken in short slices;
@@ -21,7 +21,7 @@ globalThis.window = globalThis;
 const E = await import(ui('image-embedder.js'));
 const { capPct, paceRestMs, gpuMaxBatch, imageCheckThreads, createModelQueue, cpuModelWorkerCount,
         IMAGE_CAP_MIN, EMBED_MAX_BATCH, formatEmbedTiming } = E;
-const { getTrackingThresholdDefs } = await import(ui('settings.js'));
+const { getTrackingThresholdDefs, cpuCoresNote, formatThresholdValue } = await import(ui('settings.js'));
 const { IMAGE_CHECK_IDS } = await import(ui('track-setup-modal.js'));
 
 let passed = 0, failed = 0; const failures = [];
@@ -112,22 +112,38 @@ const newTm = () => ({ queueMs: 0, batches: 0, maxBatch: 0, restMs: 0 });
     ok(settled < 200, `endRest ends a rest at once: work queued behind it finished ${Math.round(settled)} ms later (the rest was ~450 ms)`);
 }
 
-// ---- the settings: two caps, both 50% by default ----------------------------
+// ---- the settings: two caps as fractions, both 0.50 by default --------------
 const defs = getTrackingThresholdDefs();
-for (const id of ['imageCheckMaxGpu', 'imageCheckMaxCpu']) {
+for (const [id, label] of [['imageCheckGpuTime', 'Image check: GPU time (%)'], ['imageCheckCpuCores', 'Image check: CPU cores (%)']]) {
     const d = defs.find(x => x.id === id);
-    ok(!!d && d.default === 50 && d.value === 50 && d.min === IMAGE_CAP_MIN && d.max === 100, `${id}: default 50%, range 10..100`);
+    ok(!!d && d.label === label, `${id} is labelled "${d && d.label}"`);
+    ok(!!d && d.default === 0.5 && d.value === 0.5 && d.min === IMAGE_CAP_MIN / 100 && d.max === 1 && d.decimals === 2,
+        `${id}: default 0.50, range 0.10..1.00, shown to 2 places`);
+    ok(!!d && formatThresholdValue(d, d.value) === '0.50' && formatThresholdValue(d, 1) === '1.00', `${id} reads "0.50" (and "1.00") in its field`);
     ok(IMAGE_CHECK_IDS.includes(id), `${id} is offered in the Track All / Track Frame Range dialogs`);
+}
+ok(!defs.some(d => d.id === 'imageCheckMaxGpu' || d.id === 'imageCheckMaxCpu'), 'the percentage-scale ids are gone (a stored 50 cannot be read as uncapped)');
+ok(formatThresholdValue(defs.find(d => d.id === 'imageCheckHz'), 2) === '2', 'a setting without `decimals` is shown as before');
+
+// ---- the CPU cap's note: what the fraction means on this machine -------------
+const cpuDef = defs.find(d => d.id === 'imageCheckCpuCores');
+ok(typeof cpuDef.note === 'function' && !defs.find(d => d.id === 'imageCheckGpuTime').note, 'only the CPU cap carries a note');
+ok(cpuCoresNote(0.5, 10) === '5 of 10 cores' && cpuCoresNote(1, 10) === '10 of 10 cores' && cpuCoresNote(0.25, 12) === '3 of 12 cores',
+    `0.50 of 10 -> "${cpuCoresNote(0.5, 10)}", 1.00 of 10 -> "${cpuCoresNote(1, 10)}", 0.25 of 12 -> "${cpuCoresNote(0.25, 12)}"`);
+ok(cpuCoresNote(0.1, 2) === '1 of 2 cores', 'never fewer than 1 core');
+for (const cores of [2, 4, 8, 10, 12, 16]) for (const v of [0.1, 0.25, 0.5, 0.75]) {
+    const n = Number(cpuCoresNote(v, cores).split(' ')[0]);
+    ok(n === imageCheckThreads(cores, 8, 100 * v, false).budget, `the note agrees with the embedder's budget (${v} of ${cores}: ${n})`);
 }
 
 // ---- the run summary says what was capped ------------------------------------
 const t = { crops: 90, cropsPerS: 9, seconds: 10, gpuBusyPct: 50, batches: 5, avgBatch: 18, modelMsPerCrop: 80,
     decodeMsPerFrame: 1, cropMsPerFrame: 40, queueMsPerFrame: 900, backend: 'webgpu', dtype: 'fp16' };
-const both = formatEmbedTiming(Object.assign({}, t, { maxGpuPct: 50, batchLimit: 32, restS: 4.6, maxCpuPct: 50, threads: 5 }));
-ok(/ · GPU capped at 50% \(batches of ≤32, 5 s resting\) · CPU capped at 50% \(5 worker threads\)$/.test(both), `both caps in the summary: "${both.slice(both.indexOf(' · GPU'))}"`);
-const cpuRun = formatEmbedTiming(Object.assign({}, t, { backend: 'cpu', workers: 4, maxGpuPct: null, maxCpuPct: 50, threads: 5 }));
-ok(!/GPU capped/.test(cpuRun) && / · CPU capped at 50% \(5 worker threads\)$/.test(cpuRun), 'on the CPU path only the CPU cap is reported');
-ok(!/capped/.test(formatEmbedTiming(Object.assign({}, t, { maxGpuPct: 100, maxCpuPct: 100, threads: 8 }))), 'an uncapped run says nothing about caps');
+const both = formatEmbedTiming(Object.assign({}, t, { maxGpuPct: 50, batchLimit: 32, restS: 4.6, maxCpuPct: 50, threads: 5, cores: 10 }));
+ok(/ · GPU time capped at 0\.50 \(batches of ≤32, 5 s idle\) · CPU capped at 5 of 10 cores$/.test(both), `both caps in the summary: "${both.slice(both.indexOf(' · GPU'))}"`);
+const cpuRun = formatEmbedTiming(Object.assign({}, t, { backend: 'cpu', workers: 4, maxGpuPct: null, maxCpuPct: 50, threads: 5, cores: 10 }));
+ok(!/GPU time capped/.test(cpuRun) && / · CPU capped at 5 of 10 cores$/.test(cpuRun), 'on the CPU path only the CPU cap is reported');
+ok(!/capped/.test(formatEmbedTiming(Object.assign({}, t, { maxGpuPct: 100, maxCpuPct: 100, threads: 8, cores: 10 }))), 'an uncapped run says nothing about caps');
 
 console.log(`\ntest-image-compute-caps: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.map(f => '  - ' + f).join('\n')); process.exit(1); }

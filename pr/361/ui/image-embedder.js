@@ -40,10 +40,10 @@
  * spawns ui/image-crop-worker.js and ui/image-model-worker.js.
  */
 
-import { state } from './app-state.js?v=7cafa1239fd9';
-import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=7cafa1239fd9';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=7cafa1239fd9';
-import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js?v=7cafa1239fd9';
+import { state } from './app-state.js?v=f6ee765f7f64';
+import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=f6ee765f7f64';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=f6ee765f7f64';
+import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js?v=f6ee765f7f64';
 
 // The load meter now lives in ui/load-graph.js (shared with the loading overlay); still exported from here.
 export { createLoadMeter };
@@ -237,7 +237,7 @@ export async function createCpuModelPool(count, onStatus, clock) {
                 try { slot.w.terminate(); } catch (e) { /* ignore */ }
                 reject(err);                                     // no-op once started
             };
-            try { slot.w = new Worker(new URL('./image-model-worker.js?v=7cafa1239fd9', import.meta.url), { type: 'module' }); }
+            try { slot.w = new Worker(new URL('./image-model-worker.js?v=f6ee765f7f64', import.meta.url), { type: 'module' }); }
             catch (e) { reject(e); return; }
             slot.w.onerror = function (e) {
                 if (e && e.preventDefault) e.preventDefault();
@@ -701,7 +701,7 @@ export const EMBED_MAX_BATCH = 64;
  */
 export const EMBED_IN_FLIGHT = 8;
 
-/** The lowest cap the image check takes (%, the minimum of the `imageCheckMaxGpu` and `imageCheckMaxCpu` settings). */
+/** The lowest cap the image check takes (%; the `imageCheckGpuTime` / `imageCheckCpuCores` settings' minimum, 0.10). */
 export const IMAGE_CAP_MIN = 10;
 
 /** A cap as a percentage in IMAGE_CAP_MIN..100; anything not a positive number is 100, the uncapped check. */
@@ -712,7 +712,8 @@ export function capPct(pct) {
 
 /*
  * The compute caps. The share of the GPU and of the CPU the image check may use is
- * the user's to set (`imageCheckMaxGpu`, `imageCheckMaxCpu`), so that what it does
+ * the user's to set (`imageCheckGpuTime`, `imageCheckCpuCores`: fractions, 0.50 by
+ * default, passed in here as percentages), so that what it does
  * not take is left for other work on the machine — held even when nothing else
  * wants it. No browser API gives a page a share of either, so the check takes its
  * share by how it runs: the GPU by smaller batches and a rest after each
@@ -741,7 +742,7 @@ export function paceRestMs(runMs, maxGpuPct) {
 }
 
 /**
- * The CPU cap: the worker threads the image check runs, `{model, crop, budget}` —
+ * The CPU cap: the worker threads the image check runs, `{model, crop, budget, cores}` —
  * model workers (the CPU path only; 0 on the GPU path) and crop workers. Capped,
  * the budget is floor(cores x pct / 100) threads: on the CPU path the model takes
  * all but one (it is the slow part; never more than cpuModelWorkerCount allows for
@@ -754,11 +755,11 @@ export function imageCheckThreads(cores, memoryGB, maxCpuPct, onCpu) {
     const c = cores > 0 ? cores : 4, cropMax = Math.max(0, Math.min(c - 1, 8));
     const model = onCpu ? cpuModelWorkerCount(c, memoryGB) : 0;
     const p = capPct(maxCpuPct);
-    if (p >= 100) return { model: model, crop: cropMax, budget: c };
+    if (p >= 100) return { model: model, crop: cropMax, budget: c, cores: c };
     const budget = Math.max(1, Math.floor(c * p / 100));
-    if (!onCpu) return { model: 0, crop: Math.min(cropMax, budget), budget: budget };
+    if (!onCpu) return { model: 0, crop: Math.min(cropMax, budget), budget: budget, cores: c };
     const m = Math.max(1, Math.min(model, budget - 1));
-    return { model: m, crop: Math.min(cropMax, Math.max(1, budget - m)), budget: budget };
+    return { model: m, crop: Math.min(cropMax, Math.max(1, budget - m)), budget: budget, cores: c };
 }
 
 /**
@@ -905,8 +906,8 @@ export function formatEmbedTiming(t) {
         t.batches + ' batches of ~' + Math.round(t.avgBatch) + ', ' + t.modelMsPerCrop.toFixed(1) + ' ms/crop) · per frame: decode ' +
         Math.round(t.decodeMsPerFrame) + ' ms, crop ' + Math.round(t.cropMsPerFrame) + ' ms, queue ' + Math.round(t.queueMsPerFrame) + ' ms' +
         ' · ' + (cpu ? 'CPU (' + t.workers + ' workers)' : t.backend === 'webnn' ? 'WebNN' : 'WebGPU') + (t.dtype ? ' ' + t.dtype : '') +
-        (t.maxGpuPct != null && t.maxGpuPct < 100 ? ' · GPU capped at ' + Math.round(t.maxGpuPct) + '% (batches of ≤' + t.batchLimit + ', ' + Math.round(t.restS || 0) + ' s resting)' : '') +
-        (t.maxCpuPct != null && t.maxCpuPct < 100 ? ' · CPU capped at ' + Math.round(t.maxCpuPct) + '% (' + t.threads + ' worker thread' + (t.threads === 1 ? '' : 's') + ')' : '') +
+        (t.maxGpuPct != null && t.maxGpuPct < 100 ? ' · GPU time capped at ' + (t.maxGpuPct / 100).toFixed(2) + ' (batches of ≤' + t.batchLimit + ', ' + Math.round(t.restS || 0) + ' s idle)' : '') +
+        (t.maxCpuPct != null && t.maxCpuPct < 100 ? ' · CPU capped at ' + t.threads + ' of ' + t.cores + ' cores' : '') +
         formatKeyframes(t.keyframes);
 }
 
@@ -958,7 +959,7 @@ export function createCropPool(clock, count) {
     };
     try {
         for (let i = 0; i < n; i++) {
-            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=7cafa1239fd9', import.meta.url), { type: 'module' }), load: 0 };
+            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=f6ee765f7f64', import.meta.url), { type: 'module' }), load: 0 };
             w.worker.onmessage = function (e) {
                 const p = pending.get(e.data.id); if (!p) return;
                 pending.delete(e.data.id); w.load--;
@@ -1213,7 +1214,7 @@ export async function createImageEmbedder(session, opts) {
             const t = summarizeEmbedTiming(tm, backend, backend === 'webnn' ? 'fp16' : dtype);
             t.keyframes = summarizeKeyframePlans(plans);
             t.maxGpuPct = cpu ? null : maxGpuPct; t.batchLimit = batchLimit; t.restS = tm.restMs / 1000;
-            t.maxCpuPct = maxCpuPct; t.threads = (cpu ? cpuWorkers : 0) + threads.crop;
+            t.maxCpuPct = maxCpuPct; t.threads = (cpu ? cpuWorkers : 0) + threads.crop; t.cores = threads.cores;
             if (cpu) t.workers = cpuWorkers;
             return t;
         },

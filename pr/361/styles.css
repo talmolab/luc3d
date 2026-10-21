@@ -1709,6 +1709,69 @@ body {
   font-size: 12px;
 }
 
+/* The two compute caps share a row, and Try WebNN starts the row under them
+   (each starts a row; the cell beside "Views per animal" stays empty). */
+.track-setup-options .settings-node-weight-row[data-row="imageCheckGpuTime"],
+.track-setup-options .settings-node-weight-row[data-row="imageCheckWebNN"] {
+  grid-column-start: 1;
+}
+
+/* A label, its ⓘ and its note, together on the left of the row. The label keeps
+   its full width; the note is what gives way when the cell is narrow. */
+.track-setup-option-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.track-setup-option-head .settings-kbd-label {
+  flex: none;
+}
+
+.track-setup-option-head .settings-threshold-note {
+  margin-left: 4px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* An ⓘ outside the plane panel: the same look as .plane-pin-info. */
+.info-tip-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--text-muted);
+  cursor: help;
+}
+
+.info-tip-btn:hover,
+.info-tip-btn:focus-visible {
+  color: var(--text-primary);
+}
+
+/* Inside a dialog, undo `.multi-frame-modal button` (padding, border, fill). */
+.multi-frame-modal .info-tip-btn {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: inherit;
+}
+
+.multi-frame-modal .info-tip-btn:hover,
+.multi-frame-modal .info-tip-btn:focus-visible {
+  filter: none;
+  color: var(--text-primary);
+}
+
 /* Align Views to References modal (#226). The table grows with the camera
    count rather than scrolling inside the dialog (no scroll-within-scroll). */
 .align-views-modal {
@@ -4979,6 +5042,25 @@ kbd {
   margin-top: 2px;
 }
 
+/* What a setting's value means on this machine ("5 of 10 cores"): beside its field in
+   the Track dialogs' compact grid, under it in the Wizard (.settings-threshold-field),
+   so the Wizard's fields stay in one column. */
+.settings-threshold-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 8px;
+  white-space: nowrap;
+}
+.settings-threshold-field {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+}
+.settings-threshold-field .settings-threshold-note {
+  margin-left: 0;
+}
+
 /* Shared number field for node weights and tracking thresholds. */
 .settings-num-input {
   width: 72px;
@@ -6081,7 +6163,10 @@ kbd {
    the hover, fire `mouseout` on the icon and flicker itself away. */
 .info-tip {
   position: fixed;
-  z-index: 10000;
+  /* Above every layer, modal overlays included (20000, 30000): an ⓘ inside a
+     dialog would otherwise show its tip BEHIND the dialog. Safe because it takes
+     no pointer events and lives only as long as the hover. */
+  z-index: 30001;
   max-width: 260px;
   padding: 6px 9px;
   border: 1px solid var(--border-light);
@@ -6837,7 +6922,8 @@ body.origin-mode-lock .timeline-container {
    for the same reason. It carries no caution and no todo list: it is a note
    saying which sessions loaded which calibration, and nothing else. */
 .origin-rebase-modal,
-.calib-notice-modal {
+.calib-notice-modal,
+.skeleton-edit-modal {
   min-width: 440px;
   max-width: 560px;
   /* Three tables plus two cautions is tall — ~975px on a multi-session
@@ -6853,7 +6939,8 @@ body.origin-mode-lock .timeline-container {
    below the fold. Still one scroller — sticky does not add another, it just
    keeps this row out of the scrolled flow. */
 .origin-rebase-modal .modal-actions,
-.calib-notice-modal .modal-actions {
+.calib-notice-modal .modal-actions,
+.skeleton-edit-modal .modal-actions {
   position: sticky;
   bottom: -20px;
   margin: 0 -22px -20px;
@@ -7116,6 +7203,63 @@ details[open] > summary.origin-rebase-block-title::before {
   margin-bottom: 6px;
   font-variant-numeric: tabular-nums;
 }
+
+/* Skeleton edit confirmation (ui/skeleton-edit-warning.js). It reuses
+   `.origin-rebase-block` / `-table` / `-caution` wholesale; all it needs of its
+   own is the action row, which carries "Do not show again" on the LEFT of the
+   two buttons. The checkbox is not a third action — it qualifies the one the
+   user is about to take — so it sits apart from them rather than in the row. */
+.skeleton-edit-actions {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.skeleton-edit-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.skeleton-edit-again {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.skeleton-edit-again input {
+  margin: 0;
+  cursor: pointer;
+}
+
+/* The way back on, in the Skeleton tab. Present in the markup always and shown
+   only while the preference is set, so it costs nothing in the ordinary case —
+   and `display` is driven from `populateSkeletonTable`, the one refresh point
+   after every skeleton mutation. */
+#skeletonWarnOffNote {
+  margin-top: 8px;
+  margin-bottom: 12px;
+  padding: 6px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+}
+
+#skeletonWarnOffNote button {
+  margin-left: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--accent, #4a9eff);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* Tracks ▸ Check ID Switches — the ID Switches tab of the right panel (ui/id-switch-modal.js
    refreshIdSwitchPanel). The tab content is the panel's one scroller; the toolbar sticks. */
 .id-switch-summary { font-size: 12px; margin: 2px 0; }
