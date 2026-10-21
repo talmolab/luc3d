@@ -54,7 +54,7 @@
             markDirty();
             markDirty();
             assertTrue(state.isDirty, 'isDirty should still be true');
-            assertEqual(document.title, '\u2022 Lucid');
+            assertEqual(document.title, '\u2022 LUC3D');
         });
 
         it('dirty indicator dot visibility toggles', function () {

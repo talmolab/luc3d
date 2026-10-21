@@ -363,7 +363,7 @@ export function markDirty() {
     if (state.session) state.session.isDirty = true;
     if (state.isDirty) return;
     state.isDirty = true;
-    document.title = '\u2022 Lucid';
+    document.title = '\u2022 LUC3D';
     var saveDot = document.getElementById('saveDirtyDot');
     if (saveDot) saveDot.style.display = 'inline-block';
 }
@@ -377,7 +377,7 @@ export function clearDirty() {
     } else if (state.session) {
         state.session.isDirty = false;
     }
-    document.title = 'Lucid';
+    document.title = 'LUC3D';
     var saveDot = document.getElementById('saveDirtyDot');
     if (saveDot) saveDot.style.display = 'none';
 }
