@@ -22,76 +22,76 @@ import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, VIEW_NAMES, buildRememberedSkeleton, setProjectSkeleton,
     isViewDocked,
-} from '../ui/app-state.js?v=7248263ddac9';
+} from '../ui/app-state.js?v=3cfec37e0372';
 
 import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
-} from '../pose/pose-data.js?v=7248263ddac9';
+} from '../pose/pose-data.js?v=3cfec37e0372';
 
-import { OnDemandVideoDecoder, VideoController } from './video.js?v=7248263ddac9';
-import { videoLoadFailureText } from './video-codec-diagnosis.js?v=7248263ddac9';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=7248263ddac9';
-import { confirmFolderPick } from '../ui/folder-confirm-tip.js?v=7248263ddac9';
+import { OnDemandVideoDecoder, VideoController } from './video.js?v=3cfec37e0372';
+import { videoLoadFailureText } from './video-codec-diagnosis.js?v=3cfec37e0372';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=3cfec37e0372';
+import { confirmFolderPick } from '../ui/folder-confirm-tip.js?v=3cfec37e0372';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
     parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO,
     loadCalibrationFile,
-} from '../import-export/file-io.js?v=7248263ddac9';
+} from '../import-export/file-io.js?v=3cfec37e0372';
 
-import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=7248263ddac9';
+import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=3cfec37e0372';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
 // the browser test runner (session-loader itself pulls app.js) — same reason
 // and same shape as `resolveImportTrackIdx` above.
-import { chooseCameraSlp } from './percam-slp-choice.js?v=7248263ddac9';
+import { chooseCameraSlp } from './percam-slp-choice.js?v=3cfec37e0372';
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js?v=7248263ddac9';
-import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=7248263ddac9';
+import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js?v=3cfec37e0372';
+import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=3cfec37e0372';
 import {
     isCalibrationImagesVideo, preferNonCalibrationVideos, matchVideoToCamera,
-} from './video-file-pick.js?v=7248263ddac9';
+} from './video-file-pick.js?v=3cfec37e0372';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,
     ensureLazyFrameData,
-} from '../pose/triangulation.js?v=7248263ddac9';
-import { SioLazyLoader } from './sio-lazy-loader.js?v=7248263ddac9';
-import { unionTrackNames, remapTrackIdx } from './track-union.js?v=7248263ddac9';
+} from '../pose/triangulation.js?v=3cfec37e0372';
+import { SioLazyLoader } from './sio-lazy-loader.js?v=3cfec37e0372';
+import { unionTrackNames, remapTrackIdx } from './track-union.js?v=3cfec37e0372';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
     setStatus, showLoading, hideLoading, ensureNo3dImportBlockingLoad,
-} from '../import-export/save-load.js?v=7248263ddac9';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=7248263ddac9';
+} from '../import-export/save-load.js?v=3cfec37e0372';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=3cfec37e0372';
 
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=7248263ddac9';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=7248263ddac9';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=7248263ddac9';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=7248263ddac9';
-import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=7248263ddac9';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=3cfec37e0372';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=3cfec37e0372';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=3cfec37e0372';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=3cfec37e0372';
+import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=3cfec37e0372';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, setupTimeline,
     updateFpsDisplay,
     hideWelcomeOverlay,
-} from '../pose/initialization.js?v=7248263ddac9';
+} from '../pose/initialization.js?v=3cfec37e0372';
 // Pass 3h: populateViewStrip / populateSessionStrip / switchSession moved to sessions-panes.js.
 import {
     populateViewStrip, populateSessionStrip, switchSession, multiSelectViews,
-} from '../ui/sessions-panes.js?v=7248263ddac9';
+} from '../ui/sessions-panes.js?v=3cfec37e0372';
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
 import {
     updateSeekbar, fitTimelineToData, onPlaybackStateChange, updateVideoGridDisplay,
-} from '../ui/ui-wiring.js?v=7248263ddac9';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=7248263ddac9';
-import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=7248263ddac9';
-import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js?v=7248263ddac9';
+} from '../ui/ui-wiring.js?v=3cfec37e0372';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=3cfec37e0372';
+import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=3cfec37e0372';
+import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js?v=3cfec37e0372';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -367,6 +367,9 @@ export async function handleLoadVideos() {
 
         // Update total frames before rebuilding controller so seekToFrame works correctly
         updateTotalFrames();
+        // If nothing decoded on a project loaded without video, keep it sized
+        // by its labels rather than collapsing to frame 0.
+        adoptLabeledFrameCount();
 
         if (newViewNames.length > 0) {
             populateViewStrip();
@@ -482,18 +485,41 @@ export function autoAssignVideosToCameras() {
 }
 
 /**
- * Show a full-screen overlay that blocks until the user selects video files.
- * Returns the selected File[] (never empty — overlay stays until files are picked).
+ * Show a full-screen overlay asking the user to select video files.
+ * Returns the selected File[], or [] when the user continues without video
+ * (the "Continue Without Video" button or Esc) — the caller then finishes
+ * loading with no views, and videos can be attached via File → Load Videos.
+ * A cancelled file picker leaves the overlay up.
+ *
+ * @param {string} refInfo - Video names to expect; the "Expected:" line is
+ *   omitted when empty.
+ * @param {object} [options]
+ * @param {string} [options.title] - Overlay title (default is neutral, since
+ *   callers load both `.slp` and project `.json` files).
  */
-export function forceVideoSelection(refInfo) {
+export function forceVideoSelection(refInfo, options) {
     return new Promise(function (resolve) {
         var overlay = document.createElement('div');
         overlay.id = 'videoSelectOverlay';
         overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;';
 
+        // Esc continues without video (UI convention: modals close on Esc).
+        function onKeyDown(ev) {
+            if (ev.key === 'Escape') {
+                ev.preventDefault();
+                finish([]);
+            }
+        }
+        function finish(files) {
+            document.removeEventListener('keydown', onKeyDown);
+            overlay.remove();
+            resolve(files);
+        }
+        document.addEventListener('keydown', onKeyDown);
+
         var title = document.createElement('div');
         title.style.cssText = 'color:#fff;font-size:20px;font-weight:600;margin-bottom:8px;';
-        title.textContent = 'SLP loaded — now select the video file(s)';
+        title.textContent = (options && options.title) || 'Select the video file(s)';
         overlay.appendChild(title);
 
         if (refInfo) {
@@ -503,21 +529,28 @@ export function forceVideoSelection(refInfo) {
             overlay.appendChild(sub);
         }
 
+        var btnRow = document.createElement('div');
+        btnRow.style.cssText = 'display:flex;gap:16px;flex-wrap:wrap;justify-content:center;';
+
         var btn = document.createElement('button');
         btn.style.cssText = 'padding:14px 40px;font-size:16px;font-weight:600;cursor:pointer;background:#4a9eff;color:#fff;border:none;border-radius:8px;';
         btn.textContent = 'Select Video Files';
-        overlay.appendChild(btn);
+        btnRow.appendChild(btn);
 
         btn.addEventListener('click', async function () {
             var files = [];
             try { files = await pickVideoFiles(); } catch (e) { /* cancelled */ }
-            if (files.length > 0) {
-                overlay.remove();
-                resolve(files);
-            }
-            // If cancelled / empty, overlay stays — user must pick files
+            if (files.length > 0) finish(files);
+            // If cancelled / empty, overlay stays — Continue Without Video / Esc leave it
         });
 
+        var btnSkip = document.createElement('button');
+        btnSkip.style.cssText = 'padding:14px 40px;font-size:16px;font-weight:600;cursor:pointer;background:transparent;color:#aaa;border:1px solid var(--border-color,#555);border-radius:8px;';
+        btnSkip.textContent = 'Continue Without Video';
+        btnRow.appendChild(btnSkip);
+        btnSkip.addEventListener('click', function () { finish([]); });
+
+        overlay.appendChild(btnRow);
         document.body.appendChild(overlay);
     });
 }
@@ -1313,6 +1346,32 @@ export function updateTotalFrames() {
             timeline.setTotalFrames(1);
         }
     }
+}
+
+/**
+ * Size a project that has labels but no video (#337): with no decoder,
+ * updateTotalFrames() leaves totalFrames at 0 and only frame 0 is reachable,
+ * so adopt the last labeled frame instead, as the no-video points3d import
+ * does. Call it right after updateTotalFrames(). A no-op when any view exists
+ * (the video sizes the project) or on a lazy session, whose frameGroups is
+ * only the resident window and would give a plausible, too-small count.
+ *
+ * @returns {number} the first labeled frame index, or -1 when nothing was done.
+ */
+export function adoptLabeledFrameCount() {
+    var session = state.session;
+    if (state.views.length > 0 || !session || session.lazyLoader) return -1;
+    var lastLabeled = -1;
+    var firstLabeled = -1;
+    for (var [fIdx] of session.frameGroups) {
+        if (fIdx > lastLabeled) lastLabeled = fIdx;
+        if (firstLabeled < 0 || fIdx < firstLabeled) firstLabeled = fIdx;
+    }
+    if (lastLabeled < 0) return -1;
+    state.totalFrames = lastLabeled + 1;
+    refreshReadoutTotals();
+    if (timeline) timeline.setTotalFrames(state.totalFrames);
+    return firstLabeled;
 }
 
 /**
