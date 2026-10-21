@@ -16,32 +16,32 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=aeea3d443293';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=aeea3d443293';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=aeea3d443293';
+} from './triangulation.js?v=405eb04f38e0';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=405eb04f38e0';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=405eb04f38e0';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=aeea3d443293';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=405eb04f38e0';
 import {
     getNodeWeightArray, getNodeWeight, updateNodeWeights,
     getTrackingThresholds, getTrackingThreshold, isCameraTracked,
     getTrackingThresholdDefs, updateTrackingThresholds,
-} from '../ui/settings.js?v=aeea3d443293';
-import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=aeea3d443293';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=aeea3d443293';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=aeea3d443293';
-import { startTrackerWorker } from './tracker-pool.js?v=aeea3d443293';
-import { passesDetectionFilter } from './detection-filter-stats.js?v=aeea3d443293';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=aeea3d443293';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=aeea3d443293';
-import { updateInfoPanel } from '../ui/info-panel.js?v=aeea3d443293';
-import { setColorByIdentity } from '../ui/color-by.js?v=aeea3d443293';
-import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=aeea3d443293';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=aeea3d443293';
-import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=aeea3d443293';
-import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=aeea3d443293';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=aeea3d443293';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=aeea3d443293';
+} from '../ui/settings.js?v=405eb04f38e0';
+import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=405eb04f38e0';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=405eb04f38e0';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=405eb04f38e0';
+import { startTrackerWorker } from './tracker-pool.js?v=405eb04f38e0';
+import { passesDetectionFilter } from './detection-filter-stats.js?v=405eb04f38e0';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=405eb04f38e0';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=405eb04f38e0';
+import { updateInfoPanel } from '../ui/info-panel.js?v=405eb04f38e0';
+import { setColorByIdentity } from '../ui/color-by.js?v=405eb04f38e0';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=405eb04f38e0';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=405eb04f38e0';
+import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=405eb04f38e0';
+import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=405eb04f38e0';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=405eb04f38e0';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=405eb04f38e0';
 
 /**
  * A frame index as the USER sees it: 1-based.
