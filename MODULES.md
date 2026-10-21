@@ -945,7 +945,12 @@ is harmless for two cameras empties the third.
   {isCancelled})` — walk the session ONCE (the async one yields between
   cameras) into flat typed columns: camera index, present-keypoint count,
   instance score (Float64 — a stored 0.9 must still pass a minimum of 0.9),
-  mean per-point confidence over PRESENT nodes (NaN when none), predicted flag;
+  mean per-point confidence as sleap-nn computes its "mean node score" — over
+  ALL nodes, a missing node counting as 0 (NaN with no point scores at all;
+  averaging the present nodes only understated the real stressTest sideC
+  rerun, 36.7% below 0.75 instead of sleap-nn's 43.8%). That is sleap-nn
+  0.3.3's definition; 0.2.0 averaged the present nodes only, so a file it
+  filtered at 0.75 still shows some detections "below 0.75" here — predicted flag;
   plus per-camera `detections` / `predicted` / `predictedWithScore` /
   `withPointScores`, and `hasInstanceScores` / `hasPointScores`.
 - `countDetectionFilters(stats, {minVisibleNodes, minInstanceScore,

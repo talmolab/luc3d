@@ -14,7 +14,8 @@
 //
 // - `collectDetectionStats(session)` walks the session ONCE and records, per
 //   detection, its camera, its present-keypoint count, its instance score and
-//   its mean per-point confidence, in flat typed arrays.
+//   its mean per-point confidence (sleap-nn's "mean node score"), in flat
+//   typed arrays.
 // - `countDetectionFilters(stats, values)` counts failures at given values.
 //   O(detections), allocation-free apart from the result.
 //
@@ -132,8 +133,14 @@ function finishSink(s) {
     };
 }
 
-// Mean model confidence over an in-memory instance's PRESENT nodes; NaN when it
-// carries none. Only a prediction's scores mean anything
+// Mean model confidence of an in-memory instance, as sleap-nn computes it for
+// `filter_min_mean_node_score`: over ALL the skeleton's nodes, a missing node
+// counting as 0 (averaging the present nodes only put 36.7% of the real
+// stressTest sideC rerun below 0.75 instead of sleap-nn's 43.8%). That is
+// sleap-nn 0.3 (0.3.3 measured, the live rig's version); 0.2.0 averaged the
+// present nodes only — its filtered files bottom out at exactly 0.75 on that
+// definition — so on a 0.2 file this reads lower than what it filtered on. NaN when it
+// carries no scores at all. Only a prediction's scores mean anything
 // (`Session.predictedNodeScore` says the same).
 function instanceMeanPointScore(session, camName, frameIdx, inst) {
     if (!inst || inst.type !== 'predicted') return NaN;
@@ -145,7 +152,7 @@ function instanceMeanPointScore(session, camName, frameIdx, inst) {
         var v = eager ? inst.pointScore(k) : session.predictedNodeScore(camName, frameIdx, inst, k);
         if (v === v) { sum += v; cnt++; }
     }
-    return cnt ? sum / cnt : NaN;
+    return cnt && n ? sum / n : NaN;
 }
 
 function pushInstance(sink, ci, session, camName, frameIdx, inst) {
@@ -201,7 +208,8 @@ function collectStore(sink, ci, session, camName) {
             if (sc) { var v = Number(sc[p0 + k]); if (isFinite(v)) { sum += v; cnt++; } }
         }
         var score = isPred ? (Number(idn.score ? idn.score[j] : 0) || 0) : 0;
-        sink.push(ci, vis, score, cnt ? sum / cnt : NaN, isPred);
+        // Mean over ALL nodes, a missing one counting as 0 — see instanceMeanPointScore.
+        sink.push(ci, vis, score, cnt && numNodes ? sum / numNodes : NaN, isPred);
     }, { camera: camName });
 }
 

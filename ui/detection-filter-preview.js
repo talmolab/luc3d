@@ -157,7 +157,7 @@ export function buildDetectionFilterPreview(opts) {
         ctl.appendChild(input);
         sec.appendChild(ctl);
         sec.appendChild(el('div', 'dfp-note',
-            'LUCID does not filter on this. A detection\'s mean point confidence is the average of its keypoints\' scores; ' +
+            'LUCID does not filter on this. A detection\'s mean point confidence is the average of its keypoints\' scores, a missing keypoint counting as 0 (as sleap-nn 0.3 computes it; 0.2 averaged the found keypoints only); ' +
             'sleap-nn can drop detections below a minimum of it before LUCID ever sees them, which hits a camera whose values sit low hardest.'));
         const holder = el('div');
         sec.appendChild(holder);
