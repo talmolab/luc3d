@@ -22,8 +22,8 @@
 // Depends on: ui/app-state.js (state), pose/lazy-residency.js
 // (hydrateFrameMembers2d, releaseFrameMembers2d).
 
-import { state } from './app-state.js?v=7f2ca21e22a5';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=7f2ca21e22a5';
+import { state } from './app-state.js?v=d2d5880ee4d6';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=d2d5880ee4d6';
 
 /** Sample images per identity. */
 export const GALLERY_SAMPLES = 5;

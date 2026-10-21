@@ -62,7 +62,7 @@
  * app state.
  */
 
-import { Instance, lazyPlaceholderXY } from './pose-data.js?v=7f2ca21e22a5';
+import { Instance, lazyPlaceholderXY } from './pose-data.js?v=d2d5880ee4d6';
 
 /** Frames the playback loader keeps hydrated ahead of the playhead. */
 export const LAZY_PLAYBACK_AHEAD = 600;
