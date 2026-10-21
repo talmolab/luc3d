@@ -20,7 +20,7 @@ import {
     collectDetectionStatsAsync,
     countDetectionFilters,
     meanPointScoreHistograms,
-} from '../pose/detection-filter-stats.js?v=9d6c0ddeb984';
+} from '../pose/detection-filter-stats.js?v=8765d1f95056';
 
 const HIST_BINS = 10;
 const DEFAULT_PREVIEW_MPS = 0.75;
@@ -157,7 +157,7 @@ export function buildDetectionFilterPreview(opts) {
         ctl.appendChild(input);
         sec.appendChild(ctl);
         sec.appendChild(el('div', 'dfp-note',
-            'LUCID does not filter on this. A detection\'s mean point confidence is the average of its keypoints\' scores; ' +
+            'LUCID does not filter on this. A detection\'s mean point confidence is the average of its keypoints\' scores, a missing keypoint counting as 0 (as sleap-nn 0.3 computes it; 0.2 averaged the found keypoints only); ' +
             'sleap-nn can drop detections below a minimum of it before LUCID ever sees them, which hits a camera whose values sit low hardest.'));
         const holder = el('div');
         sec.appendChild(holder);

@@ -134,11 +134,11 @@ function eagerSession() {
     ok(agree, 'for every value in a sweep, "removed" equals what passesDetectionFilter drops');
 
     const mp = F.countDetectionFilters(st, { minMeanPointScore: 0.75 });
-    // mean point scores: top 0.85, 0.5, (user: none) | side 0.65, 0.3, 0.925
+    // mean point scores (over ALL 4 nodes, missing = 0): top 0.85, 0.25, (user: none) | side 0.65, 0.075, 0.925
     ok(mp.perCamera[0].failMeanPointScore === 1 && mp.perCamera[1].failMeanPointScore === 2 && mp.total.withPointScores === 5,
         `mean-point preview counts over detections that have point scores (${mp.total.failMeanPointScore}/${mp.total.withPointScores})`);
     ok(mp.total.removed === 0, 'the preview never enters "removed"');
-    ok(near(st.meanPointScore[1], 0.5), 'mean point score averages PRESENT nodes only');
+    ok(near(st.meanPointScore[1], 0.25), 'mean point score averages ALL nodes, a missing one counting as 0 (sleap-nn\'s mean node score)');
 }
 
 // ---------------------------------------------------------------------------
@@ -236,7 +236,7 @@ function eagerSession() {
     ok(a.length === 4, 'camA: three store rows and the resident frame');
     ok(a[0].v === 4 && near(a[0].s, 0.9) && near(a[0].m, 0.7) && a[0].p === 1, 'store prediction: points, score, mean confidence');
     ok(a[1].v === 2 && a[1].s === 0 && Number.isNaN(a[1].m) && a[1].p === 0, 'store user row: score 0 (as hydration gives it), no confidence');
-    ok(a[2].v === 3 && a[2].s === 0 && near(a[2].m, 0.4), 'store NaN score hydrates to 0; the absent 4th point is not averaged');
+    ok(a[2].v === 3 && a[2].s === 0 && near(a[2].m, 0.3), 'store NaN score hydrates to 0; the absent 4th point counts as 0');
     ok(a[3].v === 4 && near(a[3].s, 0.7) && near(a[3].m, 0.1), 'the resident frame is read from MEMORY (its edit), confidence from the store row by name');
 
     // What the tracker would do to the hydrated frame-10 instances.
@@ -268,11 +268,11 @@ function eagerSession() {
     const st = F.collectDetectionStats(eagerSession());
     const h = F.meanPointScoreHistograms(st, 10);
     ok(h.length === 2 && h[0].count === 2 && h[1].count === 3, 'user instances and score-less detections are left out');
-    ok(h[0].bins[8] === 1 && h[0].bins[5] === 1 && near(h[0].median, 0.675), `top: bins and median (${h[0].median})`);
-    ok(h[1].bins[3] === 1 && h[1].bins[6] === 1 && h[1].bins[9] === 1 && near(h[1].median, 0.65), 'side: bins and median');
+    ok(h[0].bins[8] === 1 && h[0].bins[2] === 1 && near(h[0].median, 0.55), `top: bins and median (${h[0].median})`);
+    ok(h[1].bins[0] === 1 && h[1].bins[6] === 1 && h[1].bins[9] === 1 && near(h[1].median, 0.65), 'side: bins and median');
 
     const s = makeSession(['a']);
-    frame(s, 0).addUnlinkedInstance('a', new UnlinkedInstance(pred(2, 0.9, [1.4, 1.4, 0, 0]), 'a'));
+    frame(s, 0).addUnlinkedInstance('a', new UnlinkedInstance(pred(4, 0.9, [1.4, 1.4, 1.4, 1.4]), 'a'));
     const h2 = F.meanPointScoreHistograms(F.collectDetectionStats(s), 10);
     ok(h2[0].bins[9] === 1, 'a confidence above 1 lands in the last bin');
 }
