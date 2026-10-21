@@ -78,6 +78,7 @@ import { showSettingsModal } from './settings-modal.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
 import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js';
 import { runIdSwitchChecks, setIdSwitchNavigator, setIdSwitchRefresher, updateIdSwitchProgress } from './id-switch-modal.js';
+import { checkPoses, gotoFlaggedPose, setPoseCheckNavigator } from './pose-check-command.js';
 import { setTrackSummaryNavigator } from './track-summary-modal.js';
 // Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
 // (`swapTracks` joined this module in 3i-4; `seekToLabeledFrame` is now in-module.)
@@ -876,6 +877,7 @@ export function setupMenus() {
     // post-encounter body sizes favour swapped identities (ui/id-switch-modal.js).
     setIdSwitchNavigator(navigateToFrame);   // also used when a tracking pass runs the checks itself
     setTrackSummaryNavigator(navigateToFrame);   // the Track All summary's Identities samples and maps
+    setPoseCheckNavigator(navigateToFrame);      // Next / Previous Flagged Pose
     // After the tab fixes (or un-fixes) a switch, repaint everything that shows identities.
     setIdSwitchRefresher(function () {
         drawAllOverlays(state.currentFrame);
@@ -891,6 +893,21 @@ export function setupMenus() {
     document.getElementById('menuCheckImageSwitches').addEventListener('click', function () {
         closeMenus();
         runIdSwitchChecks({ image: true, navigateToFrame: navigateToFrame });
+    });
+    // Tracks ▸ Check Poses: the 2D pose check on its own, tracking nothing — how a
+    // reopened project gets its ?/✕ marks back (ui/pose-check-command.js).
+    document.getElementById('menuCheckPoses').addEventListener('click', function () {
+        closeMenus();
+        checkPoses();
+    });
+    // Tracks ▸ Next / Previous Flagged Pose (also `]` / `[`, catalog-dispatched below).
+    document.getElementById('menuNextFlaggedPose').addEventListener('click', function () {
+        closeMenus();
+        gotoFlaggedPose(1);
+    });
+    document.getElementById('menuPrevFlaggedPose').addEventListener('click', function () {
+        closeMenus();
+        gotoFlaggedPose(-1);
     });
 
     // Propagate Tracks → IDs (one-shot): each track label becomes an identity,
@@ -2348,6 +2365,9 @@ export function setupUI() {
     // has unwinding to do (Set Origin Mode, the angle dialog, the toolbar lock)
     // and a second entry point would be a second place to forget it.
     setHandler('definePlanes', function () { togglePlaneMode(); });
+    // `]` / `[`: the frames the last 2D pose check flagged (ui/pose-check-command.js).
+    setHandler('nextFlaggedPose', function () { gotoFlaggedPose(1); });
+    setHandler('prevFlaggedPose', function () { gotoFlaggedPose(-1); });
 
     // Single dispatcher for catalog-driven shortcuts. Runs before the structural
     // handlers below; if a catalog action matches it consumes the event.

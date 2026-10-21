@@ -1456,6 +1456,68 @@ function drawNamePill(ctx, cp, text, color, fontSize, uprightRad) {
     ctx.restore();
 }
 
+/** The 2D pose check's mark colors: amber for an uncommon pose, red for an outlier. */
+export const POSE_FLAG_COLORS = { uncommon: '#ffb300', outlier: '#ff3b30' };
+
+/**
+ * The 2D pose check's mark on one prediction (pose/pose-check.js, after Track
+ * All): a "?" badge at the corner of an uncommon pose's box, and for an outlier
+ * an "✕" badge on a dashed red box around it.
+ * The badge is sized in screen pixels and drawn upright however the view is
+ * rotated, like a name label; the box is pinned to the animal. It sits at the
+ * box's BOTTOM-right corner: the name label is drawn above the skeleton, and a
+ * badge at the top corner covered it.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {Object} inst  the Instance (its visible nodes set the box)
+ * @param {number} cls   1 = uncommon, 2 = outlier (anything else draws nothing)
+ * @param {Object} options  render options: video/canvas size, labelDisplayScale, labelRotation
+ */
+export function drawPoseFlag(ctx, inst, cls, options) {
+    if (!(cls === 1 || cls === 2) || !inst || !(inst.numNodes > 0)) return;
+    var cw = options.canvasWidth != null ? options.canvasWidth : ctx.canvas.width;
+    var ch = options.canvasHeight != null ? options.canvasHeight : ctx.canvas.height;
+    var toCanvas = makeVideoToCanvasTransform(options.videoWidth || cw, options.videoHeight || ch, cw, ch);
+    var x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (var k = 0; k < inst.numNodes; k++) {
+        var x = inst.getX(k), y = inst.getY(k);
+        if (!(x === x && y === y)) continue;
+        var cp = toCanvas(x, y);
+        if (cp.x < x0) x0 = cp.x; if (cp.x > x1) x1 = cp.x;
+        if (cp.y < y0) y0 = cp.y; if (cp.y > y1) y1 = cp.y;
+    }
+    if (!(x1 >= x0)) return;
+    var px = resolveLabelDisplayScale(ctx, cw, options);   // backing pixels per CSS pixel
+    var color = cls === 2 ? POSE_FLAG_COLORS.outlier : POSE_FLAG_COLORS.uncommon;
+    var pad = 4 * px;
+    ctx.save();
+    if (cls === 2) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5 * px;
+        ctx.setLineDash([5 * px, 4 * px]);
+        ctx.strokeRect(x0 - pad, y0 - pad, x1 - x0 + 2 * pad, y1 - y0 + 2 * pad);
+        ctx.setLineDash([]);
+    }
+    var r = 7 * px, ax = x1 + pad, ay = y1 + pad;
+    var rad = uprightLabelRadians(options);
+    beginUprightFrame(ctx, rad, ax, ay);
+    var ox = uprightOriginX(rad, ax), oy = uprightOriginY(rad, ay);
+    ctx.beginPath();
+    ctx.arc(ox, oy, r, 0, 2 * Math.PI);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.lineWidth = 1.5 * px;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
+    ctx.stroke();
+    ctx.fillStyle = '#000000';
+    ctx.font = 'bold ' + Math.round(11 * px) + 'px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(cls === 2 ? '✕' : '?', ox, oy + 0.5 * px);
+    ctx.restore();
+    ctx.restore();
+}
+
 /**
  * The identity a LINKED instance's label should name, resolved in the same two
  * steps `getGroupColor` uses so the pill's text and its color can never name
@@ -2870,6 +2932,27 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
         if (dragInst && dragInst.numNodes > 0) {
             drawDragPreview(ctx, dragInst.toPointsArray(), dragInfo.nodeIdx, dragInfo.currentPos, skeleton,
                 Object.assign({}, userRender, { color: '#ffffff' }));
+        }
+    }
+
+    // 7.4 The 2D pose check's marks (Track All; pose/pose-check.js): "?" by an
+    // uncommon prediction, "✕" and a dashed box around an outlier. On the
+    // predictions layer, so only while it is shown. `poseCheckOf(inst)` is the
+    // renderer's (pose/pose-check-session.js), null when no check has run.
+    if (options.poseCheckOf && showPredicted) {
+        var poseInsts = [];
+        if (viewInstances) {
+            for (var _pi = 0; _pi < viewInstances.length; _pi++) {
+                if (viewInstances[_pi].type === 'predicted') poseInsts.push(viewInstances[_pi]);
+            }
+        }
+        var _poseUl = options.unlinkedInstances || [];
+        for (var _pu = 0; _pu < _poseUl.length; _pu++) {
+            if (_poseUl[_pu].instance && _poseUl[_pu].instance.type === 'predicted') poseInsts.push(_poseUl[_pu].instance);
+        }
+        for (var _pf = 0; _pf < poseInsts.length; _pf++) {
+            var _pv = options.poseCheckOf(poseInsts[_pf]);
+            if (_pv && _pv.cls > 0) drawPoseFlag(ctx, poseInsts[_pf], _pv.cls, predictedRender);
         }
     }
 

@@ -76,11 +76,13 @@ export function formatTrackingSpeed(frames, ms, recordingFps) {
  * the whole project and not the resident window.
  *
  * @param {Object} session
- * @param {{frames:number, animals:number, animalsAuto?:boolean, elapsedMs?:number, fps?:number}} opts
+ * @param {{frames:number, animals:number, animalsAuto?:boolean, elapsedMs?:number, fps?:number, poses?:Object}} opts
  *   `frames` — the frames the pass swept (the denominator); `animals` — the
  *   animal count it ran with; `animalsAuto` — whether that count was detected
  *   rather than entered; `elapsedMs` — how long tracking took; `fps` — the
- *   recording's frame rate, for the real-time multiplier (0/absent: none shown).
+ *   recording's frame rate, for the real-time multiplier (0/absent: none shown);
+ *   `poses` — the 2D pose check's result (`session.poseCheck`, from
+ *   pose/pose-check-session.js `finishPoseCheckRun`), absent when it did not run.
  */
 export function summarizeTrackedIdentities(session, opts) {
     opts = opts || {};
@@ -112,9 +114,51 @@ export function summarizeTrackedIdentities(session, opts) {
         animalsAuto: !!opts.animalsAuto,
         elapsedMs: opts.elapsedMs,
         fps: opts.fps > 0 ? opts.fps : 0,
+        poses: summarizePoseCheck(opts.poses),
         identities: ids.map(function (id, i) {
             return { id: id.id, name: id.name, color: id.color, frames: counts[i] };
         }),
+    };
+}
+
+/**
+ * The 2D pose check's counts, in the summary's terms: totals, whether outliers
+ * were left out of tracking, and one line per camera for the hover text.
+ * @param {Object|null|undefined} pc  `session.poseCheck`
+ * @returns {{checked:number, untested:number, uncommon:number, outliers:number,
+ *   excluded:boolean, cameras:Array<{name:string, checked:number, uncommon:number,
+ *   outliers:number, modelled:boolean}>}|null}
+ */
+export function summarizePoseCheck(pc) {
+    if (!pc || !pc.total) return null;
+    return {
+        checked: pc.total.checked, untested: pc.total.untested,
+        uncommon: pc.total.uncommon, outliers: pc.total.outliers,
+        excluded: !!pc.excluded,
+        cameras: (pc.cameras || []).map(function (c) {
+            return { name: c.name, checked: c.checked, uncommon: c.uncommon, outliers: c.outliers, modelled: !!c.modelled };
+        }),
+    };
+}
+
+/** The pose check's stat row: what it flagged, of how many, per camera on hover. */
+function poseStat(p) {
+    if (!p.cameras.some(function (c) { return c.modelled; })) {
+        return { label: '2D poses', value: 'Not checked', detail: 'too few complete poses to learn from' };
+    }
+    var flagged = p.uncommon + p.outliers;
+    var value = flagged ? [p.uncommon ? n(p.uncommon) + ' uncommon' : '', p.outliers ? plural(p.outliers, 'outlier') : '']
+        .filter(Boolean).join(', ') : 'None flagged';
+    var lines = p.cameras.map(function (c) {
+        return c.name + ': ' + (c.modelled ? n(c.uncommon) + ' uncommon, ' + plural(c.outliers, 'outlier') + ' of ' + n(c.checked)
+            : 'not checked (too few complete poses to learn from)');
+    });
+    if (p.untested) lines.push(n(p.untested) + ' with too few nodes to check');
+    return {
+        label: '2D poses',
+        value: value,
+        detail: 'of ' + n(p.checked) + (p.outliers && p.excluded ? ' · outliers not tracked' : ''),
+        title: lines.join('\n'),
     };
 }
 
@@ -234,6 +278,7 @@ export function planTrackSummary(s, checks) {
                   (Math.round(s.fps * 100) / 100) + ' fps' : '') : '',
         });
     }
+    if (s.poses) stats.push(poseStat(s.poses));
 
     // Identities beyond the animal count are an animal the tracker lost and
     // re-found under a new name: each extra covers only the stretch after it.
@@ -243,6 +288,10 @@ export function planTrackSummary(s, checks) {
     } else if (s.animals > 0 && nIds > 0 && nIds < s.animals) {
         notes.push('Fewer identities than animals: ' + (s.animals - nIds === 1 ? 'one animal was' : 'some animals were') +
             ' never matched across two views.');
+    }
+
+    if (s.poses && s.poses.uncommon + s.poses.outliers > 0) {
+        notes.push('Flagged 2D poses are marked in the views: ? uncommon, ✕ outlier. Hover a node for its pose score.');
     }
 
     var maxFrames = s.identities.reduce(function (m, id) { return Math.max(m, id.frames); }, 0);

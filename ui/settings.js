@@ -53,6 +53,9 @@ const ACTION_CATALOG = [
     { id: 'firstLastFrame', label: 'First / Last frame', category: 'Navigation', binding: 'Home / End', editable: false, dispatched: false },
     { id: 'playPause', label: 'Play / Pause', category: 'Navigation', binding: 'Space', editable: false, dispatched: false },
     { id: 'gotoFrame', label: 'Go to frame number', category: 'Navigation', binding: 'Mod+Shift+J', editable: false, dispatched: false },
+    // The frames the last 2D pose check flagged (ui/pose-check-command.js `gotoFlaggedPose`).
+    { id: 'nextFlaggedPose', label: 'Next flagged pose (2D pose check)', category: 'Navigation', binding: ']', editable: true, dispatched: true },
+    { id: 'prevFlaggedPose', label: 'Previous flagged pose (2D pose check)', category: 'Navigation', binding: '[', editable: true, dispatched: true },
 
     // --- Editing ---
     { id: 'addInstanceSmart', label: 'Add instance (smart init)', category: 'Editing', binding: 'Mod+I', editable: true, dispatched: true },
@@ -329,6 +332,27 @@ const TRACKING_THRESHOLDS = [
         min: 0, max: 1, step: 0.05,
         desc: 'Detection-pool filter: drop instances whose detection score is below this value (only applies when per-instance scores are available). 0 = off; the sleap-3d reference used 0.85.',
     },
+    // --- 2D pose check (pose/pose-check.js) ---
+    {
+        id: 'poseCheck', label: 'Check 2D poses during tracking', default: 1,
+        min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
+        desc: 'Track All and Track Frame Range score every 2D prediction by how common its shape is among its own camera\'s poses (wherever the animal is, whichever way it faces, however far from the camera). Uncommon and outlier poses are marked in the views for inspection (? and ✕) and counted in the Track All summary. Hover a node to see its pose\'s score.',
+    },
+    {
+        id: 'poseUncommonZ', label: 'Pose check: uncommon from', default: 10,
+        min: 1, max: 200, step: 0.5,
+        desc: 'A prediction whose pose score reaches this is marked uncommon (still tracked). The score is about 0 for a typical pose and grows the rarer the shape. On six proofread 3–4-mouse sessions, 10 flagged 0.1% of good poses, and most poses it flagged were visibly wrong.',
+    },
+    {
+        id: 'poseOutlierZ', label: 'Pose check: outlier from', default: 15,
+        min: 0, max: 200, step: 0.5,
+        desc: 'A prediction whose pose score reaches this is an outlier. On six proofread 3–4-mouse sessions, 15 flagged 1 good pose in 13,000, and 92% of what it flagged was wrong: nodes scattered, or stretched over two animals. 0 = mark no pose as an outlier.',
+    },
+    {
+        id: 'poseExcludeOutliers', label: 'Pose check: leave outliers out of tracking', default: 0,
+        min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
+        desc: 'Also leave outlier poses out of tracking, so they get no identity. Off by default: a garbled pose is usually still the right animal, and taking it away can let a target take the wrong one. On 22 proofread sessions and a 5-mouse recording, with the match gate on or off, it fixed two lasting swaps and caused two, and otherwise only left the outliers unlabelled.',
+    },
     // --- CrossViewTracker engine (pose/cross-view-tracker.js) ---
     {
         id: 'corr2dWeight', label: '2D correspondence weight', default: 1,
@@ -414,6 +438,7 @@ TRACKING_THRESHOLDS.forEach(function (t) { _thrById.set(t.id, t); });
 // for the benchmark harness.
 const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore',
+    'poseCheck', 'poseUncommonZ', 'poseOutlierZ', 'poseExcludeOutliers',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
     'stale', 'matchGate',
     'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckWebNN',
