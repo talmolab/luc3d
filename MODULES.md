@@ -2749,9 +2749,20 @@ the 5-mouse recording no combination beat the default (4 → 4–14 lasting rela
 With 3 of the cameras at a time (3 triples × 22 sessions) switches went 1,598 → 704
 and mean accuracy 82.8% → 89.8%. birthMedian changed nothing, with 8 cameras or 3. Hence opt-in: the first two as
 Tracking Wizard settings; `birthMedian` only as a hyperparameter (no measured effect,
-so not offered). `matchReproj` costs about 60% more tracker time (the leave-one-view-out
-re-solves). Covered by `tests/test-crossview-features.mjs` (each option's effect,
-and that 0 reproduces today's cost).
+so not offered). `matchReproj`'s cost is the leave-one-view-out re-solves (on SLAP
+145420: 1.0M node checks, 19% over 20 px, 1.6M trial solves). `checkedPoints3d` does
+them through `DltViewSystem` (each view's DLT rows formed once per node, only summed
+per subset), reads the extrinsics from one flat array, and takes both the trials and
+each trial's views WORST VIEW FIRST, so a losing trial stops at its first view
+(`worstViewError`'s bound; ties still go to the lowest view index, via `nextUp`).
+Every result is bit-identical to solving each trial with `triangulatePointDLT` in
+index order — identical Track All identities on the 22 SLAP sessions and the 5-mouse
+recording, five or six settings each — and what `matchReproj` adds to the tracker
+about halved: with maxPenalty 4 + matchReproj 20, 5.1 → 4.0 s on 145420 (3.0 s off)
+and 51 → 39 s on the 5-mouse recording (25.5 s off). Covered by
+`tests/test-crossview-features.mjs` (each option's effect, that 0 reproduces today's
+cost, and `match3d` bit-identical to a verbatim copy of the original per-trial
+`triangulatePointDLT` loop).
 
 **Coordinate conventions (verified vs `sleap_3d/geometry.py`).** Works entirely
 in NORMALIZED camera coordinates: detections are undistorted + K⁻¹-applied on
@@ -2816,7 +2827,7 @@ Weights section (`getNodeWeightArray`).
 
 **Imports.** `pose/triangulation-core.js` (all geometry is coordinate-agnostic and
 reused by passing the bare extrinsic + normalized points:
-`triangulatePoints`, `triangulatePointDLT`, `reprojectPoint`, `backProjectToRays`,
+`triangulatePoints`, `DltViewSystem`, `reprojectPoint`, `backProjectToRays`,
 `pointsToRayDistances`, `hungarianAlgorithm`, `computeFundamentalMatrix`,
 `epipolarErrorMatrix`). From the core, NOT `pose/triangulation.js` (which
 re-exports them): that module pulls in the whole UI, and this one must load in
@@ -3765,7 +3776,8 @@ fails with the `user`/`modified` blockers removed: a member's edit is lost on sa
 **Purpose.** The pure triangulation math, split out of `pose/triangulation.js`
 so a Web Worker can load it: matrix helpers (`matMul`, `matTranspose`,
 `solveSmallestEigenvector4x4`, `svd3x4`), DLT
-(`triangulatePointDLT`, `triangulatePoints`), the "Refined" point stage
+(`triangulatePointDLT`, `triangulatePoints`, and `DltViewSystem` for solving
+one keypoint again on subsets of its views), the "Refined" point stage
 (`triangulatePointBA`, `triangulatePointsBA`, `BA_ROBUST_SCALE_PX`),
 reprojection (`reprojectPoint(s)`, `reprojectPointCamera(s)`, `cameraDepth` —
 the homogeneous `w`, POSITIVE in front of the camera, which any caller
@@ -3841,6 +3853,21 @@ null-vector solve.**
   a real result; a deliberately sloppy solver (tolerance 1e-4, 3D off by up to
   53 mm) still grouped every frame identically, so the tracker is robust to
   this kind of change by a wide margin.
+- Subset DLT: `DltViewSystem` (`prepare(observations, Ps)`, `solve(use, out)`)
+  holds one keypoint's per-view DLT products so it can be solved again on any
+  subset of its views — the tracker's `checkedPoints3d` leaves one view out at a
+  time. `prepare` forms each view's two rows (`dltRowsInto`, the one copy of the
+  row expressions, shared with `dltNormalMatrixFlat`) in the frame of the SAME
+  `Ps` array — every camera, left out or not, as `triangulatePointDLT` does with
+  views nulled — and their ten upper-triangle products; `solve` only adds the
+  used views' products in row order, so M, and hence the answer, is
+  bit-identical to `triangulatePointDLT` with the other views nulled.
+  Subtracting a view's products from the full M would be cheaper and is NOT
+  identical. `smallestEigvec4Inverse`'s Cholesky and triangular solves are
+  unrolled into locals — the same operations in the same order as the loop form
+  through scratch arrays, so the same bits (pinned against a verbatim copy of the
+  loop form, including every fallback), which speeds up every DLT solve (Track
+  All 3.1 → 3.0 s on SLAP 145420, 27.2 → 25.5 s on the 5-mouse recording).
 - Refinement: `triangulatePointBA` projects through
   `_projectAndJacobian(Camera)Into`, which write into one scratch object with
   the same expressions as `projectAndJacobian`, `distortJacobian` and
