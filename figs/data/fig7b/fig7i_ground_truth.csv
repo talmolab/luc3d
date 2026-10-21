@@ -1,0 +1,7 @@
+arm,metric,label,value,freely_fitted
+calibrat3,d_fx,focal length,0.05,True
+calibrat3,centre_pct,camera center,0.0353,True
+calibrat3,scale_pct,rig scale,0.029,True
+anipose,d_fx,focal length,2.2,True
+anipose,centre_pct,camera center,2.1081,True
+anipose,scale_pct,rig scale,2.976,True

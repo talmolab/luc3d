@@ -74,6 +74,13 @@ def main():
         sys.exit("set SCORE_NOTAIL=1 (Fig 4D / 6b-d score tail-free)")
     commit = subprocess.run(["git", "-C", os.environ["LUCID_ROOT"], "rev-parse", "HEAD"],
                             capture_output=True, text=True, check=True).stdout.strip()
+    # R4 (LUC3D-JS plan J12, 2026-10-20): refuse anything but a clean v1.0.5 checkout.
+    dirty = subprocess.run(["git", "-C", os.environ["LUCID_ROOT"], "status", "--porcelain",
+                            "--untracked-files=no"], capture_output=True, text=True,
+                           check=True).stdout.strip()
+    if commit != "2dc001fe527c4dbaad17fa171da132cfdfe010e6" or dirty:
+        sys.exit(f"LUCID_ROOT is at {commit[:8]}{' (dirty)' if dirty else ''}, not a clean "
+                 "2dc001fe -- refusing")
     sess, _ = f4.sessions()
     for cfg, (st, d) in ARMS.items():
         if d.parent == TMP:

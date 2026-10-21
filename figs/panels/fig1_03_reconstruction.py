@@ -66,8 +66,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src.data_loader import OUT, load  # noqa: E402
-from src.style import INK, SPAN, mm, save, tile, use  # noqa: E402
+from src.data_loader import APP_OUT, OUT, load  # noqa: E402
+from src.style import INK, SPAN, mm, save, tagged_render, tile, use  # noqa: E402
 from src.skeleton_style import SLAP_NODES, draw_pose_overlay  # noqa: E402
 
 import numpy as np  # noqa: E402
@@ -157,8 +157,8 @@ def main():
                                 w_pad=0.004, h_pad=0.004)
     for ax, (name_tpl, badge, bcol, crop, aspect) in zip(axes, TILES):
         name = name_tpl.format(frame=j["frame"])
-        p = (OUT / name) if "{" in name_tpl or name.startswith("after") \
-            else (RENDERS / name)
+        p = (APP_OUT / name) if "{" in name_tpl or name.startswith("after") \
+            else tagged_render(RENDERS / name)
         if not p.exists():
             src = ("`node figs/fig1_tracking.mjs`" if name.startswith("after") else
                    "`blender-images/bpyenv/bin/python blender-images/fig1d_scene.py"

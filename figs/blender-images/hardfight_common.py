@@ -14,35 +14,38 @@ videos in `_bugdata/20260605_133431-HardFight_reencoded`. The skeleton is the
 SAME 15-node mouse skeleton as SLAP-2M, so chen_common's NODE_NAMES /
 MOUSE_EDGE_IDXS apply verbatim.
 
-So this module builds the 3D itself, for the handful of frames a figure
-needs:
-  - `associate_frame`: cross-view identity at one frame -- pick the reference
-    view with the most instances, then greedily match every other view's
-    instances to the reference by two-view-triangulation reprojection error.
-  - `triangulate`: multi-view DLT on undistorted normalized rays, with
-    iterative worst-view rejection (a view is dropped while its reprojection
-    error exceeds REPROJ_DROP_PX and >= 2 views remain).
-  - `fit_alignment`: the calib-world -> aligned (floor z=0, +z up) transform,
-    fitted from the data itself since there is no alignment.toml: triangulate
-    a sample of frames, take the pancake-shaped keypoint cloud's thin axis as
-    up (sign chosen so the cameras sit above), put z=0 at the 2nd percentile
-    of heights (feet/bedding), and align x with the cloud's long axis. The
-    result is passed to chen_common.Alignment, so downstream code treats the
-    two datasets identically.
-
-Everything is validated by `_diag_hardfight_3d.py`-style checks before use:
-triangulated body sizes come out at real mouse scale and reprojection errors
-at a few px (see the numbers recorded in the idswitch_common.py comments).
+The 3D is LUC3D v1.0.5's (LUC3D-JS plan, 2026-10-20; Eric: "for these
+visualizations we should be using luc3d triangulation and tracker").
+`figs/hardfight_luc3d.py` runs LUC3D's tracker on every camera's detections and
+triangulates each identity's views with LUC3D's DLT (Triangulate All's default),
+writing `figs/out/hardfight_luc3d.npz`. This module only reads it:
+  - `poses_calib`: one frame's (3, 15, 3) LUC3D poses, in LUC3D identity order
+    (stable across frames: the tracker's identities, not a per-frame matching),
+    plus each identity's per-view detections (the ones LUC3D grouped).
+  - `project_pinhole`: LUC3D's reprojectPoint (undistorted pixels), through
+    figs/lucid_geom.mjs.
+  - `fit_alignment`: the calib-world -> aligned (floor z=0, +z up) transform for
+    the renders, fitted to LUC3D's keypoint cloud since there is no
+    alignment.toml: the pancake-shaped cloud's thin axis is up (sign chosen so
+    the cameras sit above), z=0 at the 2nd percentile of heights (feet/bedding),
+    x along the cloud's long axis. Scene geometry for a render, not a LUC3D
+    number. The result is passed to chen_common.Alignment, so downstream code
+    treats the two datasets identically.
+No triangulation, association or reprojection happens in Python here.
 """
 import glob
 import json
 import os
+import sys
 
 import h5py
 import numpy as np
 import toml
 
 import chen_common as cc
+
+if os.path.dirname(cc.HERE) not in sys.path:   # figs/, for lucid_geom
+    sys.path.insert(0, os.path.dirname(cc.HERE))
 
 HERE = cc.HERE
 REPO = os.path.dirname(os.path.dirname(HERE))
@@ -56,30 +59,36 @@ FPS = 60.0
 N_NODES = 15
 N_ANIMALS = 3
 
-#: instance-score floor for using a detection at all, and per-view
-#: reprojection error (px, median over visible nodes) above which a view is
-#: dropped from a keypoint's triangulation / an association is refused.
+#: instance-score floor for using a detection at all. hardfight_luc3d.py fed LUC3D
+#: exactly Slp2D.at()'s detections, so its slot indices index at(frame).
 MIN_INSTANCE_SCORE = 0.5
-ASSOC_MAX_PX = 25.0
-REPROJ_DROP_PX = 12.0
+
+LUC3D_NPZ = os.path.join(os.path.dirname(HERE), "out", "hardfight_luc3d.npz")
+LUC3D_JSON = os.path.join(os.path.dirname(HERE), "out", "hardfight_luc3d.json")
 
 
 def video_path(cam):
     return glob.glob(f"{SESSION_VID}/{cam}/*.mp4")[0]
 
 
+def _lucid_camera(name):
+    v = next(v for k, v in toml.load(os.path.join(SESSION_SLP, "calibration.toml")).items()
+             if k.startswith("cam_") and v["name"] == name)
+    return dict(name=name, matrix=v["matrix"], distortions=v["distortions"],
+                rvec=v["rotation"], tvec=v["translation"], size=v["size"])
+
+
 def project_pinhole(cam, P):
     """calib-world (mm) -> UNDISTORTED image px: the coordinates of a
-    cv2.undistort-ed frame (newCameraMatrix defaults to K). The figure panes
-    show undistorted photos, so their overlays must be projected WITHOUT the
-    distortion model -- HardFight's k1 is -0.36, strong enough that
-    distorted-coordinate overlays land visibly off the animals (Eric: "the
-    blue instance isnt even on the animal"). chen_common.project (distorted)
-    is only for comparing against the raw detections."""
-    Pc = (cam.R @ np.asarray(P, float)[..., None])[..., 0] + cam.t
-    xy = Pc[..., :2] / Pc[..., 2:3]
-    return np.stack([cam.K[0, 0] * xy[..., 0] + cam.K[0, 2],
-                     cam.K[1, 1] * xy[..., 1] + cam.K[1, 2]], axis=-1)
+    cv2.undistort-ed frame. The figure panes show undistorted photos, so their
+    overlays are projected WITHOUT the distortion model -- HardFight's k1 is
+    -0.36, strong enough that distorted-coordinate overlays land visibly off
+    the animals (Eric: "the blue instance isnt even on the animal"). Computed
+    by LUC3D v1.0.5's reprojectPoint (figs/lucid_geom.mjs), not in Python."""
+    import lucid_geom
+    P = np.asarray(P, float)
+    uv, _ = lucid_geom.project_pinhole([_lucid_camera(cam.name)], P.reshape(-1, 3))
+    return uv[0].reshape(P.shape[:-1] + (2,))
 
 
 def pinhole_camera(cam):
@@ -143,134 +152,71 @@ def load_all_slp():
     return {cam: Slp2D(cam) for cam in CAMS}
 
 
-def _normalized(cam, pts):
-    """(N,2) px -> (N,2) undistorted normalized coords (NaN passthrough)."""
-    out = np.full_like(pts, np.nan, dtype=float)
-    for i, p in enumerate(pts):
-        if not np.isnan(p).any():
-            out[i] = cc.undistort_px(p, cam.K, cam.dist)
-    return out
+_LUC3D = None
 
 
-def triangulate_point(cams_used, xns):
-    """DLT from >=2 views: cams_used list of cc.Camera, xns list of (xn, yn)
-    normalized coords. Returns (3,) calib-world point."""
-    A = []
-    for cam, (xn, yn) in zip(cams_used, xns):
-        P = np.hstack([cam.R, cam.t[:, None]])
-        A.append(xn * P[2] - P[0])
-        A.append(yn * P[2] - P[1])
-    A = np.array(A)
-    _, _, Vt = np.linalg.svd(A)
-    X = Vt[-1]
-    return X[:3] / X[3]
-
-
-def triangulate(views):
-    """views: list of (cc.Camera, (15,2) px). Returns (15,3) calib-world with
-    NaN where <2 views saw the node, using iterative worst-view rejection."""
-    cams = [v[0] for v in views]
-    norm = [_normalized(c, p) for c, p in views]
-    px = [p for _, p in views]
-    X = np.full((N_NODES, 3), np.nan)
-    for n in range(N_NODES):
-        use = [i for i in range(len(cams)) if not np.isnan(norm[i][n]).any()]
-        while len(use) >= 2:
-            Xn = triangulate_point([cams[i] for i in use], [norm[i][n] for i in use])
-            errs = np.array([np.linalg.norm(cams[i].project(Xn) - px[i][n]) for i in use])
-            if errs.max() <= REPROJ_DROP_PX or len(use) == 2:
-                if errs.max() <= REPROJ_DROP_PX:
-                    X[n] = Xn
-                break
-            use.pop(int(errs.argmax()))
-    return X
-
-
-def _pair_error(cam_a, inst_a, cam_b, inst_b):
-    """Median cross-reprojection error (px) of two-view triangulation over the
-    nodes both instances see -- the association cost."""
-    common = ~(np.isnan(inst_a["pts"]).any(1) | np.isnan(inst_b["pts"]).any(1))
-    idx = np.where(common)[0]
-    if len(idx) < 4:
-        return np.inf
-    na = _normalized(cam_a, inst_a["pts"])
-    nb = _normalized(cam_b, inst_b["pts"])
-    errs = []
-    for n in idx:
-        Xn = triangulate_point([cam_a, cam_b], [na[n], nb[n]])
-        ea = np.linalg.norm(cam_a.project(Xn) - inst_a["pts"][n])
-        eb = np.linalg.norm(cam_b.project(Xn) - inst_b["pts"][n])
-        errs.append(max(ea, eb))
-    return float(np.median(errs))
-
-
-def associate_frame(slp, cams, frame):
-    """Cross-view identity at one frame. Returns a list of animals, each a
-    dict cam_name -> instance dict (subset of views). Reference view: the one
-    with the most (score-weighted) instances; every other view's instances
-    are greedily matched to reference instances by _pair_error, refused above
-    ASSOC_MAX_PX."""
-    per_view = {cam: slp[cam].at(frame) for cam in CAMS}
-    # prefer a reference view seeing exactly N_ANIMALS (a 4th "instance" is a
-    # duplicate/ghost detection that would fabricate a 4th animal), then most
-    # instances, then score.
-    ref = max(CAMS, key=lambda c: (len(per_view[c]) == N_ANIMALS,
-                                   len(per_view[c]),
-                                   sum(i["score"] for i in per_view[c])))
-    animals = [{ref: inst} for inst in per_view[ref]]
-    for cam in CAMS:
-        if cam == ref:
-            continue
-        cost = np.full((len(animals), len(per_view[cam])), np.inf)
-        for i, an in enumerate(animals):
-            for j, inst in enumerate(per_view[cam]):
-                cost[i, j] = _pair_error(cams[ref], an[ref], cams[cam], inst)
-        while np.isfinite(cost).any() and cost.min() < ASSOC_MAX_PX:
-            i, j = np.unravel_index(np.argmin(cost), cost.shape)
-            animals[i][cam] = per_view[cam][j]
-            cost[i, :] = np.inf
-            cost[:, j] = np.inf
-    return animals
+def luc3d():
+    """hardfight_luc3d.npz: X (F, 3, 15, 3) calib-world mm, NaN where unseen;
+    slots (F, 3, 8) each identity's Slp2D.at() index per camera, -1 if none."""
+    global _LUC3D
+    if _LUC3D is None:
+        if not os.path.exists(LUC3D_NPZ):
+            raise SystemExit(f"missing {LUC3D_NPZ}: run POSE_DIR=<v1.0.5>/pose figs/hardfight_luc3d.py")
+        stamp = json.load(open(LUC3D_JSON))
+        if stamp.get("lucid_commit") != "2dc001fe527c4dbaad17fa171da132cfdfe010e6":
+            raise SystemExit(f"{LUC3D_JSON} is not LUC3D v1.0.5: {stamp.get('lucid_commit')}")
+        z = np.load(LUC3D_NPZ)
+        _LUC3D = (z["X"], z["slots"], stamp)
+    return _LUC3D
 
 
 def poses_calib(slp, cams, frame):
-    """(n_animals, 15, 3) calib-world triangulated poses at `frame` (NaN
-    rows where unseen), plus each animal's per-view instances (for 2D
-    overlays). Animals in reference-view instance order -- NOT temporally
-    stable; callers link identities across frames themselves."""
-    animals = associate_frame(slp, cams, frame)
-    X = []
-    for an in animals:
-        views = [(cams[c], inst["pts"]) for c, inst in an.items()]
-        X.append(triangulate(views) if len(views) >= 2 else np.full((N_NODES, 3), np.nan))
-    return np.array(X), animals
+    """(3, 15, 3) calib-world LUC3D poses at `frame` (NaN where unseen), in
+    LUC3D identity order (the tracker's, stable across frames), plus each
+    identity's per-view detections as LUC3D grouped them: a list of dicts
+    cam_name -> instance dict. `cams` is unused (kept for the callers)."""
+    X, slots, _ = luc3d()
+    animals = []
+    for a in range(N_ANIMALS):
+        an = {}
+        for ci, cam in enumerate(CAMS):
+            s = int(slots[frame, a, ci])
+            if s >= 0:
+                an[cam] = slp[cam].at(frame)[s]
+        animals.append(an)
+    return X[frame].copy(), animals
 
 
-ALIGNMENT_CACHE = os.path.join(HERE, "renders", "hardfight_alignment.json")
+#: FIG_TAG=b (a figure series) gets its own cache, so a series never refits the main one.
+_TAG = os.environ.get("FIG_TAG", "")
+ALIGNMENT_CACHE = os.path.join(HERE, "renders", f"hardfight_alignment{'_' + _TAG if _TAG else ''}.json")
 
 
 def load_alignment(slp=None, cams=None):
     """The fitted alignment, cached at ALIGNMENT_CACHE so every figure script
-    (and re-run) uses the exact same transform. First call fits it (~2 min)."""
+    (and re-run) uses the exact same transform. The cache records the LUC3D
+    deposit it was fitted to and is refitted when that is missing or differs."""
+    stamp = luc3d()[2]
+    key = {k: stamp.get(k) for k in ("lucid_commit", "finite_keypoints")}
     if os.path.exists(ALIGNMENT_CACHE):
-        return cc.Alignment(json.load(open(ALIGNMENT_CACHE)))
+        d = json.load(open(ALIGNMENT_CACHE))
+        if d.get("fitted_to") == key:
+            return cc.Alignment(d)
     ali = fit_alignment(slp or load_all_slp(), cams or load_calibration_all())
     os.makedirs(os.path.dirname(ALIGNMENT_CACHE), exist_ok=True)
     with open(ALIGNMENT_CACHE, "w") as f:
-        json.dump({"rotation": ali.Ra.tolist(), "translation": ali.ta.tolist()}, f, indent=2)
+        json.dump({"rotation": ali.Ra.tolist(), "translation": ali.ta.tolist(),
+                   "fitted_to": key, "source": "figs/out/hardfight_luc3d.npz (LUC3D v1.0.5)"},
+                  f, indent=2)
     return ali
 
 
 def fit_alignment(slp, cams, sample_step=200, seed_frames=None):
-    """calib-world -> aligned (floor z=0, +z up, x = cage long axis) fit from
-    the triangulated data itself (HardFight has no alignment.toml). Returns a
-    chen_common.Alignment."""
-    frames = seed_frames if seed_frames is not None else range(0, 36000, sample_step)
-    pts = []
-    for f in frames:
-        X, _ = poses_calib(slp, cams, f)
-        pts.append(X.reshape(-1, 3))
-    P = np.concatenate(pts)
+    """calib-world -> aligned (floor z=0, +z up, x = cage long axis) fit to
+    LUC3D's triangulated keypoints (HardFight has no alignment.toml), the same
+    every-200th-frame sample as before. Returns a chen_common.Alignment."""
+    frames = list(seed_frames if seed_frames is not None else range(0, 36000, sample_step))
+    P = luc3d()[0][frames].reshape(-1, 3)
     P = P[~np.isnan(P).any(1)]
     c = P.mean(0)
     _, _, Vt = np.linalg.svd(P - c, full_matrices=False)

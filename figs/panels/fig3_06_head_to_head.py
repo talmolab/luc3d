@@ -116,6 +116,9 @@ FPS = 30.0   # SLAP-2M is 30 fps (13 sessions 60), Methods L254. Was 50 until 20
 #: the earlier ones. Unset = unchanged.
 import os  # noqa: E402
 CLEAN = os.environ.get("FIG3F_CLEAN") == "1"
+#: FIG3F_CLEAN_TAG=_j17 (2026-10-20): the J17 sitting, rerun under figs/timing_watch.py
+#: with per-process CPU evidence. Unset = the T1 sitting.
+CLEAN_TAG = os.environ.get("FIG3F_CLEAN_TAG", "")
 
 CORPUS = {
     "10072022131531": "SLAP-2M",
@@ -179,9 +182,9 @@ def build():
         # 2026-10-20: the clean sitting. Both arms on identical frames, one process at a
         # time, 3 rounds. The 4x6 greedy value is its own greedy-only sitting (no
         # exhaustive run exists there).
-        h = load("fig3_headtohead_clean.json")
-        measured = (load("fig3_runtime_clean.json")["measured"]
-                    + load("fig3_runtime_clean_a4c6.json")["measured"])
+        h = load(f"fig3_headtohead_clean{CLEAN_TAG}.json")
+        measured = (load(f"fig3_runtime_clean{CLEAN_TAG}.json")["measured"]
+                    + load(f"fig3_runtime_clean{CLEAN_TAG}_a4c6.json")["measured"])
     else:
         h = load("fig3_headtohead.json")
         r = load("fig3_runtime.json")

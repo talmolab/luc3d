@@ -43,6 +43,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--links", required=True)
     ap.add_argument("--loads", required=True)
+    ap.add_argument("--out", default=os.path.join(OUT, "provenance_gate.json"))
     a = ap.parse_args()
     man = json.load(open(os.path.join(FIGS, "provenance_manifest.json")))
     v105, deps = man["v105"], man["deposits"]
@@ -91,6 +92,9 @@ def main():
             g = None
         if isinstance(g, str):
             scripts.add(g.split()[0].replace("figs/", "", 1))
+    # Blender / illustration prep runs outside data_loader, so the loads log cannot name it;
+    # the manifest lists it (2026-10-21, after the HardFight NumPy DLT hid there).
+    scripts |= set(man.get("render_path_scripts", {}).get("scripts", []))
     allow = man.get("python_geometry_allowlist", {})
     scanned = []
     for s in sorted(scripts):
@@ -105,7 +109,7 @@ def main():
 
     out = dict(generated_by="figs/provenance_gate.py", v105=v105, passed=not fails,
                failures=fails, inputs=rows, scanned=scanned)
-    json.dump(out, open(os.path.join(OUT, "provenance_gate.json"), "w"), indent=1)
+    json.dump(out, open(a.out, "w"), indent=1)
     for f in fails:
         print("FAIL", f)
     print(f"PROVENANCE GATE {'PASSED' if not fails else 'FAILED'}: {len(rows)} inputs, "

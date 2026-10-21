@@ -118,7 +118,9 @@ def build():
     sessions, with the join guarded rather than assumed."""
     # md56 (2026-10-14): the LUC3D tracking re-run on origin/main lives in <stem>_md56.json.
     # x7 (2026-10-20): the single-variant final build links the same md56 deposit.
-    f9 = load(IDF1_FILE, variant=os.environ.get("FIG_VARIANT") in ("md56", "x7"))
+    # b (2026-10-21): the LUC3D-only series links the same md56 deposit; without it here
+    # a b build silently read the pre-v1.0.5 base file.
+    f9 = load(IDF1_FILE, variant=os.environ.get("FIG_VARIANT") in ("md56", "x7", "b"))
     print(f"  IDF1 pool: {IDF1_POOL} ({IDF1_FILE})")
     cells = {c["config"]: c for c in f9["cells"]}
     if SHIPPED not in cells:

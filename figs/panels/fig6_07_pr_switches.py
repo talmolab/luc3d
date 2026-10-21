@@ -90,6 +90,7 @@ Identity precision/recall come from motmetrics `idp`/`idr` via figs/fig3_score.p
 
     python3 figs/panels/fig8_07_pr_switches.py
 """
+import os
 import sys
 from pathlib import Path
 
@@ -391,10 +392,14 @@ def main(deposit_name="fig8_methods_50.json"):
     import json
     W, H = fig.get_size_inches() * 25.4
     boxes = [a.get_position() for a in axes]
-    (FIGS_DIR / "figures" / "fig6" / "fig6f_axes.json").write_text(json.dumps({
-        "fig_mm": [W, H],
-        "axes_mm": [[b.x0 * W, b.y0 * H, b.width * W, b.height * H]
-                    for b in boxes]}, indent=1))
+    # Untagged builds only. Under FIG_TAG this used to overwrite the MAIN figure's
+    # figures/fig6/fig6f_axes.json (2026-10-21), and a tagged panel g reads
+    # figures/fig6<FIG_TAG>/fig6f_axes.json, which fig6slapstale_reduction.py writes.
+    if not os.environ.get("FIG_TAG"):
+        (FIGS_DIR / "figures" / "fig6" / "fig6f_axes.json").write_text(json.dumps({
+            "fig_mm": [W, H],
+            "axes_mm": [[b.x0 * W, b.y0 * H, b.width * W, b.height * H]
+                        for b in boxes]}, indent=1))
     save(fig, 6, "f", "pr_switches")
 
 

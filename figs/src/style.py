@@ -671,6 +671,30 @@ def save(fig, fig_no, letter, slug, *, png: bool = True, close: bool = True) -> 
     return stem.with_suffix(".pdf")
 
 
+def tagged_render(path) -> Path:
+    """A render (or other pre-rendered image) for this build's figure series.
+
+    Under FIG_TAG=<t>, `name.png` -> `name_<t>.png` when that file exists, else the
+    base file. FIG_RENDER_REQUIRE=1 refuses the fallback, as FIG_VARIANT_REQUIRE does
+    for deposits (2026-10-20: the b series' renders come from LUC3D v1.0.5 output and
+    must not silently mix with the main figures' renders).
+    """
+    import os
+    import sys
+    path = Path(path)
+    tag = os.environ.get("FIG_TAG", "")
+    if not tag:
+        return path
+    alt = path.with_name(f"{path.stem}_{tag}{path.suffix}")
+    if alt.exists():
+        print(f"  [render {tag}] {path.name} -> {alt.name}")
+        return alt
+    if os.environ.get("FIG_RENDER_REQUIRE"):
+        sys.exit(f"[render {tag}] REQUIRED {alt} is missing -- refusing to fall back to {path.name}")
+    print(f"  [render {tag}] {path.name}: no series render, BASE used")
+    return path
+
+
 def data_path(fig_no, name) -> Path:
     """`data/figN/<name>` -- the committed, plot-ready table for a panel."""
     import os

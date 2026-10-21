@@ -64,10 +64,10 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Arc, Polygon
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src.data_loader import OUT, load  # noqa: E402
+from src.data_loader import APP_OUT, load  # noqa: E402
 from src.diagram import blank, icon, point, ray  # noqa: E402
 from src.skeleton_style import SLAP_NODES, draw_pose_overlay  # noqa: E402
-from src.style import MUTED, GREY, INK, SALMON, SPAN, TEAL, mm, save, tile, use  # noqa: E402
+from src.style import MUTED, GREY, INK, SALMON, SPAN, TEAL, mm, save, tagged_render, tile, use  # noqa: E402
 
 RENDERS = Path(__file__).resolve().parent.parent / "blender-images" / "renders"
 
@@ -381,7 +381,7 @@ def main():
 
     # --- 1: the two anchor views ------------------------------------------
     for r, cam in enumerate(anchors):
-        f = OUT / f"fig2p-anchor-f{frame}-{cam}.png"
+        f = APP_OUT / f"fig2p-anchor-f{frame}-{cam}.png"
         if not f.exists():
             sys.exit(f"missing figs/out/{f.name} — run `node figs/fig2_protocol.mjs`")
         v = view_of(va, cam)
@@ -397,7 +397,7 @@ def main():
     # fits), so nothing is cropped here -- the old app-viewport shot needed its
     # content bbox measured off the pixels; this tile does not. Dark-ink badge:
     # the background is now a white room, not the app's dark viewport.
-    p3d = RENDERS / "fig2a_pose.png"
+    p3d = tagged_render(RENDERS / "fig2a_pose.png")
     if not p3d.exists():
         sys.exit("missing blender-images/renders/fig2a_pose.png — run "
                  "`figs/.venv/bin/python figs/fig2a_scene.py`, then "
@@ -410,7 +410,7 @@ def main():
     # --- 3: two views nobody labelled -------------------------------------
     for r, cam in enumerate(REPROJ_CAMS):
         v = view_of(vr, cam)
-        ax_t, _ = photo_tile(cells[(r, 2)], OUT / f"fig2p-reproj-f{frame}-{cam}.png",
+        ax_t, _ = photo_tile(cells[(r, 2)], APP_OUT / f"fig2p-reproj-f{frame}-{cam}.png",
                              bbox_of(vr, cam),
                              badge=f"{cam_label(cam)} · not labelled")
         draw_reprojected(ax_t, v)
@@ -422,7 +422,7 @@ def main():
     # carry the "dotted = reprojected / solid = detected" key below.
     vm = view_of(vr, "Camera0_mid")
     zoom = zoom_on_largest(vm)
-    ax0 = tile(cells[(0, 3)], OUT / f"fig2p-reproj-f{frame}-Camera0_mid.png", None,
+    ax0 = tile(cells[(0, 3)], APP_OUT / f"fig2p-reproj-f{frame}-Camera0_mid.png", None,
                badge=f"{cam_label('Camera0_mid')} · magnified")
     ax0.set_xlim(zoom[0], zoom[2])
     ax0.set_ylim(zoom[3], zoom[1])

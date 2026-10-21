@@ -22,7 +22,7 @@ Same session as Fig 1d (figs/session = the trimmed 8-camera HardFight clip), so:
     floor = 2nd percentile of heights).
   * ARENA RULE -- the floor plane's footprint is Fig 1d's movement rule verbatim
     (fig1_hardfight_scene.py, itself Fig 1a's BMimica recipe): the 0.1-99.9
-    percentile span of x and y over every triangulated keypoint of all three mice
+    percentile span of x and y over every LUC3D-triangulated keypoint (figs/out/hardfight_luc3d.npz) of all three mice
     across the whole 36,000-frame session, sampled every SAMPLE_STEP frames.
     Recomputed here rather than read out of Fig 1d's deposit so the two figures'
     builds stay independent; the rule (and so the plane) is identical.
@@ -170,7 +170,14 @@ def main():
     elev = float(np.degrees(np.arcsin(np.clip(-fwd[2], -1, 1))))
     print(f"viewpoint from {VIEW_ANCHOR}: azim {azim:.1f} deg, elev {elev:.1f} deg")
 
+    # R4 stamp (LUC3D-JS plan): the pose is the app export's and the floor alignment is
+    # fitted to hardfight_luc3d.npz, so the scene carries both of their stamps forward.
+    luc = hf.luc3d()[2]
+    stamp = {"generated_by": "figs/fig2a_scene.py",
+             **{k: P.get(k) for k in ("lucid_root", "lucid_commit", "pose_dir", "served_app_root")},
+             "alignment_fitted_to": {k: luc.get(k) for k in ("lucid_commit", "generated_by")}}
     out = {
+        **stamp,
         "corpus": "HardFight", "session": "20260605_133431",
         "clip": {"rel": "figs/session", "frame": int(P["frame"])},
         "frame": int(P["frame"]), "fps": hf.FPS, "n_animals": len(pose),
@@ -191,7 +198,7 @@ def main():
         "crosscheck_two_anchor_vs_all_views_mm": med,
         "suggested_azim_deg": azim, "suggested_elev_deg": elev,
         "view_anchor": VIEW_ANCHOR,
-        "alignment": "blender-images/renders/hardfight_alignment.json",
+        "alignment": os.path.relpath(hf.ALIGNMENT_CACHE, HERE),  # the cache load_alignment read
     }
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w") as f:

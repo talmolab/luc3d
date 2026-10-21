@@ -15,8 +15,8 @@ measurement and contains no hand-placed geometry.
   * `arena` -- the movement-fitted box, exactly Fig 1a's BMimica recipe: HardFight
     ships no arena reconstruction (`hardfight_common.py`: no alignment.toml, no
     cage points), so the FOOTPRINT is the 0.1-99.9 percentile span of x and y over
-    every triangulated keypoint of all three mice across the whole 36,000-frame
-    session, in the same fitted floor-z=0 frame every HardFight figure uses
+    every LUC3D-triangulated keypoint of all three mice across the whole 36,000-frame
+    session (figs/out/hardfight_luc3d.npz), in the same fitted floor-z=0 frame every HardFight figure uses
     (`hardfight_common.load_alignment`, cached in
     blender-images/renders/hardfight_alignment.json). UNLIKE BMimica the footprint
     is NOT squared up -- Eric: "it is also a rectangular prism or cube like
@@ -42,12 +42,12 @@ measurement and contains no hand-placed geometry.
 
 FRAME-OFFSET CROSS-CHECK. figs/session is a 300-frame trim of the full session
 starting at build_fig_session.py's default S=24551, but the trim records no
-offset. Rather than trust the default, this script triangulates absolute frame
-CLIP_START + frame offline (hardfight_common.poses_calib) and matches each app
-animal to the nearest offline animal by median keypoint distance: at the right
-offset the same mice are within a few mm (the two pipelines share detections and
-calibration and differ only in association/rejection rules); at a wrong offset
-they are body lengths apart. The check FAILS LOUDLY above --check-mm (25 mm).
+offset. Rather than trust the default, this script reads absolute frame
+CLIP_START + frame from the full-session LUC3D v1.0.5 run (hardfight_common.poses_calib,
+figs/out/hardfight_luc3d.npz) and matches each app animal to the nearest LUC3D
+animal by median keypoint distance: at the right offset the same mice are within a
+few mm (same detections and calibration); at a wrong offset they are body lengths
+apart. The check FAILS LOUDLY above --check-mm (25 mm).
 
   python3 figs/fig1_hardfight_scene.py                  # ~2 min (footprint scan)
   Writes figs/out/fig1_hardfight_scene.json; render with
@@ -121,7 +121,7 @@ def main():
                 best = min(best, float(np.nanmedian(d)))
         med.append(best)
     print(f"frame-offset check: clip frame {frame_clip} = absolute {frame_abs}, "
-          f"app-vs-offline median keypoint distance per animal "
+          f"app-vs-LUC3D-run median keypoint distance per animal "
           f"{['%.1f' % m for m in med]} mm")
     if not all(m <= args.check_mm for m in med):
         raise SystemExit(f"cross-check failed (> {args.check_mm} mm): the clip "
@@ -182,7 +182,14 @@ def main():
               f"forward ({cm['forward'][0]:+.3f}, {cm['forward'][1]:+.3f}, "
               f"{cm['forward'][2]:+.3f})")
 
+    # R4 stamp (LUC3D-JS plan): the pose is the app export's and the floor alignment is
+    # fitted to hardfight_luc3d.npz, so the scene carries both of their stamps forward.
+    luc = hf.luc3d()[2]
+    stamp = {"generated_by": "figs/fig1_hardfight_scene.py",
+             **{k: P.get(k) for k in ("lucid_root", "lucid_commit", "pose_dir", "served_app_root")},
+             "alignment_fitted_to": {k: luc.get(k) for k in ("lucid_commit", "generated_by")}}
     out = {
+        **stamp,
         "corpus": "HardFight", "session": "20260605_133431",
         "clip": {"rel": "figs/session", "start": CLIP_START, "frame": frame_clip},
         "frame": frame_abs, "fps": hf.FPS, "n_animals": len(pose),
@@ -201,7 +208,7 @@ def main():
         "pose_names": names,
         "pose_source": args.pose,
         "offset_check_mm": med,
-        "alignment": "blender-images/renders/hardfight_alignment.json",
+        "alignment": os.path.relpath(hf.ALIGNMENT_CACHE, HERE),  # the cache load_alignment read
     }
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w") as f:

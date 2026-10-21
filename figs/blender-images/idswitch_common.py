@@ -11,14 +11,15 @@ TWO DATASETS (select with the IDSWITCH_DATASET env var; default "hardfight"):
     look a bit off still ... either we should use two top views or use the
     hard fight dataset side views and top views for this example", picking
     HardFight side+top "should be similar angles though if possible"). It
-    ships NO proofread 3D, so hardfight_common.py triangulates the needed
-    frames itself (cross-view association + multi-view DLT + fitted floor
-    alignment -- see its docstring; body sizes come out 64-88 mm nose-TTI,
-    median reprojection error 2-4 px). The figure shows the CLOSEST PAIR of
-    the three mice; the third is far away at the chosen event and outside
-    both photo crops. The 2D overlays are the triangulated 3D reprojected
-    through the calibration -- the same 3D-consistent quantity the SLAP-2M
-    reprojections.h5 carries.
+    ships NO proofread 3D, so the 3D and the identities are LUC3D v1.0.5's
+    (figs/hardfight_luc3d.py: LUC3D's tracker + DLT over all 36,000 frames;
+    hardfight_common.py reads it and fits the floor alignment for the render).
+    The figure shows the CLOSEST PAIR of the three LUC3D identities; the third
+    is far away at the chosen event and outside both photo crops. The 2D
+    overlays are LUC3D's 3D reprojected by LUC3D's reprojectPoint -- the same
+    3D-consistent quantity the SLAP-2M reprojections.h5 carries. The swapped
+    overlay in one camera is drawn for illustration; it is not a switch LUC3D
+    made.
   - "slap2m": the original 2-animal SLAP-2M session (chen_common.SESSION,
     "2022-10-07/10072022180149") with its shipped proofread points3d.h5 /
     reprojections.h5. KEPT FULLY REPRODUCIBLE (Eric: "maybe keep the old
@@ -188,8 +189,8 @@ if DATASET == "hardfight":
     #: sweep -- A walks in from (-152, 5) along a curve and flees to (-70, 69),
     #: B comes down from (-125, 73) and drops away, ~190 mm of travel EACH way
     #: -- spans ~+-10 s. So the loader walks TRAIL_SPAN frames each side of
-    #: the anchor at TRAIL_LINK_STEP (fine enough that nearest-centroid
-    #: identity linking cannot jump animals at this event's speeds), then
+    #: the anchor at TRAIL_LINK_STEP (each animal followed by its LUC3D
+    #: identity), then
     #: keeps, PER ANIMAL, the frames where the centroid has moved
     #: TRAIL_SPACING_MM since the last kept pose -- up to TRAIL_MAX_PRE /
     #: TRAIL_MAX_POST steps. The two animals therefore have their OWN frame
@@ -293,6 +294,9 @@ else:
 
     _SUFFIX = ""
 
+#: FIG_TAG=b (a figure series) writes its own files beside the main ones.
+if os.environ.get("FIG_TAG"):
+    _SUFFIX += "_" + os.environ["FIG_TAG"]
 DATA_JSON = os.path.join(HERE, "renders", f"idswitch_fig_data{_SUFFIX}.json")
 STAGING_CAMERA_JSON = os.path.join(HERE, "renders", f"idswitch_staging_camera{_SUFFIX}.json")
 RENDER_PNG = os.path.join(HERE, "renders", f"idswitch_render{_SUFFIX}.png")
@@ -410,12 +414,14 @@ def _slap2m_figure_data(cams):
 
 def _hf_figure_data(cams):
     """HardFight: walk TRAIL_SPAN frames each side of IMAGE_FRAME at
-    TRAIL_LINK_STEP, triangulating (hardfight_common) and linking the CLOSEST
-    PAIR at IMAGE_FRAME outward by nearest centroid; order the pair [A, B]
-    with A = the member that travels farther (the mover -- blue). Then pick
-    each animal's OWN trail frames by displacement: keep a walked frame when
-    its centroid is TRAIL_SPACING_MM from the last kept one (see the
-    TRAIL_SPACING_MM comment for why per-animal, not shared)."""
+    TRAIL_LINK_STEP on LUC3D v1.0.5's poses and identities (hardfight_common
+    reads figs/out/hardfight_luc3d.npz); show the CLOSEST PAIR of LUC3D
+    identities at IMAGE_FRAME, followed through the window by LUC3D's own
+    identity (no Python re-linking); order the pair [A, B] with A = the member
+    that travels farther (the mover -- blue). Then pick each animal's OWN trail
+    frames by displacement: keep a walked frame when its centroid is
+    TRAIL_SPACING_MM from the last kept one (see the TRAIL_SPACING_MM comment
+    for why per-animal, not shared)."""
     import hardfight_common as hf
     slp = hf.load_all_slp()
     ali = hf.load_alignment(slp, cams)
@@ -438,24 +444,9 @@ def _hf_figure_data(cams):
     d = {(i, j): np.linalg.norm(cf[i] - cf[j]) for i in range(n) for j in range(i + 1, n)}
     pair = list(min(d.items(), key=lambda kv: kv[1])[0])
 
-    picked = {IMAGE_FRAME: pair}
-    for direction in (1, -1):
-        idx = frames.index(IMAGE_FRAME)
-        ref = np.array([cf[pair[0]], cf[pair[1]]])
-        while True:
-            idx += direction
-            if idx < 0 or idx >= len(frames):
-                break
-            f = frames[idx]
-            c = cen_by[f]
-            out, used = [], set()
-            for r in ref:
-                dd = np.linalg.norm(c - r, axis=1)
-                j = next(j for j in np.argsort(dd) if j not in used)
-                out.append(int(j))
-                used.add(int(j))
-            picked[f] = out
-            ref = np.array([c[out[0]], c[out[1]]])
+    # LUC3D's identities are stable across frames: the pair is the same two
+    # identity indices in every walked frame.
+    picked = {f: pair for f in frames}
 
     # A = the pair member that travels farther over the window (the mover).
     trav = [sum(np.linalg.norm(cen_by[f2][picked[f2][k]] - cen_by[f1][picked[f1][k]])

@@ -62,10 +62,10 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import FIGS, MUTED, ROW_H, SPAN, deposit, mm, save, use  # noqa: E402
+from src.style import FIGS, MUTED, ROW_H, SPAN, deposit, mm, save, tagged_render, use  # noqa: E402
 
 CA, CB = "#4393C3", "#D6604D"        # male, female -- matches every other fig5 panel
-RENDER = FIGS / "blender-images" / "renders" / "fig5a_upright.png"
+RENDER = tagged_render(FIGS / "blender-images" / "renders" / "fig5a_upright.png")
 BOX_MM = (230, 230, 140)             # the render's volume; keep in sync with the
                                      # fig5a_scene.py command in the docstring
 

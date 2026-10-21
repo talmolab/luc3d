@@ -131,7 +131,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src.data_loader import OUT, load  # noqa: E402
+from src.data_loader import APP_OUT, load  # noqa: E402
 from src.style import (MUTED, GREY, INK, SPAN, deposit, mm, save, tile, use)  # noqa: E402
 from src.skeleton_style import SLAP_NODES, draw_pose_overlay  # noqa: E402
 
@@ -345,7 +345,7 @@ def main():
             # exports are named by frame, so a hard-coded 150 here silently kept
             # reading the OLD tiles after the driver was re-run on another frame --
             # artwork and deposit disagreeing with each other.
-            p = OUT / f"{stage}-f{j['frame']}-{cam}.png"
+            p = APP_OUT / f"{stage}-f{j['frame']}-{cam}.png"
             if not p.exists():
                 sys.exit(f"missing figs/out/{p.name} — run `node figs/fig1_tracking.mjs`")
             tiles.append((p, bbox_for(j[stage], cam), cam, stage))

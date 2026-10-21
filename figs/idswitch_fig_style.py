@@ -22,6 +22,7 @@ Reads blender-images/renders/{idswitch_fig_data.json,
 idswitch_staging_camera.json, idswitch_render.png}. Writes
 figures/drafts/figs/lucid_idswitch_style.png.
 """
+import glob
 import json
 import os
 import sys
@@ -230,6 +231,12 @@ def content_bbox(data, stg, pad=8):
 
 
 def main():
+    # The panels' bundled Liberation Sans (src/style.py registers it the same way), so the
+    # figure does not depend on the host having it installed (2026-10-20: a host without
+    # it fell back to the wider DejaVu Sans and clipped the legend).
+    from matplotlib import font_manager
+    for ttf in sorted(glob.glob(os.path.join(HERE, "src", "fonts", "*.ttf"))):
+        font_manager.fontManager.addfont(ttf)
     plt.rcParams.update({"font.size": pt(PAGE_LEGEND), "font.family": "sans-serif",
                           "font.sans-serif": ["Liberation Sans", "Arial", "DejaVu Sans"],
                           "text.color": INK})

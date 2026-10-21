@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-TRUE raw-detection quality on SLAP-2M, by difficulty — and the test that decides
-whether reprojection error is a useful proofreading triage signal.
+TRUE raw-detection quality on SLAP-2M, by difficulty.
 
 WHY THIS EXISTS. `figs/fig4_difficulty.py` compares each camera's PROOFREAD 2D labels
 against the proofread 3D reprojected into that camera. Both sides come from the
@@ -17,33 +16,21 @@ detections per frame ordered score-descending, with `det_scores`. Session axis i
 row index into `$BENCH/outputs/detections_only_master_sheet.tsv` (74 sessions), the same
 indexing `luc3d-bench/scripts/evaluate.py` uses (`f["tracks"][session_idx]`).
 
-TWO MEASUREMENTS
-----------------
-A. DETECTION QUALITY BY DIFFICULTY (the corrected Fig 6). Match the raw detections to
+THE MEASUREMENT
+---------------
+DETECTION QUALITY BY DIFFICULTY (the corrected Fig 6). Match the raw detections to
    the reference animals per frame per camera, then report, per session:
      * detection error   |raw − reference| for matched keypoints, MEAN plus the tail
      * miss rate         reference keypoint present, no matched raw detection covering it
    Reference = the proofread 3D reprojected into that camera, which is identity-
    consistent across cameras by construction.
 
-B. IS REPROJECTION ERROR A USEFUL TRIAGE SIGNAL? (the non-tautological Fig 5 claim.)
-   Showing that "ranking by reprojection error finds keypoints with high reprojection
-   error" is circular. The claim that matters is that reprojection error — computable
-   from raw detections and the calibration alone, with NO ground truth — predicts where
-   the human actually had to intervene. So for every keypoint:
-     signal   cross-view reprojection residual of the 3D triangulated from the RAW
-              detections across cameras. Available at proofreading time.
-     target   |raw − proofread reference|, i.e. how far the keypoint actually had to
-              move. Needs the answer, so it is what we are trying to predict.
-   Then rank by `signal` and measure how much of the total `target` is captured, and
-   compare against ranking by the detector's own confidence (`det_scores`), which is
-   the obvious alternative a reviewer will propose. Both rankings are scored on the
-   identical keypoint set.
-
-   Cross-view identity for the triangulation is taken from the reference match, so this
-   assumes association is already correct. That is the right assumption here — it is a
-   separate step (Fig 3) that the user has already run before proofreading — and it is
-   stated in the output caveats.
+PART B REMOVED (2026-10-21, LUC3D-JS plan J9). This script also had a "triage" analysis
+that triangulated the raw detections with fig2_measure.py's NumPy DLT + OpenCV and
+reprojected them. That is a Python reimplementation of LUC3D's geometry, no panel or tex
+sentence used it, and it is gone. Its fields (signal, target, spearman, capture_*) are not
+in deposits written after this date. The last version with it:
+out/md56_logs/fig4_detections.before_partB_removal_2026-10-21.py.
 
 Run with the bench env:
     /root/vast/eric/luc3d-bench/lp3d_env/bin/python figs/fig4_detections.py --jobs 12
@@ -65,7 +52,6 @@ import json
 import os
 import sys
 
-import cv2
 import h5py
 import numpy as np
 
@@ -73,11 +59,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, "/root/vast/eric/luc3d-bench/scripts/bartul")
 from build_gt_reproj import load_calibration  # noqa: E402
-#: FIG4_PY_TRIAGE=1 (opt-in since 2026-10-20, LUC3D-JS plan J9): part B, the triage
-#: analysis. It triangulates and reprojects with a NumPy DLT + OpenCV, i.e. NOT LUC3D's
-#: JavaScript, so it is off by default and nothing it writes may be presented as LUC3D.
-#: No placed panel or tex sentence reads its fields (signal, target, spearman, capture_*).
-TRIAGE = os.environ.get("FIG4_PY_TRIAGE") == "1"
 
 BENCH = "/root/vast/eric/luc3d-bench"
 MASTER = f"{BENCH}/outputs/detections_only_master_sheet.tsv"
@@ -192,7 +173,7 @@ def measure_session(row, sidx, stride):
     if len(use) < 3:
         return None
 
-    ref, matched, scores = {}, {}, {}
+    ref, matched = {}, {}
     for c in use:
         rp = row[f"{c}_reproj_h5"]
         rp = rp if os.path.isabs(rp) else os.path.join(SLAP_ROOT, rp)
@@ -215,12 +196,6 @@ def measure_session(row, sidx, stride):
             m = m[:, :, _keep]
         ref[c] = R
         matched[c] = m
-        # score of whichever detection was assigned to each animal
-        sfull = np.full(which.shape, np.nan)
-        for a in range(which.shape[1]):
-            got = which[:, a] >= 0
-            sfull[got, a] = sc[:F][got, which[got, a]]
-        scores[c] = sfull
 
     C = len(use)
     F, T, N, _ = ref[use[0]].shape
@@ -248,92 +223,7 @@ def measure_session(row, sidx, stride):
         frac_over_tau=float((err > TAU_PX).mean()),
         n_keypoints=int(len(err)),
     )
-    if not TRIAGE:
-        return out
-
-    # ---------- B. triage signal vs target (opt-in, NumPy/OpenCV, not LUC3D) ----------
-    from fig2_measure import triangulate_batch  # noqa: E402
-    # triangulate the RAW matched detections across cameras (no ground truth used
-    # beyond the identity assignment), then measure how far each view's raw detection
-    # sits from that consensus -- the signal -- against how far it sits from the
-    # proofread reference -- the target.
-    Ps = np.stack([cams_all[c]["P"] for c in use], 0)
-    uv = np.stack([matched[c].reshape(-1, 2) for c in use], 0)         # (C, M, 2)
-    # undistort for triangulation; the pool detections are in native pixels
-    und = np.empty_like(uv)
-    for i, c in enumerate(use):
-        flat = uv[i].copy()
-        ok = ~np.isnan(flat).any(1)
-        if ok.any():
-            u = cv2.undistortPoints(flat[ok].reshape(-1, 1, 2), cams_all[c]["K"],
-                                    cams_all[c]["dist"], P=cams_all[c]["K"])
-            flat[ok] = u.reshape(-1, 2)
-        und[i] = flat
-    mask = ~np.isnan(und).any(-1)
-    X = triangulate_batch(und, Ps, mask)                              # (M, 3)
-
-    sig, tgt, conf = [], [], []
-    for i, c in enumerate(use):
-        cam = cams_all[c]
-        good = ~np.isnan(X).any(1) & mask[i]
-        if not good.any():
-            continue
-        pp, _ = cv2.projectPoints(X[good].astype(np.float64), cam["rvec"], cam["t"],
-                                  cam["K"], cam["dist"])
-        proj = pp.reshape(-1, 2)
-        raw_i = uv[i][good]
-        ref_i = ref[c].reshape(-1, 2)[good]
-        s = np.linalg.norm(proj - raw_i, axis=1)          # signal: cross-view residual
-        t = np.linalg.norm(raw_i - ref_i, axis=1)         # target: distance to proofread
-        cf = np.repeat(scores[c].reshape(-1), N)[good]    # detector confidence
-        keep = np.isfinite(s) & np.isfinite(t)
-        sig.append(s[keep])
-        tgt.append(t[keep])
-        conf.append(cf[keep])
-    if not sig:
-        return None
-    sig = np.concatenate(sig)
-    tgt = np.concatenate(tgt)
-    conf = np.concatenate(conf)
-
-    def capture(rank_desc, payload, fracs=(0.01, 0.05, 0.10, 0.20)):
-        """Share of total `payload` captured by reviewing the top `frac` by `rank_desc`."""
-        order = np.argsort(-rank_desc, kind="stable")
-        cum = np.cumsum(payload[order])
-        total = cum[-1] if len(cum) else 0.0
-        if total <= 0:
-            return {}
-        return {str(fr): float(cum[max(0, int(fr * len(order)) - 1)] / total)
-                for fr in fracs}
-
-    finite = np.isfinite(conf)
-    return dict(
-        out,
-        # B
-        signal=q(sig), target=q(tgt),
-        spearman=float(_spearman(sig, tgt)),
-        capture_by_reproj=capture(sig, tgt),
-        # confidence is "higher = better", so rank by its NEGATIVE (least confident first)
-        capture_by_lowconf=(capture(-conf[finite], tgt[finite]) if finite.any() else {}),
-        capture_by_oracle=capture(tgt, tgt),
-        n_triage=int(len(sig)),
-    )
-
-
-def _f(v):
-    return float("nan") if v is None else v
-
-
-def _spearman(a, b):
-    """Rank correlation without scipy, so this runs in any of the envs here."""
-    if len(a) < 3:
-        return float("nan")
-    ra = np.argsort(np.argsort(a)).astype(float)
-    rb = np.argsort(np.argsort(b)).astype(float)
-    ra -= ra.mean()
-    rb -= rb.mean()
-    d = np.sqrt((ra ** 2).sum() * (rb ** 2).sum())
-    return float((ra * rb).sum() / d) if d else float("nan")
+    return out
 
 
 def _one(job):
@@ -397,10 +287,7 @@ def main():
         done.append(r)
         print(f"  [{sidx}] {r['session']}: diff {r['difficulty']} "
               f"err mean {r['det_error']['mean']:6.2f} p95 {r['det_error']['p95']:6.2f} "
-              f"miss {r['miss_rate'] * 100:5.1f}%  "
-              f"rho {r.get('spearman', float('nan')):.3f}  "
-              f"reproj@10% {r.get('capture_by_reproj', {}).get('0.1', float('nan')):.3f} "
-              f"vs lowconf {r.get('capture_by_lowconf', {}).get('0.1', float('nan')):.3f}")
+              f"miss {r['miss_rate'] * 100:5.1f}%")
 
     if not done:
         raise SystemExit("nothing measured")
@@ -434,10 +321,6 @@ def main():
             err_p99=m(v, ["det_error", "p99"]),
             miss_rate=m(v, ["miss_rate"]),
             frac_over_tau=m(v, ["frac_over_tau"]),
-            spearman=m(v, ["spearman"]),
-            capture_reproj_10=m(v, ["capture_by_reproj", "0.1"]),
-            capture_lowconf_10=m(v, ["capture_by_lowconf", "0.1"]),
-            capture_oracle_10=m(v, ["capture_by_oracle", "0.1"]),
             err_mean_sd=(float(np.std([x["det_error"]["mean"] for x in v]))
                          if len(v) > 1 else 0.0),
             miss_rate_sd=(float(np.std([x["miss_rate"] for x in v]))
@@ -460,9 +343,6 @@ def main():
             "Detections are assigned to reference animals per frame per camera by mean "
             "keypoint distance, so a long identity swap by the detector appears as "
             "error rather than as a swap.",
-            "The triage analysis takes cross-view identity from that reference match, "
-            "i.e. it assumes association is already correct -- a separate step the user "
-            "runs before proofreading.",
             "Frames are uniformly strided, never selected.",
         ])
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
@@ -470,14 +350,10 @@ def main():
         json.dump(payload, f, indent=1)
 
     print("\nby difficulty (mean across sessions):")
-    print(f"  {'diff':>4} {'n':>3} {'err mean':>9} {'err p95':>8} {'miss%':>7} "
-          f"{'rho':>6} {'reproj@10%':>11} {'lowconf@10%':>12} {'oracle@10%':>11}")
+    print(f"  {'diff':>4} {'n':>3} {'err mean':>9} {'err p95':>8} {'miss%':>7}")
     for k, v in payload["by_difficulty"].items():
         print(f"  {k:>4} {v['n_sessions']:>3} {v['err_mean']:>9.2f} "
-              f"{v['err_p95']:>8.2f} {v['miss_rate'] * 100:>7.1f} "
-              f"{_f(v['spearman']):>6.3f} {_f(v['capture_reproj_10']):>11.3f} "
-              f"{_f(v['capture_lowconf_10']):>12.3f} "
-              f"{_f(v['capture_oracle_10']):>11.3f}")
+              f"{v['err_p95']:>8.2f} {v['miss_rate'] * 100:>7.1f}")
     print(f"[json] {args.out}")
 
 

@@ -15,10 +15,25 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { lucidPose } from './lucid_v105.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const repoRoot = path.resolve(__dirname, '..');
-export const outDir = path.join(__dirname, 'out');
+// LUCID_APP_ROOT: the directory the dev server serves (default: this repo). The b
+// series serves LUC3D v1.0.5 (LUC3D-JS plan R1): a scratch dir of symlinks to the
+// clean v1.0.5 checkout plus figs/session, since the checkout itself must stay clean.
+export const appRoot = process.env.LUCID_APP_ROOT ? path.resolve(process.env.LUCID_APP_ROOT) : repoRoot;
+// FIG_OUT_DIR: where shots and manifests go (default figs/out), so a series run
+// cannot overwrite the main series' files.
+export const outDir = process.env.FIG_OUT_DIR ? path.resolve(process.env.FIG_OUT_DIR) : path.join(__dirname, 'out');
+// Under LUCID_APP_ROOT the served pose/ must be the clean v1.0.5 checkout POSE_DIR names,
+// and every manifest carries its R4 stamp.
+const appStamp = process.env.LUCID_APP_ROOT ? (() => {
+    const { poseDir, stamp } = lucidPose();
+    const served = fs.realpathSync(path.join(appRoot, 'pose'));
+    if (served !== fs.realpathSync(poseDir)) throw new Error(`${appRoot}/pose is ${served}, not POSE_DIR ${poseDir}`);
+    return { ...stamp, served_app_root: appRoot, driver: 'figs/_drive.mjs' };
+})() : null;
 // Which session folder to load, relative to the repo root. Fig 1/2 use the trimmed
 // 8-camera HardFight clip; Fig 6 points this at a SLAP-2M session instead.
 export const SESSION_REL = process.env.SESSION_REL || 'figs/session';
@@ -29,11 +44,12 @@ export function log(m) { process.stdout.write(m + '\n'); }
 
 /** Start a dev server on `port` unless one is already answering there. */
 export async function serve(port) {
-    try {
-        const r = await fetch(`http://localhost:${port}/index.html`);
-        if (r.ok) { log(`[serve] reusing server on ${port}`); return null; }
-    } catch { /* not up */ }
-    const p = spawn('python3', ['-m', 'http.server', String(port)], { cwd: repoRoot, stdio: 'ignore' });
+    let up = false;
+    try { up = (await fetch(`http://localhost:${port}/index.html`)).ok; } catch { /* not up */ }
+    // A reused server serves whatever root it was started in, so a LUCID_APP_ROOT run refuses one.
+    if (up && process.env.LUCID_APP_ROOT) throw new Error(`port ${port} is taken; LUCID_APP_ROOT needs its own server`);
+    if (up) { log(`[serve] reusing server on ${port}`); return null; }
+    const p = spawn('python3', ['-m', 'http.server', String(port)], { cwd: appRoot, stdio: 'ignore' });
     await new Promise(r => setTimeout(r, 1200));
     log(`[serve] started server on ${port}`);
     return p;
@@ -1057,7 +1073,7 @@ export async function exportViews(page, { cams = null, prefix = 'view', pad = 0.
 export function writeManifest(name, obj) {
     const p = path.join(outDir, name.endsWith('.json') ? name : name + '.json');
     fs.mkdirSync(outDir, { recursive: true });
-    fs.writeFileSync(p, JSON.stringify(obj, null, 2));
+    fs.writeFileSync(p, JSON.stringify(appStamp ? { ...obj, ...appStamp } : obj, null, 2));
     log(`[manifest] ${path.relative(repoRoot, p)}`);
     return p;
 }

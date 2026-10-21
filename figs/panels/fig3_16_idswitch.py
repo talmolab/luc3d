@@ -33,11 +33,11 @@ import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from src.style import mm, save, use  # noqa: E402
+from src.style import mm, save, tagged_render, use  # noqa: E402
 from fig3_10_hyp_illustration import content_crop  # noqa: E402
 
-SRC = (Path(__file__).resolve().parent.parent / "figures" / "drafts" / "figs"
-       / "lucid_idswitch_style_hardfight.png")
+SRC = tagged_render(Path(__file__).resolve().parent.parent / "figures" / "drafts" / "figs"
+                    / "lucid_idswitch_style_hardfight.png")
 
 #: panel height in mm -- sized like 13c (the other staged-3D illustration,
 #: ~100 mm) rather than the 52 mm data-panel rows: the pane photos and the

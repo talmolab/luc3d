@@ -44,3 +44,11 @@ def project(cameras, X):
     M = X.shape[0]
     out, stamp = _run("project", cameras, X)
     return out.reshape(len(cameras), M, 2), stamp
+
+
+def project_pinhole(cameras, X):
+    """X (M, 3) calibration-frame points -> ((C, M, 2) UNDISTORTED pixels, stamp):
+    LUC3D's reprojectPoint with no distortPoint, for overlays on undistorted photos."""
+    M = X.shape[0]
+    out, stamp = _run("project_pinhole", cameras, X)
+    return out.reshape(len(cameras), M, 2), stamp

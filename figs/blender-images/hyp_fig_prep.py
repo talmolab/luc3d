@@ -91,7 +91,8 @@ def prep_camera(cam, ali, S_px, standoff_m, quad_scale, margin_px):
 
 def extract_photo(mp4_glob, frame, fps, out_path, cam, crop_box):
     mp4 = glob.glob(mp4_glob)[0]
-    raw_png = os.path.join(HERE, "renders", "_hyp_raw.png")
+    tag = os.environ.get("FIG_TAG", "")
+    raw_png = os.path.join(HERE, "renders", f"_hyp_raw{'_' + tag if tag else ''}.png")
     subprocess.run(
         ["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{frame / fps:.6f}",
          "-i", mp4, "-vframes", "1", raw_png], check=True)

@@ -1,48 +1,270 @@
 {
-  "_doc": "LUC3D-JS-CONSISTENCY-PLAN-2026-10-20 G1/G2. Every input the final build reads, keyed by the FILE it resolves to (out/ relative), with its kind. Kinds that must carry lucid_commit = v1.0.5: luc3d_js, app_capture. 'unclassified' fails the gate on purpose until someone checks it. python_geometry_allowlist: every script on the build path that triangulates / projects / undistorts in Python, with why that is not LUC3D work.",
-  "v105": "2dc001fe527c4dbaad17fa171da132cfdfe010e6",
-  "deposits": {
-    "fig2-protocol.json": {"kind": "app_capture_kept", "fig": "2A", "reason": "Playwright capture of the eric/figs app, Aug 25 (fig2_protocol.mjs). Eric D4 2026-10-20: keep. Not v1.0.5, so the caption must not imply it."},
-    "fig2a_scene.json": {"kind": "scene_geometry", "fig": "2A", "reason": "arena/floor placement for a render (fig2a_scene.py via hardfight_common). Display only; J5 decides whether it shows LUC3D output."},
-    "fig2g_retime_all_jsb.json": {"kind": "luc3d_js", "fig": "2G", "reason": "J16b sitting: fig2_solvers_time_luc3d.mjs on v1.0.5; Anipose arms are the baseline."},
-    "fig4_js.json": {"kind": "luc3d_js", "fig": "2F", "reason": "fig2_solvers_measure.mjs on the LUC3D-built export."},
-    "fig4_by_views_js.json": {"kind": "luc3d_js", "fig": "2B 2C 2D 2E", "reason": "fig2_solvers_by_views.mjs on the LUC3D-built export."},
-    "fig4_robust_sessions_js.json": {"kind": "luc3d_js", "fig": "2E bottom", "reason": "fig2_solvers_robust_sessions.mjs; drop rule is an analysis protocol (Methods)."},
-    "fig4_anipose_jspad.json": {"kind": "baseline", "fig": "2F 2G", "reason": "aniposelib 0.7.2 on LUC3D's exact keypoints."},
-    "fig5_views_js.json": {"kind": "luc3d_js", "fig": "5A 2D-strip", "reason": "fig5_views.py, alignment + projections by lucid_geom (J4)."},
-    "fig5_upright.json": {"kind": "dataset", "fig": "5B-F", "reason": "statistics on the dataset's reference 3D (Eric: Fig 5 presents the dataset)."},
-    "fig5_rear_coupling_2animal_perdir.json": {"kind": "dataset", "fig": "5G", "reason": "statistics on the dataset's reference 3D."},
-    "fig4_recovery_proofread2d.json": {"kind": "dataset", "fig": "4B", "reason": "counts of cameras carrying proofread 2D; no triangulation."},
-    "fig6_detections.json": {"kind": "unclassified", "fig": "4C?", "reason": "loaded by the Fig 4 build; panel use not yet verified."},
-    "fig6_detections_proofread_notail.json": {"kind": "dataset", "fig": "4C", "reason": "|label - reference reprojection| on the dataset's sleap-anipose 3D. Unplotted NumPy triage fields (J9) must not be cited."},
-    "fig6_recovery.json": {"kind": "unclassified", "fig": "4?", "reason": "loaded by the Fig 4 build; generator and panel not yet verified."},
-    "fig9_slap2m_lite_bvis5_notailscore_md56.json": {"kind": "luc3d_js", "fig": "4D", "reason": "fig3_bench.mjs on v1.0.5 (run_F4main.sh)."},
-    "fig7_calibration.json": {"kind": "calibrat3", "fig": "Supp 8", "reason": "calibrat3 (separate repo) vs Anipose, scored by aniposelib."},
-    "fig3_exhaustive_bmimica_b3.json": {"kind": "baseline", "fig": "3E 3G 3H", "reason": "exhaustive enumeration (Maree et al.) baseline; reuses v1.0.5 triangulation."},
-    "fig3_quality_b3.json": {"kind": "baseline", "fig": "3E", "reason": "exhaustive arm quality."},
-    "fig3_frame_matched_bmimica_b3.json": {"kind": "luc3d_js", "fig": "3G 3H", "reason": "frame-matched rule; greedy arm is v1.0.5."},
-    "fig3_headtohead_b3.json": {"kind": "luc3d_js", "fig": "3B 3F", "reason": "greedy arm via fig3_bench.mjs (run_B3Q.sh asserts 2dc001fe); stamp added by J12."},
-    "fig3_headtohead_clean_b3.json": {"kind": "luc3d_js", "fig": "3F", "reason": "fig3f_timing_clean.py, asserts 2dc001fe."},
-    "fig3_runtime_b3.json": {"kind": "luc3d_js", "fig": "3B", "reason": "greedy runtime."},
-    "fig3_runtime_clean_b3.json": {"kind": "luc3d_js", "fig": "3F", "reason": "fig3f_timing_clean.py."},
-    "fig3_runtime_clean_b3_a4c6.json": {"kind": "luc3d_js", "fig": "3F", "reason": "fig3f_timing_clean.py T_A4C6."},
-    "fig3_sweep50__distanceThreshold50-stale0_ce1d7f8d_b3.json": {"kind": "luc3d_js", "fig": "3G 3H", "reason": "fig3_sweep50.py, SWEEP50_LUCID_ROOT md56."},
-    "fig3_sweep50__distanceThreshold25-stale20_f7733dbf_b3.json": {"kind": "luc3d_js", "fig": "3G 3H", "reason": "fig3_sweep50.py, SWEEP50_LUCID_ROOT md56."},
-    "fig3_sweep50__distanceThreshold25-stale20-sync_e508a7ab_framematched_b3.json": {"kind": "luc3d_js", "fig": "3G 3H", "reason": "rescoring of the md56 sweep caches."},
-    "md56main/fig3_quality__distanceThreshold25-stale20_f7733dbf_b3.json": {"kind": "luc3d_js", "fig": "3E", "reason": "fig3_hh_freshanchor.py on md56."},
-    "fig3_trackers.json": {"kind": "unplaced", "fig": "(fig6ca_within_vs_cross, deleted after the build)", "reason": "read by the non-variant within-vs-cross panel that the build removes; not in any placed panel."},
-    "fig7_fair_baselines_c6b3nd.json": {"kind": "baseline", "fig": "Supp 6A", "reason": "SLEAP + ByteTrack arms."},
-    "fig7_variant_best_c6b3.json": {"kind": "luc3d_js", "fig": "Supp 6A-D", "reason": "LUC3D arm from fig8_methods_50_b3 (v1.0.5); metadata fixed by J11."},
-    "fig8_methods_50_b3.json": {"kind": "luc3d_js", "fig": "Supp 6A, subsec2-9", "reason": "fig6_methods.py with FIG8M_LUCID_ROOT md56."}
+ "_doc": "LUC3D-JS-CONSISTENCY-PLAN-2026-10-20 G1/G2. Every input the final build reads, keyed by the FILE it resolves to (out/ relative), with its kind. Kinds that must carry lucid_commit = v1.0.5: luc3d_js, app_capture. 'unclassified' fails the gate on purpose until someone checks it. python_geometry_allowlist: every script on the build path that triangulates / projects / undistorts in Python, with why that is not LUC3D work.",
+ "v105": "2dc001fe527c4dbaad17fa171da132cfdfe010e6",
+ "deposits": {
+  "fig2-protocol.json": {
+   "kind": "app_capture_kept",
+   "fig": "2A",
+   "reason": "Playwright capture of the eric/figs app, Aug 25 (fig2_protocol.mjs). Eric D4 2026-10-20: keep. Not v1.0.5, so the caption must not imply it."
   },
-  "unlogged_inputs": {
-    "stale_sweep_slap2m.json": {"kind": "luc3d_js", "fig": "Supp 6F", "reason": "read directly by panels/fig6slapstale_reduction.py; fig3_bench.mjs on v1.0.5."},
-    "../fig10-bench/results_v105/agg": {"kind": "luc3d_js_dir", "fig": "Supp 6G", "reason": "s-DANNCE via fig10_bench.mjs; run_SDV105.sh asserts 2dc001fe. The placed fig6c read results/agg (c9b2a325, eric-mimic2 S1); the final build sets FIG6_SDANNCE_AGG to this directory."}
+  "fig2a_scene.json": {
+   "kind": "scene_geometry",
+   "fig": "2A",
+   "reason": "arena/floor placement for a render (fig2a_scene.py via hardfight_common). Display only; J5 decides whether it shows LUC3D output."
   },
-  "python_geometry_allowlist": {
-    "fig2_solvers_anipose.py": "Anipose baseline (aniposelib's own triangulation).",
-    "fig7_calib_anipose_on_ours.py": "calibration benchmark scoring with aniposelib.",
-    "fig7_calib_gt_compare.py": "calibration benchmark against a synthetic rig.",
-    "out/md56_logs/calib_b/make_synthetic_session_b.py": "synthetic calibration rig generation."
+  "fig2g_retime_all_jsb.json": {
+   "kind": "luc3d_js",
+   "fig": "2G",
+   "reason": "J16b sitting: fig2_solvers_time_luc3d.mjs on v1.0.5; Anipose arms are the baseline."
+  },
+  "fig4_js.json": {
+   "kind": "luc3d_js",
+   "fig": "2F",
+   "reason": "fig2_solvers_measure.mjs on the LUC3D-built export."
+  },
+  "fig4_by_views_js.json": {
+   "kind": "luc3d_js",
+   "fig": "2B 2C 2D 2E",
+   "reason": "fig2_solvers_by_views.mjs on the LUC3D-built export."
+  },
+  "fig4_robust_sessions_js.json": {
+   "kind": "luc3d_js",
+   "fig": "2E bottom",
+   "reason": "fig2_solvers_robust_sessions.mjs; drop rule is an analysis protocol (Methods)."
+  },
+  "fig4_anipose_jspad.json": {
+   "kind": "baseline",
+   "fig": "2F 2G",
+   "reason": "aniposelib 0.7.2 on LUC3D's exact keypoints."
+  },
+  "fig5_views_js.json": {
+   "kind": "luc3d_js",
+   "fig": "5A 2D-strip",
+   "reason": "fig5_views.py, alignment + projections by lucid_geom (J4)."
+  },
+  "fig5_upright.json": {
+   "kind": "dataset",
+   "fig": "5B-F",
+   "reason": "statistics on the dataset's reference 3D (Eric: Fig 5 presents the dataset)."
+  },
+  "fig5_rear_coupling_2animal_perdir.json": {
+   "kind": "dataset",
+   "fig": "5G",
+   "reason": "statistics on the dataset's reference 3D."
+  },
+  "fig4_recovery_proofread2d.json": {
+   "kind": "dataset",
+   "fig": "4B",
+   "reason": "counts of cameras carrying proofread 2D; no triangulation."
+  },
+  "fig6_detections.json": {
+   "kind": "unclassified",
+   "fig": "4C?",
+   "reason": "loaded by the Fig 4 build; panel use not yet verified."
+  },
+  "fig6_detections_proofread_notail.json": {
+   "kind": "dataset",
+   "fig": "4C",
+   "reason": "|label - reference reprojection| on the dataset's sleap-anipose 3D. Unplotted NumPy triage fields (J9) must not be cited."
+  },
+  "fig6_recovery.json": {
+   "kind": "unclassified",
+   "fig": "4?",
+   "reason": "loaded by the Fig 4 build; generator and panel not yet verified."
+  },
+  "fig9_slap2m_lite_bvis5_notailscore_md56.json": {
+   "kind": "luc3d_js",
+   "fig": "4D",
+   "reason": "fig3_bench.mjs on v1.0.5 (run_F4main.sh)."
+  },
+  "fig7_calibration.json": {
+   "kind": "calibrat3",
+   "fig": "Supp 8",
+   "reason": "calibrat3 (separate repo) vs Anipose, scored by aniposelib."
+  },
+  "fig3_exhaustive_bmimica_b3.json": {
+   "kind": "baseline",
+   "fig": "3E 3G 3H",
+   "reason": "exhaustive enumeration (Maree et al.) baseline; reuses v1.0.5 triangulation."
+  },
+  "fig3_quality_b3.json": {
+   "kind": "baseline",
+   "fig": "3E",
+   "reason": "exhaustive arm quality."
+  },
+  "fig3_frame_matched_bmimica_b3.json": {
+   "kind": "luc3d_js",
+   "fig": "3G 3H",
+   "reason": "frame-matched rule; greedy arm is v1.0.5."
+  },
+  "fig3_headtohead_b3.json": {
+   "kind": "luc3d_js",
+   "fig": "3B 3F",
+   "reason": "greedy arm via fig3_bench.mjs (run_B3Q.sh asserts 2dc001fe); stamp added by J12."
+  },
+  "fig3_headtohead_clean_b3.json": {
+   "kind": "luc3d_js",
+   "fig": "3F",
+   "reason": "fig3f_timing_clean.py, asserts 2dc001fe."
+  },
+  "fig3_runtime_b3.json": {
+   "kind": "luc3d_js",
+   "fig": "3B",
+   "reason": "greedy runtime."
+  },
+  "fig3_runtime_clean_b3.json": {
+   "kind": "luc3d_js",
+   "fig": "3F",
+   "reason": "fig3f_timing_clean.py."
+  },
+  "fig3_runtime_clean_b3_a4c6.json": {
+   "kind": "luc3d_js",
+   "fig": "3F",
+   "reason": "fig3f_timing_clean.py T_A4C6."
+  },
+  "fig3_sweep50__distanceThreshold50-stale0_ce1d7f8d_b3.json": {
+   "kind": "luc3d_js",
+   "fig": "3G 3H",
+   "reason": "fig3_sweep50.py, SWEEP50_LUCID_ROOT md56."
+  },
+  "fig3_sweep50__distanceThreshold25-stale20_f7733dbf_b3.json": {
+   "kind": "luc3d_js",
+   "fig": "3G 3H",
+   "reason": "fig3_sweep50.py, SWEEP50_LUCID_ROOT md56."
+  },
+  "fig3_sweep50__distanceThreshold25-stale20-sync_e508a7ab_framematched_b3.json": {
+   "kind": "luc3d_js",
+   "fig": "3G 3H",
+   "reason": "rescoring of the md56 sweep caches."
+  },
+  "md56main/fig3_quality__distanceThreshold25-stale20_f7733dbf_b3.json": {
+   "kind": "luc3d_js",
+   "fig": "3E",
+   "reason": "fig3_hh_freshanchor.py on md56."
+  },
+  "fig3_trackers.json": {
+   "kind": "unplaced",
+   "fig": "(fig6ca_within_vs_cross, deleted after the build)",
+   "reason": "read by the non-variant within-vs-cross panel that the build removes; not in any placed panel."
+  },
+  "fig7_fair_baselines_c6b3nd.json": {
+   "kind": "baseline",
+   "fig": "Supp 6A",
+   "reason": "SLEAP + ByteTrack arms."
+  },
+  "fig7_variant_best_c6b3.json": {
+   "kind": "luc3d_js",
+   "fig": "Supp 6A-D",
+   "reason": "LUC3D arm from fig8_methods_50_b3 (v1.0.5); metadata fixed by J11."
+  },
+  "fig8_methods_50_b3.json": {
+   "kind": "luc3d_js",
+   "fig": "Supp 6A, subsec2-9",
+   "reason": "fig6_methods.py with FIG8M_LUCID_ROOT md56."
+  },
+  "b_app/fig1.json": {
+   "kind": "app_capture",
+   "fig": "1A-C (b)",
+   "reason": "fig1_tracking.mjs on the app served from the clean v1.0.5 checkout (_drive.mjs LUCID_APP_ROOT asserts and stamps)."
+  },
+  "b_app/fig2-protocol.json": {
+   "kind": "app_capture",
+   "fig": "2A (b)",
+   "reason": "fig2_protocol.mjs on the app served from the clean v1.0.5 checkout."
+  },
+  "fig1_hardfight_scene_b.json": {
+   "kind": "luc3d_js",
+   "fig": "1C 3D tiles (b)",
+   "reason": "pose = v1.0.5 app export (b_app/fig1d_pose.json); arena and floor alignment fitted to hardfight_luc3d.npz (LUC3D tracker + DLT). Stamp carried forward."
+  },
+  "fig2a_scene_b.json": {
+   "kind": "luc3d_js",
+   "fig": "2A 3D tile (b)",
+   "reason": "pose = v1.0.5 app two-anchor export (b_app/fig2a_pose.json); floor alignment fitted to hardfight_luc3d.npz. Stamp carried forward."
+  },
+  "fig3_headtohead_clean_b3_j17.json": {
+   "kind": "luc3d_js",
+   "fig": "3F (b)",
+   "reason": "J17 watched sitting; greedy timings fig3f_timing_clean.py (asserts 2dc001fe), accuracy cells J12-re-derived. Stamp added 2026-10-21 (metadata only)."
+  },
+  "fig3_runtime_clean_b3_j17.json": {
+   "kind": "luc3d_js",
+   "fig": "3F (b)",
+   "reason": "fig3f_timing_clean.py J17, asserts 2dc001fe."
+  },
+  "fig3_runtime_clean_b3_j17_a4c6.json": {
+   "kind": "luc3d_js",
+   "fig": "3F (b)",
+   "reason": "fig3f_timing_clean.py J17 T_A4C6, asserts 2dc001fe."
   }
+ },
+ "unlogged_inputs": {
+  "stale_sweep_slap2m.json": {
+   "kind": "luc3d_js",
+   "fig": "Supp 6F",
+   "reason": "read directly by panels/fig6slapstale_reduction.py; fig3_bench.mjs on v1.0.5."
+  },
+  "../fig10-bench/results_v105/agg": {
+   "kind": "luc3d_js_dir",
+   "fig": "Supp 6G",
+   "reason": "s-DANNCE via fig10_bench.mjs; run_SDV105.sh asserts 2dc001fe. The placed fig6c read results/agg (c9b2a325, eric-mimic2 S1); the final build sets FIG6_SDANNCE_AGG to this directory."
+  },
+  "hardfight_luc3d.json": {
+   "kind": "luc3d_js",
+   "fig": "1C 2A 3D renders (b)",
+   "reason": "stamp of hardfight_luc3d.npz, the HardFight 3D + identities every b HardFight render reads (blender-images/hardfight_common.py refuses any other commit)."
+  },
+  "fig1_bmimica_scene_b.json": {
+   "kind": "luc3d_js",
+   "fig": "1D Mouse-Dyad render (b)",
+   "reason": "dataset pose; camera placement aligned on LUC3D's DLT (lucid_geom)."
+  },
+  "fig5_views_js.json": {
+   "kind": "luc3d_js",
+   "fig": "5A render + projections",
+   "reason": "read directly by blender-images/fig5a_scene.py."
+  },
+  "b_app/fig1d_pose.json": {
+   "kind": "luc3d_js",
+   "fig": "1C pose (b)",
+   "reason": "v1.0.5 app trackAll + triangulateAll export."
+  },
+  "b_app/fig2a_pose.json": {
+   "kind": "luc3d_js",
+   "fig": "2A pose (b)",
+   "reason": "v1.0.5 app two-anchor export."
+  }
+ },
+ "python_geometry_allowlist": {
+  "fig2_solvers_anipose.py": "Anipose baseline (aniposelib's own triangulation).",
+  "fig7_calib_anipose_on_ours.py": "calibration benchmark scoring with aniposelib.",
+  "fig7_calib_gt_compare.py": "calibration benchmark against a synthetic rig.",
+  "out/md56_logs/calib_b/make_synthetic_session_b.py": "synthetic calibration rig generation.",
+  "lucid_geom.py": "wrappers that hand the batch to LUC3D v1.0.5's JavaScript (lucid_geom.mjs); no geometry in Python.",
+  "blender-images/hardfight_common.py": "SVD = floor-plane PCA of LUC3D's own keypoint cloud, for the render's floor (scene geometry). Its NumPy DLT and matcher were deleted 2026-10-20.",
+  "blender-images/cage_scene.py": "SVD = plane fits to the SLAP-2M dataset's cage points (scene geometry for a dataset render)."
+ },
+ "render_path_scripts": {
+  "_doc": "Blender / illustration prep the b renders ran (they read their inputs outside data_loader, so the loads log cannot name them). G2 scans these too.",
+  "scripts": [
+   "hardfight_luc3d.py",
+   "fig1_hardfight_scene.py",
+   "fig2a_scene.py",
+   "fig1_bmimica_scene.py",
+   "fig5_views.py",
+   "idswitch_fig_style.py",
+   "lucid_geom.py",
+   "blender-images/hardfight_common.py",
+   "blender-images/idswitch_common.py",
+   "blender-images/idswitch_fig_prep.py",
+   "blender-images/idswitch_fig_scene.py",
+   "blender-images/hyp_fig_prep.py",
+   "blender-images/hyp_common.py",
+   "blender-images/chen_common.py",
+   "blender-images/fig1d_scene.py",
+   "blender-images/bmimica_scene.py",
+   "blender-images/fig5a_scene.py",
+   "blender-images/cage_scene.py"
+  ]
+ }
 }

@@ -16,6 +16,9 @@
  *   mode "project": in = float64 (M, 3) points in the calibration frame.
  *        out = float64 (C, M, 2) distorted pixels per camera: reprojectPoint, then
  *        distortPoint. NaN where the input is NaN or the point does not project.
+ *   mode "project_pinhole": as "project" but WITHOUT distortPoint: reprojectPoint's own
+ *        UNDISTORTED pixels, the coordinates of a cv2.undistort-ed frame (overlays drawn
+ *        on undistorted photos).
  * Writes <out>.json beside the binary with the LUC3D stamp, which callers record.
  */
 import { register } from 'node:module';
@@ -51,7 +54,7 @@ if (req.mode === 'triangulate') {
         const X = tri.triangulatePointDLT(obs, Ps);
         if (X) { OUT[i * 3] = X[0]; OUT[i * 3 + 1] = X[1]; OUT[i * 3 + 2] = X[2]; }
     }
-} else if (req.mode === 'project') {
+} else if (req.mode === 'project' || req.mode === 'project_pinhole') {
     M = IN.length / 3;
     OUT = new Float64Array(C * M * 2).fill(NaN);
     for (let i = 0; i < M; i++) {
@@ -60,7 +63,7 @@ if (req.mode === 'triangulate') {
         for (let c = 0; c < C; c++) {
             const id = tri.reprojectPoint(X, Ps[c]);
             if (!id) continue;
-            const p = cams[c].distortPoint(id);
+            const p = req.mode === 'project' ? cams[c].distortPoint(id) : id;
             OUT[(c * M + i) * 2] = p[0]; OUT[(c * M + i) * 2 + 1] = p[1];
         }
     }

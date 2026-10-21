@@ -27,11 +27,16 @@ committed so the figures are buildable from a fresh clone.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
 FIGS = Path(__file__).resolve().parent.parent
 OUT = FIGS / "out"
+#: Where the app captures (Playwright tiles, `fig2p-*.png`, `after-*.png`) are read from.
+#: FIG_APP_OUT=out/b_app points a series build at captures shot on LUC3D v1.0.5
+#: (2026-10-20, the b series); default the August captures in `out/`.
+APP_OUT = FIGS / os.environ["FIG_APP_OUT"] if os.environ.get("FIG_APP_OUT") else OUT
 
 
 def _required() -> set:

@@ -106,7 +106,7 @@ import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src.style import INK, SPAN, mm, save, use  # noqa: E402
+from src.style import INK, SPAN, mm, save, tagged_render, use  # noqa: E402
 
 RENDERS = Path(__file__).resolve().parent.parent / "blender-images" / "renders"
 
@@ -123,7 +123,7 @@ RENDERS = Path(__file__).resolve().parent.parent / "blender-images" / "renders"
 #: changing either crop.
 TILES = [
     ("SLAP-2M", RENDERS / "fig1_renders" / "slap2m-4mice_f06020.png", (154, 0, 1126, 960)),
-    ("Mouse-Dyad-10M", RENDERS / "fig1_renders" / "mouse-dyad_f55701.png", (154, 0, 1126, 960)),
+    ("Mouse-Dyad-10M", tagged_render(RENDERS / "fig1_renders" / "mouse-dyad_f55701.png"), (154, 0, 1126, 960)),
 ]
 
 #: px of backdrop kept around the measured content box, and the mask thresholds.

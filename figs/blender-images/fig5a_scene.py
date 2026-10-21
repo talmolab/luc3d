@@ -45,7 +45,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import cage_scene as cs  # noqa: E402  (materials, primitives, animals, rig)
 
-VIEWS_JSON = os.path.join(HERE, "..", "out", "fig5_views.json")
+# LUC3D-JS plan J4: the LUC3D-aligned deposit (fig5_views.py on lucid_geom), not the
+# August NumPy-aligned out/fig5_views.json.
+VIEWS_JSON = os.path.join(HERE, "..", "out", "fig5_views_js.json")
 
 # fig5's two animals -- male/female (blue/red), matching every other fig5 panel
 # (2026-08-21: was Set2 teal/pink, retired once every other fig5 panel moved to
