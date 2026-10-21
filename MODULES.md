@@ -2830,6 +2830,30 @@ Wizard's `matchGate` threshold (`ui/settings.js`) via `crossViewHyperparams()`
 gate off — and lost-target re-acquisition, which fails under a naive gate that
 also gates lost targets).
 
+**Misplaced nodes (2026-10-20, `maxPenalty` / `matchReproj` / `birthMedian` hp; all
+0 = off = today's tracker exactly).** Ported from campy's live port of this tracker
+(olinesn/campy#85). A node the 2D model put in the wrong place triangulates far from
+its animal (metres, on a rig whose model was trained elsewhere), and the unbounded
+per-node 3D term then lets that one node decide the Hungarian. `maxPenalty` floors
+the per-node 3D term at `-maxPenalty × corr3d` (4 = flat beyond 5 × distanceThreshold).
+`matchReproj` (px) makes `_retriangulate` also build `target.match3d` — `points3d`
+re-solved by `checkedPoints3d` (campy's `TriangulateChecked`: a node whose worst view
+is over the threshold loses the view WITHOUT which its other views fit best, down to
+2 views, then is dropped) — and `matchPoints3d(target)` is what `_adjacency3d` and
+`targetProjection` read. `points3d` (written to the groups) stays the plain DLT.
+`birthMedian` pairs births by the median epipolar distance over nodes
+(`epipolarMedianMatrix`) instead of `epipolarErrorMatrix`'s mean. Measured with an
+exact offline replay of Track All on 22 proofread SLAP sessions (8 cameras):
+maxPenalty 4 + matchReproj 20 took lasting identity switches 360 → 168 and mean
+accuracy 88.2% → 90.5% (every pair of 1–8 × 10–40 px halved the switches), but on
+the 5-mouse recording no combination beat the default (4 → 4–14 lasting relabels).
+With 3 of the cameras at a time (3 triples × 22 sessions) switches went 1,598 → 704
+and mean accuracy 82.8% → 89.8%. birthMedian changed nothing, with 8 cameras or 3. Hence opt-in: the first two as
+Tracking Wizard settings; `birthMedian` only as a hyperparameter (no measured effect,
+so not offered). `matchReproj` costs about 60% more tracker time (the leave-one-view-out
+re-solves). Covered by `tests/test-crossview-features.mjs` (each option's effect,
+and that 0 reproduces today's cost).
+
 **Coordinate conventions (verified vs `sleap_3d/geometry.py`).** Works entirely
 in NORMALIZED camera coordinates: detections are undistorted + K⁻¹-applied on
 ingest (`normalizePoint` == `cv2.undistortPoints` with no `P`), and the
@@ -2893,7 +2917,7 @@ Weights section (`getNodeWeightArray`).
 
 **Imports.** `pose/triangulation-core.js` (all geometry is coordinate-agnostic and
 reused by passing the bare extrinsic + normalized points:
-`triangulatePoints`, `reprojectPoint`, `backProjectToRays`,
+`triangulatePoints`, `triangulatePointDLT`, `reprojectPoint`, `backProjectToRays`,
 `pointsToRayDistances`, `hungarianAlgorithm`, `computeFundamentalMatrix`,
 `epipolarErrorMatrix`). From the core, NOT `pose/triangulation.js` (which
 re-exports them): that module pulls in the whole UI, and this one must load in
@@ -11127,6 +11151,8 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   only (`filterMinVisibleNodes`, `filterMinInstanceScore`, `filterMinMeanNodeScore`, `corr2dWeight`,
   `corr3dWeight`, `velocityThreshold`, `distanceThreshold`, `timePenalty`,
   `stale`, `matchGate` (0/1 toggle for the CrossViewTracker match gate),
+  `maxPenalty` / `matchReproj` — the misplaced-node options, 0 (off) by
+  default (the tracker's third, `birthMedian`, is not in the wizard),
   `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
   0/1, the image check likewise, default 0; `imageChangeThreshold` -0.8;

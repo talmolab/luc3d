@@ -135,5 +135,106 @@ group('nodeWeights — weights actually scale the association cost');
     ok(one0._adjacency3d(target, det, det.cam) !== a3dBase, 'zeroing one node changes the 3D cost');
 }
 
+// --- a misplaced node: one view's 2D for node `k` moved `dy` pixels ---
+function misplaced(det, k, dy) {
+    const px = det.instance.toPointsArray();
+    px[k] = [px[k][0], px[k][1] + dy];
+    return new Detection(new Instance(px, det.instance.trackIdx, 'predicted', 1.0), det.cam, det.frameIdx, det.slot);
+}
+const finite3 = (p, k) => Number.isFinite(p[3 * k]) && Number.isFinite(p[3 * k + 1]) && Number.isFinite(p[3 * k + 2]);
+const dist3 = (p, k, q) => Math.hypot(p[3 * k] - q[0], p[3 * k + 1] - q[1], p[3 * k + 2] - q[2]);
+
+// ===========================================================================
+group('maxPenalty — a node far from the ray costs at most maxPenalty x corr3d');
+{
+    // distanceThreshold 1 in this rig's units, so 300 px is ~24 thresholds off.
+    const H = Object.assign({}, HP, { distanceThreshold: 1 });
+    const base = new CrossViewTracker(H);
+    base.trackFrame(frameDetections(0, [[0, 0, 48]]), CAMS);
+    const target = base.targets[0];
+    const good = frameDetections(1, [[0, 0, 48]]).get('c0')[0];
+    const bad = misplaced(good, 0, 300);   // node 0 pulled 300 px off its animal
+
+    const off = new CrossViewTracker(H);
+    const zero = new CrossViewTracker(Object.assign({}, H, { maxPenalty: 0 }));
+    const cap = new CrossViewTracker(Object.assign({}, H, { maxPenalty: 4 }));
+    eq(off.maxPenalty, 0, 'maxPenalty unset → 0 (off)');
+    eq(zero._adjacency3d(target, bad, bad.cam), off._adjacency3d(target, bad, bad.cam), 'maxPenalty 0 == today\'s 3D cost');
+    eq(cap._adjacency3d(target, good, good.cam), off._adjacency3d(target, good, good.cam),
+        'nodes near their rays: cost unchanged by the floor');
+    // Each good node sits on its ray and scores corr3d, so the bad node's
+    // term is the total minus five of those.
+    const rest = 5 * H.corr3dWeight;
+    ok(off._adjacency3d(target, bad, bad.cam) - rest < -10 * H.corr3dWeight,
+        'without the floor the misplaced node costs over 10 x corr3d (precondition)');
+    ok(Math.abs(cap._adjacency3d(target, bad, bad.cam) - (rest - 4 * H.corr3dWeight)) < 1e-6,
+        'with maxPenalty 4 it costs exactly -4 x corr3d');
+}
+
+// ===========================================================================
+group('matchReproj — the target is matched against 3D its views agree on');
+{
+    const truth = nodes3d([0, 0, 48]);
+    const dets = frameDetections(0, [[0, 0, 48]]);
+    dets.set('c2', [misplaced(dets.get('c2')[0], 0, 80)]);   // node 0 wrong in one of three views
+
+    const off = new CrossViewTracker(HP);
+    off.trackFrame(dets, CAMS);
+    const t0 = off.targets[0];
+    eq(t0.match3d, null, 'matchReproj off: no separate match3d');
+    ok(dist3(t0.points3d, 0, truth[0]) > 0.5, 'plain DLT: node 0 pulled off by the bad view (precondition)');
+
+    const on = new CrossViewTracker(Object.assign({}, HP, { matchReproj: 20 }));
+    on.trackFrame(dets, CAMS);
+    const t1 = on.targets[0];
+    ok(t1.match3d instanceof Float64Array, 'matchReproj 20: match3d is set');
+    ok(dist3(t1.match3d, 0, truth[0]) < 1e-6, 'node 0 solved again from the two views that agree');
+    ok(dist3(t1.match3d, 1, truth[1]) < 1e-6, 'a node whose views agree is kept');
+    ok(t1.points3d.every((v, i) => Object.is(v, t0.points3d[i])), 'points3d (written to the group) is still the plain DLT');
+
+    // Two views that disagree: nothing to drop down to, so the node is dropped.
+    const two = new CrossViewTracker(Object.assign({}, HP, { matchReproj: 20 }));
+    const d2 = frameDetections(0, [[0, 0, 48]]);
+    d2.set('c1', [misplaced(d2.get('c1')[0], 0, 80)]);
+    d2.set('c2', []);
+    two.trackFrame(d2, CAMS);
+    ok(!finite3(two.targets[0].match3d, 0), '2 views over the threshold: node dropped from match3d');
+    ok(finite3(two.targets[0].match3d, 1), '...the others kept');
+    ok(finite3(two.targets[0].points3d, 0), '...and points3d still has it');
+}
+
+// ===========================================================================
+group('birthMedian — new targets paired by the median epipolar distance');
+{
+    // Two animals one above the other. In c1, animal 0's node 0 is misplaced
+    // ONTO animal 1's node-0 epipolar line, 300 px off its own: by the mean
+    // over nodes that one node makes the right pairing dearer than the wrong
+    // one. Births pair c0 with c1 (the first two views with leftovers).
+    const ANIMALS = [[0, -1.5, 48], [0, 1.5, 48]];
+    const { computeFundamentalMatrix } =
+        await import(pathToFileURL(path.join(POSE_DIR, 'triangulation-core.js')).href);
+    const F = computeFundamentalMatrix(CAMS[0], CAMS[1]);
+    const line = (p) => [0, 1, 2].map(r => F[r][0] * p[0] + F[r][1] * p[1] + F[r][2]);
+    function births(hp) {
+        const dets = frameDetections(0, ANIMALS);
+        const A = dets.get('c0'), B = dets.get('c1');
+        const l0 = line(A[0].pointsPixel[0]), l1 = line(A[1].pointsPixel[0]);
+        const p1 = B[1].pointsPixel[0], dir = [-l1[1], l1[0]], n0 = Math.hypot(l0[0], l0[1]);
+        const off0 = (t) => (l0[0] * (p1[0] + t * dir[0]) + l0[1] * (p1[1] + t * dir[1]) + l0[2]) / n0;
+        const t = (300 - off0(0)) / (off0(1) - off0(0));   // linear in t
+        const px = B[0].instance.toPointsArray();
+        px[0] = [p1[0] + t * dir[0], p1[1] + t * dir[1]];
+        dets.set('c1', [new Detection(new Instance(px, 0, 'predicted', 1.0), CAMS[1], 0, 0), B[1]]);
+        dets.set('c2', []);
+        const trk = new CrossViewTracker(Object.assign({}, HP, hp));
+        trk.trackFrame(dets, CAMS);
+        return trk.targets.map(tg => tg.detsByCam.get('c0').slot === tg.detsByCam.get('c1').slot);
+    }
+    const mean = births({}), med = births({ birthMedian: 1 });
+    eq(mean.length, 2, 'two targets born');
+    ok(mean.every(x => !x), 'mean (today): each animal is paired with the other (precondition)');
+    ok(med.length === 2 && med.every(x => x), 'median: each animal paired with itself');
+}
+
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);
 if (failed > 0) { console.error('\nFailures:\n - ' + failures.join('\n - ')); process.exit(1); }
