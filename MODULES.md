@@ -923,11 +923,12 @@ session is included) and `tests/e2e/set-new-calibration.mjs`.
 
 ### pose/detection-filter-stats.js
 
-**Purpose.** Count what the tracker's two detection filters
-(`filterMinVisibleNodes`, `filterMinInstanceScore`) would remove, per camera and
-in total, before anyone runs tracking — so the Tracking Wizard can show it while
-the values are being chosen (`ui/detection-filter-preview.js`). DOM-free, no
-imports.
+**Purpose.** The tracker's three detection filters (`filterMinVisibleNodes`,
+`filterMinInstanceScore`, `filterMinMeanNodeScore`) — the rule itself, which
+`pose/tracker.js` imports — and the count of what they would remove, per camera
+and in total, before anyone runs tracking, so the Tracking Wizard can show it
+while the values are being chosen (`ui/detection-filter-preview.js`). DOM-free,
+no imports.
 
 **Why it exists.** The filters drop detections silently, and they do not hit
 every camera alike: on a real 3-camera rig the low side camera's detections
@@ -935,59 +936,73 @@ scored far below the other two (median mean node score 0.64), so a value that
 is harmless for two cameras empties the third.
 
 **Key exports.**
-- `failsMinVisibleNodes(visible, min)`, `failsMinInstanceScore(score, min)` —
-  the two primitives. A score that is null/undefined/NaN never fails (the
-  tracker's rule); a score of 0 does.
-- `passesDetectionFilter(inst, minVis, minScore)` — **the tracker's filter**;
-  `pose/tracker.js` imports it rather than keeping its own, so the readout and a
-  run cannot disagree.
+- `failsMinVisibleNodes(visible, min)`, `failsMinInstanceScore(score, min)`,
+  `failsMinMeanNodeScore(mean, min)` — the three primitives. An instance score
+  that is null/undefined/NaN never fails (the tracker's rule); a score of 0
+  does. A NaN mean node score (no node scores) never fails.
+- `meanNodeScore(inst, session?, camName?, frameIdx?)` — sleap-nn's "mean node
+  score": the sum of the PRESENT nodes' scores over ALL the skeleton's nodes, a
+  missing node counting as 0. Averaging the present nodes only understated the
+  real stressTest sideC rerun (36.7% below 0.75 instead of sleap-nn's 43.8%).
+  That is sleap-nn 0.3.3's definition; 0.2.0 averaged the present nodes only,
+  so a file it filtered still shows a few detections below its own value here.
+  NaN for a user instance (only a prediction was scored) and for a prediction
+  with no node scores. Eager: `Instance.pointScore`. Lazy: straight from the
+  store row the instance was hydrated from (`_rawInstIndex`), presence from the
+  instance, no name lookup (a mean does not depend on node order) — cheap
+  enough for every detection of a Track All.
+- `passesDetectionFilter(inst, minVis, minScore, minMeanNode?, session?,
+  camName?, frameIdx?)` — **the tracker's filter**; every minimum 0 is a no-op,
+  and the node score is computed only when its minimum is set.
 - `collectDetectionStats(session)` / `collectDetectionStatsAsync(session,
   {isCancelled})` — walk the session ONCE (the async one yields between
-  cameras) into flat typed columns: camera index, present-keypoint count,
-  instance score (Float64 — a stored 0.9 must still pass a minimum of 0.9),
-  mean node confidence as sleap-nn computes its "mean node score" — over
-  ALL nodes, a missing node counting as 0 (NaN with no point scores at all;
-  averaging the present nodes only understated the real stressTest sideC
-  rerun, 36.7% below 0.75 instead of sleap-nn's 43.8%). That is sleap-nn
-  0.3.3's definition; 0.2.0 averaged the present nodes only, so a file it
-  filtered at 0.75 still shows some detections "below 0.75" here — predicted flag;
-  plus per-camera `detections` / `predicted` / `predictedWithScore` /
-  `withPointScores`, and `hasInstanceScores` / `hasPointScores`.
+  cameras) into flat typed columns: camera index, present-node count, instance
+  score (Float64 — a stored 0.9 must still pass a minimum of 0.9), mean node
+  score (the same arithmetic as `meanNodeScore`, store rows included),
+  predicted flag; plus per-camera `detections` / `predicted` /
+  `predictedWithScore` / `withNodeScores`, and `hasInstanceScores` /
+  `hasNodeScores`.
 - `countDetectionFilters(stats, {minVisibleNodes, minInstanceScore,
-  minMeanPointScore}, included?)` — per camera and over the `included` cameras:
-  `failVisible`, `failScore`, `removed` (either), `failsBoth`, and
-  `failMeanPointScore` — a PREVIEW (LUCID has no such filter) counted over the
-  detections that carry point scores and never added to `removed`. One pass
-  over the columns; this is what a keystroke costs.
-- `meanPointScoreHistograms(stats, bins)` — per camera, equal-width bins over
-  [0, 1] (above 1 lands in the last) and the median.
+  minMeanNodeScore}, included?)` — per camera and over the `included` cameras:
+  `failVisible`, `failScore`, `failNodeScore`, `removed` (any — what tracking
+  drops) and `failsMultiple` (two or more). One pass over the columns; this is
+  what a keystroke costs.
+- `detectionHistograms(stats, bins)` — per camera, how each filtered quantity
+  is spread: `visible` (one bin per node count, 0 … the largest in the
+  session), `score` (predictions only) and `nodeScore` (detections with node
+  scores), the last two in equal-width bins over [0, 1] (above 1 lands in the
+  last), each with its median.
 - `flagOutlierCameras(rows, partKey, wholeKey?)` — the cameras that lose MUCH
   more than the rest, which the total row hides (real HardFight, sideC
-  unfiltered, at the inference values: sideC 13.7%, every other camera 0%,
-  total 0.6%). Each tracked camera with detections is compared with the
-  MEDIAN share of the OTHER tracked cameras (never with the total, which it is
-  part of) and flagged when it is at least `OUTLIER_MIN_EXCESS` (5 points)
-  above it AND at least `OUTLIER_MIN_RATIO` (2x) it — so 0.4% against 0.1% is
-  not news, and when every camera loses a lot none is singled out. Fewer than
-  two such cameras flag nothing; excluded cameras are neither flagged nor
-  compared with.
+  unfiltered, at the inference values 12 / 0.35 / 0.6: sideC 24.8%, the other
+  cameras 0.7–2.2%, total 2.4%). Each tracked camera with detections is compared
+  with the MEDIAN share of the OTHER tracked cameras (never with the total,
+  which it is part of) and flagged when it is at least `OUTLIER_MIN_EXCESS`
+  (5 points) above it AND at least `OUTLIER_MIN_RATIO` (2x) it — so 0.4%
+  against 0.1% is not news, and when every camera loses a lot none is singled
+  out. Fewer than two such cameras flag nothing; excluded cameras are neither
+  flagged nor compared with. Used per filter and for `removed`.
 
 **Rules.**
 - **The population is the WHOLE session.** Eager: every frame group's
   instances plus its unlinked pool (what `buildTrackerDetections` sees). Lazy:
   every non-resident frame straight from the columnar store via
   `forEachInstanceRow`, with the values hydration would give it (a prediction's
-  score `|| 0`, a user row's 0, a keypoint present when x and y are finite), and
+  score `|| 0`, a user row's 0, a node present when x and y are finite), and
   every RESIDENT frame from memory (it may carry edits), never both.
 - **Missing scores are reported, not shown as 0%.** Loaders write 0 for an
   absent instance score, and the tracker then drops that detection at any
   minimum above 0 — so "no instance scores" means no prediction has a positive
   score, and the readout says so (overall and per camera) beside the count.
+  Missing NODE scores remove nothing, and the readout says that too.
 
 Covered by `tests/test-detection-filter-stats.mjs` (the primitives; eager and
-lazy counts against `passesDetectionFilter` over a sweep of values; missing
-scores; an empty pool; excluded cameras; histograms; the async walk) and
-`tests/e2e/detection-filter-preview.mjs`.
+lazy counts against `passesDetectionFilter` over a three-filter sweep of
+values, lazy node scores read from the store; missing scores; an empty pool;
+excluded cameras; histograms; the flag; the async walk),
+`tests/test-tracker-luc3d.mjs` and `tests/test-crossview-populate.mjs` (the
+node-score filter keeps a weak animal out of the legacy matcher and the real
+`runCrossViewTracker`), and `tests/e2e/detection-filter-preview.mjs`.
 
 **Imports from project modules.** None.
 
@@ -2294,16 +2309,19 @@ are exercised only by the benchmark harness.)
   denominator. Raising it (≈6 ≈ champion) makes 3D-position continuity dominate
   the temporal cost, suppressing sustained ID swaps — the analog of the
   reference `correspondence_weight_3d`.
-- *Detection-pool filter (`filterMinVisibleNodes`/`filterMinInstanceScore`, both
-  default 0 = off).* `collectInstances` gates every instance through
+- *Detection-pool filter (`filterMinVisibleNodes`/`filterMinInstanceScore`/
+  `filterMinMeanNodeScore`, all default 0 = off).* `collectInstances`,
+  `buildTrackerDetections` and `buildTrackerInputs` (the last two given the
+  session, which a lazy project's node scores need) gate every instance through
   `passesDetectionFilter` (imported from `pose/detection-filter-stats.js`, which
   the Tracking Wizard's readout counts with, so the two cannot disagree) before
   matching: drop instances with fewer than
   `filterMinVisibleNodes` present keypoints (`countPoints`), and — when a
-  per-instance `score` is available — below `filterMinInstanceScore`. This is the
-  geometry/confidence half of the detection filter; full parity (mean-node-score,
-  OKS dedup, gap recovery) needs per-detection scores plumbed through the H5
-  loader and is not yet implemented.
+  per-instance `score` is available — below `filterMinInstanceScore`, and
+  predictions whose mean node score (sleap-nn's, a missing node counting as 0)
+  is below `filterMinMeanNodeScore`. This is the
+  geometry/confidence half of the detection filter; full parity (OKS dedup, gap
+  recovery) is not yet implemented.
 
 Covered by `tests/test-tracker-luc3d.mjs` (filter + weight on the real
 `matchFrameInstances`) and `tests/test-tracker-gui.mjs` (track/identity
@@ -11101,7 +11119,7 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   wizard's render catalog `[{ id, label, default, value, min, max, step, desc, kind }]`
   (`kind`: `'toggle'` for on/off settings, drawn as a switch; else `'number'`),
   **filtered to `WIZARD_THRESHOLD_IDS`** — the CrossViewTracker's free parameters
-  only (`filterMinVisibleNodes`, `filterMinInstanceScore`, `corr2dWeight`,
+  only (`filterMinVisibleNodes`, `filterMinInstanceScore`, `filterMinMeanNodeScore`, `corr2dWeight`,
   `corr3dWeight`, `velocityThreshold`, `distanceThreshold`, `timePenalty`,
   `stale`, `matchGate` (0/1 toggle for the CrossViewTracker match gate),
   `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
@@ -11146,22 +11164,19 @@ bridgeable.
 
 ### ui/detection-filter-preview.js
 
-**Purpose.** The Tracking Wizard's readout, right under the two detection-filter
-fields: what share of the active session's detections each filter would remove
-at the values being typed, per camera and over the tracked cameras, with the
-share the two remove together ("Removed") and the share failing both. A camera
-that loses far more than the others (`flagOutlierCameras`) is coloured, tagged
-`loses far more`, and named in a sentence under the table that also says what
-the total shows ("… The total (0.6%) hides this."). Below it,
-each camera's mean node confidence — median and a ten-bar distribution —
-with a preview-only "share below" field (default 0.75, not stored) and the same
-flag (`far more below`): LUCID has
-no such filter, but sleap-nn's inference filter on it is what removed most of a
-low side camera's detections in our data.
+**Purpose.** The Tracking Wizard's readout, right under the three detection-
+filter fields: what share of the active session's detections each filter
+would remove at the values being typed — too few nodes, low instance score,
+low mean node score — per camera and over the tracked cameras, with the share
+the three remove together ("Removed") and the share failing more than one
+("Fail 2+"). Below it, "How the detections are spread": per camera, a small
+bar chart of each of the three quantities with its median, the bars below the
+filter's minimum in orange.
 
 **Key exports.**
 - `buildDetectionFilterPreview({session, getValues, isCameraIncluded})` →
-  `{root, start, update, dispose}`. `start()` begins the one walk
+  `{root, start, update, dispose}`. `getValues()` returns `{minVisibleNodes,
+  minInstanceScore, minMeanNodeScore}`. `start()` begins the one walk
   (`collectDetectionStatsAsync`, one camera per task) and is idempotent;
   `update()` re-counts from the recorded columns and re-renders;
   `dispose()` cancels a walk in flight.
@@ -11169,17 +11184,22 @@ low side camera's detections in our data.
   rounded to 0% or 100%; `—` with nothing to divide by.
 
 **Behavior.** Counts read `getValues()` (the wizard's unsaved `working`
-values), so they move before Apply. A camera switched off in Camera Views is
-greyed, tagged `excluded`, and left out of the total. Missing scores are said,
-never shown as 0%: a camera whose predictions all score 0 gets a `no scores`
-tag, and a note says a minimum above 0 removes every prediction; no per-point
-confidence replaces the confidence table with a sentence. An empty session, no
-session, and a failed walk each get a sentence instead of a table. Counts
-carry thousands commas. One scroller: the block grows to its full height.
+values), so they move before Apply. A camera that loses far more than the
+others (`flagOutlierCameras`) is flagged in each filter's own column, and — for
+"Removed" — its row is coloured, tagged `loses far more`, and named in a
+sentence under the table that also says what the total shows ("… The total
+(2.4%) hides this."). A camera switched off in Camera Views is greyed, tagged
+`excluded`, and left out of the total and of every comparison. Missing scores
+are said, never shown as 0%: `no scores` / `no node scores` tags per camera, a
+note for each (all-zero instance scores: a minimum above 0 removes every
+prediction; no node scores: the node-score filter removes nothing), and the
+chart says it instead of drawing bars. An empty session, no session, and a
+failed walk each get a sentence instead of a table. Counts carry thousands
+commas. One scroller: the block grows to its full height.
 
 **Imports from project modules.** `../pose/detection-filter-stats.js`
-(`collectDetectionStatsAsync`, `countDetectionFilters`,
-`meanPointScoreHistograms`).
+(`collectDetectionStatsAsync`, `countDetectionFilters`, `detectionHistograms`,
+`flagOutlierCameras`).
 
 **Imported by.** `ui/settings-modal.js`.
 
@@ -11252,9 +11272,9 @@ state only (only editable bindings are tracked); nothing commits until **Apply**
 `setCameraWeights` + `setTrackingThresholds`), which then repaints overlays +
 timeline so excluded views grey immediately, and re-fits the ID-switch box
 (`refreshIdSwitchHighlight`), which encloses only nonzero-weight nodes. Cancel / close `×` / backdrop click
-/ Escape discard. Right under the two detection-filter fields sits
+/ Escape discard. Right under the three detection-filter fields sits
 `ui/detection-filter-preview.js`'s readout of what they would remove, per
-camera; it re-counts on every `input` of either field and on every camera
+camera; it re-counts on every `input` of any of them and on every camera
 switch (it reads `working`, so it moves before Apply), and its one walk of the
 session starts the first time the wizard panel is SHOWN (`selectPanel`), so
 Settings opened for anything else walks nothing. Teardown disposes it. A

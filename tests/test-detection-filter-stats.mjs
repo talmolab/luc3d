@@ -8,7 +8,7 @@
  *     and — for a sweep of values — the counter agrees with
  *     `passesDetectionFilter` applied to every in-memory detection.
  *  3. Missing scores: all-zero instance scores and absent point scores are
- *     REPORTED (`hasInstanceScores` / `hasPointScores`), and an all-zero score
+ *     REPORTED (`hasInstanceScores` / `hasNodeScores`), and an all-zero score
  *     is still counted the way the tracker filters it.
  *  4. An empty pool, no session and null stats.
  *  5. A lazy session: store rows read with hydration's values, resident frames
@@ -107,15 +107,15 @@ function eagerSession() {
     const st = F.collectDetectionStats(s);
     ok(st.n === 6 && st.cameras.join() === 'top,side', `six detections over two cameras (${st.n})`);
     ok(st.perCamera[0].detections === 3 && st.perCamera[1].detections === 3, 'three per camera');
-    ok(st.hasInstanceScores && st.hasPointScores, 'scores are reported present');
+    ok(st.hasInstanceScores && st.hasNodeScores, 'scores are reported present');
 
     const c = F.countDetectionFilters(st, { minVisibleNodes: 3, minInstanceScore: 0.5 });
     const [top, side] = c.perCamera;
-    ok(top.failVisible === 1 && top.failScore === 1 && top.removed === 1 && top.failsBoth === 1,
+    ok(top.failVisible === 1 && top.failScore === 1 && top.removed === 1 && top.failsMultiple === 1,
         `top: the weak unlinked one fails both (${JSON.stringify(top)})`);
-    ok(side.failVisible === 1 && side.failScore === 2 && side.removed === 2 && side.failsBoth === 1,
+    ok(side.failVisible === 1 && side.failScore === 2 && side.removed === 2 && side.failsMultiple === 1,
         `side: two removed, one of them on both counts (${JSON.stringify(side)})`);
-    ok(c.total.detections === 6 && c.total.removed === 3 && c.total.failsBoth === 2 &&
+    ok(c.total.detections === 6 && c.total.removed === 3 && c.total.failsMultiple === 2 &&
         c.total.failVisible === 2 && c.total.failScore === 3, `total (${JSON.stringify(c.total)})`);
 
     const off = F.countDetectionFilters(st, {});
@@ -127,20 +127,27 @@ function eagerSession() {
         fg.getInstances(cam).forEach((i) => all.push(i));
         fg.getUnlinkedInstances(cam).forEach((u) => all.push(u.instance));
     }
-    let agree = true;
-    for (const minVis of [0, 1, 2, 3, 4, 5]) for (const minScore of [0, 0.25, 0.3, 0.5, 0.9, 1]) {
-        const expect = all.filter((i) => !F.passesDetectionFilter(i, minVis, minScore)).length;
-        const got = F.countDetectionFilters(st, { minVisibleNodes: minVis, minInstanceScore: minScore }).total.removed;
-        if (got !== expect) { agree = false; console.error(`    vis ${minVis} score ${minScore}: ${got} vs ${expect}`); }
+    let agree = true, multi = true;
+    for (const minVis of [0, 1, 2, 3, 4, 5]) for (const minScore of [0, 0.25, 0.3, 0.5, 0.9, 1]) for (const minNode of [0, 0.1, 0.5, 0.7, 0.9]) {
+        const expect = all.filter((i) => !F.passesDetectionFilter(i, minVis, minScore, minNode)).length;
+        const got = F.countDetectionFilters(st, { minVisibleNodes: minVis, minInstanceScore: minScore, minMeanNodeScore: minNode });
+        if (got.total.removed !== expect) { agree = false; console.error(`    vis ${minVis} score ${minScore} node ${minNode}: ${got.total.removed} vs ${expect}`); }
+        const twoPlus = all.filter((i) => (F.failsMinVisibleNodes(i.countPoints(), minVis) ? 1 : 0) + (F.failsMinInstanceScore(i.score, minScore) ? 1 : 0) +
+            (F.failsMinMeanNodeScore(F.meanNodeScore(i), minNode) ? 1 : 0) >= 2).length;
+        if (got.total.failsMultiple !== twoPlus) multi = false;
     }
-    ok(agree, 'for every value in a sweep, "removed" equals what passesDetectionFilter drops');
+    ok(agree, 'for every value in a three-filter sweep, "removed" equals what passesDetectionFilter drops');
+    ok(multi, '"fail 2+" counts the detections failing two or three filters');
 
-    const mp = F.countDetectionFilters(st, { minMeanPointScore: 0.75 });
-    // mean point scores (over ALL 4 nodes, missing = 0): top 0.85, 0.25, (user: none) | side 0.65, 0.075, 0.925
-    ok(mp.perCamera[0].failMeanPointScore === 1 && mp.perCamera[1].failMeanPointScore === 2 && mp.total.withPointScores === 5,
-        `mean-point preview counts over detections that have point scores (${mp.total.failMeanPointScore}/${mp.total.withPointScores})`);
-    ok(mp.total.removed === 0, 'the preview never enters "removed"');
-    ok(near(st.meanPointScore[1], 0.25), 'mean point score averages ALL nodes, a missing one counting as 0 (sleap-nn\'s mean node score)');
+    const mp = F.countDetectionFilters(st, { minMeanNodeScore: 0.75 });
+    // mean node scores (over ALL 4 nodes, missing = 0): top 0.85, 0.25, (user: none) | side 0.65, 0.075, 0.925
+    ok(mp.perCamera[0].failNodeScore === 1 && mp.perCamera[1].failNodeScore === 2 && mp.total.withNodeScores === 5,
+        `the node-score filter removes the predictions below it (${mp.total.failNodeScore} of ${mp.total.withNodeScores} with node scores)`);
+    ok(mp.total.removed === 3, 'and it counts in "removed" — it is a real filter');
+    ok(near(st.meanNodeScore[1], 0.25), 'mean node score averages ALL nodes, a missing one counting as 0 (sleap-nn\'s mean node score)');
+    ok(Number.isNaN(F.meanNodeScore(new Instance(P(3), 0, 'user', 1))) && F.passesDetectionFilter(new Instance(P(3), 0, 'user', 1), 0, 0, 0.99),
+        'a hand-labelled instance has no node score and is never removed by that filter');
+    ok(F.passesDetectionFilter(pred(4, 0.9), 0, 0, 0.99), 'nor is a prediction without node scores');
 }
 
 // ---------------------------------------------------------------------------
@@ -155,10 +162,10 @@ function eagerSession() {
     const st = F.collectDetectionStats(s);
     ok(!st.hasInstanceScores && st.totals.predicted === 3 && st.totals.predictedWithScore === 0,
         'all-zero instance scores are reported as missing');
-    ok(!st.hasPointScores && Number.isNaN(st.meanPointScore[0]), 'no point scores: reported missing, mean is NaN');
-    const c = F.countDetectionFilters(st, { minInstanceScore: 0.5, minMeanPointScore: 0.75 });
+    ok(!st.hasNodeScores && Number.isNaN(st.meanNodeScore[0]), 'no node scores: reported missing, mean is NaN');
+    const c = F.countDetectionFilters(st, { minInstanceScore: 0.5, minMeanNodeScore: 0.75 });
     ok(c.total.failScore === 3, 'with no scores, a minimum above 0 removes every prediction — as the tracker would');
-    ok(c.total.failMeanPointScore === 0 && c.total.withPointScores === 0, 'nothing is "below" a confidence nobody has');
+    ok(c.total.failNodeScore === 0 && c.total.withNodeScores === 0, 'the node-score filter removes nothing when nobody has node scores');
 
     // One camera with scores, one without: per-camera flags tell them apart.
     const s2 = makeSession(['a', 'b']);
@@ -181,15 +188,17 @@ function eagerSession() {
 {
     const st = F.collectDetectionStats(makeSession(['a', 'b']));
     ok(st.n === 0 && st.perCamera.length === 2 && st.perCamera.every((p) => p.detections === 0), 'empty session: no detections');
-    const c = F.countDetectionFilters(st, { minVisibleNodes: 5, minInstanceScore: 0.9, minMeanPointScore: 0.9 });
+    const c = F.countDetectionFilters(st, { minVisibleNodes: 5, minInstanceScore: 0.9, minMeanNodeScore: 0.9 });
     ok(c.total.detections === 0 && c.total.removed === 0 && c.perCamera.every((r) => r.removed === 0), 'empty pool counts to zero');
-    ok(!st.hasInstanceScores && !st.hasPointScores, 'empty pool has no scores');
+    ok(!st.hasInstanceScores && !st.hasNodeScores, 'empty pool has no scores');
 
     const none = F.collectDetectionStats(null);
     ok(none.n === 0 && none.cameras.length === 0, 'no session');
     const nul = F.countDetectionFilters(null, { minVisibleNodes: 3 });
     ok(nul.perCamera.length === 0 && nul.total.detections === 0, 'null stats count to an empty result');
-    ok(F.meanPointScoreHistograms(null).length === 0, 'null stats: no histograms');
+    ok(F.detectionHistograms(null).cameras.length === 0, 'null stats: no histograms');
+    const eh = F.detectionHistograms(st);
+    ok(eh.cameras.length === 2 && eh.cameras.every((c) => c.visible.count === 0 && Number.isNaN(c.score.median)), 'empty pool: empty histograms');
 }
 
 // ---------------------------------------------------------------------------
@@ -234,23 +243,30 @@ function eagerSession() {
     const st = F.collectDetectionStats(s);
     ok(st.n === 5, `three store rows + two resident detections, none twice (${st.n})`);
     const a = [];
-    for (let i = 0; i < st.n; i++) if (st.cam[i] === 0) a.push({ v: st.visible[i], s: st.score[i], m: st.meanPointScore[i], p: st.predicted[i] });
+    for (let i = 0; i < st.n; i++) if (st.cam[i] === 0) a.push({ v: st.visible[i], s: st.score[i], m: st.meanNodeScore[i], p: st.predicted[i] });
     ok(a.length === 4, 'camA: three store rows and the resident frame');
     ok(a[0].v === 4 && near(a[0].s, 0.9) && near(a[0].m, 0.7) && a[0].p === 1, 'store prediction: points, score, mean confidence');
     ok(a[1].v === 2 && a[1].s === 0 && Number.isNaN(a[1].m) && a[1].p === 0, 'store user row: score 0 (as hydration gives it), no confidence');
     ok(a[2].v === 3 && a[2].s === 0 && near(a[2].m, 0.3), 'store NaN score hydrates to 0; the absent 4th point counts as 0');
-    ok(a[3].v === 4 && near(a[3].s, 0.7) && near(a[3].m, 0.1), 'the resident frame is read from MEMORY (its edit), confidence from the store row by name');
+    ok(a[3].v === 4 && near(a[3].s, 0.7) && near(a[3].m, 0.1), 'the resident frame is read from MEMORY (its edit), node scores from its store row');
 
-    // What the tracker would do to the hydrated frame-10 instances.
+    // What the tracker would do to the hydrated instances: frame 10's three
+    // (hydrated with their in-frame offsets, as the loader stamps them) + the
+    // resident one on frame 11.
     const hydrated = [new Instance(P(4), -1, 'predicted', 0.9), new Instance(P(2), -1, 'user', 0),
-        new Instance(P(3), -1, 'predicted', 0), res];
+        new Instance(P(3), -1, 'predicted', 0)];
+    hydrated.forEach((inst, k) => { inst._rawInstIndex = k; });
+    const frameOf = new Map(hydrated.map((i) => [i, 10]));
+    hydrated.push(res); frameOf.set(res, 11);
     let agree = true;
-    for (const mv of [0, 2, 3, 4]) for (const ms of [0, 0.5, 0.8, 1]) {
-        const exp = hydrated.filter((i) => !F.passesDetectionFilter(i, mv, ms)).length;
-        const got = F.countDetectionFilters(st, { minVisibleNodes: mv, minInstanceScore: ms }).perCamera[0].removed;
-        if (exp !== got) { agree = false; console.error(`    lazy vis ${mv} score ${ms}: ${got} vs ${exp}`); }
+    for (const mv of [0, 2, 3, 4]) for (const ms of [0, 0.5, 0.8, 1]) for (const mn of [0, 0.05, 0.2, 0.5, 0.8]) {
+        const exp = hydrated.filter((i) => !F.passesDetectionFilter(i, mv, ms, mn, s, 'camA', frameOf.get(i))).length;
+        const got = F.countDetectionFilters(st, { minVisibleNodes: mv, minInstanceScore: ms, minMeanNodeScore: mn }).perCamera[0].removed;
+        if (exp !== got) { agree = false; console.error(`    lazy vis ${mv} score ${ms} node ${mn}: ${got} vs ${exp}`); }
     }
-    ok(agree, 'lazy counts equal the tracker\'s verdict on the hydrated instances');
+    ok(agree, 'lazy counts equal the tracker\'s verdict on the hydrated instances, node scores read from the store');
+    ok(near(F.meanNodeScore(hydrated[0], s, 'camA', 10), 0.7) && Number.isNaN(F.meanNodeScore(hydrated[0], s, 'camA', 12)) &&
+        Number.isNaN(F.meanNodeScore(hydrated[0], null, 'camA', 10)), 'a lazy node score needs the session and an existing store row');
 }
 
 // ---------------------------------------------------------------------------
@@ -268,15 +284,23 @@ function eagerSession() {
 // ---------------------------------------------------------------------------
 {
     const st = F.collectDetectionStats(eagerSession());
-    const h = F.meanPointScoreHistograms(st, 10);
-    ok(h.length === 2 && h[0].count === 2 && h[1].count === 3, 'user instances and score-less detections are left out');
+    const H = F.detectionHistograms(st, 10);
+    const h = H.cameras.map((c) => c.nodeScore);
+    ok(h.length === 2 && h[0].count === 2 && h[1].count === 3, 'node score: user instances and score-less detections are left out');
     ok(h[0].bins[8] === 1 && h[0].bins[2] === 1 && near(h[0].median, 0.55), `top: bins and median (${h[0].median})`);
     ok(h[1].bins[0] === 1 && h[1].bins[6] === 1 && h[1].bins[9] === 1 && near(h[1].median, 0.65), 'side: bins and median');
+    // visible nodes: top 4, 2, 3 (user) | side 4, 1, 4 — one bin per count, 0..4
+    ok(H.maxNodes === 4 && Array.from(H.cameras[0].visible.bins).join() === '0,0,1,1,1' &&
+        Array.from(H.cameras[1].visible.bins).join() === '0,1,0,0,2' && H.cameras[1].visible.median === 4,
+        'visible nodes: one bin per count, every detection');
+    // instance score: predictions only — top 0.9, 0.3 | side 0.4, 0.2, 0.95
+    ok(H.cameras[0].score.count === 2 && H.cameras[0].score.bins[9] === 1 && H.cameras[0].score.bins[3] === 1 &&
+        H.cameras[1].score.count === 3 && near(H.cameras[1].score.median, 0.4), 'instance score: predictions only');
 
     const s = makeSession(['a']);
     frame(s, 0).addUnlinkedInstance('a', new UnlinkedInstance(pred(4, 0.9, [1.4, 1.4, 1.4, 1.4]), 'a'));
-    const h2 = F.meanPointScoreHistograms(F.collectDetectionStats(s), 10);
-    ok(h2[0].bins[9] === 1, 'a confidence above 1 lands in the last bin');
+    const h2 = F.detectionHistograms(F.collectDetectionStats(s), 10);
+    ok(h2.cameras[0].nodeScore.bins[9] === 1, 'a score above 1 lands in the last bin');
 }
 
 // ---------------------------------------------------------------------------
@@ -335,10 +359,10 @@ function eagerSession() {
         'an excluded camera is neither flagged nor compared with');
     ok(names(F.flagOutlierCameras([row('a', 300, 1000), row('b', 250, 1000), row('c', 0, 1000), row('d', 0, 1000), row('e', 10, 1000)], 'removed')) === 'a,b',
         'two cameras can both be flagged');
-    const mp = F.flagOutlierCameras([{ name: 'a', failMeanPointScore: 2559, withPointScores: 5848, included: true },
-        { name: 'b', failMeanPointScore: 348, withPointScores: 17559, included: true },
-        { name: 'c', failMeanPointScore: 170, withPointScores: 17805, included: true }], 'failMeanPointScore', 'withPointScores');
-    ok(names(mp) === 'a', 'the confidence preview is flagged over the detections that have point scores');
+    const mp = F.flagOutlierCameras([{ name: 'a', failNodeScore: 2559, detections: 5848, included: true },
+        { name: 'b', failNodeScore: 348, detections: 17559, included: true },
+        { name: 'c', failNodeScore: 170, detections: 17805, included: true }], 'failNodeScore');
+    ok(names(mp) === 'a', 'each filter can be flagged on its own (real stressTest node-score shape)');
     ok(F.flagOutlierCameras(null, 'removed').length === 0, 'no rows');
 
     // Through the real counter: the eager fixture at 3 nodes / 0.5.

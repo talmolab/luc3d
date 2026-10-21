@@ -169,6 +169,7 @@ export function showSettingsModal(initialPanel) {
             return {
                 minVisibleNodes: working.thresholds.filterMinVisibleNodes,
                 minInstanceScore: working.thresholds.filterMinInstanceScore,
+                minMeanNodeScore: working.thresholds.filterMinMeanNodeScore,
             };
         },
         isCameraIncluded: function (name) { return working.cameraWeights[name] !== 0; },
@@ -634,7 +635,8 @@ export function showSettingsModal(initialPanel) {
         input.value = String(working.thresholds[def.id]);
         input.setAttribute('aria-label', def.label);
 
-        const isFilter = def.id === 'filterMinVisibleNodes' || def.id === 'filterMinInstanceScore';
+        const isFilter = def.id === 'filterMinVisibleNodes' || def.id === 'filterMinInstanceScore' ||
+            def.id === 'filterMinMeanNodeScore';
         input.addEventListener('input', function () {
             const v = parseFloat(input.value);
             if (isFinite(v)) working.thresholds[def.id] = v;
@@ -653,8 +655,8 @@ export function showSettingsModal(initialPanel) {
         row.appendChild(labelWrap);
         row.appendChild(input);
         thSection.body.appendChild(row);
-        // The readout goes right under the last of the two filter fields.
-        if (def.id === 'filterMinInstanceScore') thSection.body.appendChild(filterPreview.root);
+        // The readout goes right under the last of the three filter fields.
+        if (def.id === 'filterMinMeanNodeScore') thSection.body.appendChild(filterPreview.root);
     });
 
     // Docs link at the bottom of the thresholds.
