@@ -482,18 +482,41 @@ export function autoAssignVideosToCameras() {
 }
 
 /**
- * Show a full-screen overlay that blocks until the user selects video files.
- * Returns the selected File[] (never empty — overlay stays until files are picked).
+ * Show a full-screen overlay asking the user to select video files.
+ * Returns the selected File[], or [] when the user continues without video
+ * (the "Continue Without Video" button or Esc) — the caller then finishes
+ * loading with no views, and videos can be attached via File → Load Videos.
+ * A cancelled file picker leaves the overlay up.
+ *
+ * @param {string} refInfo - Video names to expect; the "Expected:" line is
+ *   omitted when empty.
+ * @param {object} [options]
+ * @param {string} [options.title] - Overlay title (default is neutral, since
+ *   callers load both `.slp` and project `.json` files).
  */
-export function forceVideoSelection(refInfo) {
+export function forceVideoSelection(refInfo, options) {
     return new Promise(function (resolve) {
         var overlay = document.createElement('div');
         overlay.id = 'videoSelectOverlay';
         overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;';
 
+        // Esc continues without video (UI convention: modals close on Esc).
+        function onKeyDown(ev) {
+            if (ev.key === 'Escape') {
+                ev.preventDefault();
+                finish([]);
+            }
+        }
+        function finish(files) {
+            document.removeEventListener('keydown', onKeyDown);
+            overlay.remove();
+            resolve(files);
+        }
+        document.addEventListener('keydown', onKeyDown);
+
         var title = document.createElement('div');
         title.style.cssText = 'color:#fff;font-size:20px;font-weight:600;margin-bottom:8px;';
-        title.textContent = 'SLP loaded — now select the video file(s)';
+        title.textContent = (options && options.title) || 'Select the video file(s)';
         overlay.appendChild(title);
 
         if (refInfo) {
@@ -503,21 +526,28 @@ export function forceVideoSelection(refInfo) {
             overlay.appendChild(sub);
         }
 
+        var btnRow = document.createElement('div');
+        btnRow.style.cssText = 'display:flex;gap:16px;flex-wrap:wrap;justify-content:center;';
+
         var btn = document.createElement('button');
         btn.style.cssText = 'padding:14px 40px;font-size:16px;font-weight:600;cursor:pointer;background:#4a9eff;color:#fff;border:none;border-radius:8px;';
         btn.textContent = 'Select Video Files';
-        overlay.appendChild(btn);
+        btnRow.appendChild(btn);
 
         btn.addEventListener('click', async function () {
             var files = [];
             try { files = await pickVideoFiles(); } catch (e) { /* cancelled */ }
-            if (files.length > 0) {
-                overlay.remove();
-                resolve(files);
-            }
-            // If cancelled / empty, overlay stays — user must pick files
+            if (files.length > 0) finish(files);
+            // If cancelled / empty, overlay stays — Continue Without Video / Esc leave it
         });
 
+        var btnSkip = document.createElement('button');
+        btnSkip.style.cssText = 'padding:14px 40px;font-size:16px;font-weight:600;cursor:pointer;background:transparent;color:#aaa;border:1px solid var(--border-color,#555);border-radius:8px;';
+        btnSkip.textContent = 'Continue Without Video';
+        btnRow.appendChild(btnSkip);
+        btnSkip.addEventListener('click', function () { finish([]); });
+
+        overlay.appendChild(btnRow);
         document.body.appendChild(overlay);
     });
 }

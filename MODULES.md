@@ -14194,6 +14194,18 @@ filesystem enumeration, decoder rebuild.
   `null`; used by the lazy project reopen) and closes on `Esc` (resolving
   `null`, per the modal UI convention) — every caller treats `null` as "no
   videos picked".
+  `forceVideoSelection(refInfo, options)` (Load Project on a V2/legacy `.json`,
+  Add SLP with no embedded video) is NOT blocking: besides Select Video Files it
+  has a **Continue Without Video** button, and `Esc` does the same — both
+  resolve `[]`, which both callers already treat as "no videos" (#337; before,
+  it resolved only on a non-empty pick, so a user without the videos had to
+  reload the page). A cancelled picker leaves it up. `options.title` names what
+  was loaded (the default is neutral, since one caller loads a `.json`), and
+  the "Expected:" line is omitted when `refInfo` is empty — callers pass `''`
+  rather than a `'(unknown)'` placeholder. A project loaded this way with no
+  views takes `state.totalFrames` from its last labeled frame and opens on its
+  first (`handleLoadProject`), so it is navigable until File ▸ Load Videos
+  attaches the videos.
 - `isCalibrationVideoFile(file)` — true for per-camera calibration clips,
   identified by a `calibration_images/` PATH segment
   (`<cam>/calibration_images/<date>-<cam>-calibration.mp4`). The folder scans
@@ -16579,7 +16591,11 @@ loading-overlay/status-text UI helpers.
   `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject` (routes a
   large `.slp` — `shouldUseLazySlp` — to the memory-bounded
   `handleLoadProjectSlpLazy` in `loading/session-loader.js` instead of the
-  eager parse, freeing any previously loaded project first).
+  eager parse, freeing any previously loaded project first). A `.json` the
+  user loads WITHOUT video (Continue Without Video / `Esc` on
+  `forceVideoSelection`, #337) has no decoder to size it, so `state.totalFrames`
+  comes from the last labeled frame, the view opens on the first, and the
+  status line says to attach videos via File ▸ Load Videos.
 - `buildSlpBytes` (internal) assembles the multi-session SLP. **When EVERY
   session in `state.sessions` has an open `lazyLoader`, it routes to the
   memory-bounded streaming path** — `buildSessionSlpBytesStreaming`

@@ -44,7 +44,7 @@ import {
 import { SioLazyLoader } from '../loading/sio-lazy-loader.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { showLoading, hideLoading } from '../ui/loading-overlay.js';
-import { clearReadout } from '../ui/frame-readout.js';
+import { clearReadout, refreshReadoutTotals } from '../ui/frame-readout.js';
 import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js';
 import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
@@ -1566,10 +1566,13 @@ export async function handleLoadProject(prePickedFile) {
 
         } else if (needsVideoPrompt) {
             // V2 / legacy: single prompt for video files
+            // No manifest (e.g. an Export Labels JSON) → nothing to show, so no
+            // "Expected:" line.
             var manifestInfo = missingFilenames.length > 0
                 ? 'Need: ' + missingFilenames.join(', ')
-                : (manifestFilenames.join(', ') || '(unknown)');
-            var videoFiles = await forceVideoSelection(manifestInfo);
+                : manifestFilenames.join(', ');
+            var videoFiles = await forceVideoSelection(manifestInfo,
+                { title: 'Project loaded — now select the video file(s)' });
 
             if (videoFiles.length > 0) {
                 for (var i = 0; i < videoFiles.length; i++) {
@@ -1661,6 +1664,26 @@ export async function handleLoadProject(prePickedFile) {
         }
 
         updateTotalFrames();
+        if (state.views.length === 0) {
+            // Loaded without video (the user continued past the video prompt).
+            // updateTotalFrames() read no decoders and reset the count to 0,
+            // which leaves only frame 0 reachable — adopt the last labeled
+            // frame instead, as the no-video points3d import does. Attaching
+            // videos later (File → Load Videos) takes the count from them.
+            // Also open on the first labeled frame, as the video path's seek does.
+            var lastLabeled = -1;
+            var firstLabeled = Infinity;
+            for (var [lfIdx] of state.session.frameGroups) {
+                if (lfIdx > lastLabeled) lastLabeled = lfIdx;
+                if (lfIdx < firstLabeled) firstLabeled = lfIdx;
+            }
+            if (lastLabeled >= 0) {
+                state.currentFrame = firstLabeled;
+                state.totalFrames = lastLabeled + 1;
+                refreshReadoutTotals();
+                if (timeline) timeline.setTotalFrames(state.totalFrames);
+            }
+        }
         if (state.views.length > 0) {
             hideWelcomeOverlay();
             populateViewStrip();
@@ -1705,8 +1728,11 @@ export async function handleLoadProject(prePickedFile) {
         var statusParts = [cameras.length + ' cameras', state.session.numFrames.toLocaleString('en-US') + ' labeled frames'];
         if (state.views.length > 0) {
             statusParts.push(state.views.length + ' views');
+            setStatus('Project loaded (' + statusParts.join(', ') + ')', 'success');
+        } else {
+            setStatus('Project loaded without video (' + statusParts.join(', ') +
+                ') — attach videos via File ▸ Load Videos…', 'success');
         }
-        setStatus('Project loaded (' + statusParts.join(', ') + ')', 'success');
     } catch (err) {
         console.error('Failed to load project:', err);
         hideLoading();
