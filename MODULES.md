@@ -14206,6 +14206,17 @@ filesystem enumeration, decoder rebuild.
   views takes `state.totalFrames` from its last labeled frame and opens on its
   first (`handleLoadProject`), so it is navigable until File ▸ Load Videos
   attaches the videos.
+- `adoptLabeledFrameCount()` — sizes a labeled project that has NO view:
+  `totalFrames = last labeled frame + 1`, plus the readout and the timeline;
+  returns the first labeled frame (or -1 when it did nothing). Called right
+  after `updateTotalFrames()`, whose no-decoder branch resets the count to 0
+  on purpose (so one session's length cannot leak into another) — that reset
+  is why this is a separate step and not a change to `updateTotalFrames`, which
+  has many callers that rely on it. Two callers: `handleLoadProject` (a load
+  continued without video) and `handleLoadVideos` (a Load Videos where nothing
+  decoded, which otherwise put such a project back on frame 0 only). A no-op
+  with any view, and on a LAZY session, whose `frameGroups` is only the
+  resident window and would give a plausible, too-small count.
 - `isCalibrationVideoFile(file)` — true for per-camera calibration clips,
   identified by a `calibration_images/` PATH segment
   (`<cam>/calibration_images/<date>-<cam>-calibration.mp4`). The folder scans
@@ -14222,7 +14233,8 @@ filesystem enumeration, decoder rebuild.
   `attachVideosForLazyReopen` and the SLP import.
 - View/grid: `createViewForVideoFile`, `removeVideoFile`, `updateGridLayout`,
   `createVideoPromptCell`, `fitCanvasesToCells`, `cellResizeObserver`,
-  `reapplyAllZoom`, `rebuildVideoController`, `updateTotalFrames`.
+  `reapplyAllZoom`, `rebuildVideoController`, `updateTotalFrames`,
+  `adoptLabeledFrameCount` (see Video assignment above).
   `reapplyAllZoom()` runs `videoController.reapplyZoom` on every view — what
   `cellResizeObserver` does after `fitCanvasesToCells`, and what a
   devicePixelRatio change does: a module-level `matchMedia('(resolution: Ndppx)')`
@@ -16594,7 +16606,8 @@ loading-overlay/status-text UI helpers.
   eager parse, freeing any previously loaded project first). A `.json` the
   user loads WITHOUT video (Continue Without Video / `Esc` on
   `forceVideoSelection`, #337) has no decoder to size it, so `state.totalFrames`
-  comes from the last labeled frame, the view opens on the first, and the
+  comes from the last labeled frame (`adoptLabeledFrameCount`,
+  `loading/session-loader.js`), the view opens on the first, and the
   status line says to attach videos via File ▸ Load Videos.
 - `buildSlpBytes` (internal) assembles the multi-session SLP. **When EVERY
   session in `state.sessions` has an open `lazyLoader`, it routes to the

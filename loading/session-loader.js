@@ -367,6 +367,9 @@ export async function handleLoadVideos() {
 
         // Update total frames before rebuilding controller so seekToFrame works correctly
         updateTotalFrames();
+        // If nothing decoded on a project loaded without video, keep it sized
+        // by its labels rather than collapsing to frame 0.
+        adoptLabeledFrameCount();
 
         if (newViewNames.length > 0) {
             populateViewStrip();
@@ -1343,6 +1346,32 @@ export function updateTotalFrames() {
             timeline.setTotalFrames(1);
         }
     }
+}
+
+/**
+ * Size a project that has labels but no video (#337): with no decoder,
+ * updateTotalFrames() leaves totalFrames at 0 and only frame 0 is reachable,
+ * so adopt the last labeled frame instead, as the no-video points3d import
+ * does. Call it right after updateTotalFrames(). A no-op when any view exists
+ * (the video sizes the project) or on a lazy session, whose frameGroups is
+ * only the resident window and would give a plausible, too-small count.
+ *
+ * @returns {number} the first labeled frame index, or -1 when nothing was done.
+ */
+export function adoptLabeledFrameCount() {
+    var session = state.session;
+    if (state.views.length > 0 || !session || session.lazyLoader) return -1;
+    var lastLabeled = -1;
+    var firstLabeled = -1;
+    for (var [fIdx] of session.frameGroups) {
+        if (fIdx > lastLabeled) lastLabeled = fIdx;
+        if (firstLabeled < 0 || fIdx < firstLabeled) firstLabeled = fIdx;
+    }
+    if (lastLabeled < 0) return -1;
+    state.totalFrames = lastLabeled + 1;
+    refreshReadoutTotals();
+    if (timeline) timeline.setTotalFrames(state.totalFrames);
+    return firstLabeled;
 }
 
 /**

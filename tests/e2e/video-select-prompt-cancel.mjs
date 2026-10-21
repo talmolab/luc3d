@@ -17,6 +17,9 @@
  *     are there, the status says so, the menu bar takes clicks again, and the
  *     project is navigable — `totalFrames` reaches the last labeled frame, it
  *     opens on the first one with its groups, and ArrowRight steps.
+ * 2b. A File ▸ Load Videos… where NOTHING decodes keeps it navigable: the
+ *     failure is reported and totalFrames stays at the labels' count — it
+ *     used to collapse to 0 (`adoptLabeledFrameCount` in handleLoadVideos).
  *  3. Recovery: File ▸ Load Videos… then attaches the videos to their cameras
  *     and a labeled frame shows its groups, with the frame count from video.
  *  4. A cancelled file picker leaves the prompt up; Continue Without Video
@@ -28,7 +31,9 @@
  * Negative control, run once: on the pre-fix build §1, §2 and §4 fail (the
  * "SLP"/"(unknown)" wording, no Continue button, the overlay survives Esc and
  * still covers the menu bar, the load never finishes, frame 0 only). §3 passes
- * there too — the recovery itself already worked; it was unreachable.
+ * there too — the recovery itself already worked; it was unreachable. §2b
+ * failed before `handleLoadVideos` called `adoptLabeledFrameCount` (totalFrames
+ * 0, ArrowRight back to frame 0).
  *
  * Run: node tests/e2e/video-select-prompt-cancel.mjs   (spawns its own http.server)
  */
@@ -159,6 +164,22 @@ try {
         await page.waitForTimeout(300);
         s = await snap(page);
         check(s.currentFrame === LABELED[0] + 1, `ArrowRight steps (frame ${s.currentFrame})`);
+
+        console.log('§2b File ▸ Load Videos… where nothing decodes keeps the project navigable');
+        const fcBad = page.waitForEvent('filechooser');
+        await page.evaluate(() => document.getElementById('menuLoadVideos').click());
+        await (await fcBad).setFiles([{ name: 'not-a-video.mp4', mimeType: 'video/mp4', buffer: Buffer.from('not a video') }]);
+        await page.waitForFunction(() => /failed to load/.test(document.getElementById('statusText').textContent),
+            null, { timeout: 20000 }).catch(() => {});
+        s = await snap(page);
+        check(/All videos failed to load/.test(s.status), `the failure is reported ("${s.status.slice(0, 60)}…")`);
+        check(s.views === 0 && s.totalFrames === LABELED[LABELED.length - 1] + 1,
+            `totalFrames still reaches the last labeled frame (${s.totalFrames}), not 0`);
+        const before2b = s.currentFrame;
+        await page.keyboard.press('ArrowRight');
+        await page.waitForTimeout(300);
+        s = await snap(page);
+        check(s.currentFrame === before2b + 1, `ArrowRight still steps (frame ${before2b} → ${s.currentFrame})`);
 
         console.log('§3 File ▸ Load Videos… afterwards');
         const fc = page.waitForEvent('filechooser');

@@ -26,7 +26,7 @@ import {
 import {
     autoAssignVideosToCameras, forceVideoSelection, showParentDirMatchSummary,
     forceVideoSelectionWithFolder, createViewForVideoFile, updateTotalFrames,
-    rebuildVideoController, fitCanvasesToCells,
+    adoptLabeledFrameCount, rebuildVideoController, fitCanvasesToCells,
 } from '../loading/session-loader.js';
 import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
@@ -44,7 +44,7 @@ import {
 import { SioLazyLoader } from '../loading/sio-lazy-loader.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { showLoading, hideLoading } from '../ui/loading-overlay.js';
-import { clearReadout, refreshReadoutTotals } from '../ui/frame-readout.js';
+import { clearReadout } from '../ui/frame-readout.js';
 import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js';
 import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
@@ -1664,26 +1664,11 @@ export async function handleLoadProject(prePickedFile) {
         }
 
         updateTotalFrames();
-        if (state.views.length === 0) {
-            // Loaded without video (the user continued past the video prompt).
-            // updateTotalFrames() read no decoders and reset the count to 0,
-            // which leaves only frame 0 reachable — adopt the last labeled
-            // frame instead, as the no-video points3d import does. Attaching
-            // videos later (File → Load Videos) takes the count from them.
-            // Also open on the first labeled frame, as the video path's seek does.
-            var lastLabeled = -1;
-            var firstLabeled = Infinity;
-            for (var [lfIdx] of state.session.frameGroups) {
-                if (lfIdx > lastLabeled) lastLabeled = lfIdx;
-                if (lfIdx < firstLabeled) firstLabeled = lfIdx;
-            }
-            if (lastLabeled >= 0) {
-                state.currentFrame = firstLabeled;
-                state.totalFrames = lastLabeled + 1;
-                refreshReadoutTotals();
-                if (timeline) timeline.setTotalFrames(state.totalFrames);
-            }
-        }
+        // Loaded without video (the user continued past the video prompt):
+        // size the project from its labels, and open on the first labeled
+        // frame as the video path's seek does.
+        var firstLabeled = adoptLabeledFrameCount();
+        if (firstLabeled >= 0) state.currentFrame = firstLabeled;
         if (state.views.length > 0) {
             hideWelcomeOverlay();
             populateViewStrip();
