@@ -3,8 +3,8 @@
  * (ui/image-embedder.js; settings `imageCheckGpuTime`, `imageCheckCpuCores`: fractions,
  * both 0.50 by default, handed to the embedder as percentages). The share of the GPU and of the CPU the check may take is the
  * user's to set, and held even when nothing else wants the rest:
- *  - GPU: smaller batches (`gpuMaxBatch`) and a rest after each run
- *    (`paceRestMs`), so busy / (busy + rest) = the cap, taken in short slices;
+ *  - GPU: full batches and an idle after each run (`paceRestMs`), so
+ *    busy / (busy + idle) = the cap;
  *  - CPU: fewer worker threads (`imageCheckThreads`), all kept working.
  * The queue that applies the GPU cap (`createModelQueue`) is driven here with a
  * fake model, since headless runs have no GPU. The CPU cap on the real model:
@@ -19,7 +19,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ui = (f) => pathToFileURL(path.join(HERE, '..', 'ui', f)).href;
 globalThis.window = globalThis;
 const E = await import(ui('image-embedder.js'));
-const { capPct, paceRestMs, gpuMaxBatch, imageCheckThreads, createModelQueue, cpuModelWorkerCount,
+const { capPct, paceRestMs, imageCheckThreads, createModelQueue, cpuModelWorkerCount,
         IMAGE_CAP_MIN, EMBED_MAX_BATCH, formatEmbedTiming } = E;
 const { getTrackingThresholdDefs, cpuCoresNote, formatThresholdValue } = await import(ui('settings.js'));
 const { IMAGE_CHECK_IDS } = await import(ui('track-setup-modal.js'));
@@ -38,9 +38,13 @@ ok(capPct(50) === 50 && capPct(1) === 10 && capPct(150) === 100, 'caps are held 
 for (const v of [0, -5, NaN, undefined, null, 'x']) ok(capPct(v) === 100, `a cap of ${String(v)} is 100 (uncapped)`);
 
 // ---- GPU, part 1: the batch shrinks with the cap ----------------------------
-ok(gpuMaxBatch(100) === EMBED_MAX_BATCH, `100%: batches of ${gpuMaxBatch(100)} = EMBED_MAX_BATCH (uncapped)`);
-ok(gpuMaxBatch(50) === 32 && gpuMaxBatch(25) === 16 && gpuMaxBatch(10) === 6, `50/25/10% -> batches of ${gpuMaxBatch(50)}/${gpuMaxBatch(25)}/${gpuMaxBatch(10)}`);
-ok(gpuMaxBatch(undefined) === EMBED_MAX_BATCH, 'no cap -> the full batch');
+ok(!('gpuMaxBatch' in E), 'batches no longer shrink with the GPU cap (no gpuMaxBatch): only the idle time follows it');
+{
+    // the embedder hands the queue full batches whatever the cap (source check: there is no GPU here to run it on)
+    const src = (await import('node:fs')).readFileSync(path.join(HERE, '..', 'ui', 'image-embedder.js'), 'utf8');
+    ok(/createModelQueue\(embed, SZ, tm, \{ maxBatch: EMBED_MAX_BATCH, maxGpuPct: cpu \? 100 : maxGpuPct \}\)/.test(src),
+        'createImageEmbedder gives the queue EMBED_MAX_BATCH on the GPU path too');
+}
 
 // ---- GPU, part 2: busy / (busy + rest) = the cap -----------------------------
 for (const pct of [10, 25, 50, 75, 90]) {
@@ -139,8 +143,8 @@ for (const cores of [2, 4, 8, 10, 12, 16]) for (const v of [0.1, 0.25, 0.5, 0.75
 // ---- the run summary says what was capped ------------------------------------
 const t = { crops: 90, cropsPerS: 9, seconds: 10, gpuBusyPct: 50, batches: 5, avgBatch: 18, modelMsPerCrop: 80,
     decodeMsPerFrame: 1, cropMsPerFrame: 40, queueMsPerFrame: 900, backend: 'webgpu', dtype: 'fp16' };
-const both = formatEmbedTiming(Object.assign({}, t, { maxGpuPct: 50, batchLimit: 32, restS: 4.6, maxCpuPct: 50, threads: 5, cores: 10 }));
-ok(/ · GPU time capped at 0\.50 \(batches of ≤32, 5 s idle\) · CPU capped at 5 of 10 cores$/.test(both), `both caps in the summary: "${both.slice(both.indexOf(' · GPU'))}"`);
+const both = formatEmbedTiming(Object.assign({}, t, { maxGpuPct: 50, restS: 4.6, maxCpuPct: 50, threads: 5, cores: 10 }));
+ok(/ · GPU time capped at 0\.50 \(5 s idle\) · CPU capped at 5 of 10 cores$/.test(both), `both caps in the summary: "${both.slice(both.indexOf(' · GPU'))}"`);
 const cpuRun = formatEmbedTiming(Object.assign({}, t, { backend: 'cpu', workers: 4, maxGpuPct: null, maxCpuPct: 50, threads: 5, cores: 10 }));
 ok(!/GPU time capped/.test(cpuRun) && / · CPU capped at 5 of 10 cores$/.test(cpuRun), 'on the CPU path only the CPU cap is reported');
 ok(!/capped/.test(formatEmbedTiming(Object.assign({}, t, { maxGpuPct: 100, maxCpuPct: 100, threads: 8, cores: 10 }))), 'an uncapped run says nothing about caps');
