@@ -37,11 +37,12 @@ import {
     setCameraWeights,
     getTrackingThresholdDefs,
     setTrackingThresholds,
-} from './settings.js?v=b59328b27b1a';
-import { getActiveSession, state, timeline } from './app-state.js?v=b59328b27b1a';
-import { drawAllOverlays } from './rendering.js?v=b59328b27b1a';
-import { installModalGeometry } from './modal-geometry.js?v=b59328b27b1a';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=b59328b27b1a';
+} from './settings.js?v=b2acb624be9c';
+import { getActiveSession, state, timeline } from './app-state.js?v=b2acb624be9c';
+import { drawAllOverlays } from './rendering.js?v=b2acb624be9c';
+import { installModalGeometry } from './modal-geometry.js?v=b2acb624be9c';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=b2acb624be9c';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=b2acb624be9c';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -158,6 +159,20 @@ export function showSettingsModal(initialPanel) {
     // Seed the working tracking-threshold map from the catalog's effective values.
     const thresholdDefs = getTrackingThresholdDefs();
     thresholdDefs.forEach(function (def) { working.thresholds[def.id] = def.value; });
+
+    // What the detection filters would remove at the values being typed, per
+    // camera (ui/detection-filter-preview.js). Counts the session in the
+    // background after the modal is up; each edit only re-counts.
+    const filterPreview = buildDetectionFilterPreview({
+        session: activeSession,
+        getValues: function () {
+            return {
+                minVisibleNodes: working.thresholds.filterMinVisibleNodes,
+                minInstanceScore: working.thresholds.filterMinInstanceScore,
+            };
+        },
+        isCameraIncluded: function (name) { return working.cameraWeights[name] !== 0; },
+    });
 
     // An on/off switch (the app's standard .toggle-switch) for a 0/1 setting.
     function makeToggle(checked, ariaLabel, onChange) {
@@ -562,6 +577,7 @@ export function showSettingsModal(initialPanel) {
             const sw = makeToggle(working.cameraWeights[name] !== 0, 'Include view ' + name + ' in tracking', function (on) {
                 working.cameraWeights[name] = on ? 1 : 0;
                 reflectExcluded();
+                filterPreview.update();
             });
 
             reflectExcluded();
@@ -618,9 +634,11 @@ export function showSettingsModal(initialPanel) {
         input.value = String(working.thresholds[def.id]);
         input.setAttribute('aria-label', def.label);
 
+        const isFilter = def.id === 'filterMinVisibleNodes' || def.id === 'filterMinInstanceScore';
         input.addEventListener('input', function () {
             const v = parseFloat(input.value);
             if (isFinite(v)) working.thresholds[def.id] = v;
+            if (isFilter) filterPreview.update();
         });
         input.addEventListener('blur', function () {
             let v = parseFloat(input.value);
@@ -629,11 +647,14 @@ export function showSettingsModal(initialPanel) {
             if (v > def.max) v = def.max;
             working.thresholds[def.id] = v;
             input.value = String(v);
+            if (isFilter) filterPreview.update();
         });
 
         row.appendChild(labelWrap);
         row.appendChild(input);
         thSection.body.appendChild(row);
+        // The readout goes right under the last of the two filter fields.
+        if (def.id === 'filterMinInstanceScore') thSection.body.appendChild(filterPreview.root);
     });
 
     // Docs link at the bottom of the thresholds.
@@ -671,6 +692,7 @@ export function showSettingsModal(initialPanel) {
         Object.keys(panels).forEach(function (key) {
             panels[key].classList.toggle('active', key === name);
         });
+        if (name === 'wizard') filterPreview.start();
     }
     NAV_ITEMS.forEach(function (item) {
         navItems[item.panel].addEventListener('click', function () {
@@ -686,6 +708,7 @@ export function showSettingsModal(initialPanel) {
 
     function teardown() {
         document.removeEventListener('keydown', onDocKeyDown, true);
+        filterPreview.dispose();
         if (disposeGeometry) { disposeGeometry(); disposeGeometry = null; }
         overlay.remove();
     }

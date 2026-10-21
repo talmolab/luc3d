@@ -16,31 +16,32 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=b59328b27b1a';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=b59328b27b1a';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=b59328b27b1a';
+} from './triangulation.js?v=b2acb624be9c';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=b2acb624be9c';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=b2acb624be9c';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=b59328b27b1a';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=b2acb624be9c';
 import {
     getNodeWeightArray, getNodeWeight, updateNodeWeights,
     getTrackingThresholds, getTrackingThreshold, isCameraTracked,
     getTrackingThresholdDefs, updateTrackingThresholds,
-} from '../ui/settings.js?v=b59328b27b1a';
-import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=b59328b27b1a';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=b59328b27b1a';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=b59328b27b1a';
-import { startTrackerWorker } from './tracker-pool.js?v=b59328b27b1a';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=b59328b27b1a';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=b59328b27b1a';
-import { updateInfoPanel } from '../ui/info-panel.js?v=b59328b27b1a';
-import { setColorByIdentity } from '../ui/color-by.js?v=b59328b27b1a';
-import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=b59328b27b1a';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=b59328b27b1a';
-import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=b59328b27b1a';
-import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=b59328b27b1a';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=b59328b27b1a';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=b59328b27b1a';
+} from '../ui/settings.js?v=b2acb624be9c';
+import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=b2acb624be9c';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=b2acb624be9c';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=b2acb624be9c';
+import { startTrackerWorker } from './tracker-pool.js?v=b2acb624be9c';
+import { passesDetectionFilter } from './detection-filter-stats.js?v=b2acb624be9c';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=b2acb624be9c';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=b2acb624be9c';
+import { updateInfoPanel } from '../ui/info-panel.js?v=b2acb624be9c';
+import { setColorByIdentity } from '../ui/color-by.js?v=b2acb624be9c';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=b2acb624be9c';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=b2acb624be9c';
+import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=b2acb624be9c';
+import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=b2acb624be9c';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=b2acb624be9c';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=b2acb624be9c';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -207,11 +208,8 @@ function crossViewScore(instA, camA, instB, camB) {
 // unless the Tracking Wizard / bench sets them.
 //   filterMinVisibleNodes — geometry gate, needs no per-detection score (sleap-3d Stage-1 = 8)
 //   filterMinInstanceScore — confidence gate, only applies when inst.score is available (sleap-3d = 0.85)
-function passesDetectionFilter(inst, minVis, minScore) {
-    if (minVis > 0 && inst.countPoints() < minVis) return false;
-    if (minScore > 0 && inst.score != null && inst.score < minScore) return false;
-    return true;
-}
+// `passesDetectionFilter` lives in pose/detection-filter-stats.js, which the
+// Tracking Wizard's readout also counts with, so the two cannot disagree.
 
 function collectInstances(frameGroup, cameras) {
     var camInstances = {};
