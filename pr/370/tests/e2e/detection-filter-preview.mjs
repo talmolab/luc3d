@@ -5,16 +5,17 @@
  *
  * Asserted, in the real modal over a synthetic two-camera session whose "side"
  * camera scores lower than "top" (the low-side-camera case that motivated it):
- *  1. The readout sits right under the two filter fields, and the walk does not
- *     start until the wizard is shown.
- *  2. At the defaults (0, 0) nothing is removed.
- *  3. Typing a minimum instance score updates the per-camera and total shares
- *     live, before Apply; "Fail both" counts detections failing both filters.
+ *  1. The readout sits right under the three filter fields, and the walk does
+ *     not start until the wizard is shown.
+ *  2. At the defaults (0, 0, 0) nothing is removed.
+ *  3. Typing a minimum updates the per-camera and total shares live, before
+ *     Apply; "Fail 2+" counts detections failing more than one filter.
  *  4. Switching a camera off greys its row and drops it from the total.
- *  4b. A camera losing far more than the others is flagged — row tag and a
- *     sentence naming it — and the flag goes when it no longer applies.
- *  5. The mean-node-confidence preview shows per-camera medians and the share
- *     below its own (non-persisted) threshold.
+ *  4b. A camera losing far more than the others is flagged — per filter cell,
+ *     row tag and a sentence naming it — and the flag goes when it no longer
+ *     applies.
+ *  5. The min mean node score is a real filter: it counts in "Removed", and the
+ *     distributions of all three quantities mark the bars each filter removes.
  *  6. Cancel stores nothing; the filters keep their old values.
  *  7. Missing instance scores and node scores are SAID, not shown as 0%.
  *  8. An empty session and no session each get a sentence, not a table.
@@ -52,7 +53,7 @@ try {
     const build = (opts) => page.evaluate(async (o) => {
         const pd = await import('/pose/pose-data.js'); const AS = await import('/ui/app-state.js');
         const S = await import('/ui/settings.js');
-        S.setTrackingThresholds({ filterMinVisibleNodes: 0, filterMinInstanceScore: 0 });
+        S.setTrackingThresholds({ filterMinVisibleNodes: 0, filterMinInstanceScore: 0, filterMinMeanNodeScore: 0 });
         S.setCameraWeights({ top: 1, side: 1 });
         const K = [[600, 0, 320], [0, 600, 240], [0, 0, 1]];
         const cams = ['top', 'side'].map((n, i) => new pd.Camera(n, K, [0, 0, 0, 0, 0], [0, 0.2 * i, 0], [20 * i, 0, 0], [640, 480]));
@@ -101,14 +102,14 @@ try {
         const r = document.querySelector('[data-testid="detection-filter-preview"]');
         const prev = r && r.previousElementSibling;
         const prev2 = prev && prev.previousElementSibling;
+        const prev3 = prev2 && prev2.previousElementSibling;
+        const has = (e, l) => !!e && !!e.querySelector(`.settings-num-input[aria-label="${l}"]`);
         return {
             present: !!r,
-            counting: r ? /Counting detections/.test(r.textContent) : false,
-            afterScore: !!prev && !!prev.querySelector('.settings-num-input[aria-label="Min instance score (filter)"]'),
-            afterVis: !!prev2 && !!prev2.querySelector('.settings-num-input[aria-label="Min visible nodes (filter)"]'),
+            order: has(prev, 'Min mean node score (filter)') && has(prev2, 'Min instance score (filter)') && has(prev3, 'Min visible nodes (filter)'),
         };
     });
-    check(before.present && before.afterScore && before.afterVis, 'the readout sits right under the two filter fields');
+    check(before.present && before.order, 'the readout sits right under the three filter fields');
     await new Promise(r => setTimeout(r, 300));
     check(await page.evaluate(() => /Counting detections/.test(document.querySelector('[data-testid="detection-filter-preview"]').textContent)),
         'nothing is counted while another panel is showing');
@@ -120,7 +121,7 @@ try {
     check(r && r.length === 3 && r[0].cam === 'top' && r[1].cam === 'side' && r[2].cells[0] === 'All tracked cameras',
         'one row per camera and a total');
     check(r[0].cells[1] === '800' && r[1].cells[1] === '800' && r[2].cells[1] === '1,600', `detections per camera (${r.map(x => x.cells[1]).join(' / ')})`);
-    check(r.every(x => x.cells[4].startsWith('0%')), 'at 0 / 0 nothing is removed');
+    check(r[0].cells.length === 7 && r.every(x => x.cells[5].startsWith('0%')), 'seven columns; at 0 / 0 / 0 nothing is removed');
 
     // ---- 3. live update ----
     await type('Min instance score (filter)', 0.5);
@@ -129,9 +130,9 @@ try {
         `a minimum score of 0.5 removes half of side, none of top (${r.map(x => x.cells[3]).join(' / ')})`);
     await type('Min visible nodes (filter)', 3);
     r = await rows();
-    check(r[1].cells[2] === '12.5% (100)' && r[1].cells[4] === '50.0% (400)' && r[1].cells[5] === '12.5% (100)',
-        `side: too few nodes 12.5%, removed 50%, fail both 12.5% (${r[1].cells.join(' | ')})`);
-    check(r[2].cells[4] === '25.0% (400)', 'total removed follows');
+    check(r[1].cells[2] === '12.5% (100)' && r[1].cells[5] === '50.0% (400)' && r[1].cells[6] === '12.5% (100)',
+        `side: too few nodes 12.5%, removed 50%, fail 2+ 12.5% (${r[1].cells.join(' | ')})`);
+    check(r[2].cells[5] === '25.0% (400)', 'total removed follows');
     const flag = () => page.evaluate(() => {
         const root = document.querySelector('[data-testid="detection-filter-preview"]');
         const t = root.querySelector('.dfp-filters');
@@ -141,6 +142,9 @@ try {
     });
     let fl = await flag();
     check(fl.rows.join() === 'side' && fl.tags.includes('loses far more'), `the camera losing far more is flagged (${fl.rows.join()})`);
+    const cellFlags = await page.evaluate(() => Array.from(document.querySelectorAll('.dfp-filters td.dfp-cell-flag'))
+        .map(td => td.closest('tr').getAttribute('data-camera') + ':' + td.getAttribute('data-filter')).join());
+    check(cellFlags === 'side:failVisible,side:failScore', `each filter's own column flags it too (${cellFlags})`);
     check(/^side loses 50\.0% of its detections, against 0% for the other cameras \(median\)\. The total \(25\.0%\) hides this\.$/.test(fl.note),
         `and named in a sentence: "${fl.note}"`);
     const stored = await page.evaluate(async () => (await import('/ui/settings.js')).getTrackingThreshold('filterMinInstanceScore'));
@@ -152,39 +156,45 @@ try {
     check(r[1].excluded && /excluded/.test(r[1].cells[0]), 'an excluded camera is greyed and tagged');
     fl = await flag();
     check(fl.rows.length === 0 && !fl.note, 'an excluded camera is not flagged');
-    check(r[2].cells[1] === '800' && r[2].cells[4].startsWith('0%'), `it leaves the total (${r[2].cells.join(' | ')})`);
+    check(r[2].cells[1] === '800' && r[2].cells[5].startsWith('0%'), `it leaves the total (${r[2].cells.join(' | ')})`);
     await page.evaluate(() => document.querySelector('.settings-toggle input[aria-label="Include view side in tracking"]').click());
 
-    // ---- 5. mean node confidence preview ----
-    const mps = await page.evaluate(() => {
-        const t = document.querySelector('[data-testid="detection-filter-preview"] .dfp-mps-table');
-        const read = () => Array.from(t.querySelectorAll('tbody tr')).map(tr => Array.from(tr.children).map(td => td.textContent.trim()));
-        return { rows: read(), bars: t.querySelectorAll('.dfp-bar').length, below: t.querySelectorAll('.dfp-bar-below').length };
+    // ---- 5. the mean node score filter, and the three distributions ----
+    // side's weak detections score 0.6 per node (0.3 mean on the 2-node ones:
+    // a missing node counts as 0), so 0.75 removes all 400 of them.
+    await type('Min mean node score (filter)', 0.75);
+    r = await rows();
+    check(r[0].cells[4].startsWith('0%') && r[1].cells[4] === '50.0% (400)', `node score 0.75 removes side's weak half (${r[1].cells[4]})`);
+    check(r[1].cells[5] === '50.0% (400)' && r[1].cells[6] === '50.0% (400)', `it counts in Removed and in Fail 2+ (${r[1].cells.join(' | ')})`);
+    const dist = await page.evaluate(() => {
+        const t = document.querySelector('[data-testid="detection-filter-preview"] .dfp-dist-table');
+        const cell = (tr, k) => tr.querySelector(`td[data-hist="${k}"]`);
+        return {
+            heads: Array.from(t.querySelectorAll('th')).map(th => th.textContent),
+            rows: Array.from(t.querySelectorAll('tbody tr')).map(tr => ['visible', 'score', 'nodeScore'].map(k => ({
+                median: (cell(tr, k).querySelector('.dfp-median') || {}).textContent,
+                bars: cell(tr, k).querySelectorAll('.dfp-bar').length,
+                below: cell(tr, k).querySelectorAll('.dfp-bar-below').length,
+            }))),
+        };
     });
-    check(mps.rows.length === 2 && mps.rows[0][1] === '0.90' && mps.rows[1][1] === '0.75', `medians per camera (${mps.rows.map(x => x[1]).join(' / ')})`);
-    check(mps.rows[1][3] === '50.0% (400)' && mps.rows[0][3] === '0%', `share below 0.75: side 50%, top 0% (${mps.rows.map(x => x[3]).join(' / ')})`);
-    check(mps.bars === 20 && mps.below > 0, 'a ten-bar distribution per camera, bars under the threshold marked');
-    const mpsFlag = await page.evaluate(() => {
-        const sec = document.querySelector('[data-testid="detection-filter-preview"] .dfp-mps');
-        return { rows: Array.from(sec.querySelectorAll('tr.dfp-flagged')).map(tr => tr.getAttribute('data-camera')),
-            note: (sec.querySelector('.dfp-outlier-note') || {}).textContent || '' };
-    });
-    check(mpsFlag.rows.join() === 'side' && /^side has 50\.0% below 0\.75, against 0% for the other cameras \(median\)\.$/.test(mpsFlag.note),
-        `the confidence preview flags it too: "${mpsFlag.note}"`);
-    await type('Preview mean node confidence threshold', 0.95);
-    const mps2 = await page.evaluate(() => Array.from(document.querySelectorAll('.dfp-mps-table tbody tr')).map(tr => tr.lastChild.textContent.trim()));
-    check(mps2[0] === '100% (800)' && mps2[1] === '100% (800)', `the preview threshold updates its column (${mps2.join(' / ')})`);
+    check(dist.heads.join('|') === 'Camera|Visible nodes (0 → 4)|Instance score (0 → 1)|Mean node score (0 → 1)', `one chart per filter (${dist.heads.join(' | ')})`);
+    const med = dist.rows.map(row => row.map(c => c.median).join('/')).join(' ; ');
+    check(med === '4/0.90/0.90 ; 4/0.65/0.75', `medians per camera and quantity (${med})`);
+    const shape = dist.rows.map(row => row.map(c => c.bars + ':' + c.below).join('/')).join(' ; ');
+    check(shape === '5:3/10:5/10:7 ; 5:3/10:5/10:7', `the bars each filter removes are marked, in all three charts (${shape})`);
 
     // Back to 0 / 0: nothing removed, nothing flagged.
-    await type('Min instance score (filter)', 0); await type('Min visible nodes (filter)', 0);
+    await type('Min instance score (filter)', 0); await type('Min visible nodes (filter)', 0); await type('Min mean node score (filter)', 0);
     fl = await flag();
-    check(fl.rows.length === 0 && !fl.note, 'at 0 / 0 nothing is flagged');
+    const marked = await page.evaluate(() => document.querySelectorAll('.dfp-dist-table .dfp-bar-below').length);
+    check(fl.rows.length === 0 && !fl.note && marked === 0, 'at 0 / 0 / 0 nothing is flagged and no bar is marked');
 
     // ---- 6. Cancel ----
     await page.click('.settings-btn-cancel');
     const after = await page.evaluate(async () => { const S = await import('/ui/settings.js');
-        return [S.getTrackingThreshold('filterMinVisibleNodes'), S.getTrackingThreshold('filterMinInstanceScore')]; });
-    check(after[0] === 0 && after[1] === 0, 'Cancel stores nothing');
+        return [S.getTrackingThreshold('filterMinVisibleNodes'), S.getTrackingThreshold('filterMinInstanceScore'), S.getTrackingThreshold('filterMinMeanNodeScore')]; });
+    check(after.every(v => v === 0), 'Cancel stores nothing');
 
     // ---- 7. missing scores ----
     await build({ scores: false });
@@ -194,12 +204,13 @@ try {
         return {
             text: root.textContent,
             tags: Array.from(root.querySelectorAll('.dfp-tag-warn')).map(e => e.textContent),
-            mpsTable: !!root.querySelector('.dfp-mps-table'),
+            nodeCells: Array.from(root.querySelectorAll('.dfp-dist-table td[data-hist="nodeScore"]')).map(td => td.textContent),
         };
     });
     check(/no instance scores/.test(miss.text) && miss.tags.filter(t => t === 'no scores').length === 2,
         'missing instance scores are said, overall and per camera');
-    check(/no per-node confidence/.test(miss.text) && !miss.mpsTable, 'missing node scores are said instead of a table');
+    check(/carry no node scores/.test(miss.text) && miss.tags.filter(t => t === 'no node scores').length === 2 &&
+        miss.nodeCells.every(t => t === 'no node scores'), 'missing node scores are said: a note, a tag per camera, and in the chart');
     await type('Min instance score (filter)', 0.5);
     r = await rows();
     check(r[2].cells[3] === '100% (1,600)' && r[1].cells[3] === '100% (800)no scores' && /removes every predicted detection/.test(await page.evaluate(() =>
