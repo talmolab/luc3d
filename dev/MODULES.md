@@ -2164,7 +2164,7 @@ and Track All rewrite `session.instanceGroups`, `session.frameIdentityMap` and
 drops the frame's groups, `runTrackingPass` before `clearIdSwitchResults` and its
 own clear, so both sweeps (`runCrossViewTrackerProgress` and the windowed
 `sweepTrackAllFrames`) are covered by the one call. For a long time none did:
-after Track All on a fresh project the save dot and `• Lucid` title never
+after Track All on a fresh project the save dot and `• LUC3D` title never
 appeared and closing the tab lost the result without a prompt. The call sits
 AFTER every bail-out (a refused click is not an edit) and is deliberately NOT
 conditional on what the run found: the clear runs first, so a re-run that

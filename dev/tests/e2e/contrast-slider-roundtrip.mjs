@@ -93,7 +93,7 @@ try {
 
         AS.state.sessions = [s1, s2];
         AS.state.isDirty = false;
-        document.title = 'Lucid';
+        document.title = 'LUC3D';
         activate(s1);
         await new Promise(r => requestAnimationFrame(r));
 
