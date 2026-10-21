@@ -9,45 +9,45 @@ import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
     toBoxedPoints3d, someValidPoint3d, pooledPoints3d,
-} from '../pose/pose-data.js?v=0bad88308ef0';
+} from '../pose/pose-data.js?v=cd3b372b9ef8';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
-} from '../pose/triangulation.js?v=0bad88308ef0';
-import { OnDemandVideoDecoder } from '../loading/video.js?v=0bad88308ef0';
-import { createDemoSkeleton } from '../demo-data.js?v=0bad88308ef0';
+} from '../pose/triangulation.js?v=cd3b372b9ef8';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=cd3b372b9ef8';
+import { createDemoSkeleton } from '../demo-data.js?v=cd3b372b9ef8';
 import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
-} from './file-io.js?v=0bad88308ef0';
+} from './file-io.js?v=cd3b372b9ef8';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setInteractionManager,
-} from '../ui/app-state.js?v=0bad88308ef0';
+} from '../ui/app-state.js?v=cd3b372b9ef8';
 import {
     autoAssignVideosToCameras, forceVideoSelection, showParentDirMatchSummary,
     forceVideoSelectionWithFolder, createViewForVideoFile, updateTotalFrames,
-    rebuildVideoController, fitCanvasesToCells,
-} from '../loading/session-loader.js?v=0bad88308ef0';
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=0bad88308ef0';
-import { updateInfoPanel } from '../ui/info-panel.js?v=0bad88308ef0';
+    adoptLabeledFrameCount, rebuildVideoController, fitCanvasesToCells,
+} from '../loading/session-loader.js?v=cd3b372b9ef8';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=cd3b372b9ef8';
+import { updateInfoPanel } from '../ui/info-panel.js?v=cd3b372b9ef8';
 // Pass 3i-3: setupInteraction / setup3DViewport / hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, hideWelcomeOverlay,
-} from '../pose/initialization.js?v=0bad88308ef0';
+} from '../pose/initialization.js?v=cd3b372b9ef8';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=0bad88308ef0';
-import { handleLoadSlpFile } from './slp-import.js?v=0bad88308ef0';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=cd3b372b9ef8';
+import { handleLoadSlpFile } from './slp-import.js?v=cd3b372b9ef8';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
     openProjectWriter, streamSessionIntoWriter, finalizeProjectWriter,
-} from './slp-streaming-write.js?v=0bad88308ef0';
-import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=0bad88308ef0';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=0bad88308ef0';
-import { showLoading, hideLoading } from '../ui/loading-overlay.js?v=0bad88308ef0';
-import { clearReadout } from '../ui/frame-readout.js?v=0bad88308ef0';
-import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=0bad88308ef0';
-import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=0bad88308ef0';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=0bad88308ef0';
+} from './slp-streaming-write.js?v=cd3b372b9ef8';
+import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=cd3b372b9ef8';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=cd3b372b9ef8';
+import { showLoading, hideLoading } from '../ui/loading-overlay.js?v=cd3b372b9ef8';
+import { clearReadout } from '../ui/frame-readout.js?v=cd3b372b9ef8';
+import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=cd3b372b9ef8';
+import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=cd3b372b9ef8';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=cd3b372b9ef8';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -351,7 +351,7 @@ function serializeSessionFrames(session) {
 
 async function ensureSleapIO() {
     if (window.SleapIO) return window.SleapIO;
-    var mod = await import('./lib/sleap-io/index.browser.js?v=0bad88308ef0');
+    var mod = await import('./lib/sleap-io/index.browser.js?v=cd3b372b9ef8');
     window.SleapIO = mod;
     return mod;
 }
@@ -1339,7 +1339,7 @@ export async function handleLoadProject(prePickedFile) {
             var LARGE_SLP_BYTES = 200 * 1024 * 1024;
             if (ext === 'slp' && file.size > LARGE_SLP_BYTES) {
                 // Dynamic import avoids a session-loader ↔ save-load import cycle.
-                var _sl = await import('../loading/session-loader.js?v=0bad88308ef0');
+                var _sl = await import('../loading/session-loader.js?v=cd3b372b9ef8');
                 if (_sl && typeof _sl.handleLoadProjectSlpLazy === 'function') {
                     return _sl.handleLoadProjectSlpLazy(file);
                 }
@@ -1566,10 +1566,13 @@ export async function handleLoadProject(prePickedFile) {
 
         } else if (needsVideoPrompt) {
             // V2 / legacy: single prompt for video files
+            // No manifest (e.g. an Export Labels JSON) → nothing to show, so no
+            // "Expected:" line.
             var manifestInfo = missingFilenames.length > 0
                 ? 'Need: ' + missingFilenames.join(', ')
-                : (manifestFilenames.join(', ') || '(unknown)');
-            var videoFiles = await forceVideoSelection(manifestInfo);
+                : manifestFilenames.join(', ');
+            var videoFiles = await forceVideoSelection(manifestInfo,
+                { title: 'Project loaded — now select the video file(s)' });
 
             if (videoFiles.length > 0) {
                 for (var i = 0; i < videoFiles.length; i++) {
@@ -1661,6 +1664,11 @@ export async function handleLoadProject(prePickedFile) {
         }
 
         updateTotalFrames();
+        // Loaded without video (the user continued past the video prompt):
+        // size the project from its labels, and open on the first labeled
+        // frame as the video path's seek does.
+        var firstLabeled = adoptLabeledFrameCount();
+        if (firstLabeled >= 0) state.currentFrame = firstLabeled;
         if (state.views.length > 0) {
             hideWelcomeOverlay();
             populateViewStrip();
@@ -1705,8 +1713,11 @@ export async function handleLoadProject(prePickedFile) {
         var statusParts = [cameras.length + ' cameras', state.session.numFrames.toLocaleString('en-US') + ' labeled frames'];
         if (state.views.length > 0) {
             statusParts.push(state.views.length + ' views');
+            setStatus('Project loaded (' + statusParts.join(', ') + ')', 'success');
+        } else {
+            setStatus('Project loaded without video (' + statusParts.join(', ') +
+                ') — attach videos via File ▸ Load Videos…', 'success');
         }
-        setStatus('Project loaded (' + statusParts.join(', ') + ')', 'success');
     } catch (err) {
         console.error('Failed to load project:', err);
         hideLoading();
