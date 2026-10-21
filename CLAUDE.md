@@ -96,7 +96,7 @@ Tests: `test-visibility-metadata.js`, `test-plane-serialization.mjs`, e2e `visib
 
 ## Lazy projects: resident frames are a window, and eviction must be lossless
 
-On a lazy project `session.frameGroups` holds only hydrated frames. `pose/lazy-residency.js` evicts them during playback (via `evictLazyFrames`).
+On a lazy project `session.frameGroups` holds only hydrated frames. Playback evicts them via `evictLazyFrames` (`pose/triangulation.js`), with the rules in DOM-free `pose/lazy-residency.js`.
 - **Evict a frame only if re-hydrating it rebuilds exactly what is resident** (`frameEvictionBlocker` compared with `SioLazyLoader.describeStoreFrame`). The blocker list is in MODULES.md `pose/lazy-residency.js`; a new kind of in-memory-only state must be added to it. A user instance always pins its frame, group member or not: the streaming save reads 2D edits from resident frames only.
 - **Never evict from `batchLoadLazyFrames`.** `sweepLazyFrameWindows` holds residency for its whole run.
 - **`LAZY_PLAYBACK_AHEAD` is both the loader lookahead and the protected window.** Never split them. `LAZY_KEEP_BEHIND` (512) must stay above `MAX_TRAIL_FRAMES` (500, `ui/trail-presets.js`), because trails draw resident frames only. A seek hydrates ahead, so the draw path fills the trail behind it (`ensureLazyTrailWindow`), and a non-resident frame ENDS a lazy trail (`trailWindowFrames`' `residentOnly`).
@@ -204,7 +204,7 @@ Tests: `tests/test-skeleton-edit-impact.mjs`, `tests/test-pose-data.js`, `tests/
 - **Info tips:** declare with `setInfoTip(el, text)` (`ui/info-tip.js`, delegated, removes `title`); never `setStatus`. One or two sentences. Keep every ⓘ a `<button>`; its capture-phase click `stopPropagation`s so it neither folds a `<summary>` nor clicks its row. Explain a section in its ⓘ (e.g. `PLANE_SECTION_INFO`), not a paragraph. Test: `tests/e2e/info-tip.mjs`.
 - **Text is selectable/copyable.** `shouldIgnoreShortcut` (`ui/keyboard-target.js`) yields copy/cut (not paste) while a selection exists. Use `user-select: none` only on drag/click surfaces (toolbars, menu bar, tab bar, modal drag handles). Test: `tests/e2e/copy-panel-text.mjs`.
 - **Plane visibility** (`ui/plane-visibility.js`): four toggles, default ON; `planeVisibility(modeActive)` overrides them in Defining Plane Mode. They decide whether a plane is drawn, never how (no fill override). In 3D they hide meshes, never filter `_planes`.
-- **Plane Views column** (`annotatedViewStats`, `ui/plane-list-panel.js`) counts hand-placed corners only, using the same test as `triangulatePlane`.
+- **Plane Views column** (`annotatedViewStats`, `ui/plane-list-panel.js`) counts views with at least one hand-placed (not reprojected) corner, using the same test as `triangulatePlane`'s `usableViews`.
 - **Plane node selection** goes by node ID, never position (`setSelectedPlaneNode`); one capture-phase document listener (`onDocumentClickForNodeSelection`) selects and clears; don't rebuild the Nodes table on select.
 - **Define Planes panel** is Nodes then Planes; the roster row is the only plane selector. `tests/e2e/define-plane-mode.mjs` §2 asserts the section's child list.
 - **Progress popups** use one card style (`ui/loading-overlay.js`); pinned by `tests/e2e/fixtures/progress-card.js`.
