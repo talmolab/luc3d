@@ -1,6 +1,4 @@
-<p align="center">
-  <img src="docs/assets/luc3d-logo.png" alt="LUC3D logo" width="160">
-</p>
+<img src="docs/assets/luc3d-wordmark.png" alt="LUC3D" width="320">
 
 # luc3d (Label Unification and Correspondence in 3D Annotation GUI)
 Label Unification and Correspondence in 3D Annotation GUI in Web Browser
