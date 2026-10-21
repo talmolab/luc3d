@@ -196,6 +196,21 @@
    "kind": "luc3d_js",
    "fig": "3F (b)",
    "reason": "fig3f_timing_clean.py J17 T_A4C6, asserts 2dc001fe."
+  },
+  "fig3_headtohead_clean_b3_j18.json": {
+   "kind": "luc3d_js",
+   "fig": "3F",
+   "reason": "J18 watched sitting (2026-10-21), rerun of J17 because J17 was valid=false: 294 calls, the 8 that overlapped a sample over 0.5 core re-timed (md56_logs/J18_redo1_calls.json); fig3f_timing_clean.py asserts 2dc001fe. Accuracy cells J12-re-derived; stamp inherited."
+  },
+  "fig3_runtime_clean_b3_j18.json": {
+   "kind": "luc3d_js",
+   "fig": "3F",
+   "reason": "J18 watched sitting (2026-10-21), rerun of J17 because J17 was valid=false: 294 calls, the 8 that overlapped a sample over 0.5 core re-timed (md56_logs/J18_redo1_calls.json); fig3f_timing_clean.py asserts 2dc001fe."
+  },
+  "fig3_runtime_clean_b3_j18_a4c6.json": {
+   "kind": "luc3d_js",
+   "fig": "3F",
+   "reason": "fig3f_timing_clean.py J18 T_A4C6 (no call over 0.5 core), asserts 2dc001fe."
   }
  },
  "unlogged_inputs": {

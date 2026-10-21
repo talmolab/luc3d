@@ -118,6 +118,8 @@ import os  # noqa: E402
 CLEAN = os.environ.get("FIG3F_CLEAN") == "1"
 #: FIG3F_CLEAN_TAG=_j17 (2026-10-20): the J17 sitting, rerun under figs/timing_watch.py
 #: with per-process CPU evidence. Unset = the T1 sitting.
+#: FIG3F_CLEAN_TAG=_j18 (2026-10-21): the placed Fig 3F. J17 rerun because J17 was
+#: valid=false; calls that overlapped a sample over 0.5 core were re-timed.
 CLEAN_TAG = os.environ.get("FIG3F_CLEAN_TAG", "")
 
 CORPUS = {
