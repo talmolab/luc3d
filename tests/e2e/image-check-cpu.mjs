@@ -202,8 +202,8 @@ try {
     });
     check(capped.device.workers === capped.want.model && capped.s.threads === capped.want.model + capped.want.crop,
           `a 50% CPU cap on ${capped.cores} cores runs ${capped.want.model} model + ${capped.want.crop} crop workers (${capped.s.threads} threads)`);
-    check(capped.s.restS === 0 && capped.s.batchLimit === 64 && capped.s.maxGpuPct === null,
-          `…and on the CPU path the GPU cap does nothing: full batches, no rests (rest ${capped.s.restS} s, batches of ≤${capped.s.batchLimit})`);
+    check(capped.s.restS === 0 && capped.s.maxGpuPct === null,
+          `…and on the CPU path the GPU cap does nothing: no idle time (${capped.s.restS} s)`);
     check(new RegExp(' · CPU capped at ' + capped.s.threads + ' of ' + capped.cores + ' cores').test(capped.timing) && !/GPU time capped/.test(capped.timing),
           `the summary reports the CPU cap alone: "${capped.timing}"`);
 

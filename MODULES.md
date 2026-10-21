@@ -10514,12 +10514,15 @@ of the GPU and of the CPU the check may take is the USER's to set, and what it
 does not take stays free for other work on the machine — even when nothing else
 wants it (a deliberate allocation, not an adaptive back-off). No browser API gives
 a page a share of either, so the check takes its share by how it runs:
-- **GPU** — smaller batches, `gpuMaxBatch(pct)` = `EMBED_MAX_BATCH × pct/100`
-  (50% -> 32), so the GPU is held in short slices and other work waits less for
-  each; and after each run a rest, `paceRestMs(runMs, pct)` = `runMs × (100/pct − 1)`,
-  so busy / (busy + rest) = pct. Both live in `createModelQueue` (the batch
-  queue, a factory so it can be tested without a GPU), which also splits a frame
-  with more crops than a batch across runs. Not applied on the CPU path.
+- **GPU** — after each FULL batch (`EMBED_MAX_BATCH`) an idle,
+  `paceRestMs(runMs, pct)` = `runMs × (100/pct − 1)`, so busy / (busy + idle) =
+  pct. Batches do NOT shrink with the cap: an earlier version scaled them
+  (`64 × pct`) for shorter holds of the GPU, but small batches run each crop
+  slower, while the idle time alone already sets the share — so a capped run is
+  as efficient as an uncapped one, and each hold lasts one full batch (~370 ms
+  on an M-series GPU). Applied in `createModelQueue` (the batch queue, a factory
+  so it can be tested without a GPU), which also splits a frame with more crops
+  than a batch across runs. Not applied on the CPU path.
 - **CPU** — fewer worker threads, all kept working, never resting:
   `imageCheckThreads(cores, memoryGB, pct, onCpu)` -> `{model, crop, budget}`, a
   budget of floor(cores × pct/100) threads; on the CPU path the model takes all
@@ -10532,9 +10535,9 @@ not counted in `busyMs()`, so the dialog's GPU line reads at most the cap.
 `releaseFrames` ends a rest in progress (`endRest`) LAST, after the CPU workers
 are terminated — `createCpuModelPool.terminate()` does not reject a job in flight,
 so a run started on a worker about to be killed would never settle. `stats()`
-adds `maxGpuPct` (null on the CPU path), `batchLimit`, `restS`, `maxCpuPct` and
+adds `maxGpuPct` (null on the CPU path), `restS`, `maxCpuPct` and
 `threads`, and `formatEmbedTiming` ends a capped run's summary with "GPU time capped at
-0.NN (batches of ≤B, S s idle)" and/or "CPU capped at T of C cores". The
+0.NN (S s idle)" and/or "CPU capped at T of C cores". The
 whole-run GPU busy % only approaches the cap over many batches: the last rest
 falls after the last crop, outside the run's timed window. (3) `stats()` / `summarizeEmbedTiming` /
 `formatEmbedTiming`: crops/s, GPU busy % (model call + result wait over wall
@@ -10702,7 +10705,7 @@ after a failure); `cannotRun(reason, cause)` (an Error whose message is the reas
 the check cannot run, flagged `cannotRun`); `asModelDownloadFailure(err)` (a failed
 download as `MODEL_OFFLINE_REASON`, else `err` unchanged); `MODEL_OFFLINE_REASON`;
 `selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
-the compute caps `capPct(pct)`, `gpuMaxBatch(pct)`, `paceRestMs(runMs, pct)`,
+the compute caps `capPct(pct)`, `paceRestMs(runMs, pct)`,
 `imageCheckThreads(cores, memoryGB, pct, onCpu)`, `IMAGE_CAP_MIN` and
 `createModelQueue(embed, sz, tm, {maxBatch, maxGpuPct})` -> `{enqueue, endRest}`;
 `createCropPool(clock?, count?)` (count: the CPU cap's crop workers),

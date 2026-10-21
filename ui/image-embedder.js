@@ -716,24 +716,17 @@ export function capPct(pct) {
  * default, passed in here as percentages), so that what it does
  * not take is left for other work on the machine — held even when nothing else
  * wants it. No browser API gives a page a share of either, so the check takes its
- * share by how it runs: the GPU by smaller batches and a rest after each
- * (gpuMaxBatch, paceRestMs), the CPU by running fewer worker threads (imageCheckThreads).
+ * share by how it runs: the GPU by idling after each full batch (paceRestMs), the
+ * CPU by running fewer worker threads (imageCheckThreads).
  */
 
 /**
- * The GPU cap, part 1: the most crops one model run takes — EMBED_MAX_BATCH scaled
- * by the cap (50% -> 32). A smaller batch holds the GPU for a shorter stretch, so the
- * check takes its share in short slices and other work on the GPU waits less for
- * each one. 100% is EMBED_MAX_BATCH, the uncapped check.
- */
-export function gpuMaxBatch(maxGpuPct) {
-    return Math.max(1, Math.round(EMBED_MAX_BATCH * capPct(maxGpuPct) / 100));
-}
-
-/**
- * The GPU cap, part 2: how long to rest after a model run of `runMs`, so the model
- * holds the GPU at most `maxGpuPct`% of the time — busy / (busy + rest) = pct.
- * 100 (or not a number) rests 0 ms: the uncapped check.
+ * The GPU cap: how long to idle after a model run of `runMs`, so the model holds the
+ * GPU at most `maxGpuPct`% of the time — busy / (busy + idle) = pct. 100 (or not a
+ * number) idles 0 ms: the uncapped check. Batches stay FULL (EMBED_MAX_BATCH) at every
+ * cap: scaling them with the cap (64 x pct, an earlier version) bought shorter holds of
+ * the GPU at the cost of throughput — small batches run each crop slower — while the
+ * idle time alone already sets the share. So a run is as efficient capped as uncapped.
  */
 export function paceRestMs(runMs, maxGpuPct) {
     const p = capPct(maxGpuPct);
@@ -906,7 +899,7 @@ export function formatEmbedTiming(t) {
         t.batches + ' batches of ~' + Math.round(t.avgBatch) + ', ' + t.modelMsPerCrop.toFixed(1) + ' ms/crop) · per frame: decode ' +
         Math.round(t.decodeMsPerFrame) + ' ms, crop ' + Math.round(t.cropMsPerFrame) + ' ms, queue ' + Math.round(t.queueMsPerFrame) + ' ms' +
         ' · ' + (cpu ? 'CPU (' + t.workers + ' workers)' : t.backend === 'webnn' ? 'WebNN' : 'WebGPU') + (t.dtype ? ' ' + t.dtype : '') +
-        (t.maxGpuPct != null && t.maxGpuPct < 100 ? ' · GPU time capped at ' + (t.maxGpuPct / 100).toFixed(2) + ' (batches of ≤' + t.batchLimit + ', ' + Math.round(t.restS || 0) + ' s idle)' : '') +
+        (t.maxGpuPct != null && t.maxGpuPct < 100 ? ' · GPU time capped at ' + (t.maxGpuPct / 100).toFixed(2) + ' (' + Math.round(t.restS || 0) + ' s idle)' : '') +
         (t.maxCpuPct != null && t.maxCpuPct < 100 ? ' · CPU capped at ' + t.threads + ' of ' + t.cores + ' cores' : '') +
         formatKeyframes(t.keyframes);
 }
@@ -995,7 +988,7 @@ export function createCropPool(clock, count) {
  * @param {{onStatus?: function(string), maxViewsPerAnimal?: number, webnn?: boolean|'force',
  *          device?: 'auto'|'webgpu'|'cpu', cpuWorkers?: number, maxGpuPct?: number, maxCpuPct?: number}} [opts]
  *   `maxGpuPct` / `maxCpuPct`: the compute caps (%, IMAGE_CAP_MIN..100; default 100 = uncapped) — see
- *   gpuMaxBatch / paceRestMs and imageCheckThreads. `opts.cpuWorkers` still overrides the model-worker count.
+ *   paceRestMs and imageCheckThreads. `opts.cpuWorkers` still overrides the model-worker count.
  * @returns {Promise<{getEmbeddings: function, prepareFrames: function, releaseFrames: function, backend: function,
  *          device: function, busyMs: function, cpuBusyMs: function, sampleCrops: function, views: string[]}>}
  */
@@ -1011,7 +1004,7 @@ export async function createImageEmbedder(session, opts) {
     let T = null, model = null, device = null, dtype = 'fp32', adapter = where.adapter, cpu = null, cpuWorkers = 0;
     // the CPU threads' busy time (cpuBusyMs): crop workers, CPU model workers, and crops cut on the main thread
     const cpuClock = createBusyClock();
-    // the compute caps (imageCheckThreads, gpuMaxBatch, paceRestMs): the user's share of the GPU and the CPU
+    // the compute caps (imageCheckThreads, paceRestMs): the user's share of the GPU and the CPU
     const maxGpuPct = capPct(opts.maxGpuPct), maxCpuPct = capPct(opts.maxCpuPct);
     const nav = typeof navigator !== 'undefined' ? navigator : {};
     const threads = imageCheckThreads(nav.hardwareConcurrency, nav.deviceMemory, maxCpuPct, where.kind !== 'webgpu');
@@ -1106,9 +1099,8 @@ export async function createImageEmbedder(session, opts) {
     const maxViews = opts.maxViewsPerAnimal > 0 ? Math.floor(opts.maxViewsPerAnimal) : 0;
     // ---- Batching (createModelQueue): with the check keeping EMBED_IN_FLIGHT frames in flight, the GPU gets
     // the next batch as soon as it finishes one instead of waiting on one frame's decode + crop. The GPU cap
-    // shrinks the batches and rests after each; on the CPU path the cap is the thread count instead.
-    const batchLimit = cpu ? EMBED_MAX_BATCH : gpuMaxBatch(maxGpuPct);
-    const modelQueue = createModelQueue(embed, SZ, tm, { maxBatch: batchLimit, maxGpuPct: cpu ? 100 : maxGpuPct });
+    // idles after each full batch; on the CPU path the cap is the thread count instead.
+    const modelQueue = createModelQueue(embed, SZ, tm, { maxBatch: EMBED_MAX_BATCH, maxGpuPct: cpu ? 100 : maxGpuPct });
     const enqueue = modelQueue.enqueue;
     const getEmbeddings = async function (frame, items) {
         const tStart = performance.now();
@@ -1213,7 +1205,7 @@ export async function createImageEmbedder(session, opts) {
         stats: function () {
             const t = summarizeEmbedTiming(tm, backend, backend === 'webnn' ? 'fp16' : dtype);
             t.keyframes = summarizeKeyframePlans(plans);
-            t.maxGpuPct = cpu ? null : maxGpuPct; t.batchLimit = batchLimit; t.restS = tm.restMs / 1000;
+            t.maxGpuPct = cpu ? null : maxGpuPct; t.restS = tm.restMs / 1000;
             t.maxCpuPct = maxCpuPct; t.threads = (cpu ? cpuWorkers : 0) + threads.crop; t.cores = threads.cores;
             if (cpu) t.workers = cpuWorkers;
             return t;
