@@ -235,5 +235,28 @@ group('§4 membersPoints3d — the helper commitTrackedFrame uses');
     }
 }
 
+// ===========================================================================
+group('§5 with the reprojection check on (matchReproj), the group still gets the members\' plain DLT');
+{
+    // `match3d` (the checked solve) is for matching only; what a group stores
+    // must stay the plain members-only DLT whatever the check does.
+    globalThis.__BENCH.thresholds = { matchReproj: 5 };
+    try {
+        const s = buildSession();
+        runCrossViewTracker(s, s.cameras, s.frameIndices, false);
+        let n = 0;
+        for (const f of MISS) {
+            const gA = groupOfA(s.instanceGroups.get(f) || []);
+            if (!gA) continue;
+            n++;
+            const members = dlt(gA.cameraNames.map(c => ({ cam: byCam(c), pixels: pixelsOf(centroidA(f), byCam(c)) })));
+            ok(bitEqual(gA.points3d, members), `frame ${f}: A's 3D is EXACTLY the members-only DLT with matchReproj on`);
+        }
+        eq(n, MISS.size, 'A was committed on every MISS frame with matchReproj on');
+    } finally {
+        globalThis.__BENCH.thresholds = {};
+    }
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) { console.error('\nFailures:\n  - ' + failures.join('\n  - ')); process.exit(1); }
