@@ -5047,6 +5047,9 @@ kbd {
   border-bottom: none;
   border-top: 1px solid var(--border-light);
 }
+.dfp-table tr.dfp-flagged td {
+  color: var(--warning-color);
+}
 .dfp-table tr.dfp-excluded td {
   opacity: 0.5;
 }
@@ -5062,20 +5065,27 @@ kbd {
   color: var(--warning-color);
   border-color: var(--warning-color);
 }
-.dfp-mps-ctl {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  margin: 4px 0;
-}
 .dfp-hist {
-  display: flex;
+  display: inline-flex;
   align-items: flex-end;
   gap: 1px;
-  width: 110px;
+  width: 90px;
   height: 18px;
+  vertical-align: middle;
+}
+.dfp-dist-cell {
+  white-space: nowrap;
+}
+.dfp-median {
+  display: inline-block;
+  min-width: 30px;
+  margin-left: 6px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+.dfp-table td.dfp-cell-flag {
+  color: var(--warning-color);
 }
 .dfp-bar {
   flex: 1;

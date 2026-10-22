@@ -12,7 +12,11 @@
  * unvisited part of a video is such a read. The video decoder (mediabunny, via
  * sleap-io.js's `MediaBunnyVideoBackend.fromRangeSource`), mp4box's index scan
  * and Load 3D Points now read through `readBlobRange`, which retries a read that
- * throws and re-reads any all-zero part of a read.
+ * throws and re-reads any all-zero part of a read, with the 4 KiB block on each
+ * side of it (§2b): a run of zeros need not start or end on a block boundary,
+ * and the partly-zero block at its edge is not all zero, so re-reading only the
+ * all-zero blocks left those zeros wrong — every wrong block on the cold 167 MB
+ * `.slp` files measured through h5wasm's copy of the rule (93 of 93, PR #354).
  *
  * The faults are injected by a fake Blob: a hole reads as zeros the first `k`
  * times a read covers it, the real bytes after that; a failing range throws the
@@ -107,7 +111,7 @@ for (let i = 0; i < real.length; i++) real[i] = (i * 2654435761 >>> 13) & 255 | 
     const got = await readBlobRange(blob, 0, real.length);
     check(sameBytes(got, real), 'guarded read of the whole file equals the file');
     check(coldReadStats.rereads === 2 && coldReadStats.recovered === 2, `two re-reads, two recovered (${JSON.stringify(coldReadStats)})`);
-    check(warnings.length === 2 && /bytes 65536-81920 first read as zeros were read again/.test(warnings[0]),
+    check(warnings.length === 2 && /bytes 61440-86016 first read as zeros were read again/.test(warnings[0]),
         'each recovery is said in the console');
 }
 {
@@ -131,6 +135,66 @@ for (let i = 0; i < real.length; i++) real[i] = (i * 2654435761 >>> 13) & 255 | 
     const expect = real.slice(0, 65536); expect.fill(0, 16384, 32768);
     check(sameBytes(got, expect), 'a hole that never fills is left as read: the guard never makes a read worse');
     check(blob.reads === 2, `one read plus one re-read, no loop (${blob.reads} reads)`);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n2b. A run of zeros that starts or ends part-way into a 4 KiB block');
+/** The rule before the neighbouring blocks: re-read only the all-zero blocks, use the re-read if non-zero. */
+async function allZeroBlocksOnly(blob, s, e) {
+    const bytes = await plainRead(blob, s, e);
+    for (const [lo, hi] of zeroRuns(bytes, s)) {
+        const again = await plainRead(blob, lo, hi);
+        if (again.some(v => v !== 0)) bytes.set(again, lo - s);
+    }
+    return bytes;
+}
+const wrongBytes = (got, want) => { let n = 0; for (let i = 0; i < want.length; i++) if (got[i] !== want[i]) n++; return n; };
+const EDGE_CASES = [
+    // 16 KiB of whole blocks, then 1,000 zeros into the next block
+    ['ends part-way into a block', [[65536, 65536 + 16384 + 1000]], 1000],
+    // 1,000 zeros at the end of the block before, then 16 KiB of whole blocks
+    ['starts part-way into a block', [[65536 - 1000, 65536 + 16384]], 1000],
+    ['starts AND ends part-way', [[65536 - 300, 65536 + 16384 + 3000]], 3300],
+    // the measured video shape: the first 64 KiB of a 1 MiB window, plus a ragged end
+    ['64 KiB at a 1 MiB boundary, ending part-way', [[1 << 19, (1 << 19) + 65536 + 2500]], 2500],
+];
+for (const [label, holes, edge] of EDGE_CASES) {
+    resetStats();
+    const old = await allZeroBlocksOnly(faultyBlob(real, { holes }), 0, real.length);
+    const n = wrongBytes(old, real);
+    check(n === edge, `${label}: negative control — re-reading only the all-zero blocks leaves ${n} bytes zero (expected ${edge})`);
+    const got = await readBlobRange(faultyBlob(real, { holes }), 0, real.length);
+    check(sameBytes(got, real), `${label}: the guarded read equals the file`);
+    check(coldReadStats.rereads === 1 && coldReadStats.recovered === 1, `  with one re-read (${JSON.stringify(coldReadStats)})`);
+}
+{
+    // the neighbour block holds bytes that REALLY are zero, next to the hole's
+    // ragged end: those stay zero, the hole's zeros are filled
+    resetStats();
+    const file = real.slice(); file.fill(0, 81920 + 2000, 81920 + 2100);
+    const got = await readBlobRange(faultyBlob(file, { holes: [[65536, 81920 + 1000]] }), 0, 131072);
+    check(sameBytes(got, file.subarray(0, 131072)), 'really-zero bytes in a neighbour block stay zero; only the hole is filled');
+}
+{
+    // a re-read is copied in only over zeros: a byte the first read got right
+    // is never replaced, even if the re-read of the neighbour block differs
+    resetStats();
+    const blob = faultyBlob(real, { holes: [[16384, 32768 + 500]] });
+    const orig = blob.slice;
+    blob.slice = function (a, b) {
+        const r = orig.call(blob, a, b);
+        if (a !== 12288) return r;   // the re-read of [12288, 36864): garble its leading neighbour block
+        return { async arrayBuffer() { const u = new Uint8Array(await r.arrayBuffer()); u.fill(0xee, 0, 4096); return u.buffer; } };
+    };
+    const got = await readBlobRange(blob, 0, 65536);
+    check(sameBytes(got, real.subarray(0, 65536)), 'bytes the first read got right are kept, whatever the re-read says');
+}
+{
+    // the window source repairs a ragged run too (it reads windows through readBlobRange)
+    resetStats();
+    const src = guardedRangeSource(faultyBlob(real, { holes: [[65536, 65536 + 65536 + 777]] }), { windowBytes: 1 << 19 });
+    const got = await src.readRange(60000, 80000);
+    check(sameBytes(got, real.subarray(60000, 140000)), 'guardedRangeSource: a run ending part-way into a block is repaired');
 }
 
 // ---------------------------------------------------------------------------
