@@ -26,7 +26,7 @@ import {
 import {
     autoAssignVideosToCameras, forceVideoSelection, showParentDirMatchSummary,
     forceVideoSelectionWithFolder, createViewForVideoFile, updateTotalFrames,
-    rebuildVideoController, fitCanvasesToCells,
+    adoptLabeledFrameCount, rebuildVideoController, fitCanvasesToCells,
 } from '../loading/session-loader.js';
 import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
@@ -363,7 +363,7 @@ export function markDirty() {
     if (state.session) state.session.isDirty = true;
     if (state.isDirty) return;
     state.isDirty = true;
-    document.title = '\u2022 Lucid';
+    document.title = '\u2022 LUC3D';
     var saveDot = document.getElementById('saveDirtyDot');
     if (saveDot) saveDot.style.display = 'inline-block';
 }
@@ -377,7 +377,7 @@ export function clearDirty() {
     } else if (state.session) {
         state.session.isDirty = false;
     }
-    document.title = 'Lucid';
+    document.title = 'LUC3D';
     var saveDot = document.getElementById('saveDirtyDot');
     if (saveDot) saveDot.style.display = 'none';
 }
@@ -1566,10 +1566,13 @@ export async function handleLoadProject(prePickedFile) {
 
         } else if (needsVideoPrompt) {
             // V2 / legacy: single prompt for video files
+            // No manifest (e.g. an Export Labels JSON) → nothing to show, so no
+            // "Expected:" line.
             var manifestInfo = missingFilenames.length > 0
                 ? 'Need: ' + missingFilenames.join(', ')
-                : (manifestFilenames.join(', ') || '(unknown)');
-            var videoFiles = await forceVideoSelection(manifestInfo);
+                : manifestFilenames.join(', ');
+            var videoFiles = await forceVideoSelection(manifestInfo,
+                { title: 'Project loaded — now select the video file(s)' });
 
             if (videoFiles.length > 0) {
                 for (var i = 0; i < videoFiles.length; i++) {
@@ -1661,6 +1664,11 @@ export async function handleLoadProject(prePickedFile) {
         }
 
         updateTotalFrames();
+        // Loaded without video (the user continued past the video prompt):
+        // size the project from its labels, and open on the first labeled
+        // frame as the video path's seek does.
+        var firstLabeled = adoptLabeledFrameCount();
+        if (firstLabeled >= 0) state.currentFrame = firstLabeled;
         if (state.views.length > 0) {
             hideWelcomeOverlay();
             populateViewStrip();
@@ -1705,8 +1713,11 @@ export async function handleLoadProject(prePickedFile) {
         var statusParts = [cameras.length + ' cameras', state.session.numFrames.toLocaleString('en-US') + ' labeled frames'];
         if (state.views.length > 0) {
             statusParts.push(state.views.length + ' views');
+            setStatus('Project loaded (' + statusParts.join(', ') + ')', 'success');
+        } else {
+            setStatus('Project loaded without video (' + statusParts.join(', ') +
+                ') — attach videos via File ▸ Load Videos…', 'success');
         }
-        setStatus('Project loaded (' + statusParts.join(', ') + ')', 'success');
     } catch (err) {
         console.error('Failed to load project:', err);
         hideLoading();
