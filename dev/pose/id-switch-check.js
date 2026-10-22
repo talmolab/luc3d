@@ -40,7 +40,7 @@
  * Depends on: pose-data.js (readPoint3d). Pure — no DOM, no app state.
  */
 
-import { readPoint3d } from './pose-data.js?v=c0d4da0a9682';
+import { readPoint3d } from './pose-data.js?v=4352b922048e';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
@@ -84,7 +84,8 @@ export const IMAGE_CHECK_DEFAULTS = Object.assign({}, SWITCH_CHECK_DEFAULTS, {
     getEmbeddings: null,   // REQUIRED: async (frame, items[{k, group}]) -> per item [{camera, vector}];
                            // STARTED in increasing frame order, at most `inFlight` in flight
     inFlight: 2,           // requests kept in flight (ui/image-embedder.js asks for 8, to batch frames)
-    prepareFrames: null,   // optional: async (frames[]) — every frame getEmbeddings will be asked for, in order
+    prepareFrames: null,   // optional: async (frames[], items[][]) — every frame getEmbeddings will be asked for, in order,
+                           // and the items it will be asked for at each (lets the provider skip frames it has cached)
     releaseFrames: null,   // optional: () — called when done (or cancelled)
 });
 
@@ -749,7 +750,7 @@ export async function checkImageSwitches(session, opts) {
     // one being consumed — requests are STARTED in frame order, so a streaming
     // provider still sees increasing frames — letting decode/crop of later frames
     // overlap embedding (a provider can then batch several frames per model run).
-    if (typeof o.prepareFrames === 'function') await o.prepareFrames(jobs.map(function (j) { return j.frame; }));
+    if (typeof o.prepareFrames === 'function') await o.prepareFrames(jobs.map(function (j) { return j.frame; }), jobs.map(function (j) { return j.items; }));
     try {
         var ahead = Math.max(1, Math.floor(o.inFlight || 2));
         var start = function (j) { var p = o.getEmbeddings(jobs[j].frame, jobs[j].items); p.catch(function () {}); return p; };   // surfaced when awaited
