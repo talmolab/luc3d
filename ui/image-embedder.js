@@ -933,7 +933,7 @@ export function embeddingCacheScope(session, views) {
 // kept beside the vectors, under the same key, and shown when that frame comes from the cache again.
 /** Frames per run whose sample crop's pixels are kept for a later cached run's dialog. */
 export const SAMPLE_FRAMES_PER_RUN = 200;
-/** Most sample crops kept, all sessions together (INPUT x INPUT grey bytes each: 50 KB, so 12.8 MB). */
+/** Most sample crops kept, all sessions together (INPUT x INPUT grey bytes each: 28 KB at 168, so 7.2 MB). */
 export const SAMPLE_PIXELS_MAX = 256;
 const _samplePixels = new Map();               // full cache key -> Uint8Array(INPUT * INPUT), least recently used first
 

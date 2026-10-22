@@ -8415,7 +8415,7 @@ the cache, F frames not decoded" (or "all N crops from the cache" when the model
 never ran). **Sample crops on cached runs:** a frame answered from the cache cuts
 no crop, so each run keeps the grey pixels (`tensorToGrey`, INPUT² bytes) of the
 dialog's sample crop on `SAMPLE_FRAMES_PER_RUN` (200) evenly spaced frames, under
-that crop's cache key (at most `SAMPLE_PIXELS_MAX` = 256 kept, 12.8 MB, dropped with
+that crop's cache key (at most `SAMPLE_PIXELS_MAX` = 256 kept, 7.2 MB at the 168-px input, dropped with
 the vectors); when such a frame comes from the cache, `sampleCrops()` gets that
 crop back (`greyToTensor`: channel 0 only, all `inputTensorToPixels` reads, so the
 dialog shows the same bytes), marked `cached: true`, with the skeleton overlay
