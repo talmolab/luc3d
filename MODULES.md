@@ -921,6 +921,70 @@ session is included) and `tests/e2e/set-new-calibration.mjs`.
 
 ---
 
+### pose/detection-filter-stats.js
+
+**Purpose.** Count what the tracker's two detection filters
+(`filterMinVisibleNodes`, `filterMinInstanceScore`) would remove, per camera and
+in total, before anyone runs tracking — so the Tracking Wizard can show it while
+the values are being chosen (`ui/detection-filter-preview.js`). DOM-free, no
+imports.
+
+**Why it exists.** The filters drop detections silently, and they do not hit
+every camera alike: on a real 3-camera rig the low side camera's detections
+scored far below the other two (median mean point score 0.64), so a value that
+is harmless for two cameras empties the third.
+
+**Key exports.**
+- `failsMinVisibleNodes(visible, min)`, `failsMinInstanceScore(score, min)` —
+  the two primitives. A score that is null/undefined/NaN never fails (the
+  tracker's rule); a score of 0 does.
+- `passesDetectionFilter(inst, minVis, minScore)` — **the tracker's filter**;
+  `pose/tracker.js` imports it rather than keeping its own, so the readout and a
+  run cannot disagree.
+- `collectDetectionStats(session)` / `collectDetectionStatsAsync(session,
+  {isCancelled})` — walk the session ONCE (the async one yields between
+  cameras) into flat typed columns: camera index, present-keypoint count,
+  instance score (Float64 — a stored 0.9 must still pass a minimum of 0.9),
+  mean per-point confidence as sleap-nn computes its "mean node score" — over
+  ALL nodes, a missing node counting as 0 (NaN with no point scores at all;
+  averaging the present nodes only understated the real stressTest sideC
+  rerun, 36.7% below 0.75 instead of sleap-nn's 43.8%). That is sleap-nn
+  0.3.3's definition; 0.2.0 averaged the present nodes only, so a file it
+  filtered at 0.75 still shows some detections "below 0.75" here — predicted flag;
+  plus per-camera `detections` / `predicted` / `predictedWithScore` /
+  `withPointScores`, and `hasInstanceScores` / `hasPointScores`.
+- `countDetectionFilters(stats, {minVisibleNodes, minInstanceScore,
+  minMeanPointScore}, included?)` — per camera and over the `included` cameras:
+  `failVisible`, `failScore`, `removed` (either), `failsBoth`, and
+  `failMeanPointScore` — a PREVIEW (LUCID has no such filter) counted over the
+  detections that carry point scores and never added to `removed`. One pass
+  over the columns; this is what a keystroke costs.
+- `meanPointScoreHistograms(stats, bins)` — per camera, equal-width bins over
+  [0, 1] (above 1 lands in the last) and the median.
+
+**Rules.**
+- **The population is the WHOLE session.** Eager: every frame group's
+  instances plus its unlinked pool (what `buildTrackerDetections` sees). Lazy:
+  every non-resident frame straight from the columnar store via
+  `forEachInstanceRow`, with the values hydration would give it (a prediction's
+  score `|| 0`, a user row's 0, a keypoint present when x and y are finite), and
+  every RESIDENT frame from memory (it may carry edits), never both.
+- **Missing scores are reported, not shown as 0%.** Loaders write 0 for an
+  absent instance score, and the tracker then drops that detection at any
+  minimum above 0 — so "no instance scores" means no prediction has a positive
+  score, and the readout says so (overall and per camera) beside the count.
+
+Covered by `tests/test-detection-filter-stats.mjs` (the primitives; eager and
+lazy counts against `passesDetectionFilter` over a sweep of values; missing
+scores; an empty pool; excluded cameras; histograms; the async walk) and
+`tests/e2e/detection-filter-preview.mjs`.
+
+**Imports from project modules.** None.
+
+**Imported by.** `pose/tracker.js`, `ui/detection-filter-preview.js`.
+
+---
+
 ### pose/skeleton-edit-impact.js
 
 **Purpose.** Count what a skeleton node/edge edit is about to re-shape, so
@@ -2191,7 +2255,7 @@ and Track All rewrite `session.instanceGroups`, `session.frameIdentityMap` and
 drops the frame's groups, `runTrackingPass` before `clearIdSwitchResults` and its
 own clear, so both sweeps (`runCrossViewTrackerProgress` and the windowed
 `sweepTrackAllFrames`) are covered by the one call. For a long time none did:
-after Track All on a fresh project the save dot and `• Lucid` title never
+after Track All on a fresh project the save dot and `• LUC3D` title never
 appeared and closing the tab lost the result without a prompt. The call sits
 AFTER every bail-out (a refused click is not an edit) and is deliberately NOT
 conditional on what the run found: the clear runs first, so a re-run that
@@ -2249,8 +2313,10 @@ are exercised only by the benchmark harness.)
   reference `correspondence_weight_3d`.
 - *Detection-pool filter (`filterMinVisibleNodes`/`filterMinInstanceScore`, both
   default 0 = off).* `collectInstances` gates every instance through
-  `passesDetectionFilter` before matching: drop instances with fewer than
-  `filterMinVisibleNodes` present keypoints (`countVisibleNodes`), and — when a
+  `passesDetectionFilter` (imported from `pose/detection-filter-stats.js`, which
+  the Tracking Wizard's readout counts with, so the two cannot disagree) before
+  matching: drop instances with fewer than
+  `filterMinVisibleNodes` present keypoints (`countPoints`), and — when a
   per-instance `score` is available — below `filterMinInstanceScore`. This is the
   geometry/confidence half of the detection filter; full parity (mean-node-score,
   OKS dedup, gap recovery) needs per-detection scores plumbed through the H5
@@ -2396,6 +2462,8 @@ drifts upward (e.g., 4 → 11 on the test fixture).
 **Imports from project modules.**
 - `./single-camera-tracking.js` — `singleCameraName`, `singleCameraTrackerConfig`,
   `trackSingleCamera`, `SINGLE_CAMERA_LAZY_REASON` (the one-camera Track All).
+- `./detection-filter-stats.js` — `passesDetectionFilter` (the detection-pool
+  filter; see above).
 - `./pose-data.js` — `InstanceGroup`, `points3dNodeCount`, `hasPoint3d`,
   `readPoint3d`, `pooledPoints3d` (`commitTrackedFrame` stores a COPY of the
   target's 3D in the slab pool — one ArrayBuffer per group was 539,545 for a
@@ -11642,6 +11710,48 @@ bridgeable.
 
 ---
 
+### ui/detection-filter-preview.js
+
+**Purpose.** The Tracking Wizard's readout, right under the two detection-filter
+fields: what share of the active session's detections each filter would remove
+at the values being typed, per camera and over the tracked cameras, with the
+share the two remove together ("Removed") and the share failing both. Below it,
+each camera's mean per-point confidence — median and a ten-bar distribution —
+with a preview-only "share below" field (default 0.75, not stored): LUCID has
+no such filter, but sleap-nn's inference filter on it is what removed most of a
+low side camera's detections in our data.
+
+**Key exports.**
+- `buildDetectionFilterPreview({session, getValues, isCameraIncluded})` →
+  `{root, start, update, dispose}`. `start()` begins the one walk
+  (`collectDetectionStatsAsync`, one camera per task) and is idempotent;
+  `update()` re-counts from the recorded columns and re-renders;
+  `dispose()` cancels a walk in flight.
+- `fmtShare(part, whole)` — `12.3%`; `<0.1%` / `>99.9%` so a sliver is never
+  rounded to 0% or 100%; `—` with nothing to divide by.
+
+**Behavior.** Counts read `getValues()` (the wizard's unsaved `working`
+values), so they move before Apply. A camera switched off in Camera Views is
+greyed, tagged `excluded`, and left out of the total. Missing scores are said,
+never shown as 0%: a camera whose predictions all score 0 gets a `no scores`
+tag, and a note says a minimum above 0 removes every prediction; no per-point
+confidence replaces the confidence table with a sentence. An empty session, no
+session, and a failed walk each get a sentence instead of a table. Counts
+carry thousands commas. One scroller: the block grows to its full height.
+
+**Imports from project modules.** `../pose/detection-filter-stats.js`
+(`collectDetectionStatsAsync`, `countDetectionFilters`,
+`meanPointScoreHistograms`).
+
+**Imported by.** `ui/settings-modal.js`.
+
+**User-facing features.** Settings ▸ Tracking Wizard ▸ Tracking Thresholds:
+"What these filters would remove". Covered by
+`tests/e2e/detection-filter-preview.mjs` and
+`tests/test-detection-filter-stats.mjs`.
+
+---
+
 ### ui/settings-modal.js
 
 **Resizable, draggable, and it remembers.** The card carries CSS `resize: both`
@@ -11704,7 +11814,12 @@ state only (only editable bindings are tracked); nothing commits until **Apply**
 `setCameraWeights` + `setTrackingThresholds`), which then repaints overlays +
 timeline so excluded views grey immediately, and re-fits the ID-switch box
 (`refreshIdSwitchHighlight`), which encloses only nonzero-weight nodes. Cancel / close `×` / backdrop click
-/ Escape discard. A
+/ Escape discard. Right under the two detection-filter fields sits
+`ui/detection-filter-preview.js`'s readout of what they would remove, per
+camera; it re-counts on every `input` of either field and on every camera
+switch (it reads `working`, so it moves before Apply), and its one walk of the
+session starts the first time the wizard panel is SHOWN (`selectPanel`), so
+Settings opened for anything else walks nothing. Teardown disposes it. A
 capture-phase document keydown listener makes the modal fully capture the
 keyboard (background shortcuts don't fire while it's open) and is removed on
 teardown.
@@ -11712,7 +11827,8 @@ teardown.
 **Imports from project modules.** `./settings.js` (`getDefaultTriangulationMethod`,
 `setDefaultTriangulationMethod`, `getActions`, `applyBindings`, `formatBinding`,
 `getNodeWeight`, `setNodeWeights`, `getCameraWeight`, `setCameraWeights`,
-`getTrackingThresholdDefs`, `setTrackingThresholds`); `./app-state.js`
+`getTrackingThresholdDefs`, `setTrackingThresholds`); `./detection-filter-preview.js`
+(`buildDetectionFilterPreview`); `./app-state.js`
 (`getActiveSession`, `state`, `timeline`); `./rendering.js` (`drawAllOverlays`,
 for the post-Apply repaint); `./modal-geometry.js` (`installModalGeometry`);
 `./id-switch-highlight.js` (`refreshIdSwitchHighlight`, on Apply).
