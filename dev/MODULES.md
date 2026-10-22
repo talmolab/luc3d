@@ -2207,6 +2207,37 @@ too would orphan a reappearing animal. Covered by
 `tests/test-cross-view-tracker.mjs` (the swap in miniature, and lost-target
 re-acquisition).
 
+**Misplaced nodes (2026-10-20, `maxPenalty` / `matchReproj` / `birthMedian` hp; all
+0 = off = today's tracker exactly).** Ported from campy's live port of this tracker
+(olinesn/campy#85). A node the 2D model put in the wrong place triangulates far from
+its animal (metres, on a rig whose model was trained elsewhere), and the unbounded
+per-node 3D term then lets that one node decide the Hungarian. `maxPenalty` floors
+the per-node 3D term at `-maxPenalty × corr3d` (4 = flat beyond 5 × distanceThreshold).
+`matchReproj` (px) makes `_retriangulate` also build `target.match3d` — `points3d`
+re-solved by `checkedPoints3d` (campy's `TriangulateChecked`: a node whose worst view
+is over the threshold loses the view WITHOUT which its other views fit best, down to
+2 views, then is dropped) — and `matchPoints3d(target)` is what `_adjacency3d` and
+`targetProjection` read. `points3d` (written to the groups) stays the plain DLT.
+`birthMedian` pairs births by the median epipolar distance over nodes
+(`epipolarMedianMatrix`) instead of `epipolarErrorMatrix`'s mean. Measured with an
+exact offline replay of Track All on 22 proofread SLAP sessions (8 cameras):
+maxPenalty 4 + matchReproj 20 took lasting identity switches 360 → 168 and mean
+accuracy 88.2% → 90.5% (every pair of 1–8 × 10–40 px halved the switches), but on
+the 5-mouse recording no combination beat the default (4 → 4–14 lasting relabels).
+With 3 of the cameras at a time (3 triples × 22 sessions) switches went 1,598 → 704
+and mean accuracy 82.8% → 89.8%. birthMedian changed nothing, with 8 cameras or 3. Hence opt-in: the first two as
+Tracking Wizard settings; `birthMedian` only as a hyperparameter (no measured effect,
+so not offered). `matchReproj`'s cost is the leave-one-view-out re-solves
+(SLAP 145420: 1.0M node checks, 19% over 20 px, 1.6M trial solves). `checkedPoints3d`
+does them through `DltViewSystem`, reads the extrinsics from one flat array, and tries
+both the trials and each trial's views WORST VIEW FIRST, so a losing trial stops at
+its first view (ties still go to the lowest view index, via `nextUp`). Bit-identical
+to solving each trial with `triangulatePointDLT` in index order (identical identities
+on 22 SLAP sessions + 5 mice); what `matchReproj` adds fell 43–49% (maxPenalty 4 +
+matchReproj 20: 5.1 → 4.0 s on 145420, 51 → 39 s on 5 mice). Covered by
+`tests/test-crossview-features.mjs` (each option's effect, that 0 reproduces today's
+cost, and `match3d` against a verbatim copy of the original per-trial loop).
+
 **Coordinate conventions.** Works entirely in NORMALIZED camera coordinates
 (detections undistorted + K⁻¹-applied on ingest, `normalizePoint`); the
 "projection matrix" is the bare extrinsic `[R|t]` (`camera.extrinsicMatrix`).
@@ -2250,8 +2281,8 @@ nodes entirely. `null`/omitted ⇒ every node weighted 1. Wired from
 `runCrossViewTracker` via the Tracking Wizard's Node Weights section
 (`getNodeWeightArray`).
 
-**Imports.** `pose/triangulation-core.js` (`triangulatePoints`, `reprojectPoint`,
-`backProjectToRays`, `pointsToRayDistances`, `hungarianAlgorithm`,
+**Imports.** `pose/triangulation-core.js` (`triangulatePoints`, `DltViewSystem`,
+`reprojectPoint`, `backProjectToRays`, `pointsToRayDistances`, `hungarianAlgorithm`,
 `computeFundamentalMatrix`, `epipolarErrorMatrix`); `pose/pose-data.js`
 (`points3dNodeCount`, `readPoint3d`). From the core, NOT `pose/triangulation.js`
 (which re-exports them): that module pulls in the whole UI, and this one must
@@ -2942,7 +2973,8 @@ played far past the cap, save, reopen — a member's edit must survive the save)
 **Purpose.** The pure triangulation math, split out of `pose/triangulation.js`
 so a Web Worker can load it: matrix helpers (`matMul`, `matTranspose`,
 `solveSmallestEigenvector4x4`, `svd3x4`), DLT
-(`triangulatePointDLT`, `triangulatePoints`), the "Refined" point stage
+(`triangulatePointDLT`, `triangulatePoints`, and `DltViewSystem` for solving
+one keypoint again on subsets of its views), the "Refined" point stage
 (`triangulatePointBA`, `triangulatePointsBA`, `BA_ROBUST_SCALE_PX`),
 reprojection (`reprojectPoint(s)`, `reprojectPointCamera(s)`, `cameraDepth` —
 the homogeneous `w`, POSITIVE in front of the camera, which any caller
@@ -2998,6 +3030,15 @@ null-vector solve.**
   frame-invariance tests catch that (a 1e-5 tolerance fails two of them).
   Measured with `tests/e2e/_diag-trackall-ab.mjs` on seven real recordings:
   identical identity groups on every frame, 3D within 8.6e-10 mm.
+- Subset DLT: `DltViewSystem` (`prepare(observations, Ps)`, `solve(use, out)`)
+  forms one keypoint's per-view DLT rows (`dltRowsInto`, shared with
+  `dltNormalMatrixFlat`) and their upper-triangle products once, in the frame of
+  the same `Ps` array; `solve` adds the used views' products in row order, so it
+  is bit-identical to `triangulatePointDLT` with the other views nulled.
+  (Subtracting a view from the full M would not be.) Used by the tracker's
+  `checkedPoints3d`. `smallestEigvec4Inverse`'s Cholesky and triangular solves
+  are unrolled into locals in the same operation order — the same bits, pinned
+  against a verbatim copy of the loop form — which speeds up every DLT solve.
 - Refinement: `triangulatePointBA` projects through
   `_projectAndJacobian(Camera)Into`, which write into one scratch object with
   the same expressions as `projectAndJacobian`, `distortJacobian` and
@@ -8521,6 +8562,8 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   only (`filterMinVisibleNodes`, `filterMinInstanceScore`, `filterMinMeanNodeScore`, `corr2dWeight`,
   `corr3dWeight`, `velocityThreshold`, `distanceThreshold`, `timePenalty`,
   `stale`, `matchGate` (0/1 toggle for the CrossViewTracker match gate),
+  `maxPenalty` / `matchReproj` — the misplaced-node options, 0 (off) by
+  default (the tracker's third, `birthMedian`, is not in the wizard),
   `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
   0/1, the image check likewise, default 0; `imageChangeThreshold` -0.8;
