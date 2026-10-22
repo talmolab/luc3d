@@ -3195,8 +3195,9 @@ keyframeGap, maxShift}` (which frame each image sample decodes in one camera —
 20000, `imageHz` 2, `getEmbeddings` REQUIRED: `async (frame, items[{k, group}]) ->
 per item [{camera, vector}]`, STARTED in increasing frame order with up to
 `inFlight` (default 2; the image embedder asks for 8) in flight; optional
-`prepareFrames(frames)` (awaited once with the sorted frames it will ask for) and
-`releaseFrames()` (always called at the end) let the provider stream its video).
+`prepareFrames(frames, items)` (awaited once with the sorted frames it will ask for
+and the items it will ask for at each — so a provider can skip what it has cached)
+and `releaseFrames()` (always called at the end) let the provider stream its video).
 
 **The grid.** Every round(fps / `sampleHz`)-th frame is a grid sample: per
 identity its InstanceGroup, body centroid and bone lengths. "Close" = body
@@ -3312,6 +3313,49 @@ three-animal scenarios; the identity metric on look-alikes; `symmetricEigen`;
 geometry of `ui/image-embedder.js`; `planKeyframeSamples`),
 `tests/e2e/image-keyframe-sampling.mjs`, `tests/e2e/size-switch-check.mjs`,
 `tests/e2e/track-auto-size-switch-check.mjs`, `tests/e2e/id-switch-image-check.mjs`.
+
+---
+
+### pose/embedding-cache.js
+
+**Purpose.** The store behind the image ID-switch check's repeat runs
+(`ui/image-embedder.js`): crop embeddings kept between runs, so a re-run after
+Track All decodes, cuts and embeds only the crops whose pixels can have changed.
+Pure — no DOM, no app state.
+
+**Key exports.** `cropKeyHash(g, others)` -> 16 hex characters: a 64-bit hash
+(two murmur3-style 32-bit mixes) of the EXACT IEEE-754 bits of everything
+`cutCrop` reads besides the image — the crop geometry's `cx`, `cy`, `angle`,
+`scale`, `L` (the mask's dilation) and `hull`, and every masked hull in order,
+with lengths, so hull boundaries count. No rounding: two crops that rounded to one
+key could differ by a pixel, and a hit must be the vector the model would give.
+`g.pts` (the dialog's overlay keypoints) is ignored, as `cutCrop` ignores it.
+`hullsReachingCrop(g, others, side)`: the masked hulls that can change the crop's
+pixels — 3+ corners (what `cutCrop` draws) and a bounding box that, mapped into
+the crop with `cutCrop`'s transform, comes within `MASK_REACH_MARGIN` (2 px, for
+anti-aliasing) of the crop square; order kept, a NaN corner counts as reaching.
+Only these go into the key, so a neighbour moving far away keeps the crop's
+entry (on the 5-mouse recording 15% of a re-run's crops missed only for that);
+`cutCrop` itself still gets every hull. Lossless pixel for pixel
+(`tests/e2e/image-check-cache.mjs` §5).
+`EmbeddingCache({maxEntries, chunk})`: a bounded LRU of fixed-length Float32
+vectors by string key — `get(key)` (a COPY, now most recently used, or null),
+`put(key, vec)` (stores a copy; evicts the least recently used when full; a
+vector of another length clears it), `has`, `deleteWhere(pred)`, `clear()`,
+`size`, `bytes`, `dim`. Vectors live in pooled `Float32Array` chunks of
+`EMBED_CACHE_CHUNK` (4096) slots, grown on demand and freed when emptied — never
+one array per vector (the renderer's V8 heap cap). `EMBED_CACHE_MAX_ENTRIES`
+(65,536 = 96 MB at 384 floats; a 15-min, 5-animal, 3-view run is ~25k).
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/image-embedder.js`.
+
+**Coverage.** `tests/test-embedding-cache.mjs` (one bit of any input changes the
+key, overlay points don't, no collisions over 20k near-identical geometries;
+which hulls reach the crop at different rotations; LRU
+order, slot recycling, copies, pooling, freeing); end to end
+`tests/e2e/image-check-cache.mjs`.
 
 ---
 
@@ -8342,6 +8386,42 @@ is file size (~+50% for HEVC).
 Embeddings are bit-identical across all of this (seeking vs streaming, top-k vs
 all views, worker vs inline crops).
 
+**Repeat runs: the embedding cache** (`pose/embedding-cache.js`, one module-level
+LRU shared by all sessions). A crop is a pure function of the video, the camera,
+the frame decoded for that view and how (`'s'` streamed or `'g'` `getFrame` — the
+two hand the crop a different kind of image), the animal's crop geometry and the
+hulls masked out of it; its vector also of the model. So each vector is stored
+under `<session uid>|<backend/dtype that produced it>|<view>|<frame decoded>|<s|g>|
+<cropKeyHash of the geometry and of the masks that reach the crop (hullsReachingCrop)>`
+(`planFrameCrops` builds the key body; the producer's tag rides on
+each batch's result). `embeddingCacheScope(session, views)` gives the session's
+prefix and drops the entries of sessions no longer in `state.sessions` (closed or
+reloaded projects) and of this session when its videos changed (`viewVideoId`:
+the decoder's source File / URL object, else the decoder). `prepareFrames(frames,
+items)` plans the keyframe snapping over ALL frames first (so a sample decodes the
+frame it always would), then — only when this session + model has stored anything,
+so a first run does no extra work — computes every frame's crops and looks them up:
+a frame whose crops are all cached is answered by `getEmbeddings` without
+geometry, decode, crop or model, and is left out of the streaming readers (a
+camera with nothing left to decode gets no reader); a partly cached frame decodes
+only the cameras with a missing crop and embeds only those crops. Hits are copied
+out at prepare time, so a mid-run eviction cannot turn a planned hit into a miss.
+Results are assembled per item in view order (`assembleItems`) — the order the
+model path always returned — and a hit carries `cached: true`. Not used while a
+WebNN trial is undecided (its backend may still switch); `opts.cache: false` or
+`window.LUCID_IMAGE_CACHE = 0` turns it off. `stats()` adds `cachedCrops`,
+`cachedFrames`, `cacheLookupMs`; the speed line ends "· N of M crops (P%) from
+the cache, F frames not decoded" (or "all N crops from the cache" when the model
+never ran). **Sample crops on cached runs:** a frame answered from the cache cuts
+no crop, so each run keeps the grey pixels (`tensorToGrey`, INPUT² bytes) of the
+dialog's sample crop on `SAMPLE_FRAMES_PER_RUN` (200) evenly spaced frames, under
+that crop's cache key (at most `SAMPLE_PIXELS_MAX` = 256 kept, 12.8 MB, dropped with
+the vectors); when such a frame comes from the cache, `sampleCrops()` gets that
+crop back (`greyToTensor`: channel 0 only, all `inputTensorToPixels` reads, so the
+dialog shows the same bytes), marked `cached: true`, with the skeleton overlay
+from today's keypoints (`cropPointsToInput` of the current geometry — the tail is
+not in the key).
+
 **WebNN (opt-in, experimental: `webnn: true`, from `imageCheckWebNN`).** WebNN can
 reach hardware WebGPU cannot (on Windows, DirectML on NVIDIA tensor cores). It is
 behind `chrome://flags/#web-machine-learning-neural-network`, compiles a static
@@ -8373,7 +8453,7 @@ since a fragment is never sent, but a new module-map entry. `loadImageModel` and
 `createImageEmbedder`'s two preflight throws (no videos, no Nose/TTI) are
 `cannotRun` errors too.
 
-**Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, webnn, keyframes})` ->
+**Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, webnn, keyframes, cache, model})` ->
 `{getEmbeddings, prepareFrames, releaseFrames, backend, device, busyMs, cpuBusyMs, stats, inFlight, views}` (the provider
 `checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and the
 CPU model workers and disposes a WebNN model; `device()` -> `{backend: 'webgpu'|'webnn'|'cpu',
@@ -8384,6 +8464,10 @@ through its animals and cameras, the last `SAMPLE_CROPS` kept as REFERENCES
 (nothing is converted unless the dialog asks) — several rather than the latest
 because on the CPU frames arrive in bursts); `opts.device` ('auto' | 'webgpu' |
 'cpu') and `opts.cpuWorkers` force a device / worker count (tests, benchmarking);
+`opts.model` (tests, benchmarks) replaces the model with an async `(data, n) -> n vectors`
+(backend 'test'); `embeddingCacheScope(session, views)`, `viewVideoId(view)`,
+`clearEmbeddingCache()`, `embeddingCacheInfo()` -> `{entries, bytes, maxEntries, samples}` (the cache, above);
+`SAMPLE_FRAMES_PER_RUN`, `SAMPLE_PIXELS_MAX`, `tensorToGrey(tensor)`, `greyToTensor(grey)` (sample crops on cached runs);
 `pickImageDevice()` -> `{kind: 'webgpu'|'cpu', adapter, why}`; `cpuModelWorkerCount(cores, memoryGB)`,
 `CPU_MODEL_MAX_WORKERS`; `createCpuModelPool(count, onStatus, clock?)` -> `{size, run(data, n) ->
 Promise<Float32Array[]>, terminate()}`; `createCropPool(clock?)` -> `{broken, run(image, crops), terminate()}` | null
@@ -8441,8 +8525,9 @@ fp32 (~88 MB). Without a hardware GPU the fp32 model runs on the CPU in workers
 calibrated model). Re-check the CLS extraction (`last_hidden_state` token 0) on
 any version bump.
 
-**Imports from project modules.** `ui/app-state.js` (`state.views`),
+**Imports from project modules.** `ui/app-state.js` (`state.views`, `state.sessions`),
 `pose/id-switch-check.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`),
+`pose/embedding-cache.js` (`EmbeddingCache`, `cropKeyHash`),
 `pose/lazy-residency.js` (`hydrateFrameMembers2d`, `releaseFrameMembers2d` — DOM-free,
 so the crop worker can load it), `ui/load-graph.js` (`createLoadMeter`,
 `createBusyClock`, `formatCpuLoad`, `LOAD_WINDOW_MS`); `mediabunny`
@@ -8463,8 +8548,14 @@ in `tests/e2e/image-check-cpu.mjs`; keyframe sampling on generated H.264 and AV1
 in `tests/e2e/image-keyframe-sampling.mjs`; a failed download in
 `tests/test-image-model-download.mjs` and `tests/e2e/image-check-offline.mjs`
 (every off-localhost request aborted after boot, GPU and CPU paths, a retry in
-the same page); accuracy on real data by `tests/e2e/_diag-image-keyframe-snap.mjs`
-(diagnostic, not in the suite).
+the same page); the embedding cache in `tests/e2e/image-check-cache.mjs` (the
+real embedder over streamed fake videos and a pixel-sensitive stand-in model:
+cache on = off, a warm run decodes and embeds nothing, one moved keypoint re-embeds
+exactly the crops whose key changed, leaving unreachable hulls out of the key is
+lossless, a cached run's sample crops are the crops' own pixels and the real dialog
+shows one); accuracy on real data by
+`tests/e2e/_diag-image-keyframe-snap.mjs`, the cache's speed and equality on real
+data by `tests/e2e/_bench-image-cache.mjs` (both diagnostic, not in the suite).
 
 ---
 
