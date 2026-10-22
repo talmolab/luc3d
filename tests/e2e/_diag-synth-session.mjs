@@ -1,8 +1,8 @@
 /**
  * _diag-synth-session.mjs — score LUCID against a synthetic session whose truth is
  * known exactly. The sessions are made by `sleap_synth_session.py`, which lives in
- * sleap-io under `contrib/synthetic_sessions/` (olinesn/sleap-io, branch
- * `feature/synthetic-sessions`): SLEAP models run backward to draw each camera,
+ * the sleap-io fork under `contrib/synthetic_sessions/`
+ * (https://github.com/olinesn/sleap-io): SLEAP models run backward to draw each camera,
  * so the 3D, every camera's 2D and the identities are known exactly.
  *
  * For each SIDE of the generated folder it loads OUT/<side> as a per-camera session
