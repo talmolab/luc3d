@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=4c65cf6fa399';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=f3fb7a235b94';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -329,6 +329,11 @@ const TRACKING_THRESHOLDS = [
         min: 0, max: 1, step: 0.05,
         desc: 'Detection-pool filter: drop instances whose detection score is below this value (only applies when per-instance scores are available). 0 = off; the sleap-3d reference used 0.85.',
     },
+    {
+        id: 'filterMinMeanNodeScore', label: 'Min mean node score (filter)', default: 0,
+        min: 0, max: 1, step: 0.05,
+        desc: 'Detection-pool filter: drop predictions whose mean node score is below this value — the average of the model\'s per-node scores over every node of the skeleton, a missing node counting as 0 (sleap-nn\'s "mean node score"). Applies only to predictions that carry node scores. 0 = off.',
+    },
     // --- CrossViewTracker engine (pose/cross-view-tracker.js) ---
     {
         id: 'corr2dWeight', label: '2D correspondence weight', default: 1,
@@ -397,6 +402,16 @@ const TRACKING_THRESHOLDS = [
         desc: 'With duplicate removal on: a detection is a duplicate only if its keypoints match the stronger detection\'s with at least this OKS (its own nodes, scaled by the stronger one\'s size, so a partial copy counts) — and the box IoU above holds too. Keypoints alone would also take two look-alike poses side by side.',
     },
     {
+        id: 'maxPenalty', label: 'Cap a far node\'s 3D penalty (x 3D weight)', default: 0,
+        min: 0, max: 100, step: 0.5,
+        desc: 'A node\'s 3D matching penalty is never below this many times the 3D correspondence weight, so a node the 2D model put in the wrong place (it triangulates far from the animal, often metres away) counts the same however far off it is, instead of deciding the match alone. 4 = flat beyond 5 x the distance threshold (125 mm at 25). 0 = off (no cap). Opt-in: on 22 proofread SLAP sessions it and the reprojection check below together halved the lasting ID switches, but on the 5-mouse recording they added some (ported from olinesn/campy#85).',
+    },
+    {
+        id: 'matchReproj', label: 'Match against views that agree (px)', default: 0,
+        min: 0, max: 500, step: 1,
+        desc: 'Each animal\'s 3D that the next frame is matched against keeps only the nodes whose views agree within this many pixels: a node over it loses its worst view (down to 2), then is dropped. The 3D written to the groups is unchanged. 20 = the value tried with the cap above. 0 = off. Makes Track All about 60% slower.',
+    },
+    {
         id: 'autoSwitchCheck', label: 'Check ID switches after tracking (body size)', default: 1,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
         desc: 'After Track All or Track Frame Range, flag contacts after which each animal\'s body size matches the other\'s before better than its own (Tracks ▸ Check ID Switches; pose/id-switch-check.js). Checks every tracked frame in the session (needs at least 60 s of tracking). Results are marked on the seekbar and listed in the ID Switches tab, which opens only when a possible switch is found.',
@@ -459,9 +474,9 @@ TRACKING_THRESHOLDS.forEach(function (t) { _thrById.set(t.id, t); });
 // and are intentionally hidden from the UI; they still resolve to their defaults
 // for the benchmark harness.
 const WIZARD_THRESHOLD_IDS = new Set([
-    'filterMinVisibleNodes', 'filterMinInstanceScore',
+    'filterMinVisibleNodes', 'filterMinInstanceScore', 'filterMinMeanNodeScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
-    'stale', 'matchGate',
+    'stale', 'matchGate', 'maxPenalty', 'matchReproj',
     'scWindowSize', 'scOksStddev', 'scConnectBreaks', 'scRemoveDuplicates', 'scDuplicateIou', 'scDuplicateOks',
     'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckWebNN',
     'autoBrightnessSwitchCheck', 'brightnessCheckThreshold', 'brightnessCheckHz',
