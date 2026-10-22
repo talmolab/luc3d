@@ -12,13 +12,13 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=58209af6908c';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=58209af6908c';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=58209af6908c';
+         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=632b97be4ddc';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=632b97be4ddc';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=632b97be4ddc';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=58209af6908c';
-import { writePlaneMetadata } from './plane-metadata.js?v=58209af6908c';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=632b97be4ddc';
+import { writePlaneMetadata } from './plane-metadata.js?v=632b97be4ddc';
 
 // ============================================
 // Generic file picker
@@ -2826,7 +2826,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=58209af6908c', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=632b97be4ddc', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },
