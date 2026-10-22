@@ -8385,7 +8385,15 @@ WebNN trial is undecided (its backend may still switch); `opts.cache: false` or
 `window.LUCID_IMAGE_CACHE = 0` turns it off. `stats()` adds `cachedCrops`,
 `cachedFrames`, `cacheLookupMs`; the speed line ends "· N of M crops (P%) from
 the cache, F frames not decoded" (or "all N crops from the cache" when the model
-never ran). A fully cached run shows no sample crop in the dialog (none is cut).
+never ran). **Sample crops on cached runs:** a frame answered from the cache cuts
+no crop, so each run keeps the grey pixels (`tensorToGrey`, INPUT² bytes) of the
+dialog's sample crop on `SAMPLE_FRAMES_PER_RUN` (200) evenly spaced frames, under
+that crop's cache key (at most `SAMPLE_PIXELS_MAX` = 256 kept, 12.8 MB, dropped with
+the vectors); when such a frame comes from the cache, `sampleCrops()` gets that
+crop back (`greyToTensor`: channel 0 only, all `inputTensorToPixels` reads, so the
+dialog shows the same bytes), marked `cached: true`, with the skeleton overlay
+from today's keypoints (`cropPointsToInput` of the current geometry — the tail is
+not in the key).
 
 **WebNN (opt-in, experimental: `webnn: true`, from `imageCheckWebNN`).** WebNN can
 reach hardware WebGPU cannot (on Windows, DirectML on NVIDIA tensor cores). It is
@@ -8431,7 +8439,8 @@ because on the CPU frames arrive in bursts); `opts.device` ('auto' | 'webgpu' |
 'cpu') and `opts.cpuWorkers` force a device / worker count (tests, benchmarking);
 `opts.model` (tests, benchmarks) replaces the model with an async `(data, n) -> n vectors`
 (backend 'test'); `embeddingCacheScope(session, views)`, `viewVideoId(view)`,
-`clearEmbeddingCache()`, `embeddingCacheInfo()` -> `{entries, bytes, maxEntries}` (the cache, above);
+`clearEmbeddingCache()`, `embeddingCacheInfo()` -> `{entries, bytes, maxEntries, samples}` (the cache, above);
+`SAMPLE_FRAMES_PER_RUN`, `SAMPLE_PIXELS_MAX`, `tensorToGrey(tensor)`, `greyToTensor(grey)` (sample crops on cached runs);
 `pickImageDevice()` -> `{kind: 'webgpu'|'cpu', adapter, why}`; `cpuModelWorkerCount(cores, memoryGB)`,
 `CPU_MODEL_MAX_WORKERS`; `createCpuModelPool(count, onStatus, clock?)` -> `{size, run(data, n) ->
 Promise<Float32Array[]>, terminate()}`; `createCropPool(clock?)` -> `{broken, run(image, crops), terminate()}` | null
@@ -8515,7 +8524,8 @@ the same page); the embedding cache in `tests/e2e/image-check-cache.mjs` (the
 real embedder over streamed fake videos and a pixel-sensitive stand-in model:
 cache on = off, a warm run decodes and embeds nothing, one moved keypoint re-embeds
 exactly the crops whose key changed, leaving unreachable hulls out of the key is
-lossless); accuracy on real data by
+lossless, a cached run's sample crops are the crops' own pixels and the real dialog
+shows one); accuracy on real data by
 `tests/e2e/_diag-image-keyframe-snap.mjs`, the cache's speed and equality on real
 data by `tests/e2e/_bench-image-cache.mjs` (both diagnostic, not in the suite).
 
