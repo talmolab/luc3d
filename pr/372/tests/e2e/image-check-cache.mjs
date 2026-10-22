@@ -16,7 +16,10 @@
  *  1. With the cache on, the first run equals a run with it off (same flags and
  *     scores, every vector bit for bit).
  *  2. A second run takes every crop from the cache: no model run, no frame
- *     streamed or fetched — and the same flags, scores and vectors.
+ *     streamed or fetched — and the same flags, scores and vectors. The progress
+ *     dialog still gets sample crops: the pixels kept when each was cut (the same
+ *     as cutting it again), with the overlay from the current keypoints — and the
+ *     real progress dialog shows one.
  *  3. Negative control: one animal's 2D keypoint moved in one camera on one
  *     decoded frame. The next run re-embeds exactly the crops whose geometry or
  *     masks changed (that animal's, and its neighbours' in that view whose crops
@@ -132,15 +135,17 @@ try {
         };
         const KF = Int32Array.from({ length: Math.ceil(T * STEP / 32) }, (v, i) => 16 + 32 * i).filter(f => f < T * STEP);
         window.__fx = { session, CAMS, sk, E, SC, AS, makeDecoder, render };
+        window.__embedOpts = { model: fakeModel, maxViewsPerAnimal: 0, keyframes: () => KF };
         // one check through the real embedder; every returned vector recorded as frame|identity|camera
         window.__run = async (cache) => {
             CAMS.forEach(c => { io.streamed[c] = []; io.fetched[c] = []; }); model.crops = 0;
-            const emb = await E.createImageEmbedder(session, { model: fakeModel, cache, maxViewsPerAnimal: 0, keyframes: () => KF });
+            const emb = await E.createImageEmbedder(session, Object.assign({ cache }, window.__embedOpts));
             const vecs = new Map(), fresh = [];
             const res = await SC.checkImageSwitches(session, { fps: FPS, prepareFrames: emb.prepareFrames, inFlight: emb.inFlight, releaseFrames: emb.releaseFrames,
                 getEmbeddings: async (frame, items) => { const out = await emb.getEmbeddings(frame, items);
                     out.forEach((l, ii) => l.forEach(e => { const k = frame + '|' + items[ii].group.identityId + '|' + e.camera; vecs.set(k, e.vector); if (!e.cached) fresh.push(k); }));
                     return out; } });
+            window.__samples = emb.sampleCrops().slice();
             return { res, vecs, fresh, stats: emb.stats(), modelCrops: model.crops, streamed: JSON.parse(JSON.stringify(io.streamed)), fetched: JSON.parse(JSON.stringify(io.fetched)) };
         };
         window.__same = (a, b) => {   // results and vectors: identical?
@@ -187,6 +192,45 @@ try {
           `…and no frame decoded in any camera (streamed ${r2.streamed.join('/')}, fetched ${r2.fetched.join('/')}; ${r2.cachedFrames}/${r2.frames} frames answered from the cache)`);
     check(r2.same.result && r2.same.vecDiff === 0 && r2.same.missing === 0, `…with the same flags, scores and vectors as the uncached run (${JSON.stringify(r2.same)})`);
     check(/^all [\d,]+ crops from the cache/.test(r2.line), `run summary: "${r2.line}"`);
+
+    // ---- 2b. the dialog still shows sample crops on a run answered from the cache: the very pixels of that crop
+    const r2b = await page.evaluate(async () => {
+        const { session, CAMS, sk, E, render } = window.__fx;
+        const canvas = new OffscreenCanvas(E.CROP, E.CROP);
+        // the frame each sample decoded: what the uncached run streamed, in order (every camera decoded every sample)
+        const sampled = [...new Set([...window.__off.vecs.keys()].map(k => +k.split('|')[0]))].sort((a, b) => a - b);
+        const decodedFor = new Map(sampled.map((f, i) => [f, window.__off.streamed.camA[i]]));
+        const out = window.__samples.map(c => {
+            const d = decodedFor.get(c.frame);
+            const items = session.instanceGroups.get(c.frame).map((g, k) => ({ k, group: g }));
+            const ii = items.findIndex(it => it.group.identityId === c.identityId), vi = CAMS.indexOf(c.camera);
+            const geo = E.frameCropGeometry(session, c.frame, items, CAMS, CAMS.map(() => d), sk), g = geo[vi][ii];
+            const vf = new VideoFrame(render(c.camera, d), { timestamp: 0 });
+            const t = new Float32Array(3 * E.INPUT * E.INPUT);
+            E.writeInputTensor(E.cutCrop(vf, g, geo[vi].filter((g2, j) => j !== ii && g2).map(g2 => g2.hull), canvas), t, 0); vf.close();
+            const want = E.tensorToGrey(t), got = E.tensorToGrey(c.tensor);
+            let diff = 0; for (let i = 0; i < want.length; i++) if (want[i] !== got[i]) diff++;
+            const q = E.cropPointsToInput(g); let pts = q.length === c.points.length; for (let i = 0; pts && i < q.length; i++) pts = Object.is(q[i], c.points[i]);
+            return { cached: !!c.cached, diff, pts, lit: got.some(v => v > 0) };
+        });
+        return { n: out.length, info: E.embeddingCacheInfo(), out };
+    });
+    check(r2b.n === 12 && r2b.out.every(c => c.cached && c.lit), `a cached run still gives the dialog sample crops (${r2b.n}, ${r2b.info.samples} kept for ${r1.modelOff} crops)`);
+    check(r2b.out.every(c => c.diff === 0 && c.pts), `…each the very pixels of that crop, cut fresh, with its keypoints in the crop (pixels differing: ${r2b.out.map(c => c.diff).join(',')})`);
+
+    // ---- 2c. the real dialog (ui/id-switch-modal.js) on a cached run shows a sample crop
+    const r2c = await page.evaluate(async () => {
+        const { E } = window.__fx;
+        const M = await import('/ui/id-switch-modal.js');
+        let shown = 0, caption = '';
+        const obs = new MutationObserver(() => { const el = document.querySelector('.id-switch-progress-crop.has-crop');
+            if (el) { shown++; caption = (el.querySelector('figcaption') || {}).textContent || ''; } });
+        obs.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
+        await M.runIdSwitchChecks({ image: true, inject: { createEmbedder: (s, o) => E.createImageEmbedder(s, Object.assign({}, o, window.__embedOpts)) } });
+        obs.disconnect();
+        return { shown, caption };
+    });
+    check(r2c.shown > 0, `the progress dialog shows a sample crop on a cached run ("${r2c.caption}")`);
 
     // ---- 3. negative control: move one 2D keypoint of one animal in one camera on one decoded frame
     const r3 = await page.evaluate(async () => {

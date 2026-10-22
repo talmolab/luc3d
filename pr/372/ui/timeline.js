@@ -8,9 +8,9 @@
  * ES module. Exports `Timeline`.
  */
 
-import { getTrackColor, NULL_ID_COLOR } from './overlays.js?v=ad6d6813fb85';
-import { someValidPoint3d, points3dNodeCount, hasPoint3d } from '../pose/pose-data.js?v=ad6d6813fb85';
-import { isCameraTracked } from './settings.js?v=ad6d6813fb85';
+import { getTrackColor, NULL_ID_COLOR } from './overlays.js?v=5d96bc6cd94c';
+import { someValidPoint3d, points3dNodeCount, hasPoint3d } from '../pose/pose-data.js?v=5d96bc6cd94c';
+import { isCameraTracked } from './settings.js?v=5d96bc6cd94c';
 
 /**
  * Parse a `session.frameIdentityMap` key ("frameIdx:camName:trackIdx") into

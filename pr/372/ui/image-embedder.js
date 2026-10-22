@@ -45,11 +45,11 @@
  * spawns ui/image-crop-worker.js and ui/image-model-worker.js.
  */
 
-import { state } from './app-state.js?v=ad6d6813fb85';
-import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=ad6d6813fb85';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=ad6d6813fb85';
-import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js?v=ad6d6813fb85';
-import { EmbeddingCache, cropKeyHash, hullsReachingCrop } from '../pose/embedding-cache.js?v=ad6d6813fb85';
+import { state } from './app-state.js?v=5d96bc6cd94c';
+import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=5d96bc6cd94c';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=5d96bc6cd94c';
+import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js?v=5d96bc6cd94c';
+import { EmbeddingCache, cropKeyHash, hullsReachingCrop } from '../pose/embedding-cache.js?v=5d96bc6cd94c';
 
 // The load meter now lives in ui/load-graph.js (shared with the loading overlay); still exported from here.
 export { createLoadMeter };
@@ -240,7 +240,7 @@ export async function createCpuModelPool(count, onStatus, clock) {
                 try { slot.w.terminate(); } catch (e) { /* ignore */ }
                 reject(err);                                     // no-op once started
             };
-            try { slot.w = new Worker(new URL('./image-model-worker.js?v=ad6d6813fb85', import.meta.url), { type: 'module' }); }
+            try { slot.w = new Worker(new URL('./image-model-worker.js?v=5d96bc6cd94c', import.meta.url), { type: 'module' }); }
             catch (e) { reject(e); return; }
             slot.w.onerror = function (e) {
                 if (e && e.preventDefault) e.preventDefault();
@@ -854,7 +854,7 @@ export function createCropPool(clock) {
     };
     try {
         for (let i = 0; i < n; i++) {
-            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=ad6d6813fb85', import.meta.url), { type: 'module' }), load: 0 };
+            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=5d96bc6cd94c', import.meta.url), { type: 'module' }), load: 0 };
             w.worker.onmessage = function (e) {
                 const p = pending.get(e.data.id); if (!p) return;
                 pending.delete(e.data.id); w.load--;
@@ -910,6 +910,7 @@ export function embeddingCacheScope(session, views) {
     const drop = function (u) {
         const pre = u + '|';
         _embedCache.deleteWhere(function (k) { return k.startsWith(pre); });
+        _samplePixels.forEach(function (v, k) { if (k.startsWith(pre)) _samplePixels.delete(k); });
         _filledScopes.forEach(function (sc) { if (sc.startsWith(pre)) _filledScopes.delete(sc); });
     };
     _sessionVideos.forEach(function (s, u) { if (!open.has(u)) { drop(u); _sessionVideos.delete(u); } });
@@ -918,14 +919,43 @@ export function embeddingCacheScope(session, views) {
     return uid + '|';
 }
 
-/** Forget every cached embedding (tests, benchmarks; `window.__lucid` debugging). */
-export function clearEmbeddingCache() {
-    _embedCache.clear(); _filledScopes.clear(); _sessionVideos.clear();
+// ---- Sample crops for the progress dialog on cached runs: a frame answered from the cache cuts no crop,
+// so the grey pixels of one crop per sample frame (SAMPLE_FRAMES_PER_RUN evenly spaced frames a run) are
+// kept beside the vectors, under the same key, and shown when that frame comes from the cache again.
+/** Frames per run whose sample crop's pixels are kept for a later cached run's dialog. */
+export const SAMPLE_FRAMES_PER_RUN = 200;
+/** Most sample crops kept, all sessions together (INPUT x INPUT grey bytes each: 50 KB, so 12.8 MB). */
+export const SAMPLE_PIXELS_MAX = 256;
+const _samplePixels = new Map();               // full cache key -> Uint8Array(INPUT * INPUT), least recently used first
+
+/** A model input's channel 0 as grey bytes (what `inputTensorToPixels` shows). */
+export function tensorToGrey(tensor) {
+    const n = INPUT * INPUT, m = MEAN[0], sd = STD[0], out = new Uint8Array(n);
+    for (let i = 0; i < n; i++) { const v = Math.round((tensor[i] * sd + m) * 255); out[i] = v < 0 ? 0 : v > 255 ? 255 : v; }
+    return out;
 }
 
-/** How full the embedding cache is: `{entries, bytes, maxEntries}`. */
+/** Grey bytes back to channel 0 of a model input — all `inputTensorToPixels` reads; it shows the same bytes. */
+export function greyToTensor(grey) {
+    const n = INPUT * INPUT, m = MEAN[0], sd = STD[0], out = new Float32Array(n);
+    for (let i = 0; i < n; i++) out[i] = (grey[i] / 255 - m) / sd;
+    return out;
+}
+
+function putSamplePixels(key, tensor) {
+    _samplePixels.delete(key);
+    _samplePixels.set(key, tensorToGrey(tensor));
+    while (_samplePixels.size > SAMPLE_PIXELS_MAX) _samplePixels.delete(_samplePixels.keys().next().value);
+}
+
+/** Forget every cached embedding (tests, benchmarks; `window.__lucid` debugging). */
+export function clearEmbeddingCache() {
+    _embedCache.clear(); _filledScopes.clear(); _sessionVideos.clear(); _samplePixels.clear();
+}
+
+/** How full the embedding cache is: `{entries, bytes, maxEntries, samples}` (samples: sample crops kept for the dialog). */
 export function embeddingCacheInfo() {
-    return { entries: _embedCache.size, bytes: _embedCache.bytes, maxEntries: _embedCache.maxEntries };
+    return { entries: _embedCache.size, bytes: _embedCache.bytes, maxEntries: _embedCache.maxEntries, samples: _samplePixels.size };
 }
 
 /** Per item, its crops' `{camera, vector}` (+ `cached: true` for a cache hit) in view order — the order the
@@ -1097,6 +1127,9 @@ export async function createImageEmbedder(session, opts) {
         return trial ? null : backend === 'webnn' ? 'webnn/fp16' : backend === 'cpu' ? 'cpu/fp32' : backend === 'test' ? 'test' : 'webgpu/' + dtype;
     };
     let cachedFrames = null, cachedCrops = null;   // frame -> its finished answer; key body -> vector (partly cached frames)
+    // sampleFrames: the frames whose sample crop's pixels are kept (SAMPLE_FRAMES_PER_RUN a run);
+    // cachedSamples: frame -> the stored sample crop shown when that frame is answered from the cache
+    let sampleFrames = null, cachedSamples = null, cachedSampleSeq = 0;
     /**
      * The crops to cut on one frame, view-major then item order (the order the model path has always
      * used): `{ii, vi, g, others, body}`, `body` being the cache key less its scope and model tag.
@@ -1151,6 +1184,14 @@ export async function createImageEmbedder(session, opts) {
         const done = cachedFrames && cachedFrames.get(frame);
         if (done) {                              // every crop cached (prepareFrames): nothing to decode, cut or embed
             cachedFrames.delete(frame);
+            const smp = cachedSamples && cachedSamples.get(frame);
+            if (smp) {                           // the dialog's sample crop: the pixels kept when this crop was cut
+                cachedSamples.delete(frame);
+                const who = items[smp.ii];
+                samples.push({ tensor: greyToTensor(smp.grey), frame: frame, camera: cams[smp.vi],
+                               identityId: who && who.group ? who.group.identityId : null, points: smp.points, cached: true });
+                if (samples.length > SAMPLE_CROPS) samples.shift();
+            }
             tm.frames++; tm.cachedFrames++;
             done.forEach(function (l) { tm.cachedCrops += l.length; });
             tm.t1 = performance.now();
@@ -1243,6 +1284,9 @@ export async function createImageEmbedder(session, opts) {
                            points: cropPointsToInput(owner[pick].g) });
             if (samples.length > SAMPLE_CROPS) samples.shift();
             const vecs = await enqueue(flat);
+            if (cachePrefix && vecs.tag && sampleFrames && sampleFrames.has(frame) && owner[pick].body !== null) {
+                putSamplePixels(cachePrefix + vecs.tag + '|' + owner[pick].body, flat[pick]);
+            }
             tm.crops += vecs.length;
             vecs.forEach(function (v, i) {
                 const c = owner[i];
@@ -1283,7 +1327,9 @@ export async function createImageEmbedder(session, opts) {
             }));
             decodeOf = plans.map(function (p) { return new Map(frames.map(function (f, i) { return [f, p.decode[i]]; })); });
             srcKind = views.map(function (v, vi) { return canStream(v.decoder, plans[vi].decode) ? 's' : 'g'; });
-            cachedFrames = new Map(); cachedCrops = new Map();
+            cachedFrames = new Map(); cachedCrops = new Map(); cachedSamples = new Map();
+            const sampleEvery = Math.max(1, Math.ceil(frames.length / SAMPLE_FRAMES_PER_RUN));
+            sampleFrames = new Set(frames.filter(function (f, i) { return i % sampleEvery === 0; }));
             // per view: the indices (into frames) it still has to decode; null = all of them
             let need = null;
             const tag = modelTag();
@@ -1300,6 +1346,13 @@ export async function createImageEmbedder(session, opts) {
                     });
                     if (!missing.size) {
                         cachedFrames.set(f, assembleItems(items.length, hits.map(function (h) { return { ii: h.c.ii, vi: h.c.vi, vector: h.v, cached: true }; }), cams));
+                        if (sampleFrames.has(f) && hits.length) {     // its sample crop, rotating through animals and cameras
+                            for (let k = 0, o = cachedSampleSeq++; k < hits.length; k++) {
+                                const c = hits[(o + k) % hits.length].c, grey = _samplePixels.get(scope + c.body);
+                                // the overlay from TODAY's keypoints (the tail is not in the key)
+                                if (grey) { cachedSamples.set(f, { grey: grey, ii: c.ii, vi: c.vi, points: cropPointsToInput(c.g) }); break; }
+                            }
+                        }
                     } else {
                         hits.forEach(function (h) { cachedCrops.set(h.c.body, h.v); });
                         missing.forEach(function (vi) { need[vi].push(i); });
@@ -1320,7 +1373,7 @@ export async function createImageEmbedder(session, opts) {
         },
         releaseFrames: function () {
             if (readers) readers.forEach(function (r) { if (r) r.close(); });
-            readers = null; decodeOf = null; srcKind = null; cachedFrames = null; cachedCrops = null;
+            readers = null; decodeOf = null; srcKind = null; cachedFrames = null; cachedCrops = null; cachedSamples = null; sampleFrames = null;
             if (pool) pool.terminate();
             pool = undefined;
             if (trial) { const d = chooseBackend(trial); note = d.note.replace(/ — using WebNN/, ' — WebNN would have been used'); trial = null; }
@@ -1335,8 +1388,9 @@ export async function createImageEmbedder(session, opts) {
                      adapter: adapter ? adapter.name : '', fallback: !!(adapter && adapter.fallback),
                      workers: cpuWorkers, why: where.why || '' };
         },
-        /** The latest sample crops, oldest first: `[{tensor, frame, camera, identityId, points}]`, at most SAMPLE_CROPS —
-         *  see inputTensorToPixels; `points` are the keypoints in the crop (cropPointsToInput). */
+        /** The latest sample crops, oldest first: `[{tensor, frame, camera, identityId, points, cached?}]`, at most SAMPLE_CROPS —
+         *  see inputTensorToPixels; `points` are the keypoints in the crop (cropPointsToInput). A `cached` one is a
+         *  frame answered from the cache: its `tensor` is channel 0 only, rebuilt from the pixels kept when it was cut. */
         sampleCrops: function () { return samples; },
         /** Milliseconds spent running the model so far, the run in flight included (feeds createLoadMeter). */
         busyMs: function () { return tm.runMs + tm.readMs + (tm.busySince ? performance.now() - tm.busySince : 0); },
