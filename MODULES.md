@@ -3301,7 +3301,12 @@ contact at +1.8 moving to +1.0). Flags change only on contacts within 0.05 of -0
 0.08, 0.05 and 0. Crops saved: 28-73% on two-mouse sessions, 8-10% on the 4-mouse
 ones, 1% on five huddling mice (their windows cover nearly everything). Frames
 decoded (keyframe every 250): 28-82% of the full run on two-mouse sessions; a
-background every 2 s placed without keyframes still decoded ~95%.
+background every 2 s placed without keyframes still decoded ~95%. **First run**
+(M2 Pro, WebGPU fp16, full and planned runs alternated): two-mouse SLAP 140918 77-79 s
+-> 24 s, 131531 82-141 s -> 55-72 s (Drive-mounted videos, decode-bound: reads vary);
+CD1 (3 mice) 140-155 s -> 75-88 s; 05mice 403-547 s -> 379-401 s (model-bound, 1%
+fewer crops). A re-run after re-tracking still takes 95-99% of its crops from the
+cache (`ui/image-embedder.js`), with the same result as a cache-off run.
 
 **Calibration (8 real recordings, 1 h 45 min; a row is right when both its
 identities change animals within its contact ± 3 s).** Images at -0.8: 10 of 12
