@@ -5,7 +5,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multi-View Pose Proofreader</title>
+    <title>LUC3D</title>
+    <!-- Cut from docs/assets/luc3d-logo.png (the tile without its outer glow),
+         resampled premultiplied so transparent pixels stay RGB-zero. Relative,
+         like every other URL here, so they resolve under every deploy channel. -->
+    <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
     <!-- The build this copy is: empty here, filled in the DEPLOYED copy by
          scripts/stamp-version.mjs and shown beside Settings by ui/version-label.js. -->
     <meta name="lucid-release" content="">
@@ -847,10 +853,15 @@
                         </div>
                     </details>
 
-                    <div style="margin-top:10px;display:flex;gap:6px">
+                    <div style="margin:10px 0 12px;display:flex;gap:6px">
                         <button class="panel-btn" id="btnLoadSkeleton" title="Load skeleton from JSON file" style="flex:1">Load Skeleton</button>
                         <button class="panel-btn" id="btnSaveSkeleton" title="Save skeleton in SLEAP format" style="flex:1">Save Skeleton</button>
                     </div>
+                    <!-- The way back on after "Do not show again" in the skeleton-edit
+                         confirmation (ui/skeleton-edit-warning.js). Hidden unless the
+                         preference is set; populateSkeletonTable owns its display. -->
+                    <div id="skeletonWarnOffNote" style="display:none">Warnings before a skeleton edit are off.<button
+                            type="button" id="btnSkeletonWarnOn">Turn them back on</button></div>
                 </div>
 
                 <!-- ==================== Session Tab ==================== -->
