@@ -3191,7 +3191,7 @@ keyframeGap, maxShift}` (which frame each image sample decodes in one camera —
 `episodeGapSeconds` 3, `minApartSeconds` 3, `windowSeconds` 10,
 `maxSpanSeconds` 60, `followSeconds` 5, `metricPcaDims` 64, `metricDims` 16,
 `metricReg` 0.1, `signal`; `threshold` -1, `maxTrainRows` 200000);
-`IMAGE_CHECK_DEFAULTS` (the same shared ones; `threshold` -0.8, `maxTrainRows`
+`IMAGE_CHECK_DEFAULTS` (the same shared ones; `threshold` -1, `maxTrainRows`
 20000, `imageHz` 2, `getEmbeddings` REQUIRED: `async (frame, items[{k, group}]) ->
 per item [{camera, vector}]`, STARTED in increasing frame order with up to
 `inFlight` (default 2; the image embedder asks for 8) in flight; optional
@@ -3271,6 +3271,33 @@ dips just past -1 now and then (2 of 24 contacts in the synthetic fixture of
 `tests/e2e/id-switch-image-check.mjs`). Analysis after embedding takes seconds
 per session. (Those sessions also carry `*.predictions.static.externals.slp`
 per camera, which a harness must leave out of the folder pick.)
+
+**Recalibrated for the 168-px model input (2026-10-22; `INPUT` was 224, the crop
+stays 160 — `ui/image-embedder.js`).** Same contacts and tracking (Track All
+defaults), scored per truth change point (a row is right when it lies within
+its contact ± 3 s of one), on 24 recordings: the 22 proofread SLAP sessions,
+five white mice, CD1FSCR3_CSI (4 h 30 min):
+
+| | original six + 5 mice + CD1 | 16 held-out | all 24 |
+|---|---|---|---|
+| 224 at -0.8 (before) | 12 caught, 12 rows, 2 false | 13 caught, 11 rows, 0 false | 25, 23 rows, 2 false |
+| **168 at -1** | 12 caught, 11 rows, 1 false | 13 caught, 11 rows, 0 false | 25, 22 rows, 1 false |
+| 168 at -0.8 | 12 caught, 14 rows, 4 false | 13 caught, 11 rows, 0 false | 25, 25 rows, 4 false |
+
+The same change points are caught; the extra false rows at -0.8 are all on five
+white mice (contacts that sat just above -0.8 at 224). The held-out set is
+identical at every threshold from -0.4 to -1.2 (per-contact AUC 1.000). A
+repeat 224 run is bit-identical, so these differences are the input size, not
+noise. Cutting the crop at 168 directly (one resample) was no better (2 false at
+-1); 140 lost a real swap. Separation of same-animal vs different-animal
+10 s means (the check's metric, proofread labels): AUC 0.962 at 224, 0.955 at
+168; same-coat pairs 0.877 / 0.861. Speed: model alone 132 -> 243 crops/s
+(WebGPU fp16, M2 Pro), CPU workers 10.9 -> 19.2; the whole check on that Mac
+only 11-14% faster (CD1 114 -> 101 s, 145420 86 -> 74 s), because video decoding
+becomes the limit once the model is faster. Raw CLS embeddings of the same crop
+at 168 vs 224: median cosine 0.86 — irrelevant to the check, which learns its
+metric per recording, but it means any embedding saved at one size cannot be
+compared with another.
 
 **Imports from project modules.** `pose/pose-data.js` (`readPoint3d`).
 
@@ -7974,7 +8001,7 @@ The dialog's `finally` also calls the embedder's `releaseFrames` (idempotent):
 `checkImageSwitches` does too, but not when it fails before its first frame,
 and the CPU workers hold ~600 MB each. On a CPU run "About these flags" says the
 model ran on the CPU. Reads `imageCheckHz` (default 2), `imageChangeThreshold`
-(default -0.8 — a new id rather than the old `imageCheckThreshold`, because the
+(default -1, -0.8 before the 168-px input — a new id rather than the old `imageCheckThreshold`, because the
 image score's scale changed), `imageCheckMaxViews` (default 3, passed as
 `maxViewsPerAnimal`) and `imageCheckWebNN` (default 0, as `webnn`), and passes
 `inFlight: embedder.inFlight`. The embedder's `backend()` outcome is attached to
@@ -8259,12 +8286,12 @@ Cropping runs in a pool of module workers (`createCropPool`,
 one frame, its VideoFrame transferred and closed by the worker — a decoder-cached
 frame is sent as a `clone()`, anything else as an ImageBitmap copy). A failed
 worker drops that one view of that frame and the rest of the run crops inline;
-`window.LUCID_CROP_WORKERS = 0` forces inline. `writeInputTensor`'s 160 -> 224
+`window.LUCID_CROP_WORKERS = 0` forces inline. `writeInputTensor`'s 160 -> 168
 sample positions are a precomputed table (same arithmetic, bit-identical).
 **GPU feeding.** (1) The model's output stays on the GPU
 (`preferredOutputLocation: 'gpu-buffer'`; its ONLY output is `last_hidden_state`
-[n, 257, 384]) and `clsFromGpu` copies just token 0 of each crop into a staging
-buffer — bit-identical, 1/257 of the readback. (2) Model runs are a greedy BATCH
+[n, 145, 384] at the 168-px input) and `clsFromGpu` copies just token 0 of each crop into a staging
+buffer — bit-identical, 1/145 of the readback. (2) Model runs are a greedy BATCH
 QUEUE: one run at a time, each taking every crop queued meanwhile (up to
 `EMBED_MAX_BATCH` = 64), with the check keeping `EMBED_IN_FLIGHT` = 8 frames in
 flight (`inFlight` on the provider) so batches fill while the GPU works (M2 Pro:
@@ -8378,7 +8405,7 @@ the CPU model, fitting — not video decoding); `inputTensorToPixels(tensor, rgb
 (a model input back to grey RGBA, the inverse of `writeInputTensor`'s normalisation),
 `SAMPLE_CROPS` (12); `cropPointsToInput(g)` (`g.pts`, the keypoints `cropGeometry` also
 records, NaN when missing, into model-input pixels: cutCrop's rotate-about-the-body-centre
-and scale, then x 224/160 — exact for an align_corners=false resize; pinned
+and scale, then x INPUT/CROP — exact for an align_corners=false resize; pinned
 against `cutCrop` itself within 0.04 px, at any rotation);
 `keyframeIndices(decoder)` -> `Promise<Int32Array|null>` (cached per video);
 `summarizeKeyframePlans(plans)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
@@ -8386,13 +8413,14 @@ against `cutCrop` itself within 0.04 px, at any rotation);
 `cropGeometry` (also `pts`: every keypoint, for the overlay — cutCrop ignores it), `cutCrop`,
 `convexHull`, `writeInputTensor`, `skeletonIndex(nodes)` (also `n`, the node count),
 `frameCropGeometry(session, frame, items, cams, atFrames, sk)` -> `geo[view][item]`; constants
-`TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (224).
+`TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (168; 224 until 2026-10-22).
 
 **The crop** (must match the calibration): rotate so the nose points right
 (Nose − TTI), centre on the mean of the body keypoints, side 1.3 x body length,
 160 x 160, greyscale; outside the animal's convex hull dilated by a quarter body
 length is black, and so are the other animals' hulls in that view; resized to
-224 (bilinear) and ImageNet-normalised; embedding = CLS token of
+168 (bilinear; 12 x 12 patches of 14 px — any multiple of 14 runs, the model resizes its 37 x 37
+position table) and ImageNet-normalised; embedding = CLS token of
 `last_hidden_state` (post-layernorm). Checked against the offline pipeline on
 real crops: embeddings cosine 0.971 (vs 0.644 between different crops).
 
@@ -8449,7 +8477,7 @@ bit-identical (asserted).
 
 **Messages.** IN `{id, image: VideoFrame|ImageBitmap (transferred), crops:
 [{g: cropGeometry, others: [hull]}]}` — one camera view of one frame; OUT `{id,
-tensors: [Float32Array(3 x 224 x 224)]}` (transferred, one per crop, in order) or
+tensors: [Float32Array(3 x INPUT x INPUT)]}` (transferred, one per crop, in order) or
 `{id, error}`. The worker owns the image and closes it.
 
 **Imports from project modules.** `ui/image-embedder.js` (`cutCrop`,
@@ -8479,7 +8507,7 @@ cross-origin isolation. See
 (`cannotRun`: a failed download, `message` then being `MODEL_OFFLINE_REASON` —
 classified here by `asModelDownloadFailure`, where the error is still a real
 one); IN `{type:
-'run', id, data: Float32Array(n x 3 x 224 x 224) (transferred), n}` -> `{type:
+'run', id, data: Float32Array(n x 3 x INPUT x INPUT) (transferred), n}` -> `{type:
 'result', id, cls: Float32Array(n x 384) (transferred), dim}` — each crop's CLS
 token, read exactly as the main thread's `clsVectors` does — or `{type: 'error',
 id, message}`.
@@ -8566,7 +8594,7 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   default (the tracker's third, `birthMedian`, is not in the wizard),
   `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
-  0/1, the image check likewise, default 0; `imageChangeThreshold` -0.8;
+  0/1, the image check likewise, default 0; `imageChangeThreshold` -1;
   `imageCheckHz` 2; `imageCheckMaxViews` 3; `imageCheckWebNN` — 0/1, try WebNN,
   default 0). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
   `reprojWeight`, `minMatchScore`, `prevIdentityBonus`, `reprojGate2/3/4`,

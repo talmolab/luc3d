@@ -502,21 +502,21 @@ group('Image check — which device runs the model, and its load (ui/image-embed
         let bad = 0; for (let i = 0; i < rgba.length; i += 4) if (rgba[i] !== g || rgba[i + 1] !== g || rgba[i + 2] !== g || rgba[i + 3] !== 255) bad++;
         eq(bad, 0, `a uniform crop of ${g} comes back as ${g} on every pixel, opaque`);
     }
-    {   // a left-to-right ramp stays a ramp (the 160 -> 224 resize in between), in range
+    {   // a left-to-right ramp stays a ramp (the CROP -> INPUT resize in between), in range
         const ramp = new Uint8ClampedArray(E.CROP * E.CROP); for (let y = 0; y < E.CROP; y++) for (let x = 0; x < E.CROP; x++) ramp[y * E.CROP + x] = Math.round(255 * x / (E.CROP - 1));
         E.writeInputTensor(ramp, tns, 0); E.inputTensorToPixels(tns, rgba);
         const row = 100 * E.INPUT; let mono = true; for (let x = 1; x < E.INPUT; x++) if (rgba[4 * (row + x)] < rgba[4 * (row + x - 1)]) mono = false;
         ok(mono && rgba[4 * row] <= 1 && rgba[4 * (row + E.INPUT - 1)] >= 254, `a ramp stays a ramp, 0..255 (${rgba[4 * row]}..${rgba[4 * (row + E.INPUT - 1)]})`);
     }
 
-    // the skeleton over the sample crop: keypoints into model-input pixels (cutCrop's transform, then x 224/160)
+    // the skeleton over the sample crop: keypoints into model-input pixels (cutCrop's transform, then x INPUT/CROP)
     {
-        const near = (a, b) => Math.abs(a - b) < 1e-4;
+        const near = (a, b) => Math.abs(a - b) < 1e-4, c = E.INPUT / 2, k = E.INPUT / E.CROP;
         let q = E.cropPointsToInput({ cx: 100, cy: 50, angle: 0, scale: 2, pts: [100, 50, 110, 50, 100, 60, NaN, NaN] });
-        ok(near(q[0], 112) && near(q[1], 112) && near(q[2], 112 + 2 * 1.4 * 10) && near(q[3], 112) && near(q[4], 112) && near(q[5], 140) && isNaN(q[6]) && isNaN(q[7]),
-            `nose right: the body centre is the crop centre, x and y scale by scale x 224/160, missing stays missing (${Array.from(q).map(v => v.toFixed(1))})`);
+        ok(near(q[0], c) && near(q[1], c) && near(q[2], c + 2 * k * 10) && near(q[3], c) && near(q[4], c) && near(q[5], c + 2 * k * 10) && isNaN(q[6]) && isNaN(q[7]),
+            `nose right: the body centre is the crop centre, x and y scale by scale x INPUT/CROP, missing stays missing (${Array.from(q).map(v => v.toFixed(1))})`);
         q = E.cropPointsToInput({ cx: 0, cy: 0, angle: Math.PI / 2, scale: 1, pts: [0, 10, 10, 0] });
-        ok(near(q[0], 126) && near(q[1], 112) && near(q[2], 112) && near(q[3], 98),
+        ok(near(q[0], c + k * 10) && near(q[1], c) && near(q[2], c) && near(q[3], c - k * 10),
             `nose pointing down the image: rotated to point right; the animal's left (+x) ends up above (${Array.from(q).map(v => v.toFixed(1))})`);
         const skn = E.skeletonIndex(NODES), pts2 = NODES.map(n => { const [x, y] = TEMPLATE[n]; return [400 + x, 300 - y]; });
         const g2 = E.cropGeometry({ getPoint: i => i === 4 ? null : pts2[i] }, skn);
@@ -577,23 +577,25 @@ group('Crop geometry (ui/image-embedder.js)');
         const pts = NODES.map(n => { const [x, y] = TEMPLATE[n]; return [400 + x, 300 - y]; });   // nose to the right in image coords
         const sk = { nose: 0, tti: 3, body: NODES.map((n, i) => i).filter(i => !/^Tail/.test(NODES[i])) };
         const g = E.cropGeometry({ getPoint: i => pts[i] }, sk);
-        ok(g && Math.abs(g.L - 85) < 1e-9 && Math.abs(g.angle) < 1e-9 && Math.abs(g.scale - 160 / (1.3 * 85)) < 1e-9,
-            `geometry: body length 85, nose angle 0, scale 160/(1.3 L) (${g && g.L}, ${g && g.angle}, ${g && g.scale.toFixed(4)})`);
+        ok(g && Math.abs(g.L - 85) < 1e-9 && Math.abs(g.angle) < 1e-9 && Math.abs(g.scale - E.CROP / (1.3 * 85)) < 1e-9,
+            `geometry: body length 85, nose angle 0, scale CROP/(1.3 L) (${g && g.L}, ${g && g.angle}, ${g && g.scale.toFixed(4)})`);
         ok(E.cropGeometry({ getPoint: i => i === 0 ? null : pts[i] }, sk) === null, 'no nose → no crop');
-        const crop = new Uint8Array(160 * 160).fill(255), data = new Float32Array(3 * 224 * 224);
+        const S = E.CROP, I = E.INPUT;
+        ok(S === 160 && I === 168, `crop 160 px, model input 168 px — the calibrated sizes (${S}, ${I})`);
+        const crop = new Uint8Array(S * S).fill(255), data = new Float32Array(3 * I * I);
         E.writeInputTensor(crop, data, 0);
-        ok(Math.abs(data[0] - (1 - 0.485) / 0.229) < 1e-5 && Math.abs(data[2 * 224 * 224] - (1 - 0.406) / 0.225) < 1e-5,
-            'input tensor: 224x224, ImageNet-normalised per channel');
+        ok(Math.abs(data[0] - (1 - 0.485) / 0.229) < 1e-5 && Math.abs(data[2 * I * I] - (1 - 0.406) / 0.225) < 1e-5,
+            `input tensor: ${I}x${I}, ImageNet-normalised per channel`);
         {   // the precomputed resize table must reproduce the per-pixel formula exactly
-            let st = 7; const rc = new Uint8Array(160 * 160).map(() => (st = (st * 1103515245 + 12345) >>> 0) >>> 24);
-            const got = new Float32Array(3 * 224 * 224); E.writeInputTensor(rc, got, 0);
+            let st = 7; const rc = new Uint8Array(S * S).map(() => (st = (st * 1103515245 + 12345) >>> 0) >>> 24);
+            const got = new Float32Array(3 * I * I); E.writeInputTensor(rc, got, 0);
             const M = [0.485, 0.456, 0.406], SD = [0.229, 0.224, 0.225], ref = new Float32Array(got.length);
-            for (let y = 0; y < 224; y++) {
-                const sy = Math.min(Math.max((y + 0.5) * 160 / 224 - 0.5, 0), 159), y0 = Math.floor(sy), y1 = Math.min(y0 + 1, 159), fy = sy - y0;
-                for (let x = 0; x < 224; x++) {
-                    const sx = Math.min(Math.max((x + 0.5) * 160 / 224 - 0.5, 0), 159), x0 = Math.floor(sx), x1 = Math.min(x0 + 1, 159), fx = sx - x0;
-                    const v = ((rc[y0 * 160 + x0] * (1 - fx) + rc[y0 * 160 + x1] * fx) * (1 - fy) + (rc[y1 * 160 + x0] * (1 - fx) + rc[y1 * 160 + x1] * fx) * fy) / 255;
-                    for (let c = 0; c < 3; c++) ref[c * 224 * 224 + y * 224 + x] = (v - M[c]) / SD[c];
+            for (let y = 0; y < I; y++) {
+                const sy = Math.min(Math.max((y + 0.5) * S / I - 0.5, 0), S - 1), y0 = Math.floor(sy), y1 = Math.min(y0 + 1, S - 1), fy = sy - y0;
+                for (let x = 0; x < I; x++) {
+                    const sx = Math.min(Math.max((x + 0.5) * S / I - 0.5, 0), S - 1), x0 = Math.floor(sx), x1 = Math.min(x0 + 1, S - 1), fx = sx - x0;
+                    const v = ((rc[y0 * S + x0] * (1 - fx) + rc[y0 * S + x1] * fx) * (1 - fy) + (rc[y1 * S + x0] * (1 - fx) + rc[y1 * S + x1] * fx) * fy) / 255;
+                    for (let c = 0; c < 3; c++) ref[c * I * I + y * I + x] = (v - M[c]) / SD[c];
                 }
             }
             ok(got.every((v, i) => Object.is(v, ref[i])), 'input tensor: table-driven resize is bit-identical to the per-pixel formula');
