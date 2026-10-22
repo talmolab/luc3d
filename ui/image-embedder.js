@@ -14,7 +14,11 @@
  * (Nose–TTI), 160 × 160, greyscale; everything outside the animal's convex hull
  * dilated by a quarter body length is black, and so are the other animals' hulls
  * in that view (so an overlapping neighbour is not learned as this animal); then
- * resized to 224 × 224 (bilinear) and normalised with the ImageNet mean/SD.
+ * resized to the model input, 168 × 168 (bilinear), and normalised with the
+ * ImageNet mean/SD. The input was 224 until 2026-10-22: 168 is 12 × 12 of the
+ * model's 14-px patches instead of 16 × 16, so the model runs 1.85x as fast
+ * (243 vs 132 crops/s on an M2 Pro) and the CPU workers 1.76x; the threshold was
+ * recalibrated for it (see MODULES.md `pose/id-switch-check.js`).
  *
  * The model and runtime (transformers.js, pinned to 4.3.0, + onnx-community/
  * dinov2-small: fp16 ~44 MB, or fp32 ~88 MB on GPUs without 'shader-f16') are
@@ -22,8 +26,8 @@
  * the browser; nothing about the user's data is sent anywhere. It runs on a
  * hardware GPU through WebGPU when there is one (`pickImageDevice`); otherwise on
  * the CPU — the fp32 model on WebAssembly, in module workers
- * (ui/image-model-worker.js, `createCpuModelPool`), ~15x slower with 4 workers on
- * an M2 Pro (9.7 vs ~150 crops/s), and the same embeddings (cosine 1.00000 vs the
+ * (ui/image-model-worker.js, `createCpuModelPool`), ~8x slower with 4 workers on
+ * an M2 Pro (19 vs ~150-170 crops/s in the check; at 224 it was 9.7-11), and the same embeddings (cosine 1.00000 vs the
  * WebGPU fp32 model; the CPU runtime's default int8 model is what drifted).
  * Without the network on that first use (offline, or either host blocked) the
  * check reports MODEL_OFFLINE_REASON as the reason it cannot run, instead of the
@@ -58,8 +62,13 @@ export const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/trans
 export const IMAGE_MODEL_ID = 'onnx-community/dinov2-small';
 export const IMAGE_MODEL_MB = 44;
 
-/** Crop side (px) and model input side (px). */
-export const CROP = 160, INPUT = 224;
+/**
+ * Crop side (px) and model input side (px). The check is calibrated to THESE sizes:
+ * changing either changes the embeddings and needs a recalibration of
+ * `imageChangeThreshold` (MODULES.md). INPUT must be a multiple of the model's
+ * 14-px patch.
+ */
+export const CROP = 160, INPUT = 168;
 const MEAN = [0.485, 0.456, 0.406], STD = [0.229, 0.224, 0.225];
 const NOSE = 'Nose', TTI = 'TTI';
 
@@ -106,7 +115,7 @@ export function importTransformers() {
 
 /**
  * fp16 when the GPU supports 16-bit floats in shaders ('shader-f16'; fastest: 155
- * crops/s measured), else fp32 on the GPU (103 crops/s, and as close to the
+ * crops/s measured at the old 224-px input), else fp32 on the GPU (103 crops/s, and as close to the
  * calibrated embeddings: cosine 0.992 vs 0.991).
  */
 async function gpuDtype() {
@@ -126,8 +135,8 @@ export function loadImageModel(onStatus) {
         const T = await importTransformers();
         const model = await T.AutoModel.from_pretrained(IMAGE_MODEL_ID, {
             device: 'webgpu', dtype: dtype,
-            // Keep the output ON THE GPU: the model's only output is last_hidden_state [n, 257, 384]
-            // (5.9 MB for 15 crops) and the check uses 1 of those 257 tokens — clsFromGpu copies just it.
+            // Keep the output ON THE GPU: the model's only output is last_hidden_state [n, 1 + (INPUT/14)², 384]
+            // ([n, 145, 384] at 168: 3.3 MB for 15 crops in fp32) and the check uses 1 of those tokens — clsFromGpu copies just it.
             session_options: { preferredOutputLocation: 'gpu-buffer' },
             progress_callback: function (p) {
                 if (onStatus && p && p.status === 'progress' && p.total) {
@@ -361,7 +370,7 @@ function clsVectors(res, n) {
 /**
  * The CLS token of each of the first `n` items of a model output that stayed on
  * the GPU (`preferredOutputLocation: 'gpu-buffer'`): one small copy per crop of
- * row 0 into a staging buffer, mapped once — 1/257 of the full readback. Falls
+ * row 0 into a staging buffer, mapped once — 1/145 of the full readback. Falls
  * back to reading the whole tensor when the output or the device isn't a GPU
  * buffer. Disposes the output either way. Bit-identical to `clsVectors`.
  */
@@ -533,7 +542,7 @@ export function cutCrop(image, g, others, canvas) {
     return out;
 }
 
-// Bilinear 160 -> 224 sample positions, fixed, so computed once (same arithmetic as per pixel).
+// Bilinear CROP -> INPUT sample positions, fixed, so computed once (same arithmetic as per pixel).
 let _resizeLUT = null;
 function resizeLUT() {
     if (_resizeLUT) return _resizeLUT;
@@ -549,7 +558,7 @@ function resizeLUT() {
  * A model input back to grey pixels, for showing the crop: channel 0 of the
  * normalised tensor (the crop is greyscale, so all three are the same image)
  * into `rgba`, INPUT x INPUT x 4. The inverse of writeInputTensor's
- * normalisation — what the model sees, after the 160 -> 224 resize.
+ * normalisation — what the model sees, after the CROP -> INPUT resize.
  */
 export function inputTensorToPixels(tensor, rgba) {
     const n = INPUT * INPUT, m = MEAN[0], sd = STD[0];
@@ -565,7 +574,7 @@ export function inputTensorToPixels(tensor, rgba) {
  * Keypoints (`g.pts`, source pixels) where they land in the model input, for
  * drawing the skeleton over the progress dialog's sample crop: cutCrop's
  * transform — about the body centre, rotated by -angle so the nose points
- * right, scaled — then the 160 -> 224 resize, which with align_corners=false
+ * right, scaled — then the CROP -> INPUT resize, which with align_corners=false
  * scales continuous coordinates by exactly INPUT / CROP. Float32Array(2N) of
  * INPUT-pixel x, y; NaN where a keypoint is missing.
  */
@@ -580,7 +589,7 @@ export function cropPointsToInput(g) {
     return out;
 }
 
-/** Bilinear 160 -> 224 resize (align_corners=false, like torch interpolate) + ImageNet normalisation, into `data` at `offset`. */
+/** Bilinear CROP -> INPUT resize (align_corners=false, like torch interpolate) + ImageNet normalisation, into `data` at `offset`. */
 export function writeInputTensor(crop, data, offset) {
     const S = CROP, D = INPUT, plane = D * D, L = resizeLUT();
     const m0 = MEAN[0], m1 = MEAN[1], m2 = MEAN[2], s0 = STD[0], s1 = STD[1], s2 = STD[2];
@@ -924,7 +933,7 @@ export function embeddingCacheScope(session, views) {
 // kept beside the vectors, under the same key, and shown when that frame comes from the cache again.
 /** Frames per run whose sample crop's pixels are kept for a later cached run's dialog. */
 export const SAMPLE_FRAMES_PER_RUN = 200;
-/** Most sample crops kept, all sessions together (INPUT x INPUT grey bytes each: 50 KB, so 12.8 MB). */
+/** Most sample crops kept, all sessions together (INPUT x INPUT grey bytes each: 28 KB at 168, so 7.2 MB). */
 export const SAMPLE_PIXELS_MAX = 256;
 const _samplePixels = new Map();               // full cache key -> Uint8Array(INPUT * INPUT), least recently used first
 

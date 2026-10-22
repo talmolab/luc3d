@@ -168,7 +168,7 @@ try {
         'a node weighted 0 is greyed out, as in the Tracking Wizard');
     check(d.imageSwitch === false && !d.imageOptionsShown,
         'the image ID-switch check is offered, off (the default), its options hidden');
-    const IMAGE_DEFAULTS = JSON.stringify([0, -0.8, 2, 3, 0]);
+    const IMAGE_DEFAULTS = JSON.stringify([0, -1, 2, 3, 0]);
     // The switch's own <input> is visually hidden; a user clicks its label.
     const imageSwitch = '.track-setup-modal .track-image-check-block > .track-setup-switch-row';
     await page.click(imageSwitch);

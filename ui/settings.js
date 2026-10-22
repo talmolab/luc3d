@@ -393,9 +393,9 @@ const TRACKING_THRESHOLDS = [
     {
         // A new id, not 'imageCheckThreshold': the score's scale changed (2026-10-09, -4..+4 instead of summed
         // log-probabilities), and an old saved -25 would otherwise be clamped to -4 and flag almost nothing.
-        id: 'imageChangeThreshold', label: 'Image check: flag threshold', default: -0.8,
+        id: 'imageChangeThreshold', label: 'Image check: flag threshold', default: -1,
         min: -4, max: 0, step: 0.1,
-        desc: 'A contact is a possible switch when its score falls below this. The score compares how each animal looks just before and just after the contact: about +2 means each still looks like itself, about -2 that they look like each other, near 0 that they cannot be told apart there. Closer to 0 catches more but flags more clean contacts: over 8 proofread or tail-marked recordings (1 h 45 min), -0.8 caught 10 of 12 real relabels with 2 false marks; -0.5 caught the same with 6; -1.2 caught 8 with none.',
+        desc: 'A contact is a possible switch when its score falls below this. The score compares how each animal looks just before and just after the contact: about +2 means each still looks like itself, about -2 that they look like each other, near 0 that they cannot be told apart there. Closer to 0 catches more but flags more clean contacts: over 24 proofread or tail-marked recordings (4 h 30 min), -1 caught 25 label changes with 1 false mark; -0.8 caught the same with 4; -1.2 caught 24 with none.',
     },
     {
         id: 'imageCheckHz', label: 'Image check: crops per second', default: 2,

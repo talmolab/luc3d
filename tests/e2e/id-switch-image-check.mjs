@@ -155,7 +155,7 @@ try {
             }
             return out;
         });
-        check(off.every(d => d < 1), `the skeleton's keypoints land on the crop's pixels, at any rotation (off by ${off.map(d => d.toFixed(2)).join(', ')} px of 224)`);
+        check(off.every(d => d < 1), `the skeleton's keypoints land on the crop's pixels, at any rotation (off by ${off.map(d => d.toFixed(2)).join(', ')} px of the model input)`);
     }
     {   // an embedder without sampleCrops (as injected here): no empty square
         await page.evaluate(async () => { await window.__buildSwap([1, 1, 1]); const M = await import('/ui/id-switch-modal.js');
