@@ -2758,7 +2758,7 @@ each trial's views WORST VIEW FIRST, so a losing trial stops at its first view
 Every result is bit-identical to solving each trial with `triangulatePointDLT` in
 index order — identical Track All identities on the 22 SLAP sessions and the 5-mouse
 recording, five or six settings each — and what `matchReproj` adds to the tracker
-about halved: with maxPenalty 4 + matchReproj 20, 5.1 → 4.0 s on 145420 (3.0 s off)
+fell by 43–49%: with maxPenalty 4 + matchReproj 20, 5.1 → 4.0 s on 145420 (3.0 s off)
 and 51 → 39 s on the 5-mouse recording (25.5 s off). Covered by
 `tests/test-crossview-features.mjs` (each option's effect, that 0 reproduces today's
 cost, and `match3d` bit-identical to a verbatim copy of the original per-trial
