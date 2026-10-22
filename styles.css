@@ -4979,6 +4979,120 @@ kbd {
   margin-top: 2px;
 }
 
+/* Tracking Wizard ▸ what the detection filters would remove
+   (ui/detection-filter-preview.js). Grows to its full height — no inner
+   scroller (see "No scroll-within-scroll"). */
+.dfp {
+  margin: 6px 4px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+}
+.dfp-title {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.dfp-subtitle {
+  font-size: 12px;
+  color: var(--text-primary);
+  margin-top: 12px;
+}
+.dfp-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 4px 0;
+}
+.dfp-warn {
+  color: var(--warning-color);
+}
+.dfp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  margin-top: 6px;
+}
+.dfp-table th {
+  text-align: right;
+  font-weight: normal;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--border-color);
+}
+.dfp-table th:first-child,
+.dfp-table td.dfp-cam {
+  text-align: left;
+}
+.dfp-table td {
+  padding: 3px 6px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+.dfp-table td.dfp-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.dfp-table td.dfp-removed {
+  color: var(--text-primary);
+}
+.dfp-count {
+  color: var(--text-muted);
+}
+.dfp-table tr.dfp-total td {
+  color: var(--text-primary);
+  border-bottom: none;
+  border-top: 1px solid var(--border-light);
+}
+.dfp-table tr.dfp-flagged td {
+  color: var(--warning-color);
+}
+.dfp-table tr.dfp-excluded td {
+  opacity: 0.5;
+}
+.dfp-tag {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--border-light);
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.dfp-tag-warn {
+  color: var(--warning-color);
+  border-color: var(--warning-color);
+}
+.dfp-hist {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1px;
+  width: 90px;
+  height: 18px;
+  vertical-align: middle;
+}
+.dfp-dist-cell {
+  white-space: nowrap;
+}
+.dfp-median {
+  display: inline-block;
+  min-width: 30px;
+  margin-left: 6px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+.dfp-table td.dfp-cell-flag {
+  color: var(--warning-color);
+}
+.dfp-bar {
+  flex: 1;
+  background: var(--accent);
+  min-height: 0;
+}
+.dfp-bar-below {
+  background: var(--warning-color);
+}
+
 /* Shared number field for node weights and tracking thresholds. */
 .settings-num-input {
   width: 72px;
