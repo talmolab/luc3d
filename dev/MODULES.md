@@ -11394,11 +11394,14 @@ every zeroed run repaired.
 **The rule.** `readBlobRange(blob, start, end)` retries a read that throws,
 after `COLD_READ_RETRY_MS` (200 ms, 1 s, 3 s), then rethrows the last error;
 and re-reads every all-zero part of a read (per 4 KiB block of the FILE,
-clipped to the read, neighbours merged — `zeroRuns`), using the re-read only
-when it holds a non-zero byte, so the guard cannot make a read worse. A re-read
-is checked the same way, at most three deep. h5wasm's patch also re-reads the
-block on each side of a run (a run of zeros can end part-way into a block);
-`zeroRuns` does not do that yet. Repairs and rescues log a `[cold-read]`
+clipped to the read, neighbours merged — `zeroRuns`) together with the 4 KiB
+block on each side of it, copying re-read bytes in only where the first read
+gave a zero byte, so the guard cannot make a read worse. The neighbours are
+there because a run of zeros can start or end part-way into a block, which is
+then not all zero (every wrong block on cold `.slp` files through h5wasm's first
+version of the rule, 93 of 93). The repaired range is checked again the same
+way, at most three re-reads deep — h5wasm's `lucidColdReadGuard` rule, plus the
+retry. Repairs and rescues log a `[cold-read]`
 console warning and are counted in `coldReadStats`.
 
 **Key exports.**
@@ -11429,7 +11432,8 @@ frame-accurate backend); the small JSON / TOML `.text()` reads (a zeroed or
 failed read of those fails to parse, loudly).
 
 **Tests.** `tests/test-cold-read-guard.mjs` (the rule over a fake Blob with
-injected holes and failures; mediabunny's index and packets of the B-frame clip
+injected holes and failures, including runs that start or end part-way into a
+block, with the all-zero-blocks-only rule as negative control; mediabunny's index and packets of the B-frame clip
 through the guard vs the unguarded read) and `tests/e2e/video-cold-read.mjs`
 (the real OnDemandVideoDecoder with faults injected under it; unguarded, a
 failed read leaves mp4box's scan at the `<video>` estimate and a zeroed first

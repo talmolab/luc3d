@@ -213,11 +213,11 @@ Tests: `tests/test-skeleton-edit-impact.mjs`, `tests/test-pose-data.js`, `tests/
 
 ## Cloud-synced files: read a user's File through `loading/cold-read-guard.js`
 
-In Google Drive for desktop (macOS File Provider), a Blob read of a not-yet-downloaded range can throw or return runs of zeros with no error. Never call `file.arrayBuffer()` / `slice().arrayBuffer()` on a user's file directly; use `readBlobRange` / `readBlobArrayBuffer` (retries thrown reads, re-reads all-zero 4 KiB blocks).
+In Google Drive for desktop (macOS File Provider), a Blob read of a not-yet-downloaded range can throw or return runs of zeros with no error. Never call `file.arrayBuffer()` / `slice().arrayBuffer()` on a user's file directly; use `readBlobRange` / `readBlobArrayBuffer` (retries thrown reads; re-reads all-zero 4 KiB blocks **plus the block on each side**, filling in only zero bytes, since a zero run can start or end part-way into a block — the same rule as h5wasm's `lucidColdReadGuard`).
 - The frame-accurate decoder must use `MediaBunnyVideoBackend.fromRangeSource(guardedRangeSource(file))` (`_initMediabunny`, `loading/video.js`), not `fromBlob`.
 - `guardedRangeSource` reads whole 1 MiB windows.
 - mp4box's index scan reads through it too (`readChunk`).
-- Not covered: `<video>` blob-URL playback and small JSON/TOML `.text()` reads. `.slp` reads go through h5wasm's own `cold-read` patch. Known gap: unlike that patch, `zeroRuns` does not re-read the block on each side of a zero run.
+- Not covered: `<video>` blob-URL playback and small JSON/TOML `.text()` reads. `.slp` reads go through h5wasm's own `cold-read` patch.
 - Tests: `tests/test-cold-read-guard.mjs`, `tests/e2e/video-cold-read.mjs`.
 
 ## Native resolution (1:1)

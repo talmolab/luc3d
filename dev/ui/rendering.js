@@ -6,33 +6,33 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=452df6aa4ee8';
-import { points3dNodeCount, isPoints3dFromFile } from '../pose/pose-data.js?v=452df6aa4ee8';
+import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=dd11de48ef87';
+import { points3dNodeCount, isPoints3dFromFile } from '../pose/pose-data.js?v=dd11de48ef87';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
     triangulateAndReproject, reprojectStoredPoints3d, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=452df6aa4ee8';
-import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=452df6aa4ee8';
-import { drawFrameOverlays } from './overlays.js?v=452df6aa4ee8';
-import { syncViewLegends } from './view-legend.js?v=452df6aa4ee8';
-import { isCameraTracked, getTrackingThreshold } from './settings.js?v=452df6aa4ee8';
+} from '../pose/triangulation.js?v=dd11de48ef87';
+import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=dd11de48ef87';
+import { drawFrameOverlays } from './overlays.js?v=dd11de48ef87';
+import { syncViewLegends } from './view-legend.js?v=dd11de48ef87';
+import { isCameraTracked, getTrackingThreshold } from './settings.js?v=dd11de48ef87';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=452df6aa4ee8';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=dd11de48ef87';
 // The toolbar's Animals field shows the ACTIVE session's count. Circular
 // (it reaches pose/tracker.js, which imports this module) — safe for the same
 // reason: the call site is inside drawAllOverlays' body.
-import { syncAnimalCountField } from './animal-count-field.js?v=452df6aa4ee8';
-import { syncNodeTooltipFrame } from './node-tooltip.js?v=452df6aa4ee8';
+import { syncAnimalCountField } from './animal-count-field.js?v=dd11de48ef87';
+import { syncNodeTooltipFrame } from './node-tooltip.js?v=dd11de48ef87';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=452df6aa4ee8';
-import { updateFrameInfo } from './info-panel.js?v=452df6aa4ee8';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=dd11de48ef87';
+import { updateFrameInfo } from './info-panel.js?v=dd11de48ef87';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
-} from './frame-counters.js?v=452df6aa4ee8';
+} from './frame-counters.js?v=dd11de48ef87';
 
 // ============================================
 // Reproj/Error visibility
