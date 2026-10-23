@@ -13006,7 +13006,10 @@ first track.
   metadata from `ig.metadata.lucid.instanceMeta`, 3D from `ig.instance3d.points`,
   the solver from `ig.metadata.lucid.triangulationMethod` (absent = `'dlt'`), and
   per-session identity from `ig.metadata.lucid.identityId` (else the raw dict's
-  `identity_idx` for legacy files). Reads both LUCID's legacy and the canonical
+  `identity_idx` for legacy files; else, with `opts.fileIdentities` — the typed
+  `/identity` catalog carried on each `slpData.sessions[]` entry as
+  `_typedIdentities`, passed by `restoreGroupingAndUnlink` only when the session's
+  identities came from that catalog — the group's canonical `identity_idx`). Reads both LUCID's legacy and the canonical
   `sessions_json`. Same pass-1 dedup + trackless/identity-less handling as the
   dict version. Returns `{ restoredGroups, restoredWith3d }`.
   **Per-node model scores** (shown by the node tooltip): from the typed

@@ -268,6 +268,17 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
 }
 
 /**
+ * typed Identity → its index in the file's `/identity` catalog (which is then
+ * `session.identities`' order), or null when there is no catalog to use.
+ */
+function fileIdentityIndex(fileIdentities) {
+    if (!fileIdentities || !fileIdentities.length) return null;
+    var m = new Map();
+    for (var i = 0; i < fileIdentities.length; i++) m.set(fileIdentities[i], i);
+    return m;
+}
+
+/**
  * Typed analog of `reconstructInstanceGroupsFromDicts` (PR 5.2). Rebuilds a
  * session's InstanceGroups from sleap-io.js's TYPED `RecordingSession` instead of
  * the raw `frame_group_dicts`. Required because the canonical `sessions_json`
@@ -287,12 +298,17 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
  *   per-session), falling back to the matching raw dict's `identity_idx` for legacy
  *   files (both are per-session; the canonical file-level `ig.identity`/`identity_idx`
  *   are NOT used — they resolve against the cross-session concat and mis-scope).
+ *   Exception: `opts.fileIdentities` (the file's typed `/identity` catalog), passed
+ *   only when `session.identities` was built from that same catalog — a file
+ *   written by another tool (campy-live-export), never a LUC3D project — lets a
+ *   group with neither take its canonical `identity_idx` (`typedIG.identity`), as
+ *   `reconstructInstanceGroupsFromSessionLazy` does.
  *
  * @param {Session} session - LUCID session whose frameGroups hold pass-1 raw instances
  * @param {Object} typedSession - sleap-io.js RecordingSession (with frameGroups Map)
  * @param {Object|null} rawSession - the verbatim sessions_json dict (legacy identity fallback)
  * @param {string[]} nodeNames - skeleton node names (point-array length)
- * @param {{onProgress?:(msg:string)=>void, batch?:number}} [opts]
+ * @param {{onProgress?:(msg:string)=>void, batch?:number, fileIdentities?:Array}} [opts]
  * @returns {Promise<{restoredGroups:number, restoredWith3d:number}>}
  */
 export async function reconstructInstanceGroupsFromSession(session, typedSession, rawSession, nodeNames, opts) {
@@ -301,6 +317,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
     var BATCH = opts.batch || 20000;
     var onProgress = opts.onProgress || function () {};
     var restoredGroups = 0, restoredWith3d = 0;
+    var fileIdentityIdx = fileIdentityIndex(opts.fileIdentities);
     // For deriving type/trackIdx/score from resolved typed instances when slim
     // metadata (#134) omits them.
     var _SIO = (typeof window !== 'undefined' && window.SleapIO) ? window.SleapIO : null;
@@ -352,6 +369,9 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
             } else {
                 var rawIG = rawFg && rawFg.instance_groups && rawFg.instance_groups[igi];
                 if (rawIG && rawIG.identity_idx != null) identityId = rawIG.identity_idx;
+                else if (fileIdentityIdx && typedIG.identity && fileIdentityIdx.has(typedIG.identity)) {
+                    identityId = fileIdentityIdx.get(typedIG.identity);
+                }
             }
             if (identityId >= 0 && identityId >= session.identities.length) {
                 console.warn('[load-slp] identity_idx ' + identityId + ' is out of bounds (only ' + session.identities.length + ' identities loaded) — dropping identity assignment');
@@ -516,12 +536,7 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
     var _SIO = (typeof window !== 'undefined' && window.SleapIO) ? window.SleapIO : null;
     var PredI = _SIO && _SIO.PredictedInstance;
     var restoredGroups = 0, restoredWith3d = 0;
-    // typed Identity → its index in the file's catalog (= session.identities).
-    var fileIdentityIdx = null;
-    if (opts.fileIdentities && opts.fileIdentities.length) {
-        fileIdentityIdx = new Map();
-        for (var _fi = 0; _fi < opts.fileIdentities.length; _fi++) fileIdentityIdx.set(opts.fileIdentities[_fi], _fi);
-    }
+    var fileIdentityIdx = fileIdentityIndex(opts.fileIdentities);
     // Time-based yielding: materializing 108k frames + building ~1.25M member
     // Instances is ~tens of seconds of work; yield every ~40ms so the tab stays
     // responsive (a frame-count batch of 20k blocks the main thread for seconds).
@@ -772,9 +787,15 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
 
         var _recon;
         if (hasTypedSession) {
+            // Identities from the file's catalog (no LUC3D per-session list):
+            // the groups' `identity_idx` indexes that same catalog.
+            var identitiesFromFile = !(perSessionIdentities && perSessionIdentities.length > 0)
+                && session.identities.length > 0;
             _recon = await reconstructInstanceGroupsFromSession(
-                session, sessData2._typedSession, sessData2, nodeNames,
-                { onProgress: onProgress });
+                session, sessData2._typedSession, sessData2, nodeNames, {
+                    onProgress: onProgress,
+                    fileIdentities: identitiesFromFile ? (sessData2._typedIdentities || null) : null,
+                });
         } else {
             _recon = await reconstructInstanceGroupsFromDicts(
                 session, fgDicts, camKeyToName, nodeNames,
