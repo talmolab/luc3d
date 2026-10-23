@@ -1709,6 +1709,69 @@ body {
   font-size: 12px;
 }
 
+/* The two compute caps share a row, and Try WebNN starts the row under them
+   (each starts a row; the cell beside "Views per animal" stays empty). */
+.track-setup-options .settings-node-weight-row[data-row="imageCheckGpuTime"],
+.track-setup-options .settings-node-weight-row[data-row="imageCheckWebNN"] {
+  grid-column-start: 1;
+}
+
+/* A label, its ⓘ and its note, together on the left of the row. The label keeps
+   its full width; the note is what gives way when the cell is narrow. */
+.track-setup-option-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.track-setup-option-head .settings-kbd-label {
+  flex: none;
+}
+
+.track-setup-option-head .settings-threshold-note {
+  margin-left: 4px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* An ⓘ outside the plane panel: the same look as .plane-pin-info. */
+.info-tip-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--text-muted);
+  cursor: help;
+}
+
+.info-tip-btn:hover,
+.info-tip-btn:focus-visible {
+  color: var(--text-primary);
+}
+
+/* Inside a dialog, undo `.multi-frame-modal button` (padding, border, fill). */
+.multi-frame-modal .info-tip-btn {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: inherit;
+}
+
+.multi-frame-modal .info-tip-btn:hover,
+.multi-frame-modal .info-tip-btn:focus-visible {
+  filter: none;
+  color: var(--text-primary);
+}
+
 /* Align Views to References modal (#226). The table grows with the camera
    count rather than scrolling inside the dialog (no scroll-within-scroll). */
 .align-views-modal {
@@ -4979,6 +5042,25 @@ kbd {
   margin-top: 2px;
 }
 
+/* What a setting's value means on this machine ("5 of 10 cores"): beside its field in
+   the Track dialogs' compact grid, under it in the Wizard (.settings-threshold-field),
+   so the Wizard's fields stay in one column. */
+.settings-threshold-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 8px;
+  white-space: nowrap;
+}
+.settings-threshold-field {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+}
+.settings-threshold-field .settings-threshold-note {
+  margin-left: 0;
+}
+
 /* Tracking Wizard ▸ what the detection filters would remove
    (ui/detection-filter-preview.js). Grows to its full height — no inner
    scroller (see "No scroll-within-scroll"). */
@@ -6195,7 +6277,10 @@ kbd {
    the hover, fire `mouseout` on the icon and flicker itself away. */
 .info-tip {
   position: fixed;
-  z-index: 10000;
+  /* Above every layer, modal overlays included (20000, 30000): an ⓘ inside a
+     dialog would otherwise show its tip BEHIND the dialog. Safe because it takes
+     no pointer events and lives only as long as the hover. */
+  z-index: 30001;
   max-width: 260px;
   padding: 6px 9px;
   border: 1px solid var(--border-light);

@@ -21,6 +21,9 @@
  *     embeds frames, shows a real sample crop and a measured CPU line with the CPU
  *     alone in the load graph, and cancels. (The sample crops are
  *     also checked bit for bit against the inputs embedded, under 2-4.)
+ *  6. The CPU cap (`maxCpuPct`, ui/image-embedder.js `imageCheckThreads`): at 50%
+ *     the check runs the reduced model + crop worker count, never rests, and its
+ *     summary says so. (The GPU cap's queue: tests/test-image-compute-caps.mjs.)
  *
  * Run: node tests/e2e/image-check-cpu.mjs   (downloads the ~88 MB fp32 model)
  */
@@ -149,7 +152,7 @@ try {
             E.writeInputTensor(E.cutCrop(window.__bmp, g, others, canvas), data.subarray(keys.length * SZ, (keys.length + 1) * SZ), 0);
             keys.push([ii, cam]); }));
         const T = await import(E.TRANSFORMERS_URL);
-        const ref = await T.AutoModel.from_pretrained(E.IMAGE_MODEL_ID, { device: 'wasm', dtype: 'fp32' });
+        const ref = await T.AutoModel.from_pretrained(E.IMAGE_MODEL_ID, { revision: E.IMAGE_MODEL_REVISION, device: 'wasm', dtype: 'fp32' });
         const res = await ref({ pixel_values: new T.Tensor('float32', data.slice(0, keys.length * SZ), [keys.length, 3, E.INPUT, E.INPUT]) });
         const hs = res.last_hidden_state, tok = hs.dims[1], dim = hs.dims[2];
         let minCos = 1, maxAbs = 0, matched = 0;
@@ -183,6 +186,26 @@ try {
     check(emb.samples.every(c => c.pts), 'each sample crop carries its animal\'s keypoints in crop pixels, for the skeleton overlay');
     check(emb.samples.length === 4 && emb.samples.every(c => c.same) && new Set(emb.samples.map(c => c.id + c.camera)).size === 4,
           `one sample crop per frame, each bit-identical to the input embedded, rotating animal/camera (${emb.samples.map(c => 'f' + c.frame + ' id' + c.id + ' ' + c.camera).join(', ')})`);
+
+    // ---- 6. the CPU cap (imageCheckThreads, `imageCheckCpuCores`): fewer threads, all working, never resting
+    check(!/capped/.test(emb.timing), 'with no caps given the embedder is uncapped (nothing capped in its summary)');
+    const capped = await page.evaluate(async () => {
+        const E = await import('/ui/image-embedder.js'), AS = await import('/ui/app-state.js');
+        const session = AS.state.session, itemsAt = (f) => session.instanceGroups.get(f).map((g, k) => ({ k, group: g }));
+        const want = E.imageCheckThreads(navigator.hardwareConcurrency, navigator.deviceMemory, 50, true);
+        const e = await E.createImageEmbedder(session, { maxViewsPerAnimal: 0, maxCpuPct: 50, maxGpuPct: 50 });
+        const device = e.device();
+        await Promise.all([0, 4, 8, 12].map(f => e.getEmbeddings(f, itemsAt(f))));
+        e.releaseFrames();
+        const s = e.stats();
+        return { want, device, s, timing: E.formatEmbedTiming(s), cores: navigator.hardwareConcurrency };
+    });
+    check(capped.device.workers === capped.want.model && capped.s.threads === capped.want.model + capped.want.crop,
+          `a 50% CPU cap on ${capped.cores} cores runs ${capped.want.model} model + ${capped.want.crop} crop workers (${capped.s.threads} threads)`);
+    check(capped.s.restS === 0 && capped.s.maxGpuPct === null,
+          `…and on the CPU path the GPU cap does nothing: no idle time (${capped.s.restS} s)`);
+    check(new RegExp(' · CPU capped at ' + capped.s.threads + ' of ' + capped.cores + ' cores').test(capped.timing) && !/GPU time capped/.test(capped.timing),
+          `the summary reports the CPU cap alone: "${capped.timing}"`);
 
     // ---- 5. the real dialog, nothing injected: runs on the CPU instead of refusing
     await page.evaluate(async () => {

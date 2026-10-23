@@ -29,6 +29,8 @@
  * Range collects the count in its own dialog and never reaches this one.
  */
 
+import { setInfoTip, ICON_INFO } from './info-tip.js';
+
 /**
  * Show the dialog. Resolves with the answer on Continue / Enter, or `null` on
  * Cancel / Esc / a backdrop click, which must leave everything as it was.
@@ -277,7 +279,7 @@ export function buildNodeWeightFields(nodes) {
  * Track All, in the order the dialog shows them: the on/off switch first.
  */
 export const IMAGE_CHECK_IDS = [
-    'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckWebNN',
+    'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckGpuTime', 'imageCheckCpuCores', 'imageCheckWebNN',
 ];
 
 /**
@@ -354,26 +356,50 @@ export function buildImageCheckFields(defs, after) {
         if (def.kind === 'toggle') {
             var row = document.createElement('div');
             row.className = 'settings-node-weight-row';
+            row.dataset.row = def.id;
             row.appendChild(toggle(def, shortLabel(def)));
             options.appendChild(row);
             return;
         }
         var r = document.createElement('div');
         r.className = 'settings-node-weight-row';
+        r.dataset.row = def.id;   // styles.css places the GPU / CPU caps on one row, WebNN on the next
         var label = document.createElement('div');
         label.className = 'settings-kbd-label';
         label.textContent = shortLabel(def);
         label.title = def.desc || '';
+        var head = label;
+        if (def.tip || def.note) {           // a short ⓘ (ui/info-tip.js) instead of the label's long native tooltip
+            head = document.createElement('div');
+            head.className = 'track-setup-option-head';
+            head.appendChild(label);
+        }
+        if (def.tip) {
+            label.removeAttribute('title');
+            var info = document.createElement('button');
+            info.type = 'button';
+            info.className = 'info-tip-btn';
+            info.innerHTML = ICON_INFO;
+            setInfoTip(info, def.tip);
+            head.appendChild(info);
+        }
         var input = document.createElement('input');
         input.type = 'number';
         input.className = 'settings-num-input';
         input.min = String(def.min);
         input.max = String(def.max);
         input.step = String(def.step);
-        input.value = String(def.value);
+        input.value = def.decimals > 0 && isFinite(def.value) ? Number(def.value).toFixed(def.decimals) : String(def.value);   // 0.50, as the Wizard shows it
         input.dataset.setting = def.id;
         input.setAttribute('aria-label', def.label);
-        r.appendChild(label);
+        if (def.note) {          // what the value means on this machine ("5 of 10 cores"), in step as it is typed;
+            var note = document.createElement('span');   // after the label, so it — not the label — gives way first
+            note.className = 'settings-threshold-note';
+            note.textContent = def.note(def.value);
+            input.addEventListener('input', function () { note.textContent = def.note(Number(input.value)); });
+            head.appendChild(note);
+        }
+        r.appendChild(head);
         r.appendChild(input);
         options.appendChild(r);
         fields.push({ def: def, input: input });

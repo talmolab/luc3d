@@ -163,18 +163,14 @@ export const ICON_PIN = (function () {
     };
 }());
 
-/** The Pin column's explanation button. @private */
-export const ICON_INFO =
-    '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" ' +
-    'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
-    'aria-hidden="true"><circle cx="12" cy="12" r="9"/>' +
-    '<path d="M12 11.2v5"/>' +
-    '<circle cx="12" cy="7.6" r="1.1" fill="currentColor" stroke="none"/></svg>';
+/** The Pin column's explanation button: now defined in ui/info-tip.js (import-free, so the Track
+ *  dialogs can use it too) and re-exported here for the plane modules that import it from the hub. */
+export { ICON_INFO };
 
 import { state, interactionManager, viewport3d } from './app-state.js';
 import { makeVideoToCanvasTransform } from './overlays.js';
 import { persistSectionStates } from './section-state.js';
-import { setInfoTip } from './info-tip.js';
+import { setInfoTip, ICON_INFO } from './info-tip.js';
 import { showPlaneDialog } from './plane-dialog.js';
 // The Visibility panel's `Planes` toggles. Read by `syncPlanes3D` here and by
 // the 2D overlay, which is what keeps the two representations agreeing about

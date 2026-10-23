@@ -1930,7 +1930,7 @@ drifts upward.
   skeleton's overrides survive) and then the count, both before
   `createTrackerRun` snapshots them; Cancel writes nothing and the run bails.
   Track All's copy (`askTrackSetup(..., withImageCheck)`) also offers the image
-  ID-switch check — its switch and four options (`IMAGE_CHECK_IDS`, from
+  ID-switch check — its switch and six options (`IMAGE_CHECK_IDS`, from
   `getTrackingThresholdDefs()`), written through `updateTrackingThresholds`; the
   pass reads `autoImageSwitchCheck` when it ends, so the answer applies to this
   run. `trackCurrentFrame` is `async` for this (its callers ignore the return
@@ -8076,7 +8076,9 @@ and the CPU workers hold ~600 MB each. On a CPU run "About these flags" says the
 model ran on the CPU. Reads `imageCheckHz` (default 2), `imageChangeThreshold`
 (default -0.8 — a new id rather than the old `imageCheckThreshold`, because the
 image score's scale changed), `imageCheckMaxViews` (default 3, passed as
-`maxViewsPerAnimal`) and `imageCheckWebNN` (default 0, as `webnn`), and passes
+`maxViewsPerAnimal`), `imageCheckGpuTime` / `imageCheckCpuCores` (fractions,
+default 0.50 each, passed × 100 as `maxGpuPct` / `maxCpuPct`: the embedder works
+in percent) and `imageCheckWebNN` (default 0, as `webnn`), and passes
 `inFlight: embedder.inFlight`. The embedder's `backend()` outcome is attached to
 the result as `model` (its note shown under "About these flags") and
 `embedder.stats()` as `timing` (logged, and shown there as "Image check speed on
@@ -8377,7 +8379,10 @@ buffer — bit-identical, 1/257 of the readback. (2) Model runs are a greedy BAT
 QUEUE: one run at a time, each taking every crop queued meanwhile (up to
 `EMBED_MAX_BATCH` = 64), with the check keeping `EMBED_IN_FLIGHT` = 8 frames in
 flight (`inFlight` on the provider) so batches fill while the GPU works (M2 Pro:
-GPU busy 66% -> 98%, embeddings identical). (3) `stats()` /
+GPU busy 66% -> 98%, embeddings identical). The queue is `createModelQueue`, a
+factory so it can be tested without a GPU; it splits a frame with more crops than
+a batch across runs and hands each frame its vectors with the batch's `tag` (the
+model that made them, which the cache stores them under). (3) `stats()` /
 `summarizeEmbedTiming` / `formatEmbedTiming`: crops/s, GPU busy %, batches,
 ms/crop, and per-frame decode / crop / queue latency — logged and shown under
 "About these flags", so a slow run says where it waited, ending with the backend
@@ -8511,14 +8516,18 @@ because on the CPU frames arrive in bursts); `opts.device` ('auto' | 'webgpu' |
 `SAMPLE_FRAMES_PER_RUN`, `SAMPLE_PIXELS_MAX`, `tensorToGrey(tensor)`, `greyToTensor(grey)` (sample crops on cached runs);
 `pickImageDevice()` -> `{kind: 'webgpu'|'cpu', adapter, why}`; `cpuModelWorkerCount(cores, memoryGB)`,
 `CPU_MODEL_MAX_WORKERS`; `createCpuModelPool(count, onStatus, clock?)` -> `{size, run(data, n) ->
-Promise<Float32Array[]>, terminate()}`; `createCropPool(clock?)` -> `{broken, run(image, crops), terminate()}` | null
+Promise<Float32Array[]>, terminate()}`; `createCropPool(clock?, count?)` -> `{broken, run(image, crops), terminate()}` | null
+(count: the CPU cap's crop workers)
 (`clock`: a `createBusyClock`, ui/load-graph.js);
 `loadImageModel(onStatus)` (WebGPU; once, cached promise);
 `importTransformers()` (the runtime, imported once; re-imported under a new fragment
 after a failure); `cannotRun(reason, cause)` (an Error whose message is the reason
 the check cannot run, flagged `cannotRun`); `asModelDownloadFailure(err)` (a failed
 download as `MODEL_OFFLINE_REASON`, else `err` unchanged); `MODEL_OFFLINE_REASON`;
-`selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
+`selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`;
+the compute caps `capPct(pct)`, `paceRestMs(runMs, pct)`,
+`imageCheckThreads(cores, memoryGB, pct, onCpu)`, `IMAGE_CAP_MIN` and
+`createModelQueue(embed, sz, tm, {maxBatch, maxGpuPct})` -> `{enqueue, endRest}`;
 `summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`;
 `describeAdapter(info)`, `gpuAdapterInfo(device, adapter)` -> `{name, fallback}`,
 `createLoadMeter` (re-exported from ui/load-graph.js, where it now lives), `GPU_LOAD_WINDOW_MS` (=
@@ -8538,7 +8547,39 @@ against `cutCrop` itself within 0.04 px, at any rotation);
 `cropGeometry` (also `pts`: every keypoint, for the overlay — cutCrop ignores it), `cutCrop`,
 `convexHull`, `writeInputTensor`, `skeletonIndex(nodes)` (also `n`, the node count),
 `frameCropGeometry(session, frame, items, cams, atFrames, sk)` -> `geo[view][item]`; constants
-`TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (224).
+`TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_REVISION`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (224).
+
+**The compute caps** (`opts.maxGpuPct` / `opts.maxCpuPct`, from the "GPU time
+(%)" / "CPU cores (%)" settings `imageCheckGpuTime` / `imageCheckCpuCores`,
+fractions 0.10–1.00, default 0.50). How much of the GPU and of the CPU the check
+may take is the USER's to set, and what it does not take stays free for other
+apps — even when nothing else wants it (an allocation, not an adaptive
+back-off). No browser API gives a page a share of either, so the check takes its
+share by how it runs:
+- **GPU** — after each FULL batch (`EMBED_MAX_BATCH`) an idle,
+  `paceRestMs(runMs, pct)` = `runMs × (100/pct − 1)`, so busy / (busy + idle) =
+  pct. Batches do NOT shrink with the cap: an earlier version scaled them
+  (`64 × pct`), but small batches run each crop slower while the idle time alone
+  already sets the share. Measured on an M-series GPU (200 frames of a real
+  recording): 6.0–6.2 ms/crop uncapped, 5.6 at 0.50, 5.8 at 0.25, GPU busy 98% /
+  50.1% / 25.3%. Not applied on the CPU path. Idle time is not counted in
+  `busyMs()`, so the dialog's GPU line reads at most the cap.
+- **CPU** — fewer worker threads, all kept working, never idling:
+  `imageCheckThreads(cores, memoryGB, pct, onCpu)` -> `{model, crop, budget,
+  cores}`, a budget of floor(cores × pct/100) threads; on the CPU path the model
+  takes all but one (still within `cpuModelWorkerCount`'s memory limit), cropping
+  the rest; otherwise cropping takes it all. At least one of each. 10 cores at
+  0.50: 4 model + 1 crop (uncapped 4 + 8). Video decoding (WebCodecs) and the main
+  thread are the browser's and not counted.
+100% is the uncapped behaviour for both; floor `IMAGE_CAP_MIN` = 10.
+`releaseFrames` ends an idle in progress (`endRest`) LAST, after the CPU workers
+are terminated — `createCpuModelPool.terminate()` does not reject a job in
+flight, so a run started on a worker about to be killed would never settle.
+`stats()` adds `maxGpuPct` (null on the CPU path), `restS`, `maxCpuPct`,
+`threads` and `cores`; `formatEmbedTiming` adds "GPU time capped at 0.NN (S s
+idle)" and/or "CPU capped at T of C cores". Covered by
+`tests/test-image-compute-caps.mjs` (incl. the queue, driven by a fake model) and
+`tests/e2e/image-check-cpu.mjs` §6.
 
 **The crop** (must match the calibration): rotate so the nose points right
 (Nose − TTI), centre on the mean of the body keypoints, side 1.3 x body length,
@@ -8558,7 +8599,11 @@ reads (the sampled frame and any keyframe-snapped `atFrames`) with
 
 **Dependencies.** transformers.js **pinned to 4.3.0** (`/+esm` from jsdelivr —
 pinned for the reason dockview is) and `onnx-community/dinov2-small` from the
-Hugging Face CDN, both fetched on FIRST USE and cached by the browser; nothing
+Hugging Face CDN, **pinned to the repo commit `IMAGE_MODEL_REVISION`** (`8b1f705…`,
+2024-10-08, the weights the check was calibrated on) — every `from_pretrained`
+passes `revision`, else it follows `main` and an upstream re-upload would change
+the weights silently; `tests/test-image-model-revision.mjs` enforces it. Both
+fetched on FIRST USE and cached by the browser; nothing
 about the user's data is sent. fp16 (~44 MB) when the GPU has `shader-f16`, else
 fp32 (~88 MB). Without a hardware GPU the fp32 model runs on the CPU in workers
 — never the CPU runtime's default int8 model, which drifts (cosine 0.953 vs the
@@ -8644,7 +8689,7 @@ token, read exactly as the main thread's `clsVectors` does — or `{type: 'error
 id, message}`.
 
 **Imports from project modules.** `ui/image-embedder.js` (`importTransformers`,
-`asModelDownloadFailure`, `IMAGE_MODEL_ID`, `INPUT` — so the pin stays in one
+`asModelDownloadFailure`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_REVISION`, `INPUT` — so the pin stays in one
 place), then the runtime through `importTransformers` (a dynamic cross-origin
 import of `TRANSFORMERS_URL`, which a module worker may do).
 
@@ -8715,8 +8760,12 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
 - `getTrackingThresholdDefs()` / `getTrackingThreshold(id)` /
   `getTrackingThresholds()` / `setTrackingThresholds(map)` — read/write the
   tracker's user-editable thresholds. `getTrackingThresholdDefs` returns the
-  wizard's render catalog `[{ id, label, default, value, min, max, step, desc, kind }]`
-  (`kind`: `'toggle'` for on/off settings, drawn as a switch; else `'number'`),
+  wizard's render catalog `[{ id, label, default, value, min, max, step, desc, kind,
+  decimals, note, tip }]` (`kind`: `'toggle'` for on/off settings, drawn as a
+  switch; else `'number'`; `decimals`: places the field shows, `formatThresholdValue`;
+  `note(value)`: a live hint beside the field — `cpuCoresNote` -> "5 of 10 cores",
+  the same budget as `imageCheckThreads`; `tip`: a one-line ⓘ in the Track
+  dialogs),
   **filtered to `WIZARD_THRESHOLD_IDS`** — the CrossViewTracker's free parameters
   only (`filterMinVisibleNodes`, `filterMinInstanceScore`, `filterMinMeanNodeScore`, `corr2dWeight`,
   `corr3dWeight`, `velocityThreshold`, `distanceThreshold`, `timePenalty`,
@@ -8728,8 +8777,14 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   0/1, the image check likewise, default 0; `imageChangeThreshold` -0.8;
   `imageCheckHz` 2; `imageCheckBackgroundHz` 0.1 (crops per second away from contacts:
   `backgroundHz`, see pose/id-switch-check.js "Which samples are embedded"; Wizard only, not
-  the Track All dialog); `imageCheckMaxViews` 3; `imageCheckWebNN` — 0/1, try WebNN,
-  default 0). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
+  the Track All dialog); `imageCheckMaxViews` 3; `imageCheckGpuTime` 0.5 and
+  `imageCheckCpuCores` 0.5 — labelled "GPU time (%)" / "CPU cores (%)", the share of
+  GPU time / of the CPU cores the image check may use, 0.10..1.00, 1 = uncapped
+  (new ids for the unreleased percentage-scale `imageCheckMaxGpu`/`Cpu`, so a
+  stored 50 is never read on the 0–1 scale); `imageCheckWebNN` — 0/1, try WebNN,
+  default 0).
+- `ID_SWITCH_SETTING_IDS` — the Wizard settings shown in its "ID Switches"
+  section rather than under Tracking Thresholds, in display order. The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
   `reprojWeight`, `minMatchScore`, `prevIdentityBonus`, `reprojGate2/3/4`,
   `track3dWeight`) drive the bench-only luc3d matcher and are hidden from the UI
   but still resolve via `getTrackingThreshold`. `getTrackingThresholds` returns
@@ -8849,9 +8904,15 @@ rejected; fixed entries show a greyed dashed chip), and **Tracking Wizard**:
 **Node Weights** (number field `0–1` per node of the active skeleton; `0` drops
 the node from the association cost and greys the row), **Camera Views** (an
 on/off switch per camera, stored as a `0/1` weight; off excludes the view from
-tracking and greys the row), and **Tracking Thresholds** (one field per
+tracking and greys the row), **Tracking Thresholds** (one field per
 `getTrackingThresholdDefs()` entry, or an on/off switch stored as `1`/`0` for a
-`kind: 'toggle'` entry, via `makeToggle`). Covered by
+`kind: 'toggle'` entry, via `makeToggle`) and **ID Switches** (the entries in
+`ID_SWITCH_SETTING_IDS`, in that order — the after-tracking checks and the image
+check's options — taken out of Tracking Thresholds because they configure the
+checks run after tracking, not the tracker's matching). Both sections draw their
+rows with one `renderThresholdRow` (each row carries `data-setting="<id>"`), so
+they cannot drift apart; a setting with `decimals` shows that many places, and one
+with a `note` shows it under its field. Covered by
 `tests/e2e/settings-wizard-toggles.mjs`. Edits mutate a local `working` state
 only; nothing commits until **Apply** (`setDefaultTriangulationMethod` +
 `applyBindings` + `setNodeWeights` + `setCameraWeights` +
@@ -9278,7 +9339,7 @@ window (e.g. around a known ID switch) while iterating on settings.
 `getTrackerNumAnimals`, `setTrackerNumAnimals`), `ui/settings.js`
 (`getNodeWeight`, `updateNodeWeights`, `getTrackingThresholdDefs`,
 `updateTrackingThresholds`), `ui/track-setup-modal.js`
-(`buildNodeWeightFields`, `buildImageCheckFields`, `IMAGE_CHECK_IDS`; a leaf).
+(`buildNodeWeightFields`, `buildImageCheckFields`, `IMAGE_CHECK_IDS`; imports only `ui/info-tip.js`).
 
 **Imported by.** `ui/ui-wiring.js` (wires `#tbTrackFrameRange`, the dropdown
 item; the `#tbTrackFrame` button itself stays wired to `trackCurrentFrame` in
@@ -9360,7 +9421,13 @@ frame is never checked); Track Frame Range shows the same section.
   Continue / Enter, and `null` on Cancel / Esc / a backdrop click. A second
   call while one is open resolves `null` at once.
 - `IMAGE_CHECK_IDS` — the image check's settings in dialog order, the switch
-  first.
+  first. In the options grid each row carries `data-row="<setting id>"`, and
+  styles.css starts a new row at `imageCheckGpuTime` and at `imageCheckWebNN`, so
+  GPU time and CPU cores share a row with Try WebNN under them. A setting's `tip`
+  puts a short ⓘ after its label (`setInfoTip`) in place of the label's long
+  native `title`; its `note` ("5 of 10 cores") follows the label inside
+  `.track-setup-option-head`, so the note — not the label — is what an ellipsis
+  shortens in a narrow cell.
 - `buildImageCheckFields(defs)` → `{element, read, refresh}` — the image-check
   section: the switch, a one-line caution, and the options in the weight
   grid's compact markup, hidden while the switch is off. Labels are the
@@ -9370,7 +9437,8 @@ frame is never checked); Track Frame Range shows the same section.
   the switch "…after `after`" (default "Track All"); Track Frame Range passes
   "tracking the range".
 
-**Imports from project modules.** None — a LEAF on purpose. It commits
+**Imports from project modules.** Only `ui/info-tip.js` (`setInfoTip`,
+`ICON_INFO`), itself import-free, for the ⓘ on a setting with a `tip`. It commits
 nothing: `pose/tracker.js` (`askTrackSetup`) writes the count through
 `setTrackerNumAnimals`, the weights through `updateNodeWeights` and the image
 check through `updateTrackingThresholds` — the settings the toolbar's Animals
@@ -10519,7 +10587,7 @@ stopped by two independent mechanisms and either one zeroes the handle.
 popover beside the pointer. Never `setStatus`: the status bar is the furthest
 point on screen from the icon, and it also carries save results and errors.
 
-A **LEAF module** — it imports nothing. Every panel with something to explain is
+A **LEAF module** — it imports nothing (which is also why `ICON_INFO` lives here). Every panel with something to explain is
 a caller, and several of those already import each other.
 
 **Key exports.**
@@ -10531,6 +10599,11 @@ a caller, and several of those already import each other.
   (`pose/initialization.js`, before any panel renders). Further calls are
   no-ops.
 - `hideInfoTip()` — put it away.
+- `ICON_INFO` — the ⓘ icon (13 px inline SVG, `currentColor`). Defined here, not
+  in the plane hub, so a module outside the plane panel can use it without
+  importing that panel; `ui/plane-definition.js` re-exports it. Outside the
+  plane panel the button is `.info-tip-btn`, with a `.multi-frame-modal
+  .info-tip-btn` rule undoing the dialogs' generic button padding, border and fill.
 - `placeTipNear(el, x, y)` — the placement rule (beside the pointer, flipped at
   the viewport edges) for any `position: fixed` popover. Shared with
   `ui/node-tooltip.js` so the app has one rule for where a tip goes.
@@ -10565,13 +10638,19 @@ and that the heading BESIDE the icon still folds.
 - **A scroll DISMISSES it** (`position: fixed` does not follow one), unlike the
   pin picker, which repositions: a picker is mid-interaction, a read sentence is
   not.
+- **The tip is above every layer** (`.info-tip` z-index 30001, over the modal
+  overlays at 20000/30000): an ⓘ inside a dialog otherwise showed its tip behind
+  the dialog. Safe because it takes no pointer events and lives only as long as
+  the hover. `tests/e2e/track-setup-modal.mjs` fails at the old 10000.
 
 Leaving the icon, clicking elsewhere, `Esc`, blur, a scroll or a resize all
 dismiss.
 
-**Imported by.** `ui/plane-definition.js` (the major sections' ⓘ),
-`ui/plane-nodes-panel.js` (the Pinned column's ⓘ), `pose/initialization.js`
-(`installInfoTips`), `ui/node-tooltip.js` (`placeTipNear`).
+**Imported by.** `ui/plane-definition.js` (the major sections' ⓘ; re-exports
+`ICON_INFO`), `ui/plane-nodes-panel.js` (the Pinned column's ⓘ),
+`pose/initialization.js` (`installInfoTips`), `ui/node-tooltip.js`
+(`placeTipNear`), `ui/track-setup-modal.js` (`setInfoTip`, `ICON_INFO`: the image
+check's GPU time / CPU cores ⓘ).
 
 Coverage: `tests/e2e/info-tip.mjs` (incl. that the status bar is left untouched
 and that an element created after startup is served with no wiring),

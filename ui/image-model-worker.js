@@ -18,7 +18,7 @@
  * `cls` is each crop's CLS token, exactly as the main thread's `clsVectors` reads it.
  */
 
-import { importTransformers, asModelDownloadFailure, IMAGE_MODEL_ID, INPUT } from './image-embedder.js';
+import { importTransformers, asModelDownloadFailure, IMAGE_MODEL_ID, IMAGE_MODEL_REVISION, INPUT } from './image-embedder.js';
 
 let T = null, model = null;
 
@@ -30,7 +30,7 @@ self.onmessage = async function (e) {
             // fp32: identical to the WebGPU fp32 model (cosine 1.00000), which matched the calibration;
             // the CPU runtime's default int8 model is what drifted from it
             model = await T.AutoModel.from_pretrained(IMAGE_MODEL_ID, {
-                device: 'wasm', dtype: 'fp32',
+                revision: IMAGE_MODEL_REVISION, device: 'wasm', dtype: 'fp32',
                 progress_callback: function (p) {
                     if (p && p.status === 'progress' && p.total) self.postMessage({ type: 'progress', loaded: p.loaded, total: p.total });
                 },
