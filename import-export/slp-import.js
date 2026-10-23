@@ -1878,11 +1878,12 @@ export async function handleAddSlp() {
                 if (fn === '.') return '';
                 return fn.replace(/^.*[\/\\]/, '');
             });
-            var addRefInfo = addSlpVideoRefs.filter(function (r) { return r; }).join(', ') || '(unknown)';
+            var addRefInfo = addSlpVideoRefs.filter(function (r) { return r; }).join(', ');
             console.log('[add-slp] SLP references videos:', addSlpVideoRefs);
 
-            // Show blocking overlay forcing user to select video files
-            var addVideoFiles = await forceVideoSelection(addRefInfo);
+            // Ask for the video files; [] = the user continued without video.
+            var addVideoFiles = await forceVideoSelection(addRefInfo,
+                { title: 'SLP loaded — now select the video file(s)' });
 
             if (addVideoFiles.length > 0) {
                 for (var amvi = 0; amvi < addVideoFiles.length; amvi++) {

@@ -355,9 +355,12 @@ async function runImage(session, rate, inject) {
         var res = await checkImageSwitches(session, {
             fps: rate.fps,
             imageHz: getTrackingThreshold('imageCheckHz') || 2,
+            backgroundHz: getTrackingThreshold('imageCheckBackgroundHz'),
             threshold: getTrackingThreshold('imageChangeThreshold'),
             getEmbeddings: embedder.getEmbeddings,
             prepareFrames: embedder.prepareFrames,
+            croppable: embedder.croppable,
+            keyframes: embedder.keyframes,
             inFlight: embedder.inFlight || 2,
             releaseFrames: embedder.releaseFrames,
             signal: prog.signal,

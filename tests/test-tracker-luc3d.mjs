@@ -2,7 +2,8 @@
  * test-tracker-luc3d.mjs — Node tests for the two reference-derived levers on the
  * legacy bench-only luc3d matcher (matchFrameInstances in pose/tracker.js):
  *
- *   Lever A — detection-pool filter (filterMinVisibleNodes / filterMinInstanceScore)
+ *   Lever A — detection-pool filter (filterMinVisibleNodes / filterMinInstanceScore /
+ *             filterMinMeanNodeScore)
  *             gate in collectInstances().
  *   Lever B — 3D-position continuity weight (track3dWeight) on Signal 2 of
  *             reorderGroupsByPrevTargets().
@@ -79,9 +80,11 @@ function points3dAt(centroid, visibleMask) {
     });
 }
 // Project a 3D node cloud into one camera → an Instance (null nodes stay null).
-function instanceFor(cam, pts3d, trackIdx, score) {
+function instanceFor(cam, pts3d, trackIdx, score, nodeScore) {
     const pts = pts3d.map(p => (p == null ? null : cam.project(p)));
-    return new Instance(pts, trackIdx, 'predicted', score == null ? 1.0 : score);
+    const inst = new Instance(pts, trackIdx, 'predicted', score == null ? 1.0 : score);
+    if (nodeScore != null) inst.setPointScores(pts.map(() => nodeScore));
+    return inst;
 }
 function newSession() {
     return new Session(CAMS, { nodes: NODES }, ['track_0', 'track_1'], 'synthetic');
@@ -94,7 +97,7 @@ function buildFrame(session, frameIdx, animals) {
             const mask = a.maskByCam ? a.maskByCam[cam.name] : null;
             const pts3d = points3dAt(a.centroid, mask);
             if (pts3d.every(p => p == null)) return;
-            fg.addInstance(cam.name, instanceFor(cam, pts3d, ai, a.score));
+            fg.addInstance(cam.name, instanceFor(cam, pts3d, ai, a.score, a.nodeScore));
         });
     });
     session.addFrameGroup(fg);
@@ -218,6 +221,30 @@ group('Lever A — filterMinInstanceScore gates low-confidence detections');
     // Only animal A (3 dets) survives the pool; B has no detections left.
     const surviving = camsPerTarget(r).filter(n => n > 0);
     eq(surviving.length, 1, 'score filter on: only the high-confidence animal has detections');
+    eq(surviving[0], 3, 'the surviving animal still spans its 3 views');
+}
+
+// ===========================================================================
+// Test 3b — Lever A: filterMinMeanNodeScore gates on the mean node score.
+// ===========================================================================
+group('Lever A — filterMinMeanNodeScore gates detections with low node scores');
+{
+    const animals = [
+        { centroid: [-7, 0, 48], nodeScore: 0.9 },
+        { centroid: [7, 0, 48], nodeScore: 0.5 },   // weak nodes everywhere, instance score still 1.0
+    ];
+    let s = newSession();
+    let fg = buildFrame(s, 0, animals);
+    setThresholds({});
+    let r = matchFrameInstances(fg, s.cameras, s, { numAnimals: 2 });
+    eq(Math.max(...camsPerTarget(r)), 3, 'node-score filter off: the weak animal spans 3 views');
+
+    s = newSession();
+    fg = buildFrame(s, 0, animals);
+    setThresholds({ filterMinMeanNodeScore: 0.75 });
+    r = matchFrameInstances(fg, s.cameras, s, { numAnimals: 2 });
+    const surviving = camsPerTarget(r).filter(n => n > 0);
+    eq(surviving.length, 1, 'node-score filter on (0.75): only the animal with strong node scores has detections');
     eq(surviving[0], 3, 'the surviving animal still spans its 3 views');
 }
 
