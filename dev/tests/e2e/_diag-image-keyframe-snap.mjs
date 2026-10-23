@@ -151,7 +151,7 @@ try {
             let last = 0;
             const res = await SC.checkImageSwitches(session, {
                 fps: AS.state.fps, imageHz: ST.getTrackingThreshold('imageCheckHz') || 2, threshold: ST.getTrackingThreshold('imageChangeThreshold'),
-                getEmbeddings: emb.getEmbeddings, prepareFrames: emb.prepareFrames, inFlight: emb.inFlight, releaseFrames: emb.releaseFrames,
+                getEmbeddings: emb.getEmbeddings, prepareFrames: emb.prepareFrames, croppable: emb.croppable, keyframes: emb.keyframes, inFlight: emb.inFlight, releaseFrames: emb.releaseFrames,
                 onProgress: async (stage, d, t) => { if (performance.now() - last > 60000) { last = performance.now(); console.log(`[diag] ${stage} ${d}/${t} after ${Math.round((performance.now() - t0) / 1000)} s`); } },
             });
             const timing = emb.stats();

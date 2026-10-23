@@ -45,11 +45,11 @@
  * spawns ui/image-crop-worker.js and ui/image-model-worker.js.
  */
 
-import { state } from './app-state.js?v=4352b922048e';
-import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=4352b922048e';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=4352b922048e';
-import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js?v=4352b922048e';
-import { EmbeddingCache, cropKeyHash, hullsReachingCrop } from '../pose/embedding-cache.js?v=4352b922048e';
+import { state } from './app-state.js?v=7ee0160c77a5';
+import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=7ee0160c77a5';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=7ee0160c77a5';
+import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js?v=7ee0160c77a5';
+import { EmbeddingCache, cropKeyHash, hullsReachingCrop } from '../pose/embedding-cache.js?v=7ee0160c77a5';
 
 // The load meter now lives in ui/load-graph.js (shared with the loading overlay); still exported from here.
 export { createLoadMeter };
@@ -240,7 +240,7 @@ export async function createCpuModelPool(count, onStatus, clock) {
                 try { slot.w.terminate(); } catch (e) { /* ignore */ }
                 reject(err);                                     // no-op once started
             };
-            try { slot.w = new Worker(new URL('./image-model-worker.js?v=4352b922048e', import.meta.url), { type: 'module' }); }
+            try { slot.w = new Worker(new URL('./image-model-worker.js?v=7ee0160c77a5', import.meta.url), { type: 'module' }); }
             catch (e) { reject(e); return; }
             slot.w.onerror = function (e) {
                 if (e && e.preventDefault) e.preventDefault();
@@ -854,7 +854,7 @@ export function createCropPool(clock) {
     };
     try {
         for (let i = 0; i < n; i++) {
-            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=4352b922048e', import.meta.url), { type: 'module' }), load: 0 };
+            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=7ee0160c77a5', import.meta.url), { type: 'module' }), load: 0 };
             w.worker.onmessage = function (e) {
                 const p = pending.get(e.data.id); if (!p) return;
                 pending.delete(e.data.id); w.load--;
@@ -1178,6 +1178,27 @@ export async function createImageEmbedder(session, opts) {
     const enqueue = function (tensors) {
         return new Promise(function (resolve, reject) { queue.push({ tensors: tensors, resolve: resolve, reject: reject, at: performance.now() }); pump(); });
     };
+    // A view's keyframes (null: off or unknown). opts.keyframes may be a function (decoder -> keyframe indices):
+    // a test / benchmark hook
+    const viewKeyframes = function (v) {
+        return !useKeyframes ? Promise.resolve(null)
+            : typeof opts.keyframes === 'function' ? Promise.resolve(opts.keyframes(v.decoder)) : keyframeIndices(v.decoder);
+    };
+    // Per view, the frame each of `frames` decodes (planKeyframeSamples), planned over EVERY image sample
+    // (`gridFrames`), asked for or not, cached or not, so a sample decodes the frame it would in a run that
+    // embeds them all: the same crop, the same cache key.
+    const planDecode = function (frames, gridFrames) {
+        const tracked = function (f) { return !!(session.instanceGroups && session.instanceGroups.has(f)); };
+        const grid = Array.isArray(gridFrames) && gridFrames.length >= frames.length ? gridFrames : frames;
+        const gridIndex = new Map(grid.map(function (f, i) { return [f, i]; }));
+        return Promise.all(views.map(async function (v) {
+            const kf = await viewKeyframes(v);
+            const p = planKeyframeSamples(grid, kf, tracked);
+            if (grid === frames) return p;
+            const decode = frames.map(function (f) { const i = gridIndex.get(f); return i == null ? f : p.decode[i]; });
+            return Object.assign({}, p, { decode: decode, snapped: decode.filter(function (d, i) { return d !== frames[i]; }).length });
+        }));
+    };
     const getEmbeddings = async function (frame, items) {
         const tStart = performance.now();
         if (!tm.t0) tm.t0 = tStart;
@@ -1313,20 +1334,22 @@ export async function createImageEmbedder(session, opts) {
             if (cpu) t.workers = cpuWorkers;
             return t;
         },
-        /** Called once with every frame getEmbeddings will be asked for (increasing) and, optionally, the items
-         *  it will be asked for at each: plans the decode, looks the run's crops up in the cache, and opens one
-         *  streaming reader per camera over the frames that still need decoding there. */
-        prepareFrames: async function (frames, itemsPerFrame) {
-            const tracked = function (f) { return !!(session.instanceGroups && session.instanceGroups.has(f)); };
-            // planned over ALL the frames, cached or not, so each sample decodes the frame it always would
-            plans = await Promise.all(views.map(async function (v) {
-                // opts.keyframes may be a function (decoder -> keyframe indices): a test / benchmark hook
-                const kf = !useKeyframes ? null
-                    : typeof opts.keyframes === 'function' ? await opts.keyframes(v.decoder) : await keyframeIndices(v.decoder);
-                return planKeyframeSamples(frames, kf, tracked);
-            }));
-            decodeOf = plans.map(function (p) { return new Map(frames.map(function (f, i) { return [f, p.decode[i]]; })); });
-            srcKind = views.map(function (v, vi) { return canStream(v.decoder, plans[vi].decode) ? 's' : 'g'; });
+        /** Called with every frame getEmbeddings will be asked for next (increasing) and, optionally, the items
+         *  it will be asked for at each, and every image sample's frame (`gridFrames`, a superset): plans the
+         *  decode, looks the round's crops up in the cache, and opens one streaming reader per camera over the
+         *  frames that still need decoding there. The check calls it once per round (planImageSamples). */
+        prepareFrames: async function (frames, itemsPerFrame, gridFrames) {
+            if (readers) readers.forEach(function (r) { if (r) r.close(); });
+            const round = await planDecode(frames, gridFrames);
+            // stats() reports the whole run (like its timing): this round's plan added to the earlier rounds'
+            const prev = plans;
+            plans = round.map(function (p, vi) {
+                const q = prev[vi];
+                return Object.assign({}, p, { decode: q ? q.decode.concat(p.decode) : p.decode, snapped: (q ? q.snapped : 0) + p.snapped,
+                                               decodedFrames: q ? q.decodedFrames : 0 });
+            });
+            decodeOf = round.map(function (p) { return new Map(frames.map(function (f, i) { return [f, p.decode[i]]; })); });
+            srcKind = views.map(function (v, vi) { return canStream(v.decoder, round[vi].decode) ? 's' : 'g'; });
             cachedFrames = new Map(); cachedCrops = new Map(); cachedSamples = new Map();
             const sampleEvery = Math.max(1, Math.ceil(frames.length / SAMPLE_FRAMES_PER_RUN));
             sampleFrames = new Set(frames.filter(function (f, i) { return i % sampleEvery === 0; }));
@@ -1338,7 +1361,7 @@ export async function createImageEmbedder(session, opts) {
                 need = views.map(function () { return []; });
                 frames.forEach(function (f, i) {
                     const items = itemsPerFrame[i] || [];
-                    const at = views.map(function (v, vi) { return plans[vi].decode[i]; });
+                    const at = views.map(function (v, vi) { return round[vi].decode[i]; });
                     const hits = [], missing = new Set();
                     planFrameCrops(frameCropGeometry(session, f, items, cams, at, sk), items, at).forEach(function (c) {
                         const v = _embedCache.get(scope + c.body);
@@ -1362,13 +1385,25 @@ export async function createImageEmbedder(session, opts) {
             }
             readers = views.map(function (v, vi) {
                 if (srcKind[vi] !== 's') return null;
-                if (!need) return streamingReader(v.decoder, frames, plans[vi].decode);
+                if (!need) return streamingReader(v.decoder, frames, round[vi].decode);
                 if (!need[vi].length) return null;            // every crop of this view cached: nothing to decode
-                return streamingReader(v.decoder, need[vi].map(function (i) { return frames[i]; }), need[vi].map(function (i) { return plans[vi].decode[i]; }));
+                return streamingReader(v.decoder, need[vi].map(function (i) { return frames[i]; }), need[vi].map(function (i) { return round[vi].decode[i]; }));
             });
             plans.forEach(function (p, vi) {                   // (stats() runs after releaseFrames)
                 p.streamed = srcKind[vi] === 's';
-                p.decodedFrames = need ? need[vi].length : frames.length;
+                p.decodedFrames += need ? need[vi].length : frames.length;
+            });
+        },
+        /** Per view, its keyframes' frame indices (increasing; null = unknown): where decoding is cheap. */
+        keyframes: function () { return Promise.all(views.map(viewKeyframes)); },
+        /** Per frame, per item: will getEmbeddings return a crop of it (a croppable view — from the keypoints of the
+         *  frame each view decodes, so before decoding)? Lets the check plan in one round (planImageSamples). */
+        croppable: async function (frames, itemsPerFrame, gridFrames) {
+            const round = await planDecode(frames, gridFrames);
+            return frames.map(function (f, i) {
+                const items = itemsPerFrame[i] || [];
+                const geo = frameCropGeometry(session, f, items, cams, views.map(function (v, vi) { return round[vi].decode[i]; }), sk);
+                return items.map(function (it, ii) { return geo.some(function (g) { return !!g[ii]; }); });
             });
         },
         releaseFrames: function () {

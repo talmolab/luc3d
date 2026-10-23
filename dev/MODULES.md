@@ -3177,12 +3177,16 @@ state — so both run headlessly (the image check with any embedding provider).
 `checkImageSwitches(session, opts)` (async) -> `{ok, flags, changes ([]),
 encounters (the scored contacts), identities, sampledFrames, closeDistance,
 threshold, fps, step, sampleHz, cue}` (+ `bones` for size; + `imageHz`, `crops`,
-`cameras` for images) or `{ok:false, reason}`; the pipeline's parts —
-`contactEpisodes(grid, gapSeconds)`, `learnIdentityMetric(X, n, D, stretch, sample,
-o)`, `contactChangeScores(grid, feat, o, every)`, `markContactChanges(scored, o)`
+`cameras`, `samples: {embedded, of, rounds}` for images) or `{ok:false, reason}`; the
+pipeline's parts — `buildGrid(session, o, needSize)`, `contactEpisodes(grid,
+gapSeconds)`, `learnIdentityMetric(X, n, D, stretch, sample, o, weights?)`,
+`contactChangeScores(grid, feat, o, every)`, `markContactChanges(scored, o)`
 (the change-point step, returning the change points; exported so a threshold can
 be re-applied to the same scores), `symmetricEigen(A, n)` (cyclic Jacobi) and
-`fitPCA(X, n, D, k)` (randomized subspace iteration); `KEYFRAME_GAP_TOLERANCE` (1.1);
+`fitPCA(X, n, D, k, {weights?})` (randomized subspace iteration); which image
+samples to embed — `contactReads(grid, has, o, every)` (the samples the scoring
+asks about, given which have features), `planImageSamples(grid, o, every, st)`,
+`MAX_PLAN_ROUNDS` (4), `MAX_BACKGROUND_GAP_SECONDS` (10); `KEYFRAME_GAP_TOLERANCE` (1.1);
 `planKeyframeSamples(frames, keyframes, hasFrame)` -> `{decode, snapped, spacing,
 keyframeGap, maxShift}` (which frame each image sample decodes in one camera — see
 "Keyframe sampling" under `ui/image-embedder.js`); `SIZE_BONES`;
@@ -3192,12 +3196,16 @@ keyframeGap, maxShift}` (which frame each image sample decodes in one camera —
 `maxSpanSeconds` 60, `followSeconds` 5, `metricPcaDims` 64, `metricDims` 16,
 `metricReg` 0.1, `signal`; `threshold` -1, `maxTrainRows` 200000);
 `IMAGE_CHECK_DEFAULTS` (the same shared ones; `threshold` -0.8, `maxTrainRows`
-20000, `imageHz` 2, `getEmbeddings` REQUIRED: `async (frame, items[{k, group}]) ->
-per item [{camera, vector}]`, STARTED in increasing frame order with up to
-`inFlight` (default 2; the image embedder asks for 8) in flight; optional
-`prepareFrames(frames, items)` (awaited once with the sorted frames it will ask for
-and the items it will ask for at each — so a provider can skip what it has cached)
-and `releaseFrames()` (always called at the end) let the provider stream its video).
+20000, `imageHz` 2, `backgroundHz` 0.1, `getEmbeddings` REQUIRED: `async (frame,
+items[{k, group}]) -> per item [{camera, vector}]`, STARTED in increasing frame order
+with up to `inFlight` (default 2; the image embedder asks for 8) in flight; optional
+`prepareFrames(frames, items, gridFrames)` (awaited once per round with the sorted
+frames it will ask for next and the items at each — so a provider can skip what it
+has cached — and every image sample's frame, a superset), `keyframes()` (per camera,
+its keyframe frame indices: where decoding is cheap), `croppable(frames, items,
+gridFrames)` (per frame, per item: will it get a crop? from the keypoints, before
+decoding) and `releaseFrames()` (always called at the end) let the provider stream
+its video).
 
 **The grid.** Every round(fps / `sampleHz`)-th frame is a grid sample: per
 identity its InstanceGroup, body centroid and bone lengths. "Close" = body
@@ -3255,6 +3263,51 @@ moves to its nearest keyframe, <= 0.25 s away — `planKeyframeSamples`), which
 does not change the result (snapped vs unsnapped scores correlate 0.98).
 Harness: `tests/e2e/_diag-image-keyframe-snap.mjs`.
 
+**Which samples are embedded** (2026-10-22). Contact episodes come from the 3D
+alone, so before decoding anything the check knows which image samples the
+scoring will read: `contactReads` runs `contactChangeScores` on stand-in features
+and records every sample it asks about — so the plan cannot drift from the
+scoring. `planImageSamples` embeds those (up to `windowSeconds` either side of
+each episode, at `imageHz`, and the episode-merge test's gap samples), plus a
+BACKGROUND for the metric: one sample per block of round(imageHz / `backgroundHz`)
+image samples that the scoring does not all read — the one cheapest to decode
+(fewest frames past its keyframe and what the planned samples already decode,
+summed over cameras; `keyframes()`), else the first. With keyframes sparser than
+the block, a block spans a keyframe gap + a sample (at most
+`MAX_BACKGROUND_GAP_SECONDS`), so it holds a sample just after a keyframe. Whole
+samples are embedded (every identity in the frame), so "different animals in one
+frame" pairs remain. A crop that never comes (no croppable view) makes the
+scoring read further; `croppable()` tells the planner up front, and otherwise —
+or when a decode fails — the check plans again after each pass until nothing is
+left (at most `MAX_PLAN_ROUNDS`; the last embeds everything left). Then the
+scoring reads exactly the samples it would read with every sample embedded
+(`tests/test-id-switch-check.mjs` pins this, with a negative control). Only the
+metric differs: it is learned from fewer crops, so `backgroundWeights` weights
+each background sample by the unread samples of its block it stands for
+(post-stratified; samples the scoring reads count once) — centring mean, PCA and
+both LDA scatters. Weights of 1 are bit-identical to the unweighted fit, and
+`backgroundHz` >= `imageHz` embeds every sample with no weights: the old check,
+bit for bit. A later pass's rows are sorted back into sample order before the fit.
+**Calibration (all 22 proofread SLAP sessions, CD1FSCR3_CSI, 05mice_flippers;
+offline replay of each recording's full run, bit-exact against the browser).**
+Without the weights the metric over-weights the windows: 144215 gained a false
+row at every rate. Weighted, with keyframe placement, at `backgroundHz` 0.1, 0.12
+and 0.15 every flagged contact on all 24 recordings is the one the full run flags
+(caught/false per group unchanged: original six 4/7, 0 false, per-contact AUC
+0.913 -> 0.914; held-out 16 11/12, 0 false, AUC 0.985 -> 0.981; CD1 its 4 real
+relabels, 0 false). Scores move by a median 0.02-0.24 per session (max 0.75: a
+contact at +1.8 moving to +1.0). Flags change only on contacts within 0.05 of -0.8 in the full run
+(05mice 26:27 at -0.82, 190807 9:21 at -0.80, 144215 1:47 at -0.75), at 0.2,
+0.08, 0.05 and 0. Crops saved: 28-73% on two-mouse sessions, 8-10% on the 4-mouse
+ones, 1% on five huddling mice (their windows cover nearly everything). Frames
+decoded (keyframe every 250): 28-82% of the full run on two-mouse sessions; a
+background every 2 s placed without keyframes still decoded ~95%. **First run**
+(M2 Pro, WebGPU fp16, full and planned runs alternated): two-mouse SLAP 140918 77-79 s
+-> 24 s, 131531 82-141 s -> 55-72 s (Drive-mounted videos, decode-bound: reads vary);
+CD1 (3 mice) 140-155 s -> 75-88 s; 05mice 403-547 s -> 379-401 s (model-bound, 1%
+fewer crops). A re-run after re-tracking still takes 95-99% of its crops from the
+cache (`ui/image-embedder.js`), with the same result as a cache-off run.
+
 **Calibration (8 real recordings, 1 h 45 min; a row is right when both its
 identities change animals within its contact ± 3 s).** Images at -0.8: 10 of 12
 relabels caught, 2 false rows; robust to every knob swept (`metricDims`,
@@ -3283,7 +3336,10 @@ invariance; images catching a swap between animals of IDENTICAL size that size
 misses; a pair swapping three times from its first encounter; huddle and
 three-animal scenarios; the identity metric on look-alikes; `symmetricEigen`;
 `markContactChanges`; cancellation; PCA; failure reasons; progress; crop
-geometry of `ui/image-embedder.js`; `planKeyframeSamples`),
+geometry of `ui/image-embedder.js`; `planKeyframeSamples`; the sample plan: every sample
+the scoring reads is planned and scores match embedding all, a dropped window sample
+fails it (negative control), one round with `croppable` and the same result after a
+second without, keyframe placement, the round cap; sample weights in the metric),
 `tests/e2e/image-keyframe-sampling.mjs`, `tests/e2e/size-switch-check.mjs`,
 `tests/e2e/track-auto-size-switch-check.mjs`, `tests/e2e/id-switch-image-check.mjs`.
 
@@ -8025,7 +8081,9 @@ image score's scale changed), `imageCheckMaxViews` (default 3, passed as
 the result as `model` (its note shown under "About these flags") and
 `embedder.stats()` as `timing` (logged, and shown there as "Image check speed on
 this machine: …"). Image rows show their score to one decimal (`fmtScore`; size
-rows stay whole numbers). Time scales with views per animal x `imageCheckHz`
+rows stay whole numbers). Also reads `imageCheckBackgroundHz` (default 0.1, as
+`backgroundHz`) and passes the embedder's `keyframes` and `croppable`, so the check
+embeds only the samples its scoring reads plus a sparse background. Time scales with views per animal x `imageCheckHz`
 (~9 min for a 30-min, 5-animal session on an M-series Mac).
 
 **User-facing features.** The **ID Switches** tab (`#tabIdSwitches` /
@@ -8289,10 +8347,17 @@ WebNN is not tried on the CPU path (it is judged against WebGPU). The run
 summary says "model busy" and "CPU (N workers) fp32" instead of "GPU busy" /
 "WebGPU".
 
-**Speed.** `prepareFrames(frames)` opens one `streamingReader` per camera over the
-whole sorted frame list (mediabunny `samplesAtTimestamps`: decode forward once,
+**Speed.** `prepareFrames(frames, items, gridFrames)` opens one `streamingReader` per
+camera over the round's sorted frame list (mediabunny `samplesAtTimestamps`: decode forward once,
 instead of `getFrame` re-decoding from the keyframe for every sample; falls back
-to `getFrame` without a mediabunny backend); `releaseFrames()` closes them.
+to `getFrame` without a mediabunny backend); `releaseFrames()` closes them. The check embeds only the samples its scoring reads
+plus a sparse background (`planImageSamples`, pose/id-switch-check.js), so readers
+jump over keyframe gaps holding no planned sample; the provider helps it plan:
+`keyframes()` (per view, `keyframeIndices`: where the background is cheapest) and
+`croppable(frames, items, gridFrames)` (per frame, per item: does any view have crop
+geometry? `frameCropGeometry` at the frames each view decodes — from the keypoints,
+before decoding — so a plan needs one pass). `prepareFrames` may be called again for a
+later pass (it closes the previous readers); `stats()` adds the passes up.
 Model runs are serialised on a queue, so the check's one-ahead request decodes
 and crops the next frame while the GPU embeds the current one.
 `maxViewsPerAnimal` (from `imageCheckMaxViews`) embeds only each animal's N
@@ -8337,7 +8402,10 @@ keyframes — see below).
 container's packet index (`keyframeIndices`: mediabunny
 `EncodedPacketSink.packets(…, {metadataOnly: true})`, `type === 'key'`, mapped to
 frame indices through the backend's `_frameTimes`; no frame data read, cached per
-video) and plans the samples with `planKeyframeSamples` (pose/id-switch-check.js):
+video) and plans the samples with `planKeyframeSamples` (pose/id-switch-check.js) —
+over EVERY image sample (`gridFrames`), asked for or not, so a sample decodes the
+frame it would in a run that embeds them all (same crop, same cache key; `planDecode`
+is shared with `croppable`):
 when the median keyframe gap is <= `KEYFRAME_GAP_TOLERANCE` (1.1) x the sample
 spacing (the 10% lets a recorder's "keyframe every 0.5 s" qualify where rounding
 makes the spacing a little shorter), each sample moves to its nearest keyframe
@@ -8371,8 +8439,8 @@ each batch's result). `embeddingCacheScope(session, views)` gives the session's
 prefix and drops the entries of sessions no longer in `state.sessions` (closed or
 reloaded projects) and of this session when its videos changed (`viewVideoId`:
 the decoder's source File / URL object, else the decoder). `prepareFrames(frames,
-items)` plans the keyframe snapping over ALL frames first (so a sample decodes the
-frame it always would), then — only when this session + model has stored anything,
+items, gridFrames)` plans the keyframe snapping over ALL image samples first (so a
+sample decodes the frame it always would), then — only when this session + model has stored anything,
 so a first run does no extra work — computes every frame's crops and looks them up:
 a frame whose crops are all cached is answered by `getEmbeddings` without
 geometry, decode, crop or model, and is left out of the streaming readers (a
@@ -8427,7 +8495,7 @@ since a fragment is never sent, but a new module-map entry. `loadImageModel` and
 `cannotRun` errors too.
 
 **Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, webnn, keyframes, cache, model})` ->
-`{getEmbeddings, prepareFrames, releaseFrames, backend, device, busyMs, cpuBusyMs, stats, inFlight, views}` (the provider
+`{getEmbeddings, prepareFrames, keyframes, croppable, releaseFrames, backend, device, busyMs, cpuBusyMs, stats, inFlight, views}` (the provider
 `checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and the
 CPU model workers and disposes a WebNN model; `device()` -> `{backend: 'webgpu'|'webnn'|'cpu',
 comparing, dtype, adapter, fallback, workers, why}` and `busyMs()` feed the progress
@@ -8658,7 +8726,9 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
   0/1, the image check likewise, default 0; `imageChangeThreshold` -0.8;
-  `imageCheckHz` 2; `imageCheckMaxViews` 3; `imageCheckWebNN` — 0/1, try WebNN,
+  `imageCheckHz` 2; `imageCheckBackgroundHz` 0.1 (crops per second away from contacts:
+  `backgroundHz`, see pose/id-switch-check.js "Which samples are embedded"; Wizard only, not
+  the Track All dialog); `imageCheckMaxViews` 3; `imageCheckWebNN` — 0/1, try WebNN,
   default 0). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
   `reprojWeight`, `minMatchScore`, `prevIdentityBonus`, `reprojGate2/3/4`,
   `track3dWeight`) drive the bench-only luc3d matcher and are hidden from the UI
