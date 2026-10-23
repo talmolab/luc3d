@@ -4925,7 +4925,9 @@ per-video loading bars), `ui/origin-rebase.js` (Set as New Calibration),
 `ui/export-modals.js` (Choose Frames for Triangulation, Export 3D Video) and
 `ui/overlay-export-modal.js` (the overlay video export). NOT position bars: the
 video seekbar, an ID-switch row's playhead, range sliders — they show where,
-not how far along. A new progress bar calls `noteProgress` after each update.
+not how far along. A new progress bar calls `noteProgress` after each update. The loading
+overlay's bar and the image check dialog's bar are a deep blue (`#1f78b4`) so
+the lit stretch stands out against them.
 
 **Imports from project modules.** None. **Imported by.** The callers above.
 
