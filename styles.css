@@ -4093,7 +4093,10 @@ input[type="range"]::-moz-range-track {
 .loading-progress-fill {
   width: 100%;
   height: 100%;
-  background: #4cc9f0;
+  /* A deeper blue than the image cue colour (#4cc9f0), so the brighter stretch
+     the bar just gained (.progress-delta, below) stands out against it. The
+     image check's dialog bar (.id-switch-progress-fill) uses the same. */
+  background: #1f78b4;
   transform-origin: left center;
   transform: scaleX(0);
   transition: transform 250ms linear;
@@ -4109,6 +4112,30 @@ input[type="range"]::-moz-range-track {
 }
 .loading-progress-fill.no-anim, .loading-progress-head.no-anim {
   transition: none;
+}
+
+/* The stretch a progress bar gained on its last update (ui/progress-delta.js),
+   on every progress bar: a translucent white tint over the fill, so it is a
+   brighter shade of the bar's own colour, and a white flash as it appears. It
+   grows with the fill's own transition (set inline from the fill's computed
+   style) and stays lit until the next update. The flash is an OPACITY
+   animation on a pseudo-element so it runs on the compositor, as the bar's
+   own transform does, even while the main thread is busy. */
+.progress-delta {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 0;
+  z-index: 1; pointer-events: none;
+  transform-origin: left center;
+  background: rgba(255, 255, 255, 0.42);
+  opacity: 0;
+}
+.progress-delta.is-on { opacity: 1; }
+.progress-delta::after {
+  content: ''; position: absolute; inset: 0; background: #fff; opacity: 0;
+}
+.progress-delta.is-on::after { animation: progress-delta-flash 700ms ease-out; }
+@keyframes progress-delta-flash { from { opacity: 0.75; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .progress-delta.is-on::after { animation: none; }
 }
 
 /* The percentage under the bar — the same rule as the image check's. */
@@ -7389,7 +7416,7 @@ details[open] > summary.origin-rebase-block-title::before {
 /* As .id-switch-pbar: the track clips the fill, the bar does not, so the playhead (.id-switch-phead) stands proud. */
 .id-switch-progress-bar { position: relative; height: 6px; }
 .id-switch-progress-track { position: absolute; inset: 0; border-radius: 3px; background: rgba(255,255,255,0.12); overflow: hidden; }
-.id-switch-progress-fill { height: 100%; width: 0; background: #4cc9f0; transition: width 0.2s; }
+.id-switch-progress-fill { height: 100%; width: 0; background: #1f78b4; transition: width 0.2s; }   /* as .loading-progress-fill */
 .id-switch-progress-bar .id-switch-phead { left: 0; transition: left 0.2s; }   /* keep pace with the fill */
 /* .id-switch-progress-pct: one rule with .loading-pct (Loading Overlay, above). */
 /* The percentage and device line on the left, a sample crop on the right, above Cancel. */

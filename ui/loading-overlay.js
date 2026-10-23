@@ -30,6 +30,7 @@
 // fingerprinting protection on, a note under it explains that the core count is
 // a random one and how to stop that (ui/browser-hints.js).
 
+import { noteProgress } from './progress-delta.js';
 import { createLoadMeter, createBusyClock, createLoadGraph, formatCpuLoad, setLoadLine, cpuCores } from './load-graph.js';
 import { renderBraveFingerprintingHint } from './browser-hints.js';
 
@@ -239,6 +240,7 @@ function _setFill(frac, animate) {
     fill.classList.toggle('no-anim', !animate);
     fill.style.transform = 'scaleX(' + frac + ')';
     fill.dataset.fraction = String(frac);
+    noteProgress(fill, frac, { animate: animate });   // light up the stretch just gained
     // the playhead at the fill's leading edge: its full-width wrapper translated by the same fraction
     var head = _el('loadingProgressHead');
     if (head) {
