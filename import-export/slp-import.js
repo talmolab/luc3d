@@ -493,11 +493,19 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
  *    resolves the correct store row — the same tag `ensureLazyFrameData` sets on
  *    the Track-All path.
  *
+ * A group's identity is `metadata.lucid.identityId`, as on the eager path.
+ * Pass `opts.fileIdentities` (the file's typed `/identity` catalog,
+ * `labels.identities`) ONLY when `session.identities` was built from that same
+ * catalog — a file written by another tool (campy-live-export) rather than by
+ * LUC3D: a group without `identityId` then takes its canonical `identity_idx`
+ * (`typedIG.identity`) instead. Never pass it for a LUC3D project, whose
+ * per-session identity list does not match the file-level catalog's order.
+ *
  * @param {Session} session - target session (identities/tracks already set)
  * @param {Object} typedSession - sleap-io.js RecordingSession (mutated: frameGroups drained)
  * @param {SioLazyLoader} loader - the open project loader (for `_rawInstIndex` refs)
  * @param {string[]} nodeNames - skeleton node names
- * @param {{onProgress?:(msg:string)=>void, batch?:number}} [opts]
+ * @param {{onProgress?:(msg:string)=>void, batch?:number, yieldMs?:number, fileIdentities?:Array}} [opts]
  * @returns {Promise<{restoredGroups:number, restoredWith3d:number}>}
  */
 export async function reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, opts) {
@@ -508,6 +516,12 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
     var _SIO = (typeof window !== 'undefined' && window.SleapIO) ? window.SleapIO : null;
     var PredI = _SIO && _SIO.PredictedInstance;
     var restoredGroups = 0, restoredWith3d = 0;
+    // typed Identity → its index in the file's catalog (= session.identities).
+    var fileIdentityIdx = null;
+    if (opts.fileIdentities && opts.fileIdentities.length) {
+        fileIdentityIdx = new Map();
+        for (var _fi = 0; _fi < opts.fileIdentities.length; _fi++) fileIdentityIdx.set(opts.fileIdentities[_fi], _fi);
+    }
     // Time-based yielding: materializing 108k frames + building ~1.25M member
     // Instances is ~tens of seconds of work; yield every ~40ms so the tab stays
     // responsive (a frame-count batch of 20k blocks the main thread for seconds).
@@ -534,6 +548,9 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
 
             var identityId = -1;
             if (igLucid.identityId != null) identityId = igLucid.identityId;
+            else if (fileIdentityIdx && typedIG.identity && fileIdentityIdx.has(typedIG.identity)) {
+                identityId = fileIdentityIdx.get(typedIG.identity);
+            }
             if (identityId >= 0 && identityId >= session.identities.length) identityId = -1;
 
             var group = new InstanceGroup(Date.now() + Math.random() * 1000 + igi, identityId);
@@ -617,6 +634,57 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
         }
     }
     return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d };
+}
+
+/**
+ * Fill `session.frameIdentityMap` from the instance groups' identities, for a
+ * file that stores identities ONLY per group (campy-live-export writes
+ * `identity_idx` + `metadata.lucid.identityId` on each group, and no LUC3D
+ * session-level `frameIdentityMap`). Everything that asks "which animal is
+ * this detection" — the Identity timeline, colour by identity, Propagate —
+ * reads that map, so without it the reopened groups know their animal but the
+ * timeline shows none.
+ *
+ * Writes one entry per tracked group member: (frame, camera, member's track)
+ * → the group's identity — the same entries Track All writes. Never
+ * overwrites an entry already there, and skips trackless members (the map
+ * cannot key a null track; the group keeps the identity). Reads only
+ * `group.identityId` and each member's `trackIdx`, so lazy placeholder members
+ * work unchanged and no 2D is hydrated. Yields every `opts.yieldMs` (40 ms).
+ *
+ * Call only when the file carried no LUC3D identity metadata (see the callers),
+ * so a LUC3D project reopens exactly as saved.
+ *
+ * @param {Session} session
+ * @param {{onProgress?:(msg:string)=>void, yieldMs?:number}} [opts]
+ * @returns {Promise<number>} entries written
+ */
+export async function stampFrameIdentitiesFromGroups(session, opts) {
+    opts = opts || {};
+    var onProgress = opts.onProgress || function () {};
+    var _now = function () { return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now(); };
+    var yieldMs = opts.yieldMs != null ? opts.yieldMs : 40;
+    var ty = _now();
+    var written = 0, done = 0, total = session.instanceGroups.size;
+    for (var [frameIdx, groups] of session.instanceGroups) {
+        done++;
+        for (var gi = 0; gi < groups.length; gi++) {
+            var g = groups[gi];
+            if (g.identityId == null || g.identityId < 0) continue;
+            for (var [camName, inst] of g.instances) {
+                if (inst.trackIdx == null || inst.trackIdx < 0) continue;
+                if (session.hasFrameIdentity(frameIdx, camName, inst.trackIdx)) continue;
+                session.setFrameIdentity(frameIdx, camName, inst.trackIdx, g.identityId);
+                written++;
+            }
+        }
+        if (_now() - ty > yieldMs) {
+            onProgress('Restoring identities (' + done.toLocaleString('en-US') + '/' + total.toLocaleString('en-US') + ')...');
+            await new Promise(function (r) { setTimeout(r, 0); });
+            ty = _now();
+        }
+    }
+    return written;
 }
 
 /**
@@ -713,6 +781,15 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
                 { onProgress: onProgress });
         }
         console.log('[load-slp] Rebuilt', _recon.restoredGroups, 'instance groups from session data,', _recon.restoredWith3d, 'with 3D points');
+
+        // A file with the identities only on its groups (no LUC3D identity
+        // list, no frameIdentityMap — campy-live-export): derive the
+        // per-detection map the Identity timeline reads.
+        if (!(perSessionIdentities && perSessionIdentities.length > 0) && !lucidMeta.frameIdentityMap
+            && !legacyGlobalIdentities && session.identities.length > 0) {
+            var _stamped = await stampFrameIdentitiesFromGroups(session, { onProgress: onProgress });
+            if (_stamped) console.log('[load-slp] derived', _stamped, 'per-frame identities from instance groups');
+        }
 
         if (legacyGlobalIdentities && legacyGlobalIdentities.length) {
             var migratedSlp = session.migrateGlobalIdentitiesToPerFrame(legacyGlobalIdentities);

@@ -47,7 +47,7 @@ import { chooseCameraSlp } from './percam-slp-choice.js';
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js';
+import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy, stampFrameIdentitiesFromGroups } from '../import-export/slp-import.js';
 import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js';
 import {
     isCalibrationImagesVideo, preferNonCalibrationVideos, matchVideoToCamera,
@@ -2615,10 +2615,20 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         lucid = (lucid && lucid.lucid) || {};
         var sessName = lucid.sessionName || slpFile.name.replace(/\.slp$/i, '');
         var session = new Session(cameras, skeleton, tracks, sessName);
+        // Identities: LUC3D's per-session list, else the file's `/identity`
+        // catalog (as the eager `restoreGroupingAndUnlink` does). A file from
+        // another tool (campy-live-export) has only the catalog, with each
+        // group's identity on the group itself — read per group below.
+        var identitiesFromFile = false;
         if (lucid.identities && lucid.identities.length) {
             session.identities = lucid.identities.map(function (id, i) {
                 return new Identity(i, id.name || ('id_' + i), id.color || null);
             });
+        } else if (labels.identities && labels.identities.length) {
+            session.identities = labels.identities.map(function (id, i) {
+                return new Identity(i, id.name || ('id_' + i), id.color || null);
+            });
+            identitiesFromFile = true;
         }
         if (lucid.frameIdentityMap) session.ingestFrameIdentityEntries(lucid.frameIdentityMap);
         if (lucid.trustTracks != null) session.trustTracks = lucid.trustTracks;
@@ -2634,8 +2644,15 @@ export async function handleLoadProjectSlpLazy(slpFile) {
 
         // Rebuild grouping + 3D (lightweight, memory-bounded).
         var nodeNames = skeleton.nodes.map(function (n) { return typeof n === 'string' ? n : (n.name || ''); });
-        await reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames,
-            { onProgress: function (m) { showLoading(m); } });
+        await reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, {
+            onProgress: function (m) { showLoading(m); },
+            fileIdentities: identitiesFromFile ? labels.identities : null,
+        });
+        // Group-only identities → the per-detection map the Identity timeline
+        // and colour-by-identity read (LUC3D projects bring their own map).
+        if (identitiesFromFile && !lucid.frameIdentityMap && !lucid.trackIdentityMap) {
+            await stampFrameIdentitiesFromGroups(session, { onProgress: function (m) { showLoading(m); } });
+        }
 
         // Activate the reopened session (the previous project was already evicted
         // + state reset at the top, so this is the sole session).
