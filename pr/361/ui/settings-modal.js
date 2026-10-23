@@ -39,11 +39,12 @@ import {
     formatThresholdValue,
     ID_SWITCH_SETTING_IDS,
     setTrackingThresholds,
-} from './settings.js?v=ad527b15dd34';
-import { getActiveSession, state, timeline } from './app-state.js?v=ad527b15dd34';
-import { drawAllOverlays } from './rendering.js?v=ad527b15dd34';
-import { installModalGeometry } from './modal-geometry.js?v=ad527b15dd34';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=ad527b15dd34';
+} from './settings.js?v=1ea1267912fc';
+import { getActiveSession, state, timeline } from './app-state.js?v=1ea1267912fc';
+import { drawAllOverlays } from './rendering.js?v=1ea1267912fc';
+import { installModalGeometry } from './modal-geometry.js?v=1ea1267912fc';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=1ea1267912fc';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=1ea1267912fc';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -160,6 +161,21 @@ export function showSettingsModal(initialPanel) {
     // Seed the working tracking-threshold map from the catalog's effective values.
     const thresholdDefs = getTrackingThresholdDefs();
     thresholdDefs.forEach(function (def) { working.thresholds[def.id] = def.value; });
+
+    // What the detection filters would remove at the values being typed, per
+    // camera (ui/detection-filter-preview.js). Counts the session in the
+    // background after the modal is up; each edit only re-counts.
+    const filterPreview = buildDetectionFilterPreview({
+        session: activeSession,
+        getValues: function () {
+            return {
+                minVisibleNodes: working.thresholds.filterMinVisibleNodes,
+                minInstanceScore: working.thresholds.filterMinInstanceScore,
+                minMeanNodeScore: working.thresholds.filterMinMeanNodeScore,
+            };
+        },
+        isCameraIncluded: function (name) { return working.cameraWeights[name] !== 0; },
+    });
 
     // An on/off switch (the app's standard .toggle-switch) for a 0/1 setting.
     function makeToggle(checked, ariaLabel, onChange) {
@@ -564,6 +580,7 @@ export function showSettingsModal(initialPanel) {
             const sw = makeToggle(working.cameraWeights[name] !== 0, 'Include view ' + name + ' in tracking', function (on) {
                 working.cameraWeights[name] = on ? 1 : 0;
                 reflectExcluded();
+                filterPreview.update();
             });
 
             reflectExcluded();
@@ -629,10 +646,13 @@ export function showSettingsModal(initialPanel) {
         const note = def.note ? document.createElement('span') : null;
         if (note) { note.className = 'settings-threshold-note'; note.textContent = def.note(working.thresholds[def.id]); }
 
+        const isFilter = def.id === 'filterMinVisibleNodes' || def.id === 'filterMinInstanceScore' ||
+            def.id === 'filterMinMeanNodeScore';
         input.addEventListener('input', function () {
             const v = parseFloat(input.value);
             if (isFinite(v)) working.thresholds[def.id] = v;
             if (note) note.textContent = def.note(working.thresholds[def.id]);
+            if (isFilter) filterPreview.update();
         });
         input.addEventListener('blur', function () {
             let v = parseFloat(input.value);
@@ -642,6 +662,7 @@ export function showSettingsModal(initialPanel) {
             working.thresholds[def.id] = v;
             input.value = formatThresholdValue(def, v);
             if (note) note.textContent = def.note(v);
+            if (isFilter) filterPreview.update();
         });
 
         row.appendChild(labelWrap);
@@ -653,6 +674,8 @@ export function showSettingsModal(initialPanel) {
             row.appendChild(field);
         } else row.appendChild(input);
         body.appendChild(row);
+        // The readout goes right under the last of the three filter fields.
+        if (def.id === 'filterMinMeanNodeScore') body.appendChild(filterPreview.root);
     }
     trackerDefs.forEach(function (def) { renderThresholdRow(def, thSection.body); });
 
@@ -705,6 +728,7 @@ export function showSettingsModal(initialPanel) {
         Object.keys(panels).forEach(function (key) {
             panels[key].classList.toggle('active', key === name);
         });
+        if (name === 'wizard') filterPreview.start();
     }
     NAV_ITEMS.forEach(function (item) {
         navItems[item.panel].addEventListener('click', function () {
@@ -720,6 +744,7 @@ export function showSettingsModal(initialPanel) {
 
     function teardown() {
         document.removeEventListener('keydown', onDocKeyDown, true);
+        filterPreview.dispose();
         if (disposeGeometry) { disposeGeometry(); disposeGeometry = null; }
         overlay.remove();
     }
