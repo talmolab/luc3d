@@ -178,7 +178,7 @@ export function newProject(force) {
     // Reset frame counter display
     clearReadout();
     var fpsEl = document.getElementById('fpsDisplay');
-    if (fpsEl) fpsEl.textContent = '30.0 fps';
+    if (fpsEl) { fpsEl.textContent = '30.0 fps'; fpsEl.title = ''; }
 
     // Reset seekbar
     var seekbar = document.getElementById('seekbar');

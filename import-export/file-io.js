@@ -281,7 +281,7 @@ export async function loadCalibrationFile() {
     } else {
         throw new Error('Unsupported calibration format: ' + file.name);
     }
-    return { cameras: cameras, fileName: file.name };
+    return { cameras: cameras, fileName: file.name, file: file };
 }
 
 /**
