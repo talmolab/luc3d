@@ -4126,6 +4126,8 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `exportReprojH5()` — reprojection H5 export.
 
 **Imports from project modules.**
+- `./progress-delta.js` — `noteProgress` (the lit stretch on the Choose Frames for
+  Triangulation and Export 3D Video bars).
 - `./app-state.js` — `state`, `viewport3d`, `timeline`, `getActiveSession`.
 - `./browser-hints.js` — `fileSystemAccessHint` (appended to the 3D-video and
   JSON-export "must be built in memory" confirms in Brave).
@@ -4871,7 +4873,8 @@ phase color flips signal transitions (red → blue → green).
   caller's title does not stick.
 - `resetLoadingProgressModal()` — test-only helper to drop the singleton.
 
-**Imports from project modules.** None.
+**Imports from project modules.** `./progress-delta.js` (`noteProgress`, each
+bar's lit stretch in `_renderRow`; import-free).
 
 **Imported by.** `ui/sessions-panes.js` (switchSession), `loading/session-loader.js`
 (handleLoadVideos), `import-export/save-load.js` (handleLoadProject V3 path),
@@ -4888,6 +4891,47 @@ after all tasks complete; stays open on error.
   Its CSS is injected by the module itself, not in `styles.css`.
 
 ---
+
+### ui/progress-delta.js
+
+**Purpose.** Every progress bar lights up the stretch it gained on its last
+update: a `.progress-delta` element in the bar's track, from the previous
+fraction to the new one, drawn over the fill as a translucent white tint (a
+brighter shade of whatever colour the bar is, no colour per bar) with a 700 ms
+white flash as it appears (an opacity animation on `::after`, so it runs on the
+compositor). It stays lit until the next update replaces it, so a glance says
+how far the bar moved on its last step — the way a game's health bar lights up
+the chunk a hit took off. It grows with the fill's OWN transition (duration and
+timing function of the fill's `width` / `transform` transition, read from its
+computed style), so its leading edge moves with the fill's instead of running
+ahead of it. Moving back, a snap (a new stage, a reset) or the first update of
+a bar show nothing. `prefers-reduced-motion` drops the flash, not the tint.
+Styles: `.progress-delta` in `styles.css` (by the loading overlay's bar).
+
+**Key exports.**
+- `noteProgress(fill, frac, { animate })` — call right after setting a bar's
+  fill to `frac` (0..1). Remembers the fraction on the fill element; `animate:
+  false` means the fill snapped, so no stretch is lit. Works for a `width`
+  fill and for a full-width fill scaled with `transform: scaleX` (the loading
+  overlay's). A static track is given `position: relative` once, for the
+  absolutely placed tint. A no-op without a real DOM (Node test stubs, stand-in
+  elements).
+- `resetProgress(fill)` — forget the last fraction (a bar reused from zero).
+
+**Callers (every progress bar).** `ui/loading-overlay.js` (`_setFill`: Track
+All, Triangulate All, Save, loading, the body-size check, …), `ui/id-switch-modal.js`
+(the image ID-switch check's dialog), `ui/loading-progress-modal.js` (the
+per-video loading bars), `ui/origin-rebase.js` (Set as New Calibration),
+`ui/export-modals.js` (Choose Frames for Triangulation, Export 3D Video) and
+`ui/overlay-export-modal.js` (the overlay video export). NOT position bars: the
+video seekbar, an ID-switch row's playhead, range sliders — they show where,
+not how far along. A new progress bar calls `noteProgress` after each update.
+
+**Imports from project modules.** None. **Imported by.** The callers above.
+
+Tested by `tests/e2e/progress-delta.mjs` (the tint's extent on both kinds of
+fill, its brightness from screenshot pixels, its edge following the fill's
+frame by frame mid-transition, and no tint on a move back, a snap or a hide).
 
 ### ui/loading-overlay.js
 
@@ -4964,7 +5008,8 @@ no bar. Pinned by `tests/e2e/fixtures/progress-card.js`.
   like background timers).
 - `PROGRESS_INTERVAL_MS` (250), `CPU_SAMPLE_MS` (1000).
 
-**Imports from project modules.** `./load-graph.js` (`createLoadMeter`,
+**Imports from project modules.** `./progress-delta.js` (`noteProgress` — the
+bar's lit stretch, called from `_setFill`; import-free), `./load-graph.js` (`createLoadMeter`,
 `createBusyClock`, `createLoadGraph`, `formatCpuLoad`, `setLoadLine`, `cpuCores` —
 itself import-free and DOM-free at load), `./browser-hints.js`
 (`renderBraveFingerprintingHint`; also import-free and DOM-free at load). Safe under the Node test stubs: every DOM access is
@@ -5453,6 +5498,7 @@ literal — a grep for `unlinkedInstances:` misses it.
 exported but the amber `?` editing prompt is not.
 
 **Imports from project modules.**
+- `./progress-delta.js` — `noteProgress` (the lit stretch on the export's bar).
 - `./app-state.js` — `state`, `videoController`, `getActiveSession`.
 - `./browser-hints.js` — `fileSystemAccessHint` (appended to the in-memory
   export confirm in Brave).
@@ -7272,7 +7318,8 @@ session's) is dropped rather than transformed — it is derived from 3D that jus
 moved — and the 3D viewport is rebuilt, not merely re-framed, because its
 skeletons are built from `points3d`.
 
-**Imports from project modules.** `./app-state.js` (`state`, `viewport3d`),
+**Imports from project modules.** `./progress-delta.js` (`noteProgress`, the
+lit stretch on the re-base bar), `./app-state.js` (`state`, `viewport3d`),
 `../import-export/save-load.js` (`setStatus`, `markDirty`, `quickSave`),
 `../import-export/file-io.js` (`exportCalibrationTOML`, `downloadTOML`),
 `../loading/calibration-pick.js` (`REBASED_CALIBRATION_NAME`),
@@ -8155,7 +8202,8 @@ fix the switch it follows first. Re-running a check forgets the fixes (the swaps
 stay): its rows were scored on the fixed labels, so an undo would rename them
 wrongly.
 
-**Imports from project modules.** `ui/app-state.js` (`state`,
+**Imports from project modules.** `ui/progress-delta.js` (`noteProgress`, the
+lit stretch on the image check dialog's bar), `ui/app-state.js` (`state`,
 `getActiveSession`), `ui/seekbar-markers.js` (`setSeekbarSwitchMarkers`),
 `import-export/save-load.js` (`setStatus`, `markDirty`),
 `ui/loading-overlay.js` (`showLoading`, `hideLoading`, `yieldToPaint` — the body-size

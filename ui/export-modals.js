@@ -8,6 +8,7 @@
 //
 // Extracted from app.js per the consolidated Pass 3 plan, Module 13.
 
+import { noteProgress } from './progress-delta.js';
 import { state, viewport3d, timeline, getActiveSession } from './app-state.js';
 import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js';
 import {
@@ -2589,7 +2590,7 @@ async function runMultiFrameTriangulation(startFrame, endFrame, overlayEl) {
     var result = await triangulateMultiFrameInstances(startFrame, endFrame, function (completed, total) {
         var pct = Math.round((completed / total) * 100);
         if (progressLabel) progressLabel.textContent = completed.toLocaleString('en-US') + ' / ' + total.toLocaleString('en-US') + ' frames via ' + methodLabel;
-        if (progressFill) progressFill.style.width = pct + '%';
+        if (progressFill) { progressFill.style.width = pct + '%'; noteProgress(progressFill, pct / 100); }
     }, method);
 
     // Update display for current frame
@@ -3348,6 +3349,7 @@ export function showExport3DVideoModal() {
                 if (out % 5 === 0 || i === expEnd) {
                     var pct = Math.round(((out + 1) / nFrames) * 100);
                     progressFill.style.width = pct + '%';
+                    noteProgress(progressFill, pct / 100);
                     progressLabel.textContent = 'Encoding ' + (out + 1).toLocaleString('en-US') + ' / ' + nFrames.toLocaleString('en-US');
                     await new Promise(function (r) { setTimeout(r, 0); });
                 }

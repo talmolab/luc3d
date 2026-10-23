@@ -4111,6 +4111,30 @@ input[type="range"]::-moz-range-track {
   transition: none;
 }
 
+/* The stretch a progress bar gained on its last update (ui/progress-delta.js),
+   on every progress bar: a translucent white tint over the fill, so it is a
+   brighter shade of the bar's own colour, and a white flash as it appears. It
+   grows with the fill's own transition (set inline from the fill's computed
+   style) and stays lit until the next update. The flash is an OPACITY
+   animation on a pseudo-element so it runs on the compositor, as the bar's
+   own transform does, even while the main thread is busy. */
+.progress-delta {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 0;
+  z-index: 1; pointer-events: none;
+  transform-origin: left center;
+  background: rgba(255, 255, 255, 0.42);
+  opacity: 0;
+}
+.progress-delta.is-on { opacity: 1; }
+.progress-delta::after {
+  content: ''; position: absolute; inset: 0; background: #fff; opacity: 0;
+}
+.progress-delta.is-on::after { animation: progress-delta-flash 700ms ease-out; }
+@keyframes progress-delta-flash { from { opacity: 0.75; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .progress-delta.is-on::after { animation: none; }
+}
+
 /* The percentage under the bar — the same rule as the image check's. */
 .loading-pct, .id-switch-progress-pct { margin-top: 8px; font-size: 24px; opacity: 0.75; font-variant-numeric: tabular-nums; }
 
