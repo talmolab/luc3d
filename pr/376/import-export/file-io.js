@@ -12,13 +12,13 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=e8ca2b5f04c5';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=e8ca2b5f04c5';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=e8ca2b5f04c5';
+         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=6a8352c1c5b4';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=6a8352c1c5b4';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=6a8352c1c5b4';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=e8ca2b5f04c5';
-import { writePlaneMetadata } from './plane-metadata.js?v=e8ca2b5f04c5';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=6a8352c1c5b4';
+import { writePlaneMetadata } from './plane-metadata.js?v=6a8352c1c5b4';
 
 // ============================================
 // Generic file picker
@@ -2792,7 +2792,10 @@ export function parseSlpH5(file, onProgress, opts) {
  * PLUS a `_typedSession` ref (the typed `RecordingSession`). Grouping is rebuilt
  * from that typed session by `reconstructInstanceGroupsFromSession`, which reads
  * both LUCID's legacy and the new canonical `sessions_json` (the raw dict is kept
- * for the legacy per-group `identity_idx` fallback — see 13-pr51-probe-findings.md).
+ * for the legacy per-group `identity_idx` fallback — see 13-pr51-probe-findings.md)
+ * and a `_typedIdentities` ref (the file's typed `/identity` catalog, which the
+ * typed groups' `identity` resolves into — the `identity_idx` fallback for files
+ * written by other tools, e.g. campy-live-export).
  *
  * The reader's own HDF5 I/O worker loads `h5wasm` via `importScripts`, so it
  * needs an **IIFE** build — pointed at LUCID's LOCAL vendored `h5wasm.iife.js`
@@ -2826,7 +2829,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=e8ca2b5f04c5', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=6a8352c1c5b4', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },
@@ -2900,7 +2903,10 @@ export async function parseSlpViaSleapIO(file, onProgress) {
                 if (rs[ri] != null) sessions.push(rs[ri]);
             }
         } else {
-            sessions.push(Object.assign({}, rs, { _typedSession: typedSessions[si] || null }));
+            sessions.push(Object.assign({}, rs, {
+                _typedSession: typedSessions[si] || null,
+                _typedIdentities: labels.identities || [],
+            }));
         }
     }
 

@@ -21,10 +21,11 @@
  *      per-detection identity map is filled, so the Identity timeline shows a
  *      row per animal per camera across every frame (not only resident ones).
  *   B. identity_idx only (no group metadata), lazy: same result.
- *   C. the same file as A through the EAGER File → Load SLP: identities and
- *      the Identity timeline match the lazy reopen.
+ *   C. A and B through the EAGER File → Load SLP: identities, group
+ *      identities and the Identity timeline match the lazy reopen (B: the
+ *      eager path reads `identity_idx` too).
  *   D. a LUC3D-saved project with identities on its groups but an EMPTY
- *      frameIdentityMap reopens exactly as before: nothing is derived.
+ *      frameIdentityMap opens exactly as before, lazy and eager: nothing is derived.
  *
  * Run: node tests/e2e/lazy-reopen-group-identities.mjs
  */
@@ -252,9 +253,9 @@ try {
             r.rows.slice(0, 4));
     }
 
-    console.log('\nC (same file as A) — eager File → Load SLP');
-    {
-        const err = await load(fixtures.campy, 'eager');
+    for (const [label, file] of [['C (file A)', fixtures.campy], ['C (file B, identity_idx only)', fixtures.idxOnly]]) {
+        console.log('\n' + label + ' — eager File → Load SLP');
+        const err = await load(file, 'eager');
         check(!err, 'eager load completed', err || undefined);
         const r = await inspect();
         check(!r.lazy, 'took the eager path');
@@ -264,10 +265,10 @@ try {
             { mapSize: r.mapSize, wrongMap: r.wrongMap });
     }
 
-    console.log('\nD (LUC3D project, identities on groups, empty frameIdentityMap) — lazy reopen');
-    {
-        const err = await load(fixtures.lucid, 'lazy');
-        check(!err, 'lazy reopen completed', err || undefined);
+    for (const how of ['lazy', 'eager']) {
+        console.log('\nD (LUC3D project, identities on groups, empty frameIdentityMap) — ' + how);
+        const err = await load(fixtures.lucid, how);
+        check(!err, how + ' load completed', err || undefined);
         const r = await inspect();
         check(JSON.stringify(r.ids) === JSON.stringify(Array.from({ length: ANIMALS }, (_, k) => 'id_' + k)),
             'identities = the project\'s own list', r.ids);

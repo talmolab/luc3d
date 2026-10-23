@@ -10,7 +10,7 @@
 //
 // Imports only `id-switch-review.js`, which is import-free.
 
-import { idSwitchOnsets, idSwitchEncounterCount } from './id-switch-review.js?v=e8ca2b5f04c5';
+import { idSwitchOnsets, idSwitchEncounterCount } from './id-switch-review.js?v=6a8352c1c5b4';
 
 /** Thousands separators, as everywhere else frame counts are shown. */
 function n(v) {
