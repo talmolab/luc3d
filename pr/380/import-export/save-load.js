@@ -9,45 +9,45 @@ import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
     toBoxedPoints3d, someValidPoint3d, pooledPoints3d,
-} from '../pose/pose-data.js?v=83c283a928fd';
+} from '../pose/pose-data.js?v=3099222ce95d';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
-} from '../pose/triangulation.js?v=83c283a928fd';
-import { OnDemandVideoDecoder } from '../loading/video.js?v=83c283a928fd';
-import { createDemoSkeleton } from '../demo-data.js?v=83c283a928fd';
+} from '../pose/triangulation.js?v=3099222ce95d';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=3099222ce95d';
+import { createDemoSkeleton } from '../demo-data.js?v=3099222ce95d';
 import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
-} from './file-io.js?v=83c283a928fd';
+} from './file-io.js?v=3099222ce95d';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setInteractionManager,
-} from '../ui/app-state.js?v=83c283a928fd';
+} from '../ui/app-state.js?v=3099222ce95d';
 import {
     autoAssignVideosToCameras, forceVideoSelection, showParentDirMatchSummary,
     forceVideoSelectionWithFolder, createViewForVideoFile, updateTotalFrames,
     adoptLabeledFrameCount, rebuildVideoController, fitCanvasesToCells,
-} from '../loading/session-loader.js?v=83c283a928fd';
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=83c283a928fd';
-import { updateInfoPanel } from '../ui/info-panel.js?v=83c283a928fd';
+} from '../loading/session-loader.js?v=3099222ce95d';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=3099222ce95d';
+import { updateInfoPanel } from '../ui/info-panel.js?v=3099222ce95d';
 // Pass 3i-3: setupInteraction / setup3DViewport / hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, hideWelcomeOverlay,
-} from '../pose/initialization.js?v=83c283a928fd';
+} from '../pose/initialization.js?v=3099222ce95d';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=83c283a928fd';
-import { handleLoadSlpFile } from './slp-import.js?v=83c283a928fd';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=3099222ce95d';
+import { handleLoadSlpFile } from './slp-import.js?v=3099222ce95d';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
     openProjectWriter, streamSessionIntoWriter, finalizeProjectWriter,
-} from './slp-streaming-write.js?v=83c283a928fd';
-import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=83c283a928fd';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=83c283a928fd';
-import { showLoading, hideLoading } from '../ui/loading-overlay.js?v=83c283a928fd';
-import { clearReadout } from '../ui/frame-readout.js?v=83c283a928fd';
-import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=83c283a928fd';
-import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=83c283a928fd';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=83c283a928fd';
+} from './slp-streaming-write.js?v=3099222ce95d';
+import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=3099222ce95d';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=3099222ce95d';
+import { showLoading, hideLoading } from '../ui/loading-overlay.js?v=3099222ce95d';
+import { clearReadout } from '../ui/frame-readout.js?v=3099222ce95d';
+import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=3099222ce95d';
+import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=3099222ce95d';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=3099222ce95d';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -351,7 +351,7 @@ function serializeSessionFrames(session) {
 
 async function ensureSleapIO() {
     if (window.SleapIO) return window.SleapIO;
-    var mod = await import('./lib/sleap-io/index.browser.js?v=83c283a928fd');
+    var mod = await import('./lib/sleap-io/index.browser.js?v=3099222ce95d');
     window.SleapIO = mod;
     return mod;
 }
@@ -1339,7 +1339,7 @@ export async function handleLoadProject(prePickedFile) {
             var LARGE_SLP_BYTES = 200 * 1024 * 1024;
             if (ext === 'slp' && file.size > LARGE_SLP_BYTES) {
                 // Dynamic import avoids a session-loader ↔ save-load import cycle.
-                var _sl = await import('../loading/session-loader.js?v=83c283a928fd');
+                var _sl = await import('../loading/session-loader.js?v=3099222ce95d');
                 if (_sl && typeof _sl.handleLoadProjectSlpLazy === 'function') {
                     return _sl.handleLoadProjectSlpLazy(file);
                 }
