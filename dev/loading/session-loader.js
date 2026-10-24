@@ -22,76 +22,82 @@ import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, VIEW_NAMES, buildRememberedSkeleton, setProjectSkeleton,
     isViewDocked,
-} from '../ui/app-state.js?v=7ee0160c77a5';
+} from '../ui/app-state.js?v=9ddb1d7f306e';
 
 import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
-} from '../pose/pose-data.js?v=7ee0160c77a5';
+} from '../pose/pose-data.js?v=9ddb1d7f306e';
 
-import { OnDemandVideoDecoder, VideoController } from './video.js?v=7ee0160c77a5';
-import { videoLoadFailureText } from './video-codec-diagnosis.js?v=7ee0160c77a5';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=7ee0160c77a5';
-import { confirmFolderPick } from '../ui/folder-confirm-tip.js?v=7ee0160c77a5';
+import { OnDemandVideoDecoder, VideoController } from './video.js?v=9ddb1d7f306e';
+import { videoLoadFailureText } from './video-codec-diagnosis.js?v=9ddb1d7f306e';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=9ddb1d7f306e';
+import { confirmFolderPick } from '../ui/folder-confirm-tip.js?v=9ddb1d7f306e';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
     parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO,
     loadCalibrationFile,
-} from '../import-export/file-io.js?v=7ee0160c77a5';
+} from '../import-export/file-io.js?v=9ddb1d7f306e';
 
-import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=7ee0160c77a5';
+import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=9ddb1d7f306e';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
 // the browser test runner (session-loader itself pulls app.js) — same reason
 // and same shape as `resolveImportTrackIdx` above.
-import { chooseCameraSlp } from './percam-slp-choice.js?v=7ee0160c77a5';
+import { chooseCameraSlp } from './percam-slp-choice.js?v=9ddb1d7f306e';
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js?v=7ee0160c77a5';
-import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=7ee0160c77a5';
+import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js?v=9ddb1d7f306e';
+import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=9ddb1d7f306e';
 import {
     isCalibrationImagesVideo, preferNonCalibrationVideos, matchVideoToCamera,
-} from './video-file-pick.js?v=7ee0160c77a5';
+} from './video-file-pick.js?v=9ddb1d7f306e';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,
     ensureLazyFrameData,
-} from '../pose/triangulation.js?v=7ee0160c77a5';
-import { SioLazyLoader } from './sio-lazy-loader.js?v=7ee0160c77a5';
-import { unionTrackNames, remapTrackIdx } from './track-union.js?v=7ee0160c77a5';
+} from '../pose/triangulation.js?v=9ddb1d7f306e';
+import { SioLazyLoader } from './sio-lazy-loader.js?v=9ddb1d7f306e';
+import { unionTrackNames, remapTrackIdx } from './track-union.js?v=9ddb1d7f306e';
+import {
+    readCampyRecording, campyCameraFor, orderByCampyCameras, preferCampyVideo, campyVideoFile,
+    compareCampyCameraNames, compareCalibrationSha256, sha256Hex, frameRatesDisagree,
+    withCampyWarnings, findCampyManifestFiles,
+} from './campy-session.js?v=9ddb1d7f306e';
+import { readBlobArrayBuffer } from './cold-read-guard.js?v=9ddb1d7f306e';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
     setStatus, showLoading, hideLoading, ensureNo3dImportBlockingLoad,
-} from '../import-export/save-load.js?v=7ee0160c77a5';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=7ee0160c77a5';
+} from '../import-export/save-load.js?v=9ddb1d7f306e';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=9ddb1d7f306e';
 
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=7ee0160c77a5';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=7ee0160c77a5';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=7ee0160c77a5';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=7ee0160c77a5';
-import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=7ee0160c77a5';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=9ddb1d7f306e';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=9ddb1d7f306e';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=9ddb1d7f306e';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=9ddb1d7f306e';
+import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=9ddb1d7f306e';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, setupTimeline,
     updateFpsDisplay,
     hideWelcomeOverlay,
-} from '../pose/initialization.js?v=7ee0160c77a5';
+} from '../pose/initialization.js?v=9ddb1d7f306e';
 // Pass 3h: populateViewStrip / populateSessionStrip / switchSession moved to sessions-panes.js.
 import {
     populateViewStrip, populateSessionStrip, switchSession, multiSelectViews,
-} from '../ui/sessions-panes.js?v=7ee0160c77a5';
+} from '../ui/sessions-panes.js?v=9ddb1d7f306e';
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
 import {
     updateSeekbar, fitTimelineToData, onPlaybackStateChange, updateVideoGridDisplay,
-} from '../ui/ui-wiring.js?v=7ee0160c77a5';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=7ee0160c77a5';
-import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=7ee0160c77a5';
-import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js?v=7ee0160c77a5';
+} from '../ui/ui-wiring.js?v=9ddb1d7f306e';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=9ddb1d7f306e';
+import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=9ddb1d7f306e';
+import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js?v=9ddb1d7f306e';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -224,7 +230,18 @@ export async function handleLoadCalibration() {
         // cameras are excluded from the timeline gutter.
         recomputeUploadedCameras(state.session, state);
         if (timeline) timeline.refreshTracks(state.session);
-        setStatus('Loaded ' + cameras.length + ' cameras', 'success');
+        // A campy recording: is this the calibration campy-live tracked with,
+        // and does it name the recording's cameras?
+        var calRec = state.session.campyRecording;
+        if (calRec) {
+            calRec.cameraMismatch = compareCampyCameraNames(calRec, cameraNames);
+            calRec.calibrationCheck = null;
+            await checkCampyCalibration(state.session, calibResult.file);
+            updateInfoPanel();
+        }
+        var calStatus = withCampyWarnings('Loaded ' + cameras.length + ' cameras', 'success', calRec,
+            { status: false });
+        setStatus(calStatus.message, calStatus.kind);
     } catch (err) {
         console.error('Failed to load calibration:', err);
         setStatus('Calibration error: ' + err.message, 'error');
@@ -592,7 +609,11 @@ export async function pickParentDirectoryForSessions(sessionNames) {
             var parts = relPath.split('/');
             // parts[0] = parent dir, parts[1] = session subdir, parts[2] = camera subdir, parts[3+] = files
             // Skip files at session root (only include files inside camera subdirs)
-            if (parts.length < 4) continue;
+            // ...except a campy recording's manifests (session.json,
+            // campy-live-session*.json), kept for adoptCampyRecording.
+            var isCampyManifest = parts.length === 3
+                && (parts[2] === 'session.json' || /^campy-live-session.*\.json$/.test(parts[2]));
+            if (parts.length < 4 && !isCampyManifest) continue;
             // Skip per-camera calibration clips (back/calibration_images/...).
             if (isCalibrationVideoFile(allFiles[i])) continue;
             var dirName = parts[1];
@@ -672,7 +693,9 @@ export async function pickParentDirectoryForSessions(sessionNames) {
                 // Exclude per-camera calibration clips (calibration_images/).
                 return !isCalibrationVideoFile(f);
             });
-            matched.set(sessName, files);
+            // A campy recording's manifests sit at the session root; keep them
+            // for adoptCampyRecording (callers' video filters drop them).
+            matched.set(sessName, files.concat(campyManifestsAmong(allFiles)));
         }
     }
 
@@ -840,7 +863,9 @@ export function forceVideoSelectionWithFolder(refInfo, sessionName, options) {
             }
 
             if (matchedFiles.length > 0) {
-                finish(matchedFiles);
+                // A campy recording's session.json (+ campy-live's manifests)
+                // rides along so the caller can read the recording's details.
+                finish(matchedFiles.concat(campyManifestsAmong(allFiles)));
             }
         });
 
@@ -1318,20 +1343,35 @@ export function rebuildVideoController() {
 export function updateTotalFrames() {
     var maxFrames = 0;
     var bestFps = 30;
+    var estimated = false;
     for (var i = 0; i < state.views.length; i++) {
         var d = state.views[i].decoder;
         if (d && d.samples && d.samples.length > maxFrames) {
             maxFrames = d.samples.length;
-            bestFps = d.videoTrack && d.videoTrack.duration > 0
+            estimated = !!(d.videoTrack && d.videoTrack.duration > 0);
+            bestFps = estimated
                 ? d.samples.length / (d.videoTrack.duration / d.videoTrack.timescale)
                 : 30;
         }
     }
+    // A campy recording says its frame rate (session.json); the video's own
+    // estimate is kept only to say when the two disagree.
+    var rec = state.session && state.session.campyRecording;
+    var campyFps = rec && rec.frameRate ? rec.frameRate : 0;
+    if (campyFps && maxFrames > 0) {
+        rec.videoFrameRate = estimated && frameRatesDisagree(campyFps, bestFps) ? bestFps : null;
+        if (rec.videoFrameRate) {
+            console.warn('[campy] session.json says ' + campyFps + ' fps, the video ' + bestFps.toFixed(3)
+                + ' fps: using session.json');
+        }
+    }
+    var fpsEl = document.getElementById('fpsDisplay');
+    fpsEl.title = campyFps ? 'Frame rate from the recording\'s session.json' : '';
     if (maxFrames > 0) {
         state.totalFrames = maxFrames;
-        state.fps = bestFps;
+        state.fps = campyFps || bestFps;
         refreshReadoutTotals();
-        document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
+        fpsEl.textContent = state.fps.toFixed(1) + ' fps';
         if (timeline) {
             timeline.setTotalFrames(maxFrames);
         }
@@ -1339,13 +1379,84 @@ export function updateTotalFrames() {
         // No decoders — empty session. Reset so previous session's
         // frame count cannot leak into this one.
         state.totalFrames = 0;
-        state.fps = 30;
+        state.fps = campyFps || 30;
         refreshReadoutTotals();
-        document.getElementById('fpsDisplay').textContent = '30.0 fps';
+        fpsEl.textContent = state.fps.toFixed(1) + ' fps';
         if (timeline) {
             timeline.setTotalFrames(1);
         }
     }
+}
+
+/**
+ * Read a campy recording's manifests (session.json and campy-live-session*.json,
+ * `loading/campy-session.js`) from a picked folder's files onto
+ * `session.campyRecording`. A folder without session.json leaves the session
+ * untouched and returns null. Never throws: an unreadable manifest is logged
+ * and the load goes on as if there were none.
+ *
+ * In memory only — never written to the .slp; picking the folder again reads
+ * it again.
+ *
+ * @param {Session} session
+ * @param {ArrayLike<File>} files
+ * @param {{calibFile?: File, calibrationNames?: string[]}} [opts] — the
+ *   calibration file this load read (its SHA-256 is compared with
+ *   campy-live's), and the calibration's camera names (compared with
+ *   session.json's cameras). `record`: one this load already read with
+ *   `readCampyRecording(files)`, so it is not read twice.
+ */
+export async function adoptCampyRecording(session, files, opts) {
+    if (!session || !files) return null;
+    var rec;
+    try {
+        rec = (opts && opts.record) || await readCampyRecording(files);
+    } catch (e) {
+        console.warn('[campy] could not read session.json:', e);
+        rec = null;
+    }
+    if (!rec) return null;
+    session.campyRecording = rec;
+    console.log('[campy] ' + session.name + ': session.json (' + (rec.status || 'no status') + ', '
+        + (rec.frameRate || '?') + ' fps, ' + rec.cameras.length + ' camera(s)), '
+        + rec.live.length + ' campy-live manifest(s)');
+    var names = opts && opts.calibrationNames;
+    if (names && names.length) rec.cameraMismatch = compareCampyCameraNames(rec, names);
+    if (opts && opts.calibFile) await checkCampyCalibration(session, opts.calibFile);
+    return rec;
+}
+
+/**
+ * Compare a calibration file's SHA-256 with the calibrations campy-live
+ * tracked this recording with (`campy-live-session*.json`). Sets
+ * `session.campyRecording.calibrationCheck`; a no-op for a session that is no
+ * campy recording, or whose campy-live runs had no calibration.
+ */
+export async function checkCampyCalibration(session, calibFile) {
+    var rec = session && session.campyRecording;
+    if (!rec || !calibFile || !rec.live.some(function (l) { return l.calibration; })) return null;
+    try {
+        var sha = await sha256Hex(await readBlobArrayBuffer(calibFile));
+        rec.calibrationCheck = compareCalibrationSha256(rec, sha, calibFile.name);
+        if (rec.calibrationCheck && !rec.calibrationCheck.matches) {
+            console.warn('[campy] ' + calibFile.name + ' SHA-256 ' + sha + ' is not campy-live\'s:',
+                rec.calibrationCheck.live);
+        }
+    } catch (e) {
+        console.warn('[campy] could not hash ' + calibFile.name + ':', e);
+    }
+    return rec.calibrationCheck;
+}
+
+/**
+ * The root-level campy manifests among a picked folder's files, for a folder
+ * prompt that otherwise keeps only videos: appended to its result so the
+ * caller can `adoptCampyRecording` them (they are JSON, so every caller's
+ * video filter drops them again).
+ */
+function campyManifestsAmong(files) {
+    var found = findCampyManifestFiles(files);
+    return found ? [found.session].concat(found.live) : [];
 }
 
 /**
@@ -1957,6 +2068,7 @@ export async function handleLoadSessionFolderSingleSlp() {
         // COLLECTED, not overwritten — see `pickCalibrationFile`.
         var calibMatches = [];
         var videoFiles = [];
+        var rootPoseFiles = [];
         var videoExtensions = ['.mp4', '.avi', '.webm', '.mov', '.mkv'];
 
         for (var fi = 0; fi < allFiles.length; fi++) {
@@ -1973,6 +2085,7 @@ export async function handleLoadSessionFolderSingleSlp() {
                     skeletonFile = file;
                 } else if (fnLower.endsWith('.slp') || fnLower.endsWith('.h5')) {
                     slpFile = file;
+                    rootPoseFiles.push(file);
                 }
             } else if (parts.length === 3 && parts[1].toLowerCase() === 'videos') {
                 var ext = fnLower.substring(fnLower.lastIndexOf('.'));
@@ -1986,6 +2099,30 @@ export async function handleLoadSessionFolderSingleSlp() {
             hideLoading();
             setStatus('No SLP file found in root of folder', 'error');
             return;
+        }
+
+        // A campy recording (session.json, `loading/campy-session.js`) has no
+        // videos/ folder: its videos are where session.json says
+        // (<Camera>/0.mp4), in campy's camera order. `campyVideoCam` maps each
+        // such video to its campy camera's name. A folder with videos/ (or
+        // without session.json) loads exactly as before.
+        var campyRec = null;
+        try { campyRec = await readCampyRecording(allFiles); } catch (e) { campyRec = null; }
+        // campy-live-export also leaves points3d.h5 beside campy-live.slp: the
+        // .slp is the project, whichever the folder listed last.
+        if (campyRec && /\.h5$/i.test(slpFile.name)) {
+            var campySlp = rootPoseFiles.filter(function (f) { return /\.slp$/i.test(f.name); });
+            if (campySlp.length) slpFile = campySlp[campySlp.length - 1];
+        }
+        var campyVideoCam = new Map();
+        if (campyRec && videoFiles.length === 0) {
+            for (var cvi = 0; cvi < campyRec.cameras.length; cvi++) {
+                var cvFile = campyVideoFile(campyRec, campyRec.cameras[cvi], allFiles);
+                if (cvFile) {
+                    videoFiles.push(cvFile);
+                    campyVideoCam.set(cvFile, campyRec.cameras[cvi].name);
+                }
+            }
         }
 
         // Resolve the ONE calibration to use, and say so when the folder held
@@ -2240,7 +2377,7 @@ export async function handleLoadSessionFolderSingleSlp() {
         // (pickFolder returns files in an OS-dependent order, which made the
         // 2D panes reshuffle on reload). Videos that match no camera keep their
         // relative order, placed after the matched ones.
-        if (cameras.length > 0) {
+        if (cameras.length > 0 && campyVideoCam.size === 0) {
             var camOrderIndex = function (vf) {
                 var stem = vf.name.replace(/\.[^.]+$/, '').toLowerCase();
                 for (var ci = 0; ci < cameras.length; ci++) {
@@ -2260,13 +2397,16 @@ export async function handleLoadSessionFolderSingleSlp() {
             var vStemName = vFile.name.replace(/\.[^.]+$/, '');
             // Match to a camera only if calibration provides cameras
             var matchedCam = null;
+            var campyCamName = campyVideoCam.get(vFile) || null;
             for (var mci = 0; mci < cameras.length; mci++) {
-                if (vStemName.toLowerCase().indexOf(cameras[mci].name.toLowerCase()) >= 0) {
+                if (campyCamName
+                    ? cameras[mci].name.toLowerCase() === campyCamName.toLowerCase()
+                    : vStemName.toLowerCase().indexOf(cameras[mci].name.toLowerCase()) >= 0) {
                     matchedCam = cameras[mci].name;
                     break;
                 }
             }
-            var viewName = matchedCam || vStemName;
+            var viewName = matchedCam || campyCamName || vStemName;
 
             try {
                 var decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
@@ -2296,6 +2436,15 @@ export async function handleLoadSessionFolderSingleSlp() {
                 console.error('[single-slp] Failed to load video:', vFile.name, e);
                 failedVideos.push(videoLoadFailureText(vFile.name, e));
             }
+        }
+
+        // The recording's details, before updateTotalFrames takes its fps.
+        if (campyRec) {
+            await adoptCampyRecording(session, allFiles, {
+                record: campyRec,
+                calibFile: calibFile,
+                calibrationNames: cameras.map(function (c) { return c.name; }),
+            });
         }
 
         // Finalize
@@ -2334,16 +2483,21 @@ export async function handleLoadSessionFolderSingleSlp() {
         updateInfoPanel();
         if (timeline) timeline.setData(session);
         if (videoController) await videoController.seekToFrame(0);
+        var finalMsg, finalKind;
         if (failedVideos.length > 0 && state.views.length === 0) {
-            setStatus('All videos failed to load: ' + failedVideos.join('; '), 'error');
+            finalMsg = 'All videos failed to load: ' + failedVideos.join('; '); finalKind = 'error';
         } else if (failedVideos.length > 0) {
-            setStatus('Loaded ' + state.views.length + ' video(s), ' + failedVideos.length + ' failed: ' + failedVideos[0], 'warning');
+            finalMsg = 'Loaded ' + state.views.length + ' video(s), ' + failedVideos.length + ' failed: ' + failedVideos[0];
+            finalKind = 'warning';
         } else if (planeConflict) {
-            setStatus('Loaded session from ' + slpFile.name + ' — its planes were not added: ' +
-                planeConflict, 'warning');
+            finalMsg = 'Loaded session from ' + slpFile.name + ' — its planes were not added: ' + planeConflict;
+            finalKind = 'warning';
         } else {
-            setStatus('Loaded session from ' + slpFile.name + ' (' + videoFiles.length + ' videos)', 'success');
+            finalMsg = 'Loaded session from ' + slpFile.name + ' (' + videoFiles.length + ' videos)';
+            finalKind = 'success';
         }
+        var campyFinal = withCampyWarnings(finalMsg, finalKind, session.campyRecording);
+        setStatus(campyFinal.message, campyFinal.kind);
     } catch (err) {
         console.error('[single-slp] Error:', err);
         hideLoading();
@@ -2391,6 +2545,10 @@ export async function attachVideosForLazyReopen(session, loader, pickedFilesOver
         || await forceVideoSelectionWithFolder(refInfo, session.name || 'Session', { allowSkip: true });
     if (!picked || picked.parentResult || picked.length === 0) return false;
 
+    // A campy recording folder: its session.json (frame rate, camera order,
+    // the video campy wrote for each camera). Null otherwise.
+    var campyRec = await adoptCampyRecording(session, picked, { calibrationNames: camNames });
+
     // Filter to real session videos and match each to a camera.
     var vidExts = ['.mp4', '.avi', '.mov', '.mkv', '.webm'];
     var candidates = [];
@@ -2415,6 +2573,17 @@ export async function attachVideosForLazyReopen(session, loader, pickedFilesOver
         console.log('[lazy-reopen] preferring plainly-named videos over calibration-named ' +
             _lrPref.dropped.map(function (f) { return '"' + f.name + '"'; }).join(', '));
         candidates = _lrPref.kept;
+    }
+
+    // campy's own video for each camera wins the first-wins pick below.
+    if (campyRec) {
+        var campyOwn = new Set();
+        campyRec.cameras.forEach(function (c) {
+            var f = campyVideoFile(campyRec, c, candidates);
+            if (f) campyOwn.add(f);
+        });
+        candidates = candidates.filter(function (f) { return campyOwn.has(f); })
+            .concat(candidates.filter(function (f) { return !campyOwn.has(f); }));
     }
 
     var toLoad = [];
@@ -2459,6 +2628,11 @@ export async function attachVideosForLazyReopen(session, loader, pickedFilesOver
             modal.failTask(taskId, decErr);
         }
     }));
+
+    // Views in campy's camera order.
+    if (campyRec) {
+        toLoad = orderByCampyCameras(campyRec, toLoad, function (e) { return { name: e.assignedCam }; });
+    }
 
     var attachedNames = [];
     var failed = [];
@@ -2706,8 +2880,10 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         }
         updateInfoPanel();
         if (videosAttached) {
-            setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size.toLocaleString('en-US')
-                + ' grouped frames, ' + state.views.length + ' videos', 'success');
+            var lazyStatus = withCampyWarnings('Reopened ' + slpFile.name + ' — '
+                + session.instanceGroups.size.toLocaleString('en-US')
+                + ' grouped frames, ' + state.views.length + ' videos', 'success', session.campyRecording);
+            setStatus(lazyStatus.message, lazyStatus.kind);
         } else {
             setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size.toLocaleString('en-US')
                 + ' grouped frames, ' + loader.nFrames.toLocaleString('en-US') + ' frames. File → Load Videos to show images.', 'success');
@@ -2875,6 +3051,18 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             }
         }
 
+        // A campy recording's session.json (`loading/campy-session.js`): the
+        // video campy wrote for each camera goes first in its directory. Null
+        // for any other folder, which then loads exactly as before.
+        var campyRec = null;
+        try { campyRec = await readCampyRecording(allFiles); } catch (e) { campyRec = null; }
+        if (campyRec) {
+            for (var cpd in cameraDirs) {
+                var cpCam = campyCameraFor(campyRec, cpd, cpd);
+                if (cpCam) cameraDirs[cpd].videos = preferCampyVideo(campyRec, cpCam, cameraDirs[cpd].videos);
+            }
+        }
+
         // Resolve the ONE calibration to use, and say so when the folder held
         // more than one: a silently-chosen stale calibration puts every camera
         // in the wrong frame while every number still looks plausible.
@@ -2952,9 +3140,14 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             // Videos can be viewed but camera assignments and 3D features require calibration.
             for (var dirName in cameraDirs) {
                 if (cameraDirs[dirName].videos.length > 0 || cameraDirs[dirName].slps.length > 0) {
+                    // A campy recording names its cameras (session.json); the
+                    // view is then that name, not the video's stem (campy's
+                    // videos are all called 0.mp4).
+                    var ncCampy = campyCameraFor(campyRec, dirName, dirName);
                     matchedCameraDirs.push({
                         dirName: dirName,
-                        camName: dirName,
+                        camName: ncCampy ? ncCampy.name : dirName,
+                        campyName: ncCampy ? ncCampy.name : null,
                         videos: cameraDirs[dirName].videos,
                         slps: cameraDirs[dirName].slps,
                         envSlps: cameraDirs[dirName].envSlps,
@@ -3022,6 +3215,15 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             hideLoading();
             setStatus('No camera directories with videos found in folder', 'error');
             return;
+        }
+
+        // Views in campy's camera order (session.json), not the calibration's
+        // or the folder listing's. The calibration's own camera list keeps its
+        // order: 3D and the saved file use it.
+        if (campyRec) {
+            matchedCameraDirs = orderByCampyCameras(campyRec, matchedCameraDirs, function (d) {
+                return { name: d.camName, dirName: d.dirName };
+            });
         }
 
         console.log('[session-folder] Matched camera dirs:', matchedCameraDirs.length);
@@ -3400,7 +3602,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 var sessionIdx = state.sessions.indexOf(state.session);
                 var videoStem = videoFile.name.replace(/\.[^.]+$/, '');
                 var assignCam = camDir.noCalibration ? null : camName;
-                var viewName = camDir.noCalibration ? videoStem : camName;
+                var viewName = camDir.noCalibration ? (camDir.campyName || videoStem) : camName;
 
                 if (deferVideos) {
                     // Store file ref only — decoder created on session switch
@@ -3551,6 +3753,16 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             }
         }
 
+        // 5c. The recording's details, before the frame count and fps are set
+        // (updateTotalFrames takes campy's frame rate from them).
+        if (campyRec && state.session) {
+            await adoptCampyRecording(state.session, allFiles, {
+                record: campyRec,
+                calibFile: hasCalibration ? calibFile : null,
+                calibrationNames: hasCalibration ? cameras.map(function (c) { return c.name; }) : null,
+            });
+        }
+
         // 6. Finalize
         if (state.views.length > 0) {
             paneManager._suppressActiveHighlight = true;
@@ -3660,7 +3872,8 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             statusMsg += ' — newer .slp present but not loaded: ' + staleWarnings.join('; ');
             statusKind = 'warning';
         }
-        setStatus(statusMsg, statusKind);
+        var campyStatus = withCampyWarnings(statusMsg, statusKind, state.session && state.session.campyRecording);
+        setStatus(campyStatus.message, campyStatus.kind);
 
     } catch (err) {
         console.error('[session-folder] Error:', err);

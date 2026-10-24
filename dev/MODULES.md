@@ -4266,7 +4266,8 @@ Edit Group mode, track-swap dialogs.
 
 **Purpose.** Right-hand info panel — populates the Videos, Cameras,
 Skeleton, Sessions, and Frame Info tables; hosts the skeleton editor and
-the per-frame instance-group / unlinked-instance tables.
+the per-frame instance-group / unlinked-instance tables. `updateInfoPanel` also
+renders the Session tab's Recording section (`ui/recording-info.js`).
 
 **Reprojection Error panel (`updateFrameInfo`).** The headline mean,
 undistorted residual, method label, and per-camera rows are the frame SUMMARY
@@ -10705,6 +10706,28 @@ it qualifies the action, it is not a third one) and `#skeletonWarnOffNote`.
 app over a two-session project, incl. Esc/Cancel leaving it byte-identical, the
 lazy warning with a resident negative control, and the no-dialog gate.
 
+### ui/recording-info.js
+
+**Purpose.** The Session tab's **Recording** section (`#recordingInfoSection`,
+a `<details>` under Session Info): a campy recording's `session.campyRecording`
+(`loading/campy-session.js`). Hidden for any other session. Rows: status (the
+warning colour unless `complete`, with a plain explanation), experiment, animal
+IDs (with an ⓘ saying they are not LUC3D's identities), notes, other fields,
+annotations with their times, frame rate (and what the video says when it
+differs by > 1%), start time, campy's version, the calibration check ("same as
+campy-live's", or a warning naming both hashes), cameras in only one of
+session.json and the calibration, and a Camera / Serial / Video table.
+
+**Key exports.** `setupRecordingInfo()` (once at init: `persistSectionState`,
+browser-local), `renderRecordingInfo(session)` (called by `updateInfoPanel`),
+`formatCampyTime`, `RECORDING_SECTION_ID`, `ANIMAL_IDS_INFO`.
+
+**Dependencies.** `loading/campy-session.js`, `ui/section-state.js`,
+`ui/info-tip.js`, `ICON_INFO` from `ui/plane-definition.js` (read only inside a
+function, so the cycle through the info panel is hoist-safe).
+
+**Tests.** `tests/e2e/campy-session-folder.mjs`.
+
 ### ui/section-state.js
 
 **Purpose.** Remember which collapsible `<details>` sections a user left open,
@@ -10923,6 +10946,55 @@ only cites it in a comment.)
 
 **Tests.** `tests/test-calibration-file-pick.mjs`.
 
+### loading/campy-session.js
+
+**Purpose.** What a campy recording folder says about itself. campy (2.1.1+)
+writes `<recording>/session.json` (schema `campy-session/1`); campy-live writes
+`campy-live-session*.json` beside it (schema `campy-live-session/1`). Fields are
+documented in campy's `docs/recordings.md`. This module finds the manifests
+among a picked folder's files and turns them into the record the loaders put on
+`session.campyRecording`. **Read only, never written to the `.slp`** (the folder
+is the source; picking it again reads it again; `save-golden-digest.mjs` does
+not move). A folder without session.json gives null everywhere, so every loader
+behaves exactly as before.
+
+**No imports**, so `tests/test-campy-session.mjs` loads it in Node.
+
+**Key exports.**
+- `findCampyManifestFiles(files)` → `{session, live, root}|null`: the
+  SHALLOWEST `session.json`, the `campy-live-session*.json` in the same
+  directory, and that directory's relative path (what campy's relative `video`
+  paths join to).
+- `parseCampySession(text)` → the record, or null for anything but
+  `campy-session/1`: `frameRate` (`config.effective.frameRate.value`, null when
+  absent or ≤ 0), `status`, `startedAt`, `campyVersion`, `experiment` (`name`,
+  `animalIds` as strings, `notes`, `fields` as `[key, value]`), `annotations`,
+  `cameras` sorted by campy's `index` (`name`, `serial`, `folder`, `video`),
+  `failures`, `error`; plus `live`, `calibrationCheck`, `cameraMismatch`,
+  `videoFrameRate`, filled by the loader. campy's `"None"` for an unset field is
+  no value (`campyUnset`). **Animal IDs are display only**: campy-live numbers
+  animals as it first matches them, so they must never name identities.
+- `parseCampyLiveSession(text, fileName)` → `{file, calibration: {path, sha256,
+  cameraNames}|null}` (null calibration = a 2D-only run).
+- `readCampyRecording(files, readText?)` — both, as one record (`.root`, `.live`).
+- `campyCameraFor`, `orderByCampyCameras(record, items, keyOf)` (campy order,
+  others after in their own order, stable), `campyVideoFile` (matched by full
+  relative path), `preferCampyVideo`.
+- `compareCampyCameraNames(record, calibrationNames)`,
+  `sha256Hex(buffer)`, `compareCalibrationSha256(record, sha, fileName)` (a
+  match with ANY campy-live run counts), `frameRatesDisagree` (> 1%).
+- `describeCampyStatus(record)` → `{ok, label, detail}` in plain words;
+  `campyRecordingWarnings(record, {status})`, `withCampyWarnings(message, kind,
+  record, opts)` — a load's final status-bar message with the warnings added
+  (`success` → `warning`). `calibrationMismatchText`, `pathBaseName`.
+
+**Imported by.** `loading/session-loader.js`, `import-export/slp-import.js`,
+`ui/recording-info.js`.
+
+**Tests.** `tests/test-campy-session.mjs` (fixture
+`tests/fixtures/campy-recording/`, a real session.json),
+`tests/e2e/campy-session-folder.mjs`.
+
 ### loading/video-file-pick.js
 
 **Purpose.** Which of a camera's candidate videos is the session recording.
@@ -11108,6 +11180,26 @@ filesystem enumeration, decoder rebuild.
   dock (`updateVideoGridDisplay`). Covered by `tests/e2e/videos-panel-buttons.mjs`.
 - Session-mode UI: `showSessionModeModal`, `showMissingFilesPopup`.
 - Filesystem: `enumerateDirectoryHandle`.
+- **campy recordings** (`loading/campy-session.js`):
+  `adoptCampyRecording(session, files, {record, calibFile, calibrationNames})`
+  reads a picked folder's session.json (+ campy-live's manifests) onto
+  `session.campyRecording` (in memory only; null and untouched without one) and
+  runs `checkCampyCalibration(session, calibFile)` (SHA-256 through
+  `readBlobArrayBuffer`, compared with campy-live's). Called by the per-camera
+  loader, the single-SLP loader, `attachVideosForLazyReopen`,
+  `handleLoadSlpFile`'s Select Session Folder path, and `handleLoadCalibration`
+  (which reports only on the calibration). With a record:
+  `updateTotalFrames` uses its `frameRate` over the video estimate (and sets the
+  fps readout's `title`; the estimate is kept as `videoFrameRate` when it
+  differs by > 1%); views follow campy's camera order (the calibration's own
+  camera list keeps its order); each camera loads the file at campy's `video`
+  path; with no calibration, views are named after campy's cameras, not the
+  video stem (campy's are all `0.mp4`); the single-SLP loader takes videos from
+  session.json when there is no `videos/` and reads the root `.slp` over
+  campy-live-export's `points3d.h5`; the load's final status gains the
+  warnings (`withCampyWarnings`). `forceVideoSelectionWithFolder`'s folder
+  button and `pickParentDirectoryForSessions` pass the root-level manifests
+  through with the videos (JSON, so every caller's video filter drops them).
 - `recomputeUploadedCameras`.
 - Misc re-exports: `resolveImportTrackIdx` (from
   `import-export/import-track-resolve.js`) and `chooseCameraSlp` (from
@@ -12474,7 +12566,9 @@ session's resident/total) rather than truncate silently. Covered by
 **Key exports.**
 - File pickers: `pickFiles`, `pickFolder`, `pickVideoFiles`.
 - Calibration: `parseCalibrationTOML`, `parseCalibrationJSON`,
-  `loadCalibrationFile`, `exportCalibrationTOML`, `downloadTOML`.
+  `loadCalibrationFile` (→ `{cameras, fileName, file}`; `file` lets
+  `handleLoadCalibration` hash it for a campy recording),
+  `exportCalibrationTOML`, `downloadTOML`.
 - Video matching: `matchVideosToCameras`, `buildVideoGrid`.
 - SLP build: `buildSlpExportData`, `buildPerCameraSlpJson`,
   `buildSlpLabels`, `buildSlpLabelsAllViews`,
@@ -12911,6 +13005,14 @@ the status bar at the bottom.
 **Purpose.** SLP/H5 project import + 3D-points-overlay import. Three
 workflows: load fresh SLP (replaces state), additive merge SLP into
 current session, overlay reprojected points3d from H5.
+
+**campy recordings.** When the video prompt's folder is a campy recording
+(session.json), `handleLoadSlpFile` puts it on the session
+(`adoptCampyRecording`, `loading/session-loader.js`): a camera whose campy video
+was picked loads only that video, views follow campy's camera order, the frame
+rate is session.json's, and the final status gains each session's warnings
+(`campyRecordingWarnings`). No calibration hash check here: the calibration
+came from the `.slp`.
 
 The `.slp` parse is dispatched by the private `parseSlpForImport(file,
 onProgress)`: real `.slp` files go through `parseSlpViaSleapIO` (sleap-io.js
