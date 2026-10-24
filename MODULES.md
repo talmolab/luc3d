@@ -1434,6 +1434,9 @@ session graph that holds them.
   `pose/initialization.js`. Tested by `tests/test-group-display-name.mjs`.
 - `Session` — top-level container: cameras, skeleton, tracks, identities,
   frameGroups, instanceGroups.
+  - **`fileProvenance`** — the provenance of the `.slp` it was loaded from,
+    without LUC3D's own keys (null when none); in memory only, written back on
+    save by `import-export/slp-provenance.js`.
   - **`predictedNodeScore(cameraName, frameIdx, inst, k)`** is the one answer to
     "what did the model score this node?" — the node tooltip and the streaming
     writer's overlay both ask it. NaN unless `inst` is `'predicted'` (an edit
@@ -11378,7 +11381,9 @@ stack. See `ui/calibration-notice.js`.
   `../pose/initialization.js`, `../ui/sessions-panes.js`, `../ui/ui-wiring.js`,
   `../import-export/visibility-metadata.js` (`readVisibilityMetadata`) and
   `../import-export/plane-metadata.js` (`readPlaneMetadata`, `resetPlaneState`,
-  `planeMetadataConflict`).
+  `planeMetadataConflict`), `../import-export/slp-provenance.js`
+  (`fileSessionProvenance`, `fileSessionNames` — the single-SLP folder and lazy
+  project loaders keep the file's provenance on the session).
 
 **Imported by.** `pose/initialization.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`, `ui/info-panel.js`,
@@ -12496,6 +12501,50 @@ incl. `planeMetadataConflict`).
 
 ---
 
+### import-export/slp-provenance.js
+
+**Purpose.** Keeps a loaded `.slp`'s `provenance` dict through LUC3D's project
+saves. Other programs keep real records there — campy-live-export
+(olinesn/campy `campy/liveexport.py` `Provenance()`) stores the recording's
+session.json, its campy-live-session.json, `animalIds` and `calibrationDiffers`
+— and every save used to replace it with a fresh `{ source: 'lucid',
+exported_at }`. DOM-free.
+
+**The rule.** Every key the file had is written back unchanged; LUC3D's
+`source: 'lucid'` + `exported_at` are refreshed and only ever replace LUC3D's
+own earlier pair (another program's `source`/`exported_at` stay, and LUC3D's
+pair goes under `lucid`). Sessions from different files: the first session
+with a provenance gives the top level, every session whose provenance differs
+is kept whole under `lucid_sessions` by session name (`{}` = none; a repeated
+name is `name #2`, …), and goes back to that session on reopen. No provenance
+anywhere → exactly `{ source, exported_at }`. The 2D exports (one camera,
+multi-session export) do not use it: they keep `{ source, exported_at }`.
+
+**Key exports.** `buildSaveProvenance(sessions, exportedAt?)` (reads each
+session's `name` + `fileProvenance`); `fileSessionProvenance(fileProv, names,
+index)` (what one loaded session keeps); `fileSessionNames(rawSessions)`
+(`metadata.lucid.sessionName` per `sessions_json` entry);
+`foreignProvenance(prov)` (the dict minus LUC3D's keys, deep-copied);
+`provenanceSessionKeys(names)`; `LUCID_PROVENANCE_SOURCE`,
+`LUCID_PROVENANCE_KEY` (`lucid`), `PROVENANCE_SESSIONS_KEY` (`lucid_sessions`).
+
+**Imports from project modules.** None.
+
+**Imported by.** Writers: `import-export/save-load.js` (`buildSlpBytes` eager
+and single-session streaming, `finalizeMultiSessionSave`). Readers (set
+`session.fileProvenance`): `import-export/slp-import.js` (`handleLoadSlpFile`),
+`loading/session-loader.js` (`handleLoadSessionFolderSingleSlp`,
+`handleLoadProjectSlpLazy`). A new loader that builds a Session from an `.slp`
+must set it too, or a save drops the file's provenance. The per-camera and
+multi-session folder loaders do not (they read camera `.slp` files as 2D only).
+
+**Tests.** `tests/test-slp-provenance.mjs` (the rule),
+`tests/e2e/slp-provenance-roundtrip.mjs` (real load → Save → reopen: eager,
+lazy single-session and multi-session streaming writers, two sessions, a file
+without provenance, a ~120 KB provenance).
+
+---
+
 ### import-export/skeleton-json.js
 
 **Purpose.** Pure, DOM-free (de)serialization for standalone `.skeleton.json`
@@ -12675,7 +12724,9 @@ session's resident/total) rather than truncate silently. Covered by
   `reconstructInstanceGroupsFromSession` for grouping — which reads LUCID's legacy
   inline `frame_group_dicts`, the canonical `sessions_json`, and the SLP 2.8
   columnar `/session_data`. The reader's I/O worker loads the vendored h5wasm
-  IIFE via `h5wasmUrl`.
+  IIFE via `h5wasmUrl`. `provenance` is the file's whole provenance dict
+  (`labels.provenance`; the raw worker returns it too), for
+  `import-export/slp-provenance.js`.
 - H5 build/parse: `buildPoints3dH5`, `buildReprojH5`,
   `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`. `buildReprojH5`
   (Save Reprojections) projects a group's stored 3D into each camera when it has
@@ -12999,7 +13050,9 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   (`writeVisibilityMetadata`/`readVisibilityMetadata` for the session-scoped
   settings in the legacy v2/v3 project JSON — same keys and omit-the-defaults
   rule as the `.slp` writers, at the session-dict level), `./plane-metadata.js`
-  (`writePlaneMetadata`/`readPlaneMetadata`/`resetPlaneState`, same reason).
+  (`writePlaneMetadata`/`readPlaneMetadata`/`resetPlaneState`, same reason),
+  `./slp-provenance.js` (`buildSaveProvenance` — every `.slp` project save keeps
+  the loaded files' provenance).
 
 **Imported by.** `pose/triangulation.js`, `pose/tracker.js`,
 `pose/initialization.js`, `import-export/slp-import.js`,
@@ -13204,6 +13257,8 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
   (`readVisibilityMetadata`), `./plane-metadata.js` (`readPlaneMetadata`,
   `resetPlaneState`), `./import-track-resolve.js`
   (`remapGlobalTrackToSession`, `nulledNodesFromOcclusion`),
+  `./slp-provenance.js` (`fileSessionProvenance`, `fileSessionNames` — each
+  session keeps its part of the file's provenance),
   `../loading/video-file-pick.js` (`preferNonCalibrationVideos`),
   `../ui/loading-progress-modal.js` (`getLoadingProgressModal`),
   `../loading/cold-read-guard.js`

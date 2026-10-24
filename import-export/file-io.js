@@ -2923,6 +2923,9 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         videos: videos,
         sessions: sessions,
         identities: identities,
+        // The file's whole provenance dict (slp-provenance.js picks each
+        // session's part).
+        provenance: labels.provenance || null,
     };
 }
 
