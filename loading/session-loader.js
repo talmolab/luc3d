@@ -58,6 +58,7 @@ import {
     ensureLazyFrameData,
 } from '../pose/triangulation.js';
 import { SioLazyLoader } from './sio-lazy-loader.js';
+import { fileSessionNames, fileSessionProvenance } from '../import-export/slp-provenance.js';
 import { unionTrackNames, remapTrackIdx } from './track-union.js';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
@@ -2131,6 +2132,10 @@ export async function handleLoadSessionFolderSingleSlp() {
         var tracks = slpData.tracks.length > 0 ? slpData.tracks : ['track_0'];
         var folderName = allFiles[0].webkitRelativePath ? allFiles[0].webkitRelativePath.split('/')[0] : 'Session';
         var session = new Session(cameras, skeleton, tracks, folderName);
+        // The file's provenance (e.g. campy-live-export's records), written back
+        // on save. This loader reads the file's first session only.
+        session.fileProvenance = fileSessionProvenance(slpData.provenance,
+            fileSessionNames(slpData.sessions), 0);
 
         // The session's own `metadata.lucid`: restoreGroupingAndUnlink (below)
         // reads its grouping and identity keys, these two readers the rest —
@@ -2615,6 +2620,9 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         lucid = (lucid && lucid.lucid) || {};
         var sessName = lucid.sessionName || slpFile.name.replace(/\.slp$/i, '');
         var session = new Session(cameras, skeleton, tracks, sessName);
+        // The file's provenance (e.g. campy-live-export's records), written back on save.
+        session.fileProvenance = fileSessionProvenance(labels.provenance,
+            fileSessionNames(labels.rawSessionsJson), 0);
         if (lucid.identities && lucid.identities.length) {
             session.identities = lucid.identities.map(function (id, i) {
                 return new Identity(i, id.name || ('id_' + i), id.color || null);
