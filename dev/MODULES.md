@@ -10267,6 +10267,10 @@ via the options bag.
   `showInitialView`, `setMissingVideoCameras`, `highlightCamera`,
   `resize`, `resetCamera`, `lookAtOrigin`, `fitToScene`, `originPivot`,
   `originUp`, `setVisible(visible)` / `isVisible()`, `dispose`.
+- **`skeleton` may be null** (`newProject`, removing the last session) and the
+  loaders seek — which draws — before they set the new one; `updateSkeleton`
+  and `setEnvironment` draw a null skeleton as one with no edges rather than
+  throw (`tests/e2e/new-project-then-load.mjs`).
 - **`setVisible(false)` stops ALL processing** (the `\` toggle's other half —
   see `ui/panel-visibility.js`); a collapsed container is still a WebGL render
   target, so an unpaused `_animate()` would render ~60x/second for nothing.
