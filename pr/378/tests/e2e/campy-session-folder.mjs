@@ -302,11 +302,7 @@ try {
     console.log('\n7. File → Load SLP, then Select Session Folder');
     {
         const dir = writeRecording('rec7', videos);
-        // A fresh page, not resetApp: File → New Project followed by Load SLP
-        // fails on its own (the 3D viewport's skeleton is null when the load
-        // first seeks), with or without session.json.
-        await page.goto(`http://localhost:${PORT}/index.html`);
-        await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 20000 });
+        await resetApp();
         await page.evaluate((bytes) => {
             window.__slpLoad = (async () => {
                 const si = await import('/import-export/slp-import.js');
@@ -357,8 +353,7 @@ try {
     console.log('\n9. Reopening a project lazily, then Select Session Folder');
     {
         const dir = writeRecording('rec9', videos, { editSession: s => { s.status = 'recording'; } });
-        await page.goto(`http://localhost:${PORT}/index.html`);
-        await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 20000 });
+        await resetApp();
         await page.evaluate((bytes) => {
             window.__lazyLoad = (async () => {
                 const loader = await import('/loading/session-loader.js');
