@@ -8,6 +8,16 @@
   "recording": "/data/campy-test/2026-10-23_04-07-04",
   "session": "session.json",
   "models": [],
+  "options": {
+    "--wait-sec": {
+      "value": Infinity,
+      "source": "default"
+    },
+    "--fps": {
+      "value": 20.0,
+      "source": "command line"
+    }
+  },
   "calibration": {
     "path": "/data/campy-test/calibration.toml",
     "sha256": "f32d33b83fafc88c003c923e374a954b889f1add0c8a9a4afc071685b263b259",

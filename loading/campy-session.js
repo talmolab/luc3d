@@ -85,9 +85,38 @@ export function findCampyManifestFiles(files) {
     return { session: best, live: live, root: root };
 }
 
-function parseJson(text) {
-    try { return JSON.parse(text); } catch (e) { return null; }
+/**
+ * JSON.parse, and failing that the same text with Python's non-standard
+ * `NaN`, `Infinity` and `-Infinity` (outside strings) read as null. campy
+ * writes its manifests with Python's json module, which emits those for a
+ * float option left at inf (campy-live's `--wait-sec` default), and strict
+ * JSON.parse rejects the whole file. Null when it still is not JSON.
+ */
+export function parseCampyJson(text) {
+    try { return JSON.parse(text); } catch (e) { /* try the Python tokens */ }
+    try { return JSON.parse(pythonJsonTokensToNull(String(text))); } catch (e) { return null; }
 }
+
+function pythonJsonTokensToNull(text) {
+    var out = '', i = 0, n = text.length;
+    while (i < n) {
+        var ch = text[i];
+        if (ch === '"') {                       // copy a string as it is
+            var j = i + 1;
+            while (j < n && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
+            out += text.substring(i, j + 1);
+            i = j + 1;
+            continue;
+        }
+        var m = /^(-?Infinity|NaN)/.exec(text.substring(i, i + 9));
+        if (m) { out += 'null'; i += m[1].length; continue; }
+        out += ch;
+        i++;
+    }
+    return out;
+}
+
+var parseJson = parseCampyJson;
 
 function str(v) { return v === undefined || v === null ? '' : String(v); }
 
@@ -215,10 +244,14 @@ export async function readCampyRecording(files, readText) {
     if (!record) return null;
     record.root = found.root;
     for (var i = 0; i < found.live.length; i++) {
+        var live = null;
         try {
-            var live = parseCampyLiveSession(await read(found.live[i]), found.live[i].name);
-            if (live) record.live.push(live);
-        } catch (e) { /* an unreadable campy-live manifest is skipped */ }
+            live = parseCampyLiveSession(await read(found.live[i]), found.live[i].name);
+        } catch (e) { live = null; }
+        if (live) record.live.push(live);
+        // Skipped, but said: without it the calibration check silently does
+        // not run.
+        else if (typeof console !== 'undefined') console.warn('[campy] ' + found.live[i].name + ' is not a readable campy-live-session/1 manifest; skipped');
     }
     return record;
 }
