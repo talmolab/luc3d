@@ -9,62 +9,62 @@ import {
     InstanceGroup, Session,
     asPoints3d, points3dNodeCount, someValidPoint3d, lazyPlaceholderXY, pooledPoints3d,
     markPoints3dFromFile,
-} from '../pose/pose-data.js?v=83ec6bde93ae';
+} from '../pose/pose-data.js?v=4a756749fd45';
 import {
     getInstanceGroupsForFrame,
-} from '../pose/triangulation.js?v=83ec6bde93ae';
+} from '../pose/triangulation.js?v=4a756749fd45';
 import {
     parseSlpH5, parseSlpViaSleapIO, instanceMatchesPoints, parsePoints3dH5, pickFiles,
-} from './file-io.js?v=83ec6bde93ae';
+} from './file-io.js?v=4a756749fd45';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames,
-} from './slp-merge.js?v=83ec6bde93ae';
-import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=83ec6bde93ae';
+} from './slp-merge.js?v=4a756749fd45';
+import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=4a756749fd45';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController,
-} from '../ui/app-state.js?v=83ec6bde93ae';
+} from '../ui/app-state.js?v=4a756749fd45';
 import {
     autoAssignVideosToCameras, forceVideoSelection, forceVideoSelectionWithFolder,
     showParentDirMatchSummary, createViewForVideoFile, updateTotalFrames,
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
     adoptCampyRecording,
-} from '../loading/session-loader.js?v=83ec6bde93ae';
-import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=83ec6bde93ae';
+} from '../loading/session-loader.js?v=4a756749fd45';
+import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=4a756749fd45';
 import {
     campyVideoFile, orderByCampyCameras, campyRecordingWarnings,
-} from '../loading/campy-session.js?v=83ec6bde93ae';
-import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=83ec6bde93ae';
-import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=83ec6bde93ae';
-import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=83ec6bde93ae';
-import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js?v=83ec6bde93ae';
+} from '../loading/campy-session.js?v=4a756749fd45';
+import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=4a756749fd45';
+import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=4a756749fd45';
+import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=4a756749fd45';
+import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js?v=4a756749fd45';
 import {
     showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
-} from './save-load.js?v=83ec6bde93ae';
+} from './save-load.js?v=4a756749fd45';
 
 // Circular import — these are still defined in app.js for now. They are only
 // invoked inside function bodies, never at module-init time, so live-binding
 // lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=83ec6bde93ae';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=83ec6bde93ae';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=83ec6bde93ae';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=4a756749fd45';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=4a756749fd45';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=4a756749fd45';
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=83ec6bde93ae';
+import { setup3DViewport } from '../pose/initialization.js?v=4a756749fd45';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
-import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=83ec6bde93ae';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=83ec6bde93ae';
+import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=4a756749fd45';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=4a756749fd45';
 // Block 1 (Prompt 4): keep timeline._uploadedCameras in sync after SLP
 // load so the gutter filters to the cameras that actually have video
 // assignments rather than every calibration camera.
-import { recomputeUploadedCameras } from '../loading/session-loader.js?v=83ec6bde93ae';
+import { recomputeUploadedCameras } from '../loading/session-loader.js?v=4a756749fd45';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=83ec6bde93ae';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=83ec6bde93ae';
-import { readVisibilityMetadata } from './visibility-metadata.js?v=83ec6bde93ae';
-import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=83ec6bde93ae';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=4a756749fd45';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=4a756749fd45';
+import { readVisibilityMetadata } from './visibility-metadata.js?v=4a756749fd45';
+import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=4a756749fd45';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -273,6 +273,17 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
 }
 
 /**
+ * typed Identity → its index in the file's `/identity` catalog (which is then
+ * `session.identities`' order), or null when there is no catalog to use.
+ */
+function fileIdentityIndex(fileIdentities) {
+    if (!fileIdentities || !fileIdentities.length) return null;
+    var m = new Map();
+    for (var i = 0; i < fileIdentities.length; i++) m.set(fileIdentities[i], i);
+    return m;
+}
+
+/**
  * Typed analog of `reconstructInstanceGroupsFromDicts` (PR 5.2). Rebuilds a
  * session's InstanceGroups from sleap-io.js's TYPED `RecordingSession` instead of
  * the raw `frame_group_dicts`. Required because the canonical `sessions_json`
@@ -292,12 +303,17 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
  *   per-session), falling back to the matching raw dict's `identity_idx` for legacy
  *   files (both are per-session; the canonical file-level `ig.identity`/`identity_idx`
  *   are NOT used — they resolve against the cross-session concat and mis-scope).
+ *   Exception: `opts.fileIdentities` (the file's typed `/identity` catalog), passed
+ *   only when `session.identities` was built from that same catalog — a file
+ *   written by another tool (campy-live-export), never a LUC3D project — lets a
+ *   group with neither take its canonical `identity_idx` (`typedIG.identity`), as
+ *   `reconstructInstanceGroupsFromSessionLazy` does.
  *
  * @param {Session} session - LUCID session whose frameGroups hold pass-1 raw instances
  * @param {Object} typedSession - sleap-io.js RecordingSession (with frameGroups Map)
  * @param {Object|null} rawSession - the verbatim sessions_json dict (legacy identity fallback)
  * @param {string[]} nodeNames - skeleton node names (point-array length)
- * @param {{onProgress?:(msg:string)=>void, batch?:number}} [opts]
+ * @param {{onProgress?:(msg:string)=>void, batch?:number, fileIdentities?:Array}} [opts]
  * @returns {Promise<{restoredGroups:number, restoredWith3d:number}>}
  */
 export async function reconstructInstanceGroupsFromSession(session, typedSession, rawSession, nodeNames, opts) {
@@ -306,6 +322,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
     var BATCH = opts.batch || 20000;
     var onProgress = opts.onProgress || function () {};
     var restoredGroups = 0, restoredWith3d = 0;
+    var fileIdentityIdx = fileIdentityIndex(opts.fileIdentities);
     // For deriving type/trackIdx/score from resolved typed instances when slim
     // metadata (#134) omits them.
     var _SIO = (typeof window !== 'undefined' && window.SleapIO) ? window.SleapIO : null;
@@ -357,6 +374,9 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
             } else {
                 var rawIG = rawFg && rawFg.instance_groups && rawFg.instance_groups[igi];
                 if (rawIG && rawIG.identity_idx != null) identityId = rawIG.identity_idx;
+                else if (fileIdentityIdx && typedIG.identity && fileIdentityIdx.has(typedIG.identity)) {
+                    identityId = fileIdentityIdx.get(typedIG.identity);
+                }
             }
             if (identityId >= 0 && identityId >= session.identities.length) {
                 console.warn('[load-slp] identity_idx ' + identityId + ' is out of bounds (only ' + session.identities.length + ' identities loaded) — dropping identity assignment');
@@ -498,11 +518,19 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
  *    resolves the correct store row — the same tag `ensureLazyFrameData` sets on
  *    the Track-All path.
  *
+ * A group's identity is `metadata.lucid.identityId`, as on the eager path.
+ * Pass `opts.fileIdentities` (the file's typed `/identity` catalog,
+ * `labels.identities`) ONLY when `session.identities` was built from that same
+ * catalog — a file written by another tool (campy-live-export) rather than by
+ * LUC3D: a group without `identityId` then takes its canonical `identity_idx`
+ * (`typedIG.identity`) instead. Never pass it for a LUC3D project, whose
+ * per-session identity list does not match the file-level catalog's order.
+ *
  * @param {Session} session - target session (identities/tracks already set)
  * @param {Object} typedSession - sleap-io.js RecordingSession (mutated: frameGroups drained)
  * @param {SioLazyLoader} loader - the open project loader (for `_rawInstIndex` refs)
  * @param {string[]} nodeNames - skeleton node names
- * @param {{onProgress?:(msg:string)=>void, batch?:number}} [opts]
+ * @param {{onProgress?:(msg:string)=>void, batch?:number, yieldMs?:number, fileIdentities?:Array}} [opts]
  * @returns {Promise<{restoredGroups:number, restoredWith3d:number}>}
  */
 export async function reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, opts) {
@@ -513,6 +541,7 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
     var _SIO = (typeof window !== 'undefined' && window.SleapIO) ? window.SleapIO : null;
     var PredI = _SIO && _SIO.PredictedInstance;
     var restoredGroups = 0, restoredWith3d = 0;
+    var fileIdentityIdx = fileIdentityIndex(opts.fileIdentities);
     // Time-based yielding: materializing 108k frames + building ~1.25M member
     // Instances is ~tens of seconds of work; yield every ~40ms so the tab stays
     // responsive (a frame-count batch of 20k blocks the main thread for seconds).
@@ -539,6 +568,9 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
 
             var identityId = -1;
             if (igLucid.identityId != null) identityId = igLucid.identityId;
+            else if (fileIdentityIdx && typedIG.identity && fileIdentityIdx.has(typedIG.identity)) {
+                identityId = fileIdentityIdx.get(typedIG.identity);
+            }
             if (identityId >= 0 && identityId >= session.identities.length) identityId = -1;
 
             var group = new InstanceGroup(Date.now() + Math.random() * 1000 + igi, identityId);
@@ -622,6 +654,57 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
         }
     }
     return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d };
+}
+
+/**
+ * Fill `session.frameIdentityMap` from the instance groups' identities, for a
+ * file that stores identities ONLY per group (campy-live-export writes
+ * `identity_idx` + `metadata.lucid.identityId` on each group, and no LUC3D
+ * session-level `frameIdentityMap`). Everything that asks "which animal is
+ * this detection" — the Identity timeline, colour by identity, Propagate —
+ * reads that map, so without it the reopened groups know their animal but the
+ * timeline shows none.
+ *
+ * Writes one entry per tracked group member: (frame, camera, member's track)
+ * → the group's identity — the same entries Track All writes. Never
+ * overwrites an entry already there, and skips trackless members (the map
+ * cannot key a null track; the group keeps the identity). Reads only
+ * `group.identityId` and each member's `trackIdx`, so lazy placeholder members
+ * work unchanged and no 2D is hydrated. Yields every `opts.yieldMs` (40 ms).
+ *
+ * Call only when the file carried no LUC3D identity metadata (see the callers),
+ * so a LUC3D project reopens exactly as saved.
+ *
+ * @param {Session} session
+ * @param {{onProgress?:(msg:string)=>void, yieldMs?:number}} [opts]
+ * @returns {Promise<number>} entries written
+ */
+export async function stampFrameIdentitiesFromGroups(session, opts) {
+    opts = opts || {};
+    var onProgress = opts.onProgress || function () {};
+    var _now = function () { return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now(); };
+    var yieldMs = opts.yieldMs != null ? opts.yieldMs : 40;
+    var ty = _now();
+    var written = 0, done = 0, total = session.instanceGroups.size;
+    for (var [frameIdx, groups] of session.instanceGroups) {
+        done++;
+        for (var gi = 0; gi < groups.length; gi++) {
+            var g = groups[gi];
+            if (g.identityId == null || g.identityId < 0) continue;
+            for (var [camName, inst] of g.instances) {
+                if (inst.trackIdx == null || inst.trackIdx < 0) continue;
+                if (session.hasFrameIdentity(frameIdx, camName, inst.trackIdx)) continue;
+                session.setFrameIdentity(frameIdx, camName, inst.trackIdx, g.identityId);
+                written++;
+            }
+        }
+        if (_now() - ty > yieldMs) {
+            onProgress('Restoring identities (' + done.toLocaleString('en-US') + '/' + total.toLocaleString('en-US') + ')...');
+            await new Promise(function (r) { setTimeout(r, 0); });
+            ty = _now();
+        }
+    }
+    return written;
 }
 
 /**
@@ -709,15 +792,30 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
 
         var _recon;
         if (hasTypedSession) {
+            // Identities from the file's catalog (no LUC3D per-session list):
+            // the groups' `identity_idx` indexes that same catalog.
+            var identitiesFromFile = !(perSessionIdentities && perSessionIdentities.length > 0)
+                && session.identities.length > 0;
             _recon = await reconstructInstanceGroupsFromSession(
-                session, sessData2._typedSession, sessData2, nodeNames,
-                { onProgress: onProgress });
+                session, sessData2._typedSession, sessData2, nodeNames, {
+                    onProgress: onProgress,
+                    fileIdentities: identitiesFromFile ? (sessData2._typedIdentities || null) : null,
+                });
         } else {
             _recon = await reconstructInstanceGroupsFromDicts(
                 session, fgDicts, camKeyToName, nodeNames,
                 { onProgress: onProgress });
         }
         console.log('[load-slp] Rebuilt', _recon.restoredGroups, 'instance groups from session data,', _recon.restoredWith3d, 'with 3D points');
+
+        // A file with the identities only on its groups (no LUC3D identity
+        // list, no frameIdentityMap — campy-live-export): derive the
+        // per-detection map the Identity timeline reads.
+        if (!(perSessionIdentities && perSessionIdentities.length > 0) && !lucidMeta.frameIdentityMap
+            && !legacyGlobalIdentities && session.identities.length > 0) {
+            var _stamped = await stampFrameIdentitiesFromGroups(session, { onProgress: onProgress });
+            if (_stamped) console.log('[load-slp] derived', _stamped, 'per-frame identities from instance groups');
+        }
 
         if (legacyGlobalIdentities && legacyGlobalIdentities.length) {
             var migratedSlp = session.migrateGlobalIdentitiesToPerFrame(legacyGlobalIdentities);
@@ -1178,7 +1276,7 @@ export async function handleLoadSlpFile(slpFile) {
             // --- Embedded videos: use frame-worker for on-demand extraction ---
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=83ec6bde93ae', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=4a756749fd45', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
@@ -1821,7 +1919,7 @@ export async function handleAddSlp() {
         if (hasEmbedded) {
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=83ec6bde93ae', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=4a756749fd45', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;

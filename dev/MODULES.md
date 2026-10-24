@@ -11342,6 +11342,13 @@ bypasses the prompt for tests. Covered by `tests/test-lazy-reopen.js`. Before th
 first grouped frame it calls `setReprojErrorVisible(true)` when there are any
 `instanceGroups`, as every other 3D-populating path does, or
 `#reprojErrorSection` stays hidden (`tests/e2e/reopen-reprojection-panel-autopopulate.mjs`).
+Identities come from `metadata.lucid.identities`, else (like the eager
+`restoreGroupingAndUnlink`) the file's `/identity` catalog (`labels.identities`).
+In the catalog case — a file from another tool, e.g. campy-live-export — the
+reconstruct also reads each group's `identity_idx` (`fileIdentities`) and, unless
+the file has a `frameIdentityMap`/`trackIdentityMap`, `stampFrameIdentitiesFromGroups`
+derives the per-detection map the Identity timeline reads. LUC3D projects take
+neither step (`tests/e2e/lazy-reopen-group-identities.mjs`).
 
 **`handleLoadMultiSession` ends with a calibration cross-check.** The tail calls
 `noteSessionCalibrationDivergence(state.sessions)` LAST, once every session is
@@ -13165,7 +13172,10 @@ first track.
   metadata from `ig.metadata.lucid.instanceMeta`, 3D from `ig.instance3d.points`,
   the solver from `ig.metadata.lucid.triangulationMethod` (absent = `'dlt'`), and
   per-session identity from `ig.metadata.lucid.identityId` (else the raw dict's
-  `identity_idx` for legacy files). Reads both LUCID's legacy and the canonical
+  `identity_idx` for legacy files; else, with `opts.fileIdentities` — the typed
+  `/identity` catalog carried on each `slpData.sessions[]` entry as
+  `_typedIdentities`, passed by `restoreGroupingAndUnlink` only when the session's
+  identities came from that catalog — the group's canonical `identity_idx`). Reads both LUCID's legacy and the canonical
   `sessions_json`. Same pass-1 dedup + trackless/identity-less handling as the
   dict version. Returns `{ restoredGroups, restoredWith3d }`.
   **Per-node model scores** (shown by the node tooltip): from the typed
@@ -13173,7 +13183,20 @@ first track.
   group member REPLACES (`adoptPointScoresFrom` — the group dict has none).
 - `reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, opts)`
   — async; the lazy-reopen analog (see "Lazy reopen's lightweight members"
-  below). Imported by `loading/session-loader.js`.
+  below). Imported by `loading/session-loader.js`. Identity per group from
+  `metadata.lucid.identityId`; with `opts.fileIdentities` (the typed `/identity`
+  catalog, passed only when `session.identities` was built from it) a group
+  without one takes its canonical `identity_idx` (`typedIG.identity`).
+- `stampFrameIdentitiesFromGroups(session, opts)` — async; fills
+  `frameIdentityMap` with (frame, camera, member track) → the group's identity
+  for every tracked member, never overwriting an entry and skipping trackless
+  members. For files whose identities live only on the groups (campy-live-export:
+  file catalog + per-group `identity_idx`/`identityId`, no LUC3D
+  `identities`/`frameIdentityMap`/`trackIdentityMap`); without it the Identity
+  timeline and colour by identity show nothing. Called by `restoreGroupingAndUnlink`
+  and `handleLoadProjectSlpLazy` only in that case, so LUC3D projects reopen as
+  saved. Reads `identityId` + `trackIdx` only (no 2D hydration); typed-array map,
+  ~44 B per entry. Test: `tests/e2e/lazy-reopen-group-identities.mjs`.
 - `parseSlpForImport(file, onProgress)` (private) — dispatches `.slp` →
   `parseSlpViaSleapIO`, else / on error → `parseSlpH5`.
 
