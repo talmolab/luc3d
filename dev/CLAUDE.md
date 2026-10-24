@@ -82,7 +82,9 @@ Per-session state, written to each session's dict by exactly two modules:
 - `import-export/visibility-metadata.js` (`VISIBILITY_METADATA_KEYS`): `videoBrightness`/`videoContrast`/`videoRotation`, `hiddenCameras`/`hiddenTracks`/`hiddenIdentities`, `idSwitchReview`, `numAnimals` (a count or `"auto"`; absent until asked, so a reopened session asks again; changing it marks the project dirty).
 - `import-export/plane-metadata.js` (`PLANE_METADATA_KEYS`, mapping in DOM-free `pose/plane-serialization.js`). `planeNodes`/`planes`/`meshObjects`/`planeOrigin` are project-scoped: the same in every session, read from the first one ingested. `planePlacements` is per session and must not leak.
 
-Writers: `file-io.js`, `slp-streaming-write.js`, `save-load.js`. Readers: `handleLoadSlpFile`, `handleLoadProjectSlpLazy`, `handleLoadSessionFolderSingleSlp` and the `save-load.js` reader. A new setting changes only its module. A new loader that builds a Session by hand must call BOTH readers, or settings and planes silently reset to defaults. The per-camera and multi-session folder loaders are NOT readers: they ignore a root `.slp` and read camera-folder `.slp` files as 2D only.
+Writers: `file-io.js`, `slp-streaming-write.js`, `save-load.js`. Readers: `handleLoadSlpFile`, `handleLoadProjectSlpLazy`, `handleLoadSessionFolderSingleSlp` and the `save-load.js` reader. A new setting changes only its module. A new loader that builds a Session by hand must call BOTH readers, or settings and planes silently reset to defaults.
+
+The file-level `provenance` (outside `metadata.lucid`) is kept too, via `import-export/slp-provenance.js`, because campy-live-export stores the recording's session.json there. The three `.slp` readers set `session.fileProvenance`, and project saves write `buildSaveProvenance(sessions)`, never a fresh `{source, exported_at}`. Exports keep the fresh pair. Tests: `test-slp-provenance.mjs`, e2e `slp-provenance-roundtrip`. The per-camera and multi-session folder loaders are NOT readers: they ignore a root `.slp` and read camera-folder `.slp` files as 2D only.
 
 Rules:
 - **Never write defaults.** `tests/e2e/save-golden-digest.mjs` must not move.
