@@ -31,8 +31,12 @@ import {
     showParentDirMatchSummary, createViewForVideoFile, updateTotalFrames,
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
+    adoptCampyRecording,
 } from '../loading/session-loader.js';
 import { preferNonCalibrationVideos } from '../loading/video-file-pick.js';
+import {
+    campyVideoFile, orderByCampyCameras, campyRecordingWarnings,
+} from '../loading/campy-session.js';
 import { readBlobArrayBuffer } from '../loading/cold-read-guard.js';
 import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js';
 import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js';
@@ -1453,6 +1457,28 @@ export async function handleLoadSlpFile(slpFile) {
                     vidFiles = _slpPref.kept;
                 }
 
+                // A campy recording folder (session.json,
+                // `loading/campy-session.js`): its frame rate and details go
+                // on the session; a camera whose campy video was picked loads
+                // only that video; the views follow campy's camera order.
+                var slpCampy = await adoptCampyRecording(session, videoFiles,
+                    { calibrationNames: cameraNames });
+                if (slpCampy) {
+                    var campyOwnByCam = new Map();
+                    slpCampy.cameras.forEach(function (c) {
+                        var own = campyVideoFile(slpCampy, c, vidFiles);
+                        var ownCam = own && slpMatchCam(own);
+                        if (ownCam) campyOwnByCam.set(ownCam, own);
+                    });
+                    vidFiles = vidFiles.filter(function (f) {
+                        var fc = slpMatchCam(f);
+                        return !fc || !campyOwnByCam.has(fc) || campyOwnByCam.get(fc) === f;
+                    });
+                    vidFiles = orderByCampyCameras(slpCampy, vidFiles, function (f) {
+                        return { name: slpMatchCam(f) || '' };
+                    });
+                }
+
                 var slpModal = getLoadingProgressModal({ title: 'Importing project' });
                 slpModal.show();
 
@@ -1687,7 +1713,15 @@ export async function handleLoadSlpFile(slpFile) {
         var statusParts = [state.sessions.length + ' session(s)', skeleton.nodes.length + ' nodes'];
         if (state.session) statusParts.push(state.session.numFrames.toLocaleString('en-US') + ' labeled frames');
         if (state.views.length > 0) statusParts.push(state.views.length + ' views');
-        setStatus('SLP loaded (' + statusParts.join(', ') + ')', 'success');
+        // A campy recording's warnings (status, cameras), per session.
+        var campyWarn = [];
+        state.sessions.forEach(function (cs) {
+            campyRecordingWarnings(cs.campyRecording).forEach(function (w) {
+                campyWarn.push(state.sessions.length > 1 ? cs.name + ': ' + w : w);
+            });
+        });
+        setStatus('SLP loaded (' + statusParts.join(', ') + ')'
+            + (campyWarn.length ? ' — ' + campyWarn.join('; ') : ''), campyWarn.length ? 'warning' : 'success');
 
         // One skeleton per project: a multi-session .slp otherwise carries a
         // per-session skeleton each. Prompt for a single unifying skeleton file,
