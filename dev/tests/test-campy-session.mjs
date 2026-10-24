@@ -31,7 +31,7 @@ import {
     findCampyManifestFiles, parseCampySession, parseCampyLiveSession, readCampyRecording,
     campyCameraFor, orderByCampyCameras, campyVideoFile, preferCampyVideo,
     compareCampyCameraNames, sha256Hex, compareCalibrationSha256, frameRatesDisagree,
-    describeCampyStatus, campyRecordingWarnings, withCampyWarnings, campyUnset,
+    describeCampyStatus, campyRecordingWarnings, withCampyWarnings, campyUnset, parseCampyJson,
 } from '../loading/campy-session.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -124,6 +124,21 @@ console.log('\n3. Not campy-session/1 → null');
     check(live.calibration.cameraNames.join(',') === 'Camera0,Camera1', 'and its camera names');
     const twoD = parseCampyLiveSession(JSON.stringify({ schema: 'campy-live-session/1', calibration: null }));
     check(twoD && twoD.calibration === null, 'a 2D-only campy-live run has no calibration');
+
+    // Python's json module writes inf / nan as bare Infinity / NaN, which
+    // strict JSON.parse rejects. Real campy-live manifests have one: the
+    // `--wait-sec` option's default is inf. The fixture carries it too.
+    check(/"value": Infinity/.test(liveText), 'the fixture has campy-live\'s Infinity, like a real one');
+    check(live !== null, 'and still parses');
+    const py = parseCampyJson('{"a": Infinity, "b": -Infinity, "c": NaN, "d": [1, NaN], '
+        + '"s": "Infinity and NaN stay", "e": "a \\"quoted\\" NaN", "f": 1.5}');
+    check(py && py.a === null && py.b === null && py.c === null && py.d[1] === null,
+        'Infinity, -Infinity and NaN read as null');
+    check(py.s === 'Infinity and NaN stay' && py.e === 'a "quoted" NaN' && py.f === 1.5,
+        'inside strings they are left alone (escaped quotes too)');
+    check(parseCampyJson('{"a": Infinit}') === null && parseCampyJson('nonsense') === null,
+        'anything else that is not JSON is still null');
+    check(JSON.stringify(parseCampyJson('{"x": [1, 2]}')) === '{"x":[1,2]}', 'plain JSON unchanged');
 }
 
 console.log('\n4. Camera order and each camera\'s video');
@@ -163,7 +178,7 @@ console.log('\n5. The calibration and the cameras');
     const r = await readCampyRecording(files);
     check(r && r.live.length === 1 && r.root === 'rec', 'readCampyRecording reads both manifests');
     const sha = await sha256Hex(calibBytes);
-    check(sha === JSON.parse(liveText).calibration.sha256, 'sha256Hex of the fixture calibration is the recorded one');
+    check(sha === parseCampyJson(liveText).calibration.sha256, 'sha256Hex of the fixture calibration is the recorded one');
     const same = compareCalibrationSha256(r, sha, 'calibration.toml');
     check(same && same.matches === true, 'the same calibration matches');
     const changed = Buffer.from(calibBytes); changed[changed.length - 2] ^= 1;

@@ -10980,6 +10980,13 @@ behaves exactly as before.
   animals as it first matches them, so they must never name identities.
 - `parseCampyLiveSession(text, fileName)` → `{file, calibration: {path, sha256,
   cameraNames}|null}` (null calibration = a 2D-only run).
+- `parseCampyJson(text)` — both parsers read through it: `JSON.parse`, and on
+  failure the text again with Python's bare `NaN` / `Infinity` / `-Infinity`
+  (outside strings) as null. campy writes its manifests with Python's json
+  module, and real campy-live manifests hold `Infinity` (`--wait-sec`'s
+  default), which strict `JSON.parse` rejects; skipping the file silently
+  turned the calibration check off. A manifest that still cannot be read is
+  skipped with a console warning.
 - `readCampyRecording(files, readText?)` — both, as one record (`.root`, `.live`).
 - `campyCameraFor`, `orderByCampyCameras(record, items, keyOf)` (campy order,
   others after in their own order, stable), `campyVideoFile` (matched by full

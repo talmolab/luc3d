@@ -56,7 +56,9 @@ let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
 const sessionJson = JSON.parse(fs.readFileSync(path.join(FIX, 'session.json'), 'utf8'));
-const liveJson = JSON.parse(fs.readFileSync(path.join(FIX, 'campy-live-session.json'), 'utf8'));
+// Kept as text: like a real one, it holds Python's bare `Infinity`, which
+// JSON.parse (and JSON.stringify) would not keep.
+const liveText = fs.readFileSync(path.join(FIX, 'campy-live-session.json'), 'utf8');
 // campy's default video name: every camera's video is 0.mp4.
 sessionJson.cameras.forEach(c => { c.video = c.name + '/0.mp4'; });
 
@@ -79,10 +81,10 @@ function writeRecording(name, videos, opts = {}) {
         const s = structuredClone(sessionJson);
         if (opts.editSession) opts.editSession(s);
         fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify(s, null, 2));
-        const l = structuredClone(liveJson);
         // campy-live tracked with the reordered calibration (byte for byte).
-        l.calibration.sha256 = sha(CALIB_REORDERED);
-        fs.writeFileSync(path.join(dir, 'campy-live-session.json'), JSON.stringify(l, null, 2));
+        const l = liveText.replace(/"sha256": "[0-9a-f]{64}"/, '"sha256": "' + sha(CALIB_REORDERED) + '"');
+        if (l === liveText || !/Infinity/.test(l)) throw new Error('fixture campy-live-session.json changed shape');
+        fs.writeFileSync(path.join(dir, 'campy-live-session.json'), l);
     }
     for (const cam of ['Camera0', 'Camera1']) {
         fs.mkdirSync(path.join(dir, cam), { recursive: true });
