@@ -22,84 +22,84 @@ import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, VIEW_NAMES, buildRememberedSkeleton, setProjectSkeleton,
     isViewDocked,
-} from '../ui/app-state.js?v=b534ddb5c45e';
+} from '../ui/app-state.js?v=d8286343f44a';
 
 import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
-} from '../pose/pose-data.js?v=b534ddb5c45e';
+} from '../pose/pose-data.js?v=d8286343f44a';
 
-import { OnDemandVideoDecoder, VideoController } from './video.js?v=b534ddb5c45e';
-import { videoLoadFailureText } from './video-codec-diagnosis.js?v=b534ddb5c45e';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=b534ddb5c45e';
-import { confirmFolderPick } from '../ui/folder-confirm-tip.js?v=b534ddb5c45e';
+import { OnDemandVideoDecoder, VideoController } from './video.js?v=d8286343f44a';
+import { videoLoadFailureText } from './video-codec-diagnosis.js?v=d8286343f44a';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=d8286343f44a';
+import { confirmFolderPick } from '../ui/folder-confirm-tip.js?v=d8286343f44a';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
     parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO,
     loadCalibrationFile,
-} from '../import-export/file-io.js?v=b534ddb5c45e';
+} from '../import-export/file-io.js?v=d8286343f44a';
 
-import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=b534ddb5c45e';
+import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=d8286343f44a';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
 // the browser test runner (session-loader itself pulls app.js) — same reason
 // and same shape as `resolveImportTrackIdx` above.
-import { chooseCameraSlp } from './percam-slp-choice.js?v=b534ddb5c45e';
+import { chooseCameraSlp } from './percam-slp-choice.js?v=d8286343f44a';
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy, stampFrameIdentitiesFromGroups } from '../import-export/slp-import.js?v=b534ddb5c45e';
-import { readFrameIdentityMetadata } from '../import-export/frame-identity-metadata.js?v=b534ddb5c45e';
-import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=b534ddb5c45e';
+import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy, stampFrameIdentitiesFromGroups } from '../import-export/slp-import.js?v=d8286343f44a';
+import { readFrameIdentityMetadata } from '../import-export/frame-identity-metadata.js?v=d8286343f44a';
+import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=d8286343f44a';
 import {
     isCalibrationImagesVideo, preferNonCalibrationVideos, matchVideoToCamera,
-} from './video-file-pick.js?v=b534ddb5c45e';
+} from './video-file-pick.js?v=d8286343f44a';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,
     ensureLazyFrameData,
-} from '../pose/triangulation.js?v=b534ddb5c45e';
-import { SioLazyLoader } from './sio-lazy-loader.js?v=b534ddb5c45e';
-import { fileSessionNames, fileSessionProvenance } from '../import-export/slp-provenance.js?v=b534ddb5c45e';
-import { unionTrackNames, remapTrackIdx } from './track-union.js?v=b534ddb5c45e';
+} from '../pose/triangulation.js?v=d8286343f44a';
+import { SioLazyLoader } from './sio-lazy-loader.js?v=d8286343f44a';
+import { fileSessionNames, fileSessionProvenance } from '../import-export/slp-provenance.js?v=d8286343f44a';
+import { unionTrackNames, remapTrackIdx } from './track-union.js?v=d8286343f44a';
 import {
     readCampyRecording, campyCameraFor, orderByCampyCameras, preferCampyVideo, campyVideoFile,
     compareCampyCameraNames, compareCalibrationSha256, sha256Hex, frameRatesDisagree,
     withCampyWarnings, findCampyManifestFiles,
-} from './campy-session.js?v=b534ddb5c45e';
-import { readBlobArrayBuffer } from './cold-read-guard.js?v=b534ddb5c45e';
+} from './campy-session.js?v=d8286343f44a';
+import { readBlobArrayBuffer } from './cold-read-guard.js?v=d8286343f44a';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
     setStatus, showLoading, hideLoading, ensureNo3dImportBlockingLoad,
-} from '../import-export/save-load.js?v=b534ddb5c45e';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=b534ddb5c45e';
+} from '../import-export/save-load.js?v=d8286343f44a';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=d8286343f44a';
 
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=b534ddb5c45e';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=b534ddb5c45e';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=b534ddb5c45e';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=b534ddb5c45e';
-import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=b534ddb5c45e';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=d8286343f44a';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=d8286343f44a';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=d8286343f44a';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=d8286343f44a';
+import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=d8286343f44a';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, setupTimeline,
     updateFpsDisplay,
     hideWelcomeOverlay,
-} from '../pose/initialization.js?v=b534ddb5c45e';
+} from '../pose/initialization.js?v=d8286343f44a';
 // Pass 3h: populateViewStrip / populateSessionStrip / switchSession moved to sessions-panes.js.
 import {
     populateViewStrip, populateSessionStrip, switchSession, multiSelectViews,
-} from '../ui/sessions-panes.js?v=b534ddb5c45e';
+} from '../ui/sessions-panes.js?v=d8286343f44a';
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
 import {
     updateSeekbar, fitTimelineToData, onPlaybackStateChange, updateVideoGridDisplay,
-} from '../ui/ui-wiring.js?v=b534ddb5c45e';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=b534ddb5c45e';
-import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=b534ddb5c45e';
-import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js?v=b534ddb5c45e';
+} from '../ui/ui-wiring.js?v=d8286343f44a';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=d8286343f44a';
+import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=d8286343f44a';
+import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js?v=d8286343f44a';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -2714,10 +2714,74 @@ export async function attachVideosForLazyReopen(session, loader, pickedFilesOver
  * the user is prompted to attach them (`attachVideosForLazyReopen`, skippable —
  * File → Load Videos still works later).
  */
+// ---- The Open project card ----
+// Opening a large project used to show one changing line ("Reading frames",
+// "Reading points", …) with nothing saying how far along it was — over a
+// network share, "Reading points" alone sat for minutes. It now shows the
+// shared progress card (ui/loading-overlay.js), titled "Open project", one step
+// per stage. Reading the file counts megabytes (the vendored reader reads the
+// big tables in counted slices — LUCID local patch, open progress); restoring
+// the 3D groups counts frames; the two short stages show the spinner.
+var OPEN_STEP = { read: 1, sessions: 2, groups: 3, identities: 3, first: 4 };
+var OPEN_STEPS = 4;
+var OPEN_STEP_LABELS = {
+    read: 'Reading the project file',
+    sessions: 'Reading 3D groups and points',
+    groups: 'Restoring 3D groups',
+    identities: 'Restoring identities',
+    first: 'Drawing the first frame',
+};
+
+/**
+ * `progress(stage, done, total, unit)`: a counted stage moves the bar
+ * (repainting at most every `PROGRESS_INTERVAL_MS`), an uncounted one shows the
+ * spinner with its step; a call that changes the card returns a promise for the
+ * next paint, so the step is on screen before its work. `progress.readerStage(msg)`
+ * maps the vendored reader's stage messages onto the steps.
+ */
+export function createOpenProgress(fileName) {
+    var pacer = createProgressPacer();
+    var shown = null;
+    var opts = function (stage, unit) {
+        return { title: 'Open project', step: OPEN_STEP[stage], steps: OPEN_STEPS, unit: unit, detail: fileName };
+    };
+    var progress = function (stage, done, total, unit) {
+        if (total == null) {
+            if (shown === stage) return null;
+            shown = stage;
+            showLoading(OPEN_STEP_LABELS[stage] + '…', opts(stage));
+            return yieldToPaint();
+        }
+        // A stage's first count is always shown, even after its own spinner.
+        var key = stage + ':counted';
+        if (shown === key && done < total && !pacer.due()) return null;
+        shown = key;
+        showLoadingProgress(OPEN_STEP_LABELS[stage], done, total, opts(stage, unit || 'frames'));
+        return pacer.yield();
+    };
+    progress.readerStage = function (msg) {
+        // "Building labeled frames" / "Reading identities" / "Reading sessions":
+        // the big tables are in; what is left of the read is the 3D groups.
+        if (/^(Building labeled frames|Reading identities|Reading sessions)/.test(msg || '')) progress('sessions');
+    };
+    progress.bytes = async function (done, total) {
+        // Whole megabytes for a big file; one decimal below 100 MB, so a small one still counts up.
+        var MB = 1048576, k = total >= 100 * MB ? 1 : 10;
+        var painted = progress('read', Math.round(done / MB * k) / k, Math.max(0.1, Math.round(total / MB * k) / k), 'MB');
+        if (painted) await painted;
+        // The big tables are in: step 2 starts here, inside a call the reader
+        // awaits, so it is painted before the reader goes on (its own stage
+        // messages are not awaited).
+        if (total > 0 && done >= total) await progress('sessions');
+    };
+    return progress;
+}
+
 export async function handleLoadProjectSlpLazy(slpFile) {
     try {
         if (!(await ensureNo3dImportBlockingLoad())) { setStatus('Load cancelled', 'warning'); return; }
-        showLoading('Reopening project (lazy): ' + slpFile.name + '...');
+        var openProgress = createOpenProgress(slpFile.name);
+        openProgress('read');
 
         // Free the PREVIOUS project's memory BEFORE opening the new one. A large
         // lazy session holds ~1 GB in its loader + GBs of grouping/3D; opening a
@@ -2765,7 +2829,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         paneManager.clearAll();
 
         var loader = new SioLazyLoader();
-        var opened = await loader.openProjectSlp(slpFile, function (msg) { showLoading(msg); });
+        var opened = await loader.openProjectSlp(slpFile, openProgress.readerStage, openProgress.bytes);
         var labels = opened.labels;
         var typedSession = opened.typedSession;
 
@@ -2827,17 +2891,23 @@ export async function handleLoadProjectSlpLazy(slpFile) {
 
         // Rebuild grouping + 3D (lightweight, memory-bounded).
         var nodeNames = skeleton.nodes.map(function (n) { return typeof n === 'string' ? n : (n.name || ''); });
+        var nGroupFrames = typedSession && typedSession.frameGroups ? typedSession.frameGroups.size : 0;
+        if (nGroupFrames > 0) await openProgress('groups', 0, nGroupFrames);
         await reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, {
-            onProgress: function (m) { showLoading(m); },
+            onCount: function (done, total) { return openProgress('groups', done, total); },
             fileIdentities: identitiesFromFile ? labels.identities : null,
         });
         // A LUC3D project that stored only the identities its groups do not
         // imply: rebuild the rest from the groups just restored.
-        await readFrameIdentityMetadata(session, lucid, { onProgress: function (m) { showLoading(m); } });
+        await readFrameIdentityMetadata(session, lucid, {
+            onCount: function (done, total) { return openProgress('identities', done, total); },
+        });
         // Group-only identities → the per-detection map the Identity timeline
         // and colour-by-identity read (LUC3D projects bring their own map).
         if (identitiesFromFile && !lucid.frameIdentityMap && !lucid.trackIdentityMap) {
-            await stampFrameIdentitiesFromGroups(session, { onProgress: function (m) { showLoading(m); } });
+            await stampFrameIdentitiesFromGroups(session, {
+                onCount: function (done, total) { return openProgress('identities', done, total); },
+            });
         }
 
         // Activate the reopened session (the previous project was already evicted
@@ -2876,6 +2946,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         }
 
         // Land on the first grouped frame + render it (hydrates its 2D).
+        await openProgress('first');
         var gk = Array.from(session.instanceGroups.keys());
         gk.sort(function (a, b) { return a - b; });
         var firstFrame = gk.length ? gk[0] : 0;

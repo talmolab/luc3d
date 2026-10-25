@@ -86,7 +86,8 @@ export function writeFrameIdentityMetadata(lucid, session) {
  * its map was already ingested as it was written.
  * @param {Session} session
  * @param {Object} lucid - the session's `metadata.lucid` dict as read
- * @param {{onProgress?:(msg:string)=>void, yieldMs?:number}} [opts]
+ * @param {{onProgress?:(msg:string)=>void, onCount?:(done:number, total:number)=>(void|Promise), yieldMs?:number}} [opts]
+ *   passed on to `stampFrameIdentitiesFromGroups`
  * @returns {Promise<boolean>} true when the map was rebuilt
  */
 export async function readFrameIdentityMetadata(session, lucid, opts) {
@@ -114,10 +115,12 @@ export async function readFrameIdentityMetadata(session, lucid, opts) {
  * step). Never overwrites an entry already there, and skips trackless members
  * (the map cannot key a null track; the group keeps the identity). Reads only
  * `group.identityId` and each member's `trackIdx`, so lazy placeholder members
- * work unchanged and no 2D is hydrated. Yields every `opts.yieldMs` (40 ms).
+ * work unchanged and no 2D is hydrated. Yields every `opts.yieldMs` (40 ms),
+ * reporting `opts.onProgress(message)` and, awaited, `opts.onCount(done, total)`
+ * in frames (the Open project card's counted hook; also called at the end).
  *
  * @param {Session} session
- * @param {{onProgress?:(msg:string)=>void, yieldMs?:number}} [opts]
+ * @param {{onProgress?:(msg:string)=>void, onCount?:(done:number, total:number)=>(void|Promise), yieldMs?:number}} [opts]
  * @returns {Promise<number>} entries written
  */
 export async function stampFrameIdentitiesFromGroups(session, opts) {
@@ -141,9 +144,11 @@ export async function stampFrameIdentitiesFromGroups(session, opts) {
         }
         if (_now() - ty > yieldMs) {
             onProgress('Restoring identities (' + done.toLocaleString('en-US') + '/' + total.toLocaleString('en-US') + ')...');
+            if (opts.onCount) await opts.onCount(done, total);   // the Open project card's counted hook
             await new Promise(function (r) { setTimeout(r, 0); });
             ty = _now();
         }
     }
+    if (opts.onCount) await opts.onCount(total, total);
     return written;
 }
