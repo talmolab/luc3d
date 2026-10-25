@@ -3173,6 +3173,68 @@ body {
   font-weight: 500;
 }
 
+/* The Session tab's Recording section (ui/recording-info.js): a campy
+   recording's session.json. Values may be long (a camera name, a field), so a
+   row's value wraps and stays right-aligned; notes and warnings are blocks. */
+.recording-row {
+  gap: 10px;
+  align-items: baseline;
+}
+
+.recording-row .value {
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.recording-row .label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.recording-row.recording-warn .value,
+.recording-block.recording-warn .recording-block-text {
+  color: var(--warning-color);
+}
+
+.recording-block {
+  padding: 3px 0;
+  font-size: 13px;
+}
+
+.recording-annotations {
+  font-size: 12px;
+}
+
+.recording-block-label {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-bottom: 2px;
+}
+
+.recording-block-text {
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.recording-annotations {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--text-primary);
+}
+
+.recording-annotation-at {
+  color: var(--text-muted);
+  margin-right: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.recording-cameras {
+  margin-top: 6px;
+}
+
 /* Instance / Track list */
 .instance-list {
   display: flex;

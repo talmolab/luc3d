@@ -30,9 +30,9 @@
 // fingerprinting protection on, a note under it explains that the core count is
 // a random one and how to stop that (ui/browser-hints.js).
 
-import { noteProgress } from './progress-delta.js?v=3099222ce95d';
-import { createLoadMeter, createBusyClock, createLoadGraph, formatCpuLoad, setLoadLine, cpuCores } from './load-graph.js?v=3099222ce95d';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=3099222ce95d';
+import { noteProgress } from './progress-delta.js?v=a7113dc25815';
+import { createLoadMeter, createBusyClock, createLoadGraph, formatCpuLoad, setLoadLine, cpuCores } from './load-graph.js?v=a7113dc25815';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=a7113dc25815';
 
 /** Default pacer interval. Each yield waits for one paint (~one display frame),
  *  so this bounds the overhead at roughly frame-time / interval (a few %). The
@@ -158,6 +158,9 @@ function _setTitle(opts) {
 /**
  * The card with a message and a spinner, no progress bar (an operation that
  * cannot say how far along it is). `opts.title`: see `_setTitle`.
+ * `opts.step` / `opts.steps` / `opts.detail` fill the detail line exactly as
+ * `showLoadingProgress` does, for a stage of a multi-step run that cannot
+ * count its own work (Save's file-writing steps).
  */
 export function showLoading(msg, opts) {
     var overlay = _el('loadingOverlay');
@@ -166,6 +169,18 @@ export function showLoading(msg, opts) {
     var status = _el('loadingStatus');
     if (status) status.textContent = msg || 'Loading...';
     _setBarVisible(false);
+    _setSubstatus(opts || {});
+}
+
+/** The detail line under the bar: "Step k of n" (only when n > 1) · detail. */
+function _setSubstatus(opts) {
+    var sub = _el('loadingSubstatus');
+    if (!sub) return;
+    var parts = [];
+    if (opts.steps > 1 && opts.step) parts.push('Step ' + opts.step + ' of ' + opts.steps);
+    if (opts.detail) parts.push(opts.detail);
+    sub.textContent = parts.join(' · ');
+    sub.classList.toggle('hidden', parts.length === 0);
 }
 
 export function hideLoading() {
@@ -292,14 +307,7 @@ export function showLoadingProgress(label, done, total, opts) {
     _setBarVisible(true);
     _setFill(frac, animate);
     _updateEta(label, done, total, opts);
-    var sub = _el('loadingSubstatus');
-    if (sub) {
-        var parts = [];
-        if (opts.steps > 1 && opts.step) parts.push('Step ' + opts.step + ' of ' + opts.steps);
-        if (opts.detail) parts.push(opts.detail);
-        sub.textContent = parts.join(' · ');
-        sub.classList.toggle('hidden', parts.length === 0);
-    }
+    _setSubstatus(opts);
 }
 
 function _updateEta(label, done, total, opts) {

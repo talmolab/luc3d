@@ -12,13 +12,14 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=3099222ce95d';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=3099222ce95d';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=3099222ce95d';
+         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=a7113dc25815';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=a7113dc25815';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=a7113dc25815';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=3099222ce95d';
-import { writePlaneMetadata } from './plane-metadata.js?v=3099222ce95d';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=a7113dc25815';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=a7113dc25815';
+import { writePlaneMetadata } from './plane-metadata.js?v=a7113dc25815';
 
 // ============================================
 // Generic file picker
@@ -281,7 +282,7 @@ export async function loadCalibrationFile() {
     } else {
         throw new Error('Unsupported calibration format: ' + file.name);
     }
-    return { cameras: cameras, fileName: file.name };
+    return { cameras: cameras, fileName: file.name, file: file };
 }
 
 /**
@@ -2267,9 +2268,7 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
     sioSession.metadata.lucid = {
         sessionName: session.name || null,
         trustTracks: session.trustTracks || false,
-        frameIdentityMap: session.frameIdentityMap
-            ? session.exportFrameIdentityEntries()
-            : [],
+        frameIdentityMap: [],   // filled by writeFrameIdentityMetadata below
         identities: sessIdentitiesJson,
         skeleton: {
             name: session.skeleton.name || 'skeleton',
@@ -2278,6 +2277,8 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
         },
         tracks: session.tracks,
     };
+    // `frameIdentityMap`, minus what the instance groups already imply.
+    writeFrameIdentityMetadata(sioSession.metadata.lucid, session);
     // Session-scoped Visibility-panel state. Every one of these is written ONLY
     // when it holds a non-default value, so an untouched project's bytes are
     // unchanged (tests/e2e/save-golden-digest.mjs).
@@ -2792,7 +2793,10 @@ export function parseSlpH5(file, onProgress, opts) {
  * PLUS a `_typedSession` ref (the typed `RecordingSession`). Grouping is rebuilt
  * from that typed session by `reconstructInstanceGroupsFromSession`, which reads
  * both LUCID's legacy and the new canonical `sessions_json` (the raw dict is kept
- * for the legacy per-group `identity_idx` fallback — see 13-pr51-probe-findings.md).
+ * for the legacy per-group `identity_idx` fallback — see 13-pr51-probe-findings.md)
+ * and a `_typedIdentities` ref (the file's typed `/identity` catalog, which the
+ * typed groups' `identity` resolves into — the `identity_idx` fallback for files
+ * written by other tools, e.g. campy-live-export).
  *
  * The reader's own HDF5 I/O worker loads `h5wasm` via `importScripts`, so it
  * needs an **IIFE** build — pointed at LUCID's LOCAL vendored `h5wasm.iife.js`
@@ -2826,7 +2830,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=3099222ce95d', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=a7113dc25815', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },
@@ -2900,7 +2904,10 @@ export async function parseSlpViaSleapIO(file, onProgress) {
                 if (rs[ri] != null) sessions.push(rs[ri]);
             }
         } else {
-            sessions.push(Object.assign({}, rs, { _typedSession: typedSessions[si] || null }));
+            sessions.push(Object.assign({}, rs, {
+                _typedSession: typedSessions[si] || null,
+                _typedIdentities: labels.identities || [],
+            }));
         }
     }
 
@@ -2917,6 +2924,9 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         videos: videos,
         sessions: sessions,
         identities: identities,
+        // The file's whole provenance dict (slp-provenance.js picks each
+        // session's part).
+        provenance: labels.provenance || null,
     };
 }
 

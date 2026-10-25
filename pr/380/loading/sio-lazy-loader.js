@@ -31,7 +31,7 @@
  * (`loading/track-union.js`) — see `_unifyTracks`.
  */
 
-import { unionTrackNames } from './track-union.js?v=3099222ce95d';
+import { unionTrackNames } from './track-union.js?v=a7113dc25815';
 
 /**
  * `deleteInstanceRows` moves surviving rows with one `copyWithin` per run when
@@ -168,7 +168,7 @@ export class SioLazyLoader {
         }
         // Point the reader's internal I/O worker at LUCID's local vendored h5wasm
         // IIFE (document.baseURI keeps this correct on sub-path deployments).
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=3099222ce95d', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=a7113dc25815', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -391,14 +391,18 @@ export class SioLazyLoader {
      *
      * @param {File} file - the project `.slp`
      * @param {Function} [onProgress] - `(msg) => void`
+     * @param {Function} [onReadBytes] - `(done, total) => (void|Promise)`: bytes
+     *   read of the file's four big tables (frames, instances, points,
+     *   pred_points), read in counted row slices — the vendored reader's
+     *   `onReadBytes` (LUCID local patch, open progress). Awaited.
      * @returns {Promise<{labels:Object, typedSession:Object, cameraNames:string[], nFrames:number}>}
      */
-    async openProjectSlp(file, onProgress) {
+    async openProjectSlp(file, onProgress, onReadBytes) {
         var SIO = window.SleapIO;
         if (!SIO || typeof SIO.readSlpStreaming !== 'function') {
             throw new Error('sleap-io.js readSlpStreaming not available on window.SleapIO');
         }
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=3099222ce95d', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=a7113dc25815', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -407,6 +411,7 @@ export class SioLazyLoader {
             onProgress: onProgress
                 ? function (n, total, msg) { onProgress(msg || ('Reading ' + n + '/' + total)); }
                 : undefined,
+            onReadBytes: onReadBytes || undefined,
         });
         this._projectLabels = labels;
         // A single project `.slp` interleaves every camera in ONE store, so all
