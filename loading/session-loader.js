@@ -2714,10 +2714,74 @@ export async function attachVideosForLazyReopen(session, loader, pickedFilesOver
  * the user is prompted to attach them (`attachVideosForLazyReopen`, skippable —
  * File → Load Videos still works later).
  */
+// ---- The Open project card ----
+// Opening a large project used to show one changing line ("Reading frames",
+// "Reading points", …) with nothing saying how far along it was — over a
+// network share, "Reading points" alone sat for minutes. It now shows the
+// shared progress card (ui/loading-overlay.js), titled "Open project", one step
+// per stage. Reading the file counts megabytes (the vendored reader reads the
+// big tables in counted slices — LUCID local patch, open progress); restoring
+// the 3D groups counts frames; the two short stages show the spinner.
+var OPEN_STEP = { read: 1, sessions: 2, groups: 3, identities: 3, first: 4 };
+var OPEN_STEPS = 4;
+var OPEN_STEP_LABELS = {
+    read: 'Reading the project file',
+    sessions: 'Reading 3D groups and points',
+    groups: 'Restoring 3D groups',
+    identities: 'Restoring identities',
+    first: 'Drawing the first frame',
+};
+
+/**
+ * `progress(stage, done, total, unit)`: a counted stage moves the bar
+ * (repainting at most every `PROGRESS_INTERVAL_MS`), an uncounted one shows the
+ * spinner with its step; a call that changes the card returns a promise for the
+ * next paint, so the step is on screen before its work. `progress.readerStage(msg)`
+ * maps the vendored reader's stage messages onto the steps.
+ */
+export function createOpenProgress(fileName) {
+    var pacer = createProgressPacer();
+    var shown = null;
+    var opts = function (stage, unit) {
+        return { title: 'Open project', step: OPEN_STEP[stage], steps: OPEN_STEPS, unit: unit, detail: fileName };
+    };
+    var progress = function (stage, done, total, unit) {
+        if (total == null) {
+            if (shown === stage) return null;
+            shown = stage;
+            showLoading(OPEN_STEP_LABELS[stage] + '…', opts(stage));
+            return yieldToPaint();
+        }
+        // A stage's first count is always shown, even after its own spinner.
+        var key = stage + ':counted';
+        if (shown === key && done < total && !pacer.due()) return null;
+        shown = key;
+        showLoadingProgress(OPEN_STEP_LABELS[stage], done, total, opts(stage, unit || 'frames'));
+        return pacer.yield();
+    };
+    progress.readerStage = function (msg) {
+        // "Building labeled frames" / "Reading identities" / "Reading sessions":
+        // the big tables are in; what is left of the read is the 3D groups.
+        if (/^(Building labeled frames|Reading identities|Reading sessions)/.test(msg || '')) progress('sessions');
+    };
+    progress.bytes = async function (done, total) {
+        // Whole megabytes for a big file; one decimal below 100 MB, so a small one still counts up.
+        var MB = 1048576, k = total >= 100 * MB ? 1 : 10;
+        var painted = progress('read', Math.round(done / MB * k) / k, Math.max(0.1, Math.round(total / MB * k) / k), 'MB');
+        if (painted) await painted;
+        // The big tables are in: step 2 starts here, inside a call the reader
+        // awaits, so it is painted before the reader goes on (its own stage
+        // messages are not awaited).
+        if (total > 0 && done >= total) await progress('sessions');
+    };
+    return progress;
+}
+
 export async function handleLoadProjectSlpLazy(slpFile) {
     try {
         if (!(await ensureNo3dImportBlockingLoad())) { setStatus('Load cancelled', 'warning'); return; }
-        showLoading('Reopening project (lazy): ' + slpFile.name + '...');
+        var openProgress = createOpenProgress(slpFile.name);
+        openProgress('read');
 
         // Free the PREVIOUS project's memory BEFORE opening the new one. A large
         // lazy session holds ~1 GB in its loader + GBs of grouping/3D; opening a
@@ -2765,7 +2829,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         paneManager.clearAll();
 
         var loader = new SioLazyLoader();
-        var opened = await loader.openProjectSlp(slpFile, function (msg) { showLoading(msg); });
+        var opened = await loader.openProjectSlp(slpFile, openProgress.readerStage, openProgress.bytes);
         var labels = opened.labels;
         var typedSession = opened.typedSession;
 
@@ -2827,17 +2891,23 @@ export async function handleLoadProjectSlpLazy(slpFile) {
 
         // Rebuild grouping + 3D (lightweight, memory-bounded).
         var nodeNames = skeleton.nodes.map(function (n) { return typeof n === 'string' ? n : (n.name || ''); });
+        var nGroupFrames = typedSession && typedSession.frameGroups ? typedSession.frameGroups.size : 0;
+        if (nGroupFrames > 0) await openProgress('groups', 0, nGroupFrames);
         await reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, {
-            onProgress: function (m) { showLoading(m); },
+            onCount: function (done, total) { return openProgress('groups', done, total); },
             fileIdentities: identitiesFromFile ? labels.identities : null,
         });
         // A LUC3D project that stored only the identities its groups do not
         // imply: rebuild the rest from the groups just restored.
-        await readFrameIdentityMetadata(session, lucid, { onProgress: function (m) { showLoading(m); } });
+        await readFrameIdentityMetadata(session, lucid, {
+            onCount: function (done, total) { return openProgress('identities', done, total); },
+        });
         // Group-only identities → the per-detection map the Identity timeline
         // and colour-by-identity read (LUC3D projects bring their own map).
         if (identitiesFromFile && !lucid.frameIdentityMap && !lucid.trackIdentityMap) {
-            await stampFrameIdentitiesFromGroups(session, { onProgress: function (m) { showLoading(m); } });
+            await stampFrameIdentitiesFromGroups(session, {
+                onCount: function (done, total) { return openProgress('identities', done, total); },
+            });
         }
 
         // Activate the reopened session (the previous project was already evicted
@@ -2876,6 +2946,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         }
 
         // Land on the first grouped frame + render it (hydrates its 2D).
+        await openProgress('first');
         var gk = Array.from(session.instanceGroups.keys());
         gk.sort(function (a, b) { return a - b; });
         var firstFrame = gk.length ? gk[0] : 0;
