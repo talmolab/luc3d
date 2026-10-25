@@ -30,8 +30,9 @@
 // fingerprinting protection on, a note under it explains that the core count is
 // a random one and how to stop that (ui/browser-hints.js).
 
-import { createLoadMeter, createBusyClock, createLoadGraph, formatCpuLoad, setLoadLine, cpuCores } from './load-graph.js?v=f7b11af7bca7';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=f7b11af7bca7';
+import { noteProgress } from './progress-delta.js?v=3c5cdc75dce6';
+import { createLoadMeter, createBusyClock, createLoadGraph, formatCpuLoad, setLoadLine, cpuCores } from './load-graph.js?v=3c5cdc75dce6';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=3c5cdc75dce6';
 
 /** Default pacer interval. Each yield waits for one paint (~one display frame),
  *  so this bounds the overhead at roughly frame-time / interval (a few %). The
@@ -254,6 +255,7 @@ function _setFill(frac, animate) {
     fill.classList.toggle('no-anim', !animate);
     fill.style.transform = 'scaleX(' + frac + ')';
     fill.dataset.fraction = String(frac);
+    noteProgress(fill, frac, { animate: animate });   // light up the stretch just gained
     // the playhead at the fill's leading edge: its full-width wrapper translated by the same fraction
     var head = _el('loadingProgressHead');
     if (head) {
