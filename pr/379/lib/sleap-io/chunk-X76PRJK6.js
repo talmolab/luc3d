@@ -36,7 +36,7 @@ import {
   resolveIdentity,
   resolveVideoFilename,
   sessionsReadError
-} from "./chunk-H7G4PJNA.js?v=166eb88629ec";
+} from "./chunk-H7G4PJNA.js?v=84f6bd5113c0";
 import {
   RemoteIOError,
   fetchRetrying,
@@ -48,7 +48,7 @@ import {
   redactedCauseSummary,
   resolveUrl,
   statusToMessage
-} from "./chunk-YS7Q6CO6.js?v=166eb88629ec";
+} from "./chunk-YS7Q6CO6.js?v=84f6bd5113c0";
 
 // src/model/centroid.ts
 var _centroidSkeleton = null;
@@ -12015,7 +12015,9 @@ async function readSlpStreaming(source, options) {
       options?.onProgress,
       options?.rawSessions ?? false,
       options?.lazy ?? false,
-      lazyVideoMetadata
+      lazyVideoMetadata,
+      // LUCID local patch (open progress): bytes read of the four big tables
+      options?.onReadBytes
     );
   } finally {
     if (!openVideos && !lazyVideoMetadata) {
@@ -12023,7 +12025,7 @@ async function readSlpStreaming(source, options) {
     }
   }
 }
-async function readFromStreamingFile(file, url, filenameHint, openVideos = false, onProgress, rawSessions = false, lazy = false, lazyVideoMetadata = false) {
+async function readFromStreamingFile(file, url, filenameHint, openVideos = false, onProgress, rawSessions = false, lazy = false, lazyVideoMetadata = false, onReadBytes = void 0) {
   const STAGES = [
     "Reading metadata",
     // 0
@@ -12080,12 +12082,16 @@ async function readFromStreamingFile(file, url, filenameHint, openVideos = false
   report(3);
   const suggestions = await readSuggestionsStreaming(file, videos);
   report(4);
-  const framesData = await readStructDatasetStreaming(file, "frames");
+  // LUCID local patch (open progress): with `onReadBytes(done, total)`, the
+  // four big tables are read in row slices and every slice is counted, over
+  // the tables' total size taken from their metadata first.
+  const lucidRead = onReadBytes ? await lucidPlanTableReads(file, ["frames", "instances", "points", "pred_points"], onReadBytes) : null;
+  const framesData = await readStructDatasetStreaming(file, "frames", false, lucidRead);
   report(5);
-  const instancesData = await readStructDatasetStreaming(file, "instances");
+  const instancesData = await readStructDatasetStreaming(file, "instances", false, lucidRead);
   report(6);
-  const pointsData = await readStructDatasetStreaming(file, "points");
-  const predPointsData = await readStructDatasetStreaming(file, "pred_points");
+  const pointsData = await readStructDatasetStreaming(file, "points", false, lucidRead);
+  const predPointsData = await readStructDatasetStreaming(file, "pred_points", false, lucidRead);
   report(7);
   const lazyStore = lazy ? new LazyDataStore({
     framesData,
@@ -12874,11 +12880,71 @@ async function readSessionDataStreaming(file) {
     instanceGroupMeta: await meta("instance_group_meta")
   };
 }
-async function readStructDatasetStreaming(file, path, assumePresent = false) {
+// LUCID local patch (open progress): the byte plan `readFromStreamingFile`
+// counts the big tables' reads against — each table's size is its element
+// count times its element size (h5wasm metadata `size`), both layouts.
+async function lucidPlanTableReads(file, paths, onReadBytes) {
+  const sizes = /* @__PURE__ */ new Map();
+  let total = 0;
+  for (const p of paths) {
+    try {
+      if (!file.keys().includes(p)) continue;
+      const meta = await file.getDatasetMeta(p);
+      const n = (meta.shape || []).reduce((a, b) => a * Number(b), 1);
+      const bytes = n * Number(meta.metadata && meta.metadata.size || 8);
+      sizes.set(p, bytes);
+      total += bytes;
+    } catch {
+    }
+  }
+  const plan = { sizes, total, done: 0, onReadBytes };
+  await onReadBytes(0, total);
+  return plan;
+}
+// LUCID local patch (open progress): read a flat 2-D table in row slices into
+// one pre-sized typed array (the same array a whole read returns, plus one
+// slice in flight), counting each slice into `plan`.
+async function lucidReadRowsChunked(file, path, shape, plan) {
+  const rows = Number(shape[0]), cols = Number(shape[1]) || 1;
+  const tableBytes = plan.sizes.get(path) || 0;
+  // 512K elements (4 MB of float64) per slice: over a slow network share
+  // (~0.4 MB/s measured) the count still moves every ~10 s, and a local read
+  // pays nothing measurable for the extra slices. Tests shrink it further.
+  const sliceElems = typeof globalThis !== "undefined" && globalThis.__lucidReadSliceElems || 524288;
+  const rowsPer = Math.max(1, Math.floor(sliceElems / cols));
+  let out = null;
+  for (let r = 0; r < rows; r += rowsPer) {
+    const end = Math.min(rows, r + rowsPer);
+    const part = await file.getDatasetValue(path, [[r, end]]);
+    const v = part.value;
+    if (!ArrayBuffer.isView(v)) return null;
+    if (!out) out = new v.constructor(rows * cols);
+    out.set(v, r * cols);
+    plan.done += tableBytes * (end - r) / rows;
+    await plan.onReadBytes(Math.round(plan.done), plan.total);
+  }
+  return { value: out, shape: [rows, cols] };
+}
+async function readStructDatasetStreaming(file, path, assumePresent = false, lucidRead = null) {
   try {
     if (!assumePresent && !file.keys().includes(path)) return {};
     const meta = await file.getDatasetMeta(path);
-    const data = await file.getDatasetValue(path);
+    // LUCID local patch (open progress): a flat 2-D table (LUCID's layout:
+    // `field_names` attr, no compound members) is read in counted row slices
+    // when a byte plan is given; anything else is one whole read, counted at
+    // its end. Same values either way.
+    let data = null;
+    if (lucidRead && meta.shape && meta.shape.length === 2 && Number(meta.shape[0]) > 0 &&
+        getFieldNamesFromMeta(meta).length === 0 && !(meta.metadata && meta.metadata.vlen)) {
+      data = await lucidReadRowsChunked(file, path, meta.shape, lucidRead);
+    }
+    if (!data) {
+      data = await file.getDatasetValue(path);
+      if (lucidRead) {
+        lucidRead.done += lucidRead.sizes.get(path) || 0;
+        await lucidRead.onReadBytes(Math.round(Math.min(lucidRead.done, lucidRead.total)), lucidRead.total);
+      }
+    }
     let fieldNames = getFieldNamesFromMeta(meta);
     if (fieldNames.length === 0) {
       try {
