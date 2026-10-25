@@ -2724,6 +2724,115 @@ export class Session {
     }
 
     /**
+     * The identity the instance groups imply for (frameIdx, cameraName,
+     * trackIdx): the `identityId` of every group at that frame whose member on
+     * that camera carries that track. This is exactly the entry
+     * `stampFrameIdentitiesFromGroups` (import-export/frame-identity-metadata.js)
+     * writes on load, so the two must keep the same rule: groups with an
+     * identity >= 0, members with a track >= 0.
+     * @returns {number|undefined|null} the identity; undefined when no group
+     *   implies one; null when two groups imply DIFFERENT ones (the loader's
+     *   pick would then depend on iteration order)
+     */
+    _derivedFrameIdentity(frameIdx, cameraName, trackIdx) {
+        if (trackIdx == null || trackIdx < 0) return undefined;
+        var groups = this.instanceGroups.get(frameIdx);
+        if (!groups) return undefined;
+        var found;
+        for (var gi = 0; gi < groups.length; gi++) {
+            var g = groups[gi];
+            if (g.identityId == null || g.identityId < 0) continue;
+            var inst = g.instances.get(cameraName);
+            if (!inst || inst.trackIdx !== trackIdx) continue;
+            if (found === undefined) found = g.identityId;
+            else if (found !== g.identityId) return null;
+        }
+        return found;
+    }
+
+    /**
+     * `frameIdentityMap` minus what the instance groups already say, for the
+     * `.slp` writers (import-export/frame-identity-metadata.js). After Track All
+     * the map holds one entry per grouped 2D detection, each equal to its
+     * group's identity — 3,458,373 entries, 101 MB of JSON, on an 8-camera
+     * project — and the loader can rebuild all of those from the groups.
+     *
+     *   entries — map entries the groups do not reproduce: no group implies the
+     *             key, groups imply a different value, or groups disagree. Same
+     *             `[["frameIdx:camName:trackIdx", identityId], ...]` shape as
+     *             `exportFrameIdentityEntries`.
+     *   dropped — keys the groups imply that the map does NOT hold (an entry
+     *             removed after grouping), so the loader deletes them again.
+     *
+     * Rebuild = derive from the groups, delete `dropped`, set `entries`. That
+     * gives back exactly this map's entries whatever order the loader walks the
+     * groups in, because every key whose derived value is ambiguous is in one
+     * of the two lists.
+     * @returns {{entries: Array<[string, number]>, dropped: string[]}}
+     */
+    frameIdentityExceptions() {
+        var entries = [];
+        for (var rec of this.frameIdentityEntries()) {
+            if (this._derivedFrameIdentity(rec.frameIdx, rec.camName, rec.trackIdx) === rec.identityId) continue;
+            entries.push([rec.frameIdx + ':' + rec.camName + ':' + rec.trackIdx, rec.identityId]);
+        }
+        var dropped = [];
+        var seen = null;
+        for (var [frameIdx, groups] of this.instanceGroups) {
+            for (var gi = 0; gi < groups.length; gi++) {
+                var g = groups[gi];
+                if (g.identityId == null || g.identityId < 0) continue;
+                for (var [camName, inst] of g.instances) {
+                    if (!inst || inst.trackIdx == null || inst.trackIdx < 0) continue;
+                    if (this.hasFrameIdentity(frameIdx, camName, inst.trackIdx)) continue;
+                    var key = frameIdx + ':' + camName + ':' + inst.trackIdx;
+                    if (!seen) seen = new Set();
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    dropped.push(key);
+                }
+            }
+        }
+        return { entries: entries, dropped: dropped };
+    }
+
+    /**
+     * Set serialized `[key, identityId]` pairs into `frameIdentityMap` WITHOUT
+     * clearing it first (`ingestFrameIdentityEntries` replaces the map). Keys in
+     * either form, as `ingestFrameIdentityEntries` accepts them.
+     * @param {Array<[string|number, number]>} entries
+     * @returns {number} entries set
+     */
+    applyFrameIdentityEntries(entries) {
+        if (!entries) return 0;
+        for (var i = 0; i < entries.length; i++) {
+            this.frameIdentityMap.set(this._fimNormalizeKey(entries[i][0]), entries[i][1]);
+        }
+        return entries.length;
+    }
+
+    /**
+     * Delete serialized keys (either form) from `frameIdentityMap`.
+     * @param {Array<string|number>} keys
+     * @returns {number} entries deleted
+     */
+    deleteFrameIdentityKeys(keys) {
+        if (!keys) return 0;
+        var n = 0;
+        for (var i = 0; i < keys.length; i++) {
+            if (this.frameIdentityMap.delete(this._fimNormalizeKey(keys[i]))) n++;
+        }
+        return n;
+    }
+
+    /** A serialized key -> the key `frameIdentityMap` stores (packed when encodable). */
+    _fimNormalizeKey(k) {
+        if (_fimIsPacked(k)) return k;
+        var parts = _parseFrameIdentityKey(String(k));
+        return parts ? this._fimKey(parts.frameIdx, parts.camName, parts.trackIdx) : k;
+    }
+
+    /**
      * Set identity for a track from a start frame forward through all subsequent frames.
      * Sets per-frame overrides for every frame where this camera:trackIdx appears.
      * @param {number} startFrame
