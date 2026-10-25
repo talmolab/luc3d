@@ -36,7 +36,7 @@ import {
   resolveIdentity,
   resolveVideoFilename,
   sessionsReadError
-} from "./chunk-H7G4PJNA.js?v=79ba0d43f914";
+} from "./chunk-H7G4PJNA.js?v=f7b11af7bca7";
 import {
   RemoteIOError,
   fetchRetrying,
@@ -48,7 +48,7 @@ import {
   redactedCauseSummary,
   resolveUrl,
   statusToMessage
-} from "./chunk-YS7Q6CO6.js?v=79ba0d43f914";
+} from "./chunk-YS7Q6CO6.js?v=f7b11af7bca7";
 
 // src/model/centroid.ts
 var _centroidSkeleton = null;
@@ -13653,6 +13653,26 @@ var SlpStreamWriter = class {
    * skipped ranges. `store` must not itself contain duplicate `(video, frameIdx)`.
    */
   appendStore(store, opts) {
+    // LUCID local patch (save progress): the body is `_lucidAppendStoreSteps`,
+    // run to the end here without a break — same rows, same order, same bytes.
+    const steps = this._lucidAppendStoreSteps(store, opts);
+    while (!steps.next().done) {
+    }
+  }
+  /**
+   * LUCID local patch (save progress): `appendStore`, awaiting
+   * `onWindow(doneRows, totalRows)` after each window of frames — so a caller
+   * can repaint a progress bar (and the browser stay responsive) during the
+   * longest stretch of a large save. Writes exactly what `appendStore` writes.
+   */
+  async appendStoreAsync(store, opts, onWindow) {
+    const steps = this._lucidAppendStoreSteps(store, opts);
+    for (let st = steps.next(); !st.done; st = steps.next()) {
+      if (onWindow) await onWindow(st.value.done, st.value.total);
+    }
+  }
+  // LUCID local patch (save progress): appendStore's body, as steps
+  *_lucidAppendStoreSteps(store, opts) {
     if (this.closed) throw new Error("SlpStreamWriter is closed");
     const windowFrames = opts?.windowFrames ?? DEFAULT_WRITE_WINDOW_FRAMES;
     const vOff = opts?.videoIndexOffset ?? 0;
@@ -13819,6 +13839,8 @@ var SlpStreamWriter = class {
           this.predPointRows
         );
         this.predPointRows += emPredPts;
+        // LUCID local patch (save progress): a break between windows
+        yield { done: wEnd, total: nFrames };
       }
       this.collectStoreAnnotations(
         store,

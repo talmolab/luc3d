@@ -4909,7 +4909,7 @@ after all tasks complete; stays open on error.
 
 **Purpose.** Owns the full-window loading overlay (`#loadingOverlay`) and its
 determinate progress bar — the ONE progress component shared by Track All,
-Triangulate All (all three routes), Group by Identity/Track, and anything else
+Triangulate All (all three routes), Group by Identity/Track, File ▸ Save, and anything else
 that runs a chunked main-thread loop behind the overlay.
 
 **It is a card in the image ID-switch check's dialog style**
@@ -4926,8 +4926,8 @@ no bar. Pinned by `tests/e2e/fixtures/progress-card.js`.
 - `showLoading(msg, { title, step, steps, detail })` — indeterminate form
   (spinner + text); hides the bar and the percentage. `step`/`steps`/`detail`
   fill the detail line as in `showLoadingProgress`, for a step of a multi-step
-  run that cannot count its own work (Open project's spinner steps); without
-  them the detail line is hidden, as before.
+  run that cannot count its own work (Save's file-writing steps, Open project's
+  spinner steps); without them the detail line is hidden, as before.
 - **The title** (`opts.title` on either call) names the operation — "Track All",
   "Triangulate All", "Checking ID switches (body size)" — and is KEPT until
   `hideLoading` (or a call passing another; `''` clears it), so the progress
@@ -12923,14 +12923,24 @@ each holding only one session's data at a time:
     otherwise takes the pair from `instRefs.get(camera)`.
   - **`await yieldToBrowser()` every 2,000 frames** so the save progress modal
     paints and V8 gets collection points — this is why the function is `async`.
+    An optional 5th argument, `onProgress`, is the Save progress card's hook:
+    called (and awaited) as `onProgress('refs', done, total)` once before the
+    synchronous pruning / overlay / row-map work, then at those yield points
+    and at the end, over the session's grouped frames.
 - **`openProjectWriter(ctx, allSioSessions, provenance)`** — the single
   `SIO.openSlpWriter(...)` call, made once every session's ref graph is final.
-- **`streamSessionIntoWriter(writer, session, refGraphResult)`** — PASS 2, per
+- **`streamSessionIntoWriter(writer, session, refGraphResult, onProgress)`** —
+  **`async`** (callers must `await`). PASS 2, per
   session: `appendFrames(overlayLfs)` + `appendStore(store, {videoIndexOffset,
   trackOffset})` per camera, using the offsets saved in pass 1. Requires
   `session.lazyLoader` to be (re)opened — no Track All/Triangulate All needed;
   `appendStore` reads straight from the columnar store (a far lower peak than
-  pass 1).
+  pass 1). With `onProgress` it appends through the vendored writer's
+  `appendStoreAsync` instead (LUCID local patch, save progress — same rows,
+  same bytes), calling and awaiting `onProgress('frames', done, total,
+  'camera frames')` after each 5,000-row window, over every store row being
+  appended (one row per camera per frame). On the real 8-camera,
+  176,406-frame project this is the longest step of a save (13.9 s of 36 s).
 
 **Shared-store re-save (lazy project reopen).** A session reopened via
 `SioLazyLoader.openProjectSlp` has `loader._sharedStore` set: ONE interleaved
@@ -12958,7 +12968,14 @@ video filename/shape instead of degrading to `<camName>.mp4` with zero
 dimensions. Covered by `tests/test-lazy-reopen.js`.
 - **`finalizeProjectWriter(writer, opts)`** — `writer.close()`/`writeToSink()`.
 - **`buildSessionSlpBytesStreaming(session, views, videoFiles, opts)`** — thin
-  single-session wrapper chaining all four.
+  single-session wrapper chaining all four. `opts.onProgress(stage, done,
+  total, unit)` drives the Save progress card (`save-load.js`), one stage
+  after another: `'refs'` (counted), `'header'` (uncounted: `/session_data`,
+  written inside `openSlpWriter` without a break), `'frames'` (counted) and
+  `'finish'` (uncounted: `close()` / `writeToSink()`). Every call is awaited,
+  so the card paints a step before the vendored writer holds the main thread.
+  Measured on the real 8-camera, 176,406-frame project (1.8 GB, headless
+  Chromium on an M-series Mac): 6.7 / 7.7 / 13.9 / 6.1 s.
 
 **Calibration-only cameras** (in `session.cameras` but with no loaded lazy
 store) get a header `Camera`+`Video` (0-frame) and a cameraGroup slot so the
@@ -12999,6 +13016,28 @@ saveAs, saveProjectSlp, saveProject), load dispatcher
 loading-overlay/status-text UI helpers.
 
 **Key exports.**
+- **The Save progress card.** `quickSave`/`saveAs` and `saveProjectSlp` (the
+  download path, which is what Save is in Brave — its save dialog cannot open
+  until the whole file is built) show the shared loading overlay
+  (`ui/loading-overlay.js`), titled "Save", from the start of the save until it
+  ends, fails or is cancelled. `createSaveProgress(steps)` (internal) is the
+  `onProgress(stage, done, total, unit)` hook passed down `buildSlpBytes` into
+  the streaming writer: a counted stage moves the bar (`showLoadingProgress`,
+  repainting at most every `PROGRESS_INTERVAL_MS`), an uncounted one shows the
+  spinner with its step (`showLoading` with `step`/`steps`), and every call
+  that changes the card returns a promise for the next paint, so a step is on
+  screen before the work it names. The steps (`saveSteps(streaming,
+  download)`): Collecting 3D groups (counted) · Writing 3D groups and points ·
+  Writing 2D poses (counted) · Finishing the file — or, for an eager project,
+  Writing the file — plus Opening the save dialog on the download path.
+  `progress.disk(bytes)` reports the streamed write to a picked file
+  ("Writing to disk: N MB…"). `quickSave` puts the card up only after the
+  save-file picker returns, since the picker needs the click's user activation.
+  `isStreamingSave(sessions, SIO)` (internal) is the one test of which path
+  `buildSlpBytes` takes, shared with the card. `saveProjectSlp` now sets
+  `state.isSaving` and refuses a second save while one runs (two builds would
+  hold two copies of the file in memory), and `quickSave` awaits it. Covered by
+  `tests/e2e/save-progress-card.mjs`.
 - Project: `newProject(force)` (`force` skips the unsaved-changes confirm and
   is used by the 3D-import reset), `markDirty`, `clearDirty`, `quickSave`,
   `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject` (routes a

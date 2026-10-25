@@ -49,9 +49,9 @@
  * `updateIdSwitchProgress`).
  */
 
-import { state } from './app-state.js?v=79ba0d43f914';
-import { makeVideoToCanvasTransform } from './overlays.js?v=79ba0d43f914';
-import { getNodeWeightArray } from './settings.js?v=79ba0d43f914';
+import { state } from './app-state.js?v=f7b11af7bca7';
+import { makeVideoToCanvasTransform } from './overlays.js?v=f7b11af7bca7';
+import { getNodeWeightArray } from './settings.js?v=f7b11af7bca7';
 
 var _target = null;          // {nameA, nameB, p0, s, e, p1}
 var _frame = -1;             // frame the boxes were computed for
