@@ -28,7 +28,7 @@ import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
 } from '../pose/pose-data.js';
 
-import { OnDemandVideoDecoder, VideoController } from './video.js';
+import { OnDemandVideoDecoder, VideoController, releaseViewsFrames } from './video.js';
 import { videoLoadFailureText } from './video-codec-diagnosis.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
 import { confirmFolderPick } from '../ui/folder-confirm-tip.js';
@@ -1999,6 +1999,7 @@ export function handleEmptySession() {
         oldSession.triangulationResults = state.triangulationResults;
         oldSession._views = state.views;
         oldSession._videoController = videoController;
+        releaseViewsFrames(state.views);   // off screen now: drop its decoded frames
         if (viewport3d && viewport3d.threeCamera && viewport3d.controls) {
             oldSession._viewport3dState = {
                 cameraPosition: viewport3d.threeCamera.position.toArray(),
@@ -2342,6 +2343,7 @@ export async function handleLoadSessionFolderSingleSlp() {
             oldSession.triangulationResults = state.triangulationResults;
             oldSession._views = state.views;
             oldSession._videoController = videoController;
+            releaseViewsFrames(state.views);   // off screen now: drop its decoded frames
             if (viewport3d && viewport3d.threeCamera && viewport3d.controls) {
                 oldSession._viewport3dState = {
                     cameraPosition: viewport3d.threeCamera.position.toArray(),
@@ -3063,6 +3065,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             previousSession.triangulationResults = state.triangulationResults;
             previousSession._views = state.views;
             previousSession._videoController = videoController;
+            releaseViewsFrames(state.views);   // off screen now: drop its decoded frames
         }
         // Start fresh for the new session
         state.session = null;

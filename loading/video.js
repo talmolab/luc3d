@@ -90,6 +90,23 @@ export function frameCacheFrames(budgetMB, frameBytes) {
     return Math.max(FRAME_CACHE_MIN, Math.min(FRAME_CACHE_MAX, n));
 }
 
+/**
+ * `releaseFrames()` every decoder of these views — for a SESSION going off
+ * screen (another session loaded over it). `VideoController._shownViews` only
+ * sees the active session's views, so without this each loaded session keeps
+ * its full caches: measured on 3 open 8-camera sessions, 3.2 GB of ImageBitmaps
+ * held for the two not shown (GPU-backed, but counted by V8 as external
+ * memory), and Track All on the third took 92–95 s instead of ~24 s, most of it
+ * in back-to-back full GCs. Coming back re-decodes the current frame.
+ * @param {Array} views
+ */
+export function releaseViewsFrames(views) {
+    (views || []).forEach(function (v) {
+        var d = v && v.decoder;
+        if (d && typeof d.releaseFrames === 'function') d.releaseFrames();
+    });
+}
+
 /** Index of the frame nearest timestamp `t` in the sorted `times` (within half a frame), or -1. */
 function frameNearTime(times, t) {
     var lo = 0, hi = times.length - 1;
