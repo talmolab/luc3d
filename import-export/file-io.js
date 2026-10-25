@@ -18,6 +18,7 @@ import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPoints
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
 import { writeVisibilityMetadata } from './visibility-metadata.js';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js';
 import { writePlaneMetadata } from './plane-metadata.js';
 
 // ============================================
@@ -2267,9 +2268,7 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
     sioSession.metadata.lucid = {
         sessionName: session.name || null,
         trustTracks: session.trustTracks || false,
-        frameIdentityMap: session.frameIdentityMap
-            ? session.exportFrameIdentityEntries()
-            : [],
+        frameIdentityMap: [],   // filled by writeFrameIdentityMetadata below
         identities: sessIdentitiesJson,
         skeleton: {
             name: session.skeleton.name || 'skeleton',
@@ -2278,6 +2277,8 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
         },
         tracks: session.tracks,
     };
+    // `frameIdentityMap`, minus what the instance groups already imply.
+    writeFrameIdentityMetadata(sioSession.metadata.lucid, session);
     // Session-scoped Visibility-panel state. Every one of these is written ONLY
     // when it holds a non-default value, so an untouched project's bytes are
     // unchanged (tests/e2e/save-golden-digest.mjs).

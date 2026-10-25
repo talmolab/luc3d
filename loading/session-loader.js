@@ -48,6 +48,7 @@ import { chooseCameraSlp } from './percam-slp-choice.js';
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
 import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy, stampFrameIdentitiesFromGroups } from '../import-export/slp-import.js';
+import { readFrameIdentityMetadata } from '../import-export/frame-identity-metadata.js';
 import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js';
 import {
     isCalibrationImagesVideo, preferNonCalibrationVideos, matchVideoToCamera,
@@ -2895,6 +2896,11 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         await reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, {
             onCount: function (done, total) { return openProgress('groups', done, total); },
             fileIdentities: identitiesFromFile ? labels.identities : null,
+        });
+        // A LUC3D project that stored only the identities its groups do not
+        // imply: rebuild the rest from the groups just restored.
+        await readFrameIdentityMetadata(session, lucid, {
+            onCount: function (done, total) { return openProgress('identities', done, total); },
         });
         // Group-only identities → the per-detection map the Identity timeline
         // and colour-by-identity read (LUC3D projects bring their own map).

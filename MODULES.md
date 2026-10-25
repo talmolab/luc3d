@@ -1258,14 +1258,26 @@ Tuples that cannot be packed (trackIdx > 131070, or a camera absent from
 `session.cameras`) fall back to the legacy string key rather than silently
 losing identities; `_fimDecode` handles both forms.
 
-**On-disk format is unchanged.** `exportFrameIdentityEntries()` emits
+**Entry format is unchanged.** `exportFrameIdentityEntries()` emits
 `[["frameIdx:camName:trackIdx", identityId], ...]`, and
 `ingestFrameIdentityEntries()` accepts BOTH that and packed numbers, so old
-projects load and new files stay readable by older builds. Callers: the write
-side in `save-load.js`, `file-io.js`, `slp-streaming-write.js`; the read side in
-`save-load.js`, `slp-import.js`, `session-loader.js`. Guarded by the
-`frameIdentityMap packed-key codec` block in `tests/test-identity.js` and by
-`tests/e2e/save-golden-digest.mjs` at the byte level.
+projects load. The project JSON (`save-load.js`) writes the full list. The two
+`.slp` writers (`file-io.js`, `slp-streaming-write.js`) write only the entries
+the instance groups do not imply, through
+`import-export/frame-identity-metadata.js`, using:
+- `frameIdentityExceptions()` → `{ entries, dropped }`: map entries the groups
+  do not reproduce (no group implies the key, a different value, or two groups
+  disagree), and keys the groups imply that the map does not hold.
+- `_derivedFrameIdentity(frameIdx, cameraName, trackIdx)` — what the groups at
+  that frame imply: an identity, `undefined`, or `null` when two disagree. Must
+  keep the rule of `stampFrameIdentitiesFromGroups` (identity >= 0, track >= 0).
+- `applyFrameIdentityEntries(entries)` / `deleteFrameIdentityKeys(keys)` — set /
+  delete serialized pairs or keys WITHOUT clearing the map first (both key forms,
+  via `_fimNormalizeKey`).
+Read side: `save-load.js`, `slp-import.js`, `session-loader.js`. Guarded by the
+`frameIdentityMap packed-key codec` block in `tests/test-identity.js`,
+`tests/e2e/frame-identity-compact-roundtrip.mjs` (every exception case, both
+writers, both readers) and `tests/e2e/save-golden-digest.mjs` at the byte level.
 
 One deliberate exception: `track-identity-ops.js` `deleteTrackAt` still writes the
 legacy `"frame:cam:null"` STRING for entries on the deleted track. That is not
@@ -11398,7 +11410,9 @@ stack. See `ui/calibration-notice.js`.
   `../ui/loading-overlay.js` (`showLoadingProgress`, `createProgressPacer`,
   `yieldToPaint`), `../import-export/import-track-resolve.js`,
   `../pose/initialization.js`, `../ui/sessions-panes.js`, `../ui/ui-wiring.js`,
-  `../import-export/visibility-metadata.js` (`readVisibilityMetadata`) and
+  `../import-export/visibility-metadata.js` (`readVisibilityMetadata`),
+  `../import-export/frame-identity-metadata.js` (`readFrameIdentityMetadata`,
+  called by `handleLoadProjectSlpLazy` after the groups are rebuilt) and
   `../import-export/plane-metadata.js` (`readPlaneMetadata`, `resetPlaneState`,
   `planeMetadataConflict`), `../import-export/slp-provenance.js`
   (`fileSessionProvenance`, `fileSessionNames` — the single-SLP folder and lazy
@@ -12390,6 +12404,56 @@ the v2 and v3 project-JSON shapes) — and the four readers —
 
 ---
 
+### import-export/frame-identity-metadata.js
+
+**Purpose.** How `Session.frameIdentityMap` is stored in a `.slp`'s
+`metadata.lucid`, and how it is rebuilt on load. After Track All the map holds
+one entry per grouped 2D detection, each equal to its group's identity, which
+the file already stores per group; written in full it was 101 MB of JSON
+(3,458,373 entries) on an 8-camera, 176,406-frame project — built and parsed in
+the renderer, and as one HDF5 string headed for h5wasm's ~0.45 GB string-read
+ceiling on longer recordings. The writers now store only the exceptions:
+
+- `frameIdentityMap` — entries the groups do not reproduce (same shape as before);
+- `frameIdentityMapFromGroups: true` — rebuild the rest from the instance groups;
+- `frameIdentityMapDropped` — keys the groups imply that the map did not hold
+  (omitted when empty).
+
+The reader derives from the groups (`stampFrameIdentitiesFromGroups`), deletes
+the dropped keys, then sets the listed entries; the result is the saved map
+whatever order the groups are walked in (see `Session.frameIdentityExceptions`).
+
+**Rules.** (1) Never larger than the full map: when exceptions + dropped are not
+fewer than the map's entries (no groups, or a map that disagrees with them), the
+full list is written without the marker — the old form. An empty map writes `[]`
+as before. (2) A reader runs AFTER the groups are rebuilt. (3) The project JSON
+keeps the full map. A LUC3D build from before this opens a compact file with only
+the listed entries (its groups still know their animal).
+
+**Key exports.**
+- `FRAME_IDENTITY_METADATA_KEYS` — the three keys.
+- `writeFrameIdentityMetadata(lucid, session)` — fill a `metadata.lucid` dict.
+- `readFrameIdentityMetadata(session, lucid, opts)` — async; rebuild the map from
+  a compact file; returns false (and touches nothing) for a full-form file.
+- `stampFrameIdentitiesFromGroups(session, opts)` — async; moved here from
+  `slp-import.js` (re-exported there). Fills the map with (frame, camera, member
+  track) → the group's identity for every tracked member, never overwriting an
+  entry and skipping trackless members; reads `identityId` + `trackIdx` only (no
+  2D hydration); yields every 40 ms with a progress message.
+
+**Imports from project modules.** None (Session methods are reached through the
+instance), so it sits outside the slp-import / session-loader import graph.
+
+**Imported by.** Writers: `import-export/file-io.js` (`buildSlpLabelsAllViews`),
+`import-export/slp-streaming-write.js` (`buildSessionRefGraph`). Readers:
+`import-export/slp-import.js` (`restoreGroupingAndUnlink`),
+`loading/session-loader.js` (`handleLoadProjectSlpLazy`).
+
+**Tests.** `tests/e2e/frame-identity-compact-roundtrip.mjs`;
+`tests/e2e/lazy-reopen-group-identities.mjs` (the group-only campy case).
+
+---
+
 ### import-export/mesh-export.js
 
 **Purpose.** A 3D mesh object as a file another program can open: **binary
@@ -12772,6 +12836,8 @@ session's resident/total) rather than truncate silently. Covered by
 - `./visibility-metadata.js` — `writeVisibilityMetadata` (its only deps are
   dependency-free `ui/` leaves, so it adds nothing to this module's import
   graph).
+- `./frame-identity-metadata.js` — `writeFrameIdentityMetadata` (fills
+  `metadata.lucid.frameIdentityMap` in `buildSlpLabelsAllViews`; no imports).
 - `./plane-metadata.js` — `writePlaneMetadata`.
 
 **Imported by.** `import-export/save-load.js`,
@@ -12936,7 +13002,8 @@ full grouping (identities + 3D) + 2D corrections.
 (`import-export/file-io.js`); `points3dNodeCount` (`pose/pose-data.js`);
 `writeVisibilityMetadata` (`import-export/visibility-metadata.js` — must stay in
 lockstep with the eager writer in `file-io.js`, which is why both call the one
-helper); `writePlaneMetadata` (`import-export/plane-metadata.js`, same reason).
+helper); `writeFrameIdentityMetadata` (`import-export/frame-identity-metadata.js`,
+same reason); `writePlaneMetadata` (`import-export/plane-metadata.js`, same reason).
 **Imported by.** `import-export/save-load.js`
 (`buildSlpBytes`, `saveAllSessionsStreaming`, `commitSessionForMultiSessionSave`,
 `finalizeMultiSessionSave`).
@@ -13252,16 +13319,18 @@ first track.
   card's counted hook, called at each yield and at the end; `opts.onProgress`
   still gets the old message. `stampFrameIdentitiesFromGroups` takes the same
   `opts.onCount`.
-- `stampFrameIdentitiesFromGroups(session, opts)` — async; fills
-  `frameIdentityMap` with (frame, camera, member track) → the group's identity
-  for every tracked member, never overwriting an entry and skipping trackless
-  members. For files whose identities live only on the groups (campy-live-export:
-  file catalog + per-group `identity_idx`/`identityId`, no LUC3D
-  `identities`/`frameIdentityMap`/`trackIdentityMap`); without it the Identity
-  timeline and colour by identity show nothing. Called by `restoreGroupingAndUnlink`
-  and `handleLoadProjectSlpLazy` only in that case, so LUC3D projects reopen as
-  saved. Reads `identityId` + `trackIdx` only (no 2D hydration); typed-array map,
-  ~44 B per entry. Test: `tests/e2e/lazy-reopen-group-identities.mjs`.
+- `stampFrameIdentitiesFromGroups(session, opts)` — now DEFINED in
+  `./frame-identity-metadata.js` and re-exported here for existing callers. For
+  files whose identities live only on the groups (campy-live-export: file
+  catalog + per-group `identity_idx`/`identityId`, no LUC3D
+  `identities`/`frameIdentityMap`/`trackIdentityMap`) `restoreGroupingAndUnlink`
+  and `handleLoadProjectSlpLazy` call it directly; without it the Identity
+  timeline and colour by identity show nothing. Takes `opts.onCount(done, total)`
+  (the Open project card's counted hook) as well as `opts.onProgress`. Test:
+  `tests/e2e/lazy-reopen-group-identities.mjs`.
+- `restoreGroupingAndUnlink` also calls `readFrameIdentityMetadata` right after
+  the groups are rebuilt, which rebuilds `frameIdentityMap` from them when the
+  file stored it in the compact form (see `import-export/frame-identity-metadata.js`).
 - `parseSlpForImport(file, onProgress)` (private) — dispatches `.slp` →
   `parseSlpViaSleapIO`, else / on error → `parseSlpH5`.
 
@@ -13319,7 +13388,8 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
   `../pose/initialization.js`, `../ui/ui-wiring.js`,
   `../ui/frame-readout.js` (`refreshReadoutTotals`, when a video-less import
   sets the frame count), `../ui/sessions-panes.js`, `./visibility-metadata.js`
-  (`readVisibilityMetadata`), `./plane-metadata.js` (`readPlaneMetadata`,
+  (`readVisibilityMetadata`), `./frame-identity-metadata.js`
+  (`stampFrameIdentitiesFromGroups`, `readFrameIdentityMetadata`), `./plane-metadata.js` (`readPlaneMetadata`,
   `resetPlaneState`), `./import-track-resolve.js`
   (`remapGlobalTrackToSession`, `nulledNodesFromOcclusion`),
   `./slp-provenance.js` (`fileSessionProvenance`, `fileSessionNames` — each
