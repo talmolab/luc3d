@@ -11,6 +11,7 @@ import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from 
 import { drawAllOverlays, updateFrameCounters } from './rendering.js';
 import { isInteractiveClickTarget } from './interaction.js';
 import { persistSectionState } from './section-state.js';
+import { renderRecordingInfo } from './recording-info.js';
 import { buildLazySelect } from './lazy-select.js';
 import { confirmSkeletonEdit, isSkeletonEditWarningSuppressed,
          setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js';
@@ -1197,6 +1198,7 @@ export function updateInfoPanel() {
         return;
     }
 
+    renderRecordingInfo(state.session);
     if (!state.session) {
         document.getElementById('infoCameras').textContent = '-';
         document.getElementById('infoSkeleton').textContent = '-';

@@ -1822,6 +1822,14 @@ export class Session {
         this.lazyLoader = null;
         /** @type {Map<string,{data:Uint8Array,nTracks:number,nFrames:number}>|null} Per-camera track occupancy for timeline */
         this.trackOccupancy = null;
+        /**
+         * The provenance of the .slp this session was loaded from, without
+         * LUC3D's own keys (e.g. campy-live-export's copies of the recording's
+         * session.json). Written back on save — `import-export/slp-provenance.js`.
+         * In memory only, never in `metadata.lucid`; null when there was none.
+         * @type {Object|null}
+         */
+        this.fileProvenance = null;
     }
 
     addIdentity(name, color) {

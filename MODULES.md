@@ -1434,6 +1434,9 @@ session graph that holds them.
   `pose/initialization.js`. Tested by `tests/test-group-display-name.mjs`.
 - `Session` — top-level container: cameras, skeleton, tracks, identities,
   frameGroups, instanceGroups.
+  - **`fileProvenance`** — the provenance of the `.slp` it was loaded from,
+    without LUC3D's own keys (null when none); in memory only, written back on
+    save by `import-export/slp-provenance.js`.
   - **`predictedNodeScore(cameraName, frameIdx, inst, k)`** is the one answer to
     "what did the model score this node?" — the node tooltip and the streaming
     writer's overlay both ask it. NaN unless `inst` is `'predicted'` (an edit
@@ -4266,7 +4269,8 @@ Edit Group mode, track-swap dialogs.
 
 **Purpose.** Right-hand info panel — populates the Videos, Cameras,
 Skeleton, Sessions, and Frame Info tables; hosts the skeleton editor and
-the per-frame instance-group / unlinked-instance tables.
+the per-frame instance-group / unlinked-instance tables. `updateInfoPanel` also
+renders the Session tab's Recording section (`ui/recording-info.js`).
 
 **Reprojection Error panel (`updateFrameInfo`).** The headline mean,
 undistorted residual, method label, and per-camera rows are the frame SUMMARY
@@ -10269,6 +10273,10 @@ via the options bag.
   `showInitialView`, `setMissingVideoCameras`, `highlightCamera`,
   `resize`, `resetCamera`, `lookAtOrigin`, `fitToScene`, `originPivot`,
   `originUp`, `setVisible(visible)` / `isVisible()`, `dispose`.
+- **`skeleton` may be null** (`newProject`, removing the last session) and the
+  loaders seek — which draws — before they set the new one; `updateSkeleton`
+  and `setEnvironment` draw a null skeleton as one with no edges rather than
+  throw (`tests/e2e/new-project-then-load.mjs`).
 - **`setVisible(false)` stops ALL processing** (the `\` toggle's other half —
   see `ui/panel-visibility.js`); a collapsed container is still a WebGL render
   target, so an unpaused `_animate()` would render ~60x/second for nothing.
@@ -10708,6 +10716,28 @@ it qualifies the action, it is not a third one) and `#skeletonWarnOffNote`.
 app over a two-session project, incl. Esc/Cancel leaving it byte-identical, the
 lazy warning with a resident negative control, and the no-dialog gate.
 
+### ui/recording-info.js
+
+**Purpose.** The Session tab's **Recording** section (`#recordingInfoSection`,
+a `<details>` under Session Info): a campy recording's `session.campyRecording`
+(`loading/campy-session.js`). Hidden for any other session. Rows: status (the
+warning colour unless `complete`, with a plain explanation), experiment, animal
+IDs (with an ⓘ saying they are not LUC3D's identities), notes, other fields,
+annotations with their times, frame rate (and what the video says when it
+differs by > 1%), start time, campy's version, the calibration check ("same as
+campy-live's", or a warning naming both hashes), cameras in only one of
+session.json and the calibration, and a Camera / Serial / Video table.
+
+**Key exports.** `setupRecordingInfo()` (once at init: `persistSectionState`,
+browser-local), `renderRecordingInfo(session)` (called by `updateInfoPanel`),
+`formatCampyTime`, `RECORDING_SECTION_ID`, `ANIMAL_IDS_INFO`.
+
+**Dependencies.** `loading/campy-session.js`, `ui/section-state.js`,
+`ui/info-tip.js`, `ICON_INFO` from `ui/plane-definition.js` (read only inside a
+function, so the cycle through the info panel is hoist-safe).
+
+**Tests.** `tests/e2e/campy-session-folder.mjs`.
+
 ### ui/section-state.js
 
 **Purpose.** Remember which collapsible `<details>` sections a user left open,
@@ -10926,6 +10956,62 @@ only cites it in a comment.)
 
 **Tests.** `tests/test-calibration-file-pick.mjs`.
 
+### loading/campy-session.js
+
+**Purpose.** What a campy recording folder says about itself. campy (2.1.1+)
+writes `<recording>/session.json` (schema `campy-session/1`); campy-live writes
+`campy-live-session*.json` beside it (schema `campy-live-session/1`). Fields are
+documented in campy's `docs/recordings.md`. This module finds the manifests
+among a picked folder's files and turns them into the record the loaders put on
+`session.campyRecording`. **Read only, never written to the `.slp`** (the folder
+is the source; picking it again reads it again; `save-golden-digest.mjs` does
+not move). A folder without session.json gives null everywhere, so every loader
+behaves exactly as before.
+
+**No imports**, so `tests/test-campy-session.mjs` loads it in Node.
+
+**Key exports.**
+- `findCampyManifestFiles(files)` → `{session, live, root}|null`: the
+  SHALLOWEST `session.json`, the `campy-live-session*.json` in the same
+  directory, and that directory's relative path (what campy's relative `video`
+  paths join to).
+- `parseCampySession(text)` → the record, or null for anything but
+  `campy-session/1`: `frameRate` (`config.effective.frameRate.value`, null when
+  absent or ≤ 0), `status`, `startedAt`, `campyVersion`, `experiment` (`name`,
+  `animalIds` as strings, `notes`, `fields` as `[key, value]`), `annotations`,
+  `cameras` sorted by campy's `index` (`name`, `serial`, `folder`, `video`),
+  `failures`, `error`; plus `live`, `calibrationCheck`, `cameraMismatch`,
+  `videoFrameRate`, filled by the loader. campy's `"None"` for an unset field is
+  no value (`campyUnset`). **Animal IDs are display only**: campy-live numbers
+  animals as it first matches them, so they must never name identities.
+- `parseCampyLiveSession(text, fileName)` → `{file, calibration: {path, sha256,
+  cameraNames}|null}` (null calibration = a 2D-only run).
+- `parseCampyJson(text)` — both parsers read through it: `JSON.parse`, and on
+  failure the text again with Python's bare `NaN` / `Infinity` / `-Infinity`
+  (outside strings) as null. campy writes its manifests with Python's json
+  module, and real campy-live manifests hold `Infinity` (`--wait-sec`'s
+  default), which strict `JSON.parse` rejects; skipping the file silently
+  turned the calibration check off. A manifest that still cannot be read is
+  skipped with a console warning.
+- `readCampyRecording(files, readText?)` — both, as one record (`.root`, `.live`).
+- `campyCameraFor`, `orderByCampyCameras(record, items, keyOf)` (campy order,
+  others after in their own order, stable), `campyVideoFile` (matched by full
+  relative path), `preferCampyVideo`.
+- `compareCampyCameraNames(record, calibrationNames)`,
+  `sha256Hex(buffer)`, `compareCalibrationSha256(record, sha, fileName)` (a
+  match with ANY campy-live run counts), `frameRatesDisagree` (> 1%).
+- `describeCampyStatus(record)` → `{ok, label, detail}` in plain words;
+  `campyRecordingWarnings(record, {status})`, `withCampyWarnings(message, kind,
+  record, opts)` — a load's final status-bar message with the warnings added
+  (`success` → `warning`). `calibrationMismatchText`, `pathBaseName`.
+
+**Imported by.** `loading/session-loader.js`, `import-export/slp-import.js`,
+`ui/recording-info.js`.
+
+**Tests.** `tests/test-campy-session.mjs` (fixture
+`tests/fixtures/campy-recording/`, a real session.json),
+`tests/e2e/campy-session-folder.mjs`.
+
 ### loading/video-file-pick.js
 
 **Purpose.** Which of a camera's candidate videos is the session recording.
@@ -11111,6 +11197,26 @@ filesystem enumeration, decoder rebuild.
   dock (`updateVideoGridDisplay`). Covered by `tests/e2e/videos-panel-buttons.mjs`.
 - Session-mode UI: `showSessionModeModal`, `showMissingFilesPopup`.
 - Filesystem: `enumerateDirectoryHandle`.
+- **campy recordings** (`loading/campy-session.js`):
+  `adoptCampyRecording(session, files, {record, calibFile, calibrationNames})`
+  reads a picked folder's session.json (+ campy-live's manifests) onto
+  `session.campyRecording` (in memory only; null and untouched without one) and
+  runs `checkCampyCalibration(session, calibFile)` (SHA-256 through
+  `readBlobArrayBuffer`, compared with campy-live's). Called by the per-camera
+  loader, the single-SLP loader, `attachVideosForLazyReopen`,
+  `handleLoadSlpFile`'s Select Session Folder path, and `handleLoadCalibration`
+  (which reports only on the calibration). With a record:
+  `updateTotalFrames` uses its `frameRate` over the video estimate (and sets the
+  fps readout's `title`; the estimate is kept as `videoFrameRate` when it
+  differs by > 1%); views follow campy's camera order (the calibration's own
+  camera list keeps its order); each camera loads the file at campy's `video`
+  path; with no calibration, views are named after campy's cameras, not the
+  video stem (campy's are all `0.mp4`); the single-SLP loader takes videos from
+  session.json when there is no `videos/` and reads the root `.slp` over
+  campy-live-export's `points3d.h5`; the load's final status gains the
+  warnings (`withCampyWarnings`). `forceVideoSelectionWithFolder`'s folder
+  button and `pickParentDirectoryForSessions` pass the root-level manifests
+  through with the videos (JSON, so every caller's video filter drops them).
 - `recomputeUploadedCameras`.
 - Misc re-exports: `resolveImportTrackIdx` (from
   `import-export/import-track-resolve.js`) and `chooseCameraSlp` (from
@@ -11239,6 +11345,13 @@ bypasses the prompt for tests. Covered by `tests/test-lazy-reopen.js`. Before th
 first grouped frame it calls `setReprojErrorVisible(true)` when there are any
 `instanceGroups`, as every other 3D-populating path does, or
 `#reprojErrorSection` stays hidden (`tests/e2e/reopen-reprojection-panel-autopopulate.mjs`).
+Identities come from `metadata.lucid.identities`, else (like the eager
+`restoreGroupingAndUnlink`) the file's `/identity` catalog (`labels.identities`).
+In the catalog case — a file from another tool, e.g. campy-live-export — the
+reconstruct also reads each group's `identity_idx` (`fileIdentities`) and, unless
+the file has a `frameIdentityMap`/`trackIdentityMap`, `stampFrameIdentitiesFromGroups`
+derives the per-detection map the Identity timeline reads. LUC3D projects take
+neither step (`tests/e2e/lazy-reopen-group-identities.mjs`).
 
 **`handleLoadMultiSession` ends with a calibration cross-check.** The tail calls
 `noteSessionCalibrationDivergence(state.sessions)` LAST, once every session is
@@ -11271,7 +11384,9 @@ stack. See `ui/calibration-notice.js`.
   `../pose/initialization.js`, `../ui/sessions-panes.js`, `../ui/ui-wiring.js`,
   `../import-export/visibility-metadata.js` (`readVisibilityMetadata`) and
   `../import-export/plane-metadata.js` (`readPlaneMetadata`, `resetPlaneState`,
-  `planeMetadataConflict`).
+  `planeMetadataConflict`), `../import-export/slp-provenance.js`
+  (`fileSessionProvenance`, `fileSessionNames` — the single-SLP folder and lazy
+  project loaders keep the file's provenance on the session).
 
 **Imported by.** `pose/initialization.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`, `ui/info-panel.js`,
@@ -12389,6 +12504,50 @@ incl. `planeMetadataConflict`).
 
 ---
 
+### import-export/slp-provenance.js
+
+**Purpose.** Keeps a loaded `.slp`'s `provenance` dict through LUC3D's project
+saves. Other programs keep real records there — campy-live-export
+(olinesn/campy `campy/liveexport.py` `Provenance()`) stores the recording's
+session.json, its campy-live-session.json, `animalIds` and `calibrationDiffers`
+— and every save used to replace it with a fresh `{ source: 'lucid',
+exported_at }`. DOM-free.
+
+**The rule.** Every key the file had is written back unchanged; LUC3D's
+`source: 'lucid'` + `exported_at` are refreshed and only ever replace LUC3D's
+own earlier pair (another program's `source`/`exported_at` stay, and LUC3D's
+pair goes under `lucid`). Sessions from different files: the first session
+with a provenance gives the top level, every session whose provenance differs
+is kept whole under `lucid_sessions` by session name (`{}` = none; a repeated
+name is `name #2`, …), and goes back to that session on reopen. No provenance
+anywhere → exactly `{ source, exported_at }`. The 2D exports (one camera,
+multi-session export) do not use it: they keep `{ source, exported_at }`.
+
+**Key exports.** `buildSaveProvenance(sessions, exportedAt?)` (reads each
+session's `name` + `fileProvenance`); `fileSessionProvenance(fileProv, names,
+index)` (what one loaded session keeps); `fileSessionNames(rawSessions)`
+(`metadata.lucid.sessionName` per `sessions_json` entry);
+`foreignProvenance(prov)` (the dict minus LUC3D's keys, deep-copied);
+`provenanceSessionKeys(names)`; `LUCID_PROVENANCE_SOURCE`,
+`LUCID_PROVENANCE_KEY` (`lucid`), `PROVENANCE_SESSIONS_KEY` (`lucid_sessions`).
+
+**Imports from project modules.** None.
+
+**Imported by.** Writers: `import-export/save-load.js` (`buildSlpBytes` eager
+and single-session streaming, `finalizeMultiSessionSave`). Readers (set
+`session.fileProvenance`): `import-export/slp-import.js` (`handleLoadSlpFile`),
+`loading/session-loader.js` (`handleLoadSessionFolderSingleSlp`,
+`handleLoadProjectSlpLazy`). A new loader that builds a Session from an `.slp`
+must set it too, or a save drops the file's provenance. The per-camera and
+multi-session folder loaders do not (they read camera `.slp` files as 2D only).
+
+**Tests.** `tests/test-slp-provenance.mjs` (the rule),
+`tests/e2e/slp-provenance-roundtrip.mjs` (real load → Save → reopen: eager,
+lazy single-session and multi-session streaming writers, two sessions, a file
+without provenance, a ~120 KB provenance).
+
+---
+
 ### import-export/skeleton-json.js
 
 **Purpose.** Pure, DOM-free (de)serialization for standalone `.skeleton.json`
@@ -12477,7 +12636,9 @@ session's resident/total) rather than truncate silently. Covered by
 **Key exports.**
 - File pickers: `pickFiles`, `pickFolder`, `pickVideoFiles`.
 - Calibration: `parseCalibrationTOML`, `parseCalibrationJSON`,
-  `loadCalibrationFile`, `exportCalibrationTOML`, `downloadTOML`.
+  `loadCalibrationFile` (→ `{cameras, fileName, file}`; `file` lets
+  `handleLoadCalibration` hash it for a campy recording),
+  `exportCalibrationTOML`, `downloadTOML`.
 - Video matching: `matchVideosToCameras`, `buildVideoGrid`.
 - SLP build: `buildSlpExportData`, `buildPerCameraSlpJson`,
   `buildSlpLabels`, `buildSlpLabelsAllViews`,
@@ -12566,7 +12727,9 @@ session's resident/total) rather than truncate silently. Covered by
   `reconstructInstanceGroupsFromSession` for grouping — which reads LUCID's legacy
   inline `frame_group_dicts`, the canonical `sessions_json`, and the SLP 2.8
   columnar `/session_data`. The reader's I/O worker loads the vendored h5wasm
-  IIFE via `h5wasmUrl`.
+  IIFE via `h5wasmUrl`. `provenance` is the file's whole provenance dict
+  (`labels.provenance`; the raw worker returns it too), for
+  `import-export/slp-provenance.js`.
 - H5 build/parse: `buildPoints3dH5`, `buildReprojH5`,
   `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`. `buildReprojH5`
   (Save Reprojections) projects a group's stored 3D into each camera when it has
@@ -12929,7 +13092,9 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   (`writeVisibilityMetadata`/`readVisibilityMetadata` for the session-scoped
   settings in the legacy v2/v3 project JSON — same keys and omit-the-defaults
   rule as the `.slp` writers, at the session-dict level), `./plane-metadata.js`
-  (`writePlaneMetadata`/`readPlaneMetadata`/`resetPlaneState`, same reason).
+  (`writePlaneMetadata`/`readPlaneMetadata`/`resetPlaneState`, same reason),
+  `./slp-provenance.js` (`buildSaveProvenance` — every `.slp` project save keeps
+  the loaded files' provenance).
 
 **Imported by.** `pose/triangulation.js`, `pose/tracker.js`,
 `pose/initialization.js`, `import-export/slp-import.js`,
@@ -12953,6 +13118,14 @@ the status bar at the bottom.
 **Purpose.** SLP/H5 project import + 3D-points-overlay import. Three
 workflows: load fresh SLP (replaces state), additive merge SLP into
 current session, overlay reprojected points3d from H5.
+
+**campy recordings.** When the video prompt's folder is a campy recording
+(session.json), `handleLoadSlpFile` puts it on the session
+(`adoptCampyRecording`, `loading/session-loader.js`): a camera whose campy video
+was picked loads only that video, views follow campy's camera order, the frame
+rate is session.json's, and the final status gains each session's warnings
+(`campyRecordingWarnings`). No calibration hash check here: the calibration
+came from the `.slp`.
 
 The `.slp` parse is dispatched by the private `parseSlpForImport(file,
 onProgress)`: real `.slp` files go through `parseSlpViaSleapIO` (sleap-io.js
@@ -13041,7 +13214,10 @@ first track.
   metadata from `ig.metadata.lucid.instanceMeta`, 3D from `ig.instance3d.points`,
   the solver from `ig.metadata.lucid.triangulationMethod` (absent = `'dlt'`), and
   per-session identity from `ig.metadata.lucid.identityId` (else the raw dict's
-  `identity_idx` for legacy files). Reads both LUCID's legacy and the canonical
+  `identity_idx` for legacy files; else, with `opts.fileIdentities` — the typed
+  `/identity` catalog carried on each `slpData.sessions[]` entry as
+  `_typedIdentities`, passed by `restoreGroupingAndUnlink` only when the session's
+  identities came from that catalog — the group's canonical `identity_idx`). Reads both LUCID's legacy and the canonical
   `sessions_json`. Same pass-1 dedup + trackless/identity-less handling as the
   dict version. Returns `{ restoredGroups, restoredWith3d }`.
   **Per-node model scores** (shown by the node tooltip): from the typed
@@ -13049,7 +13225,20 @@ first track.
   group member REPLACES (`adoptPointScoresFrom` — the group dict has none).
 - `reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, opts)`
   — async; the lazy-reopen analog (see "Lazy reopen's lightweight members"
-  below). Imported by `loading/session-loader.js`.
+  below). Imported by `loading/session-loader.js`. Identity per group from
+  `metadata.lucid.identityId`; with `opts.fileIdentities` (the typed `/identity`
+  catalog, passed only when `session.identities` was built from it) a group
+  without one takes its canonical `identity_idx` (`typedIG.identity`).
+- `stampFrameIdentitiesFromGroups(session, opts)` — async; fills
+  `frameIdentityMap` with (frame, camera, member track) → the group's identity
+  for every tracked member, never overwriting an entry and skipping trackless
+  members. For files whose identities live only on the groups (campy-live-export:
+  file catalog + per-group `identity_idx`/`identityId`, no LUC3D
+  `identities`/`frameIdentityMap`/`trackIdentityMap`); without it the Identity
+  timeline and colour by identity show nothing. Called by `restoreGroupingAndUnlink`
+  and `handleLoadProjectSlpLazy` only in that case, so LUC3D projects reopen as
+  saved. Reads `identityId` + `trackIdx` only (no 2D hydration); typed-array map,
+  ~44 B per entry. Test: `tests/e2e/lazy-reopen-group-identities.mjs`.
 - `parseSlpForImport(file, onProgress)` (private) — dispatches `.slp` →
   `parseSlpViaSleapIO`, else / on error → `parseSlpH5`.
 
@@ -13110,6 +13299,8 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
   (`readVisibilityMetadata`), `./plane-metadata.js` (`readPlaneMetadata`,
   `resetPlaneState`), `./import-track-resolve.js`
   (`remapGlobalTrackToSession`, `nulledNodesFromOcclusion`),
+  `./slp-provenance.js` (`fileSessionProvenance`, `fileSessionNames` — each
+  session keeps its part of the file's provenance),
   `../loading/video-file-pick.js` (`preferNonCalibrationVideos`),
   `../ui/loading-progress-modal.js` (`getLoadingProgressModal`),
   `../loading/cold-read-guard.js`

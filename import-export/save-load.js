@@ -49,6 +49,7 @@ import {
 import { clearReadout } from '../ui/frame-readout.js';
 import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js';
 import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
+import { buildSaveProvenance } from './slp-provenance.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
 
 /**
@@ -180,7 +181,7 @@ export function newProject(force) {
     // Reset frame counter display
     clearReadout();
     var fpsEl = document.getElementById('fpsDisplay');
-    if (fpsEl) fpsEl.textContent = '30.0 fps';
+    if (fpsEl) { fpsEl.textContent = '30.0 fps'; fpsEl.title = ''; }
 
     // Reset seekbar
     var seekbar = document.getElementById('seekbar');
@@ -687,7 +688,7 @@ async function buildSlpBytes(opts) {
             console.log('[save-slp] lazy session → streaming writer (', lazySess.lazyLoader.nFrames, 'frames ×',
                 lazySess.cameras.length, 'cameras )');
             return await buildSessionSlpBytesStreaming(lazySess, lazyViews, lazyVideoFiles,
-                { sink: opts.sink, onProgress: onProgress });
+                { sink: opts.sink || undefined, provenance: buildSaveProvenance([lazySess]), onProgress: onProgress });
         }
         return await saveAllSessionsStreaming(sessionsToExport, { sink: opts.sink, onProgress: onProgress });
     }
@@ -807,7 +808,8 @@ async function buildSlpBytes(opts) {
         tracks: allTracks,
         identities: allIdentities,
         sessions: allSessions,
-        provenance: { source: 'lucid', exported_at: new Date().toISOString() },
+        // Keeps the loaded files' provenance (slp-provenance.js).
+        provenance: buildSaveProvenance(sessionsToExport),
     });
 
     // PR 5.2: export sleap-io.js's canonical bytes directly. The typed graph
@@ -1017,7 +1019,8 @@ export async function finalizeMultiSessionSave(handle, opts) {
     // same stages, with the 2D step counted over sessions.
     var onProgress = (opts && opts.onProgress) || null;
     if (onProgress) await onProgress('header');
-    var writer = await openProjectWriter(handle.ctx, handle.pending.map(function (p) { return p.refGraph.sioSession; }));
+    var writer = await openProjectWriter(handle.ctx, handle.pending.map(function (p) { return p.refGraph.sioSession; }),
+        buildSaveProvenance(handle.pending.map(function (p) { return p.session; })));
     _lap('openProjectWriter (writes /session_data + sessions_json)');
     try {
         for (var j = 0; j < handle.pending.length; j++) {

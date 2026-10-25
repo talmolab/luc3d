@@ -281,7 +281,7 @@ export async function loadCalibrationFile() {
     } else {
         throw new Error('Unsupported calibration format: ' + file.name);
     }
-    return { cameras: cameras, fileName: file.name };
+    return { cameras: cameras, fileName: file.name, file: file };
 }
 
 /**
@@ -2792,7 +2792,10 @@ export function parseSlpH5(file, onProgress, opts) {
  * PLUS a `_typedSession` ref (the typed `RecordingSession`). Grouping is rebuilt
  * from that typed session by `reconstructInstanceGroupsFromSession`, which reads
  * both LUCID's legacy and the new canonical `sessions_json` (the raw dict is kept
- * for the legacy per-group `identity_idx` fallback — see 13-pr51-probe-findings.md).
+ * for the legacy per-group `identity_idx` fallback — see 13-pr51-probe-findings.md)
+ * and a `_typedIdentities` ref (the file's typed `/identity` catalog, which the
+ * typed groups' `identity` resolves into — the `identity_idx` fallback for files
+ * written by other tools, e.g. campy-live-export).
  *
  * The reader's own HDF5 I/O worker loads `h5wasm` via `importScripts`, so it
  * needs an **IIFE** build — pointed at LUCID's LOCAL vendored `h5wasm.iife.js`
@@ -2900,7 +2903,10 @@ export async function parseSlpViaSleapIO(file, onProgress) {
                 if (rs[ri] != null) sessions.push(rs[ri]);
             }
         } else {
-            sessions.push(Object.assign({}, rs, { _typedSession: typedSessions[si] || null }));
+            sessions.push(Object.assign({}, rs, {
+                _typedSession: typedSessions[si] || null,
+                _typedIdentities: labels.identities || [],
+            }));
         }
     }
 
@@ -2917,6 +2923,9 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         videos: videos,
         sessions: sessions,
         identities: identities,
+        // The file's whole provenance dict (slp-provenance.js picks each
+        // session's part).
+        provenance: labels.provenance || null,
     };
 }
 

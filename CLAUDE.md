@@ -83,7 +83,9 @@ Per-session state, written to each session's dict by exactly two modules:
 - `import-export/visibility-metadata.js` (`VISIBILITY_METADATA_KEYS`): `videoBrightness`/`videoContrast`/`videoRotation`, `hiddenCameras`/`hiddenTracks`/`hiddenIdentities`, `idSwitchReview`, `numAnimals` (a count or `"auto"`; absent until asked, so a reopened session asks again; changing it marks the project dirty).
 - `import-export/plane-metadata.js` (`PLANE_METADATA_KEYS`, mapping in DOM-free `pose/plane-serialization.js`). `planeNodes`/`planes`/`meshObjects`/`planeOrigin` are project-scoped: the same in every session, read from the first one ingested. `planePlacements` is per session and must not leak.
 
-Writers: `file-io.js`, `slp-streaming-write.js`, `save-load.js`. Readers: `handleLoadSlpFile`, `handleLoadProjectSlpLazy`, `handleLoadSessionFolderSingleSlp` and the `save-load.js` reader. A new setting changes only its module. A new loader that builds a Session by hand must call BOTH readers, or settings and planes silently reset to defaults. The per-camera and multi-session folder loaders are NOT readers: they ignore a root `.slp` and read camera-folder `.slp` files as 2D only.
+Writers: `file-io.js`, `slp-streaming-write.js`, `save-load.js`. Readers: `handleLoadSlpFile`, `handleLoadProjectSlpLazy`, `handleLoadSessionFolderSingleSlp` and the `save-load.js` reader. A new setting changes only its module. A new loader that builds a Session by hand must call BOTH readers, or settings and planes silently reset to defaults.
+
+The file-level `provenance` (outside `metadata.lucid`) is kept too, via `import-export/slp-provenance.js`, because campy-live-export stores the recording's session.json there. The three `.slp` readers set `session.fileProvenance`, and project saves write `buildSaveProvenance(sessions)`, never a fresh `{source, exported_at}`. Exports keep the fresh pair. Tests: `test-slp-provenance.mjs`, e2e `slp-provenance-roundtrip`. The per-camera and multi-session folder loaders are NOT readers: they ignore a root `.slp` and read camera-folder `.slp` files as 2D only.
 
 Rules:
 - **Never write defaults.** `tests/e2e/save-golden-digest.mjs` must not move.
@@ -193,6 +195,17 @@ One skeleton object is shared by all sessions, and `Instance` stores 2D by node 
 - No annotations → no dialog (`skeletonEditNeedsConfirmation`). "Do not show again" is `localStorage.skeletonEditWarningOff`: checked before the tally, recorded only when the edit is applied, never in the `.slp`; a storage failure means warn, never skip; `#skeletonWarnOffNote` turns it back on.
 - Every edit calls `markDirty()`. Keep the dialog to title + one sentence + counts.
 Tests: `tests/test-skeleton-edit-impact.mjs`, `tests/test-pose-data.js`, `tests/e2e/skeleton-edit-warning.mjs`.
+
+## campy recording folders (`session.json`)
+
+campy writes `<recording>/session.json` (`campy-session/1`); campy-live writes `campy-live-session*.json` beside it. `loading/campy-session.js` (import-free) reads them; `adoptCampyRecording` (`loading/session-loader.js`) puts the record on `session.campyRecording`; the Session tab's Recording section is `ui/recording-info.js`.
+- **A folder without session.json loads exactly as before.** Every campy branch is gated on the record.
+- **Animal IDs are display only.** Never name identities or tracks with them: campy-live numbers animals as it first matches them.
+- **Read, never written:** not in the `.slp` (`save-golden-digest.mjs` must not move); picking the folder again re-reads it.
+- The frame rate is `config.effective.frameRate.value` over the video estimate (`updateTotalFrames`). Views follow campy's camera order, but the calibration's camera list keeps its order. Each camera loads the file at campy's `video` path (campy names every video `0.mp4`, so never name a view by video stem when campy names the camera).
+- A calibration FILE is hashed (`checkCampyCalibration`, through `readBlobArrayBuffer`) and compared with campy-live's `calibration.sha256`. A status other than `complete`, a mismatch, or cameras in only one of the two files go on the load's final status (`withCampyWarnings`) and in the section. Never a modal.
+- A folder prompt that keeps only videos must also pass the root-level manifests through (`campyManifestsAmong`).
+Tests: `tests/test-campy-session.mjs`, `tests/e2e/campy-session-folder.mjs`.
 
 ## UI conventions
 
