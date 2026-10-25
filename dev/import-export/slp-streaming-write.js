@@ -53,10 +53,11 @@
  * streams from the columnar store untouched.
  */
 
-import { _buildSioPoints } from './file-io.js?v=dc1662023532';
-import { points3dNodeCount } from '../pose/pose-data.js?v=dc1662023532';
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=dc1662023532';
-import { writePlaneMetadata } from './plane-metadata.js?v=dc1662023532';
+import { _buildSioPoints } from './file-io.js?v=79ba0d43f914';
+import { points3dNodeCount } from '../pose/pose-data.js?v=79ba0d43f914';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=79ba0d43f914';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=79ba0d43f914';
+import { writePlaneMetadata } from './plane-metadata.js?v=79ba0d43f914';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;
@@ -390,11 +391,13 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx) {
     sioSession.metadata.lucid = {
         sessionName: session.name || null,
         trustTracks: session.trustTracks || false,
-        frameIdentityMap: session.frameIdentityMap ? session.exportFrameIdentityEntries() : [],
+        frameIdentityMap: [],   // filled by writeFrameIdentityMetadata below
         identities: sessIdentitiesJson,
         skeleton: { name: session.skeleton.name || 'skeleton', nodes: session.skeleton.nodes, edges: session.skeleton.edges },
         tracks: session.tracks,
     };
+    // `frameIdentityMap`, minus what the instance groups already imply.
+    writeFrameIdentityMetadata(sioSession.metadata.lucid, session);
     // Session-scoped Visibility-panel state — each key omitted when it is at its
     // default, so untouched projects serialize byte-identically. Must stay in
     // lockstep with the eager writer in `file-io.js` (both call the one helper).

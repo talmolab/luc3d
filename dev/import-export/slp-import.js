@@ -9,62 +9,63 @@ import {
     InstanceGroup, Session,
     asPoints3d, points3dNodeCount, someValidPoint3d, lazyPlaceholderXY, pooledPoints3d,
     markPoints3dFromFile,
-} from '../pose/pose-data.js?v=dc1662023532';
+} from '../pose/pose-data.js?v=79ba0d43f914';
 import {
     getInstanceGroupsForFrame,
-} from '../pose/triangulation.js?v=dc1662023532';
+} from '../pose/triangulation.js?v=79ba0d43f914';
 import {
     parseSlpH5, parseSlpViaSleapIO, instanceMatchesPoints, parsePoints3dH5, pickFiles,
-} from './file-io.js?v=dc1662023532';
+} from './file-io.js?v=79ba0d43f914';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames,
-} from './slp-merge.js?v=dc1662023532';
-import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=dc1662023532';
+} from './slp-merge.js?v=79ba0d43f914';
+import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=79ba0d43f914';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController,
-} from '../ui/app-state.js?v=dc1662023532';
+} from '../ui/app-state.js?v=79ba0d43f914';
 import {
     autoAssignVideosToCameras, forceVideoSelection, forceVideoSelectionWithFolder,
     showParentDirMatchSummary, createViewForVideoFile, updateTotalFrames,
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
     adoptCampyRecording,
-} from '../loading/session-loader.js?v=dc1662023532';
-import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=dc1662023532';
+} from '../loading/session-loader.js?v=79ba0d43f914';
+import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=79ba0d43f914';
 import {
     campyVideoFile, orderByCampyCameras, campyRecordingWarnings,
-} from '../loading/campy-session.js?v=dc1662023532';
-import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=dc1662023532';
-import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=dc1662023532';
-import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=dc1662023532';
-import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js?v=dc1662023532';
+} from '../loading/campy-session.js?v=79ba0d43f914';
+import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=79ba0d43f914';
+import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=79ba0d43f914';
+import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=79ba0d43f914';
+import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js?v=79ba0d43f914';
+import { stampFrameIdentitiesFromGroups, readFrameIdentityMetadata } from './frame-identity-metadata.js?v=79ba0d43f914';
 import {
     showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
-} from './save-load.js?v=dc1662023532';
+} from './save-load.js?v=79ba0d43f914';
 
 // Circular import — these are still defined in app.js for now. They are only
 // invoked inside function bodies, never at module-init time, so live-binding
 // lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=dc1662023532';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=dc1662023532';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=dc1662023532';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=79ba0d43f914';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=79ba0d43f914';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=79ba0d43f914';
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=dc1662023532';
+import { setup3DViewport } from '../pose/initialization.js?v=79ba0d43f914';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
-import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=dc1662023532';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=dc1662023532';
+import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=79ba0d43f914';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=79ba0d43f914';
 // Block 1 (Prompt 4): keep timeline._uploadedCameras in sync after SLP
 // load so the gutter filters to the cameras that actually have video
 // assignments rather than every calibration camera.
-import { recomputeUploadedCameras } from '../loading/session-loader.js?v=dc1662023532';
+import { recomputeUploadedCameras } from '../loading/session-loader.js?v=79ba0d43f914';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=dc1662023532';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=dc1662023532';
-import { readVisibilityMetadata } from './visibility-metadata.js?v=dc1662023532';
-import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=dc1662023532';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=79ba0d43f914';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=79ba0d43f914';
+import { readVisibilityMetadata } from './visibility-metadata.js?v=79ba0d43f914';
+import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=79ba0d43f914';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -659,58 +660,9 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
     return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d };
 }
 
-/**
- * Fill `session.frameIdentityMap` from the instance groups' identities, for a
- * file that stores identities ONLY per group (campy-live-export writes
- * `identity_idx` + `metadata.lucid.identityId` on each group, and no LUC3D
- * session-level `frameIdentityMap`). Everything that asks "which animal is
- * this detection" — the Identity timeline, colour by identity, Propagate —
- * reads that map, so without it the reopened groups know their animal but the
- * timeline shows none.
- *
- * Writes one entry per tracked group member: (frame, camera, member's track)
- * → the group's identity — the same entries Track All writes. Never
- * overwrites an entry already there, and skips trackless members (the map
- * cannot key a null track; the group keeps the identity). Reads only
- * `group.identityId` and each member's `trackIdx`, so lazy placeholder members
- * work unchanged and no 2D is hydrated. Yields every `opts.yieldMs` (40 ms).
- *
- * Call only when the file carried no LUC3D identity metadata (see the callers),
- * so a LUC3D project reopens exactly as saved.
- *
- * @param {Session} session
- * @param {{onProgress?:(msg:string)=>void, onCount?:(done:number, total:number)=>(void|Promise), yieldMs?:number}} [opts]
- * @returns {Promise<number>} entries written
- */
-export async function stampFrameIdentitiesFromGroups(session, opts) {
-    opts = opts || {};
-    var onProgress = opts.onProgress || function () {};
-    var _now = function () { return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now(); };
-    var yieldMs = opts.yieldMs != null ? opts.yieldMs : 40;
-    var ty = _now();
-    var written = 0, done = 0, total = session.instanceGroups.size;
-    for (var [frameIdx, groups] of session.instanceGroups) {
-        done++;
-        for (var gi = 0; gi < groups.length; gi++) {
-            var g = groups[gi];
-            if (g.identityId == null || g.identityId < 0) continue;
-            for (var [camName, inst] of g.instances) {
-                if (inst.trackIdx == null || inst.trackIdx < 0) continue;
-                if (session.hasFrameIdentity(frameIdx, camName, inst.trackIdx)) continue;
-                session.setFrameIdentity(frameIdx, camName, inst.trackIdx, g.identityId);
-                written++;
-            }
-        }
-        if (_now() - ty > yieldMs) {
-            onProgress('Restoring identities (' + done.toLocaleString('en-US') + '/' + total.toLocaleString('en-US') + ')...');
-            if (opts.onCount) await opts.onCount(done, total);   // the Open project card's counted hook
-            await new Promise(function (r) { setTimeout(r, 0); });
-            ty = _now();
-        }
-    }
-    if (opts.onCount) await opts.onCount(total, total);
-    return written;
-}
+// `stampFrameIdentitiesFromGroups` moved to ./frame-identity-metadata.js, beside
+// the `.slp` form of `frameIdentityMap` that relies on it; re-exported for callers.
+export { stampFrameIdentitiesFromGroups };
 
 /**
  * Restore a session's LUCID project state (identities + InstanceGroup grouping +
@@ -812,6 +764,12 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
                 { onProgress: onProgress });
         }
         console.log('[load-slp] Rebuilt', _recon.restoredGroups, 'instance groups from session data,', _recon.restoredWith3d, 'with 3D points');
+
+        // A LUC3D file that stored only the identities its groups do not imply:
+        // rebuild the rest from the groups just restored.
+        if (await readFrameIdentityMetadata(session, lucidMeta, { onProgress: onProgress })) {
+            console.log('[load-slp] rebuilt', session.frameIdentityMap.size, 'per-frame identities from instance groups');
+        }
 
         // A file with the identities only on its groups (no LUC3D identity
         // list, no frameIdentityMap — campy-live-export): derive the
@@ -1281,7 +1239,7 @@ export async function handleLoadSlpFile(slpFile) {
             // --- Embedded videos: use frame-worker for on-demand extraction ---
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=dc1662023532', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=79ba0d43f914', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
@@ -1924,7 +1882,7 @@ export async function handleAddSlp() {
         if (hasEmbedded) {
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=dc1662023532', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=79ba0d43f914', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;

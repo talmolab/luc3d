@@ -21,7 +21,7 @@
  * claims to support it — then the original error stands (e.g. a corrupt file).
  */
 
-import { readBlobRange } from './cold-read-guard.js?v=dc1662023532';
+import { readBlobRange } from './cold-read-guard.js?v=79ba0d43f914';
 
 // Video sample-entry fourcc -> human name.
 const VIDEO_ENTRIES = {
