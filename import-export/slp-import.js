@@ -649,10 +649,13 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
 
         if (_now() - _ty > _yieldMs) {
             onProgress('Restoring 3D grouping (' + fki + '/' + fgKeys.length + ')...');
+            // The Open project card's counted hook (frames done, frames in all); awaited.
+            if (opts.onCount) await opts.onCount(fki, fgKeys.length);
             await new Promise(function (r) { setTimeout(r, 0); });
             _ty = _now();
         }
     }
+    if (opts.onCount) await opts.onCount(fgKeys.length, fgKeys.length);
     return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d };
 }
 
@@ -676,7 +679,7 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
  * so a LUC3D project reopens exactly as saved.
  *
  * @param {Session} session
- * @param {{onProgress?:(msg:string)=>void, yieldMs?:number}} [opts]
+ * @param {{onProgress?:(msg:string)=>void, onCount?:(done:number, total:number)=>(void|Promise), yieldMs?:number}} [opts]
  * @returns {Promise<number>} entries written
  */
 export async function stampFrameIdentitiesFromGroups(session, opts) {
@@ -700,10 +703,12 @@ export async function stampFrameIdentitiesFromGroups(session, opts) {
         }
         if (_now() - ty > yieldMs) {
             onProgress('Restoring identities (' + done.toLocaleString('en-US') + '/' + total.toLocaleString('en-US') + ')...');
+            if (opts.onCount) await opts.onCount(done, total);   // the Open project card's counted hook
             await new Promise(function (r) { setTimeout(r, 0); });
             ty = _now();
         }
     }
+    if (opts.onCount) await opts.onCount(total, total);
     return written;
 }
 

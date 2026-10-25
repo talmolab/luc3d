@@ -4914,8 +4914,8 @@ no bar. Pinned by `tests/e2e/fixtures/progress-card.js`.
 - `showLoading(msg, { title, step, steps, detail })` — indeterminate form
   (spinner + text); hides the bar and the percentage. `step`/`steps`/`detail`
   fill the detail line as in `showLoadingProgress`, for a step of a multi-step
-  run that cannot count its own work (Save's file-writing steps); without them
-  the detail line is hidden, as before.
+  run that cannot count its own work (Save's file-writing steps, Open project's
+  spinner steps); without them the detail line is hidden, as before.
 - **The title** (`opts.title` on either call) names the operation — "Track All",
   "Triangulate All", "Checking ID switches (body size)" — and is KEPT until
   `hideLoading` (or a call passing another; `''` clears it), so the progress
@@ -11327,7 +11327,23 @@ attach step lists the reason per file too.
 
 **Lazy project reopen (`handleLoadProjectSlpLazy`).** The memory-bounded "Load
 Project" path for a large saved project `.slp` (routed by `handleLoadProject` in
-`import-export/save-load.js` via `shouldUseLazySlp`). Opens the ONE interleaved
+`import-export/save-load.js` via `shouldUseLazySlp`). **It shows the progress
+card, titled "Open project"** (`createOpenProgress(fileName)`, exported for the
+test), one step per stage, the file name on the detail line: 1. Reading the
+project file — counted in MB, from `openProjectSlp`'s `onReadBytes` (one decimal
+below 100 MB); 2. Reading 3D groups and points (spinner, from the reader's
+"Building labeled frames" / "Reading identities" / "Reading sessions" stage
+messages, and from the last byte count, which the reader awaits, so the step
+is painted before the reader goes on); 3. Restoring 3D groups — counted in frames, from
+`reconstructInstanceGroupsFromSessionLazy`'s `onCount` (and, for a file with
+group-only identities, "Restoring identities" from
+`stampFrameIdentitiesFromGroups`'s `onCount`, as the same step); 4. Drawing the
+first frame (spinner). A counted stage repaints at most every
+`PROGRESS_INTERVAL_MS`, always shows its first count, and every call that
+changes the card awaits a paint, so each step is on screen before its work.
+Over a network share the open is bound by reading the file, which is why step 1
+counts bytes (it used to sit on "Reading points" for minutes). Covered by
+`tests/e2e/project-open-progress.mjs`. Opens the ONE interleaved
 multi-camera file with `SioLazyLoader.openProjectSlp`, restores calibration +
 grouping/IDs/3D from the typed `RecordingSession` via
 `reconstructInstanceGroupsFromSessionLazy` — 2D hydrates on scrub — and brings
@@ -11417,7 +11433,10 @@ synchronous.
   `trackNames` is the union over every opened camera (see "Track indices"), so
   nothing depends on which parallel open resolves first; returns THIS camera's
   own track names.
-- `openProjectSlp(file, onProgress)` — lazy reopen of a SINGLE multi-camera
+- `openProjectSlp(file, onProgress, onReadBytes)` — `onReadBytes(done, total)`
+  (optional, awaited) counts the bytes read of the four big tables, which the
+  vendored reader then reads in row slices (LUCID local patch, open progress);
+  without it the read is unchanged. Lazy reopen of a SINGLE multi-camera
   project `.slp` (Load Project for large projects): one interleaved store shared
   by every camera, split into the same per-camera maps. Sets `_sharedStore =
   true` so the streaming re-save appends the store ONCE, retains `videoIdByCam`
@@ -13229,6 +13248,10 @@ first track.
   `metadata.lucid.identityId`; with `opts.fileIdentities` (the typed `/identity`
   catalog, passed only when `session.identities` was built from it) a group
   without one takes its canonical `identity_idx` (`typedIG.identity`).
+  `opts.onCount(done, total)` (optional, awaited; frames) is the Open project
+  card's counted hook, called at each yield and at the end; `opts.onProgress`
+  still gets the old message. `stampFrameIdentitiesFromGroups` takes the same
+  `opts.onCount`.
 - `stampFrameIdentitiesFromGroups(session, opts)` — async; fills
   `frameIdentityMap` with (frame, camera, member track) → the group's identity
   for every tracked member, never overwriting an entry and skipping trackless
