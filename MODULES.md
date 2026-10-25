@@ -11333,7 +11333,8 @@ test), one step per stage, the file name on the detail line: 1. Reading the
 project file — counted in MB, from `openProjectSlp`'s `onReadBytes` (one decimal
 below 100 MB); 2. Reading 3D groups and points (spinner, from the reader's
 "Building labeled frames" / "Reading identities" / "Reading sessions" stage
-messages); 3. Restoring 3D groups — counted in frames, from
+messages, and from the last byte count, which the reader awaits, so the step
+is painted before the reader goes on); 3. Restoring 3D groups — counted in frames, from
 `reconstructInstanceGroupsFromSessionLazy`'s `onCount` (and, for a file with
 group-only identities, "Restoring identities" from
 `stampFrameIdentitiesFromGroups`'s `onCount`, as the same step); 4. Drawing the

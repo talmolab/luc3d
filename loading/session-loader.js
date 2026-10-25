@@ -2763,10 +2763,15 @@ export function createOpenProgress(fileName) {
         // the big tables are in; what is left of the read is the 3D groups.
         if (/^(Building labeled frames|Reading identities|Reading sessions)/.test(msg || '')) progress('sessions');
     };
-    progress.bytes = function (done, total) {
+    progress.bytes = async function (done, total) {
         // Whole megabytes for a big file; one decimal below 100 MB, so a small one still counts up.
         var MB = 1048576, k = total >= 100 * MB ? 1 : 10;
-        return progress('read', Math.round(done / MB * k) / k, Math.max(0.1, Math.round(total / MB * k) / k), 'MB');
+        var painted = progress('read', Math.round(done / MB * k) / k, Math.max(0.1, Math.round(total / MB * k) / k), 'MB');
+        if (painted) await painted;
+        // The big tables are in: step 2 starts here, inside a call the reader
+        // awaits, so it is painted before the reader goes on (its own stage
+        // messages are not awaited).
+        if (total > 0 && done >= total) await progress('sessions');
     };
     return progress;
 }
@@ -2885,6 +2890,8 @@ export async function handleLoadProjectSlpLazy(slpFile) {
 
         // Rebuild grouping + 3D (lightweight, memory-bounded).
         var nodeNames = skeleton.nodes.map(function (n) { return typeof n === 'string' ? n : (n.name || ''); });
+        var nGroupFrames = typedSession && typedSession.frameGroups ? typedSession.frameGroups.size : 0;
+        if (nGroupFrames > 0) await openProgress('groups', 0, nGroupFrames);
         await reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, {
             onCount: function (done, total) { return openProgress('groups', done, total); },
             fileIdentities: identitiesFromFile ? labels.identities : null,
