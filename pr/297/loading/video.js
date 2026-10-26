@@ -8,9 +8,9 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
-import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=1e2cdb437e86';
-import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=1e2cdb437e86';
-import { readBlobRange, guardedRangeSource } from './cold-read-guard.js?v=1e2cdb437e86';
+import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=13e2706efa3a';
+import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=13e2706efa3a';
+import { readBlobRange, guardedRangeSource } from './cold-read-guard.js?v=13e2706efa3a';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -88,6 +88,23 @@ export function frameCacheFrames(budgetMB, frameBytes) {
     if (!(total > 0)) return FRAME_CACHE_MAX;
     var n = Math.floor(budgetMB * 1024 * 1024 / total);
     return Math.max(FRAME_CACHE_MIN, Math.min(FRAME_CACHE_MAX, n));
+}
+
+/**
+ * `releaseFrames()` every decoder of these views — for a SESSION going off
+ * screen (another session loaded over it). `VideoController._shownViews` only
+ * sees the active session's views, so without this each loaded session keeps
+ * its full caches: measured on 3 open 8-camera sessions, 3.1 GB of ImageBitmaps
+ * held for the two not shown (GPU-backed, but counted by V8 as external
+ * memory), and Track All on the third took 79–96 s instead of ~24 s, most of it
+ * in back-to-back full GCs. Coming back re-decodes the current frame.
+ * @param {Array} views
+ */
+export function releaseViewsFrames(views) {
+    (views || []).forEach(function (v) {
+        var d = v && v.decoder;
+        if (d && typeof d.releaseFrames === 'function') d.releaseFrames();
+    });
 }
 
 /** Index of the frame nearest timestamp `t` in the sorted `times` (within half a frame), or -1. */

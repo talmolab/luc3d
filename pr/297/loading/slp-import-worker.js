@@ -13,15 +13,15 @@
  *
  * Messages OUT:
  *   { type: 'progress', message: string }
- *   { type: 'result', data: { skeleton, tracks, frames, videos, embeddedVideos, sessions } }
+ *   { type: 'result', data: { skeleton, tracks, frames, videos, embeddedVideos, sessions, provenance } }
  *   { type: 'metadata', data: { skeleton, trackNames, nodeNames, nFrames, nTracks, nNodes, videos } }
  *   { type: 'frameData', frameIdx, requestId, instances }
  *   { type: 'framesData', startIdx, endIdx, requestId, frames }
  *   { type: 'error', message: string }
  */
 
-import * as h5wasm from '../lib/h5wasm/hdf5_hl.js?v=1e2cdb437e86';   // local vendored 0.10.3 ESM
-import { parseSlpSkeleton } from './slp-skeleton.js?v=1e2cdb437e86';
+import * as h5wasm from '../lib/h5wasm/hdf5_hl.js?v=13e2706efa3a';   // local vendored 0.10.3 ESM
+import { parseSlpSkeleton } from './slp-skeleton.js?v=13e2706efa3a';
 
 var h5wasmReady = false;
 var FS = null;
@@ -424,6 +424,8 @@ async function parseSlp(file) {
             videos: videos,
             sessions: sessionsArr,
             identities: identitiesArr,
+            // The file's provenance dict, kept through a save (import-export/slp-provenance.js).
+            provenance: metadataJson.provenance || null,
         };
         if (columnar) {
             resultData.columnar = columnar;

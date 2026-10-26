@@ -23,11 +23,17 @@
  *   - a read that throws is tried again, after `COLD_READ_RETRY_MS` delays,
  *     before the last error is rethrown;
  *   - every part of a read that came back all zero (per 4 KiB block of the
- *     FILE, clipped to the read; neighbouring blocks merged) is read again, and
- *     the re-read replaces the zeros only when it holds a non-zero byte — the
- *     same rule as h5wasm's `lucidColdReadGuard`, so a re-read can never make
- *     a read worse. A re-read is checked the same way, at most three re-reads
- *     deep. Bytes that really are zero cost one small re-read.
+ *     FILE, clipped to the read; neighbouring blocks merged) is read again
+ *     TOGETHER WITH THE 4 KiB BLOCK ON EACH SIDE OF IT, and the re-read is
+ *     copied in only where the first read gave a zero byte — the same rule as
+ *     h5wasm's `lucidColdReadGuard`, so a re-read can never make a read worse.
+ *     The neighbours are there because a run of zeros need not start or end on
+ *     a block boundary: the block where it ends part-way (zeros, then real
+ *     bytes) is not all zero, so re-reading only the all-zero blocks left its
+ *     zeros in place — on cold 167 MB `.slp` files through h5wasm's copy of
+ *     the rule, every wrong block was that one (93 of 93). The repaired bytes
+ *     are checked again the same way, at most three re-reads deep. Bytes that
+ *     really are zero cost one small re-read.
  *
  * No imports, so a Node test can load it (tests/test-cold-read-guard.mjs).
  */
@@ -94,8 +100,9 @@ async function readRetrying(blob, start, end) {
 }
 
 /**
- * Re-read every all-zero part of `bytes` (read from `position` of `blob`) and
- * put the real bytes in place, in `bytes` itself.
+ * Re-read every all-zero part of `bytes` (read from `position` of `blob`),
+ * with the 4 KiB block on each side of it, and put the real bytes in place, in
+ * `bytes` itself: a re-read byte is copied in only where `bytes` holds a zero.
  * @param {Blob} blob
  * @param {Uint8Array} bytes
  * @param {number} position
@@ -104,20 +111,25 @@ async function readRetrying(blob, start, end) {
  */
 export async function repairZeroRuns(blob, bytes, position, depth) {
     depth = depth || 0;
+    var end = position + bytes.length;
     var runs = zeroRuns(bytes, position);
     for (var i = 0; i < runs.length; i++) {
-        var lo = runs[i][0], hi = runs[i][1];
-        var again = await readRetrying(blob, lo, hi);
+        // A run need not end (or start) on a block boundary: the partly-zero
+        // block on each side is read again with it.
+        var from = Math.max(position, runs[i][0] - COLD_READ_BLOCK);
+        var to = Math.min(end, runs[i][1] + COLD_READ_BLOCK);
+        var again = await readRetrying(blob, from, to);
         coldReadStats.rereads++;
-        var nonZero = false;
-        for (var k = 0; k < again.length; k++) if (again[k] !== 0) { nonZero = true; break; }
-        if (!nonZero) continue;
-        // The re-read can carry a hole of its own further on.
-        if (depth < 2) await repairZeroRuns(blob, again, lo, depth + 1);
-        bytes.set(again.subarray(0, Math.min(again.length, hi - lo)), lo - position);
+        var fixed = 0;
+        for (var k = 0, at = from - position, n = Math.min(again.length, to - from); k < n; k++, at++) {
+            if (bytes[at] === 0 && again[k] !== 0) { bytes[at] = again[k]; fixed++; }
+        }
+        if (!fixed) continue;
         coldReadStats.recovered++;
-        console.warn('[cold-read] ' + nameOf(blob) + ' bytes ' + lo + '-' + hi
+        console.warn('[cold-read] ' + nameOf(blob) + ' bytes ' + from + '-' + to
             + ' first read as zeros were read again (file still downloading?)');
+        // The re-read can carry a hole of its own.
+        if (depth < 2) await repairZeroRuns(blob, bytes.subarray(from - position, to - position), from, depth + 1);
     }
     return bytes;
 }
