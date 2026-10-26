@@ -431,7 +431,7 @@
 
         // A decoder trimmed into the cold reserve is kept for reuse, but its
         // decoded-frame cache must go at once, not with the decoder 60 s later:
-        // measured on 3 open 8-camera sessions, the reserve held 2.4 GB of
+        // measured on 3 open 8-camera sessions, the reserve held 1.8 GB of
         // ImageBitmaps right after a switch, which V8 counts toward the limit
         // that sets off back-to-back full GCs. The reused decoders are cleared
         // by switchSource, so they are not released here.
