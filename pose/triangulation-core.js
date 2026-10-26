@@ -154,8 +154,6 @@ const _dltJA = new Float64Array(16);
 const _dltJV = new Float64Array(16);
 const _dltRowP = new Float64Array(4);
 const _dltRowQ = new Float64Array(4);
-const _dltL = new Float64Array(16);
-const _dltY = new Float64Array(4);
 
 /**
  * Smallest-eigenvalue eigenvector of the 4x4 symmetric `M` (flat, row-major),
@@ -260,34 +258,45 @@ function smallestEigvec4Inverse(M, out) {
     const tr = M[0] + M[5] + M[10] + M[15];
     if (!(tr > 0) || tr === Infinity) return smallestEigvec4Flat(M, out);
     const shift = tr * 1e-15;
-    const L = _dltL, y = _dltY;
-    for (let i = 0; i < 4; i++) {
-        for (let j = 0; j <= i; j++) {
-            let sum = M[i * 4 + j];
-            if (i === j) sum += shift;
-            for (let k = 0; k < j; k++) sum -= L[i * 4 + k] * L[j * 4 + k];
-            if (i === j) {
-                if (!(sum > 0)) return smallestEigvec4Flat(M, out);   // also catches NaN
-                L[i * 5] = Math.sqrt(sum);
-            } else {
-                L[i * 4 + j] = sum / L[j * 5];
-            }
-        }
-    }
+    // Cholesky M + δI = L·Lᵀ, unrolled into locals: the same operations in the
+    // same order as the row-by-row loop (lij is L[i][j]; each `−=` term in turn),
+    // so the same bits, without a store and reload per entry. A non-positive
+    // pivot anywhere means the Jacobi fallback, whichever pivot it is.
+    let sum = M[0] + shift;
+    if (!(sum > 0)) return smallestEigvec4Flat(M, out);       // also catches NaN
+    const l00 = Math.sqrt(sum);
+    const l10 = M[4] / l00;
+    sum = M[5] + shift; sum -= l10 * l10;
+    if (!(sum > 0)) return smallestEigvec4Flat(M, out);
+    const l11 = Math.sqrt(sum);
+    const l20 = M[8] / l00;
+    sum = M[9]; sum -= l20 * l10;
+    const l21 = sum / l11;
+    sum = M[10] + shift; sum -= l20 * l20; sum -= l21 * l21;
+    if (!(sum > 0)) return smallestEigvec4Flat(M, out);
+    const l22 = Math.sqrt(sum);
+    const l30 = M[12] / l00;
+    sum = M[13]; sum -= l30 * l10;
+    const l31 = sum / l11;
+    sum = M[14]; sum -= l30 * l20; sum -= l31 * l21;
+    const l32 = sum / l22;
+    sum = M[15] + shift; sum -= l30 * l30; sum -= l31 * l31; sum -= l32 * l32;
+    if (!(sum > 0)) return smallestEigvec4Flat(M, out);
+    const l33 = Math.sqrt(sum);
     let v0 = 0.5, v1 = 0.5, v2 = 0.5, v3 = 0.5;
     for (let it = 0; it < INVERSE_MAX_ITER; it++) {
-        // L·y = v (forward), then Lᵀ·w = y (back), w written into out
-        y[0] = v0 / L[0];
-        y[1] = (v1 - L[4] * y[0]) / L[5];
-        y[2] = (v2 - L[8] * y[0] - L[9] * y[1]) / L[10];
-        y[3] = (v3 - L[12] * y[0] - L[13] * y[1] - L[14] * y[2]) / L[15];
-        out[3] = y[3] / L[15];
-        out[2] = (y[2] - L[14] * out[3]) / L[10];
-        out[1] = (y[1] - L[9] * out[2] - L[13] * out[3]) / L[5];
-        out[0] = (y[0] - L[4] * out[1] - L[8] * out[2] - L[12] * out[3]) / L[0];
-        const norm = Math.sqrt(out[0] * out[0] + out[1] * out[1] + out[2] * out[2] + out[3] * out[3]);
+        // L·y = v (forward), then Lᵀ·w = y (back)
+        const y0 = v0 / l00;
+        const y1 = (v1 - l10 * y0) / l11;
+        const y2 = (v2 - l20 * y0 - l21 * y1) / l22;
+        const y3 = (v3 - l30 * y0 - l31 * y1 - l32 * y2) / l33;
+        const w3 = y3 / l33;
+        const w2 = (y2 - l32 * w3) / l22;
+        const w1 = (y1 - l21 * w2 - l31 * w3) / l11;
+        const w0 = (y0 - l10 * w1 - l20 * w2 - l30 * w3) / l00;
+        const norm = Math.sqrt(w0 * w0 + w1 * w1 + w2 * w2 + w3 * w3);
         if (!(norm > 0) || norm === Infinity) return smallestEigvec4Flat(M, out);
-        const a = out[0] / norm, b = out[1] / norm, c = out[2] / norm, d = out[3] / norm;
+        const a = w0 / norm, b = w1 / norm, c = w2 / norm, d = w3 / norm;
         const moved = Math.max(Math.abs(a - v0), Math.abs(b - v1), Math.abs(c - v2), Math.abs(d - v3));
         v0 = a; v1 = b; v2 = c; v3 = d;
         if (moved <= INVERSE_TOL) {
@@ -296,6 +305,28 @@ function smallestEigvec4Inverse(M, out) {
         }
     }
     return smallestEigvec4Flat(M, out);
+}
+
+/**
+ * One observation's two DLT rows, `x·(P·T)[2] − (P·T)[0]` at `A[o1..o1+3]` and
+ * `y·(P·T)[2] − (P·T)[1]` at `A[o2..o2+3]`, with T the normalizing frame
+ * `X = s·X' + c`. The one place these expressions are written, shared by
+ * `dltNormalMatrixFlat` and `DltViewSystem` so the two cannot drift apart.
+ */
+function dltRowsInto(x, y, P, s, cx, cy, cz, A, o1, o2) {
+    // Column 4 is row r of P·T's last entry:
+    //   P[r][0]*cx + P[r][1]*cy + P[r][2]*cz + P[r][3]
+    const p0w = P[0][0] * cx + P[0][1] * cy + P[0][2] * cz + P[0][3];
+    const p1w = P[1][0] * cx + P[1][1] * cy + P[1][2] * cz + P[1][3];
+    const p2w = P[2][0] * cx + P[2][1] * cy + P[2][2] * cz + P[2][3];
+    A[o1] = s * (x * P[2][0] - P[0][0]);
+    A[o1 + 1] = s * (x * P[2][1] - P[0][1]);
+    A[o1 + 2] = s * (x * P[2][2] - P[0][2]);
+    A[o1 + 3] = x * p2w - p0w;
+    A[o2] = s * (y * P[2][0] - P[1][0]);
+    A[o2 + 1] = s * (y * P[2][1] - P[1][1]);
+    A[o2 + 2] = s * (y * P[2][2] - P[1][2]);
+    A[o2 + 3] = y * p2w - p1w;
 }
 
 /**
@@ -311,21 +342,7 @@ function dltNormalMatrixFlat(xs, ys, Ps, nObs, s, cx, cy, cz) {
     if (_dltA.length < rows * 4) _dltA = new Float64Array(rows * 4 * 2);
     const A = _dltA;
     for (let idx = 0; idx < nObs; idx++) {
-        const x = xs[idx], y = ys[idx], P = Ps[idx];
-        const o1 = (2 * idx) * 4, o2 = (2 * idx + 1) * 4;
-        // Column 4 is row r of P·T's last entry:
-        //   P[r][0]*cx + P[r][1]*cy + P[r][2]*cz + P[r][3]
-        const p0w = P[0][0] * cx + P[0][1] * cy + P[0][2] * cz + P[0][3];
-        const p1w = P[1][0] * cx + P[1][1] * cy + P[1][2] * cz + P[1][3];
-        const p2w = P[2][0] * cx + P[2][1] * cy + P[2][2] * cz + P[2][3];
-        A[o1] = s * (x * P[2][0] - P[0][0]);
-        A[o1 + 1] = s * (x * P[2][1] - P[0][1]);
-        A[o1 + 2] = s * (x * P[2][2] - P[0][2]);
-        A[o1 + 3] = x * p2w - p0w;
-        A[o2] = s * (y * P[2][0] - P[1][0]);
-        A[o2 + 1] = s * (y * P[2][1] - P[1][1]);
-        A[o2 + 2] = s * (y * P[2][2] - P[1][2]);
-        A[o2 + 3] = y * p2w - p1w;
+        dltRowsInto(xs[idx], ys[idx], Ps[idx], s, cx, cy, cz, A, (2 * idx) * 4, (2 * idx + 1) * 4);
     }
     const M = _dltM;
     for (let i = 0; i < 4; i++) {
@@ -553,6 +570,99 @@ export function triangulatePoints(allObservations, projectionMatrices) {
         setPoint3d(results, k, triangulatePointDLT(allObservations[k], projectionMatrices));
     }
     return results;
+}
+
+/**
+ * One keypoint's DLT system, kept so it can be solved again on many SUBSETS of
+ * its views — the tracker's reprojection check (`checkedPoints3d` in
+ * `pose/cross-view-tracker.js`) leaves one view out at a time, up to V solves
+ * per round. `dltNormalMatrixFlat` forms each M entry as the products
+ * A[k][i]·A[k][j] summed over the rows k in order, and a subset's M is the same
+ * products over fewer rows. So `prepare` forms each view's two rows (the same
+ * expressions, in the same frame — `dltNormalizingFrame` of the SAME
+ * `projectionMatrices` array, so of every camera, left out or not) and their
+ * ten upper-triangle products ONCE, and `solve` only adds them up.
+ *
+ * `solve(use, out)` is therefore BIT-IDENTICAL to `triangulatePointDLT` on the
+ * observations with every view `!use[v]` nulled — not merely close: the same
+ * doubles added in the same order are the same sum, and the null vector and
+ * the dehomogenization are the same code. Subtracting a view's products from
+ * the full M would be cheaper and is NOT identical (the rounding differs).
+ * Pinned by tests/test-triangulation-kernels.mjs.
+ */
+export class DltViewSystem {
+    constructor() {
+        this.nViews = 0;
+        this.prods = new Float64Array(20 * 8);   // per view: row 2v's 10 products, then row 2v+1's
+        this.valid = new Uint8Array(8);          // observation AND projection matrix present
+        this.s = 1; this.cx = 0; this.cy = 0; this.cz = 0;
+    }
+
+    /** Form the rows of `observations[v]` through `projectionMatrices[v]` for every view. */
+    prepare(observations, projectionMatrices) {
+        const V = observations.length;
+        if (this.valid.length < V) {
+            this.valid = new Uint8Array(2 * V);
+            this.prods = new Float64Array(40 * V);
+        }
+        this.nViews = V;
+        const nf = dltNormalizingFrame(projectionMatrices);
+        const s = nf ? nf.s : 1;
+        const cx = nf ? nf.cx : 0, cy = nf ? nf.cy : 0, cz = nf ? nf.cz : 0;
+        this.s = s; this.cx = cx; this.cy = cy; this.cz = cz;
+        const A = _dltA, p = this.prods;
+        for (let v = 0; v < V; v++) {
+            const o = observations[v], P = projectionMatrices[v];
+            this.valid[v] = (o != null && P != null) ? 1 : 0;
+            if (!this.valid[v]) continue;
+            dltRowsInto(o[0], o[1], P, s, cx, cy, cz, A, 0, 4);
+            for (let r = 0; r < 2; r++) {
+                const a = r * 4, q = 20 * v + 10 * r;
+                p[q] = A[a] * A[a];         p[q + 1] = A[a] * A[a + 1];
+                p[q + 2] = A[a] * A[a + 2]; p[q + 3] = A[a] * A[a + 3];
+                p[q + 4] = A[a + 1] * A[a + 1]; p[q + 5] = A[a + 1] * A[a + 2];
+                p[q + 6] = A[a + 1] * A[a + 3]; p[q + 7] = A[a + 2] * A[a + 2];
+                p[q + 8] = A[a + 2] * A[a + 3]; p[q + 9] = A[a + 3] * A[a + 3];
+            }
+        }
+        return this;
+    }
+
+    /**
+     * Triangulate from the views with `use[v]` set (and an observation), into
+     * `out[0..2]`. Returns false where `triangulatePointDLT` returns null:
+     * fewer than two such views, or a point at infinity.
+     */
+    solve(use, out) {
+        const p = this.prods, valid = this.valid;
+        let m00 = 0, m01 = 0, m02 = 0, m03 = 0, m11 = 0, m12 = 0, m13 = 0, m22 = 0, m23 = 0, m33 = 0;
+        let n = 0;
+        for (let v = 0; v < this.nViews; v++) {
+            if (!valid[v] || !use[v]) continue;
+            n++;
+            // row 2v, then row 2v+1 — the k order `dltNormalMatrixFlat` sums in
+            for (let q = 20 * v, end = q + 20; q < end; q += 10) {
+                m00 += p[q]; m01 += p[q + 1]; m02 += p[q + 2]; m03 += p[q + 3];
+                m11 += p[q + 4]; m12 += p[q + 5]; m13 += p[q + 6];
+                m22 += p[q + 7]; m23 += p[q + 8]; m33 += p[q + 9];
+            }
+        }
+        if (n < 2) return false;
+        const M = _dltM;
+        M[0] = m00; M[1] = m01; M[2] = m02; M[3] = m03;
+        M[4] = m01; M[5] = m11; M[6] = m12; M[7] = m13;
+        M[8] = m02; M[9] = m12; M[10] = m22; M[11] = m23;
+        M[12] = m03; M[13] = m13; M[14] = m23; M[15] = m33;
+        const xHomog = smallestEigvec4Inverse(M, _dltOut);
+        // From here on exactly `triangulatePointDLT`'s tail.
+        const w = xHomog[3];
+        if (Math.abs(w) < 1e-10) return false;
+        const s = this.s;
+        out[0] = s * (xHomog[0] / w) + this.cx;
+        out[1] = s * (xHomog[1] / w) + this.cy;
+        out[2] = s * (xHomog[2] / w) + this.cz;
+        return true;
+    }
 }
 
 
@@ -1322,15 +1432,10 @@ export function invert3x3(M) {
  *   meanError: scalar mean error across all cameras and keypoints
  */
 export function triangulateAndReproject(instanceGroup, cameras, options) {
-    // Build ordered list of camera names and their projection matrices
     const cameraNames = [];
     const projMatrices = [];
     const cameraMap = {};
-    for (let c = 0; c < cameras.length; c++) {
-        cameraNames.push(cameras[c].name);
-        projMatrices.push(cameras[c].projectionMatrix);
-        cameraMap[cameras[c].name] = cameras[c];
-    }
+    _indexCameras(cameras, cameraNames, projMatrices, cameraMap);
 
     // Feature: views excluded in the Tracking Wizard's Camera Views panel never
     // CONTRIBUTE to the 3D solve — but we still reproject INTO them below, so an
@@ -1340,20 +1445,10 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     // Source: `options.includedCameras` (explicit list, for tests) else the live
     // Camera Views setting, reached through a hook — unset in a worker, where
     // every view is included (the pool passes `includedCameras` explicitly).
-    const included = cameraNames.map(function (n) {
-        if (options && options.includedCameras) return options.includedCameras.indexOf(n) >= 0;
-        return _settingsHooks.isCameraTracked ? _settingsHooks.isCameraTracked(n) : true;
-    });
+    const included = _includedCameras(cameraNames, options);
 
     // Determine number of keypoints from the first available instance
-    let numKeypoints = 0;
-    for (let c = 0; c < cameraNames.length; c++) {
-        const inst = instanceGroup.getInstance(cameraNames[c]);
-        if (inst && inst.numNodes > 0) {
-            numKeypoints = inst.numNodes;
-            break;
-        }
-    }
+    const numKeypoints = _groupNumKeypoints(instanceGroup, cameraNames);
 
     if (numKeypoints === 0) {
         return {
@@ -1374,32 +1469,9 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     //   the undistorted form (it is a linear method in ideal pinhole
     //   coordinates); the 'ba' refinement needs the raw form, because it
     //   minimizes in the space the reported error is measured in (issue #113).
-    const allObservations = [];
-    const allObservationsRaw = [];
-    for (let k = 0; k < numKeypoints; k++) {
-        const obsForKeypoint = [];
-        const rawForKeypoint = [];
-        for (let c = 0; c < cameraNames.length; c++) {
-            const inst = instanceGroup.getInstance(cameraNames[c]);
-            // Skip nulled nodes — they are excluded from triangulation
-            const isNulled = inst && inst.nulledNodes && inst.nulledNodes.has(k);
-            if (included[c] && inst && inst.hasPoint(k) && !isNulled) {
-                const cam = cameraMap[cameraNames[c]];
-                const raw2d = inst.getPoint(k);
-                rawForKeypoint.push(raw2d);
-                if (cam && cam.undistortPoint) {
-                    obsForKeypoint.push(cam.undistortPoint(raw2d));
-                } else {
-                    obsForKeypoint.push(raw2d);
-                }
-            } else {
-                obsForKeypoint.push(null);
-                rawForKeypoint.push(null);
-            }
-        }
-        allObservations.push(obsForKeypoint);
-        allObservationsRaw.push(rawForKeypoint);
-    }
+    const obs = _collectObservations(instanceGroup, cameraNames, cameraMap, included, numKeypoints);
+    const allObservations = obs.allObservations;
+    const allObservationsRaw = obs.allObservationsRaw;
 
     // Step 2: Triangulate.
     //   'dlt' (default) — fast linear DLT.
@@ -1504,6 +1576,169 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         return { points3d: points3d, reprojections: {}, errors: {}, meanError: null, method: method };
     }
 
+    // Steps 3-5: reproject into every camera and score (`_reprojectAndScore`,
+    // shared with `reprojectStoredPoints3d`, which runs them on a group's
+    // already-solved 3D).
+    const scored = _reprojectAndScore(instanceGroup, cameraNames, cameraMap, projMatrices,
+        points3d, allObservations, numKeypoints);
+    return {
+        points3d: points3d,
+        reprojections: scored.reprojections,
+        errors: scored.errors,
+        errorsUndistorted: scored.errorsUndistorted,
+        meanError: scored.meanError,
+        meanErrorUndistorted: scored.meanErrorUndistorted,
+        method: method
+    };
+}
+
+/**
+ * The reprojection half of `triangulateAndReproject` (its steps 3-5), run on
+ * the 3D a group ALREADY has (`instanceGroup.points3d`) instead of a fresh
+ * solve: reprojections into every camera, per-camera errors in native and
+ * undistorted pixels, and their means — the same result object, with
+ * `method` = the group's `triangulationMethod`.
+ *
+ * Errors are measured in the cameras the group has an instance in — the
+ * cameras the bulk solves use (`prep.groupCameras` in pose/triangulation.js)
+ * — and the reprojections cover every camera, as `reprojectIntoEveryCamera`
+ * does after such a solve; a camera with no instance has nothing to measure.
+ *
+ * It is `triangulateAndReproject`'s own code (`_collectObservations` +
+ * `_reprojectAndScore`), so for a group whose stored 3D IS that solve's output
+ * the two return the same numbers — except for one input the stored 3D does
+ * not record: with a reprojection-error threshold set, the solve drops
+ * over-threshold observations, and its UNDISTORTED errors leave those out.
+ * Callers that need that figure exactly re-solve instead (see
+ * `ui/rendering.js`'s reprojection fill).
+ *
+ * Why it exists: re-solving to get numbers the stored 3D already determines is
+ * what the display used to do for every frame Triangulate All had not kept
+ * results for — 2.4 ms per frame with one animal Refined on 17 cameras, 5.0 ms
+ * with three, against 0.1-0.2 ms for this.
+ *
+ * @param {InstanceGroup} instanceGroup - with `points3d` (flat [X,Y,Z] per node)
+ * @param {Camera[]} cameras - every camera to reproject into
+ * @param {{includedCameras?: string[]}} [options] - as `triangulateAndReproject`
+ * @returns {Object} the `triangulateAndReproject` result shape
+ */
+export function reprojectStoredPoints3d(instanceGroup, cameras, options) {
+    const members = cameras.filter(function (c) { return !!instanceGroup.getInstance(c.name); });
+    const cameraNames = [];
+    const projMatrices = [];
+    const cameraMap = {};
+    _indexCameras(members, cameraNames, projMatrices, cameraMap);
+    const included = _includedCameras(cameraNames, options);
+    const numKeypoints = _groupNumKeypoints(instanceGroup, cameraNames);
+    const method = instanceGroup.triangulationMethod === 'ba' ? 'ba' : 'dlt';
+    const points3d = instanceGroup.points3d;
+    if (numKeypoints === 0 || !points3d) {
+        return { points3d: points3d || makePoints3d(0), reprojections: {}, errors: {}, meanError: null, method: method };
+    }
+    const obs = _collectObservations(instanceGroup, cameraNames, cameraMap, included, numKeypoints);
+    const scored = _reprojectAndScore(instanceGroup, cameraNames, cameraMap, projMatrices,
+        points3d, obs.allObservations, numKeypoints);
+    const reprojections = {};
+    for (let c = 0; c < cameras.length; c++) {
+        const name = cameras[c].name;
+        reprojections[name] = scored.reprojections[name] || reprojectPointsCamera(points3d, cameras[c]);
+    }
+    return {
+        points3d: points3d,
+        reprojections: reprojections,
+        errors: scored.errors,
+        errorsUndistorted: scored.errorsUndistorted,
+        meanError: scored.meanError,
+        meanErrorUndistorted: scored.meanErrorUndistorted,
+        method: method
+    };
+}
+
+/**
+ * The keep-only-the-summary form of a solve's result, for the bulk sweeps
+ * (`createGroupSolver`'s `summaryOnly`): the 3D and the mean errors, without
+ * the per-camera reprojections and errors. Those are ~52 KB of small arrays per
+ * group at 17 cameras x 34 nodes, and a worker's reply would otherwise clone
+ * them all onto the main thread only for the sweep to drop them.
+ */
+export function triangulationSummary(result) {
+    return {
+        points3d: result.points3d,
+        meanError: result.meanError,
+        meanErrorUndistorted: result.meanErrorUndistorted,
+        method: result.method,
+    };
+}
+
+/** Fill `cameraNames` / `projMatrices` / `cameraMap` from `cameras`, in order. */
+function _indexCameras(cameras, cameraNames, projMatrices, cameraMap) {
+    for (let c = 0; c < cameras.length; c++) {
+        cameraNames.push(cameras[c].name);
+        projMatrices.push(cameras[c].projectionMatrix);
+        cameraMap[cameras[c].name] = cameras[c];
+    }
+}
+
+/** `included[c]`: whether camera c may CONTRIBUTE observations (see `triangulateAndReproject`). */
+function _includedCameras(cameraNames, options) {
+    return cameraNames.map(function (n) {
+        if (options && options.includedCameras) return options.includedCameras.indexOf(n) >= 0;
+        return _settingsHooks.isCameraTracked ? _settingsHooks.isCameraTracked(n) : true;
+    });
+}
+
+/** Node count of the group's first camera instance that has nodes, else 0. */
+function _groupNumKeypoints(instanceGroup, cameraNames) {
+    for (let c = 0; c < cameraNames.length; c++) {
+        const inst = instanceGroup.getInstance(cameraNames[c]);
+        if (inst && inst.numNodes > 0) return inst.numNodes;
+    }
+    return 0;
+}
+
+/**
+ * Step 1 of `triangulateAndReproject`: per keypoint, per camera, the
+ * undistorted observation and the raw one (or null) — see the comment there.
+ * @returns {{allObservations: Array, allObservationsRaw: Array}}
+ */
+function _collectObservations(instanceGroup, cameraNames, cameraMap, included, numKeypoints) {
+    const allObservations = [];
+    const allObservationsRaw = [];
+    for (let k = 0; k < numKeypoints; k++) {
+        const obsForKeypoint = [];
+        const rawForKeypoint = [];
+        for (let c = 0; c < cameraNames.length; c++) {
+            const inst = instanceGroup.getInstance(cameraNames[c]);
+            // Skip nulled nodes — they are excluded from triangulation
+            const isNulled = inst && inst.nulledNodes && inst.nulledNodes.has(k);
+            if (included[c] && inst && inst.hasPoint(k) && !isNulled) {
+                const cam = cameraMap[cameraNames[c]];
+                const raw2d = inst.getPoint(k);
+                rawForKeypoint.push(raw2d);
+                if (cam && cam.undistortPoint) {
+                    obsForKeypoint.push(cam.undistortPoint(raw2d));
+                } else {
+                    obsForKeypoint.push(raw2d);
+                }
+            } else {
+                obsForKeypoint.push(null);
+                rawForKeypoint.push(null);
+            }
+        }
+        allObservations.push(obsForKeypoint);
+        allObservationsRaw.push(rawForKeypoint);
+    }
+
+    return { allObservations: allObservations, allObservationsRaw: allObservationsRaw };
+}
+
+/**
+ * Steps 3-5 of `triangulateAndReproject`: reproject `points3d` into every
+ * camera and score it against the group's 2D. `allObservations` is the
+ * undistorted observations Step 1 collected (after any outlier rejection) —
+ * what the undistorted error is measured against.
+ */
+function _reprojectAndScore(instanceGroup, cameraNames, cameraMap, projMatrices, points3d, allObservations, numKeypoints) {
     // Step 3: Reproject to each camera, in the camera's native (distorted) pixel
     // space so reprojections align with the raw observed keypoints (the error in
     // Step 4 compares against the raw, still-distorted observations).
@@ -1572,13 +1807,11 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     const meanErrorUndistorted = totalCountUndist > 0 ? totalErrorUndist / totalCountUndist : null;
 
     return {
-        points3d: points3d,
         reprojections: reprojections,
         errors: errorsPerCamera,
         errorsUndistorted: errorsPerCameraUndistorted,
         meanError: meanError,
         meanErrorUndistorted: meanErrorUndistorted,
-        method: method
     };
 }
 
@@ -1589,6 +1822,7 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
  */
 export const __triangulationKernelsForTest = {
     svd3x4, dltHomogeneousFlat, dltNormalMatrixFlat, smallestEigvec4Flat, smallestEigvec4Inverse,
+    DltViewSystem, triangulatePointDLT,
     solveSmallestEigenvector4x4, matMul, matTranspose,
     projectAndJacobianCamera, projectAndJacobian,
     _projectAndJacobianCameraInto, _projectAndJacobianInto,
