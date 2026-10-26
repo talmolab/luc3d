@@ -5,41 +5,44 @@
 
 import {
     Skeleton, Camera, Session,
-} from '../pose/pose-data.js?v=edf9db6937ba';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=edf9db6937ba';
-import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=edf9db6937ba';
-import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=edf9db6937ba';
-import { isInteractiveClickTarget } from './interaction.js?v=edf9db6937ba';
-import { persistSectionState } from './section-state.js?v=edf9db6937ba';
-import { buildLazySelect } from './lazy-select.js?v=edf9db6937ba';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=edf9db6937ba';
-import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=edf9db6937ba';
+} from '../pose/pose-data.js?v=42cf1b1eef13';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=42cf1b1eef13';
+import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=42cf1b1eef13';
+import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=42cf1b1eef13';
+import { isInteractiveClickTarget } from './interaction.js?v=42cf1b1eef13';
+import { persistSectionState } from './section-state.js?v=42cf1b1eef13';
+import { renderRecordingInfo } from './recording-info.js?v=42cf1b1eef13';
+import { buildLazySelect } from './lazy-select.js?v=42cf1b1eef13';
+import { confirmSkeletonEdit, isSkeletonEditWarningSuppressed,
+         setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js?v=42cf1b1eef13';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=42cf1b1eef13';
+import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=42cf1b1eef13';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
-         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=edf9db6937ba';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=edf9db6937ba';
-import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=edf9db6937ba';
+         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=42cf1b1eef13';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=42cf1b1eef13';
+import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=42cf1b1eef13';
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
     loadSingleSessionFromCache, removeVideoFile,
-} from '../loading/session-loader.js?v=edf9db6937ba';
+} from '../loading/session-loader.js?v=42cf1b1eef13';
 
 // Circular import — these are still defined in app.js for now. They will be
 // retargeted as later passes land:
 // - swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu
 //   → ui/identity-assignment.js (Pass 3f)
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
-import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=edf9db6937ba';
+import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=42cf1b1eef13';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
 // luc3d #172: every manual identity switch routes through applyIdentitySwitch,
 // which subsumes this file's former direct propagateIdentityForward calls.
 import {
     swapAssignTrack, applyIdentitySwitch, describeIdentitySwitch,
-} from './identity-assignment.js?v=edf9db6937ba';
+} from './identity-assignment.js?v=42cf1b1eef13';
 // Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import {
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
-} from './sessions-panes.js?v=edf9db6937ba';
+} from './sessions-panes.js?v=42cf1b1eef13';
 // Block 2 (Prompt 4): per-session timeline visibility toggles.
 import {
     toggleCameraVisibility,
@@ -48,7 +51,7 @@ import {
     getCameraVisibilityList,
     getTrackVisibilityList,
     getIdentityVisibilityList,
-} from './timeline-visibility.js?v=edf9db6937ba';
+} from './timeline-visibility.js?v=42cf1b1eef13';
 
 // ============================================
 // Inline name entry for "+ New Track" / "+ New Identity"
@@ -688,6 +691,14 @@ export function populateSkeletonTable() {
     setSectionCount('skeletonNodesCount', sk.nodes.length);
     setSectionCount('skeletonEdgesCount', sk.edges.length);
 
+    // The way back on after "Do not show again" in the edit confirmation. Shown
+    // only while the preference is set — the control that undoes a setting has
+    // to be findable, and the panel the setting governs is where it is looked
+    // for. Driven from here because this is the one refresh point after every
+    // skeleton mutation.
+    const warnNote = document.getElementById('skeletonWarnOffNote');
+    if (warnNote) warnNote.style.display = isSkeletonEditWarningSuppressed() ? '' : 'none';
+
     // Remember this skeleton for the current app session so newly loaded videos
     // inherit it (rememberSkeleton ignores empty skeletons, so viewing a blank
     // session never clobbers a good remembered one). Called here because this is
@@ -712,10 +723,21 @@ export function populateSkeletonTable() {
         nameInput.addEventListener('change', function () {
             const newName = nameInput.value.trim();
             if (!newName) { nameInput.value = sk.nodes[i]; return; }
-            sk.nodes[i] = newName;
-            setProjectSkeleton(sk); // one skeleton per project — keep all sessions on it
-            populateSkeletonTable();
-            drawAllOverlays(state.currentFrame);
+            if (newName === sk.nodes[i]) return;
+            // Confirm against what is already annotated. A rename moves no
+            // coordinates, but the node NAME is how every other tool — a
+            // trained model, an analysis script, a SLEAP project — identifies
+            // it, so it is still a skeleton edit and still goes through the
+            // dialog. Cancelling has to put the typed text back, or the field
+            // would keep showing a name the skeleton does not have.
+            confirmSkeletonEdit({ kind: 'rename-node', label: newName }, function (sessions) {
+                sk.nodes[i] = newName;
+                adoptEditedSkeleton(sk, sessions);
+                markDirty();
+                populateSkeletonTable();
+                drawAllOverlays(state.currentFrame);
+            });
+            nameInput.value = sk.nodes[i];
         });
         tdName.appendChild(nameInput);
 
@@ -726,13 +748,18 @@ export function populateSkeletonTable() {
         delBtn.style.cssText = 'padding:0 5px;font-size:14px;line-height:1;min-width:0;color:var(--error);';
         delBtn.title = 'Remove node';
         delBtn.addEventListener('click', function () {
-            sk.removeNode(i);
-            // One skeleton per project: unify + drop the node's point from every
-            // session's instances.
-            setProjectSkeleton(sk);
-            propagateNodeRemovedAllSessions(i);
-            populateSkeletonTable();
-            drawAllOverlays(state.currentFrame);
+            // The destructive one: this deletes the node's coordinates from
+            // every instance in every session, with no undo.
+            confirmSkeletonEdit({ kind: 'remove-node', label: sk.nodes[i] }, function (sessions) {
+                sk.removeNode(i);
+                // Drop the node's point from every instance of every session on
+                // THIS skeleton — the ones the confirmation counted.
+                adoptEditedSkeleton(sk, sessions);
+                propagateNodeRemovedFromSessions(i, sessions);
+                markDirty();
+                populateSkeletonTable();
+                drawAllOverlays(state.currentFrame);
+            });
         });
         tdDel.appendChild(delBtn);
 
@@ -759,10 +786,16 @@ export function populateSkeletonTable() {
         delBtn.style.cssText = 'padding:0 5px;font-size:14px;line-height:1;min-width:0;color:var(--error);';
         delBtn.title = 'Remove edge';
         delBtn.addEventListener('click', function () {
-            sk.removeEdge(edgeIdx);
-            setProjectSkeleton(sk); // one skeleton per project — keep all sessions on it
-            populateSkeletonTable();
-            drawAllOverlays(state.currentFrame);
+            // An edge moves no coordinates, but it IS part of the skeleton that
+            // gets exported and matched against, so it confirms like the rest.
+            var edgeLabel = sk.nodes[edge[0]] + ' – ' + sk.nodes[edge[1]];
+            confirmSkeletonEdit({ kind: 'remove-edge', label: edgeLabel }, function (sessions) {
+                sk.removeEdge(edgeIdx);
+                adoptEditedSkeleton(sk, sessions);
+                markDirty();
+                populateSkeletonTable();
+                drawAllOverlays(state.currentFrame);
+            });
         });
         tdDel.appendChild(delBtn);
 
@@ -855,13 +888,81 @@ function showOneSkeletonWarning(onConfirm) {
 
 // After the shared project skeleton gains/loses a node, keep every session's
 // per-session instance point-arrays in sync.
-function propagateNodeAddedAllSessions() {
-    var ss = state.sessions || [];
-    for (var i = 0; i < ss.length; i++) if (ss[i] && ss[i].propagateNodeAdded) ss[i].propagateNodeAdded();
+// `hidden: true` because this is the INTERACTIVE path: the user just added the
+// node and has to be able to reach it. An empty slot draws no marker and so can
+// never be clicked, which would make a node added to an annotated project
+// permanently unplaceable on every instance that already exists. See
+// `Session.propagateNodeAdded`.
+function propagateNodeAddedToSessions(sessions) {
+    var ss = sessions || [];
+    for (var i = 0; i < ss.length; i++) {
+        if (ss[i] && ss[i].propagateNodeAdded) ss[i].propagateNodeAdded({ hidden: true });
+    }
+    dropDerivedTriangulationResults();
 }
-function propagateNodeRemovedAllSessions(nodeIdx) {
-    var ss = state.sessions || [];
+function propagateNodeRemovedFromSessions(nodeIdx, sessions) {
+    var ss = sessions || [];
     for (var i = 0; i < ss.length; i++) if (ss[i] && ss[i].propagateNodeRemoved) ss[i].propagateNodeRemoved(nodeIdx);
+    dropDerivedTriangulationResults();
+}
+
+/**
+ * Point the sessions this edit APPLIES TO at the edited skeleton, and keep it
+ * as the project default for sessions created later.
+ *
+ * Deliberately not `setProjectSkeleton`, which re-points EVERY loaded session.
+ * The confirmation counts only the sessions already on this skeleton and names
+ * the rest separately (`#skeletonEditOtherSkeletons`), so re-pointing one of
+ * those here would discard the skeleton it was loaded with and leave its
+ * instances at a node count the new skeleton does not describe — a dialog
+ * describing one edit while a different one happens. A project really can hold
+ * two shapes: `promptImportSkeletonForAllSessions` lets the user Skip.
+ *
+ * `sessions` comes from `confirmSkeletonEdit`, which takes it BEFORE the
+ * caller mutates the skeleton — the only moment the question is answerable.
+ *
+ * @param {Skeleton} sk
+ * @param {Session[]} sessions
+ */
+function adoptEditedSkeleton(sk, sessions) {
+    rememberSkeleton(sk);
+    var ss = sessions || [];
+    for (var i = 0; i < ss.length; i++) if (ss[i]) ss[i].skeleton = sk;
+}
+
+/**
+ * Drop every frame's `triangulationResults` entry after a skeleton node edit.
+ *
+ * That map is a per-frame SNAPSHOT of the last solve — each group's `points3d`,
+ * `reprojections` and per-node `errors` — and a node edit has just re-shaped
+ * every one of those arrays, so each entry now describes a project at the
+ * previous node count. It is DROPPED rather than re-shaped, exactly as
+ * `ui/origin-rebase.js`'s `finishRebase` drops it after the 3D moves: the draw
+ * path re-derives a frame's entry when it is shown
+ * (`ui/rendering.js`'s `fillLazyReprojections`).
+ *
+ * Without this the stale entry SURVIVES and that fill CONCATENATES the fresh
+ * one onto it, so the frame holds two records of every group — one at the old
+ * node count, one at the new. The symptom is in the info panel's per-instance
+ * node breakdown, which renders one table per entry: on the real
+ * `slap_GT/10072022145420` session, four animals came out as EIGHT tables, each
+ * animal listed twice with the first copy stopping at the old node count.
+ *
+ * Both maps go, because a skeleton is project-wide: `state.triangulationResults`
+ * is the live one and each session keeps its own across pane switches
+ * (`ui/sessions-panes.js`).
+ *
+ * Only the node edits need this. Renaming a node and adding or removing an edge
+ * leave every point array exactly as it was, so nothing in the snapshot goes
+ * stale — a rename only changes the label the panel prints beside the same
+ * column.
+ */
+function dropDerivedTriangulationResults() {
+    if (state.triangulationResults) state.triangulationResults.clear();
+    var ss = state.sessions || [];
+    for (var i = 0; i < ss.length; i++) {
+        if (ss[i] && ss[i].triangulationResults) ss[i].triangulationResults.clear();
+    }
 }
 
 // After a MULTI-SESSION project loads, ask the user to import ONE skeleton file
@@ -928,6 +1029,17 @@ export function setupSkeletonEditing() {
     persistSectionState('skeletonNodesSection', SKELETON_SECTIONS_KEY);
     persistSectionState('skeletonEdgesSection', SKELETON_SECTIONS_KEY);
 
+    // Undo "Do not show again". Wired at SETUP, like the Videos tab's two
+    // buttons and for the same reason: a handler assigned inside a per-session
+    // rebuild is missing exactly when there is no session yet.
+    const warnOnBtn = document.getElementById('btnSkeletonWarnOn');
+    if (warnOnBtn) warnOnBtn.addEventListener('click', function () {
+        setSkeletonEditWarningSuppressed(false);
+        const note = document.getElementById('skeletonWarnOffNote');
+        if (note) note.style.display = 'none';
+        setStatus('Skeleton edits will ask for confirmation again', 'success');
+    });
+
     // Add Node button
     document.getElementById('btnAddNode').addEventListener('click', function () {
         ensureSession();
@@ -939,14 +1051,20 @@ export function setupSkeletonEditing() {
             setStatus('Node "' + name + '" already exists', 'warning');
             return;
         }
-        state.session.skeleton.addNode(name);
-        // One skeleton per project: unify the reference across all sessions and
-        // extend every session's instance point-arrays for the new node.
-        setProjectSkeleton(state.session.skeleton);
-        propagateNodeAddedAllSessions();
-        input.value = '';
-        populateSkeletonTable();
-        drawAllOverlays(state.currentFrame);
+        confirmSkeletonEdit({ kind: 'add-node', label: name }, function (sessions) {
+            state.session.skeleton.addNode(name);
+            // Extend the instance point-arrays of every session on THIS
+            // skeleton — the ones the confirmation counted. `hidden` places the
+            // node beside the animal and switches it off on hand-labelled
+            // instances, so the node the user just added is reachable instead
+            // of being an invisible empty slot.
+            adoptEditedSkeleton(state.session.skeleton, sessions);
+            propagateNodeAddedToSessions(sessions);
+            markDirty();
+            input.value = '';
+            populateSkeletonTable();
+            drawAllOverlays(state.currentFrame);
+        });
     });
 
     // Allow Enter key in the node name input
@@ -963,13 +1081,28 @@ export function setupSkeletonEditing() {
         const src = parseInt(document.getElementById('edgeSrcSelect').value, 10);
         const dst = parseInt(document.getElementById('edgeDstSelect').value, 10);
         if (isNaN(src) || isNaN(dst)) return;
-        if (!state.session.skeleton.addEdge(src, dst)) {
+        var sk = state.session.skeleton;
+        // Validate BEFORE confirming: a duplicate or self-edge is a no-op, and
+        // asking the user to approve something that then does nothing would
+        // make the dialog read as noise.
+        if (src === dst || sk.nodes[src] == null || sk.nodes[dst] == null ||
+            sk.edges.some(function (e) {
+                return (e[0] === src && e[1] === dst) || (e[0] === dst && e[1] === src);
+            })) {
             setStatus('Cannot add edge: duplicate or same node', 'warning');
             return;
         }
-        setProjectSkeleton(state.session.skeleton); // one skeleton per project
-        populateSkeletonTable();
-        drawAllOverlays(state.currentFrame);
+        var edgeLabel = sk.nodes[src] + ' – ' + sk.nodes[dst];
+        confirmSkeletonEdit({ kind: 'add-edge', label: edgeLabel }, function (sessions) {
+            if (!sk.addEdge(src, dst)) {
+                setStatus('Cannot add edge: duplicate or same node', 'warning');
+                return;
+            }
+            adoptEditedSkeleton(sk, sessions);
+            markDirty();
+            populateSkeletonTable();
+            drawAllOverlays(state.currentFrame);
+        });
     });
 
     // Save Skeleton button
@@ -1065,6 +1198,7 @@ export function updateInfoPanel() {
         return;
     }
 
+    renderRecordingInfo(state.session);
     if (!state.session) {
         document.getElementById('infoCameras').textContent = '-';
         document.getElementById('infoSkeleton').textContent = '-';

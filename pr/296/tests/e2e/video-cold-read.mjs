@@ -13,7 +13,8 @@
  * parses, as 16 KiB pages). OnDemandVideoDecoder now reads the File
  * through `loading/cold-read-guard.js`: mediabunny via sleap-io.js's
  * `MediaBunnyVideoBackend.fromRangeSource`, and mp4box's index scan via
- * `readChunk`, both retrying failed reads and re-reading all-zero blocks.
+ * `readChunk`, both retrying failed reads and re-reading all-zero blocks (with the block
+ * on each side, for a run that starts or ends part-way into one).
  *
  * The faults are injected in the page, under the app: `Blob.prototype.slice`,
  * `arrayBuffer` and `stream` are wrapped so that reads of the file named
@@ -163,6 +164,9 @@ try {
             'a 4 KiB block of zeros in the frames': { holes: [[8192, 12288, 1]], fails: [] },
             'the first page zeroed (ftyp and the first frames)': { holes: [[0, 16384, 1]], fails: [] },
             'a 16 KiB page of zeros over the frames and the index': { holes: [[16384, 32768, 1]], fails: [] },
+            // a run that starts and ends part-way into a 4 KiB block: its ragged edges are not all zero
+            'a run of zeros with ragged edges in the frames': { holes: [[8192 - 700, 12288 + 900, 1]], fails: [] },
+            'a run of zeros over the index, ending part-way into a block': { holes: [[16384, 28672 + 400, 1]], fails: [] },
         };
         window.__vc = {
             labels: Object.keys(CASES),

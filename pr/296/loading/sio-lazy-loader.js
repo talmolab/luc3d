@@ -36,8 +36,8 @@
  * `_unifyNodeOrder` (`loading/slp-skeleton.js`).
  */
 
-import { unionTrackNames } from './track-union.js?v=edf9db6937ba';
-import { nodeOrderRemap, permuteStoreNodeRows } from './slp-skeleton.js?v=edf9db6937ba';
+import { unionTrackNames } from './track-union.js?v=42cf1b1eef13';
+import { nodeOrderRemap, permuteStoreNodeRows } from './slp-skeleton.js?v=42cf1b1eef13';
 
 /**
  * `deleteInstanceRows` moves surviving rows with one `copyWithin` per run when
@@ -184,7 +184,7 @@ export class SioLazyLoader {
         }
         // Point the reader's internal I/O worker at LUCID's local vendored h5wasm
         // IIFE (document.baseURI keeps this correct on sub-path deployments).
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=edf9db6937ba', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=42cf1b1eef13', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -461,14 +461,18 @@ export class SioLazyLoader {
      *
      * @param {File} file - the project `.slp`
      * @param {Function} [onProgress] - `(msg) => void`
+     * @param {Function} [onReadBytes] - `(done, total) => (void|Promise)`: bytes
+     *   read of the file's four big tables (frames, instances, points,
+     *   pred_points), read in counted row slices — the vendored reader's
+     *   `onReadBytes` (LUCID local patch, open progress). Awaited.
      * @returns {Promise<{labels:Object, typedSession:Object, cameraNames:string[], nFrames:number}>}
      */
-    async openProjectSlp(file, onProgress) {
+    async openProjectSlp(file, onProgress, onReadBytes) {
         var SIO = window.SleapIO;
         if (!SIO || typeof SIO.readSlpStreaming !== 'function') {
             throw new Error('sleap-io.js readSlpStreaming not available on window.SleapIO');
         }
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=edf9db6937ba', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=42cf1b1eef13', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -477,6 +481,7 @@ export class SioLazyLoader {
             onProgress: onProgress
                 ? function (n, total, msg) { onProgress(msg || ('Reading ' + n + '/' + total)); }
                 : undefined,
+            onReadBytes: onReadBytes || undefined,
         });
         this._projectLabels = labels;
         // A single project `.slp` interleaves every camera in ONE store, so all

@@ -41,7 +41,7 @@ const OFF = [[0, 0, 0], [2, 1, 0], [-2, 1, 0], [0, -2, 1], [1.5, 0, -1.5], [-1.5
 const nodes3d = c => OFF.map(o => [c[0] + o[0], c[1] + o[1], c[2] + o[2]]);
 
 // Two animals across 4 frames, drifting but staying separated.
-function buildSession() {
+function buildSession(nodeScores) {
     const s = new Session(CAMS, { nodes: NODES }, [], 'crossview-pop');
     const paths = [
         [[-7, 0, 8], [7, 0, 8]],
@@ -53,7 +53,9 @@ function buildSession() {
         const fg = new FrameGroup(fi);
         centroids.forEach((ctr, ai) => CAMS.forEach(cam => {
             const pix = nodes3d(ctr).map(p => cam.project(p));
-            fg.addInstance(cam.name, new Instance(pix, ai, 'predicted', 1.0));
+            const inst = new Instance(pix, ai, 'predicted', 1.0);
+            if (nodeScores) inst.setPointScores(pix.map(() => nodeScores[ai]));
+            fg.addInstance(cam.name, inst);
         }));
         s.addFrameGroup(fg);
     });
@@ -118,6 +120,27 @@ group('runCrossViewTracker populates every data structure');
         }
     }
     ok(consistent, 'trackIdx → frameIdentityMap → identity round-trips for every instance');
+}
+
+// ===========================================================================
+group('runCrossViewTracker — the mean node score filter keeps weak detections out');
+{
+    // Animal 1's nodes all score 0.5 (instance score still 1.0).
+    const off = buildSession([0.9, 0.5]);
+    runCrossViewTracker(off, off.cameras, off.frameIndices, true);
+    eq(off.identities.length, 2, 'filter off: both animals tracked');
+
+    const on = buildSession([0.9, 0.5]);
+    globalThis.__BENCH.thresholds = { filterMinMeanNodeScore: 0.75 };
+    try { runCrossViewTracker(on, on.cameras, on.frameIndices, true); }
+    finally { globalThis.__BENCH.thresholds = {}; }
+    eq(on.identities.length, 1, 'filter at 0.75: only the animal with strong node scores is tracked');
+    let weakGrouped = 0, strongGrouped = 0;
+    for (const [, groups] of on.instanceGroups) for (const g of groups) {
+        for (const [, inst] of g.instances) { if (inst.pointScore(0) < 0.75) weakGrouped++; else strongGrouped++; }
+    }
+    eq(weakGrouped, 0, 'no detection of the weak animal reaches a group');
+    eq(strongGrouped, on.frameIndices.length * 3, 'the strong animal is grouped in all 3 views of every frame');
 }
 
 // ===========================================================================
