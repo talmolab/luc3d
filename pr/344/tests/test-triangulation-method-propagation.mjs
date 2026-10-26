@@ -21,15 +21,18 @@
  * forgets is the whole failure mode, and it arrives silently — no crash, no wrong
  * shape, just quietly worse 3D — so a static check is the cheap guard.
  *
- * The one intentionally-DLT caller (the O(nRef x nOther) Hungarian cost matrix in
- * `ui/identity-assignment.js`, whose temporary 3D is discarded) passes
- * `{ method: 'dlt' }` explicitly for this reason.
+ * No caller hardcodes `method: 'dlt'` either. The last one that did — the
+ * O(nRef x nOther) Hungarian cost matrix in `ui/identity-assignment.js`'s
+ * automatic assignment, whose temporary 3D was discarded — was deleted with the
+ * rest of that unreachable chain, so a hardcoded DLT is now always a caller
+ * ignoring both the group's recorded method and the user's Settings choice. A
+ * future caller that genuinely wants DLT whatever the setting has to change that
+ * check, and say why, in the same commit.
  *
  * Deliberately a source scan rather than a runtime assert/warn inside
- * `triangulateAndReproject`: that function is called once per candidate PAIR
- * inside the cost matrix, so a runtime warning would fire O(n*m) times per
- * auto-assign — noise in a legitimate path, which is exactly what the guard must
- * not create.
+ * `triangulateAndReproject`: a runtime check fires only on the paths something
+ * happens to execute, into a console nobody is watching, while the scan covers
+ * every call site on every run — including the ones no behavior test reaches.
  *
  * Run:  node tests/test-triangulation-method-propagation.mjs
  */
@@ -64,16 +67,17 @@ function sourceFiles() {
  * balanced scan from the opening paren, so a nested call or an object literal in
  * an earlier argument cannot fool the comma splitting.
  */
-function callsIn(text) {
+function callsIn(text, fn = 'triangulateAndReproject') {
     const calls = [];
-    const needle = 'triangulateAndReproject(';
+    const needle = fn + '(';
+    const defn = new RegExp('function\\s+' + fn + '\\b');
     let i = 0;
     while ((i = text.indexOf(needle, i)) !== -1) {
         // Skip the definition itself and any comment/doc mention.
         const lineStart = text.lastIndexOf('\n', i) + 1;
         const lineEnd = text.indexOf('\n', i);
         const line = text.slice(lineStart, lineEnd < 0 ? text.length : lineEnd);
-        if (/^\s*(\*|\/\/)/.test(line) || /function\s+triangulateAndReproject/.test(line)) {
+        if (/^\s*(\*|\/\/)/.test(line) || defn.test(line)) {
             i += needle.length;
             continue;
         }
@@ -94,6 +98,7 @@ function callsIn(text) {
             line: text.slice(0, i).split('\n').length,
             nArgs: args.length,
             third: (args[2] || '').trim(),
+            fourth: (args[3] || '').trim(),
         });
         i = j > i ? j : i + needle.length;
     }
@@ -108,7 +113,7 @@ for (const rel of sourceFiles()) {
     for (const c of callsIn(text)) all.push({ file: rel, ...c });
 }
 
-check(all.length >= 10,
+check(all.length >= 8,
     `found the call sites to audit (${all.length}) — if this collapses the scan ` +
     `has stopped matching and the guard is dead`);
 
@@ -123,14 +128,14 @@ check(noMethod.length === 0,
     `...and every options object names a \`method\` ` +
     `(offenders: ${JSON.stringify(noMethod.map(c => `${c.file}:${c.line} -> ${c.third.slice(0, 60)}`))})`);
 
-// Exactly one caller may hardcode 'dlt': the cost matrix, whose 3D is discarded.
+// No caller may hardcode 'dlt' (see the header: the cost matrix that did is gone).
 const hardcodedDlt = all.filter(c => /method:\s*'dlt'/.test(c.third));
-check(hardcodedDlt.length === 1 && hardcodedDlt[0].file === 'ui/identity-assignment.js',
-    `exactly ONE caller hardcodes method:'dlt' — the Hungarian cost matrix, whose ` +
-    `temporary 3D is discarded (got ${JSON.stringify(hardcodedDlt.map(c => `${c.file}:${c.line}`))})`);
+check(hardcodedDlt.length === 0,
+    `NO caller hardcodes method:'dlt' — it would ignore the group's own method and ` +
+    `the user's Settings choice (got ${JSON.stringify(hardcodedDlt.map(c => `${c.file}:${c.line}`))})`);
 
-// Everyone else must RESOLVE the method: from the group's own recorded method,
-// from the user's Settings default, or from one threaded in by their caller.
+// Every other caller must RESOLVE the method: from the group's own recorded
+// method, from the user's Settings default, or from one threaded in by their caller.
 const RESOLVERS = /resolveTriangulationMethod|triangulationMethod|method:\s*(method|_m|prefMethod|prefMethodT|triMethod)\b/;
 const unresolved = all.filter(c =>
     !/method:\s*'dlt'/.test(c.third) && !RESOLVERS.test(c.third));
@@ -138,6 +143,22 @@ check(unresolved.length === 0,
     `every other caller RESOLVES its method (the group's own method, the Settings ` +
     `default, or one threaded in) rather than inventing one ` +
     `(offenders: ${JSON.stringify(unresolved.map(c => `${c.file}:${c.line} -> ${c.third.slice(0, 60)}`))})`);
+
+// `triangulateMultiFrameInstances(start, end, onProgress, method)` has the same
+// silent default — an omitted 4th argument is DLT — and Triangulate Multiple
+// Frames omitted it, solving with DLT whatever Settings ▸ Default Triangulation
+// said. Its callers must name a method too.
+const ranged = [];
+for (const rel of sourceFiles()) {
+    const text = fs.readFileSync(path.join(repoRoot, rel), 'utf8');
+    for (const c of callsIn(text, 'triangulateMultiFrameInstances')) ranged.push({ file: rel, ...c });
+}
+check(ranged.length >= 1,
+    `found the triangulateMultiFrameInstances call sites (${ranged.length})`);
+const rangedNoMethod = ranged.filter(c => c.nArgs < 4 || !c.fourth || /^'dlt'$/.test(c.fourth));
+check(rangedNoMethod.length === 0,
+    `EVERY triangulateMultiFrameInstances call passes a resolved method, never none or a bare 'dlt' ` +
+    `(offenders: ${JSON.stringify(rangedNoMethod.map(c => `${c.file}:${c.line}`))})`);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 console.log(failed === 0 ? 'PASS' : 'FAIL');
