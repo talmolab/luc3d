@@ -7927,7 +7927,10 @@ beside `state.decoderPool[]`: when the incoming session has fewer cameras,
 surplus decoders move to the cold reserve with a 60-second eviction timer, and
 the next switch reuses them (cancelling the timer) before constructing new
 `OnDemandVideoDecoder`s. This caps the pool at the current session's camera
-count without destroying recently-used decoders immediately.
+count without destroying recently-used decoders immediately. A decoder going
+into the reserve gets `releaseFrames()` at once: the reserve keeps the decoder,
+not its decoded frames (1.8 GB of them right after a switch between 3 open
+8-camera sessions, held for the 60 s). Test: `tests/test-decoder-pool-repeated-swap.js`.
 
 **Per-session timeline height.** `switchSession` saves the timeline height on
 the **outgoing** session (`oldSession._timelineHeight`,
@@ -11445,8 +11448,10 @@ stack. See `ui/calibration-notice.js`.
   `../ui/browser-hints.js` (`fileSystemAccessHint`),
   `../ui/folder-confirm-tip.js` (`confirmFolderPick` — awaited before every
   folder picker; a cancel ends the load with "No folder selected"),
-  `./video.js`, `../import-export/file-io.js`, `../pose/triangulation.js`
-  (`shouldUseLazyH5`, `shouldUseLazySlp`, `LazyFrameLoader`),
+  `./video.js` (`OnDemandVideoDecoder`, `VideoController`, `releaseViewsFrames` —
+  called wherever an outgoing session's views are stashed in `_views`: empty
+  session, single-SLP folder, per-camera folder), `../import-export/file-io.js`,
+  `../pose/triangulation.js` (`shouldUseLazyH5`, `shouldUseLazySlp`, `LazyFrameLoader`),
   `./sio-lazy-loader.js` (`SioLazyLoader`),
   `./track-union.js` (`unionTrackNames`, `remapTrackIdx`),
   `../import-export/save-load.js`,
@@ -12243,11 +12248,21 @@ How it behaves:
 - `FRAME_CACHE_BUDGET_MB` (2560), `FRAME_CACHE_MAX` (60), `FRAME_CACHE_MIN` (12),
   `frameCacheFrames(budgetMB, frameBytes[])` — the decoded-frame cache budget
   (see below).
+- `releaseViewsFrames(views)` — `releaseFrames()` on every view's decoder, for a
+  whole SESSION going off screen (`loading/session-loader.js`, when another
+  session is loaded over it). `_shownViews` only sees the active session's
+  views, so without it each loaded session kept its full caches: on 3 open
+  8-camera sessions, 3.1 GB of bitmaps for the two not shown, and Track All on
+  the third took 79–96 s instead of ~24 s, mostly in back-to-back full GCs
+  (V8 counts the bitmaps as external memory). Test:
+  `tests/test-release-views-frames.mjs`.
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
   `getFrame(frameIndex)` (mediabunny: via `_mbGetFrame`), `releaseStepCursor()`,
   `releaseFrames()` (closes and drops every cached decoded frame — backend cache
   + HTML5/WebCodecs cache — and the stepping streams, keeping the decoder open;
-  called by `VideoController._shownViews` for a view that went off screen),
+  called by `VideoController._shownViews` for a view that went off screen, by
+  `releaseViewsFrames` for a session that went off screen, and by `switchSession`
+  for a decoder going into the cold reserve),
   `setCacheSize(n)` (re-sizes both frame caches, evicting at once — the
   backend's frames farthest from the last stepped frame first),
   `_initMediabunny(source)` / `_mediabunnyEnabled()`,
