@@ -329,6 +329,11 @@ const TRACKING_THRESHOLDS = [
         min: 0, max: 1, step: 0.05,
         desc: 'Detection-pool filter: drop instances whose detection score is below this value (only applies when per-instance scores are available). 0 = off; the sleap-3d reference used 0.85.',
     },
+    {
+        id: 'filterMinMeanNodeScore', label: 'Min mean node score (filter)', default: 0,
+        min: 0, max: 1, step: 0.05,
+        desc: 'Detection-pool filter: drop predictions whose mean node score is below this value — the average of the model\'s per-node scores over every node of the skeleton, a missing node counting as 0 (sleap-nn\'s "mean node score"). Applies only to predictions that carry node scores. 0 = off.',
+    },
     // --- CrossViewTracker engine (pose/cross-view-tracker.js) ---
     {
         id: 'corr2dWeight', label: '2D correspondence weight', default: 1,
@@ -398,6 +403,11 @@ const TRACKING_THRESHOLDS = [
         desc: 'How many frames per second the image ID-switch check crops and embeds, per animal and camera. Higher catches more but takes proportionally longer (2 = ~10 min for 30 min of 5 animals x 8 cameras, 3 views each, on an M-series Mac).',
     },
     {
+        id: 'imageCheckBackgroundHz', label: 'Image check: crops per second away from contacts', default: 0.1,
+        min: 0, max: 15, step: 0.05,
+        desc: 'The image check embeds every sample its scoring reads — up to 10 s either side of each contact, at the crops-per-second rate — and elsewhere only this many per second, placed where the video is cheapest to decode; it learns what tells the animals apart from both. Lower is faster. On 24 test recordings 0.1 flagged exactly the contacts that embedding everything flags. At or above the crops-per-second rate every sample is embedded (as before).',
+    },
+    {
         id: 'imageCheckMaxViews', label: 'Image check: views per animal', default: 3,
         min: 0, max: 16, step: 1,
         desc: 'Embed only each animal\'s N views where it appears largest (0 = every view it is visible in). The model is the slow part, so time scales with this: 3 views ran 2.5x faster than all 8 with the same accuracy; 2 starts to cost accuracy.',
@@ -423,10 +433,10 @@ TRACKING_THRESHOLDS.forEach(function (t) { _thrById.set(t.id, t); });
 // and are intentionally hidden from the UI; they still resolve to their defaults
 // for the benchmark harness.
 const WIZARD_THRESHOLD_IDS = new Set([
-    'filterMinVisibleNodes', 'filterMinInstanceScore',
+    'filterMinVisibleNodes', 'filterMinInstanceScore', 'filterMinMeanNodeScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
     'stale', 'matchGate', 'maxPenalty', 'matchReproj',
-    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckWebNN',
+    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz', 'imageCheckMaxViews', 'imageCheckWebNN',
     'reprojErrorThreshold',
 ]);
 

@@ -3173,6 +3173,68 @@ body {
   font-weight: 500;
 }
 
+/* The Session tab's Recording section (ui/recording-info.js): a campy
+   recording's session.json. Values may be long (a camera name, a field), so a
+   row's value wraps and stays right-aligned; notes and warnings are blocks. */
+.recording-row {
+  gap: 10px;
+  align-items: baseline;
+}
+
+.recording-row .value {
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.recording-row .label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.recording-row.recording-warn .value,
+.recording-block.recording-warn .recording-block-text {
+  color: var(--warning-color);
+}
+
+.recording-block {
+  padding: 3px 0;
+  font-size: 13px;
+}
+
+.recording-annotations {
+  font-size: 12px;
+}
+
+.recording-block-label {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-bottom: 2px;
+}
+
+.recording-block-text {
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.recording-annotations {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--text-primary);
+}
+
+.recording-annotation-at {
+  color: var(--text-muted);
+  margin-right: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.recording-cameras {
+  margin-top: 6px;
+}
+
 /* Instance / Track list */
 .instance-list {
   display: flex;
@@ -4093,7 +4155,10 @@ input[type="range"]::-moz-range-track {
 .loading-progress-fill {
   width: 100%;
   height: 100%;
-  background: #4cc9f0;
+  /* A deeper blue than the image cue colour (#4cc9f0), so the brighter stretch
+     the bar just gained (.progress-delta, below) stands out against it. The
+     image check's dialog bar (.id-switch-progress-fill) uses the same. */
+  background: #1f78b4;
   transform-origin: left center;
   transform: scaleX(0);
   transition: transform 250ms linear;
@@ -4109,6 +4174,30 @@ input[type="range"]::-moz-range-track {
 }
 .loading-progress-fill.no-anim, .loading-progress-head.no-anim {
   transition: none;
+}
+
+/* The stretch a progress bar gained on its last update (ui/progress-delta.js),
+   on every progress bar: a translucent white tint over the fill, so it is a
+   brighter shade of the bar's own colour, and a white flash as it appears. It
+   grows with the fill's own transition (set inline from the fill's computed
+   style) and stays lit until the next update. The flash is an OPACITY
+   animation on a pseudo-element so it runs on the compositor, as the bar's
+   own transform does, even while the main thread is busy. */
+.progress-delta {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 0;
+  z-index: 1; pointer-events: none;
+  transform-origin: left center;
+  background: rgba(255, 255, 255, 0.42);
+  opacity: 0;
+}
+.progress-delta.is-on { opacity: 1; }
+.progress-delta::after {
+  content: ''; position: absolute; inset: 0; background: #fff; opacity: 0;
+}
+.progress-delta.is-on::after { animation: progress-delta-flash 700ms ease-out; }
+@keyframes progress-delta-flash { from { opacity: 0.75; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .progress-delta.is-on::after { animation: none; }
 }
 
 /* The percentage under the bar — the same rule as the image check's. */
@@ -4977,6 +5066,120 @@ kbd {
   font-size: 11px;
   color: var(--text-muted);
   margin-top: 2px;
+}
+
+/* Tracking Wizard ▸ what the detection filters would remove
+   (ui/detection-filter-preview.js). Grows to its full height — no inner
+   scroller (see "No scroll-within-scroll"). */
+.dfp {
+  margin: 6px 4px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+}
+.dfp-title {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.dfp-subtitle {
+  font-size: 12px;
+  color: var(--text-primary);
+  margin-top: 12px;
+}
+.dfp-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 4px 0;
+}
+.dfp-warn {
+  color: var(--warning-color);
+}
+.dfp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  margin-top: 6px;
+}
+.dfp-table th {
+  text-align: right;
+  font-weight: normal;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--border-color);
+}
+.dfp-table th:first-child,
+.dfp-table td.dfp-cam {
+  text-align: left;
+}
+.dfp-table td {
+  padding: 3px 6px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+.dfp-table td.dfp-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.dfp-table td.dfp-removed {
+  color: var(--text-primary);
+}
+.dfp-count {
+  color: var(--text-muted);
+}
+.dfp-table tr.dfp-total td {
+  color: var(--text-primary);
+  border-bottom: none;
+  border-top: 1px solid var(--border-light);
+}
+.dfp-table tr.dfp-flagged td {
+  color: var(--warning-color);
+}
+.dfp-table tr.dfp-excluded td {
+  opacity: 0.5;
+}
+.dfp-tag {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--border-light);
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.dfp-tag-warn {
+  color: var(--warning-color);
+  border-color: var(--warning-color);
+}
+.dfp-hist {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1px;
+  width: 90px;
+  height: 18px;
+  vertical-align: middle;
+}
+.dfp-dist-cell {
+  white-space: nowrap;
+}
+.dfp-median {
+  display: inline-block;
+  min-width: 30px;
+  margin-left: 6px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+.dfp-table td.dfp-cell-flag {
+  color: var(--warning-color);
+}
+.dfp-bar {
+  flex: 1;
+  background: var(--accent);
+  min-height: 0;
+}
+.dfp-bar-below {
+  background: var(--warning-color);
 }
 
 /* Shared number field for node weights and tracking thresholds. */
@@ -7275,7 +7478,7 @@ details[open] > summary.origin-rebase-block-title::before {
 /* As .id-switch-pbar: the track clips the fill, the bar does not, so the playhead (.id-switch-phead) stands proud. */
 .id-switch-progress-bar { position: relative; height: 6px; }
 .id-switch-progress-track { position: absolute; inset: 0; border-radius: 3px; background: rgba(255,255,255,0.12); overflow: hidden; }
-.id-switch-progress-fill { height: 100%; width: 0; background: #4cc9f0; transition: width 0.2s; }
+.id-switch-progress-fill { height: 100%; width: 0; background: #1f78b4; transition: width 0.2s; }   /* as .loading-progress-fill */
 .id-switch-progress-bar .id-switch-phead { left: 0; transition: left 0.2s; }   /* keep pace with the fill */
 /* .id-switch-progress-pct: one rule with .loading-pct (Loading Overlay, above). */
 /* The percentage and device line on the left, a sample crop on the right, above Cancel. */

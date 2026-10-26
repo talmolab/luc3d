@@ -26,7 +26,7 @@ import {
 import {
     autoAssignVideosToCameras, forceVideoSelection, showParentDirMatchSummary,
     forceVideoSelectionWithFolder, createViewForVideoFile, updateTotalFrames,
-    rebuildVideoController, fitCanvasesToCells,
+    adoptLabeledFrameCount, rebuildVideoController, fitCanvasesToCells,
 } from '../loading/session-loader.js';
 import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
@@ -43,10 +43,13 @@ import {
 } from './slp-streaming-write.js';
 import { SioLazyLoader } from '../loading/sio-lazy-loader.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
-import { showLoading, hideLoading } from '../ui/loading-overlay.js';
+import {
+    showLoading, hideLoading, showLoadingProgress, createProgressPacer, yieldToPaint,
+} from '../ui/loading-overlay.js';
 import { clearReadout } from '../ui/frame-readout.js';
 import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js';
 import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
+import { buildSaveProvenance } from './slp-provenance.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
 
 /**
@@ -178,7 +181,7 @@ export function newProject(force) {
     // Reset frame counter display
     clearReadout();
     var fpsEl = document.getElementById('fpsDisplay');
-    if (fpsEl) fpsEl.textContent = '30.0 fps';
+    if (fpsEl) { fpsEl.textContent = '30.0 fps'; fpsEl.title = ''; }
 
     // Reset seekbar
     var seekbar = document.getElementById('seekbar');
@@ -363,7 +366,7 @@ export function markDirty() {
     if (state.session) state.session.isDirty = true;
     if (state.isDirty) return;
     state.isDirty = true;
-    document.title = '\u2022 Lucid';
+    document.title = '\u2022 LUC3D';
     var saveDot = document.getElementById('saveDirtyDot');
     if (saveDot) saveDot.style.display = 'inline-block';
 }
@@ -377,7 +380,7 @@ export function clearDirty() {
     } else if (state.session) {
         state.session.isDirty = false;
     }
-    document.title = 'Lucid';
+    document.title = 'LUC3D';
     var saveDot = document.getElementById('saveDirtyDot');
     if (saveDot) saveDot.style.display = 'none';
 }
@@ -548,10 +551,89 @@ export function getCageLimitBytes() {
 // known to work is what the old heuristic did wrong.
 var CAGE_WARN_FRACTION = 0.85;
 
+/**
+ * Whether `buildSlpBytes` will take the memory-bounded streaming path: every
+ * session lazily loaded, and the vendored streaming writer present. Shared with
+ * the Save progress card, which needs to know the steps before they start.
+ */
+function isStreamingSave(sessionsToExport, SIO) {
+    return sessionsToExport.length > 0 && !!SIO && typeof SIO.openSlpWriter === 'function' &&
+        sessionsToExport.every(function (s) { return !!s.lazyLoader; });
+}
+
+function sessionsToSave() {
+    return state.sessions.length > 0 ? state.sessions : [state.session];
+}
+
+// ---- The Save progress card ----
+// Save used to say only "Saving..." / "Building SLP..." in the status bar while
+// it held the main thread for up to minutes on a large project — and in Brave,
+// whose save dialog cannot open until the whole file is built, the app simply
+// looked idle after File > Save. It now shows the shared progress card
+// (ui/loading-overlay.js, the one Track All and Triangulate All use), titled
+// "Save", one step per stage of the write. The card's layer also blocks clicks,
+// so nothing can edit the project while it is being written.
+var SAVE_STEP_LABELS = {
+    refs: 'Collecting 3D groups',          // counted, over grouped frames
+    header: 'Writing 3D groups and points',
+    frames: 'Writing 2D poses',
+    finish: 'Finishing the file',
+    eager: 'Writing the file',
+    download: 'Opening the save dialog',
+};
+
+/**
+ * The step list a save will report, in order: the streaming path's four stages
+ * or the eager path's one, plus Brave's download hand-off.
+ */
+function saveSteps(streaming, download) {
+    var steps = streaming ? ['refs', 'header', 'frames', 'finish'] : ['eager'];
+    if (download) steps.push('download');
+    return steps;
+}
+
+/**
+ * The `onProgress(stage, done, total, unit)` hook the save paths call (see
+ * `buildSessionSlpBytesStreaming`). A counted stage moves the bar (repainting
+ * at most every `PROGRESS_INTERVAL_MS`); an uncounted one shows the spinner
+ * with its step — those stages hold the main thread inside the vendored
+ * writer, and the CSS spinner keeps turning there, so the card still says the
+ * app is working. Every call that changes what the card shows returns a
+ * promise for the next paint, so the step is on screen BEFORE the work starts.
+ * `progress.disk(bytes)` reports the streamed write to the picked file.
+ */
+function createSaveProgress(steps) {
+    var pacer = createProgressPacer();
+    var shown = null;
+    function opts(stage, unit) {
+        return { title: 'Save', step: steps.indexOf(stage) + 1, steps: steps.length, unit: unit };
+    }
+    var progress = function (stage, done, total, unit) {
+        if (steps.indexOf(stage) < 0) return null;
+        if (total == null) {
+            shown = stage;
+            showLoading(SAVE_STEP_LABELS[stage] + '…', opts(stage));
+            return yieldToPaint();
+        }
+        var fresh = shown !== stage;
+        if (!fresh && done < total && !pacer.due()) return null;
+        shown = stage;
+        showLoadingProgress(SAVE_STEP_LABELS[stage], done, total, opts(stage, unit || 'frames'));
+        return pacer.yield();
+    };
+    progress.disk = function (bytes) {
+        if (!pacer.due()) return;
+        showLoading('Writing to disk: ' + Math.round(bytes / 1048576).toLocaleString('en-US') + ' MB…',
+            opts('finish'));
+    };
+    return progress;
+}
+
 async function buildSlpBytes(opts) {
     opts = opts || {};
     await ensureSleapIO();
     var SIO = window.SleapIO;
+    var onProgress = opts.onProgress || null;
 
     var allLabeledFrames = [];
     var allVideos = [];
@@ -562,7 +644,7 @@ async function buildSlpBytes(opts) {
     var seenSkeletonNames = new Set();
     var seenTrackNames = new Set();
 
-    var sessionsToExport = state.sessions.length > 0 ? state.sessions : [state.session];
+    var sessionsToExport = sessionsToSave();
 
     // Large lazy prediction sessions: build the file INCREMENTALLY via sleap-io.js's
     // streaming writer so the whole ~108k×N-frame graph is never resident and no
@@ -574,8 +656,7 @@ async function buildSlpBytes(opts) {
     // `Uint8Array` — for a multi-GB multi-session project that in-memory copy is
     // itself a meaningful chunk of peak memory on top of whatever the sessions
     // themselves haven't been reclaimed yet. Returns `null` when streamed to a sink.
-    if (sessionsToExport.length > 0 && SIO && typeof SIO.openSlpWriter === 'function' &&
-        sessionsToExport.every(function (s) { return !!s.lazyLoader; })) {
+    if (isStreamingSave(sessionsToExport, SIO)) {
 
         if (!opts.skipSizeWarning) {
             var estBytes = estimateSaveCagePressureBytes(sessionsToExport);
@@ -606,9 +687,10 @@ async function buildSlpBytes(opts) {
             });
             console.log('[save-slp] lazy session → streaming writer (', lazySess.lazyLoader.nFrames, 'frames ×',
                 lazySess.cameras.length, 'cameras )');
-            return await buildSessionSlpBytesStreaming(lazySess, lazyViews, lazyVideoFiles, opts.sink ? { sink: opts.sink } : undefined);
+            return await buildSessionSlpBytesStreaming(lazySess, lazyViews, lazyVideoFiles,
+                { sink: opts.sink || undefined, provenance: buildSaveProvenance([lazySess]), onProgress: onProgress });
         }
-        return await saveAllSessionsStreaming(sessionsToExport, opts.sink ? { sink: opts.sink } : undefined);
+        return await saveAllSessionsStreaming(sessionsToExport, { sink: opts.sink, onProgress: onProgress });
     }
 
     // MIXED PROJECT GUARD. The eager builder below iterates only the RESIDENT
@@ -645,6 +727,9 @@ async function buildSlpBytes(opts) {
         setStatus(_msg, 'error');
         throw new Error(_msg);
     }
+
+    // The eager writer below runs without a break: show its one step first.
+    if (onProgress) await onProgress('eager');
 
     for (var si = 0; si < sessionsToExport.length; si++) {
         var sess = sessionsToExport[si];
@@ -723,7 +808,8 @@ async function buildSlpBytes(opts) {
         tracks: allTracks,
         identities: allIdentities,
         sessions: allSessions,
-        provenance: { source: 'lucid', exported_at: new Date().toISOString() },
+        // Keeps the loaded files' provenance (slp-provenance.js).
+        provenance: buildSaveProvenance(sessionsToExport),
     });
 
     // PR 5.2: export sleap-io.js's canonical bytes directly. The typed graph
@@ -873,7 +959,7 @@ export function beginMultiSessionSave() {
  * that follow-up; `saveAllSessionsStreaming` below covers the simpler case
  * where every session's compute already fits resident simultaneously.
  */
-export async function commitSessionForMultiSessionSave(handle, session) {
+export async function commitSessionForMultiSessionSave(handle, session, onProgress) {
     if (!session.lazyLoader) {
         throw new Error('commitSessionForMultiSessionSave: session "' + (session.name || '') +
             '" has no open lazyLoader');
@@ -886,7 +972,7 @@ export async function commitSessionForMultiSessionSave(handle, session) {
     });
     var sourceFiles = Array.from(session.lazyLoader.sourceFiles.entries());
     var wasSharedStore = !!session.lazyLoader._sharedStore;
-    var refGraph = await buildSessionRefGraph(session, sessViews, sessVideoFiles, handle.ctx);
+    var refGraph = await buildSessionRefGraph(session, sessViews, sessVideoFiles, handle.ctx, onProgress);
     // A store edited in memory is not what pass 2 will read back from the
     // files: keep its frame + instance columns (`keepEditedStoreColumns`).
     var editedColumns = keepEditedStoreColumns(session.lazyLoader);
@@ -929,20 +1015,27 @@ export async function finalizeMultiSessionSave(handle, opts) {
             ' ms (total ' + Math.round(n - _t0) + ' ms)');
         _tp = n;
     };
-    var writer = await openProjectWriter(handle.ctx, handle.pending.map(function (p) { return p.refGraph.sioSession; }));
+    // The Save progress card's hook (see `buildSessionSlpBytesStreaming`): the
+    // same stages, with the 2D step counted over sessions.
+    var onProgress = (opts && opts.onProgress) || null;
+    if (onProgress) await onProgress('header');
+    var writer = await openProjectWriter(handle.ctx, handle.pending.map(function (p) { return p.refGraph.sioSession; }),
+        buildSaveProvenance(handle.pending.map(function (p) { return p.session; })));
     _lap('openProjectWriter (writes /session_data + sessions_json)');
     try {
         for (var j = 0; j < handle.pending.length; j++) {
             var p = handle.pending[j];
+            if (onProgress) await onProgress('frames', j, handle.pending.length, 'sessions');
             await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore);
             if (p.editedColumns) restoreEditedStoreColumns(p.session.lazyLoader, p.editedColumns);
-            streamSessionIntoWriter(writer, p.session, p.refGraph);
+            await streamSessionIntoWriter(writer, p.session, p.refGraph);
             p.session.lazyLoader.close();
             p.session.lazyLoader = null;
             console.log('[save-slp] pass 2/2: streamed session', p.session.name || j, 'into the project writer');
             _lap('stream session ' + (p.session.name || j));
             await encourageGC(1000);
         }
+        if (onProgress) await onProgress('finish');
         var _out = await finalizeProjectWriter(writer, opts);
         _lap('finalizeProjectWriter (flush to disk)');
         return _out;
@@ -970,7 +1063,8 @@ export async function finalizeMultiSessionSave(handle, opts) {
  */
 export async function saveAllSessionsStreaming(sessions, opts) {
     var handle = beginMultiSessionSave();
-    for (var i = 0; i < sessions.length; i++) await commitSessionForMultiSessionSave(handle, sessions[i]);
+    var onProgress = (opts && opts.onProgress) || undefined;
+    for (var i = 0; i < sessions.length; i++) await commitSessionForMultiSessionSave(handle, sessions[i], onProgress);
     return await finalizeMultiSessionSave(handle, opts);
 }
 
@@ -989,7 +1083,7 @@ export async function quickSave() {
         if (!state.slpFileHandle) {
             if (!window.showSaveFilePicker) {
                 // Fallback: use old download-based save
-                saveProjectSlp();
+                await saveProjectSlp();
                 return;
             }
             var filename = 'project.slp';
@@ -1015,6 +1109,11 @@ export async function quickSave() {
 
         state.isSaving = true;
         setStatus('Saving...', 'warning');
+        // The progress card goes up only AFTER the picker: it needs the click's
+        // user activation, which an awaited paint first could lose.
+        await ensureSleapIO();
+        var progress = createSaveProgress(saveSteps(isStreamingSave(sessionsToSave(), window.SleapIO), false));
+        showLoading('Preparing to save…', { title: 'Save' });
 
         // Stream straight to the file handle when the streaming path is used
         // (single or multi-session lazy save) — for a multi-GB project,
@@ -1026,10 +1125,14 @@ export async function quickSave() {
         var writable = await state.slpFileHandle.createWritable();
         var bytesWritten = 0;
         var sink = {
-            write: function (chunk) { bytesWritten += chunk.byteLength; return writable.write(chunk); },
+            write: function (chunk) {
+                bytesWritten += chunk.byteLength;
+                progress.disk(bytesWritten);
+                return writable.write(chunk);
+            },
             close: function () { return writable.close(); },
         };
-        var bytes = await buildSlpBytes({ sink: sink });
+        var bytes = await buildSlpBytes({ sink: sink, onProgress: progress });
         if (bytes) {
             // Eager (non-streaming) path returned bytes directly instead of
             // using the sink — write them out now.
@@ -1039,11 +1142,13 @@ export async function quickSave() {
         }
 
         state.isSaving = false;
+        hideLoading();
         clearDirty();
         var sizeMB = (bytesWritten / 1024 / 1024).toFixed(1);
         setStatus('Saved (' + sizeMB + ' MB)', 'success');
     } catch (err) {
         state.isSaving = false;
+        hideLoading();
         if (err && err.name === 'SaveCancelledError') {
             // `writable` (if it got that far) already has an open swap file —
             // abort() discards it WITHOUT touching the original file at
@@ -1071,16 +1176,29 @@ export async function saveProjectSlp() {
         setStatus('No session to save', 'error');
         return;
     }
+    // Two builds at once would hold two copies of the project's file in memory.
+    if (state.isSaving) {
+        setStatus('Save already in progress...', 'warning');
+        return;
+    }
     // In Brave the save-file picker is OFF by default, so Save lands here: the
     // whole file is built in memory and downloaded (risky for a large
     // project, and never updates the file in place). Say why, and how to fix.
+    // The browser's save dialog opens only once the file is built, so the
+    // progress card says what is happening until then.
     var fsaHint = fileSystemAccessHint();
+    state.isSaving = true;
     try {
         setStatus(fsaHint ? 'Building SLP in memory to download it (Brave cannot save straight to a file)...'
             : 'Building SLP...', 'warning');
+        showLoading('Preparing to save…', { title: 'Save' });
+        await ensureSleapIO();
+        var progress = createSaveProgress(saveSteps(isStreamingSave(sessionsToSave(), window.SleapIO), true));
 
-        var bytes = await buildSlpBytes();
+        var bytes = await buildSlpBytes({ onProgress: progress });
+        await progress('download');
         var blob = new Blob([bytes], { type: 'application/x-hdf5' });
+        bytes = null;   // the Blob holds its own copy: let this one go before the download
 
         var filename = 'project.slp';
         if (state.sessions.length === 1 && state.session.name) {
@@ -1105,6 +1223,9 @@ export async function saveProjectSlp() {
         }
         console.error('Save project SLP failed:', err);
         setStatus('Save failed: ' + err.message + (fsaHint ? ' ' + fsaHint : ''), 'error');
+    } finally {
+        state.isSaving = false;
+        hideLoading();
     }
 }
 
@@ -1566,10 +1687,13 @@ export async function handleLoadProject(prePickedFile) {
 
         } else if (needsVideoPrompt) {
             // V2 / legacy: single prompt for video files
+            // No manifest (e.g. an Export Labels JSON) → nothing to show, so no
+            // "Expected:" line.
             var manifestInfo = missingFilenames.length > 0
                 ? 'Need: ' + missingFilenames.join(', ')
-                : (manifestFilenames.join(', ') || '(unknown)');
-            var videoFiles = await forceVideoSelection(manifestInfo);
+                : manifestFilenames.join(', ');
+            var videoFiles = await forceVideoSelection(manifestInfo,
+                { title: 'Project loaded — now select the video file(s)' });
 
             if (videoFiles.length > 0) {
                 for (var i = 0; i < videoFiles.length; i++) {
@@ -1661,6 +1785,11 @@ export async function handleLoadProject(prePickedFile) {
         }
 
         updateTotalFrames();
+        // Loaded without video (the user continued past the video prompt):
+        // size the project from its labels, and open on the first labeled
+        // frame as the video path's seek does.
+        var firstLabeled = adoptLabeledFrameCount();
+        if (firstLabeled >= 0) state.currentFrame = firstLabeled;
         if (state.views.length > 0) {
             hideWelcomeOverlay();
             populateViewStrip();
@@ -1705,8 +1834,11 @@ export async function handleLoadProject(prePickedFile) {
         var statusParts = [cameras.length + ' cameras', state.session.numFrames.toLocaleString('en-US') + ' labeled frames'];
         if (state.views.length > 0) {
             statusParts.push(state.views.length + ' views');
+            setStatus('Project loaded (' + statusParts.join(', ') + ')', 'success');
+        } else {
+            setStatus('Project loaded without video (' + statusParts.join(', ') +
+                ') — attach videos via File ▸ Load Videos…', 'success');
         }
-        setStatus('Project loaded (' + statusParts.join(', ') + ')', 'success');
     } catch (err) {
         console.error('Failed to load project:', err);
         hideLoading();
