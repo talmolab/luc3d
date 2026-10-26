@@ -163,15 +163,15 @@
 // the UI, and this one must load in a worker (pose/tracker-worker.js).
 import {
     triangulatePoints,
-    triangulatePointDLT,
+    DltViewSystem,
     reprojectPoint,
     backProjectToRays,
     pointsToRayDistances,
     hungarianAlgorithm,
     computeFundamentalMatrix,
     epipolarErrorMatrix,
-} from './triangulation-core.js?v=37c101863857';
-import { points3dNodeCount, readPoint3d } from './pose-data.js?v=37c101863857';
+} from './triangulation-core.js?v=448af53fefb9';
+import { points3dNodeCount, readPoint3d } from './pose-data.js?v=448af53fefb9';
 
 // ---------------------------------------------------------------------------
 // Normalized-coordinate helpers
@@ -307,25 +307,87 @@ function matchPoints3d(target) {
     return target.match3d != null ? target.match3d : target.points3d;
 }
 
-// One node's reprojection error in each view it has (undistorted pixels:
-// the normalized offset scaled by that camera's focal lengths), or -1 for a
-// view it does not use. Infinity when the point could not be solved.
-function viewErrors(p, obs, exts, dets, use, out) {
-    for (var v = 0; v < obs.length; v++) {
-        if (!use[v]) { out[v] = -1; continue; }
-        if (p == null) { out[v] = Infinity; continue; }
-        var q = projectNorm(p, exts[v]), K = dets[v].cam.matrix;
-        var dx = (q[0] - obs[v][0]) * K[0][0], dy = (q[1] - obs[v][1]) * K[1][1];
-        var e = Math.sqrt(dx * dx + dy * dy);
-        out[v] = isFinite(e) ? e : Infinity;
-    }
-    return out;
+// One view's reprojection error of the point (x, y, z), in undistorted pixels:
+// the normalized offset scaled by that camera's focal lengths. `E` holds every
+// view's bare extrinsic, flat (12 per view, row-major), and its fx, fy at
+// 12V + 2v — copied once per call by `checkedPoints3d`, so the hot loops read
+// one typed array instead of nested ones. The projection is `reprojectPoint`'s
+// [u / w, v / w], unboxed (the same expressions, so the same bits). A
+// non-finite error counts as Infinity.
+function viewError(x, y, z, o, E, V, v) {
+    var b = 12 * v;
+    var u = E[b] * x + E[b + 1] * y + E[b + 2] * z + E[b + 3];
+    var t = E[b + 4] * x + E[b + 5] * y + E[b + 6] * z + E[b + 7];
+    var w = E[b + 8] * x + E[b + 9] * y + E[b + 10] * z + E[b + 11];
+    var dx = (u / w - o[0]) * E[12 * V + 2 * v], dy = (t / w - o[1]) * E[12 * V + 2 * v + 1];
+    var e = Math.sqrt(dx * dx + dy * dy);
+    return isFinite(e) ? e : Infinity;
 }
 
-function maxOf(a) {
+// The worst `viewError` over the views with `use[v]` set, or -1 when it uses
+// none, taken in the order `ord[0..V-1]` and each written to `errOut[v]`.
+// Returns as soon as the worst so far reaches `bound`: the caller only asks
+// whether the max is below `bound`, and the views not yet seen cannot lower a
+// max. The order changes nothing else — a max is the same whatever order it
+// is taken in — but `checkedPoints3d` passes the views worst-first, so a trial
+// that kept the bad view stops at the first one it looks at. No allocation:
+// this runs once per view left out, per round, per node over the threshold.
+function worstViewError(x, y, z, obs, E, V, use, ord, bound, errOut) {
     var m = -1;
-    for (var i = 0; i < a.length; i++) if (a[i] > m) m = a[i];
+    for (var i = 0; i < V; i++) {
+        var v = ord[i];
+        if (!use[v]) continue;
+        var e = errOut[v] = viewError(x, y, z, obs[v], E, V, v);
+        if (e > m) {
+            m = e;
+            if (m >= bound) return m;
+        }
+    }
     return m;
+}
+
+// `ord[0..V-1]` = the views, by `err[v]` descending (unused views last).
+function orderWorstFirst(err, use, V, ord) {
+    for (var i = 0; i < V; i++) {
+        var v = i, ev = use[v] ? err[v] : -Infinity, j = i;
+        while (j > 0 && (use[ord[j - 1]] ? err[ord[j - 1]] : -Infinity) < ev) { ord[j] = ord[j - 1]; j--; }
+        ord[j] = v;
+    }
+}
+
+// Whether any view with `use[v]` set is over `thresh` — the same answer as
+// `worstViewError(...) > thresh`, stopping at the first such view.
+function anyViewOver(x, y, z, obs, E, V, use, thresh) {
+    for (var v = 0; v < V; v++) {
+        if (use[v] && viewError(x, y, z, obs[v], E, V, v) > thresh) return true;
+    }
+    return false;
+}
+
+// The smallest double above `x`, for an error in pixels (finite, >= +0), so
+// `m >= nextUp(x)` is exactly `m > x`: one more in the bit pattern.
+var _nuF = new Float64Array(1), _nuW = new Uint32Array(_nuF.buffer);
+var _nuLo = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1 ? 0 : 1;   // little-endian: low word first
+function nextUp(x) {
+    if (!(x >= 0 && x < Infinity)) return x;
+    _nuF[0] = x;
+    if (_nuW[_nuLo] === 0xffffffff) { _nuW[_nuLo] = 0; _nuW[1 - _nuLo]++; } else _nuW[_nuLo]++;
+    return _nuF[0];
+}
+
+// One DLT system and one scratch set for `checkedPoints3d`, reused: the
+// tracker runs one target at a time.
+var _checkSystem = new DltViewSystem();
+var _checkScratch = null;
+function checkScratch(V) {
+    if (_checkScratch == null || _checkScratch.use.length < V) {
+        var n = Math.max(8, 2 * V);
+        _checkScratch = {
+            use: new Uint8Array(n), E: new Float64Array(14 * n), ord: new Int32Array(n),
+            err: new Float64Array(n), trialErr: new Float64Array(n), bestErr: new Float64Array(n),
+        };
+    }
+    return _checkScratch;
 }
 
 // `points3d` solved again so that every node's views agree within `thresh` px
@@ -336,33 +398,66 @@ function maxOf(a) {
 // over it with 2 views is dropped (NaN). A misplaced 2D node triangulates
 // far from its animal, often metres away; matched against, that one node can
 // decide which detection the target takes.
+//
+// Every result is bit-identical to solving each trial from scratch with
+// `triangulatePointDLT` and keeping the first strict improvement in view-index
+// order; only the work is less. The leave-one-view-out solves go through
+// `DltViewSystem`, which forms each view's DLT rows once per node and only sums
+// them per subset (see pose/triangulation-core.js), and the errors are taken
+// worst view first so a losing trial stops at its first view (`worstViewError`).
+// With maxPenalty 4 + matchReproj 20 that took the tracker from 5.1 to 4.0 s
+// on the 4-mouse SLAP session 145420 (3.0 s with matchReproj off) and from
+// 51 to 39 s on the 5-mouse recording (25.5 s off), identities unchanged.
 function checkedPoints3d(points3d, allObs, exts, dets, thresh) {
-    var out = new Float64Array(points3d), V = dets.length;
-    var use = new Array(V), err = new Array(V), trialErr = new Array(V), p = [0, 0, 0];
+    var out = new Float64Array(points3d), V = dets.length, sys = _checkSystem, sc = checkScratch(V);
+    var use = sc.use, E = sc.E, ord = sc.ord, err = sc.err, X = [0, 0, 0], xt = [0, 0, 0];
+    for (var v = 0; v < V; v++) {
+        var P = exts[v], K = dets[v].cam.matrix;
+        for (var r = 0; r < 3; r++) for (var c = 0; c < 4; c++) E[12 * v + 4 * r + c] = P[r][c];
+        E[12 * V + 2 * v] = K[0][0]; E[12 * V + 2 * v + 1] = K[1][1];
+        ord[v] = v;
+    }
     for (var k = 0; k < allObs.length; k++) {
         var obs = allObs[k], n = 0;
-        for (var v = 0; v < V; v++) { use[v] = obs[v] != null; if (use[v]) n++; }
-        var X = readPoint3d(points3d, k, p) ? [p[0], p[1], p[2]] : null;
-        if (X == null) continue;                                  // already NaN
-        viewErrors(X, obs, exts, dets, use, err);
-        while (n > 2 && maxOf(err) > thresh) {
-            var best = -1, bestErr = Infinity, bestX = null;
-            for (var drop = 0; drop < V; drop++) {
+        for (v = 0; v < V; v++) { use[v] = obs[v] != null ? 1 : 0; n += use[v]; }
+        if (readPoint3d(points3d, k, X) == null) continue;        // already NaN
+        var over = anyViewOver(X[0], X[1], X[2], obs, E, V, use, thresh);
+        if (n > 2 && over) {
+            sys.prepare(obs, exts);
+            for (v = 0; v < V; v++) ord[v] = v;
+            worstViewError(X[0], X[1], X[2], obs, E, V, use, ord, Infinity, err);
+        }
+        while (n > 2 && over) {
+            orderWorstFirst(err, use, V, ord);
+            // Leave out each view in turn and keep the trial whose worst view is
+            // best; on a tie, the lowest view index (what trying them in index
+            // order and keeping the first strict improvement gives). They are
+            // TRIED worst view first, which is usually the winner, so every
+            // trial after it can stop at its first view over that bound.
+            var best = -1, bestErr = Infinity, bx = 0, by = 0, bz = 0;
+            for (var i = 0; i < V; i++) {
+                var drop = ord[i];
                 if (!use[drop]) continue;
-                use[drop] = false;
-                var trial = obs.map(function (o, i) { return use[i] ? o : null; });
-                var Xt = triangulatePointDLT(trial, exts);
-                var e = maxOf(viewErrors(Xt, obs, exts, dets, use, trialErr));
-                if (Xt == null) e = Infinity;
-                use[drop] = true;
-                if (e < bestErr) { bestErr = e; best = drop; bestX = Xt; }
+                use[drop] = 0;
+                // a trial that cannot beat the best so far stops early; it loses
+                // either way. It can win a tie only with a lower index.
+                var bound = best >= 0 && drop < best ? nextUp(bestErr) : bestErr;
+                var e = sys.solve(use, xt)
+                    ? worstViewError(xt[0], xt[1], xt[2], obs, E, V, use, ord, bound, sc.trialErr)
+                    : Infinity;
+                use[drop] = 1;
+                if (e < bestErr || (e === bestErr && best >= 0 && drop < best)) {
+                    bestErr = e; best = drop; bx = xt[0]; by = xt[1]; bz = xt[2];
+                    var tmp = sc.bestErr; sc.bestErr = sc.trialErr; sc.trialErr = tmp;   // it ran to the end
+                }
             }
             if (best < 0) break;                                  // no solve without any one view
-            use[best] = false; n--;
-            X = bestX;
-            viewErrors(X, obs, exts, dets, use, err);
+            use[best] = 0; n--;
+            X[0] = bx; X[1] = by; X[2] = bz;
+            over = bestErr > thresh;                              // the winning trial's own worst view
+            for (v = 0; v < V; v++) err[v] = sc.bestErr[v];       // ...and its errors, to order the next round
         }
-        if (X == null || maxOf(err) > thresh) {
+        if (over) {
             out[3 * k] = out[3 * k + 1] = out[3 * k + 2] = NaN;
         } else {
             out[3 * k] = X[0]; out[3 * k + 1] = X[1]; out[3 * k + 2] = X[2];

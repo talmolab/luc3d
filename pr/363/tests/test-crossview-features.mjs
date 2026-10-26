@@ -1,7 +1,8 @@
 /**
  * test-crossview-features.mjs — tests for LUCID's extensions to the
  * `CrossViewTracker` (pose/cross-view-tracker.js) that are NOT in the sleap-3d
- * reference: the `maxTargets` target cap and per-node association weights.
+ * reference: the `maxTargets` target cap, per-node association weights and the
+ * misplaced-node options.
  * Drives the real class headlessly (UI stubbed via scripts/bench/hooks.mjs).
  *
  * Run:  node tests/test-crossview-features.mjs
@@ -201,6 +202,97 @@ group('matchReproj — the target is matched against 3D its views agree on');
     ok(!finite3(two.targets[0].match3d, 0), '2 views over the threshold: node dropped from match3d');
     ok(finite3(two.targets[0].match3d, 1), '...the others kept');
     ok(finite3(two.targets[0].points3d, 0), '...and points3d still has it');
+}
+
+// ===========================================================================
+group('matchReproj — match3d is bit-identical to solving every trial from scratch');
+{
+    // checkedPoints3d leaves views out through DltViewSystem and takes trials
+    // and views worst first. Neither may change a single bit: this is the
+    // original implementation, verbatim (one triangulatePointDLT per trial,
+    // trials and views in index order), run on the target's own inputs.
+    const { triangulatePointDLT, reprojectPoint } =
+        await import(pathToFileURL(path.join(POSE_DIR, 'triangulation-core.js')).href);
+    function viewErrors(p, obs, exts, dets, use, out) {
+        for (var v = 0; v < obs.length; v++) {
+            if (!use[v]) { out[v] = -1; continue; }
+            if (p == null) { out[v] = Infinity; continue; }
+            var q = reprojectPoint(p, exts[v]), K = dets[v].cam.matrix;
+            var dx = (q[0] - obs[v][0]) * K[0][0], dy = (q[1] - obs[v][1]) * K[1][1];
+            var e = Math.sqrt(dx * dx + dy * dy);
+            out[v] = isFinite(e) ? e : Infinity;
+        }
+        return out;
+    }
+    function maxOf(a) { var m = -1; for (var i = 0; i < a.length; i++) if (a[i] > m) m = a[i]; return m; }
+    function referenceChecked(points3d, allObs, exts, dets, thresh) {
+        var out = new Float64Array(points3d), V = dets.length;
+        var use = new Array(V), err = new Array(V), trialErr = new Array(V);
+        for (var k = 0; k < allObs.length; k++) {
+            var obs = allObs[k], n = 0;
+            for (var v = 0; v < V; v++) { use[v] = obs[v] != null; if (use[v]) n++; }
+            if (!finite3(points3d, k)) continue;
+            var X = [points3d[3 * k], points3d[3 * k + 1], points3d[3 * k + 2]];
+            viewErrors(X, obs, exts, dets, use, err);
+            while (n > 2 && maxOf(err) > thresh) {
+                var best = -1, bestErr = Infinity, bestX = null;
+                for (var drop = 0; drop < V; drop++) {
+                    if (!use[drop]) continue;
+                    use[drop] = false;
+                    var trial = obs.map(function (o, i) { return use[i] ? o : null; });
+                    var Xt = triangulatePointDLT(trial, exts);
+                    var e = maxOf(viewErrors(Xt, obs, exts, dets, use, trialErr));
+                    if (Xt == null) e = Infinity;
+                    use[drop] = true;
+                    if (e < bestErr) { bestErr = e; best = drop; bestX = Xt; }
+                }
+                if (best < 0) break;
+                use[best] = false; n--;
+                X = bestX;
+                viewErrors(X, obs, exts, dets, use, err);
+            }
+            if (X == null || maxOf(err) > thresh) out[3 * k] = out[3 * k + 1] = out[3 * k + 2] = NaN;
+            else { out[3 * k] = X[0]; out[3 * k + 1] = X[1]; out[3 * k + 2] = X[2]; }
+        }
+        return out;
+    }
+    // Six cameras around the animal, every node a little noisy, and 0–3
+    // views per node misplaced by 10–200 px (some nodes missing in a view),
+    // so trials run 1–4 rounds and some nodes end up dropped.
+    let seed = 7;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    const RIG = [0, 1, 2, 3, 4, 5].map(i => makeCam('r' + i,
+        [0.3 * Math.sin(i), 0.4 * Math.cos(1.3 * i), 0.1 * i], [3 * Math.cos(i), 3 * Math.sin(i), 40 + i]));
+    let nodesChecked = 0, dropped = 0, bad = 0;
+    for (const thresh of [5, 20]) {
+        for (let f = 0; f < 150; f++) {
+            const tr = new CrossViewTracker(Object.assign({}, HP, { matchReproj: thresh }));
+            const pts = nodes3d([rnd() * 4 - 2, rnd() * 4 - 2, 48]);
+            const detsByCam = new Map();
+            RIG.forEach((cam, ci) => {
+                const px = pts.map((p) => {
+                    if (rnd() < 0.05) return null;
+                    const q = cam.project(p);
+                    const off = rnd() < 0.25 ? 10 + 190 * rnd() : 0.5 * rnd();
+                    return [q[0] + off * (rnd() - 0.5) * 2, q[1] + off * (rnd() - 0.5) * 2];
+                });
+                detsByCam.set(cam.name, [new Detection(new Instance(px, 0, 'predicted', 1.0), cam, 0, 0)]);
+            });
+            tr.trackFrame(detsByCam, RIG);
+            for (const t of tr.targets) {
+                const dets = Array.from(t.detsByCam.values());
+                const exts = dets.map(d => d.cam.extrinsicMatrix);
+                const allObs = [];
+                for (let k = 0; k < dets[0].pointsNorm.length; k++) allObs.push(dets.map(d => d.pointsNorm[k]));
+                const ref = referenceChecked(t.points3d, allObs, exts, dets, thresh);
+                nodesChecked += allObs.length;
+                for (let k = 0; k < allObs.length; k++) if (finite3(t.points3d, k) && !finite3(ref, k)) dropped++;
+                if (!ref.every((v, i) => Object.is(v, t.match3d[i]))) bad++;
+            }
+        }
+    }
+    ok(bad === 0 && nodesChecked > 1000 && dropped > 0,
+        `${nodesChecked} nodes over 300 random frames (${dropped} dropped): ${bad} targets differ from the reference`);
 }
 
 // ===========================================================================

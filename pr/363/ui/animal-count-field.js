@@ -26,11 +26,11 @@
 // Not in Defining Plane Mode's toolbar lock: it is a setting a run reads when
 // it starts, not an action on annotation.
 
-import { state } from './app-state.js?v=37c101863857';
-import { setStatus } from '../import-export/save-load.js?v=37c101863857';
+import { state } from './app-state.js?v=448af53fefb9';
+import { setStatus } from '../import-export/save-load.js?v=448af53fefb9';
 import {
     getTrackerNumAnimals, setTrackerNumAnimals, onTrackerNumAnimalsChange,
-} from '../pose/tracker.js?v=37c101863857';
+} from '../pose/tracker.js?v=448af53fefb9';
 
 // What the field last showed, so a redraw with nothing new is a no-op.
 var _shownSession;

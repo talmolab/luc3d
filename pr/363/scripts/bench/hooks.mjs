@@ -27,6 +27,7 @@ const THRESHOLD_DEFAULTS = {
     track3dWeight: 1,
     filterMinVisibleNodes: 0,
     filterMinInstanceScore: 0,
+    filterMinMeanNodeScore: 0,
     corr2dWeight: 1,
     corr3dWeight: 6,
     velocityThreshold: 10,
@@ -40,6 +41,7 @@ const THRESHOLD_DEFAULTS = {
     autoImageSwitchCheck: 0,
     imageChangeThreshold: -0.8,
     imageCheckHz: 2,
+    imageCheckBackgroundHz: 0.1,
     imageCheckMaxViews: 3,
     imageCheckWebNN: 0,
 };

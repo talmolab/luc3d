@@ -4,7 +4,7 @@
  * Track Frame, Track Frame Range and Track All rewrite project state
  * (`session.instanceGroups`, `session.frameIdentityMap`, `session.identities`)
  * but for a long time none of them called `markDirty()`. After Track All on a
- * fresh project the save dot and the `• Lucid` title never appeared,
+ * fresh project the save dot and the `• LUC3D` title never appeared,
  * `state.isDirty` / `session.isDirty` stayed false, and closing the tab or
  * switching sessions gave no unsaved-changes prompt — so the whole tracking
  * result could be lost silently.
