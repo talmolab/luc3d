@@ -3023,6 +3023,49 @@ body {
   display: none;
 }
 
+/* The selected view at the hovered frame (ui/seekbar-preview.js), stacked
+   above the tooltip bubble (its 6px gap + ~22px height + 4px). The canvas is
+   PREVIEW_WIDTH (224px) wide — keep the two in sync, the JS clamps the box by
+   it — and its height follows the view's aspect ratio. `left` is set in px. */
+.seekbar-preview {
+  position: absolute;
+  bottom: calc(100% + 32px);
+  transform: translateX(-50%);
+  z-index: 1000;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: #000;
+  overflow: hidden;
+  pointer-events: none;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+.seekbar-preview[hidden] { display: none; }
+.seekbar-preview-canvas {
+  display: block;
+  width: 224px;
+  transition: opacity 80ms linear;
+}
+/* Showing a nearby frame while the hovered one decodes. */
+.seekbar-preview.is-pending .seekbar-preview-canvas { opacity: 0.55; }
+.seekbar-preview-label {
+  position: absolute; left: 0; bottom: 0;
+  max-width: calc(100% - 8px);
+  padding: 1px 6px;
+  border-top-right-radius: 4px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 10px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* No image at this frame (e.g. an embedded-frames .slp, which only holds the labeled ones). */
+.seekbar-preview.is-empty::before {
+  content: 'No image at this frame';
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-secondary, #aaa);
+  font-size: 11px;
+}
+
 /* FPS pill */
 .fps-pill {
   display: inline-flex;

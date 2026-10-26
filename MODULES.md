@@ -7761,6 +7761,66 @@ DOM mutations over 200 frame steps, fits at 640 px).
 
 ---
 
+### ui/seekbar-preview.js
+
+**Purpose.** A thumbnail of the SELECTED view at the hovered frame, above the
+seekbar's hover tooltip — so you can see what is at a moment before you click
+there.
+
+**Key exports.** `installSeekbarPreview(seekbar, {getView, devicePixelRatio?})`
+-> `{show(frame, x, barWidth), hide(), element}` (handed to
+`installSeekbarTooltip` as its `preview` option; `getView()` -> `{name, decoder,
+videoWidth, videoHeight}` | null); `previewLeft(x, barWidth, boxWidth)` (the
+box's centre: over the cursor, clamped over the bar, centred when the bar is
+narrower); `createThumbCache(max)` (an LRU of thumbnails that closes evicted
+bitmaps); `PREVIEW_WIDTH` (224 CSS px — `.seekbar-preview-canvas` in
+`styles.css` must match), `THUMB_CACHE` (48). DOM: `#seekbarPreview`
+(`.seekbar-preview` > canvas + `.seekbar-preview-label`).
+
+**Behaviour.**
+- **Which view.** `ui/ui-wiring.js`'s `getView`: the solo view in single-view
+  mode, else the active dock pane's (`getActiveView`, the `.video-selected`
+  cell), else the first. NOT `interactionManager.lastInteractedView` — mousemove
+  over a view sets that, so it would follow the pointer across whichever views
+  it crossed on its way down to the bar.
+- **Frames come from `decoder.peekFrame(frame, canvasWidth)`**
+  (`loading/video.js`), which never moves playback, the step cursor or the frame
+  cache; hovering therefore cannot disturb the views or a paused step. A view
+  whose decoder is missing or has no `peekFrame` gets no box (the tooltip
+  alone).
+- **One decode at a time, the newest wins.** A decode can be a keyframe run, far
+  longer than a mousemove, so frames hovered meanwhile are not queued: when it
+  lands, the latest hovered frame is next and the rest are skipped. Each result
+  is drawn as it lands, dimmed (`.is-pending`) while it is not the frame under
+  the cursor. Another view's image is cleared, never shown under this one's
+  label. A null result (e.g. an embedded-frames `.slp`, which holds only the
+  labelled frames) shows "No image at this frame" (`.is-empty`); nulls are not
+  cached, since one can only mean the video was still loading.
+- The last `THUMB_CACHE` thumbnails stay (keyed by decoder + its source, since
+  a pooled decoder `switchSource`s and stays the same object), so going back
+  over a stretch already hovered is instant.
+- **Layout-free while moving**, like the tooltip: the box has a fixed width, so
+  it is clamped without measuring; the canvas is resized only when the view's
+  aspect ratio changes. Stacked above the bubble by CSS (`bottom: calc(100% +
+  32px)`), `pointer-events: none`.
+
+**Imports from project modules.** None (dependency-free, like the tooltip; the
+pure half runs in Node).
+
+**Imported by.** `ui/ui-wiring.js` (inside the seekbar-scrubbing IIFE in
+`setupUI`).
+
+**Coverage.** `tests/test-seekbar-preview.mjs` (`previewLeft`, the LRU) and
+`tests/e2e/seekbar-preview.mjs` (real app: the active pane's view at the
+hovered frame, above the bubble and clamped; follows the active pane and the
+solo view but not `lastInteractedView`; never calls `getFrame` or moves the
+frame; newest-wins coalescing with a slow decoder and cache hits; hidden while
+dragging / on leave; "No image"; and `peekFrame` itself on
+`tests/fixtures/barcode-60` — frame-accurate on mediabunny and HTML5, leaving
+the step cursor, the frame cache and the playback `<video>` untouched).
+
+---
+
 ### ui/seekbar-tooltip.js
 
 **Purpose.** Hover tooltip on the transport seekbar (#142): "Frame 1,234 ·
@@ -7771,11 +7831,14 @@ frame.
 **Key exports.** `formatTimestamp(seconds)` (`mm:ss.mmm`, `h:mm:ss.mmm` from an
 hour up; rounds to the millisecond before splitting, so never `00:60.000`),
 `seekbarTooltipText(frameIdx, fps)`, `installSeekbarTooltip(seekbar,
-{frameAtFraction, getTotalFrames, getFps, markerAt?, hoverLine?})` -> the
+{frameAtFraction, getTotalFrames, getFps, markerAt?, hoverLine?, preview?})` -> the
 tooltip element (`markerAt(frac, widthPx)` -> `{frame, text}` | null: a
 possible-ID-switch tick under the cursor — its frame replaces
 `frameAtFraction`'s, as the scrub handlers snap to it, and its text is
-appended; `hoverLine`: the `#seekbarHoverLine` element, from `index.html`)
+appended; `hoverLine`: the `#seekbarHoverLine` element, from `index.html`;
+`preview`: `{show(frame, x, barWidth), hide()}`, the controller
+`ui/seekbar-preview.js` returns — shown with the tooltip at the same frame,
+hidden during a drag like the hover line)
 (`#seekbarTooltip`, `.seekbar-tooltip`).
 
 **Behaviour.**
@@ -7797,7 +7860,8 @@ appended; `hoverLine`: the `#seekbarHoverLine` element, from `index.html`)
   tick (4 x 24 px vs 3 x 16 px) so it reads among them. Its place in
   `index.html`'s markup, at the ticks' z-index, paints it over the ticks and
   under the thumb. Shown and hidden with the tooltip, except during a drag
-  (the thumb already sits on the frame).
+  (the thumb already sits on the frame). A release over the bar re-runs the
+  hover for the release point, which brings the line (and the preview) back.
 - **Layout-free while moving**, so hovering during playback adds no forced
   synchronous layout: the bar's rect is cached on mouseenter / drag start
   (dropped by a `ResizeObserver` and window `resize`), and the bubble is
@@ -10195,6 +10259,8 @@ field),
 `view-align-modal.js` (`showAlignViewsModal`, View ▸ "Align Views to
 References…"),
 `seekbar-tooltip.js` (`installSeekbarTooltip`),
+`seekbar-preview.js` (`installSeekbarPreview` — the selected view's thumbnail
+above the tooltip, handed to it as `preview`),
 `frame-readout.js` (`showReadoutFrame`, `refreshReadoutTotals` — the
 time / frame readout, written by `updateSeekbarVisual`, the inline frame editor
 and the FPS pill),
@@ -12256,8 +12322,22 @@ How it behaves:
   the third took 79–96 s instead of ~24 s, mostly in back-to-back full GCs
   (V8 counts the bitmaps as external memory). Test:
   `tests/test-release-views-frames.mjs`.
+- `scaledBitmap(src, width)` — an ImageBitmap / VideoFrame / `<video>` as a new
+  ImageBitmap `width` px wide, aspect kept (full size when not smaller).
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
-  `getFrame(frameIndex)` (mediabunny: via `_mbGetFrame`), `releaseStepCursor()`,
+  `getFrame(frameIndex)` (mediabunny: via `_mbGetFrame`),
+  `peekFrame(frameIndex, width)` (a caller-owned copy scaled to `width`, for the
+  seekbar's hover thumbnail, `ui/seekbar-preview.js` — it touches NOTHING
+  playback or stepping uses: no `_mbSeekLock`, step cursor, back-prefetch,
+  cache write or playback-`<video>` seek. mediabunny: a frame the backend
+  holds is copied with `Map.get`, so its LRU order is untouched; any other is
+  `sink.getSample(_frameTimes[i])` on its own short-lived decoder, from its
+  keyframe — ~40–70 ms on a 1280×1024 60 fps HEVC field recording. No backend
+  (or it fails): `_peekHTML5`, a second private `<video>` (`_peekEl`, its
+  seeks serialized by `_peekLock`) on the same File / URL, seeked to
+  `html5SeekTime`; re-pointed when `switchSource` changes the file, released
+  by `close`. `EmbeddedVideoDecoder.peekFrame` is the same contract over
+  `getFrame`, null for a frame not embedded), `releaseStepCursor()`,
   `releaseFrames()` (closes and drops every cached decoded frame — backend cache
   + HTML5/WebCodecs cache — and the stepping streams, keeping the decoder open;
   called by `VideoController._shownViews` for a view that went off screen, by
