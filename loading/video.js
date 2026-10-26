@@ -94,9 +94,9 @@ export function frameCacheFrames(budgetMB, frameBytes) {
  * `releaseFrames()` every decoder of these views — for a SESSION going off
  * screen (another session loaded over it). `VideoController._shownViews` only
  * sees the active session's views, so without this each loaded session keeps
- * its full caches: measured on 3 open 8-camera sessions, 3.2 GB of ImageBitmaps
+ * its full caches: measured on 3 open 8-camera sessions, 3.1 GB of ImageBitmaps
  * held for the two not shown (GPU-backed, but counted by V8 as external
- * memory), and Track All on the third took 92–95 s instead of ~24 s, most of it
+ * memory), and Track All on the third took 79–96 s instead of ~24 s, most of it
  * in back-to-back full GCs. Coming back re-decodes the current frame.
  * @param {Array} views
  */

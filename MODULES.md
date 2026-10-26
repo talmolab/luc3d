@@ -7929,7 +7929,7 @@ the next switch reuses them (cancelling the timer) before constructing new
 `OnDemandVideoDecoder`s. This caps the pool at the current session's camera
 count without destroying recently-used decoders immediately. A decoder going
 into the reserve gets `releaseFrames()` at once: the reserve keeps the decoder,
-not its decoded frames (2.4 GB of them right after a switch between 3 open
+not its decoded frames (1.8 GB of them right after a switch between 3 open
 8-camera sessions, held for the 60 s). Test: `tests/test-decoder-pool-repeated-swap.js`.
 
 **Per-session timeline height.** `switchSession` saves the timeline height on
@@ -12252,8 +12252,8 @@ How it behaves:
   whole SESSION going off screen (`loading/session-loader.js`, when another
   session is loaded over it). `_shownViews` only sees the active session's
   views, so without it each loaded session kept its full caches: on 3 open
-  8-camera sessions, 3.2 GB of bitmaps for the two not shown, and Track All on
-  the third took 92–95 s instead of ~24 s, mostly in back-to-back full GCs
+  8-camera sessions, 3.1 GB of bitmaps for the two not shown, and Track All on
+  the third took 79–96 s instead of ~24 s, mostly in back-to-back full GCs
   (V8 counts the bitmaps as external memory). Test:
   `tests/test-release-views-frames.mjs`.
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,

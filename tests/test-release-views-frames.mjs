@@ -5,9 +5,9 @@
  * (`FRAME_CACHE_BUDGET_MB`, `loading/video.js`). `VideoController._shownViews`
  * releases them for a view that leaves the screen, but it only ever sees the
  * ACTIVE session's views: a session that another one was loaded over kept its
- * full caches. Measured on 3 open 8-camera sessions: 3.2 GB of bitmaps held for
+ * full caches. Measured on 3 open 8-camera sessions: 3.1 GB of bitmaps held for
  * the two not shown, which V8 counts as external memory, and Track All on the
- * third then took 92–95 s instead of ~24 s, most of it in back-to-back full GCs.
+ * third then took 79–96 s instead of ~24 s, most of it in back-to-back full GCs.
  *
  * 1. `releaseViewsFrames(views)` calls `releaseFrames()` once per decoder and
  *    tolerates views with no decoder, decoders without the method, and no views.
