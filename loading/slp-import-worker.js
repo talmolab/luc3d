@@ -13,7 +13,7 @@
  *
  * Messages OUT:
  *   { type: 'progress', message: string }
- *   { type: 'result', data: { skeleton, tracks, frames, videos, embeddedVideos, sessions } }
+ *   { type: 'result', data: { skeleton, tracks, frames, videos, embeddedVideos, sessions, provenance } }
  *   { type: 'metadata', data: { skeleton, trackNames, nodeNames, nFrames, nTracks, nNodes, videos } }
  *   { type: 'frameData', frameIdx, requestId, instances }
  *   { type: 'framesData', startIdx, endIdx, requestId, frames }
@@ -424,6 +424,8 @@ async function parseSlp(file) {
             videos: videos,
             sessions: sessionsArr,
             identities: identitiesArr,
+            // The file's provenance dict, kept through a save (import-export/slp-provenance.js).
+            provenance: metadataJson.provenance || null,
         };
         if (columnar) {
             resultData.columnar = columnar;

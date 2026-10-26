@@ -247,6 +247,102 @@ group('triangulatePointBA end to end is deterministic and refines');
     ok(Math.hypot(r1[0] - X[0], r1[1] - X[1], r1[2] - X[2]) < 5, 'converges near the true point');
 }
 
+group('inverse iteration, unrolled into locals == the loop form it replaced, bit for bit');
+{
+    // The loop form, verbatim from before the unrolling (Cholesky and both
+    // triangular solves through 16- and 4-entry scratch arrays).
+    const L = new Float64Array(16), y = new Float64Array(4);
+    function loopForm(M, out) {
+        const tr = M[0] + M[5] + M[10] + M[15];
+        if (!(tr > 0) || tr === Infinity) return K.smallestEigvec4Flat(M, out);
+        const shift = tr * 1e-15;
+        for (let i = 0; i < 4; i++) {
+            for (let j = 0; j <= i; j++) {
+                let sum = M[i * 4 + j];
+                if (i === j) sum += shift;
+                for (let k = 0; k < j; k++) sum -= L[i * 4 + k] * L[j * 4 + k];
+                if (i === j) {
+                    if (!(sum > 0)) return K.smallestEigvec4Flat(M, out);
+                    L[i * 5] = Math.sqrt(sum);
+                } else {
+                    L[i * 4 + j] = sum / L[j * 5];
+                }
+            }
+        }
+        let v0 = 0.5, v1 = 0.5, v2 = 0.5, v3 = 0.5;
+        for (let it = 0; it < 50; it++) {
+            y[0] = v0 / L[0];
+            y[1] = (v1 - L[4] * y[0]) / L[5];
+            y[2] = (v2 - L[8] * y[0] - L[9] * y[1]) / L[10];
+            y[3] = (v3 - L[12] * y[0] - L[13] * y[1] - L[14] * y[2]) / L[15];
+            out[3] = y[3] / L[15];
+            out[2] = (y[2] - L[14] * out[3]) / L[10];
+            out[1] = (y[1] - L[9] * out[2] - L[13] * out[3]) / L[5];
+            out[0] = (y[0] - L[4] * out[1] - L[8] * out[2] - L[12] * out[3]) / L[0];
+            const norm = Math.sqrt(out[0] * out[0] + out[1] * out[1] + out[2] * out[2] + out[3] * out[3]);
+            if (!(norm > 0) || norm === Infinity) return K.smallestEigvec4Flat(M, out);
+            const a = out[0] / norm, b = out[1] / norm, c = out[2] / norm, d = out[3] / norm;
+            const moved = Math.max(Math.abs(a - v0), Math.abs(b - v1), Math.abs(c - v2), Math.abs(d - v3));
+            v0 = a; v1 = b; v2 = c; v3 = d;
+            if (moved <= 1e-15) { out[0] = v0; out[1] = v1; out[2] = v2; out[3] = v3; return out; }
+        }
+        return K.smallestEigvec4Flat(M, out);
+    }
+    const Ms = SYSTEMS.map((s) => flatOf(K.matMul(K.matTranspose(s.A), s.A)));
+    // and matrices that take each fallback: indefinite (a failed pivot at
+    // every position), zero, NaN, Infinity
+    for (let p = 0; p < 4; p++) {
+        const M = Ms[p].slice(); M[p * 5] = -M[p * 5] - 1; Ms.push(M);
+        const M2 = Ms[p + 4].slice(); M2[p * 5] = 1e-300; Ms.push(M2);
+    }
+    Ms.push(new Float64Array(16), Float64Array.from(Ms[0], (x, i) => i === 6 ? NaN : x),
+        Float64Array.from(Ms[0], (x, i) => i === 15 ? Infinity : x));
+    let bad = 0;
+    for (const M of Ms) {
+        const ref = Array.from(loopForm(M, new Float64Array(4)));
+        const got = Array.from(K.smallestEigvec4Inverse(M, new Float64Array(4)));
+        if (!sameArr(ref, got)) { bad++; if (bad <= 3) console.error('   mismatch', ref, got); }
+    }
+    ok(bad === 0, `${Ms.length} matrices: ${bad} differ`);
+}
+
+group('DltViewSystem: every subset of views == triangulatePointDLT with the rest nulled, bit for bit');
+{
+    // The tracker's reprojection check (checkedPoints3d) leaves views out one
+    // at a time through this; it must give exactly the solve it replaced, or
+    // Track All's identities move. Every subset of each system, half of them
+    // through a fresh copy of the matrices (a new normalizing-frame cache key),
+    // with a missing observation in some.
+    const sys = new K.DltViewSystem();
+    const out = [0, 0, 0];
+    let solves = 0, bad = 0, nulls = 0;
+    for (let t = 0; t < 600; t++) {
+        const s = SYSTEMS[t];
+        const obs = s.xs.map((x, i) => [x, s.ys[i]]);
+        if (t % 7 === 3 && s.nObs > 2) obs[1] = null;
+        const exts = t % 2 === 1 ? s.Ps.map((P) => P.map((r) => r.slice())) : s.Ps;
+        sys.prepare(obs, exts);
+        const use = new Uint8Array(s.nObs);
+        for (let mask = 0; mask < (1 << s.nObs); mask++) {
+            for (let v = 0; v < s.nObs; v++) use[v] = (mask >> v) & 1;
+            const ref = K.triangulatePointDLT(obs.map((o, v) => use[v] ? o : null), exts);
+            const got = sys.solve(use, out) ? out.slice() : null;
+            solves++;
+            if (ref == null) nulls++;
+            if (!sameArr(ref, got)) { bad++; if (bad <= 3) console.error('   mismatch', mask, ref, got); }
+        }
+    }
+    ok(bad === 0 && solves > 10000 && nulls > 0, `${solves} subset solves (${nulls} null): ${bad} differ`);
+
+    // Re-preparing for another node must not leak the previous node's views.
+    const a = SYSTEMS[2], b = SYSTEMS[3];
+    const obsA = a.xs.map((x, i) => [x, a.ys[i]]), obsB = b.xs.map((x, i) => [x, b.ys[i]]);
+    sys.prepare(obsA, a.Ps);
+    sys.prepare(obsB, b.Ps);
+    const all = new Uint8Array(b.nObs).fill(1);
+    ok(sameArr(sys.solve(all, out) ? out.slice() : null, K.triangulatePointDLT(obsB, b.Ps)), 'prepare() replaces the previous system');
+}
+
 group('camera-geometry memo (cameraCenter / backProjectToRays)');
 {
     const cam = randCamera(7, false);

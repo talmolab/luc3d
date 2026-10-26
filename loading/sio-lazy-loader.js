@@ -461,9 +461,13 @@ export class SioLazyLoader {
      *
      * @param {File} file - the project `.slp`
      * @param {Function} [onProgress] - `(msg) => void`
+     * @param {Function} [onReadBytes] - `(done, total) => (void|Promise)`: bytes
+     *   read of the file's four big tables (frames, instances, points,
+     *   pred_points), read in counted row slices — the vendored reader's
+     *   `onReadBytes` (LUCID local patch, open progress). Awaited.
      * @returns {Promise<{labels:Object, typedSession:Object, cameraNames:string[], nFrames:number}>}
      */
-    async openProjectSlp(file, onProgress) {
+    async openProjectSlp(file, onProgress, onReadBytes) {
         var SIO = window.SleapIO;
         if (!SIO || typeof SIO.readSlpStreaming !== 'function') {
             throw new Error('sleap-io.js readSlpStreaming not available on window.SleapIO');
@@ -477,6 +481,7 @@ export class SioLazyLoader {
             onProgress: onProgress
                 ? function (n, total, msg) { onProgress(msg || ('Reading ' + n + '/' + total)); }
                 : undefined,
+            onReadBytes: onReadBytes || undefined,
         });
         this._projectLabels = labels;
         // A single project `.slp` interleaves every camera in ONE store, so all

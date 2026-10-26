@@ -329,6 +329,11 @@ const TRACKING_THRESHOLDS = [
         min: 0, max: 1, step: 0.05,
         desc: 'Detection-pool filter: drop instances whose detection score is below this value (only applies when per-instance scores are available). 0 = off; the sleap-3d reference used 0.85.',
     },
+    {
+        id: 'filterMinMeanNodeScore', label: 'Min mean node score (filter)', default: 0,
+        min: 0, max: 1, step: 0.05,
+        desc: 'Detection-pool filter: drop predictions whose mean node score is below this value — the average of the model\'s per-node scores over every node of the skeleton, a missing node counting as 0 (sleap-nn\'s "mean node score"). Applies only to predictions that carry node scores. 0 = off.',
+    },
     // --- CrossViewTracker engine (pose/cross-view-tracker.js) ---
     {
         id: 'corr2dWeight', label: '2D correspondence weight', default: 1,
@@ -366,6 +371,16 @@ const TRACKING_THRESHOLDS = [
         desc: 'The match gate (pose/cross-view-tracker.js, 2026-10-03). On: a tracked target only takes a detection it scores positively on (roughly, within the distance threshold of where it is), instead of being forced onto whatever is left. Stops a spare target and an extra detection (e.g. a reflection) from trading a correct match away. Targets lost for longer than the stale window still re-acquire ungated. Off (the default): the pre-gate forced assignment — on proofread benchmarks the gate helped SLAP but gave about 6x the ID switches on Mouse-Dyad-10M and 10x on s-DANNCE (#285).',
     },
     {
+        id: 'maxPenalty', label: 'Cap a far node\'s 3D penalty (x 3D weight)', default: 0,
+        min: 0, max: 100, step: 0.5,
+        desc: 'A node\'s 3D matching penalty is never below this many times the 3D correspondence weight, so a node the 2D model put in the wrong place (it triangulates far from the animal, often metres away) counts the same however far off it is, instead of deciding the match alone. 4 = flat beyond 5 x the distance threshold (125 mm at 25). 0 = off (no cap). Opt-in: on 22 proofread SLAP sessions it and the reprojection check below together halved the lasting ID switches, but on the 5-mouse recording they added some (ported from olinesn/campy#85).',
+    },
+    {
+        id: 'matchReproj', label: 'Match against views that agree (px)', default: 0,
+        min: 0, max: 500, step: 1,
+        desc: 'Each animal\'s 3D that the next frame is matched against keeps only the nodes whose views agree within this many pixels: a node over it loses its worst view (down to 2), then is dropped. The 3D written to the groups is unchanged. 20 = the value tried with the cap above. 0 = off. Makes Track All about 60% slower.',
+    },
+    {
         id: 'autoSwitchCheck', label: 'Check ID switches after tracking (body size)', default: 1,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
         desc: 'After Track All or Track Frame Range, flag contacts after which each animal\'s body size matches the other\'s before better than its own (Tracks ▸ Check ID Switches; pose/id-switch-check.js). Checks every tracked frame in the session (needs at least 60 s of tracking). Results are marked on the seekbar and listed in the ID Switches tab, which opens only when a possible switch is found.',
@@ -386,6 +401,11 @@ const TRACKING_THRESHOLDS = [
         id: 'imageCheckHz', label: 'Image check: crops per second', default: 2,
         min: 0.5, max: 15, step: 0.5,
         desc: 'How many frames per second the image ID-switch check crops and embeds, per animal and camera. Higher catches more but takes proportionally longer (2 = ~10 min for 30 min of 5 animals x 8 cameras, 3 views each, on an M-series Mac).',
+    },
+    {
+        id: 'imageCheckBackgroundHz', label: 'Image check: crops per second away from contacts', default: 0.1,
+        min: 0, max: 15, step: 0.05,
+        desc: 'The image check embeds every sample its scoring reads — up to 10 s either side of each contact, at the crops-per-second rate — and elsewhere only this many per second, placed where the video is cheapest to decode; it learns what tells the animals apart from both. Lower is faster. On 24 test recordings 0.1 flagged exactly the contacts that embedding everything flags. At or above the crops-per-second rate every sample is embedded (as before).',
     },
     {
         id: 'imageCheckMaxViews', label: 'Image check: views per animal', default: 3,
@@ -413,10 +433,10 @@ TRACKING_THRESHOLDS.forEach(function (t) { _thrById.set(t.id, t); });
 // and are intentionally hidden from the UI; they still resolve to their defaults
 // for the benchmark harness.
 const WIZARD_THRESHOLD_IDS = new Set([
-    'filterMinVisibleNodes', 'filterMinInstanceScore',
+    'filterMinVisibleNodes', 'filterMinInstanceScore', 'filterMinMeanNodeScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
-    'stale', 'matchGate',
-    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckWebNN',
+    'stale', 'matchGate', 'maxPenalty', 'matchReproj',
+    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz', 'imageCheckMaxViews', 'imageCheckWebNN',
     'reprojErrorThreshold',
 ]);
 
