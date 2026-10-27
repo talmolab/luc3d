@@ -1365,6 +1365,16 @@ body {
   background: var(--accent-dim);
 }
 
+/* Temporal Smoothing while it is applied (ui/ui-wiring.js refreshSmoothingItems):
+   the toolbar's on-state colours. */
+.tri-dropdown-item.applied,
+.tri-dropdown-item.applied .tri-dropdown-hint {
+  color: var(--accent);
+}
+.tri-dropdown-item.applied {
+  background: var(--accent-dim);
+}
+
 .tri-dropdown-hint {
   font-size: 10px;
   color: var(--text-muted);

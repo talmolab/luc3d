@@ -115,8 +115,12 @@ import {
     POINT3D_STRIDE,
     points3dNodeCount,
     NO_REPROJECTED_INSTANCES,
+    pooledPoints3d,
     markPoints3dSmoothed,
-} from './pose-data.js?v=84d6fff68bda';
+    isPoints3dSmoothed,
+    unsmoothedPoints3d,
+    clearPoints3dSmoothed,
+} from './pose-data.js?v=a8a08ce625b2';
 
 // Identity id meaning "no identity" (matches `InstanceGroup`'s default).
 const NO_IDENTITY = -1;
@@ -380,7 +384,8 @@ export function smoothTrajectory(byFrame, cfg, writeFrames) {
     // leaves the tail signals NaN, which the segmentation already tolerates.
     var nNodes = 0;
     for (var fi = 0; fi < frameIdxs.length; fi++) {
-        var nc = points3dNodeCount(byFrame.get(frameIdxs[fi]).points3d);
+        var gp = byFrame.get(frameIdxs[fi]).points3d;
+        var nc = points3dNodeCount(unsmoothedPoints3d(gp) || gp);
         if (nc > nNodes) nNodes = nc;
     }
     if (nNodes === 0) return { frames: 0, nodes: 0 };
@@ -396,7 +401,9 @@ export function smoothTrajectory(byFrame, cfg, writeFrames) {
         var t = frameIdx - minFrame;
         var group = byFrame.get(frameIdx);
         groupAt[t] = group;
-        var pts = group.points3d;
+        // Filter the 3D as it was before ANY smoothing, so a second run
+        // replaces the first rather than smoothing its output again.
+        var pts = unsmoothedPoints3d(group.points3d) || group.points3d;
         var have = 0;
         var count = points3dNodeCount(pts);
         var base = t * stride;
@@ -453,6 +460,7 @@ export function smoothTrajectory(byFrame, cfg, writeFrames) {
         if (!g || !present[t2]) continue;
         if (writeFrames && !writeFrames.has(t2 + minFrame)) continue;
         var pts2 = g.points3d;
+        var source = unsmoothedPoints3d(pts2);
         var count2 = points3dNodeCount(pts2);
         var base2 = t2 * stride;
         var touched = 0;
@@ -461,6 +469,11 @@ export function smoothTrajectory(byFrame, cfg, writeFrames) {
             var nx = data[base2 + o2];
             // Never resurrect a node that was missing: gaps are not filled.
             if (Number.isNaN(nx)) continue;
+            // First smoothing of this array: keep what it held (in the slab
+            // pool, not one ArrayBuffer per group) before overwriting it. The
+            // slice matters: `pooledPoints3d` hands an already-pooled array
+            // back as-is, which would make the copy the array being written.
+            if (!source) source = pooledPoints3d(pts2.slice());
             pts2[o2] = nx;
             pts2[o2 + 1] = data[base2 + o2 + 1];
             pts2[o2 + 2] = data[base2 + o2 + 2];
@@ -468,7 +481,7 @@ export function smoothTrajectory(byFrame, cfg, writeFrames) {
         }
         if (touched > 0) {
             invalidateReprojections(g);
-            markPoints3dSmoothed(pts2);
+            markPoints3dSmoothed(pts2, source);
             g.smoothed = true;
             framesWritten++;
             nodesWritten += touched;
@@ -512,4 +525,54 @@ export function smoothSession(session, params, opts) {
     }
     result.ran = true;
     return result;
+}
+
+/**
+ * Does any group hold smoothed 3D (`isPoints3dSmoothed`) — on `frameIdx`, or
+ * anywhere in the session when it is omitted? Lights the menu items.
+ * @param {Session} session
+ * @param {number} [frameIdx]
+ * @returns {boolean}
+ */
+export function hasSmoothed3d(session, frameIdx) {
+    if (!session || !session.instanceGroups) return false;
+    var lists = frameIdx == null
+        ? session.instanceGroups.values()
+        : [session.instanceGroups.get(frameIdx) || []];
+    for (var groups of lists) {
+        if (!groups) continue;
+        for (var gi = 0; gi < groups.length; gi++) {
+            if (groups[gi] && isPoints3dSmoothed(groups[gi].points3d)) return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Undo the pass: copy each smoothed group's pre-smoothing 3D back in place
+ * (`unsmoothedPoints3d`) and drop the mark, so the group is exactly what it was
+ * before its first smoothing (and a mark from a file read still applies).
+ *
+ * @param {Session} session
+ * @param {{writeFrames?: Set<number>|null}} [opts] frames to restore; null = all
+ * @returns {{frames: number}} groups restored
+ */
+export function unsmoothSession(session, opts) {
+    var writeFrames = (opts && opts.writeFrames) || null;
+    var frames = 0;
+    if (!session || !session.instanceGroups) return { frames: 0 };
+    for (var [frameIdx, groups] of session.instanceGroups) {
+        if (!groups || (writeFrames && !writeFrames.has(frameIdx))) continue;
+        for (var gi = 0; gi < groups.length; gi++) {
+            var g = groups[gi];
+            var source = g && unsmoothedPoints3d(g.points3d);
+            if (!source) continue;
+            g.points3d.set(source);
+            clearPoints3dSmoothed(g.points3d);
+            invalidateReprojections(g);
+            g.smoothed = false;
+            frames++;
+        }
+    }
+    return { frames: frames };
 }

@@ -28,8 +28,13 @@ import {
     collectTrajectories,
     smoothTrajectory,
     smoothSession,
+    unsmoothSession,
+    hasSmoothed3d,
 } from '../pose/temporal-smoothing.js';
-import { InstanceGroup, Instance, makePoints3d, setPoint3d } from '../pose/pose-data.js';
+import {
+    InstanceGroup, Instance, makePoints3d, setPoint3d, pooledPoints3d,
+    isPoints3dSmoothed, unsmoothedPoints3d,
+} from '../pose/pose-data.js';
 
 let passed = 0, failed = 0;
 const failures = [];
@@ -379,6 +384,53 @@ group('partially-missing nodes within a present skeleton');
     const g3 = session.instanceGroups.get(3)[0];
     eq(g3.points3d[0], 0, 'node 0 spike on the same frame is smoothed away');
     ok(Number.isNaN(g3.points3d[3]), 'node 1 stays missing — not resurrected by the filter');
+}
+
+group('a second run REPLACES the first — it filters the pre-smoothing 3D');
+{
+    // A spike at frame 4. Window 9 then window 3 must equal window 3 alone:
+    // stacking would leave the window-9 smear under the window-3 result.
+    const build = () => {
+        const frames = [];
+        for (let f = 0; f < 15; f++) {
+            // Pooled like real groups: the first-run copy must not alias them.
+            const g = makeGroup(5, [[(f === 4 ? 90 : f), 0, 0], [0, 0, 0]]);
+            g.points3d = pooledPoints3d(g.points3d);
+            frames.push([f, [g]]);
+        }
+        return makeSession(frames);
+    };
+    const xs = (sess) => Array.from({ length: 15 }, (_, f) => sess.instanceGroups.get(f)[0].points3d[0]);
+    const once = build();
+    smoothSession(once, { smoothGaussianWindow: 3, smoothMinSegment: 1 });
+    const twice = build();
+    const raw = xs(twice);
+    smoothSession(twice, { smoothGaussianWindow: 9, smoothMinSegment: 1 });
+    ok(Math.abs(xs(twice)[4] - 90) > 10, 'precondition: the wide window moved the spike');
+    smoothSession(twice, { smoothGaussianWindow: 3, smoothMinSegment: 1 });
+    eqList(xs(twice), xs(once), 'window 9 then window 3 == window 3 alone');
+
+    const g4 = twice.instanceGroups.get(4)[0];
+    ok(isPoints3dSmoothed(g4.points3d), 'smoothed array is marked');
+    const src = unsmoothedPoints3d(g4.points3d);
+    // Would read the smoothed value if the copy aliased the pooled array.
+    eq(src && src[0], 90, 'the kept copy holds the pre-smoothing value');
+
+    eq(hasSmoothed3d(twice), true, 'hasSmoothed3d: session');
+    eq(hasSmoothed3d(twice, 4), true, 'hasSmoothed3d: frame 4');
+    eq(hasSmoothed3d(twice, 99), false, 'hasSmoothed3d: a frame with no groups');
+
+    // Both kernels off → restore.
+    const r1 = unsmoothSession(twice, { writeFrames: new Set([4]) });
+    eq(r1.frames, 1, 'restore one frame');
+    eq(twice.instanceGroups.get(4)[0].points3d[0], 90, 'frame 4 back to its pre-smoothing value');
+    ok(!isPoints3dSmoothed(twice.instanceGroups.get(4)[0].points3d), 'and no longer marked');
+    eq(hasSmoothed3d(twice, 4), false, 'hasSmoothed3d: frame 4 after restore');
+    eq(hasSmoothed3d(twice), true, 'other frames still smoothed');
+    unsmoothSession(twice);
+    eqList(xs(twice), raw, 'restoring everything gives back the original 3D');
+    eq(hasSmoothed3d(twice), false, 'hasSmoothed3d: nothing left');
+    eq(unsmoothSession(twice).frames, 0, 'a second restore has nothing to do');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
