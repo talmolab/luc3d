@@ -713,8 +713,8 @@ export const EMBED_MAX_BATCH = 64;
  */
 export const EMBED_IN_FLIGHT = 8;
 
-/** The lowest cap the image check takes (%; the `imageCheckGpuTime` / `imageCheckCpuCores` settings' minimum, 0.10). */
-export const IMAGE_CAP_MIN = 10;
+/** The lowest cap the image check takes (%; the `imageCheckGpuTimePct` / `imageCheckCpuCoresPct` settings' minimum). */
+export const IMAGE_CAP_MIN = 1;
 
 /** A cap as a percentage in IMAGE_CAP_MIN..100; anything not a positive number is 100, the uncapped check. */
 export function capPct(pct) {
@@ -724,8 +724,8 @@ export function capPct(pct) {
 
 /*
  * The compute caps. The share of the GPU and of the CPU the image check may use is
- * the user's to set (`imageCheckGpuTime`, `imageCheckCpuCores`: fractions, 0.50 by
- * default, passed in here as percentages), so that what it does
+ * the user's to set (`imageCheckGpuTimePct`, `imageCheckCpuCoresPct`: whole
+ * percentages, 50 by default), so that what it does
  * not take is left for other work on the machine — held even when nothing else
  * wants it. No browser API gives a page a share of either, so the check takes its
  * share by how it runs: the GPU by idling after each full batch (paceRestMs), the
@@ -924,7 +924,7 @@ export function formatEmbedTiming(t) {
         t.batches + ' batches of ~' + Math.round(t.avgBatch) + ', ' + t.modelMsPerCrop.toFixed(1) + ' ms/crop) · per frame: decode ' +
         Math.round(t.decodeMsPerFrame) + ' ms, crop ' + Math.round(t.cropMsPerFrame) + ' ms, queue ' + Math.round(t.queueMsPerFrame) + ' ms' +
         ' · ' + (cpu ? 'CPU (' + t.workers + ' workers)' : t.backend === 'webnn' ? 'WebNN' : 'WebGPU') + (t.dtype ? ' ' + t.dtype : '') +
-        (t.maxGpuPct != null && t.maxGpuPct < 100 ? ' · GPU time capped at ' + (t.maxGpuPct / 100).toFixed(2) + ' (' + Math.round(t.restS || 0) + ' s idle)' : '') +
+        (t.maxGpuPct != null && t.maxGpuPct < 100 ? ' · GPU time capped at ' + Math.round(t.maxGpuPct) + '% (' + Math.round(t.restS || 0) + ' s idle)' : '') +
         (t.maxCpuPct != null && t.maxCpuPct < 100 ? ' · CPU capped at ' + t.threads + ' of ' + t.cores + ' cores' : '') +
         formatKeyframes(t.keyframes) + formatCached(t);
 }

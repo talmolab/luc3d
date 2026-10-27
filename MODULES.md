@@ -8211,9 +8211,8 @@ and the CPU workers hold ~600 MB each. On a CPU run "About these flags" says the
 model ran on the CPU. Reads `imageCheckHz` (default 2), `imageChangeThreshold`
 (default -0.8 — a new id rather than the old `imageCheckThreshold`, because the
 image score's scale changed), `imageCheckMaxViews` (default 3, passed as
-`maxViewsPerAnimal`), `imageCheckGpuTime` / `imageCheckCpuCores` (fractions,
-default 0.50 each, passed × 100 as `maxGpuPct` / `maxCpuPct`: the embedder works
-in percent) and `imageCheckWebNN` (default 0, as `webnn`), and passes
+`maxViewsPerAnimal`), `imageCheckGpuTimePct` / `imageCheckCpuCoresPct` (whole
+percentages, default 50 each, as `maxGpuPct` / `maxCpuPct`) and `imageCheckWebNN` (default 0, as `webnn`), and passes
 `inFlight: embedder.inFlight`. The embedder's `backend()` outcome is attached to
 the result as `model` (its note shown under "About these flags") and
 `embedder.stats()` as `timing` (logged, and shown there as "Image check speed on
@@ -8686,8 +8685,8 @@ against `cutCrop` itself within 0.04 px, at any rotation);
 `TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_REVISION`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (224).
 
 **The compute caps** (`opts.maxGpuPct` / `opts.maxCpuPct`, from the "GPU time
-(%)" / "CPU cores (%)" settings `imageCheckGpuTime` / `imageCheckCpuCores`,
-fractions 0.10–1.00, default 0.50). How much of the GPU and of the CPU the check
+(%)" / "CPU cores (%)" settings `imageCheckGpuTimePct` / `imageCheckCpuCoresPct`,
+whole percentages 1–100, default 50). How much of the GPU and of the CPU the check
 may take is the USER's to set, and what it does not take stays free for other
 apps — even when nothing else wants it (an allocation, not an adaptive
 back-off). No browser API gives a page a share of either, so the check takes its
@@ -8697,7 +8696,7 @@ share by how it runs:
   pct. Batches do NOT shrink with the cap: an earlier version scaled them
   (`64 × pct`), but small batches run each crop slower while the idle time alone
   already sets the share. Measured on an M-series GPU (200 frames of a real
-  recording): 6.0–6.2 ms/crop uncapped, 5.6 at 0.50, 5.8 at 0.25, GPU busy 98% /
+  recording): 6.0–6.2 ms/crop uncapped, 5.6 at 50%, 5.8 at 25%, GPU busy 98% /
   50.1% / 25.3%. Not applied on the CPU path. Idle time is not counted in
   `busyMs()`, so the dialog's GPU line reads at most the cap.
 - **CPU** — fewer worker threads, all kept working, never idling:
@@ -8705,14 +8704,14 @@ share by how it runs:
   cores}`, a budget of floor(cores × pct/100) threads; on the CPU path the model
   takes all but one (still within `cpuModelWorkerCount`'s memory limit), cropping
   the rest; otherwise cropping takes it all. At least one of each. 10 cores at
-  0.50: 4 model + 1 crop (uncapped 4 + 8). Video decoding (WebCodecs) and the main
+  50%: 4 model + 1 crop (uncapped 4 + 8). Video decoding (WebCodecs) and the main
   thread are the browser's and not counted.
-100% is the uncapped behaviour for both; floor `IMAGE_CAP_MIN` = 10.
+100% is the uncapped behaviour for both; floor `IMAGE_CAP_MIN` = 1 (1% idles 99× each run).
 `releaseFrames` ends an idle in progress (`endRest`) LAST, after the CPU workers
 are terminated — `createCpuModelPool.terminate()` does not reject a job in
 flight, so a run started on a worker about to be killed would never settle.
 `stats()` adds `maxGpuPct` (null on the CPU path), `restS`, `maxCpuPct`,
-`threads` and `cores`; `formatEmbedTiming` adds "GPU time capped at 0.NN (S s
+`threads` and `cores`; `formatEmbedTiming` adds "GPU time capped at N% (S s
 idle)" and/or "CPU capped at T of C cores". Covered by
 `tests/test-image-compute-caps.mjs` (incl. the queue, driven by a fake model) and
 `tests/e2e/image-check-cpu.mjs` §6.
@@ -8913,11 +8912,12 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   0/1, the image check likewise, default 0; `imageChangeThreshold` -0.8;
   `imageCheckHz` 2; `imageCheckBackgroundHz` 0.1 (crops per second away from contacts:
   `backgroundHz`, see pose/id-switch-check.js "Which samples are embedded"; Wizard only, not
-  the Track All dialog); `imageCheckMaxViews` 3; `imageCheckGpuTime` 0.5 and
-  `imageCheckCpuCores` 0.5 — labelled "GPU time (%)" / "CPU cores (%)", the share of
-  GPU time / of the CPU cores the image check may use, 0.10..1.00, 1 = uncapped
-  (new ids for the unreleased percentage-scale `imageCheckMaxGpu`/`Cpu`, so a
-  stored 50 is never read on the 0–1 scale); `imageCheckWebNN` — 0/1, try WebNN,
+  the Track All dialog); `imageCheckMaxViews` 3; `imageCheckGpuTimePct` 50 and
+  `imageCheckCpuCoresPct` 50 — labelled "GPU time (%)" / "CPU cores (%)", the share
+  of GPU time / of the CPU cores the image check may use, whole numbers 1..100,
+  100 = uncapped (new ids each time the scale changed — the unreleased
+  `imageCheckMaxGpu`/`Cpu` 10–100, then `imageCheckGpuTime`/`CpuCores` 0.10–1.00 —
+  so a value stored on an earlier scale is never read on this one); `imageCheckWebNN` — 0/1, try WebNN,
   default 0).
 - `ID_SWITCH_SETTING_IDS` — the Wizard settings shown in its "ID Switches"
   section rather than under Tracking Thresholds, in display order. The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
@@ -9558,7 +9558,7 @@ frame is never checked); Track Frame Range shows the same section.
   call while one is open resolves `null` at once.
 - `IMAGE_CHECK_IDS` — the image check's settings in dialog order, the switch
   first. In the options grid each row carries `data-row="<setting id>"`, and
-  styles.css starts a new row at `imageCheckGpuTime` and at `imageCheckWebNN`, so
+  styles.css starts a new row at `imageCheckGpuTimePct` and at `imageCheckWebNN`, so
   GPU time and CPU cores share a row with Try WebNN under them. A setting's `tip`
   puts a short ⓘ after its label (`setInfoTip`) in place of the label's long
   native `title`; its `note` ("5 of 10 cores") follows the label inside

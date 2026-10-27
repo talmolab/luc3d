@@ -279,7 +279,7 @@ export function buildNodeWeightFields(nodes) {
  * Track All, in the order the dialog shows them: the on/off switch first.
  */
 export const IMAGE_CHECK_IDS = [
-    'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckGpuTime', 'imageCheckCpuCores', 'imageCheckWebNN',
+    'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckGpuTimePct', 'imageCheckCpuCoresPct', 'imageCheckWebNN',
 ];
 
 /**
