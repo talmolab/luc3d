@@ -148,6 +148,25 @@ await switchCase(16);
 group('A switch early in the session (the swapped stretch is the MAJORITY) — the same: one change point, at the switch');
 await switchCase(7);
 
+group('Moments — an end reads back through weakly swapped encounters; repeated ends of one swap are one row');
+{
+    // momentChangePoints on hand-made encounters and 'end' moments (the labels BEFORE each look swapped), e.g. an
+    // animal back from out of sight several times after one swap (single-camera returns)
+    const o = Object.assign({}, SC.CLASSIFIER_CHECK_DEFAULTS, { fps: 30 });
+    const enc = (frame, score, flagged = false) => ({ frame, startFrame: frame - 10, identityA: 0, identityB: 1, nameA: 'id_0', nameB: 'id_1', score, flagged });
+    const end = (frame, start, score = -300) => ({ frame, startFrame: start, identityA: 0, identityB: 1, nameA: 'id_0', nameB: 'id_1', score, side: 'before', look: ['return'] });
+    let out = SC.momentChangePoints([end(1500, 1430)], [enc(900, -88)], [], o);
+    ok(out.length === 1 && out[0].kind === 'end' && out[0].switchedAt === null,
+        `the pair's encounter before it scored -88 (swapped, if too weakly to flag): the stretch runs back past it, to the start (switchedAt ${out[0] && out[0].switchedAt})`);
+    out = SC.momentChangePoints([end(1500, 1430)], [enc(600, 40), enc(900, -88)], [], o);
+    eq(out[0] && out[0].switchedAt, 600, '…to the last encounter that reads right');
+    out = SC.momentChangePoints([end(1500, 1430), end(1610, 1556), end(1668, 1636)], [enc(900, -88)], [], o);
+    ok(out.length === 1 && out[0].frame === 1500 && out[0].switchedAt === null,
+        `three returns after one swap, nothing reading right between them: ONE row, the first (${JSON.stringify(out.map(x => [x.frame, x.switchedAt]))})`);
+    out = SC.momentChangePoints([end(1500, 1430), end(2400, 2300)], [enc(900, -88), enc(2000, 60)], [], o);
+    ok(out.length === 2 && out[1].switchedAt === 2000, `…but an encounter reading right between them makes two stretches (${JSON.stringify(out.map(x => [x.frame, x.switchedAt]))})`);
+}
+
 group('Moments (coat brightness) — a switch AWAY from every encounter is found at the moment it happened');
 {
     // Candidate moments are tested by the classifier, which only the coat-brightness check still runs (#310 made the

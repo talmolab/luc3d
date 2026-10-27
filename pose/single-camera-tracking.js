@@ -207,7 +207,8 @@ function trackerPoints(inst) {
  *          keep no track, and stay in the session
  * @returns {Promise<{numIdentities: number, frames: number, tracked: number, untracked: number,
  *          duplicates: number, moments: Array, review: Array}>}  `untracked` excludes the `duplicates`;
- *          `review` = `moments` plus handovers (`handoverCandidates`), the review list's rows
+ *          `moments` = the candidate moments plus returns (`returnMoments`), what the checks test;
+ *          `review` = the candidate moments plus handovers (`handoverCandidates`), the review list's rows
  */
 export async function trackSingleCamera(session, cfg, opts) {
     var cam = singleCameraName(session);
@@ -268,9 +269,11 @@ export async function trackSingleCamera(session, cfg, opts) {
         }
     }
     var fps = (opts && opts.fps) || session.fps || 30;
-    var moments = candidateMoments(frames, out, inputTracks, ambiguous, look, fps);
-    // The review list adds handovers (where a lone animal's track changes); the checks keep testing `moments` only,
-    // the candidates they were calibrated on.
+    // The checks test the candidate moments plus every RETURN (an animal back after more than a second out of
+    // sight, returnMoments): the coat-brightness check then compares the labels before it went out of sight with
+    // the labels after it came back. The review list adds handovers (where a lone animal's track changes) instead.
+    var moments = candidateMoments(frames, out, inputTracks, ambiguous, look, fps).concat(returnMoments(frames, out, fps))
+        .sort(function (x, y) { return x.frame - y.frame || x.identityA - y.identityA || x.identityB - y.identityB; });
     var review = candidateMoments(frames, out, inputTracks, ambiguous, look, fps, handoverCandidates(frames, out, fps));
     return { numIdentities: nTracks, frames: frames.length, tracked: tracked, untracked: untracked,
              duplicates: removed.length, moments: moments, review: review };
@@ -411,6 +414,41 @@ export function handoverCandidates(frames, out, fps, opts) {
         for (var q2 = 0; q2 < cs.length; q2++) if (cs[q2] && ids[q2] != null) recent.push({ f: f, c: cs[q2], t: ids[q2] });
     }
     return out2;
+}
+
+/** A return: a track's first detection after more than `gapSeconds` with none. */
+export const RETURN_DEFAULTS = { gapSeconds: 1 };
+
+/**
+ * Where an animal comes back after being out of sight — handled, hidden in a
+ * shelter, outside a partial view — for the coat-brightness check to test: it is
+ * the commonest way a single-camera switch happens with no contact to see, and
+ * the review list's handovers only look back `HANDOVER_DEFAULTS.lookSeconds`. A
+ * moment per return of track a and each other track b, its `startFrame` the
+ * frame a was last seen, so the check reads the labels before the animal went
+ * out of sight against the labels after it came back (`testMoments`). Read from
+ * the tracker's output only. Not on the review list: one place per return would
+ * double it (measured, MODULES.md).
+ * @returns {Array<{frame, startFrame, identityA, identityB, cues: string[]}>}
+ */
+export function returnMoments(frames, out, fps, opts) {
+    var o = Object.assign({}, RETURN_DEFAULTS, opts || {});
+    var gap = o.gapSeconds * (fps || 30), last = new Map(), moments = [];
+    for (var p = 0; p < frames.length; p++) {
+        var f = frames[p].frameIdx, ids = out[p] || [];
+        for (var q = 0; q < ids.length; q++) {
+            var t = ids[q];
+            if (t == null || t < 0) continue;
+            if (last.has(t) && f - last.get(t) > gap) {
+                last.forEach(function (lf, u) {
+                    if (u === t) return;
+                    moments.push({ frame: f, startFrame: last.get(t), identityA: Math.min(t, u), identityB: Math.max(t, u), cues: ['return'] });
+                });
+            }
+        }
+        for (var q2 = 0; q2 < ids.length; q2++) if (ids[q2] != null && ids[q2] >= 0) last.set(ids[q2], f);
+    }
+    return moments;
 }
 
 /**

@@ -2546,8 +2546,8 @@ lone animal hopping onto a stray detection's track, or onto a track another anim
 left — the switches no contact sees. 1 s rather than 0.5 because a mouse often
 drops out of detection for over half a second and comes back on the other track
 (sham_gdx R289: 0.6 s, a switch the 0.5 s list missed entirely); 2 s added places
-without catching more. The checks keep testing `moments` only (the
-candidates they were calibrated on), so the coat-brightness check is unchanged.
+without catching more. The checks test `moments`: the candidate moments plus
+RETURNS, not the handovers (see below).
 Measured 2026-10-21/27 offline through this code (the harness rebuilt in
 `~/luc3d-eval`, `measure_review.mjs` / `measure_fix.mjs`), a switch counting as on
 the list when one of its ends is within 2 s of a row:
@@ -2570,6 +2570,37 @@ the list when one of its ends is within 2 s of a row:
 - **Its pair:** on 3–4 mice the row's pair was the swapped one in only a third to
   two thirds of the switches it found, so the Fix dialog lets the reviewer pick the
   two tracks (`ui/id-switch-modal.js`).
+
+**Returns: an animal back from out of sight, for the coat-brightness check.**
+`returnMoments(frames, out, fps, opts)` -> one moment `{frame, startFrame, identityA,
+identityB, cues: ['return']}` per return of a track (its first detection after more
+than `RETURN_DEFAULTS.gapSeconds` (1) unseen) and each other track, `startFrame` the
+frame it was last seen, so `testMoments` reads the labels before the animal went out
+of sight against the labels after it came back. `trackSingleCamera`'s `moments` =
+candidate moments + returns (sorted); the review list does not take them (a place
+per return would add 1–2.5 places a minute). Their rows note "an animal comes back
+after being out of sight". They cost no decoding: the check reads its 4 Hz samples
+anyway. Measured 2026-10-27 offline with the check's own code on precomputed coat
+vectors (`~/luc3d-eval/extract_bright.mjs`, `eval_bright.mjs`), the simulated reviewer
+working through the review list plus the check's rows:
+- **SLAP original six (3–4 mice of different coats, 23 views):** 1,450 returns tested
+  -> 21 rows, 19 at a real switch (12 rows once repeated returns after one swap share
+  a row, `momentChangePoints`); the check's rows 13 (9 real) -> 34 (28 real); after
+  review 99.74% -> 99.95% (150448/midL: two mice swapped from the start, put right
+  while out of view, which the list had no place for: 96.0% -> 99.98%). In the app on
+  that view: one return row, whose own Fix swaps 0:00.0–0:50.0 — 96.04% -> 99.86%.
+- **SLAP held-out (2 mice, 64 views):** 14 rows, 10 real; after review unchanged (99.75%).
+- **sham_gdx (2 light-coated mice, 193 videos):** 2,464 returns -> 2 rows, both false;
+  unchanged (99.94%). Coat brightness cannot tell look-alikes apart.
+- **Not adopted: search-zone stitching** after PrecisionTrack (Coulombe et al., 2025,
+  "PrecisionTrack: A Platform for Automated Long-Term Social Behavior Analysis in
+  Naturalized Environments", https://github.com/VincentCoulombe/precision_track): with
+  the animal count known, a lost track's search zone grows ahead of where it was going
+  and a returning detection takes the identity whose zone it comes back in. Reimplemented
+  offline after Track All (`~/luc3d-eval/stitch.mjs`) and swept over its tuning ranges, it
+  was neutral to worse (sham_gdx 94.08% -> 94.04%, 24 videos worse and 13 better; only
+  SLAP six gained, at beta 1.5): mice come back far from where they left (handled, hidden),
+  so where they were heading says little.
 
 **Eager sessions only.** A lazy (> 150 MB) single-camera project is refused with
 `SINGLE_CAMERA_LAZY_REASON` rather than tracked from its resident window. Track
@@ -2609,7 +2640,8 @@ out, inputTracks, ambiguous, look, fps, extra?)` (`extra`: more candidates `{f, 
 cue}` to cluster with them); `CANDIDATE_DEFAULTS` (`ambiguityMargin`
 0.1, `trackletGapFrames` 5, `clusterSeconds` 3); `handoverCandidates(frames, out, fps,
 opts)` -> `[{f, a, b, cue: 'handover'}]`; `HANDOVER_DEFAULTS` (`lookSeconds` 1,
-`nearBody` 0.5); `reviewResult(moments, session, fps)` -> the review list's result; `singleCameraCheckSession(session)`
+`nearBody` 0.5); `returnMoments(frames, out, fps, opts)` -> `[{frame, startFrame, identityA,
+identityB, cues: ['return']}]`; `RETURN_DEFAULTS` (`gapSeconds` 1); `reviewResult(moments, session, fps)` -> the review list's result; `singleCameraCheckSession(session)`
 -> stand-in | null | `{fail}`; `swapSingleCameraIdentities(session, from, to, idA, idB)`
 -> `{frames, tracks: boolean}` | null; `singleCameraCheckOptions(cue)` -> the options
 the coat-brightness check runs with on one camera (`{skipEmpty: true,
@@ -3728,7 +3760,14 @@ nearby 'end' rows sharing an animal, the clearest leads).
   more switch: the classifier learns whichever labelling covers more of the
   video. A moment's row is never a follow-on, other pairs' rows up to 3 s before
   it follow it, and it merges with the flagged run it starts or ends — one
-  swapped stretch, one row, one Fix.
+  swapped stretch, one row, one Fix. An 'end' with no run before it reads back
+  through the pair's encounters still scoring below `continueBelow` (the run
+  hysteresis, going backwards) to the last that reads right, and a later 'end' of
+  the same pair with nothing reading right in between adds no row (same stretch).
+  Measured 2026-10-27 by accepting each row's Fix as the dialog proposes it, alone,
+  on Track All's labels (with returns): SLAP six 34 rows, Fixes +45.0 / -8.5 points
+  summed -> 22 rows, +54.2 / -11.3; SLAP held-out 63 -> 58 rows, +488 / -4.6 ->
+  +542 / -9.8; sham_gdx 13 -> 10 rows, +42 / -19.8 -> +61 / -21.1.
 - **Calibrated on the 35 proofread single-camera SLAP videos (59 switches):**
   moment rows caught 14 with no false rows (the image check's moment rows under
   its old scoring: 13, 12 shared); encounter rows were noise at every threshold,
@@ -8560,7 +8599,7 @@ lists `results.review` (`pose/single-camera-tracking.js` `reviewResult`): the pl
 a switch is most likely — near-ties, input-tracklet changes, handovers. They are
 rows like the checks' (ticks, seekbar markers, progress bar, Next unreviewed,
 the saved checklist), drawn grey, with NO score; their note says why the place is
-listed ("a lone animal's track changes", …); the header counts them ("N places to
+listed ("a lone animal's track changes", "an animal comes back after being out of sight", …); the header counts them ("N places to
 look at") and "About these flags" explains the list first. A check row at the same
 place and pair is ONE row, the check's, marked "on the review list" ('review' is
 last in `ID_SWITCH_CUES`). **Fix on a review row** swaps from the frame you are on
