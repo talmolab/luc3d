@@ -36,6 +36,14 @@
  *  7. Duplicate removal is offered in the Tracking Wizard, off by default (box
  *     IoU 0.5, OKS 0.6); switched on, Track All leaves a planted partial copy of
  *     an animal without a track and says so, and every animal keeps its track.
+ *  7b. The Wizard's detection filters apply on one camera: at Min visible nodes
+ *     12 the Wizard counts the one detection with 11 nodes, and Track All leaves
+ *     it without a track, saying so in the status and the summary box (as
+ *     filtered, not as a duplicate).
+ *  7c. The Instances tab's Ungrouped table shows each instance's mean node
+ *     score under its instance score (a missing node counts as 0; "-" without
+ *     node scores), explained on the "Score / Node" header
+ *     (tests/e2e/info-panel-instance-tables.mjs checks the table fits).
  *  8. The review list: a lone animal hopping onto the tracks of SLEAP's copies of
  *     itself (a second animal elsewhere, a third entering later) leaves places
  *     to review: the status counts them, the ID Switches tab lists them as grey
@@ -344,6 +352,56 @@ try {
     check(box7 && box7.includes('Without a track1 detection1 duplicate removed first'), 'the summary box counts the removed duplicate: ' + JSON.stringify(box7 && box7.slice(-2)));
     await page.evaluate(() => { const c = document.getElementById('trackSummaryClose'); if (c) c.click(); });
     await page.evaluate(async () => (await import('/ui/settings.js')).setTrackingThresholds({ scRemoveDuplicates: 0 }));
+
+    console.log('\n7b. The Tracking Wizard\'s detection filters apply on one camera, as the Wizard counts them');
+    // The planted copy (11 of 15 nodes) is the one detection below a minimum of 12 visible nodes.
+    await page.evaluate(async () => { const M = await import('/ui/settings-modal.js'); M.showSettingsModal('wizard'); });
+    await page.evaluate(() => {
+        const i = document.querySelector('.settings-overlay .settings-num-input[aria-label="Min visible nodes (filter)"]');
+        i.value = '12'; i.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await page.waitForFunction(() => {
+        const r = document.querySelector('.settings-overlay [data-testid="detection-filter-preview"]');
+        return r && r.querySelector('tr[data-camera="mouse_video"] .dfp-removed');
+    }, { timeout: 20000 });
+    const readout = await page.evaluate(() =>
+        document.querySelector('.settings-overlay [data-testid="detection-filter-preview"] tr[data-camera="mouse_video"] .dfp-removed').textContent.trim());
+    check(/\(1\)$/.test(readout), 'the Wizard counts the one detection the filter removes on this camera: ' + readout);
+    await page.click('.settings-overlay .settings-btn-apply');
+    check(await page.evaluate(async () => (await import('/ui/settings.js')).getTrackingThreshold('filterMinVisibleNodes')) === 12, 'set with Apply');
+    await page.evaluate(() => { document.getElementById('statusText').textContent = ''; document.getElementById('tbTrackAll').click(); });
+    await page.waitForFunction(() => /Tracked \d+ animal|Track All error/.test(document.getElementById('statusText').textContent), { timeout: 60000 });
+    const st7b = await status(), after7b = await page.evaluate(() => ({ copy: window.__copy.trackIdx, tr: window.__tracks() }));
+    check(/1 detection removed by the detection filters \(left without a track\)/.test(st7b) && !/duplicate/.test(st7b),
+        'the status counts it as filtered, not as a duplicate: ' + st7b.slice(0, 200));
+    check(after7b.copy === null, 'the filtered detection keeps no track');
+    const per7b = [0, 1, 2].map(a => new Set(after7b.tr.map(r => r[a])));
+    check(per7b.every(x => x.size === 1) && new Set(per7b.map(x => [...x][0])).size === 3, 'each animal is still on one track throughout');
+    const box7b = await page.evaluate(() => { const o = document.getElementById('trackSummaryOverlay'); return o ? [...o.querySelectorAll('.track-summary-stat')].map(r => r.textContent) : null; });
+    check(box7b && box7b.includes('Without a track1 detection1 removed by the detection filters'),
+        'the summary box counts it under the filters: ' + JSON.stringify(box7b && box7b.slice(-2)));
+    await page.evaluate(() => { const c = document.getElementById('trackSummaryClose'); if (c) c.click(); });
+    await page.evaluate(async () => (await import('/ui/settings.js')).setTrackingThresholds({ filterMinVisibleNodes: 0 }));
+
+    console.log('\n7c. The Instances tab shows each instance\'s mean node score, under its instance score');
+    const ns = await page.evaluate(async () => {
+        const S = window.__lucid.state.session, IP = await import('/ui/info-panel.js');
+        // node scores of 0.6 on every node: 0.60 for animal 0 (15 nodes), 0.44 for the 11-node copy (a missing node is 0)
+        const a0 = S.frameGroups.get(300).getUnlinkedInstances('mouse_video')[0].instance;
+        a0.setPointScores(new Array(15).fill(0.6)); window.__copy.setPointScores(new Array(15).fill(0.6));
+        window.__lucid.state.currentFrame = 300; IP.updateInfoPanel(); IP.updateFrameInfo(300, []);
+        const t = document.getElementById('unlinkedTable');
+        const heads = [...t.querySelectorAll('thead th')].map(th => th.textContent.trim());
+        const col = heads.indexOf('Score / Node');
+        const cells = [...t.querySelectorAll('tbody tr')].filter(tr => tr.children.length === heads.length)
+            .map(tr => [...tr.children[col].querySelectorAll(':scope > div')].map(d => d.textContent).join('/'));
+        const head = t.querySelectorAll('thead th')[col];
+        return { heads, cells, tip: head && head.dataset.infotip || '' };
+    });
+    check(ns.heads.join('|') === 'Track / Identity|Type|Points|Score / Node', 'the Ungrouped table\'s last column is Score / Node: ' + ns.heads.join('|'));
+    check(ns.cells.slice().sort().join(',') === '0.50/0.44,0.90/-,0.90/-,0.90/0.60',
+        'under each instance score, its mean node score: 0.60 and 0.44 (a missing node counts as 0), "-" without node scores: ' + ns.cells.join(','));
+    check(/Min mean node score/.test(ns.tip), 'its header explains the second line is what the "Min mean node score" filter tests');
 
     console.log('\n8. The review list: a lone animal hopping tracks is on it, and a review row Fixes from here to the end');
     await page.evaluate(async () => {

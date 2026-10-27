@@ -746,7 +746,9 @@ centroid/normal split, §11 the SUBSET case) and
 
 **Purpose.** The tracker's three detection filters (`filterMinVisibleNodes`,
 `filterMinInstanceScore`, `filterMinMeanNodeScore`) — the rule itself, which
-`pose/tracker.js` imports — and the count of what they would remove, per camera
+`pose/tracker.js` imports and single-camera Track All
+(`pose/single-camera-tracking.js`) applies before SLEAP's tracker — and the
+count of what they would remove, per camera
 and in total, before anyone runs tracking, so the Tracking Wizard can show it
 while the values are being chosen (`ui/detection-filter-preview.js`). DOM-free,
 no imports.
@@ -773,8 +775,10 @@ is harmless for two cameras empties the third.
   instance, no name lookup (a mean does not depend on node order) — cheap
   enough for every detection of a Track All.
 - `passesDetectionFilter(inst, minVis, minScore, minMeanNode?, session?,
-  camName?, frameIdx?)` — **the tracker's filter**; every minimum 0 is a no-op,
-  and the node score is computed only when its minimum is set.
+  camName?, frameIdx?)` — **the tracker's filter**, multi-camera and
+  single-camera alike; every minimum 0 is a no-op, and the node score is
+  computed only when its minimum is set. A loaded user instance's score is 0,
+  so a minimum instance score above 0 removes it too (the readout counts it).
 - `collectDetectionStats(session)` / `collectDetectionStatsAsync(session,
   {isCancelled})` — walk the session ONCE into flat typed columns. The async
   one walks each camera in windows of `ASYNC_WINDOW_FRAMES` (4,000) frames with
@@ -828,11 +832,15 @@ values, lazy node scores read from the store; missing scores; an empty pool;
 excluded cameras; histograms; the flag; the async walk),
 `tests/test-tracker-luc3d.mjs` and `tests/test-crossview-populate.mjs` (the
 node-score filter keeps a weak animal out of the legacy matcher and the real
-`runCrossViewTracker`), and `tests/e2e/detection-filter-preview.mjs`.
+`runCrossViewTracker`), `tests/test-single-camera-tracking.mjs` §11 (on one
+camera, Track All leaves out exactly what `countDetectionFilters` counts), and
+`tests/e2e/detection-filter-preview.mjs`.
 
 **Imports from project modules.** None.
 
-**Imported by.** `pose/tracker.js`, `ui/detection-filter-preview.js`.
+**Imported by.** `pose/tracker.js`, `pose/single-camera-tracking.js`,
+`ui/detection-filter-preview.js`, `ui/info-panel.js` (`meanNodeScore`, shown
+under each instance score in the Instances tab).
 
 ---
 
@@ -1776,8 +1784,13 @@ multi-camera pass) and the
 Tracking Wizard's `scWindowSize` / `scOksStddev` / `scConnectBreaks`, ends on the
 Track All summary box planned for one camera (`ui/track-summary-modal.js`; timed
 from the tracker call, counted on the single-camera stand-in), and with
-`scRemoveDuplicates` on (default off) leaves each frame's duplicate detections
-out first (`scDuplicateIou` / `scDuplicateOks`; the status line says how many). It writes
+the Tracking Wizard's detection filters (`filterMinVisibleNodes` /
+`filterMinInstanceScore` / `filterMinMeanNodeScore`, read as the multi-camera
+pass reads them; default 0 = off) leaves the detections that fail them out
+first, and with `scRemoveDuplicates` on (default off) then each frame's duplicate
+detections (`scDuplicateIou` / `scDuplicateOks`); the status line and the summary
+box count each apart ("removed by the detection filters", "duplicate … removed
+first"). It writes
 the TRACKS, as `sleap-nn track` does, plus one identity per track, then follows
 the multi-camera pass's contract: `markDirty()` after the last bail-out, the
 previous identities and ID-switch results cleared, Color: ID, predictions only,
@@ -1876,7 +1889,9 @@ constants exactly.
   (`inst.countPoints()`), or — when a per-instance `score` exists — below the
   score, or a prediction whose mean node score (sleap-nn's, a missing node
   counting as 0) is below `filterMinMeanNodeScore`. Full parity (OKS dedup, gap
-  recovery) is not implemented.
+  recovery) is not implemented. `runSingleCameraTrackAll` reads the same three
+  settings (through `thr`) and hands them to `trackSingleCamera` as
+  `opts.filter`: one camera applies the same gate before SLEAP's tracker.
 
 Covered by `tests/test-tracker-luc3d.mjs` (filter + weight on the real
 `matchFrameInstances`) and `tests/test-tracker-gui.mjs` (track/identity
@@ -2477,6 +2492,25 @@ Measured 2026-10-12, offline through this function and then in the app:
   better on SLAP at the same OKS. A keypoint-distance-only rule (median < 10 px)
   removed more, including more real animals: 88.03%, 16 views worse.
 
+**The Tracking Wizard's detection filters apply here too** (`opts.filter`:
+`{minVisibleNodes, minInstanceScore, minMeanNodeScore}`, which Track All reads
+from `filterMinVisibleNodes` / `filterMinInstanceScore` /
+`filterMinMeanNodeScore` exactly as the multi-camera pass does). Per frame and
+FIRST — before duplicate removal, which then looks for duplicates among the
+detections the filters kept, and before the port, which is untouched — every
+detection failing `passesDetectionFilter` (`pose/detection-filter-stats.js`, the
+multi-camera tracker's own rule) is left out. So the Wizard's readout counts
+exactly what is left out here. Like a duplicate, a filtered detection keeps no
+track or identity, stays in the session, and is counted (`filtered`, apart from
+`untracked` and `duplicates`). A frame left with no detection is skipped, as a
+frame that never had one is; `frames` still counts it (every frame with a
+detection before anything was left out). All three minimums default to 0 (off),
+which leaves the tracking as it was. Keep them off by default unless measured: on
+the offline harness (2026-10-27, `filter_strays.mjs`) dropping detections with
+fewer than 2/3/5 visible nodes before Track All helped Track All slightly but
+was worse after review — it drops real, partly visible animals (SLAP held-out
+after review 99.75% -> 99.05% at >= 3 nodes; 0.4–2% of real detections lost).
+
 **The summary box's gallery reads the same stand-in with a pixel camera**
 (`singleCameraCheckSession(session, {pixelCamera: true})`): its one camera's
 `project` maps (x, y, 0) back to (x, y) and claims no size, which is what
@@ -2653,8 +2687,8 @@ cannot see.
 
 **Key exports.** `singleCameraName(session)` (the camera, or null);
 `singleCameraTrackerConfig(numAnimals, {windowSize, oksStddev, connectBreaks})`;
-`trackSingleCamera(session, cfg, {onProgress, signal, fps, look})` ->
-`{numIdentities, frames, tracked, untracked, moments, review}`; `candidateMoments(frames,
+`trackSingleCamera(session, cfg, {onProgress, signal, fps, look, filter, duplicates})` ->
+`{numIdentities, frames, tracked, untracked, filtered, duplicates, moments, review}`; `candidateMoments(frames,
 out, inputTracks, ambiguous, look, fps, extra?)` (`extra`: more candidates `{f, a, b,
 cue}` to cluster with them); `CANDIDATE_DEFAULTS` (`ambiguityMargin`
 0.1, `trackletGapFrames` 5, `clusterSeconds` 3); `handoverCandidates(frames, out, fps,
@@ -2667,11 +2701,13 @@ the coat-brightness check runs with on one camera (`{skipEmpty: true,
 clearestEndLeads: true}`); `DUPLICATE_DEFAULTS` (`iou` 0.5, `oks` 0.6, `oksStddev`
 0.1, `minNodes` 3); `duplicateDetections(dets, o)` -> the indices of one frame's
 duplicate detections; `boxIou(a, b)`; `duplicateOks(strong, weak, strongBox,
-stddev, minNodes)`; `SINGLE_CAMERA_LAZY_REASON`. `trackSingleCamera` also takes
-`opts.duplicates` (DUPLICATE_DEFAULTS overrides; absent or null = off) and returns
-`duplicates` (how many were left out).
+stddev, minNodes)`; `SINGLE_CAMERA_LAZY_REASON`. In `trackSingleCamera`,
+`opts.filter` is the Wizard's three minimums (absent, or all 0 = off) and
+`opts.duplicates` the DUPLICATE_DEFAULTS overrides (absent or null = off);
+`filtered` and `duplicates` count what each left out.
 
-**Imports from project modules.** `pose/sleap-tracker.js`.
+**Imports from project modules.** `pose/sleap-tracker.js`,
+`pose/detection-filter-stats.js` (`passesDetectionFilter`).
 
 **Imported by.** `pose/tracker.js` (Track All), `ui/id-switch-modal.js` (the
 checks and the fix).
@@ -2681,11 +2717,16 @@ across 18 input tracklet breaks, the spurious detection and the user frame, the
 candidate moments, the stand-in and a planted swap found by the real size check,
 the track swap and its fallback, the refusals, §6/§7 `skipEmpty` and
 `clearestEndLeads` on the classifier's change points, and §9 the review list:
-handovers, its rows, their Fix plan and the saved checklist) and
+handovers, its rows, their Fix plan and the saved checklist, and §11 the
+detection filters: each minimum leaves its failing detections without a track,
+counted as `filtered` — the Wizard's own count — all 0 changes nothing, and
+duplicates are looked for after the filters) and
 `tests/e2e/single-camera-track-all.mjs` (the real buttons, the refusals, a planted
 swap found, fixed and undone through the ID Switches tab, a swap away from every
 contact found by the coat-brightness check at a candidate moment, a "Both" row of
-size and brightness, §6 which checks take the single-camera options, and §8 the
+size and brightness, §6 which checks take the single-camera options, §7b a Wizard
+filter counted in the Wizard, then left without a track by Track All and counted
+in the status and the summary box, §7c the Instances tab's mean node score, and §8 the
 review list after Track All: counted in the status and the summary box, listed in
 the tab, and a review row's Fix between two picked tracks, from here to the end,
 then Fix again from past its own window: only the stretch between stays swapped).
@@ -4791,8 +4832,15 @@ projects alike.
 
 **Instance tables layout: both fit a 300 px panel.** Grouped Instances is
 Track / Identity · Views · Type · Error · unlink; Ungrouped Instances is
-Track / Identity · Type · Points · Score, under one full-width header row per
-camera. In both, a row's track and identity `<select>`s are STACKED in the
+Track / Identity · Type · Points · Score / Node, under one full-width header
+row per camera. Score / Node is STACKED like Track / Identity: the instance
+score, and under it (muted, `.unlinked-node-score`) the instance's mean node
+score (`meanNodeScore`, `pose/detection-filter-stats.js`: sleap-nn's, a missing
+node counting as 0 — what the Tracking Wizard's "Min mean node score" filter
+tests; "-" with no node scores, e.g. a user instance), explained on its header
+(`SCORE_NODE_TIP`, `setInfoTip`). A fifth column did not fit: 273 px against
+257 with the panel's scrollbar showing. The header is held at its narrowest
+(`width: 1px`, "Score /" kept on one line) so "Track / Identity" stays on one. In both, a row's track and identity `<select>`s are STACKED in the
 first cell, all `STACKED_SELECT_PX` (80) wide and left-aligned, track on top
 (the Grouped row's dirty marker sits beside its track dropdown) — side by side
 they made the Instances tab scroll sideways. The track dropdown is the FIRST
@@ -4989,6 +5037,9 @@ In-memory only; see `ui/app-state.js`.
 **Imports from project modules.**
 - `../pose/pose-data.js` — `Skeleton`, `Camera`, `Session`.
 - `../pose/triangulation.js` — `getInstanceGroupsForFrame`.
+- `../pose/detection-filter-stats.js` — `meanNodeScore` (the Ungrouped table's
+  mean node score, under the instance score).
+- `./info-tip.js` — `setInfoTip` (the Score / Node header's explanation).
 - `./overlays.js` — `REPROJECTION_COLOR`, `NULL_ID_COLOR`, `getTrackColor`,
   `getGroupColor`.
 - `./rendering.js` — `drawAllOverlays`, `updateFrameCounters`.
@@ -10171,7 +10222,7 @@ unit-tested in Node (`tests/test-track-summary.mjs`). It gives every outcome
 
 **Key exports.**
 - `summarizeTrackedIdentities(session, {frames, animals, animalsAuto, elapsedMs, fps,
-  singleCamera, untracked, duplicates, reviewPlaces})`
+  singleCamera, untracked, filtered, duplicates, reviewPlaces})`
   — frames per identity, frames with any identity, frames with every animal, from
   `session.instanceGroups` (never evicted on a lazy project, so the whole project).
   An identity listed twice in one frame counts once. A single-camera Track All
@@ -10193,7 +10244,8 @@ unit-tested in Node (`tests/test-track-summary.mjs`). It gives every outcome
   multi-camera one is unchanged.
   - **What it reports:** it counts **Tracks**, since SLEAP's tracker writes one per
     animal, and adds a "Without a track" row for detections over the animal count
-    plus duplicates removed first, and a "To review" row for the places on its
+    plus those the Tracking Wizard's detection filters removed (`filtered`) and the
+    duplicates removed first, each named apart, and a "To review" row for the places on its
     review list (`reviewPlaces`, with their rate a minute).
   - **Its checks:** Coat brightness (the automatic one, counting its candidate
     moments), Images, and Body size. Body size is "Not run" on one camera, with
@@ -11338,7 +11390,8 @@ dismiss.
 
 **Imported by.** `ui/plane-definition.js` (the major sections' ⓘ),
 `ui/plane-nodes-panel.js` (the Pinned column's ⓘ), `pose/initialization.js`
-(`installInfoTips`), `ui/node-tooltip.js` (`placeTipNear`).
+(`installInfoTips`), `ui/node-tooltip.js` (`placeTipNear`), `ui/info-panel.js`
+(the Ungrouped table's Score / Node header).
 
 Coverage: `tests/e2e/info-tip.mjs` (incl. that the status bar is left untouched
 and that an element created after startup is served with no wiring),

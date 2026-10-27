@@ -322,7 +322,7 @@ const TRACKING_THRESHOLDS = [
     {
         id: 'filterMinVisibleNodes', label: 'Min visible nodes (filter)', default: 0,
         min: 0, max: 30, step: 1,
-        desc: 'Detection-pool filter: drop instances with fewer than this many present keypoints before cross-view matching (geometry half of the detection filter). 0 = off; the sleap-3d reference used 8 on a 15-node skeleton.',
+        desc: 'Detection-pool filter: drop instances with fewer than this many present keypoints before tracking (cross-view matching, or SLEAP\'s tracker on one camera; a dropped detection keeps no track). 0 = off; the sleap-3d reference used 8 on a 15-node skeleton.',
     },
     {
         id: 'filterMinInstanceScore', label: 'Min instance score (filter)', default: 0,
@@ -332,7 +332,7 @@ const TRACKING_THRESHOLDS = [
     {
         id: 'filterMinMeanNodeScore', label: 'Min mean node score (filter)', default: 0,
         min: 0, max: 1, step: 0.05,
-        desc: 'Detection-pool filter: drop predictions whose mean node score is below this value — the average of the model\'s per-node scores over every node of the skeleton, a missing node counting as 0 (sleap-nn\'s "mean node score"). Applies only to predictions that carry node scores. 0 = off.',
+        desc: 'Detection-pool filter: drop predictions whose mean node score is below this value — the average of the model\'s per-node scores over every node of the skeleton, a missing node counting as 0 (sleap-nn\'s "mean node score"). Applies only to predictions that carry node scores; the Instances tab shows each instance\'s value under its score. 0 = off.',
     },
     // --- CrossViewTracker engine (pose/cross-view-tracker.js) ---
     {
