@@ -13326,6 +13326,12 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   (`writePlaneMetadata`/`readPlaneMetadata`/`resetPlaneState`, same reason),
   `./slp-provenance.js` (`buildSaveProvenance` — every `.slp` project save keeps
   the loaded files' provenance).
+- `../lib/sleap-io/index.browser.js` — dynamic `import()` in the private
+  `ensureSleapIO()`, a fallback taken only when the `window.SleapIO` bridge in
+  `index.html` is missing. The specifier resolves against THIS module, hence
+  `../`; it read `./lib/…` (i.e. `import-export/lib/…`, a 404) until
+  `tests/test-module-specifiers-resolve.mjs` was added to check every relative
+  module reference in the app.
 
 **Imported by.** `pose/triangulation.js`, `pose/tracker.js`,
 `pose/initialization.js`, `import-export/slp-import.js`,
