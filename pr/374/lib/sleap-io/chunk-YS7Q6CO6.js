@@ -226,7 +226,7 @@ async function headOrRangeProbe(url, options) {
   }
   if (resolved.gdrive) {
     try {
-      const { parseGdrive: parseGdrive2 } = await import("./gdrive-6DDSPUUK.js?v=d04a4dbfeeaf");
+      const { parseGdrive: parseGdrive2 } = await import("./gdrive-6DDSPUUK.js?v=54e4fbd1434a");
       parseGdrive2(url);
       return true;
     } catch {
