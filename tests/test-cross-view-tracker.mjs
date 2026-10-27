@@ -209,6 +209,94 @@ group('Match gate — a spare target cannot trade an animal onto a reflection');
     eq(on.g.frameIdx, 0, 'gate ON: the spare target is left unmatched this frame');
 }
 
+group('Soft gate — the gate\'s split with "no match" at a cost: off by default, 0 is off, the gate wins');
+{
+    // The same scene as above, run with the soft gate. The reflection costs A's
+    // target far more than SOFT, so A's target refuses it instead of being
+    // forced onto it, exactly as with the gate.
+    const SOFT = 100;
+    function run(extra) {
+        const trk = new CrossViewTracker(Object.assign({ maxTargets: 3 }, GATE_HP, extra));
+        const A = [-7, 0, 48], B = [7, 0, 48], G = [0, 8, 48];
+        const three = [nodes3d(A), nodes3d(B), nodes3d(G)];
+        trk.trackFrame(viewDets(0, { c0: three, c1: three, c2: three }), CAMS);
+        const tA = nearestTarget(trk, A), tG = nearestTarget(trk, G);
+        const C0 = [0, 0, -40];
+        tG.points3d = Float64Array.from(nodes3d(A).flatMap(p => {
+            const v = p.map((x, i) => x - C0[i]), L = Math.hypot(...v);
+            return [p[0] + 8 * v[0] / L + 1, p[1] + 8 * v[1] / L, p[2] + 8 * v[2] / L];
+        }));
+        const reflection = nodes3d([A[0], A[1] - 30, A[2]]);
+        const costs = [tA, tG].map(t => [0, 2].map(k => -trk._adjacency(t, det(CAMS[0], 1, k, k === 0 ? nodes3d(A) : reflection), CAMS[0])));
+        trk.trackFrame(viewDets(1, {
+            c0: [nodes3d(A), nodes3d(B), reflection],
+            c1: [nodes3d(A), nodes3d(B)],
+            c2: [nodes3d(A), nodes3d(B)],
+        }), CAMS);
+        return { a: tA.detsByCam.get('c0'), g: tG.detsByCam.get('c0'), costs };
+    }
+    const soft = run({ softGate: SOFT });
+    ok(soft.costs[0][1] > SOFT && soft.costs[1][1] > SOFT, `fixture: the reflection costs both targets more than ${SOFT} (${soft.costs[0][1].toFixed(0)}, ${soft.costs[1][1].toFixed(0)})`);
+    ok(soft.costs[0][0] < SOFT && soft.costs[1][0] < SOFT, 'fixture: A\'s detection costs both targets less than it');
+    ok(soft.a.frameIdx === 1 && soft.a.slot === 0, 'soft gate: A\'s target keeps A\'s detection');
+    eq(soft.g.frameIdx, 0, 'soft gate: the spare target is left unmatched this frame');
+    for (const [extra, what] of [[{}, 'absent'], [{ softGate: 0 }, '0']]) {
+        const r = run(extra);
+        eq(r.a.slot, 2, `soft gate ${what}: the forced assignment, unchanged (A's target on the reflection)`);
+    }
+    // With the gate on, its cost of 0 is what applies: a soft gate of 1e6 would
+    // let the spare keep taking A, so this run tells the two apart.
+    const both = run({ matchGate: 1, softGate: 1e6 }), gate = run({ matchGate: 1 });
+    ok(both.a.slot === gate.a.slot && both.a.frameIdx === gate.a.frameIdx && both.g.frameIdx === gate.g.frameIdx,
+        'gate on + soft gate = the gate alone');
+}
+
+group('Soft gate — a LOST target still re-acquires far away (lost targets are never gated)');
+{
+    const trk = new CrossViewTracker(Object.assign({ maxTargets: 2, stale: 20, softGate: 10 }, GATE_HP));
+    const A = [-7, 0, 48], B = [7, 0, 48], A2 = [-7, 12, 48];
+    const both = [nodes3d(A), nodes3d(B)];
+    for (let f = 0; f < 3; f++) trk.trackFrame(viewDets(f, { c0: both, c1: both, c2: both }), CAMS);
+    const tA = nearestTarget(trk, A);
+    const onlyB = [nodes3d(B)];
+    for (let f = 3; f < 31; f++) trk.trackFrame(viewDets(f, { c0: onlyB, c1: onlyB, c2: onlyB }), CAMS);
+    const back = [nodes3d(A2), nodes3d(B)];
+    const far = -trk._adjacency(tA, det(CAMS[0], 31, 0, nodes3d(A2)), CAMS[0]);
+    ok(far > 10, `fixture: A's new position costs its lost target more than the soft gate (${far.toFixed(0)})`);
+    trk.trackFrame(viewDets(31, { c0: back, c1: back, c2: back }), CAMS);
+    eq(tA.detsByCam.size, 3, 'the lost target re-acquired A in all three views');
+}
+
+group('Hold bonus — two near-tied targets stop trading one detection back and forth');
+{
+    // A and B are seen in c1 and c2 throughout; c0 sees ONE detection, roughly
+    // between them, that drifts back and forth across the middle (the overlap a
+    // missing animal leaves in one view). Without the bonus it changes hands
+    // whenever it crosses; with it, the target that took it keeps it. The swing
+    // has to cross the middle by enough to flip a target that was just pulled
+    // toward it (±0.7 does not) while each step stays inside the hold radius
+    // (0.02 normalized: 1.6 units at c0's ~88 depth is ~0.018; ±0.9 is not).
+    const A = [-3, 0, 48], B = [3, 0, 48];
+    const xs = [-0.8, 0.8, -0.8, 0.8, -0.8, 0.8];
+    function run(extra) {
+        const trk = new CrossViewTracker(Object.assign({ maxTargets: 2 }, GATE_HP, { distanceThreshold: 50 }, extra));
+        const both = [nodes3d(A), nodes3d(B)];
+        trk.trackFrame(viewDets(0, { c0: both, c1: both, c2: both }), CAMS);
+        const tA = nearestTarget(trk, A), owners = [];
+        xs.forEach((x, i) => {
+            const f = i + 1;
+            trk.trackFrame(viewDets(f, { c0: [nodes3d([x, 0, 48])], c1: both, c2: both }), CAMS);
+            const d = tA.detsByCam.get('c0');
+            owners.push(d.frameIdx === f ? 'A' : 'B');
+        });
+        return owners.join('');
+    }
+    const off = run({}), on = run({ holdBonus: 30 });
+    ok(/AB|BA/.test(off), `without the bonus the detection changes hands (${off})`);
+    ok(/^(A+|B+)$/.test(on), `with a hold bonus of 30 one target keeps it (${on})`);
+    eq(run({ holdBonus: 0 }), off, 'a hold bonus of 0 is off');
+}
+
 group('Match gate — a LOST target still re-acquires its animal far from where it vanished');
 {
     // Animal A disappears for longer than `stale`, so every one of its target's

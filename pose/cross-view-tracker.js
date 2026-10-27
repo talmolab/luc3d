@@ -94,6 +94,38 @@
  *      before, forced. That is how an animal that vanished and reappeared
  *      elsewhere is re-acquired; gating them too would orphan it for good.
  *
+ * -----------------------------------------------------------------------
+ * THE FLICKER FIX (2026-10-19) — two opt-in settings, both off by default
+ * -----------------------------------------------------------------------
+ * With the gate off, a target whose animal has no usable detection in a view
+ * is still forced onto one there. Two ways that shows, both seen on the real
+ * 3-mouse SLAP session 10072022143153:
+ *   - a stray detection sits next to animal A: the spare target taking A's
+ *     detection and A's target taking the stray adds up cheaper than the
+ *     spare taking the stray (midL, frame 13,232: 84 + 382 < -24 + 718);
+ *   - the missing animal's target projects onto a neighbour's detection, and
+ *     the two targets' costs on it are close (mid, frames 14,990-14,999).
+ * Small frame-to-frame changes then tip the total one way or the other, so the
+ * label of an animal that is plainly visible flips every frame or two.
+ *   - **`softGate` (cost; 0 = off)** — the match gate's two stages with the
+ *     tracked targets' "no match" at this cost instead of 0: a tracked target
+ *     refuses a detection costing it more than `softGate`, and lost targets
+ *     still take what is left, forced. Ignored while `matchGate` is on.
+ *   - **`holdBonus` (adjacency; 0 = off)** — a target scores this much better
+ *     on the detection that continues the one it took in the same view on the
+ *     previous frame (mean per-node distance under `holdRadius`, normalized
+ *     image units, default 0.02 — pixels, so it stays frame-invariant).
+ * Measured on all 22 proofread SLAP sessions (gate off; softGate 150 +
+ * holdBonus 30): short identity runs (< 0.5 s) 2,385 -> 1,351, lasting switches
+ * 360 -> 220, median accuracy 99.15% -> 99.74%, mean 88.21% -> 93.78%; the mean
+ * moves 89-94% across neighbouring values, since lasting swaps come and go per
+ * session. With the gate on, holdBonus 30: 568 -> 433 short runs, accuracy
+ * unchanged. On the 5-mouse recording (vs. its gate-on, tails-0 reference) the
+ * soft gate keeps 4 relabels but swaps a different pair (17.8% -> 22.8% of
+ * animal-frames wrong); holdBonus 30 alone gives 2 relabels, 12.4%. Not yet
+ * measured on Mouse-Dyad / s-DANNCE, where the gate itself hurt (#285) — so
+ * neither is a default.
+ *
  * Faithful-port quirks still preserved from the reference (do NOT "fix" these
  * without new measurement — they were not implicated by the fig8-bench search):
  *   - `velocity_threshold` / `distance_threshold` are SOFT (drive the cost term
@@ -293,6 +325,8 @@ export class CrossViewTracker {
      *   matchGate (0) — THE MATCH GATE (see file header). A tracked target only
      *   takes a detection it scores positively on; lost targets re-acquire
      *   ungated. 0 (the default since #285) is the pre-gate forced assignment.
+     *   softGate (0), holdBonus (0), holdRadius (0.02) — THE FLICKER FIX (see
+     *   file header). 0 = off, which is the tracker exactly as before.
      */
     constructor(hp) {
         hp = hp || {};
@@ -311,6 +345,12 @@ export class CrossViewTracker {
         this.stale = Math.max(0, Math.floor(num(hp.stale, 20)));
         // Match gate (see file header). Default off (#285); 1 = on.
         this.matchGate = num(hp.matchGate, 0) > 0;
+        // Soft gate (see file header, "THE FLICKER FIX"). 0 / absent (default) =
+        // off; ignored while matchGate is on, which is the same split at cost 0.
+        this.softGate = (typeof hp.softGate === 'number' && isFinite(hp.softGate) && hp.softGate > 0) ? hp.softGate : null;
+        // Hold bonus (same section). 0 (default) = off.
+        this.holdBonus = (typeof hp.holdBonus === 'number' && isFinite(hp.holdBonus) && hp.holdBonus > 0) ? hp.holdBonus : 0;
+        this.holdRadius = num(hp.holdRadius, 0.02);
 
         this.targets = [];                 // list of live Target
         this.unmatchedByCam = new Map();   // camName -> Detection[] (births buffer)
@@ -391,16 +431,19 @@ export class CrossViewTracker {
         var matchedDet = new Array(M).fill(false);
 
         if (N > 0 && M > 0) {
-            if (!this.matchGate) {
+            // "No match" cost for tracked targets: 0 with the match gate, the
+            // soft gate's cost with that, or none (forced, the default).
+            var gateCost = this.matchGate ? 0 : this.softGate;
+            if (gateCost == null) {
                 this._assign(this.targets, dets, cam, matchedDet, false);
             } else {
-                // Match gate (see file header): tracked targets first, gated;
-                // lost targets then take what is left, forced, as before.
+                // Match gate / soft gate (see file header): tracked targets first,
+                // gated; lost targets then take what is left, forced, as before.
                 var tracked = [], lost = [];
                 for (var t = 0; t < N; t++) {
                     (this.targets[t]._lost ? lost : tracked).push(this.targets[t]);
                 }
-                this._assign(tracked, dets, cam, matchedDet, true);
+                this._assign(tracked, dets, cam, matchedDet, true, gateCost);
                 this._assign(lost, dets, cam, matchedDet, false);
             }
         }
@@ -417,9 +460,11 @@ export class CrossViewTracker {
     // adjacency[t][d] = 2D term + 3D term (higher = better), negated for LUCID's
     // minimizing Hungarian (== maximize adjacency). Ungated, every target takes
     // a detection while any are free (reference behavior). Gated, each target
-    // also gets a "no match" column at adjacency 0, so it takes a detection only
-    // when that raises the total — i.e. never one it scores at or below 0.
-    _assign(targets, dets, cam, matchedDet, gated) {
+    // also gets a "no match" column at cost `noMatchCost` (adjacency -cost; 0 for
+    // the match gate), so it takes a detection only when that lowers the total —
+    // i.e. never one it scores at or below -noMatchCost.
+    _assign(targets, dets, cam, matchedDet, gated, noMatchCost) {
+        var R = gated ? noMatchCost : 0;
         var cols = [];
         for (var d = 0; d < dets.length; d++) if (!matchedDet[d]) cols.push(d);
         var N = targets.length, M = cols.length;
@@ -427,7 +472,7 @@ export class CrossViewTracker {
         var width = gated ? M + N : M;
         var cost = [];
         for (var t = 0; t < N; t++) {
-            cost[t] = new Array(width).fill(0);   // gated "no match" columns stay 0
+            cost[t] = new Array(width).fill(R);   // gated "no match" columns stay R
             for (var c = 0; c < M; c++) {
                 cost[t][c] = -this._adjacency(targets[t], dets[cols[c]], cam);
             }
@@ -436,7 +481,7 @@ export class CrossViewTracker {
         for (var ti = 0; ti < N; ti++) {
             var ci = assign[ti];
             if (ci == null || ci < 0 || ci >= M) continue;   // unmatched / "no match"
-            if (gated && !(cost[ti][ci] < 0)) continue;      // tie at 0 or NaN: not a match
+            if (gated && !(cost[ti][ci] < R)) continue;      // tie at R or NaN: not a match
             // Sync fix: record the match now but defer re-triangulation to
             // _endFrame(), so a later camera THIS frame is scored against
             // the same points3d an earlier camera this frame was.
@@ -453,7 +498,24 @@ export class CrossViewTracker {
     _adjacency(target, det, cam) {
         var mean = target._snapMean != null ? target._snapMean : target.frameIdxMean();
         var dt = det.frameIdx - mean;
-        return this._adjacency2d(target, det, dt) + this._adjacency3d(target, det, cam);
+        var a = this._adjacency2d(target, det, dt) + this._adjacency3d(target, det, cam);
+        if (this.holdBonus > 0 && this._continues(target, det, cam)) a += this.holdBonus;
+        return a;
+    }
+
+    // Hold bonus: does `det` continue the detection `target` took in this same
+    // view on the previous frame — mean per-node distance under `holdRadius`
+    // (normalized image units, so pixels and not world coordinates)?
+    _continues(target, det, cam) {
+        var prev = target.detsByCam.get(cam.name);
+        if (!prev || prev.frameIdx !== det.frameIdx - 1) return false;
+        var P = prev.pointsNorm, Q = det.pointsNorm, s = 0, n = 0;
+        for (var k = 0; k < P.length && k < Q.length; k++) {
+            if (P[k] == null || Q[k] == null) continue;
+            var dx = P[k][0] - Q[k][0], dy = P[k][1] - Q[k][1], d = Math.sqrt(dx * dx + dy * dy);
+            if (isFinite(d)) { s += d; n++; }
+        }
+        return n > 0 && s / n < this.holdRadius;
     }
 
     // Per-node association weight (LUCID extension). null weights ⇒ 1 for every

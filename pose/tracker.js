@@ -940,6 +940,9 @@ function crossViewHyperparams() {
         stale: thr('stale'),
         // Match gate (pose/cross-view-tracker.js, 2026-10-03).
         matchGate: thr('matchGate'),
+        // The flicker fix (pose/cross-view-tracker.js, 2026-10-19); 0 = off.
+        softGate: thr('softGate'),
+        holdBonus: thr('holdBonus'),
     };
 }
 

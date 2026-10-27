@@ -2442,7 +2442,7 @@ computing `loader`/`windowed` first and checking `loader.nFrames > 0` instead of
 `tests/e2e/track-all-fresh-lazy-session.mjs` (reopens a real saved lazy project
 with 0 resident frameGroups and asserts Track All finds identities instead of
 bailing). Hyperparameters come from the
-`corr2dWeight`/`corr3dWeight`/`velocityThreshold`/`distanceThreshold`/`timePenalty`/`stale`/`matchGate`
+`corr2dWeight`/`corr3dWeight`/`velocityThreshold`/`distanceThreshold`/`timePenalty`/`stale`/`matchGate`/`softGate`/`holdBonus`
 tracking thresholds (`ui/settings.js`; defaults are the `G_keeptrack_3d6`
 champion values, except `distanceThreshold`/`stale` which carry the 2026-08-14
 stale-anchor-fix values — see `pose/cross-view-tracker.js`). Track Frame/Track All pass the user's animal count as
@@ -2615,6 +2615,38 @@ Wizard's `matchGate` threshold (`ui/settings.js`) via `crossViewHyperparams()`
 `tests/test-cross-view-tracker.mjs` (the swap in miniature — fails with the
 gate off — and lost-target re-acquisition, which fails under a naive gate that
 also gates lost targets).
+
+**Flicker fix (2026-10-19, `softGate` + `holdBonus` hps; both 0 = off by default).**
+With the gate off, a target whose animal has no usable detection in a view is
+still forced onto one there, and when its cost on a neighbour's detection (or a
+stray one next to it) is close to the alternative, the label of a plainly
+visible animal flips every frame or two. Seen on the 3-mouse SLAP session
+10072022143153: midL 13,232 (spare target takes A's detection, A's target the
+stray: 84 + 382 < -24 + 718) and mid 14,990-14,999 (the missing animal's
+target projects onto a neighbour's detection). Two opt-in fixes:
+- **`softGate`** — the match gate's two stages, but the tracked targets' "no
+  match" costs `softGate` instead of 0 (`_assign`'s `noMatchCost`): a tracked
+  target refuses a detection costing it more than that, and lost targets still
+  take the leftovers, forced. `matchGate` on wins (cost 0).
+- **`holdBonus`** — `_adjacency` adds it when the detection continues the one
+  the target took in the same view on the previous frame (`_continues`: mean
+  per-node distance under `holdRadius`, 0.02 normalized image units — pixels,
+  so frame-invariant).
+Measured offline (the app's Track All inputs dumped and replayed through this
+class, bit-identical to the app on all 23 recordings) on the 22 proofread SLAP
+sessions, gate off, softGate 150 + holdBonus 30: short identity runs (< 0.5 s)
+2,385 -> 1,351, lasting switches 360 -> 220, median accuracy 99.15% -> 99.74%,
+mean 88.21% -> 93.78% (89-94% across neighbouring values: lasting swaps come and
+go per session). Gate on + holdBonus 30: short runs 568 -> 433, accuracy
+unchanged. 5-mouse recording vs its gate-on, tails-0 reference: the soft gate
+keeps 4 relabels but swaps a different pair (17.8% -> 22.8% wrong); holdBonus 30
+alone gives 2 relabels, 12.4%. Not measured on Mouse-Dyad / s-DANNCE, where the
+gate itself hurt — hence not a default. Wired from the Tracking Wizard
+(`ui/settings.js`) via `crossViewHyperparams()`; `scripts/bench/hooks.mjs`
+mirrors the defaults. Covered by `tests/test-cross-view-tracker.mjs` (the
+spare-target swap refused, 0/absent = forced, gate wins, lost targets still
+re-acquire, and a detection that changes hands without the bonus and does not
+with it).
 
 **Coordinate conventions (verified vs `sleap_3d/geometry.py`).** Works entirely
 in NORMALIZED camera coordinates: detections are undistorted + K⁻¹-applied on
@@ -10785,6 +10817,7 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   only (`filterMinVisibleNodes`, `filterMinInstanceScore`, `corr2dWeight`,
   `corr3dWeight`, `velocityThreshold`, `distanceThreshold`, `timePenalty`,
   `stale`, `matchGate` (0/1 toggle for the CrossViewTracker match gate),
+  `softGate` and `holdBonus` (the tracker's flicker fix, 0 = off by default),
   `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
   0/1, the image check likewise, default 0; `imageChangeThreshold` -0.8;
