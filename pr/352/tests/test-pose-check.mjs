@@ -439,5 +439,48 @@ ok(PS.poseCheckOf({}, 'A', g) === null && PS.poseCheckOf(session, 'Z', g) === nu
     ok(JSON.stringify(PS.flaggedFrames(pcF)) === '[5]', 'a new flags array is re-read, not served stale from the cache');
 }
 
+// ---- 14. The seekbar's flagged-pose ticks (ui/seekbar-pose-flags.js) ----------------------
+{
+    const SF = await import(pathToFileURL(path.join(HERE, '..', 'ui', 'seekbar-pose-flags.js')).href);
+    const pcS = { flags: [
+        { frame: 5, camera: 'A', cls: POSE_UNCOMMON, score: 11.24 },
+        { frame: 5, camera: 'B', cls: POSE_OUTLIER, score: 18.04 },
+        { frame: 6, camera: 'A', cls: POSE_UNCOMMON, score: 10.5 },
+        { frame: 500, camera: 'B', cls: POSE_UNCOMMON, score: 12.0 },
+        { frame: 999, camera: 'A', cls: POSE_OUTLIER, score: 30.0 },
+    ] };
+    ok(JSON.stringify(Array.from(PS.flaggedFrameClasses(pcS))) === JSON.stringify([POSE_OUTLIER, POSE_UNCOMMON, POSE_UNCOMMON, POSE_OUTLIER]),
+        'each flagged frame carries its worst class (an outlier beside an uncommon pose is an outlier frame)');
+    ok(PS.describeFlagsAt(pcS, 5) === 'uncommon in A (score 11.2), outlier in B (score 18.0)' && PS.describeFlagsAt(pcS, 7) === '' &&
+        PS.describeFlagsAt(pcS, 999) === 'outlier in A (score 30.0)' && PS.describeFlagsAt(null, 5) === '',
+        'describeFlagsAt names every flag on that frame, and nothing on a clean one');
+    // columns: 1,000 frames over 100 columns — frames 5 and 6 share column 0, worst wins
+    const cols = SF.poseFlagColumns(PS.flaggedFrames(pcS), PS.flaggedFrameClasses(pcS), 1000, 100);
+    const marked = []; cols.forEach((c, i) => { if (c) marked.push(i + ':' + c); });
+    ok(JSON.stringify(marked) === JSON.stringify(['0:2', '50:1', '99:2']), `one column per flagged stretch, worst class wins: ${JSON.stringify(marked)}`);
+    ok(SF.poseFlagColumns([0, 1], [2, 2], 1, 10).every((c) => c === 0) && SF.poseFlagColumns([3], [1], 10, 0).length === 0,
+        'a one-frame session or a zero-width bar marks nothing');
+    // dense: more flagged frames than columns, all counted
+    const many = Array.from({ length: 5000 }, (_, i) => i * 2), worstMany = new Uint8Array(5000).fill(POSE_UNCOMMON);
+    worstMany[2500] = POSE_OUTLIER;
+    const dense = SF.poseFlagColumns(many, worstMany, 10000, 200);
+    ok(dense.every((c) => c > 0) && dense.filter((c) => c === POSE_OUTLIER).length === 1, 'dense flags fill every column; the one outlier keeps its column red');
+    // snapping: within POSE_FLAG_SNAP_PX of a tick, on a 1,000 px bar of 1,000 frames
+    SF.syncSeekbarPoseFlags({ poseCheck: pcS }, 1000);
+    let hit = SF.seekbarPoseFlagAt(501 / 999, 999);
+    ok(hit && hit.frame === 500 && hit.text === 'flagged pose: uncommon in B (score 12.0)', `1 px from frame 500: snaps to it (${JSON.stringify(hit)})`);
+    ok(SF.seekbarPoseFlagAt(510 / 999, 999) === null, '10 px away: no snap');
+    hit = SF.seekbarPoseFlagAt(5.4 / 999, 999);
+    ok(hit && hit.frame === 5, 'between two flagged frames: the nearer one');
+    hit = SF.seekbarPoseFlagAt(6 / 999, 999);
+    ok(hit && hit.frame === 5, 'on an uncommon frame 1 px from an outlier frame: the outlier wins');
+    hit = SF.seekbarPoseFlagAt(498 / 999, 999, 3);
+    ok(hit && hit.frame === 500, 'approaching from the left, within reach: snaps');
+    SF.syncSeekbarPoseFlags({ poseCheck: null }, 1000);
+    ok(SF.seekbarPoseFlagAt(500 / 999, 999) === null, 'a session without a check: nothing to snap to');
+    SF.syncSeekbarPoseFlags({ poseCheck: { flags: [] } }, 1000);
+    ok(SF.seekbarPoseFlagAt(500 / 999, 999) === null, 'a check that flagged nothing: nothing to snap to');
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) { failures.forEach((f) => console.error('  ✗ ' + f)); process.exit(1); }

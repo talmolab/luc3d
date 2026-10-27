@@ -37,7 +37,7 @@
 import {
     createPoseSample, fitPoseModel, poseScore, poseClassOf, poseSampleStride, trimPosePatterns,
     POSE_UNCOMMON, POSE_OUTLIER, POSE_COMMON,
-} from './pose-check.js?v=f04b78a4876a';
+} from './pose-check.js?v=ae427ed2883a';
 
 // A windowed lazy loader — `session.frameGroups` is then only the resident window.
 function isWindowedLoader(loader) {
@@ -309,22 +309,57 @@ export function poseTooltipLine(v, pc) {
 
 /**
  * The distinct frames holding a flagged (uncommon or outlier) pose, ascending —
- * the stops of Next / Previous Flagged Pose. Read off `flags`, which a finished
- * run keeps in frame order; cached on the result.
+ * the stops of Next / Previous Flagged Pose and the seekbar's ticks. Read off
+ * `flags`, which a finished run keeps in frame order; cached on the result.
  * @param {Object|null} pc  `session.poseCheck`
  * @returns {number[]}
  */
 export function flaggedFrames(pc) {
-    if (!pc || !pc.flags) return [];
-    if (pc._flaggedFrames && pc._flaggedFramesOf === pc.flags) return pc._flaggedFrames;
-    var out = [];
+    return flaggedIndex(pc).frames;
+}
+
+/**
+ * The worst class flagged on each of `flaggedFrames(pc)`, index for index:
+ * `POSE_OUTLIER` when any pose there is an outlier, else `POSE_UNCOMMON`.
+ * @returns {Uint8Array}
+ */
+export function flaggedFrameClasses(pc) {
+    return flaggedIndex(pc).worst;
+}
+
+var NO_FLAGS = { frames: [], worst: new Uint8Array(0), first: [] };
+
+// frames[k], the worst class there, and the index in `flags` of its first flag.
+function flaggedIndex(pc) {
+    if (!pc || !pc.flags) return NO_FLAGS;
+    if (pc._flagged && pc._flaggedOf === pc.flags) return pc._flagged;
+    var frames = [], first = [], worst = [];
     for (var i = 0; i < pc.flags.length; i++) {
-        var f = pc.flags[i].frame;
-        if (!out.length || out[out.length - 1] !== f) out.push(f);
+        var fl = pc.flags[i];
+        if (!frames.length || frames[frames.length - 1] !== fl.frame) {
+            frames.push(fl.frame); first.push(i); worst.push(fl.cls);
+        } else if (fl.cls > worst[worst.length - 1]) worst[worst.length - 1] = fl.cls;
     }
-    pc._flaggedFrames = out;
-    pc._flaggedFramesOf = pc.flags;
-    return out;
+    pc._flagged = { frames: frames, worst: Uint8Array.from(worst), first: first };
+    pc._flaggedOf = pc.flags;
+    return pc._flagged;
+}
+
+/**
+ * What the check flagged on one frame (0-based): "outlier in Camera1_topC (score
+ * 18.2), uncommon in Camera0_topB (score 12.1)", or '' when nothing was.
+ */
+export function describeFlagsAt(pc, frame) {
+    var ix = flaggedIndex(pc), frames = ix.frames;
+    var lo = 0, hi = frames.length;
+    while (lo < hi) { var mid = (lo + hi) >> 1; if (frames[mid] < frame) lo = mid + 1; else hi = mid; }
+    if (lo >= frames.length || frames[lo] !== frame) return '';
+    var out = [];
+    for (var i = ix.first[lo]; i < pc.flags.length && pc.flags[i].frame === frame; i++) {
+        var f = pc.flags[i];
+        out.push((f.cls === POSE_OUTLIER ? 'outlier' : 'uncommon') + ' in ' + f.camera + ' (score ' + f.score.toFixed(1) + ')');
+    }
+    return out.join(', ');
 }
 
 /**
@@ -352,10 +387,7 @@ export function nextFlaggedFrame(pc, frame, dir) {
 export function describeFlaggedFrame(pc, frame) {
     var frames = flaggedFrames(pc);
     var n = function (v) { return v.toLocaleString('en-US'); };
-    var at = (pc && pc.flags ? pc.flags : []).filter(function (f) { return f.frame === frame; });
-    var what = at.map(function (f) {
-        return (f.cls === POSE_OUTLIER ? 'outlier' : 'uncommon') + ' in ' + f.camera + ' (score ' + f.score.toFixed(1) + ')';
-    }).join(', ');
+    var what = describeFlagsAt(pc, frame);
     return 'Flagged frame ' + n(frames.indexOf(frame) + 1) + ' of ' + n(frames.length) +
         ' (frame ' + n(frame + 1) + ')' + (what ? ': ' + what : '');
 }
