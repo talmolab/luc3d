@@ -503,12 +503,12 @@ export const SMOOTHING_PARAMS = [
     {
         id: 'smoothMedianWindow', label: 'Median window (frames)', default: 0,
         min: 0, max: 101, step: 2,
-        desc: 'Despiking stage, applied FIRST. Replaces each 3D coordinate with the median over this many frames, removing isolated outliers without averaging. Coerced to the next odd value so the window stays centered on the frame being written. 0 = off. Note that a median filter erases any feature narrower than about half the window, so keep it short for fast motion.',
+        desc: 'Stage 1, over time. Replaces each node\'s x, y and z with that node\'s median over this many frames, which removes one-frame spikes without averaging. Coerced to the next odd value so the window stays centered on the frame being written. 0 = off. Note that a median filter erases any feature narrower than about half the window, so keep it short for fast motion.',
     },
     {
         id: 'smoothGaussianWindow', label: 'Gaussian window (frames)', default: 0,
         min: 0, max: 101, step: 2,
-        desc: 'Smoothing stage, applied AFTER the median. Weighted average over this many frames with sigma = (window-1)/6, so the window spans +/-3 sigma and the current frame counts most. Removes broadband jitter. Coerced to the next odd value. 0 = off.',
+        desc: 'Stage 2, over time, applied to the median\'s output. A weighted average of each node\'s x, y and z over this many frames, with sigma = (window-1)/6, so the window spans +/-3 sigma and the current frame counts most. Removes broadband jitter. Coerced to the next odd value. 0 = off.',
     },
     {
         id: 'smoothMaxGap', label: 'Max gap to smooth across (frames)', default: 5,

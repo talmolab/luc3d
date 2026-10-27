@@ -728,9 +728,10 @@ export function showSettingsModal(initialPanel) {
     smHint.className = 'settings-kbd-hint';
     smHint.style.marginTop = '0';
     smHint.style.marginBottom = '8px';
-    smHint.textContent = 'Filters the triangulated 3D tracks through time to remove frame-to-frame jitter. ' +
-        'Each skeleton node is filtered independently along the frame axis; 2D user labels and predictions are ' +
-        'never modified, and the reprojection overlays follow the smoothed 3D. Both stages are off (0) by ' +
+    smHint.textContent = 'Smooths each node\'s 3D position over time, in two stages that both work along the frame ' +
+        'axis: a median first, to remove one-frame spikes, then a Gaussian on its output, to remove remaining ' +
+        'jitter. Each node\'s x, y and z are filtered separately; nodes are never mixed with each other. 2D labels ' +
+        'and predictions are never changed, and the reprojection overlays follow the smoothed 3D. Both stages are off (0) by ' +
         'default — run the pass with the Temporal Smoothing button next to Triangulate All. Changes apply when you click Apply.';
     smPanel.appendChild(smHint);
 
