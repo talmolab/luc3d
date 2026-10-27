@@ -2595,6 +2595,15 @@ working through the review list plus the check's rows:
 - **SLAP held-out (2 mice, 64 views):** 14 rows, 10 real; after review unchanged (99.75%).
 - **sham_gdx (2 light-coated mice, 193 videos):** 2,464 returns -> 2 rows, both false;
   unchanged (99.94%). Coat brightness cannot tell look-alikes apart.
+- **All of SLAP-2M (2026-10-28):** every multi-animal back/mid/top view (and its L
+  twin) with proofread labels — 252 views, 42 sessions. 57 (all 2 mice) were set apart
+  because SLEAP's own tracks in the raw file already equal the proofreading (the
+  input-tracklet cue is then the answer): Track All 98.7%, the list takes them to 100%,
+  no return rows. On the other 195 (1,773 min), after review with the list plus the
+  check's rows: back pair 99.29% -> 99.56%, mid 99.76% -> 99.88%, top 99.74% (same);
+  2 mice 99.62% -> 99.77%, 3–4 mice 99.55% -> 99.66%; 50 return rows, 35 real, Fix as
+  proposed helping 36 / hurting 13; 2 views better (10302022030623/backL 66.1% -> 100%,
+  150448/midL 96.0% -> 99.98%), none worse.
 - **Not adopted: search-zone stitching** after PrecisionTrack (Coulombe et al., 2025,
   "PrecisionTrack: A Platform for Automated Long-Term Social Behavior Analysis in
   Naturalized Environments", https://github.com/VincentCoulombe/precision_track): with
