@@ -21,8 +21,9 @@
  *     tooltip); its view count is under Views, Type is empty, and the error
  *     dash is under Error.
  *  4. Every Ungrouped data row has one cell per header column, with Type,
- *     Points and Score under their headers; each camera's header row spans
- *     the whole table.
+ *     Points and Score / Node (the instance score over the mean node score,
+ *     "-" with no node scores) under their headers; each camera's header row
+ *     spans the whole table.
  *  5. In both tables the identity dropdown ends in "(+) New Identity" (it read
  *     "(+) New ID"), beside the track dropdown's "(+) New Track".
  *  6. In both tables, every track and identity dropdown's "nothing" option
@@ -82,7 +83,9 @@ try {
         s.instanceGroups.set(0, groups);
         AS.state.session = s; AS.state.sessions = [s]; AS.state.currentFrame = 0;
         s.addUnlinkedInstance(0, 'cam4', mk(2, 'user'));
-        s.addUnlinkedInstance(0, 'cam5', mk(0, 'predicted', 0.87));
+        const scored = mk(0, 'predicted', 0.87);
+        scored.setPointScores([0.5, 0.7]);   // mean node score 0.60
+        s.addUnlinkedInstance(0, 'cam5', scored);
         s.addUnlinkedInstance(0, 'cam5', mk(null, 'predicted', 0.42));
         AS.state.triangulationResults.set(0, groups.map((g, i) =>
             ({ group: g, errors: {}, meanError: [2.5, 14.25, 999.9][i], method: 'dlt' })));
@@ -114,6 +117,7 @@ try {
                         shownText: s.selectedIndex >= 0 ? s.options[s.selectedIndex].textContent : null, ...box(s) })),
                     cells: [...tr.children].map(td => ({
                         text: td.textContent.trim(),
+                        lines: [...td.querySelectorAll(':scope > div')].map(d => d.textContent.trim()),
                         title: td.title,
                         badge: td.querySelector('.badge-reproj') ? td.querySelector('.badge-reproj').textContent : null,
                         shown: getComputedStyle(td).display !== 'none',
@@ -174,7 +178,7 @@ try {
     // ---- 4. Ungrouped Instances ---------------------------------------------------
     const U = t.ungrouped;
     const ucol = (name) => U.headers.indexOf(name);
-    check(JSON.stringify(U.headers) === JSON.stringify(['Track / Identity', 'Type', 'Points', 'Score']),
+    check(JSON.stringify(U.headers) === JSON.stringify(['Track / Identity', 'Type', 'Points', 'Score / Node']),
         `Ungrouped headers are ${JSON.stringify(U.headers)}`);
     const camRows = U.rows.filter(r => r.cameraHeader);
     const dataRows = U.rows.filter(r => !r.cameraHeader);
@@ -187,9 +191,9 @@ try {
         check(r.cells.length === U.headers.length,
             `ungrouped row ${i} has ${r.cells.length} cells for ${U.headers.length} headers`);
     }
-    const typesPtsScores = dataRows.map(r => [r.cells[ucol('Type')].text, r.cells[ucol('Points')].text, r.cells[ucol('Score')].text].join(' '));
-    check(JSON.stringify(typesPtsScores) === JSON.stringify(['User 2/2 1.00', 'Pred 2/2 0.87', 'Pred 2/2 0.42']),
-        `Type, Points and Score are under their headers (${typesPtsScores.join(' | ')})`);
+    const typesPtsScores = dataRows.map(r => [r.cells[ucol('Type')].text, r.cells[ucol('Points')].text, r.cells[ucol('Score / Node')].lines.join('/')].join(' '));
+    check(JSON.stringify(typesPtsScores) === JSON.stringify(['User 2/2 1.00/-', 'Pred 2/2 0.87/0.60', 'Pred 2/2 0.42/-']),
+        `Type, Points and Score / Node (instance score over mean node score; "-" with no node scores) are under their headers (${typesPtsScores.join(' | ')})`);
     check(dataRows[2].selects[0].value === '-1' && dataRows[2].selects[0].shownText === '(none)',
         `the trackless row shows "(none)" for its track (got "${dataRows[2].selects[0].shownText}")`);
 

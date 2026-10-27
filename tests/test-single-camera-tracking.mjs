@@ -36,6 +36,12 @@
  *     while the checks' `moments` keep none; the lone animal's hops are on the
  *     list; a review row Fixes from the frame you are on to the end of the
  *     video; and the rows survive the .slp checklist round trip.
+ * 11. The Tracking Wizard's detection filters: a detection failing a minimum
+ *     (visible nodes, instance score, mean node score) gets no track and no
+ *     identity, stays in the session and is counted as `filtered` — the
+ *     Wizard's own count — not in `untracked`; every minimum at 0 changes
+ *     nothing; a frame left with no detection still counts in `frames`; and
+ *     duplicates are looked for among the detections the filters kept.
  *
  * Run:  node tests/test-single-camera-tracking.mjs
  */
@@ -466,6 +472,91 @@ group('10. Returns: an animal back after more than a second out of sight, tested
         `the checks' moments carry the return of the hidden animal, one per other track (${JSON.stringify(rets.map(x => [x.frame, x.startFrame, x.identityA, x.identityB]))})`);
     ok(res.moments.every((x, i) => i === 0 || x.frame >= res.moments[i - 1].frame), '…in frame order with the other moments');
     ok(!res.review.some(x => x.cues.includes('return')), '…and the review list does not take them (one place per return would double it)');
+}
+
+group('11. The Tracking Wizard\'s detection filters, before the tracker');
+{
+    // Two animals for 30 s with node scores (0.8 each). Animal 1 is partly visible (5 of 15 nodes) on 9 frames;
+    // a weak junk detection (score 0.3, node scores 0.2) appears now and then; frame 900 has only junk.
+    // `strongCopy`: on frame 300, a copy of animal 0 scoring HIGHER (0.95) but with node scores of 0.1.
+    const N = 900;
+    const mk = (strongCopy) => {
+        const cam = new PD.Camera(CAM, [[600, 0, 320], [0, 600, 240], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]);
+        const S = new PD.Session([cam], new PD.Skeleton('mouse', NODES, []), ['t0', 't1'], 'filters');
+        const add = (f, pts, score, nodeScore, track = null) => {
+            const inst = new PD.Instance(pts, track, 'predicted', score);
+            inst.setPointScores(NODES.map(() => nodeScore));
+            S.addUnlinkedInstance(f, CAM, inst);
+            return inst;
+        };
+        const partial = [], junk = [];
+        let copy = null;
+        for (let f = 0; f < N; f++) {
+            add(f, pose(0, f), 0.9, 0.8, 0);
+            const p1 = pose(1, f);
+            if (f % 100 === 50) partial.push(add(f, p1.map((p, k) => k < 5 ? p : null), 0.9, 0.8, 1));
+            else add(f, p1, 0.9, 0.8, 1);
+            if (f % 150 === 75) junk.push(add(f, pose(2, f).map(([x, y]) => [x - 300, y - 250]), 0.3, 0.2));
+            if (strongCopy && f === 300) copy = add(f, pose(0, f).map(([x, y]) => [x + 1, y - 1]), 0.95, 0.1);
+        }
+        junk.push(add(N, pose(2, N), 0.3, 0.2));
+        S.identities = []; S.frameIdentityMap = new Map();
+        return { S, partial, junk, copy };
+    };
+    const DFS = await imp('pose/detection-filter-stats.js');
+    const cfg2 = SCT.singleCameraTrackerConfig(2, {});
+    const tracksOf = S => { const out = []; for (let f = 0; f <= N; f++) out.push(S.frameGroups.get(f).getUnlinkedInstances(CAM).map(u => u.instance.trackIdx)); return out; };
+    // per animal (instances 0 and 1 of frames < N), the tracks it is on, leaving out the detections in `skip`
+    const animalTracks = (S, skip) => [0, 1].map(a => {
+        const t = new Set();
+        for (let f = 0; f < N; f++) { const i = S.frameGroups.get(f).getUnlinkedInstances(CAM)[a].instance; if (!skip.includes(i)) t.add(i.trackIdx); }
+        return t;
+    });
+
+    let F = mk();
+    const plain = await SCT.trackSingleCamera(F.S, cfg2, { fps: FPS });
+    const plainTracks = JSON.stringify(tracksOf(F.S));
+    eq(plain.filtered, 0, 'no filter: nothing filtered');
+    F = mk();
+    const zero = await SCT.trackSingleCamera(F.S, cfg2, { fps: FPS, filter: { minVisibleNodes: 0, minInstanceScore: 0, minMeanNodeScore: 0 } });
+    ok(zero.filtered === 0 && JSON.stringify(tracksOf(F.S)) === plainTracks && zero.frames === plain.frames && zero.untracked === plain.untracked,
+        'every minimum at 0 (the defaults): the same tracks as no filter at all');
+
+    const cases = [
+        ['Min visible nodes 8', { minVisibleNodes: 8 }, 'partial'],
+        ['Min instance score 0.5', { minInstanceScore: 0.5 }, 'junk'],
+        ['Min mean node score 0.5', { minMeanNodeScore: 0.5 }, 'both'],   // 5 of 15 nodes at 0.8 = 0.27: partial ones fail too
+    ];
+    for (const [name, values, who] of cases) {
+        F = mk();
+        const wizard = DFS.countDetectionFilters(DFS.collectDetectionStats(F.S), values).total.removed;
+        const r = await SCT.trackSingleCamera(F.S, cfg2, { fps: FPS, filter: values });
+        const gone = who === 'partial' ? F.partial : who === 'junk' ? F.junk : F.partial.concat(F.junk);
+        eq(r.filtered, gone.length, `${name}: the ${gone.length} failing detections are filtered`);
+        eq(r.filtered, wizard, `${name}: …exactly what the Tracking Wizard counts (${wizard})`);
+        ok(gone.every(i => i.trackIdx === null && i.identityId == null), `${name}: they keep no track and no identity`);
+        let inSession = 0;
+        for (const fg of F.S.frameGroups.values()) for (const u of fg.getUnlinkedInstances(CAM)) if (gone.includes(u.instance)) inSession++;
+        eq(inSession, gone.length, `${name}: …and stay in the session`);
+        const at = animalTracks(F.S, gone);
+        ok(at.every(t => t.size === 1 && !t.has(null)) && [...at[0]][0] !== [...at[1]][0],
+            `${name}: each animal keeps one track (${at.map(t => [...t].join('/')).join(', ')})`);
+        eq(r.frames, plain.frames, `${name}: \`frames\` still counts every frame with a detection (${r.frames}), the junk-only one included`);
+        eq(r.untracked + r.filtered + r.tracked, plain.untracked + plain.tracked, `${name}: \`untracked\` leaves the filtered ones out`);
+    }
+
+    // The filters decide what the tracker sees, and duplicates are looked for among THOSE: a stronger copy of
+    // animal 0 that fails the node-score minimum no longer takes the animal out as its duplicate.
+    F = mk(true);
+    let r = await SCT.trackSingleCamera(F.S, cfg2, { fps: FPS, duplicates: {} });
+    const a0 = F.S.frameGroups.get(300).getUnlinkedInstances(CAM)[0].instance;
+    ok(r.duplicates === 1 && a0.trackIdx === null && F.copy.trackIdx !== null,
+        `duplicates alone: the weaker real detection goes as the stronger copy's duplicate (duplicates ${r.duplicates})`);
+    F = mk(true);
+    r = await SCT.trackSingleCamera(F.S, cfg2, { fps: FPS, duplicates: {}, filter: { minMeanNodeScore: 0.5 } });
+    const b0 = F.S.frameGroups.get(300).getUnlinkedInstances(CAM)[0].instance;
+    ok(r.duplicates === 0 && F.copy.trackIdx === null && b0.trackIdx !== null && r.filtered === F.partial.length + F.junk.length + 1,
+        `filter first: the copy is filtered, the animal is kept and tracked (duplicates ${r.duplicates}, filtered ${r.filtered})`);
 }
 
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);
