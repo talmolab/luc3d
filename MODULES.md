@@ -2551,6 +2551,13 @@ RETURNS, not the handovers (see below).
 Measured 2026-10-21/27 offline through this code (the harness rebuilt in
 `~/luc3d-eval`, `measure_review.mjs` / `measure_fix.mjs`), a switch counting as on
 the list when one of its ends is within 2 s of a row:
+- **All of SLAP-2M (2026-10-28), the 195 multi-animal back/mid/top views whose raw
+  SLEAP tracks are not already the proofreading (1,773 min, 817 switches):** 1.45 rows
+  a minute, 95% of the switches on the list, 13.9% of the video within 2 s of a row;
+  2 mice 1.48 / 95% / 14.9%, 3–4 mice 1.37 / 91% / 10.9%; back pair 97%, mid and top
+  93%. The 57 views whose raw tracks equal the proofreading: 0.11 a minute, 20 of 20.
+  Those 57 had flattered the earlier 87-view figures below (25 of them were in it):
+  there the input-tracklet cue is the answer.
 - **87 proofread SLAP top/mid views:** 2 mice (held-out 16) 1.06 rows a minute,
   97% of 232 switches on the list, 10.2% of the video within 2 s of a row; 3–4
   mice (original six) 1.04 a minute, 86% of 44, 7.9%. (With the earlier 0.5 s
