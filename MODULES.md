@@ -729,10 +729,12 @@ is no hydration sweep and no resident-only hazard here.
 
 **Imports from project modules.** `./origin-frame.js` (`applyOriginFrame`,
 `mulMat3Vec3`, `rebaseExtrinsics`), `./pose-data.js` (`pooledPoints3d` — `applyOriginRebase` stores each re-based group in the slab pool — `points3dNodeCount`,
-`hasPoint3d`, `isPoints3dFromFile` / `markPoints3dFromFile` and
-`isPoints3dSmoothed` / `markPoints3dSmoothed` — a group whose 3D was read from a
-file or smoothed keeps that mark across the re-base, so the display still
-reprojects it rather than re-solving). DOM-free.
+`hasPoint3d`, `isPoints3dFromFile` / `markPoints3dFromFile` — a group whose 3D
+was read from a file keeps that mark across the re-base, so the display still
+reprojects it rather than re-solving — and `unsmoothedPoints3d` /
+`markPoints3dSmoothed`: a smoothed group's pre-smoothing copy is re-based by the
+same `rebasePoints3d` (the plan's `nextUnsmoothed`), so a later smoothing run
+filters 3D in the new frame). DOM-free.
 
 **Imported by.** `ui/origin-rebase.js`.
 
@@ -1200,11 +1202,15 @@ assigns a new array, and nothing but the smoothing pass writes a group's
 `points3d` in place. The origin re-base (`applyOriginRebase`) carries the mark
 to the re-based array.
 
-**Smoothed 3D is marked the same way.** `markPoints3dSmoothed(points3d)` /
-`isPoints3dSmoothed(points3d)` — the arrays `pose/temporal-smoothing.js` wrote
-(in place). The reprojection fill reprojects them (a re-solve would draw the
-unsmoothed answer), `adoptPrior3d` never adopts them (re-triangulating undoes
-the pass), and the origin re-base carries the mark.
+**Smoothed 3D is marked the same way.** `markPoints3dSmoothed(points3d, source)` /
+`isPoints3dSmoothed(points3d)` — a `WeakMap` from each array
+`pose/temporal-smoothing.js` wrote (in place) to a pooled copy of what it held
+before its FIRST smoothing (`unsmoothedPoints3d(points3d)`;
+`clearPoints3dSmoothed` forgets it). Every later pass filters that copy, so runs
+replace each other instead of stacking. The reprojection fill reprojects marked
+3D (a re-solve would draw the unsmoothed answer), `adoptPrior3d` never adopts it
+(re-triangulating undoes the pass), and the origin re-base re-bases the copy
+with the points.
 
 **`InstanceGroup.points3d` on the bulk paths lives in a slab pool.**
 `pooledPoints3d(points)` returns a `Float64Array` VIEW of exactly the group's 3N
@@ -2373,6 +2379,16 @@ It also marks the written array (`markPoints3dSmoothed`), so that refill
 reprojects the smoothed 3D instead of re-solving the 2D — without the mark,
 groups with no `triangulationMethod` (Track All's) or any group under a
 reprojection-error threshold drew the unsmoothed answer.
+
+**Runs replace, never stack.** The mark keeps a pooled copy of the group's 3D
+from before its first smoothing (taken just before the first write; the
+`slice()` matters, since `pooledPoints3d` returns an already-pooled array as-is),
+and the gather reads that copy (`unsmoothedPoints3d`), so window 60 then
+window 3 gives window 3's result. `unsmoothSession(session, {writeFrames})`
+copies it back and drops the mark (the "both windows 0" action);
+`hasSmoothed3d(session, frameIdx?)` says whether any group (on a frame, or
+anywhere) is smoothed. Not persisted: a reopened project's 3D is the smoothed
+values, and only re-triangulating gets back to the unsmoothed 3D.
 `triangulationMethod` is deliberately UNTOUCHED: smoothing is
 orthogonal to which solver produced the points (a group can be BA-solved AND
 smoothed), and a third value there would erase the solver identity
@@ -2380,10 +2396,11 @@ smoothed), and a third value there would erase the solver identity
 
 **Exports.** `normalizeWindow`, `sigmaForWindow`, `buildSegments`, `medianOf`,
 `smoothSignalInto`, `resolveSmoothingParams`, `collectTrajectories`,
-`smoothTrajectory`, `smoothSession`.
+`smoothTrajectory`, `smoothSession`, `unsmoothSession`, `hasSmoothed3d`.
 
 **Imports.** `pose/pose-data.js` (`POINT3D_STRIDE`, `points3dNodeCount`,
-`NO_REPROJECTED_INSTANCES`, `markPoints3dSmoothed`) only —
+`NO_REPROJECTED_INSTANCES`, `pooledPoints3d`, `markPoints3dSmoothed`,
+`isPoints3dSmoothed`, `unsmoothedPoints3d`, `clearPoints3dSmoothed`) only —
 no UI imports, so the module stays unit-testable in plain Node.
 
 **Imported by.** `ui/ui-wiring.js` (`smoothSession`, `resolveSmoothingParams`).
@@ -10434,16 +10451,23 @@ second click must re-hover the button first (`tests/e2e/track-frame-range.mjs`).
 
 Both menus carry a third item below a separator, **Temporal Smoothing** (luc3d
 #134), handled by the private `runTemporalSmoothing(currentFrameOnly)`. It reads
-`getSmoothingParams()`; when both kernels are off it says so and opens Settings ▸
+`getSmoothingParams()`; when both kernels are off it restores the pre-smoothing
+3D (`unsmoothSession`), or, with nothing smoothed, says so and opens Settings ▸
 Temporal Smoothing rather than silently doing nothing; otherwise it calls
-`smoothSession` (`pose/temporal-smoothing.js`), drops the `state.triangulationResults`
+`smoothSession` (`pose/temporal-smoothing.js`; every run filters the
+pre-smoothing 3D, so it replaces the last; the status counts POSES, one per
+animal per frame), drops the `state.triangulationResults`
 entries of every group whose reprojections the pass cleared (the fill appends a
 fresh one, and the panel would average both), then `markDirty` +
 `drawAllOverlays` + `update3DViewport` + `updateInfoPanel`. Under `Triangulate`
 it passes `writeFrames: new Set([state.currentFrame])` — the whole trajectory is
 still READ (a filter needs neighbours on both sides), only the current frame is
 WRITTEN. Synchronous, no progress modal: it touches only `points3d` on the
-already-resident `session.instanceGroups`, hydrating no 2D.
+already-resident `session.instanceGroups`, hydrating no 2D. The two items turn
+blue (`.tri-dropdown-item.applied`, toolbar on-state colours) while smoothing is
+applied — on the current frame under Triangulate, anywhere under Triangulate
+All — via `refreshSmoothingItems` (`hasSmoothed3d`), run on each menu's
+`mouseenter` and after each pass rather than tracked.
 
 `wireTriDropdown` passes the menu item's `data-method` through **verbatim** (it
 used to map any unrecognized value onto DLT, so the `smooth` item would have run

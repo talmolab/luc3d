@@ -14,7 +14,10 @@
  *   B. Triangulate All's groups with a reprojection-error threshold set;
  *   C. the info panel keeps one result per group on the frame (no stale
  *      pre-smoothing entry beside the refilled one);
- *   D. re-triangulating replaces the smoothed 3D, and the display re-solves again.
+ *   D. re-triangulating replaces the smoothed 3D, and the display re-solves again;
+ *   E. a second run replaces the first (window 9 then 3 == window 3 alone),
+ *      both windows at 0 restores the original 3D, and the menu item is blue
+ *      (`.applied`) exactly while smoothing is applied.
  *
  * Run: node tests/e2e/temporal-smoothing-display.mjs
  */
@@ -64,16 +67,16 @@ try {
         re.source, { timeout: 60000 });
 
     // Smooth through the real dropdown item, then draw MID.
-    const smooth = async () => {
-        await page.evaluate(async (MID) => {
+    const smooth = async (win = 9) => {
+        await page.evaluate(async ({ MID, win }) => {
             const AS = await import('/ui/app-state.js');
             const S = await import('/ui/settings.js');
-            S.setSmoothingParams({ smoothGaussianWindow: 9, smoothMedianWindow: 0 });
+            S.setSmoothingParams({ smoothGaussianWindow: win, smoothMedianWindow: 0 });
             AS.state.currentFrame = MID;
             document.getElementById('statusText').textContent = '';
             document.querySelector('#triangulateAllDropdown .tri-dropdown-item[data-method="smooth"]').click();
-        }, MID);
-        await waitStatus(/^Smoothed |Temporal smoothing/);
+        }, { MID, win });
+        await waitStatus(/^Smoothed |^Removed |Temporal smoothing/);
         return page.evaluate(() => document.getElementById('statusText').textContent);
     };
 
@@ -125,7 +128,7 @@ try {
     }, NF);
     check(cleared === 2 * NF, `A. precondition: every group has no triangulation method (${cleared})`);
     const msgA = await smooth();
-    check(/^Smoothed [\d,]+ frames across 2 tracks/.test(msgA), `A. the pass ran ("${msgA}")`);
+    check(/^Smoothed [\d,]+ poses across 2 tracks/.test(msgA), `A. the pass ran ("${msgA}")`);
     const a = await measure(MID);
     check(a.length === 2 && a.every(r => r.hasReproj && r.smoothedMark && r.method == null),
         'A. both groups on the frame are marked smoothed, reprojected, and still have no method');
@@ -158,6 +161,36 @@ try {
         return (TRI.getInstanceGroupsForFrame(MID) || []).map(g => PD.isPoints3dSmoothed(g.points3d));
     }, MID);
     check(d.length === 2 && d.every(m => !m), `D. Triangulate All replaces the smoothed 3D (marks ${JSON.stringify(d)})`);
+
+    // ---- E. re-run replaces, 0 restores, the item is blue while applied --------------
+    await setup('smoothDisplayE');
+    await waitStatus(/^(Triangulated|Grouped) /);
+    // Every group's 3D on every frame, and the two items' blue state as a user
+    // sees it on opening each menu.
+    const snapshot = () => page.evaluate(async (NF) => {
+        const TRI = await import('/pose/triangulation.js');
+        const out = [];
+        for (let f = 0; f < NF; f++) (TRI.getInstanceGroupsForFrame(f) || []).forEach(g => out.push(...g.points3d));
+        return out;
+    }, NF);
+    const blue = () => page.evaluate(() => ['triangulateDropdown', 'triangulateAllDropdown'].map(id => {
+        document.getElementById(id).dispatchEvent(new MouseEvent('mouseenter'));
+        return document.querySelector('#' + id + ' .tri-dropdown-item[data-method="smooth"]').classList.contains('applied');
+    }));
+    const same = (x, y) => x.length === y.length && x.every((v, i) => (Number.isNaN(v) && Number.isNaN(y[i])) || Math.abs(v - y[i]) < 1e-9);
+    const raw = await snapshot();
+    check(JSON.stringify(await blue()) === '[false,false]', 'E. before smoothing, neither item is blue');
+    await smooth(9);
+    check(JSON.stringify(await blue()) === '[true,true]', 'E. after smoothing, both items are blue');
+    await smooth(3);
+    const nineThenThree = await snapshot();
+    const msgOff = await smooth(0);
+    check(/^Removed temporal smoothing from [\d,]+ poses/.test(msgOff), `E. both windows at 0 removes the smoothing ("${msgOff}")`);
+    check(same(await snapshot(), raw), 'E. ...and gives back the original 3D exactly');
+    check(JSON.stringify(await blue()) === '[false,false]', 'E. ...and neither item is blue');
+    await smooth(3);
+    check(same(nineThenThree, await snapshot()), 'E. window 9 then window 3 == window 3 alone (runs replace, never stack)');
+    check(!same(nineThenThree, raw), 'E. precondition: window 3 changed the 3D');
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

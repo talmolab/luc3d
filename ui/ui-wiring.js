@@ -76,7 +76,7 @@ import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangula
 import { getDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler,
          dispatchEvent, getActions, formatBinding, getSmoothingParams } from './settings.js';
 // luc3d #134: post-triangulation temporal smoothing of the 3D tracks.
-import { smoothSession, resolveSmoothingParams } from '../pose/temporal-smoothing.js';
+import { smoothSession, unsmoothSession, hasSmoothed3d, resolveSmoothingParams } from '../pose/temporal-smoothing.js';
 import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js';
 import { showSettingsModal } from './settings-modal.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
@@ -2905,28 +2905,38 @@ export function setupUI() {
 
         var params = getSmoothingParams();
         var cfg = resolveSmoothingParams(params);
-        if (!cfg.enabled) {
-            setStatus('Temporal smoothing is off — set a median or Gaussian window in Settings ▸ Temporal Smoothing');
-            showSettingsModal('smoothing');
-            return;
-        }
-
         var writeFrames = currentFrameOnly ? new Set([state.currentFrame]) : null;
-        var stats = smoothSession(session, params, { writeFrames: writeFrames });
-
-        if (stats.frames === 0) {
-            setStatus(currentFrameOnly
-                ? 'Temporal smoothing: nothing to smooth on this frame'
-                : 'Temporal smoothing: no triangulated tracks to smooth');
-            return;
+        var stats;
+        if (!cfg.enabled) {
+            // Both kernels off: put back the 3D from before any smoothing (each
+            // run filters that, so this is the "window 0" result). With nothing
+            // smoothed there is nothing to do, so point at the settings.
+            stats = unsmoothSession(session, { writeFrames: writeFrames });
+            if (stats.frames === 0) {
+                setStatus('Temporal smoothing is off — set a median or Gaussian window in Settings ▸ Temporal Smoothing');
+                showSettingsModal('smoothing');
+                return;
+            }
+            setStatus('Removed temporal smoothing from ' + stats.frames.toLocaleString('en-US') + ' pose' +
+                (stats.frames === 1 ? '' : 's'));
+        } else {
+            // Each run filters the 3D from before ANY smoothing
+            // (`unsmoothedPoints3d`), so it replaces the last run, never stacks.
+            stats = smoothSession(session, params, { writeFrames: writeFrames });
+            if (stats.frames === 0) {
+                setStatus(currentFrameOnly
+                    ? 'Temporal smoothing: nothing to smooth on this frame'
+                    : 'Temporal smoothing: no triangulated tracks to smooth');
+                return;
+            }
+            var parts = [];
+            if (cfg.medianWindow) parts.push('median ' + cfg.medianWindow);
+            if (cfg.gaussianWindow) parts.push('Gaussian ' + cfg.gaussianWindow);
+            // `frames` counts groups written: one pose per animal per frame.
+            setStatus('Smoothed ' + stats.frames.toLocaleString('en-US') + ' pose' + (stats.frames === 1 ? '' : 's') +
+                ' across ' + stats.tracks.toLocaleString('en-US') + ' track' + (stats.tracks === 1 ? '' : 's') +
+                ' (' + parts.join(' + ') + ')');
         }
-
-        var parts = [];
-        if (cfg.medianWindow) parts.push('median ' + cfg.medianWindow);
-        if (cfg.gaussianWindow) parts.push('Gaussian ' + cfg.gaussianWindow);
-        setStatus('Smoothed ' + stats.frames.toLocaleString('en-US') + ' frame' + (stats.frames === 1 ? '' : 's') +
-            ' across ' + stats.tracks.toLocaleString('en-US') + ' track' + (stats.tracks === 1 ? '' : 's') +
-            ' (' + parts.join(' + ') + ')');
 
         // The info panel's per-frame results still hold the pre-smoothing 3D
         // and errors of every group the pass wrote (its reprojections are now
@@ -2942,7 +2952,29 @@ export function setupUI() {
         drawAllOverlays(state.currentFrame);
         update3DViewport();
         updateInfoPanel();
+        refreshSmoothingItems();
     }
+
+    // The Temporal Smoothing items turn blue (`.applied`) while smoothing is in
+    // effect: under Triangulate, on the current frame; under Triangulate All,
+    // anywhere in the session. Recomputed whenever a menu opens rather than
+    // tracked, since every re-solve or edit that drops smoothed 3D would
+    // otherwise have to report it.
+    function refreshSmoothingItems() {
+        [['triangulateDropdown', state.currentFrame], ['triangulateAllDropdown', undefined]].forEach(function (pair) {
+            var item = document.querySelector('#' + pair[0] + ' .tri-dropdown-item[data-method="smooth"]');
+            if (!item) return;
+            var on = hasSmoothed3d(state.session, pair[1]);
+            item.classList.toggle('applied', on);
+            item.title = on
+                ? 'Applied. Run again to replace it with the current settings; set both windows to 0 to remove it.'
+                : '';
+        });
+    }
+    ['triangulateDropdown', 'triangulateAllDropdown'].forEach(function (id) {
+        var dd = document.getElementById(id);
+        if (dd) dd.addEventListener('mouseenter', refreshSmoothingItems);
+    });
 
     // NOTE: the menu item's `data-method` is passed through VERBATIM. It used to
     // be normalized here with `=== 'ba' ? 'ba' : 'dlt'`, which silently mapped
