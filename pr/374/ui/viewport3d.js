@@ -17,7 +17,7 @@
  * requires the shared accessors rather than array indexing.
  */
 
-import { points3dNodeCount, getPoint3d } from '../pose/pose-data.js?v=e64eb1d9d896';
+import { points3dNodeCount, getPoint3d } from '../pose/pose-data.js?v=d04a4dbfeeaf';
 
 // ============================================
 // Deferred work (hidden viewport)
@@ -1414,8 +1414,12 @@ export class Viewport3D {
             console.log('[3D] updateSkeleton:', instanceGroups.length, 'groups,', groupsWithPts.length, 'with points3d, sceneScale:', this._sceneScale);
         }
 
-        const edges = this.skeleton.edges || [];
-        const nodes = this.skeleton.nodes || [];
+        // `skeleton` is null between New Project / removing the last session
+        // and the next load setting it, and loaders seek (which draws) before
+        // they set it: draw markers without edges rather than throw.
+        const skeleton = this.skeleton || {};
+        const edges = skeleton.edges || [];
+        const nodes = skeleton.nodes || [];
         const showNodes = this.showSkeletonNodes && nodeRadius > 0;
         const showEdges = this.showSkeletonEdges && edgeRadius > 0;
         const dir = pool.tmpDir, yAxis = pool.yAxis;
@@ -1681,8 +1685,9 @@ export class Viewport3D {
         const sphereSegments = 10;
         const cylinderSegments = 6;
         const sphereGeo = new THREE.SphereGeometry(nodeRadius, sphereSegments, sphereSegments);
-        const edges = this.skeleton.edges || [];
-        const nodes = this.skeleton.nodes || [];
+        const skeleton = this.skeleton || {};  // may be null, see updateSkeleton
+        const edges = skeleton.edges || [];
+        const nodes = skeleton.nodes || [];
 
         var envColor = new THREE.Color(0xdddddd);
 

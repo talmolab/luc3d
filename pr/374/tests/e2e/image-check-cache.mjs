@@ -141,7 +141,7 @@ try {
             CAMS.forEach(c => { io.streamed[c] = []; io.fetched[c] = []; }); model.crops = 0;
             const emb = await E.createImageEmbedder(session, Object.assign({ cache }, window.__embedOpts));
             const vecs = new Map(), fresh = [];
-            const res = await SC.checkImageSwitches(session, { fps: FPS, prepareFrames: emb.prepareFrames, inFlight: emb.inFlight, releaseFrames: emb.releaseFrames,
+            const res = await SC.checkImageSwitches(session, { fps: FPS, prepareFrames: emb.prepareFrames, croppable: emb.croppable, keyframes: emb.keyframes, inFlight: emb.inFlight, releaseFrames: emb.releaseFrames,
                 getEmbeddings: async (frame, items) => { const out = await emb.getEmbeddings(frame, items);
                     out.forEach((l, ii) => l.forEach(e => { const k = frame + '|' + items[ii].group.identityId + '|' + e.camera; vecs.set(k, e.vector); if (!e.cached) fresh.push(k); }));
                     return out; } });

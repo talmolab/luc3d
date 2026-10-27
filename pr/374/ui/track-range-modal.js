@@ -24,14 +24,14 @@
  * Depends on: pose/tracker.js (the run itself), ui/app-state.js, save-load.js.
  */
 
-import { state, getActiveSession } from './app-state.js?v=e64eb1d9d896';
-import { setStatus } from '../import-export/save-load.js?v=e64eb1d9d896';
-import { getNodeWeight, updateNodeWeights, getTrackingThresholdDefs, updateTrackingThresholds } from './settings.js?v=e64eb1d9d896';
-import { buildNodeWeightFields, buildImageCheckFields, IMAGE_CHECK_IDS } from './track-setup-modal.js?v=e64eb1d9d896';
+import { state, getActiveSession } from './app-state.js?v=d04a4dbfeeaf';
+import { setStatus } from '../import-export/save-load.js?v=d04a4dbfeeaf';
+import { getNodeWeight, updateNodeWeights, getTrackingThresholdDefs, updateTrackingThresholds } from './settings.js?v=d04a4dbfeeaf';
+import { buildNodeWeightFields, buildImageCheckFields, IMAGE_CHECK_IDS } from './track-setup-modal.js?v=d04a4dbfeeaf';
 import {
     trackFrameRange, trackableFrameBounds,
     getTrackerNumAnimals, setTrackerNumAnimals,
-} from '../pose/tracker.js?v=e64eb1d9d896';
+} from '../pose/tracker.js?v=d04a4dbfeeaf';
 
 // Frames pre-filled into the End field, measured from the current frame. The
 // feature is for narrow windows around a suspected switch, so the default is a
