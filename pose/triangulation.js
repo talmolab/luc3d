@@ -9,7 +9,8 @@
 
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
-         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d } from './pose-data.js';
+         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d,
+         isPoints3dSmoothed } from './pose-data.js';
 // The Jacobi eigensolver and the least-squares plane fit live in
 // `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
 // importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
@@ -2138,6 +2139,9 @@ export function findEquivalentPriorGroup(priorGroups, group) {
  * reprojections"), leaving the Info Panel with no results to show. Same reason
  * the memory-bounded sweeps drop it; `points3d` is what save/export reads.
  *
+ * Smoothed 3D (`isPoints3dSmoothed`) is never adopted: it is the filter's
+ * output, not the method's solution, and re-triangulating undoes the pass.
+ *
  * `triangulationMethod` IS persisted (per-group
  * `metadata.lucid.triangulationMethod`, written by both SLP writers and restored
  * by the importer), so this check still works on a REOPENED project. It was not,
@@ -2157,6 +2161,9 @@ export function adoptPrior3d(group, prior, method) {
     // and the group is re-solved rather than trusted.
     var want = (method === 'ba') ? 'ba' : 'dlt';
     if (prior.triangulationMethod !== want) return false;
+    // Smoothed 3D (pose/temporal-smoothing.js) is not what the solve produces
+    // either: re-triangulating is how a user undoes the pass.
+    if (isPoints3dSmoothed(prior.points3d)) return false;
     group.points3d = prior.points3d;
     group.triangulationMethod = want;
     if (prior.usedCameras && prior.usedCameras.size) group.usedCameras = prior.usedCameras;

@@ -45,8 +45,11 @@ const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repo
 await new Promise(r => setTimeout(r, 1200));
 
 /** Every button the mode must block. */
-const LOCKED = ['tbAddInstance', 'tbDeleteInstance', 'tbGroup', 'tbEditGroup',
-    'tbTriangulate', 'tbTriangulateAll', 'tbTrackFrame', 'tbTrackAll'];
+const LOCKED = ['tbInstanceMenu', 'tbAddInstance', 'tbDeleteInstance', 'tbGroupMenu', 'tbGroup', 'tbEditGroup',
+    'tbTriangulate', 'tbTriangulateAll', 'tbSmooth', 'tbTrackFrame', 'tbTrackAll'];
+/** The hover-menu wrappers, which must be locked with their buttons. */
+const LOCKED_DROPDOWNS = ['instanceDropdown', 'groupDropdown', 'triangulateDropdown',
+    'triangulateAllDropdown', 'smoothingDropdown'];
 /** Everything else in the toolbar, which must stay live. */
 const FREE_BUTTONS = ['tbSessions', 'colorByTracks', 'colorById', 'infoPanelToggleBtn'];
 const FREE_CHECKBOXES = ['visUser', 'visPredicted', 'visReprojections', 'visErrors'];
@@ -67,7 +70,7 @@ try {
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
 
-    const out = await page.evaluate(async ({ LOCKED, FREE_BUTTONS, FREE_CHECKBOXES }) => {
+    const out = await page.evaluate(async ({ LOCKED, LOCKED_DROPDOWNS, FREE_BUTTONS, FREE_CHECKBOXES }) => {
         const P = await import('/ui/plane-definition.js');
         const R = await import('/ui/rendering.js');
         const AS = await import('/ui/app-state.js');
@@ -90,13 +93,13 @@ try {
             const el = document.getElementById(id);
             return el ? !!el.disabled : 'MISSING:' + id;
         });
-        const dropLocked = () => ['triangulateDropdown', 'triangulateAllDropdown'].map(id => {
+        const dropLocked = () => LOCKED_DROPDOWNS.map(id => {
             const el = document.getElementById(id);
             return el ? el.classList.contains('plane-mode-locked') : 'MISSING:' + id;
         });
         const titles = (ids) => ids.map(id => (document.getElementById(id) || {}).title || '');
         /** What the browser actually computes, not just what class is on it. */
-        const dropPointerEvents = () => ['triangulateDropdown', 'triangulateAllDropdown'].map(id =>
+        const dropPointerEvents = () => LOCKED_DROPDOWNS.map(id =>
             getComputedStyle(document.getElementById(id)).pointerEvents);
         const btnOpacity = () => LOCKED.map(id =>
             getComputedStyle(document.getElementById(id)).opacity);
@@ -192,7 +195,7 @@ try {
         res.ownedByRedrawAfterExit = eg.disabled;
 
         return res;
-    }, { LOCKED, FREE_BUTTONS, FREE_CHECKBOXES });
+    }, { LOCKED, LOCKED_DROPDOWNS, FREE_BUTTONS, FREE_CHECKBOXES });
 
     const allFalse = (a) => a.every(v => v === false);
     const allTrue = (a) => a.every(v => v === true);
@@ -200,7 +203,7 @@ try {
     console.log('\n-- 1. outside the mode the toolbar is live --');
     check(allFalse(out.beforeLocked),
         `all ${LOCKED.length} annotation buttons start enabled (got ${JSON.stringify(out.beforeLocked)})`);
-    check(eq(out.beforeDrop, [false, false]), 'and neither triangulate dropdown is locked');
+    check(eq(out.beforeDrop, LOCKED_DROPDOWNS.map(() => false)), 'and no hover menu is locked');
     check(out.beforeOpacity.every(o => o === '1'), 'and none is dimmed');
 
     console.log('\n-- 2. entering the mode blocks every annotation button --');
@@ -226,9 +229,9 @@ try {
         'drawAllOverlays recomputes tbGroup/tbEditGroup every frame, and the ' +
         `lock survives it (got ${JSON.stringify(out.afterRedraw)})`);
 
-    console.log('\n-- 4. the triangulate dropdowns are locked with their buttons --');
-    check(eq(out.inDrop, [true, true]), 'both wrappers carry the lock class');
-    check(eq(out.inDropPointer, ['none', 'none']),
+    console.log('\n-- 4. the hover menus are locked with their buttons --');
+    check(eq(out.inDrop, LOCKED_DROPDOWNS.map(() => true)), `all ${LOCKED_DROPDOWNS.length} wrappers carry the lock class`);
+    check(eq(out.inDropPointer, LOCKED_DROPDOWNS.map(() => 'none')),
         `and pointer-events is off, so the hover-open and the DLT / BA items are ` +
         `both dead (got ${JSON.stringify(out.inDropPointer)})`);
     check(out.hasDropdownItem, 'the dropdown really does have menu items to block');
@@ -237,7 +240,7 @@ try {
     console.log('\n-- 5. leaving restores the toolbar --');
     check(allFalse(out.afterExit),
         `every button is live again (got ${JSON.stringify(out.afterExit)})`);
-    check(eq(out.afterExitDrop, [false, false]), 'and both dropdowns unlock');
+    check(eq(out.afterExitDrop, LOCKED_DROPDOWNS.map(() => false)), 'and every hover menu unlocks');
     check(!/not available/.test(out.afterExitTitles[0]),
         `the original tooltip comes back (got "${out.afterExitTitles[0]}")`);
     check(out.afterExitOpacity.every(o => o === '1'), 'and nothing is left dimmed');

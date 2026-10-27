@@ -118,7 +118,7 @@ try {
         `every one of the ${NODE_COUNT} skeleton nodes is rendered (got ${lists[0].rows})`);
 
     // ---- 2. The sections fold ----------------------------------------------
-    const sections = await page.evaluate(() => Array.from(document.querySelectorAll('.settings-section'))
+    const sections = await page.evaluate(() => Array.from(document.querySelectorAll('.settings-panel[data-panel="wizard"] .settings-section'))
         .map(d => ({
             title: d.querySelector('.settings-section-title').textContent,
             count: d.querySelector('.settings-section-count') ? d.querySelector('.settings-section-count').textContent : null,
@@ -126,7 +126,7 @@ try {
             tag: d.tagName,
         })));
     check(sections.length === 3 && sections.every(s => s.tag === 'DETAILS' && s.open),
-        `three <details> sections, all open by default (${JSON.stringify(sections.map(s => [s.title, s.open]))})`);
+        `the wizard has three <details> sections, all open by default (${JSON.stringify(sections.map(s => [s.title, s.open]))})`);
     check(sections.length === 3 &&
         sections[0].count === String(NODE_COUNT) && sections[1].count === '8',
         `each carries its row count (${JSON.stringify(sections.map(s => s.count))})`);

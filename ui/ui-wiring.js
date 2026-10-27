@@ -73,7 +73,11 @@ import { installSeekbarTicks, refreshSeekbarTicks } from './seekbar-ticks.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
 // User settings: default triangulation method + editable keyboard bindings.
-import { getDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler, dispatchEvent, getActions, formatBinding } from './settings.js';
+import { getDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler,
+         dispatchEvent, getActions, formatBinding, getSmoothingParams } from './settings.js';
+// luc3d #134: post-triangulation temporal smoothing of the 3D tracks.
+import { smoothSession, unsmoothSession, resolveSmoothingParams } from '../pose/temporal-smoothing.js';
+import { syncSmoothingButton } from './smoothing-button.js';
 import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js';
 import { showSettingsModal } from './settings-modal.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
@@ -2893,6 +2897,92 @@ export function setupUI() {
     // Settings default method. Choosing a menu item runs that specific method.
     // Implicit triangulation (the keyboard shortcut and the Edit menu) also uses
     // the Settings default method.
+    // Temporal Smoothing (luc3d #134) — the post-triangulation pass behind the
+    // toolbar button of that name, next to Triangulate All. `currentFrameOnly`
+    // is its "This frame" item: the whole trajectory is always READ (a filter
+    // needs neighbours on both sides), but only the current frame is WRITTEN.
+    //
+    // Runs synchronously. It touches only `points3d` on the already-resident
+    // `session.instanceGroups` — no 2D hydration, no lazy sweep — so even the
+    // whole-project case is a few seconds, and a progress modal would flash.
+    function runTemporalSmoothing(currentFrameOnly) {
+        var session = state.session;
+        if (!session) { setStatus('No session loaded'); return; }
+
+        var params = getSmoothingParams();
+        var cfg = resolveSmoothingParams(params);
+        var writeFrames = currentFrameOnly ? new Set([state.currentFrame]) : null;
+        var stats;
+        if (!cfg.enabled) {
+            // Both kernels off: put back the 3D from before any smoothing (each
+            // run filters that, so this is the "window 0" result). With nothing
+            // smoothed there is nothing to do, so point at the settings.
+            stats = unsmoothSession(session, { writeFrames: writeFrames });
+            if (stats.frames === 0) {
+                setStatus('Temporal smoothing is off — set a median or Gaussian window in Settings ▸ Temporal Smoothing');
+                showSettingsModal('smoothing');
+                return;
+            }
+            setStatus('Removed temporal smoothing from ' + stats.frames.toLocaleString('en-US') + ' pose' +
+                (stats.frames === 1 ? '' : 's'));
+        } else {
+            // Each run filters the 3D from before ANY smoothing
+            // (`unsmoothedPoints3d`), so it replaces the last run, never stacks.
+            stats = smoothSession(session, params, { writeFrames: writeFrames });
+            if (stats.frames === 0) {
+                setStatus(currentFrameOnly
+                    ? 'Temporal smoothing: nothing to smooth on this frame'
+                    : 'Temporal smoothing: no triangulated tracks to smooth');
+                return;
+            }
+            var parts = [];
+            if (cfg.medianWindow) parts.push('median ' + cfg.medianWindow);
+            if (cfg.gaussianWindow) parts.push('Gaussian ' + cfg.gaussianWindow);
+            // `frames` counts groups written: one pose per animal per frame.
+            setStatus('Smoothed ' + stats.frames.toLocaleString('en-US') + ' pose' + (stats.frames === 1 ? '' : 's') +
+                ' across ' + stats.tracks.toLocaleString('en-US') + ' track' + (stats.tracks === 1 ? '' : 's') +
+                ' (' + parts.join(' + ') + ')');
+        }
+
+        // The info panel's per-frame results still hold the pre-smoothing 3D
+        // and errors of every group the pass wrote (its reprojections are now
+        // null), and the reprojection fill APPENDS a fresh entry for each, so
+        // drop the stale ones or the panel would average both.
+        state.triangulationResults.forEach(function (results, fi) {
+            var kept = results.filter(function (r) { return !r.group || !!r.group.reprojections; });
+            if (kept.length === 0) state.triangulationResults.delete(fi);
+            else if (kept.length !== results.length) state.triangulationResults.set(fi, kept);
+        });
+
+        markDirty();
+        drawAllOverlays(state.currentFrame);
+        update3DViewport();
+        updateInfoPanel();
+        syncSmoothingButton();
+    }
+
+    // The Temporal Smoothing toolbar button: a click smooths every frame; its
+    // hover menu also runs the current frame or opens the settings. Its blue
+    // state is `syncSmoothingButton` (ui/smoothing-button.js).
+    var smoothBtn = document.getElementById('tbSmooth');
+    if (smoothBtn) smoothBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        runTemporalSmoothing(false);
+    });
+    document.querySelectorAll('#smoothingDropdown .tri-dropdown-item').forEach(function (item) {
+        item.addEventListener('click', function (e) {
+            e.stopPropagation();
+            var scope = item.getAttribute('data-scope');
+            if (scope === 'settings') showSettingsModal('smoothing');
+            else runTemporalSmoothing(scope === 'frame');
+        });
+    });
+
+    // NOTE: the menu item's `data-method` is passed through VERBATIM. It used to
+    // be normalized here with `=== 'ba' ? 'ba' : 'dlt'`, which silently mapped
+    // every unrecognized value onto DLT, so a new item would have run a
+    // triangulation instead of its own action, with no error. Each `onPick`
+    // owns the mapping and must handle anything it does not expect.
     function wireTriDropdown(dropdownId, buttonId, onPick) {
         var dropdown = document.getElementById(dropdownId);
         if (!dropdown) return;
@@ -2908,7 +2998,7 @@ export function setupUI() {
         dropdown.querySelectorAll('.tri-dropdown-item').forEach(function (item) {
             item.addEventListener('click', function (e) {
                 e.stopPropagation();
-                onPick(item.getAttribute('data-method') === 'ba' ? 'ba' : 'dlt');
+                onPick(item.getAttribute('data-method'));
             });
         });
     }
@@ -2935,7 +3025,7 @@ export function setupUI() {
 
     // Triangulate current frame with the chosen (or default) method.
     wireTriDropdown('triangulateDropdown', 'tbTriangulate', function (method) {
-        triangulateCurrentFrame(method);
+        triangulateCurrentFrame(method === 'ba' ? 'ba' : 'dlt');
     });
 
     // Triangulate all frames. DLT keeps the existing "group by identity first"

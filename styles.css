@@ -1365,9 +1365,45 @@ body {
   background: var(--accent-dim);
 }
 
+/* The Instance and Group menus hold the original toolbar <button>s
+   (index.html), restyled as menu rows. They keep the toolbar's on-state
+   (.active, e.g. Ungroup while a group is selected) and disabled look. */
+button.tri-dropdown-item {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+}
+button.tri-dropdown-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+  background: transparent;
+}
+
+/* An item that is ON: a pressed Group item, or Temporal Smoothing's scope
+   while it is applied (ui/smoothing-button.js). Toolbar on-state colours. */
+.tri-dropdown-item.active,
+.tri-dropdown-item.applied,
+.tri-dropdown-item.applied .tri-dropdown-hint {
+  color: var(--accent);
+}
+.tri-dropdown-item.active,
+.tri-dropdown-item.applied {
+  background: var(--accent-dim);
+}
+
 .tri-dropdown-hint {
   font-size: 10px;
   color: var(--text-muted);
+}
+
+/* Divider between the triangulation solvers and the post-triangulation
+   Temporal Smoothing pass — they are different operations, not two solvers. */
+.tri-dropdown-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border-color);
 }
 
 /* Shared modal overlay + card. Named for the multi-frame assignment modal it
