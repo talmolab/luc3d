@@ -137,6 +137,7 @@ try {
 
         tracker.setTrackerNumAnimals(2);
         await tracker.trackAll();
+        document.getElementById('trackSummaryClose').click();   // Track All's summary box
         const afterAll = {
             identities: session.identities.length,
             fimSize: session.frameIdentityMap.size,

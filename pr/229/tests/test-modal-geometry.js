@@ -16,10 +16,9 @@
     const { describe, it, assertEqual, assertNull, assertNotNull,
         assertTrue, assertFalse, assertDeepEqual } = TestFramework;
 
+    // Bridged onto `window` by the test runner.
     function pick(name) {
-        if (typeof window !== 'undefined' && window[name] !== undefined) return window[name];
-        if (typeof globalThis !== 'undefined' && globalThis[name] !== undefined) return globalThis[name];
-        return undefined;
+        return window[name];
     }
     function MG() {
         return {
@@ -33,7 +32,7 @@
         };
     }
 
-    /** A localStorage stand-in — the real one isn't available in the sandbox. */
+    /** A localStorage stand-in, so these tests never touch the real one. */
     function fakeStorage(seed) {
         const map = Object.assign({}, seed || {});
         return {

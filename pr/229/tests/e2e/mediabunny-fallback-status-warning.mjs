@@ -71,7 +71,25 @@ try {
         sessionLoader.rebuildVideoController();
         const statusAfterAllGood = document.getElementById('statusText').textContent;
 
-        return { statusAfterMissing, statusAfterAllGood };
+        // Case 3: a backend dropped on purpose because WebCodecs cannot decode
+        // the codec (Firefox + HEVC) — its own message, not "init failed".
+        AS.state.views = [
+            { name: 'camA', decoder: { _mbBackend: null, _mbUnavailable: { reason: 'codec', codec: 'hevc', codecString: 'hev1.1.6.L123.90' } } },
+            { name: 'camB', decoder: { _mbBackend: null, _mbUnavailable: { reason: 'codec', codec: 'hevc', codecString: 'hev1.1.6.L123.90' } } },
+            { name: 'camC', decoder: { _mbBackend: {} } },
+        ];
+        sessionLoader.rebuildVideoController();
+        const statusCodec = document.getElementById('statusText').textContent;
+
+        // Case 4: both kinds at once — one clause each.
+        AS.state.views = [
+            { name: 'camA', decoder: { _mbBackend: null, _mbUnavailable: { reason: 'codec', codec: 'hevc' } } },
+            { name: 'camB', decoder: { _mbBackend: null, _mbUnavailable: { reason: 'init', message: 'boom' } } },
+        ];
+        sessionLoader.rebuildVideoController();
+        const statusBoth = document.getElementById('statusText').textContent;
+
+        return { statusAfterMissing, statusAfterAllGood, statusCodec, statusBoth };
     });
 
     console.log('  measured:', JSON.stringify(r, null, 2));
@@ -79,6 +97,11 @@ try {
         `warning names the exact fallback count when a decoder lacks _mbBackend (got "${r.statusAfterMissing}")`);
     check(r.statusAfterAllGood === 'unrelated prior status',
         `no warning (and no clobbering of an unrelated prior status) when every decoder has _mbBackend (got "${r.statusAfterAllGood}")`);
+    check(/^2 of 3 camera\(s\) step with <video> seeks: this browser cannot decode HEVC with WebCodecs/.test(r.statusCodec)
+        && !/init failed|frame or two off/.test(r.statusCodec),
+        `an undecodable codec is named as the cause, not as an init failure (got "${r.statusCodec}")`);
+    check(/^1 of 2 camera\(s\) step with <video> seeks: .*HEVC.*; 1 of 2 camera\(s\) fell back to HTML5 seeking \(frame-accurate mediabunny init failed\)/.test(r.statusBoth),
+        `both kinds at once get one clause each (got "${r.statusBoth}")`);
 
     await browser.close();
 } finally {

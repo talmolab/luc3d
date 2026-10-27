@@ -31,6 +31,10 @@
  *     scores / follow-on / repeat / 'end' kinds, the image run's details, and the
  *     ticked rows come back exactly, with a "Both" pair re-linked — and a session
  *     no check ran on writes no such key.
+ *  8. The number of animals tracking uses (`numAnimals`, the toolbar's Animals
+ *     field) rides it too, per session: a count, an explicit "auto", and — in
+ *     the untouched project — nothing at all, so a never-asked session is asked
+ *     again after a reopen.
  *
  * Run: node visibility-settings-roundtrip.mjs   (spawns its own http.server)
  */
@@ -102,7 +106,7 @@ try {
 
         AS.state.sessions = [s1, s2];
         AS.state.isDirty = false;
-        document.title = 'Lucid';
+        document.title = 'LUC3D';
         activate(s1);
         await new Promise(r => requestAnimationFrame(r));
 
@@ -290,13 +294,15 @@ try {
               hiddenCameras: ['a_cam1'],
               hiddenTracks: ['t0'],
               hiddenIdentities: ['id0'],
-              idSwitch: true },
+              idSwitch: true,
+              numAnimals: 3 },
             { name: 'sessB', cams: ['b_cam0', 'b_cam1'], fx: 2000, nFrames: 3,
               brightness: { b_cam1: 45 },
               rotation: { b_cam0: 180 },
               hiddenCameras: [],
               hiddenTracks: ['t0'],
-              hiddenIdentities: [] },
+              hiddenIdentities: [],
+              numAnimals: 'auto' },
         ];
 
         function buildSession(spec) {
@@ -325,6 +331,7 @@ try {
             session._hiddenCameras = new Set(spec.hiddenCameras);
             session._hiddenTracks = new Set(spec.hiddenTracks);
             session._hiddenIdentities = new Set(spec.hiddenIdentities);
+            session.numAnimals = spec.numAnimals;
             if (spec.idSwitch) {
                 // What a size + image check run leaves (pose/id-switch-check.js shapes): a change point
                 // both checks found (frames 100 / 110, same pair -> "Both"), a follow-on, a still-swapped
@@ -388,6 +395,7 @@ try {
                         hiddenTracks: Array.from(fresh._hiddenTracks).sort(),
                         hiddenIdentities: Array.from(fresh._hiddenIdentities).sort(),
                         idSwitch: review.serializeIdSwitchReview(fresh),
+                        numAnimals: fresh.numAnimals,
                     },
                     idSwitchBothLinked: !!(fresh._idSwitch && fresh._idSwitch.results.size &&
                         fresh._idSwitch.results.size.flags.some(m => m.agree && m.agree.cue === 'image' && m.agree.agree === m)),
@@ -418,6 +426,7 @@ try {
                 ...SPECS[0], name: 'plain',
                 brightness: {}, rotation: {},
                 hiddenCameras: [], hiddenTracks: [], hiddenIdentities: [], idSwitch: false,
+                numAnimals: null,
             });
             const labels = fileio.buildSlpLabelsAllViews(plain, viewsFor(SPECS[0]), videoFilesFor(SPECS[0]));
             const bytes = await window.SleapIO.saveSlpToBytes(labels);
@@ -475,6 +484,7 @@ try {
             hiddenTracks: spec.hiddenTracks.slice().sort(),
             hiddenIdentities: spec.hiddenIdentities.slice().sort(),
             idSwitch: spec.idSwitchExpected || null,
+            numAnimals: spec.numAnimals,
         };
     }
 
@@ -495,6 +505,7 @@ try {
             `hidden identities on disk (got ${JSON.stringify(e.present.hiddenIdentities)})`);
         check(!!e.present.idSwitchReview && e.present.idSwitchReview.checks.size.points.length === 4 && e.present.idSwitchReview.reviewed.length === 2,
             `the ID Switches checklist is on disk (${e.present.idSwitchReview ? e.present.idSwitchReview.checks.size.points.length + ' size points, ' + e.present.idSwitchReview.reviewed.length + ' ticked' : 'absent'})`);
+        check(e.present.numAnimals === 3, `the animal count is on disk (got ${JSON.stringify(e.present.numAnimals)})`);
         check(eq(e.restored, want), `everything restores into a fresh Session (got ${JSON.stringify(e.restored)})`);
         check(e.idSwitchBothLinked && eq(e.idSwitchReviewed, ['size:100:id0:idX', 'size:2400:idX:idY']),
             `the checklist reopens with its "Both" pair re-linked and its ticks (${JSON.stringify(e.idSwitchReviewed)})`);
@@ -516,9 +527,10 @@ try {
         const names = rt.streaming.perSession.map(p => p.sessionName);
         check(eq(names, ['sessA', 'sessB']), `sessions kept their order/identity (got ${JSON.stringify(names)})`);
         // sessB has no hidden cameras / identities — those keys must be absent
-        // rather than written as empty arrays.
+        // rather than written as empty arrays. Its explicit auto-detect IS an
+        // answer, so it is written.
         const b = rt.streaming.perSession[1];
-        check(!!b && eq(b.presentKeys, ['hiddenTracks', 'videoBrightness', 'videoRotation']),
+        check(!!b && eq(b.presentKeys, ['hiddenTracks', 'numAnimals', 'videoBrightness', 'videoRotation']),
             `a partially-default session writes only the keys it needs (got ${b ? JSON.stringify(b.presentKeys) : 'missing'})`);
     }
 
@@ -530,6 +542,8 @@ try {
               && Object.keys(u.restored.rotation).length === 0
               && u.restored.hiddenCameras.length === 0,
         'and it reopens with empty stores');
+    check(!!u && u.restored.numAnimals === null,
+        `and with no animal count, so the next Track asks for one (got ${u ? JSON.stringify(u.restored.numAnimals) : 'missing'})`);
     check(!!u && Object.values(u.foreignKeysIntact).every(Boolean),
         'while still carrying every other metadata.lucid key');
 

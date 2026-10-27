@@ -15,7 +15,7 @@
  *     status line says "1 video(s) could not be played", as it did before.
  *  3. **Progress.** The overlay walks the three labelled steps — Parsing
  *     annotations, Building session, Loading videos — ending at
- *     "Loading videos: 4/4 videos (100%)…" (the failed one counts as handled).
+ *     "Loading videos: 4/4 videos…" (the failed one counts as handled).
  *
  * Run: node tests/e2e/percam-parallel-video-load.mjs
  */
@@ -156,9 +156,9 @@ try {
     check(r.unhandled.length === 0, `no unhandled promise rejection (got ${JSON.stringify(r.unhandled)})`);
 
     const seen = (re) => r.texts.some(t => re.test(t));
-    check(seen(/^Parsing annotations: \d\/4 cameras .*Step 1 of 3/), 'progress step 1: Parsing annotations');
+    check(seen(/^Parsing annotations: \d\/4 cameras….*Step 1 of 3/), 'progress step 1: Parsing annotations');
     check(seen(/^Building session: .*Step 2 of 3/), 'progress step 2: Building session');
-    check(seen(/^Loading videos: 4\/4 videos \(100%\)… \| Step 3 of 3 · Preparing instances…/),
+    check(seen(/^Loading videos: 4\/4 videos… \| Step 3 of 3 · Preparing instances…/),
         'progress step 3 ends at 4/4 videos (the failed one counts as handled), naming the tail');
     check(pageErrs.length === 0, `no page errors (${pageErrs.join(' | ')})`);
 

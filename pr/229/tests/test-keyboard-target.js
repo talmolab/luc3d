@@ -6,15 +6,14 @@
  *
  *     if (e.target.tagName === 'INPUT' || ... ) return;
  *
- * `tagName` is `INPUT` for a CHECKBOX, so clicking User / Predicted / Reproj /
- * Errors made the app deaf to EVERY key, not just the one the checkbox wanted.
+ * `tagName` is `INPUT` for a CHECKBOX, so clicking User / Predictions /
+ * Reprojections / Errors made the app deaf to EVERY key, not just the one the checkbox wanted.
  * The assertions below are therefore about the distinction that line could not
  * draw: a text field consumes the whole alphabet, a checkbox consumes exactly
  * Space, and a slider consumes exactly the arrows.
  *
  * Every predicate reads only `tagName` / `type` / `role` / `isContentEditable`
- * off its argument, so these run against plain object stubs — no DOM, and the
- * same file serves the browser runner and the `vm` sandbox.
+ * off its argument, so these run against plain object stubs — no DOM needed.
  *
  * The behavior at the app level (click the checkbox, press Space, get playback)
  * is covered end to end by `tests/e2e/checkbox-focus-hotkeys.mjs`.
@@ -23,12 +22,9 @@
 (function () {
     const { describe, it, assertEqual, assertTrue, assertFalse } = TestFramework;
 
-    // Bridged onto `window` by the browser runner, left on the sandbox global
-    // by `tests/run-node.js`. Resolve through both.
+    // Bridged onto `window` by the test runner.
     function pick(name) {
-        if (typeof window !== 'undefined' && window[name] !== undefined) return window[name];
-        if (typeof globalThis !== 'undefined' && globalThis[name] !== undefined) return globalThis[name];
-        return undefined;
+        return window[name];
     }
     function KT() {
         return {

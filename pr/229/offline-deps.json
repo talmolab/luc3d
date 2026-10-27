@@ -107,7 +107,7 @@
         { "file": "browser/dist/index.js", "exists": true, "why": "the re-export target index.js resolves to" }
       ],
       "replaces": {
-        "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js": "lib/yaml/browser/index.js"
+        "https://cdn.jsdelivr.net/npm/yaml@2.8.0/+esm": "lib/yaml/browser/index.js"
       }
     }
   }

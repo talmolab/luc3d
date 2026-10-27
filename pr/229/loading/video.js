@@ -8,8 +8,9 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
-import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=d2625fcc2537';
-import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=d2625fcc2537';
+import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=e42bbed9fecf';
+import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=e42bbed9fecf';
+import { readBlobRange, guardedRangeSource } from './cold-read-guard.js?v=e42bbed9fecf';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -27,6 +28,156 @@ export function videoLog(msg, level) {
             console.log("[video] " + msg);
         }
     }
+}
+
+/** A paused-stepping decode stream with no request for this long is closed (OnDemandVideoDecoder._mbGetFrame). */
+export const STEP_CURSOR_IDLE_MS = 3000;
+
+/**
+ * Frames decoded and kept per backward step (OnDemandVideoDecoder._decodeBackChunk):
+ * a step back must decode from the keyframe anyway, so it keeps up to this many
+ * frames ending at the target and the next steps back are cache hits. Capped at
+ * 40% of the decoder's frame cache (`_backChunkSize`), which the budget sets to
+ * FRAME_CACHE_MIN–FRAME_CACHE_MAX frames. `window.LUCID_STEP_BACK_CHUNK`
+ * overrides it; 0 or 1 turns it off.
+ */
+export const STEP_BACK_CHUNK = 24;
+
+/**
+ * After landing on a frame by a jump (not a step), wait this long and, if no
+ * other frame was asked for meanwhile, decode the chunk before it in the
+ * background so even the FIRST step back is a cache hit (OnDemandVideoDecoder._mbGetFrame).
+ */
+export const STEP_BACK_WARM_MS = 250;
+
+/**
+ * Decoded-frame cache budget, in MB, shared by the views on screen
+ * (`VideoController._applyFrameCacheBudget`). Every decoder caches decoded
+ * frames as ImageBitmaps for paused stepping, and those are big: 8 MB each at
+ * 1680×1200. With 17 cameras at the old fixed 60 frames apiece that was ~8 GB
+ * alive at once, and Chrome then spent 62–69% of the main thread
+ * garbage-collecting — grid playback at ~5 redraws/s, steps at ~170 ms. Each
+ * decoder now gets `budget / (sum of the shown views' frame sizes)` frames,
+ * within [FRAME_CACHE_MIN, FRAME_CACHE_MAX]: 19 frames for those 17 cameras
+ * (2.6 GB), 60 for one solo'd camera or for 8 cameras at 1280×1024. Measured
+ * on that project, grid mode (sweep table in MODULES.md `loading/video.js`):
+ * stepping stops garbage-collecting below ~5 GB of cached frames, playback
+ * below ~3.3 GB, and under 12 frames held back-stepping falls off.
+ * `window.LUCID_FRAME_CACHE_MB` overrides it.
+ */
+export const FRAME_CACHE_BUDGET_MB = 2560;
+/** Most frames a decoder caches: the old fixed size, still what a few small views get. */
+export const FRAME_CACHE_MAX = 60;
+/**
+ * Fewest frames a decoder caches, budget or not: below this the backward
+ * chunk (40% of the cache, `_backChunkSize`) is too short to step back through
+ * without a keyframe decode every few frames.
+ */
+export const FRAME_CACHE_MIN = 12;
+
+/**
+ * Frames per decoder so that views of these frame sizes stay within
+ * `budgetMB` together, clamped to [FRAME_CACHE_MIN, FRAME_CACHE_MAX].
+ * @param {number} budgetMB
+ * @param {number[]} frameBytes - one decoded frame's bytes per view (w × h × 4)
+ * @returns {number}
+ */
+export function frameCacheFrames(budgetMB, frameBytes) {
+    var total = 0;
+    for (var i = 0; i < frameBytes.length; i++) total += frameBytes[i] > 0 ? frameBytes[i] : 0;
+    if (!(total > 0)) return FRAME_CACHE_MAX;
+    var n = Math.floor(budgetMB * 1024 * 1024 / total);
+    return Math.max(FRAME_CACHE_MIN, Math.min(FRAME_CACHE_MAX, n));
+}
+
+/**
+ * `releaseFrames()` every decoder of these views — for a SESSION going off
+ * screen (another session loaded over it). `VideoController._shownViews` only
+ * sees the active session's views, so without this each loaded session keeps
+ * its full caches: measured on 3 open 8-camera sessions, 3.1 GB of ImageBitmaps
+ * held for the two not shown (GPU-backed, but counted by V8 as external
+ * memory), and Track All on the third took 79–96 s instead of ~24 s, most of it
+ * in back-to-back full GCs. Coming back re-decodes the current frame.
+ * @param {Array} views
+ */
+export function releaseViewsFrames(views) {
+    (views || []).forEach(function (v) {
+        var d = v && v.decoder;
+        if (d && typeof d.releaseFrames === 'function') d.releaseFrames();
+    });
+}
+
+/** Index of the frame nearest timestamp `t` in the sorted `times` (within half a frame), or -1. */
+function frameNearTime(times, t) {
+    var lo = 0, hi = times.length - 1;
+    while (lo < hi) { var m = (lo + hi) >> 1; if (times[m] < t) lo = m + 1; else hi = m; }
+    if (lo > 0 && Math.abs(times[lo - 1] - t) < Math.abs(times[lo] - t)) lo--;
+    var half = times.length > 1 ? (times[times.length - 1] - times[0]) / (times.length - 1) / 2 : Infinity;
+    return Math.abs(times[lo] - t) <= half ? lo : -1;
+}
+
+/**
+ * `src` (an ImageBitmap, VideoFrame or `<video>`) as a new ImageBitmap `width`
+ * px wide, aspect kept; full size when `width` is missing or not smaller.
+ */
+export function scaledBitmap(src, width) {
+    var w = src.displayWidth || src.videoWidth || src.width;
+    var h = src.displayHeight || src.videoHeight || src.height;
+    if (!(width > 0) || !(w > width) || !(h > 0)) return createImageBitmap(src);
+    return createImageBitmap(src, {
+        resizeWidth: Math.round(width),
+        resizeHeight: Math.max(1, Math.round(h * width / w)),
+        resizeQuality: "medium",
+    });
+}
+
+/** Resolve on `el`'s next `type` event; reject on its `error` or after `ms` (5 s). */
+function mediaEvent(el, type, ms) {
+    return new Promise(function (resolve, reject) {
+        var timer = setTimeout(function () { done(); reject(new Error(type + " timed out")); }, ms || 5000);
+        function ok() { done(); resolve(); }
+        function bad() { done(); reject(new Error("video error")); }
+        function done() {
+            clearTimeout(timer);
+            el.removeEventListener(type, ok);
+            el.removeEventListener("error", bad);
+        }
+        el.addEventListener(type, ok);
+        el.addEventListener("error", bad);
+    });
+}
+
+/**
+ * Whether mp4box's `onReady` info describes a FRAGMENTED MP4, whose samples are
+ * listed in the fragments still to come rather than in the moov. `isFragmented`
+ * is mp4box's own answer (the moov has an `mvex`); a video track whose duration
+ * is 0 says the same thing about a file that answer misses.
+ */
+export function isFragmentedInfo(info) {
+    if (!info) return false;
+    if (info.isFragmented) return true;
+    var track = (info.tracks || []).find(function (t) { return t.type === 'video'; });
+    return !!track && !(track.duration > 0);
+}
+
+/**
+ * The mp4box samples whose bytes lie inside a file of `fileSize` bytes. A
+ * truncated fragmented MP4's last moof can list samples past its end.
+ */
+export function samplesInFile(samples, fileSize) {
+    var out = [];
+    for (var i = 0; i < samples.length; i++) {
+        var smp = samples[i];
+        if (!(smp.offset >= 0 && smp.size >= 0) || smp.offset + smp.size <= fileSize) out.push(smp);
+    }
+    return out;
+}
+
+/** Sum of mp4box sample durations (track timescale units). */
+export function sumSampleDurations(samples) {
+    var total = 0;
+    for (var i = 0; i < samples.length; i++) total += samples[i].duration || 0;
+    return total;
 }
 
 // ---------------------------------------------------------------------------
@@ -51,6 +202,11 @@ export class OnDemandVideoDecoder {
         this.isDecoding = false;
         this.pendingFrame = null;
         this.CHUNK_SIZE = 1024 * 1024; // 1 MB
+        // Read size after skipping more than a chunk of a fragment's mdat
+        // (_nextFragmentOffset): room for the next moof (~0.5 KB per second of
+        // 60 fps video; a bigger one costs one more read) without reading much
+        // of the next mdat.
+        this.FRAGMENT_PROBE_SIZE = 8 * 1024;
 
         // HTML5 video element for fast loading and fallback frame extraction
         this._videoEl = null;
@@ -60,7 +216,15 @@ export class OnDemandVideoDecoder {
         this._mp4Initialized = false;
         this._mp4InitPromise = null;
         this._html5SeekLock = null; // Prevent concurrent HTML5 seeks
+        this._html5Moved = false;   // <video> played or frame-start-seeked since _getFrameHTML5 last positioned it
+        this._frameLimit = null; // frames in a truncated fragmented MP4 (see _initMp4box), else null
         this._mbBackend = null; // Optional mediabunny frame-accurate backend (issue #115)
+        this._mbUnavailable = null; // why there is no _mbBackend: { reason: 'codec'|'init', ... } (see _initMediabunny)
+        this._stepCursor = null; // open decode stream for paused forward steps (see _mbGetFrame)
+        this._keySink = null;    // mediabunny EncodedPacketSink: which keyframe a frame needs
+        this._peekEl = null;     // peekFrame's own <video> (HTML5 path), never the playback one
+        this._peekSource = null; // the File / URL _peekEl is loaded with (switchSource changes this.file)
+        this._peekLock = null;   // serializes _peekHTML5's seeks of _peekEl
 
         // Source reference for mp4box lazy init
         this._source = null;
@@ -99,15 +263,22 @@ export class OnDemandVideoDecoder {
 
         // Set up event listeners BEFORE setting src to avoid race condition.
         // Wait for 'canplay' (not just 'loadedmetadata') so the first frame is available to draw.
-        var self = this;
+        // Read the error off the ELEMENT this listener was attached to, not
+        // off `self._videoEl`. `close()` clears `src` and calls `load()`, which
+        // fires a last `error` event — asynchronously, by which time `close()`
+        // has already nulled `self._videoEl`, so reading through `self` threw
+        // `Cannot read properties of null` out of an event handler. The
+        // `once: true` listener outlives a successful load, so every decoder
+        // that is closed rather than garbage-collected hits this.
+        var el = this._videoEl;
         var metadataPromise = new Promise(function (resolve, reject) {
-            if (self._videoEl.readyState >= 3) {
+            if (el.readyState >= 3) {
                 resolve();
                 return;
             }
-            self._videoEl.addEventListener("canplay", function () { resolve(); }, { once: true });
-            self._videoEl.addEventListener("error", function () {
-                var err = self._videoEl.error;
+            el.addEventListener("canplay", function () { resolve(); }, { once: true });
+            el.addEventListener("error", function () {
+                var err = el.error;
                 var msg = err ? ("Video error code " + err.code + ": " + (err.message || "unknown")) : "Browser could not load video";
                 reject(new Error(msg));
             }, { once: true });
@@ -222,12 +393,14 @@ export class OnDemandVideoDecoder {
         // force the old (frame-inaccurate) HTML5 seek, set
         //   localStorage.LUCID_VIDEO_BACKEND = 'html5'   (then reload)
         // or window.LUCID_VIDEO_BACKEND = 'html5' before loading a session.
+        this._mbUnavailable = null;
         if (this._mediabunnyEnabled() && (source instanceof Blob || source instanceof File)) {
             try {
                 await this._initMediabunny(source);
             } catch (e) {
                 videoLog("Mediabunny backend init failed (HTML5 seek will be used): " + e.message, "warn");
                 this._mbBackend = null;
+                this._mbUnavailable = { reason: 'init', message: e.message };
             }
         }
 
@@ -272,12 +445,19 @@ export class OnDemandVideoDecoder {
             throw new Error('MediaBunnyVideoBackend unavailable (sleap-io.js not loaded)');
         }
         var name = (source && source.name) ? source.name : 'video.mp4';
-        this._mbBackend = await Backend.fromBlob(source, name, { cacheSize: this.cacheSize });
+        // Through the cold-read guard rather than mediabunny's own BlobSource:
+        // a File in a cloud-synced folder (Google Drive for desktop) reads
+        // parts not downloaded yet as errors or zeros, and every seek into an
+        // unvisited part of a video is such a read (see cold-read-guard.js).
+        this._mbBackend = typeof Backend.fromRangeSource === 'function'
+            ? await Backend.fromRangeSource(guardedRangeSource(source), name, { cacheSize: this.cacheSize })
+            : await Backend.fromBlob(source, name, { cacheSize: this.cacheSize });
 
         // Adopt mediabunny's authoritative frame count + fps. Keep `this.samples`
         // as the frame-count carrier the rest of the class reads (`.length`),
         // resizing it to match so bounds checks and the timeline agree.
         var n = this._mbBackend.numFrames;
+        if (this._frameLimit != null && n > this._frameLimit) n = this._frameLimit;   // see _initMp4box: frames past a truncated file's end
         if (n && n !== this.samples.length) {
             var resized = new Array(n);
             for (var i = 0; i < n; i++) {
@@ -288,8 +468,48 @@ export class OnDemandVideoDecoder {
         if (this._mbBackend.fps && this._mbBackend.fps > 0) {
             this._fps = this._mbBackend.fps;
         }
+
+        // Demuxing is not decoding: Firefox 157 reads an HEVC file's index fine
+        // (so the backend above initializes) but has no WebCodecs HEVC decoder,
+        // so EVERY decode then failed and fell back to the <video> seek anyway —
+        // 1,544 "decode failed, falling back" warnings in one 8-camera stepping
+        // run. Ask once. The frame count and fps adopted above are container
+        // metadata and stay.
+        var undecodable = await this._mbCannotDecode(this._mbBackend);
+        if (undecodable) {
+            try { this._mbBackend.close(); } catch (_) {}
+            this._mbBackend = null;
+            this._mbUnavailable = undecodable;
+            videoLog("This browser cannot decode " + (undecodable.codecString || undecodable.codec || 'this codec')
+                + " with WebCodecs: stepping uses <video> seeks instead", "warn");
+            return;
+        }
         videoLog("Mediabunny ready: " + n + " frames, fps=" + (this._fps ? this._fps.toFixed(2) : '?')
             + " (frame-accurate decode)");
+    }
+
+    /**
+     * `{ reason: 'codec', codec, codecString }` when this browser's WebCodecs
+     * reports it cannot decode the backend's video track, else null. Uses
+     * mediabunny's `canDecode()` — `VideoDecoder.isConfigSupported` on the
+     * track's full decoder config (codec string + hvcC/avcC description).
+     * Measured (verify/seek-probe.html, barcode clips): false for HEVC in
+     * Firefox 157 (whose decode then throws "cannot be decoded by this
+     * browser"); true for H.264 there and for HEVC + H.264 in Chrome, Brave and
+     * Safari. A check that cannot be asked (no `canDecode`, or it throws)
+     * answers null: the per-frame fallback in getFrame still covers a failure.
+     */
+    async _mbCannotDecode(be) {
+        try {
+            var track = be && be.input && await be.input.getPrimaryVideoTrack();
+            if (!track || typeof track.canDecode !== 'function') return null;
+            if (await track.canDecode()) return null;
+            var codecString = null;
+            try { codecString = await track.getCodecParameterString(); } catch (_) { /* name only */ }
+            return { reason: 'codec', codec: track.codec || null, codecString: codecString };
+        } catch (e) {
+            return null;
+        }
     }
 
     _emitProgress(event) {
@@ -305,33 +525,63 @@ export class OnDemandVideoDecoder {
     /**
      * Background mp4box initialization for WebCodecs precise decoding.
      * Does not block the UI - video is already usable via HTML5 element.
+     *
+     * A FRAGMENTED MP4 (what campy writes by default: `empty_moov` +
+     * `frag_keyframe`, so a crash leaves the file readable up to its last
+     * fragment) lists its samples in the fragments (`moof`/`trun`), not in the
+     * `moov`, and its `moov` says duration 0. mp4box fires `onReady` as soon as
+     * the `moov` is parsed, so stopping there counted only the fragments in the
+     * first chunk: a 1,200-frame 60 fps rig video loaded as 420 frames at 21 fps
+     * (420 / the `<video>` element's 20 s). So for a fragmented file the scan
+     * goes on to the end of the file and the fps comes from the sample
+     * durations. It jumps over `mdat` payloads (`_nextFragmentOffset`), and
+     * `createFile(false)` lets mp4box drop media bytes it was handed, since
+     * this pass never extracts a sample. A regular MP4 still stops at
+     * `onReady`. Measured locally (Chrome): a 30-min 60 fps file of 90 KB
+     * fragments scans in ~0.15 s; a 1 GB 1-min one of 8.7 MB fragments in
+     * ~25 ms, reading 1.9 MB of it.
      */
     async _initMp4box() {
         var self = this;
-        this.mp4boxFile = MP4Box.createFile();
+        this._frameLimit = null;
+        this.mp4boxFile = MP4Box.createFile(false);
 
+        var info = null;
         var ready = new Promise(function (resolve, reject) {
             self.mp4boxFile.onError = reject;
-            self.mp4boxFile.onReady = resolve;
+            self.mp4boxFile.onReady = function (i) { info = i; resolve(i); };
         });
 
         var offset = 0;
-        var moovParsed = false;
-        ready.then(function () { moovParsed = true; });
+        var fragmented = false;   // decided once, by the append that parses the moov
+        var jumped = 0;           // mdat bytes the last step skipped
 
-        while (offset < this.fileSize && !moovParsed) {
-            var chunkSize = Math.min(this.CHUNK_SIZE, this.fileSize - offset);
+        while (offset < this.fileSize && !(info && !fragmented)) {
+            var start = offset;
+            var chunkSize = Math.min(jumped > this.CHUNK_SIZE ? this.FRAGMENT_PROBE_SIZE : this.CHUNK_SIZE,
+                this.fileSize - offset);
             var buffer = await this.readChunk(offset, chunkSize);
             buffer.fileStart = offset;
             var next = this.mp4boxFile.appendBuffer(buffer);
             offset = (next !== undefined) ? next : (offset + chunkSize);
+            if (info && !fragmented) fragmented = isFragmentedInfo(info);
+            if (fragmented) {
+                var after = this._nextFragmentOffset(offset);
+                jumped = after - offset;
+                offset = after;
+            }
+            // mp4box asking again for bytes it was already given would loop
+            // here forever (it does exactly that if handed the rest of an mdat
+            // whose start it has discarded — see _nextFragmentOffset).
+            if (offset <= start) throw new Error("MP4 parse stalled at byte " + start);
             await new Promise(function (r) { setTimeout(r, 0); });
             if (typeof self._onProgress === 'function') {
                 self._onProgress({ phase: 'mp4box', ratio: Math.min(offset / self.fileSize, 0.999) });
             }
         }
+        if (fragmented) this.mp4boxFile.flush();
 
-        var info = await ready;
+        info = await ready;
 
         var videoTrackInfo = info.tracks.find(function (t) { return t.type === "video"; });
         if (!videoTrackInfo) {
@@ -361,10 +611,34 @@ export class OnDemandVideoDecoder {
 
         // Get real sample table for accurate frame count and FPS
         var mp4Samples = this.mp4boxFile.getTrackSamplesInfo(videoTrackInfo.id);
+        // A recording cut off mid-write (the case campy fragments for) can end
+        // inside its last fragment's media: its moof lists frames whose bytes
+        // are not in the file. Count only the frames that are, and hold
+        // mediabunny to the same count (_initMediabunny), since it lists them
+        // too. Measured on a 1,200-frame clip cut at 47,000 / 46,000 bytes:
+        // ffprobe decodes 1,194 / 1,165, both demuxers listed 1,200 / 1,182.
+        if (fragmented && mp4Samples && mp4Samples.length > 0) {
+            var whole = samplesInFile(mp4Samples, this.fileSize);
+            if (whole.length < mp4Samples.length) {
+                videoLog("Fragmented MP4 ends mid-fragment: " + (mp4Samples.length - whole.length)
+                    + " frame(s) past the end of the file dropped", "warn");
+                mp4Samples = whole;
+                this._frameLimit = whole.length;
+            }
+        }
         if (mp4Samples && mp4Samples.length > 0) {
             // Update frame count and FPS from real sample data
             var realFrameCount = mp4Samples.length;
-            if (this._videoEl && this._videoEl.duration > 0) {
+            // A fragmented MP4's container duration is 0 (empty moov, usually
+            // no mehd): take the fps from the samples' own durations, and give
+            // `videoTrack` the duration they add up to, since the fps readers
+            // (updateTotalFrames, playback's nativeFps) divide by it and fall
+            // back to 30 when it is 0.
+            var sampleSpan = (videoTrackInfo.duration > 0) ? 0 : sumSampleDurations(mp4Samples);
+            if (sampleSpan > 0 && videoTrackInfo.timescale > 0) {
+                this._fps = realFrameCount / (sampleSpan / videoTrackInfo.timescale);
+                videoTrackInfo = Object.assign({}, videoTrackInfo, { duration: sampleSpan });
+            } else if (this._videoEl && this._videoEl.duration > 0) {
                 this._fps = realFrameCount / this._videoEl.duration;
             }
 
@@ -401,7 +675,8 @@ export class OnDemandVideoDecoder {
             // handles B-frame reordering natively and gives correct frames.
             // We only use mp4box for accurate FPS and frame count.
 
-            videoLog("MP4Box ready: " + realFrameCount + " frames, fps=" + this._fps.toFixed(2) + " (using HTML5 decode with accurate FPS)");
+            videoLog("MP4Box ready: " + realFrameCount + " frames, fps=" + this._fps.toFixed(2)
+                + (fragmented ? " (fragmented MP4, every fragment read)" : "") + " (using HTML5 decode with accurate FPS)");
         } else {
             videoLog("MP4Box returned no samples, keeping HTML5 mode", "warn");
         }
@@ -412,11 +687,34 @@ export class OnDemandVideoDecoder {
         this.mp4boxFile = null;
     }
 
+    /**
+     * Where a fragmented-MP4 scan reads next, given the offset mp4box asked
+     * for. When a read ends inside an `mdat`, mp4box asks for the bytes right
+     * after it, i.e. the rest of the media; the next `moof` starts at the
+     * `mdat`'s end, so the scan jumps there (mp4box finds a buffer that starts
+     * there by position, `MultiBufferStream.seek`, as it does for a
+     * moov-at-end file whose leading mdat it skips). The jump is also what
+     * keeps the scan going at all: with `createFile(false)` mp4box drops the
+     * mdat bytes it has used, and handed the rest of that mdat it asks for an
+     * offset it already had, forever. `parsingMdat` is internal to mp4box
+     * (0.5.2, pinned in index.html and offline-deps.json); without it the
+     * scan's stall check throws and the decoder keeps its HTML5 estimate.
+     * After a jump of more than a chunk the next read is a small probe, room
+     * for the next moof; small fragments are still read a chunk at a time.
+     */
+    _nextFragmentOffset(offset) {
+        var mdat = this.mp4boxFile && this.mp4boxFile.parsingMdat;
+        if (mdat && mdat.start >= 0 && mdat.size > 0) {
+            var end = Math.min(mdat.start + mdat.size, this.fileSize);
+            if (end > offset) return end;
+        }
+        return offset;
+    }
+
     async readChunk(offset, size) {
         if (this.sourceType === "file") {
-            var slice = this.file.slice(offset, offset + size);
-            var arrayBuffer = await slice.arrayBuffer();
-            return arrayBuffer;
+            // cold-read guard: retries a failed read, re-reads zeroed pages (cold-read-guard.js)
+            return (await readBlobRange(this.file, offset, offset + size)).buffer;
         }
 
         // URL source
@@ -481,6 +779,303 @@ export class OnDemandVideoDecoder {
         return best;
     }
 
+    /**
+     * One paused frame from the mediabunny backend, keeping a decode stream OPEN
+     * between calls so stepping forward costs one decoded frame instead of every
+     * frame since the keyframe. `MediaBunnyVideoBackend.getFrame` opens a fresh
+     * decoder per frame and decodes from the frame's keyframe — on P-frame
+     * recordings with a keyframe every 250 frames, ~125 frames per camera for
+     * every arrow-key step. Here the stream (mediabunny `samples(t)`, which
+     * decodes from the keyframe once and then keeps a few frames ahead) serves
+     * every request at or after its position that needs no newer keyframe;
+     * anything else (a step back, a jump past the next keyframe) reopens it at
+     * the target — exactly the fresh decode it replaces. Results go into the
+     * backend's frame cache like `getFrame`'s, so a step back over frames just
+     * shown is still a cache hit. Idle streams close after STEP_CURSOR_IDLE_MS;
+     * playback, a source switch and `close()` close them at once. Any failure
+     * falls back to the backend's own `getFrame`. `window.LUCID_STEP_CURSOR = 0`
+     * turns it off. Callers serialize (getFrame's `_mbSeekLock`).
+     */
+    async _mbGetFrame(frameIndex) {
+        var prev = this._lastStepFrame;
+        var bitmap = await this._mbGetFrameOnce(frameIndex);
+        // landed by a jump (seekbar, a flagged switch, end of playback) and still there: once the frame
+        // is on screen, warm the chunk behind it so even the first step back is a cache hit
+        var jumped = !(prev != null && Math.abs(frameIndex - prev) <= 3);
+        if (bitmap && jumped && this._lastStepFrame === frameIndex && this._stepCursorEnabled()) this._scheduleBackWarm(frameIndex);
+        return bitmap;
+    }
+
+    _stepCursorEnabled() {
+        return !(typeof window !== 'undefined' && window.LUCID_STEP_CURSOR === 0);
+    }
+
+    async _mbGetFrameOnce(frameIndex) {
+        var be = this._mbBackend;
+        var off = !this._stepCursorEnabled();
+        if (off || !be.sink || typeof be.sink.samples !== 'function' || !be._frameTimes || !be.cache) return be.getFrame(frameIndex);
+        var prev = this._lastStepFrame;
+        this._lastStepFrame = frameIndex;
+        var back = prev != null && prev - frameIndex >= 1 && prev - frameIndex <= 3;   // a step BACK
+        // anything but a step back makes the background chunk moot: stop it (frees its decoder)
+        if (!back && this._backPrefetch) { this._backPrefetch.cancelled = true; this._backPrefetch = null; }
+        if (this._backWarmTimer) { clearTimeout(this._backWarmTimer); this._backWarmTimer = null; }
+        var hit = be.cache.get(frameIndex);
+        if (hit) { be.cache.delete(frameIndex); be.cache.set(frameIndex, hit); if (back) this._prefetchBack(frameIndex); return hit; }
+        if (be.decodingPromise) { await be.decodingPromise; if (be.cache.has(frameIndex)) return be.cache.get(frameIndex); }
+        // the background prefetch is decoding this frame: wait for it rather than decode it twice
+        var bp = this._backPrefetch;
+        if (bp && !bp.cancelled && frameIndex <= bp.end && frameIndex > bp.end - this._backChunkSize()) {
+            await bp.promise;
+            hit = be.cache.get(frameIndex);
+            if (hit) { be.cache.delete(frameIndex); be.cache.set(frameIndex, hit); if (back) this._prefetchBack(frameIndex); return hit; }
+        }
+        var ts = be._frameTimes[frameIndex];
+        if (ts == null) return null;
+        // a step back: decode the run up to it once and keep it, and start on the run before it
+        if (back) {
+            try {
+                var chunkHit = await this._decodeBackChunk(frameIndex);
+                if (chunkHit) { this._prefetchBack(frameIndex); return chunkHit; }
+            } catch (e) {
+                videoLog("Back-step chunk failed for frame " + frameIndex + " (" + e.message + "), decoding it alone", "warn");
+            }
+        }
+        try {
+            var c = this._stepCursor;
+            if (!(c && c.backend === be && frameIndex >= c.next && await this._sameKeyframeRun(c, ts))) {
+                this._closeStepStream();
+                c = this._stepCursor = { backend: be, it: be.sink.samples(ts)[Symbol.asyncIterator](), next: frameIndex, nextTs: ts, timer: null };
+            }
+            if (c.timer) { clearTimeout(c.timer); c.timer = null; }
+            var times = be._frameTimes, half = times.length > 1 ? (times[times.length - 1] - times[0]) / (times.length - 1) / 2 : Infinity;
+            for (;;) {
+                var r = await c.it.next();
+                if (r.done || !r.value) throw new Error('stream ended before frame ' + frameIndex);
+                var sample = r.value;
+                if (sample.timestamp < ts - half) { sample.close(); continue; }   // passed over on the way
+                if (sample.timestamp > ts + half) { sample.close(); throw new Error('stream skipped frame ' + frameIndex); }
+                var vf = sample.toVideoFrame();
+                var bitmap = await createImageBitmap(vf);
+                vf.close(); sample.close();
+                c.next = frameIndex + 1;
+                c.nextTs = times[frameIndex + 1] != null ? times[frameIndex + 1] : Infinity;
+                be.cacheFrame(frameIndex, bitmap);
+                var self = this;
+                c.timer = setTimeout(function () { if (self._stepCursor === c) self._closeStepStream(); }, STEP_CURSOR_IDLE_MS);
+                return bitmap;
+            }
+        } catch (e) {
+            this._closeStepStream();
+            videoLog("Step cursor failed for frame " + frameIndex + " (" + e.message + "), decoding it alone", "warn");
+            return be.getFrame(frameIndex);
+        }
+    }
+
+    /** Can the open stream reach `ts` without passing a newer keyframe (i.e. is advancing it no costlier than reopening)? */
+    async _sameKeyframeRun(c, ts) {
+        var keyTs = await this._keyTimestamp(c.backend, ts);
+        return keyTs != null && keyTs <= c.nextTs;
+    }
+
+    /** Timestamp of the keyframe that frame time `ts` decodes from (mediabunny's packet index), or null. */
+    async _keyTimestamp(be, ts) {
+        if (!this._keySink) {
+            var mb = await import('mediabunny');
+            this._keySink = new mb.EncodedPacketSink(await be.input.getPrimaryVideoTrack());
+        }
+        var key = await this._keySink.getKeyPacket(ts);
+        return key ? key.timestamp : null;
+    }
+
+    /**
+     * A step back: frame `f` has to be decoded from its keyframe whatever happens,
+     * so decode that run once and cache up to STEP_BACK_CHUNK frames ending at `f`
+     * (never earlier than its keyframe — that would be a second run), making the
+     * next steps back cache hits instead of one keyframe-to-frame decode EACH (up to
+     * 250 frames per camera on the field recordings). Returns `f`'s bitmap, or null
+     * when chunking is off (the caller then decodes `f` alone).
+     */
+    async _decodeBackChunk(f) {
+        var be = this._mbBackend, n = this._backChunkSize();
+        if (!(n > 1)) return null;
+        var start = await this._backChunkStart(be, f, n);
+        return this._decodeIntoCache(be, start, f);
+    }
+
+    /**
+     * Frames per backward chunk: STEP_BACK_CHUNK (or `window.LUCID_STEP_BACK_CHUNK`),
+     * at most 40% of the frame cache, so the chunk on screen and the one being
+     * prefetched behind it (`_prefetchBack`) both fit without evicting each other.
+     */
+    _backChunkSize() {
+        var n = (typeof window !== 'undefined' && window.LUCID_STEP_BACK_CHUNK != null) ? Math.floor(+window.LUCID_STEP_BACK_CHUNK) : STEP_BACK_CHUNK;
+        return this._mbBackend ? Math.min(n, Math.floor(this._mbBackend.cacheSize * 0.4)) : 0;
+    }
+
+    /** First frame of the chunk ending at `f`: n frames back, but never before `f`'s keyframe. */
+    async _backChunkStart(be, f, n) {
+        var times = be._frameTimes, keyTs = await this._keyTimestamp(be, times[f]);
+        var kf = keyTs == null ? -1 : frameNearTime(times, keyTs);
+        return Math.max(kf >= 0 ? kf : 0, f - n + 1);
+    }
+
+    /** Decode frames [start, end] in one run into the backend's cache (skipping cached ones); returns `end`'s bitmap. `job.cancelled` stops it. */
+    async _decodeIntoCache(be, start, end, job) {
+        var times = be._frameTimes;
+        var half = times.length > 1 ? (times[times.length - 1] - times[0]) / (times.length - 1) / 2 : 0;
+        var out = null;
+        for await (var sample of be.sink.samples(times[start], times[end] + half)) {
+            if (this._mbBackend !== be || (job && job.cancelled)) { sample.close(); break; }   // closed / switched / moved on
+            var i = frameNearTime(times, sample.timestamp);
+            if (i < start || i > end || be.cache.has(i)) { sample.close(); continue; }
+            var vf = sample.toVideoFrame();
+            var bitmap = await createImageBitmap(vf);
+            vf.close(); sample.close();
+            this._cacheNear(be, i, bitmap);
+            if (i === end) out = bitmap;
+        }
+        return out;
+    }
+
+    /**
+     * Cache a chunk frame, evicting (when full) the cached frame FARTHEST from where
+     * the user is, not the least recently used: while stepping back, the frames not
+     * yet reached are the least recently used ones, and plain LRU evicted exactly
+     * those (measured: a hitch every ~30 steps with keyframes every 30 frames).
+     */
+    _cacheNear(be, i, bitmap) {
+        var here = this._lastStepFrame != null ? this._lastStepFrame : i;
+        while (be.cache.size >= be.cacheSize) {
+            var far = null, farD = -1;
+            be.cache.forEach(function (_, k) { var d = Math.abs(k - here); if (d > farD) { farD = d; far = k; } });
+            if (far === null) break;
+            var old = be.cache.get(far);
+            if (old && old.close) old.close();
+            be.cache.delete(far);
+        }
+        be.cache.set(i, bitmap);
+    }
+
+    /**
+     * While stepping back, decode the chunk BEFORE the cached run that ends at `f`
+     * in the background (its own decoder; not under getFrame's lock), so that run's
+     * first frame is not followed by a pause for the next chunk. One at a time;
+     * nothing to do when a chunk's worth is already cached behind `f`. A request
+     * for a frame it is decoding waits for it (`_mbGetFrame`).
+     * `window.LUCID_STEP_BACK_PREFETCH = 0` turns it off.
+     */
+    /** After STEP_BACK_WARM_MS with no other request, prefetch the chunk behind landed frame `f`. */
+    _scheduleBackWarm(f) {
+        if (this._backWarmTimer) clearTimeout(this._backWarmTimer);
+        var self = this;
+        this._backWarmTimer = setTimeout(function () {
+            self._backWarmTimer = null;
+            if (self._lastStepFrame === f) self._prefetchBack(f);
+        }, STEP_BACK_WARM_MS);
+    }
+
+    _prefetchBack(f) {
+        var be = this._mbBackend, n = this._backChunkSize();
+        if (this._backPrefetch || !be || !(n > 1)) return;
+        if (typeof window !== 'undefined' && window.LUCID_STEP_BACK_PREFETCH === 0) return;
+        var low = f;
+        while (low > 0 && be.cache.has(low - 1) && f - low < n) low--;
+        if (low <= 0 || f - low >= n) return;
+        var self = this, job = { end: low - 1, promise: null };
+        job.promise = (async function () {
+            var start = await self._backChunkStart(be, job.end, n);
+            await self._decodeIntoCache(be, start, job.end, job);
+        })().catch(function (e) {
+            videoLog("Back-step prefetch failed (" + e.message + ")", "warn");
+        }).then(function () { if (self._backPrefetch === job) self._backPrefetch = null; });
+        this._backPrefetch = job;
+    }
+
+    /**
+     * Stop all paused-stepping work: the forward stream, a back-step prefetch and a
+     * pending warm-up (frees their decoders and buffered frames). For playback,
+     * source switches and close.
+     */
+    releaseStepCursor() {
+        if (this._backWarmTimer) { clearTimeout(this._backWarmTimer); this._backWarmTimer = null; }
+        if (this._backPrefetch) { this._backPrefetch.cancelled = true; this._backPrefetch = null; }
+        this._closeStepStream();
+    }
+
+    /**
+     * Drop every decoded frame this decoder holds — the mediabunny backend's
+     * frame cache, the HTML5/WebCodecs cache — and its paused-stepping streams,
+     * keeping the decoder itself open. For a view that went OFF SCREEN
+     * (`VideoController._shownViews`): a 1680×1200 frame is 8 MB, so 17 cameras
+     * with full 60-frame caches hold ~8 GB of ImageBitmaps, and while that much
+     * stays alive Chrome garbage-collects almost continuously — measured: with
+     * one camera solo'd after using the grid, 68% of the main thread was GC and
+     * playback reached 63 of 120 pictures/s (43% dropped); with the hidden
+     * views' frames released, 115/s with none dropped. Nothing reads a hidden
+     * view's cache, and docking it again re-decodes the current frame.
+     */
+    releaseFrames() {
+        this.releaseStepCursor();
+        var be = this._mbBackend;
+        if (be && be.cache) {
+            be.cache.forEach(function (bitmap) { if (bitmap && typeof bitmap.close === 'function') bitmap.close(); });
+            be.cache.clear();
+        }
+        for (var entry of this.cache) {
+            if (entry[1] && typeof entry[1].close === 'function') entry[1].close();
+        }
+        this.cache.clear();
+    }
+
+    /**
+     * Change how many decoded frames this decoder keeps (the mediabunny
+     * backend's cache and the HTML5/WebCodecs one), evicting at once down to
+     * the new size: the backend cache's frames FARTHEST from the last stepped
+     * frame go first, as `_cacheNear` evicts. Set by
+     * `VideoController._applyFrameCacheBudget`; the backward chunk follows the
+     * size by itself (`_backChunkSize`).
+     * @param {number} n - frames, at least 1
+     */
+    setCacheSize(n) {
+        n = Math.max(1, Math.floor(n));
+        this.cacheSize = n;
+        while (this.cache.size > n) {
+            var oldest = this.cache.keys().next().value;
+            var old = this.cache.get(oldest);
+            if (old && typeof old.close === 'function') old.close();
+            this.cache.delete(oldest);
+        }
+        var be = this._mbBackend;
+        if (!be || !be.cache) return;
+        be.cacheSize = n;
+        var here = this._lastStepFrame;
+        while (be.cache.size > n) {
+            var far = null, farD = -1;
+            if (here == null) {
+                far = be.cache.keys().next().value;   // no stepped frame yet: the oldest entry
+            } else {
+                be.cache.forEach(function (_, k) {
+                    var d = Math.abs(k - here);
+                    if (d > farD) { farD = d; far = k; }
+                });
+            }
+            if (far == null) break;
+            var bm = be.cache.get(far);
+            if (bm && typeof bm.close === 'function') bm.close();
+            be.cache.delete(far);
+        }
+    }
+
+    /** Close just the forward-stepping stream (reopened at a jump, or idle). */
+    _closeStepStream() {
+        var c = this._stepCursor;
+        this._stepCursor = null;
+        if (!c) return;
+        if (c.timer) clearTimeout(c.timer);
+        try { if (c.it && c.it.return) c.it.return(); } catch (_) { /* ignore */ }
+    }
+
     async getFrame(frameIndex) {
         if (frameIndex < 0 || frameIndex >= this.samples.length) {
             videoLog("Frame index out of range: " + frameIndex, "warn");
@@ -518,7 +1113,7 @@ export class OnDemandVideoDecoder {
             var resolveMbLock;
             this._mbSeekLock = new Promise(function (r) { resolveMbLock = r; });
             try {
-                var mbFrame = await this._mbBackend.getFrame(frameIndex);
+                var mbFrame = await this._mbGetFrame(frameIndex);
                 if (mbFrame) return mbFrame;
                 videoLog("Mediabunny returned no frame for " + frameIndex + ", falling back to HTML5", "warn");
             } catch (e) {
@@ -552,7 +1147,100 @@ export class OnDemandVideoDecoder {
     }
 
     /**
-     * Get a frame using the HTML5 <video> element (always works, slightly less precise).
+     * A copy of frame `frameIndex` scaled to `width` px wide (aspect kept), for
+     * a preview (the seekbar's hover thumbnail, ui/seekbar-preview.js) — WITHOUT
+     * touching anything playback or stepping relies on: no _mbSeekLock, step
+     * cursor, back-prefetch, cache write or seek of the playback `<video>`. The
+     * caller owns the result and closes it. Null when there is no such frame.
+     *
+     * mediabunny: a frame the backend already holds is copied (`Map.get`, so its
+     * LRU order is untouched); any other is decoded by `sink.getSample` on its
+     * own short-lived decoder, from its keyframe — the same frame-accurate
+     * lookup as decodeSingleFrame, minus the cacheFrame. Without a backend (or
+     * if that fails): a second, private `<video>` on the same source, seeked
+     * like _getFrameHTML5 (`_peekHTML5`).
+     */
+    async peekFrame(frameIndex, width) {
+        if (!(frameIndex >= 0 && frameIndex < this.samples.length)) return null;
+        var be = this._mbBackend;
+        if (be && be.sink && be._frameTimes && be._frameTimes[frameIndex] != null) {
+            try {
+                var hit = be.cache && be.cache.get(frameIndex);
+                if (hit) return await scaledBitmap(hit, width);
+                var sample = await be.sink.getSample(be._frameTimes[frameIndex]);
+                if (!sample) return null;
+                var vf = sample.toVideoFrame();
+                try { return await scaledBitmap(vf, width); }
+                finally { vf.close(); sample.close(); }
+            } catch (e) {
+                videoLog("Preview decode failed for frame " + frameIndex + ": " + e.message + ", trying HTML5", "warn");
+            }
+        }
+        return this._peekHTML5(frameIndex, width);
+    }
+
+    /** peekFrame's `<video>` path: its own element (`_peekEl`), never the playback one. */
+    async _peekHTML5(frameIndex, width) {
+        var source = this.file || this.url;
+        if (!source || !this._videoReady) return null;
+        while (this._peekLock) { await this._peekLock; }
+        var release;
+        this._peekLock = new Promise(function (r) { release = r; });
+        try {
+            var el = this._peekEl;
+            if (!el) {
+                el = this._peekEl = document.createElement("video");
+                el.muted = true;
+                el.playsInline = true;
+                el.preload = "auto";
+            }
+            if (this._peekSource !== source) {
+                if (el.src.startsWith("blob:")) URL.revokeObjectURL(el.src);
+                this._peekSource = source;
+                el.src = source instanceof Blob ? URL.createObjectURL(source) : source;
+            }
+            if (el.readyState < 1) await mediaEvent(el, "loadedmetadata");
+            var t = this.html5SeekTime(frameIndex);
+            if (el.currentTime !== t || el.readyState < 2) {
+                var seeked = mediaEvent(el, "seeked");
+                el.currentTime = t;
+                await seeked;
+            }
+            // close() / switchSource() may have run while we waited
+            if (el !== this._peekEl || this._peekSource !== source || el.readyState < 2) return null;
+            return await scaledBitmap(el, width);
+        } catch (e) {
+            return null;
+        } finally {
+            this._peekLock = null;
+            release();
+        }
+    }
+
+    /** Drop peekFrame's private `<video>` (close / switchSource). */
+    _releasePeek() {
+        var el = this._peekEl;
+        this._peekEl = null;
+        this._peekSource = null;
+        if (!el) return;
+        var src = el.src;
+        el.removeAttribute("src");
+        el.load();
+        if (src.startsWith("blob:")) URL.revokeObjectURL(src);
+    }
+
+    /**
+     * The `<video>.currentTime` a stepping seek to `frameIndex` sets: the middle
+     * of the frame's presentation interval, `(i + 0.5) / fps` (why: _getFrameHTML5).
+     */
+    html5SeekTime(frameIndex) {
+        var fps = this._fps > 0 ? this._fps : 30;
+        return (frameIndex + 0.5) / fps;
+    }
+
+    /**
+     * Get a frame using the HTML5 <video> element (always works, slower than
+     * mediabunny; the path for codecs this browser's WebCodecs cannot decode).
      */
     async _getFrameHTML5(frameIndex) {
         if (!this._videoEl || !this._videoReady) return null;
@@ -568,7 +1256,15 @@ export class OnDemandVideoDecoder {
         this._html5SeekLock = new Promise(function (r) { resolveLock = r; });
 
         try {
-            var time = frameIndex / this._fps;
+            // Seek to the MIDDLE of the frame's interval, not its start. A seek
+            // to exactly i/fps sits on the boundary with frame i-1, and browsers
+            // round it either way: measured on barcode clips (verify/seek-probe.html,
+            // 8 cameras), Firefox 157 showed i-1 for every frame with i % 3 == 2
+            // at 60 and 150 fps (63–70% exact), Chrome, Brave and Safari for most
+            // frames (7–33%). (i + 0.5)/fps was exact in all 2,160 Firefox seeks
+            // (HEVC + H.264) and all H.264 seeks in the other three. rVFC cannot
+            // verify it in Firefox: its mediaTime echoes the seek target.
+            var time = this.html5SeekTime(frameIndex);
 
             // Only seek if we're not already at the target time. The tolerance
             // must scale with the frame rate: a fixed constant (e.g. 10 ms)
@@ -578,15 +1274,21 @@ export class OnDemandVideoDecoder {
             // "already on this frame?" threshold — the gap between adjacent
             // frames (1/fps) always exceeds it, so every step re-seeks, while a
             // redundant request for the current frame still short-circuits.
+            // Around the frame's middle, that band is the frame's own interval.
+            // But only trust currentTime if THIS method put it there: after
+            // playback (or a frame-start seek) the picture need not match it —
+            // in Firefox the +0 pause re-decode drew the frame AFTER the paused
+            // one on 1 pause in 10 by skipping the seek (`_html5Moved`).
             var framePeriod = (this._fps > 0) ? (1 / this._fps) : (1 / 30);
             var currentTime = this._videoEl.currentTime;
-            if (Math.abs(currentTime - time) > framePeriod / 2) {
+            if (this._html5Moved || Math.abs(currentTime - time) > framePeriod / 2) {
                 var seekPromise = new Promise(function (resolve) {
                     self._videoEl.addEventListener("seeked", function () { resolve(); }, { once: true });
                     setTimeout(resolve, 5000);
                 });
                 this._videoEl.currentTime = time;
                 await seekPromise;
+                this._html5Moved = false;
             }
 
             // Ensure the video has renderable data (readyState >= 2 = HAVE_CURRENT_DATA)
@@ -885,6 +1587,7 @@ export class OnDemandVideoDecoder {
      */
     playNative() {
         if (this._videoEl) {
+            this._html5Moved = true;
             this._videoEl.play().catch(function () {});
         }
     }
@@ -903,6 +1606,7 @@ export class OnDemandVideoDecoder {
      */
     seekNative(frameIndex) {
         if (this._videoEl) {
+            this._html5Moved = true;
             this._videoEl.currentTime = frameIndex / this._fps;
         }
     }
@@ -927,7 +1631,12 @@ export class OnDemandVideoDecoder {
             if (!el) return resolve();
             var time = frameIndex / self._fps;
             var framePeriod = (self._fps > 0) ? (1 / self._fps) : (1 / 30);
-            if (Math.abs(el.currentTime - time) <= framePeriod / 2) {
+            // Also already there when _getFrameHTML5 parked the element on this
+            // frame's middle: (i+0.5)/fps - i/fps comes out a hair over half a
+            // frame for ~30% of frames in floating point, and re-seeking to the
+            // frame START would land on i-1 in Firefox (see _getFrameHTML5).
+            if (Math.abs(el.currentTime - time) <= framePeriod / 2
+                || el.currentTime === self.html5SeekTime(frameIndex)) {
                 return resolve();   // already on this frame — no seek needed
             }
             var done = false;
@@ -939,6 +1648,7 @@ export class OnDemandVideoDecoder {
             }
             el.addEventListener('seeked', finish, { once: true });
             setTimeout(finish, 2000);   // never hang if `seeked` doesn't fire
+            self._html5Moved = true;
             el.currentTime = time;
         });
     }
@@ -969,6 +1679,8 @@ export class OnDemandVideoDecoder {
         // WRONG video — frame-accurate for a video nobody is looking at
         // anymore, which reads as the pose overlay drifting off the video.
         // Re-initialized below, after the new element's metadata loads.
+        this.releaseStepCursor();
+        this._keySink = null;
         if (this._mbBackend) {
             try { this._mbBackend.close(); } catch (_) {}
             this._mbBackend = null;
@@ -987,16 +1699,19 @@ export class OnDemandVideoDecoder {
             URL.revokeObjectURL(this._videoEl.src);
         }
 
-        // Reuse existing video element — just change src
-        var self = this;
+        // Reuse existing video element — just change src. Captured locally for
+        // the same reason as in `init()`: `close()` nulls `this._videoEl` while
+        // a last `error` event is still in flight.
+        var el = this._videoEl;
         var metadataPromise = new Promise(function (resolve, reject) {
-            self._videoEl.addEventListener("canplay", function () { resolve(); }, { once: true });
-            self._videoEl.addEventListener("error", function () {
-                var err = self._videoEl.error;
+            el.addEventListener("canplay", function () { resolve(); }, { once: true });
+            el.addEventListener("error", function () {
+                var err = el.error;
                 reject(new Error(err ? "Video error " + err.code : "Video load failed"));
             }, { once: true });
         });
 
+        this._html5Moved = false;   // a new source starts at 0, on frame 0
         this._videoEl.src = URL.createObjectURL(source);
         this._emitProgress({ phase: 'canplay', ratio: 0 });
         await this._awaitPlayable(metadataPromise, source);
@@ -1056,12 +1771,14 @@ export class OnDemandVideoDecoder {
         // switchSource(), not just the first init(), or a reused pooled
         // decoder keeps stepping through the previous video after a session
         // switch/reopen.
+        this._mbUnavailable = null;
         if (this._mediabunnyEnabled() && (source instanceof Blob || source instanceof File)) {
             try {
                 await this._initMediabunny(source);
             } catch (e) {
                 videoLog("Mediabunny backend init failed on source switch (HTML5 seek will be used): " + e.message, "warn");
                 this._mbBackend = null;
+                this._mbUnavailable = { reason: 'init', message: e.message };
             }
         }
 
@@ -1086,10 +1803,14 @@ export class OnDemandVideoDecoder {
         }
 
         // Release the mediabunny backend (frees its Input/decoder + cached frames)
+        this.releaseStepCursor();
+        this._keySink = null;
         if (this._mbBackend) {
             try { this._mbBackend.close(); } catch (_) {}
             this._mbBackend = null;
         }
+
+        this._releasePeek();
 
         // Release HTML5 video element
         if (this._videoEl) {
@@ -1249,6 +1970,17 @@ export class EmbeddedVideoDecoder {
             this.cache.delete(oldest);
         }
         this.cache.set(displayFrame, bitmap);
+    }
+
+    /**
+     * OnDemandVideoDecoder.peekFrame's contract (a caller-owned copy, scaled to
+     * `width`): only frames embedded in the .slp have one. Goes through getFrame
+     * — the worker has no playback position or cursor to disturb.
+     */
+    async peekFrame(displayFrame, width) {
+        if (this._closed || !this.hasFrame(displayFrame)) return null;
+        var bitmap = await this.getFrame(displayFrame);
+        return bitmap ? scaledBitmap(bitmap, width) : null;
     }
 
     seekNative(frameIndex) {}
@@ -1469,13 +2201,37 @@ function rvfcCallbacksCoalesced() {
 }
 
 /**
+ * Whether `new VideoFrame(<video>)` is pointless, so never called: WebKit.
+ * Measured in Safari 27 on off-DOM playing `<video>`s made like the decoder's
+ * (verify/probe-paint.html, barcode clips): the timestamp is 0 or an exact
+ * copy of `currentTime` — the CLOCK, never the captured frame's own time — and
+ * named the captured picture in 0–3% of captures. A clock reading can still
+ * pass `judgeVideoFrameTimestamps` (the old judge passed it at 150 fps, and
+ * the picture then lagged the overlay by 1–13 frames; one on the frame grid
+ * would pass the current one), while drawing the captures cost ~25% of the
+ * pictures Safari presents. Skipping even the judging captures loses nothing,
+ * and the engine is the only signal before the first one. (Every iOS browser
+ * is WebKit, hence no `Safari/` test.)
+ */
+function videoFrameCaptureUnsafe() {
+    try {
+        var ua = navigator.userAgent;
+        return /AppleWebKit\//.test(ua) && !/(Chrome|Chromium|Firefox)\//.test(ua);
+    } catch (e) { return false; }
+}
+
+/**
  * Decide, per decoder, whether `new VideoFrame(<video>).timestamp` tracks the
  * picture — the per-refresh loop's frame index depends on it. Chrome: yes.
- * Safari 27: the timestamp is 0 for ~98% of captures during playback. Firefox
- * 157: a constant. Judged once the video clock has advanced a few frames since
- * the first capture: usable only if the timestamp moved AND agrees with the
- * clock to within 3 frames. Cached on the decoder as `_vfTimestamps`
- * ('ok' | 'bad'); undefined while undecided.
+ * Safari 27: 0 or the clock (and never asked — `videoFrameCaptureUnsafe`).
+ * Firefox 157: a constant. Judged once the video clock has advanced a few
+ * frames since the first capture: usable only if the timestamp moved, agrees
+ * with the clock to within max(3 frames, 50 ms) — the presented frame trails
+ * the clock by the compositor's latency, which at 150 fps on a 60 Hz display
+ * exceeds 3 frames and made Brave fall back mid-session — and is not simply
+ * the clock itself (equal to `currentTime` to the microsecond while off the
+ * frame grid: a real frame's timestamp sits on it). Cached on the decoder as
+ * `_vfTimestamps` ('ok' | 'bad'); undefined while undecided.
  *
  * @returns {'ok'|'bad'|undefined}
  */
@@ -1490,15 +2246,239 @@ function judgeVideoFrameTimestamps(dec, cap) {
         return undefined;
     }
     if (ctIdx - chk.ct < 4) return undefined;
-    var moved = cap.frame.timestamp !== chk.ts;
-    var agrees = Math.abs(cap.index - ctIdx) <= 3;
+    var ts = cap.frame.timestamp;
+    var moved = ts !== chk.ts;
+    var agrees = Math.abs(cap.index - ctIdx) <= Math.max(3, Math.ceil(0.05 * fps));
+    var pos = ts / 1e6 * fps;
+    var isClock = Math.abs(ts - el.currentTime * 1e6) < 1 && Math.abs(pos - Math.round(pos)) > 0.02;
     dec._vfTsCheck = null;
-    dec._vfTimestamps = (moved && agrees) ? 'ok' : 'bad';
+    dec._vfTimestamps = (moved && agrees && !isClock) ? 'ok' : 'bad';
     videoLog('Playback: VideoFrame timestamps ' + (dec._vfTimestamps === 'ok'
         ? 'track the video — painting captured frames'
         : 'do NOT track the video in this browser — drawing the <video> directly, frame index from '
           + (el.requestVideoFrameCallback ? 'requestVideoFrameCallback' : 'its clock')));
     return dec._vfTimestamps;
+}
+
+/**
+ * Which frame `drawImage(<video>)` paints at a given instant, in a browser
+ * whose requestVideoFrameCallback is COALESCED (Firefox — see
+ * `rvfcCallbacksCoalesced`), from those callbacks alone.
+ *
+ * Firefox queues decoded frames with wall-clock due times T_k = T_0 + k/fps
+ * and `drawImage` paints the last one due by the instant of the call, so the
+ * painted frame is floor(t·r + φ) with r = frames/ms and one unknown phase φ
+ * per element (measured: the picture-implied φ is constant to ~0.02 frame over
+ * a 2.5 s playback, verify/ff-phase.mjs). Each callback bounds T_m of the
+ * frame it reports: `expectedDisplayTime == now` ("composited") means
+ * T_m ∈ (now − P, now]; `expectedDisplayTime > now` (the next frame, due by
+ * the next refresh) means T_m ∈ (now, expectedDisplayTime] — P the refresh
+ * interval, read off the latter. Every bound is one refresh wide and, since
+ * callbacks fire on refreshes, 60 fps on 120 Hz keeps landing on the same two
+ * phases, so the intersection stays ~½ frame wide: a draw is CERTAIN only when
+ * no frame boundary can fall between the instant and the bound's edges.
+ * With ≤ ~½ frame per refresh (60 fps at 120 Hz) `VideoController` skips an
+ * uncertain refresh when the next would be certain — the frame lands one
+ * refresh later, at no cost in cadence; with more (60 fps at 60 Hz, where
+ * every bound is a whole refresh wide; 150 fps) it draws the midpoint guess.
+ * The previous projection, `round(mediaTime + (now − callback))`, ran 1–3
+ * frames AHEAD of the picture: it projected from the callback rather than the
+ * frame's due time, and rounded.
+ *
+ * A bound that contradicts the others replaces them — frames arriving late
+ * at once, a jump AHEAD only once the next callback confirms it (Firefox
+ * sometimes reports a frame ~10 ahead that is never painted) — and a callback
+ * that only re-reports a frame (the paused start frame, a stall) is ignored.
+ * Pure — unit-tested in tests/test-playback-frame-sync.js.
+ */
+export class CoalescedFrameClock {
+    constructor() { this.reset(); }
+
+    reset() {
+        this._lo = -Infinity;   // φ ∈ [_lo, _hi)
+        this._hi = Infinity;
+        this._rate = 0;         // frames per ms
+        this._period = null;    // refresh interval (ms), from 'next-frame' callbacks
+        this._fallbackPeriod = null;   // …or as measured by the caller, until then
+        this._lastNow = null;
+        this._suspect = null;   // an unconfirmed jump ahead: {lo, hi}
+        this.lastIndex = null;  // frame index of the latest callback
+    }
+
+    /**
+     * @param {number} now - the callback's `now` (ms)
+     * @param {number} index - round(metadata.mediaTime * fps)
+     * @param {number|undefined} expectedDisplayTime - metadata.expectedDisplayTime (ms)
+     * @param {number} rate - frames per ms (fps * playbackRate / 1000)
+     * @param {number} [fallbackPeriod] - refresh interval to assume until one is seen (ms)
+     */
+    observe(now, index, expectedDisplayTime, rate, fallbackPeriod) {
+        if (rate !== this._rate) { this.reset(); this._rate = rate; }
+        if (fallbackPeriod) this._fallbackPeriod = fallbackPeriod;
+        var edt = (typeof expectedDisplayTime === 'number') ? expectedDisplayTime : now;
+        var E = 0.25;   // ms of slack on every bound (vsync timestamp jitter; wider only lost certainty, measured)
+        var L, H;
+        if (edt - now > 0.5) {           // the next frame, due by the next refresh
+            this._period = edt - now;
+            L = index - (edt + E) * rate;
+            H = index - (now - E) * rate;
+        } else {
+            // Already due (T_m <= now) while the NEXT frame isn't due by the
+            // next refresh: T_m > now + P - 1/fps. When a frame is shorter than
+            // a refresh that can't happen with frames queued on time — the
+            // decoder is behind — so assume only that m is under a frame old.
+            // Only for a NEW frame, though: the first callback of a playback
+            // reports the paused start frame, which is on screen because of
+            // the pause, not the frame clock — measured 1–20 ms outside this
+            // bound, and on EITHER side (it pinned the phase ~6 ms early and
+            // the frame one ahead for cameras drawn late in the refresh) — and
+            // a stall keeps reporting one frame long after it was due. Such a
+            // callback says nothing about the clock.
+            if (this.lastIndex == null || index <= this.lastIndex) {
+                // Reported frame went BACK (seek, decoder glitch — measured
+                // once: 154 -> 147 mid-play): the clock is unknown again.
+                if (this.lastIndex != null && index < this.lastIndex - 1) {
+                    var keepRate = this._rate, keepP = this._period, keepFP = this._fallbackPeriod;
+                    this.reset();
+                    this._rate = keepRate; this._period = keepP; this._fallbackPeriod = keepFP;
+                }
+                this._suspect = null;
+                this._lastNow = now;
+                this.lastIndex = index;
+                return;
+            }
+            var P = this._period || this._fallbackPeriod || 1000 / 60, F = 1 / rate;
+            var back = F > P ? F - P : F;
+            L = index - (now + E) * rate;
+            H = index - (now - back - E) * rate;
+        }
+        // Slack for clock drift between callbacks (≤ 0.05 frame/s).
+        if (this._lastNow != null) {
+            var w = 5e-5 * Math.max(0, now - this._lastNow);
+            this._lo -= w; this._hi += w;
+        }
+        var lo = Math.max(this._lo, L), hi = Math.min(this._hi, H);
+        if (lo < hi) {
+            this._lo = lo; this._hi = hi;
+            this._suspect = null;
+        } else if (L >= this._hi && !(this._suspect && L < this._suspect.hi && H > this._suspect.lo)) {
+            // Puts the frame further AHEAD than the clock allows. Firefox
+            // occasionally reports a frame ~10 ahead that is never painted
+            // (measured, 8 HEVC cameras: 448 -> 460 -> 452 within 80 ms), so
+            // adopt it only once the next callback agrees. Not its index
+            // either, or the true frame after it would look like a step back.
+            this._suspect = { lo: L, hi: H };
+            this._lastNow = now;
+            return;
+        } else {
+            // Behind the clock (frames arriving late), or an ahead jump the
+            // next callback confirmed: start over from the latest evidence.
+            if (this._suspect && L < this._suspect.hi && H > this._suspect.lo) {
+                L = Math.max(L, this._suspect.lo); H = Math.min(H, this._suspect.hi);
+            }
+            this._lo = L; this._hi = H;
+            this._suspect = null;
+        }
+        this._lastNow = now;
+        this.lastIndex = index;
+    }
+
+    /**
+     * The frame painted at wall time `t` (ms; performance.now()).
+     * @param {number} t
+     * @param {number} [slackMs] - uncertainty of `t` itself (Firefox rounds
+     *   performance.now() to 1 ms)
+     * @returns {{index: number, certain: boolean, step: number|null}|null} —
+     *   `index` is the midpoint guess when not `certain`; `step` is frames per
+     *   refresh (null until a refresh interval is seen); null until a
+     *   callback has said something about the frame clock
+     */
+    frameAt(t, slackMs) {
+        if (!isFinite(this._lo) || !isFinite(this._hi)) return null;
+        var s = slackMs || 0, r = this._rate;
+        var a = Math.floor((t - s) * r + this._lo + 1e-9);
+        var b = Math.floor((t + s) * r + this._hi - 1e-9);
+        var mid = Math.floor(t * r + (this._lo + this._hi) / 2);
+        var P = this._period || this._fallbackPeriod;
+        // With a jump ahead awaiting confirmation, nothing is certain.
+        return { index: a === b ? a : mid, certain: a === b && !this._suspect, step: P ? r * P : null };
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Native resolution (1:1) — one video pixel per device pixel
+// ---------------------------------------------------------------------------
+
+/**
+ * A zoom step that ends within this fraction of a view's native (1:1) scale
+ * lands exactly on it (`snapZoomToNative`).
+ */
+export const NATIVE_SNAP_TOL = 0.02;
+
+/**
+ * After a wheel step snaps a view to 1:1, further wheel input in the SAME
+ * direction is swallowed until the wheel has rested this long. A fast spin or
+ * a trackpad's momentum would otherwise carry straight through 1:1 in the next
+ * event; a fresh gesture goes on past it.
+ */
+export const NATIVE_SNAP_HOLD_MS = 250;
+
+/**
+ * Where a zoom step from `oldScale` to `newScale` lands, given the view's
+ * native scale: a step that crosses `nativeScale`, or ends within
+ * `NATIVE_SNAP_TOL` of it, lands exactly on it. A step that STARTS on it is
+ * leaving 1:1 and is not snapped back (the product below is zero).
+ *
+ * @param {number} oldScale
+ * @param {number} newScale
+ * @param {number} nativeScale - the view's 1:1 scale (`VideoController.nativeZoomScales(view).x`)
+ * @returns {{scale: number, snapped: boolean}}
+ */
+export function snapZoomToNative(oldScale, newScale, nativeScale) {
+    if (!(nativeScale > 0) || newScale === oldScale || oldScale === nativeScale) {
+        return { scale: newScale, snapped: false };
+    }
+    var crossed = (oldScale - nativeScale) * (newScale - nativeScale) < 0;
+    var near = Math.abs(newScale / nativeScale - 1) <= NATIVE_SNAP_TOL;
+    return (crossed || near) ? { scale: nativeScale, snapped: true } : { scale: newScale, snapped: false };
+}
+
+/**
+ * The pane badge's hover-menu presets, in % of native resolution (1:1). 100
+ * is the exact 1:1 path (`setZoomPercent` → `_enterNative`).
+ */
+export const ZOOM_PRESET_PERCENTS = [50, 100, 150, 200];
+
+/**
+ * A zoom percentage as SCREEN pixels : VIDEO pixels, in lowest terms — the
+ * badge menu's hint beside each preset: 50 → "1:2", 100 → "1:1",
+ * 150 → "3:2", 200 → "2:1".
+ */
+export function zoomRatioLabel(pct) {
+    var a = Math.round(pct), x = a, y = 100;
+    while (y) { var t = x % y; x = y; y = t; } // x = gcd(a, 100)
+    return (a / x) + ':' + (100 / x);
+}
+
+/**
+ * The pane badge's zoom read-out, as a percentage of native resolution: 100%
+ * is one video pixel per device pixel, 200% two, 50% half. Only a view that IS
+ * held at 1:1 reads exactly "100%": one a hair off it (or at the scale but off
+ * the pixel grid) is still resampled, so it reads "99.8%" or "≈100%" rather
+ * than rounding into a claim it does not meet.
+ *
+ * @param {number} scale - the view's zoom scale
+ * @param {number|null} nativeScale - its 1:1 scale, or null when unknown
+ * @param {boolean} isNative - the view is held at 1:1
+ * @returns {string} e.g. "100%", "125%", "99.8%", "≈100%"; "Zoomed" without a 1:1 scale
+ */
+export function zoomPercentLabel(scale, nativeScale, isNative) {
+    if (isNative) return '100%';
+    if (!(nativeScale > 0) || !(scale > 0)) return 'Zoomed';
+    var pct = 100 * scale / nativeScale;
+    if (Math.round(pct) !== 100) return Math.round(pct) + '%';
+    var tenth = Math.round(pct * 10) / 10;
+    return tenth === 100 ? '≈100%' : tenth.toFixed(1) + '%';
 }
 
 // ---------------------------------------------------------------------------
@@ -1513,11 +2493,15 @@ export class VideoController {
      *   state.fps: number
      *   state.isPlaying: boolean
      *   state.playInterval: number|null
+     *   state.nativeResolution: boolean — written here: every shown view is at
+     *     1:1 (`setNativeResolution`, `_syncNativeMode`)
      * @param {Object} callbacks
      *   callbacks.updateSeekbar: (frameIndex) => void
      *   callbacks.drawOverlays: (frameIndex) => void
      *   callbacks.onPlaybackStateChange: (isPlaying) => void
      *   callbacks.log: (msg, level) => void
+     *   callbacks.isViewShown: (view) => boolean
+     *   callbacks.onZoomChange: () => void
      */
     constructor(state, callbacks) {
         this.state = state;
@@ -1525,10 +2509,83 @@ export class VideoController {
         this._scrubPending = false;
         this._scrubTarget = null;
         this._isSeeking = false;
+        this._resume = null;           // a pending `resumeAfterScrub`, or null
+        this._scrubWaiters = [];       // resolved when the scrub queue drains
     }
 
     /**
-     * Seek all views to the given frame in parallel, render, and call callbacks.
+     * The views to decode, play and paint: those with a decoder that are on
+     * screen, as `callbacks.isViewShown(view)` reports (the app passes
+     * `isViewDocked`). Undocked views — the 16 others while one camera is solo'd,
+     * or panes the user closed — are skipped, so their decoders cost nothing.
+     * Without the callback, or when it reports none shown, every view with a
+     * decoder (the previous behaviour).
+     *
+     * A decoder that WAS shown at the previous call and is not now has its
+     * decoded frames released (`releaseFrames`): left alone, the hidden views'
+     * full frame caches (~8 GB on 17 cameras at 1680×1200) keep Chrome
+     * garbage-collecting so often that the one view still shown stutters.
+     * Compared by decoder, not view object: decoders are pooled and reused
+     * across session switches, and one still in use must keep its frames.
+     * Any change of the shown decoders also re-sizes every frame cache from
+     * the shared budget (`_applyFrameCacheBudget`).
+     */
+    _shownViews() {
+        var all = this.state.views.filter(function (v) { return v.decoder; });
+        var isShown = this.callbacks.isViewShown;
+        var shown = typeof isShown === 'function' ? all.filter(function (v) { return isShown(v); }) : all;
+        if (!shown.length) shown = all;
+        var prev = this._lastShownDecoders;
+        var now = new Set(shown.map(function (v) { return v.decoder; }));
+        this._lastShownDecoders = now;
+        var changed = !prev || prev.size !== now.size;
+        if (prev) {
+            prev.forEach(function (d) {
+                if (now.has(d)) return;
+                changed = true;
+                if (typeof d.releaseFrames === 'function') d.releaseFrames();
+            });
+        }
+        if (changed) this._applyFrameCacheBudget(all, now);
+        return shown;
+    }
+
+    /**
+     * Size every decoder's frame cache from the shared budget
+     * (`FRAME_CACHE_BUDGET_MB`, or `window.LUCID_FRAME_CACHE_MB`): a shown
+     * view gets `frameCacheFrames(budget, shown views' frame sizes)`, so the
+     * views on screen together stay within it — 60 frames for one solo'd
+     * camera, 19 each for 17 cameras at 1680×1200. A hidden view gets the
+     * share it would have with EVERY view shown: nothing steps it, but the
+     * overlay-export preview decodes every view, and that must not refill 17
+     * full caches either. Run whenever the set of shown decoders changes
+     * (`_shownViews`), including the first call after a load.
+     *
+     * @param {Array} all - views with a decoder
+     * @param {Set} shownDecoders
+     */
+    _applyFrameCacheBudget(all, shownDecoders) {
+        var budget = FRAME_CACHE_BUDGET_MB;
+        try {
+            if (typeof window !== 'undefined' && window.LUCID_FRAME_CACHE_MB > 0) budget = +window.LUCID_FRAME_CACHE_MB;
+        } catch (_) { /* ignore */ }
+        var bytes = function (v) { return (v.videoWidth || 0) * (v.videoHeight || 0) * 4; };
+        var shownBytes = [], allBytes = [];
+        for (var i = 0; i < all.length; i++) {
+            allBytes.push(bytes(all[i]));
+            if (shownDecoders.has(all[i].decoder)) shownBytes.push(bytes(all[i]));
+        }
+        var nShown = frameCacheFrames(budget, shownBytes);
+        var nAll = frameCacheFrames(budget, allBytes);
+        for (var j = 0; j < all.length; j++) {
+            var d = all[j].decoder;
+            if (typeof d.setCacheSize === 'function') d.setCacheSize(shownDecoders.has(d) ? nShown : nAll);
+        }
+    }
+
+    /**
+     * Seek the shown views (`_shownViews`) to the given frame in parallel,
+     * render, and call callbacks.
      */
     async seekToFrame(frameIndex) {
         if (frameIndex < 0) frameIndex = 0;
@@ -1536,8 +2593,8 @@ export class VideoController {
 
         this.state.currentFrame = frameIndex;
 
-        // Decode all views in parallel
-        var views = this.state.views.filter(function (v) { return v.decoder; });
+        // Decode the shown views in parallel
+        var views = this._shownViews();
         var framePromises = views.map(function (view) {
             return view.decoder.getFrame(frameIndex).catch(function (e) {
                 videoLog("Error decoding frame " + frameIndex + " for view " + view.name + ": " + e.message, "error");
@@ -1553,8 +2610,11 @@ export class VideoController {
             var videoFrame = frames[i];
 
             if (videoFrame && view.ctx && view.canvas) {
-                // Draw video frame to the main canvas
-                view.ctx.drawImage(videoFrame, 0, 0, view.canvas.width, view.canvas.height);
+                // Draw video frame to the main canvas. A cached bitmap can have
+                // been closed while this seek awaited the other views (its view
+                // went off screen: `releaseFrames`) — skip it rather than throw.
+                try { view.ctx.drawImage(videoFrame, 0, 0, view.canvas.width, view.canvas.height); }
+                catch (e) { /* closed bitmap — the view is no longer shown */ }
             }
 
             // Clear the overlay canvas for fresh overlay drawing
@@ -1589,6 +2649,9 @@ export class VideoController {
         // stays consistent with reality (a stuck `isPlaying` makes the play
         // button no-op — issue #115 followup).
         if (this.state.isPlaying) this.stopPlayback();
+        // A new scrub cancels a pending resume: whoever scrubs next decides
+        // whether playback continues (the seekbar asks again on release).
+        this._resume = null;
 
         this._scrubTarget = frame;
 
@@ -1618,7 +2681,53 @@ export class VideoController {
         // If another scrub came in while we were seeking, process it
         if (this._scrubTarget !== null) {
             this._processScrub();
+            return;
         }
+        var waiters = this._scrubWaiters;
+        this._scrubWaiters = [];
+        for (var i = 0; i < waiters.length; i++) waiters[i]();
+    }
+
+    /** Resolves once no scrub is in flight or queued (immediately if none is). */
+    _scrubSettled() {
+        if (!this._isSeeking && this._scrubTarget === null) return Promise.resolve();
+        var self = this;
+        return new Promise(function (resolve) { self._scrubWaiters.push(resolve); });
+    }
+
+    /**
+     * Play again from wherever the current scrub lands — what the seekbar does
+     * on release when the video was playing before the click. A scrub always
+     * stops playback (two loops must not fight over the frame), so this waits
+     * for the scrub queue to drain, then for `prepare(frame)` if given (the app
+     * hydrates a lazy project's frames ahead, as the Play button does), then
+     * starts playback at `state.currentFrame`.
+     *
+     * Pending until playback starts. A later `scrubToFrame` or `stopPlayback`
+     * cancels it, so an arrow-key step or a session switch in that window
+     * leaves the video paused; `resumePending` lets the next seekbar press know
+     * the video still counts as playing.
+     */
+    resumeAfterScrub(prepare) {
+        var self = this;
+        var token = {};
+        this._resume = token;
+        this._scrubSettled().then(function () {
+            if (self._resume !== token) return;
+            return prepare ? prepare(self.state.currentFrame) : null;
+        }).then(function () {
+            if (self._resume !== token) return;
+            self._resume = null;
+            if (!self.state.isPlaying) self.startPlayback();
+        }).catch(function (e) {
+            if (self._resume === token) self._resume = null;
+            videoLog("Resume after scrub failed: " + (e && e.message), "error");
+        });
+    }
+
+    /** True while a `resumeAfterScrub` is waiting to start playback. */
+    get resumePending() {
+        return this._resume !== null;
     }
 
     /**
@@ -1820,6 +2929,18 @@ export class VideoController {
 
         this.state.isPlaying = true;
         var self = this;
+        // Playback decodes on its own: free the paused-stepping streams' decoders
+        // AND every cached decoded frame. Playback never reads the caches, and
+        // by the time it stops they hold frames from wherever stepping last
+        // was. Held through playback they are what made it garbage-collect
+        // most of the time: 17 cameras x 36 cached frames (4.9 GB) played at
+        // ~13 redraws/s with 64% of the main thread in GC, 24 frames at ~54/s.
+        this.state.views.forEach(function (v) {
+            var d = v.decoder;
+            if (!d) return;
+            if (typeof d.releaseFrames === 'function') d.releaseFrames();
+            else if (d.releaseStepCursor) d.releaseStepCursor();
+        });
 
         // ------------------------------------------------------------------
         // Buffered mediabunny playback (issue #115 follow-up) — OPT-IN.
@@ -1834,7 +2955,9 @@ export class VideoController {
         // the default is the smooth native <video> path below. Frame-accurate
         // stepping/seeking uses the mediabunny backend on BOTH paths, so only
         // continuous playback differs.
-        var allViews = this.state.views.filter(function (v) { return v.decoder; });
+        // Only the views on screen play (`_shownViews`): every <video> playing
+        // is a full-rate decode, and every refresh captures each playing view.
+        var allViews = this._shownViews();
         var mbViews = allViews.filter(function (v) { return v.decoder._mbBackend; });
         if (allViews.length > 0 && mbViews.length === allViews.length
             && this._bufferedPlaybackEnabled()) {
@@ -1846,10 +2969,22 @@ export class VideoController {
             return;
         }
 
-        // Start native playback on all decoders
+        // Start native playback on the shown views
         // Compute effective playback rate: (desired FPS / native FPS) * speed multiplier
         var speedMult = this.state.speedMultiplier || 1.0;
-        var views = this.state.views.filter(function (v) { return v.decoder; });
+        var views = allViews;
+        // Which views are playing. If that changes mid-playback (a different
+        // camera solo'd, a pane closed or docked), the loops below restart
+        // playback: a newly shown view's <video> is paused wherever it was
+        // left, and a restart re-seeks and plays exactly the views now shown.
+        var viewsKey = function (vs) { return vs.map(function (v) { return v.name; }).join('\n'); };
+        var playingKey = viewsKey(views);
+        var restartIfShownChanged = function (cur) {
+            if (viewsKey(cur) === playingKey) return false;
+            self.stopPlayback();
+            self.startPlayback();
+            return true;
+        };
         var nativeFps = (views.length > 0 && views[0].decoder.videoTrack && views[0].decoder.videoTrack.duration > 0)
             ? views[0].decoder.samples.length / (views[0].decoder.videoTrack.duration / views[0].decoder.videoTrack.timescale)
             : (this.state.fps || 30);
@@ -1883,7 +3018,8 @@ export class VideoController {
             if (frameIdx >= self.state.totalFrames) { self.stopPlayback(); return false; }
             self.state.currentFrame = frameIdx;
 
-            var currentViews = self.state.views.filter(function (v) { return v.decoder; });
+            var currentViews = self._shownViews();
+            if (restartIfShownChanged(currentViews)) return false;
             for (var j = 0; j < currentViews.length; j++) {
                 var view = currentViews[j];
                 if (view.decoder.drawCurrentFrame) {
@@ -1923,34 +3059,70 @@ export class VideoController {
         // Fallback for views whose VideoFrame timestamps are unusable (Safari,
         // Firefox — see judgeVideoFrameTimestamps): draw the <video> directly
         // and take the frame index from its requestVideoFrameCallback
-        // mediaTime (Safari: exact, once per shown picture), projected forward
-        // from the last callback where callbacks are coalesced (Firefox,
-        // ~24/s), else from its clock. rVFC is registered ONLY for those views:
-        // registering it on every view changed Chrome's presentation behaviour.
+        // (Safari, one callback per shown picture: painted IN the callback at
+        // its `mediaTime`; Firefox, ~24 coalesced callbacks/s: painted on the
+        // refresh, indexed by a CoalescedFrameClock evaluated at the instant
+        // of the draw), else from its clock when there is no rVFC.
+        // rVFC is registered ONLY for those views: registering it on every
+        // view changed Chrome's presentation behaviour.
+        //
+        // Until a view's first callback its index is UNKNOWN (null) and its
+        // canvas keeps the paused frame it showed — `startFrame`. The clock is
+        // not a stand-in: after the pre-play seek Safari's `drawImage` keeps
+        // painting the PRE-seek picture until it presents a new one, which
+        // overlaid frame 279 on a picture of frame 66 (verify/pause-xb.html).
         var coalesced = rvfcCallbacksCoalesced();
-        var fallback = [];   // per view: { el, id, mt, at }
+        var fallback = [];   // per view: { el, id, mt, clock|null, skips, firstIdx, trusted, painted }
         self._refreshFallback = fallback;   // diagnostics only (tests/e2e/_verify-playback-loop.html)
-        function fallbackIndex(j, view, now) {
-            var dec = view.decoder, el = dec._videoEl, fps = dec._fps || self.state.fps || 30;
+        var refreshMs = null;                // display refresh interval (ms), as PlaybackSchedule measures it
+        var refreshDeltas = [], lastNow = null;
+        function fallbackState(j, view) {
+            var dec = view.decoder, el = dec._videoEl;
             var f = fallback[j];
             if (!f && el && typeof el.requestVideoFrameCallback === 'function') {
-                f = fallback[j] = { el: el, id: null, mt: null, at: null };
+                f = fallback[j] = { el: el, id: null, mt: null, clock: coalesced ? new CoalescedFrameClock() : null,
+                    skips: 0, firstIdx: null, trusted: false, painted: null };
                 var onVF = function (cbNow, md) {
-                    if (fallback[j] !== f) return;
+                    if (fallback[j] !== f || !self.state.isPlaying) return;
                     f.mt = md && typeof md.mediaTime === 'number' ? md.mediaTime : el.currentTime;
-                    f.at = cbNow;
+                    var fps = dec._fps || self.state.fps || 30;
+                    var vi = Math.round(f.mt * fps);
+                    if (f.clock) {
+                        f.clock.observe(cbNow, vi, md && md.expectedDisplayTime,
+                            fps * (el.playbackRate || 1) / 1000, refreshMs);
+                    } else {
+                        // One callback per shown picture (Safari): paint it
+                        // HERE, where `drawImage` and `mediaTime` are the same
+                        // frame (measured 100%); by the refresh a 150 fps
+                        // video could already be 1–2 frames on. But not until
+                        // the reported frame first CHANGES: the first callback
+                        // after the pre-play seek carries stale metadata —
+                        // the pre-seek frame (541 over a picture of 210), or
+                        // the seek target over the frame before it.
+                        if (f.firstIdx == null) f.firstIdx = vi;
+                        else if (vi !== f.firstIdx) f.trusted = true;
+                        if (f.trusted && vi !== f.painted && view.ctx && view.canvas && dec.drawCurrentFrame
+                            && dec.drawCurrentFrame(view.ctx, view.canvas.width, view.canvas.height) !== false) {
+                            f.painted = vi;
+                        }
+                    }
                     f.id = el.requestVideoFrameCallback(onVF);
                 };
                 f.id = el.requestVideoFrameCallback(onVF);
             }
-            if (f && f.mt != null) {
-                var t = f.mt;
-                if (coalesced && !el.paused) {
-                    t += Math.min(Math.max(0, now - f.at), 100) / 1000 * (el.playbackRate || 1);
-                }
-                return Math.round(t * fps);
+            return f;
+        }
+        // The frame a fallback view's `drawImage(<video>)` paints at time `t`
+        // (performance.now(); {index, certain}), or null while unknown (above).
+        function fallbackFrame(j, view, t) {
+            var dec = view.decoder;
+            var f = fallbackState(j, view);
+            if (!f) {
+                var ci = dec.getCurrentFrameIndex ? dec.getCurrentFrameIndex() : null;
+                return ci == null ? null : { index: ci, certain: true };
             }
-            return dec.getCurrentFrameIndex ? dec.getCurrentFrameIndex() : self.state.currentFrame;
+            if (f.clock) return f.mt == null ? null : f.clock.frameAt(t, 1);   // Firefox rounds now() to 1 ms
+            return f.painted == null ? null : { index: f.painted, certain: true, painted: true };
         }
         // Held VideoFrames and fallback rVFCs must not outlive playback
         // (stopPlayback calls this).
@@ -1969,8 +3141,9 @@ export class VideoController {
         };
         function drawRefreshFrame(now) {
             if (!self.state.isPlaying) return false;
-            var cur = self.state.views.filter(function (v) { return v.decoder; });
+            var cur = self._shownViews();
             if (!cur.length) return false;
+            if (restartIfShownChanged(cur)) return false;
             var n = cur.length;
             if (!shown || shown.length !== n) {
                 if (pending) for (var q = 0; q < pending.length; q++) closeCap(pending[q]);
@@ -1978,35 +3151,96 @@ export class VideoController {
                 pending = new Array(n).fill(null);
                 schedule.reset();
             }
+            if (lastNow != null) {
+                // min of the first few (a missed vsync only makes one longer), then tracked
+                var dt = now - lastNow;
+                if (dt > 3 && dt < 50) {
+                    if (refreshMs == null) {
+                        refreshDeltas.push(dt);
+                        if (refreshDeltas.length >= 4) refreshMs = Math.min.apply(null, refreshDeltas);
+                    } else if (Math.abs(dt - refreshMs) < 0.25 * refreshMs) {
+                        refreshMs = 0.95 * refreshMs + 0.05 * dt;
+                    }
+                }
+            }
+            lastNow = now;
             var caps = new Array(n), idx = new Array(n);
+            var live = new Array(n).fill(false);   // painted from the <video> itself (fallback)
             var keep = new Array(n).fill(false);   // capture retained as pending
             try {
                 for (var j = 0; j < n; j++) {
                     var dec = cur[j].decoder;
+                    if (dec._vfTimestamps === undefined && videoFrameCaptureUnsafe()) {
+                        dec._vfTimestamps = 'bad';
+                        videoLog('Playback: WebKit — never capturing VideoFrames from a <video> (their timestamps are the clock); '
+                            + 'drawing the <video> directly, frame index from requestVideoFrameCallback');
+                    }
                     var tsMode = dec._vfTimestamps;
                     caps[j] = (tsMode !== 'bad' && dec.captureCurrentFrame) ? dec.captureCurrentFrame() : null;
                     if (caps[j] && tsMode === undefined) tsMode = judgeVideoFrameTimestamps(dec, caps[j]);
                     if (caps[j] && tsMode === 'ok') {
                         idx[j] = caps[j].index;
-                    } else {
-                        // Undecided (first few frames) or unusable timestamps:
-                        // paint the <video> itself, index from rVFC / clock.
+                    } else if (caps[j] && tsMode === undefined) {
+                        // Still judging the timestamps: nothing about this
+                        // view's picture is known yet — keep the paused frame.
                         closeCap(caps[j]); caps[j] = null;
-                        idx[j] = fallbackIndex(j, cur[j], now);
+                        idx[j] = null;
+                    } else {
+                        // Unusable timestamps, or no capture: paint the
+                        // <video> itself, index from rVFC / clock.
+                        closeCap(caps[j]); caps[j] = null;
+                        live[j] = true;
+                        var ff = fallbackFrame(j, cur[j], performance.now());
+                        idx[j] = ff ? ff.index : null;
                     }
                 }
                 var dec0 = cur[0].decoder, primaryEl = dec0._videoEl;
-                if (idx[0] >= self.state.totalFrames || (primaryEl && primaryEl.ended)) {
+                if ((idx[0] != null && idx[0] >= self.state.totalFrames) || (primaryEl && primaryEl.ended)) {
                     self.stopPlayback();
                     return false;
                 }
                 var rate = (dec0._fps || self.state.fps || 30) *
                     ((primaryEl && primaryEl.playbackRate) || 1) / 1000;
-                var target = schedule.update(now, idx[0], rate);
+                // The schedule follows the primary's CAPTURES; with none, every
+                // captured view simply shows its newest frame.
+                var target = (idx[0] != null && !live[0]) ? schedule.update(now, idx[0], rate) : Infinity;
 
                 var changed = false;
                 for (var k = 0; k < n; k++) {
                     var view = cur[k];
+                    if (live[k]) {
+                        // Painted live: the frame is whatever the <video> shows
+                        // at the instant of the draw, so take the index THEN
+                        // (8 views take milliseconds to draw). Firefox: when a
+                        // frame boundary may fall right at that instant, a
+                        // frame spans ~2+ refreshes (60 fps on 120 Hz) and the
+                        // next refresh would be certain, keep the frame already
+                        // on the canvas (before the first draw, the paused one)
+                        // instead — the new one lands certain a refresh later,
+                        // normally with every frame still shown for the same
+                        // number of refreshes. With ~1 frame per refresh a skip
+                        // would be a hold then a jump, so there it draws the
+                        // midpoint guess. An estimate never steps backwards
+                        // (Firefox's picture doesn't).
+                        var tDraw = performance.now();
+                        var fbk = idx[k] == null ? null : fallbackFrame(k, view, tDraw);
+                        if (!fbk) continue;
+                        var fs = fallback[k];
+                        var est = !!(fs && fs.clock);
+                        if (est && !fbk.certain && fbk.step != null && fbk.step <= 0.55 && fs.skips < 2) {
+                            var nxt = fs.clock.frameAt(tDraw + (refreshMs || 1000 / 60), 1);
+                            if (nxt && nxt.certain) { fs.skips++; continue; }
+                        }
+                        if (fs) fs.skips = 0;
+                        if (shown[k] != null && (est ? fbk.index <= shown[k] : fbk.index === shown[k])) continue;
+                        if (fbk.painted) { shown[k] = fbk.index; changed = true; continue; }   // drawn in its rVFC
+                        if (view.ctx && view.canvas && view.decoder.drawCurrentFrame
+                            && view.decoder.drawCurrentFrame(view.ctx, view.canvas.width, view.canvas.height) !== false) {
+                            shown[k] = fbk.index;
+                            changed = true;
+                        }
+                        continue;
+                    }
                     var pend = pending[k];
                     // No SECONDARY view may run ahead of the primary: the
                     // schedule is a free-running clock, so on a >60 Hz display
@@ -2014,13 +3248,10 @@ export class VideoController {
                     // yet, and those would paint it while the primary holds —
                     // cameras one frame apart, with the overlay drawn at the
                     // primary's index.
-                    var tk = (k === 0 || shown[0] == null) ? target : Math.min(target, shown[0]);
+                    var tk = (k === 0 || shown[0] == null || live[0]) ? target : Math.min(target, shown[0]);
                     var pick = pickScheduledFrame(tk, shown[k], pend ? pend.index : null, idx[k]);
                     if (pick === 'cap' && idx[k] !== shown[k]) {
-                        if (view.ctx && view.canvas) {
-                            if (caps[k]) view.ctx.drawImage(caps[k].frame, 0, 0, view.canvas.width, view.canvas.height);
-                            else if (view.decoder.drawCurrentFrame) view.decoder.drawCurrentFrame(view.ctx, view.canvas.width, view.canvas.height);
-                        }
+                        if (view.ctx && view.canvas) view.ctx.drawImage(caps[k].frame, 0, 0, view.canvas.width, view.canvas.height);
                         shown[k] = idx[k];
                         changed = true;
                     } else if (pick === 'pending' && pend.index !== shown[k]) {
@@ -2041,7 +3272,8 @@ export class VideoController {
                 }
                 if (!changed) return true;   // nothing new on screen: keep the last image
 
-                var mainIdx = shown[0];
+                // A view not yet drawn still shows the paused frame.
+                var mainIdx = shown[0] != null ? shown[0] : startFrame;
                 self.state.currentFrame = mainIdx;
                 var viewFrames = {};
                 for (var m = 0; m < n; m++) {
@@ -2049,7 +3281,7 @@ export class VideoController {
                     if (v.overlayCtx && v.overlayCanvas) {
                         v.overlayCtx.clearRect(0, 0, v.overlayCanvas.width, v.overlayCanvas.height);
                     }
-                    viewFrames[v.name] = shown[m];
+                    viewFrames[v.name] = shown[m] != null ? shown[m] : startFrame;
                 }
                 if (self.callbacks.drawOverlays) self.callbacks.drawOverlays(mainIdx, viewFrames);
                 if (self.callbacks.updateSeekbar) self.callbacks.updateSeekbar(mainIdx);
@@ -2062,7 +3294,7 @@ export class VideoController {
         }
 
         function startLoop() {
-            var live = self.state.views.filter(function (v) { return v.decoder; });
+            var live = views;
             var primaryDec = live.length ? live[0].decoder : null;
             var primaryEl = primaryDec && primaryDec._videoEl;
             var fps = (primaryDec && primaryDec._fps) || self.state.fps || 30;
@@ -2109,7 +3341,7 @@ export class VideoController {
                 videoLog('Playback loop: requestAnimationFrame fallback (no requestVideoFrameCallback)');
                 var onFrame = function () {
                     if (!self.state.isPlaying) return;
-                    var d0 = (self.state.views.filter(function (v) { return v.decoder; })[0] || {}).decoder;
+                    var d0 = primaryDec;
                     var frameIdx = (d0 && d0.getCurrentFrameIndex) ? d0.getCurrentFrameIndex() : self.state.currentFrame;
                     if (drawPlaybackFrame(frameIdx)) self._playRAF = requestAnimationFrame(onFrame);
                 };
@@ -2129,6 +3361,7 @@ export class VideoController {
      */
     stopPlayback() {
         var wasPlaying = this.state.isPlaying;
+        this._resume = null;   // a stop also cancels a pending resumeAfterScrub
         // Cancel animation frame
         if (this._playRAF) {
             cancelAnimationFrame(this._playRAF);
@@ -2197,25 +3430,44 @@ export class VideoController {
     }
 
     /**
-     * User-initiated pause. Stops playback, then does a frame-accurate mediabunny
-     * seek ONE FRAME FORWARD so we land exactly on-frame with the pose overlay.
+     * User-initiated pause. Stops playback, then re-decodes the frame it stopped
+     * on (`state.currentFrame`) through `getFrame`'s frame-accurate path
+     * (mediabunny, or the mid-frame `<video>` seek where WebCodecs cannot
+     * decode), so every camera rests on exactly that frame with its overlay.
      *
-     * Native <video> playback can settle a hair off (the residual "tracking
-     * leads the video" lag), and the user already found that pressing "next
-     * frame" after pausing snaps everything back into place — because a step
-     * goes through the frame-accurate mediabunny decode path. This just does
-     * that step automatically on pause. Internal stops (scrub, teardown,
-     * end-of-video) call `stopPlayback()` directly and skip this snap, so only
-     * the explicit pause buttons advance/realign.
+     * In Chrome/Brave this repaints the picture already on screen: the
+     * per-refresh loop paints each view's captured VideoFrame and overlays it
+     * at that frame's own index. It is needed where playback is less exact —
+     * the Safari/Firefox fallback loop (timestamps judged 'bad') can still
+     * overlay a frame off the drawn picture (Firefox's index is an estimate:
+     * CoalescedFrameClock), and on any browser a secondary camera can stop a
+     * frame out of step with camera 0, whose index `stopPlayback` redraws
+     * every overlay at.
+     *
+     * It used to step ONE FRAME FORWARD (current + 1), copying the manual
+     * "press next frame after pausing" fix from the old loop, whose overlay
+     * index came from `<video>.currentTime` and led the picture. With the
+     * per-refresh loop that step was itself the jump on every pause: measured
+     * with barcode clips in Chrome, Brave, Safari and Firefox at 60 and 120 Hz,
+     * +1 moved the skeleton on 95–100% of pauses, while +0 ended aligned in
+     * 100% of camera-pauses. Chrome/Brave's skeletons stayed still in 90–100%
+     * at 120 Hz and on 60 fps video; for 150 fps video on a 60 Hz display it
+     * was 68–95%, because there the cameras drift out of step during playback
+     * and the re-decode brings each to camera 0's frame. (Firefox HEVC was the
+     * one exception to alignment, at ~50%, until its stepping moved to
+     * mid-frame `<video>` seeks — see `_getFrameHTML5`'s `_html5Moved` —
+     * which brought +0 there to 100%.)
+     *
+     * Internal stops (scrub, teardown, end-of-video) call `stopPlayback()`
+     * directly and skip this re-decode; only the explicit pause controls use it.
      */
     pausePlayback() {
         var wasPlaying = this.state.isPlaying;
         this.stopPlayback();
         if (!wasPlaying) return;
-        var target = Math.min(this.state.currentFrame + 1, (this.state.totalFrames || 1) - 1);
-        // seekToFrame decodes via the frame-accurate mediabunny backend and
-        // redraws the video + overlay for the SAME index → guaranteed aligned.
-        this.seekToFrame(target);
+        // seekToFrame decodes via getFrame's frame-accurate path and redraws
+        // the video + overlay for the SAME index → guaranteed aligned.
+        this.seekToFrame(this.state.currentFrame);
     }
 
     /**
@@ -2330,7 +3582,17 @@ export class VideoController {
             offsetY: 0,
             baseW: 0,   // wrapper base display size the offsets are valid for;
             baseH: 0,   // set by applyZoom, used by reapplyZoom to anchor on resize
+            // Held at native resolution (1:1). A view's first zoom state
+            // starts there while the mode is on; its scale is computed by the
+            // next reapplyZoom, once the canvas is laid out.
+            native: !!(this.state && this.state.nativeResolution),
+            scaleY: undefined, // vertical scale, set only while `native` (see nativeZoomScales)
         };
+    }
+
+    /** Vertical zoom scale: differs from `z.scale` only at native resolution. */
+    _scaleY(z) {
+        return (z.native && z.scaleY > 0) ? z.scaleY : z.scale;
     }
 
     applyZoom(view) {
@@ -2338,14 +3600,18 @@ export class VideoController {
 
         var z = view.zoom;
         var rot = view.rotation || 0;
+        var sx = z.scale, sy = this._scaleY(z);
+        var scaleCss = sy === sx ? "scale(" + sx + ")" : "scale(" + sx + ", " + sy + ")";
         var transform;
         if (rot === 0) {
-            transform = "translate(" + z.offsetX + "px, " + z.offsetY + "px) scale(" + z.scale + ")";
+            if (z.native) this._alignNativeOffsets(z, 0, 0, 0);
+            transform = "translate(" + z.offsetX + "px, " + z.offsetY + "px) " + scaleCss;
         } else {
             // Rotate around wrapper center using cached CSS dimensions (avoids reflow)
             var cX = view.canvas ? parseFloat(view.canvas.style.width) / 2 || 0 : 0;
             var cY = view.canvas ? parseFloat(view.canvas.style.height) / 2 || 0 : 0;
-            transform = "translate(" + z.offsetX + "px, " + z.offsetY + "px) translate(" + cX + "px, " + cY + "px) rotate(" + rot + "deg) translate(" + (-cX) + "px, " + (-cY) + "px) scale(" + z.scale + ")";
+            if (z.native) this._alignNativeOffsets(z, rot, cX, cY);
+            transform = "translate(" + z.offsetX + "px, " + z.offsetY + "px) translate(" + cX + "px, " + cY + "px) rotate(" + rot + "deg) translate(" + (-cX) + "px, " + (-cY) + "px) " + scaleCss;
         }
 
         var wrapper = view.wrapper || (view.canvas ? view.canvas.parentElement : null);
@@ -2365,10 +3631,28 @@ export class VideoController {
 
         var cell = view.canvas ? view.canvas.closest('.video-cell') : null;
         if (cell) {
-            var isZoomed = Math.abs(z.scale - 1.0) > 0.01;
+            // The badge reads the zoom as a percentage of 1:1 (`zoomPercentLabel`).
+            // It shows at 1:1 even when 1:1 happens to be the fit: "100%" is
+            // the only on-screen sign that a wheel zoom snapped there.
+            var isZoomed = Math.abs(z.scale - 1.0) > 0.01 || !!z.native;
             cell.classList.toggle('zoomed', isZoomed);
+            cell.classList.toggle('native-resolution', !!z.native);
+            // The badge is `.zoom-badge` (the button plus its hover menu of
+            // zoom presets, ui/sessions-panes.js); a bare `.unzoom-btn` is
+            // still handled for any pane built without the wrapper.
             var unzoomBtn = cell.querySelector('.unzoom-btn');
-            if (unzoomBtn) unzoomBtn.style.display = isZoomed ? '' : 'none';
+            if (unzoomBtn) {
+                var badge = unzoomBtn.closest('.zoom-badge') || unzoomBtn;
+                badge.style.display = isZoomed ? '' : 'none';
+                var nat = isZoomed ? this.nativeZoomScales(view) : null;
+                var label = zoomPercentLabel(sx, nat ? nat.x : null, !!z.native);
+                var labelEl = unzoomBtn.querySelector('.zoom-badge-label') || unzoomBtn;
+                labelEl.textContent = label;
+                unzoomBtn.title = (z.native
+                    ? 'Native resolution: one video pixel per screen pixel (Shift+0).'
+                    : 'Zoom relative to native resolution (100% = one video pixel per screen pixel).')
+                    + ' Hover for presets; click to fit.';
+            }
         }
 
         // Record the base display size the current offsets are valid for, so the
@@ -2380,6 +3664,249 @@ export class VideoController {
             var bh = wrapper.offsetHeight;
             if (bw > 0 && bh > 0) { z.baseW = bw; z.baseH = bh; }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Native resolution (1:1)
+    // -----------------------------------------------------------------------
+
+    /**
+     * The zoom at which `view` shows one video pixel per DEVICE pixel, per
+     * axis — `{x, y}` — or null while its canvas is not laid out.
+     *
+     * Per axis because `fitCanvasesToCells` floors the canvas box to whole CSS
+     * px, so the box's aspect is a hair off the video's (561x400 for
+     * 1680x1200). One uniform scale leaves the other axis resampled by up to
+     * ~0.3%, which blurs every row of the picture — exactly what 1:1 is for.
+     * Device pixels, not CSS px: on a Retina display a CSS px is two, and 1:1
+     * in CSS px would still upscale the video twofold.
+     */
+    nativeZoomScales(view) {
+        var canvas = view && view.canvas;
+        if (!canvas || !canvas.style || !(view.videoWidth > 0) || !(view.videoHeight > 0)) return null;
+        var boxW = parseFloat(canvas.style.width) || canvas.offsetWidth;
+        var boxH = parseFloat(canvas.style.height) || canvas.offsetHeight;
+        if (!(boxW > 0) || !(boxH > 0)) return null;
+        var dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+        return { x: view.videoWidth / (boxW * dpr), y: view.videoHeight / (boxH * dpr) };
+    }
+
+    /**
+     * Nudge a 1:1 view's pan so the video's pixel grid lands ON the device
+     * pixel grid. At 1:1 a half-pixel offset still resamples: every screen
+     * pixel becomes the average of two video pixels. Chrome snaps the
+     * wrapper's own layout position to whole device pixels before applying a
+     * non-translation transform, so what is left to align is where the
+     * transform puts the canvas's top-left corner — `off + c − R·c` for a
+     * rotation R about the wrapper centre c (just `off` unrotated). R maps the
+     * device grid onto itself for the 90° steps the UI offers.
+     */
+    _alignNativeOffsets(z, rot, cX, cY) {
+        var dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+        var px = z.offsetX, py = z.offsetY;
+        if (rot) {
+            var a = rot * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a);
+            px += cX - (ca * cX - sa * cY);
+            py += cY - (sa * cX + ca * cY);
+        }
+        z.offsetX += (Math.round(px * dpr) - px * dpr) / dpr;
+        z.offsetY += (Math.round(py * dpr) - py * dpr) / dpr;
+    }
+
+    /**
+     * The geometry `applyZoom` draws `view` with, minus the zoom itself: the
+     * canvas box's centre c = (cX, cY), the wrapper's flex-centring offset in
+     * its `.video-cell` f = (fx, fy), and the rotation R as (ca, sa). A point
+     * u of the canvas box is drawn at container point `f + off + c + R·(u∘s − c)`
+     * (CSS px from the cell's top-left). Without a laid-out cell c and f are
+     * zero, which reduces that to the plain `off + u∘s` when unrotated.
+     */
+    _zoomFrame(view) {
+        var canvas = view.canvas;
+        var container = canvas && canvas.closest ? canvas.closest('.video-cell') : null;
+        var wW = 0, wH = 0, fx = 0, fy = 0;
+        if (container) {
+            wW = parseFloat(canvas.style.width) || canvas.offsetWidth || 0;
+            wH = parseFloat(canvas.style.height) || canvas.offsetHeight || 0;
+            fx = (container.clientWidth - wW) / 2;
+            fy = (container.clientHeight - wH) / 2;
+        }
+        var a = (view.rotation || 0) * Math.PI / 180;
+        return { cX: wW / 2, cY: wH / 2, fx: fx, fy: fy, ca: Math.cos(a), sa: Math.sin(a) };
+    }
+
+    /**
+     * The canvas-box point `view` currently draws at container point (qx, qy):
+     * the inverse of the whole `applyZoom` transform (see `_zoomFrame`),
+     * per-axis scale included.
+     */
+    _boxPointAt(view, qx, qy, fr) {
+        var z = view.zoom;
+        var dx = qx - fr.fx - z.offsetX - fr.cX, dy = qy - fr.fy - z.offsetY - fr.cY;
+        return [(fr.ca * dx + fr.sa * dy + fr.cX) / z.scale,
+            (-fr.sa * dx + fr.ca * dy + fr.cY) / this._scaleY(z)];
+    }
+
+    /**
+     * Set `view`'s pan so that, at scale (sx, sy), canvas-box point (ux, uy)
+     * is drawn at container point (qx, qy). Writes the offsets only.
+     */
+    _panToDraw(view, ux, uy, sx, sy, qx, qy, fr) {
+        var z = view.zoom;
+        var vx = ux * sx - fr.cX, vy = uy * sy - fr.cY;
+        z.offsetX = qx - fr.fx - fr.cX - (fr.ca * vx - fr.sa * vy);
+        z.offsetY = qy - fr.fy - fr.cY - (fr.sa * vx + fr.ca * vy);
+    }
+
+    /**
+     * Rescale `view` to (sx, sy), keeping the video point under container
+     * point (qx, qy) — CSS px from the cell's top-left — exactly where it is.
+     * Accounts for the wrapper's flex-centring offset and its rotation about
+     * its own centre, i.e. the whole `applyZoom` transform (`_zoomFrame`).
+     * Without a laid-out cell both terms are zero and this is the plain
+     * `q − (q − off)·s/s0`. Sets `z.scale` (and `z.scaleY`); the caller
+     * constrains and applies.
+     */
+    _zoomAbout(view, sx, sy, qx, qy) {
+        var z = view.zoom;
+        var fr = this._zoomFrame(view);
+        var u = this._boxPointAt(view, qx, qy, fr);
+        this._panToDraw(view, u[0], u[1], sx, sy, qx, qy, fr);
+        z.scale = sx;
+        z.scaleY = sy;
+    }
+
+    /** Container-centre point of `view`'s cell, in cell CSS px. */
+    _cellCentre(view) {
+        var cell = view.canvas && view.canvas.closest ? view.canvas.closest('.video-cell') : null;
+        return cell ? [cell.clientWidth / 2, cell.clientHeight / 2] : [0, 0];
+    }
+
+    /**
+     * The views a zoom-everything command acts on: laid out in a cell and on
+     * screen (`callbacks.isViewShown`, the app's `isViewDocked`).
+     */
+    _zoomableViews() {
+        var isShown = this.callbacks.isViewShown;
+        return this.state.views.filter(function (v) {
+            if (!v.canvas || !v.canvas.closest || !v.canvas.closest('.video-cell')) return false;
+            return typeof isShown !== 'function' || isShown(v);
+        });
+    }
+
+    /**
+     * Native resolution is ON exactly when every shown view is at 1:1. Derived
+     * rather than latched, so the menu tick cannot disagree with the screen: a
+     * wheel zoom that snaps the solo view to 1:1 turns it on, one that leaves
+     * turns it off. A pane rebuild (switching the solo camera, grid ↔ solo)
+     * reads it too: while it is on, a view coming on screen joins it at 1:1
+     * (`refreshPaneInteractions`, which then re-derives it).
+     */
+    _syncNativeMode() {
+        var views = this._zoomableViews();
+        this.state.nativeResolution = views.length > 0 && views.every(function (v) {
+            return !!(v.zoom && v.zoom.native);
+        });
+        return this.state.nativeResolution;
+    }
+
+    /** Whether native resolution is on (see `_syncNativeMode`). */
+    nativeResolutionActive() {
+        return this._syncNativeMode();
+    }
+
+    /**
+     * Put `view` at 1:1, keeping the video point at the cell centre where it
+     * is. A view not laid out yet keeps the flag and is scaled by the next
+     * `reapplyZoom`.
+     */
+    _enterNative(view) {
+        if (!view.zoom) this.initZoom(view);
+        var z = view.zoom;
+        var nat = this.nativeZoomScales(view);
+        if (!nat) { z.native = true; return; }
+        var q = this._cellCentre(view);
+        this._zoomAbout(view, nat.x, nat.y, q[0], q[1]);
+        z.native = true;
+        this._constrainOffsets(z, view);
+        this.applyZoom(view);
+    }
+
+    /**
+     * View ▸ Native Resolution / Shift+0. ON puts every shown view at one
+     * video pixel per device pixel and holds it there through resizes, pane
+     * rebuilds and devicePixelRatio changes (`reapplyZoom`); OFF fits them
+     * back into their panes. Pixel-exact at an integer devicePixelRatio. At
+     * some fractional ones (2.2 — 110% browser zoom on a Retina display) the
+     * video is shown at its native size, but Chrome's compositor resamples it
+     * whatever the transform says.
+     * @returns {boolean} whether native resolution is now on
+     */
+    setNativeResolution(on) {
+        // Every view, shown or not: a hidden view keeps its zoom through a
+        // pane rebuild (`refreshPaneInteractions`), so one left flagged would
+        // come back at 1:1 after OFF. ON flags them too, so they are already
+        // 1:1 when they come back. Hidden views get their scale from
+        // `reapplyZoom` once they are laid out again.
+        var shown = this._zoomableViews();
+        for (var i = 0; i < this.state.views.length; i++) {
+            var view = this.state.views[i];
+            if (on) {
+                if (shown.indexOf(view) >= 0) this._enterNative(view);
+                else { if (!view.zoom) this.initZoom(view); view.zoom.native = true; }
+            } else if (view.zoom && view.zoom.native) {
+                this._clearZoom(view);
+            }
+        }
+        this._syncNativeMode();
+        if (this.callbacks.onZoomChange) this.callbacks.onZoomChange();
+        return this.state.nativeResolution;
+    }
+
+    /** Flip native resolution (see `setNativeResolution`). */
+    toggleNativeResolution() {
+        return this.setNativeResolution(!this._syncNativeMode());
+    }
+
+    /**
+     * `view`'s zoom as a percentage of 1:1 (`100 × scale / nativeScale`), or
+     * null while its canvas is not laid out. What the pane badge reads.
+     */
+    zoomPercent(view) {
+        if (!view || !view.zoom) return null;
+        var nat = this.nativeZoomScales(view);
+        return nat ? 100 * view.zoom.scale / nat.x : null;
+    }
+
+    /**
+     * The pane badge's presets: zoom `view` — this view only — to `pct` % of
+     * 1:1, keeping the video point at the cell centre where it is. 100 puts it
+     * AT 1:1 (per-axis scale, on the pixel grid, held through resizes) exactly
+     * like Shift+0 does for every view; any other value is a plain zoom of
+     * `pct/100 × ` the 1:1 scale. A preset is not clamped to the wheel's range:
+     * picking 50% on a video whose fit is 80% gets 50%.
+     * @returns {boolean} false when the view has no 1:1 scale yet
+     */
+    setZoomPercent(view, pct) {
+        if (!view || !(pct > 0)) return false;
+        if (!view.zoom) this.initZoom(view);
+        var nat = this.nativeZoomScales(view);
+        if (!nat) return false;
+        var z = view.zoom;
+        if (pct === 100) {
+            this._enterNative(view);
+        } else {
+            var s = nat.x * pct / 100;
+            var q = this._cellCentre(view);
+            this._zoomAbout(view, s, s, q[0], q[1]);
+            z.native = false;
+            z.scaleY = undefined;
+            this._constrainOffsets(z, view);
+            this.applyZoom(view);
+        }
+        this._syncNativeMode();
+        if (this.callbacks.onZoomChange) this.callbacks.onZoomChange();
+        return true;
     }
 
     /**
@@ -2398,38 +3925,41 @@ export class VideoController {
      *
      * @param {number} wW - wrapper CSS width (px)
      * @param {number} wH - wrapper CSS height (px)
-     * @param {number} scale - zoom scale
+     * @param {number} scale - zoom scale (horizontal, when `scaleY` is given)
      * @param {number} rot - rotation in degrees
+     * @param {number} [scaleY] - vertical zoom scale; defaults to `scale`
+     *   (they differ only at native resolution, see `nativeZoomScales`)
      * @returns {{width:number, height:number, left:number, top:number}}
      */
-    _rotatedBBox(wW, wH, scale, rot) {
+    _rotatedBBox(wW, wH, scale, rot, scaleY) {
         var r = ((rot || 0) % 360 + 360) % 360;
         var s = scale;
+        var t = scaleY > 0 ? scaleY : scale;
         var cX = wW / 2, cY = wH / 2;
 
         // Fast paths for the four cardinal rotations (the only ones the
         // UI exposes today). Formulas derived from applying the CSS
         // transform to the wrapper's four corners and taking min/max.
         if (r === 0) {
-            return { width: wW * s, height: wH * s, left: 0, top: 0 };
+            return { width: wW * s, height: wH * t, left: 0, top: 0 };
         }
         if (r === 90) {
             return {
-                width: wH * s, height: wW * s,
-                left: cX + cY - wH * s,
+                width: wH * t, height: wW * s,
+                left: cX + cY - wH * t,
                 top: cY - cX,
             };
         }
         if (r === 180) {
             return {
-                width: wW * s, height: wH * s,
+                width: wW * s, height: wH * t,
                 left: 2 * cX - wW * s,
-                top: 2 * cY - wH * s,
+                top: 2 * cY - wH * t,
             };
         }
         if (r === 270) {
             return {
-                width: wH * s, height: wW * s,
+                width: wH * t, height: wW * s,
                 left: cX - cY,
                 top: cX + cY - wW * s,
             };
@@ -2438,7 +3968,7 @@ export class VideoController {
         var a = r * Math.PI / 180;
         var ca = Math.cos(a), sa = Math.sin(a);
         var corners = [[-cX, -cY], [wW * s - cX, -cY],
-                       [wW * s - cX, wH * s - cY], [-cX, wH * s - cY]];
+                       [wW * s - cX, wH * t - cY], [-cX, wH * t - cY]];
         var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
         for (var i = 0; i < 4; i++) {
             var rx = ca * corners[i][0] - sa * corners[i][1];
@@ -2505,7 +4035,7 @@ export class VideoController {
         // On-screen bbox (excluding the outer offset translation):
         //   bbox_left = flexOffX + bbox.left + z.offsetX
         //   bbox_top  = flexOffY + bbox.top  + z.offsetY
-        var bbox = this._rotatedBBox(wW, wH, z.scale, view.rotation || 0);
+        var bbox = this._rotatedBBox(wW, wH, z.scale, view.rotation || 0, this._scaleY(z));
         var bboxLeft0 = flexOffX + bbox.left;
         var bboxTop0 = flexOffY + bbox.top;
 
@@ -2527,33 +4057,69 @@ export class VideoController {
         }
     }
 
+    /**
+     * Zoom `view` by `factor`, about container point (cssX, cssY) when given.
+     * A step that passes through the view's native (1:1) scale stops on it
+     * (`snapZoomToNative`) and holds it there; a step from 1:1 leaves it. The
+     * usual [fit, 10x] range stretches to include 1:1, so a video smaller than
+     * its pane can be zoomed down to it and a tiny pane up to it.
+     * @returns {boolean} true when this step snapped to 1:1
+     */
     zoomVideo(view, factor, cssX, cssY) {
         if (!view.zoom) this.initZoom(view);
 
         var z = view.zoom;
         var oldScale = z.scale;
         var minScale = this._getMinScale(view);
-        var newScale = Math.max(minScale, Math.min(10, oldScale * factor));
+        var nat = this.nativeZoomScales(view);
+        // The range also stretches to wherever the view already is — a badge
+        // preset (`setZoomPercent`) is not clamped — so a wheel step from 50%
+        // below fit moves on from 50% instead of jumping back up to fit.
+        var lo = Math.min(minScale, nat ? nat.x : Infinity, oldScale);
+        var hi = Math.max(10, nat ? nat.x : 0, oldScale);
+        var newScale = Math.max(lo, Math.min(hi, oldScale * factor));
+        if (newScale === oldScale) return false; // pinned at a limit: nothing moves
+
+        var snapped = false;
+        if (nat && !z.native) {
+            var snap = snapZoomToNative(oldScale, newScale, nat.x);
+            newScale = snap.scale;
+            snapped = snap.snapped;
+        }
+        var newScaleY = snapped ? nat.y : newScale;
 
         if (cssX !== undefined && cssY !== undefined) {
-            var contentX = (cssX - z.offsetX) / oldScale;
-            var contentY = (cssY - z.offsetY) / oldScale;
-            z.offsetX = cssX - contentX * newScale;
-            z.offsetY = cssY - contentY * newScale;
+            // Through the whole transform, flex-centring and rotation included:
+            // the plain `q − (q − off)·s/s0` ignored the wrapper's letterbox
+            // offset, so the picture slid out from under the cursor along the
+            // letterboxed axis by that offset × 10% on every wheel notch.
+            this._zoomAbout(view, newScale, newScaleY, cssX, cssY);
         }
 
         z.scale = newScale;
+        z.native = snapped;
+        z.scaleY = snapped ? newScaleY : undefined;
         this._constrainOffsets(z, view);
         this.applyZoom(view);
+        this._syncNativeMode();
         if (this.callbacks.onZoomChange) this.callbacks.onZoomChange();
+        return snapped;
     }
 
-    resetZoom(view) {
+    /** Back to the fitted view, without the change callbacks. */
+    _clearZoom(view) {
         if (!view.zoom) this.initZoom(view);
         view.zoom.scale = 1.0;
         view.zoom.offsetX = 0;
         view.zoom.offsetY = 0;
+        view.zoom.native = false;
+        view.zoom.scaleY = undefined;
         this.applyZoom(view);
+    }
+
+    resetZoom(view) {
+        this._clearZoom(view);
+        this._syncNativeMode();
         if (this.callbacks.onZoomChange) this.callbacks.onZoomChange();
     }
 
@@ -2574,10 +4140,34 @@ export class VideoController {
                 z.offsetY *= newH / z.baseH;
             }
         }
+        // A view held at 1:1 has a scale that depends on the canvas box and on
+        // devicePixelRatio, so a resize — or the window moving to a display
+        // with another DPR — moves its 1:1 scale. Re-derive it, about the cell
+        // centre, so the picture stays 1:1 and the region in view stays put.
+        var nativeMoved = false;
+        if (z.native) {
+            var nat = this.nativeZoomScales(view);
+            if (nat && (nat.x !== z.scale || nat.y !== this._scaleY(z))) {
+                var q = this._cellCentre(view);
+                this._zoomAbout(view, nat.x, nat.y, q[0], q[1]);
+                nativeMoved = true;
+            }
+        }
         this._constrainOffsets(z, view);
         this.applyZoom(view);
+        if (nativeMoved && this.callbacks.onZoomChange) this.callbacks.onZoomChange();
     }
 
+    /**
+     * Box zoom: fit the rectangle (x1, y1)–(x2, y2) — container CSS px, as the
+     * drag handler reports it — to `container`, its centre at the container's
+     * centre. The rectangle goes through the inverse of the whole `applyZoom`
+     * transform (`_boxPointAt`): flex-centring offset, rotation and a per-axis
+     * 1:1 scale. The plain `(x − off) / s` ignored the first two, so along a
+     * letterboxed axis the rectangle's centre landed f·(1 − s) px off the
+     * centre (f = that axis's flex offset; ~900 px for f = 304, s = 4), and a
+     * rotated view zoomed somewhere else entirely.
+     */
     zoomToRect(view, x1, y1, x2, y2, container) {
         if (!view.zoom) this.initZoom(view);
 
@@ -2589,25 +4179,36 @@ export class VideoController {
         var containerW = container.clientWidth;
         var containerH = container.clientHeight;
 
-        var contentX1 = (Math.min(x1, x2) - z.offsetX) / z.scale;
-        var contentY1 = (Math.min(y1, y2) - z.offsetY) / z.scale;
-        var contentX2 = (Math.max(x1, x2) - z.offsetX) / z.scale;
-        var contentY2 = (Math.max(y1, y2) - z.offsetY) / z.scale;
-        var contentW = contentX2 - contentX1;
-        var contentH = contentY2 - contentY1;
+        // The box points under the rectangle's corners, turned back into screen
+        // axes: at one uniform scale S a box point u is drawn at a fixed point
+        // plus S·R·u, so the rectangle is drawn S × the extent of R·u wide/tall.
+        var fr = this._zoomFrame(view);
+        var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        var corners = [[x1, y1], [x2, y1], [x1, y2], [x2, y2]];
+        for (var i = 0; i < 4; i++) {
+            var u = this._boxPointAt(view, corners[i][0], corners[i][1], fr);
+            var rx = fr.ca * u[0] - fr.sa * u[1];
+            var ry = fr.sa * u[0] + fr.ca * u[1];
+            if (rx < minX) minX = rx;
+            if (rx > maxX) maxX = rx;
+            if (ry < minY) minY = ry;
+            if (ry > maxY) maxY = ry;
+        }
 
-        var newScale = Math.min(containerW / contentW, containerH / contentH);
+        var newScale = Math.min(containerW / (maxX - minX), containerH / (maxY - minY));
         var minScale = this._getMinScale(view);
         var clampedScale = Math.max(minScale, Math.min(10, newScale));
 
-        var contentCenterX = (contentX1 + contentX2) / 2;
-        var contentCenterY = (contentY1 + contentY2) / 2;
-        z.offsetX = containerW / 2 - contentCenterX * clampedScale;
-        z.offsetY = containerH / 2 - contentCenterY * clampedScale;
+        var centre = this._boxPointAt(view, (x1 + x2) / 2, (y1 + y2) / 2, fr);
+        this._panToDraw(view, centre[0], centre[1], clampedScale, clampedScale,
+            containerW / 2, containerH / 2, fr);
         z.scale = clampedScale;
+        z.native = false;
+        z.scaleY = undefined;
         this._constrainOffsets(z, view);
 
         this.applyZoom(view);
+        this._syncNativeMode();
         if (this.callbacks.onZoomChange) this.callbacks.onZoomChange();
     }
 
@@ -2655,11 +4256,28 @@ export class VideoController {
             // view out from under the skeleton being rotated. Releasing Option
             // brings zoom straight back.
             if (e.altKey) return;
-            var factor = e.deltaY < 0 ? 1.10 : 1 / 1.10;
+            var dir = e.deltaY < 0 ? 1 : -1;
+            // A step that snapped to 1:1 holds there: more wheel in the same
+            // direction is swallowed until it rests NATIVE_SNAP_HOLD_MS, so a
+            // fast spin or trackpad momentum stops at 1:1 instead of sailing
+            // past it in the next event. Each swallowed event extends the hold;
+            // reversing direction is never held.
+            var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+            var hold = view._nativeSnapHold;
+            if (hold) {
+                if (dir === hold.dir && now - hold.last < NATIVE_SNAP_HOLD_MS) {
+                    hold.last = now;
+                    return;
+                }
+                view._nativeSnapHold = null;
+            }
+            var factor = dir > 0 ? 1.10 : 1 / 1.10;
             var rect = container.getBoundingClientRect();
             var cssX = e.clientX - rect.left;
             var cssY = e.clientY - rect.top;
-            self.zoomVideo(view, factor, cssX, cssY);
+            if (self.zoomVideo(view, factor, cssX, cssY)) {
+                view._nativeSnapHold = { dir: dir, last: now };
+            }
         }, { passive: false });
 
         // ---- Drag state for pan / box zoom ----

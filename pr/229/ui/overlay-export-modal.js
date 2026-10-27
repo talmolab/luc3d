@@ -24,23 +24,23 @@
 
 // Pinned to 6.6.1 — keep in sync with the dockview.css pin in index.html and the
 // import in ui/sessions-panes.js (see CLAUDE.md › Dependencies).
+import { noteProgress } from './progress-delta.js?v=e42bbed9fecf';
 import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockview-core@6.6.1/+esm';
 
-import { state, videoController, getActiveSession } from './app-state.js?v=d2625fcc2537';
-import { Viewport3D } from './viewport3d.js?v=d2625fcc2537';
+import { state, videoController, getActiveSession } from './app-state.js?v=e42bbed9fecf';
+import { Viewport3D } from './viewport3d.js?v=e42bbed9fecf';
 import {
     drawFrameOverlays, drawLegend, drawViewNameLabel, getTrackColor, getGroupColor,
-} from './overlays.js?v=d2625fcc2537';
-import { getVisibilitySettings } from './rendering.js?v=d2625fcc2537';
+    TRAIL_SHADES, DEFAULT_TRAIL_SHADE, trailShadeFor,
+} from './overlays.js?v=e42bbed9fecf';
+import { getVisibilitySettings, fillLazyReprojections } from './rendering.js?v=e42bbed9fecf';
 import {
     getInstanceGroupsForFrame,
     ensureLazyFrameData,
-    triangulateAndReproject,
-    storeReprojectedInstances,
+    ensureLazyTrailWindow,
     sessionHasCalibration,
-} from '../pose/triangulation.js?v=d2625fcc2537';
-import { points3dNodeCount } from '../pose/pose-data.js?v=d2625fcc2537';
-import { setStatus } from '../import-export/save-load.js?v=d2625fcc2537';
+} from '../pose/triangulation.js?v=e42bbed9fecf';
+import { setStatus } from '../import-export/save-load.js?v=e42bbed9fecf';
 
 import {
     TILE_3D, RES_PRESETS, RES_CUSTOM, MAX_OUT_DIM,
@@ -50,16 +50,16 @@ import {
     defaultOverlayExportSettings, applyStoredSettings, saveOverlayExportSettings,
     overlayOptionsFrom, seedLayoutPlan,
     distributeAxisSizes, SASH_SHARE_FAR,
-} from './overlay-export-layout.js?v=d2625fcc2537';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=d2625fcc2537';
-import { fileSystemAccessHint } from './browser-hints.js?v=d2625fcc2537';
+} from './overlay-export-layout.js?v=e42bbed9fecf';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=e42bbed9fecf';
+import { fileSystemAccessHint } from './browser-hints.js?v=e42bbed9fecf';
 // The main window's per-camera display settings. `ui/video-filters.js` imports NO
 // project modules, so this adds no cycle — and going through the SAME
 // `buildVideoFilter` the live canvases use is what stops the export drifting from
 // what the user sees (`applyVideoFilters` in ui/sessions-panes.js).
 import {
     buildVideoFilter, getSessionBrightness, getSessionContrast, getSessionRotation,
-} from './video-filters.js?v=d2625fcc2537';
+} from './video-filters.js?v=e42bbed9fecf';
 
 // Re-exported so callers/tests have one import site for the feature.
 export { TILE_3D };
@@ -119,6 +119,7 @@ export function settingsFromVisibilityPanel() {
     s.layers.errors = !!vis.showErrors;
     s.layers.legend = !!vis.showLegend;
     s.trailLength = state.trailLength || 0;
+    s.trailShade = state.trailShade || DEFAULT_TRAIL_SHADE;
     s.colorBy = state.colorByIdentity ? 'identity' : 'track';
     function copy(dst, src, keys) {
         if (!src) return;
@@ -126,11 +127,22 @@ export function settingsFromVisibilityPanel() {
             if (src[keys[i]] != null && !Number.isNaN(src[keys[i]])) dst[keys[i]] = src[keys[i]];
         }
     }
-    copy(s.user, vis.userOpts, ['nodeStyle', 'nodeSize', 'lineWidth', 'alpha', 'labelSize', 'labelAlpha']);
+    // The Visibility panel folds "no node labels" into a SIZE OF 0; the export has
+    // an explicit `showLabels` toggle instead, so the two are split on the way in.
+    // A 0 becomes `showLabels: false` and leaves the size at its default — copy it
+    // through and turning the toggle back on would draw 0px labels, i.e. nothing.
+    function seedLabels(dst, src) {
+        if (!src) return;
+        dst.showLabels = !!src.showLabels;
+        if (src.labelSize > 0) dst.labelSize = src.labelSize;
+    }
+    copy(s.user, vis.userOpts, ['nodeStyle', 'nodeSize', 'lineWidth', 'alpha', 'labelAlpha']);
+    seedLabels(s.user, vis.userOpts);
     if (vis.userOpts) s.user.lineStyle = vis.userOpts.postLineStyle || 'solid';
     copy(s.pred, vis.predictedOpts, ['nodeStyle', 'nodeSize', 'lineWidth', 'alpha']);
     if (vis.predictedOpts) s.pred.lineStyle = vis.predictedOpts.postLineStyle || 'solid';
-    copy(s.reproj, vis.reprojOpts, ['nodeStyle', 'nodeSize', 'lineWidth', 'alpha', 'brightness', 'labelSize', 'labelAlpha']);
+    copy(s.reproj, vis.reprojOpts, ['nodeStyle', 'nodeSize', 'lineWidth', 'alpha', 'brightness', 'labelAlpha']);
+    seedLabels(s.reproj, vis.reprojOpts);
     if (vis.reprojOpts) s.reproj.lineStyle = vis.reprojOpts.lineStyle || 'solid';
     s.reproj.nodeColor = vis.reprojNodeColor || 'white';
     s.fps = Math.round(state.fps || 30);
@@ -138,31 +150,36 @@ export function settingsFromVisibilityPanel() {
 }
 
 export function loadOverlayExportSettings() {
-    return applyStoredSettings(settingsFromVisibilityPanel());
+    var s = applyStoredSettings(settingsFromVisibilityPanel());
+    // A stored shade this build does not offer would leave the select blank.
+    if (!trailShadeFor(s.trailShade)) s.trailShade = DEFAULT_TRAIL_SHADE;
+    return s;
 }
 
 /**
- * Fill the reprojection cache for `groups` — the same lazy fill `drawAllOverlays`
- * does on the live path, so an export of a triangulated-but-never-viewed frame
- * range still shows reprojections.
+ * Fill frame `f`'s reprojection state — its groups' reprojections, reprojected
+ * instances and per-camera errors — so an export of a triangulated-but-never-
+ * viewed frame range still shows reprojections and error lines.
+ *
+ * It IS the live display's fill (`fillLazyReprojections`, ui/rendering.js),
+ * not a copy of it, for two reasons:
+ *  - **Same numbers.** It reprojects a group's stored 3D whenever that 3D is
+ *    current or was read from a file, so the video shows the 3D the project
+ *    holds, exactly as the app does. This used to re-solve every group instead
+ *    — 2.4-5.0 ms per frame on a 17-camera project, for numbers the stored 3D
+ *    already determines, and, with a reprojection-error threshold set or on a
+ *    file's 3D, numbers the app does not show.
+ *  - **Bounded memory.** It keeps derived state for at most
+ *    DERIVED_FRAMES_KEEP frames, dropping the least recently filled. This used
+ *    to keep every exported frame's: exporting a 36,000-frame range of a
+ *    17-camera, 34-node project would rebuild the ~75 KB per frame per animal
+ *    that Triangulate All and the `.slp` load no longer keep.
+ * A no-op for a session that is not the one on screen (the fill reads
+ * `state.session`); the export only ever draws that one.
  */
-function ensureReprojections(groups, session) {
-    if (!groups || !session || !session.cameras || session.cameras.length < 2) return;
-    for (var i = 0; i < groups.length; i++) {
-        var g = groups[i];
-        if (points3dNodeCount(g.points3d) > 0 &&
-            (!g.reprojectedInstances || g.reprojectedInstances.size === 0) &&
-            (!g.reprojections || Object.keys(g.reprojections).length === 0)) {
-            // Resolve the method from the group, exactly as `rendering.js`'s lazy
-            // fill does. Omitting it silently re-solves with DLT, which would burn
-            // DLT reprojections into the video while the app displays BA's —
-            // breaking the "exported 3D == displayed 3D" invariant (#113).
-            var _m = (g.triangulationMethod === 'ba') ? 'ba' : 'dlt';
-            var res = triangulateAndReproject(g, session.cameras, { method: _m });
-            g.reprojections = res.reprojections;
-            storeReprojectedInstances(g, res, session.cameras);
-        }
-    }
+function ensureReprojections(f, groups, session) {
+    if (!groups || session !== state.session) return;
+    fillLazyReprojections(f, groups);
 }
 
 /** `frameGroup` in the plain-object shape `drawFrameOverlays` expects. */
@@ -918,10 +935,17 @@ export function showOverlayExportModal() {
             try { await ensureLazyFrameData(f); } catch (e) { /* ignore */ }
             if (token !== previewToken) return;
         }
+        // The frames behind `f` the node trails draw (see ensureLazyTrailWindow).
+        var trailLoad = session.lazyLoader && settings.trailLength > 0
+            ? ensureLazyTrailWindow(f, settings.trailLength) : null;
+        if (trailLoad) {
+            await trailLoad;
+            if (token !== previewToken) return;
+        }
 
         var frameGroup = session.getFrameGroup(f);
         var groups = getInstanceGroupsForFrame(f);
-        if (settings.layers.reproj || settings.layers.errors) ensureReprojections(groups, session);
+        if (settings.layers.reproj || settings.layers.errors) ensureReprojections(f, groups, session);
         var ofg = toOverlayFrameGroup(frameGroup);
 
         // Decode every docked 2D view in parallel.
@@ -1341,6 +1365,8 @@ export function showOverlayExportModal() {
         addSelect(gLayers.body, 'Color by', settings, 'colorBy',
             [['track', 'Track'], ['identity', 'Identity']], 'ovColorBy');
         addNumber(gLayers.body, 'Node trails (frames)', settings, 'trailLength', 0, 500, 10);
+        addSelect(gLayers.body, 'Trail shade', settings, 'trailShade',
+            TRAIL_SHADES.map(function (sh) { return [sh.key, sh.name]; }), 'ovTrailShade');
         addSelect(gLayers.body, 'Background', settings, 'background',
             [['video', 'video'], ['black', 'black'], ['white', 'white'], ['gray', 'gray']], 'ovBackground');
 
@@ -1353,7 +1379,12 @@ export function showOverlayExportModal() {
         addSelect(gUser.body, 'Line style', settings.user, 'lineStyle', LINES);
         addCheck(gUser.body, 'Show nodes', settings.user, 'showNodes');
         addCheck(gUser.body, 'Show edges', settings.user, 'showEdges');
-        addNumber(gUser.body, 'Node label size', settings.user, 'labelSize', 0, 40, 1);
+        // The node-name toggle sits WITH the other two "show" switches, and the
+        // size field below it floors at 1: a size is a size, and an off switch
+        // hidden at the bottom of a numeric range is exactly what this toggle
+        // exists to replace (issue #223).
+        addCheck(gUser.body, 'Show node labels', settings.user, 'showLabels');
+        addNumber(gUser.body, 'Node label size', settings.user, 'labelSize', 1, 40, 1);
         addNumber(gUser.body, 'Label opacity', settings.user, 'labelAlpha', 0, 1, 0.05);
 
         var gPred = group('Predicted Appearance', false);
@@ -1376,6 +1407,9 @@ export function showOverlayExportModal() {
         addNumber(gRep.body, 'Brightness', settings.reproj, 'brightness', 0.1, 1, 0.05);
         addCheck(gRep.body, 'Show nodes', settings.reproj, 'showNodes');
         addCheck(gRep.body, 'Show edges', settings.reproj, 'showEdges');
+        addCheck(gRep.body, 'Show node labels', settings.reproj, 'showLabels');
+        addNumber(gRep.body, 'Node label size', settings.reproj, 'labelSize', 1, 40, 1);
+        addNumber(gRep.body, 'Label opacity', settings.reproj, 'labelAlpha', 0, 1, 0.05);
 
         // --- Quality / output ---
         var gOut = group('Quality & Output');
@@ -1428,10 +1462,10 @@ export function showOverlayExportModal() {
         playhead.style.left = pctOf(previewFrame) + '%';
         if (startField) startField.value = rangeStart + 1;   // 1-based display
         if (endField) endField.value = rangeEnd + 1;
-        scrubVal.textContent = 'frame ' + (previewFrame + 1) + ' / ' + frameCount;
+        scrubVal.textContent = 'frame ' + (previewFrame + 1).toLocaleString('en-US') + ' / ' + frameCount.toLocaleString('en-US');
         var note = modal.querySelector('#ovRangeNote');
         if (note) {
-            note.textContent = selectedCount() + ' frames · ' +
+            note.textContent = selectedCount().toLocaleString('en-US') + ' frames · ' +
                 fmtDuration(selectedCount() / currentFps()) + ' @ ' + currentFps() + ' fps';
         }
         refreshSummary();
@@ -1463,7 +1497,7 @@ export function showOverlayExportModal() {
         if (f > lastIdx) f = lastIdx;
         previewFrame = f;
         playhead.style.left = pctOf(f) + '%';
-        scrubVal.textContent = 'frame ' + (f + 1) + ' / ' + frameCount;
+        scrubVal.textContent = 'frame ' + (f + 1).toLocaleString('en-US') + ' / ' + frameCount.toLocaleString('en-US');
         schedulePreview();
         syncViewer(f);
     }
@@ -1601,7 +1635,7 @@ export function showOverlayExportModal() {
             var bytes = estimatedBytes(size.width, size.height, fps, settings.quality, nFrames);
             summaryEl.textContent = n + ' tile' + (n === 1 ? '' : 's') + ' · ' + resTierLabel(size) +
                 ' · ' + size.width + '×' + size.height +
-                ' · ' + nFrames + ' frames · ~' + fmtBytes(bytes);
+                ' · ' + nFrames.toLocaleString('en-US') + ' frames · ~' + fmtBytes(bytes);
             if (outNote) {
                 outNote.textContent = 'One .mp4 laid out exactly as the composition (' +
                     size.width + '×' + size.height + ' at ' +
@@ -1618,7 +1652,7 @@ export function showOverlayExportModal() {
             var firstSize = individualSizeFor(layout.tiles[0]);
             syncOutFields(firstSize);
             summaryEl.textContent = n + ' file' + (n === 1 ? '' : 's') + ' · ' + resTierLabel(null) +
-                ' · ' + nFrames + ' frames · ~' + fmtBytes(total);
+                ' · ' + nFrames.toLocaleString('en-US') + ' frames · ~' + fmtBytes(total);
             if (outNote) {
                 // Quality is named here TOO. It used to appear only in the stitched
                 // branch, so in this mode the ONLY visible effect of changing
@@ -1916,9 +1950,15 @@ export function showOverlayExportModal() {
                 if (session.lazyLoader && !session.frameGroups.has(f)) {
                     try { await ensureLazyFrameData(f); } catch (e) { /* frame stays empty */ }
                 }
+                // The first frame's trail reaches back before the export range;
+                // every later frame's window is already resident.
+                if (session.lazyLoader && settings.trailLength > 0) {
+                    var expTrailLoad = ensureLazyTrailWindow(f, settings.trailLength);
+                    if (expTrailLoad) await expTrailLoad;
+                }
                 var frameGroup = session.getFrameGroup(f);
                 var groups = getInstanceGroupsForFrame(f);
-                if (settings.layers.reproj || settings.layers.errors) ensureReprojections(groups, session);
+                if (settings.layers.reproj || settings.layers.errors) ensureReprojections(f, groups, session);
                 var ofg = toOverlayFrameGroup(frameGroup);
 
                 // Decode every 2D tile's frame in parallel.
@@ -1973,7 +2013,8 @@ export function showOverlayExportModal() {
                 if (out % 5 === 0 || f === expEnd) {
                     var pct = Math.round(((out + 1) / nFrames) * 100);
                     progressFill.style.width = pct + '%';
-                    progressLabel.textContent = 'Encoding ' + (out + 1) + ' / ' + nFrames;
+                    noteProgress(progressFill, pct / 100);
+                    progressLabel.textContent = 'Encoding ' + (out + 1).toLocaleString('en-US') + ' / ' + nFrames.toLocaleString('en-US');
                     await new Promise(function (r) { setTimeout(r, 0); });
                 }
             }
@@ -1990,11 +2031,11 @@ export function showOverlayExportModal() {
                     }
                 }
                 if (stitched) {
-                    setStatus('Overlay video exported: ' + specs[0].filename + ' (' + nFrames +
+                    setStatus('Overlay video exported: ' + specs[0].filename + ' (' + nFrames.toLocaleString('en-US') +
                         ' frames @ ' + fps + ' fps, ' + outW + '×' + outH + ')', 'success');
                 } else {
                     setStatus('Overlay videos exported: ' + specs.length + ' file' +
-                        (specs.length === 1 ? '' : 's') + ' (' + nFrames + ' frames @ ' +
+                        (specs.length === 1 ? '' : 's') + ' (' + nFrames.toLocaleString('en-US') + ' frames @ ' +
                         fps + ' fps)', 'success');
                 }
             } else {

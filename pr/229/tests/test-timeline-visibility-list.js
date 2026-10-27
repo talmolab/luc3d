@@ -268,8 +268,7 @@
             // semantics so the Info Panel wiring and the timeline render
             // path agree on shape. The exact module name is permissive —
             // accept any of the plausible options, exported either onto
-            // `window` (vm sandbox) or onto a global `TimelineVisibility`
-            // namespace.
+            // `window` or onto a global `TimelineVisibility` namespace.
             var candidates = [
                 'toggleCameraVisibility',
                 'toggleTrackVisibility',
@@ -279,7 +278,7 @@
                 'isIdentityVisible',
             ];
 
-            // Resolve from sandbox global OR a namespace object.
+            // Resolve from `window` OR a namespace object.
             function resolve(name) {
                 if (typeof window[name] === 'function') return window[name];
                 if (typeof globalThis !== 'undefined' &&

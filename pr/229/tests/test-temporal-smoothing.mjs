@@ -325,7 +325,7 @@ group('2D is never touched; derived reprojections are invalidated');
     const inst = new Instance([[10, 20], [30, 40]], 0, 'user', 1);
     g.addInstance('camA', inst);
     g.reprojections = { camA: [[1, 1], [2, 2]] };
-    g.reprojectedInstances.set('camA', new Instance([[1, 1], [2, 2]], 0, 'reprojected', 1));
+    g.addReprojectedInstance('camA', new Instance([[1, 1], [2, 2]], 0, 'reprojected', 1));
     g.triangulationMethod = 'ba';
 
     const frames = [[0, [g]]];

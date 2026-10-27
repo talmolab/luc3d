@@ -74,8 +74,8 @@ function buildProject() {
     gPred.addInstance('camA', new Instance([[50, 60]], 1, 'predicted', 0.8));
     gPred.addInstance('camB', new Instance([[51, 61]], 1, 'predicted', 0.8));
     gPred.addInstance('camC', new Instance([[52, 62]], 1, 'predicted', 0.8));
-    gPred.reprojectedInstances.set('camA', new Instance([[50, 60]], 1, 'reprojected', 1));
-    gPred.reprojectedInstances.set('camB', new Instance([[51, 61]], 1, 'reprojected', 1));
+    gPred.addReprojectedInstance('camA', new Instance([[50, 60]], 1, 'reprojected', 1));
+    gPred.addReprojectedInstance('camB', new Instance([[51, 61]], 1, 'reprojected', 1));
     gPred.points3d = makePoints3d(2);
     setPoint3d(gPred.points3d, 0, [300, -120, 88]);
     setPoint3d(gPred.points3d, 1, [5, 5, 1000]);

@@ -47,22 +47,22 @@
 // dirty. Entering and leaving the mode does not — a wizard the user backed out
 // of changed nothing.
 
-import { state, viewport3d } from './app-state.js?v=d2625fcc2537';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=d2625fcc2537';
-import { buildOriginFrame, rebaseExtrinsics } from '../pose/origin-frame.js?v=d2625fcc2537';
-import { getPoint3d, hasPoint3d, Camera } from '../pose/pose-data.js?v=d2625fcc2537';
-import { exportCalibrationTOML, downloadTOML } from '../import-export/file-io.js?v=d2625fcc2537';
-import { REBASED_CALIBRATION_NAME } from '../loading/calibration-pick.js?v=d2625fcc2537';
+import { state, viewport3d } from './app-state.js?v=e42bbed9fecf';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=e42bbed9fecf';
+import { buildOriginFrame, rebaseExtrinsics } from '../pose/origin-frame.js?v=e42bbed9fecf';
+import { getPoint3d, hasPoint3d, Camera } from '../pose/pose-data.js?v=e42bbed9fecf';
+import { exportCalibrationTOML, downloadTOML } from '../import-export/file-io.js?v=e42bbed9fecf';
+import { REBASED_CALIBRATION_NAME } from '../loading/calibration-pick.js?v=e42bbed9fecf';
 // Circular by design (plane-definition imports this module's `enterOriginMode`
 // for its button). Safe: every use is inside a function body, so the binding
 // resolves at call time.
 import {
     planeState, planeModel, getPlane, planePoints3d, planeNodeNameAt, syncPlanes3D,
     showPlaneDialog,
-} from './plane-definition.js?v=d2625fcc2537';
+} from './plane-definition.js?v=e42bbed9fecf';
 // Circular for the same reason and under the same rule: this module owns the
 // button, that one owns what the button does.
-import { showSetCalibrationModal } from './origin-rebase.js?v=d2625fcc2537';
+import { showSetCalibrationModal } from './origin-rebase.js?v=e42bbed9fecf';
 
 export const originState = {
     /** @type {boolean} True while Set Origin Mode is active. */

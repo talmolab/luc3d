@@ -11,7 +11,18 @@
  * include it. A requestAnimationFrame loop runs ONLY while the frame is in the
  * interval, so the marching-ants outline moves even when paused; outside it the
  * canvases are cleared once and the loop stops. Boxes are recomputed only when
- * the frame changes.
+ * the frame changes — and, on a lazy project, when the frame on screen arrives:
+ * selecting a row jumps to a frame that is usually not resident yet, and its
+ * hydration redraws the overlays but is not a frame change, so the loop polls
+ * `frameGroups.has(frame)` while it waits (`_waiting`). Without that the box
+ * stayed empty until the frame next changed — i.e. until play was pressed.
+ *
+ * Kept cheap, because it runs during playback on every view: a view is repainted
+ * when the frame changes and otherwise at most every `ANIM_MS` (the animation is
+ * timed from the clock, so its speed does not depend on the rate), and a repaint
+ * clears only the rectangle the last one drew, not the whole video-sized canvas.
+ * Repainting all eight full canvases at the display rate (120 Hz) was 2x the
+ * video's own rate for an outline that moves a few pixels.
  *
  * The animals are found per camera by their identity NAME at the current frame,
  * the way the overlays resolve identity: the per-frame identity of the instance's
@@ -20,49 +31,81 @@
  * `session.getIdentityIdForUnlinkedInstance`. One box encloses both (or the one
  * visible in that view), labelled "id_a ↔ id_b" in the identities' colours.
  *
+ * The box encloses only the nodes the Tracking Wizard weights above 0 (Settings ▸
+ * Tracking Wizard ▸ Node weights), so with the tail nodes at 0 it frames the
+ * bodies and heads, not a tail sweeping across half the view. An instance none
+ * of whose weighted nodes is visible in a view falls back to all of its nodes,
+ * so an animal is never dropped from the box; so does a skeleton weighted 0
+ * throughout. Applying new weights recomputes the box at once
+ * (`refreshIdSwitchHighlight`, from ui/settings-modal.js).
+ *
+ * The box takes the colour of the progress-bar SECTION the frame is in —
+ * `ID_SWITCH_SECTION_RGB`, which the bar (ui/id-switch-modal.js `progressHtml`)
+ * reads too, so the two cannot drift: orange over the lead-in and lead-out,
+ * red over the close spell [s, e] where a swap would happen.
+ *
  * Driven by ui/id-switch-modal.js: `setIdSwitchHighlight` on row selection /
  * panel render, `updateIdSwitchHighlight(frame)` on every frame change (from
  * `updateIdSwitchProgress`).
  */
 
-import { state } from './app-state.js?v=d2625fcc2537';
-import { makeVideoToCanvasTransform } from './overlays.js?v=d2625fcc2537';
+import { state } from './app-state.js?v=e42bbed9fecf';
+import { makeVideoToCanvasTransform } from './overlays.js?v=e42bbed9fecf';
+import { getNodeWeightArray } from './settings.js?v=e42bbed9fecf';
 
-var _target = null;          // {nameA, nameB, p0, p1}
+var _target = null;          // {nameA, nameB, p0, s, e, p1}
 var _frame = -1;             // frame the boxes were computed for
+var _waiting = false;        // that frame was not resident (lazy project): recompute once it is
 var _boxes = new Map();      // view name -> {x0, y0, x1, y1} in video px, or absent
 var _raf = 0;
 var _canvases = new WeakMap();
 var _cleared = true;
+var ANIM_MS = 33;            // repaint for the animation alone at most ~30 Hz; a new frame repaints at once
+var _paintT = -Infinity, _paintFrame = -1;
+var _dirty = new WeakMap();  // canvas -> [x, y, w, h] the last repaint drew (canvas px), cleared by the next
 
-/** Select the pair + interval to highlight, or `null` to stop. */
+/** The colour of each section of the row's interval, as `r, g, b` (the bar and the box share it). */
+export var ID_SWITCH_SECTION_RGB = Object.freeze({ lead: '255, 176, 32', close: '240, 60, 50' });
+
+/** The section `frame` is in: 'close' over [s, e], else 'lead' (lead-in or lead-out). */
+export function idSwitchSection(target, frame) {
+    return target && target.s != null && target.e != null && frame >= target.s && frame <= target.e ? 'close' : 'lead';
+}
+
+/** Select the pair + interval (p0 .. close spell s..e .. p1) to highlight, or `null` to stop. */
 export function setIdSwitchHighlight(target) {
     var same = _target && target && _target.nameA === target.nameA && _target.nameB === target.nameB &&
-        _target.p0 === target.p0 && _target.p1 === target.p1;
+        _target.p0 === target.p0 && _target.s === target.s && _target.e === target.e && _target.p1 === target.p1;
     if (same) return;
-    _target = target ? { nameA: target.nameA, nameB: target.nameB, p0: target.p0, p1: target.p1 } : null;
+    _target = target ? { nameA: target.nameA, nameB: target.nameB, p0: target.p0, s: target.s, e: target.e, p1: target.p1 } : null;
     _frame = -1;
     updateIdSwitchHighlight(state.currentFrame);
 }
 
-/** @returns {?{nameA, nameB, p0, p1}} the current target (tests). */
+/** Recompute the boxes at the current frame — after the identities themselves changed (a fixed switch). */
+export function refreshIdSwitchHighlight() {
+    _frame = -1;
+    updateIdSwitchHighlight(state.currentFrame);
+}
+
+/** @returns {?{nameA, nameB, p0, s, e, p1}} the current target (tests). */
 export function getIdSwitchHighlight() { return _target ? Object.assign({}, _target) : null; }
 
 /** Called on every frame change: start / stop the animation and refresh the boxes. */
 export function updateIdSwitchHighlight(frame) {
     var inRange = !!_target && frame >= _target.p0 && frame <= _target.p1;
     if (!inRange) { stop(); return; }
-    if (frame !== _frame) { _frame = frame; computeBoxes(frame); }
+    if (frame !== _frame) { _frame = frame; computeBoxes(frame); _paintFrame = -1; }
     if (!_raf && typeof requestAnimationFrame === 'function') _raf = requestAnimationFrame(tick);
 }
 
 function stop() {
     if (_raf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(_raf);
-    _raf = 0; _frame = -1; _boxes.clear();
+    _raf = 0; _frame = -1; _waiting = false; _boxes.clear();
     if (!_cleared) {
         (state.views || []).forEach(function (v) {
             var c = _canvases.get(v);
-            if (c) c.getContext('2d').clearRect(0, 0, c.width, c.height);
+            if (c) { c.getContext('2d').clearRect(0, 0, c.width, c.height); _dirty.delete(c); }
         });
         _cleared = true;
     }
@@ -81,34 +124,56 @@ function identityName(session, inst, cam, frame, group) {
     return g ? g.name : null;
 }
 
-function extend(box, inst) {
-    var n = inst.numNodes != null ? inst.numNodes : 0;
+/**
+ * The nodes the box encloses: `mask[k]` true for a node weighted above 0 in the
+ * Tracking Wizard, or `null` (every node) when nothing is weighted 0 or nothing is left.
+ */
+export function idSwitchBoxNodeMask(nodeNames) {
+    var w = getNodeWeightArray(nodeNames);
+    if (!w || !w.length) return null;
+    var mask = w.map(function (x) { return x > 0; });
+    var kept = mask.filter(Boolean).length;
+    return kept === 0 || kept === mask.length ? null : mask;
+}
+
+/** Grow `box` by `inst`'s visible nodes in `mask` (all when null); @returns how many it took. */
+function extendBy(box, inst, mask) {
+    var n = inst.numNodes != null ? inst.numNodes : 0, used = 0;
     for (var k = 0; k < n; k++) {
+        if (mask && !mask[k]) continue;
         if (inst.hasPoint && !inst.hasPoint(k)) continue;
         var x = inst.getX(k), y = inst.getY(k);
         if (!isFinite(x) || !isFinite(y)) continue;
         if (x < box.x0) box.x0 = x; if (y < box.y0) box.y0 = y;
         if (x > box.x1) box.x1 = x; if (y > box.y1) box.y1 = y;
+        used++;
     }
+    return used;
+}
+
+function extend(box, inst, mask) {
+    if (!extendBy(box, inst, mask) && mask) extendBy(box, inst, null);   // only zero-weight nodes visible
 }
 
 function computeBoxes(frame) {
     _boxes.clear();
+    _waiting = false;
     var session = state.session;
     if (!session || !_target) return;
-    if (session.frameGroups && !session.frameGroups.has(frame)) return;     // lazy project: frame not resident
+    if (session.frameGroups && !session.frameGroups.has(frame)) { _waiting = true; return; }   // lazy: not resident yet
     var groups = (session.instanceGroups && session.instanceGroups.get(frame)) || [];
     var fg = session.getFrameGroup ? session.getFrameGroup(frame) : null;
     var names = [_target.nameA, _target.nameB];
+    var mask = idSwitchBoxNodeMask(session.skeleton && session.skeleton.nodes);
     (state.views || []).forEach(function (v) {
         var cam = v.cameraName || v.name, box = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }, found = 0;
         groups.forEach(function (g) {
             var inst = g.getInstance ? g.getInstance(cam) : null;
-            if (inst && names.indexOf(identityName(session, inst, cam, frame, g)) >= 0) { extend(box, inst); found++; }
+            if (inst && names.indexOf(identityName(session, inst, cam, frame, g)) >= 0) { extend(box, inst, mask); found++; }
         });
         if (fg && fg.getUnlinkedInstances) fg.getUnlinkedInstances(cam).forEach(function (u) {
             var inst = u && (u.instance || u);
-            if (inst && inst.getX && names.indexOf(identityName(session, inst, cam, frame, null)) >= 0) { extend(box, inst); found++; }
+            if (inst && inst.getX && names.indexOf(identityName(session, inst, cam, frame, null)) >= 0) { extend(box, inst, mask); found++; }
         });
         if (found && box.x1 >= box.x0) _boxes.set(v.name, box);
     });
@@ -139,12 +204,22 @@ function colorOf(name) {
 function tick(t) {
     _raf = 0;
     if (!_target || _frame < 0) return;
+    // the frame on screen has been hydrated since (lazy project) — a hydration is not a frame change
+    if (_waiting && state.session && state.session.frameGroups && state.session.frameGroups.has(_frame)) {
+        computeBoxes(_frame); _paintFrame = -1;
+    }
+    if (_frame === _paintFrame && t - _paintT < ANIM_MS) {      // same frame, animation step not due yet
+        if (typeof requestAnimationFrame === 'function') _raf = requestAnimationFrame(tick);
+        return;
+    }
+    _paintT = t; _paintFrame = _frame;
     _cleared = false;
+    var rgb = ID_SWITCH_SECTION_RGB[idSwitchSection(_target, _frame)];
     (state.views || []).forEach(function (v) {
         var c = canvasFor(v);
         if (!c) return;
-        var ctx = c.getContext('2d');
-        ctx.clearRect(0, 0, c.width, c.height);
+        var ctx = c.getContext('2d'), d = _dirty.get(c);
+        if (d) { ctx.clearRect(d[0], d[1], d[2], d[3]); _dirty.delete(c); }
         var b = _boxes.get(v.name);
         if (!b) return;
         var toC = makeVideoToCanvasTransform(v.videoWidth, v.videoHeight, c.width, c.height);
@@ -158,7 +233,7 @@ function tick(t) {
         ctx.save();
         ctx.lineWidth = 4 * s; ctx.strokeStyle = 'rgba(0, 0, 0, ' + (0.55 * pulse).toFixed(3) + ')';
         ctx.setLineDash([]); ctx.strokeRect(x, y, w, h);                          // dark halo: readable on any video
-        ctx.lineWidth = 2.5 * s; ctx.strokeStyle = 'rgba(255, 176, 32, ' + pulse.toFixed(3) + ')';
+        ctx.lineWidth = 2.5 * s; ctx.strokeStyle = 'rgba(' + rgb + ', ' + pulse.toFixed(3) + ')';
         ctx.setLineDash([10 * s, 7 * s]); ctx.lineDashOffset = -((t / 28) % (17 * s));   // marching ants
         ctx.strokeRect(x, y, w, h);
         // "id_a ↔ id_b" above the box, each name in its identity's colour
@@ -170,6 +245,9 @@ function tick(t) {
         var lx = x + 4 * s;
         parts.forEach(function (p) { ctx.fillStyle = p[1]; ctx.fillText(p[0], lx, ly); lx += ctx.measureText(p[0]).width; });
         ctx.restore();
+        // what this repaint touched — the box with its halo, and the label — with a margin for antialiasing
+        var m = 4 * s, dx0 = Math.floor(x - m), dy0 = Math.floor(Math.min(y, ly - fs) - m);
+        _dirty.set(c, [dx0, dy0, Math.ceil(Math.max(x + w, x + tw + 8 * s) + m) - dx0, Math.ceil(Math.max(y + h, ly + 5 * s) + m) - dy0]);
     });
     if (typeof requestAnimationFrame === 'function') _raf = requestAnimationFrame(tick);
 }

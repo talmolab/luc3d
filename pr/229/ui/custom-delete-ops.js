@@ -398,6 +398,8 @@ export function previewCascade(targets) {
  *   1. store rows (the persistence; must run BEFORE `_rawInstIndex` is touched,
  *      since the row identity IS `_rawInstIndex`)
  *   2. renumber `_rawInstIndex` on survivors
+ *      (1 and 2 are `deleteTargetsFromStore`, which the interactive deletes in
+ *      `ui/interaction.js` and the group context menu call too)
  *   3. `instanceGroups` cascade (project-wide)
  *   4. `frameGroups` cascade (resident) under the SAME `seen` Set
  *   5. `frameIdentityMap` prune
@@ -428,74 +430,12 @@ export function executeDeletion(session, targets) {
     };
     if (!session || !targets || targets.length === 0) return result;
 
-    // ---- 0. Index the kill set by (camera, frame) -> Set<rawInstIndex>.
-    // Captured BEFORE any mutation: a store row's identity is its offset within
-    // its (camera, frame) list, i.e. exactly `_rawInstIndex`.
-    var killByCam = new Map();
-    var touched = new Set();
-    for (var i = 0; i < targets.length; i++) {
-        var t = targets[i];
-        touched.add(t.frameIdx);
-        if (t.rawIdx == null) continue;   // memory-only instance (never came from the store)
-        if (!killByCam.has(t.camName)) killByCam.set(t.camName, new Map());
-        var perFrame = killByCam.get(t.camName);
-        if (!perFrame.has(t.frameIdx)) perFrame.set(t.frameIdx, new Set());
-        perFrame.get(t.frameIdx).add(t.rawIdx);
-    }
-    result.touchedFrames = Array.from(touched);
-
-    // ---- 1. THE PERSISTENCE. Remove the rows from the columnar store.
-    if (session.lazyLoader && typeof session.lazyLoader.deleteInstanceRows === 'function' &&
-        killByCam.size > 0) {
-        var storeRes = session.lazyLoader.deleteInstanceRows(
-            function (camName, frameIdx, offsetInFrame) {
-                var pf = killByCam.get(camName);
-                if (!pf) return false;
-                var set = pf.get(frameIdx);
-                return !!set && set.has(offsetInFrame);
-            }
-        );
-        result.durable = storeRes.deleted;
-        result.errorRows = storeRes.errorRows;
-        result.firstError = storeRes.firstError;
-    }
-
-    // ---- 2. Renumber `_rawInstIndex` on every SURVIVING instance of each
-    // touched (camera, frame). The store just compacted, so an unchanged
-    // `_rawInstIndex` would make `refFor` write grouping refs pointing at the
-    // wrong instances and make `finalizeLazyFrameGroup` hydrate the wrong 2D
-    // into group members. New index = old index minus the number of deleted
-    // rows before it.
-    if (killByCam.size > 0) {
-        var seenRenumber = new Set();
-        var shiftFor = function (killSet, oldIdx) {
-            var shift = 0;
-            for (var k of killSet) if (k < oldIdx) shift++;
-            return shift;
-        };
-        var renumberInst = function (inst, killSet) {
-            if (!inst || seenRenumber.has(inst)) return;
-            seenRenumber.add(inst);
-            if (inst._rawInstIndex == null) return;
-            if (killSet.has(inst._rawInstIndex)) return;   // being deleted; leave it
-            inst._rawInstIndex = inst._rawInstIndex - shiftFor(killSet, inst._rawInstIndex);
-        };
-        for (var [rCam, rPerFrame] of killByCam) {
-            for (var [rFrame, rKill] of rPerFrame) {
-                var rGroups = session.instanceGroups.get(rFrame) || [];
-                for (var rgi = 0; rgi < rGroups.length; rgi++) {
-                    var gInst = rGroups[rgi].instances.get(rCam);
-                    if (gInst) renumberInst(gInst, rKill);
-                }
-                var rFg = session.getFrameGroup ? session.getFrameGroup(rFrame) : session.frameGroups.get(rFrame);
-                if (!rFg) continue;
-                var rArr = rFg.instances.get(rCam);
-                if (rArr) for (var ai = 0; ai < rArr.length; ai++) renumberInst(rArr[ai], rKill);
-                var rUl = rFg.unlinkedInstances.get(rCam);
-                if (rUl) for (var uj = 0; uj < rUl.length; uj++) renumberInst(rUl[uj] && rUl[uj].instance, rKill);
-            }
-        }
-    }
+    // ---- 1 + 2. The persistence, and the renumbering it requires.
+    var store = deleteTargetsFromStore(session, targets);
+    result.durable = store.durable;
+    result.errorRows = store.errorRows;
+    result.firstError = store.firstError;
+    result.touchedFrames = store.touchedFrames;
 
     // ---- 3 + 4. Memory cascade, grouped targets bucketed by group so the
     // full/lone-survivor/partial decision is made ONCE per group.
@@ -600,6 +540,156 @@ export function executeDeletion(session, targets) {
     // from this map for any frame with no instanceGroups entry, so an unpruned
     // entry brings a deleted group back on the next Triangulate All.
     pruneOrphanIdentities(session, result.touchedFrames);
+
+    return result;
+}
+
+/**
+ * The deletion target for one ungrouped instance — what the Delete key acts on
+ * when an `UnlinkedInstance` is selected (`ui/interaction.js` `_deleteSelected`).
+ *
+ * @param {number} frameIdx
+ * @param {{instance: Object, cameraName: string, id: number}} ul  an `UnlinkedInstance`
+ */
+export function unlinkedTarget(frameIdx, ul) {
+    var inst = ul && ul.instance;
+    return {
+        kind: 'ungrouped', frameIdx: frameIdx, camName: ul.cameraName, ul: ul, inst: inst,
+        rawIdx: inst && inst._rawInstIndex != null ? inst._rawInstIndex : null,
+    };
+}
+
+/**
+ * The deletion targets for a group's members in `camNames` (every member when
+ * omitted) — the per-view and whole-group deletes of the Delete key and the
+ * group context menu's "Delete group".
+ *
+ * @param {number} frameIdx
+ * @param {Object} group      an `InstanceGroup`
+ * @param {string[]} [camNames]
+ */
+export function groupMemberTargets(frameIdx, group, camNames) {
+    var out = [];
+    if (!group || !group.instances) return out;
+    var cams = camNames || Array.from(group.instances.keys());
+    for (var i = 0; i < cams.length; i++) {
+        var inst = group.instances.get(cams[i]);
+        if (!inst) continue;
+        out.push({
+            kind: 'grouped', frameIdx: frameIdx, camName: cams[i], group: group, inst: inst,
+            rawIdx: inst._rawInstIndex != null ? inst._rawInstIndex : null,
+        });
+    }
+    return out;
+}
+
+/**
+ * The DURABLE half of a deletion: remove the targets' rows from the lazy
+ * project's columnar store, then renumber `_rawInstIndex` on the survivors.
+ * Touches nothing else — the caller mirrors the removal into
+ * `frameGroups`/`instanceGroups` AFTERWARDS (the victims must still be in those
+ * containers while this runs, so the renumbering can recognise and skip them).
+ *
+ * Every delete of an instance that came from the store has to come through
+ * here, not only Custom Instance Delete (`executeDeletion`). The interactive
+ * deletes — the Delete key, Edit ▸ Delete Instance, the toolbar, the group
+ * context menu — used to edit the resident frame alone, and on a lazy project
+ * that is undone twice over (see the note at the top of this module): a
+ * windowed sweep releases the predicted-only frame and re-hydrates the row, and
+ * the streaming save writes it. A delete must not depend on its frame staying
+ * resident to be real.
+ *
+ * A target with no `rawIdx` never came from the store (an instance added in
+ * this session) and has no row to remove. An eager session has no store: this
+ * is then a no-op that reports `durable: null`.
+ *
+ * Steps, as numbered in `executeDeletion`'s order note:
+ *   0. index the kill set by (camera, frame) -> Set<rawInstIndex>, BEFORE any
+ *      mutation — a store row's identity is its offset within its (camera,
+ *      frame) list, i.e. exactly `_rawInstIndex`;
+ *   1. remove the rows (`SioLazyLoader.deleteInstanceRows`, walking only the
+ *      named camera-frames — one Delete keypress must not pay a whole-project
+ *      pass);
+ *   2. renumber `_rawInstIndex` on every surviving instance of each touched
+ *      (camera, frame).
+ *
+ * @param {Object} session
+ * @param {Array} targets  from `collectDeletionTargets`, `unlinkedTarget` or `groupMemberTargets`
+ * @returns {{durable: number|null, errorRows: number, firstError: Error|null, touchedFrames: Array<number>}}
+ */
+export function deleteTargetsFromStore(session, targets) {
+    var result = { durable: null, errorRows: 0, firstError: null, touchedFrames: [] };
+    if (!session || !targets || targets.length === 0) return result;
+
+    // ---- 0. Index the kill set by (camera, frame) -> Set<rawInstIndex>.
+    // Captured BEFORE any mutation: a store row's identity is its offset within
+    // its (camera, frame) list, i.e. exactly `_rawInstIndex`.
+    var killByCam = new Map();
+    var touched = new Set();
+    for (var i = 0; i < targets.length; i++) {
+        var t = targets[i];
+        touched.add(t.frameIdx);
+        if (t.rawIdx == null) continue;   // memory-only instance (never came from the store)
+        if (!killByCam.has(t.camName)) killByCam.set(t.camName, new Map());
+        var perFrame = killByCam.get(t.camName);
+        if (!perFrame.has(t.frameIdx)) perFrame.set(t.frameIdx, new Set());
+        perFrame.get(t.frameIdx).add(t.rawIdx);
+    }
+    result.touchedFrames = Array.from(touched);
+
+    // ---- 1. THE PERSISTENCE. Remove the rows from the columnar store.
+    if (session.lazyLoader && typeof session.lazyLoader.deleteInstanceRows === 'function' &&
+        killByCam.size > 0) {
+        var storeRes = session.lazyLoader.deleteInstanceRows(
+            function (camName, frameIdx, offsetInFrame) {
+                var pf = killByCam.get(camName);
+                if (!pf) return false;
+                var set = pf.get(frameIdx);
+                return !!set && set.has(offsetInFrame);
+            },
+            { only: killByCam }
+        );
+        result.durable = storeRes.deleted;
+        result.errorRows = storeRes.errorRows;
+        result.firstError = storeRes.firstError;
+    }
+
+    // ---- 2. Renumber `_rawInstIndex` on every SURVIVING instance of each
+    // touched (camera, frame). The store just compacted, so an unchanged
+    // `_rawInstIndex` would make `refFor` write grouping refs pointing at the
+    // wrong instances and make `finalizeLazyFrameGroup` hydrate the wrong 2D
+    // into group members. New index = old index minus the number of deleted
+    // rows before it.
+    if (killByCam.size > 0) {
+        var seenRenumber = new Set();
+        var shiftFor = function (killSet, oldIdx) {
+            var shift = 0;
+            for (var k of killSet) if (k < oldIdx) shift++;
+            return shift;
+        };
+        var renumberInst = function (inst, killSet) {
+            if (!inst || seenRenumber.has(inst)) return;
+            seenRenumber.add(inst);
+            if (inst._rawInstIndex == null) return;
+            if (killSet.has(inst._rawInstIndex)) return;   // being deleted; leave it
+            inst._rawInstIndex = inst._rawInstIndex - shiftFor(killSet, inst._rawInstIndex);
+        };
+        for (var [rCam, rPerFrame] of killByCam) {
+            for (var [rFrame, rKill] of rPerFrame) {
+                var rGroups = session.instanceGroups.get(rFrame) || [];
+                for (var rgi = 0; rgi < rGroups.length; rgi++) {
+                    var gInst = rGroups[rgi].instances.get(rCam);
+                    if (gInst) renumberInst(gInst, rKill);
+                }
+                var rFg = session.getFrameGroup ? session.getFrameGroup(rFrame) : session.frameGroups.get(rFrame);
+                if (!rFg) continue;
+                var rArr = rFg.instances.get(rCam);
+                if (rArr) for (var ai = 0; ai < rArr.length; ai++) renumberInst(rArr[ai], rKill);
+                var rUl = rFg.unlinkedInstances.get(rCam);
+                if (rUl) for (var uj = 0; uj < rUl.length; uj++) renumberInst(rUl[uj] && rUl[uj].instance, rKill);
+            }
+        }
+    }
 
     return result;
 }
