@@ -6,33 +6,33 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=e42bbed9fecf';
-import { points3dNodeCount, isPoints3dFromFile } from '../pose/pose-data.js?v=e42bbed9fecf';
+import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=84d6fff68bda';
+import { points3dNodeCount, isPoints3dFromFile, isPoints3dSmoothed } from '../pose/pose-data.js?v=84d6fff68bda';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
     triangulateAndReproject, reprojectStoredPoints3d, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=e42bbed9fecf';
-import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=e42bbed9fecf';
-import { drawFrameOverlays } from './overlays.js?v=e42bbed9fecf';
-import { syncViewLegends } from './view-legend.js?v=e42bbed9fecf';
-import { isCameraTracked, getTrackingThreshold } from './settings.js?v=e42bbed9fecf';
+} from '../pose/triangulation.js?v=84d6fff68bda';
+import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=84d6fff68bda';
+import { drawFrameOverlays } from './overlays.js?v=84d6fff68bda';
+import { syncViewLegends } from './view-legend.js?v=84d6fff68bda';
+import { isCameraTracked, getTrackingThreshold } from './settings.js?v=84d6fff68bda';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=e42bbed9fecf';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=84d6fff68bda';
 // The toolbar's Animals field shows the ACTIVE session's count. Circular
 // (it reaches pose/tracker.js, which imports this module) — safe for the same
 // reason: the call site is inside drawAllOverlays' body.
-import { syncAnimalCountField } from './animal-count-field.js?v=e42bbed9fecf';
-import { syncNodeTooltipFrame } from './node-tooltip.js?v=e42bbed9fecf';
+import { syncAnimalCountField } from './animal-count-field.js?v=84d6fff68bda';
+import { syncNodeTooltipFrame } from './node-tooltip.js?v=84d6fff68bda';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=e42bbed9fecf';
-import { updateFrameInfo } from './info-panel.js?v=e42bbed9fecf';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=84d6fff68bda';
+import { updateFrameInfo } from './info-panel.js?v=84d6fff68bda';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
-} from './frame-counters.js?v=e42bbed9fecf';
+} from './frame-counters.js?v=84d6fff68bda';
 
 // ============================================
 // Reproj/Error visibility
@@ -204,7 +204,9 @@ const MAX_OVERLAY_AREA = 268435456; // 2^28 px
 //    FROM A FILE (`isPoints3dFromFile`: a loaded `.slp`'s, an imported
 //    points3d `.h5`'s) is reprojected whenever the group is clean, threshold
 //    or not, and with or without a method: a re-solve would show LUCID's
-//    answer rather than the 3D the project holds. Any other group (Track
+//    answer rather than the 3D the project holds. SMOOTHED 3D
+//    (`isPoints3dSmoothed`) is reprojected the same way, or the display would
+//    re-solve the unsmoothed answer from the 2D. Any other group (Track
 //    All's provisional 3D, an edited group) is re-solved, as before.
 //  - **It keeps what it made for at most DERIVED_FRAMES_KEEP frames per
 //    session** (`noteDerivedFrame`), dropping the least recently filled
@@ -227,7 +229,7 @@ export function fillLazyReprojections(fi, instanceGroups) {
                 (!_grp.reprojections || Object.keys(_grp.reprojections).length === 0)) {
                 if (_threshold == null) _threshold = getTrackingThreshold('reprojErrorThreshold') || 0;
                 var _triRes;
-                if (!_grp.dirty && (isPoints3dFromFile(_grp.points3d) ||
+                if (!_grp.dirty && (isPoints3dFromFile(_grp.points3d) || isPoints3dSmoothed(_grp.points3d) ||
                     (_grp.triangulationMethod != null && !(_threshold > 0)))) {
                     _triRes = reprojectStoredPoints3d(_grp, state.session.cameras);
                 } else {

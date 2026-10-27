@@ -4083,6 +4083,27 @@ export function isPoints3dFromFile(points3d) {
     return !!points3d && _filePoints3d.has(points3d);
 }
 
+/** `points3d` arrays the temporal-smoothing pass wrote (see `markPoints3dSmoothed`). */
+var _smoothedPoints3d = new WeakSet();
+
+/**
+ * Record that `points3d` holds SMOOTHED 3D (`pose/temporal-smoothing.js`), so
+ * the reprojection fill reprojects it like 3D read from a file: a re-solve
+ * from the 2D would draw the unsmoothed answer, and the pass would look as if
+ * it did nothing. The pass writes in place, so this marks the group's own
+ * array; like `markPoints3dFromFile` it lapses when a re-solve or edit assigns
+ * a new one.
+ * @param {Float64Array|null} points3d
+ */
+export function markPoints3dSmoothed(points3d) {
+    if (points3d) _smoothedPoints3d.add(points3d);
+}
+
+/** Does `points3d` hold smoothed 3D? (`markPoints3dSmoothed`) */
+export function isPoints3dSmoothed(points3d) {
+    return !!points3d && _smoothedPoints3d.has(points3d);
+}
+
 
 // --------------------------------------------------------------------------
 // Linear algebra helpers (module-level utility functions)

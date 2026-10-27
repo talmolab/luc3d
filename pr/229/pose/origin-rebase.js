@@ -66,8 +66,9 @@
 //
 // DOM-free, so it is testable directly.
 
-import { applyOriginFrame, mulMat3Vec3, rebaseExtrinsics } from './origin-frame.js?v=e42bbed9fecf';
-import { points3dNodeCount, hasPoint3d, pooledPoints3d, isPoints3dFromFile, markPoints3dFromFile } from './pose-data.js?v=e42bbed9fecf';
+import { applyOriginFrame, mulMat3Vec3, rebaseExtrinsics } from './origin-frame.js?v=84d6fff68bda';
+import { points3dNodeCount, hasPoint3d, pooledPoints3d, isPoints3dFromFile, markPoints3dFromFile,
+    isPoints3dSmoothed, markPoints3dSmoothed } from './pose-data.js?v=84d6fff68bda';
 
 /**
  * The SESSION-scoped tally fields — exactly what one `perSession` record
@@ -517,10 +518,13 @@ export function applyOriginRebase(plan) {
         // ArrayBuffer per group. The plan's own buffers are left for the GC.
         var g = plan.groups[i].group;
         var fromFile = isPoints3dFromFile(g.points3d);
+        var smoothed = isPoints3dSmoothed(g.points3d);
         g.points3d = pooledPoints3d(plan.groups[i].next);
-        // The same 3D in the new frame: still the file's, not a solve's (see
-        // `markPoints3dFromFile` — the display reprojects it, never re-solves).
+        // The same 3D in the new frame: still the file's (or the smoothing
+        // pass's), not a solve's (see `markPoints3dFromFile` — the display
+        // reprojects it, never re-solves).
         if (fromFile) markPoints3dFromFile(g.points3d);
+        if (smoothed) markPoints3dSmoothed(g.points3d);
     }
     for (i = 0; i < plan.nodes.length; i++) {
         var node = plan.nodes[i].node, nn = plan.nodes[i].next;
