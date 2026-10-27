@@ -16,32 +16,32 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=e647fa94f149';
-import { CrossViewTracker, Detection, membersPoints3d } from './cross-view-tracker.js?v=e647fa94f149';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=e647fa94f149';
+} from './triangulation.js?v=db2bf10a9f59';
+import { CrossViewTracker, Detection, membersPoints3d } from './cross-view-tracker.js?v=db2bf10a9f59';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=db2bf10a9f59';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=e647fa94f149';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=db2bf10a9f59';
 import {
     getNodeWeightArray, getNodeWeight, updateNodeWeights,
     getTrackingThresholds, getTrackingThreshold, isCameraTracked,
     getTrackingThresholdDefs, updateTrackingThresholds,
-} from '../ui/settings.js?v=e647fa94f149';
-import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=e647fa94f149';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=e647fa94f149';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=e647fa94f149';
-import { startTrackerWorker } from './tracker-pool.js?v=e647fa94f149';
-import { passesDetectionFilter } from './detection-filter-stats.js?v=e647fa94f149';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=e647fa94f149';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=e647fa94f149';
-import { updateInfoPanel } from '../ui/info-panel.js?v=e647fa94f149';
-import { setColorByIdentity } from '../ui/color-by.js?v=e647fa94f149';
-import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=e647fa94f149';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=e647fa94f149';
-import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=e647fa94f149';
-import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=e647fa94f149';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=e647fa94f149';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=e647fa94f149';
+} from '../ui/settings.js?v=db2bf10a9f59';
+import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=db2bf10a9f59';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=db2bf10a9f59';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=db2bf10a9f59';
+import { startTrackerWorker } from './tracker-pool.js?v=db2bf10a9f59';
+import { passesDetectionFilter } from './detection-filter-stats.js?v=db2bf10a9f59';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=db2bf10a9f59';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=db2bf10a9f59';
+import { updateInfoPanel } from '../ui/info-panel.js?v=db2bf10a9f59';
+import { setColorByIdentity } from '../ui/color-by.js?v=db2bf10a9f59';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=db2bf10a9f59';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=db2bf10a9f59';
+import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=db2bf10a9f59';
+import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=db2bf10a9f59';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=db2bf10a9f59';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=db2bf10a9f59';
 
 /**
  * A frame index as the USER sees it: 1-based.

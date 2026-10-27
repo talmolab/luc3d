@@ -28,20 +28,21 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=e647fa94f149';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=e647fa94f149';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=e647fa94f149';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=e647fa94f149';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=e647fa94f149';
-import { getTrackingThreshold } from './settings.js?v=e647fa94f149';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=e647fa94f149';
+import { noteProgress } from './progress-delta.js?v=db2bf10a9f59';
+import { state, getActiveSession } from './app-state.js?v=db2bf10a9f59';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=db2bf10a9f59';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=db2bf10a9f59';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=db2bf10a9f59';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=db2bf10a9f59';
+import { getTrackingThreshold } from './settings.js?v=db2bf10a9f59';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=db2bf10a9f59';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=e647fa94f149';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=e647fa94f149';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=e647fa94f149';
+         inputTensorToPixels, INPUT } from './image-embedder.js?v=db2bf10a9f59';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=db2bf10a9f59';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=db2bf10a9f59';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=e647fa94f149';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=db2bf10a9f59';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -247,6 +248,7 @@ function openProgressDialog(title) {
             if (frac != null) {
                 var pct = Math.round(100 * Math.min(1, Math.max(0, frac))) + '%';
                 fill.style.width = head.style.left = pct;
+                noteProgress(fill, parseFloat(pct) / 100);
                 pctEl.textContent = pct;
             }
         },
@@ -353,9 +355,12 @@ async function runImage(session, rate, inject) {
         var res = await checkImageSwitches(session, {
             fps: rate.fps,
             imageHz: getTrackingThreshold('imageCheckHz') || 2,
+            backgroundHz: getTrackingThreshold('imageCheckBackgroundHz'),
             threshold: getTrackingThreshold('imageChangeThreshold'),
             getEmbeddings: embedder.getEmbeddings,
             prepareFrames: embedder.prepareFrames,
+            croppable: embedder.croppable,
+            keyframes: embedder.keyframes,
             inFlight: embedder.inFlight || 2,
             releaseFrames: embedder.releaseFrames,
             signal: prog.signal,

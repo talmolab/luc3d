@@ -28,22 +28,22 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js?v=e647fa94f149';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=e647fa94f149';
-import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=e647fa94f149';
+} from './app-state.js?v=db2bf10a9f59';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=db2bf10a9f59';
+import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=db2bf10a9f59';
 import {
     triangulateAndReproject, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod,
-} from '../pose/triangulation.js?v=e647fa94f149';
+} from '../pose/triangulation.js?v=db2bf10a9f59';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js?v=e647fa94f149';
-import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js?v=e647fa94f149';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=e647fa94f149';
+} from '../loading/session-loader.js?v=db2bf10a9f59';
+import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js?v=db2bf10a9f59';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=db2bf10a9f59';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -51,23 +51,23 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js?v=e647fa94f149';
+} from './video-filters.js?v=db2bf10a9f59';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=e647fa94f149';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=db2bf10a9f59';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js?v=e647fa94f149';
-import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=e647fa94f149';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=e647fa94f149';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=e647fa94f149';
+import { setSoloView } from './ui-wiring.js?v=db2bf10a9f59';
+import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=db2bf10a9f59';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=db2bf10a9f59';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=db2bf10a9f59';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=e647fa94f149';
-import { getLoadingProgressModal } from './loading-progress-modal.js?v=e647fa94f149';
+import { setup3DViewport } from '../pose/initialization.js?v=db2bf10a9f59';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=db2bf10a9f59';
 
 // ============================================
 // Dockview Pane Manager
@@ -2108,6 +2108,10 @@ export async function switchSession(newIdx) {
             // accidentally drive an unrelated modal task.
             coldDec._onProgress = null;
             coldDec.onProgress = null;
+            // ...and its decoded frames: the reserve keeps the decoder for
+            // reuse, not its cache, which would stay alive (counted by V8)
+            // for the 60 s before the close below.
+            if (typeof coldDec.releaseFrames === 'function') coldDec.releaseFrames();
             // Schedule close after 60s idle; rehydrate cancels this.
             coldDec._coldTimer = setTimeout(function () {
                 var idx = state._decoderPoolCold.indexOf(coldDec);
