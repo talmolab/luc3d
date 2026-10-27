@@ -19,6 +19,11 @@
  *     replaces the verdicts without touching the tracking: the left-out
  *     detections stay ungrouped, and the tooltip no longer claims "not tracked"
  *     for a check that tracked nothing.
+ *  2b. The seekbar's strip (ui/seekbar-pose-flags.js) shows a red tick at each
+ *     planted frame and no other red; hovering 1 px off one, the tooltip snaps to
+ *     that frame and names the outlier, and a click lands on it. With "outlier
+ *     from" 0 the same ticks are amber (§4), and a session with no check has an
+ *     empty strip (§6's end).
  *  6. Next / Previous Flagged Pose: real `]` / `[` presses step through exactly
  *     the planted frames, each with a status line naming what was flagged there;
  *     past the last one it stays put and says so (no wrap); the Tracks menu items
@@ -60,6 +65,19 @@ try {
     const tipOn = (cam, frame, which) => tipOnIn(page, cam, frame, which);
     const setThresholds = (th) => page.evaluate(async (th) => (await import('/ui/settings.js')).setTrackingThresholds(Object.assign({ autoSwitchCheck: 0 }, th)), th);
     const status = () => page.evaluate(() => document.getElementById('statusText').textContent);
+    // The seekbar strip: the colour drawn at each column ('red' / 'amber' / null), and
+    // the runs of red columns.
+    const strip = () => page.evaluate(() => {
+        const cv = document.getElementById('seekbarPoseFlags'), ctx = cv.getContext('2d');
+        const d = ctx.getImageData(0, 0, cv.width, cv.height).data, y = Math.floor(cv.height / 2), cols = [];
+        for (let x = 0; x < cv.width; x++) {
+            const i = (y * cv.width + x) * 4, [r, g, b, a] = [d[i], d[i + 1], d[i + 2], d[i + 3]];
+            cols.push(a < 128 ? null : (r > 200 && g < 100 ? 'red' : (r > 200 && g > 140 && b < 80 ? 'amber' : '?')));
+        }
+        return { cols, width: cv.width, total: window.__lucid.state.totalFrames };
+    });
+    const colorAt = (st, frame) => st.cols[Math.min(st.width - 1, Math.floor(frame / (st.total - 1) * st.width))];
+    const redRuns = (st) => st.cols.reduce((n, c, i) => n + (c === 'red' && st.cols[i - 1] !== 'red' ? 1 : 0), 0);
     // Tracks ▸ Check Poses, the real menu item; resolves once its status line is up.
     const runFromMenu = async () => {
         await page.evaluate(() => { document.getElementById('statusText').textContent = ''; document.getElementById('menuCheckPoses').click(); });
@@ -96,6 +114,22 @@ try {
     let t = await tipOn('c0', 300, 'planted');
     check(/^\w+\n(\(score: [\d.]+\)\n)?Pose: outlier \(score \d+\.\d\)$/.test(t), `hover on the planted pose: ${JSON.stringify(t)}`);
 
+    // ---- 2b. the seekbar strip ----------------------------------------------------------------
+    let sb = await strip();
+    check(sb.width > 0 && [300, 900, 1200, 1500].every(f => colorAt(sb, f) === 'red'), 'a red tick on the seekbar at each planted frame',
+        [300, 900, 1200, 1500].map(f => colorAt(sb, f)));
+    check(redRuns(sb) === 4, `...and no other red on the strip (${redRuns(sb)} red ticks)`);
+    {
+        const box = await page.locator('#seekbar').boundingBox();
+        const x = box.x + 900 / (sb.total - 1) * box.width + 1, y = box.y + box.height / 2;
+        await page.mouse.move(x, y);
+        const tip = await page.evaluate(() => document.getElementById('seekbarTooltip').textContent);
+        check(/^Frame 901\b.* — flagged pose: outlier in c0 \(score \d+\.\d\)$/.test(tip), `hover 1 px off the tick: the tooltip snaps to it and names it: "${tip}"`);
+        await page.mouse.down(); await page.mouse.up();
+        check(await page.evaluate(() => window.__lucid.state.currentFrame) === 900, 'a click there lands on the flagged frame');
+        await page.mouse.move(box.x + box.width / 2, box.y - 200);
+    }
+
     // ---- 3. it tracks nothing and edits nothing ----------------------------------------------
     const after = await page.evaluate(() => ({ groups: window.__lucid.state.session.instanceGroups.size, dirty: window.__lucid.state.isDirty }));
     check(after.groups === groupsBefore && after.groups === 0, `no identity group appears (${after.groups})`);
@@ -108,6 +142,8 @@ try {
     st = await runFromMenu();
     check(/^2D poses: [\d,]+ uncommon of 11,700 checked — /.test(st), `"outlier from" 0: uncommon only (${st})`);
     check(await badgePixels('c0', 300, 'planted', AMBER) > 20 && await badgePixels('c0', 300, 'planted', RED) === 0, '...and the badge is the amber "?"');
+    sb = await strip();
+    check([300, 900, 1200, 1500].every(f => colorAt(sb, f) === 'amber') && redRuns(sb) === 0, '...and the seekbar ticks are amber, none red');
 
     // ---- 5. after a Track All that left outliers out -----------------------------------------------
     await page.evaluate(async () => { (await import('/ui/app-state.js')).state.views = []; });
@@ -159,6 +195,9 @@ try {
     r = await press(']');
     check(r.frame === 10 && r.status === 'No pose check on this session — run Track All or Tracks ▸ Check Poses first',
         `no check yet: says to run one, goes nowhere (${r.frame}, "${r.status}")`);
+    await page.evaluate(async () => (await import('/ui/rendering.js')).drawAllOverlays(10));   // what a load does after building its session
+    sb = await strip();
+    check(sb.cols.every(c => c === null), 'a session with no check: the seekbar strip is empty');
 
     check(errs.length === 0, 'no page errors', errs);
 } finally {

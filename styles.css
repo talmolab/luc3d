@@ -2972,6 +2972,14 @@ body {
    character width still holds. */
 .seekbar-tick-label.is-end { font-weight: 600; }
 
+/* Frames the last 2D pose check flagged (ui/seekbar-pose-flags.js): a canvas
+   exactly over the 6px track, red = outlier, amber = uncommon only; under the
+   ID-switch ticks and the thumb, and never takes the pointer. */
+.seekbar-pose-flags {
+  position: absolute; left: 0; right: 0; top: 50%; width: 100%; height: 6px;
+  transform: translateY(-50%); border-radius: 3px; pointer-events: none; z-index: 1;
+}
+
 /* Possible-ID-switch ticks on the seekbar (ui/seekbar-markers.js): over the
    track, under the thumb; they never take the pointer (the seekbar's handlers
    snap to them instead). */

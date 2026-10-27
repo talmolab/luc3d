@@ -69,6 +69,7 @@ import { installSeekbarTooltip } from './seekbar-tooltip.js';
 import { installSeekbarPreview } from './seekbar-preview.js';
 import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js';
 import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js';
+import { installSeekbarPoseFlags, syncSeekbarPoseFlags, seekbarPoseFlagAt } from './seekbar-pose-flags.js';
 import { installSeekbarTicks, refreshSeekbarTicks } from './seekbar-ticks.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
@@ -1960,15 +1961,23 @@ export function setupUI() {
         var frameAtFraction = function (fraction) {
             return Math.round(fraction * (state.totalFrames - 1));
         };
-        // A possible-ID-switch tick under the cursor (ui/seekbar-markers.js) wins: a click or
+        // A possible-ID-switch tick under the cursor (ui/seekbar-markers.js) wins, then a
+        // flagged pose's tick within a few pixels (ui/seekbar-pose-flags.js): a click or
         // drag there lands on that exact frame, and the tooltip names it.
+        var markerAt = function (frac, widthPx) {
+            var m = seekbarMarkerAt(frac, widthPx);
+            if (m) return { frame: m.frame, text: describeSwitchMarker(m) };
+            return seekbarPoseFlagAt(frac, widthPx);
+        };
         var getFrameFromEvent = function (e) {
             var rect = seekbar.getBoundingClientRect();
             var frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-            var m = seekbarMarkerAt(frac, rect.width);
+            var m = markerAt(frac, rect.width);
             return m ? m.frame : frameAtFraction(frac);
         };
         installSeekbarMarkers(document.getElementById('seekbarMarks'), state.totalFrames);
+        installSeekbarPoseFlags(document.getElementById('seekbarPoseFlags'));
+        syncSeekbarPoseFlags(getActiveSession(), state.totalFrames);
         // The time ruler under the bar (ui/seekbar-ticks.js).
         installSeekbarTicks(document.getElementById('seekbarRuler'), {
             getTotalFrames: function () { return state.totalFrames; },
@@ -1980,10 +1989,7 @@ export function setupUI() {
             frameAtFraction: frameAtFraction,
             getTotalFrames: function () { return state.totalFrames; },
             getFps: function () { return state.fps; },
-            markerAt: function (frac, widthPx) {
-                var m = seekbarMarkerAt(frac, widthPx);
-                return m ? { frame: m.frame, text: describeSwitchMarker(m) } : null;
-            },
+            markerAt: markerAt,
             hoverLine: document.getElementById('seekbarHoverLine'),
             // The selected view at that frame: the solo view, else the active
             // pane's (.video-selected), else the first — not lastInteractedView,
@@ -3063,6 +3069,7 @@ export function updateSeekbarVisual(frameIdx) {
     document.getElementById('seekbarThumb').style.left = pct + '%';
     showReadoutFrame(frameIdx);
     setSeekbarMarkerFrames(state.totalFrames);       // no-op unless the frame count changed
+    syncSeekbarPoseFlags(getActiveSession(), state.totalFrames);   // no-op unless the pose check or frame count changed
     refreshSeekbarTicks();                           // no-op unless the frame count or FPS changed
     updateIdSwitchProgress(frameIdx);                // the ID Switches tab's selected-row bar (no-op without one)
 }

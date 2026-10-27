@@ -17,6 +17,7 @@ import { drawFrameOverlays } from './overlays.js';
 import { syncViewLegends } from './view-legend.js';
 import { isCameraTracked, getTrackingThreshold } from './settings.js';
 import { poseCheckOf } from '../pose/pose-check-session.js';
+import { syncSeekbarPoseFlags } from './seekbar-pose-flags.js';
 
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
@@ -338,6 +339,9 @@ export function drawAllOverlays(frameIdx, viewFrames) {
     // A node tooltip names a node on the frame it was hovered on; on any other
     // frame that node has moved out from under the pointer.
     syncNodeTooltipFrame(frameIdx);
+    // The seekbar's flagged-pose ticks follow the session's pose check, which
+    // Track All and Check Poses replace and then redraw (a no-op otherwise).
+    syncSeekbarPoseFlags(state.session, state.totalFrames);
 
     // Lazy H5: fetch frame data on demand if not yet loaded
     if (state.session.lazyLoader && !state.session.frameGroups.has(frameIdx)) {

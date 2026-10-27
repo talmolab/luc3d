@@ -3594,7 +3594,12 @@ re-read); `nextFlaggedFrame(poseCheck, frame, dir)` — the next one strictly af
 wrap-around); `describeFlaggedFrame(poseCheck, frame)` — "Flagged frame 3 of 412
 (frame 1,235): outlier in Camera1_topC (score 18.2), uncommon in …", frames shown
 1-based; `describeNoFlaggedFrame(poseCheck, frame, dir)` — no check yet, nothing
-flagged, or nothing past `frame` that way.
+flagged, or nothing past `frame` that way. For the seekbar's ticks
+(`ui/seekbar-pose-flags.js`): `flaggedFrameClasses(poseCheck)` — the worst class
+on each of those frames, index for index (`Uint8Array`, outlier beats uncommon),
+cached with them; `describeFlagsAt(poseCheck, frame)` — just the "outlier in …
+(score …), uncommon in …" part, by binary search ('' on a clean frame), which
+`describeFlaggedFrame` also uses.
 
 **The views score what they draw.** Nothing is written onto an Instance (a lazy
 project's instances come and go), so `poseCheckOf(session, camName, inst)` scores
@@ -3606,18 +3611,18 @@ tracked", "Pose: too few nodes to check".
 **Imports from project modules.** `./pose-check.js`.
 
 **Imported by.** `pose/tracker.js`, `ui/rendering.js`, `ui/interaction.js`,
-`ui/pose-check-command.js`.
+`ui/pose-check-command.js`, `ui/seekbar-pose-flags.js`.
 
 **User-facing features.** The "2D poses" row of the Track All summary, the ?/✕
-marks in the views, the tooltip line, (opt-in) outliers left out of tracking, and
-Tracks ▸ Check Poses.
+marks in the views, the tooltip line, (opt-in) outliers left out of tracking,
+Tracks ▸ Check Poses, and the flagged frames' ticks on the seekbar.
 
 Covered by `tests/test-pose-check.mjs` (§10: eager and lazy sampling agree, the
 lazy sampler's release rule, the run's counts and flags, user instances, the
 default keeping outliers, outlier threshold 0; §11: Check Poses on an eager and a
 lazy session, resident frames read from the session, the release rule, the
 status line; §12: trimming leaves every score bit-identical; §13: the stops and
-their status lines),
+their status lines; §14: the seekbar's columns and snapping),
 `tests/e2e/track-all-pose-check.mjs` and `tests/e2e/check-poses-command.mjs`.
 
 ---
@@ -6346,6 +6351,9 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   pose check (`session.poseCheck`, after Track All or Check Poses), each view
   passes `drawFrameOverlays` a verdict function (`poseCheckOfView`) for its ?/✕
   marks. The instance is scored on demand, nothing cached — about a microsecond each.
+- `./seekbar-pose-flags.js` — `syncSeekbarPoseFlags`: every `drawAllOverlays`
+  keeps the seekbar's flagged-pose strip on the session's current check (Track
+  All and Check Poses replace it, then redraw); a no-op when nothing changed.
 - `./identity-assignment.js` — `editGroupState`, `finishEditGroup`.
 - `./info-panel.js` — `updateFrameInfo`.
 - `./frame-counters.js` — `computeFrameCounterBaseline`,
@@ -7926,6 +7934,54 @@ id_2 (size score -1415)").
 
 **Coverage.** `tests/e2e/size-switch-check.mjs` (ticks drawn, none on the
 timeline, hover text, click snaps to the tick's frame, reviewed dimming).
+
+---
+
+### ui/seekbar-pose-flags.js
+
+**Purpose.** The frames the last 2D pose check flagged (Track All or Tracks ▸
+Check Poses — `session.poseCheck`, `pose/pose-check-session.js`), as a strip of
+ticks on the transport seekbar: a `<canvas id="seekbarPoseFlags">` exactly over
+the 6 px track, red where a frame holds an outlier, amber where it holds only
+uncommon poses. Under the ID-switch ticks (`ui/seekbar-markers.js`) and the
+thumb, `pointer-events: none`.
+
+**Drawing.** One canvas, a column per device pixel — never an element per frame:
+a check can flag tens of thousands of frames (~40,000 uncommon and ~14,000
+outlier poses on the 5-mouse recording), more than the bar has pixels. A column
+takes the worst class of the flagged frames under it (`poseFlagColumns`, the
+thumb's `frame / (totalFrames - 1)` mapping), and every marked column is drawn at
+least `MIN_TICK_CSS_PX` (2) wide, so one flagged frame in an hour still shows;
+red is drawn after amber, so it wins where they meet.
+
+**Key exports.** `installSeekbarPoseFlags(canvas)` (redraws on resize via a
+`ResizeObserver`); `syncSeekbarPoseFlags(session, totalFrames)` — redraws only
+when the session's `poseCheck`, its `flags` array or the frame count changed, so
+it is called on every `updateSeekbarVisual` and every `drawAllOverlays` (which
+Track All and Check Poses end with) for a few comparisons; a session without a
+check clears the strip; `poseFlagColumns(frames, worst, totalFrames, columns)`
+(pure); `seekbarPoseFlagAt(frac, widthPx, tolPx = POSE_FLAG_SNAP_PX)` — the
+flagged frame within 3 px of the cursor, an OUTLIER in reach before a nearer
+uncommon one (so a red tick among amber ones can be hit), with the tooltip line
+"flagged pose: outlier in c0 (score 18.2)"; `SEEKBAR_POSE_COLORS` (the views'
+`POSE_FLAG_COLORS`).
+
+**Snapping.** `ui/ui-wiring.js`'s seekbar `markerAt` asks the ID-switch ticks
+first, then this: a click or drag lands on the flagged frame, and the tooltip
+names that same frame ("Frame 901 · 00:30.000 — flagged pose: outlier in c0
+(score 82.0)").
+
+**Imports from project modules.** `../pose/pose-check-session.js`
+(`flaggedFrames`, `flaggedFrameClasses`, `describeFlagsAt`).
+
+**Imported by.** `ui/ui-wiring.js`, `ui/rendering.js`.
+
+**Coverage.** `tests/test-pose-check.mjs` §14 (columns, worst class, dense
+flags, snapping and its outlier priority); `tests/e2e/check-poses-command.mjs`
+(red ticks exactly at the planted frames, amber with "outlier from" 0, the hover
+text, a click snapping, empty without a check) and
+`tests/e2e/track-all-pose-check.mjs` (ticks after Track All, cleared with the
+check off).
 
 ---
 
@@ -10580,6 +10636,10 @@ and the FPS pill),
 `seekbar-markers.js` (`installSeekbarMarkers`, `seekbarMarkerAt`,
 `describeSwitchMarker`, `setSeekbarMarkerFrames` — the possible-ID-switch ticks:
 the scrub handlers and the tooltip snap to a tick within 5 px),
+`seekbar-pose-flags.js` (`installSeekbarPoseFlags`, `syncSeekbarPoseFlags`,
+`seekbarPoseFlagAt` — the flagged-pose strip: synced from `updateSeekbarVisual`,
+and the scrub handlers and the tooltip snap to its ticks after the ID-switch
+ones),
 `seekbar-ticks.js` (`installSeekbarTicks`, `refreshSeekbarTicks` — the time
 ruler under the seekbar; `updateSeekbarVisual` calls the refresh, a no-op
 unless the frame count or FPS changed),

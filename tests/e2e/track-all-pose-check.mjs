@@ -23,7 +23,8 @@
  *     reuses the pass's models — one frame is too little to learn from).
  *  5. Negative controls: with the check OFF the forced assignment DOES group
  *     planted detections (so (4) is the check's doing), the summary has no pose
- *     row and no verdicts stay on the session; with "outlier from" set to 0 they
+ *     row and no verdicts stay on the session (and the seekbar's red ticks, one
+ *     per planted frame after a checked run, are gone); with "outlier from" set to 0 they
  *     are flagged "uncommon" (amber badge, tooltip) and tracked.
  *
  * Run: node tests/e2e/track-all-pose-check.mjs
@@ -68,6 +69,17 @@ try {
             text: Array.from(r.children).map(c => c.textContent).join('|'), title: r.title || (r.querySelector('[title]') || {}).title || '' }));
     });
     const closeSummary = () => page.evaluate(() => { const b = document.getElementById('trackSummaryClose'); if (b) b.click(); });
+
+    // Red columns on the seekbar's flagged-pose strip (ui/seekbar-pose-flags.js), as runs.
+    const seekbarRedTicks = () => page.evaluate(() => {
+        const cv = document.getElementById('seekbarPoseFlags'), d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+        const y = Math.floor(cv.height / 2); let runs = 0, prev = false;
+        for (let x = 0; x < cv.width; x++) {
+            const i = (y * cv.width + x) * 4, red = d[i + 3] > 128 && d[i] > 200 && d[i + 1] < 100;
+            if (red && !prev) runs++; prev = red;
+        }
+        return runs;
+    });
     const setThresholds = (th) => page.evaluate(async (th) => (await import('/ui/settings.js')).setTrackingThresholds(Object.assign({ autoSwitchCheck: 0 }, th)), th);
 
     // ---- 1. Track All (defaults) -> the summary row -------------------------------------------
@@ -87,6 +99,7 @@ try {
     const flags = await page.evaluate(() => window.__lucid.state.session.poseCheck.flags.filter(f => f.cls === 2).map(f => f.camera + '@' + f.frame));
     check(JSON.stringify(flags) === JSON.stringify(['c0@300', 'c0@900', 'c1@1200', 'c0@1500']), `the flags name the planted detections: ${JSON.stringify(flags)}`);
     await closeSummary();
+    check(await seekbarRedTicks() === 4, 'Track All puts a red tick on the seekbar at each planted frame');
 
     // ---- 2. by default outliers are flagged, and still tracked --------------------------------------
     let pl = await planted();
@@ -133,6 +146,7 @@ try {
     pl = await planted();
     check(pl.some(p => p.grouped), `check off: the forced assignment groups planted detections (${pl.filter(p => p.grouped).length} of 4) — so their absence in (4) is the check's doing`, pl);
     check(await page.evaluate(() => window.__lucid.state.session.poseCheck === null), 'check off: no verdicts are left on the session');
+    check(await seekbarRedTicks() === 0, 'check off: the seekbar strip is cleared');
 
     await page.evaluate(() => window.__build());
     await setThresholds({ poseOutlierZ: 0, poseExcludeOutliers: 1 });
