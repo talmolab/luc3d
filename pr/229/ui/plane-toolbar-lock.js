@@ -16,7 +16,7 @@
 // because the binding is read INSIDE the function body, never at module top
 // level, where a circular import is still `undefined`.
 
-import { planeState } from './plane-definition.js?v=a8a08ce625b2';
+import { planeState } from './plane-definition.js?v=340619b4e8b3';
 
 /**
  * The toolbar buttons Defining Plane Mode blocks.
@@ -39,22 +39,26 @@ import { planeState } from './plane-definition.js?v=a8a08ce625b2';
  * @type {string[]}
  */
 const PLANE_LOCKED_TOOLBAR_IDS = [
-    'tbAddInstance', 'tbDeleteInstance',
-    'tbGroup', 'tbEditGroup', 'tbTriangulate', 'tbTriangulateAll',
-    'tbTrackFrame', 'tbTrackAll',
+    'tbInstanceMenu', 'tbAddInstance', 'tbDeleteInstance',
+    'tbGroupMenu', 'tbGroup', 'tbEditGroup', 'tbTriangulate', 'tbTriangulateAll',
+    'tbSmooth', 'tbTrackFrame', 'tbTrackAll',
 ];
 
 /**
  * The dropdown WRAPPERS whose menus must be locked with their button.
  *
- * `#tbTriangulate` / `#tbTriangulateAll` each sit inside a `.tri-dropdown`
- * whose menu opens on **hover** (CSS) and whose DLT / BA entries are `div`s
- * with their own click handlers. `disabled` on the button reaches neither, so
- * without this the button greys out while its menu still triangulates.
+ * `#tbTriangulate` / `#tbTriangulateAll` / `#tbSmooth` each sit inside a
+ * `.tri-dropdown` whose menu opens on **hover** (CSS) and whose entries are
+ * `div`s with their own click handlers. `disabled` on the button reaches
+ * neither, so without this the button greys out while its menu still runs.
+ * The Instance and Group menus hold `<button>`s that ARE disabled one by one
+ * (they are in the list above too); their wrappers are locked so the menus do
+ * not even open.
  *
  * @type {string[]}
  */
-const PLANE_LOCKED_DROPDOWN_IDS = ['triangulateDropdown', 'triangulateAllDropdown'];
+const PLANE_LOCKED_DROPDOWN_IDS = ['instanceDropdown', 'groupDropdown', 'triangulateDropdown',
+    'triangulateAllDropdown', 'smoothingDropdown'];
 
 /** Suffix appended to a locked button's tooltip, so "why?" is answered in place. */
 const LOCKED_TITLE_SUFFIX = ' — not available in Defining Plane Mode';

@@ -120,7 +120,7 @@ import {
     isPoints3dSmoothed,
     unsmoothedPoints3d,
     clearPoints3dSmoothed,
-} from './pose-data.js?v=a8a08ce625b2';
+} from './pose-data.js?v=340619b4e8b3';
 
 // Identity id meaning "no identity" (matches `InstanceGroup`'s default).
 const NO_IDENTITY = -1;
@@ -515,8 +515,14 @@ export function smoothSession(session, params, opts) {
 
     var total = collected.tracks.size;
     var done = 0;
+    var smoothedFrames = smoothedFramesOf(session);
     for (var [, byFrame] of collected.tracks) {
         var stats = smoothTrajectory(byFrame, cfg, writeFrames);
+        if (stats.frames > 0) {
+            for (var [fi, g] of byFrame) {
+                if (isPoints3dSmoothed(g.points3d)) smoothedFrames.add(fi);
+            }
+        }
         if (stats.frames > 0) result.tracks++;
         result.frames += stats.frames;
         result.nodes += stats.nodes;
@@ -527,23 +533,44 @@ export function smoothSession(session, params, opts) {
     return result;
 }
 
+/** Session -> frames a pass smoothed something on (a superset; see `hasSmoothed3d`). */
+var _smoothedFrames = new WeakMap();
+
+function smoothedFramesOf(session) {
+    var set = _smoothedFrames.get(session);
+    if (!set) { set = new Set(); _smoothedFrames.set(session, set); }
+    return set;
+}
+
+/** Does any group on `frameIdx` hold smoothed 3D (`isPoints3dSmoothed`)? */
+function frameHasSmoothed3d(session, frameIdx) {
+    var groups = session.instanceGroups.get(frameIdx);
+    if (!groups) return false;
+    for (var gi = 0; gi < groups.length; gi++) {
+        if (groups[gi] && isPoints3dSmoothed(groups[gi].points3d)) return true;
+    }
+    return false;
+}
+
 /**
- * Does any group hold smoothed 3D (`isPoints3dSmoothed`) — on `frameIdx`, or
- * anywhere in the session when it is omitted? Lights the menu items.
+ * Does any group hold smoothed 3D — on `frameIdx`, or anywhere in the session
+ * when it is omitted? Drives the toolbar button's blue state on every redraw,
+ * so the session-wide answer walks only the frames a pass wrote, dropping each
+ * one found no longer smoothed (re-triangulated, restored, deleted): cheap
+ * whether everything is still smoothed (the first frame answers) or nothing is
+ * (each stale frame is visited once).
  * @param {Session} session
  * @param {number} [frameIdx]
  * @returns {boolean}
  */
 export function hasSmoothed3d(session, frameIdx) {
     if (!session || !session.instanceGroups) return false;
-    var lists = frameIdx == null
-        ? session.instanceGroups.values()
-        : [session.instanceGroups.get(frameIdx) || []];
-    for (var groups of lists) {
-        if (!groups) continue;
-        for (var gi = 0; gi < groups.length; gi++) {
-            if (groups[gi] && isPoints3dSmoothed(groups[gi].points3d)) return true;
-        }
+    if (frameIdx != null) return frameHasSmoothed3d(session, frameIdx);
+    var set = _smoothedFrames.get(session);
+    if (!set) return false;
+    for (var fi of set) {
+        if (frameHasSmoothed3d(session, fi)) return true;
+        set.delete(fi);
     }
     return false;
 }

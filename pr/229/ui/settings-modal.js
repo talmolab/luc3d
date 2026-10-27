@@ -40,12 +40,12 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=a8a08ce625b2';
-import { getActiveSession, state, timeline } from './app-state.js?v=a8a08ce625b2';
-import { drawAllOverlays } from './rendering.js?v=a8a08ce625b2';
-import { installModalGeometry } from './modal-geometry.js?v=a8a08ce625b2';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=a8a08ce625b2';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=a8a08ce625b2';
+} from './settings.js?v=340619b4e8b3';
+import { getActiveSession, state, timeline } from './app-state.js?v=340619b4e8b3';
+import { drawAllOverlays } from './rendering.js?v=340619b4e8b3';
+import { installModalGeometry } from './modal-geometry.js?v=340619b4e8b3';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=340619b4e8b3';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=340619b4e8b3';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -714,8 +714,8 @@ export function showSettingsModal(initialPanel) {
     // The post-triangulation filter's hyperparameters. Kept as its own panel
     // rather than a fourth section of the Tracking Wizard because it is NOT a
     // tracking parameter: it runs after triangulation, over 3D that the tracker
-    // has already finished with. Run it from Triangulate ▸ Temporal Smoothing
-    // (current frame) or Triangulate All ▸ Temporal Smoothing (whole project).
+    // has already finished with. Run it from the toolbar's Temporal Smoothing
+    // button (all frames; its menu also has "This frame").
     const smPanel = document.createElement('div');
     smPanel.className = 'settings-panel';
     smPanel.dataset.panel = 'smoothing';
@@ -731,7 +731,7 @@ export function showSettingsModal(initialPanel) {
     smHint.textContent = 'Filters the triangulated 3D tracks through time to remove frame-to-frame jitter. ' +
         'Each skeleton node is filtered independently along the frame axis; 2D user labels and predictions are ' +
         'never modified, and the reprojection overlays follow the smoothed 3D. Both stages are off (0) by ' +
-        'default — run the pass from Triangulate ▸ Temporal Smoothing. Changes apply when you click Apply.';
+        'default — run the pass with the Temporal Smoothing button next to Triangulate All. Changes apply when you click Apply.';
     smPanel.appendChild(smHint);
 
     const smSection = buildSection('Filter Parameters', smoothingDefs.length || null);

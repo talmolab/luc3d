@@ -6,33 +6,34 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=a8a08ce625b2';
-import { points3dNodeCount, isPoints3dFromFile, isPoints3dSmoothed } from '../pose/pose-data.js?v=a8a08ce625b2';
+import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=340619b4e8b3';
+import { points3dNodeCount, isPoints3dFromFile, isPoints3dSmoothed } from '../pose/pose-data.js?v=340619b4e8b3';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
     triangulateAndReproject, reprojectStoredPoints3d, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=a8a08ce625b2';
-import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=a8a08ce625b2';
-import { drawFrameOverlays } from './overlays.js?v=a8a08ce625b2';
-import { syncViewLegends } from './view-legend.js?v=a8a08ce625b2';
-import { isCameraTracked, getTrackingThreshold } from './settings.js?v=a8a08ce625b2';
+} from '../pose/triangulation.js?v=340619b4e8b3';
+import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=340619b4e8b3';
+import { drawFrameOverlays } from './overlays.js?v=340619b4e8b3';
+import { syncViewLegends } from './view-legend.js?v=340619b4e8b3';
+import { isCameraTracked, getTrackingThreshold } from './settings.js?v=340619b4e8b3';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=a8a08ce625b2';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=340619b4e8b3';
 // The toolbar's Animals field shows the ACTIVE session's count. Circular
 // (it reaches pose/tracker.js, which imports this module) — safe for the same
 // reason: the call site is inside drawAllOverlays' body.
-import { syncAnimalCountField } from './animal-count-field.js?v=a8a08ce625b2';
-import { syncNodeTooltipFrame } from './node-tooltip.js?v=a8a08ce625b2';
+import { syncAnimalCountField } from './animal-count-field.js?v=340619b4e8b3';
+import { syncNodeTooltipFrame } from './node-tooltip.js?v=340619b4e8b3';
+import { syncSmoothingButton } from './smoothing-button.js?v=340619b4e8b3';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=a8a08ce625b2';
-import { updateFrameInfo } from './info-panel.js?v=a8a08ce625b2';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=340619b4e8b3';
+import { updateFrameInfo } from './info-panel.js?v=340619b4e8b3';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
-} from './frame-counters.js?v=a8a08ce625b2';
+} from './frame-counters.js?v=340619b4e8b3';
 
 // ============================================
 // Reproj/Error visibility
@@ -411,6 +412,15 @@ export function drawAllOverlays(frameIdx, viewFrames) {
         var isReprojSelected = interactionManager ? interactionManager.selectedReprojected : false;
         tbEditGroup.disabled = isReprojSelected;
     }
+    // Group and Edit Group live in the Group hover menu: its button turns blue
+    // whenever either item is, so the mode shows without opening the menu.
+    var tbGroupMenu = document.getElementById('tbGroupMenu');
+    if (tbGroupMenu) {
+        tbGroupMenu.classList.toggle('active',
+            !!(tbGroup && tbGroup.classList.contains('active')) ||
+            !!(tbEditGroup && tbEditGroup.classList.contains('active')));
+    }
+    syncSmoothingButton();
     // Defining Plane Mode blocks the pose-annotation buttons, and the two
     // above are recomputed on EVERY overlay draw — so the lock is re-asserted
     // here rather than only at `enterPlaneMode`, where it would survive until

@@ -1365,12 +1365,30 @@ body {
   background: var(--accent-dim);
 }
 
-/* Temporal Smoothing while it is applied (ui/ui-wiring.js refreshSmoothingItems):
-   the toolbar's on-state colours. */
+/* The Instance and Group menus hold the original toolbar <button>s
+   (index.html), restyled as menu rows. They keep the toolbar's on-state
+   (.active, e.g. Ungroup while a group is selected) and disabled look. */
+button.tri-dropdown-item {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+}
+button.tri-dropdown-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+  background: transparent;
+}
+
+/* An item that is ON: a pressed Group item, or Temporal Smoothing's scope
+   while it is applied (ui/smoothing-button.js). Toolbar on-state colours. */
+.tri-dropdown-item.active,
 .tri-dropdown-item.applied,
 .tri-dropdown-item.applied .tri-dropdown-hint {
   color: var(--accent);
 }
+.tri-dropdown-item.active,
 .tri-dropdown-item.applied {
   background: var(--accent-dim);
 }

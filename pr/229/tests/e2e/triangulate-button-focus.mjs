@@ -175,7 +175,9 @@ try {
     // Tab rather than .focus(): only a real keyboard focus sets :focus-visible,
     // which is what the blur rule keys on.
     await reset();
-    await page.evaluate(() => { document.getElementById('tbEditGroup').focus(); });
+    // The Group menu's button is the last toolbar control before Triangulate
+    // (its items are in a closed hover menu, which Tab skips).
+    await page.evaluate(() => { document.getElementById('tbGroupMenu').focus(); });
     for (let i = 0; i < 6; i++) {
         await page.keyboard.press('Tab');
         const id = await page.evaluate(() => document.activeElement.id);
