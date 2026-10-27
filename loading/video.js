@@ -90,6 +90,23 @@ export function frameCacheFrames(budgetMB, frameBytes) {
     return Math.max(FRAME_CACHE_MIN, Math.min(FRAME_CACHE_MAX, n));
 }
 
+/**
+ * `releaseFrames()` every decoder of these views — for a SESSION going off
+ * screen (another session loaded over it). `VideoController._shownViews` only
+ * sees the active session's views, so without this each loaded session keeps
+ * its full caches: measured on 3 open 8-camera sessions, 3.1 GB of ImageBitmaps
+ * held for the two not shown (GPU-backed, but counted by V8 as external
+ * memory), and Track All on the third took 79–96 s instead of ~24 s, most of it
+ * in back-to-back full GCs. Coming back re-decodes the current frame.
+ * @param {Array} views
+ */
+export function releaseViewsFrames(views) {
+    (views || []).forEach(function (v) {
+        var d = v && v.decoder;
+        if (d && typeof d.releaseFrames === 'function') d.releaseFrames();
+    });
+}
+
 /** Index of the frame nearest timestamp `t` in the sorted `times` (within half a frame), or -1. */
 function frameNearTime(times, t) {
     var lo = 0, hi = times.length - 1;
@@ -97,6 +114,37 @@ function frameNearTime(times, t) {
     if (lo > 0 && Math.abs(times[lo - 1] - t) < Math.abs(times[lo] - t)) lo--;
     var half = times.length > 1 ? (times[times.length - 1] - times[0]) / (times.length - 1) / 2 : Infinity;
     return Math.abs(times[lo] - t) <= half ? lo : -1;
+}
+
+/**
+ * `src` (an ImageBitmap, VideoFrame or `<video>`) as a new ImageBitmap `width`
+ * px wide, aspect kept; full size when `width` is missing or not smaller.
+ */
+export function scaledBitmap(src, width) {
+    var w = src.displayWidth || src.videoWidth || src.width;
+    var h = src.displayHeight || src.videoHeight || src.height;
+    if (!(width > 0) || !(w > width) || !(h > 0)) return createImageBitmap(src);
+    return createImageBitmap(src, {
+        resizeWidth: Math.round(width),
+        resizeHeight: Math.max(1, Math.round(h * width / w)),
+        resizeQuality: "medium",
+    });
+}
+
+/** Resolve on `el`'s next `type` event; reject on its `error` or after `ms` (5 s). */
+function mediaEvent(el, type, ms) {
+    return new Promise(function (resolve, reject) {
+        var timer = setTimeout(function () { done(); reject(new Error(type + " timed out")); }, ms || 5000);
+        function ok() { done(); resolve(); }
+        function bad() { done(); reject(new Error("video error")); }
+        function done() {
+            clearTimeout(timer);
+            el.removeEventListener(type, ok);
+            el.removeEventListener("error", bad);
+        }
+        el.addEventListener(type, ok);
+        el.addEventListener("error", bad);
+    });
 }
 
 /**
@@ -174,6 +222,9 @@ export class OnDemandVideoDecoder {
         this._mbUnavailable = null; // why there is no _mbBackend: { reason: 'codec'|'init', ... } (see _initMediabunny)
         this._stepCursor = null; // open decode stream for paused forward steps (see _mbGetFrame)
         this._keySink = null;    // mediabunny EncodedPacketSink: which keyframe a frame needs
+        this._peekEl = null;     // peekFrame's own <video> (HTML5 path), never the playback one
+        this._peekSource = null; // the File / URL _peekEl is loaded with (switchSource changes this.file)
+        this._peekLock = null;   // serializes _peekHTML5's seeks of _peekEl
 
         // Source reference for mp4box lazy init
         this._source = null;
@@ -1096,6 +1147,89 @@ export class OnDemandVideoDecoder {
     }
 
     /**
+     * A copy of frame `frameIndex` scaled to `width` px wide (aspect kept), for
+     * a preview (the seekbar's hover thumbnail, ui/seekbar-preview.js) — WITHOUT
+     * touching anything playback or stepping relies on: no _mbSeekLock, step
+     * cursor, back-prefetch, cache write or seek of the playback `<video>`. The
+     * caller owns the result and closes it. Null when there is no such frame.
+     *
+     * mediabunny: a frame the backend already holds is copied (`Map.get`, so its
+     * LRU order is untouched); any other is decoded by `sink.getSample` on its
+     * own short-lived decoder, from its keyframe — the same frame-accurate
+     * lookup as decodeSingleFrame, minus the cacheFrame. Without a backend (or
+     * if that fails): a second, private `<video>` on the same source, seeked
+     * like _getFrameHTML5 (`_peekHTML5`).
+     */
+    async peekFrame(frameIndex, width) {
+        if (!(frameIndex >= 0 && frameIndex < this.samples.length)) return null;
+        var be = this._mbBackend;
+        if (be && be.sink && be._frameTimes && be._frameTimes[frameIndex] != null) {
+            try {
+                var hit = be.cache && be.cache.get(frameIndex);
+                if (hit) return await scaledBitmap(hit, width);
+                var sample = await be.sink.getSample(be._frameTimes[frameIndex]);
+                if (!sample) return null;
+                var vf = sample.toVideoFrame();
+                try { return await scaledBitmap(vf, width); }
+                finally { vf.close(); sample.close(); }
+            } catch (e) {
+                videoLog("Preview decode failed for frame " + frameIndex + ": " + e.message + ", trying HTML5", "warn");
+            }
+        }
+        return this._peekHTML5(frameIndex, width);
+    }
+
+    /** peekFrame's `<video>` path: its own element (`_peekEl`), never the playback one. */
+    async _peekHTML5(frameIndex, width) {
+        var source = this.file || this.url;
+        if (!source || !this._videoReady) return null;
+        while (this._peekLock) { await this._peekLock; }
+        var release;
+        this._peekLock = new Promise(function (r) { release = r; });
+        try {
+            var el = this._peekEl;
+            if (!el) {
+                el = this._peekEl = document.createElement("video");
+                el.muted = true;
+                el.playsInline = true;
+                el.preload = "auto";
+            }
+            if (this._peekSource !== source) {
+                if (el.src.startsWith("blob:")) URL.revokeObjectURL(el.src);
+                this._peekSource = source;
+                el.src = source instanceof Blob ? URL.createObjectURL(source) : source;
+            }
+            if (el.readyState < 1) await mediaEvent(el, "loadedmetadata");
+            var t = this.html5SeekTime(frameIndex);
+            if (el.currentTime !== t || el.readyState < 2) {
+                var seeked = mediaEvent(el, "seeked");
+                el.currentTime = t;
+                await seeked;
+            }
+            // close() / switchSource() may have run while we waited
+            if (el !== this._peekEl || this._peekSource !== source || el.readyState < 2) return null;
+            return await scaledBitmap(el, width);
+        } catch (e) {
+            return null;
+        } finally {
+            this._peekLock = null;
+            release();
+        }
+    }
+
+    /** Drop peekFrame's private `<video>` (close / switchSource). */
+    _releasePeek() {
+        var el = this._peekEl;
+        this._peekEl = null;
+        this._peekSource = null;
+        if (!el) return;
+        var src = el.src;
+        el.removeAttribute("src");
+        el.load();
+        if (src.startsWith("blob:")) URL.revokeObjectURL(src);
+    }
+
+    /**
      * The `<video>.currentTime` a stepping seek to `frameIndex` sets: the middle
      * of the frame's presentation interval, `(i + 0.5) / fps` (why: _getFrameHTML5).
      */
@@ -1676,6 +1810,8 @@ export class OnDemandVideoDecoder {
             this._mbBackend = null;
         }
 
+        this._releasePeek();
+
         // Release HTML5 video element
         if (this._videoEl) {
             var src = this._videoEl.src;
@@ -1834,6 +1970,17 @@ export class EmbeddedVideoDecoder {
             this.cache.delete(oldest);
         }
         this.cache.set(displayFrame, bitmap);
+    }
+
+    /**
+     * OnDemandVideoDecoder.peekFrame's contract (a caller-owned copy, scaled to
+     * `width`): only frames embedded in the .slp have one. Goes through getFrame
+     * — the worker has no playback position or cursor to disturb.
+     */
+    async peekFrame(displayFrame, width) {
+        if (this._closed || !this.hasFrame(displayFrame)) return null;
+        var bitmap = await this.getFrame(displayFrame);
+        return bitmap ? scaledBitmap(bitmap, width) : null;
     }
 
     seekNative(frameIndex) {}

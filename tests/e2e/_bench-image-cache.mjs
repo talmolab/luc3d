@@ -144,7 +144,7 @@ try {
             const vecs = new Map(); let last = 0;
             const res = await SC.checkImageSwitches(session, {
                 fps: AS.state.fps, imageHz: ST.getTrackingThreshold('imageCheckHz') || 2, threshold: ST.getTrackingThreshold('imageChangeThreshold'),
-                prepareFrames: emb.prepareFrames, inFlight: emb.inFlight, releaseFrames: emb.releaseFrames,
+                prepareFrames: emb.prepareFrames, croppable: emb.croppable, keyframes: emb.keyframes, inFlight: emb.inFlight, releaseFrames: emb.releaseFrames,
                 getEmbeddings: async (frame, items) => { const out = await emb.getEmbeddings(frame, items);
                     out.forEach((l, ii) => l.forEach(e => vecs.set(frame + '|' + items[ii].group.identityId + '|' + e.camera, e.vector)));
                     return out; },
