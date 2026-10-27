@@ -171,7 +171,7 @@ try {
         'a node weighted 0 is greyed out, as in the Tracking Wizard');
     check(d.imageSwitch === false && !d.imageOptionsShown,
         'the image ID-switch check is offered, off (the default), its options hidden');
-    const IMAGE_DEFAULTS = JSON.stringify([0, -0.8, 2, 3, 50, 50, 0]);
+    const IMAGE_DEFAULTS = JSON.stringify([0, -0.8, 2, 3, 80, 80, 0]);
     // The switch's own <input> is visually hidden; a user clicks its label.
     const imageSwitch = '.track-setup-modal .track-image-check-block > .track-setup-switch-row';
     await page.click(imageSwitch);
@@ -179,7 +179,7 @@ try {
     check(d.imageSwitch === true && d.imageOptionsShown &&
         JSON.stringify(d.imageOptions) === JSON.stringify(['Flag threshold', 'Crops per second', 'Views per animal', 'GPU time (%)', 'CPU cores (%)', 'Try WebNN (experimental)']),
         `switching it on shows its six options (${d.imageOptions.join(', ')})`);
-    check(d.gpuTime === '50' && d.cpuCores === '50' && /^\d+ of \d+ cores$/.test(d.cpuNote || ''),
+    check(d.gpuTime === '80' && d.cpuCores === '80' && /^\d+ of \d+ cores$/.test(d.cpuNote || ''),
         `the two caps read as whole percentages (${d.gpuTime}, ${d.cpuCores}), the CPU one with what it means here ("${d.cpuNote}")`);
     {
         // GPU time and CPU cores share a row, Try WebNN starts the row under them; each cap has a short ⓘ
@@ -265,7 +265,7 @@ try {
     await page.waitForSelector('#trackSummaryOverlay', { timeout: 30000 });
     s = await appState();
     check(!(await dialog()), 'Enter closes it');
-    check(JSON.stringify(s.image) === JSON.stringify([1, -0.5, 3, 3, 50, 50, 0]),
+    check(JSON.stringify(s.image) === JSON.stringify([1, -0.5, 3, 3, 80, 80, 0]),
         `the image check is stored on, with the two edited options (${s.image})`);
     check(/ID-switch check \(images\): skipped — needs the session's videos/.test(s.status),
         'and this run attempted it (skipped: no videos are loaded)');
@@ -347,7 +347,7 @@ try {
     await page.keyboard.press('Escape');
     s = await appState();
     check(!(await page.$('.track-range-modal')) && s.weights.TailTip === 0 &&
-        JSON.stringify(s.image) === JSON.stringify([1, -0.5, 3, 3, 50, 50, 0]), 'Esc closes it and writes nothing (image check still on)');
+        JSON.stringify(s.image) === JSON.stringify([1, -0.5, 3, 3, 80, 80, 0]), 'Esc closes it and writes nothing (image check still on)');
     await openRange();
     await page.fill(rangeTail, '0.75');
     await page.fill('.track-range-modal input[data-setting="imageChangeThreshold"]', '-1');
@@ -356,7 +356,7 @@ try {
     await page.waitForSelector('.track-range-modal', { state: 'detached' });
     await page.waitForFunction(() => /identit/i.test(document.getElementById('statusText').textContent), null, { timeout: 30000 });
     s = await appState();
-    check(JSON.stringify(s.image) === JSON.stringify([1, -1, 3, 3, 50, 50, 0]), `Continue stores the edited threshold (${s.image})`);
+    check(JSON.stringify(s.image) === JSON.stringify([1, -1, 3, 3, 80, 80, 0]), `Continue stores the edited threshold (${s.image})`);
     check(/ID-switch check \(images\): skipped — needs the session's videos/.test(s.status),
         'and the range run attempted the check (skipped: no videos are loaded)');
     check(JSON.stringify(s.weights) === JSON.stringify({ TailMid: 0.25, TailTip: 0.75, otherSkeletonNode: 0.3 }),

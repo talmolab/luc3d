@@ -1,7 +1,7 @@
 /**
  * test-image-compute-caps.mjs — the image ID-switch check's two compute caps
  * (ui/image-embedder.js; settings `imageCheckGpuTimePct`, `imageCheckCpuCoresPct`:
- * whole percentages 1-100, both 50 by default). The share of the GPU and of the CPU the check may take is the
+ * whole percentages 1-100, both 80 by default). The share of the GPU and of the CPU the check may take is the
  * user's to set, and held even when nothing else wants the rest:
  *  - GPU: full batches and an idle after each run (`paceRestMs`), so
  *    busy / (busy + idle) = the cap;
@@ -122,9 +122,9 @@ const defs = getTrackingThresholdDefs();
 for (const [id, label] of [['imageCheckGpuTimePct', 'Image check: GPU time (%)'], ['imageCheckCpuCoresPct', 'Image check: CPU cores (%)']]) {
     const d = defs.find(x => x.id === id);
     ok(!!d && d.label === label, `${id} is labelled "${d && d.label}"`);
-    ok(!!d && d.default === 50 && d.value === 50 && d.min === IMAGE_CAP_MIN && d.max === 100 && d.step === 1 && !d.decimals,
-        `${id}: default 50, whole numbers 1..100`);
-    ok(!!d && formatThresholdValue(d, d.value) === '50' && formatThresholdValue(d, 100) === '100', `${id} reads "50" (and "100") in its field`);
+    ok(!!d && d.default === 80 && d.value === 80 && d.min === IMAGE_CAP_MIN && d.max === 100 && d.step === 1 && !d.decimals,
+        `${id}: default 80, whole numbers 1..100`);
+    ok(!!d && formatThresholdValue(d, d.value) === '80' && formatThresholdValue(d, 100) === '100', `${id} reads "80" (and "100") in its field`);
     ok(IMAGE_CHECK_IDS.includes(id), `${id} is offered in the Track All / Track Frame Range dialogs`);
 }
 ok(!defs.some(d => ['imageCheckMaxGpu', 'imageCheckMaxCpu', 'imageCheckGpuTime', 'imageCheckCpuCores'].includes(d.id)),

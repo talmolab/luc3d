@@ -416,13 +416,13 @@ const TRACKING_THRESHOLDS = [
         // A whole percentage (1-100). New ids, as each time the scale changed (the unreleased
         // imageCheckMaxGpu/Cpu were 10-100, then imageCheckGpuTime/CpuCores 0.10-1.00), so a value saved on
         // an earlier scale is never read on this one — a stored 0.5 would otherwise become 1%.
-        id: 'imageCheckGpuTimePct', label: 'Image check: GPU time (%)', default: 50,
+        id: 'imageCheckGpuTimePct', label: 'Image check: GPU time (%)', default: 80,
         min: 1, max: 100, step: 1,
         desc: 'The share of time the image check may use the GPU (or WebNN device); the rest is left for other apps.',
         tip: 'Fraction of GPU time to run image check, idling the remaining time.',
     },
     {
-        id: 'imageCheckCpuCoresPct', label: 'Image check: CPU cores (%)', default: 50,
+        id: 'imageCheckCpuCoresPct', label: 'Image check: CPU cores (%)', default: 80,
         min: 1, max: 100, step: 1, note: cpuCoresNote,
         desc: 'The share of this computer\'s cores the image check may use; the rest are left for other apps.',
         tip: 'Fraction of CPU cores to run image check, the remaining cores are left free.',

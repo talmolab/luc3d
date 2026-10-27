@@ -8212,7 +8212,7 @@ model ran on the CPU. Reads `imageCheckHz` (default 2), `imageChangeThreshold`
 (default -0.8 — a new id rather than the old `imageCheckThreshold`, because the
 image score's scale changed), `imageCheckMaxViews` (default 3, passed as
 `maxViewsPerAnimal`), `imageCheckGpuTimePct` / `imageCheckCpuCoresPct` (whole
-percentages, default 50 each, as `maxGpuPct` / `maxCpuPct`) and `imageCheckWebNN` (default 0, as `webnn`), and passes
+percentages, default 80 each, as `maxGpuPct` / `maxCpuPct`) and `imageCheckWebNN` (default 0, as `webnn`), and passes
 `inFlight: embedder.inFlight`. The embedder's `backend()` outcome is attached to
 the result as `model` (its note shown under "About these flags") and
 `embedder.stats()` as `timing` (logged, and shown there as "Image check speed on
@@ -8686,7 +8686,7 @@ against `cutCrop` itself within 0.04 px, at any rotation);
 
 **The compute caps** (`opts.maxGpuPct` / `opts.maxCpuPct`, from the "GPU time
 (%)" / "CPU cores (%)" settings `imageCheckGpuTimePct` / `imageCheckCpuCoresPct`,
-whole percentages 1–100, default 50). How much of the GPU and of the CPU the check
+whole percentages 1–100, default 80). How much of the GPU and of the CPU the check
 may take is the USER's to set, and what it does not take stays free for other
 apps — even when nothing else wants it (an allocation, not an adaptive
 back-off). No browser API gives a page a share of either, so the check takes its
@@ -8912,8 +8912,8 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   0/1, the image check likewise, default 0; `imageChangeThreshold` -0.8;
   `imageCheckHz` 2; `imageCheckBackgroundHz` 0.1 (crops per second away from contacts:
   `backgroundHz`, see pose/id-switch-check.js "Which samples are embedded"; Wizard only, not
-  the Track All dialog); `imageCheckMaxViews` 3; `imageCheckGpuTimePct` 50 and
-  `imageCheckCpuCoresPct` 50 — labelled "GPU time (%)" / "CPU cores (%)", the share
+  the Track All dialog); `imageCheckMaxViews` 3; `imageCheckGpuTimePct` 80 and
+  `imageCheckCpuCoresPct` 80 — labelled "GPU time (%)" / "CPU cores (%)", the share
   of GPU time / of the CPU cores the image check may use, whole numbers 1..100,
   100 = uncapped (new ids each time the scale changed — the unreleased
   `imageCheckMaxGpu`/`Cpu` 10–100, then `imageCheckGpuTime`/`CpuCores` 0.10–1.00 —
