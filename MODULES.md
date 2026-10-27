@@ -3367,6 +3367,12 @@ becomes the limit once the model is faster. Raw CLS embeddings of the same crop
 at 168 vs 224: median cosine 0.86 — irrelevant to the check, which learns its
 metric per recording, but it means any embedding saved at one size cannot be
 compared with another.
+Re-checked after #375 (sampling near contacts + 0.1 Hz background), 2026-10-27:
+on all 24 recordings, 168 at -1 flags exactly the same rows with that sampling
+as with every sample embedded (25 caught, 22 rows, 1 false), on 70% of the
+crops. Margins tighten: two real swaps sit at -1.09 (181300 0:37) and -1.11
+(183527 8:28) instead of -1.74 / -1.49, and the closest clean contact at -0.96
+(05mice 26:53) — so -1.2 would lose those two swaps.
 
 **Imports from project modules.** `pose/pose-data.js` (`readPoint3d`).
 
