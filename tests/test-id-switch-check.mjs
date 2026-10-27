@@ -165,6 +165,10 @@ group('Moments — an end reads back through weakly swapped encounters; repeated
         `three returns after one swap, nothing reading right between them: ONE row, the first (${JSON.stringify(out.map(x => [x.frame, x.switchedAt]))})`);
     out = SC.momentChangePoints([end(1500, 1430), end(2400, 2300)], [enc(900, -88), enc(2000, 60)], [], o);
     ok(out.length === 2 && out[1].switchedAt === 2000, `…but an encounter reading right between them makes two stretches (${JSON.stringify(out.map(x => [x.frame, x.switchedAt]))})`);
+    const tie = Object.assign(end(1500, 1490, -210), { look: ['ambiguity'] });
+    out = SC.momentChangePoints([tie, end(1500, 1430, -338)], [enc(900, -88)], [], o);
+    ok(out.length === 1 && out[0].look.join() === 'ambiguity,return' && out[0].score === -338,
+        `a near-tie and a return of the same pair at one place: one row, both cues, the clearer score (${JSON.stringify(out.map(x => [x.frame, x.look, x.score]))})`);
 }
 
 group('Moments (coat brightness) — a switch AWAY from every encounter is found at the moment it happened');

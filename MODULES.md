@@ -2589,6 +2589,9 @@ working through the review list plus the check's rows:
   review 99.74% -> 99.95% (150448/midL: two mice swapped from the start, put right
   while out of view, which the list had no place for: 96.0% -> 99.98%). In the app on
   that view: one return row, whose own Fix swaps 0:00.0–0:50.0 — 96.04% -> 99.86%.
+  On 190807/top (brown, brown, white; Track All 66.5%) the app raised 5 return rows;
+  accepting the 3 whose Fix made the labels right, as proposed, gave 85.0% (the other
+  two: one changed nothing, one — renamed by an earlier Fix — would have hurt).
 - **SLAP held-out (2 mice, 64 views):** 14 rows, 10 real; after review unchanged (99.75%).
 - **sham_gdx (2 light-coated mice, 193 videos):** 2,464 returns -> 2 rows, both false;
   unchanged (99.94%). Coat brightness cannot tell look-alikes apart.
@@ -3763,7 +3766,9 @@ nearby 'end' rows sharing an animal, the clearest leads).
   swapped stretch, one row, one Fix. An 'end' with no run before it reads back
   through the pair's encounters still scoring below `continueBelow` (the run
   hysteresis, going backwards) to the last that reads right, and a later 'end' of
-  the same pair with nothing reading right in between adds no row (same stretch).
+  the same pair with nothing reading right in between adds no row (same stretch);
+  two moments of the same pair and side within 3 s (a near-tie and a return at one
+  contact) are one row with both cues and the clearer score.
   Measured 2026-10-27 by accepting each row's Fix as the dialog proposes it, alone,
   on Track All's labels (with returns): SLAP six 34 rows, Fixes +45.0 / -8.5 points
   summed -> 22 rows, +54.2 / -11.3; SLAP held-out 63 -> 58 rows, +488 / -4.6 ->
