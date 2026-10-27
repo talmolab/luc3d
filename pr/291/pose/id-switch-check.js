@@ -46,7 +46,7 @@
  * Depends on: pose-data.js (readPoint3d). Pure — no DOM, no app state.
  */
 
-import { readPoint3d } from './pose-data.js?v=8d73138efb85';
+import { readPoint3d } from './pose-data.js?v=ba5d5aad5f51';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
@@ -1361,9 +1361,13 @@ function testMoments(grid, LP, present, weight, o) {
  *    pair's next moment, else null (to the session's end).
  *  - An 'end' closes the flagged run before it: `switchedAt` = the run's onset
  *    row, whose `switchBackAt` becomes the moment, and the run's own 'end' row
- *    is dropped. With no run before it, `switchedAt` = the pair's previous
- *    encounter (labels read right after it), else its previous moment, else
- *    null (from the session's start). "Before it" means ended before the
+ *    is dropped. With no run before it, `switchedAt` = the pair's last
+ *    encounter that reads right (its stretch runs back through encounters still
+ *    reading swapped, below `continueBelow`, as a run does going forward), else
+ *    its previous moment, else null (from the session's start). An 'end' whose
+ *    previous same-pair moment is an 'end' with nothing reading right between
+ *    them saw the same swapped stretch (an animal back from out of sight several
+ *    times after one swap): that row stands for it, and it adds none. "Before it" means ended before the
  *    moment's own contact began: an encounter ending inside that contact is
  *    the moment itself, and its score describes the labels AFTER it.
  * Encounters scoring exactly 0 (no samples on either side) are skipped: they
@@ -1426,8 +1430,13 @@ export function momentChangePoints(moments, scored, changes, o) {
             if (stop) changes.forEach(function (c) { if (samePair(c, m) && c.frame === stop.frame) c.switchedAt = m.frame; });
         } else {
             var ib = beforeContact(L, m), lo = mine.filter(function (x) { return x.frame < m.frame; }).pop(), first = null, k = ib - 1;
-            for (; k >= 0 && !(lo && L[k].frame <= lo.frame) && L[k].flagged; k--) first = L[k];
+            // back through the pair's encounters still reading swapped — flagged, or below `continueBelow`, the
+            // hysteresis a run uses going forward — to the last one that reads right
+            for (; k >= 0 && !(lo && L[k].frame <= lo.frame) && (L[k].flagged || L[k].score < o.continueBelow); k--) first = L[k];
             var before = k >= 0 && !(lo && L[k].frame <= lo.frame) ? L[k] : null;
+            // the pair's previous 'end' with nothing reading right between them saw the same swapped stretch:
+            // that row stands for both (several returns of the same animals after one swap)
+            if (lo && lo.kind === 'end' && !before) { m.sameStretchAs = lo; return; }
             if (first && first.kind === 'onset' && !first.continues) { m.switchedAt = first.frame; first.switchBackAt = m.frame; }
             else m.switchedAt = before ? before.frame : lo ? lo.frame : null;
             if (first) {
@@ -1436,6 +1445,7 @@ export function momentChangePoints(moments, scored, changes, o) {
             }
         }
     });
+    out = out.filter(function (m) { return !m.sameStretchAs; });
     if (out.length) {
         var primary = scored.filter(function (x) { return x.kind === 'onset' && !x.continues; }).concat(changes, out);
         primary.forEach(function (x) { delete x.followOf; });

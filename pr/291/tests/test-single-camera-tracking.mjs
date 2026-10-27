@@ -390,7 +390,7 @@ group('9. The review list: handovers, rows, Fix plan, saved checklist');
     eq(onList.length, hops.length, `every hop is within 1 s of a review row (${onList.length} of ${hops.length})`);
     ok(res.review.some(m => m.cues.includes('handover')), 'the review rows include handovers');
     ok(!res.moments.some(m => m.cues.includes('handover')), '…and the checks\' moments do not: they keep the candidates they were calibrated on');
-    ok(res.moments.every(m => res.review.some(r => r.identityA === m.identityA && r.identityB === m.identityB && r.frame >= m.frame)),
+    ok(res.moments.filter(m => !m.cues.includes('return')).every(m => res.review.some(r => r.identityA === m.identityA && r.identityB === m.identityB && r.frame >= m.frame)),
         'every candidate moment is on the review list too');
 
     const rr = SCT.reviewResult(res.review, S, 30);
@@ -431,6 +431,41 @@ group('9. The review list: handovers, rows, Fix plan, saved checklist');
     ok(back && back.flags.length === rr.flags.length && back.flags.every((m, i) => m.cue === 'review' && m.score === 0 &&
         JSON.stringify(m.look) === JSON.stringify(rr.flags[i].look) && m.frame === rr.flags[i].frame), 'and come back from the file as they were');
     ok(S2._idSwitch.reviewed.has(RV.idSwitchRowKey(m0)), '…with their reviewed ticks');
+}
+
+group('10. Returns: an animal back after more than a second out of sight, tested by the coat-brightness check');
+{
+    const fr = (f, n) => ({ frameIdx: f, dets: Array.from({ length: n }, () => ({ points: new Float64Array(30) })) });
+    const run = (goneFrom, goneTo, nTracks = 2, from = 0) => {     // track 0 unseen on [goneFrom, goneTo); the others always
+        const frames = [], out = [];
+        for (let f = from; f < 150; f++) { const ids = []; for (let t = 0; t < nTracks; t++) if (t || f < goneFrom || f >= goneTo) ids.push(t);
+            frames.push(fr(f, ids.length)); out.push(ids); }
+        return SCT.returnMoments(frames, out, 30);
+    };
+    let m = run(30, 75);
+    ok(m.length === 1 && m[0].frame === 75 && m[0].startFrame === 29 && m[0].identityA === 0 && m[0].identityB === 1 && m[0].cues.join() === 'return',
+        `a track back after 1.5 s unseen is a return, read from where it was last seen (${JSON.stringify(m)})`);
+    eq(SCT.RETURN_DEFAULTS.gapSeconds, 1, 'more than a second unseen');
+    eq(run(30, 45).length, 0, 'back after half a second: not a return');
+    m = run(30, 75, 3);
+    ok(m.length === 2 && m.every(x => x.frame === 75 && x.startFrame === 29) && m.map(x => x.identityA + '-' + x.identityB).sort().join() === '0-1,0-2',
+        'with three tracks, one moment per other track (the check tests each pair)');
+    eq(run(-1, 60, 2, 0).length, 0, 'a track seen for the first time is not a return');
+
+    // Track All: an animal hidden for 2 s leaves a return among the checks' moments, and none on the review list
+    const cam = new PD.Camera(CAM, [[600, 0, 320], [0, 600, 240], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]);
+    const S = new PD.Session([cam], new PD.Skeleton('mouse', NODES, []), ['t0', 't1', 't2'], 'hide');
+    for (let f = 0; f < 900; f++) for (let a = 0; a < 3; a++) {
+        if (a === 2 && f >= 450 && f < 510) continue;              // animal 2 out of sight for 2 s
+        S.addUnlinkedInstance(f, CAM, new PD.Instance(pose(a, f), a, 'predicted', 0.9));
+    }
+    S.identities = []; S.frameIdentityMap = new Map();
+    const res = await SCT.trackSingleCamera(S, SCT.singleCameraTrackerConfig(3, {}), { fps: FPS });
+    const rets = res.moments.filter(x => x.cues.includes('return'));
+    ok(rets.length >= 2 && rets.every(x => x.frame === 510 && x.startFrame === 449),
+        `the checks' moments carry the return of the hidden animal, one per other track (${JSON.stringify(rets.map(x => [x.frame, x.startFrame, x.identityA, x.identityB]))})`);
+    ok(res.moments.every((x, i) => i === 0 || x.frame >= res.moments[i - 1].frame), '…in frame order with the other moments');
+    ok(!res.review.some(x => x.cues.includes('return')), '…and the review list does not take them (one place per return would double it)');
 }
 
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);
