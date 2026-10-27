@@ -30,22 +30,23 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=f3fb7a235b94';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=f3fb7a235b94';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=f3fb7a235b94';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=f3fb7a235b94';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=f3fb7a235b94';
-import { getTrackingThreshold } from './settings.js?v=f3fb7a235b94';
-import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=f3fb7a235b94';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions } from '../pose/single-camera-tracking.js?v=f3fb7a235b94';
+import { noteProgress } from './progress-delta.js?v=1aacb1b3f7c1';
+import { state, getActiveSession } from './app-state.js?v=1aacb1b3f7c1';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=1aacb1b3f7c1';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=1aacb1b3f7c1';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=1aacb1b3f7c1';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=1aacb1b3f7c1';
+import { getTrackingThreshold } from './settings.js?v=1aacb1b3f7c1';
+import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=1aacb1b3f7c1';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions } from '../pose/single-camera-tracking.js?v=1aacb1b3f7c1';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=f3fb7a235b94';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=f3fb7a235b94';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=f3fb7a235b94';
-import { createBrightnessSampler } from './brightness-sampler.js?v=f3fb7a235b94';
+         inputTensorToPixels, INPUT } from './image-embedder.js?v=1aacb1b3f7c1';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=1aacb1b3f7c1';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=1aacb1b3f7c1';
+import { createBrightnessSampler } from './brightness-sampler.js?v=1aacb1b3f7c1';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary } from './id-switch-review.js?v=f3fb7a235b94';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary } from './id-switch-review.js?v=1aacb1b3f7c1';
 
 const CUE_LABEL = { size: 'body size', image: 'images', brightness: 'coat brightness' };
 
@@ -270,6 +271,7 @@ function openProgressDialog(title) {
             if (frac != null) {
                 var pct = Math.round(100 * Math.min(1, Math.max(0, frac))) + '%';
                 fill.style.width = head.style.left = pct;
+                noteProgress(fill, parseFloat(pct) / 100);
                 pctEl.textContent = pct;
             }
         },
@@ -377,9 +379,12 @@ async function runImage(session, rate, inject) {
         var opts = {
             fps: rate.fps,
             imageHz: getTrackingThreshold('imageCheckHz') || 2,
+            backgroundHz: getTrackingThreshold('imageCheckBackgroundHz'),
             threshold: threshold,
             getEmbeddings: embedder.getEmbeddings,
             prepareFrames: embedder.prepareFrames,
+            croppable: embedder.croppable,
+            keyframes: embedder.keyframes,
             inFlight: embedder.inFlight || 2,
             releaseFrames: embedder.releaseFrames,
             signal: prog.signal,
