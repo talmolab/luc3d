@@ -16,32 +16,33 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=f36ecac769a4';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=f36ecac769a4';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=f36ecac769a4';
+} from './triangulation.js?v=f04b78a4876a';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=f04b78a4876a';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=f04b78a4876a';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=f36ecac769a4';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=f04b78a4876a';
 import {
     getNodeWeightArray, getNodeWeight, updateNodeWeights,
     getTrackingThresholds, getTrackingThreshold, isCameraTracked,
     getTrackingThresholdDefs, updateTrackingThresholds,
-} from '../ui/settings.js?v=f36ecac769a4';
-import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=f36ecac769a4';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=f36ecac769a4';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=f36ecac769a4';
-import { startTrackerWorker } from './tracker-pool.js?v=f36ecac769a4';
-import { fitSessionPoseModels, createPoseCheckRun, poseCheckExcludes, finishPoseCheckRun } from './pose-check-session.js?v=f36ecac769a4';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=f36ecac769a4';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=f36ecac769a4';
-import { updateInfoPanel } from '../ui/info-panel.js?v=f36ecac769a4';
-import { setColorByIdentity } from '../ui/color-by.js?v=f36ecac769a4';
-import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=f36ecac769a4';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=f36ecac769a4';
-import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=f36ecac769a4';
-import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=f36ecac769a4';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=f36ecac769a4';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=f36ecac769a4';
+} from '../ui/settings.js?v=f04b78a4876a';
+import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=f04b78a4876a';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=f04b78a4876a';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=f04b78a4876a';
+import { startTrackerWorker } from './tracker-pool.js?v=f04b78a4876a';
+import { fitSessionPoseModels, createPoseCheckRun, poseCheckExcludes, finishPoseCheckRun } from './pose-check-session.js?v=f04b78a4876a';
+import { passesDetectionFilter } from './detection-filter-stats.js?v=f04b78a4876a';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=f04b78a4876a';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=f04b78a4876a';
+import { updateInfoPanel } from '../ui/info-panel.js?v=f04b78a4876a';
+import { setColorByIdentity } from '../ui/color-by.js?v=f04b78a4876a';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=f04b78a4876a';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=f04b78a4876a';
+import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=f04b78a4876a';
+import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=f04b78a4876a';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=f04b78a4876a';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=f04b78a4876a';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -208,19 +209,19 @@ function crossViewScore(instA, camA, instB, camB) {
 // unless the Tracking Wizard / bench sets them.
 //   filterMinVisibleNodes — geometry gate, needs no per-detection score (sleap-3d Stage-1 = 8)
 //   filterMinInstanceScore — confidence gate, only applies when inst.score is available (sleap-3d = 0.85)
-function passesDetectionFilter(inst, minVis, minScore) {
-    if (minVis > 0 && inst.countPoints() < minVis) return false;
-    if (minScore > 0 && inst.score != null && inst.score < minScore) return false;
-    return true;
-}
+//   filterMinMeanNodeScore — sleap-nn's mean node score (missing node = 0), only for predictions with node scores
+// `passesDetectionFilter` lives in pose/detection-filter-stats.js, which the
+// Tracking Wizard's readout also counts with, so the two cannot disagree.
 
-function collectInstances(frameGroup, cameras) {
+function collectInstances(frameGroup, cameras, session) {
     var camInstances = {};
     var camMap = {};
     var activeCams = [];
 
     var minVis = thr('filterMinVisibleNodes');
     var minScore = thr('filterMinInstanceScore');
+    var minNode = thr('filterMinMeanNodeScore');
+    var fi = frameGroup.frameIdx;
 
     for (var ci = 0; ci < cameras.length; ci++) {
         var cam = cameras[ci];
@@ -228,11 +229,11 @@ function collectInstances(frameGroup, cameras) {
         var all = [];
         var linked = frameGroup.getInstances(cam.name);
         if (linked) for (var i = 0; i < linked.length; i++) {
-            if (passesDetectionFilter(linked[i], minVis, minScore)) all.push(linked[i]);
+            if (passesDetectionFilter(linked[i], minVis, minScore, minNode, session, cam.name, fi)) all.push(linked[i]);
         }
         var unlinked = frameGroup.getUnlinkedInstances(cam.name);
         if (unlinked) for (var j = 0; j < unlinked.length; j++) {
-            if (passesDetectionFilter(unlinked[j].instance, minVis, minScore)) all.push(unlinked[j].instance);
+            if (passesDetectionFilter(unlinked[j].instance, minVis, minScore, minNode, session, cam.name, fi)) all.push(unlinked[j].instance);
         }
         if (all.length > 0) {
             camInstances[cam.name] = all;
@@ -278,7 +279,7 @@ export function matchFrameInstances(frameGroup, cameras, session, opts) {
 
     clearFrameCache();
 
-    var collected = collectInstances(frameGroup, cameras);
+    var collected = collectInstances(frameGroup, cameras, session);
     var camInstances = collected.camInstances;
     var camMap = collected.camMap;
     var activeCams = collected.activeCams;
@@ -941,6 +942,9 @@ function crossViewHyperparams() {
         stale: thr('stale'),
         // Match gate (pose/cross-view-tracker.js, 2026-10-03).
         matchGate: thr('matchGate'),
+        // Misplaced-node robustness (pose/cross-view-tracker.js, 2026-10-20), off by default.
+        maxPenalty: thr('maxPenalty'),
+        matchReproj: thr('matchReproj'),
     };
 }
 
@@ -950,9 +954,10 @@ function crossViewHyperparams() {
 // and leaves an outlier pose out when the run excludes outliers).
 // Each Detection records whether it came from the unlinked pool so commit can
 // promote it into a group.
-function buildTrackerDetections(frameGroup, cameras, frameIdx, poseRun) {
+function buildTrackerDetections(frameGroup, cameras, frameIdx, session, poseRun) {
     var minVis = thr('filterMinVisibleNodes');
     var minScore = thr('filterMinInstanceScore');
+    var minNode = thr('filterMinMeanNodeScore');
     var detsByCam = new Map();
     for (var ci = 0; ci < cameras.length; ci++) {
         var cam = cameras[ci];
@@ -960,7 +965,7 @@ function buildTrackerDetections(frameGroup, cameras, frameIdx, poseRun) {
         var slot = 0;
         var linked = frameGroup.getInstances(cam.name);
         if (linked) for (var i = 0; i < linked.length; i++) {
-            if (!passesDetectionFilter(linked[i], minVis, minScore)) continue;
+            if (!passesDetectionFilter(linked[i], minVis, minScore, minNode, session, cam.name, frameIdx)) continue;
             if (poseRun && poseCheckExcludes(poseRun, cam.name, linked[i], frameIdx)) continue;
             var dl = new Detection(linked[i], cam, frameIdx, slot++);
             dl.unlinkedId = null;
@@ -968,7 +973,7 @@ function buildTrackerDetections(frameGroup, cameras, frameIdx, poseRun) {
         }
         var unlinked = frameGroup.getUnlinkedInstances(cam.name);
         if (unlinked) for (var j = 0; j < unlinked.length; j++) {
-            if (!passesDetectionFilter(unlinked[j].instance, minVis, minScore)) continue;
+            if (!passesDetectionFilter(unlinked[j].instance, minVis, minScore, minNode, session, cam.name, frameIdx)) continue;
             if (poseRun && poseCheckExcludes(poseRun, cam.name, unlinked[j].instance, frameIdx)) continue;
             var du = new Detection(unlinked[j].instance, cam, frameIdx, slot++);
             du.unlinkedId = unlinked[j].id;
@@ -1107,22 +1112,23 @@ function createTrackerRun(session, cameras, maxTargets, identityPool) {
 // order), each passing detection's flat 2D (the pool copies it on submit;
 // `Detection` reads nothing else of its Instance), and, kept here, what commit
 // needs back for each slot.
-function buildTrackerInputs(frameGroup, cameras, frameIdx, poseRun) {
+function buildTrackerInputs(frameGroup, cameras, frameIdx, session, poseRun) {
     var minVis = thr('filterMinVisibleNodes');
     var minScore = thr('filterMinInstanceScore');
+    var minNode = thr('filterMinMeanNodeScore');
     var xys = new Array(cameras.length), metas = new Array(cameras.length);
     for (var ci = 0; ci < cameras.length; ci++) {
         var cam = cameras[ci], xy = [], meta = [];
         var linked = frameGroup.getInstances(cam.name);
         if (linked) for (var i = 0; i < linked.length; i++) {
-            if (!passesDetectionFilter(linked[i], minVis, minScore)) continue;
+            if (!passesDetectionFilter(linked[i], minVis, minScore, minNode, session, cam.name, frameIdx)) continue;
             if (poseRun && poseCheckExcludes(poseRun, cam.name, linked[i], frameIdx)) continue;
             xy.push(linked[i]._xy);
             meta.push({ frameIdx: frameIdx, instance: linked[i], unlinkedId: null });
         }
         var unlinked = frameGroup.getUnlinkedInstances(cam.name);
         if (unlinked) for (var j = 0; j < unlinked.length; j++) {
-            if (!passesDetectionFilter(unlinked[j].instance, minVis, minScore)) continue;
+            if (!passesDetectionFilter(unlinked[j].instance, minVis, minScore, minNode, session, cam.name, frameIdx)) continue;
             if (poseRun && poseCheckExcludes(poseRun, cam.name, unlinked[j].instance, frameIdx)) continue;
             xy.push(unlinked[j].instance._xy);
             meta.push({ frameIdx: frameIdx, instance: unlinked[j].instance, unlinkedId: unlinked[j].id });
@@ -1151,7 +1157,7 @@ async function attachTrackerWorker(session, run) {
 function submitTrackerFrame(session, run, fi) {
     var fg = session.getFrameGroup(fi);
     if (!fg) return undefined;
-    var inp = buildTrackerInputs(fg, run.cameras, fi, run.pose);
+    var inp = buildTrackerInputs(fg, run.cameras, fi, session, run.pose);
     run.pending.set(fi, inp.metas);
     run.pool.submit(fi, inp.xys);
     return run.pool.saturated() ? idleWhile(run.pool.throttle()) : undefined;
@@ -1189,7 +1195,7 @@ function trackRunResult(session, run) {
 function stepTrackerFrame(session, run, fi) {
     var fg = session.getFrameGroup(fi);
     if (!fg) return;
-    var detsByCam = buildTrackerDetections(fg, run.cameras, fi, run.pose);
+    var detsByCam = buildTrackerDetections(fg, run.cameras, fi, session, run.pose);
     run.trk.trackFrame(detsByCam, run.cameras);
     commitTrackedFrame(session, run.trk, fi, run.trackToIdentity, run.identityPool);
 }
