@@ -28,6 +28,7 @@ import {
     collectTrajectories,
     smoothTrajectory,
     smoothSession,
+    smoothSessionAsync,
     unsmoothSession,
     hasSmoothed3d,
 } from '../pose/temporal-smoothing.js';
@@ -431,6 +432,33 @@ group('a second run REPLACES the first — it filters the pre-smoothing 3D');
     eqList(xs(twice), raw, 'restoring everything gives back the original 3D');
     eq(hasSmoothed3d(twice), false, 'hasSmoothed3d: nothing left');
     eq(unsmoothSession(twice).frames, 0, 'a second restore has nothing to do');
+}
+
+group('smoothSessionAsync — same result, progress in poses');
+{
+    const build = () => {
+        const frames = [];
+        for (let f = 0; f < 12; f++) {
+            frames.push([f, [makeGroup(1, [[(f === 5 ? 70 : f), 0, 0], [0, 0, 0]]),
+                makeGroup(2, [[100 + f, (f === 8 ? 40 : 0), 0], [0, 0, 0]])]]);
+        }
+        return makeSession(frames);
+    };
+    const params = { smoothMedianWindow: 3, smoothGaussianWindow: 5, smoothMinSegment: 1 };
+    const sync = build();
+    const rs = smoothSession(sync, params);
+    const asyn = build();
+    const calls = [];
+    const ra = await smoothSessionAsync(asyn, params, {
+        onProgress: async (done, total) => { calls.push([done, total]); },
+    });
+    eq(JSON.stringify(ra), JSON.stringify(rs), 'same result object');
+    const pts = (sess) => [...sess.instanceGroups.values()].flatMap(gs => gs.flatMap(g => [...g.points3d]));
+    eqList(pts(asyn), pts(sync), 'same 3D written');
+    eq(calls.length > 2, true, 'reports progress more than once per track');
+    eq(calls.every(c => c[1] === 24), true, 'total is the pose count (12 frames x 2 animals)');
+    eq(calls.every((c, i) => i === 0 || c[0] >= calls[i - 1][0]), true, 'progress never goes backwards');
+    eq(calls[calls.length - 1][0], 24, 'and ends at the total');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

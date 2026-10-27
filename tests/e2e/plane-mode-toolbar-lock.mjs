@@ -46,10 +46,13 @@ await new Promise(r => setTimeout(r, 1200));
 
 /** Every button the mode must block. */
 const LOCKED = ['tbInstanceMenu', 'tbAddInstance', 'tbDeleteInstance', 'tbGroupMenu', 'tbGroup', 'tbEditGroup',
-    'tbTriangulate', 'tbTriangulateAll', 'tbSmooth', 'tbTrackFrame', 'tbTrackAll'];
-/** The hover-menu wrappers, which must be locked with their buttons. */
-const LOCKED_DROPDOWNS = ['instanceDropdown', 'groupDropdown', 'triangulateDropdown',
-    'triangulateAllDropdown', 'smoothingDropdown'];
+    'tbTriangulateAll', 'tbTriangulate', 'tbTriangulateAllFrames',
+    'tbSmooth', 'tbSmoothFrame', 'tbSmoothAllFrames',
+    'tbTrackAll', 'tbTrackFrame', 'tbTrackAllFrames', 'tbTrackFrameRange'];
+/** The hover-menu wrappers locked whole (menus of actions only). The
+ *  Triangulate / Temporal Smoothing / Track menus also hold settings, so they
+ *  stay open-able with their run buttons disabled — §4b. */
+const LOCKED_DROPDOWNS = ['instanceDropdown', 'groupDropdown'];
 /** Everything else in the toolbar, which must stay live. */
 const FREE_BUTTONS = ['tbSessions', 'colorByTracks', 'colorById', 'infoPanelToggleBtn'];
 const FREE_CHECKBOXES = ['visUser', 'visPredicted', 'visReprojections', 'visErrors'];
@@ -236,6 +239,33 @@ try {
         `both dead (got ${JSON.stringify(out.inDropPointer)})`);
     check(out.hasDropdownItem, 'the dropdown really does have menu items to block');
     check(!out.triangulateRan, 'and nothing triangulated');
+
+    console.log('\n-- 4b. the action menus still open, with only their settings live --');
+    await page.evaluate(async () => (await import('/ui/plane-definition.js')).enterPlaneMode());
+    const inMenu = {};
+    for (const [btn, probe] of [['tbTriangulateAll', 'tbTriangulate'], ['tbSmooth', 'tbSmoothFrame'], ['tbTrackAll', 'tbTrackFrame']]) {
+        await page.mouse.move(700, 700);
+        await page.waitForTimeout(450);
+        await page.hover('#' + btn, { force: true });   // a disabled button still opens its menu
+        await page.waitForTimeout(200);
+        inMenu[btn] = { opens: await page.locator('#' + probe).isVisible() };
+        if (btn === 'tbTrackAll') {
+            inMenu.animals = await page.evaluate(() => {
+                const f = document.getElementById('tbNumAnimals');
+                return { enabled: !f.disabled, visible: f.getBoundingClientRect().width > 0 };
+            });
+            inMenu.animalsVisible = await page.locator('#tbNumAnimals').isVisible();
+        }
+        if (btn === 'tbTriangulateAll') {
+            inMenu.radio = await page.evaluate(() => !document.querySelector('#triangulateDropdown input[value="ba"]').disabled);
+            inMenu.radioVisible = await page.locator('#triangulateDropdown input[value="ba"]').isVisible();
+        }
+    }
+    await page.evaluate(async () => (await import('/ui/plane-definition.js')).exitPlaneMode());
+    check(inMenu.tbTriangulateAll.opens && inMenu.tbSmooth.opens && inMenu.tbTrackAll.opens,
+        `hovering Triangulate / Temporal Smoothing / Track still opens each menu (${JSON.stringify(inMenu)})`);
+    check(inMenu.animals.enabled && inMenu.animalsVisible, 'Track\'s Animals field is shown and live in the mode');
+    check(inMenu.radio && inMenu.radioVisible, 'Triangulate\'s Method radios are shown and live in the mode');
 
     console.log('\n-- 5. leaving restores the toolbar --');
     check(allFalse(out.afterExit),

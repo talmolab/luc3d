@@ -1892,9 +1892,10 @@ identity colors).
   `triangulateCurrentFrame` (`triangulation.js`) and
   `groupByIdentityAndTriangulateAll` (`ui/export-modals.js`).
 
-**WHICH function the "Triangulate All" button calls.** `ui/ui-wiring.js`
-(`wireTriDropdown('triangulateAllDropdown', …)`)
-routes the toolbar split-button by method AND by session state: `'ba'` →
+**WHICH function the Triangulate button calls.** `ui/ui-wiring.js`
+(`wireActionMenu('triangulateDropdown', …)`, its `all` handler — a click on
+the button, or its menu's All frames) routes by the default method AND by
+session state: `'ba'` →
 `triangulateAllFrames('ba')`; default/DLT with **any identities present** →
 `groupByIdentityAndTriangulateAll('dlt')` (`ui/export-modals.js`); DLT with no
 identities → `triangulateAllFrames('dlt')`. Any real tracked project takes the
@@ -2399,7 +2400,12 @@ smoothed), and a third value there would erase the solver identity
 
 **Exports.** `normalizeWindow`, `sigmaForWindow`, `buildSegments`, `medianOf`,
 `smoothSignalInto`, `resolveSmoothingParams`, `collectTrajectories`,
-`smoothTrajectory`, `smoothSession`, `unsmoothSession`, `hasSmoothed3d`.
+`smoothTrajectory`, `smoothSession`, `smoothSessionAsync`, `unsmoothSession`,
+`hasSmoothed3d`. `smoothSessionAsync(session, params, {writeFrames, onProgress})`
+awaits `onProgress(done, total)` (poses) after each node coordinate of each
+track; both entry points run the same generators (`smoothTrajectorySteps`,
+`smoothSessionSteps`), so the result and the writes are identical, and nothing
+of a trajectory is written before its last step.
 
 **Imports.** `pose/pose-data.js` (`POINT3D_STRIDE`, `points3dNodeCount`,
 `NO_REPROJECTED_INSTANCES`, `pooledPoints3d`, `markPoints3dSmoothed`,
@@ -4954,8 +4960,8 @@ The `blur()` is deferred a turn: focus from a label click lands *after* the
 listener runs, and `input`/`change` are still dispatching.
 
 The listener is in the **capture** phase (issue #230) so a control whose own
-handler calls `e.stopPropagation()` (the Triangulate split buttons,
-`wireTriDropdown`) cannot opt itself out of focus release and keep `Space`.
+handler calls `e.stopPropagation()` (the toolbar's action menus,
+`wireActionMenu`) cannot opt itself out of focus release and keep `Space`.
 
 **Imports from project modules.** None — every predicate reads only
 `tagName` / `type` / `role` / `isContentEditable` off its argument, so it
@@ -6277,8 +6283,8 @@ stays reachable at its original path) and `ui/plane-nodes-panel.js`;
 
 ### ui/animal-count-field.js
 
-**Purpose.** The toolbar's **Animals** field (`#tbNumAnimals`), first in the
-Track group: shows and edits the ACTIVE session's animal count, the number every
+**Purpose.** The toolbar's **Animals** field (`#tbNumAnimals`), in the Track
+menu (hover **Track ▾**) below its run items: shows and edits the ACTIVE session's animal count, the number every
 tracking run caps identities at (`Session.numAnimals`, through
 `pose/tracker.js`). Blank is
 auto-detect (`placeholder="auto"`), as in the first-use dialog
@@ -6340,9 +6346,13 @@ from the rest of the panel.
 Adding a button to the lock means adding its id to `PLANE_LOCKED_TOOLBAR_IDS`;
 if it opens a menu, its wrapper also needs `PLANE_LOCKED_DROPDOWN_IDS`, since a
 `.tri-dropdown` menu opens on hover and its items are `div`s, so `disabled` on
-the button reaches neither. Locked menus: Instance, Group, Triangulate,
-Triangulate All, Temporal Smoothing (the Instance and Group items are
-`<button>`s and are in the id list as well).
+the button reaches neither. Locked menus: Instance and Group (actions only).
+The Triangulate / Temporal Smoothing / Track menus are NOT wrapper-locked:
+they also hold settings that stay live in the mode (Method, Animals,
+Settings…), so they open, and each run item is a `<button>` in
+`PLANE_LOCKED_TOOLBAR_IDS` (a new run item there must be too). A disabled
+button still opens its menu on hover (`tests/e2e/plane-mode-toolbar-lock.mjs`
+§4b).
 
 **Imports** `planeState` from `ui/plane-definition.js` — circular, and safe only
 because the binding is read INSIDE the function body. **Imported by**
@@ -10443,58 +10453,71 @@ opens the docs site (`https://talmolab.github.io/luc3d-docs/`) in a new tab;
 **Hot Keys** modal is generated from `getActions()`, so it follows the catalog
 and user rebindings.
 
-**Triangulate dropdowns + default method.** `Triangulate` / `Triangulate All`
-are **split buttons**: the button runs `getDefaultTriangulationMethod()`; the
-hover menu picks DLT / BA explicitly (`wireTriDropdown`). Both handlers
-`stopPropagation()`, which is why `ui/keyboard-target.js`'s focus-release
-listener must run in the **capture** phase (in bubble these buttons kept focus
-and swallowed `Space`/`Enter`). Implicit triangulation (`t`, Edit ▸
-Triangulate) and the environment-skeleton solve (Load Environment, via
-`resolveTriangulationMethod(group)` on a new group) use the default too.
-
-**Track Frame is a split button too.** Same `.tri-dropdown` markup, but NOT
-`wireTriDropdown` — its button keeps its own handler in `pose/tracker.js`'s
-IIFE (`trackCurrentFrame`); `ui-wiring.js` wires only `#tbTrackFrameRange` to
-`showTrackRangeModal()`, passing `navigateToFrame` as `onTracked` (injected to
-avoid the `initialization.js` → `ui-wiring.js` → modal cycle). The menu is
-pure `:hover`: in a test, a modal opening over the toolbar drops hover, so a
-second click must re-hover the button first (`tests/e2e/track-frame-range.mjs`).
+**Triangulate, Temporal Smoothing and Track share one menu shape**
+(`wireActionMenu(dropdownId, handlers)`). Each is ONE button whose click runs
+**all frames**; its `:hover` menu (`.tri-dropdown.action-menu`) has **This
+frame**, **All frames** (Track also **Frame range…**), the action's quick
+settings, and **Settings…** for its Settings panel. The All frames item
+forwards to the button (`button.click()`), so the two cannot differ and a
+disabled button disables both; other items call `handlers[data-scope]`. Each
+button keeps the id of the old all-frames button (`#tbTriangulateAll`,
+`#tbTrackAll`), so a click on it does what it always did; This frame is
+`#tbTriangulate` / `#tbSmoothFrame` / `#tbTrackFrame`. All items are
+`<button>`s so Defining Plane Mode can disable the runs one by one while the
+settings in the same menu stay live. `:focus-within` keeps a menu open, so
+typing in Animals does not lose it and Tab walks into the items.
+- **Triangulate ▾** (`#triangulateDropdown`): label "Triangulate: DLT" (#138);
+  the Method radios (`input[name="tbTriMethod"]`) ARE Settings ▸ Default
+  Triangulation (`setDefaultTriangulationMethod`; `updateTriangulateButtonLabels`
+  re-checks them on `onDefaultTriangulationMethodChange`). This frame runs
+  `triangulateCurrentFrame(default)`; Settings… → `'triangulation'`. Implicit
+  triangulation (`t`, Edit ▸ Triangulate) and the environment-skeleton solve
+  (Load Environment, via `resolveTriangulationMethod(group)` on a new group)
+  use the default too.
+- **Temporal Smoothing ▾** (`#smoothingDropdown`, `#tbSmooth`): see below.
+  Settings… → `'smoothing'`.
+- **Track ▾** (`#trackDropdown`): the button (Track All) and This frame keep
+  their own handlers in `pose/tracker.js`'s IIFE; `ui-wiring.js` wires Frame
+  range… to `showTrackRangeModal()`, passing `navigateToFrame` as `onTracked`
+  (injected to avoid the `initialization.js` → `ui-wiring.js` → modal cycle),
+  and Settings… → `'wizard'`. The Animals field sits in this menu.
+The menus are pure `:hover`: in a test, a modal opening over the toolbar drops
+hover, so a second click must re-hover the button first
+(`tests/e2e/track-frame-range.mjs`). Shape covered by
+`tests/e2e/toolbar-hover-menus.mjs` §5.
 
 **Instance and Group are hover menus.** To save toolbar width, `+ Instance` /
 `- Instance` sit under an **Instance ▾** button (`#tbInstanceMenu`,
 `#instanceDropdown`) and `Group` / `Edit Group` under **Group ▾**
-(`#tbGroupMenu`, `#groupDropdown`), opening on `:hover` like Triangulate. The
-four items are still the original `<button>`s with their ids and handlers
+(`#tbGroupMenu`, `#groupDropdown`), opening on `:hover`. The four items are
+still the original `<button>`s with their ids and handlers
 (`button.tri-dropdown-item` restyles them as rows), so `ui/rendering.js` keeps
 rewriting Group's label and both items' `disabled` / `.active`; it also turns
 `#tbGroupMenu` blue whenever either item is. Tab skips the items while the menu
 is closed; their shortcuts (`Mod+I`, `Delete`, `Shift+G`) still work.
 Covered by `tests/e2e/toolbar-hover-menus.mjs`.
 
-**Temporal Smoothing** (luc3d #134) is its own split button right after
-Triangulate All (`#tbSmooth`, `#smoothingDropdown`): a click smooths all
-frames; the hover menu has **All frames**, **This frame** and **Settings…**
-(`data-scope`). All run the private `runTemporalSmoothing(currentFrameOnly)`.
-It reads `getSmoothingParams()`; when both kernels are off it restores the
-pre-smoothing 3D (`unsmoothSession`), or, with nothing smoothed, says so and
-opens Settings ▸ Temporal Smoothing rather than silently doing nothing;
-otherwise it calls `smoothSession` (`pose/temporal-smoothing.js`; every run
-filters the pre-smoothing 3D, so it replaces the last; the status counts POSES,
-one per animal per frame), drops the `state.triangulationResults` entries of
-every group whose reprojections the pass cleared (the fill appends a fresh one,
-and the panel would average both), then `markDirty` + `drawAllOverlays` +
-`update3DViewport` + `updateInfoPanel`. "This frame" passes
-`writeFrames: new Set([state.currentFrame])` — the whole trajectory is still
-READ (a filter needs neighbours on both sides), only the current frame is
-WRITTEN. Synchronous, no progress modal: it touches only `points3d` on the
+**Temporal Smoothing** (luc3d #134) runs the private async
+`runTemporalSmoothing(currentFrameOnly)` (a re-entry guard drops a second
+click while one runs). It reads `getSmoothingParams()`; when both kernels are
+off it restores the pre-smoothing 3D (`unsmoothSession`), or, with nothing
+smoothed, says so and opens Settings ▸ Temporal Smoothing rather than silently
+doing nothing; otherwise it runs `smoothSessionAsync`
+(`pose/temporal-smoothing.js`; every run filters the pre-smoothing 3D, so it
+replaces the last) behind the shared progress card, counted in POSES (one per
+animal per frame): All frames shows the card at once and paints it
+(`yieldToPaint`) before the pass; This frame reads the same trajectories, so it
+shows the card only once a `createProgressPacer` interval has passed. Then it
+records the scope (`noteSmoothingScope`), drops the `state.triangulationResults`
+entries of every group whose reprojections the pass cleared (the fill appends a
+fresh one, and the panel would average both), and runs `markDirty` +
+`drawAllOverlays` + `update3DViewport` + `updateInfoPanel`, setting the summary
+status last. "This frame" passes `writeFrames: new Set([state.currentFrame])` —
+the whole trajectory is still READ (a filter needs neighbours on both sides),
+only the current frame is WRITTEN. It touches only `points3d` on the
 already-resident `session.instanceGroups`, hydrating no 2D. The button is blue
-while smoothing is applied (`ui/smoothing-button.js`, synced on every overlay
-draw).
-
-`wireTriDropdown` passes the menu item's `data-method` through **verbatim** (it
-used to map any unrecognized value onto DLT, so a new item would have run a
-triangulation). Each `onPick` owns the mapping and must handle values it does
-not expect.
+while smoothing is applied, and the menu lights only the last run's scope
+(`ui/smoothing-button.js`, synced on every overlay draw).
 
 **The Animals field (`#tbNumAnimals`)** is wired by `wireAnimalCountField()`
 from `ui/animal-count-field.js`, which owns it (see that entry).
@@ -11051,12 +11074,14 @@ function, so the cycle through the info panel is hoist-safe).
 ### ui/smoothing-button.js
 
 **Purpose.** The toolbar's Temporal Smoothing button state (luc3d #134):
-`#tbSmooth` is blue (`.active`) while any 3D in the session is smoothed; in its
-menu, **All frames** is lit (`.applied`) the same way and **This frame** while
-the current frame's 3D is.
+`#tbSmooth` is blue (`.active`) while any 3D in the session is smoothed. Its
+menu lights (`.applied`) only the scope of the LAST run, never both: **All
+frames** after an all-frames run (while anything is still smoothed), **This
+frame** after a this-frame run, on the frames it smoothed.
 
 **Key exports.** `syncSmoothingButton()` — re-derives that state from the
-session. Smoothing lapses by itself when a re-solve or edit replaces a group's
+session. `noteSmoothingScope(session, 'all' | 'frame')` — records the scope a
+run used (per session, `WeakMap`). Smoothing lapses by itself when a re-solve or edit replaces a group's
 3D (`isPoints3dSmoothed` keys the array), so nothing tracks it: `ui/rendering.js`
 calls this on every overlay draw and the pass calls it after running.
 `hasSmoothed3d` (`pose/temporal-smoothing.js`) keeps the per-draw cost small.

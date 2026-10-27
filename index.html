@@ -239,32 +239,48 @@
                         <button class="tri-dropdown-item" id="tbEditGroup" role="menuitem" title="Edit selected group membership">Edit Group</button>
                     </div>
                 </div>
-                <div class="tri-dropdown" id="triangulateDropdown">
-                    <button class="toolbar-btn" id="tbTriangulate" title="Triangulate selected group (t)">Triangulate<span class="tri-method"></span> <span class="tri-caret">▾</span></button>
-                    <div class="tri-dropdown-menu">
-                        <div class="tri-dropdown-item" data-method="dlt">DLT <span class="tri-dropdown-hint">Fast</span></div>
-                        <div class="tri-dropdown-item" data-method="ba">Ref <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
-                    </div>
-                </div>
-                <div class="tri-dropdown" id="triangulateAllDropdown">
-                    <button class="toolbar-btn" id="tbTriangulateAll" title="Triangulate all frames with instance groups">Triangulate All<span class="tri-method"></span> <span class="tri-caret">▾</span></button>
-                    <div class="tri-dropdown-menu">
-                        <div class="tri-dropdown-item" data-method="dlt">DLT <span class="tri-dropdown-hint">Fast</span></div>
-                        <div class="tri-dropdown-item" data-method="ba">Ref <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
-                    </div>
-                </div>
-                <!-- Temporal Smoothing (luc3d #134): a click smooths every frame;
-                     the hover menu also offers the current frame and the
-                     settings. Blue (.active) while smoothing is applied
-                     (ui/smoothing-button.js). -->
-                <div class="tri-dropdown" id="smoothingDropdown">
-                    <button class="toolbar-btn" id="tbSmooth" aria-haspopup="menu"
-                        title="Smooth the 3D tracks through time, all frames (windows: Settings ▸ Temporal Smoothing)">Temporal Smoothing <span class="tri-caret">▾</span></button>
+                <!-- Triangulate, Temporal Smoothing and Track share one shape: a
+                     click on the button runs ALL frames; the hover menu has This
+                     frame / All frames, then the action's quick settings, then
+                     Settings… for the rest (ui/ui-wiring.js wireActionMenu). Each
+                     button keeps the id of the old all-frames button
+                     (#tbTriangulateAll, #tbTrackAll), so a click on it does what
+                     it always did. The items are <button>s, so Defining Plane
+                     Mode can disable the actions one by one and leave the
+                     settings in the same menu live. -->
+                <div class="tri-dropdown action-menu" id="triangulateDropdown">
+                    <button class="toolbar-btn" id="tbTriangulateAll" aria-haspopup="menu"
+                        title="Triangulate all frames with instance groups">Triangulate<span class="tri-method"></span> <span class="tri-caret">▾</span></button>
                     <div class="tri-dropdown-menu" role="menu">
-                        <div class="tri-dropdown-item" data-scope="all" role="menuitem">All frames</div>
-                        <div class="tri-dropdown-item" data-scope="frame" role="menuitem">This frame</div>
+                        <button class="tri-dropdown-item" id="tbTriangulate" data-scope="frame" role="menuitem"
+                            title="Triangulate the current frame (t)">This frame</button>
+                        <button class="tri-dropdown-item" id="tbTriangulateAllFrames" data-scope="all" role="menuitem"
+                            title="Triangulate all frames with instance groups">All frames</button>
                         <div class="tri-dropdown-sep"></div>
-                        <div class="tri-dropdown-item" data-scope="settings" role="menuitem">Settings…</div>
+                        <div class="tri-dropdown-setting" role="radiogroup" aria-label="Triangulation method">
+                            <span class="tri-dropdown-setting-label">Method</span>
+                            <span class="tri-dropdown-setting-control">
+                                <label title="DLT: fast"><input type="radio" name="tbTriMethod" value="dlt"> DLT</label>
+                                <label title="Refined: slow and accurate"><input type="radio" name="tbTriMethod" value="ba"> Ref</label>
+                            </span>
+                        </div>
+                        <button class="tri-dropdown-item" data-scope="settings" role="menuitem"
+                            title="Settings ▸ Default Triangulation">Settings…</button>
+                    </div>
+                </div>
+                <!-- Temporal Smoothing (luc3d #134). Blue (.active) while smoothing
+                     is applied (ui/smoothing-button.js). -->
+                <div class="tri-dropdown action-menu" id="smoothingDropdown">
+                    <button class="toolbar-btn" id="tbSmooth" aria-haspopup="menu"
+                        title="Smooth the 3D tracks through time, all frames">Temporal Smoothing <span class="tri-caret">▾</span></button>
+                    <div class="tri-dropdown-menu" role="menu">
+                        <button class="tri-dropdown-item" id="tbSmoothFrame" data-scope="frame" role="menuitem"
+                            title="Smooth the current frame (its neighbours are read, not written)">This frame</button>
+                        <button class="tri-dropdown-item" id="tbSmoothAllFrames" data-scope="all" role="menuitem"
+                            title="Smooth every frame">All frames</button>
+                        <div class="tri-dropdown-sep"></div>
+                        <button class="tri-dropdown-item" data-scope="settings" role="menuitem"
+                            title="Settings ▸ Temporal Smoothing: the median and Gaussian windows">Settings…</button>
                     </div>
                 </div>
                 <!-- Inside the Triangulate group so it stays on this side of the
@@ -272,23 +288,28 @@
                 <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             </div>
             <div class="toolbar-group">
-                <!-- The animal count every tracking run uses. Before this it was
-                     visible only in the first-use prompt, so a user who forgot
-                     what they typed had no way to find out. Blank = auto-detect.
-                     Wired in ui/ui-wiring.js (wireAnimalCountField). FIRST in the
-                     group: the setting before the actions that use it, and
-                     after Track All it read as "Track All Animals". -->
-                <label class="toolbar-field" title="Number of animals to track. Leave blank to auto-detect it from the most instances seen in one view.">Animals
-                    <input type="number" id="tbNumAnimals" min="1" step="1" inputmode="numeric"
-                        placeholder="auto" autocomplete="off" aria-label="Number of animals">
-                </label>
-                <div class="tri-dropdown" id="trackFrameDropdown">
-                    <button class="toolbar-btn" id="tbTrackFrame" title="Track current frame (Shift+T)">Track Frame <span class="tri-caret">▾</span></button>
-                    <div class="tri-dropdown-menu">
-                        <div class="tri-dropdown-item" id="tbTrackFrameRange">Track Frame Range… <span class="tri-dropdown-hint">Start–End</span></div>
+                <div class="tri-dropdown action-menu" id="trackDropdown">
+                    <button class="toolbar-btn" id="tbTrackAll" aria-haspopup="menu"
+                        title="Track all frames (Ctrl+Shift+T)">Track <span class="tri-caret">▾</span></button>
+                    <div class="tri-dropdown-menu" role="menu">
+                        <button class="tri-dropdown-item" id="tbTrackFrame" data-scope="frame" role="menuitem"
+                            title="Track the current frame (Shift+T)">This frame</button>
+                        <button class="tri-dropdown-item" id="tbTrackAllFrames" data-scope="all" role="menuitem"
+                            title="Track all frames (Ctrl+Shift+T)">All frames</button>
+                        <button class="tri-dropdown-item" id="tbTrackFrameRange" data-scope="range" role="menuitem"
+                            title="Track a range of frames">Frame range… <span class="tri-dropdown-hint">Start–End</span></button>
+                        <div class="tri-dropdown-sep"></div>
+                        <!-- The animal count every tracking run uses. Blank = auto-detect.
+                             Wired in ui/ui-wiring.js (wireAnimalCountField). -->
+                        <label class="tri-dropdown-setting" title="Number of animals to track. Leave blank to auto-detect it from the most instances seen in one view.">
+                            <span class="tri-dropdown-setting-label">Animals</span>
+                            <input type="number" id="tbNumAnimals" min="1" step="1" inputmode="numeric"
+                                placeholder="auto" autocomplete="off" aria-label="Number of animals">
+                        </label>
+                        <button class="tri-dropdown-item" data-scope="settings" role="menuitem"
+                            title="Settings ▸ Tracking Wizard">Settings…</button>
                     </div>
                 </div>
-                <button class="toolbar-btn" id="tbTrackAll" title="Track all frames (Ctrl+Shift+T)">Track All</button>
             </div>
             <div class="toolbar-group toolbar-checkboxes">
                 <label><input type="checkbox" id="visUser" checked> User</label>
