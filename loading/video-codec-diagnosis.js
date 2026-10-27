@@ -10,7 +10,14 @@
  *     (canPlayType: hev1 "", hvc1 "probably"). A lossless re-tag fixes it.
  *   - AV1: Safari decodes AV1 only with hardware AV1 decode (Apple M3 or newer);
  *     Chrome and Firefox decode it in software.
- *   - HEVC on a browser with no HEVC at all, or any other undecodable codec:
+ *   - HEVC in Chrome or Edge: they have no HEVC decoder of their own and play it
+ *     only through the GPU's hardware decoder. With no GPU the browser can use
+ *     (WebGL renderer "Microsoft Basic Render Driver", SwiftShader, llvmpipe or
+ *     a virtual machine's display adapter: measured on a Windows 11 VM, Chrome
+ *     155, canPlayType("hvc1…") "" while avc1/av01 "probably") the fix is a GPU,
+ *     not another browser; with a GPU it is the driver or Chrome's graphics
+ *     acceleration setting.
+ *   - HEVC on another browser with no HEVC, or any other undecodable codec:
  *     suggest another browser or converting to H.264.
  *
  * Reading is cheap even for multi-GB recordings: it walks top-level box headers
@@ -133,30 +140,88 @@ function defaultIsSafari() {
     } catch (e) { return false; }
 }
 
+function defaultIsChromium() {
+    try {
+        var ua = navigator.userAgent;
+        return /(Chrome|Chromium|Edg)\//.test(ua) && !/(Firefox|FxiOS)\//.test(ua);
+    } catch (e) { return false; }
+}
+
+var cachedRenderer;
+
+/**
+ * The graphics adapter the browser renders with (WebGL's unmasked renderer
+ * string), or '' when it can't be read. Cached: one WebGL context per page.
+ * @returns {string}
+ */
+export function graphicsRenderer() {
+    if (cachedRenderer !== undefined) return cachedRenderer;
+    cachedRenderer = '';
+    try {
+        var canvas = document.createElement('canvas');
+        var gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+        if (gl) {
+            var ext = gl.getExtension('WEBGL_debug_renderer_info');
+            cachedRenderer = String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || '');
+            var lose = gl.getExtension('WEBGL_lose_context');
+            if (lose) lose.loseContext();
+        }
+    } catch (e) { /* no WebGL: unknown */ }
+    return cachedRenderer;
+}
+
+// Renderers that mean "no GPU the browser can decode video on": Windows' stand-in
+// driver, the software rasterizers, and virtual machines' display adapters.
+var NO_GPU_RENDERER = /Basic Render Driver|SwiftShader|llvmpipe|softpipe|Software (Rasterizer|Adapter)|VMware SVGA|VirtualBox|Parallels Display|Hyper-V|virgl|VirtIO|QXL|Red Hat/i;
+
+/**
+ * Whether a renderer string names a real GPU: true, false (software or a
+ * virtual adapter), or null when it is unknown ('').
+ * @param {string} renderer
+ * @returns {boolean|null}
+ */
+export function rendererHasGpu(renderer) {
+    if (!renderer) return null;
+    return !NO_GPU_RENDERER.test(renderer);
+}
+
+/** The adapter's name without ANGLE's wrapping ("ANGLE (Vendor, NAME (…) Direct3D11 …)"). */
+function adapterName(renderer) {
+    var m = /^ANGLE \(([^,]*),\s*(.*?)(\s+Direct3D.*|\s+OpenGL.*|\s+Vulkan.*|\s+Metal.*)?(, [^,]*)?\)$/.exec(renderer);
+    var name = m ? m[2] : renderer;
+    return name.replace(/\s*\(0x[0-9A-Fa-f]+\)/g, '').trim() || renderer;
+}
+
 function fileStem(name) {
     return String(name || 'video').replace(/^.*[\/\\]/, '').replace(/\.[^.]+$/, '');
 }
 
 /**
  * Build the user-facing explanation for a codec this browser can't play.
- * Pure: `canPlayType` and `isSafari` are injected (tests).
+ * Pure: `canPlayType`, `isSafari`, `isChromium` and `renderer` are injected (tests).
+ *
+ * HEVC kinds also carry `title`, `why` and `steps` (what to change, in order)
+ * for the notice in ui/video-codec-notice.js; `message` stays the one-line form.
  *
  * @param {string} fourccCode - sample-entry fourcc (e.g. 'hev1', 'av01')
  * @param {string} fileName
- * @param {{canPlayType?: function(string): string, isSafari?: boolean}} [env]
- * @returns {{fourcc: string, codecName: string, kind: string, message: string}|null}
+ * @param {{canPlayType?: function(string): string, isSafari?: boolean,
+ *   isChromium?: boolean, renderer?: string}} [env]
+ * @returns {{fourcc: string, codecName: string, kind: string, message: string,
+ *   title?: string, why?: string, steps?: string[], command?: string}|null}
  *   null when the browser says it can play this codec (nothing to explain).
  */
 export function explainUnplayableCodec(fourccCode, fileName, env) {
     env = env || {};
     const canPlay = env.canPlayType || defaultCanPlayType;
     const safari = env.isSafari != null ? env.isSafari : defaultIsSafari();
+    const chromium = !safari && (env.isChromium != null ? env.isChromium : defaultIsChromium());
     const name = String(fileName || 'video').replace(/^.*[\/\\]/, '');
     const stem = fileStem(name);
     const browser = safari ? 'Safari' : 'this browser';
     const codecName = VIDEO_ENTRIES[fourccCode] || (fourccCode === 'encv' ? 'encrypted video' : fourccCode);
     const supported = (fc) => PROBE_CODECS[fc] ? canPlay('video/mp4; codecs="' + PROBE_CODECS[fc] + '"') !== '' : false;
-    const toH264 = 'ffmpeg -i "' + name + '" -c:v libx264 -crf 18 "' + stem + '_h264.mp4"';
+    const toH264 = 'ffmpeg -i "' + name + '" -c:v libx264 -crf 18 -pix_fmt yuv420p -fps_mode passthrough "' + stem + '_h264.mp4"';
 
     if (fourccCode === 'encv') {
         return { fourcc: fourccCode, codecName, kind: 'encrypted',
@@ -176,10 +241,62 @@ export function explainUnplayableCodec(fourccCode, fileName, env) {
                 + (safari ? ' (Safari decodes AV1 only on Macs with Apple M3 or newer)' : '')
                 + '. Open the project in a recent Chrome or Firefox, or convert to H.264: ' + toH264 };
     }
+    if ((fourccCode === 'hev1' || fourccCode === 'hvc1') && chromium) {
+        const renderer = env.renderer != null ? env.renderer : graphicsRenderer();
+        const gpu = rendererHasGpu(renderer);
+        const why = 'Chrome and Edge have no H.265 decoder of their own: they play H.265 only through '
+            + 'the GPU\'s hardware video decoder (H.264 and AV1 they decode themselves).';
+        const elsewhere = 'Or open the project on a Mac (Chrome or Safari), or on a computer with a GPU.';
+        const convert = 'Or convert the videos to H.264 (keeps every frame): ' + toH264;
+        // SwiftShader is Chrome's own software renderer: what it falls back to
+        // when its graphics acceleration is off, GPU or not. Point at the setting.
+        const software = /SwiftShader/i.test(renderer || '');
+        if (gpu === false && !software) {
+            const shown = adapterName(renderer);
+            return { fourcc: fourccCode, codecName, kind: 'hevc-no-gpu', command: toH264,
+                title: 'This computer has no GPU to play H.265 video',
+                why: why + ' This browser has none to use: its graphics adapter is "' + shown
+                    + '", which usually means a virtual machine or a computer without a GPU driver.',
+                steps: [
+                    'Give this computer a GPU that decodes H.265 (NVIDIA GTX 950/960 or newer, AMD from about 2015, '
+                        + 'Intel 6th generation or newer; on a virtual machine, pass one through) and install its maker\'s driver.',
+                    'Over Remote Desktop, also enable the Group Policy "Use hardware graphics adapters for all '
+                        + 'Remote Desktop Services sessions".',
+                    elsewhere,
+                    convert,
+                ],
+                message: name + ': HEVC (H.265) video, which this browser can only play on a GPU, and it has none '
+                    + '(graphics: ' + shown + '). Add a GPU with its driver, open the project on a Mac, '
+                    + 'or convert to H.264: ' + toH264 };
+        }
+        const gpuName = gpu ? adapterName(renderer) : '';   // '' for SwiftShader or unknown
+        return { fourcc: fourccCode, codecName, kind: 'hevc-gpu-no-decode', command: toH264,
+            title: 'This browser isn\'t decoding H.265 on the GPU',
+            why: why + (software ? ' It is drawing in software (SwiftShader), so its graphics acceleration is off or it can\'t use the GPU.'
+                : gpuName ? ' It sees a GPU ("' + gpuName + '") but reports no H.265 decoder on it.'
+                : ' It reports no H.265 decoder.'),
+            steps: [
+                'Turn on graphics acceleration: Settings ▸ System ▸ "Use graphics acceleration when available", then relaunch.',
+                'Update the GPU driver from its maker (NVIDIA, AMD or Intel), then check chrome://gpu: '
+                    + '"Video Decode" should be hardware accelerated and list HEVC.',
+                'Very old GPUs have no H.265 decoder (NVIDIA before the GTX 950/960, Intel before 6th generation).',
+                elsewhere,
+                convert,
+            ],
+            message: name + ': HEVC (H.265) video, which this browser plays only on the GPU, and it found no H.265 decoder'
+                + (gpuName ? ' on ' + gpuName : '') + '. Turn on graphics acceleration and update the GPU driver, '
+                + 'open the project on a Mac, or convert to H.264: ' + toH264 };
+    }
     if (fourccCode === 'hev1' || fourccCode === 'hvc1') {
-        return { fourcc: fourccCode, codecName, kind: 'hevc-unsupported',
+        return { fourcc: fourccCode, codecName, kind: 'hevc-unsupported', command: toH264,
+            title: browser === 'Safari' ? 'Safari can\'t play these videos' : 'This browser can\'t play H.265 video',
+            why: 'The videos are H.265 (HEVC), which ' + browser + ' cannot decode.',
+            steps: [
+                'Open the project in Safari on a Mac, or in Chrome or Edge on a computer with a GPU.',
+                'Or convert the videos to H.264 (keeps every frame): ' + toH264,
+            ],
             message: name + ': HEVC (H.265) video, which ' + browser + ' cannot decode. '
-                + 'Open the project in Chrome or Safari, or convert to H.264: ' + toH264 };
+                + 'Open the project in Safari on a Mac or in Chrome on a computer with a GPU, or convert to H.264: ' + toH264 };
     }
     return { fourcc: fourccCode, codecName, kind: 'unsupported',
         message: name + ': ' + codecName + ' video, which ' + browser + ' cannot decode. Convert to H.264: ' + toH264 };

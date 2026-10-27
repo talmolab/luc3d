@@ -11509,6 +11509,7 @@ stack. See `ui/calibration-notice.js`.
 - `./calibration-pick.js` (`REBASED_CALIBRATION_NAME`, `pickCalibrationFile`),
   `./percam-slp-choice.js` (`chooseCameraSlp`), `./video-file-pick.js`,
   `./video-codec-diagnosis.js` (`videoLoadFailureText`),
+  `../ui/video-codec-notice.js` (`noteUnplayableVideos`),
   `../ui/app-state.js` (incl. `buildRememberedSkeleton`, and `isViewDocked` as the
   rebuilt video controller's `isViewShown`), `../pose/pose-data.js`,
   `../ui/browser-hints.js` (`fileSystemAccessHint`),
@@ -11924,7 +11925,12 @@ actionable message. Measured cases (`tests/e2e/_probe-capabilities.mjs`):
 Safari plays HEVC-in-MP4 only when tagged `hvc1` (`hev1` → canPlayType "") — a
 lossless `ffmpeg -c copy -tag:v hvc1` re-tag fixes it; Safari decodes AV1 only
 with hardware AV1 (Apple M3+), while Chrome/Firefox decode it in software;
-otherwise suggest another browser / converting to H.264. Cheap on multi-GB
+Chrome and Edge have no HEVC decoder of their own and play it only on the GPU,
+so for them the advice depends on WebGL's renderer (`graphicsRenderer`): no GPU
+(Microsoft Basic Render Driver, llvmpipe, a virtual machine's adapter: measured
+on a Windows 11 VM, Chrome 155) → add a GPU and its driver; SwiftShader or a
+real GPU → turn on graphics acceleration / update the driver; otherwise suggest
+another browser / converting to H.264 (`-fps_mode passthrough` keeps every frame). Cheap on multi-GB
 recordings: it walks top-level box headers with random-access reads
 (`Blob.slice`, or HTTP Range for URLs) and reads only `moov` (often at the
 END, after the `mdat`). No diagnosis (null) when the codec can't be read or the
@@ -11934,8 +11940,13 @@ browser claims support — the original error then stands.
 - `sniffMp4VideoCodec(source)` → `{fourcc, codecName}|null` (File/Blob/URL).
 - `videoFourccFromMoov(moovBytes)` — first video sample-entry fourcc in a `moov`.
 - `explainUnplayableCodec(fourcc, fileName, env?)` → `{fourcc, codecName, kind,
-  message}|null`; pure (`env.canPlayType`, `env.isSafari` injectable). Kinds:
-  `hevc-hev1-tag`, `av1-unsupported`, `hevc-unsupported`, `unsupported`, `encrypted`.
+  message, title?, why?, steps?, command?}|null`; pure (`env.canPlayType`,
+  `env.isSafari`, `env.isChromium`, `env.renderer` injectable). Kinds:
+  `hevc-hev1-tag`, `av1-unsupported`, `hevc-no-gpu`, `hevc-gpu-no-decode`,
+  `hevc-unsupported`, `unsupported`, `encrypted`. The three HEVC-unsupported
+  kinds carry `title`/`why`/`steps` for `ui/video-codec-notice.js`.
+- `graphicsRenderer()` — WebGL's unmasked renderer string, cached ('' unknown).
+- `rendererHasGpu(renderer)` → true / false (software or virtual adapter) / null.
 - `diagnoseUnplayableVideo(source, fileName?, env?)` — sniff + explain.
 - `videoLoadFailureText(name, err)` — one-line reason for loaders' status
   messages: `err.codecDiagnosis.message` when present, else the error text.
@@ -11947,8 +11958,40 @@ browser claims support — the original error then stands.
 `loading/session-loader.js` (`videoLoadFailureText`).
 
 **Tests.** `tests/test-video-codec-diagnosis.js` (synthetic MP4s, every message
-kind, decoder integration); real browsers via the `decoderErrors` step of
-`tests/e2e/_probe-capabilities.html`.
+kind, renderer classes, decoder integration); real browsers via the
+`decoderErrors` step of `tests/e2e/_probe-capabilities.html`;
+`tests/e2e/video-codec-notice.mjs` (the notice, through File ▸ Load Videos).
+
+### ui/video-codec-notice.js
+
+**Purpose.** The note a load leaves when its videos can't play in this browser:
+why, and what to change. The loaders also put the one-line diagnosis in the
+status line, but on a multi-camera project that line runs off the window and
+the fix was cut off (H.265 in Chrome on a Windows VM with no GPU: poses loaded,
+every view black).
+
+**When.** Only for a failure whose `err.codecDiagnosis` has `steps` (the HEVC
+kinds), so corrupt or undiagnosed files keep the status line alone. One note per
+load, for the first such diagnosis, counting every file with the same kind. It
+waits for any other open overlay (`.plane-confirm-overlay`, `*modal-overlay`, the
+loading overlay) to close rather than stacking on it, and never opens twice.
+
+**Layout.** Title, the files ("N of M videos could not be played: …", 4 names),
+the why paragraph, "What to change" as a numbered list with the ffmpeg command
+as selectable code, one **Got it** button; Esc closes it. Changes nothing.
+
+**Key exports.** `noteUnplayableVideos(failures, totalVideos?)` (`failures`:
+`[{name, error}]`; returns the diagnosis shown or null; never throws) and
+`showVideoCodecNotice(diag, fileNames, totalVideos?)`.
+
+**Imported by.** `loading/session-loader.js` — after the final status of
+`handleLoadVideos`, the single-SLP folder loader, the attach-videos path and the
+session-folder loader.
+
+**Tests.** `tests/e2e/video-codec-notice.mjs` (a VM with no GPU simulated: H.265
+hidden from canPlayType, WebGL renderer "Microsoft Basic Render Driver"; one note
+for three files; Esc / Got it; waits for another dialog; SwiftShader; none for a
+non-video).
 
 ### loading/video.js
 
