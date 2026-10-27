@@ -28,7 +28,7 @@
  *   4. With a reprojection-error threshold set, the fill STILL reprojects the
  *      stored 3D. It used to re-solve, which drew a different 3D than the one
  *      in the 3D view and the saved file (review of PR #289); see
- *      `deriveDisplayReprojections` in pose/triangulation.js.
+ *      `fillLazyReprojections` in ui/rendering.js.
  *   5. Save Reprojections (`buildReprojH5`) writes every frame, shown or not
  *      — it used to skip any group with no stored reprojections.
  *

@@ -33,14 +33,15 @@
  * Frame-rate independence: everything time-dependent is set in SECONDS and
  * converted with the recording's frame rate (`opts.fps`, required). Contacts are
  * found on a ~`sampleHz` grid (every round(fps / sampleHz)-th frame); the image
- * check samples more sparsely (`imageHz`, on the same grid). A score is a
- * difference of cosine similarities between mean features, which no sample
- * rate scales.
+ * check samples more sparsely (`imageHz`, on the same grid), and embeds only the
+ * image samples its scoring reads plus a sparse background (`planImageSamples`).
+ * A score is a difference of cosine similarities between mean features, which no
+ * sample rate scales.
  *
  * Depends on: pose-data.js (readPoint3d). Pure — no DOM, no app state.
  */
 
-import { readPoint3d } from './pose-data.js?v=9e7754c6085c';
+import { readPoint3d } from './pose-data.js?v=4252feadb328';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
@@ -78,13 +79,23 @@ export const SIZE_CHECK_DEFAULTS = Object.assign({}, SWITCH_CHECK_DEFAULTS, {
 
 /** Image-check options. Calibration: see MODULES.md (2026-10-09). */
 export const IMAGE_CHECK_DEFAULTS = Object.assign({}, SWITCH_CHECK_DEFAULTS, {
-    imageHz: 2,             // crops per second per identity (on the contact grid)
+    imageHz: 2,             // crops per second per identity (on the contact grid), where the scoring reads them;
+    backgroundHz: 0.1,      // elsewhere only this many (planImageSamples), so the metric still sees the whole
+                            // session; >= imageHz embeds every image sample
     threshold: -0.8,        // a contact whose score is below this is a possible switch
     maxTrainRows: 20000,    // crops per camera the metric is learned from
     getEmbeddings: null,   // REQUIRED: async (frame, items[{k, group}]) -> per item [{camera, vector}];
                            // STARTED in increasing frame order, at most `inFlight` in flight
     inFlight: 2,           // requests kept in flight (ui/image-embedder.js asks for 8, to batch frames)
-    prepareFrames: null,   // optional: async (frames[]) — every frame getEmbeddings will be asked for, in order
+    prepareFrames: null,   // optional: async (frames[], items[][], gridFrames[]) — every frame getEmbeddings will be asked
+                           // for next, in order, and the items it will be asked for at each (lets the provider skip frames
+                           // it has cached); gridFrames = every image sample's frame (frames is a subset of it). Called
+                           // once per round (planImageSamples): a later round asks for frames an earlier one did not
+    keyframes: null,       // optional: async () -> per camera, its keyframes' frame indices (increasing; null = unknown):
+                           // the background is placed where decoding is cheap (planImageSamples)
+    croppable: null,       // optional: async (frames[], items[][], gridFrames[]) -> per frame, per item: will getEmbeddings
+                           // return at least one crop of it? (from the keypoints, before decoding; lets planImageSamples
+                           // plan in one round what missing crops would otherwise make it ask for in a second)
     releaseFrames: null,   // optional: () — called when done (or cancelled)
 });
 
@@ -103,9 +114,10 @@ function throwIfAborted(signal) {
 export function fitPCA(X, n, D, k, opts) {
     opts = opts || {};
     k = Math.min(k, D, Math.max(1, n - 1));
+    var w = opts.weights || null, W = 0;
     var mean = new Float64Array(D);
-    for (var r = 0; r < n; r++) for (var d = 0; d < D; d++) mean[d] += X[r * D + d];
-    for (var d1 = 0; d1 < D; d1++) mean[d1] /= Math.max(1, n);
+    for (var r = 0; r < n; r++) { var wr = w ? w[r] : 1; W += wr; for (var d = 0; d < D; d++) mean[d] += wr * X[r * D + d]; }
+    for (var d1 = 0; d1 < D; d1++) mean[d1] /= w ? W : Math.max(1, n);
     var seed = 12345, rnd = function () { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 - 0.5; };
     var Q = new Float64Array(D * k);
     for (var i = 0; i < Q.length; i++) Q[i] = rnd();
@@ -126,7 +138,8 @@ export function fitPCA(X, n, D, k, opts) {
         for (var r2 = 0; r2 < n; r2++) {             // Y = (X - mean) Q
             for (var d6 = 0; d6 < D; d6++) row[d6] = X[r2 * D + d6] - mean[d6];
             for (var c3 = 0; c3 < k; c3++) { var s = 0; for (var d7 = 0; d7 < D; d7++) s += row[d7] * Q[d7 * k + c3]; Y[r2 * k + c3] = s; }
-            for (var d8 = 0; d8 < D; d8++) { var xv = row[d8]; if (!xv) continue; for (var c4 = 0; c4 < k; c4++) Z[d8 * k + c4] += xv * Y[r2 * k + c4]; }
+            var w2 = w ? w[r2] : 1;
+            for (var d8 = 0; d8 < D; d8++) { var xv = row[d8] * w2; if (!xv) continue; for (var c4 = 0; c4 < k; c4++) Z[d8 * k + c4] += xv * Y[r2 * k + c4]; }
         }
         orth(Z); Q.set(Z);                           // Q <- orth((X - mean)^T (X - mean) Q)
     }
@@ -157,7 +170,7 @@ function median(arr) {
  * the tracklets — runs where an identity is apart from every other.
  * @returns {object} grid, or {fail: reason}
  */
-function buildGrid(session, o, needSize) {
+export function buildGrid(session, o, needSize) {
     if (!(typeof o.fps === 'number' && isFinite(o.fps) && o.fps > 0)) return { fail: 'Unknown frame rate (set the fps)' };
     if (!(o.sampleHz > 0)) return { fail: 'sampleHz must be positive' };
     var step = Math.max(1, Math.round(o.fps / o.sampleHz));
@@ -353,8 +366,9 @@ export function symmetricEigen(A, n) {
  * @returns {{dims: number, project: function(ArrayLike<number>): Float64Array}}  unit vectors;
  *   PCA alone when there are too few stretches or simultaneous pairs to learn from
  */
-export function learnIdentityMetric(X, n, D, stretch, sample, o) {
-    var pca = fitPCA(X, n, D, o.metricPcaDims || 64), d = pca.dims;
+export function learnIdentityMetric(X, n, D, stretch, sample, o, weights) {
+    var w = weights || null, wOf = function (r) { return w ? w[r] : 1; };
+    var pca = fitPCA(X, n, D, o.metricPcaDims || 64, { weights: w }), d = pca.dims;
     var Y = new Float64Array(n * d);
     for (var r = 0; r < n; r++) Y.set(pca.project(X.subarray(r * D, (r + 1) * D)), r * d);
     var groups = function (key) {
@@ -362,22 +376,27 @@ export function learnIdentityMetric(X, n, D, stretch, sample, o) {
         for (var r2 = 0; r2 < n; r2++) { var g = key[r2]; if (g < 0) continue; if (!m.has(g)) m.set(g, []); m.get(g).push(r2); }
         return m;
     };
-    var Sw = new Float64Array(d * d), Sb = new Float64Array(d * d), nw = 0, nb = 0, mu = new Float64Array(d), dv = new Float64Array(d);
+    // nw / nb count pairs (the "too few to learn from" test); sw / sb are their summed weights (the averages)
+    var Sw = new Float64Array(d * d), Sb = new Float64Array(d * d), nw = 0, nb = 0, sw = 0, sb = 0, mu = new Float64Array(d), dv = new Float64Array(d);
     groups(stretch).forEach(function (rows) {
         if (rows.length < 2) return;
         mu.fill(0);
-        rows.forEach(function (r3) { for (var x = 0; x < d; x++) mu[x] += Y[r3 * d + x] / rows.length; });
+        var wsum = 0;
+        rows.forEach(function (r3) { wsum += wOf(r3); });
+        rows.forEach(function (r3) { var wr = wOf(r3); for (var x = 0; x < d; x++) mu[x] += wr * Y[r3 * d + x] / wsum; });
         rows.forEach(function (r3) {
+            var wr = wOf(r3);
             for (var x = 0; x < d; x++) dv[x] = Y[r3 * d + x] - mu[x];
-            for (var x2 = 0; x2 < d; x2++) for (var y2 = 0; y2 < d; y2++) Sw[x2 * d + y2] += dv[x2] * dv[y2];
-            nw++;
+            for (var x2 = 0; x2 < d; x2++) for (var y2 = 0; y2 < d; y2++) Sw[x2 * d + y2] += dv[x2] * dv[y2] * wr;
+            nw++; sw += wr;
         });
     });
     groups(sample).forEach(function (rows) {
         for (var p = 0; p < rows.length; p++) for (var q = p + 1; q < rows.length; q++) {
+            var wp = wOf(rows[p]);                    // one sample: both rows weigh the same
             for (var x = 0; x < d; x++) dv[x] = Y[rows[p] * d + x] - Y[rows[q] * d + x];
-            for (var x2 = 0; x2 < d; x2++) for (var y2 = 0; y2 < d; y2++) Sb[x2 * d + y2] += dv[x2] * dv[y2];
-            nb++;
+            for (var x2 = 0; x2 < d; x2++) for (var y2 = 0; y2 < d; y2++) Sb[x2 * d + y2] += dv[x2] * dv[y2] * wp;
+            nb++; sb += wp;
         }
     });
     var unit = function (z) {
@@ -387,7 +406,7 @@ export function learnIdentityMetric(X, n, D, stretch, sample, o) {
     };
     if (nw < 20 || nb < 20) return { dims: d, project: function (x) { return unit(pca.project(x)); } };
     var tr = 0;
-    for (var x3 = 0; x3 < d; x3++) { for (var y3 = 0; y3 < d; y3++) { Sw[x3 * d + y3] /= nw; Sb[x3 * d + y3] /= nb; } tr += Sw[x3 * d + x3]; }
+    for (var x3 = 0; x3 < d; x3++) { for (var y3 = 0; y3 < d; y3++) { Sw[x3 * d + y3] /= sw; Sb[x3 * d + y3] /= sb; } tr += Sw[x3 * d + x3]; }
     for (var x4 = 0; x4 < d; x4++) Sw[x4 * d + x4] += (o.metricReg != null ? o.metricReg : 0.1) * tr / d;
     // whiten the within-animal scatter (W1 = E diag(1/sqrt(l))), then the top directions of the between-animal one
     var ew = symmetricEigen(Sw, d), W1 = new Float64Array(d * d);
@@ -501,6 +520,158 @@ export function contactChangeScores(grid, feat, o, every) {
 }
 
 /**
+ * Which samples `contactChangeScores` reads features of, given which (sample,
+ * identity) have them (`has`): it is run on stand-in features and every sample
+ * it asks about is recorded, so the answer cannot drift from the scoring. Only
+ * image samples (every `every`-th) count — the check embeds no others. Reads
+ * depend on `has` (a side keeps going past samples without features, and the
+ * episode merge counts them), which is why `planImageSamples` repeats.
+ * @param {object} grid  from buildGrid
+ * @param {function(number, number): boolean} has  does identity k have features at sample i?
+ * @returns {number[]} sample indices, increasing
+ */
+export function contactReads(grid, has, o, every) {
+    var seen = new Uint8Array(grid.T), stub = [{ c: 0, u: new Float64Array([1]) }];
+    contactChangeScores(grid, function (i, k) {
+        if (i % every) return null;
+        seen[i] = 1;
+        return has(i, k) ? stub : null;
+    }, o, every);
+    var out = [];
+    for (var i = 0; i < grid.T; i++) if (seen[i]) out.push(i);
+    return out;
+}
+
+/** Never fewer background samples than one per this many seconds, however sparse the keyframes. */
+export const MAX_BACKGROUND_GAP_SECONDS = 10;
+
+/**
+ * The background's blocks: runs of `len` consecutive image samples, one sample
+ * embedded per block. `len` = round(imageHz / backgroundHz) (1 = every sample;
+ * 0 = no background). With keyframes known, a block is at least one keyframe gap
+ * (+ a sample) long, so it holds a sample just after a keyframe — at most
+ * `MAX_BACKGROUND_GAP_SECONDS` long.
+ * @returns {number} image samples per block (0 = none)
+ */
+function backgroundBlock(grid, o, every, keyframes) {
+    var imgHz = grid.hz / every;
+    if (!(o.backgroundHz < imgHz)) return 1;
+    if (!(o.backgroundHz > 0)) return 0;
+    var len = Math.max(1, Math.round(imgHz / o.backgroundHz));
+    if (len > 1 && keyframes) {
+        var gap = 0;
+        keyframes.forEach(function (kf) {
+            var d = [];
+            for (var j = 1; kf && j < kf.length; j++) d.push(kf[j] - kf[j - 1]);
+            if (d.length) gap = Math.max(gap, median(d));
+        });
+        var gapSamples = Math.ceil(gap / (grid.step * every)) + 1;
+        len = Math.max(len, Math.min(gapSamples, Math.round(MAX_BACKGROUND_GAP_SECONDS * imgHz)));
+    }
+    return len;
+}
+
+/** Rounds of `planImageSamples` before the image check embeds every sample left (each round is a pass over the videos). */
+export const MAX_PLAN_ROUNDS = 4;
+
+/**
+ * The image samples still to embed. Contact episodes, and so the windows the
+ * scoring reads (`contactChangeScores`), come from the 3D alone, so they are
+ * known before any frame is decoded: every image sample the scoring would read
+ * (`contactReads`, assuming a sample not yet embedded will have every identity's
+ * crop it is expected to have), plus a background so the identity metric
+ * (centring, PCA, LDA in `scoreContacts`) still sees the whole session: one
+ * sample in each block of `backgroundBlock` image samples that holds samples the
+ * scoring does not read — the one cheapest to decode (fewest frames past what its
+ * keyframe and the planned samples already decode, summed over cameras: on a
+ * recording with a keyframe every 250 frames a sample mid-gap costs ~125 frames
+ * per camera, one just after a keyframe ~1), else the first.
+ * Whole samples — every identity in the frame — so "two identities in the same
+ * frame" pairs remain. A crop that turns out missing makes the scoring read
+ * further, so the check calls this again after each round until it returns
+ * nothing; then every sample the scoring reads has been embedded, and it reads
+ * exactly the samples it would have read with all of them embedded (only the
+ * metric, learned from fewer crops, differs — see `backgroundWeights`).
+ * @param {object} grid  from buildGrid
+ * @param {object} o     options (`backgroundHz`, and the scoring's)
+ * @param {number} every grid samples per image sample
+ * @param {{embeddable: Uint8Array, embedded: Uint8Array, got: Uint8Array, expect: ?Uint8Array, keyframes: ?Array}} st
+ *        per sample i: an image sample with at least 2 identities (one the check can ask for); already asked for;
+ *        got[i * K + k]: it returned a crop of identity k; expect[i * K + k] (optional): it is expected to
+ *        (`o.croppable`); keyframes (optional): per camera, its keyframes' frame indices, increasing
+ * @returns {number[]} samples to embed next, increasing ([] = done)
+ */
+export function planImageSamples(grid, o, every, st) {
+    var K = grid.K, T = grid.T, frames = grid.frames, want = new Uint8Array(T);
+    var has = function (i, k) { return st.embedded[i] ? st.got[i * K + k] === 1 : st.embeddable[i] === 1 && (!st.expect || st.expect[i * K + k] === 1); };
+    var reads = contactReads(grid, has, o, every);
+    reads.forEach(function (i) { want[i] = 1; });
+    var len = backgroundBlock(grid, o, every, st.keyframes);
+    if (len > 0) {
+        // per camera: how far each keyframe gap is decoded already (the planned and embedded samples)
+        var kfs = (st.keyframes || []).filter(function (kf) { return kf && kf.length; });
+        var gapOf = function (kf, f) {                  // index of the last keyframe <= f (-1: before the first)
+            var lo = 0, hi = kf.length - 1, r = -1;
+            while (lo <= hi) { var m = (lo + hi) >> 1; if (kf[m] <= f) { r = m; lo = m + 1; } else hi = m - 1; }
+            return r;
+        };
+        var reach = kfs.map(function () { return new Map(); });   // per camera: keyframe gap -> last frame decoded in it
+        var reached = function (c, g) { return reach[c].has(g) ? reach[c].get(g) : -1; };
+        var cover = function (f) { kfs.forEach(function (kf, c) { var g = gapOf(kf, f); if (f > reached(c, g)) reach[c].set(g, f); }); };
+        for (var i0 = 0; i0 < T; i0 += every) if (want[i0] || st.embedded[i0]) cover(frames[i0]);
+        var cost = function (f) {                       // frames decoded for f beyond what is decoded anyway, all cameras
+            var sum = 0;
+            kfs.forEach(function (kf, c) { var g = gapOf(kf, f); sum += Math.max(0, f - Math.max(g >= 0 ? kf[g] : 0, reached(c, g))); });
+            return sum;
+        };
+        var n = Math.ceil(T / every);
+        for (var b = 0; b < n; b += len) {
+            var best = -1, bestCost = Infinity, done = false;
+            for (var j = b; j < Math.min(n, b + len) && !done; j++) {
+                var i1 = j * every;
+                if (!st.embeddable[i1] || want[i1]) continue;
+                if (st.embedded[i1]) { done = true; break; }         // the block already has its background sample
+                var c1 = len > 1 ? cost(frames[i1]) : 0;
+                if (c1 < bestCost) { best = i1; bestCost = c1; }
+            }
+            if (!done && best >= 0) { want[best] = 1; if (len > 1) cover(frames[best]); }
+        }
+    }
+    var out = [];
+    for (var i = 0; i < T; i += every) if (want[i] && st.embeddable[i] && !st.embedded[i]) out.push(i);
+    return out;
+}
+
+/**
+ * How much each embedded sample counts in the identity metric, so it is learned
+ * as if from every image sample: a sample the scoring reads counts once; the
+ * background samples of a block (`backgroundBlock`) share the block's samples the
+ * scoring does not read. null when every image sample was embedded (each counts
+ * once — the old, unweighted fit, bit for bit).
+ * @returns {?function(number): number} sample index -> weight
+ */
+function backgroundWeights(grid, o, every, st) {
+    var T = grid.T, K = grid.K, n = Math.ceil(T / every), len = backgroundBlock(grid, o, every, st.keyframes);
+    var all = true;
+    for (var i = 0; i < T; i += every) if (st.embeddable[i] && !st.embedded[i]) { all = false; break; }
+    if (all || len < 1) return null;
+    var read = new Uint8Array(T);
+    contactReads(grid, function (i2, k2) { return st.got[i2 * K + k2] === 1; }, o, every).forEach(function (i2) { read[i2] = 1; });
+    var w = new Float64Array(T).fill(1);
+    for (var b = 0; b < n; b += len) {
+        var rest = 0, picked = [];
+        for (var j = b; j < Math.min(n, b + len); j++) {
+            var i3 = j * every;
+            if (!st.embeddable[i3] || read[i3]) continue;
+            rest++;
+            if (st.embedded[i3]) picked.push(i3);
+        }
+        picked.forEach(function (i4) { w[i4] = rest / picked.length; });
+    }
+    return function (i5) { return w[i5]; };
+}
+
+/**
  * Change points from contact scores (mutates them: `flagged`, `kind`,
  * `switchBackAt` / `switchedAt`, `followOf`). Every contact scoring below
  * `o.threshold` is where a pair's labels changed hands. Taking the session's
@@ -558,7 +729,7 @@ export function markContactChanges(scored, o) {
  * @param {?function(number, number): Promise} fitProgress  awaited before each view and at the end
  * @returns {Promise<Array>} the scored contacts, marked
  */
-async function scoreContacts(grid, views, o, every, unitRows, fitProgress) {
+async function scoreContacts(grid, views, o, every, unitRows, fitProgress, sampleWeight) {
     var T = grid.T, K = grid.K;
     var stretchOf = new Int32Array(T * K).fill(-1);
     grid.tl.forEach(function (t, ti) { for (var i = t.start; i <= t.end; i++) stretchOf[i * K + t.k] = ti; });
@@ -568,7 +739,9 @@ async function scoreContacts(grid, views, o, every, unitRows, fitProgress) {
         if (fitProgress) await fitProgress(ci, views.length);
         var data = views[ci], n = data.rows.length, D = data.vecs[0].length;
         var X = new Float64Array(n * D), mean = new Float64Array(D);
-        data.vecs.forEach(function (v) { for (var x = 0; x < D; x++) mean[x] += v[x] / n; });
+        var wRow = function (r0) { return sampleWeight ? sampleWeight(Math.floor(data.rows[r0] / K)) : 1; }, W = 0;
+        for (var r0 = 0; r0 < n; r0++) W += wRow(r0);
+        data.vecs.forEach(function (v, r1) { var wr = wRow(r1); for (var x = 0; x < D; x++) mean[x] += wr * v[x] / W; });
         data.vecs.forEach(function (v, r) {
             var nn = 0;
             for (var x = 0; x < D; x++) { var t = v[x] - mean[x]; X[r * D + x] = t; nn += t * t; }
@@ -577,11 +750,13 @@ async function scoreContacts(grid, views, o, every, unitRows, fitProgress) {
         var stride = Math.max(1, Math.ceil(n / o.maxTrainRows)), use = [];
         for (var r = 0; r < n; r++) if (Math.floor(data.rows[r] / K / every) % stride === 0) use.push(r);   // whole samples
         var Xt = new Float64Array(use.length * D), st = new Int32Array(use.length), sm = new Int32Array(use.length);
+        var wt = sampleWeight ? new Float64Array(use.length) : null;
         use.forEach(function (r2, j) {
             Xt.set(X.subarray(r2 * D, (r2 + 1) * D), j * D);
             st[j] = stretchOf[data.rows[r2]]; sm[j] = Math.floor(data.rows[r2] / K);
+            if (wt) wt[j] = wRow(r2);
         });
-        var metric = learnIdentityMetric(Xt, use.length, D, st, sm, o);
+        var metric = learnIdentityMetric(Xt, use.length, D, st, sm, o, wt);
         for (var r3 = 0; r3 < n; r3++) {
             var row = data.rows[r3];
             if (!feats.has(row)) feats.set(row, []);
@@ -711,10 +886,14 @@ export function planKeyframeSamples(frames, keyframes, hasFrame) {
 }
 
 /**
- * Image check: on every round(sampleHz / imageHz)-th grid sample,
+ * Image check: image samples are every round(sampleHz / imageHz)-th grid
+ * sample; at those the scoring reads, plus a sparse background
+ * (`planImageSamples`: `backgroundHz`, placed by `opts.keyframes`, planned in one
+ * round when `opts.croppable` says which animals will have crops),
  * `opts.getEmbeddings(frame, items)` is awaited for the identities present
  * (`items` = [{k, group}]) and returns, per item, the crops' embeddings as
- * [{camera, vector}] (any length; [] = not visible). Each camera is one view of
+ * [{camera, vector}] (any length; [] = not visible). `backgroundHz` >= `imageHz`
+ * embeds every image sample, as before. Each camera is one view of
  * `scoreContacts`: its embeddings are centred and scaled to unit length, a metric
  * is learned per camera without identity labels (`learnIdentityMetric`), every
  * contact is scored by whether the two animals look like themselves across it
@@ -725,7 +904,8 @@ export function planKeyframeSamples(frames, keyframes, hasFrame) {
  * sampled frame) and 'fit' (per camera). `opts.signal` cancels.
  *
  * @returns {Promise<object>} as checkSizeSwitches (without `bones`), plus
- *   {imageHz, crops, cameras}, or {ok: false, reason}.
+ *   {imageHz, crops, cameras, samples: {embedded, of, rounds}} (image samples embedded,
+ *   of those with 2+ identities, in how many passes), or {ok: false, reason}.
  */
 export async function checkImageSwitches(session, opts) {
     var o = Object.assign({}, IMAGE_CHECK_DEFAULTS, opts || {});
@@ -736,21 +916,31 @@ export async function checkImageSwitches(session, opts) {
     var every = Math.max(1, Math.round(grid.hz / o.imageHz)), imgHz = grid.hz / every;
     var progress = o.onProgress || null;
 
-    // ---- embeddings at the image samples, grouped by camera
+    // ---- embeddings at the image samples the scoring reads (+ a background), grouped by camera
     var perCam = new Map();   // camera -> {rows: [], vecs: []}
-    var crops = 0, jobs = [];
+    var crops = 0, jobAt = new Map(), gridFrames = [];
+    var st = { embeddable: new Uint8Array(T), embedded: new Uint8Array(T), got: new Uint8Array(T * K), expect: null,
+               keyframes: typeof o.keyframes === 'function' ? await o.keyframes() : null };
     for (var i = 0; i < T; i += every) {
         var items = [];
         for (var k = 0; k < K; k++) if (grid.G[i * K + k] && grid.hasCen(i, k)) items.push({ k: k, group: grid.G[i * K + k] });
-        if (items.length >= 2) jobs.push({ i: i, frame: grid.frames[i], items: items });
+        if (items.length >= 2) { jobAt.set(i, { i: i, frame: grid.frames[i], items: items }); st.embeddable[i] = 1; gridFrames.push(grid.frames[i]); }
     }
     // The provider may stream the frames in order instead of seeking to each one
     // (`prepareFrames`), and up to `inFlight` requests (default 2) run ahead of the
     // one being consumed — requests are STARTED in frame order, so a streaming
     // provider still sees increasing frames — letting decode/crop of later frames
     // overlap embedding (a provider can then batch several frames per model run).
-    if (typeof o.prepareFrames === 'function') await o.prepareFrames(jobs.map(function (j) { return j.frame; }));
-    try {
+    var asked = 0, answered = 0, rounds = 0;
+    if (typeof o.croppable === 'function') {
+        var cand = Array.from(jobAt.values()), can = await o.croppable(cand.map(function (j) { return j.frame; }), cand.map(function (j) { return j.items; }), gridFrames);
+        st.expect = new Uint8Array(T * K);
+        cand.forEach(function (j, ci) { j.items.forEach(function (itm, ii) { if (!can || !can[ci] || can[ci][ii]) st.expect[j.i * K + itm.k] = 1; }); });
+    }
+    var embedRound = async function (jobs) {
+        if (typeof o.prepareFrames === 'function') {
+            await o.prepareFrames(jobs.map(function (j) { return j.frame; }), jobs.map(function (j) { return j.items; }), gridFrames);
+        }
         var ahead = Math.max(1, Math.floor(o.inFlight || 2));
         var start = function (j) { var p = o.getEmbeddings(jobs[j].frame, jobs[j].items); p.catch(function () {}); return p; };   // surfaced when awaited
         var pending = [], launched = 0;
@@ -761,24 +951,49 @@ export async function checkImageSwitches(session, opts) {
             var embs = await pending.shift();
             fill();
             var job = jobs[ji];
+            st.embedded[job.i] = 1;
             for (var it = 0; it < job.items.length; it++) {
                 var list = (embs && embs[it]) || [];
+                if (list.length) st.got[job.i * K + job.items[it].k] = 1;
                 for (var e = 0; e < list.length; e++) {
                     var cam = list[e].camera;
                     if (!perCam.has(cam)) perCam.set(cam, { rows: [], vecs: [] });
                     perCam.get(cam).rows.push(job.i * K + job.items[it].k); perCam.get(cam).vecs.push(list[e].vector); crops++;
                 }
             }
-            if (progress && (ji % 5 === 0 || ji === jobs.length - 1)) await progress('embed', ji + 1, jobs.length);
+            answered++;
+            if (progress && (ji % 5 === 0 || ji === jobs.length - 1)) await progress('embed', answered, asked);
+        }
+    };
+    try {
+        for (;;) {
+            var next = planImageSamples(grid, o, every, st);
+            if (!next.length) break;
+            if (rounds === MAX_PLAN_ROUNDS - 1) {      // crops keep failing: embed everything left, so the scoring is still exact
+                next = [];
+                jobAt.forEach(function (j, i3) { if (!st.embedded[i3]) next.push(i3); });
+                next.sort(function (a, b) { return a - b; });
+            }
+            rounds++; asked += next.length;
+            await embedRound(next.map(function (i2) { return jobAt.get(i2); }));
         }
     } finally {
         if (typeof o.releaseFrames === 'function') o.releaseFrames();
     }
     if (!crops) return failure('No crops could be embedded');
 
-    // ---- per camera: centre, learn the identity metric, score the contacts
+    // ---- per camera: centre, learn the identity metric (weighted: backgroundWeights), score the contacts
+    var sampleWeight = backgroundWeights(grid, o, every, st);
     var cams = Array.from(perCam.keys());
+    if (rounds > 1) {                              // in sample order, as one round leaves them: the fit sums in row order
+        perCam.forEach(function (v) {
+            var ix = v.rows.map(function (r, j) { return j; }).sort(function (a, b) { return v.rows[a] - v.rows[b] || a - b; });
+            v.rows = ix.map(function (j) { return v.rows[j]; }); v.vecs = ix.map(function (j) { return v.vecs[j]; });
+        });
+    }
     var scored = await scoreContacts(grid, cams.map(function (c) { return perCam.get(c); }), o, every, true,
-        progress ? function (d, t) { return progress('fit', d, t); } : null);
-    return result(grid, scored, o, { cue: 'image', imageHz: imgHz, crops: crops, cameras: cams });
+        progress ? function (d, t) { return progress('fit', d, t); } : null, sampleWeight);
+    return result(grid, scored, o, { cue: 'image', imageHz: imgHz, crops: crops, cameras: cams,
+        // how many of the image samples were embedded (planImageSamples), in how many rounds
+        samples: { embedded: answered, of: jobAt.size, rounds: rounds } });
 }

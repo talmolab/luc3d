@@ -8,56 +8,64 @@ import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
     asPoints3d, points3dNodeCount, someValidPoint3d, lazyPlaceholderXY, pooledPoints3d,
-} from '../pose/pose-data.js?v=9e7754c6085c';
+    markPoints3dFromFile,
+} from '../pose/pose-data.js?v=4252feadb328';
 import {
-    reprojectPointsCamera, reprojectPoints, computeReprojectionErrors,
-    storeReprojectedInstances, getInstanceGroupsForFrame,
-} from '../pose/triangulation.js?v=9e7754c6085c';
+    getInstanceGroupsForFrame,
+} from '../pose/triangulation.js?v=4252feadb328';
 import {
     parseSlpH5, parseSlpViaSleapIO, instanceMatchesPoints, parsePoints3dH5, pickFiles,
-} from './file-io.js?v=9e7754c6085c';
+} from './file-io.js?v=4252feadb328';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames,
-} from './slp-merge.js?v=9e7754c6085c';
-import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=9e7754c6085c';
+} from './slp-merge.js?v=4252feadb328';
+import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=4252feadb328';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController,
-} from '../ui/app-state.js?v=9e7754c6085c';
+} from '../ui/app-state.js?v=4252feadb328';
 import {
     autoAssignVideosToCameras, forceVideoSelection, forceVideoSelectionWithFolder,
     showParentDirMatchSummary, createViewForVideoFile, updateTotalFrames,
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
-} from '../loading/session-loader.js?v=9e7754c6085c';
-import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=9e7754c6085c';
-import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=9e7754c6085c';
+    adoptCampyRecording,
+} from '../loading/session-loader.js?v=4252feadb328';
+import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=4252feadb328';
+import {
+    campyVideoFile, orderByCampyCameras, campyRecordingWarnings,
+} from '../loading/campy-session.js?v=4252feadb328';
+import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=4252feadb328';
+import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=4252feadb328';
+import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=4252feadb328';
+import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js?v=4252feadb328';
+import { stampFrameIdentitiesFromGroups, readFrameIdentityMetadata } from './frame-identity-metadata.js?v=4252feadb328';
 import {
     showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
-} from './save-load.js?v=9e7754c6085c';
+} from './save-load.js?v=4252feadb328';
 
 // Circular import — these are still defined in app.js for now. They are only
 // invoked inside function bodies, never at module-init time, so live-binding
 // lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=9e7754c6085c';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=9e7754c6085c';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=9e7754c6085c';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=4252feadb328';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=4252feadb328';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=4252feadb328';
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=9e7754c6085c';
+import { setup3DViewport } from '../pose/initialization.js?v=4252feadb328';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
-import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=9e7754c6085c';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=9e7754c6085c';
+import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=4252feadb328';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=4252feadb328';
 // Block 1 (Prompt 4): keep timeline._uploadedCameras in sync after SLP
 // load so the gutter filters to the cameras that actually have video
 // assignments rather than every calibration camera.
-import { recomputeUploadedCameras } from '../loading/session-loader.js?v=9e7754c6085c';
+import { recomputeUploadedCameras } from '../loading/session-loader.js?v=4252feadb328';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=9e7754c6085c';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=9e7754c6085c';
-import { readVisibilityMetadata } from './visibility-metadata.js?v=9e7754c6085c';
-import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=9e7754c6085c';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=4252feadb328';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=4252feadb328';
+import { readVisibilityMetadata } from './visibility-metadata.js?v=4252feadb328';
+import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=4252feadb328';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -248,6 +256,7 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
                 // reprojections with DLT and displays DLT's error for BA points,
                 // and `adoptPrior3d` can never match so every regroup re-solves.
                 group.triangulationMethod = (igLucid.triangulationMethod === 'ba') ? 'ba' : 'dlt';
+                markPoints3dFromFile(group.points3d);
             }
 
             groups.push(group);
@@ -262,6 +271,17 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
         }
     }
     return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d };
+}
+
+/**
+ * typed Identity → its index in the file's `/identity` catalog (which is then
+ * `session.identities`' order), or null when there is no catalog to use.
+ */
+function fileIdentityIndex(fileIdentities) {
+    if (!fileIdentities || !fileIdentities.length) return null;
+    var m = new Map();
+    for (var i = 0; i < fileIdentities.length; i++) m.set(fileIdentities[i], i);
+    return m;
 }
 
 /**
@@ -284,12 +304,17 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
  *   per-session), falling back to the matching raw dict's `identity_idx` for legacy
  *   files (both are per-session; the canonical file-level `ig.identity`/`identity_idx`
  *   are NOT used — they resolve against the cross-session concat and mis-scope).
+ *   Exception: `opts.fileIdentities` (the file's typed `/identity` catalog), passed
+ *   only when `session.identities` was built from that same catalog — a file
+ *   written by another tool (campy-live-export), never a LUC3D project — lets a
+ *   group with neither take its canonical `identity_idx` (`typedIG.identity`), as
+ *   `reconstructInstanceGroupsFromSessionLazy` does.
  *
  * @param {Session} session - LUCID session whose frameGroups hold pass-1 raw instances
  * @param {Object} typedSession - sleap-io.js RecordingSession (with frameGroups Map)
  * @param {Object|null} rawSession - the verbatim sessions_json dict (legacy identity fallback)
  * @param {string[]} nodeNames - skeleton node names (point-array length)
- * @param {{onProgress?:(msg:string)=>void, batch?:number}} [opts]
+ * @param {{onProgress?:(msg:string)=>void, batch?:number, fileIdentities?:Array}} [opts]
  * @returns {Promise<{restoredGroups:number, restoredWith3d:number}>}
  */
 export async function reconstructInstanceGroupsFromSession(session, typedSession, rawSession, nodeNames, opts) {
@@ -298,6 +323,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
     var BATCH = opts.batch || 20000;
     var onProgress = opts.onProgress || function () {};
     var restoredGroups = 0, restoredWith3d = 0;
+    var fileIdentityIdx = fileIdentityIndex(opts.fileIdentities);
     // For deriving type/trackIdx/score from resolved typed instances when slim
     // metadata (#134) omits them.
     var _SIO = (typeof window !== 'undefined' && window.SleapIO) ? window.SleapIO : null;
@@ -349,6 +375,9 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
             } else {
                 var rawIG = rawFg && rawFg.instance_groups && rawFg.instance_groups[igi];
                 if (rawIG && rawIG.identity_idx != null) identityId = rawIG.identity_idx;
+                else if (fileIdentityIdx && typedIG.identity && fileIdentityIdx.has(typedIG.identity)) {
+                    identityId = fileIdentityIdx.get(typedIG.identity);
+                }
             }
             if (identityId >= 0 && identityId >= session.identities.length) {
                 console.warn('[load-slp] identity_idx ' + identityId + ' is out of bounds (only ' + session.identities.length + ' identities loaded) — dropping identity assignment');
@@ -445,6 +474,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
                 // reprojections with DLT and displays DLT's error for BA points,
                 // and `adoptPrior3d` can never match so every regroup re-solves.
                 group.triangulationMethod = (igLucid.triangulationMethod === 'ba') ? 'ba' : 'dlt';
+                markPoints3dFromFile(group.points3d);
             }
 
             groups.push(group);
@@ -489,11 +519,19 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
  *    resolves the correct store row — the same tag `ensureLazyFrameData` sets on
  *    the Track-All path.
  *
+ * A group's identity is `metadata.lucid.identityId`, as on the eager path.
+ * Pass `opts.fileIdentities` (the file's typed `/identity` catalog,
+ * `labels.identities`) ONLY when `session.identities` was built from that same
+ * catalog — a file written by another tool (campy-live-export) rather than by
+ * LUC3D: a group without `identityId` then takes its canonical `identity_idx`
+ * (`typedIG.identity`) instead. Never pass it for a LUC3D project, whose
+ * per-session identity list does not match the file-level catalog's order.
+ *
  * @param {Session} session - target session (identities/tracks already set)
  * @param {Object} typedSession - sleap-io.js RecordingSession (mutated: frameGroups drained)
  * @param {SioLazyLoader} loader - the open project loader (for `_rawInstIndex` refs)
  * @param {string[]} nodeNames - skeleton node names
- * @param {{onProgress?:(msg:string)=>void, batch?:number}} [opts]
+ * @param {{onProgress?:(msg:string)=>void, batch?:number, yieldMs?:number, fileIdentities?:Array}} [opts]
  * @returns {Promise<{restoredGroups:number, restoredWith3d:number}>}
  */
 export async function reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, opts) {
@@ -504,6 +542,7 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
     var _SIO = (typeof window !== 'undefined' && window.SleapIO) ? window.SleapIO : null;
     var PredI = _SIO && _SIO.PredictedInstance;
     var restoredGroups = 0, restoredWith3d = 0;
+    var fileIdentityIdx = fileIdentityIndex(opts.fileIdentities);
     // Time-based yielding: materializing 108k frames + building ~1.25M member
     // Instances is ~tens of seconds of work; yield every ~40ms so the tab stays
     // responsive (a frame-count batch of 20k blocks the main thread for seconds).
@@ -530,6 +569,9 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
 
             var identityId = -1;
             if (igLucid.identityId != null) identityId = igLucid.identityId;
+            else if (fileIdentityIdx && typedIG.identity && fileIdentityIdx.has(typedIG.identity)) {
+                identityId = fileIdentityIdx.get(typedIG.identity);
+            }
             if (identityId >= 0 && identityId >= session.identities.length) identityId = -1;
 
             var group = new InstanceGroup(Date.now() + Math.random() * 1000 + igi, identityId);
@@ -597,6 +639,7 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
                 // reprojections with DLT and displays DLT's error for BA points,
                 // and `adoptPrior3d` can never match so every regroup re-solves.
                 group.triangulationMethod = (igLucid.triangulationMethod === 'ba') ? 'ba' : 'dlt';
+                markPoints3dFromFile(group.points3d);
             }
 
             groups.push(group);
@@ -607,12 +650,19 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
 
         if (_now() - _ty > _yieldMs) {
             onProgress('Restoring 3D grouping (' + fki + '/' + fgKeys.length + ')...');
+            // The Open project card's counted hook (frames done, frames in all); awaited.
+            if (opts.onCount) await opts.onCount(fki, fgKeys.length);
             await new Promise(function (r) { setTimeout(r, 0); });
             _ty = _now();
         }
     }
+    if (opts.onCount) await opts.onCount(fgKeys.length, fgKeys.length);
     return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d };
 }
+
+// `stampFrameIdentitiesFromGroups` moved to ./frame-identity-metadata.js, beside
+// the `.slp` form of `frameIdentityMap` that relies on it; re-exported for callers.
+export { stampFrameIdentitiesFromGroups };
 
 /**
  * Restore a session's LUCID project state (identities + InstanceGroup grouping +
@@ -699,15 +749,36 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
 
         var _recon;
         if (hasTypedSession) {
+            // Identities from the file's catalog (no LUC3D per-session list):
+            // the groups' `identity_idx` indexes that same catalog.
+            var identitiesFromFile = !(perSessionIdentities && perSessionIdentities.length > 0)
+                && session.identities.length > 0;
             _recon = await reconstructInstanceGroupsFromSession(
-                session, sessData2._typedSession, sessData2, nodeNames,
-                { onProgress: onProgress });
+                session, sessData2._typedSession, sessData2, nodeNames, {
+                    onProgress: onProgress,
+                    fileIdentities: identitiesFromFile ? (sessData2._typedIdentities || null) : null,
+                });
         } else {
             _recon = await reconstructInstanceGroupsFromDicts(
                 session, fgDicts, camKeyToName, nodeNames,
                 { onProgress: onProgress });
         }
         console.log('[load-slp] Rebuilt', _recon.restoredGroups, 'instance groups from session data,', _recon.restoredWith3d, 'with 3D points');
+
+        // A LUC3D file that stored only the identities its groups do not imply:
+        // rebuild the rest from the groups just restored.
+        if (await readFrameIdentityMetadata(session, lucidMeta, { onProgress: onProgress })) {
+            console.log('[load-slp] rebuilt', session.frameIdentityMap.size, 'per-frame identities from instance groups');
+        }
+
+        // A file with the identities only on its groups (no LUC3D identity
+        // list, no frameIdentityMap — campy-live-export): derive the
+        // per-detection map the Identity timeline reads.
+        if (!(perSessionIdentities && perSessionIdentities.length > 0) && !lucidMeta.frameIdentityMap
+            && !legacyGlobalIdentities && session.identities.length > 0) {
+            var _stamped = await stampFrameIdentitiesFromGroups(session, { onProgress: onProgress });
+            if (_stamped) console.log('[load-slp] derived', _stamped, 'per-frame identities from instance groups');
+        }
 
         if (legacyGlobalIdentities && legacyGlobalIdentities.length) {
             var migratedSlp = session.migrateGlobalIdentitiesToPerFrame(legacyGlobalIdentities);
@@ -932,6 +1003,8 @@ export async function handleLoadSlpFile(slpFile) {
             });
         }
 
+        // Whether the session loaded last — the one left active — has 3D.
+        var lastSessionHas3d = false;
         for (var slpSessIdx = 0; slpSessIdx < numSlpSessions; slpSessIdx++) {
         showLoading('Building session ' + (slpSessIdx + 1) + '/' + numSlpSessions + '...');
         await new Promise(function (r) { setTimeout(r, 0); });
@@ -1059,6 +1132,9 @@ export async function handleLoadSlpFile(slpFile) {
 
         var session = new Session(cameras, sessSkeleton, sessTracks);
         session.name = sessName;
+        // The file's provenance (e.g. campy-live-export's records), written back on save.
+        session.fileProvenance = fileSessionProvenance(slpData.provenance,
+            fileSessionNames(slpData.sessions), slpSessIdx);
         readVisibilityMetadata(session, earlyVisibility);
         // Define Planes state — pool/planes/origin from the first session that
         // carries them, this session's per-view 2D onto this session.
@@ -1123,105 +1199,28 @@ export async function handleLoadSlpFile(slpFile) {
         await restoreGroupingAndUnlink(session, slpData, slpSessIdx,
             { onProgress: function (msg) { showLoading(msg); }, batch: BATCH });
 
-        // Recompute reprojections from stored 3D points + calibration
-        if (session.cameras.length >= 2) {
-            var hasAny3d = false;
-            for (var [, groups3d] of session.instanceGroups) {
-                for (var g3d of groups3d) {
-                    if (someValidPoint3d(g3d.points3d)) {
-                        hasAny3d = true;
-                        break;
-                    }
+        // A session's stored 3D is all this load keeps: no reprojections, no
+        // reprojected instances, no per-frame `triangulationResults`. It used
+        // to reproject every group into every camera and score it here — ~75 KB
+        // per frame per animal on a 17-camera, 34-node project, so an eager
+        // 36,000-frame project spent gigabytes of the renderer's ~4 GB heap on
+        // frames nobody had looked at. `ui/rendering.js`'s reprojection fill
+        // now derives a frame's when it is shown, from this same stored 3D
+        // (`reprojectStoredPoints3d`), and keeps at most DERIVED_FRAMES_KEEP
+        // frames' worth. The restore marked every group's 3D as read from the
+        // file (`markPoints3dFromFile`), so the fill reprojects it even with a
+        // reprojection-error threshold set — it never re-solves the file's 3D.
+        var sessionHas3d = false;
+        for (var [, groups3d] of session.instanceGroups) {
+            for (var g3d of groups3d) {
+                if (someValidPoint3d(g3d.points3d)) {
+                    sessionHas3d = true;
+                    g3d.markClean();
                 }
-                if (hasAny3d) break;
-            }
-            if (hasAny3d) {
-                showLoading('Recomputing reprojections from 3D data...');
-                await new Promise(function (r) { setTimeout(r, 0); });
-                var sessTriResults = new Map();
-                for (var [frameIdx3, groups3] of session.instanceGroups) {
-                    var frameTriResults = [];
-                    for (var grp of groups3) {
-                        if (!someValidPoint3d(grp.points3d)) continue;
-                        // Build reprojections from 3D points for each camera
-                        var reprojResult = { reprojections: {}, points3d: grp.points3d };
-                        for (var ci2 = 0; ci2 < session.cameras.length; ci2++) {
-                            var cam2 = session.cameras[ci2];
-                            if (cam2.projectionMatrix) {
-                                // Native (distorted) pixel space to match raw keypoints.
-                                reprojResult.reprojections[cam2.name] = reprojectPointsCamera(grp.points3d, cam2);
-                            }
-                        }
-                        grp.reprojections = reprojResult.reprojections;
-                        storeReprojectedInstances(grp, reprojResult, session.cameras);
-
-                        // `observedPoints` is derived from grp.instances — hoist
-                        // it once, it allocates per access (luc3d #189).
-                        var grpObserved = grp.observedPoints;
-
-                        // Compute per-camera reprojection errors (distorted/native
-                        // pixel space): re-distorted reprojection vs raw observation.
-                        var trErrors = {};
-                        var trTotalErr = 0, trTotalCount = 0;
-                        for (var trCamName in grp.reprojections) {
-                            var trObs = grpObserved[trCamName];
-                            var trRep = grp.reprojections[trCamName];
-                            if (trObs && trRep) {
-                                trErrors[trCamName] = computeReprojectionErrors(trObs, trRep);
-                                for (var ei = 0; ei < trErrors[trCamName].length; ei++) {
-                                    if (trErrors[trCamName][ei] != null) {
-                                        trTotalErr += trErrors[trCamName][ei];
-                                        trTotalCount++;
-                                    }
-                                }
-                            }
-                        }
-
-                        // Undistorted-space errors (mirror triangulateAndReproject
-                        // Step 5): ideal pinhole reprojection vs undistorted
-                        // observation. Without this the Undistorted headline reads
-                        // "-" for groups loaded from an SLP project.
-                        var trErrorsUndist = {};
-                        var trTotalErrU = 0, trTotalCountU = 0;
-                        for (var ciu = 0; ciu < session.cameras.length; ciu++) {
-                            var camU = session.cameras[ciu];
-                            if (!camU.projectionMatrix) continue;
-                            var rawObsU = grpObserved[camU.name];
-                            if (!rawObsU) continue;
-                            var idealRep = reprojectPoints(grp.points3d, camU.projectionMatrix);
-                            var obsUndist = [];
-                            for (var ku = 0; ku < rawObsU.length; ku++) {
-                                obsUndist.push(rawObsU[ku] != null ? camU.undistortPoint(rawObsU[ku]) : null);
-                            }
-                            trErrorsUndist[camU.name] = computeReprojectionErrors(obsUndist, idealRep);
-                            for (var eiu = 0; eiu < trErrorsUndist[camU.name].length; eiu++) {
-                                if (trErrorsUndist[camU.name][eiu] != null) {
-                                    trTotalErrU += trErrorsUndist[camU.name][eiu];
-                                    trTotalCountU++;
-                                }
-                            }
-                        }
-
-                        frameTriResults.push({
-                            group: grp,
-                            points3d: grp.points3d,
-                            reprojections: grp.reprojections,
-                            errors: trErrors,
-                            errorsUndistorted: trErrorsUndist,
-                            meanError: trTotalCount > 0 ? trTotalErr / trTotalCount : null,
-                            meanErrorUndistorted: trTotalCountU > 0 ? trTotalErrU / trTotalCountU : null
-                        });
-
-                        grp.markClean();
-                    }
-                    if (frameTriResults.length > 0) {
-                        sessTriResults.set(frameIdx3, frameTriResults);
-                    }
-                }
-                session.triangulationResults = sessTriResults;
-                console.log('[load-slp] Recomputed reprojections from 3D data (' + sessTriResults.size + ' frames with results)');
             }
         }
+        session.triangulationResults = new Map();
+        lastSessionHas3d = sessionHas3d && session.cameras.length >= 2;
 
         console.log('[load-slp] Session', slpSessIdx, 'name:', session.name,
             'skeleton:', session.skeleton.nodes.length, 'nodes,', session.skeleton.edges.length, 'edges');
@@ -1240,7 +1239,7 @@ export async function handleLoadSlpFile(slpFile) {
             // --- Embedded videos: use frame-worker for on-demand extraction ---
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=9e7754c6085c', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=4252feadb328', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
@@ -1425,6 +1424,28 @@ export async function handleLoadSlpFile(slpFile) {
                     vidFiles = _slpPref.kept;
                 }
 
+                // A campy recording folder (session.json,
+                // `loading/campy-session.js`): its frame rate and details go
+                // on the session; a camera whose campy video was picked loads
+                // only that video; the views follow campy's camera order.
+                var slpCampy = await adoptCampyRecording(session, videoFiles,
+                    { calibrationNames: cameraNames });
+                if (slpCampy) {
+                    var campyOwnByCam = new Map();
+                    slpCampy.cameras.forEach(function (c) {
+                        var own = campyVideoFile(slpCampy, c, vidFiles);
+                        var ownCam = own && slpMatchCam(own);
+                        if (ownCam) campyOwnByCam.set(ownCam, own);
+                    });
+                    vidFiles = vidFiles.filter(function (f) {
+                        var fc = slpMatchCam(f);
+                        return !fc || !campyOwnByCam.has(fc) || campyOwnByCam.get(fc) === f;
+                    });
+                    vidFiles = orderByCampyCameras(slpCampy, vidFiles, function (f) {
+                        return { name: slpMatchCam(f) || '' };
+                    });
+                }
+
                 var slpModal = getLoadingProgressModal({ title: 'Importing project' });
                 slpModal.show();
 
@@ -1607,8 +1628,10 @@ export async function handleLoadSlpFile(slpFile) {
         }
 
         // 4. Restore triangulation results for the active session
+        // (nothing is derived yet — the first draw fills the frame on screen —
+        // so whether the active session has 3D, not the map's size, says so)
         state.triangulationResults = (state.session && state.session.triangulationResults) || new Map();
-        if (state.triangulationResults.size > 0) {
+        if (state.triangulationResults.size > 0 || lastSessionHas3d) {
             setReprojErrorVisible(true);
         }
 
@@ -1657,7 +1680,15 @@ export async function handleLoadSlpFile(slpFile) {
         var statusParts = [state.sessions.length + ' session(s)', skeleton.nodes.length + ' nodes'];
         if (state.session) statusParts.push(state.session.numFrames.toLocaleString('en-US') + ' labeled frames');
         if (state.views.length > 0) statusParts.push(state.views.length + ' views');
-        setStatus('SLP loaded (' + statusParts.join(', ') + ')', 'success');
+        // A campy recording's warnings (status, cameras), per session.
+        var campyWarn = [];
+        state.sessions.forEach(function (cs) {
+            campyRecordingWarnings(cs.campyRecording).forEach(function (w) {
+                campyWarn.push(state.sessions.length > 1 ? cs.name + ': ' + w : w);
+            });
+        });
+        setStatus('SLP loaded (' + statusParts.join(', ') + ')'
+            + (campyWarn.length ? ' — ' + campyWarn.join('; ') : ''), campyWarn.length ? 'warning' : 'success');
 
         // One skeleton per project: a multi-session .slp otherwise carries a
         // per-session skeleton each. Prompt for a single unifying skeleton file,
@@ -1851,7 +1882,7 @@ export async function handleAddSlp() {
         if (hasEmbedded) {
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=9e7754c6085c', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=4252feadb328', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
@@ -1946,11 +1977,12 @@ export async function handleAddSlp() {
                 if (fn === '.') return '';
                 return fn.replace(/^.*[\/\\]/, '');
             });
-            var addRefInfo = addSlpVideoRefs.filter(function (r) { return r; }).join(', ') || '(unknown)';
+            var addRefInfo = addSlpVideoRefs.filter(function (r) { return r; }).join(', ');
             console.log('[add-slp] SLP references videos:', addSlpVideoRefs);
 
-            // Show blocking overlay forcing user to select video files
-            var addVideoFiles = await forceVideoSelection(addRefInfo);
+            // Ask for the video files; [] = the user continued without video.
+            var addVideoFiles = await forceVideoSelection(addRefInfo,
+                { title: 'SLP loaded — now select the video file(s)' });
 
             if (addVideoFiles.length > 0) {
                 for (var amvi = 0; amvi < addVideoFiles.length; amvi++) {
@@ -2114,7 +2146,8 @@ export async function handleLoadPoints3dH5() {
         }
 
         showLoading('Reading 3D points file...');
-        var arrayBuffer = await files[0].arrayBuffer();
+        // Not files[0].arrayBuffer(): a cloud file still downloading reads back with zeroed pages (cold-read-guard.js)
+        var arrayBuffer = await readBlobArrayBuffer(files[0]);
 
         showLoading('Parsing 3D points...');
         var ptsData = await parsePoints3dH5(arrayBuffer);
@@ -2160,11 +2193,15 @@ export async function handleLoadPoints3dH5() {
                 if (existingGroup) {
                     // Assign 3D points to existing group
                     existingGroup.points3d = pooledPoints3d(pts3d);
+                    markPoints3dFromFile(existingGroup.points3d);
+                    // its reprojections were of the 3D just replaced
+                    dropGroupDerivedReprojections(existingGroup, frameIdx, state.triangulationResults);
                     existingGroup.markClean();
                 } else {
                     // Create a new InstanceGroup with just 3D data
                     var newGroup = new InstanceGroup(Date.now() + frameIdx * 100 + trackIdx, trackIdx); // identityId = trackIdx
                     newGroup.points3d = pooledPoints3d(pts3d);
+                    markPoints3dFromFile(newGroup.points3d);
                     newGroup.markClean();
                     frameGroupsList.push(newGroup);
                 }

@@ -36,7 +36,7 @@ import {
   resolveIdentity,
   resolveVideoFilename,
   sessionsReadError
-} from "./chunk-H7G4PJNA.js?v=9e7754c6085c";
+} from "./chunk-H7G4PJNA.js?v=4252feadb328";
 import {
   RemoteIOError,
   fetchRetrying,
@@ -48,7 +48,7 @@ import {
   redactedCauseSummary,
   resolveUrl,
   statusToMessage
-} from "./chunk-YS7Q6CO6.js?v=9e7754c6085c";
+} from "./chunk-YS7Q6CO6.js?v=4252feadb328";
 
 // src/model/centroid.ts
 var _centroidSkeleton = null;
@@ -12015,7 +12015,9 @@ async function readSlpStreaming(source, options) {
       options?.onProgress,
       options?.rawSessions ?? false,
       options?.lazy ?? false,
-      lazyVideoMetadata
+      lazyVideoMetadata,
+      // LUCID local patch (open progress): bytes read of the four big tables
+      options?.onReadBytes
     );
   } finally {
     if (!openVideos && !lazyVideoMetadata) {
@@ -12023,7 +12025,7 @@ async function readSlpStreaming(source, options) {
     }
   }
 }
-async function readFromStreamingFile(file, url, filenameHint, openVideos = false, onProgress, rawSessions = false, lazy = false, lazyVideoMetadata = false) {
+async function readFromStreamingFile(file, url, filenameHint, openVideos = false, onProgress, rawSessions = false, lazy = false, lazyVideoMetadata = false, onReadBytes = void 0) {
   const STAGES = [
     "Reading metadata",
     // 0
@@ -12080,12 +12082,16 @@ async function readFromStreamingFile(file, url, filenameHint, openVideos = false
   report(3);
   const suggestions = await readSuggestionsStreaming(file, videos);
   report(4);
-  const framesData = await readStructDatasetStreaming(file, "frames");
+  // LUCID local patch (open progress): with `onReadBytes(done, total)`, the
+  // four big tables are read in row slices and every slice is counted, over
+  // the tables' total size taken from their metadata first.
+  const lucidRead = onReadBytes ? await lucidPlanTableReads(file, ["frames", "instances", "points", "pred_points"], onReadBytes) : null;
+  const framesData = await readStructDatasetStreaming(file, "frames", false, lucidRead);
   report(5);
-  const instancesData = await readStructDatasetStreaming(file, "instances");
+  const instancesData = await readStructDatasetStreaming(file, "instances", false, lucidRead);
   report(6);
-  const pointsData = await readStructDatasetStreaming(file, "points");
-  const predPointsData = await readStructDatasetStreaming(file, "pred_points");
+  const pointsData = await readStructDatasetStreaming(file, "points", false, lucidRead);
+  const predPointsData = await readStructDatasetStreaming(file, "pred_points", false, lucidRead);
   report(7);
   const lazyStore = lazy ? new LazyDataStore({
     framesData,
@@ -12874,11 +12880,71 @@ async function readSessionDataStreaming(file) {
     instanceGroupMeta: await meta("instance_group_meta")
   };
 }
-async function readStructDatasetStreaming(file, path, assumePresent = false) {
+// LUCID local patch (open progress): the byte plan `readFromStreamingFile`
+// counts the big tables' reads against — each table's size is its element
+// count times its element size (h5wasm metadata `size`), both layouts.
+async function lucidPlanTableReads(file, paths, onReadBytes) {
+  const sizes = /* @__PURE__ */ new Map();
+  let total = 0;
+  for (const p of paths) {
+    try {
+      if (!file.keys().includes(p)) continue;
+      const meta = await file.getDatasetMeta(p);
+      const n = (meta.shape || []).reduce((a, b) => a * Number(b), 1);
+      const bytes = n * Number(meta.metadata && meta.metadata.size || 8);
+      sizes.set(p, bytes);
+      total += bytes;
+    } catch {
+    }
+  }
+  const plan = { sizes, total, done: 0, onReadBytes };
+  await onReadBytes(0, total);
+  return plan;
+}
+// LUCID local patch (open progress): read a flat 2-D table in row slices into
+// one pre-sized typed array (the same array a whole read returns, plus one
+// slice in flight), counting each slice into `plan`.
+async function lucidReadRowsChunked(file, path, shape, plan) {
+  const rows = Number(shape[0]), cols = Number(shape[1]) || 1;
+  const tableBytes = plan.sizes.get(path) || 0;
+  // 512K elements (4 MB of float64) per slice: over a slow network share
+  // (~0.4 MB/s measured) the count still moves every ~10 s, and a local read
+  // pays nothing measurable for the extra slices. Tests shrink it further.
+  const sliceElems = typeof globalThis !== "undefined" && globalThis.__lucidReadSliceElems || 524288;
+  const rowsPer = Math.max(1, Math.floor(sliceElems / cols));
+  let out = null;
+  for (let r = 0; r < rows; r += rowsPer) {
+    const end = Math.min(rows, r + rowsPer);
+    const part = await file.getDatasetValue(path, [[r, end]]);
+    const v = part.value;
+    if (!ArrayBuffer.isView(v)) return null;
+    if (!out) out = new v.constructor(rows * cols);
+    out.set(v, r * cols);
+    plan.done += tableBytes * (end - r) / rows;
+    await plan.onReadBytes(Math.round(plan.done), plan.total);
+  }
+  return { value: out, shape: [rows, cols] };
+}
+async function readStructDatasetStreaming(file, path, assumePresent = false, lucidRead = null) {
   try {
     if (!assumePresent && !file.keys().includes(path)) return {};
     const meta = await file.getDatasetMeta(path);
-    const data = await file.getDatasetValue(path);
+    // LUCID local patch (open progress): a flat 2-D table (LUCID's layout:
+    // `field_names` attr, no compound members) is read in counted row slices
+    // when a byte plan is given; anything else is one whole read, counted at
+    // its end. Same values either way.
+    let data = null;
+    if (lucidRead && meta.shape && meta.shape.length === 2 && Number(meta.shape[0]) > 0 &&
+        getFieldNamesFromMeta(meta).length === 0 && !(meta.metadata && meta.metadata.vlen)) {
+      data = await lucidReadRowsChunked(file, path, meta.shape, lucidRead);
+    }
+    if (!data) {
+      data = await file.getDatasetValue(path);
+      if (lucidRead) {
+        lucidRead.done += lucidRead.sizes.get(path) || 0;
+        await lucidRead.onReadBytes(Math.round(Math.min(lucidRead.done, lucidRead.total)), lucidRead.total);
+      }
+    }
     let fieldNames = getFieldNamesFromMeta(meta);
     if (fieldNames.length === 0) {
       try {
@@ -13495,6 +13561,13 @@ function numAt(col, i, def = 0) {
   const v = col?.[i];
   return v === void 0 || v === null ? def : Number(v);
 }
+// LUCID local patch (luc3d gzip): these four tables are always chunked, and
+// were written uncompressed. On a real 8-camera, 176,406-frame project they
+// were 1.49 GB of a 1.92 GB file (`pred_points` alone 1,156 MB). gzip level 1
+// halves `pred_points` and shrinks `instances` ~4x (mostly counters and
+// constant columns) — the same filter and level `points_3d` already uses.
+// Values, shapes and dtypes are unchanged, so every HDF5 reader (h5py, SLEAP,
+// sleap-io, h5wasm) reads the file exactly as before.
 function createAppendableMatrixDataset(file, name, fieldNames, dtype) {
   const colCount = fieldNames.length;
   file.create_dataset({
@@ -13503,7 +13576,9 @@ function createAppendableMatrixDataset(file, name, fieldNames, dtype) {
     shape: [0, colCount],
     maxshape: [null, colCount],
     chunks: [WRITE_CHUNK_ROWS, colCount],
-    dtype
+    dtype,
+    compression: "gzip",
+    compression_opts: 1
   });
   setStringAttr(file.get(name), "field_names", JSON.stringify(fieldNames));
 }
@@ -13578,6 +13653,26 @@ var SlpStreamWriter = class {
    * skipped ranges. `store` must not itself contain duplicate `(video, frameIdx)`.
    */
   appendStore(store, opts) {
+    // LUCID local patch (save progress): the body is `_lucidAppendStoreSteps`,
+    // run to the end here without a break — same rows, same order, same bytes.
+    const steps = this._lucidAppendStoreSteps(store, opts);
+    while (!steps.next().done) {
+    }
+  }
+  /**
+   * LUCID local patch (save progress): `appendStore`, awaiting
+   * `onWindow(doneRows, totalRows)` after each window of frames — so a caller
+   * can repaint a progress bar (and the browser stay responsive) during the
+   * longest stretch of a large save. Writes exactly what `appendStore` writes.
+   */
+  async appendStoreAsync(store, opts, onWindow) {
+    const steps = this._lucidAppendStoreSteps(store, opts);
+    for (let st = steps.next(); !st.done; st = steps.next()) {
+      if (onWindow) await onWindow(st.value.done, st.value.total);
+    }
+  }
+  // LUCID local patch (save progress): appendStore's body, as steps
+  *_lucidAppendStoreSteps(store, opts) {
     if (this.closed) throw new Error("SlpStreamWriter is closed");
     const windowFrames = opts?.windowFrames ?? DEFAULT_WRITE_WINDOW_FRAMES;
     const vOff = opts?.videoIndexOffset ?? 0;
@@ -13744,6 +13839,8 @@ var SlpStreamWriter = class {
           this.predPointRows
         );
         this.predPointRows += emPredPts;
+        // LUCID local patch (save progress): a break between windows
+        yield { done: wEnd, total: nFrames };
       }
       this.collectStoreAnnotations(
         store,
@@ -14971,7 +15068,11 @@ function LucidAppendTable(file, name, ncols, dtype, fieldNames, gzip, onCreate) 
   this.ncols = ncols;
   this.dtype = dtype;
   this.fieldNames = fieldNames || null;
-  this.gzip = !!gzip;
+  // true = always gzip; "chunked" (LUCID local patch (luc3d gzip)) = gzip only
+  // a table that overflows its staging buffer and so becomes chunked anyway. A
+  // small table is still written one-shot, contiguous and uncompressed, so
+  // small projects stay BYTE-IDENTICAL.
+  this.gzip = gzip === "chunked" ? "chunked" : !!gzip;
   this.onCreate = onCreate || null;
   // `total` counts every row PUSHED (flushed + staged), so it is always the
   // global index of the NEXT row — which is what the [start, end) slice bounds
@@ -15045,7 +15146,7 @@ LucidAppendTable.prototype.finish = function (force) {
   const needed = n * this.ncols;
   const data = this.buf.length === needed ? this.buf : this.buf.subarray(0, needed);
   const spec = { name: this.name, data, shape: [n, this.ncols], dtype: this.dtype };
-  if (this.gzip) {
+  if (this.gzip === true) {
     spec.chunks = [Math.min(WRITE_CHUNK_ROWS, Math.max(1, n)), this.ncols];
     spec.compression = "gzip";
     spec.compression_opts = 1;
@@ -15070,12 +15171,14 @@ LucidAppendTable.prototype._slot = function () {
   this.total++;
   return off;
 };
-/** Append one row from up to 8 positional values — no boxed row at all. */
-LucidAppendTable.prototype.push = function (a, b, c, d, e, f, g, h) {
+/** Append one row from up to 10 positional values — no boxed row at all.
+ * (LUCID local patch (luc3d eager-save): 8 -> 10, for the `instances` table.) */
+LucidAppendTable.prototype.push = function (a, b, c, d, e, f, g, h, i, j) {
   const o = this._slot(), n = this.ncols, D = this.buf;
   if (n > 0) D[o] = a; if (n > 1) D[o + 1] = b; if (n > 2) D[o + 2] = c;
   if (n > 3) D[o + 3] = d; if (n > 4) D[o + 4] = e; if (n > 5) D[o + 5] = f;
-  if (n > 6) D[o + 6] = g; if (n > 7) D[o + 7] = h;
+  if (n > 6) D[o + 6] = g; if (n > 7) D[o + 7] = h; if (n > 8) D[o + 8] = i;
+  if (n > 9) D[o + 9] = j;
 };
 // Writes `width` coerced values from `row` (a null row => all-NaN, matching
 // `coerce3dRow`), plus a trailing `extra` column when ncols > width.
@@ -15256,18 +15359,22 @@ function writeSessions(file, sessions, videos, labeledFrames, identities) {
     file.create_group("session_data");
     _sdGroup = true;
   };
+  // LUCID local patch (luc3d gzip): the three struct tables are gzipped once
+  // they outgrow one staging buffer ("chunked"): integer-valued float64 columns,
+  // mostly running [start, end) counters, which compress 6-7x. Small tables
+  // stay contiguous and uncompressed, byte-identical to before.
   const fgTable = new LucidAppendTable(
     file, "session_data/frame_groups", SESSION_FRAME_GROUP_FIELDS.length,
-    "<d", SESSION_FRAME_GROUP_FIELDS, false, ensureSessionData
+    "<d", SESSION_FRAME_GROUP_FIELDS, "chunked", ensureSessionData
   );
   const igTable = new LucidAppendTable(
     file, "session_data/instance_groups", SESSION_INSTANCE_GROUP_FIELDS.length,
-    "<d", SESSION_INSTANCE_GROUP_FIELDS, false, ensureSessionData
+    "<d", SESSION_INSTANCE_GROUP_FIELDS, "chunked", ensureSessionData
   );
   const memberTable = new LucidAppendTable(
     file, "session_data/instance_group_members",
     SESSION_INSTANCE_GROUP_MEMBER_FIELDS.length,
-    "<d", SESSION_INSTANCE_GROUP_MEMBER_FIELDS, false, ensureSessionData
+    "<d", SESSION_INSTANCE_GROUP_MEMBER_FIELDS, "chunked", ensureSessionData
   );
   // The 3D-point tables carry no field_names attr and ARE gzipped — matching what
   // createGzipFloatMatrixTyped wrote before #191.
@@ -15430,46 +15537,136 @@ function emitInstancePoints(target, instance, predicted) {
     }
   }
 }
+// LUCID local patch (luc3d eager-save): `emitInstancePoints`, but appending
+// straight into a LucidAppendTable (luc3d #191) instead of pushing one boxed row
+// per keypoint. The values are exactly the ones the boxed row held: `x`, `y`,
+// `visible ? 1 : 0`, `complete ? 1 : 0` and, for a prediction, `score ?? 0`
+// (a NaN score stays NaN); a node past the instance's own point count is the
+// same all-NaN/0 padding row. An instance with the columnar storage
+// (`_xy`/`_visible`/`_complete`/`_score`) is read from it directly — what its
+// PointViews read — so no PointView or `xy` pair is allocated per keypoint
+// either; anything else goes through `points`, as before.
+function emitInstancePointsInto(table, instance, predicted) {
+  const nNodes = instance.skeleton.nodeNames.length;
+  const xy = instance._xy;
+  if (!(xy instanceof Float64Array)) {
+    const pts = instance.points;
+    if (pts.length !== nNodes && !_spanWarned.has(instance.skeleton.name ?? "")) {
+      _spanWarned.add(instance.skeleton.name ?? "");
+      console.warn(
+        `Instance has ${pts.length} point(s) but its skeleton "${instance.skeleton.name ?? "?"}" has ${nNodes} node(s); padding/truncating to the node count so the written SLP stays self-consistent (a mismatch would break the Python reader).`
+      );
+    }
+    for (let i = 0; i < nNodes; i++) {
+      const p = pts[i];
+      if (p) {
+        const pxy = p.xy;
+        table.push(pxy[0], pxy[1], p.visible ? 1 : 0, p.complete ? 1 : 0, predicted ? p.score ?? 0 : 0);
+      } else {
+        table.push(Number.NaN, Number.NaN, 0, 0, 0);
+      }
+    }
+    return;
+  }
+  const n = instance._n;
+  if (n !== nNodes && !_spanWarned.has(instance.skeleton.name ?? "")) {
+    _spanWarned.add(instance.skeleton.name ?? "");
+    console.warn(
+      `Instance has ${n} point(s) but its skeleton "${instance.skeleton.name ?? "?"}" has ${nNodes} node(s); padding/truncating to the node count so the written SLP stays self-consistent (a mismatch would break the Python reader).`
+    );
+  }
+  const vis = instance._visible, comp = instance._complete, sc = instance._score;
+  for (let i = 0; i < nNodes; i++) {
+    if (i < n) {
+      const j = i << 1;
+      table.push(xy[j], xy[j + 1], vis[i] !== 0 ? 1 : 0, comp[i] !== 0 ? 1 : 0,
+        predicted ? sc ? sc[i] ?? 0 : 0 : 0);
+    } else {
+      table.push(Number.NaN, Number.NaN, 0, 0, 0);
+    }
+  }
+}
+// LUCID local patch (luc3d eager-save): the four 2D tables are written through
+// LucidAppendTables (luc3d #191) instead of whole-table arrays of boxed rows.
+// LUCID local patch (luc3d gzip): passed "chunked", so a table that overflows
+// its buffer is also gzipped (level 1); a small one stays contiguous.
+//
+// The eager project Save (`buildSlpLabelsAllViews` + `saveSlpToBytes`) ran the
+// renderer out of memory on a 17-camera, 34-node, 36,000-frame recording: one
+// boxed row per KEYPOINT (1.39M instances x 34 = 47M rows), every one alive until
+// `createMatrixDataset` flattened its table. A prediction's row was the worst of
+// it: `row.push(score)` onto a 4-element array grows its backing store to 22
+// doubles, ~210 B in V8's pointer-compressed heap per keypoint, against the
+// 40 B the row holds — measured 7.4 KB of writer heap per 2D instance.
+//
+// Now each table stages at most SESSION_FLUSH_ROWS rows in a fixed buffer, so
+// the writer's 2D tables cost the same at any project size. As in #191:
+//  - The VALUES are bit-identical. A table that never fills its buffer is
+//    written one-shot and contiguous, in the old order, so a small project's
+//    file is BYTE-IDENTICAL (save-golden-digest.mjs MUST NOT move); one that
+//    overflows becomes chunked, and is created on its first flush.
+//  - All four are force-created, empty ones included, as before.
+// `from_predicted` used to be patched into the boxed rows after the loop; a
+// flushed row cannot be, so the instance ids it needs are found first, by a
+// pre-pass that runs only when some user instance has a `fromPredicted`. It
+// keeps the old map's rule: an instance listed twice resolves to its LAST row.
 function writeLabeledFrames(file, labels) {
-  const frames = [];
-  const instances = [];
-  const points = [];
-  const predPoints = [];
-  const instanceIndex = /* @__PURE__ */ new Map();
-  const predictedLinks = [];
+  const framesTable = new LucidAppendTable(file, "frames", 5, "<i8", FRAMES_FIELDS, "chunked", null);
+  const instancesTable = new LucidAppendTable(file, "instances", 10, "<d", INSTANCES_FIELDS, "chunked", null);
+  // LUCID local patch (sleap-io.js#231): h5wasm float64 is "<d"; "<f8" is
+  // parsed as float32, corrupting point ids beyond 2^24 point rows.
+  const pointsTable = new LucidAppendTable(file, "points", 4, "<f8", POINTS_FIELDS, "chunked", null);
+  const predPointsTable = new LucidAppendTable(file, "pred_points", 5, "<f8", PRED_POINTS_FIELDS, "chunked", null);
+  let instanceIndex = null;
   for (const labeledFrame of labels.labeledFrames) {
-    const frameId = frames.length;
-    const instanceStart = instances.length;
+    for (const instance of labeledFrame.instances) {
+      if (!(instance instanceof PredictedInstance) && instance.fromPredicted) {
+        instanceIndex = /* @__PURE__ */ new Map();
+        break;
+      }
+    }
+    if (instanceIndex) break;
+  }
+  if (instanceIndex) {
+    let id = 0;
+    for (const labeledFrame of labels.labeledFrames) {
+      for (const instance of labeledFrame.instances) instanceIndex.set(instance, id++);
+    }
+  }
+  for (const labeledFrame of labels.labeledFrames) {
+    const frameId = framesTable.total;
+    const instanceStart = instancesTable.total;
     const videoIndex = Math.max(0, labels.videos.indexOf(labeledFrame.video));
     for (const instance of labeledFrame.instances) {
-      const instanceId = instances.length;
-      instanceIndex.set(instance, instanceId);
+      const instanceId = instancesTable.total;
       const skeletonId = Math.max(
         0,
         labels.skeletons.indexOf(instance.skeleton)
       );
       const trackId = instance.track ? labels.tracks.indexOf(instance.track) : -1;
       const trackingScore = instance.trackingScore ?? 0;
-      const fromPredicted = -1;
+      let fromPredicted = -1;
       let score = 0;
       let pointStart = 0;
       let pointEnd = 0;
-      if (instance instanceof PredictedInstance) {
+      const predicted = instance instanceof PredictedInstance;
+      if (predicted) {
         score = instance.score ?? 0;
-        pointStart = predPoints.length;
-        emitInstancePoints(predPoints, instance, true);
-        pointEnd = predPoints.length;
+        pointStart = predPointsTable.total;
+        emitInstancePointsInto(predPointsTable, instance, true);
+        pointEnd = predPointsTable.total;
       } else {
-        pointStart = points.length;
-        emitInstancePoints(points, instance, false);
-        pointEnd = points.length;
+        pointStart = pointsTable.total;
+        emitInstancePointsInto(pointsTable, instance, false);
+        pointEnd = pointsTable.total;
         if (instance.fromPredicted) {
-          predictedLinks.push([instanceId, instance.fromPredicted]);
+          const fromIndex = instanceIndex.get(instance.fromPredicted);
+          fromPredicted = fromIndex != null ? fromIndex : -1;
         }
       }
-      instances.push([
+      instancesTable.push(
         instanceId,
-        instance instanceof PredictedInstance ? 1 : 0,
+        predicted ? 1 : 0,
         frameId,
         skeletonId,
         trackId,
@@ -15478,66 +15675,15 @@ function writeLabeledFrames(file, labels) {
         pointStart,
         pointEnd,
         trackingScore
-      ]);
+      );
     }
-    const instanceEnd = instances.length;
-    frames.push([
-      frameId,
-      videoIndex,
-      labeledFrame.frameIdx,
-      instanceStart,
-      instanceEnd
-    ]);
+    const instanceEnd = instancesTable.total;
+    framesTable.push(frameId, videoIndex, labeledFrame.frameIdx, instanceStart, instanceEnd);
   }
-  for (const [instanceId, fromPredictedInstance] of predictedLinks) {
-    const fromIndex = instanceIndex.get(fromPredictedInstance);
-    if (fromIndex != null) {
-      instances[instanceId][5] = fromIndex;
-    } else {
-      instances[instanceId][5] = -1;
-    }
-  }
-  createMatrixDataset(
-    file,
-    "frames",
-    frames,
-    ["frame_id", "video", "frame_idx", "instance_id_start", "instance_id_end"],
-    "<i8"
-  );
-  createMatrixDataset(
-    file,
-    "instances",
-    instances,
-    [
-      "instance_id",
-      "instance_type",
-      "frame_id",
-      "skeleton",
-      "track",
-      "from_predicted",
-      "score",
-      "point_id_start",
-      "point_id_end",
-      "tracking_score"
-    ],
-    "<d"
-    // LUCID local patch (sleap-io.js#231): h5wasm float64 is "<d"; "<f8" is
-    // parsed as float32, corrupting point ids beyond 2^24 point rows.
-  );
-  createMatrixDataset(
-    file,
-    "points",
-    points,
-    ["x", "y", "visible", "complete"],
-    "<f8"
-  );
-  createMatrixDataset(
-    file,
-    "pred_points",
-    predPoints,
-    ["x", "y", "visible", "complete", "score"],
-    "<f8"
-  );
+  framesTable.finish(true);
+  instancesTable.finish(true);
+  pointsTable.finish(true);
+  predPointsTable.finish(true);
 }
 function writeNegativeFrames(file, labels) {
   const negativeFrames = labels.labeledFrames.filter((f) => f.isNegative);
