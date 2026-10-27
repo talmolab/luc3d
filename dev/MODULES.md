@@ -731,7 +731,10 @@ is no hydration sweep and no resident-only hazard here.
 `mulMat3Vec3`, `rebaseExtrinsics`), `./pose-data.js` (`pooledPoints3d` — `applyOriginRebase` stores each re-based group in the slab pool — `points3dNodeCount`,
 `hasPoint3d`, `isPoints3dFromFile` / `markPoints3dFromFile` — a group whose 3D
 was read from a file keeps that mark across the re-base, so the display still
-reprojects it rather than re-solving). DOM-free.
+reprojects it rather than re-solving — and `unsmoothedPoints3d` /
+`markPoints3dSmoothed`: a smoothed group's pre-smoothing copy is re-based by the
+same `rebasePoints3d` (the plan's `nextUnsmoothed`), so a later smoothing run
+filters 3D in the new frame). DOM-free.
 
 **Imported by.** `ui/origin-rebase.js`.
 
@@ -1195,8 +1198,19 @@ points3d `.h5` import). `ui/rendering.js`'s reprojection fill reprojects marked
 3D rather than re-solving it, even with a reprojection-error threshold set,
 since a re-solve would show LUCID's answer instead of the file's. Keyed by the
 ARRAY so it lapses by itself: every path that re-solves or edits a group's 3D
-assigns a new array, and nothing writes a group's `points3d` in place. The
-origin re-base (`applyOriginRebase`) carries the mark to the re-based array.
+assigns a new array, and nothing but the smoothing pass writes a group's
+`points3d` in place. The origin re-base (`applyOriginRebase`) carries the mark
+to the re-based array.
+
+**Smoothed 3D is marked the same way.** `markPoints3dSmoothed(points3d, source)` /
+`isPoints3dSmoothed(points3d)` — a `WeakMap` from each array
+`pose/temporal-smoothing.js` wrote (in place) to a pooled copy of what it held
+before its FIRST smoothing (`unsmoothedPoints3d(points3d)`;
+`clearPoints3dSmoothed` forgets it). Every later pass filters that copy, so runs
+replace each other instead of stacking. The reprojection fill reprojects marked
+3D (a re-solve would draw the unsmoothed answer), `adoptPrior3d` never adopts it
+(re-triangulating undoes the pass), and the origin re-base re-bases the copy
+with the points.
 
 **`InstanceGroup.points3d` on the bulk paths lives in a slab pool.**
 `pooledPoints3d(points)` returns a `Float64Array` VIEW of exactly the group's 3N
@@ -2307,6 +2321,99 @@ load in `pose/tracker-worker.js`. Keep every import of this module worker-safe.
 
 ---
 
+### pose/temporal-smoothing.js
+
+**Purpose.** Post-triangulation temporal filtering of the 3D tracks — the
+smoothing half of luc3d #134 ("3d projection would benefit from anipose's
+temporal smoothing and RPE flags"). The RPE half of that issue already shipped
+as the Tracking Wizard's `reprojErrorThreshold` in `triangulateAndReproject`
+(`pose/triangulation.js`). Reads and writes `InstanceGroup.points3d` ONLY;
+`Instance._xy` (`'user'` and `'predicted'` 2D) is never modified.
+
+**Where it sits.** AFTER triangulation, never inside tracking, and never on 2D.
+Pipeline: track → proofread identities → triangulate → smooth. Smoothing before
+identities are proofread smooths ACROSS an ID swap, welding two animals'
+trajectories together; `CrossViewTracker` is causal and frame-by-frame while a
+smoother is non-causal; and the tracker's hyperparameters are measured against
+benchmark corpora that changing its 3D state would invalidate. 2D filtering was
+rejected because the low-acceleration prior is physically true in 3D and only
+approximately true under perspective projection, and because interpolating a
+missing view fabricates an observation that then votes in triangulation as if
+it were real data.
+
+**Algorithm.** Two independently switchable stages over each node's 1D
+coordinate signals (15 nodes = 45 signals per identity; nodes never enter each
+other's windows):
+1. **Median** (despike) — nonlinear, rank-based, removes impulses.
+2. **Gaussian** (smooth) — weighted mean, `sigma = (window-1)/6`, removes
+   broadband noise.
+Order is fixed: Gaussian-first would smear an isolated outlier across its
+window, after which the median can no longer remove it. Windows are coerced to
+ODD (`normalizeWindow`) so they stay centered — an even window is a half-frame
+phase shift against the video.
+
+**Missing data.** Two regimes, deliberately distinguished. ISOLATED HOLES (gap
+<= `smoothMaxGap`) are skipped with the Gaussian weights renormalized over
+present samples. SEGMENT BOUNDARIES (longer gaps, and the ends of the
+trajectory) shrink the window SYMMETRICALLY — a one-sided window is an
+extrapolation, biased toward whichever side still has data by roughly
+`velocity x half-window` (~15 mm at 10 mm/frame with a 7-window), which reads
+as the skeleton lurching at every occlusion edge. Presence is decided ONCE at
+the SKELETON level and applied to all 45 signals, because a single 1D signal
+cannot distinguish "occluded in 4 of 5 cameras" from "the animal left", and
+per-node segmentation would deform the skeleton. Gaps are NEVER filled — a NaN
+input is a NaN output — unlike anipose's `filter_3d.py`, which `np.interp`s
+across gaps of any length before filtering. This also keeps the gap structure
+invariant across the two stages, so segments are computed once and reused.
+
+**Not a lazy sweep.** `session.instanceGroups` is fully resident
+(`sweepLazyFrameWindows` releases `frameGroups`, never `instanceGroups`, and
+the SLP 2.8 columnar reader materializes every group's 3D on load — luc3d
+#189), so this walks the map directly and hydrates no 2D. It therefore cannot
+fall into the resident-only bug class of luc3d #194/#195.
+
+**Provenance.** Sets `InstanceGroup.smoothed = true` and clears the derived
+reprojection caches (`group.reprojections`; `group.reprojectedInstances` goes back
+to the shared `NO_REPROJECTED_INSTANCES`, never `clear()`ed), which refill lazily.
+It also marks the written array (`markPoints3dSmoothed`), so that refill
+reprojects the smoothed 3D instead of re-solving the 2D — without the mark,
+groups with no `triangulationMethod` (Track All's) or any group under a
+reprojection-error threshold drew the unsmoothed answer.
+
+**Runs replace, never stack.** The mark keeps a pooled copy of the group's 3D
+from before its first smoothing (taken just before the first write; the
+`slice()` matters, since `pooledPoints3d` returns an already-pooled array as-is),
+and the gather reads that copy (`unsmoothedPoints3d`), so window 60 then
+window 3 gives window 3's result. `unsmoothSession(session, {writeFrames})`
+copies it back and drops the mark (the "both windows 0" action);
+`hasSmoothed3d(session, frameIdx?)` says whether any group (on a frame, or
+anywhere) is smoothed; the session-wide answer walks only the frames a pass
+wrote (a per-session `WeakMap` set), dropping each one found no longer
+smoothed, because `ui/smoothing-button.js` asks on every overlay draw.
+Not persisted: a reopened project's 3D is the smoothed
+values, and only re-triangulating gets back to the unsmoothed 3D.
+`triangulationMethod` is deliberately UNTOUCHED: smoothing is
+orthogonal to which solver produced the points (a group can be BA-solved AND
+smoothed), and a third value there would erase the solver identity
+`resolveTriangulationMethod` exists to preserve.
+
+**Exports.** `normalizeWindow`, `sigmaForWindow`, `buildSegments`, `medianOf`,
+`smoothSignalInto`, `resolveSmoothingParams`, `collectTrajectories`,
+`smoothTrajectory`, `smoothSession`, `unsmoothSession`, `hasSmoothed3d`.
+
+**Imports.** `pose/pose-data.js` (`POINT3D_STRIDE`, `points3dNodeCount`,
+`NO_REPROJECTED_INSTANCES`, `pooledPoints3d`, `markPoints3dSmoothed`,
+`isPoints3dSmoothed`, `unsmoothedPoints3d`, `clearPoints3dSmoothed`) only —
+no UI imports, so the module stays unit-testable in plain Node.
+
+**Imported by.** `ui/ui-wiring.js` (`smoothSession`, `resolveSmoothingParams`).
+
+**Tests.** `tests/test-temporal-smoothing.mjs` (88 assertions). Verified by
+mutation: removing the symmetric shrink, zero-padding instead of renormalizing,
+and filling gaps each fail with the specific artifact they represent.
+
+---
+
 ### pose/triangulation.js
 
 **Purpose.** DLT triangulation, bundle-adjustment refinement, reprojection
@@ -2528,7 +2635,8 @@ a Refined solve with a DLT one behind the user's back. Three helpers:
   `triangulationMethod` and `usedCameras`; returns true when `group` therefore
   needs no solve. Requires identical membership **AND**
   `prior.triangulationMethod === method`, so it only fires when re-solving would
-  be a provable no-op (an *unknown* prior method never matches). Does **not**
+  be a provable no-op (an *unknown* prior method never matches; smoothed 3D,
+  `isPoints3dSmoothed`, never matches either). Does **not**
   copy `reprojections` — leaving them empty is what lets `ui/rendering.js`'s fill
   regenerate them (and `state.triangulationResults`) with the adopted method.
 
@@ -6019,8 +6127,10 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   after one. **3D read from a file** (`isPoints3dFromFile`: a loaded `.slp`'s,
   an imported points3d `.h5`'s) is reprojected whenever the group is clean,
   threshold or not, method or not — a re-solve would show LUCID's answer
-  instead of the 3D the project holds. Anything else (Track All's provisional
-  3D, an edited group) is re-solved. The `.slp` load, moving a view between
+  instead of the 3D the project holds. **Smoothed 3D** (`isPoints3dSmoothed`)
+  is reprojected the same way, or the overlay would re-solve the unsmoothed
+  answer (`tests/e2e/temporal-smoothing-display.mjs`). Anything else (Track
+  All's provisional 3D, an edited group) is re-solved. The `.slp` load, moving a view between
   sessions and the overlay video export also leave derived state to this fill
   (`tests/e2e/load-export-move-bounded-derived-state.mjs`).
 
@@ -6084,6 +6194,11 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   every frame and in every mode (planes are static scene geometry). Pinned by
   `tests/e2e/define-plane-mode.mjs`.
 
+  **The Group menu button and Temporal Smoothing are synced here too.**
+  `#tbGroupMenu` (the hover menu holding Group / Edit Group) is `.active` while
+  either item is, and `syncSmoothingButton()` (`ui/smoothing-button.js`)
+  re-derives the Temporal Smoothing button's blue state on every draw.
+
   **Defining Plane Mode's toolbar lock is re-asserted here.** `drawAllOverlays`
   RECOMPUTES `tbGroup.disabled` / `tbEditGroup.disabled` from the pose selection
   on every draw, so `applyPlaneModeToolbarLock()` (`ui/plane-toolbar-lock.js`,
@@ -6103,7 +6218,7 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `getInstanceGroupsForFrame`, `triangulateAndReproject`,
   `reprojectStoredPoints3d`, `storeReprojectedInstances`.
 - `../pose/lazy-residency.js` — `dropDerivedReprojections`.
-- `../pose/pose-data.js` — `points3dNodeCount`, `isPoints3dFromFile`.
+- `../pose/pose-data.js` — `points3dNodeCount`, `isPoints3dFromFile`, `isPoints3dSmoothed`.
 - `./overlays.js` — `drawFrameOverlays`.
 - `./view-legend.js` — `syncViewLegends`.
 - `./settings.js` — `isCameraTracked` (passed to `drawFrameOverlays` as
@@ -6115,6 +6230,7 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `computeLazyCameraBaseline`, `createFrameCounterBaselineBuilder`,
   `countFrameCounters`, `nonResidentCameraCounts`, `refreshCountedFrame`.
 - `./plane-definition.js` — `drawPlaneOverlays`, `applyPlaneModeToolbarLock`.
+- `./smoothing-button.js` — `syncSmoothingButton` (every draw).
   **Circular** (that module imports `drawAllOverlays` back); safe because both
   call sites are inside function bodies.
 - `./animal-count-field.js` — `syncAnimalCountField`. **Circular** through
@@ -6224,7 +6340,9 @@ from the rest of the panel.
 Adding a button to the lock means adding its id to `PLANE_LOCKED_TOOLBAR_IDS`;
 if it opens a menu, its wrapper also needs `PLANE_LOCKED_DROPDOWN_IDS`, since a
 `.tri-dropdown` menu opens on hover and its items are `div`s, so `disabled` on
-the button reaches neither.
+the button reaches neither. Locked menus: Instance, Group, Triangulate,
+Triangulate All, Temporal Smoothing (the Instance and Group items are
+`<button>`s and are in the id list as well).
 
 **Imports** `planeState` from `ui/plane-definition.js` — circular, and safe only
 because the binding is read INSIDE the function body. **Imported by**
@@ -8871,6 +8989,19 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   but still resolve via `getTrackingThreshold`. `getTrackingThresholds` returns
   the effective `{ id: value }` map the tracker snapshots per run; values clamp to
   range and entries equal to the default are dropped.
+- `SMOOTHING_PARAMS` / `getSmoothingParamDefs()` / `getSmoothingParam(id)` /
+  `getSmoothingParams()` / `setSmoothingParams(map)` — the Temporal Smoothing
+  hyperparameters (luc3d #134): `smoothMedianWindow`, `smoothGaussianWindow`
+  (both default **0 = off**, matching `reprojErrorThreshold`, so shipping the
+  feature changes no existing project's 3D), `smoothMaxGap` (5),
+  `smoothMinSegment` (5). A SEPARATE catalog from `TRACKING_THRESHOLDS`, not more
+  entries in it: these are post-triangulation filter parameters rather than
+  cross-view tracker knobs, and the Tracking Wizard's Thresholds section renders
+  every threshold the catalog exposes. Note the `smooth*` prefix — `filter*` is
+  already taken here for DETECTION filtering (`filterMinVisibleNodes`,
+  `filterMinInstanceScore`). Same clamp + drop-if-default persistence as the
+  thresholds, under `_settings.smoothingParams`. Read by `ui/ui-wiring.js` and
+  passed to `smoothSession` (`pose/temporal-smoothing.js`).
 - `getActions()` — catalog snapshot `[{ id, label, category, binding,
   defaultBinding, editable, dispatched }]` with effective bindings, for the modal.
 - `getBinding(id)` — effective binding string (user override or catalog default).
@@ -8974,38 +9105,49 @@ right panel area (`settings-panel-container`), with a Cancel / Apply footer.
 
 **Key exports.**
 - `showSettingsModal(initialPanel)` — `initialPanel` ∈ `'triangulation'` |
-  `'keyboard'` | `'wizard'` (default `'triangulation'`). Single-instance.
+  `'keyboard'` | `'wizard'` | `'smoothing'` (default `'triangulation'`).
+  Single-instance.
 
-**Behavior.** Three panels: **Default Triangulation** (DLT / Refined radio rows
+**Behavior.** Four panels: **Default Triangulation** (DLT / Refined radio rows
 — `'ba'` is labelled "Refined (Ref)"), **Keyboard Shortcuts** (the
 `getActions()` catalog by category; an editable entry's key chip captures a
 **chord or multi-key sequence** — keys accumulate, Ctrl/Cmd normalized to `Mod`
 via `chordFromEvent`, until a click sets it or Esc cancels; duplicates are
-rejected; fixed entries show a greyed dashed chip), and **Tracking Wizard**:
+rejected; fixed entries show a greyed dashed chip), **Tracking Wizard**:
 **Node Weights** (number field `0–1` per node of the active skeleton; `0` drops
 the node from the association cost and greys the row), **Camera Views** (an
 on/off switch per camera, stored as a `0/1` weight; off excludes the view from
 tracking and greys the row), and **Tracking Thresholds** (one field per
 `getTrackingThresholdDefs()` entry, or an on/off switch stored as `1`/`0` for a
 `kind: 'toggle'` entry, via `makeToggle`). Covered by
-`tests/e2e/settings-wizard-toggles.mjs`. Edits mutate a local `working` state
-only; nothing commits until **Apply** (`setDefaultTriangulationMethod` +
-`applyBindings` + `setNodeWeights` + `setCameraWeights` +
-`setTrackingThresholds`), which repaints overlays + timeline and re-fits the
-ID-switch box (`refreshIdSwitchHighlight`, which encloses only nonzero-weight
-nodes). Cancel / × / backdrop / Escape discard. Under the three
-detection-filter fields sits `ui/detection-filter-preview.js`'s per-camera
-readout of what they would remove; it re-counts on every `input` and camera
-switch (it reads `working`, so it moves before Apply), and its one walk of the
-session starts the first time the wizard panel is SHOWN (`selectPanel`), so
-Settings opened for anything else walks nothing. Teardown disposes it. A capture-phase document keydown
-listener keeps background shortcuts from firing while it is open, and is
-removed on teardown.
+`tests/e2e/settings-wizard-toggles.mjs`. And **Temporal Smoothing** (luc3d
+#134 — one **Filter Parameters** section rendering `getSmoothingParamDefs()`:
+median window, Gaussian window, max gap, minimum segment. Its own panel because
+it is not a tracking parameter — it runs after triangulation, on 3D the tracker
+has finished with. A note warns that raising the reprojection-error threshold
+creates more gaps, hence more gap edges where the filter is least accurate. The
+pass itself runs from the Triangulate / Triangulate All dropdowns.) Threshold
+and smoothing rows share one `buildParamRow(def, bag, onEdit)` helper (same
+`{ id, label, desc, min, max, step }` catalog shape, clamp on blur, `kind:
+'toggle'` → switch; `onEdit` lets the filter fields re-count the preview).
+Edits mutate a local `working` state only; nothing commits until **Apply**
+(`setDefaultTriangulationMethod` + `applyBindings` + `setNodeWeights` +
+`setCameraWeights` + `setTrackingThresholds` + `setSmoothingParams`), which
+repaints overlays + timeline and re-fits the ID-switch box
+(`refreshIdSwitchHighlight`, which encloses only nonzero-weight nodes). Cancel /
+× / backdrop / Escape discard. Under the three detection-filter fields sits
+`ui/detection-filter-preview.js`'s per-camera readout of what they would remove;
+it re-counts on every `input` and camera switch (it reads `working`, so it moves
+before Apply), and its one walk of the session starts the first time the wizard
+panel is SHOWN (`selectPanel`), so Settings opened for anything else walks
+nothing. Teardown disposes it. A capture-phase document keydown listener keeps
+background shortcuts from firing while it is open, and is removed on teardown.
 
 **Imports from project modules.** `./settings.js` (`getDefaultTriangulationMethod`,
 `setDefaultTriangulationMethod`, `getActions`, `applyBindings`, `formatBinding`,
 `getNodeWeight`, `setNodeWeights`, `getCameraWeight`, `setCameraWeights`,
-`getTrackingThresholdDefs`, `setTrackingThresholds`); `./detection-filter-preview.js`
+`getTrackingThresholdDefs`, `setTrackingThresholds`, `getSmoothingParamDefs`,
+`setSmoothingParams`); `./detection-filter-preview.js`
 (`buildDetectionFilterPreview`); `./app-state.js`
 (`getActiveSession`, `state`, `timeline`); `./rendering.js` (`drawAllOverlays`,
 for the post-Apply repaint); `./modal-geometry.js` (`installModalGeometry`);
@@ -9014,8 +9156,9 @@ for the post-Apply repaint); `./modal-geometry.js` (`installModalGeometry`);
 **Imported by.** `ui/ui-wiring.js`.
 
 **User-facing features.** Settings modal — choose default triangulation method,
-remap keyboard shortcuts, set per-node tracking weights, and exclude camera views
-from tracking (Tracking Wizard, also reachable via Tracks ▸ Tracking Wizard).
+remap keyboard shortcuts, set per-node tracking weights, exclude camera views
+from tracking (Tracking Wizard, also reachable via Tracks ▸ Tracking Wizard),
+and tune the Temporal Smoothing filter (luc3d #134).
 
 ---
 
@@ -10317,6 +10460,42 @@ avoid the `initialization.js` → `ui-wiring.js` → modal cycle). The menu is
 pure `:hover`: in a test, a modal opening over the toolbar drops hover, so a
 second click must re-hover the button first (`tests/e2e/track-frame-range.mjs`).
 
+**Instance and Group are hover menus.** To save toolbar width, `+ Instance` /
+`- Instance` sit under an **Instance ▾** button (`#tbInstanceMenu`,
+`#instanceDropdown`) and `Group` / `Edit Group` under **Group ▾**
+(`#tbGroupMenu`, `#groupDropdown`), opening on `:hover` like Triangulate. The
+four items are still the original `<button>`s with their ids and handlers
+(`button.tri-dropdown-item` restyles them as rows), so `ui/rendering.js` keeps
+rewriting Group's label and both items' `disabled` / `.active`; it also turns
+`#tbGroupMenu` blue whenever either item is. Tab skips the items while the menu
+is closed; their shortcuts (`Mod+I`, `Delete`, `Shift+G`) still work.
+Covered by `tests/e2e/toolbar-hover-menus.mjs`.
+
+**Temporal Smoothing** (luc3d #134) is its own split button right after
+Triangulate All (`#tbSmooth`, `#smoothingDropdown`): a click smooths all
+frames; the hover menu has **All frames**, **This frame** and **Settings…**
+(`data-scope`). All run the private `runTemporalSmoothing(currentFrameOnly)`.
+It reads `getSmoothingParams()`; when both kernels are off it restores the
+pre-smoothing 3D (`unsmoothSession`), or, with nothing smoothed, says so and
+opens Settings ▸ Temporal Smoothing rather than silently doing nothing;
+otherwise it calls `smoothSession` (`pose/temporal-smoothing.js`; every run
+filters the pre-smoothing 3D, so it replaces the last; the status counts POSES,
+one per animal per frame), drops the `state.triangulationResults` entries of
+every group whose reprojections the pass cleared (the fill appends a fresh one,
+and the panel would average both), then `markDirty` + `drawAllOverlays` +
+`update3DViewport` + `updateInfoPanel`. "This frame" passes
+`writeFrames: new Set([state.currentFrame])` — the whole trajectory is still
+READ (a filter needs neighbours on both sides), only the current frame is
+WRITTEN. Synchronous, no progress modal: it touches only `points3d` on the
+already-resident `session.instanceGroups`, hydrating no 2D. The button is blue
+while smoothing is applied (`ui/smoothing-button.js`, synced on every overlay
+draw).
+
+`wireTriDropdown` passes the menu item's `data-method` through **verbatim** (it
+used to map any unrecognized value onto DLT, so a new item would have run a
+triangulation). Each `onPick` owns the mapping and must handle values it does
+not expect.
+
 **The Animals field (`#tbNumAnimals`)** is wired by `wireAnimalCountField()`
 from `ui/animal-count-field.js`, which owns it (see that entry).
 
@@ -10868,6 +11047,23 @@ browser-local), `renderRecordingInfo(session)` (called by `updateInfoPanel`),
 function, so the cycle through the info panel is hoist-safe).
 
 **Tests.** `tests/e2e/campy-session-folder.mjs`.
+
+### ui/smoothing-button.js
+
+**Purpose.** The toolbar's Temporal Smoothing button state (luc3d #134):
+`#tbSmooth` is blue (`.active`) while any 3D in the session is smoothed; in its
+menu, **All frames** is lit (`.applied`) the same way and **This frame** while
+the current frame's 3D is.
+
+**Key exports.** `syncSmoothingButton()` — re-derives that state from the
+session. Smoothing lapses by itself when a re-solve or edit replaces a group's
+3D (`isPoints3dSmoothed` keys the array), so nothing tracks it: `ui/rendering.js`
+calls this on every overlay draw and the pass calls it after running.
+`hasSmoothed3d` (`pose/temporal-smoothing.js`) keeps the per-draw cost small.
+
+**Imports.** `./app-state.js` (`state`), `../pose/temporal-smoothing.js`
+(`hasSmoothed3d`). **Imported by** `ui/rendering.js`, `ui/ui-wiring.js`.
+Covered by `tests/e2e/temporal-smoothing-display.mjs` §E.
 
 ### ui/section-state.js
 
