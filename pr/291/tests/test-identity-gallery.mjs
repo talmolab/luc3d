@@ -91,6 +91,16 @@ console.log('3. pickSampleFrames');
     const mids = G.pickSampleFrames(alone, ta.get(0), 0, 5, { maxCandidates: 1000 });
     // the span is frames 0..999: slot middles 99.9, 299.7, 499.5, 699.3, 899.1 (a tie keeps the earlier)
     eq(mids, [100, 300, 499, 699, 899], 'alone everywhere: the frame nearest each slot\'s middle');
+    // a stray detection (one keypoint of three) wears the identity for a frame between its real stretches, in the
+    // middle of slots 2 and 3: no picture is cut from it — each slot takes the usable frame nearest its middle
+    const stray = (f) => Object.assign(group(0, 0, 0, 100), { points3d: new Float64Array([0, 0, 100, NaN, NaN, NaN, NaN, NaN, NaN]) });
+    const gappy = session([...Array.from({ length: 400 }, (_, f) => [f, [group(0, 0, 0, 100)]]), [500, [stray(500)]], [700, [stray(700)]],
+        ...Array.from({ length: 200 }, (_, i) => [800 + i, [group(0, 0, 0, 100)]])]);
+    const tg = G.identityTracks(gappy), fg = G.pickSampleFrames(gappy, tg.get(0), 0, 5, { maxCandidates: 1000 });
+    ok(!fg.includes(500) && !fg.includes(700), `stray one-keypoint detections are never sampled: ${fg}`);
+    ok(fg.includes(399) && fg.includes(800), `an empty slot middle takes the usable frame nearest it, on either side: ${fg}`);
+    const allStray = session([[10, [stray(10)]], [20, [stray(20)]], [30, [stray(30)]], [40, [stray(40)]], [50, [stray(50)]], [60, [stray(60)]]]);
+    eq(G.pickSampleFrames(allStray, G.identityTracks(allStray).get(0), 0, 5).length, 5, 'with nothing usable at all, still five samples');
     eq(G.pickSampleFrames(alone, { frames: new Int32Array([3, 9]), xyz: new Float64Array(6) }, 0, 5), [3, 9], 'fewer frames than samples: all of them');
     eq(G.pickSampleFrames(alone, { frames: new Int32Array(0), xyz: new Float64Array(0) }, 0, 5), [], 'no frames: none');
 }

@@ -30,23 +30,23 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { noteProgress } from './progress-delta.js?v=2c43f1f5896e';
-import { state, getActiveSession } from './app-state.js?v=2c43f1f5896e';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=2c43f1f5896e';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=2c43f1f5896e';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=2c43f1f5896e';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=2c43f1f5896e';
-import { getTrackingThreshold } from './settings.js?v=2c43f1f5896e';
-import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=2c43f1f5896e';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions } from '../pose/single-camera-tracking.js?v=2c43f1f5896e';
+import { noteProgress } from './progress-delta.js?v=b617cad483b6';
+import { state, getActiveSession } from './app-state.js?v=b617cad483b6';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=b617cad483b6';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=b617cad483b6';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=b617cad483b6';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=b617cad483b6';
+import { getTrackingThreshold } from './settings.js?v=b617cad483b6';
+import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=b617cad483b6';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions } from '../pose/single-camera-tracking.js?v=b617cad483b6';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=2c43f1f5896e';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=2c43f1f5896e';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=2c43f1f5896e';
-import { createBrightnessSampler } from './brightness-sampler.js?v=2c43f1f5896e';
+         inputTensorToPixels, INPUT } from './image-embedder.js?v=b617cad483b6';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=b617cad483b6';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=b617cad483b6';
+import { createBrightnessSampler } from './brightness-sampler.js?v=b617cad483b6';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary } from './id-switch-review.js?v=2c43f1f5896e';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary } from './id-switch-review.js?v=b617cad483b6';
 
 const CUE_LABEL = { size: 'body size', image: 'images', brightness: 'coat brightness', review: 'review list' };
 
@@ -781,7 +781,8 @@ function openFixDialog(session, st, f) {
     var isReview = f.cue === 'review';
     var pickPair = isReview && (session.identities || []).length > 2;
     if (isReview) {
-        startWhy = plan.start === 'current' ? 'the frame you are on' : 'just after this place — the frame you are on is outside it';
+        startWhy = plan.start === 'current' ? 'the frame you are on'
+            : 'just after this place — the frame you are on is before it, or past the next place on the list';
         endWhy = 'the end of the video — later places on the list fix their own stretches';
     } else if (f.kind === 'end') {
         startWhy = plan.edge == null ? 'the start of the video, where the swapped stretch begins'
@@ -806,8 +807,8 @@ function openFixDialog(session, st, f) {
         (f.followOf != null ? '<p class="id-switch-fix-warn">This flag follows the switch at ' + fmtTime(f.followOf) +
             ', and is often a side effect of it. Fix that one first if you have not.</p>' : '') +
         '<p class="id-switch-fix-tip">To ' + (f.kind === 'end' ? 'end' : 'start') + ' somewhere else, go to that frame on the row\'s ' +
-        'progress bar (click it, step or play) and click Fix switch again.' + (isReview ? ' If the labels swap back later, ' +
-        'Fix again from there.' : '') + '</p>' +
+        'progress bar (click it, step or play) and click Fix switch again.' + (isReview ? ' If the labels swap back before ' +
+        'the next place, go to where they do and click Fix again on this row.' : '') + '</p>' +
         '<div class="modal-actions"><button id="idSwitchFixCancel">Cancel</button>' +
         '<button id="idSwitchFixOk" class="primary">Swap identities</button></div></div>';
     document.body.appendChild(overlay);
@@ -940,11 +941,23 @@ function lookNote(cues) {
     }).join(', ');
 }
 
-/** What the selected row shows under its lines: the progress bar, then Fix switch… (or what was fixed, and Undo). */
+/**
+ * What the selected row shows under its lines: the progress bar, then Fix switch… (or what was fixed, and Undo).
+ * A review-list row can be fixed again — a swap that undoes itself before the next place takes two fixes — so it
+ * lists every fix made from it and keeps a "Fix again…" button.
+ */
 function selectedHtml(st, f) {
     var fix = idSwitchFixFor(st, f), last = st.fixes && st.fixes.length ? st.fixes[st.fixes.length - 1] : null;
     var act;
-    if (fix) {
+    if (fix && f.cue === 'review') {
+        var key = rowKey(f), mine = (st.fixes || []).filter(function (x) { return x.key === key; });
+        act = '<span class="id-switch-fixed-note is-list">Fixed: ' + mine.map(function (x, i) {
+            return (i ? 'again ' : escapeHtml(x.nameA) + ' ↔ ' + escapeHtml(x.nameB) + ' swapped ') + 'on frames ' +
+                (x.from + 1).toLocaleString() + '–' + (x.to + 1).toLocaleString();
+        }).join('; ') + '</span>' +
+            '<button class="panel-btn id-switch-fix" title="Swap the two tracks again, from the frame you are on — for labels that swap back before the next place">Fix again…</button>' +
+            (mine.indexOf(last) >= 0 ? '<button class="panel-btn id-switch-undo" title="Swap the same frames back">Undo fix</button>' : '');
+    } else if (fix) {
         act = '<span class="id-switch-fixed-note">Fixed: ' + escapeHtml(fix.nameA) + ' ↔ ' + escapeHtml(fix.nameB) +
             ' swapped on frames ' + (fix.from + 1).toLocaleString() + '–' + (fix.to + 1).toLocaleString() + '</span>' +
             (fix === last ? '<button class="panel-btn id-switch-undo" title="Swap the same frames back">Undo fix</button>' : '');

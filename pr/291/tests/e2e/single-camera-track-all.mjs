@@ -42,7 +42,9 @@
  *     rows saying why ("a lone animal's track changes"), the summary box counts
  *     them and makes reviewing the next step; Fix on a review row swaps from the
  *     frame you are on to the end of the video, between two tracks picked in the
- *     dialog (three tracks here), and Esc cancels it.
+ *     dialog (three tracks here), and Esc cancels it; the fixed row offers Fix
+ *     again…, which from a frame past its own window (before the next place)
+ *     swaps back, leaving only the stretch between the two fixes swapped.
  *  1b. Track All ends on the summary box, planned for one camera: it counts
  *     tracks, lists coat brightness / images / body size, recommends saving and
  *     never Triangulate All, has an Identities row per track, and the ID
@@ -419,6 +421,36 @@ try {
         if (after8[f][q] !== want) bad++; else if (want !== t) swapped++;
     }
     check(bad === 0 && swapped > 0, `it swaps the two PICKED tracks (${pickA} ↔ ${pickB}) from the frame you were on to the end (${swapped} detections moved, ${bad} wrong)`);
+
+    // Labels that swap back before the next place: Fix again on the same row, from a frame past its own window.
+    const acts = await page.evaluate((s) => [...document.querySelectorAll(s + ' .id-switch-actions button')].map(b => b.textContent), rowSel8);
+    check(acts.includes('Fix again…') && acts.includes('Undo fix'), `a fixed review row keeps a "Fix again…" button beside Undo (${acts.join(', ')})`);
+    const later = await page.evaluate((key) => {
+        const S = window.__lucid.state.session, flags = S._idSwitch.results.review.flags;
+        const m = flags.find(x => 'review:' + x.frame + ':' + x.nameA + ':' + x.nameB === key) || flags[0];
+        const next = flags.filter(x => x.frame > m.frame).map(x => Math.min(x.startFrame, x.frame));
+        return { own: m.frame + 60, next: next.length ? Math.min(...next) : window.__lucid.state.totalFrames };
+    }, sel);
+    const here2 = Math.min(later.next - 1, later.own + 30);
+    check(here2 > later.own && here2 > here, `a frame past the row's own window but before the next place (${here2}; window to ${later.own}, next place at ${later.next})`);
+    await page.evaluate(async (f) => { const I = await import('/pose/initialization.js'); I.navigateToFrame(f); }, here2);
+    await page.click(rowSel8 + ' .id-switch-fix');
+    const dlg2 = await page.evaluate(() => (document.querySelector('.id-switch-fix-modal') || {}).textContent || '');
+    check(/Starts at frame [\d,]+: the frame you are on/.test(dlg2) && /before the next place, go to where they do and click Fix again on this row/.test(dlg2),
+        'Fix again starts from the frame you are on, and the dialog says when to use it');
+    await page.selectOption('#idSwitchFixA', pickA);
+    await page.selectOption('#idSwitchFixB', pickB);
+    await page.click('#idSwitchFixOk');
+    const after8b = await page.evaluate(() => window.__lone());
+    bad = 0; swapped = 0;
+    for (let f = 0; f < before.length; f++) for (let q = 0; q < before[f].length; q++) {
+        const t = before[f][q], want = f < here || f >= here2 ? t : t === ida ? idb : t === idb ? ida : t;
+        if (after8b[f][q] !== want) bad++; else if (want !== t) swapped++;
+    }
+    check(bad === 0 && swapped > 0, `the two fixes leave only the stretch between them swapped (${swapped} detections, ${bad} wrong)`);
+    await page.click(rowSel8 + ' .id-switch-line1');
+    const note2 = await page.evaluate((s) => (document.querySelector(s + ' .id-switch-fixed-note') || {}).textContent || '', rowSel8);
+    check(/^Fixed: .* swapped on frames [\d,]+–[\d,]+; again on frames [\d,]+–[\d,]+$/.test(note2), 'the row lists both fixes: ' + note2);
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

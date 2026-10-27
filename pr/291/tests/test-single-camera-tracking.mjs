@@ -393,8 +393,24 @@ group('9. The review list: handovers, rows, Fix plan, saved checklist');
     const m0 = rr.flags[0], s0 = m0.startFrame, e0 = m0.frame;
     let plan = RV.idSwitchFixPlan(m0, rr, { currentFrame: s0, totalFrames: N, window: [s0 - 60, e0 + 60] });
     ok(plan.from === s0 && plan.to === N - 1 && plan.start === 'current', `a review row Fixes from the frame you are on to the end (${plan.from}–${plan.to})`);
-    plan = RV.idSwitchFixPlan(m0, rr, { currentFrame: e0 + 500, totalFrames: N, window: [s0 - 60, e0 + 60] });
-    ok(plan.from === e0 + 1 && plan.start === 'separate', `…or, from outside its window, from just after the place (${plan.from})`);
+    // A review row's window reaches on to just before the next place: a swap that undoes itself in between is fixed
+    // from that row twice (its own window here: 60 frames either side, as the tab's 2 s lead at 30 fps).
+    const two = SCT.reviewResult([{ f: 110, s: 100, a: 0, b: 1, cues: ['handover'] }, { f: 305, s: 300, a: 0, b: 1, cues: ['tracklet'] }]
+        .map(c => ({ frame: c.f, startFrame: c.s, identityA: c.a, identityB: c.b, cues: c.cues })), S, 30);
+    const [p1, p2] = two.flags, win = m => [m.startFrame - 60, m.frame + 60];
+    ok(two.flags.length === 2 && p1.frame === 110 && p2.startFrame === 300, 'a hand-made list of two places (frames 100–110 and 300–305)');
+    plan = RV.idSwitchFixPlan(p1, two, { currentFrame: 299, totalFrames: N, window: win(p1) });
+    ok(plan.from === 299 && plan.to === N - 1 && plan.start === 'current',
+        `the first place Fixes from any frame up to just before the next one (${plan.from}), past its own window (to ${win(p1)[1]})`);
+    plan = RV.idSwitchFixPlan(p1, two, { currentFrame: 300, totalFrames: N, window: win(p1) });
+    ok(plan.from === 111 && plan.start === 'separate', `…and from the next place on, from just after itself (${plan.from})`);
+    plan = RV.idSwitchFixPlan(p1, two, { currentFrame: 39, totalFrames: N, window: win(p1) });
+    ok(plan.from === 111 && plan.start === 'separate', '…as from before its window');
+    plan = RV.idSwitchFixPlan(p2, two, { currentFrame: N - 2, totalFrames: N, window: win(p2) });
+    ok(plan.from === N - 2 && plan.start === 'current', 'the last place\'s window runs to the end of the video');
+    const scored = { ...p1, cue: 'brightness' };
+    plan = RV.idSwitchFixPlan(scored, { flags: [scored, { ...p2, cue: 'brightness' }], changes: [] }, { currentFrame: 299, totalFrames: N, window: win(p1) });
+    ok(plan.start === 'separate', 'a check\'s row keeps its own window');
 
     // The saved checklist keeps the review rows, their cues and the ticks.
     S._idSwitch = { results: { review: rr }, reviewed: new Set([RV.idSwitchRowKey(m0)]), fixes: [] };

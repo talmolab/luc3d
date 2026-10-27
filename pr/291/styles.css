@@ -7479,6 +7479,8 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-actions .panel-btn { flex: none; }
 .id-switch-fix:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .id-switch-fixed-note { color: var(--success-color); flex: 1; min-width: 0; }
+/* a review row's note lists every fix made from it, above Fix again… and Undo */
+.id-switch-fixed-note.is-list { flex-basis: 100%; }
 .id-switch-tick { margin: 2px 0 0; flex: none; cursor: pointer; }
 .id-switch-main { flex: 1; min-width: 0; }
 .id-switch-line1 { display: flex; gap: 8px; font-size: 12px; }
