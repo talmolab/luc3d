@@ -56,6 +56,9 @@ export { createLoadMeter };
 
 export const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/+esm';
 export const IMAGE_MODEL_ID = 'onnx-community/dinov2-small';
+// The model repo's commit, pinned like TRANSFORMERS_URL: without it from_pretrained follows `main`, so an
+// upstream re-upload would silently change the weights the check was calibrated against (and what runs).
+export const IMAGE_MODEL_REVISION = '8b1f705a3a7f6f062f6bdd21986c1583d3ef105d';
 export const IMAGE_MODEL_MB = 44;
 
 /** Crop side (px) and model input side (px). */
@@ -125,7 +128,7 @@ export function loadImageModel(onStatus) {
         if (onStatus) onStatus('Loading the image model (' + (dtype === 'fp16' ? IMAGE_MODEL_MB : 2 * IMAGE_MODEL_MB) + ' MB on first use, cached afterwards)…');
         const T = await importTransformers();
         const model = await T.AutoModel.from_pretrained(IMAGE_MODEL_ID, {
-            device: 'webgpu', dtype: dtype,
+            revision: IMAGE_MODEL_REVISION, device: 'webgpu', dtype: dtype,
             // Keep the output ON THE GPU: the model's only output is last_hidden_state [n, 257, 384]
             // (5.9 MB for 15 crops) and the check uses 1 of those 257 tokens — clsFromGpu copies just it.
             session_options: { preferredOutputLocation: 'gpu-buffer' },
@@ -321,7 +324,7 @@ export async function loadWebNNModel(onStatus) {
     if (onStatus) onStatus('Compiling the image model for WebNN (experimental)…');
     const T = await importTransformers();
     const model = await T.AutoModel.from_pretrained(IMAGE_MODEL_ID, {
-        device: 'webnn-gpu', dtype: 'fp16',
+        revision: IMAGE_MODEL_REVISION, device: 'webnn-gpu', dtype: 'fp16',
         session_options: { freeDimensionOverrides: { batch_size: WEBNN_BATCH, num_channels: 3, height: INPUT, width: INPUT } },
     });
     await model({ pixel_values: new T.Tensor('float32', new Float32Array(WEBNN_BATCH * 3 * INPUT * INPUT), [WEBNN_BATCH, 3, INPUT, INPUT]) });
@@ -710,6 +713,130 @@ export const EMBED_MAX_BATCH = 64;
  */
 export const EMBED_IN_FLIGHT = 8;
 
+/** The lowest cap the image check takes (%; the `imageCheckGpuTimePct` / `imageCheckCpuCoresPct` settings' minimum). */
+export const IMAGE_CAP_MIN = 1;
+
+/** A cap as a percentage in IMAGE_CAP_MIN..100; anything not a positive number is 100, the uncapped check. */
+export function capPct(pct) {
+    const p = Number(pct);
+    return p > 0 ? Math.min(100, Math.max(IMAGE_CAP_MIN, p)) : 100;
+}
+
+/*
+ * The compute caps. The share of the GPU and of the CPU the image check may use is
+ * the user's to set (`imageCheckGpuTimePct`, `imageCheckCpuCoresPct`: whole
+ * percentages, 50 by default), so that what it does
+ * not take is left for other work on the machine — held even when nothing else
+ * wants it. No browser API gives a page a share of either, so the check takes its
+ * share by how it runs: the GPU by idling after each full batch (paceRestMs), the
+ * CPU by running fewer worker threads (imageCheckThreads).
+ */
+
+/**
+ * The GPU cap: how long to idle after a model run of `runMs`, so the model holds the
+ * GPU at most `maxGpuPct`% of the time — busy / (busy + idle) = pct. 100 (or not a
+ * number) idles 0 ms: the uncapped check. Batches stay FULL (EMBED_MAX_BATCH) at every
+ * cap: scaling them with the cap (64 x pct, an earlier version) bought shorter holds of
+ * the GPU at the cost of throughput — small batches run each crop slower — while the
+ * idle time alone already sets the share. So a run is as efficient capped as uncapped.
+ */
+export function paceRestMs(runMs, maxGpuPct) {
+    const p = capPct(maxGpuPct);
+    if (p >= 100 || !(runMs > 0)) return 0;
+    return runMs * (100 / p - 1);
+}
+
+/**
+ * The CPU cap: the worker threads the image check runs, `{model, crop, budget, cores}` —
+ * model workers (the CPU path only; 0 on the GPU path) and crop workers. Capped,
+ * the budget is floor(cores x pct / 100) threads: on the CPU path the model takes
+ * all but one (it is the slow part; never more than cpuModelWorkerCount allows for
+ * memory) and cropping the rest, on the GPU path cropping takes it all (never more
+ * than createCropPool's own cores - 1 and 8). At least one of each. Fewer threads
+ * that all keep working, rather than every thread resting part of the time: the
+ * cores left over are free for the whole run. 100% is the uncapped check.
+ */
+export function imageCheckThreads(cores, memoryGB, maxCpuPct, onCpu) {
+    const c = cores > 0 ? cores : 4, cropMax = Math.max(0, Math.min(c - 1, 8));
+    const model = onCpu ? cpuModelWorkerCount(c, memoryGB) : 0;
+    const p = capPct(maxCpuPct);
+    if (p >= 100) return { model: model, crop: cropMax, budget: c, cores: c };
+    const budget = Math.max(1, Math.floor(c * p / 100));
+    if (!onCpu) return { model: 0, crop: Math.min(cropMax, budget), budget: budget, cores: c };
+    const m = Math.max(1, Math.min(model, budget - 1));
+    return { model: m, crop: Math.min(cropMax, Math.max(1, budget - m)), budget: budget, cores: c };
+}
+
+/**
+ * The model queue. Runs are serialised, but each takes EVERY crop queued up
+ * meanwhile, up to `maxBatch`: the first frame runs alone, and while it runs the
+ * next frames' crops accumulate into a bigger batch. A frame with more crops than
+ * `maxBatch` is split across runs. After each run the queue rests for
+ * `paceRestMs(run, maxGpuPct)` before starting the next — the GPU cap; 100 never rests.
+ * `embed(data, n)` -> Promise<Float32Array[]> runs the model on `n` crops of `sz` floats.
+ * Each frame's vectors carry the batch's `tag` (the model that made them) when `embed`'s result has one.
+ * `tm` (the run's timing) gets `queueMs`, `batches`, `maxBatch` and `restMs` added to.
+ * `endRest()` ends a rest in progress at once (queued work then runs or fails at once).
+ * @returns {{enqueue: function(Float32Array[]): Promise<Float32Array[]>, endRest: function()}}
+ */
+export function createModelQueue(embed, sz, tm, limits) {
+    const maxBatch = Math.max(1, Math.floor((limits && limits.maxBatch) || EMBED_MAX_BATCH));
+    const maxGpuPct = capPct(limits && limits.maxGpuPct);
+    const queue = [];
+    let running = false, restTimer = null, restResume = null;
+    const pump = function () {
+        if (running || !queue.length) return;
+        const take = [];
+        let n = 0;
+        while (queue.length && (n === 0 || n + queue[0].tensors.length <= maxBatch)) { const q = queue.shift(); take.push(q); n += q.tensors.length; }
+        running = true;
+        const now = performance.now();
+        take.forEach(function (q) { tm.queueMs += now - q.at; });
+        const data = new Float32Array(n * sz);
+        let at = 0;
+        take.forEach(function (q) { q.tensors.forEach(function (t) { data.set(t, at); at += sz; }); });
+        tm.batches++; tm.maxBatch = Math.max(tm.maxBatch, n);
+        const runFrom = performance.now();
+        embed(data, n).then(function (vecs) {
+            let k = 0;
+            take.forEach(function (q) {
+                const part = vecs.slice(k, k + q.tensors.length);
+                if (vecs.tag !== undefined) part.tag = vecs.tag;   // the model that made them (the cache keys on it)
+                q.resolve(part); k += q.tensors.length;
+            });
+        }, function (err) {
+            take.forEach(function (q) { q.reject(err); });
+        }).then(function () {
+            const rest = paceRestMs(performance.now() - runFrom, maxGpuPct);
+            if (!(rest > 0)) { running = false; pump(); return; }
+            const restFrom = performance.now();
+            restResume = function () {
+                clearTimeout(restTimer); restTimer = null; restResume = null;
+                tm.restMs += performance.now() - restFrom;
+                running = false; pump();
+            };
+            restTimer = setTimeout(restResume, rest);
+        });
+    };
+    const enqueueOne = function (tensors) {
+        return new Promise(function (resolve, reject) { queue.push({ tensors: tensors, resolve: resolve, reject: reject, at: performance.now() }); pump(); });
+    };
+    return {
+        enqueue: function (tensors) {
+            if (tensors.length <= maxBatch) return enqueueOne(tensors);
+            const parts = [];
+            for (let i = 0; i < tensors.length; i += maxBatch) parts.push(enqueueOne(tensors.slice(i, i + maxBatch)));
+            return Promise.all(parts).then(function (rs) {
+                const out = [].concat.apply([], rs);
+                // one tag only if every part agrees: a split across the WebNN trial's switch has none
+                if (rs.every(function (r) { return r.tag === rs[0].tag; })) out.tag = rs[0].tag;
+                return out;
+            });
+        },
+        endRest: function () { if (restResume) restResume(); },
+    };
+}
+
 /**
  * A run's timing as numbers a person can act on. `gpuBusyPct` is the share of the
  * run's wall time spent inside model runs + readback: near 100% means the GPU is
@@ -796,7 +923,10 @@ export function formatEmbedTiming(t) {
     return Math.round(t.cropsPerS) + ' crops/s over ' + t.seconds.toFixed(0) + ' s · ' + (cpu ? 'model busy ' : 'GPU busy ') + Math.round(t.gpuBusyPct) + '% (' +
         t.batches + ' batches of ~' + Math.round(t.avgBatch) + ', ' + t.modelMsPerCrop.toFixed(1) + ' ms/crop) · per frame: decode ' +
         Math.round(t.decodeMsPerFrame) + ' ms, crop ' + Math.round(t.cropMsPerFrame) + ' ms, queue ' + Math.round(t.queueMsPerFrame) + ' ms' +
-        ' · ' + (cpu ? 'CPU (' + t.workers + ' workers)' : t.backend === 'webnn' ? 'WebNN' : 'WebGPU') + (t.dtype ? ' ' + t.dtype : '') + formatKeyframes(t.keyframes) + formatCached(t);
+        ' · ' + (cpu ? 'CPU (' + t.workers + ' workers)' : t.backend === 'webnn' ? 'WebNN' : 'WebGPU') + (t.dtype ? ' ' + t.dtype : '') +
+        (t.maxGpuPct != null && t.maxGpuPct < 100 ? ' · GPU time capped at ' + Math.round(t.maxGpuPct) + '% (' + Math.round(t.restS || 0) + ' s idle)' : '') +
+        (t.maxCpuPct != null && t.maxCpuPct < 100 ? ' · CPU capped at ' + t.threads + ' of ' + t.cores + ' cores' : '') +
+        formatKeyframes(t.keyframes) + formatCached(t);
 }
 
 function formatCached(t) {
@@ -822,10 +952,10 @@ function formatKeyframes(k) {
  * the pool stops taking new ones (`broken`), so the caller falls back inline.
  * `clock` (createBusyClock, optional) is told while each worker holds a job, for the CPU load.
  */
-export function createCropPool(clock) {
+export function createCropPool(clock, count) {
     const forced = typeof window !== 'undefined' ? window.LUCID_CROP_WORKERS : undefined;
     const hc = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 1;
-    const n = forced != null ? Math.max(0, forced | 0) : Math.max(0, Math.min(hc - 1, 8));
+    const n = forced != null ? Math.max(0, forced | 0) : count != null ? Math.max(0, count | 0) : Math.max(0, Math.min(hc - 1, 8));
     if (n < 1 || typeof Worker !== 'function') return null;
     const workers = [], pending = new Map();
     let nextId = 1;
@@ -991,7 +1121,10 @@ function assembleItems(nItems, entries, cams) {
  * async `(data, n) -> n vectors`, tagged 'test' in the cache.
  * @param {Session} session
  * @param {{onStatus?: function(string), maxViewsPerAnimal?: number, webnn?: boolean|'force',
- *          device?: 'auto'|'webgpu'|'cpu', cpuWorkers?: number, cache?: boolean, model?: function}} [opts]
+ *          device?: 'auto'|'webgpu'|'cpu', cpuWorkers?: number, cache?: boolean, model?: function,
+ *          maxGpuPct?: number, maxCpuPct?: number}} [opts]
+ *   `maxGpuPct` / `maxCpuPct`: the compute caps (%, IMAGE_CAP_MIN..100; default 100 = uncapped) — see
+ *   paceRestMs and imageCheckThreads. `opts.cpuWorkers` still overrides the model-worker count.
  * @returns {Promise<{getEmbeddings: function, prepareFrames: function, releaseFrames: function, backend: function,
  *          device: function, busyMs: function, cpuBusyMs: function, sampleCrops: function, views: string[]}>}
  */
@@ -1009,12 +1142,15 @@ export async function createImageEmbedder(session, opts) {
     let T = null, model = null, device = null, dtype = 'fp32', adapter = where.adapter, cpu = null, cpuWorkers = 0;
     // the CPU threads' busy time (cpuBusyMs): crop workers, CPU model workers, and crops cut on the main thread
     const cpuClock = createBusyClock();
+    // the compute caps (imageCheckThreads, paceRestMs): the user's share of the GPU and the CPU
+    const maxGpuPct = capPct(opts.maxGpuPct), maxCpuPct = capPct(opts.maxCpuPct);
+    const nav = typeof navigator !== 'undefined' ? navigator : {};
+    const threads = imageCheckThreads(nav.hardwareConcurrency, nav.deviceMemory, maxCpuPct, where.kind === 'cpu');
     if (where.kind === 'webgpu') ({ T, model, device, dtype, adapter } = await loadImageModel(opts.onStatus));
     else if (testModel) dtype = null;
     else {
         if (opts.onStatus) opts.onStatus('No GPU (' + where.why + ') — loading the image model to run on the CPU (' + 2 * IMAGE_MODEL_MB + ' MB on first use, cached afterwards)…');
-        const nav = typeof navigator !== 'undefined' ? navigator : {};
-        cpu = await createCpuModelPool(opts.cpuWorkers > 0 ? Math.floor(opts.cpuWorkers) : cpuModelWorkerCount(nav.hardwareConcurrency, nav.deviceMemory), opts.onStatus, cpuClock);
+        cpu = await createCpuModelPool(opts.cpuWorkers > 0 ? Math.floor(opts.cpuWorkers) : threads.model, opts.onStatus, cpuClock);
         cpuWorkers = cpu.size;
     }
     // WebNN (opt-in, experimental): embed the first frames on both backends, then keep the faster consistent one
@@ -1034,7 +1170,7 @@ export async function createImageEmbedder(session, opts) {
     const SZ = 3 * INPUT * INPUT;
     // timing breakdown for this run (stats()): where the time goes, measured on the user's machine
     const tm = { frames: 0, crops: 0, batches: 0, t0: 0, t1: 0, decodeMs: 0, cropMs: 0, queueMs: 0, runMs: 0, readMs: 0, maxBatch: 0, busySince: 0,
-                 cachedCrops: 0, cachedFrames: 0, cacheLookupMs: 0 };
+                 restMs: 0, cachedCrops: 0, cachedFrames: 0, cacheLookupMs: 0 };
     // which model produced a batch of vectors: the cache keeps each vector under its producer
     const tagged = function (vecs, tag) { vecs.tag = tag; return vecs; };
     // busySince: when the model run in flight started (0: none) — busyMs() counts it while it runs
@@ -1150,34 +1286,12 @@ export async function createImageEmbedder(session, opts) {
         });
         return crops;
     };
-    // ---- Batching. Model runs are serialised, but each takes EVERY crop that has queued up meanwhile
-    // (up to EMBED_MAX_BATCH): the first frame runs alone, and while it runs the next frames' crops
-    // accumulate into a bigger batch. With the check keeping EMBED_IN_FLIGHT frames in flight, the GPU
-    // gets the next batch as soon as it finishes one instead of waiting on one frame's decode + crop.
-    const queue = [];
-    let running = false;
-    const pump = function () {
-        if (running || !queue.length) return;
-        const take = [];
-        let n = 0;
-        while (queue.length && (n === 0 || n + queue[0].tensors.length <= EMBED_MAX_BATCH)) { const q = queue.shift(); take.push(q); n += q.tensors.length; }
-        running = true;
-        const now = performance.now();
-        take.forEach(function (q) { tm.queueMs += now - q.at; });
-        const data = new Float32Array(n * SZ);
-        let at = 0;
-        take.forEach(function (q) { q.tensors.forEach(function (t) { data.set(t, at); at += SZ; }); });
-        tm.batches++; tm.maxBatch = Math.max(tm.maxBatch, n);
-        embed(data, n).then(function (vecs) {
-            let k = 0;
-            take.forEach(function (q) { q.resolve(tagged(vecs.slice(k, k + q.tensors.length), vecs.tag)); k += q.tensors.length; });
-        }, function (err) {
-            take.forEach(function (q) { q.reject(err); });
-        }).then(function () { running = false; pump(); });
-    };
-    const enqueue = function (tensors) {
-        return new Promise(function (resolve, reject) { queue.push({ tensors: tensors, resolve: resolve, reject: reject, at: performance.now() }); pump(); });
-    };
+    // ---- Batching (createModelQueue): with the check keeping EMBED_IN_FLIGHT frames in flight, the GPU gets
+    // the next batch as soon as it finishes one instead of waiting on one frame's decode + crop. The GPU cap
+    // idles after each full batch; on the CPU path the cap is the thread count instead. Each frame's
+    // vectors come back tagged with the model that made them (`tag`), which the cache stores them under.
+    const modelQueue = createModelQueue(embed, SZ, tm, { maxBatch: EMBED_MAX_BATCH, maxGpuPct: cpu ? 100 : maxGpuPct });
+    const enqueue = modelQueue.enqueue;
     // A view's keyframes (null: off or unknown). opts.keyframes may be a function (decoder -> keyframe indices):
     // a test / benchmark hook
     const viewKeyframes = function (v) {
@@ -1259,7 +1373,7 @@ export async function createImageEmbedder(session, opts) {
         };
         let tensors;
         try {
-            if (jobs.length && !pool && pool !== null) pool = createCropPool(cpuClock);
+            if (jobs.length && !pool && pool !== null) pool = createCropPool(cpuClock, threads.crop);
             tensors = await Promise.all(jobs.map(async function (job) {
                 if (!pool || pool.broken) return inline(job);
                 const im = images[job.vi];
@@ -1331,6 +1445,8 @@ export async function createImageEmbedder(session, opts) {
         stats: function () {
             const t = summarizeEmbedTiming(tm, backend, backend === 'webnn' ? 'fp16' : dtype);
             t.keyframes = summarizeKeyframePlans(plans);
+            t.maxGpuPct = cpu ? null : maxGpuPct; t.restS = tm.restMs / 1000;
+            t.maxCpuPct = maxCpuPct; t.threads = (cpu ? cpuWorkers : 0) + threads.crop; t.cores = threads.cores;
             if (cpu) t.workers = cpuWorkers;
             return t;
         },
@@ -1414,6 +1530,10 @@ export async function createImageEmbedder(session, opts) {
             if (trial) { const d = chooseBackend(trial); note = d.note.replace(/ — using WebNN/, ' — WebNN would have been used'); trial = null; }
             dropWebNN();
             if (cpu) cpu.terminate();                      // ~600 MB each: not kept between runs (reloading is ~1 s from cache)
+            // a rest in progress ends now, so work queued behind it settles instead of waiting out the timer. LAST:
+            // ended before the CPU workers are terminated, it would start a run on a worker terminate() then
+            // kills — and the pool does not reject a job in flight, so that run would never settle
+            modelQueue.endRest();
         },
         /** Which model backend embedded the crops, and why (for the dialog). */
         backend: function () { return { name: backend, note: note }; },

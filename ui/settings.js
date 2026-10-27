@@ -413,6 +413,21 @@ const TRACKING_THRESHOLDS = [
         desc: 'Embed only each animal\'s N views where it appears largest (0 = every view it is visible in). The model is the slow part, so time scales with this: 3 views ran 2.5x faster than all 8 with the same accuracy; 2 starts to cost accuracy.',
     },
     {
+        // A whole percentage (1-100). New ids, as each time the scale changed (the unreleased
+        // imageCheckMaxGpu/Cpu were 10-100, then imageCheckGpuTime/CpuCores 0.10-1.00), so a value saved on
+        // an earlier scale is never read on this one — a stored 0.5 would otherwise become 1%.
+        id: 'imageCheckGpuTimePct', label: 'Image check: GPU time (%)', default: 80,
+        min: 1, max: 100, step: 1,
+        desc: 'The share of time the image check may use the GPU (or WebNN device); the rest is left for other apps.',
+        tip: 'Fraction of GPU time to run image check, idling the remaining time.',
+    },
+    {
+        id: 'imageCheckCpuCoresPct', label: 'Image check: CPU cores (%)', default: 80,
+        min: 1, max: 100, step: 1, note: cpuCoresNote,
+        desc: 'The share of this computer\'s cores the image check may use; the rest are left for other apps.',
+        tip: 'Fraction of CPU cores to run image check, the remaining cores are left free.',
+    },
+    {
         id: 'imageCheckWebNN', label: 'Image check: try WebNN (experimental)', default: 0,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
         desc: 'Also try the browser\'s WebNN API, which on Windows can use NVIDIA tensor cores (Chrome: enable chrome://flags/#web-machine-learning-neural-network). The first frames are embedded both ways; WebNN is kept only if it is faster and its embeddings match the calibrated WebGPU model. "About these flags" in the ID Switches tab says which was used. On macOS (Chrome 154) it measured ~10x slower, CPU only, so the trial keeps WebGPU there.',
@@ -423,6 +438,23 @@ const TRACKING_THRESHOLDS = [
         desc: 'Robust triangulation: after an initial 3D solve, drop any 2D node whose reprojection error in a view exceeds this many pixels, then re-triangulate that node from the remaining reliable views. A node left with fewer than 2 reliable views is dropped from 3D. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless.',
     },
 ];
+
+/**
+ * What an `imageCheckCpuCoresPct` value (a percentage) means on this machine, for
+ * the note beside its field: "5 of 10 cores" — floor(cores x pct / 100), at least
+ * one, the budget ui/image-embedder.js `imageCheckThreads` gives the check.
+ */
+export function cpuCoresNote(pct, cores) {
+    const c = cores > 0 ? cores : (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 0;
+    const v = Number(pct);
+    if (!(c > 0) || !isFinite(v)) return '';
+    return Math.max(1, Math.floor(c * Math.min(100, Math.max(0, v)) / 100)) + ' of ' + c + ' cores';
+}
+
+/** A setting's value as its field shows it: `decimals` places when the setting has them (0.50), else as is. */
+export function formatThresholdValue(def, v) {
+    return def && def.decimals > 0 && typeof v === 'number' && isFinite(v) ? v.toFixed(def.decimals) : String(v);
+}
 
 const _thrById = new Map();
 TRACKING_THRESHOLDS.forEach(function (t) { _thrById.set(t.id, t); });
@@ -436,9 +468,21 @@ const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore', 'filterMinMeanNodeScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
     'stale', 'matchGate', 'maxPenalty', 'matchReproj',
-    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz', 'imageCheckMaxViews', 'imageCheckWebNN',
+    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz', 'imageCheckMaxViews',
+    'imageCheckGpuTimePct', 'imageCheckCpuCoresPct', 'imageCheckWebNN',
     'reprojErrorThreshold',
 ]);
+
+/**
+ * The Tracking Wizard settings shown in its own "ID Switches" section rather than
+ * under Tracking Thresholds, in this order: the two after-tracking checks, then the
+ * image check's options. They configure the checks run AFTER tracking, not the
+ * tracker's matching.
+ */
+export const ID_SWITCH_SETTING_IDS = [
+    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz',
+    'imageCheckMaxViews', 'imageCheckGpuTimePct', 'imageCheckCpuCoresPct', 'imageCheckWebNN',
+];
 
 // Clamp a value to a threshold's [min, max] range, or null if not a number.
 function clampThreshold(def, v) {
@@ -459,6 +503,7 @@ export function getTrackingThresholdDefs() {
             id: t.id, label: t.label, default: t.default,
             value: getTrackingThreshold(t.id),
             min: t.min, max: t.max, step: t.step, desc: t.desc, kind: t.kind || 'number',
+            decimals: t.decimals || 0, note: t.note || null, tip: t.tip || '',
         };
     });
 }

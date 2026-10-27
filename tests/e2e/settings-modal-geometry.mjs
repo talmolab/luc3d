@@ -125,11 +125,24 @@ try {
             open: d.open,
             tag: d.tagName,
         })));
-    check(sections.length === 3 && sections.every(s => s.tag === 'DETAILS' && s.open),
-        `three <details> sections, all open by default (${JSON.stringify(sections.map(s => [s.title, s.open]))})`);
-    check(sections.length === 3 &&
+    check(sections.length === 4 && sections.every(s => s.tag === 'DETAILS' && s.open),
+        `four <details> sections, all open by default (${JSON.stringify(sections.map(s => [s.title, s.open]))})`);
+    check(sections.length === 4 &&
         sections[0].count === String(NODE_COUNT) && sections[1].count === '8',
         `each carries its row count (${JSON.stringify(sections.map(s => s.count))})`);
+    // the ID-switch checks' settings have their own section after Tracking Thresholds, and are not in it
+    const idSec = await page.evaluate(async () => {
+        const S = await import('/ui/settings.js');
+        const d = [...document.querySelectorAll('.settings-section')].map(x => ({
+            title: x.querySelector('.settings-section-title').textContent,
+            ids: [...x.querySelectorAll('.settings-threshold-row')].map(r => r.dataset.setting) }));
+        return { titles: d.map(x => x.title), th: d.find(x => x.title === 'Tracking Thresholds'), id: d.find(x => x.title === 'ID Switches'), want: S.ID_SWITCH_SETTING_IDS };
+    });
+    check(idSec.titles[2] === 'Tracking Thresholds' && idSec.titles[3] === 'ID Switches' &&
+        JSON.stringify(idSec.id.ids) === JSON.stringify(idSec.want) && sections[3].count === String(idSec.want.length),
+        `an "ID Switches" section after Tracking Thresholds holds the ${idSec.want.length} ID-switch settings, in order (${idSec.id && idSec.id.ids.join(', ')})`);
+    check(idSec.th.ids.length > 0 && !idSec.th.ids.some(id => idSec.want.includes(id)) && sections[2].count === String(idSec.th.ids.length),
+        `…and Tracking Thresholds no longer lists them (${idSec.th.ids.length} rows: ${idSec.th.ids.join(', ')})`);
 
     const folded = await page.evaluate(async () => {
         const panel = document.querySelector('.settings-panel-container');
