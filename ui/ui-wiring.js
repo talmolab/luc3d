@@ -66,6 +66,7 @@ import { TRAIL_PRESETS, MAX_TRAIL_FRAMES, trailPresetFor, trailLabel, trailFrame
          setTrailSeconds, onTrailSecondsChange } from './trail-presets.js';
 import { TRAIL_SHADES, TRACK_COLORS, trailShadeFor, trailColor } from './overlays.js';
 import { installSeekbarTooltip } from './seekbar-tooltip.js';
+import { installSeekbarPreview } from './seekbar-preview.js';
 import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js';
 import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js';
 import { installSeekbarTicks, refreshSeekbarTicks } from './seekbar-ticks.js';
@@ -1984,6 +1985,16 @@ export function setupUI() {
                 return m ? { frame: m.frame, text: describeSwitchMarker(m) } : null;
             },
             hoverLine: document.getElementById('seekbarHoverLine'),
+            // The selected view at that frame: the solo view, else the active
+            // pane's (.video-selected), else the first — not lastInteractedView,
+            // which follows the pointer across whichever views it passed on its
+            // way down to the bar.
+            preview: installSeekbarPreview(seekbar, {
+                getView: function () {
+                    if (state.viewMode === 'single' && state.views[state.singleViewIndex]) return state.views[state.singleViewIndex];
+                    return getActiveView() || state.views[0] || null;
+                },
+            }),
         });
 
         var _seekThrottle = { lastRender: 0, timer: null, pendingFrame: null };
