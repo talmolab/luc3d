@@ -29,7 +29,7 @@
  * Range collects the count in its own dialog and never reaches this one.
  */
 
-import { setInfoTip, ICON_INFO } from './info-tip.js?v=eb797d862958';
+import { setInfoTip, ICON_INFO } from './info-tip.js?v=6bb31cee0eb0';
 
 /**
  * Show the dialog. Resolves with the answer on Continue / Enter, or `null` on
@@ -279,7 +279,7 @@ export function buildNodeWeightFields(nodes) {
  * Track All, in the order the dialog shows them: the on/off switch first.
  */
 export const IMAGE_CHECK_IDS = [
-    'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckGpuTime', 'imageCheckCpuCores', 'imageCheckWebNN',
+    'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckGpuTimePct', 'imageCheckCpuCoresPct', 'imageCheckWebNN',
 ];
 
 /**

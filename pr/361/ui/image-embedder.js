@@ -45,11 +45,11 @@
  * spawns ui/image-crop-worker.js and ui/image-model-worker.js.
  */
 
-import { state } from './app-state.js?v=eb797d862958';
-import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=eb797d862958';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=eb797d862958';
-import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js?v=eb797d862958';
-import { EmbeddingCache, cropKeyHash, hullsReachingCrop } from '../pose/embedding-cache.js?v=eb797d862958';
+import { state } from './app-state.js?v=6bb31cee0eb0';
+import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=6bb31cee0eb0';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=6bb31cee0eb0';
+import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js?v=6bb31cee0eb0';
+import { EmbeddingCache, cropKeyHash, hullsReachingCrop } from '../pose/embedding-cache.js?v=6bb31cee0eb0';
 
 // The load meter now lives in ui/load-graph.js (shared with the loading overlay); still exported from here.
 export { createLoadMeter };
@@ -243,7 +243,7 @@ export async function createCpuModelPool(count, onStatus, clock) {
                 try { slot.w.terminate(); } catch (e) { /* ignore */ }
                 reject(err);                                     // no-op once started
             };
-            try { slot.w = new Worker(new URL('./image-model-worker.js?v=eb797d862958', import.meta.url), { type: 'module' }); }
+            try { slot.w = new Worker(new URL('./image-model-worker.js?v=6bb31cee0eb0', import.meta.url), { type: 'module' }); }
             catch (e) { reject(e); return; }
             slot.w.onerror = function (e) {
                 if (e && e.preventDefault) e.preventDefault();
@@ -713,8 +713,8 @@ export const EMBED_MAX_BATCH = 64;
  */
 export const EMBED_IN_FLIGHT = 8;
 
-/** The lowest cap the image check takes (%; the `imageCheckGpuTime` / `imageCheckCpuCores` settings' minimum, 0.10). */
-export const IMAGE_CAP_MIN = 10;
+/** The lowest cap the image check takes (%; the `imageCheckGpuTimePct` / `imageCheckCpuCoresPct` settings' minimum). */
+export const IMAGE_CAP_MIN = 1;
 
 /** A cap as a percentage in IMAGE_CAP_MIN..100; anything not a positive number is 100, the uncapped check. */
 export function capPct(pct) {
@@ -724,8 +724,8 @@ export function capPct(pct) {
 
 /*
  * The compute caps. The share of the GPU and of the CPU the image check may use is
- * the user's to set (`imageCheckGpuTime`, `imageCheckCpuCores`: fractions, 0.50 by
- * default, passed in here as percentages), so that what it does
+ * the user's to set (`imageCheckGpuTimePct`, `imageCheckCpuCoresPct`: whole
+ * percentages, 50 by default), so that what it does
  * not take is left for other work on the machine — held even when nothing else
  * wants it. No browser API gives a page a share of either, so the check takes its
  * share by how it runs: the GPU by idling after each full batch (paceRestMs), the
@@ -924,7 +924,7 @@ export function formatEmbedTiming(t) {
         t.batches + ' batches of ~' + Math.round(t.avgBatch) + ', ' + t.modelMsPerCrop.toFixed(1) + ' ms/crop) · per frame: decode ' +
         Math.round(t.decodeMsPerFrame) + ' ms, crop ' + Math.round(t.cropMsPerFrame) + ' ms, queue ' + Math.round(t.queueMsPerFrame) + ' ms' +
         ' · ' + (cpu ? 'CPU (' + t.workers + ' workers)' : t.backend === 'webnn' ? 'WebNN' : 'WebGPU') + (t.dtype ? ' ' + t.dtype : '') +
-        (t.maxGpuPct != null && t.maxGpuPct < 100 ? ' · GPU time capped at ' + (t.maxGpuPct / 100).toFixed(2) + ' (' + Math.round(t.restS || 0) + ' s idle)' : '') +
+        (t.maxGpuPct != null && t.maxGpuPct < 100 ? ' · GPU time capped at ' + Math.round(t.maxGpuPct) + '% (' + Math.round(t.restS || 0) + ' s idle)' : '') +
         (t.maxCpuPct != null && t.maxCpuPct < 100 ? ' · CPU capped at ' + t.threads + ' of ' + t.cores + ' cores' : '') +
         formatKeyframes(t.keyframes) + formatCached(t);
 }
@@ -984,7 +984,7 @@ export function createCropPool(clock, count) {
     };
     try {
         for (let i = 0; i < n; i++) {
-            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=eb797d862958', import.meta.url), { type: 'module' }), load: 0 };
+            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=6bb31cee0eb0', import.meta.url), { type: 'module' }), load: 0 };
             w.worker.onmessage = function (e) {
                 const p = pending.get(e.data.id); if (!p) return;
                 pending.delete(e.data.id); w.load--;

@@ -28,21 +28,21 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { noteProgress } from './progress-delta.js?v=eb797d862958';
-import { state, getActiveSession } from './app-state.js?v=eb797d862958';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=eb797d862958';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=eb797d862958';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=eb797d862958';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=eb797d862958';
-import { getTrackingThreshold } from './settings.js?v=eb797d862958';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=eb797d862958';
+import { noteProgress } from './progress-delta.js?v=6bb31cee0eb0';
+import { state, getActiveSession } from './app-state.js?v=6bb31cee0eb0';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=6bb31cee0eb0';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=6bb31cee0eb0';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=6bb31cee0eb0';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=6bb31cee0eb0';
+import { getTrackingThreshold } from './settings.js?v=6bb31cee0eb0';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=6bb31cee0eb0';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=eb797d862958';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=eb797d862958';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=eb797d862958';
+         inputTensorToPixels, INPUT } from './image-embedder.js?v=6bb31cee0eb0';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=6bb31cee0eb0';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=6bb31cee0eb0';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=eb797d862958';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=6bb31cee0eb0';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -316,8 +316,8 @@ async function runImage(session, rate, inject) {
     try {
         embedder = await (inject.createEmbedder || createImageEmbedder)(session, { onStatus: function (t) { prog.update(t, 0); },
             maxViewsPerAnimal: getTrackingThreshold('imageCheckMaxViews'),
-            maxGpuPct: 100 * getTrackingThreshold('imageCheckGpuTime'),
-            maxCpuPct: 100 * getTrackingThreshold('imageCheckCpuCores'),
+            maxGpuPct: getTrackingThreshold('imageCheckGpuTimePct'),
+            maxCpuPct: getTrackingThreshold('imageCheckCpuCoresPct'),
             webnn: getTrackingThreshold('imageCheckWebNN') > 0 });
         // What runs the model, and — once embedding starts, every second — how busy the check keeps the CPU and
         // the GPU, as two lines and a graph. The CPU's busy time is the embedder's threads plus the fit, which runs

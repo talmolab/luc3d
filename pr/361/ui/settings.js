@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=eb797d862958';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=6bb31cee0eb0';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -413,16 +413,17 @@ const TRACKING_THRESHOLDS = [
         desc: 'Embed only each animal\'s N views where it appears largest (0 = every view it is visible in). The model is the slow part, so time scales with this: 3 views ran 2.5x faster than all 8 with the same accuracy; 2 starts to cost accuracy.',
     },
     {
-        // A fraction (0.10-1.00), not a percentage: new ids rather than the unreleased imageCheckMaxGpu/Cpu
-        // (stored 10-100), so a value saved on the old scale cannot be read as 1.00 = uncapped.
-        id: 'imageCheckGpuTime', label: 'Image check: GPU time (%)', default: 0.5,
-        min: 0.1, max: 1, step: 0.05, decimals: 2,
+        // A whole percentage (1-100). New ids, as each time the scale changed (the unreleased
+        // imageCheckMaxGpu/Cpu were 10-100, then imageCheckGpuTime/CpuCores 0.10-1.00), so a value saved on
+        // an earlier scale is never read on this one — a stored 0.5 would otherwise become 1%.
+        id: 'imageCheckGpuTimePct', label: 'Image check: GPU time (%)', default: 50,
+        min: 1, max: 100, step: 1,
         desc: 'The share of time the image check may use the GPU (or WebNN device); the rest is left for other apps.',
         tip: 'Fraction of GPU time to run image check, idling the remaining time.',
     },
     {
-        id: 'imageCheckCpuCores', label: 'Image check: CPU cores (%)', default: 0.5,
-        min: 0.1, max: 1, step: 0.05, decimals: 2, note: cpuCoresNote,
+        id: 'imageCheckCpuCoresPct', label: 'Image check: CPU cores (%)', default: 50,
+        min: 1, max: 100, step: 1, note: cpuCoresNote,
         desc: 'The share of this computer\'s cores the image check may use; the rest are left for other apps.',
         tip: 'Fraction of CPU cores to run image check, the remaining cores are left free.',
     },
@@ -439,15 +440,15 @@ const TRACKING_THRESHOLDS = [
 ];
 
 /**
- * What an `imageCheckCpuCores` value means on this machine, for the note beside
- * its field: "5 of 10 cores" — floor(cores x value), at least one, the budget
- * ui/image-embedder.js `imageCheckThreads` gives the check.
+ * What an `imageCheckCpuCoresPct` value (a percentage) means on this machine, for
+ * the note beside its field: "5 of 10 cores" — floor(cores x pct / 100), at least
+ * one, the budget ui/image-embedder.js `imageCheckThreads` gives the check.
  */
-export function cpuCoresNote(value, cores) {
+export function cpuCoresNote(pct, cores) {
     const c = cores > 0 ? cores : (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 0;
-    const v = Number(value);
+    const v = Number(pct);
     if (!(c > 0) || !isFinite(v)) return '';
-    return Math.max(1, Math.floor(c * Math.min(1, Math.max(0, v)))) + ' of ' + c + ' cores';
+    return Math.max(1, Math.floor(c * Math.min(100, Math.max(0, v)) / 100)) + ' of ' + c + ' cores';
 }
 
 /** A setting's value as its field shows it: `decimals` places when the setting has them (0.50), else as is. */
@@ -468,7 +469,7 @@ const WIZARD_THRESHOLD_IDS = new Set([
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
     'stale', 'matchGate', 'maxPenalty', 'matchReproj',
     'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz', 'imageCheckMaxViews',
-    'imageCheckGpuTime', 'imageCheckCpuCores', 'imageCheckWebNN',
+    'imageCheckGpuTimePct', 'imageCheckCpuCoresPct', 'imageCheckWebNN',
     'reprojErrorThreshold',
 ]);
 
@@ -480,7 +481,7 @@ const WIZARD_THRESHOLD_IDS = new Set([
  */
 export const ID_SWITCH_SETTING_IDS = [
     'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz',
-    'imageCheckMaxViews', 'imageCheckGpuTime', 'imageCheckCpuCores', 'imageCheckWebNN',
+    'imageCheckMaxViews', 'imageCheckGpuTimePct', 'imageCheckCpuCoresPct', 'imageCheckWebNN',
 ];
 
 // Clamp a value to a threshold's [min, max] range, or null if not a number.

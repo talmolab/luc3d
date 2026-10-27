@@ -126,9 +126,9 @@ try {
             imageOptionsShown: !!m.querySelector('.track-setup-options') && !m.querySelector('.track-setup-options').hidden,
             imageOptions: [...m.querySelectorAll('.track-setup-options .settings-kbd-label, .track-setup-options .track-setup-switch-row')]
                 .map(e => e.textContent.trim()),
-            gpuTime: (m.querySelector('input[data-setting="imageCheckGpuTime"]') || {}).value,
-            cpuCores: (m.querySelector('input[data-setting="imageCheckCpuCores"]') || {}).value,
-            cpuNote: ((m.querySelector('input[data-setting="imageCheckCpuCores"]') || {}).parentElement?.querySelector('.settings-threshold-note') || {}).textContent,
+            gpuTime: (m.querySelector('input[data-setting="imageCheckGpuTimePct"]') || {}).value,
+            cpuCores: (m.querySelector('input[data-setting="imageCheckCpuCoresPct"]') || {}).value,
+            cpuNote: ((m.querySelector('input[data-setting="imageCheckCpuCoresPct"]') || {}).parentElement?.querySelector('.settings-threshold-note') || {}).textContent,
             rows: [...m.querySelectorAll('.track-setup-weights .settings-node-weight-row')].map(r => ({
                 name: r.querySelector('.settings-kbd-label').textContent,
                 value: r.querySelector('input').value,
@@ -146,7 +146,7 @@ try {
             identities: s.session.identities.length,
             dirty: s.isDirty === true,
             weights: settings.getNodeWeights(),
-            image: ['autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckGpuTime', 'imageCheckCpuCores', 'imageCheckWebNN']
+            image: ['autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckGpuTimePct', 'imageCheckCpuCoresPct', 'imageCheckWebNN']
                 .map(id => settings.getTrackingThreshold(id)),
             status: document.getElementById('statusText').textContent,
             summary: !!document.getElementById('trackSummaryOverlay'),
@@ -171,7 +171,7 @@ try {
         'a node weighted 0 is greyed out, as in the Tracking Wizard');
     check(d.imageSwitch === false && !d.imageOptionsShown,
         'the image ID-switch check is offered, off (the default), its options hidden');
-    const IMAGE_DEFAULTS = JSON.stringify([0, -0.8, 2, 3, 0.5, 0.5, 0]);
+    const IMAGE_DEFAULTS = JSON.stringify([0, -0.8, 2, 3, 50, 50, 0]);
     // The switch's own <input> is visually hidden; a user clicks its label.
     const imageSwitch = '.track-setup-modal .track-image-check-block > .track-setup-switch-row';
     await page.click(imageSwitch);
@@ -179,15 +179,15 @@ try {
     check(d.imageSwitch === true && d.imageOptionsShown &&
         JSON.stringify(d.imageOptions) === JSON.stringify(['Flag threshold', 'Crops per second', 'Views per animal', 'GPU time (%)', 'CPU cores (%)', 'Try WebNN (experimental)']),
         `switching it on shows its six options (${d.imageOptions.join(', ')})`);
-    check(d.gpuTime === '0.50' && d.cpuCores === '0.50' && /^\d+ of \d+ cores$/.test(d.cpuNote || ''),
-        `the two caps read as fractions to 2 places (${d.gpuTime}, ${d.cpuCores}), the CPU one with what it means here ("${d.cpuNote}")`);
+    check(d.gpuTime === '50' && d.cpuCores === '50' && /^\d+ of \d+ cores$/.test(d.cpuNote || ''),
+        `the two caps read as whole percentages (${d.gpuTime}, ${d.cpuCores}), the CPU one with what it means here ("${d.cpuNote}")`);
     {
         // GPU time and CPU cores share a row, Try WebNN starts the row under them; each cap has a short ⓘ
         const lay = await page.evaluate(() => {
             const row = id => document.querySelector(`.track-setup-modal .settings-node-weight-row[data-row="${id}"]`).getBoundingClientRect();
-            const g = row('imageCheckGpuTime'), c = row('imageCheckCpuCores'), w = row('imageCheckWebNN');
+            const g = row('imageCheckGpuTimePct'), c = row('imageCheckCpuCoresPct'), w = row('imageCheckWebNN');
             const tips = [...document.querySelectorAll('.track-setup-modal .track-setup-options [data-infotip]')].map(e => e.dataset.infotip);
-            const cpuLabel = document.querySelector('.track-setup-modal .settings-node-weight-row[data-row="imageCheckCpuCores"] .settings-kbd-label');
+            const cpuLabel = document.querySelector('.track-setup-modal .settings-node-weight-row[data-row="imageCheckCpuCoresPct"] .settings-kbd-label');
             return { sameRow: Math.abs(g.top - c.top) < 1 && c.left > g.left, webnnBelow: w.top >= g.bottom - 1 && Math.abs(w.left - g.left) < 1,
                      tips, cpuLabelWhole: cpuLabel.scrollWidth <= cpuLabel.clientWidth, cpuLabelTitle: cpuLabel.hasAttribute('title') };
         });
@@ -195,7 +195,7 @@ try {
         check(lay.tips.length === 2 && lay.tips.every(t => t.length <= 80 && /GPU|CPU/.test(t)) && !lay.cpuLabelTitle,
             `each cap has a short ⓘ instead of a native tooltip (${JSON.stringify(lay.tips)})`);
         check(lay.cpuLabelWhole, '"CPU cores (%)" is shown whole, not cut off by its note');
-        const btn = page.locator('.track-setup-modal .settings-node-weight-row[data-row="imageCheckGpuTime"] .info-tip-btn');
+        const btn = page.locator('.track-setup-modal .settings-node-weight-row[data-row="imageCheckGpuTimePct"] .info-tip-btn');
         const bb = await btn.boundingBox();
         await page.mouse.move(bb.x + bb.width / 2, bb.y + bb.height / 2);
         await page.mouse.move(bb.x + bb.width / 2 + 1, bb.y + bb.height / 2 + 1);
@@ -265,7 +265,7 @@ try {
     await page.waitForSelector('#trackSummaryOverlay', { timeout: 30000 });
     s = await appState();
     check(!(await dialog()), 'Enter closes it');
-    check(JSON.stringify(s.image) === JSON.stringify([1, -0.5, 3, 3, 0.5, 0.5, 0]),
+    check(JSON.stringify(s.image) === JSON.stringify([1, -0.5, 3, 3, 50, 50, 0]),
         `the image check is stored on, with the two edited options (${s.image})`);
     check(/ID-switch check \(images\): skipped — needs the session's videos/.test(s.status),
         'and this run attempted it (skipped: no videos are loaded)');
@@ -347,7 +347,7 @@ try {
     await page.keyboard.press('Escape');
     s = await appState();
     check(!(await page.$('.track-range-modal')) && s.weights.TailTip === 0 &&
-        JSON.stringify(s.image) === JSON.stringify([1, -0.5, 3, 3, 0.5, 0.5, 0]), 'Esc closes it and writes nothing (image check still on)');
+        JSON.stringify(s.image) === JSON.stringify([1, -0.5, 3, 3, 50, 50, 0]), 'Esc closes it and writes nothing (image check still on)');
     await openRange();
     await page.fill(rangeTail, '0.75');
     await page.fill('.track-range-modal input[data-setting="imageChangeThreshold"]', '-1');
@@ -356,7 +356,7 @@ try {
     await page.waitForSelector('.track-range-modal', { state: 'detached' });
     await page.waitForFunction(() => /identit/i.test(document.getElementById('statusText').textContent), null, { timeout: 30000 });
     s = await appState();
-    check(JSON.stringify(s.image) === JSON.stringify([1, -1, 3, 3, 0.5, 0.5, 0]), `Continue stores the edited threshold (${s.image})`);
+    check(JSON.stringify(s.image) === JSON.stringify([1, -1, 3, 3, 50, 50, 0]), `Continue stores the edited threshold (${s.image})`);
     check(/ID-switch check \(images\): skipped — needs the session's videos/.test(s.status),
         'and the range run attempted the check (skipped: no videos are loaded)');
     check(JSON.stringify(s.weights) === JSON.stringify({ TailMid: 0.25, TailTip: 0.75, otherSkeletonNode: 0.3 }),

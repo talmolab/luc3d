@@ -187,7 +187,7 @@ try {
     check(emb.samples.length === 4 && emb.samples.every(c => c.same) && new Set(emb.samples.map(c => c.id + c.camera)).size === 4,
           `one sample crop per frame, each bit-identical to the input embedded, rotating animal/camera (${emb.samples.map(c => 'f' + c.frame + ' id' + c.id + ' ' + c.camera).join(', ')})`);
 
-    // ---- 6. the CPU cap (imageCheckThreads, `imageCheckCpuCores`): fewer threads, all working, never resting
+    // ---- 6. the CPU cap (imageCheckThreads, `imageCheckCpuCoresPct`): fewer threads, all working, never resting
     check(!/capped/.test(emb.timing), 'with no caps given the embedder is uncapped (nothing capped in its summary)');
     const capped = await page.evaluate(async () => {
         const E = await import('/ui/image-embedder.js'), AS = await import('/ui/app-state.js');

@@ -18,7 +18,7 @@
  * `cls` is each crop's CLS token, exactly as the main thread's `clsVectors` reads it.
  */
 
-import { importTransformers, asModelDownloadFailure, IMAGE_MODEL_ID, IMAGE_MODEL_REVISION, INPUT } from './image-embedder.js?v=eb797d862958';
+import { importTransformers, asModelDownloadFailure, IMAGE_MODEL_ID, IMAGE_MODEL_REVISION, INPUT } from './image-embedder.js?v=6bb31cee0eb0';
 
 let T = null, model = null;
 
