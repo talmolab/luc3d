@@ -7,7 +7,7 @@
  * draw. It used to re-solve from the 2D whenever the group had no
  * `triangulationMethod` (Track All's provisional 3D) or a reprojection-error
  * threshold was set — drawing the unsmoothed answer, so the pass looked as if it
- * did nothing. Driven through the real dropdown item, on the shared BA rig
+ * did nothing. Driven through the real toolbar button, on the shared BA rig
  * fixture (2 px noise on every 2D observation, so a re-solve is measurably
  * different from the smoothed 3D):
  *   A. groups with no triangulation method (as Track All leaves them);
@@ -16,8 +16,9 @@
  *      pre-smoothing entry beside the refilled one);
  *   D. re-triangulating replaces the smoothed 3D, and the display re-solves again;
  *   E. a second run replaces the first (window 9 then 3 == window 3 alone),
- *      both windows at 0 restores the original 3D, and the menu item is blue
- *      (`.applied`) exactly while smoothing is applied.
+ *      both windows at 0 restores the original 3D, and the toolbar button is
+ *      blue (`.active`) exactly while smoothing is applied; its "This frame"
+ *      item runs one frame, and is lit only where that frame is smoothed.
  *
  * Run: node tests/e2e/temporal-smoothing-display.mjs
  */
@@ -74,7 +75,7 @@ try {
             S.setSmoothingParams({ smoothGaussianWindow: win, smoothMedianWindow: 0 });
             AS.state.currentFrame = MID;
             document.getElementById('statusText').textContent = '';
-            document.querySelector('#triangulateAllDropdown .tri-dropdown-item[data-method="smooth"]').click();
+            document.getElementById('tbSmooth').click();
         }, { MID, win });
         await waitStatus(/^Smoothed |^Removed |Temporal smoothing/);
         return page.evaluate(() => document.getElementById('statusText').textContent);
@@ -173,24 +174,50 @@ try {
         for (let f = 0; f < NF; f++) (TRI.getInstanceGroupsForFrame(f) || []).forEach(g => out.push(...g.points3d));
         return out;
     }, NF);
-    const blue = () => page.evaluate(() => ['triangulateDropdown', 'triangulateAllDropdown'].map(id => {
-        document.getElementById(id).dispatchEvent(new MouseEvent('mouseenter'));
-        return document.querySelector('#' + id + ' .tri-dropdown-item[data-method="smooth"]').classList.contains('applied');
-    }));
+    // [button blue, "This frame" lit], after a redraw like any frame change.
+    const blue = (frame = MID) => page.evaluate(async (frame) => {
+        (await import('/ui/rendering.js')).drawAllOverlays(frame);
+        (await import('/ui/app-state.js')).state.currentFrame = frame;
+        (await import('/ui/smoothing-button.js')).syncSmoothingButton();
+        return [document.getElementById('tbSmooth').classList.contains('active'),
+            document.querySelector('#smoothingDropdown [data-scope="frame"]').classList.contains('applied')];
+    }, frame);
     const same = (x, y) => x.length === y.length && x.every((v, i) => (Number.isNaN(v) && Number.isNaN(y[i])) || Math.abs(v - y[i]) < 1e-9);
     const raw = await snapshot();
-    check(JSON.stringify(await blue()) === '[false,false]', 'E. before smoothing, neither item is blue');
+    check(JSON.stringify(await blue()) === '[false,false]', 'E. before smoothing, the button is not blue');
     await smooth(9);
-    check(JSON.stringify(await blue()) === '[true,true]', 'E. after smoothing, both items are blue');
+    check(JSON.stringify(await blue()) === '[true,true]', 'E. after smoothing, the button and "This frame" are blue');
     await smooth(3);
     const nineThenThree = await snapshot();
     const msgOff = await smooth(0);
     check(/^Removed temporal smoothing from [\d,]+ poses/.test(msgOff), `E. both windows at 0 removes the smoothing ("${msgOff}")`);
     check(same(await snapshot(), raw), 'E. ...and gives back the original 3D exactly');
-    check(JSON.stringify(await blue()) === '[false,false]', 'E. ...and neither item is blue');
+    check(JSON.stringify(await blue()) === '[false,false]', 'E. ...and the button is no longer blue');
     await smooth(3);
     check(same(nineThenThree, await snapshot()), 'E. window 9 then window 3 == window 3 alone (runs replace, never stack)');
     check(!same(nineThenThree, raw), 'E. precondition: window 3 changed the 3D');
+
+    // "This frame" through its menu item: only that frame is written and lit.
+    await smooth(0);
+    await page.evaluate(async (MID) => {
+        (await import('/ui/settings.js')).setSmoothingParams({ smoothGaussianWindow: 3 });
+        (await import('/ui/app-state.js')).state.currentFrame = MID;
+        document.getElementById('statusText').textContent = '';
+        document.querySelector('#smoothingDropdown [data-scope="frame"]').click();
+    }, MID);
+    await waitStatus(/^Smoothed /);
+    const msgFrame = await page.evaluate(() => document.getElementById('statusText').textContent);
+    check(/^Smoothed 2 poses/.test(msgFrame), `E. "This frame" smooths the 2 poses on it ("${msgFrame}")`);
+    check(JSON.stringify(await blue(MID)) === '[true,true]', 'E. ...the button is blue and "This frame" is lit there');
+    check(JSON.stringify(await blue(MID + 1)) === '[true,false]', 'E. ...but not lit on the next frame');
+
+    // Re-triangulating everything turns the button back off, with no menu opened.
+    await page.evaluate(() => {
+        document.getElementById('statusText').textContent = '';
+        document.getElementById('tbTriangulateAll').click();
+    });
+    await waitStatus(/^(Triangulated|Grouped) /);
+    check(JSON.stringify(await blue(MID)) === '[false,false]', 'E. Triangulate All turns the button back off');
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

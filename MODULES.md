@@ -2387,7 +2387,10 @@ and the gather reads that copy (`unsmoothedPoints3d`), so window 60 then
 window 3 gives window 3's result. `unsmoothSession(session, {writeFrames})`
 copies it back and drops the mark (the "both windows 0" action);
 `hasSmoothed3d(session, frameIdx?)` says whether any group (on a frame, or
-anywhere) is smoothed. Not persisted: a reopened project's 3D is the smoothed
+anywhere) is smoothed; the session-wide answer walks only the frames a pass
+wrote (a per-session `WeakMap` set), dropping each one found no longer
+smoothed, because `ui/smoothing-button.js` asks on every overlay draw.
+Not persisted: a reopened project's 3D is the smoothed
 values, and only re-triangulating gets back to the unsmoothed 3D.
 `triangulationMethod` is deliberately UNTOUCHED: smoothing is
 orthogonal to which solver produced the points (a group can be BA-solved AND
@@ -6191,6 +6194,11 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   every frame and in every mode (planes are static scene geometry). Pinned by
   `tests/e2e/define-plane-mode.mjs`.
 
+  **The Group menu button and Temporal Smoothing are synced here too.**
+  `#tbGroupMenu` (the hover menu holding Group / Edit Group) is `.active` while
+  either item is, and `syncSmoothingButton()` (`ui/smoothing-button.js`)
+  re-derives the Temporal Smoothing button's blue state on every draw.
+
   **Defining Plane Mode's toolbar lock is re-asserted here.** `drawAllOverlays`
   RECOMPUTES `tbGroup.disabled` / `tbEditGroup.disabled` from the pose selection
   on every draw, so `applyPlaneModeToolbarLock()` (`ui/plane-toolbar-lock.js`,
@@ -6222,6 +6230,7 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `computeLazyCameraBaseline`, `createFrameCounterBaselineBuilder`,
   `countFrameCounters`, `nonResidentCameraCounts`, `refreshCountedFrame`.
 - `./plane-definition.js` — `drawPlaneOverlays`, `applyPlaneModeToolbarLock`.
+- `./smoothing-button.js` — `syncSmoothingButton` (every draw).
   **Circular** (that module imports `drawAllOverlays` back); safe because both
   call sites are inside function bodies.
 - `./animal-count-field.js` — `syncAnimalCountField`. **Circular** through
@@ -6331,7 +6340,9 @@ from the rest of the panel.
 Adding a button to the lock means adding its id to `PLANE_LOCKED_TOOLBAR_IDS`;
 if it opens a menu, its wrapper also needs `PLANE_LOCKED_DROPDOWN_IDS`, since a
 `.tri-dropdown` menu opens on hover and its items are `div`s, so `disabled` on
-the button reaches neither.
+the button reaches neither. Locked menus: Instance, Group, Triangulate,
+Triangulate All, Temporal Smoothing (the Instance and Group items are
+`<button>`s and are in the id list as well).
 
 **Imports** `planeState` from `ui/plane-definition.js` — circular, and safe only
 because the binding is read INSIDE the function body. **Imported by**
@@ -10449,29 +10460,40 @@ avoid the `initialization.js` → `ui-wiring.js` → modal cycle). The menu is
 pure `:hover`: in a test, a modal opening over the toolbar drops hover, so a
 second click must re-hover the button first (`tests/e2e/track-frame-range.mjs`).
 
-Both menus carry a third item below a separator, **Temporal Smoothing** (luc3d
-#134), handled by the private `runTemporalSmoothing(currentFrameOnly)`. It reads
-`getSmoothingParams()`; when both kernels are off it restores the pre-smoothing
-3D (`unsmoothSession`), or, with nothing smoothed, says so and opens Settings ▸
-Temporal Smoothing rather than silently doing nothing; otherwise it calls
-`smoothSession` (`pose/temporal-smoothing.js`; every run filters the
-pre-smoothing 3D, so it replaces the last; the status counts POSES, one per
-animal per frame), drops the `state.triangulationResults`
-entries of every group whose reprojections the pass cleared (the fill appends a
-fresh one, and the panel would average both), then `markDirty` +
-`drawAllOverlays` + `update3DViewport` + `updateInfoPanel`. Under `Triangulate`
-it passes `writeFrames: new Set([state.currentFrame])` — the whole trajectory is
-still READ (a filter needs neighbours on both sides), only the current frame is
+**Instance and Group are hover menus.** To save toolbar width, `+ Instance` /
+`- Instance` sit under an **Instance ▾** button (`#tbInstanceMenu`,
+`#instanceDropdown`) and `Group` / `Edit Group` under **Group ▾**
+(`#tbGroupMenu`, `#groupDropdown`), opening on `:hover` like Triangulate. The
+four items are still the original `<button>`s with their ids and handlers
+(`button.tri-dropdown-item` restyles them as rows), so `ui/rendering.js` keeps
+rewriting Group's label and both items' `disabled` / `.active`; it also turns
+`#tbGroupMenu` blue whenever either item is. Tab skips the items while the menu
+is closed; their shortcuts (`Mod+I`, `Delete`, `Shift+G`) still work.
+Covered by `tests/e2e/toolbar-hover-menus.mjs`.
+
+**Temporal Smoothing** (luc3d #134) is its own split button right after
+Triangulate All (`#tbSmooth`, `#smoothingDropdown`): a click smooths all
+frames; the hover menu has **All frames**, **This frame** and **Settings…**
+(`data-scope`). All run the private `runTemporalSmoothing(currentFrameOnly)`.
+It reads `getSmoothingParams()`; when both kernels are off it restores the
+pre-smoothing 3D (`unsmoothSession`), or, with nothing smoothed, says so and
+opens Settings ▸ Temporal Smoothing rather than silently doing nothing;
+otherwise it calls `smoothSession` (`pose/temporal-smoothing.js`; every run
+filters the pre-smoothing 3D, so it replaces the last; the status counts POSES,
+one per animal per frame), drops the `state.triangulationResults` entries of
+every group whose reprojections the pass cleared (the fill appends a fresh one,
+and the panel would average both), then `markDirty` + `drawAllOverlays` +
+`update3DViewport` + `updateInfoPanel`. "This frame" passes
+`writeFrames: new Set([state.currentFrame])` — the whole trajectory is still
+READ (a filter needs neighbours on both sides), only the current frame is
 WRITTEN. Synchronous, no progress modal: it touches only `points3d` on the
-already-resident `session.instanceGroups`, hydrating no 2D. The two items turn
-blue (`.tri-dropdown-item.applied`, toolbar on-state colours) while smoothing is
-applied — on the current frame under Triangulate, anywhere under Triangulate
-All — via `refreshSmoothingItems` (`hasSmoothed3d`), run on each menu's
-`mouseenter` and after each pass rather than tracked.
+already-resident `session.instanceGroups`, hydrating no 2D. The button is blue
+while smoothing is applied (`ui/smoothing-button.js`, synced on every overlay
+draw).
 
 `wireTriDropdown` passes the menu item's `data-method` through **verbatim** (it
-used to map any unrecognized value onto DLT, so the `smooth` item would have run
-a triangulation). Each `onPick` owns the mapping and must handle values it does
+used to map any unrecognized value onto DLT, so a new item would have run a
+triangulation). Each `onPick` owns the mapping and must handle values it does
 not expect.
 
 **The Animals field (`#tbNumAnimals`)** is wired by `wireAnimalCountField()`
@@ -11025,6 +11047,23 @@ browser-local), `renderRecordingInfo(session)` (called by `updateInfoPanel`),
 function, so the cycle through the info panel is hoist-safe).
 
 **Tests.** `tests/e2e/campy-session-folder.mjs`.
+
+### ui/smoothing-button.js
+
+**Purpose.** The toolbar's Temporal Smoothing button state (luc3d #134):
+`#tbSmooth` is blue (`.active`) while any 3D in the session is smoothed; in its
+menu, **All frames** is lit (`.applied`) the same way and **This frame** while
+the current frame's 3D is.
+
+**Key exports.** `syncSmoothingButton()` — re-derives that state from the
+session. Smoothing lapses by itself when a re-solve or edit replaces a group's
+3D (`isPoints3dSmoothed` keys the array), so nothing tracks it: `ui/rendering.js`
+calls this on every overlay draw and the pass calls it after running.
+`hasSmoothed3d` (`pose/temporal-smoothing.js`) keeps the per-draw cost small.
+
+**Imports.** `./app-state.js` (`state`), `../pose/temporal-smoothing.js`
+(`hasSmoothed3d`). **Imported by** `ui/rendering.js`, `ui/ui-wiring.js`.
+Covered by `tests/e2e/temporal-smoothing-display.mjs` §E.
 
 ### ui/section-state.js
 

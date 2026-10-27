@@ -76,7 +76,8 @@ import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangula
 import { getDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler,
          dispatchEvent, getActions, formatBinding, getSmoothingParams } from './settings.js';
 // luc3d #134: post-triangulation temporal smoothing of the 3D tracks.
-import { smoothSession, unsmoothSession, hasSmoothed3d, resolveSmoothingParams } from '../pose/temporal-smoothing.js';
+import { smoothSession, unsmoothSession, resolveSmoothingParams } from '../pose/temporal-smoothing.js';
+import { syncSmoothingButton } from './smoothing-button.js';
 import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js';
 import { showSettingsModal } from './settings-modal.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
@@ -2891,10 +2892,10 @@ export function setupUI() {
     // Settings default method. Choosing a menu item runs that specific method.
     // Implicit triangulation (the keyboard shortcut and the Edit menu) also uses
     // the Settings default method.
-    // Temporal Smoothing (luc3d #134) — the post-triangulation pass behind both
-    // dropdowns' third item. `currentFrameOnly` mirrors the Triangulate /
-    // Triangulate All split: the whole trajectory is always READ (a filter needs
-    // neighbours on both sides), but only the current frame is WRITTEN.
+    // Temporal Smoothing (luc3d #134) — the post-triangulation pass behind the
+    // toolbar button of that name, next to Triangulate All. `currentFrameOnly`
+    // is its "This frame" item: the whole trajectory is always READ (a filter
+    // needs neighbours on both sides), but only the current frame is WRITTEN.
     //
     // Runs synchronously. It touches only `points3d` on the already-resident
     // `session.instanceGroups` — no 2D hydration, no lazy sweep — so even the
@@ -2952,35 +2953,31 @@ export function setupUI() {
         drawAllOverlays(state.currentFrame);
         update3DViewport();
         updateInfoPanel();
-        refreshSmoothingItems();
+        syncSmoothingButton();
     }
 
-    // The Temporal Smoothing items turn blue (`.applied`) while smoothing is in
-    // effect: under Triangulate, on the current frame; under Triangulate All,
-    // anywhere in the session. Recomputed whenever a menu opens rather than
-    // tracked, since every re-solve or edit that drops smoothed 3D would
-    // otherwise have to report it.
-    function refreshSmoothingItems() {
-        [['triangulateDropdown', state.currentFrame], ['triangulateAllDropdown', undefined]].forEach(function (pair) {
-            var item = document.querySelector('#' + pair[0] + ' .tri-dropdown-item[data-method="smooth"]');
-            if (!item) return;
-            var on = hasSmoothed3d(state.session, pair[1]);
-            item.classList.toggle('applied', on);
-            item.title = on
-                ? 'Applied. Run again to replace it with the current settings; set both windows to 0 to remove it.'
-                : '';
+    // The Temporal Smoothing toolbar button: a click smooths every frame; its
+    // hover menu also runs the current frame or opens the settings. Its blue
+    // state is `syncSmoothingButton` (ui/smoothing-button.js).
+    var smoothBtn = document.getElementById('tbSmooth');
+    if (smoothBtn) smoothBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        runTemporalSmoothing(false);
+    });
+    document.querySelectorAll('#smoothingDropdown .tri-dropdown-item').forEach(function (item) {
+        item.addEventListener('click', function (e) {
+            e.stopPropagation();
+            var scope = item.getAttribute('data-scope');
+            if (scope === 'settings') showSettingsModal('smoothing');
+            else runTemporalSmoothing(scope === 'frame');
         });
-    }
-    ['triangulateDropdown', 'triangulateAllDropdown'].forEach(function (id) {
-        var dd = document.getElementById(id);
-        if (dd) dd.addEventListener('mouseenter', refreshSmoothingItems);
     });
 
     // NOTE: the menu item's `data-method` is passed through VERBATIM. It used to
     // be normalized here with `=== 'ba' ? 'ba' : 'dlt'`, which silently mapped
-    // every unrecognized value onto DLT — so adding the 'smooth' item would have
-    // run a triangulation instead of the smoothing pass, with no error. Each
-    // `onPick` now owns the mapping and must handle anything it does not expect.
+    // every unrecognized value onto DLT, so a new item would have run a
+    // triangulation instead of its own action, with no error. Each `onPick`
+    // owns the mapping and must handle anything it does not expect.
     function wireTriDropdown(dropdownId, buttonId, onPick) {
         var dropdown = document.getElementById(dropdownId);
         if (!dropdown) return;
@@ -3023,7 +3020,6 @@ export function setupUI() {
 
     // Triangulate current frame with the chosen (or default) method.
     wireTriDropdown('triangulateDropdown', 'tbTriangulate', function (method) {
-        if (method === 'smooth') { runTemporalSmoothing(true); return; }
         triangulateCurrentFrame(method === 'ba' ? 'ba' : 'dlt');
     });
 
@@ -3034,9 +3030,7 @@ export function setupUI() {
     // (or Settings ▸ Default Triangulation when given none), so without this an
     // explicit "DLT" pick would silently run as BA under a BA default.
     wireTriDropdown('triangulateAllDropdown', 'tbTriangulateAll', function (method) {
-        if (method === 'smooth') {
-            runTemporalSmoothing(false);
-        } else if (method === 'ba') {
+        if (method === 'ba') {
             triangulateAllFrames('ba');
         } else if (state.session && state.session.identities.length > 0) {
             groupByIdentityAndTriangulateAll('dlt');

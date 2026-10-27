@@ -217,20 +217,33 @@
         <div class="toolbar" id="toolbar">
             <div class="toolbar-group">
                 <button class="toolbar-btn active" id="tbSessions" title="Toggle Sessions sidebar">Sessions</button>
-                <button class="toolbar-btn" id="tbAddInstance" title="Add new instance (Ctrl+I)">+ Instance</button>
-                <button class="toolbar-btn" id="tbDeleteInstance" title="Delete selected instance (Del)">-
-                    Instance</button>
+                <!-- + Instance / - Instance (and Group / Edit Group below) share a
+                     menu that opens on hover, to save toolbar width. The items
+                     keep their ids and stay <button>s: ui/rendering.js rewrites
+                     Group's label and both Group items' disabled / .active. -->
+                <div class="tri-dropdown" id="instanceDropdown">
+                    <button class="toolbar-btn" id="tbInstanceMenu" aria-haspopup="menu"
+                        title="Add or delete an instance">Instance <span class="tri-caret">▾</span></button>
+                    <div class="tri-dropdown-menu" role="menu">
+                        <button class="tri-dropdown-item" id="tbAddInstance" role="menuitem" title="Add new instance (Ctrl+I)">+ Instance</button>
+                        <button class="tri-dropdown-item" id="tbDeleteInstance" role="menuitem" title="Delete selected instance (Del)">- Instance</button>
+                    </div>
+                </div>
             </div>
             <div class="toolbar-group">
-                <button class="toolbar-btn" id="tbGroup" title="Group selected instances (⇧G or C)">Group</button>
-                <button class="toolbar-btn" id="tbEditGroup" title="Edit selected group membership">Edit Group</button>
+                <div class="tri-dropdown" id="groupDropdown">
+                    <button class="toolbar-btn" id="tbGroupMenu" aria-haspopup="menu"
+                        title="Group, ungroup or edit a group">Group <span class="tri-caret">▾</span></button>
+                    <div class="tri-dropdown-menu" role="menu">
+                        <button class="tri-dropdown-item" id="tbGroup" role="menuitem" title="Group selected instances (⇧G or C)">Group</button>
+                        <button class="tri-dropdown-item" id="tbEditGroup" role="menuitem" title="Edit selected group membership">Edit Group</button>
+                    </div>
+                </div>
                 <div class="tri-dropdown" id="triangulateDropdown">
                     <button class="toolbar-btn" id="tbTriangulate" title="Triangulate selected group (t)">Triangulate<span class="tri-method"></span> <span class="tri-caret">▾</span></button>
                     <div class="tri-dropdown-menu">
                         <div class="tri-dropdown-item" data-method="dlt">DLT <span class="tri-dropdown-hint">Fast</span></div>
                         <div class="tri-dropdown-item" data-method="ba">Ref <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
-                        <div class="tri-dropdown-sep"></div>
-                        <div class="tri-dropdown-item" data-method="smooth">Temporal Smoothing <span class="tri-dropdown-hint">This frame</span></div>
                     </div>
                 </div>
                 <div class="tri-dropdown" id="triangulateAllDropdown">
@@ -238,8 +251,20 @@
                     <div class="tri-dropdown-menu">
                         <div class="tri-dropdown-item" data-method="dlt">DLT <span class="tri-dropdown-hint">Fast</span></div>
                         <div class="tri-dropdown-item" data-method="ba">Ref <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
+                    </div>
+                </div>
+                <!-- Temporal Smoothing (luc3d #134): a click smooths every frame;
+                     the hover menu also offers the current frame and the
+                     settings. Blue (.active) while smoothing is applied
+                     (ui/smoothing-button.js). -->
+                <div class="tri-dropdown" id="smoothingDropdown">
+                    <button class="toolbar-btn" id="tbSmooth" aria-haspopup="menu"
+                        title="Smooth the 3D tracks through time, all frames (windows: Settings ▸ Temporal Smoothing)">Temporal Smoothing <span class="tri-caret">▾</span></button>
+                    <div class="tri-dropdown-menu" role="menu">
+                        <div class="tri-dropdown-item" data-scope="all" role="menuitem">All frames</div>
+                        <div class="tri-dropdown-item" data-scope="frame" role="menuitem">This frame</div>
                         <div class="tri-dropdown-sep"></div>
-                        <div class="tri-dropdown-item" data-method="smooth">Temporal Smoothing <span class="tri-dropdown-hint">All frames</span></div>
+                        <div class="tri-dropdown-item" data-scope="settings" role="menuitem">Settings…</div>
                     </div>
                 </div>
                 <!-- Inside the Triangulate group so it stays on this side of the
