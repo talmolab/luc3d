@@ -13085,7 +13085,8 @@ each holding only one session's data at a time:
   same bytes), calling and awaiting `onProgress('frames', done, total,
   'camera frames')` after each 5,000-row window, over every store row being
   appended (one row per camera per frame). On the real 8-camera,
-  176,406-frame project this is the longest step of a save (13.9 s of 36 s).
+  176,406-frame project this is the longest step of a save: 23.8–24.7 s of
+  33.8–35.2 s, since the gzip of the 2D tables (`luc3d gzip`) is done here.
 
 **Shared-store re-save (lazy project reopen).** A session reopened via
 `SioLazyLoader.openProjectSlp` has `loader._sharedStore` set: ONE interleaved
@@ -13119,8 +13120,13 @@ dimensions. Covered by `tests/test-lazy-reopen.js`.
   written inside `openSlpWriter` without a break), `'frames'` (counted) and
   `'finish'` (uncounted: `close()` / `writeToSink()`). Every call is awaited,
   so the card paints a step before the vendored writer holds the main thread.
-  Measured on the real 8-camera, 176,406-frame project (1.8 GB, headless
-  Chromium on an M-series Mac): 6.7 / 7.7 / 13.9 / 6.1 s.
+  Measured on the real 8-camera, 176,406-frame project (headless Chromium on
+  an M-series Mac, four saves — two through the download path, two streamed
+  to a picked file — at commit f7b11af7, i.e. with the gzip of #385):
+  3.6–4.0 / 5.5–5.6 / 23.8–24.7 / 0.5–0.9 s, 33.8–35.2 s in all, writing
+  945,024,789 bytes (901 MB). Before #385 the same project took 6.7 / 7.7 /
+  13.9 / 6.1 s (36.0 s) and wrote 1.8 GB: compression moved time into
+  `'frames'` and out of `'finish'`, which hands over half as many bytes.
 
 **Calibration-only cameras** (in `session.cameras` but with no loaded lazy
 store) get a header `Camera`+`Video` (0-frame) and a cameraGroup slot so the
