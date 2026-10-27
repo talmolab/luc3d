@@ -279,6 +279,23 @@ eq(p.identities[0].share + '|' + p.identities[0].frac, '50.0%|0.5', 'identity sh
     q = planTrackSummary(lone, { brightness: C('na'), image: C('na'), size: C('na') });
     eq(q.checks.length, 0, 'one track: no check rows');
     ok(q.notes.length === 1 && /never detected/.test(q.notes[0]), 'fewer tracks than animals: an animal was never DETECTED (not "matched across views")');
+    // The review list (single-camera Track All's places to look at): counted, and reviewing them is the next step.
+    const listed = summarizeTrackedIdentities({
+        identities: [{ id: 0, name: 'id_0' }, { id: 1, name: 'id_1' }],
+        instanceGroups: new Map([[0, [{ identityId: 0 }, { identityId: 1 }]]]),
+    }, { frames: 24000, animals: 2, fps: 40, singleCamera: 'Camera0', reviewPlaces: 9 });
+    const scL = (brightness) => planTrackSummary(listed, { brightness, image: C('off'), size: off });
+    q = scL(C('clear', { switches: 0, encounters: 34, moments: 4 }));
+    const tr = q.stats.find(x => x.label === 'To review');
+    eq(tr && tr.value + '|' + tr.detail, '9 places|0.9 a minute', 'the review list is counted, with its rate (9 places in 10 minutes)');
+    eq(q.primary.action + '|' + q.primary.label, 'review|Review the list', 'nothing flagged but places listed: reviewing them is the next step, not saving');
+    ok(/9 places most likely to hold a switch/.test(q.next.headline) && q.next.caveat == null, 'its headline says how many, without the "checks miss" caveat');
+    eq(q.secondary.map(x => x.action).join(','), 'imageCheck,sizeCheck', 'and still offers the checks not run');
+    q = scL(C('found', { switches: 1, encounters: 34, moments: 4 }));
+    ok(q.primary.action === 'review' && /with the 9 places on the review list/.test(q.next.steps[0]), 'a switch flagged too: one review, of both');
+    ok(!planTrackSummary(summarizeTrackedIdentities({ identities: [{ id: 0, name: 'id_0' }, { id: 1, name: 'id_1' }], instanceGroups: new Map() },
+        { frames: 10, animals: 2, singleCamera: 'Camera0' }), { brightness: C('off'), image: C('off'), size: off }).stats.some(x => x.label === 'To review'),
+        'no review list: no line for it');
     eq(plan(two, C('clear', { switches: 0, encounters: 40 }), C('off')).primary.action, 'triangulate', 'several cameras: unchanged, Triangulate All');
 }
 

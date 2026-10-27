@@ -2985,6 +2985,11 @@ body {
 .seekbar-mark.cue-brightness { background: #c77dff; }
 .seekbar-mark.cue-both-size-brightness { background: linear-gradient(to bottom, #ffb020 50%, #c77dff 50%); }
 .seekbar-mark.cue-both-image-brightness { background: linear-gradient(to bottom, #4cc9f0 50%, #c77dff 50%); }
+/* The single-camera review list: places to look, not a check's flags — grey, apart from the three checks' hues. */
+.seekbar-mark.cue-review { background: #9aa5b1; }
+.seekbar-mark.cue-both-size-review { background: linear-gradient(to bottom, #ffb020 50%, #9aa5b1 50%); }
+.seekbar-mark.cue-both-image-review { background: linear-gradient(to bottom, #4cc9f0 50%, #9aa5b1 50%); }
+.seekbar-mark.cue-both-brightness-review { background: linear-gradient(to bottom, #c77dff 50%, #9aa5b1 50%); }
 .seekbar-mark.is-follow { opacity: 0.7; height: 12px; }
 .seekbar-mark.is-repeat { opacity: 0.4; width: 2px; height: 10px; box-shadow: none; }
 .seekbar-mark.is-reviewed { opacity: 0.3; }
@@ -7457,6 +7462,11 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-row.cue-brightness { border-left-color: #c77dff; }
 .id-switch-row.cue-both-size-brightness { border-image: linear-gradient(to right, #ffb020 50%, #c77dff 50%) 1; }
 .id-switch-row.cue-both-image-brightness { border-image: linear-gradient(to right, #4cc9f0 50%, #c77dff 50%) 1; }
+.id-switch-row.cue-review { border-left-color: #9aa5b1; }
+.id-switch-row.cue-both-size-review { border-image: linear-gradient(to right, #ffb020 50%, #9aa5b1 50%) 1; }
+.id-switch-row.cue-both-image-review { border-image: linear-gradient(to right, #4cc9f0 50%, #9aa5b1 50%) 1; }
+.id-switch-row.cue-both-brightness-review { border-image: linear-gradient(to right, #c77dff 50%, #9aa5b1 50%) 1; }
+.id-switch-pair-pick { font: inherit; margin: 0 2px; }
 .id-switch-row.is-repeat .id-switch-main { opacity: 0.65; }
 .id-switch-row.is-reviewed .id-switch-main { opacity: 0.45; }
 .id-switch-row.is-reviewed .id-switch-pair { text-decoration: line-through; }

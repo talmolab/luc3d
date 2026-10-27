@@ -30,6 +30,12 @@
  *     are each kept by one of the two); user instances are never removed; and a
  *     lone animal that hops onto the tracks of SLEAP's copies of it without
  *     removal keeps one track with it, its partner entering on the other.
+ *  9. The review list: a handover is a LONE animal whose track changes in
+ *     place (not two animals exchanging in contact, not a track appearing far
+ *     away); Track All's `review` rows add handovers to the candidate moments
+ *     while the checks' `moments` keep none; the lone animal's hops are on the
+ *     list; a review row Fixes from the frame you are on to the end of the
+ *     video; and the rows survive the .slp checklist round trip.
  *
  * Run:  node tests/test-single-camera-tracking.mjs
  */
@@ -334,6 +340,74 @@ group('8. Duplicate removal (opt-in): box IoU AND OKS, before the tracker');
     L = lone();
     const off = await SCT.trackSingleCamera(L.S, cfg2, { duplicates: null });
     eq(off.duplicates, 0, 'duplicates: null is off');
+}
+
+group('9. The review list: handovers, rows, Fix plan, saved checklist');
+{
+    const RV = await imp('ui/id-switch-review.js');
+    const P = pts => Float64Array.from(pts.flatMap(p => p));
+    const at = (cx, cy) => NODES.map(n => [cx + T[n][0], cy + T[n][1]]);
+    const fr = (f, dets) => ({ frameIdx: f, dets: dets.map(([x, y]) => ({ points: P(at(x, y)), score: 0.9, isUser: false })) });
+    // (a) one animal, alone, standing still; its track changes 0 -> 1 at frame 30
+    let frames = [], out = [];
+    for (let f = 0; f < 60; f++) { frames.push(fr(f, [[300, 200]])); out.push([f < 30 ? 0 : 1]); }
+    let h = SCT.handoverCandidates(frames, out, 30);
+    ok(h.length >= 1 && h.every(c => c.cue === 'handover') && h[0].f === 30 && ((h[0].a === 1 && h[0].b === 0) || (h[0].a === 0 && h[0].b === 1)),
+        `a lone animal whose track changes in place is a handover at that frame (${JSON.stringify(h[0])}, ${h.length} in the next 0.5 s)`);
+    // (b) two animals in contact exchanging tracks: not alone, so no handover
+    frames = []; out = [];
+    for (let f = 0; f < 60; f++) { frames.push(fr(f, [[300, 200], [330, 205]])); out.push(f < 30 ? [0, 1] : [1, 0]); }
+    eq(SCT.handoverCandidates(frames, out, 30).length, 0, 'two animals exchanging tracks in contact are not a handover (the checks score contacts)');
+    // (c) one track appearing far from where the other was: no handover
+    frames = []; out = [];
+    for (let f = 0; f < 60; f++) { frames.push(fr(f, [f < 30 ? [100, 100] : [500, 400]])); out.push([f < 30 ? 0 : 1]); }
+    eq(SCT.handoverCandidates(frames, out, 30).length, 0, 'a track appearing far from the last detection is not a handover');
+
+    // The lone animal of §8 hopping onto its copies' tracks, without removal: the hops are on the review list.
+    const N = 900, ENTER = 600, walk = f => [600 + 300 * Math.sin(f / 30), 240 + 40 * Math.sin(f / 50)];
+    const at2 = (cx, cy, k = 1, hh = 0) => NODES.map(n => { const [x, y] = T[n], c = Math.cos(hh), si = Math.sin(hh); return [cx + k * (c * x - si * y), cy + k * (si * x + c * y)]; });
+    const c = new PD.Camera(CAM, [[600, 0, 320], [0, 600, 240], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [1280, 480]);
+    const S = new PD.Session([c], new PD.Skeleton('mouse', NODES, []), ['t0', 't1'], 'lone');
+    for (let f = 0; f < N; f++) {
+        const [x, y] = walk(f);
+        S.addUnlinkedInstance(f, CAM, new PD.Instance(at2(x, y), 0, 'predicted', 0.9));
+        if (f >= ENTER) S.addUnlinkedInstance(f, CAM, new PD.Instance(at2(1150, 400 - 0.2 * (f - ENTER), 1, Math.PI), 1, 'predicted', 0.9));
+        else if (f % 50 === 25) { const [nx, ny] = walk(f + 1); S.addUnlinkedInstance(f, CAM, new PD.Instance(at2(nx, ny), null, 'predicted', 0.7)); }
+    }
+    S.identities = []; S.frameIdentityMap = new Map();
+    const res = await SCT.trackSingleCamera(S, SCT.singleCameraTrackerConfig(2, {}), { fps: 30 });
+    const hops = []; let prev = null;
+    for (let f = 0; f < ENTER; f++) { const t = S.frameGroups.get(f).getUnlinkedInstances(CAM)[0].instance.trackIdx; if (prev != null && t !== prev) hops.push(f); prev = t; }
+    ok(hops.length > 0, `the fixture's lone animal changes track ${hops.length} times before its partner enters`);
+    const onList = hops.filter(f => res.review.some(m => f >= m.startFrame - 30 && f <= m.frame + 30));
+    eq(onList.length, hops.length, `every hop is within 1 s of a review row (${onList.length} of ${hops.length})`);
+    ok(res.review.some(m => m.cues.includes('handover')), 'the review rows include handovers');
+    ok(!res.moments.some(m => m.cues.includes('handover')), '…and the checks\' moments do not: they keep the candidates they were calibrated on');
+    ok(res.moments.every(m => res.review.some(r => r.identityA === m.identityA && r.identityB === m.identityB && r.frame >= m.frame)),
+        'every candidate moment is on the review list too');
+
+    const rr = SCT.reviewResult(res.review, S, 30);
+    ok(rr.ok && rr.cue === 'review' && rr.flags.length === res.review.length && rr.flags.every(m => m.kind === 'onset' && m.score === 0 &&
+        m.switchBackAt === null && m.look.length > 0 && m.cue === 'review' && /^id_\d$/.test(m.nameA)),
+        `reviewResult: one unscored onset row per review moment, named, with its cues (${rr.flags.length} rows)`);
+    const m0 = rr.flags[0], s0 = m0.startFrame, e0 = m0.frame;
+    let plan = RV.idSwitchFixPlan(m0, rr, { currentFrame: s0, totalFrames: N, window: [s0 - 60, e0 + 60] });
+    ok(plan.from === s0 && plan.to === N - 1 && plan.start === 'current', `a review row Fixes from the frame you are on to the end (${plan.from}–${plan.to})`);
+    plan = RV.idSwitchFixPlan(m0, rr, { currentFrame: e0 + 500, totalFrames: N, window: [s0 - 60, e0 + 60] });
+    ok(plan.from === e0 + 1 && plan.start === 'separate', `…or, from outside its window, from just after the place (${plan.from})`);
+
+    // The saved checklist keeps the review rows, their cues and the ticks.
+    S._idSwitch = { results: { review: rr }, reviewed: new Set([RV.idSwitchRowKey(m0)]), fixes: [] };
+    RV.linkIdSwitchResults(S._idSwitch.results);
+    const payload = JSON.parse(JSON.stringify(RV.serializeIdSwitchReview(S)));
+    ok(payload && payload.checks.review && payload.checks.review.points.length === rr.flags.length && !('imageHz' in payload.checks.review),
+        'the review rows are saved under checks.review, with no image fields');
+    const S2 = { };
+    RV.ingestIdSwitchReview(S2, payload);
+    const back = S2._idSwitch && S2._idSwitch.results.review;
+    ok(back && back.flags.length === rr.flags.length && back.flags.every((m, i) => m.cue === 'review' && m.score === 0 &&
+        JSON.stringify(m.look) === JSON.stringify(rr.flags[i].look) && m.frame === rr.flags[i].frame), 'and come back from the file as they were');
+    ok(S2._idSwitch.reviewed.has(RV.idSwitchRowKey(m0)), '…with their reviewed ticks');
 }
 
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);
