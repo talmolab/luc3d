@@ -148,6 +148,11 @@ function linkedFrame(m, res) {
  * to the frame before its boundary. The change point at the other edge, when the
  * list shows one, is the fix's `partnerKey`: the same stretch, fixed by the same swap.
  *
+ * A review-list row (`cue` 'review') is a place, not an encounter: its window
+ * reaches on to just before the next place on the list (the end of the video
+ * after the last), so a swap that undoes itself between two places can be fixed
+ * from this row twice — once where the labels swap, again where they swap back.
+ *
  * @param {object} m          a change point (a row of the ID Switches tab)
  * @param {object} res        the check result it came from
  * @param {{currentFrame:number, totalFrames:number, window?:number[]}} o  `window`: [first, last] frame
@@ -156,7 +161,9 @@ function linkedFrame(m, res) {
  */
 export function idSwitchFixPlan(m, res, o) {
     var s = m.startFrame != null && m.startFrame <= m.frame ? m.startFrame : m.frame, e = m.frame;
-    var w = o.window || [s, e + 1], cur = o.currentFrame, here = cur != null && cur >= w[0] && cur <= w[1];
+    var w = o.window || [s, e + 1];
+    if (m.cue === 'review') w = [w[0], Math.max(w[1], nextPlaceStart(m, res, o.totalFrames) - 1)];
+    var cur = o.currentFrame, here = cur != null && cur >= w[0] && cur <= w[1];
     var split = here ? cur : e + 1, edge = linkedFrame(m, res), from, to;
     if (m.kind === 'end') { from = edge == null ? 0 : edge + 1; to = split - 1; }
     else { from = split; to = edge == null ? Math.max(0, (o.totalFrames || 0) - 1) : edge; }
@@ -166,6 +173,17 @@ export function idSwitchFixPlan(m, res, o) {
     });
     return { key: idSwitchRowKey(m), partnerKey: partner ? idSwitchRowKey(partner) : '', nameA: m.nameA, nameB: m.nameB,
              from: from, to: to, start: here ? 'current' : 'separate', edge: edge };
+}
+
+/** Where the next place on `m`'s list starts (its first frame), or `totalFrames` after the last. */
+function nextPlaceStart(m, res, totalFrames) {
+    var next = Math.max(0, totalFrames || 0);
+    idSwitchMarkers(res).forEach(function (x) {
+        if (x.frame <= m.frame) return;
+        var xs = x.startFrame != null && x.startFrame <= x.frame ? x.startFrame : x.frame;
+        if (xs < next) next = xs;
+    });
+    return next;
 }
 
 /** The fix that covers row `m` (its own, or its partner's), or null. */

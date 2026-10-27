@@ -2629,7 +2629,8 @@ swap found, fixed and undone through the ID Switches tab, a swap away from every
 contact found by the coat-brightness check at a candidate moment, a "Both" row of
 size and brightness, §6 which checks take the single-camera options, and §8 the
 review list after Track All: counted in the status and the summary box, listed in
-the tab, and a review row's Fix between two picked tracks, from here to the end).
+the tab, and a review row's Fix between two picked tracks, from here to the end,
+then Fix again from past its own window: only the stretch between stays swapped).
 `tests/e2e/_real-single-camera.mjs` runs the whole thing on a real SLEAP file
 through File ▸ Load SLP.
 
@@ -8556,8 +8557,12 @@ listed ("a lone animal's track changes", …); the header counts them ("N places
 look at") and "About these flags" explains the list first. A check row at the same
 place and pair is ONE row, the check's, marked "on the review list" ('review' is
 last in `ID_SWITCH_CUES`). **Fix on a review row** swaps from the frame you are on
-(inside the row's window) or just after the place, to the END of the video — later
-rows fix their own stretches — and, with more than two tracks, lets the reviewer
+(anywhere from the row's lead-in up to just before the NEXT place on the list) or
+just after the place, to the END of the video — later rows fix their own
+stretches. A fixed review row keeps a **Fix again…** button and lists every fix
+made from it ("Fixed: … on frames a–end; again on frames b–end"): labels that swap
+back before the next place (a short flip, seen while playing the row through)
+take a second fix from where they do. With more than two tracks it lets the reviewer
 pick the two tracks (`pairSelect`, `#idSwitchFixA` / `#idSwitchFixB`, defaulting to
 the row's pair): on 3–4 mice the row's own pair was the swapped one in only a third
 to two thirds of the switches found. The dialog keeps Esc / Cancel.
@@ -8800,7 +8805,9 @@ other pairs' rows inside a fixed stretch — an involution, keys follow).
 row's window (`o.window` — in the app the whole progress bar), so the user puts
 it where they saw the labels flip; outside the window it falls back to e + 1
 (where the animals separate). Without `o.window` the window is the close spell
-[s, e + 1]. An onset swaps from there to its `switchBackAt` encounter's last
+[s, e + 1]. A review-list row's window reaches on to just before the next place on
+its list (`nextPlaceStart`; the end of the video after the last), so a swap that
+undoes itself between two places is fixed from that row twice. An onset swaps from there to its `switchBackAt` encounter's last
 close frame, or the last frame; an 'end' swaps the stretch BEFORE it, from just
 after `switchedAt` (or frame 0) to the frame before its boundary. The change point
 at the other edge is the fix's `partnerKey`. Results restored from a file saved
@@ -10265,7 +10272,13 @@ either ID-switch check is run.
   (its nearest other identity more than 1.5 of its body sizes away), the
   isolated frame nearest the middle winning (maximising isolation pushed picks
   to slot edges). Only the middle 60% of each slot is searched, so neighbouring
-  samples stay 40% of a slot apart even in a crowded cage.
+  samples stay 40% of a slot apart even in a crowded cage. Only frames where the
+  animal has at least half its keypoints count (`keypointShare`): a stray
+  detection — one keypoint wearing the identity for a frame between its real
+  stretches — made an empty "no keypoints" picture (seen on a real sham_gdx
+  video). A slot with none in its middle takes the usable frame nearest that
+  middle, on either side; only an identity with no usable frame at all falls back
+  to whatever is tracked.
 - `pickCamera` — among the views where the group has a 2D member: the largest
   projection of its 3D (diagonal, with the camera's distortion) inside the image
   is the best, and among the views good enough to use (inside the image, at

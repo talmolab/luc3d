@@ -156,6 +156,11 @@ function isolationAt(session, frame, identityId, own) {
  * Only the middle 60% of a slot is searched, so neighbouring samples stay at
  * least 40% of a slot apart even in a cage too crowded for any frame to be
  * isolated. At most `maxCandidates` frames per slot are scored, evenly strided.
+ * Only frames where the animal has at least half its keypoints count (`usable`):
+ * a stray detection — one keypoint, wearing this identity for a frame between
+ * its real stretches — makes an empty picture. A slot with none in its middle
+ * takes the usable frame nearest that middle; only an identity with no usable
+ * frame at all falls back to whatever is tracked.
  *
  * @param {Object} session
  * @param {{frames: Int32Array, xyz: Float64Array}} track  from `identityTracks`
@@ -173,26 +178,55 @@ export function pickSampleFrames(session, track, identityId, k, opts) {
     var lo = F[0], hi = F[n - 1], span = hi - lo, out = [];
     // index of the first tracked frame >= f
     var lower = function (f) { var a = 0, b = n; while (a < b) { var m = (a + b) >> 1; if (F[m] < f) a = m + 1; else b = m; } return a; };
-    for (var s = 0; s < k; s++) {
-        var a0 = lower(lo + span * (s + 0.2) / k), a1 = lower(lo + span * (s + 0.8) / k);
-        if (s === k - 1 && a1 >= n) a1 = n;
-        if (a1 <= a0) {                                  // nothing tracked in the middle of the slot: its nearest frame
-            a0 = Math.min(n - 1, lower(lo + span * (s + 0.5) / k)); a1 = a0 + 1;
+    var usable = function (i) { var g = identityGroupAt(session, F[i], identityId); return keypointShare(g && g.points3d) >= 0.5; };
+    // the usable frame nearest `target`, searching out from it (-1: none in the whole track)
+    var nearestUsable = function (target) {
+        var r = lower(target), l = r - 1;
+        while (l >= 0 || r < n) {
+            var pr = r < n && (l < 0 || F[r] - target <= target - F[l]);
+            var j = pr ? r++ : l--;
+            if (usable(j)) return j;
         }
-        var target = lo + span * (s + 0.5) / k;
+        return -1;
+    };
+    // the slot's pick among frames a0..a1-1: the isolated one nearest the target, else the most isolated
+    var bestIn = function (a0, a1, target, onlyUsable) {
         var step = Math.max(1, Math.floor((a1 - a0) / maxCand));
         var near = -1, nearDist = Infinity, most = -1, mostIso = -1;
         for (var i = a0; i < a1; i += step) {
+            if (onlyUsable && !usable(i)) continue;
             var own = [track.xyz[3 * i], track.xyz[3 * i + 1], track.xyz[3 * i + 2]];
             var iso = isolationAt(session, F[i], identityId, own), dist = Math.abs(F[i] - target);
             var g = identityGroupAt(session, F[i], identityId);
             if (iso > 1.5 * groupExtent(g && g.points3d) && dist < nearDist) { near = i; nearDist = dist; }
             if (iso > mostIso || (iso === mostIso && dist < Math.abs(F[most] - target))) { most = i; mostIso = iso; }
         }
-        var pick = near >= 0 ? near : most;
+        return near >= 0 ? near : most;
+    };
+    for (var s = 0; s < k; s++) {
+        var a0 = lower(lo + span * (s + 0.2) / k), a1 = lower(lo + span * (s + 0.8) / k);
+        if (s === k - 1 && a1 >= n) a1 = n;
+        var target = lo + span * (s + 0.5) / k;
+        var pick = a1 > a0 ? bestIn(a0, a1, target, true) : -1;
+        if (pick < 0) pick = nearestUsable(target);      // none usable in the middle of the slot: the usable frame nearest it
+        if (pick < 0) {                                  // nothing usable anywhere: as before, any tracked frame
+            if (a1 <= a0) { a0 = Math.min(n - 1, lower(target)); a1 = a0 + 1; }
+            pick = bestIn(a0, a1, target, false);
+        }
         if (pick >= 0 && out.indexOf(F[pick]) < 0) out.push(F[pick]);
     }
     return out.sort(function (p, q) { return p - q; });
+}
+
+/** The share of a group's keypoints with finite 3D (0 without any). */
+function keypointShare(p3) {
+    if (!p3 || !p3.length) return 0;
+    var flat = typeof p3[0] === 'number', n = flat ? Math.floor(p3.length / 3) : p3.length, ok = 0;
+    for (var i = 0; i < n; i++) {
+        var r = flat ? [p3[3 * i], p3[3 * i + 1], p3[3 * i + 2]] : p3[i];
+        if (r && isFinite(r[0]) && isFinite(r[1]) && isFinite(r[2])) ok++;
+    }
+    return n ? ok / n : 0;
 }
 
 /**
