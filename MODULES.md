@@ -1785,7 +1785,11 @@ Timeline and 3D viewer closed, and the automatic coat-brightness check
 (`autoBrightnessSwitchCheck`, default on — no model, no GPU) and image check
 (`autoImageSwitchCheck`) when they are on. It
 keeps Track All's candidate moments on the session (`session._idSwitchCandidates`,
-cleared at the start of the run) for the checks to test.
+cleared at the start of the run) for the checks to test, and puts its REVIEW LIST in
+the ID Switches tab before the checks run (`setReviewList` with
+`pose/single-camera-tracking.js` `reviewResult` — the moments plus handovers, as
+unscored rows; with two or more tracks), counting it in the status line ("N places
+to review in the ID Switches tab") and the summary box (`reviewPlaces`).
 The body-size check is OPTIONAL on one camera (the user's choice, 2026-10-12):
 Track All does not run it, the status line and the summary box say so
 (`SINGLE_CAMERA_SIZE_SKIP_NOTE`), and the menu runs it. Its 2D accuracy is under
@@ -2529,6 +2533,37 @@ tracklets alone 42), about 10 moments per 10 min. Ambiguity is observed before
 connect-single-breaks renumbers tracks, so its ids are read through the final
 output, never from the observer.
 
+**The review list: where to look, as rows of their own.** Track All also returns
+`review` — the candidate moments plus HANDOVERS, clustered the same way
+(`candidateMoments(..., extra)` with `handoverCandidates(frames, out, fps)`) — and
+`pose/tracker.js` puts it in the ID Switches tab as unscored rows
+(`reviewResult(moments, session, fps)` -> a result with `cue: 'review'`, one
+'onset' row per moment, `score` 0, `look` = its cues, no far edge). A handover is
+a LONE detection (none other within one body length) whose nearest detection in
+the last `lookSeconds` (0.5) lay within `nearBody` (0.5) body lengths and wore
+another track (`HANDOVER_DEFAULTS`; body length = median detection extent): the
+lone animal hopping onto a stray detection's track, or onto a track another animal
+left — the switches no contact sees. The checks keep testing `moments` only (the
+candidates they were calibrated on), so the coat-brightness check is unchanged.
+Measured 2026-10-21/27 offline through this code (the harness rebuilt in
+`~/luc3d-eval`, `measure_review.mjs` / `measure_fix.mjs`), a switch counting as on
+the list when one of its ends is within 2 s of a row:
+- **87 proofread SLAP top/mid views:** 2 mice (held-out 16) 0.97 rows a minute,
+  96% of 232 switches on the list, 9.3% of the video within 2 s of a row; 3–4
+  mice (original six) 1.02 a minute, 86% of 44, 7.7%.
+- **207 sham_gdx conditions (2 mice, mostly a lone subject before its partner
+  enters):** A+T+H 1.10 a minute, 91% of 139, 8.6%.
+- **Every close encounter instead** would be 0.5–1.8 rows a minute but long ones
+  (median 3–16 s, p90 up to minutes), covering 34–80% of the video, which is why
+  encounters are not on the list (the checks flag the ones worth a look).
+- **Where a row lands:** the true switch is within the row's 2 s window in about
+  70–80% of switches found (median 0–0.7 s off), so a Fix from the frame the
+  reviewer stops on takes the right boundary; fixing from the row's own frame did
+  about as well as from the exact switch frame in the simulation.
+- **Its pair:** on 3–4 mice the row's pair was the swapped one in only a third to
+  two thirds of the switches it found, so the Fix dialog lets the reviewer pick the
+  two tracks (`ui/id-switch-modal.js`).
+
 **Eager sessions only.** A lazy (> 150 MB) single-camera project is refused with
 `SINGLE_CAMERA_LAZY_REASON` rather than tracked from its resident window. Track
 Frame and Track Frame Range are refused on one camera (the tracker is temporal,
@@ -2562,9 +2597,12 @@ cannot see.
 **Key exports.** `singleCameraName(session)` (the camera, or null);
 `singleCameraTrackerConfig(numAnimals, {windowSize, oksStddev, connectBreaks})`;
 `trackSingleCamera(session, cfg, {onProgress, signal, fps, look})` ->
-`{numIdentities, frames, tracked, untracked, moments}`; `candidateMoments(frames,
-out, inputTracks, ambiguous, look, fps)`; `CANDIDATE_DEFAULTS` (`ambiguityMargin`
-0.1, `trackletGapFrames` 5, `clusterSeconds` 3); `singleCameraCheckSession(session)`
+`{numIdentities, frames, tracked, untracked, moments, review}`; `candidateMoments(frames,
+out, inputTracks, ambiguous, look, fps, extra?)` (`extra`: more candidates `{f, a, b,
+cue}` to cluster with them); `CANDIDATE_DEFAULTS` (`ambiguityMargin`
+0.1, `trackletGapFrames` 5, `clusterSeconds` 3); `handoverCandidates(frames, out, fps,
+opts)` -> `[{f, a, b, cue: 'handover'}]`; `HANDOVER_DEFAULTS` (`lookSeconds` 0.5,
+`nearBody` 0.5); `reviewResult(moments, session, fps)` -> the review list's result; `singleCameraCheckSession(session)`
 -> stand-in | null | `{fail}`; `swapSingleCameraIdentities(session, from, to, idA, idB)`
 -> `{frames, tracks: boolean}` | null; `singleCameraCheckOptions(cue)` -> the options
 the coat-brightness check runs with on one camera (`{skipEmpty: true,
@@ -2583,12 +2621,15 @@ checks and the fix).
 **Coverage.** `tests/test-single-camera-tracking.mjs` (one track per animal
 across 18 input tracklet breaks, the spurious detection and the user frame, the
 candidate moments, the stand-in and a planted swap found by the real size check,
-the track swap and its fallback, the refusals, and §6/§7 `skipEmpty` and
-`clearestEndLeads` on the classifier's change points) and
+the track swap and its fallback, the refusals, §6/§7 `skipEmpty` and
+`clearestEndLeads` on the classifier's change points, and §9 the review list:
+handovers, its rows, their Fix plan and the saved checklist) and
 `tests/e2e/single-camera-track-all.mjs` (the real buttons, the refusals, a planted
 swap found, fixed and undone through the ID Switches tab, a swap away from every
 contact found by the coat-brightness check at a candidate moment, a "Both" row of
-size and brightness, and §6 which checks take the single-camera options).
+size and brightness, §6 which checks take the single-camera options, and §8 the
+review list after Track All: counted in the status and the summary box, listed in
+the tab, and a review row's Fix between two picked tracks, from here to the end).
 `tests/e2e/_real-single-camera.mjs` runs the whole thing on a real SLEAP file
 through File ▸ Load SLP.
 
@@ -8028,7 +8069,8 @@ ticks out only when the frame count changed — called from `updateSeekbarVisual
 point beats a repeat); `describeSwitchMarker(m)` (the tooltip text).
 
 **Drawing.** One tick per marker at `frame / (totalFrames - 1)` — the thumb's own
-mapping: amber = size, cyan = images, violet = coat brightness; a "Both" tick wears
+mapping: amber = size, cyan = images, violet = coat brightness, grey = the
+single-camera review list (its tooltip: "place to review: id_0 ↔ id_1", no score); a "Both" tick wears
 its two checks' colours (`cue-both-<earlier>-<later>`; drawn once, on the earlier
 check's marker — size, then images, then brightness — its twin skipped), follow-on fainter and shorter,
 still-swapped repeat a short faint tick, `reviewed` (ticked in the tab) dimmed.
@@ -8495,6 +8537,8 @@ the tab; with no summary kept for the session it opens the tab as from the menu)
 markers on the seekbar — called after a check, from `updateInfoPanel` and from
 `switchSession`); `openIdSwitchPanel()` (show the panel, if hidden, on the tab);
 `clearIdSwitchResults(session?)` (called by `runTrackingPass` before it relabels);
+`setReviewList(session, result, navigateToFrame?)` (single-camera Track All puts its
+review list on the session as `results.review` — see below);
 `ID_SWITCH_LEAD_IN_SECONDS` (1), `ID_SWITCH_SINGLE_CAMERA_LEAD_SECONDS` (2),
 `idSwitchLeadSeconds(session)` (2 on a single-camera session, else 1),
 `idSwitchLeadInFrame(marker, fps, seconds?)`,
@@ -8502,6 +8546,21 @@ markers on the seekbar — called after a check, from `updateInfoPanel` and from
 `runSizeSwitchCheck`. `inject: {createEmbedder, createBrightnessSampler}` replaces
 the image model and the coat-brightness sampler — test-only
 (`tests/e2e/id-switch-image-check.mjs`, `tests/e2e/single-camera-track-all.mjs`).
+
+**The review list (single camera).** After single-camera Track All the tab also
+lists `results.review` (`pose/single-camera-tracking.js` `reviewResult`): the places
+a switch is most likely — near-ties, input-tracklet changes, handovers. They are
+rows like the checks' (ticks, seekbar markers, progress bar, Next unreviewed,
+the saved checklist), drawn grey, with NO score; their note says why the place is
+listed ("a lone animal's track changes", …); the header counts them ("N places to
+look at") and "About these flags" explains the list first. A check row at the same
+place and pair is ONE row, the check's, marked "on the review list" ('review' is
+last in `ID_SWITCH_CUES`). **Fix on a review row** swaps from the frame you are on
+(inside the row's window) or just after the place, to the END of the video — later
+rows fix their own stretches — and, with more than two tracks, lets the reviewer
+pick the two tracks (`pairSelect`, `#idSwitchFixA` / `#idSwitchFixB`, defaulting to
+the row's pair): on 3–4 mice the row's own pair was the swapped one in only a third
+to two thirds of the switches found. The dialog keeps Esc / Cancel.
 
 **The coat-brightness check** (`brightness: true`, `runBrightness`) runs
 `checkBrightnessSwitches` with `ui/brightness-sampler.js`'s vectors under the same
@@ -8721,7 +8780,10 @@ points), `idSwitchMarkers(res)` (+ repeats), `idSwitchOnsets(res)` (the
 a later check to the nearest unlinked one of an earlier check of the same pair at
 the same contact, as `agree` — "Both": their close spells overlap, give or take
 1 s; or, without start frames, they end within 1 s); `ID_SWITCH_CUES`
-(`['size', 'image', 'brightness']`, the order of precedence);
+(`['size', 'image', 'brightness', 'review']`, the order of precedence — 'review' is
+single-camera Track All's review list, unscored rows (score 0, `look` = cues) saved
+under `checks.review` with no image fields; last, so a check's row at the same
+place is the one shown);
 `idSwitchIsSecondary(m)` (the later half of a "Both" pair — listed and drawn
 through its partner);
 `serializeIdSwitchReview(session)` -> payload or `null` (no check results -> no
@@ -10035,7 +10097,7 @@ unit-tested in Node (`tests/test-track-summary.mjs`). It gives every outcome
 
 **Key exports.**
 - `summarizeTrackedIdentities(session, {frames, animals, animalsAuto, elapsedMs, fps,
-  singleCamera, untracked, duplicates})`
+  singleCamera, untracked, duplicates, reviewPlaces})`
   — frames per identity, frames with any identity, frames with every animal, from
   `session.instanceGroups` (never evicted on a lazy project, so the whole project).
   An identity listed twice in one frame counts once. A single-camera Track All
@@ -10057,16 +10119,18 @@ unit-tested in Node (`tests/test-track-summary.mjs`). It gives every outcome
   multi-camera one is unchanged.
   - **What it reports:** it counts **Tracks**, since SLEAP's tracker writes one per
     animal, and adds a "Without a track" row for detections over the animal count
-    plus duplicates removed first.
+    plus duplicates removed first, and a "To review" row for the places on its
+    review list (`reviewPlaces`, with their rate a minute).
   - **Its checks:** Coat brightness (the automatic one, counting its candidate
     moments), Images, and Body size. Body size is "Not run" on one camera, with
     the reason on hover.
-  - **Next step:** **Review switches** when one was flagged; otherwise **Save
-    project** (the tracks are what SLEAP reads back), with each check that did
-    not run offered: images, coat brightness, and body size (optional on one
-    camera). It never suggests
-    Triangulate All: there is no 3D.
-  - **"Nothing flagged" carries a caveat** that the checks miss many swaps on one
+  - **Next step:** **Review switches** when one was flagged (with the review list's
+    places named in the step); else **Review the list** when it has places ("Review
+    the N places most likely to hold a switch"); otherwise **Save project** (the
+    tracks are what SLEAP reads back). Each check that did not run is offered:
+    images, coat brightness, and body size (optional on one camera). It never
+    suggests Triangulate All: there is no 3D.
+  - **"Nothing flagged", with no review list, carries a caveat** that the checks miss many swaps on one
     camera. On 87 proofread SLAP views the image check found 82 of 276, and 113
     of those 276 were one track changing animal while the other was undetected,
     so no contact was there to test.

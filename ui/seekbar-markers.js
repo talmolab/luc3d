@@ -47,8 +47,8 @@ export function setSeekbarMarkerFrames(totalFrames) {
     if (totalFrames > 0 && totalFrames !== _total) { _total = totalFrames; render(); }
 }
 
-var CUES = ['size', 'image', 'brightness'];   // precedence, as ui/id-switch-review.js ID_SWITCH_CUES
-var CUE_NAME = { size: 'size', image: 'image', brightness: 'brightness' };
+var CUES = ['size', 'image', 'brightness', 'review'];   // precedence, as ui/id-switch-review.js ID_SWITCH_CUES
+var CUE_NAME = { size: 'size', image: 'image', brightness: 'brightness', review: 'review list' };
 function cueOf(m) { return CUES.indexOf(m.cue) >= 0 ? m.cue : 'size'; }
 
 /** A "Both" pair is drawn once, on the earlier check's marker. */
@@ -74,11 +74,14 @@ export function seekbarMarkerAt(frac, widthPx, tolPx) {
     return best;
 }
 
-/** "possible ID switch: id_1 ↔ id_3 (size score -50, still swapped, reviewed)". */
+/** "possible ID switch: id_1 ↔ id_3 (size score -50, still swapped, reviewed)"; a review-list row has no score. */
 export function describeSwitchMarker(m) {
-    var cue = m.agree ? CUE_NAME[cueOf(m)] + ' and ' + CUE_NAME[cueOf(m.agree)] + ' agree; ' + CUE_NAME[cueOf(m)] + ' score ' +
-            Math.round(m.score) + ', ' + CUE_NAME[cueOf(m.agree)] + ' ' + Math.round(m.agree.score)
-        : CUE_NAME[cueOf(m)] + ' score ' + Math.round(m.score);
+    if (cueOf(m) === 'review' && !m.agree) {
+        return 'place to review: ' + m.nameA + ' ↔ ' + m.nameB + (m.reviewed ? ' (reviewed)' : '');
+    }
+    var scoreOf = function (x) { return cueOf(x) === 'review' ? 'on the review list' : CUE_NAME[cueOf(x)] + ' score ' + Math.round(x.score); };
+    var cue = m.agree ? CUE_NAME[cueOf(m)] + ' and ' + CUE_NAME[cueOf(m.agree)] + ' agree; ' + scoreOf(m) + ', ' + scoreOf(m.agree)
+        : scoreOf(m);
     return 'possible ID switch: ' + m.nameA + ' ↔ ' + m.nameB + ' (' + cue +
         (m.continues ? ', still swapped' : m.followOf != null ? ', follows an earlier switch'
             : m.kind === 'end' ? ', labelling changes here' : '') + (m.reviewed ? ', reviewed' : '') + ')';

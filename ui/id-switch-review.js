@@ -16,7 +16,7 @@
  * fitted models:
  *
  *   { v: 1,
- *     checks: { size?|image?|brightness?: { encounters, sampleHz, step, fps, fpsFromVideo,
+ *     checks: { size?|image?|brightness?|review?: { encounters, sampleHz, step, fps, fpsFromVideo,
  *                                [imageHz, crops, cameras, model: {name, note}],
  *                                points: [[frame, nameA, nameB, score, kind, followOf, continues, startFrame, link,
  *                                          look?], …] } },
@@ -31,7 +31,8 @@
  * or -1 for none (the session's end / start); files saved before it was added
  * have no `link`, and a fix then pairs rows by what the list shows. `look`,
  * written only for a point scored at a candidate moment rather than an encounter
- * (single camera, see pose/single-camera-tracking.js), lists its cues. Rows are keyed by check,
+ * (single camera, see pose/single-camera-tracking.js), lists its cues; every
+ * 'review' point has one (its score is 0: the review list is not scored). Rows are keyed by check,
  * frame and identity NAMES (`rowKey`) — names, not ids, are what a reopened
  * project still agrees on. Nothing is written for a session no check has run on,
  * so such a project's bytes are unchanged. Reads tolerate absence and garbage.
@@ -67,9 +68,12 @@ export function idSwitchEncounterCount(res) {
 
 /**
  * The checks, in order of precedence: when two find the same change point, the
- * row is shown once, on the earlier check's result ("Both").
+ * row is shown once, on the earlier check's result ("Both"). 'review' is not a
+ * check: it is the list of places single-camera Track All leaves to look at
+ * (pose/single-camera-tracking.js `reviewResult`), rows with no score. Last, so a
+ * check flagging the same place shows its own row, marked as on the list too.
  */
-export const ID_SWITCH_CUES = ['size', 'image', 'brightness'];
+export const ID_SWITCH_CUES = ['size', 'image', 'brightness', 'review'];
 
 /** True for the later half of a "Both" pair — drawn and listed through its partner. */
 export function idSwitchIsSecondary(m) {
@@ -226,7 +230,7 @@ export function serializeIdSwitchReview(session) {
                 return p;
             }),
         };
-        if (cue !== 'size') {                                   // image / brightness: samples per second, samples, views
+        if (cue === 'image' || cue === 'brightness') {          // samples per second, samples, views
             c.imageHz = r.imageHz; c.crops = r.crops; c.cameras = (r.cameras || []).slice();
             if (r.model && r.model.note) c.model = { name: r.model.name, note: r.model.note };
         }
@@ -278,7 +282,7 @@ export function ingestIdSwitchReview(session, payload) {
             var r = { ok: true, restored: true, flags: flags, changes: [], encounterCount: isNum(c.encounters) ? c.encounters : 0,
                       sampleHz: isNum(c.sampleHz) ? c.sampleHz : 0, step: isNum(c.step) ? c.step : 1, fps: isNum(c.fps) ? c.fps : 0,
                       fpsFromVideo: !!c.fpsFromVideo };
-            if (cue !== 'size') {
+            if (cue === 'image' || cue === 'brightness') {
                 r.imageHz = isNum(c.imageHz) ? c.imageHz : 0; r.crops = isNum(c.crops) ? c.crops : 0;
                 r.cameras = Array.isArray(c.cameras) ? c.cameras.filter(function (x) { return typeof x === 'string'; }) : [];
                 if (c.model && typeof c.model.note === 'string') r.model = { name: String(c.model.name || ''), note: c.model.note };

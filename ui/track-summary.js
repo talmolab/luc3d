@@ -77,7 +77,7 @@ export function formatTrackingSpeed(frames, ms, recordingFps) {
  *
  * @param {Object} session
  * @param {{frames:number, animals:number, animalsAuto?:boolean, elapsedMs?:number, fps?:number,
- *          singleCamera?:string, untracked?:number, duplicates?:number}} opts
+ *          singleCamera?:string, untracked?:number, duplicates?:number, reviewPlaces?:number}} opts
  *   `frames` — the frames the pass swept (the denominator); `animals` — the
  *   animal count it ran with; `animalsAuto` — whether that count was detected
  *   rather than entered; `elapsedMs` — how long tracking took; `fps` — the
@@ -85,7 +85,9 @@ export function formatTrackingSpeed(frames, ms, recordingFps) {
  *   A single-camera Track All (pose/single-camera-tracking.js) also passes its
  *   camera (`singleCamera`) and the detections it left without a track
  *   (`untracked`: over the animal count; `duplicates`: removed before tracking),
- *   and is counted on the stand-in session `singleCameraCheckSession` builds.
+ *   and the number of places on its review list (`reviewPlaces`, the ID Switches
+ *   tab's 'review' rows), and is counted on the stand-in session
+ *   `singleCameraCheckSession` builds.
  */
 export function summarizeTrackedIdentities(session, opts) {
     opts = opts || {};
@@ -120,6 +122,7 @@ export function summarizeTrackedIdentities(session, opts) {
         singleCamera: opts.singleCamera || null,
         untracked: opts.untracked || 0,
         duplicates: opts.duplicates || 0,
+        reviewPlaces: opts.reviewPlaces || 0,
         identities: ids.map(function (id, i) {
             return { id: id.id, name: id.name, color: id.color, frames: counts[i] };
         }),
@@ -380,6 +383,12 @@ function planSingleCameraSummary(s, checks) {
         stats.push({ label: 'Without a track', value: plural(without, 'detection'), detail: why.join(', '),
                      title: 'Detections Track All left without a track. They stay in the project.' });
     }
+    if (s.reviewPlaces > 0) {
+        stats.push({ label: 'To review', value: plural(s.reviewPlaces, 'place'),
+                     detail: s.fps > 0 && s.frames > 0 ? (s.reviewPlaces / (s.frames / s.fps / 60)).toFixed(1) + ' a minute' : '',
+                     title: 'Where a switch is most likely: the tracker nearly chose the other assignment, the input\'s own tracks ' +
+                            'disagree with Track All, or a lone animal\'s track changes. Listed in the ID Switches tab.' });
+    }
     var trackTime = formatDuration(s.elapsedMs);
     if (trackTime) {
         var speed = formatTrackingSpeed(s.frames, s.elapsedMs, s.fps);
@@ -425,8 +434,18 @@ function planSingleCameraSummary(s, checks) {
         primary = { action: 'wizard', label: 'Tracking Wizard…' };
     } else if (all.some(function (c) { return c.state === 'found'; })) {
         next = { headline: 'Review the possible ID switches.', caveat: null,
-                 steps: ['Step through them in the ID Switches tab and fix the real ones: a fix swaps the two tracks.', SAVE_STEP] };
+                 steps: ['Step through them in the ID Switches tab' + (s.reviewPlaces > 0 ? ', with the ' + plural(s.reviewPlaces, 'place') +
+                         ' on the review list,' : '') + ' and fix the real ones: a fix swaps the two tracks.', SAVE_STEP] };
         primary = { action: 'review', label: 'Review switches' };
+    } else if (nIds > 1 && s.reviewPlaces > 0) {
+        // No check flagged anything, but the review list is where most single-camera switches are found.
+        next = { headline: 'Review the ' + plural(s.reviewPlaces, 'place') + ' most likely to hold a switch.', caveat: null,
+                 steps: ['Step through the review list in the ID Switches tab and fix the places where the labels swap: a fix ' +
+                         'swaps the two tracks.', SAVE_STEP] };
+        primary = { action: 'review', label: 'Review the list' };
+        if (rerun(image)) secondary.push({ action: 'imageCheck', label: 'Check by images…' });
+        if (rerun(brightness)) secondary.push({ action: 'brightnessCheck', label: 'Check by coat brightness…' });
+        if (rerun(size)) secondary.push({ action: 'sizeCheck', label: 'Check by body size' });
     } else {
         var headline, caveat = null;
         if (nIds === 1) headline = 'One track, so there is nothing to switch.';

@@ -18,7 +18,7 @@ import {
     hungarianAlgorithm
 } from './triangulation.js';
 import { CrossViewTracker, Detection } from './cross-view-tracker.js';
-import { singleCameraName, singleCameraTrackerConfig, trackSingleCamera, SINGLE_CAMERA_LAZY_REASON } from './single-camera-tracking.js';
+import { singleCameraName, singleCameraTrackerConfig, trackSingleCamera, reviewResult, SINGLE_CAMERA_LAZY_REASON } from './single-camera-tracking.js';
 import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
@@ -38,7 +38,7 @@ import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/r
 import { updateInfoPanel } from '../ui/info-panel.js';
 import { setColorByIdentity } from '../ui/color-by.js';
 import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js';
+import { runIdSwitchChecks, clearIdSwitchResults, setReviewList } from '../ui/id-switch-modal.js';
 import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js';
 import { showTrackSummaryModal, rememberTrackSummary, summarySession } from '../ui/track-summary-modal.js';
 import { collapseTimeline } from '../ui/timeline-controller.js';
@@ -1808,6 +1808,11 @@ async function runSingleCameraTrackAll(session, bail) {
         hideLoading();
         // Where else a switch could be (not saved: the input tracklets they come from are rewritten).
         session._idSwitchCandidates = res.moments;
+        // The review list: those moments plus where a lone animal's track changes, as rows of the ID Switches tab
+        // (saved with its checklist). About one a minute; most single-camera switches are near one.
+        var reviewFps = state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 30);
+        var nReview = res.numIdentities > 1 ? res.review.length : 0;
+        if (nReview) setReviewList(session, reviewResult(res.review, session, reviewFps));
         var switchedToIds = res.numIdentities > 0 && setColorByIdentity(state, true);
         var predOnly = res.numIdentities > 0 && showPredictedOnly();
         // ...and node trails at ¼ s if they are off, as after a multi-camera Track All (runTrackingPass).
@@ -1824,6 +1829,7 @@ async function runSingleCameraTrackAll(session, bail) {
                 ' over the animal count left without a track' : '') +
             (res.duplicates ? ', ' + res.duplicates.toLocaleString() + ' duplicate detection' + (res.duplicates === 1 ? '' : 's') +
                 ' removed first (left without a track)' : '') +
+            (nReview ? ', ' + nReview.toLocaleString() + ' place' + (nReview === 1 ? '' : 's') + ' to review in the ID Switches tab' : '') +
             (switchedToIds ? ', now coloring by ID' : '') +
             (trailsOn ? ', node trails on (' + trailSecondsName(TRACK_ALL_TRAIL_SECONDS) + ')' : '') + (predOnly ? PREDICTED_ONLY_NOTE : '');
         // The body-size check is OPTIONAL on one camera (the user's choice, 2026-10-12): not run here, and the
@@ -1847,6 +1853,7 @@ async function runSingleCameraTrackAll(session, bail) {
                 frames: res.frames, animals: numAnimals, animalsAuto: !userCount, elapsedMs: trackMs,
                 fps: state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 0),
                 singleCamera: session.cameras[0].name, untracked: res.untracked, duplicates: res.duplicates,
+                reviewPlaces: nReview,
             };
             var summaryChecks = {
                 brightness: describeSwitchCheck(autoBrightness, checkRes && checkRes.brightness, res.numIdentities),

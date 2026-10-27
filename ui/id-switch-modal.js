@@ -48,7 +48,7 @@ import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
          idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary } from './id-switch-review.js';
 
-const CUE_LABEL = { size: 'body size', image: 'images', brightness: 'coat brightness' };
+const CUE_LABEL = { size: 'body size', image: 'images', brightness: 'coat brightness', review: 'review list' };
 
 function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, function (c) {
@@ -621,7 +621,33 @@ export function clearIdSwitchResults(session) {
     refreshIdSwitchPanel(session);
 }
 
+/**
+ * Put single-camera Track All's review list (pose/single-camera-tracking.js `reviewResult`) on the session:
+ * the places a switch is most likely, as rows of their own. A new tracking pass has just cleared the old
+ * results, so this starts a fresh checklist; checks that run after it add their rows beside it.
+ */
+export function setReviewList(session, result, navigateToFrame) {
+    if (!session) return;
+    var st = session._idSwitch || (session._idSwitch = { results: {}, reviewed: new Set(), fixes: [], showRepeats: false, current: null });
+    st.results.review = result;
+    if (navigateToFrame) st.navigate = navigateToFrame;
+    tagAndLink(st.results);
+    markDirty();
+    refreshIdSwitchPanel(session);
+}
+
 function aboutHtml(st, ran) {
+    var checks = ran.filter(function (c) { return c !== 'review'; });
+    var rv = st.results.review && st.results.review.ok ? st.results.review : null;
+    var reviewAbout = rv ? '<p><b>The review list</b> is where a switch is most likely on one camera — where the tracker nearly ' +
+        'chose the other assignment, where the input file\'s own tracks disagree with Track All, or where a lone animal\'s track ' +
+        'changes. About one place a minute; on proofread videos about 9 of every 10 switches were within 2 s of one. Rows have ' +
+        'no score: look at each, and Fix the ones where the labels swap.</p>' : '';
+    if (!checks.length) return reviewAbout;
+    return reviewAbout + aboutChecksHtml(st, checks);
+}
+
+function aboutChecksHtml(st, ran) {
     var r0 = st.results[ran[0]], im = st.results.image, br = st.results.brightness;
     var sz = st.results.size, by = [sz && sz.ok ? (r0.singleCamera ? 'body size in the one camera view (which also changes with ' +
         'posture and distance from the camera)' : '3D body size') : '', im && im.ok ? 'appearance in the videos' : ''].filter(Boolean);
@@ -748,7 +774,16 @@ function openFixDialog(session, st, f) {
     }
     var fr = function (x) { return 'frame ' + (x + 1).toLocaleString(); };
     var startWhy, endWhy;
-    if (f.kind === 'end') {
+    // A review-list row is a place, not a scored change: it swaps from the frame you are on (or just after the
+    // place) to the end of the video, and later rows fix their own stretches in turn. With more than two tracks
+    // its pair is the cue's guess, so the two tracks to swap can be chosen (on 3-4 mice the cue named the
+    // swapped pair in about a third to two thirds of the switches it found).
+    var isReview = f.cue === 'review';
+    var pickPair = isReview && (session.identities || []).length > 2;
+    if (isReview) {
+        startWhy = plan.start === 'current' ? 'the frame you are on' : 'just after this place — the frame you are on is outside it';
+        endWhy = 'the end of the video — later places on the list fix their own stretches';
+    } else if (f.kind === 'end') {
         startWhy = plan.edge == null ? 'the start of the video, where the swapped stretch begins'
             : 'just after their encounter at ' + fmtTenths(plan.edge) + ', where the labels first look swapped';
         endWhy = plan.start === 'current' ? 'just before the frame you are on'
@@ -762,7 +797,8 @@ function openFixDialog(session, st, f) {
     overlay.className = 'multi-frame-modal-overlay';
     overlay.innerHTML = '<div class="multi-frame-modal id-switch-fix-modal" role="dialog" aria-labelledby="idSwitchFixTitle">' +
         '<h3 id="idSwitchFixTitle">Fix ID switch</h3>' +
-        '<p>Swap ' + idName(session, plan.nameA) + ' ↔ ' + idName(session, plan.nameB) + ' on <b>frames ' +
+        '<p>Swap ' + (pickPair ? pairSelect(session, 'idSwitchFixA', plan.nameA) + ' ↔ ' + pairSelect(session, 'idSwitchFixB', plan.nameB)
+            : idName(session, plan.nameA) + ' ↔ ' + idName(session, plan.nameB)) + ' on <b>frames ' +
         (plan.from + 1).toLocaleString() + '–' + (plan.to + 1).toLocaleString() + '</b> (' + fmtTenths(plan.from) + '–' +
         fmtTenths(plan.to) + ')' + (singleCameraName(session) ? ' (their tracks)' : ', in every camera view') + '.</p>' +
         '<ul class="id-switch-fix-why"><li>Starts at ' + fr(plan.from) + ': ' + startWhy + '.</li>' +
@@ -770,7 +806,8 @@ function openFixDialog(session, st, f) {
         (f.followOf != null ? '<p class="id-switch-fix-warn">This flag follows the switch at ' + fmtTime(f.followOf) +
             ', and is often a side effect of it. Fix that one first if you have not.</p>' : '') +
         '<p class="id-switch-fix-tip">To ' + (f.kind === 'end' ? 'end' : 'start') + ' somewhere else, go to that frame on the row\'s ' +
-        'progress bar (click it, step or play) and click Fix switch again.</p>' +
+        'progress bar (click it, step or play) and click Fix switch again.' + (isReview ? ' If the labels swap back later, ' +
+        'Fix again from there.' : '') + '</p>' +
         '<div class="modal-actions"><button id="idSwitchFixCancel">Cancel</button>' +
         '<button id="idSwitchFixOk" class="primary">Swap identities</button></div></div>';
     document.body.appendChild(overlay);
@@ -785,6 +822,12 @@ function openFixDialog(session, st, f) {
     overlay.querySelector('#idSwitchFixCancel').addEventListener('click', close);
     overlay.addEventListener('mousedown', function (e) { if (e.target === overlay) close(); });
     overlay.querySelector('#idSwitchFixOk').addEventListener('click', function () {
+        if (pickPair) {
+            var a = overlay.querySelector('#idSwitchFixA').value, b = overlay.querySelector('#idSwitchFixB').value;
+            if (a === b) { setStatus('Pick two different tracks to swap', 'warning'); return; }
+            plan = Object.assign({}, plan, { nameA: a, nameB: b });
+            idA = identityIdByName(session, a); idB = identityIdByName(session, b);
+        }
         close();
         applyFix(session, st, f, plan, idA, idB);
     });
@@ -839,6 +882,13 @@ function undoLastFix(session, st) {
         (fix.to + 1).toLocaleString(), 'success');
 }
 
+/** A select of the session's identities (by name), `name` selected: the Fix dialog's pair picker. */
+function pairSelect(session, id, name) {
+    return '<select id="' + id + '" class="id-switch-pair-pick">' + (session.identities || []).map(function (i) {
+        return '<option value="' + escapeHtml(i.name) + '"' + (i.name === name ? ' selected' : '') + '>' + escapeHtml(i.name) + '</option>';
+    }).join('') + '</select>';
+}
+
 /** An identity name in that identity's colour (the one the overlays and timeline use), when the session knows it. */
 function idName(session, name) {
     var ids = (session && session.identities) || [], hit = null;
@@ -854,7 +904,9 @@ function fmtScore(m) {
 
 function rowHtml(session, st, f, both) {
     var cue = f.agree ? 'both' : f.cue, key = rowKey(f), rev = isReviewed(st, f);
-    var score = f.agree ? fmtScore(f) + ' / ' + fmtScore(f.agree) : fmtScore(f);
+    // A review-list row has no score; a check's row it agrees with keeps the check's own.
+    var scored = [f, f.agree].filter(function (x) { return x && x.cue !== 'review'; });
+    var score = scored.map(fmtScore).join(' / ');
     var note = f.continues ? 'still swapped'
         : f.followOf != null ? 'follows the switch at ' + fmtTime(f.followOf)
         : f.kind === 'end' ? (f.cue === 'brightness' ? 'labelling changes here; earlier encounters look swapped' : 'labels change back here') : '';
@@ -872,9 +924,10 @@ function rowHtml(session, st, f, both) {
         '<input type="checkbox" class="id-switch-tick" title="Reviewed"' + (rev ? ' checked' : '') + '>' +
         '<div class="id-switch-main"><div class="id-switch-line1"><span class="id-switch-time">' + fmtTime(f.frame) + '</span>' +
         '<span class="id-switch-pair">' + idName(session, f.nameA) + ' ↔ ' + idName(session, f.nameB) + '</span>' +
-        '<span class="id-switch-score" title="Score' + (f.agree ? ' (size / images)' : '') + '">' + score + '</span></div>' +
+        (score ? '<span class="id-switch-score" title="Score">' + score + '</span>' : '') + '</div>' +
         '<div class="id-switch-line2">' + spanHtml(f) +
-        (both ? ' · ' + (cue === 'both' ? '<b title="' + CUE_LABEL[f.cue] + ' and ' + CUE_LABEL[f.agree.cue] + '">Both</b>' : CUE_LABEL[cue]) : '') +
+        (both ? ' · ' + (cue === 'both' ? (f.agree.cue === 'review' ? CUE_LABEL[f.cue] + ' · <b>on the review list</b>'
+            : '<b title="' + CUE_LABEL[f.cue] + ' and ' + CUE_LABEL[f.agree.cue] + '">Both</b>') : CUE_LABEL[cue]) : '') +
         (fixed ? ' · <span class="id-switch-fixed">Fixed</span>' : '') +
         (note ? ' · ' + note : '') + '</div>' + (st.current === key ? selectedHtml(st, f) : '') + '</div></div>';
 }
@@ -882,7 +935,8 @@ function rowHtml(session, st, f, both) {
 /** Why a row that is not a close encounter was looked at (its candidate moment's cues). */
 function lookNote(cues) {
     return cues.map(function (c) {
-        return c === 'ambiguity' ? 'tracker nearly chose the swap' : c === 'tracklet' ? 'input tracklet changes animal' : c;
+        return c === 'ambiguity' ? 'tracker nearly chose the swap' : c === 'tracklet' ? 'input tracklet changes animal'
+            : c === 'handover' ? 'a lone animal\'s track changes' : c;
     }).join(', ');
 }
 
@@ -945,6 +999,10 @@ export function refreshIdSwitchPanel(session) {
         '<div class="info-section id-switch-head"><h3>Possible ID switches</h3>' +
         ran.map(function (c) {
             var r = st.results[c], n = countOnsets(r);
+            if (c === 'review') {
+                return '<div class="id-switch-summary">' + (both ? '<b>Review list:</b> ' : '') + '<b>' + n.toLocaleString() + '</b> place' +
+                    (n === 1 ? '' : 's') + ' to look at</div>';
+            }
             var mo = r.moments && r.moments.length;
             return '<div class="id-switch-summary">' + (both ? '<b>' + { size: 'Body size', image: 'Images', brightness: 'Coat brightness' }[c] + ':</b> ' : '') +
                 encounterCount(r).toLocaleString() + ' close encounters' + (mo ? ' + ' + mo.toLocaleString() + ' moments' : '') + ' · ' +
@@ -961,7 +1019,8 @@ export function refreshIdSwitchPanel(session) {
         '</div>' +
         '<div class="id-switch-list" id="idSwitchList">' +
         (rows.length ? rows.map(function (f) { return rowHtml(session, st, f, both); }).join('')
-            : '<p class="table-empty">No encounter scored below the threshold.</p>') + '</div>';
+            : '<p class="table-empty">' + (ran.indexOf('review') >= 0 ? 'Nothing to review: no check flagged anything, and there is no place on the review list.'
+                : 'No encounter scored below the threshold.') + '</p>') + '</div>';
     _progStale = true;                               // the list was rebuilt: re-find the selected row's bar
     wireTrackSummary(host, session);
     highlightRow(rows.filter(function (f) { return rowKey(f) === st.current; })[0] || null);

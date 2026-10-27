@@ -206,7 +206,8 @@ function trackerPoints(inst) {
  *          for off) leaves each frame's duplicate detections out of the tracking — they
  *          keep no track, and stay in the session
  * @returns {Promise<{numIdentities: number, frames: number, tracked: number, untracked: number,
- *          duplicates: number, moments: Array}>}  `untracked` excludes the `duplicates`
+ *          duplicates: number, moments: Array, review: Array}>}  `untracked` excludes the `duplicates`;
+ *          `review` = `moments` plus handovers (`handoverCandidates`), the review list's rows
  */
 export async function trackSingleCamera(session, cfg, opts) {
     var cam = singleCameraName(session);
@@ -266,9 +267,13 @@ export async function trackSingleCamera(session, cfg, opts) {
             groups[g].identityId = m && m.trackIdx != null ? m.trackIdx : null;
         }
     }
-    var moments = candidateMoments(frames, out, inputTracks, ambiguous, look, (opts && opts.fps) || session.fps || 30);
+    var fps = (opts && opts.fps) || session.fps || 30;
+    var moments = candidateMoments(frames, out, inputTracks, ambiguous, look, fps);
+    // The review list adds handovers (where a lone animal's track changes); the checks keep testing `moments` only,
+    // the candidates they were calibrated on.
+    var review = candidateMoments(frames, out, inputTracks, ambiguous, look, fps, handoverCandidates(frames, out, fps));
     return { numIdentities: nTracks, frames: frames.length, tracked: tracked, untracked: untracked,
-             duplicates: removed.length, moments: moments };
+             duplicates: removed.length, moments: moments, review: review };
 }
 
 /**
@@ -311,12 +316,13 @@ function collectAmbiguous(m, pos, maxMargin, outList) {
  * before connect-single-breaks renumbers tracks, so ids are read through the
  * final output, never from the observer.
  */
-export function candidateMoments(frames, out, inputTracks, ambiguous, look, fps) {
+export function candidateMoments(frames, out, inputTracks, ambiguous, look, fps, extra) {
     var cands = [];
     var push = function (f, a, b, cue) {
         if (a == null || b == null || a === b) return;
         cands.push({ f: f, a: Math.min(a, b), b: Math.max(a, b), cue: cue });
     };
+    (extra || []).forEach(function (c) { push(c.f, c.a, c.b, c.cue); });
     ambiguous.forEach(function (x) { push(frames[x.pos].frameIdx, out[x.pos][x.d1], out[x.pos][x.d2], 'ambiguity'); });
     var last = new Map();
     for (var p = 0; p < frames.length; p++) {
@@ -346,6 +352,82 @@ export function candidateMoments(frames, out, inputTracks, ambiguous, look, fps)
         }
     });
     return moments.sort(function (x, y) { return x.frame - y.frame || x.identityA - y.identityA || x.identityB - y.identityB; });
+}
+
+/** The handover look: a lone detection whose nearest detection in the last `lookSeconds` lay within
+ *  `nearBody` body lengths and wore another track. "Lone" = no other detection within one body length. */
+export const HANDOVER_DEFAULTS = { lookSeconds: 0.5, nearBody: 0.5 };
+
+/** Mean of the present nodes of tracker points, or null. */
+function pointsCentroid(p) {
+    var x = 0, y = 0, n = 0;
+    for (var k = 0; k < p.length; k += 2) { if (p[k] !== p[k] || p[k + 1] !== p[k + 1]) continue; x += p[k]; y += p[k + 1]; n++; }
+    return n ? [x / n, y / n] : null;
+}
+
+/**
+ * Where a track changes while its animal is ALONE: the place an animal is, one
+ * moment ago with one track and now with another, and nobody else near it. That
+ * is how most single-camera switches look that no contact sees — a lone animal
+ * hopping onto the track of a stray detection, or onto a track another animal
+ * left. Read from the detections and the tracker's output only, in final ids,
+ * as candidates `{f, a, b, cue: 'handover'}` for `candidateMoments`' `extra`.
+ * The body length is the median detection extent (sampled), so the look is
+ * resolution-free.
+ */
+export function handoverCandidates(frames, out, fps, opts) {
+    var o = Object.assign({}, HANDOVER_DEFAULTS, opts || {});
+    var ext = [], total = 0;
+    frames.forEach(function (fr) { total += fr.dets.length; });
+    var every = Math.max(1, Math.floor(total / 5000)), i = 0;
+    frames.forEach(function (fr) { fr.dets.forEach(function (d) {
+        if (i++ % every) return;
+        var b = pointsBox(d.points); if (b) ext.push(Math.max(b[2] - b[0], b[3] - b[1]));
+    }); });
+    ext.sort(function (x, y) { return x - y; });
+    var body = ext.length ? ext[ext.length >> 1] : 0, out2 = [];
+    if (!(body > 0)) return out2;
+    var look = Math.max(1, Math.round(o.lookSeconds * (fps || 30))), near = o.nearBody * body, recent = [];
+    for (var p = 0; p < frames.length; p++) {
+        var f = frames[p].frameIdx, ids = out[p], cs = frames[p].dets.map(function (d) { return pointsCentroid(d.points); });
+        while (recent.length && recent[0].f < f - look) recent.shift();
+        for (var q = 0; q < cs.length; q++) {
+            var c = cs[q], t = ids[q];
+            if (!c || t == null) continue;
+            var alone = true;
+            for (var r = 0; r < cs.length && alone; r++) if (r !== q && cs[r] && Math.hypot(cs[r][0] - c[0], cs[r][1] - c[1]) <= body) alone = false;
+            if (!alone) continue;
+            var best = null, bd = near;
+            for (var j = recent.length - 1; j >= 0; j--) {
+                var e = recent[j], dd = Math.hypot(e.c[0] - c[0], e.c[1] - c[1]);
+                if (dd < bd) { best = e; bd = dd; }
+            }
+            if (best && best.t !== t) out2.push({ f: f, a: t, b: best.t, cue: 'handover' });
+        }
+        for (var q2 = 0; q2 < cs.length; q2++) if (cs[q2] && ids[q2] != null) recent.push({ f: f, c: cs[q2], t: ids[q2] });
+    }
+    return out2;
+}
+
+/**
+ * The review list single-camera Track All leaves in the ID Switches tab: every
+ * candidate moment (near-ties, input-tracklet changes) plus every handover, one
+ * row per pair per run of them no more than `clusterSeconds` apart. Rows are
+ * change points with no score (0) and no far edge — a Fix swaps from the frame the
+ * reviewer stopped on to the end of the video, and later rows fix their own
+ * stretches in turn. Measured on 87 proofread SLAP views and 207 sham_gdx
+ * conditions (MODULES.md): about one row a minute, within 2 s of 86–96% of the
+ * real switches, under 10% of the video inside a row's window.
+ * @returns {{ok: true, cue: 'review', flags: Array, changes: [], encounters: [], fps: number}}
+ */
+export function reviewResult(moments, session, fps) {
+    var name = function (id) { var i = session.getIdentity ? session.getIdentity(id) : null; return i ? i.name : 'id_' + id; };
+    var flags = moments.map(function (m) {
+        return { frame: m.frame, startFrame: m.startFrame, identityA: m.identityA, identityB: m.identityB,
+                 nameA: name(m.identityA), nameB: name(m.identityB), kind: 'onset', score: 0, look: m.cues.slice(),
+                 switchBackAt: null, cue: 'review' };
+    });
+    return { ok: true, cue: 'review', flags: flags, changes: [], encounters: [], fps: fps || 30, sampleHz: 0, step: 1 };
 }
 
 /**

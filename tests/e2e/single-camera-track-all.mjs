@@ -36,6 +36,13 @@
  *  7. Duplicate removal is offered in the Tracking Wizard, off by default (box
  *     IoU 0.5, OKS 0.6); switched on, Track All leaves a planted partial copy of
  *     an animal without a track and says so, and every animal keeps its track.
+ *  8. The review list: a lone animal hopping onto the tracks of SLEAP's copies of
+ *     itself (a second animal elsewhere, a third entering later) leaves places
+ *     to review: the status counts them, the ID Switches tab lists them as grey
+ *     rows saying why ("a lone animal's track changes"), the summary box counts
+ *     them and makes reviewing the next step; Fix on a review row swaps from the
+ *     frame you are on to the end of the video, between two tracks picked in the
+ *     dialog (three tracks here), and Esc cancels it.
  *  1b. Track All ends on the summary box, planned for one camera: it counts
  *     tracks, lists coat brightness / images / body size, recommends saving and
  *     never Triangulate All, has an Identities row per track, and the ID
@@ -335,6 +342,83 @@ try {
     check(box7 && box7.includes('Without a track1 detection1 duplicate removed first'), 'the summary box counts the removed duplicate: ' + JSON.stringify(box7 && box7.slice(-2)));
     await page.evaluate(() => { const c = document.getElementById('trackSummaryClose'); if (c) c.click(); });
     await page.evaluate(async () => (await import('/ui/settings.js')).setTrackingThresholds({ scRemoveDuplicates: 0 }));
+
+    console.log('\n8. The review list: a lone animal hopping tracks is on it, and a review row Fixes from here to the end');
+    await page.evaluate(async () => {
+        const pd = await import('/pose/pose-data.js'), AS = await import('/ui/app-state.js');
+        const NODES = ['Nose', 'Ear_R', 'Ear_L', 'TTI', 'TailTip', 'Head', 'Trunk', 'Tail_0', 'Tail_1', 'Tail_2',
+            'Shoulder_left', 'Shoulder_right', 'Haunch_left', 'Haunch_right', 'Neck'];
+        const T = { Nose: [45, 0], Ear_R: [25, -11], Ear_L: [25, 11], Head: [30, 0], Neck: [20, 0], Trunk: [-5, 0], TTI: [-40, 0],
+            Shoulder_left: [10, 12], Shoulder_right: [10, -12], Haunch_left: [-25, 15], Haunch_right: [-25, -15],
+            Tail_0: [-65, 0], Tail_1: [-88, 0], Tail_2: [-110, 0], TailTip: [-132, 0] };
+        const at = (cx, cy, h = 0) => NODES.map(n => { const [x, y] = T[n], c = Math.cos(h), si = Math.sin(h); return [cx + c * x - si * y, cy + si * x + c * y]; });
+        const N = 900, ENTER = 600, walk = f => [600 + 300 * Math.sin(f / 30), 240 + 40 * Math.sin(f / 50)];
+        const cam = new pd.Camera('lone_video', [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [1280, 960]);
+        const s = new pd.Session([cam], new pd.Skeleton('mouse', NODES, []), ['t0', 't1', 't2'], 'lone');
+        for (let f = 0; f < N; f++) {
+            const [x, y] = walk(f);
+            s.addUnlinkedInstance(f, cam.name, new pd.Instance(at(x, y), 0, 'predicted', 0.9));           // A: alone, fast
+            s.addUnlinkedInstance(f, cam.name, new pd.Instance(at(300, 800), 2, 'predicted', 0.9));       // C: far away, still
+            if (f >= ENTER) s.addUnlinkedInstance(f, cam.name, new pd.Instance(at(1150, 600 - 0.2 * (f - ENTER), Math.PI), 1, 'predicted', 0.9));
+            else if (f % 50 === 25) { const [nx, ny] = walk(f + 1); s.addUnlinkedInstance(f, cam.name, new pd.Instance(at(nx, ny), null, 'predicted', 0.7)); }
+        }
+        AS.state.sessions = [s]; AS.state.activeSessionIdx = 0; AS.state.session = s;
+        AS.state.totalFrames = N; AS.state.currentFrame = 0; AS.state.fps = 30;
+        if (AS.timeline) { AS.timeline.setTotalFrames(N); AS.timeline.setData(s); }
+        window.__lone = () => { const S = AS.state.session, out = [];
+            for (let f = 0; f < N; f++) out.push(S.frameGroups.get(f).getUnlinkedInstances('lone_video').map(u => u.instance.trackIdx));
+            return out; };
+    });
+    await page.evaluate(() => { document.getElementById('statusText').textContent = ''; document.getElementById('tbTrackAll').click(); });
+    await page.waitForFunction(() => /Tracked \d+ animal|Track All error/.test(document.getElementById('statusText').textContent), { timeout: 60000 });
+    const st8 = await status();
+    const rv = await page.evaluate(() => {
+        const r = window.__lucid.state.session._idSwitch && window.__lucid.state.session._idSwitch.results.review;
+        return r ? { n: r.flags.length, handover: r.flags.filter(m => m.look.includes('handover')).length } : null;
+    });
+    check(!!rv && rv.n > 0 && rv.handover > 0 && new RegExp(rv.n + ' places? to review in the ID Switches tab').test(st8),
+        `Track All leaves ${rv && rv.n} places to review (${rv && rv.handover} handovers), and the status says so: …${st8.slice(st8.indexOf('detection') - 20, st8.indexOf('ID Switches tab') + 15)}`);
+    const box8 = await page.evaluate(() => { const o = document.getElementById('trackSummaryOverlay'); return o ? { stats: [...o.querySelectorAll('.track-summary-stat')].map(r => r.textContent),
+        primary: (o.querySelector('#trackSummaryPrimary') || {}).textContent, text: o.textContent } : null; });
+    check(box8 && box8.stats.some(x => new RegExp('^To review' + rv.n + ' place').test(x)) && box8.primary === 'Review the list' && /most likely to hold a switch/.test(box8.text),
+        `the summary box counts them and makes reviewing them the next step (primary "${box8 && box8.primary}")`);
+    await page.click('#trackSummaryPrimary');                                     // Review the list: the tab, on the first row
+    const tab = await page.evaluate(() => ({ rows: document.querySelectorAll('#idSwitchPanel .id-switch-row.cue-review').length,
+        head: (document.querySelector('#idSwitchPanel .id-switch-summary') || {}).textContent || '',
+        note: (document.querySelector('#idSwitchPanel .id-switch-row.cue-review .id-switch-line2') || {}).textContent || '',
+        score: document.querySelectorAll('#idSwitchPanel .id-switch-row.cue-review .id-switch-score').length,
+        current: !!document.querySelector('#idSwitchPanel .id-switch-row.is-current'),
+        ticks: document.querySelectorAll('.seekbar-mark.cue-review').length }));
+    check(tab.rows === rv.n && new RegExp(rv.n + ' places? to look at').test(tab.head) && tab.score === 0,
+        `the ID Switches tab lists them as review rows, with no score (${tab.rows} rows, "${tab.head}")`);
+    check(/a lone animal's track changes/.test(tab.note), 'a row says why it is on the list: ' + tab.note.slice(0, 90));
+    check(tab.current && tab.ticks > 0, `"Review the list" lands on the first row, and the rows have grey seekbar ticks (${tab.ticks})`);
+    const before = await page.evaluate(() => window.__lone());
+    const sel = await page.evaluate(() => { const r = document.querySelector('#idSwitchPanel .id-switch-row.cue-review'); return r.dataset.key; });
+    const rowSel8 = `#idSwitchPanel .id-switch-row[data-key="${sel}"]`;
+    await page.click(rowSel8 + ' .id-switch-line1');
+    const here = await page.evaluate(() => window.__lucid.state.currentFrame);
+    await page.click(rowSel8 + ' .id-switch-fix');
+    const fixDlg = await page.evaluate(() => { const d = document.querySelector('.id-switch-fix-modal'); return d ? { text: d.textContent,
+        picks: d.querySelectorAll('select.id-switch-pair-pick').length, a: (d.querySelector('#idSwitchFixA') || {}).value, b: (d.querySelector('#idSwitchFixB') || {}).value } : null; });
+    check(fixDlg && fixDlg.picks === 2 && /the end of the video — later places on the list fix their own stretches/.test(fixDlg.text) &&
+        /Starts at frame [\d,]+: the frame you are on/.test(fixDlg.text),
+        `Fix on a review row: two tracks to pick (three tracks here), from the frame you are on to the end of the video (${fixDlg && fixDlg.a} ↔ ${fixDlg && fixDlg.b})`);
+    await page.keyboard.press('Escape');
+    check(await page.evaluate(() => !document.querySelector('.id-switch-fix-modal')) && JSON.stringify(await page.evaluate(() => window.__lone())) === JSON.stringify(before),
+        'Esc cancels it and changes nothing');
+    await page.click(rowSel8 + ' .id-switch-fix');
+    const pickA = fixDlg.a, pickB = fixDlg.a === 'id_2' ? 'id_0' : 'id_2';      // a pair other than the row's
+    await page.selectOption('#idSwitchFixB', pickB);
+    await page.click('#idSwitchFixOk');
+    const after8 = await page.evaluate(() => window.__lone());
+    const ida = Number(pickA.slice(3)), idb = Number(pickB.slice(3));
+    let bad = 0, swapped = 0;
+    for (let f = 0; f < before.length; f++) for (let q = 0; q < before[f].length; q++) {
+        const t = before[f][q], want = f < here ? t : t === ida ? idb : t === idb ? ida : t;
+        if (after8[f][q] !== want) bad++; else if (want !== t) swapped++;
+    }
+    check(bad === 0 && swapped > 0, `it swaps the two PICKED tracks (${pickA} ↔ ${pickB}) from the frame you were on to the end (${swapped} detections moved, ${bad} wrong)`);
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {
