@@ -29,7 +29,7 @@
  * Range collects the count in its own dialog and never reaches this one.
  */
 
-import { setInfoTip, ICON_INFO } from './info-tip.js?v=1ea1267912fc';
+import { setInfoTip, ICON_INFO } from './info-tip.js?v=a0de886abebd';
 
 /**
  * Show the dialog. Resolves with the answer on Continue / Enter, or `null` on

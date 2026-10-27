@@ -3086,6 +3086,49 @@ body {
   display: none;
 }
 
+/* The selected view at the hovered frame (ui/seekbar-preview.js), stacked
+   above the tooltip bubble (its 6px gap + ~22px height + 4px). The canvas is
+   PREVIEW_WIDTH (224px) wide — keep the two in sync, the JS clamps the box by
+   it — and its height follows the view's aspect ratio. `left` is set in px. */
+.seekbar-preview {
+  position: absolute;
+  bottom: calc(100% + 32px);
+  transform: translateX(-50%);
+  z-index: 1000;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: #000;
+  overflow: hidden;
+  pointer-events: none;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+.seekbar-preview[hidden] { display: none; }
+.seekbar-preview-canvas {
+  display: block;
+  width: 224px;
+  transition: opacity 80ms linear;
+}
+/* Showing a nearby frame while the hovered one decodes. */
+.seekbar-preview.is-pending .seekbar-preview-canvas { opacity: 0.55; }
+.seekbar-preview-label {
+  position: absolute; left: 0; bottom: 0;
+  max-width: calc(100% - 8px);
+  padding: 1px 6px;
+  border-top-right-radius: 4px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 10px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* No image at this frame (e.g. an embedded-frames .slp, which only holds the labeled ones). */
+.seekbar-preview.is-empty::before {
+  content: 'No image at this frame';
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-secondary, #aaa);
+  font-size: 11px;
+}
+
 /* FPS pill */
 .fps-pill {
   display: inline-flex;
@@ -3234,6 +3277,68 @@ body {
 .session-info-row .value {
   color: var(--text-primary);
   font-weight: 500;
+}
+
+/* The Session tab's Recording section (ui/recording-info.js): a campy
+   recording's session.json. Values may be long (a camera name, a field), so a
+   row's value wraps and stays right-aligned; notes and warnings are blocks. */
+.recording-row {
+  gap: 10px;
+  align-items: baseline;
+}
+
+.recording-row .value {
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.recording-row .label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.recording-row.recording-warn .value,
+.recording-block.recording-warn .recording-block-text {
+  color: var(--warning-color);
+}
+
+.recording-block {
+  padding: 3px 0;
+  font-size: 13px;
+}
+
+.recording-annotations {
+  font-size: 12px;
+}
+
+.recording-block-label {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-bottom: 2px;
+}
+
+.recording-block-text {
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.recording-annotations {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--text-primary);
+}
+
+.recording-annotation-at {
+  color: var(--text-muted);
+  margin-right: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.recording-cameras {
+  margin-top: 6px;
 }
 
 /* Instance / Track list */
@@ -4156,7 +4261,10 @@ input[type="range"]::-moz-range-track {
 .loading-progress-fill {
   width: 100%;
   height: 100%;
-  background: #4cc9f0;
+  /* A deeper blue than the image cue colour (#4cc9f0), so the brighter stretch
+     the bar just gained (.progress-delta, below) stands out against it. The
+     image check's dialog bar (.id-switch-progress-fill) uses the same. */
+  background: #1f78b4;
   transform-origin: left center;
   transform: scaleX(0);
   transition: transform 250ms linear;
@@ -4172,6 +4280,30 @@ input[type="range"]::-moz-range-track {
 }
 .loading-progress-fill.no-anim, .loading-progress-head.no-anim {
   transition: none;
+}
+
+/* The stretch a progress bar gained on its last update (ui/progress-delta.js),
+   on every progress bar: a translucent white tint over the fill, so it is a
+   brighter shade of the bar's own colour, and a white flash as it appears. It
+   grows with the fill's own transition (set inline from the fill's computed
+   style) and stays lit until the next update. The flash is an OPACITY
+   animation on a pseudo-element so it runs on the compositor, as the bar's
+   own transform does, even while the main thread is busy. */
+.progress-delta {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 0;
+  z-index: 1; pointer-events: none;
+  transform-origin: left center;
+  background: rgba(255, 255, 255, 0.42);
+  opacity: 0;
+}
+.progress-delta.is-on { opacity: 1; }
+.progress-delta::after {
+  content: ''; position: absolute; inset: 0; background: #fff; opacity: 0;
+}
+.progress-delta.is-on::after { animation: progress-delta-flash 700ms ease-out; }
+@keyframes progress-delta-flash { from { opacity: 0.75; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .progress-delta.is-on::after { animation: none; }
 }
 
 /* The percentage under the bar — the same rule as the image check's. */
@@ -7474,7 +7606,7 @@ details[open] > summary.origin-rebase-block-title::before {
 /* As .id-switch-pbar: the track clips the fill, the bar does not, so the playhead (.id-switch-phead) stands proud. */
 .id-switch-progress-bar { position: relative; height: 6px; }
 .id-switch-progress-track { position: absolute; inset: 0; border-radius: 3px; background: rgba(255,255,255,0.12); overflow: hidden; }
-.id-switch-progress-fill { height: 100%; width: 0; background: #4cc9f0; transition: width 0.2s; }
+.id-switch-progress-fill { height: 100%; width: 0; background: #1f78b4; transition: width 0.2s; }   /* as .loading-progress-fill */
 .id-switch-progress-bar .id-switch-phead { left: 0; transition: left 0.2s; }   /* keep pace with the fill */
 /* .id-switch-progress-pct: one rule with .loading-pct (Loading Overlay, above). */
 /* The percentage and device line on the left, a sample crop on the right, above Cancel. */

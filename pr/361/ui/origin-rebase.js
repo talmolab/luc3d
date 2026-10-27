@@ -73,17 +73,18 @@
 //
 // The handle is remembered for the page session, so the picker appears once.
 
-import { state, viewport3d } from './app-state.js?v=1ea1267912fc';
-import { setStatus, markDirty, quickSave } from '../import-export/save-load.js?v=1ea1267912fc';
-import { exportCalibrationTOML, downloadTOML } from '../import-export/file-io.js?v=1ea1267912fc';
-import { REBASED_CALIBRATION_NAME } from '../loading/calibration-pick.js?v=1ea1267912fc';
-import { countRebaseTargets, subsetRebaseTally, planOriginRebase, applyOriginRebase } from '../pose/origin-rebase.js?v=1ea1267912fc';
+import { noteProgress } from './progress-delta.js?v=a0de886abebd';
+import { state, viewport3d } from './app-state.js?v=a0de886abebd';
+import { setStatus, markDirty, quickSave } from '../import-export/save-load.js?v=a0de886abebd';
+import { exportCalibrationTOML, downloadTOML } from '../import-export/file-io.js?v=a0de886abebd';
+import { REBASED_CALIBRATION_NAME } from '../loading/calibration-pick.js?v=a0de886abebd';
+import { countRebaseTargets, subsetRebaseTally, planOriginRebase, applyOriginRebase } from '../pose/origin-rebase.js?v=a0de886abebd';
 // Both circular by design and used only inside function bodies, the same rule
 // the rest of this directory's cycles follow.
-import { originState, renderOriginResult } from './origin-definition.js?v=1ea1267912fc';
-import { planeModel, syncPlanes3D, refreshPlanePanel } from './plane-definition.js?v=1ea1267912fc';
-import { drawAllOverlays } from './rendering.js?v=1ea1267912fc';
-import { update3DViewport } from '../pose/initialization.js?v=1ea1267912fc';
+import { originState, renderOriginResult } from './origin-definition.js?v=a0de886abebd';
+import { planeModel, syncPlanes3D, refreshPlanePanel } from './plane-definition.js?v=a0de886abebd';
+import { drawAllOverlays } from './rendering.js?v=a0de886abebd';
+import { update3DViewport } from '../pose/initialization.js?v=a0de886abebd';
 
 /**
  * @type {FileSystemFileHandle|null} Where `calibration.toml` lives, once the
@@ -625,7 +626,7 @@ function openProgressModal(onCancel) {
             var label = document.getElementById('rebaseProgressLabel');
             var fill = document.getElementById('rebaseProgressFill');
             if (label) label.textContent = n(done) + ' / ' + n(total) + ' (' + pct + '%)';
-            if (fill) fill.style.width = pct + '%';
+            if (fill) { fill.style.width = pct + '%'; noteProgress(fill, pct / 100); }
         },
         setPhase: function (text) {
             var label = document.getElementById('rebaseProgressLabel');
