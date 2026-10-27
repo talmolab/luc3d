@@ -2108,6 +2108,10 @@ export async function switchSession(newIdx) {
             // accidentally drive an unrelated modal task.
             coldDec._onProgress = null;
             coldDec.onProgress = null;
+            // ...and its decoded frames: the reserve keeps the decoder for
+            // reuse, not its cache, which would stay alive (counted by V8)
+            // for the 60 s before the close below.
+            if (typeof coldDec.releaseFrames === 'function') coldDec.releaseFrames();
             // Schedule close after 60s idle; rehydrate cancels this.
             coldDec._coldTimer = setTimeout(function () {
                 var idx = state._decoderPoolCold.indexOf(coldDec);
