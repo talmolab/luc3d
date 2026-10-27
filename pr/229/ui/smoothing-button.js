@@ -12,8 +12,8 @@
  * Depends on: ui/app-state.js, pose/temporal-smoothing.js
  */
 
-import { state } from './app-state.js?v=340619b4e8b3';
-import { hasSmoothed3d } from '../pose/temporal-smoothing.js?v=340619b4e8b3';
+import { state } from './app-state.js?v=bbaccdddf8ad';
+import { hasSmoothed3d } from '../pose/temporal-smoothing.js?v=bbaccdddf8ad';
 
 /** Re-derive the button's and its menu items' on-state from the session. */
 export function syncSmoothingButton() {
