@@ -46,7 +46,7 @@
  * Depends on: pose-data.js (readPoint3d). Pure — no DOM, no app state.
  */
 
-import { readPoint3d } from './pose-data.js?v=ba5d5aad5f51';
+import { readPoint3d } from './pose-data.js?v=d12398fadcc2';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
@@ -1367,7 +1367,9 @@ function testMoments(grid, LP, present, weight, o) {
  *    its previous moment, else null (from the session's start). An 'end' whose
  *    previous same-pair moment is an 'end' with nothing reading right between
  *    them saw the same swapped stretch (an animal back from out of sight several
- *    times after one swap): that row stands for it, and it adds none. "Before it" means ended before the
+ *    times after one swap): that row stands for it, and it adds none. Two moments
+ *    of the same pair on the same side within 3 s (a near-tie and a return at one
+ *    contact) are one row, with both cues and the clearer score. "Before it" means ended before the
  *    moment's own contact began: an encounter ending inside that contact is
  *    the moment itself, and its score describes the labels AFTER it.
  * Encounters scoring exactly 0 (no samples on either side) are skipped: they
@@ -1408,7 +1410,16 @@ export function momentChangePoints(moments, scored, changes, o) {
         var prev = L[(m.side === 'after' ? i : beforeContact(L, m)) - 1];
         if (m.side === 'after' ? prev && prev.flagged && i >= 2 && L[i - 2].flagged
             : next && next.flagged && (prev ? prev.flagged : next.continues)) return;
-        out.push(Object.assign({}, m, { flagged: m.side === 'after', continues: false, kind: m.side === 'after' ? 'onset' : 'end' }));
+        // the same pair's moment on the same side within 3 s (a near-tie and a return at one contact) is the same
+        // change point: one row, with both cues and the clearer score
+        var twin = out.filter(function (x) { return samePair(x, m) && x.side === m.side && Math.abs(x.frame - m.frame) < near; })[0];
+        if (twin) {
+            (m.look || []).forEach(function (c) { if (twin.look.indexOf(c) < 0) twin.look.push(c); });
+            if (m.score < twin.score) twin.score = m.score;
+            return;
+        }
+        out.push(Object.assign({}, m, { flagged: m.side === 'after', continues: false, kind: m.side === 'after' ? 'onset' : 'end',
+                                        look: (m.look || []).slice() }));
     });
     var demote = function (e) {               // an encounter row the moment's row takes over: now a repeat
         if (e.kind !== 'onset' || e.continues) return;
