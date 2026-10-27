@@ -21,9 +21,9 @@
  * pose/id-switch-check.js (planKeyframeSamples).
  */
 
-import { state } from './app-state.js?v=d12398fadcc2';
-import { skeletonIndex, mapFrameInstances, streamingReader, keyframeIndices } from './image-embedder.js?v=d12398fadcc2';
-import { planKeyframeSamples } from '../pose/id-switch-check.js?v=d12398fadcc2';
+import { state } from './app-state.js?v=f688f417d14b';
+import { skeletonIndex, mapFrameInstances, streamingReader, keyframeIndices } from './image-embedder.js?v=f688f417d14b';
+import { planKeyframeSamples } from '../pose/id-switch-check.js?v=f688f417d14b';
 
 /** Percentiles of the body keypoints' brightness that make up the vector (plus their mean). */
 export const BRIGHTNESS_QUANTILES = [0.1, 0.5, 0.9];

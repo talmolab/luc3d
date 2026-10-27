@@ -170,8 +170,8 @@ import {
     hungarianAlgorithm,
     computeFundamentalMatrix,
     epipolarErrorMatrix,
-} from './triangulation-core.js?v=d12398fadcc2';
-import { points3dNodeCount, readPoint3d } from './pose-data.js?v=d12398fadcc2';
+} from './triangulation-core.js?v=f688f417d14b';
+import { points3dNodeCount, readPoint3d } from './pose-data.js?v=f688f417d14b';
 
 // ---------------------------------------------------------------------------
 // Normalized-coordinate helpers
