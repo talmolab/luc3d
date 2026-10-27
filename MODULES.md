@@ -2185,7 +2185,10 @@ frame; `points3d` (built by `_retriangulate` with DLT) is the only
 frame-dependent input, which is why `triangulatePointDLT` had to be made
 frame-invariant (see `pose/triangulation-core.js`). Keep it that way: anything
 added to the cost must be a function of the rays, the pixels or `points3d`,
-never of absolute world coordinates. The tracker calls `triangulatePoints` (DLT)
+never of absolute world coordinates. The rays (`backProjectToRays`) were not
+invariant for a camera exactly at the world origin: they came out NaN, and the
+3D term skipped that camera without a word (campy puts cam_0 there). They are
+cast from M⁻¹ now; see the core's entry. The tracker calls `triangulatePoints` (DLT)
 unconditionally and never `triangulatePointsBA`, so the Settings "Refined"
 method does **not** reach this path.
 
@@ -2327,7 +2330,7 @@ installs the core's two settings hooks (`setTriangulationSettingsHooks`) with
 **Performance (outputs bit-identical — see
 `tests/test-triangulation-kernels.mjs` and the `_bench-progress-overlay.mjs
 DIGEST_OPS=1` digests).** `cameraCenter` and `backProjectToRay(s)` are memoized
-per P array (`_pGeometry` / `_pseudoInverse`, a WeakMap) and VALIDATED on every
+per P array (`_pGeometry` / `_rayBasis`, a WeakMap) and VALIDATED on every
 hit against a snapshot of P's 12 entries, so an in-place-mutated P recomputes;
 returned centres are copies. Triangulate All's per-group step is split into
 `_prepareGroupStep` (camera fix-ups, >=2-usable-views gate, `usedCameras`) /
@@ -2998,10 +3001,27 @@ reprojecting into a camera it did not choose must gate on), errors
 the full per-group pipeline `triangulateAndReproject`, its reprojection half
 on already-solved 3D (`reprojectStoredPoints3d`), `triangulationSummary`, and the cross-view
 tracker's geometry — `hungarianAlgorithm`, `cameraCenter`, `backProjectToRay`,
-`backProjectToRays` (with their `_pGeometry` / `_pseudoInverse` WeakMap memo),
+`backProjectToRays` (with their `_pGeometry` / `_rayBasis` WeakMap memo),
 `pointToRayDistance`, `pointsToRayDistances`, `computeFundamentalMatrix`,
 `epipolarError`, `epipolarErrorMatrix` — here so `pose/tracker-worker.js` can
 load the tracker.
+
+**Back-projection works for a camera at the world origin.**
+`backProjectToRay(s)` cast the ray through P = [M | p4] as centre −M⁻¹·p4 and
+direction normalize(M⁻¹·(u, v, 1)), which points in front of the camera for
+P = K·[R | t] (`_rayBasis` memoizes M⁻¹ and the centre per P; a singular M gives a NaN origin
+and null directions). Never go back to the line from the centre to the
+pseudo-inverse point P⁺·(u, v, 1): for P = [M | 0] that point is at infinity, so
+every direction was NaN and `CrossViewTracker._adjacency3d` silently dropped
+the camera's 3D term. campy writes cam_0 at exactly the origin, and with
+`back` moved there Track All fell from 99.99% to 91.1% correct on SLAP 140918,
+and from 93.3% to 59.7% on 145420. Elsewhere that point runs off to infinity
+along one line of the image, and the old rays were off by up to ~1e-5 (worst
+for cameras far from the origin); the new ones reproject exactly. On the
+recorded SLAP calibrations Track All's identities came out unchanged.
+`cameraCenter` is still the null vector of P (eigen-solve) and no longer feeds
+the rays. Test: `tests/test-back-projection.mjs`, plus the origin-camera group
+in `tests/test-cross-view-tracker.mjs`.
 
 **Key exports.** All of the above, plus `setTriangulationSettingsHooks({
 isCameraTracked, getTrackingThreshold })` — the only app state the pipeline

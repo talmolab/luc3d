@@ -52,9 +52,14 @@ const TestFramework = (function () {
         }
     }
 
+    // Fails on NaN and on anything that is not a number: `Math.abs(NaN - x) >
+    // tol` is false, so a `> tol` check let them through. To expect NaN, pass
+    // NaN as `expected`; an infinity matches only the same infinity.
     function assertApprox(actual, expected, tolerance, message) {
         tolerance = tolerance || 1e-6;
-        if (Math.abs(actual - expected) > tolerance) {
+        const close = typeof actual === 'number' && typeof expected === 'number' &&
+            (actual === expected || Object.is(actual, expected) || Math.abs(actual - expected) <= tolerance);
+        if (!close) {
             throw new Error(
                 (message ? message + ': ' : '') +
                 'Expected ~' + expected + ' (±' + tolerance + ') but got ' + actual
