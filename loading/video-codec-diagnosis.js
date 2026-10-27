@@ -258,15 +258,18 @@ export function explainUnplayableCodec(fourccCode, fileName, env) {
                 why: why + ' This browser has none to use: its graphics adapter is "' + shown
                     + '", which usually means a virtual machine or a computer without a GPU driver.',
                 steps: [
-                    'Give this computer a GPU that decodes H.265 (NVIDIA GTX 950/960 or newer, AMD from about 2015, '
-                        + 'Intel 6th generation or newer; on a virtual machine, pass one through) and install its maker\'s driver.',
+                    'Give this computer a GPU that decodes H.265 and install its maker\'s driver. It needn\'t be a '
+                        + 'graphics card: most modern CPUs have a built-in GPU that is enough (Intel 6th generation '
+                        + 'or newer, AMD Ryzen with Radeon graphics). Cards work too (NVIDIA GTX 950/960 or newer, '
+                        + 'AMD from about 2015). On a virtual machine, pass the host\'s GPU through to it.',
                     'Over Remote Desktop, also enable the Group Policy "Use hardware graphics adapters for all '
                         + 'Remote Desktop Services sessions".',
                     elsewhere,
                     convert,
                 ],
                 message: name + ': HEVC (H.265) video, which this browser can only play on a GPU, and it has none '
-                    + '(graphics: ' + shown + '). Add a GPU with its driver, open the project on a Mac, '
+                    + '(graphics: ' + shown + '). Add a GPU with its driver (most modern CPUs have a built-in one that is enough), '
+                    + 'open the project on a Mac, '
                     + 'or convert to H.264: ' + toH264 };
         }
         const gpuName = gpu ? adapterName(renderer) : '';   // '' for SwiftShader or unknown

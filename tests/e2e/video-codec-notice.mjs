@@ -134,6 +134,7 @@ try {
         check(/no H\.265 decoder of their own/.test(n.why) && /"Microsoft Basic Render Driver"/.test(n.why),
             'why: Chrome needs the GPU, and names the adapter without ANGLE\'s wrapping');
         check(/GPU that decodes H\.265/.test(n.steps[0]) && /driver/.test(n.steps[0]), 'step 1: add a GPU and its driver');
+        check(/most modern CPUs have a built-in GPU that is enough/.test(n.steps[0]), 'step 1: a CPU\'s built-in GPU is enough');
         check(n.steps.some(s => /Remote Desktop/.test(s)), 'Remote Desktop policy step');
         check(n.steps.some(s => /Mac/.test(s)), 'open-elsewhere step');
         check(/^ffmpeg -i "Camera0_topB\.mp4" -c:v libx264 .*-fps_mode passthrough "Camera0_topB_h264\.mp4"$/.test(n.command),
