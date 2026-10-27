@@ -264,6 +264,11 @@ eq(p.identities[0].share + '|' + p.identities[0].frac, '50.0%|0.5', 'identity sh
     eq(q.stats[0].label + '|' + q.stats[0].value, 'Tracks|2', 'one camera: the box counts TRACKS (SLEAP\'s tracker writes one per animal)');
     const wo = q.stats.find(x => x.label === 'Without a track');
     eq(wo && wo.value + '|' + wo.detail, '5 detections|3 over the animal count, 2 duplicates removed first', 'detections left without a track, and why');
+    const filt = planTrackSummary(summarizeTrackedIdentities({ identities: [], instanceGroups: new Map() },
+        { frames: 2, animals: 2, singleCamera: 'Camera0', untracked: 3, filtered: 1234, duplicates: 2 }), { brightness: off, image: off, size: off });
+    const wf = filt.stats.find(x => x.label === 'Without a track');
+    eq(wf && wf.value + '|' + wf.detail, '1,239 detections|3 over the animal count, 1,234 removed by the detection filters, 2 duplicates removed first',
+        'detections the Tracking Wizard\'s filters removed are counted apart from the duplicates');
     q = sc(C('clear', { switches: 0, encounters: 34, moments: 4 }), C('off'));
     eq(q.primary.action + '|' + q.primary.label, 'save|Save project', 'nothing flagged: the recommended step is saving');
     ok(/checks miss many switches/.test(q.next.caveat), 'nothing flagged on one camera: says how much the checks miss');

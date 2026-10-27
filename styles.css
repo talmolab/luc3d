@@ -3479,6 +3479,23 @@ body {
   font-size: 11px;
 }
 
+/* The Ungrouped table's mean node score, under the instance score (ui/info-panel.js).
+   The header's `width: 1px` keeps its column at its narrowest ("SCORE /" over
+   "NODE"), so the extra width goes to the others and "Track / Identity" stays on
+   one line. */
+#unlinkedTable #unlinkedScoreHead {
+  width: 1px;
+}
+
+#unlinkedTable #unlinkedScoreHead span {
+  white-space: nowrap;
+}
+
+#unlinkedTable .unlinked-node-score {
+  margin-top: 3px;
+  color: var(--text-secondary);
+}
+
 .data-table .badge {
   display: inline-block;
   font-size: 10px;
