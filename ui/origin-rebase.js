@@ -73,6 +73,7 @@
 //
 // The handle is remembered for the page session, so the picker appears once.
 
+import { noteProgress } from './progress-delta.js';
 import { state, viewport3d } from './app-state.js';
 import { setStatus, markDirty, quickSave } from '../import-export/save-load.js';
 import { exportCalibrationTOML, downloadTOML } from '../import-export/file-io.js';
@@ -625,7 +626,7 @@ function openProgressModal(onCancel) {
             var label = document.getElementById('rebaseProgressLabel');
             var fill = document.getElementById('rebaseProgressFill');
             if (label) label.textContent = n(done) + ' / ' + n(total) + ' (' + pct + '%)';
-            if (fill) fill.style.width = pct + '%';
+            if (fill) { fill.style.width = pct + '%'; noteProgress(fill, pct / 100); }
         },
         setPhase: function (text) {
             var label = document.getElementById('rebaseProgressLabel');
