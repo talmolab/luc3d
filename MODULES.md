@@ -729,8 +729,9 @@ is no hydration sweep and no resident-only hazard here.
 
 **Imports from project modules.** `./origin-frame.js` (`applyOriginFrame`,
 `mulMat3Vec3`, `rebaseExtrinsics`), `./pose-data.js` (`pooledPoints3d` — `applyOriginRebase` stores each re-based group in the slab pool — `points3dNodeCount`,
-`hasPoint3d`, `isPoints3dFromFile` / `markPoints3dFromFile` — a group whose 3D
-was read from a file keeps that mark across the re-base, so the display still
+`hasPoint3d`, `isPoints3dFromFile` / `markPoints3dFromFile` and
+`isPoints3dSmoothed` / `markPoints3dSmoothed` — a group whose 3D was read from a
+file or smoothed keeps that mark across the re-base, so the display still
 reprojects it rather than re-solving). DOM-free.
 
 **Imported by.** `ui/origin-rebase.js`.
@@ -1195,8 +1196,15 @@ points3d `.h5` import). `ui/rendering.js`'s reprojection fill reprojects marked
 3D rather than re-solving it, even with a reprojection-error threshold set,
 since a re-solve would show LUCID's answer instead of the file's. Keyed by the
 ARRAY so it lapses by itself: every path that re-solves or edits a group's 3D
-assigns a new array, and nothing writes a group's `points3d` in place. The
-origin re-base (`applyOriginRebase`) carries the mark to the re-based array.
+assigns a new array, and nothing but the smoothing pass writes a group's
+`points3d` in place. The origin re-base (`applyOriginRebase`) carries the mark
+to the re-based array.
+
+**Smoothed 3D is marked the same way.** `markPoints3dSmoothed(points3d)` /
+`isPoints3dSmoothed(points3d)` — the arrays `pose/temporal-smoothing.js` wrote
+(in place). The reprojection fill reprojects them (a re-solve would draw the
+unsmoothed answer), `adoptPrior3d` never adopts them (re-triangulating undoes
+the pass), and the origin re-base carries the mark.
 
 **`InstanceGroup.points3d` on the bulk paths lives in a slab pool.**
 `pooledPoints3d(points)` returns a `Float64Array` VIEW of exactly the group's 3N
@@ -2361,6 +2369,10 @@ fall into the resident-only bug class of luc3d #194/#195.
 **Provenance.** Sets `InstanceGroup.smoothed = true` and clears the derived
 reprojection caches (`group.reprojections`; `group.reprojectedInstances` goes back
 to the shared `NO_REPROJECTED_INSTANCES`, never `clear()`ed), which refill lazily.
+It also marks the written array (`markPoints3dSmoothed`), so that refill
+reprojects the smoothed 3D instead of re-solving the 2D — without the mark,
+groups with no `triangulationMethod` (Track All's) or any group under a
+reprojection-error threshold drew the unsmoothed answer.
 `triangulationMethod` is deliberately UNTOUCHED: smoothing is
 orthogonal to which solver produced the points (a group can be BA-solved AND
 smoothed), and a third value there would erase the solver identity
@@ -2371,7 +2383,7 @@ smoothed), and a third value there would erase the solver identity
 `smoothTrajectory`, `smoothSession`.
 
 **Imports.** `pose/pose-data.js` (`POINT3D_STRIDE`, `points3dNodeCount`,
-`NO_REPROJECTED_INSTANCES`) only —
+`NO_REPROJECTED_INSTANCES`, `markPoints3dSmoothed`) only —
 no UI imports, so the module stays unit-testable in plain Node.
 
 **Imported by.** `ui/ui-wiring.js` (`smoothSession`, `resolveSmoothingParams`).
@@ -2603,7 +2615,8 @@ a Refined solve with a DLT one behind the user's back. Three helpers:
   `triangulationMethod` and `usedCameras`; returns true when `group` therefore
   needs no solve. Requires identical membership **AND**
   `prior.triangulationMethod === method`, so it only fires when re-solving would
-  be a provable no-op (an *unknown* prior method never matches). Does **not**
+  be a provable no-op (an *unknown* prior method never matches; smoothed 3D,
+  `isPoints3dSmoothed`, never matches either). Does **not**
   copy `reprojections` — leaving them empty is what lets `ui/rendering.js`'s fill
   regenerate them (and `state.triangulationResults`) with the adopted method.
 
@@ -6094,8 +6107,10 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   after one. **3D read from a file** (`isPoints3dFromFile`: a loaded `.slp`'s,
   an imported points3d `.h5`'s) is reprojected whenever the group is clean,
   threshold or not, method or not — a re-solve would show LUCID's answer
-  instead of the 3D the project holds. Anything else (Track All's provisional
-  3D, an edited group) is re-solved. The `.slp` load, moving a view between
+  instead of the 3D the project holds. **Smoothed 3D** (`isPoints3dSmoothed`)
+  is reprojected the same way, or the overlay would re-solve the unsmoothed
+  answer (`tests/e2e/temporal-smoothing-display.mjs`). Anything else (Track
+  All's provisional 3D, an edited group) is re-solved. The `.slp` load, moving a view between
   sessions and the overlay video export also leave derived state to this fill
   (`tests/e2e/load-export-move-bounded-derived-state.mjs`).
 
@@ -6178,7 +6193,7 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `getInstanceGroupsForFrame`, `triangulateAndReproject`,
   `reprojectStoredPoints3d`, `storeReprojectedInstances`.
 - `../pose/lazy-residency.js` — `dropDerivedReprojections`.
-- `../pose/pose-data.js` — `points3dNodeCount`, `isPoints3dFromFile`.
+- `../pose/pose-data.js` — `points3dNodeCount`, `isPoints3dFromFile`, `isPoints3dSmoothed`.
 - `./overlays.js` — `drawFrameOverlays`.
 - `./view-legend.js` — `syncViewLegends`.
 - `./settings.js` — `isCameraTracked` (passed to `drawFrameOverlays` as
@@ -10421,7 +10436,9 @@ Both menus carry a third item below a separator, **Temporal Smoothing** (luc3d
 #134), handled by the private `runTemporalSmoothing(currentFrameOnly)`. It reads
 `getSmoothingParams()`; when both kernels are off it says so and opens Settings ▸
 Temporal Smoothing rather than silently doing nothing; otherwise it calls
-`smoothSession` (`pose/temporal-smoothing.js`), then `markDirty` +
+`smoothSession` (`pose/temporal-smoothing.js`), drops the `state.triangulationResults`
+entries of every group whose reprojections the pass cleared (the fill appends a
+fresh one, and the panel would average both), then `markDirty` +
 `drawAllOverlays` + `update3DViewport` + `updateInfoPanel`. Under `Triangulate`
 it passes `writeFrames: new Set([state.currentFrame])` — the whole trajectory is
 still READ (a filter needs neighbours on both sides), only the current frame is

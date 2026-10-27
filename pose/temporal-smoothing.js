@@ -115,6 +115,7 @@ import {
     POINT3D_STRIDE,
     points3dNodeCount,
     NO_REPROJECTED_INSTANCES,
+    markPoints3dSmoothed,
 } from './pose-data.js';
 
 // Identity id meaning "no identity" (matches `InstanceGroup`'s default).
@@ -467,6 +468,7 @@ export function smoothTrajectory(byFrame, cfg, writeFrames) {
         }
         if (touched > 0) {
             invalidateReprojections(g);
+            markPoints3dSmoothed(pts2);
             g.smoothed = true;
             framesWritten++;
             nodesWritten += touched;

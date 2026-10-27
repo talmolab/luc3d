@@ -2924,9 +2924,19 @@ export function setupUI() {
         var parts = [];
         if (cfg.medianWindow) parts.push('median ' + cfg.medianWindow);
         if (cfg.gaussianWindow) parts.push('Gaussian ' + cfg.gaussianWindow);
-        setStatus('Smoothed ' + stats.frames + ' frame' + (stats.frames === 1 ? '' : 's') +
-            ' across ' + stats.tracks + ' track' + (stats.tracks === 1 ? '' : 's') +
+        setStatus('Smoothed ' + stats.frames.toLocaleString('en-US') + ' frame' + (stats.frames === 1 ? '' : 's') +
+            ' across ' + stats.tracks.toLocaleString('en-US') + ' track' + (stats.tracks === 1 ? '' : 's') +
             ' (' + parts.join(' + ') + ')');
+
+        // The info panel's per-frame results still hold the pre-smoothing 3D
+        // and errors of every group the pass wrote (its reprojections are now
+        // null), and the reprojection fill APPENDS a fresh entry for each, so
+        // drop the stale ones or the panel would average both.
+        state.triangulationResults.forEach(function (results, fi) {
+            var kept = results.filter(function (r) { return !r.group || !!r.group.reprojections; });
+            if (kept.length === 0) state.triangulationResults.delete(fi);
+            else if (kept.length !== results.length) state.triangulationResults.set(fi, kept);
+        });
 
         markDirty();
         drawAllOverlays(state.currentFrame);
