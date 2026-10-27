@@ -355,8 +355,12 @@ export function candidateMoments(frames, out, inputTracks, ambiguous, look, fps,
 }
 
 /** The handover look: a lone detection whose nearest detection in the last `lookSeconds` lay within
- *  `nearBody` body lengths and wore another track. "Lone" = no other detection within one body length. */
-export const HANDOVER_DEFAULTS = { lookSeconds: 0.5, nearBody: 0.5 };
+ *  `nearBody` body lengths and wore another track. "Lone" = no other detection within one body length.
+ *  1 s, not 0.5: a mouse often drops out of detection for over half a second and comes back on the other
+ *  track (sham_gdx R289: 0.6 s); on proofread data 1 s put 225 of 232 SLAP held-out switches on the list
+ *  (0.5 s: 222) at 1.06 places a minute (0.97), and the review fixed 95 of 108 erroneous sham_gdx videos to
+ *  >= 99.9% (92); 2 s added places without catching more. */
+export const HANDOVER_DEFAULTS = { lookSeconds: 1, nearBody: 0.5 };
 
 /** Mean of the present nodes of tracker points, or null. */
 function pointsCentroid(p) {

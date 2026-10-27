@@ -2540,19 +2540,26 @@ output, never from the observer.
 (`reviewResult(moments, session, fps)` -> a result with `cue: 'review'`, one
 'onset' row per moment, `score` 0, `look` = its cues, no far edge). A handover is
 a LONE detection (none other within one body length) whose nearest detection in
-the last `lookSeconds` (0.5) lay within `nearBody` (0.5) body lengths and wore
+the last `lookSeconds` (1) lay within `nearBody` (0.5) body lengths and wore
 another track (`HANDOVER_DEFAULTS`; body length = median detection extent): the
 lone animal hopping onto a stray detection's track, or onto a track another animal
-left — the switches no contact sees. The checks keep testing `moments` only (the
+left — the switches no contact sees. 1 s rather than 0.5 because a mouse often
+drops out of detection for over half a second and comes back on the other track
+(sham_gdx R289: 0.6 s, a switch the 0.5 s list missed entirely); 2 s added places
+without catching more. The checks keep testing `moments` only (the
 candidates they were calibrated on), so the coat-brightness check is unchanged.
 Measured 2026-10-21/27 offline through this code (the harness rebuilt in
 `~/luc3d-eval`, `measure_review.mjs` / `measure_fix.mjs`), a switch counting as on
 the list when one of its ends is within 2 s of a row:
-- **87 proofread SLAP top/mid views:** 2 mice (held-out 16) 0.97 rows a minute,
-  96% of 232 switches on the list, 9.3% of the video within 2 s of a row; 3–4
-  mice (original six) 1.02 a minute, 86% of 44, 7.7%.
+- **87 proofread SLAP top/mid views:** 2 mice (held-out 16) 1.06 rows a minute,
+  97% of 232 switches on the list, 10.2% of the video within 2 s of a row; 3–4
+  mice (original six) 1.04 a minute, 86% of 44, 7.9%. (With the earlier 0.5 s
+  look-back: 0.97 a minute and 96% on 2 mice, 1.02 and 86% on 3–4.)
 - **207 sham_gdx conditions (2 mice, mostly a lone subject before its partner
-  enters):** 1.05 rows a minute, 91% of 139, 8.6%.
+  enters):** 1.13 rows a minute, 94% of 139, 9.3% (0.5 s: 1.05, 91%, 8.6%). A
+  reviewer simulated on all 207 (it plays each row to the next place, keeping who is
+  who, and fixes where a mouse wears another label) takes the 108 videos with errors
+  from 88.1% to 99.90% correct on average, 95 of them to >= 99.9%.
 - **Every close encounter instead** would be 0.5–1.8 rows a minute but long ones
   (median 3–16 s, p90 up to minutes), covering 34–80% of the video, which is why
   encounters are not on the list (the checks flag the ones worth a look).
@@ -2601,7 +2608,7 @@ cannot see.
 out, inputTracks, ambiguous, look, fps, extra?)` (`extra`: more candidates `{f, a, b,
 cue}` to cluster with them); `CANDIDATE_DEFAULTS` (`ambiguityMargin`
 0.1, `trackletGapFrames` 5, `clusterSeconds` 3); `handoverCandidates(frames, out, fps,
-opts)` -> `[{f, a, b, cue: 'handover'}]`; `HANDOVER_DEFAULTS` (`lookSeconds` 0.5,
+opts)` -> `[{f, a, b, cue: 'handover'}]`; `HANDOVER_DEFAULTS` (`lookSeconds` 1,
 `nearBody` 0.5); `reviewResult(moments, session, fps)` -> the review list's result; `singleCameraCheckSession(session)`
 -> stand-in | null | `{fail}`; `swapSingleCameraIdentities(session, from, to, idA, idB)`
 -> `{frames, tracks: boolean}` | null; `singleCameraCheckOptions(cue)` -> the options
