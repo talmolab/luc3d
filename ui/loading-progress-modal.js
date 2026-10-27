@@ -30,6 +30,8 @@
  * just the header row.
  */
 
+import { noteProgress } from './progress-delta.js';
+
 export class LoadingProgressModal {
     constructor(options = {}) {
         this.title = options.title || 'Loading';
@@ -331,7 +333,10 @@ export class LoadingProgressModal {
         else if (task.phase === 'canplay') display = 0.05 * (task.ratio || 0);
         else if (task.phase === 'mp4box') display = 0.05 + 0.85 * (task.ratio || 0);
         else display = 0;
-        if (bar && bar.style) bar.style.width = (display * 100).toFixed(1) + '%';
+        if (bar && bar.style) {
+            bar.style.width = (display * 100).toFixed(1) + '%';
+            noteProgress(bar, display);
+        }
         if (barWrap && typeof barWrap.setAttribute === 'function') {
             barWrap.setAttribute('aria-valuenow', String(Math.round(display * 100)));
         }
