@@ -2552,7 +2552,7 @@ the list when one of its ends is within 2 s of a row:
   96% of 232 switches on the list, 9.3% of the video within 2 s of a row; 3–4
   mice (original six) 1.02 a minute, 86% of 44, 7.7%.
 - **207 sham_gdx conditions (2 mice, mostly a lone subject before its partner
-  enters):** A+T+H 1.10 a minute, 91% of 139, 8.6%.
+  enters):** 1.05 rows a minute, 91% of 139, 8.6%.
 - **Every close encounter instead** would be 0.5–1.8 rows a minute but long ones
   (median 3–16 s, p90 up to minutes), covering 34–80% of the video, which is why
   encounters are not on the list (the checks flag the ones worth a look).
