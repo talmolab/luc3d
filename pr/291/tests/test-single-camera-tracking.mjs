@@ -362,6 +362,13 @@ group('9. The review list: handovers, rows, Fix plan, saved checklist');
     frames = []; out = [];
     for (let f = 0; f < 60; f++) { frames.push(fr(f, [f < 30 ? [100, 100] : [500, 400]])); out.push([f < 30 ? 0 : 1]); }
     eq(SCT.handoverCandidates(frames, out, 30).length, 0, 'a track appearing far from the last detection is not a handover');
+    // (d) a lone animal undetected for 0.6 s that comes back nearby on the other track (sham_gdx R289): a handover —
+    // the look-back is 1 s, not 0.5 — but not after a 1.5 s gap
+    const gap = (missing) => { const fr2 = [], o2 = []; for (let f = 0; f < 90; f++) { if (f >= 30 && f < 30 + missing) continue;
+        fr2.push(fr(f, [[300 + (f < 30 ? 0 : 20), 200]])); o2.push([f < 30 ? 0 : 1]); } return SCT.handoverCandidates(fr2, o2, 30); };
+    eq(SCT.HANDOVER_DEFAULTS.lookSeconds, 1, 'the handover look-back is 1 s');
+    ok(gap(18).length >= 1 && gap(18)[0].f === 48, `a lone animal back on the other track after 0.6 s undetected is a handover (${JSON.stringify(gap(18)[0])})`);
+    eq(gap(45).length, 0, '…after 1.5 s undetected it is not');
 
     // The lone animal of §8 hopping onto its copies' tracks, without removal: the hops are on the review list.
     const N = 900, ENTER = 600, walk = f => [600 + 300 * Math.sin(f / 30), 240 + 40 * Math.sin(f / 50)];
