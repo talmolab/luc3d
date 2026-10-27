@@ -43,8 +43,8 @@ const THRESHOLD_DEFAULTS = {
     imageCheckHz: 2,
     imageCheckBackgroundHz: 0.1,
     imageCheckMaxViews: 3,
-    imageCheckGpuTimePct: 50,
-    imageCheckCpuCoresPct: 50,
+    imageCheckGpuTimePct: 80,
+    imageCheckCpuCoresPct: 80,
     imageCheckWebNN: 0,
 };
 
