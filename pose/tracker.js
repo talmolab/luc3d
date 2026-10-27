@@ -32,6 +32,7 @@ import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js
 import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js';
 import { startTrackerWorker } from './tracker-pool.js';
 import { fitSessionPoseModels, createPoseCheckRun, poseCheckExcludes, finishPoseCheckRun } from './pose-check-session.js';
+import { passesDetectionFilter } from './detection-filter-stats.js';
 import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js';
 import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
@@ -208,11 +209,8 @@ function crossViewScore(instA, camA, instB, camB) {
 // unless the Tracking Wizard / bench sets them.
 //   filterMinVisibleNodes — geometry gate, needs no per-detection score (sleap-3d Stage-1 = 8)
 //   filterMinInstanceScore — confidence gate, only applies when inst.score is available (sleap-3d = 0.85)
-function passesDetectionFilter(inst, minVis, minScore) {
-    if (minVis > 0 && inst.countPoints() < minVis) return false;
-    if (minScore > 0 && inst.score != null && inst.score < minScore) return false;
-    return true;
-}
+// `passesDetectionFilter` lives in pose/detection-filter-stats.js, which the
+// Tracking Wizard's readout also counts with, so the two cannot disagree.
 
 function collectInstances(frameGroup, cameras) {
     var camInstances = {};
