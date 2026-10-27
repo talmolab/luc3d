@@ -47,6 +47,7 @@ const THRESHOLD_DEFAULTS = {
     autoImageSwitchCheck: 0,
     imageChangeThreshold: -0.8,
     imageCheckHz: 2,
+    imageCheckBackgroundHz: 0.1,
     imageCheckMaxViews: 3,
     imageCheckWebNN: 0,
     autoBrightnessSwitchCheck: 1,

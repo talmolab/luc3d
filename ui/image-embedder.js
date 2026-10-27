@@ -34,8 +34,13 @@
  * 0.5 s) each sample is moved to its nearest keyframe and decoded as that ONE
  * frame — see `planKeyframeSamples` (pose/id-switch-check.js) and keyframeIndices.
  *
- * Depends on: ui/app-state.js (state.views), pose/id-switch-check.js
- * (planKeyframeSamples, KEYFRAME_GAP_TOLERANCE), ui/load-graph.js (the busy clock, the
+ * Repeat runs: every crop's embedding is remembered (pose/embedding-cache.js,
+ * keyed on everything the crop's pixels depend on — see `embeddingCacheScope`
+ * and `planFrameCrops` in createImageEmbedder), so after Track All re-runs only
+ * the crops whose keypoints or masks changed are decoded, cut and embedded again.
+ *
+ * Depends on: ui/app-state.js (state.views, state.sessions), pose/id-switch-check.js
+ * (planKeyframeSamples, KEYFRAME_GAP_TOLERANCE), pose/embedding-cache.js, ui/load-graph.js (the busy clock, the
  * load meter and the CPU line, for the progress dialog), mediabunny (EncodedPacketSink, imported lazily, for the keyframe index);
  * spawns ui/image-crop-worker.js and ui/image-model-worker.js.
  */
@@ -44,6 +49,7 @@ import { state } from './app-state.js';
 import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE, findNode, isTailNode } from '../pose/id-switch-check.js';
 import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js';
 import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js';
+import { EmbeddingCache, cropKeyHash, hullsReachingCrop } from '../pose/embedding-cache.js';
 
 // The load meter now lives in ui/load-graph.js (shared with the loading overlay); still exported from here.
 export { createLoadMeter };
@@ -648,11 +654,10 @@ export function keyframeIndices(decoder) {
  * `getFrame`.
  */
 export function streamingReader(decoder, frames, decode) {
-    const be = decoder && decoder._mbBackend;
-    if (!be || !be.sink || typeof be.sink.samplesAtTimestamps !== 'function' || !be._frameTimes) return null;
     decode = decode || frames;
+    if (!canStream(decoder, decode)) return null;
+    const be = decoder._mbBackend;
     const ts = decode.map(function (f) { return be._frameTimes[f]; });
-    if (ts.some(function (t) { return t == null; })) return null;
     const pos = new Map(frames.map(function (f, i) { return [f, i]; }));
     const it = be.sink.samplesAtTimestamps(ts)[Symbol.asyncIterator]();
     let ptr = 0, chain = Promise.resolve();
@@ -675,6 +680,13 @@ export function streamingReader(decoder, frames, decode) {
         },
         close: function () { try { if (it.return) it.return(); } catch (e) { /* ignore */ } },
     };
+}
+
+/** Can `streamingReader` stream these frames from this decoder (a mediabunny backend that knows every one's timestamp)? */
+function canStream(decoder, decode) {
+    const be = decoder && decoder._mbBackend;
+    if (!be || !be.sink || typeof be.sink.samplesAtTimestamps !== 'function' || !be._frameTimes) return false;
+    return decode.every(function (f) { return be._frameTimes[f] != null; });
 }
 
 /**
@@ -726,6 +738,8 @@ export function summarizeEmbedTiming(tm, backend, dtype) {
         // for the results + the CLS copy, which is where the GPU's compute time shows up
         gpuBusyPct: 100 * Math.min(1, busy / wall), modelMsPerCrop: per(busy, tm.crops), submitMs: tm.runMs, gpuWaitMs: tm.readMs,
         decodeMsPerFrame: per(tm.decodeMs, tm.frames), cropMsPerFrame: per(tm.cropMs, tm.frames), queueMsPerFrame: per(tm.queueMs, tm.frames),
+        // reused from an earlier run (pose/embedding-cache.js): crops, and frames with nothing left to decode
+        cachedCrops: tm.cachedCrops || 0, cachedFrames: tm.cachedFrames || 0, cacheLookupMs: tm.cacheLookupMs || 0,
     };
 }
 
@@ -788,12 +802,20 @@ export function summarizeKeyframePlans(plans) {
 
 /** One line for the dialog / console: "155 crops/s over 15 s · GPU busy 98% (41 batches of ~55, 6.3 ms/crop) · per frame: decode 37 ms, crop 146 ms, queue 199 ms · WebGPU fp16". */
 export function formatEmbedTiming(t) {
-    if (!t || !t.crops) return '';
+    if (!t) return '';
+    if (!t.crops) return t.cachedCrops ? 'all ' + t.cachedCrops.toLocaleString('en-US') + ' crops from the cache (' + t.seconds.toFixed(1) + ' s)' : '';
     const cpu = t.backend === 'cpu';
     return Math.round(t.cropsPerS) + ' crops/s over ' + t.seconds.toFixed(0) + ' s · ' + (cpu ? 'model busy ' : 'GPU busy ') + Math.round(t.gpuBusyPct) + '% (' +
         t.batches + ' batches of ~' + Math.round(t.avgBatch) + ', ' + t.modelMsPerCrop.toFixed(1) + ' ms/crop) · per frame: decode ' +
         Math.round(t.decodeMsPerFrame) + ' ms, crop ' + Math.round(t.cropMsPerFrame) + ' ms, queue ' + Math.round(t.queueMsPerFrame) + ' ms' +
-        ' · ' + (cpu ? 'CPU (' + t.workers + ' workers)' : t.backend === 'webnn' ? 'WebNN' : 'WebGPU') + (t.dtype ? ' ' + t.dtype : '') + formatKeyframes(t.keyframes);
+        ' · ' + (cpu ? 'CPU (' + t.workers + ' workers)' : t.backend === 'webnn' ? 'WebNN' : 'WebGPU') + (t.dtype ? ' ' + t.dtype : '') + formatKeyframes(t.keyframes) + formatCached(t);
+}
+
+function formatCached(t) {
+    if (!t.cachedCrops) return '';
+    const all = t.cachedCrops + t.crops;
+    return ' · ' + t.cachedCrops.toLocaleString('en-US') + ' of ' + all.toLocaleString('en-US') + ' crops (' + Math.round(100 * t.cachedCrops / all) +
+        '%) from the cache, ' + t.cachedFrames.toLocaleString('en-US') + ' frames not decoded';
 }
 
 function formatKeyframes(k) {
@@ -861,6 +883,105 @@ export function createCropPool(clock) {
     return pool;
 }
 
+// ---- The embedding cache, shared by every session (one LRU bound for all of them), each session's
+// entries under its own key prefix. Entries die with their session (`embeddingCacheScope` drops the
+// sessions no longer open), when its videos change, and by LRU when the cache is full.
+const _embedCache = new EmbeddingCache();
+const _filledScopes = new Set();               // key prefixes (session + model) that have had entries stored
+const _sessionUid = new WeakMap(), _objectUid = new WeakMap();
+const _sessionVideos = new Map();              // session uid -> the video signature its entries were cut from
+let _nextUid = 1;
+function uidOf(map, o) {
+    if (!map.has(o)) map.set(o, _nextUid++);
+    return map.get(o);
+}
+
+/**
+ * Which video a view shows, for the cache: its decoder's source File (or URL) —
+ * the same File object is the same bytes — else the decoder object itself. A
+ * new File (re-picked video, `switchSource`) or a new decoder is a new video.
+ */
+export function viewVideoId(view) {
+    const d = view && view.decoder;
+    if (!d) return 'none';
+    const src = d.file || d._source || d.url || d;
+    return typeof src === 'string' ? 'url:' + src : 'obj:' + uidOf(_objectUid, src);
+}
+
+/**
+ * The key prefix of `session`'s cache entries under the videos `views` show
+ * ('<uid>|'). Drops the entries of sessions that are no longer open (not in
+ * state.sessions: closed or reloaded projects), and this session's entries when
+ * its videos changed since they were stored.
+ */
+export function embeddingCacheScope(session, views) {
+    const uid = uidOf(_sessionUid, session);
+    const sig = views.map(function (v) { return (v.cameraName || v.name) + '=' + viewVideoId(v); }).join('\u0001');
+    const open = new Set([uid]);
+    (state.sessions || []).forEach(function (s) { if (s && typeof s === 'object') open.add(uidOf(_sessionUid, s)); });
+    const drop = function (u) {
+        const pre = u + '|';
+        _embedCache.deleteWhere(function (k) { return k.startsWith(pre); });
+        _samplePixels.forEach(function (v, k) { if (k.startsWith(pre)) _samplePixels.delete(k); });
+        _filledScopes.forEach(function (sc) { if (sc.startsWith(pre)) _filledScopes.delete(sc); });
+    };
+    _sessionVideos.forEach(function (s, u) { if (!open.has(u)) { drop(u); _sessionVideos.delete(u); } });
+    if (_sessionVideos.has(uid) && _sessionVideos.get(uid) !== sig) drop(uid);
+    _sessionVideos.set(uid, sig);
+    return uid + '|';
+}
+
+// ---- Sample crops for the progress dialog on cached runs: a frame answered from the cache cuts no crop,
+// so the grey pixels of one crop per sample frame (SAMPLE_FRAMES_PER_RUN evenly spaced frames a run) are
+// kept beside the vectors, under the same key, and shown when that frame comes from the cache again.
+/** Frames per run whose sample crop's pixels are kept for a later cached run's dialog. */
+export const SAMPLE_FRAMES_PER_RUN = 200;
+/** Most sample crops kept, all sessions together (INPUT x INPUT grey bytes each: 50 KB, so 12.8 MB). */
+export const SAMPLE_PIXELS_MAX = 256;
+const _samplePixels = new Map();               // full cache key -> Uint8Array(INPUT * INPUT), least recently used first
+
+/** A model input's channel 0 as grey bytes (what `inputTensorToPixels` shows). */
+export function tensorToGrey(tensor) {
+    const n = INPUT * INPUT, m = MEAN[0], sd = STD[0], out = new Uint8Array(n);
+    for (let i = 0; i < n; i++) { const v = Math.round((tensor[i] * sd + m) * 255); out[i] = v < 0 ? 0 : v > 255 ? 255 : v; }
+    return out;
+}
+
+/** Grey bytes back to channel 0 of a model input — all `inputTensorToPixels` reads; it shows the same bytes. */
+export function greyToTensor(grey) {
+    const n = INPUT * INPUT, m = MEAN[0], sd = STD[0], out = new Float32Array(n);
+    for (let i = 0; i < n; i++) out[i] = (grey[i] / 255 - m) / sd;
+    return out;
+}
+
+function putSamplePixels(key, tensor) {
+    _samplePixels.delete(key);
+    _samplePixels.set(key, tensorToGrey(tensor));
+    while (_samplePixels.size > SAMPLE_PIXELS_MAX) _samplePixels.delete(_samplePixels.keys().next().value);
+}
+
+/** Forget every cached embedding (tests, benchmarks; `window.__lucid` debugging). */
+export function clearEmbeddingCache() {
+    _embedCache.clear(); _filledScopes.clear(); _sessionVideos.clear(); _samplePixels.clear();
+}
+
+/** How full the embedding cache is: `{entries, bytes, maxEntries, samples}` (samples: sample crops kept for the dialog). */
+export function embeddingCacheInfo() {
+    return { entries: _embedCache.size, bytes: _embedCache.bytes, maxEntries: _embedCache.maxEntries, samples: _samplePixels.size };
+}
+
+/** Per item, its crops' `{camera, vector}` (+ `cached: true` for a cache hit) in view order — the order the
+ *  model path has always returned them in, so a run that mixes hits and new crops returns the same lists. */
+function assembleItems(nItems, entries, cams) {
+    entries.sort(function (a, b) { return a.ii - b.ii || a.vi - b.vi; });
+    const out = [];
+    for (let i = 0; i < nItems; i++) out.push([]);
+    entries.forEach(function (e) {
+        out[e.ii].push(e.cached ? { camera: cams[e.vi], vector: e.vector, cached: true } : { camera: cams[e.vi], vector: e.vector });
+    });
+    return out;
+}
+
 /**
  * Build the provider `checkImageSwitches` needs over the active session's loaded
  * videos: `getEmbeddings(frame, items)`, plus `prepareFrames(frames)` /
@@ -876,9 +997,13 @@ export function createCropPool(clock) {
  * `opts.maxViewsPerAnimal` (0 = all) embeds only each animal's N largest views
  * (see selectViews): the model, not decoding, is the bottleneck once frames are
  * streamed, so time scales with the number of crops.
+ * `opts.cache` (default true; `window.LUCID_IMAGE_CACHE = 0` also turns it off)
+ * reuses the embeddings of crops cut identically on an earlier run (see the
+ * cache section below). `opts.model` (tests, benchmarks) replaces the model: an
+ * async `(data, n) -> n vectors`, tagged 'test' in the cache.
  * @param {Session} session
  * @param {{onStatus?: function(string), maxViewsPerAnimal?: number, webnn?: boolean|'force',
- *          device?: 'auto'|'webgpu'|'cpu', cpuWorkers?: number}} [opts]
+ *          device?: 'auto'|'webgpu'|'cpu', cpuWorkers?: number, cache?: boolean, model?: function}} [opts]
  * @returns {Promise<{getEmbeddings: function, prepareFrames: function, releaseFrames: function, backend: function,
  *          device: function, busyMs: function, cpuBusyMs: function, sampleCrops: function, views: string[]}>}
  */
@@ -889,12 +1014,15 @@ export async function createImageEmbedder(session, opts) {
     const sk = skeletonIndex((session.skeleton && session.skeleton.nodes) || []);
     if (sk.nose < 0 || sk.tti < 0) throw cannotRun('needs Nose and TTI nodes in the skeleton to align crops');
     // A hardware GPU through WebGPU, else the CPU workers (pickImageDevice)
-    const where = opts.device === 'cpu' ? { kind: 'cpu', adapter: null, why: 'the CPU was requested' }
+    const testModel = typeof opts.model === 'function' ? opts.model : null;
+    const where = testModel ? { kind: 'test', adapter: null, why: '' }
+        : opts.device === 'cpu' ? { kind: 'cpu', adapter: null, why: 'the CPU was requested' }
         : opts.device === 'webgpu' ? { kind: 'webgpu' } : await pickImageDevice();
     let T = null, model = null, device = null, dtype = 'fp32', adapter = where.adapter, cpu = null, cpuWorkers = 0;
     // the CPU threads' busy time (cpuBusyMs): crop workers, CPU model workers, and crops cut on the main thread
     const cpuClock = createBusyClock();
     if (where.kind === 'webgpu') ({ T, model, device, dtype, adapter } = await loadImageModel(opts.onStatus));
+    else if (testModel) dtype = null;
     else {
         if (opts.onStatus) opts.onStatus('No GPU (' + where.why + ') — loading the image model to run on the CPU (' + 2 * IMAGE_MODEL_MB + ' MB on first use, cached afterwards)…');
         const nav = typeof navigator !== 'undefined' ? navigator : {};
@@ -902,9 +1030,9 @@ export async function createImageEmbedder(session, opts) {
         cpuWorkers = cpu.size;
     }
     // WebNN (opt-in, experimental): embed the first frames on both backends, then keep the faster consistent one
-    let nnModel = null, trial = null, backend = cpu ? 'cpu' : 'webgpu';
+    let nnModel = null, trial = null, backend = testModel ? 'test' : cpu ? 'cpu' : 'webgpu';
     let note = cpu ? 'no GPU — ' + where.why + ': ran on the CPU, ' + cpuWorkers + ' worker' + (cpuWorkers === 1 ? '' : 's') : '';
-    if (opts.webnn && !cpu) {                           // WebNN is judged against WebGPU, so not without it
+    if (opts.webnn && !cpu && !testModel) {                           // WebNN is judged against WebGPU, so not without it
         if (!hasWebNN()) note = 'WebNN is not available in this browser (Chrome: enable chrome://flags/#web-machine-learning-neural-network) — used WebGPU';
         else {
             try {
@@ -917,7 +1045,10 @@ export async function createImageEmbedder(session, opts) {
     const dropWebNN = function () { if (nnModel) { try { nnModel.dispose(); } catch (e) { /* ignore */ } } nnModel = null; };
     const SZ = 3 * INPUT * INPUT;
     // timing breakdown for this run (stats()): where the time goes, measured on the user's machine
-    const tm = { frames: 0, crops: 0, batches: 0, t0: 0, t1: 0, decodeMs: 0, cropMs: 0, queueMs: 0, runMs: 0, readMs: 0, maxBatch: 0, busySince: 0 };
+    const tm = { frames: 0, crops: 0, batches: 0, t0: 0, t1: 0, decodeMs: 0, cropMs: 0, queueMs: 0, runMs: 0, readMs: 0, maxBatch: 0, busySince: 0,
+                 cachedCrops: 0, cachedFrames: 0, cacheLookupMs: 0 };
+    // which model produced a batch of vectors: the cache keeps each vector under its producer
+    const tagged = function (vecs, tag) { vecs.tag = tag; return vecs; };
     // busySince: when the model run in flight started (0: none) — busyMs() counts it while it runs
     const runWebGPU = async function (data, n) {
         const a = tm.busySince = performance.now();
@@ -926,7 +1057,7 @@ export async function createImageEmbedder(session, opts) {
             const b = performance.now();
             const out = await clsFromGpu(res, n, device);
             tm.runMs += b - a; tm.readMs += performance.now() - b;
-            return out;
+            return tagged(out, 'webgpu/' + dtype);
         } finally { tm.busySince = 0; }
     };
     // `timed`: count it in the run's timing (not during the WebNN trial, where the WebGPU run is the timed one)
@@ -941,17 +1072,26 @@ export async function createImageEmbedder(session, opts) {
             }
             if (timed) tm.runMs += performance.now() - t0;   // WebNN returns results on the CPU: run + readback in one
         } finally { if (timed) tm.busySince = 0; }
-        return out;
+        return tagged(out, 'webnn/fp16');
     };
     const runCpu = async function (data, n) {
         const a = tm.busySince = performance.now();
         try {
             const out = await cpu.run(data, n);
             tm.runMs += performance.now() - a;           // the workers return results on the CPU: run + readback in one
-            return out;
+            return tagged(out, 'cpu/fp32');
+        } finally { tm.busySince = 0; }
+    };
+    const runTest = async function (data, n) {
+        const a = tm.busySince = performance.now();
+        try {
+            const out = await testModel(data, n);
+            tm.runMs += performance.now() - a;
+            return tagged(out, 'test');
         } finally { tm.busySince = 0; }
     };
     const embed = async function (data, n) {
+        if (testModel) return runTest(data, n);
         if (cpu) return runCpu(data, n);
         if (trial) {
             try {
@@ -978,12 +1118,50 @@ export async function createImageEmbedder(session, opts) {
     let plans = [];
     const useKeyframes = opts.keyframes !== false &&
         !(typeof window !== 'undefined' && window.LUCID_IMAGE_KEYFRAMES === 0);
-    const frameOf = function (vi, frame) {
-        const r = readers && readers[vi];
-        if (r) return r.get(frame);
-        return views[vi].decoder.getFrame(frame);
-    };
     const maxViews = opts.maxViewsPerAnimal > 0 ? Math.floor(opts.maxViewsPerAnimal) : 0;
+    const cams = views.map(function (v) { return v.cameraName || v.name; });
+    // per view, set by prepareFrames: frame -> the frame decoded for it (planKeyframeSamples; absent = itself),
+    // and 's' (streamed) or 'g' (getFrame) — the two paths hand the crop a different kind of image
+    let decodeOf = null, srcKind = null;
+    const decodedAt = function (vi, frame) { const m = decodeOf && decodeOf[vi]; const d = m ? m.get(frame) : undefined; return d === undefined ? frame : d; };
+    // ---- The cache (pose/embedding-cache.js). A crop's pixels depend on the video (the scope's signature),
+    // the camera, the frame decoded and how, the animal's crop geometry and the hulls masked out of it
+    // (cropKeyHash: their exact bits — of the masks, only those that reach the crop square, since a hull
+    // drawn off the canvas changes no pixel); its vector also on the model, so each vector is stored under the
+    // backend + dtype that produced it. prepareFrames looks every crop of the run up BEFORE decoding:
+    // a frame whose crops are all cached is answered without decoding, cropping or the model, and is
+    // left out of the streaming readers; a partly cached frame decodes and embeds only its missing views'
+    // crops. The hits are copied out then, so nothing evicted mid-run can turn a planned hit into a miss.
+    const cacheOn = opts.cache !== false && !(typeof window !== 'undefined' && window.LUCID_IMAGE_CACHE === 0);
+    const cachePrefix = cacheOn ? embeddingCacheScope(session, views) : null;
+    // the tag of the model that answers from now on; null while the WebNN trial may still switch it
+    const modelTag = function () {
+        return trial ? null : backend === 'webnn' ? 'webnn/fp16' : backend === 'cpu' ? 'cpu/fp32' : backend === 'test' ? 'test' : 'webgpu/' + dtype;
+    };
+    let cachedFrames = null, cachedCrops = null;   // frame -> its finished answer; key body -> vector (partly cached frames)
+    // sampleFrames: the frames whose sample crop's pixels are kept (SAMPLE_FRAMES_PER_RUN a run);
+    // cachedSamples: frame -> the stored sample crop shown when that frame is answered from the cache
+    let sampleFrames = null, cachedSamples = null, cachedSampleSeq = 0;
+    /**
+     * The crops to cut on one frame, view-major then item order (the order the model path has always
+     * used): `{ii, vi, g, others, body}`, `body` being the cache key less its scope and model tag.
+     * Every other croppable animal in the view is masked out, picked for this view or not (`others` is
+     * what cutCrop gets — all of them; only the key leaves out the ones that cannot reach the crop).
+     */
+    const planFrameCrops = function (geo, items, at) {
+        const want = items.map(function (it, ii) { return selectViews(geo.map(function (g) { return g[ii]; }), maxViews); });
+        const crops = [];
+        views.forEach(function (v, vi) {
+            const gv = geo[vi];
+            items.forEach(function (it, ii) {
+                if (!want[ii].has(vi)) return;
+                const others = gv.filter(function (g2, j) { return j !== ii && g2; }).map(function (g2) { return g2.hull; });
+                crops.push({ ii: ii, vi: vi, g: gv[ii], others: others,
+                             body: cachePrefix ? vi + '|' + at[vi] + '|' + (srcKind ? srcKind[vi] : 'g') + '|' + cropKeyHash(gv[ii], hullsReachingCrop(gv[ii], others, CROP)) : null });
+            });
+        });
+        return crops;
+    };
     // ---- Batching. Model runs are serialised, but each takes EVERY crop that has queued up meanwhile
     // (up to EMBED_MAX_BATCH): the first frame runs alone, and while it runs the next frames' crops
     // accumulate into a bigger batch. With the check keeping EMBED_IN_FLIGHT frames in flight, the GPU
@@ -1004,7 +1182,7 @@ export async function createImageEmbedder(session, opts) {
         tm.batches++; tm.maxBatch = Math.max(tm.maxBatch, n);
         embed(data, n).then(function (vecs) {
             let k = 0;
-            take.forEach(function (q) { q.resolve(vecs.slice(k, k + q.tensors.length)); k += q.tensors.length; });
+            take.forEach(function (q) { q.resolve(tagged(vecs.slice(k, k + q.tensors.length), vecs.tag)); k += q.tensors.length; });
         }, function (err) {
             take.forEach(function (q) { q.reject(err); });
         }).then(function () { running = false; pump(); });
@@ -1012,28 +1190,60 @@ export async function createImageEmbedder(session, opts) {
     const enqueue = function (tensors) {
         return new Promise(function (resolve, reject) { queue.push({ tensors: tensors, resolve: resolve, reject: reject, at: performance.now() }); pump(); });
     };
+    // A view's keyframes (null: off or unknown). opts.keyframes may be a function (decoder -> keyframe indices):
+    // a test / benchmark hook
+    const viewKeyframes = function (v) {
+        return !useKeyframes ? Promise.resolve(null)
+            : typeof opts.keyframes === 'function' ? Promise.resolve(opts.keyframes(v.decoder)) : keyframeIndices(v.decoder);
+    };
+    // Per view, the frame each of `frames` decodes (planKeyframeSamples), planned over EVERY image sample
+    // (`gridFrames`), asked for or not, cached or not, so a sample decodes the frame it would in a run that
+    // embeds them all: the same crop, the same cache key.
+    const planDecode = function (frames, gridFrames) {
+        const tracked = function (f) { return !!(session.instanceGroups && session.instanceGroups.has(f)); };
+        const grid = Array.isArray(gridFrames) && gridFrames.length >= frames.length ? gridFrames : frames;
+        const gridIndex = new Map(grid.map(function (f, i) { return [f, i]; }));
+        return Promise.all(views.map(async function (v) {
+            const kf = await viewKeyframes(v);
+            const p = planKeyframeSamples(grid, kf, tracked);
+            if (grid === frames) return p;
+            const decode = frames.map(function (f) { const i = gridIndex.get(f); return i == null ? f : p.decode[i]; });
+            return Object.assign({}, p, { decode: decode, snapped: decode.filter(function (d, i) { return d !== frames[i]; }).length });
+        }));
+    };
     const getEmbeddings = async function (frame, items) {
         const tStart = performance.now();
         if (!tm.t0) tm.t0 = tStart;
-        // crop geometry comes from the 2D keypoints alone, so the views to embed are known before decoding
-        const geo = frameCropGeometry(session, frame, items,
-            views.map(function (v) { return v.cameraName || v.name; }),
-            views.map(function (v, vi) { const r = readers && readers[vi]; return r ? r.decodedFrame(frame) : frame; }),
-            sk);
-        const want = items.map(function (it, ii) { return selectViews(geo.map(function (g) { return g[ii]; }), maxViews); });
-        const cropsFor = function (vi) {        // the crops to cut in view vi (every other animal masked out, picked for it or not)
-            const gv = geo[vi], crops = [], who = [];
-            items.forEach(function (it, ii) {
-                if (!want[ii].has(vi)) return;
-                crops.push({ g: gv[ii], others: gv.filter(function (g2, j) { return j !== ii && g2; }).map(function (g2) { return g2.hull; }) });
-                who.push([ii, views[vi].cameraName || views[vi].name]);
-            });
-            return { vi: vi, crops: crops, who: who };
-        };
-        // fetch only the cameras some item needs (a streamed reader steps past a frame nobody asks for);
+        const done = cachedFrames && cachedFrames.get(frame);
+        if (done) {                              // every crop cached (prepareFrames): nothing to decode, cut or embed
+            cachedFrames.delete(frame);
+            const smp = cachedSamples && cachedSamples.get(frame);
+            if (smp) {                           // the dialog's sample crop: the pixels kept when this crop was cut
+                cachedSamples.delete(frame);
+                const who = items[smp.ii];
+                samples.push({ tensor: greyToTensor(smp.grey), frame: frame, camera: cams[smp.vi],
+                               identityId: who && who.group ? who.group.identityId : null, points: smp.points, cached: true });
+                if (samples.length > SAMPLE_CROPS) samples.shift();
+            }
+            tm.frames++; tm.cachedFrames++;
+            done.forEach(function (l) { tm.cachedCrops += l.length; });
+            tm.t1 = performance.now();
+            return done;
+        }
+        // crop geometry comes from the 2D keypoints alone, so the crops to cut are known before decoding
+        const at = views.map(function (v, vi) { return decodedAt(vi, frame); });
+        const crops = planFrameCrops(frameCropGeometry(session, frame, items, cams, at, sk), items, at);
+        const hits = [], byView = new Map();     // byView: vi -> the crops still to cut there
+        crops.forEach(function (c) {
+            const v = cachedCrops && c.body !== null ? cachedCrops.get(c.body) : undefined;
+            if (v) { cachedCrops.delete(c.body); hits.push({ ii: c.ii, vi: c.vi, vector: v, cached: true }); return; }
+            if (!byView.has(c.vi)) byView.set(c.vi, []);
+            byView.get(c.vi).push(c);
+        });
+        // fetch only the cameras with a crop to cut (a streamed reader steps past a frame nobody asks for);
         // a streamed frame is ours to hand over and close, a getFrame one belongs to the decoder's cache
         const images = await Promise.all(views.map(async function (v, vi) {
-            if (!want.some(function (w) { return w.has(vi); })) return null;
+            if (!byView.has(vi)) return null;
             try {
                 const r = readers && readers[vi];
                 const img = r ? await r.get(frame) : await views[vi].decoder.getFrame(frame);
@@ -1044,7 +1254,11 @@ export async function createImageEmbedder(session, opts) {
         tm.decodeMs += tFrames - tStart;
         // per view: the crops to cut there
         const jobs = [];
-        views.forEach(function (v, vi) { if (images[vi]) jobs.push(cropsFor(vi)); });
+        views.forEach(function (v, vi) {
+            if (!images[vi]) return;
+            const list = byView.get(vi);
+            jobs.push({ vi: vi, list: list, crops: list.map(function (c) { return { g: c.g, others: c.others }; }) });
+        });
         const inline = function (job) {
             cpuClock.begin('main');
             try {
@@ -1057,7 +1271,7 @@ export async function createImageEmbedder(session, opts) {
         };
         let tensors;
         try {
-            if (!pool && pool !== null) pool = createCropPool(cpuClock);
+            if (jobs.length && !pool && pool !== null) pool = createCropPool(cpuClock);
             tensors = await Promise.all(jobs.map(async function (job) {
                 if (!pool || pool.broken) return inline(job);
                 const im = images[job.vi];
@@ -1076,7 +1290,7 @@ export async function createImageEmbedder(session, opts) {
             images.forEach(function (im) { if (im && im.owned && im.img && im.img.close) im.img.close(); });
         }
         tm.cropMs += performance.now() - tFrames;
-        return finishFrame(frame, items, { jobs: jobs, tensors: tensors });
+        return finishFrame(frame, items, { jobs: jobs, tensors: tensors, hits: hits });
     };
     // The crops the progress dialog cycles through (sampleCrops): one per frame, rotating through the
     // frame's animals and cameras, the last SAMPLE_CROPS kept. Only references — the tensors are on the
@@ -1085,25 +1299,39 @@ export async function createImageEmbedder(session, opts) {
     // then ~6 s of model time), so a single latest crop would sit still between them.
     const samples = [];
     let sampleSeq = 0;
-    // Queue the frame's crops for the model and hand back {camera, vector} per item.
+    // Queue the frame's new crops for the model, store their vectors, and hand back {camera, vector} per
+    // item — the cache hits and the new vectors together, in view order.
     const finishFrame = async function (frame, items, cut) {
-        const out = items.map(function () { return []; });
-        const owner = [], geos = [];   // owner[i] = [item index, camera]; geos[i] = its crop geometry
+        const entries = cut.hits.slice();
+        const owner = [];   // owner[i] = the planned crop (ii, vi, g, body) of the i-th tensor
         cut.jobs.forEach(function (job, j) {
-            if (cut.tensors[j].length) { job.who.forEach(function (w) { owner.push(w); }); job.crops.forEach(function (c) { geos.push(c.g); }); }
+            if (cut.tensors[j].length) job.list.forEach(function (c) { owner.push(c); });
         });
         tm.frames++;
-        if (!owner.length) return out;
-        const flat = [];
-        cut.tensors.forEach(function (ts) { ts.forEach(function (t) { flat.push(t); }); });
-        const pick = sampleSeq++ % flat.length, who = items[owner[pick][0]];
-        samples.push({ tensor: flat[pick], frame: frame, camera: owner[pick][1], identityId: who && who.group ? who.group.identityId : null,
-                       points: cropPointsToInput(geos[pick]) });
-        if (samples.length > SAMPLE_CROPS) samples.shift();
-        const vecs = await enqueue(flat);
-        tm.crops += vecs.length; tm.t1 = performance.now();
-        vecs.forEach(function (v, i) { out[owner[i][0]].push({ camera: owner[i][1], vector: v }); });
-        return out;
+        tm.cachedCrops += cut.hits.length;
+        if (owner.length) {
+            const flat = [];
+            cut.tensors.forEach(function (ts) { ts.forEach(function (t) { flat.push(t); }); });
+            const pick = sampleSeq++ % flat.length, who = items[owner[pick].ii];
+            samples.push({ tensor: flat[pick], frame: frame, camera: cams[owner[pick].vi], identityId: who && who.group ? who.group.identityId : null,
+                           points: cropPointsToInput(owner[pick].g) });
+            if (samples.length > SAMPLE_CROPS) samples.shift();
+            const vecs = await enqueue(flat);
+            if (cachePrefix && vecs.tag && sampleFrames && sampleFrames.has(frame) && owner[pick].body !== null) {
+                putSamplePixels(cachePrefix + vecs.tag + '|' + owner[pick].body, flat[pick]);
+            }
+            tm.crops += vecs.length;
+            vecs.forEach(function (v, i) {
+                const c = owner[i];
+                entries.push({ ii: c.ii, vi: c.vi, vector: v });
+                if (cachePrefix && c.body !== null && vecs.tag) {
+                    _embedCache.put(cachePrefix + vecs.tag + '|' + c.body, v);
+                    _filledScopes.add(cachePrefix + vecs.tag);
+                }
+            });
+        }
+        if (owner.length || cut.hits.length) tm.t1 = performance.now();
+        return assembleItems(items.length, entries, cams);
     };
     return {
         getEmbeddings: getEmbeddings,
@@ -1118,20 +1346,81 @@ export async function createImageEmbedder(session, opts) {
             if (cpu) t.workers = cpuWorkers;
             return t;
         },
-        prepareFrames: async function (frames) {
-            const tracked = function (f) { return !!(session.instanceGroups && session.instanceGroups.has(f)); };
-            plans = await Promise.all(views.map(async function (v) {
-                // opts.keyframes may be a function (decoder -> keyframe indices): a test / benchmark hook
-                const kf = !useKeyframes ? null
-                    : typeof opts.keyframes === 'function' ? await opts.keyframes(v.decoder) : await keyframeIndices(v.decoder);
-                return planKeyframeSamples(frames, kf, tracked);
-            }));
-            readers = views.map(function (v, vi) { return streamingReader(v.decoder, frames, plans[vi].decode); });
-            plans.forEach(function (p, vi) { p.streamed = !!readers[vi]; });   // (stats() runs after releaseFrames)
+        /** Called with every frame getEmbeddings will be asked for next (increasing) and, optionally, the items
+         *  it will be asked for at each, and every image sample's frame (`gridFrames`, a superset): plans the
+         *  decode, looks the round's crops up in the cache, and opens one streaming reader per camera over the
+         *  frames that still need decoding there. The check calls it once per round (planImageSamples). */
+        prepareFrames: async function (frames, itemsPerFrame, gridFrames) {
+            if (readers) readers.forEach(function (r) { if (r) r.close(); });
+            const round = await planDecode(frames, gridFrames);
+            // stats() reports the whole run (like its timing): this round's plan added to the earlier rounds'
+            const prev = plans;
+            plans = round.map(function (p, vi) {
+                const q = prev[vi];
+                return Object.assign({}, p, { decode: q ? q.decode.concat(p.decode) : p.decode, snapped: (q ? q.snapped : 0) + p.snapped,
+                                               decodedFrames: q ? q.decodedFrames : 0 });
+            });
+            decodeOf = round.map(function (p) { return new Map(frames.map(function (f, i) { return [f, p.decode[i]]; })); });
+            srcKind = views.map(function (v, vi) { return canStream(v.decoder, round[vi].decode) ? 's' : 'g'; });
+            cachedFrames = new Map(); cachedCrops = new Map(); cachedSamples = new Map();
+            const sampleEvery = Math.max(1, Math.ceil(frames.length / SAMPLE_FRAMES_PER_RUN));
+            sampleFrames = new Set(frames.filter(function (f, i) { return i % sampleEvery === 0; }));
+            // per view: the indices (into frames) it still has to decode; null = all of them
+            let need = null;
+            const tag = modelTag();
+            if (cachePrefix && tag && _filledScopes.has(cachePrefix + tag) && Array.isArray(itemsPerFrame) && itemsPerFrame.length === frames.length) {
+                const t0 = performance.now(), scope = cachePrefix + tag + '|';
+                need = views.map(function () { return []; });
+                frames.forEach(function (f, i) {
+                    const items = itemsPerFrame[i] || [];
+                    const at = views.map(function (v, vi) { return round[vi].decode[i]; });
+                    const hits = [], missing = new Set();
+                    planFrameCrops(frameCropGeometry(session, f, items, cams, at, sk), items, at).forEach(function (c) {
+                        const v = _embedCache.get(scope + c.body);
+                        if (v) hits.push({ c: c, v: v }); else missing.add(c.vi);
+                    });
+                    if (!missing.size) {
+                        cachedFrames.set(f, assembleItems(items.length, hits.map(function (h) { return { ii: h.c.ii, vi: h.c.vi, vector: h.v, cached: true }; }), cams));
+                        if (sampleFrames.has(f) && hits.length) {     // its sample crop, rotating through animals and cameras
+                            for (let k = 0, o = cachedSampleSeq++; k < hits.length; k++) {
+                                const c = hits[(o + k) % hits.length].c, grey = _samplePixels.get(scope + c.body);
+                                // the overlay from TODAY's keypoints (the tail is not in the key)
+                                if (grey) { cachedSamples.set(f, { grey: grey, ii: c.ii, vi: c.vi, points: cropPointsToInput(c.g) }); break; }
+                            }
+                        }
+                    } else {
+                        hits.forEach(function (h) { cachedCrops.set(h.c.body, h.v); });
+                        missing.forEach(function (vi) { need[vi].push(i); });
+                    }
+                });
+                tm.cacheLookupMs += performance.now() - t0;
+            }
+            readers = views.map(function (v, vi) {
+                if (srcKind[vi] !== 's') return null;
+                if (!need) return streamingReader(v.decoder, frames, round[vi].decode);
+                if (!need[vi].length) return null;            // every crop of this view cached: nothing to decode
+                return streamingReader(v.decoder, need[vi].map(function (i) { return frames[i]; }), need[vi].map(function (i) { return round[vi].decode[i]; }));
+            });
+            plans.forEach(function (p, vi) {                   // (stats() runs after releaseFrames)
+                p.streamed = srcKind[vi] === 's';
+                p.decodedFrames += need ? need[vi].length : frames.length;
+            });
+        },
+        /** Per view, its keyframes' frame indices (increasing; null = unknown): where decoding is cheap. */
+        keyframes: function () { return Promise.all(views.map(viewKeyframes)); },
+        /** Per frame, per item: will getEmbeddings return a crop of it (a croppable view — from the keypoints of the
+         *  frame each view decodes, so before decoding)? Lets the check plan in one round (planImageSamples). */
+        croppable: async function (frames, itemsPerFrame, gridFrames) {
+            const round = await planDecode(frames, gridFrames);
+            return frames.map(function (f, i) {
+                const items = itemsPerFrame[i] || [];
+                const geo = frameCropGeometry(session, f, items, cams, views.map(function (v, vi) { return round[vi].decode[i]; }), sk);
+                return items.map(function (it, ii) { return geo.some(function (g) { return !!g[ii]; }); });
+            });
         },
         releaseFrames: function () {
             if (readers) readers.forEach(function (r) { if (r) r.close(); });
-            readers = null;
+            readers = null; decodeOf = null; srcKind = null; cachedFrames = null; cachedCrops = null; cachedSamples = null; sampleFrames = null;
             if (pool) pool.terminate();
             pool = undefined;
             if (trial) { const d = chooseBackend(trial); note = d.note.replace(/ — using WebNN/, ' — WebNN would have been used'); trial = null; }
@@ -1146,8 +1435,9 @@ export async function createImageEmbedder(session, opts) {
                      adapter: adapter ? adapter.name : '', fallback: !!(adapter && adapter.fallback),
                      workers: cpuWorkers, why: where.why || '' };
         },
-        /** The latest sample crops, oldest first: `[{tensor, frame, camera, identityId, points}]`, at most SAMPLE_CROPS —
-         *  see inputTensorToPixels; `points` are the keypoints in the crop (cropPointsToInput). */
+        /** The latest sample crops, oldest first: `[{tensor, frame, camera, identityId, points, cached?}]`, at most SAMPLE_CROPS —
+         *  see inputTensorToPixels; `points` are the keypoints in the crop (cropPointsToInput). A `cached` one is a
+         *  frame answered from the cache: its `tensor` is channel 0 only, rebuilt from the pixels kept when it was cut. */
         sampleCrops: function () { return samples; },
         /** Milliseconds spent running the model so far, the run in flight included (feeds createLoadMeter). */
         busyMs: function () { return tm.runMs + tm.readMs + (tm.busySince ? performance.now() - tm.busySince : 0); },

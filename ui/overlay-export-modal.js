@@ -24,6 +24,7 @@
 
 // Pinned to 6.6.1 — keep in sync with the dockview.css pin in index.html and the
 // import in ui/sessions-panes.js (see CLAUDE.md › Dependencies).
+import { noteProgress } from './progress-delta.js';
 import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockview-core@6.6.1/+esm';
 
 import { state, videoController, getActiveSession } from './app-state.js';
@@ -2012,6 +2013,7 @@ export function showOverlayExportModal() {
                 if (out % 5 === 0 || f === expEnd) {
                     var pct = Math.round(((out + 1) / nFrames) * 100);
                     progressFill.style.width = pct + '%';
+                    noteProgress(progressFill, pct / 100);
                     progressLabel.textContent = 'Encoding ' + (out + 1).toLocaleString('en-US') + ' / ' + nFrames.toLocaleString('en-US');
                     await new Promise(function (r) { setTimeout(r, 0); });
                 }
