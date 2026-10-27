@@ -47,7 +47,9 @@ import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { answerTrackSetup } from './fixtures/track-setup.js';
 import fs from 'node:fs';
+import { acquireBrowserLock } from '../../scripts/browser-lock.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -78,6 +80,8 @@ if (!fs.existsSync(DATASET)) { console.error('DATASET not found: ' + DATASET); p
 const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: appRoot, stdio: 'ignore' });
 await sleep(1200);
 
+// a visible browser window: one such run at a time across sessions (scripts/browser-lock.mjs)
+const releaseBrowserLock = await acquireBrowserLock({ label: '_bench-progress-overlay' });
 let browser;
 const summary = { label: LABEL, appRoot, dataset: DATASET, when: new Date().toISOString(), ops: [] };
 try {
@@ -89,6 +93,7 @@ try {
     const page = await context.newPage();
     page.on('pageerror', e => log('  [pageerror] ' + String(e).slice(0, 300)));
     page.on('dialog', d => d.accept(process.env.NANIMALS || '3'));
+    await answerTrackSetup(page, process.env.NANIMALS || '3');   // Track All's first-use dialog (animal count)
     // CONSOLE=<regex>: echo matching console lines, timestamped from the start.
     if (process.env.CONSOLE) {
         const re = new RegExp(process.env.CONSOLE);
@@ -428,5 +433,6 @@ try {
     fs.writeFileSync(path.join(OUT_DIR, 'summary.json'), JSON.stringify(summary, null, 2));
     log('\nwrote ' + path.relative(repoRoot, OUT_DIR));
     if (browser) await browser.close().catch(() => {});
+    await releaseBrowserLock();
     server.kill();
 }

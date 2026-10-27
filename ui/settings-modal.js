@@ -44,6 +44,8 @@ import {
 import { getActiveSession, state, timeline } from './app-state.js';
 import { drawAllOverlays } from './rendering.js';
 import { installModalGeometry } from './modal-geometry.js';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -113,9 +115,10 @@ function makeToggle(checked, ariaLabel, onChange) {
  *
  * @param {{id:string,label:string,desc:string,kind?:string,min:number,max:number,step:number}} def
  * @param {Object.<string, number>} bag working map mutated on edit
+ * @param {?function(): void} [onEdit] called after each edit of a number field
  * @returns {HTMLElement}
  */
-function buildParamRow(def, bag) {
+function buildParamRow(def, bag, onEdit) {
     const row = document.createElement('div');
     row.className = 'settings-threshold-row';
 
@@ -148,6 +151,7 @@ function buildParamRow(def, bag) {
     input.addEventListener('input', function () {
         const v = parseFloat(input.value);
         if (isFinite(v)) bag[def.id] = v;
+        if (onEdit) onEdit();
     });
     input.addEventListener('blur', function () {
         let v = parseFloat(input.value);
@@ -156,6 +160,7 @@ function buildParamRow(def, bag) {
         if (v > def.max) v = def.max;
         bag[def.id] = v;
         input.value = String(v);
+        if (onEdit) onEdit();
     });
 
     row.appendChild(labelWrap);
@@ -251,6 +256,21 @@ export function showSettingsModal(initialPanel) {
     // Seed the working temporal-smoothing map the same way (luc3d #134).
     const smoothingDefs = getSmoothingParamDefs();
     smoothingDefs.forEach(function (def) { working.smoothing[def.id] = def.value; });
+
+    // What the detection filters would remove at the values being typed, per
+    // camera (ui/detection-filter-preview.js). Counts the session in the
+    // background after the modal is up; each edit only re-counts.
+    const filterPreview = buildDetectionFilterPreview({
+        session: activeSession,
+        getValues: function () {
+            return {
+                minVisibleNodes: working.thresholds.filterMinVisibleNodes,
+                minInstanceScore: working.thresholds.filterMinInstanceScore,
+                minMeanNodeScore: working.thresholds.filterMinMeanNodeScore,
+            };
+        },
+        isCameraIncluded: function (name) { return working.cameraWeights[name] !== 0; },
+    });
 
     // --- Build DOM --------------------------------------------------------
     const overlay = document.createElement('div');
@@ -639,6 +659,7 @@ export function showSettingsModal(initialPanel) {
             const sw = makeToggle(working.cameraWeights[name] !== 0, 'Include view ' + name + ' in tracking', function (on) {
                 working.cameraWeights[name] = on ? 1 : 0;
                 reflectExcluded();
+                filterPreview.update();
             });
 
             reflectExcluded();
@@ -666,7 +687,12 @@ export function showSettingsModal(initialPanel) {
     thSection.body.appendChild(thHint);
 
     thresholdDefs.forEach(function (def) {
-        thSection.body.appendChild(buildParamRow(def, working.thresholds));
+        const isFilter = def.id === 'filterMinVisibleNodes' || def.id === 'filterMinInstanceScore' ||
+            def.id === 'filterMinMeanNodeScore';
+        thSection.body.appendChild(buildParamRow(def, working.thresholds,
+            isFilter ? function () { filterPreview.update(); } : null));
+        // The readout goes right under the last of the three filter fields.
+        if (def.id === 'filterMinMeanNodeScore') thSection.body.appendChild(filterPreview.root);
     });
 
     // Docs link at the bottom of the thresholds.
@@ -748,6 +774,7 @@ export function showSettingsModal(initialPanel) {
         Object.keys(panels).forEach(function (key) {
             panels[key].classList.toggle('active', key === name);
         });
+        if (name === 'wizard') filterPreview.start();
     }
     NAV_ITEMS.forEach(function (item) {
         navItems[item.panel].addEventListener('click', function () {
@@ -763,6 +790,7 @@ export function showSettingsModal(initialPanel) {
 
     function teardown() {
         document.removeEventListener('keydown', onDocKeyDown, true);
+        filterPreview.dispose();
         if (disposeGeometry) { disposeGeometry(); disposeGeometry = null; }
         overlay.remove();
     }
@@ -784,6 +812,8 @@ export function showSettingsModal(initialPanel) {
         // grey out in both the video overlays and the timeline.
         try { drawAllOverlays(state.currentFrame); } catch (e) { /* no active render yet */ }
         if (timeline && typeof timeline.redraw === 'function') timeline.redraw();
+        // The ID-switch box encloses only nonzero-weight nodes: re-fit it to the new weights.
+        refreshIdSwitchHighlight();
     }
 
     function onDocKeyDown(e) {

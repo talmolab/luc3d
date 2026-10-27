@@ -13,7 +13,7 @@
  *
  * Messages OUT:
  *   { type: 'progress', message: string }
- *   { type: 'result', data: { skeleton, tracks, frames, videos, embeddedVideos, sessions } }
+ *   { type: 'result', data: { skeleton, tracks, frames, videos, embeddedVideos, sessions, provenance } }
  *   { type: 'metadata', data: { skeleton, trackNames, nodeNames, nFrames, nTracks, nNodes, videos } }
  *   { type: 'frameData', frameIdx, requestId, instances }
  *   { type: 'framesData', startIdx, endIdx, requestId, frames }
@@ -303,7 +303,7 @@ async function parseSlp(file) {
         progress('pointsData: ' + (pointsData ? 'OK (' + pointsData.x.length + ' rows)' : 'NULL'));
         progress('predPointsData: ' + (predPointsData ? 'OK (' + predPointsData.x.length + ' rows)' : 'NULL'));
 
-        progress('Frames: ' + (framesData ? framesData.frame_id.length : 0) +
+        progress('Frames: ' + (framesData ? framesData.frame_id.length : 0).toLocaleString('en-US') +
             ', Points: ' + (pointsData ? pointsData.x.length : 0) +
             ', PredPoints: ' + (predPointsData ? predPointsData.x.length : 0));
 
@@ -382,6 +382,8 @@ async function parseSlp(file) {
 
                     var points = [];
                     var occludedFlags = [];
+                    // The model's per-node scores (a prediction's only).
+                    var ptScores = (instType === 1 && pts.score) ? new Float64Array(numNodes).fill(NaN) : null;
                     for (var ki = ptStart; ki < ptEnd && ki < ptStart + numNodes; ki++) {
                         if (ki >= pts.x.length) { points.push(null); occludedFlags.push(false); continue; }
                         var px = Number(pts.x[ki]);
@@ -394,6 +396,7 @@ async function parseSlp(file) {
                             points.push(null);
                             occludedFlags.push(false);
                         }
+                        if (ptScores) ptScores[ki - ptStart] = Number(pts.score[ki]);
                     }
                     while (points.length < numNodes) { points.push(null); occludedFlags.push(false); }
 
@@ -403,6 +406,7 @@ async function parseSlp(file) {
                         type: instType === 1 ? 'predicted' : 'user',
                         points: points,
                         occluded: occludedFlags,
+                        pointScores: ptScores,
                     });
                 }
 
@@ -412,7 +416,7 @@ async function parseSlp(file) {
             }
         }
 
-        progress('Built ' + (columnar ? columnar.nFrames : frames.length) + ' frames with pose data' +
+        progress('Built ' + (columnar ? columnar.nFrames : frames.length).toLocaleString('en-US') + ' frames with pose data' +
             (columnar ? ' (columnar)' : ''));
 
         // --- Sessions JSON ---
@@ -481,6 +485,8 @@ async function parseSlp(file) {
             videos: videos,
             sessions: sessionsArr,
             identities: identitiesArr,
+            // The file's provenance dict, kept through a save (import-export/slp-provenance.js).
+            provenance: metadataJson.provenance || null,
         };
         if (columnar) {
             resultData.columnar = columnar;
@@ -488,7 +494,7 @@ async function parseSlp(file) {
             postMessage({ type: 'result', data: resultData }, [
                 columnar.frameIdx.buffer, columnar.videoIdx.buffer, columnar.instOffsets.buffer,
                 columnar.trackIdx.buffer, columnar.score.buffer, columnar.type.buffer,
-                columnar.xy.buffer, columnar.occluded.buffer,
+                columnar.xy.buffer, columnar.occluded.buffer, columnar.pointScore.buffer,
             ]);
         } else {
             postMessage({ type: 'result', data: resultData });
@@ -603,6 +609,19 @@ function parseAnalysisH5(f, filename) {
         }
 
         // --- Read point scores (optional) ---
+        // NOTE (future work): these are read and then NOT USED, so a node from
+        // an analysis .h5 shows its name in the node tooltip but no score —
+        // left that way deliberately (luc3d #322). To show them, give each
+        // instance built below a `pointScores` Float64Array(nNodes), indexed
+        // like `tracks` (expected [n_tracks, n_nodes, n_frames] when
+        // `transposed`, [n_frames, n_nodes, n_tracks] otherwise — check
+        // `pointScoresShape` against a real SLEAP export); the eager importers
+        // already keep a dict's `pointScores` (`Instance.setPointScores`). The
+        // LAZY .h5 path (`extractFrameInstances`) is the harder half: it must
+        // not copy them onto hydrated instances (frames re-hydrate on every
+        // visit), so it would need a lookup like
+        // `SioLazyLoader.predictedPointScore` for `Session.predictedNodeScore`
+        // to call — and these arrays live in this worker, not the main thread.
         var pointScores = null;
         var pointScoresShape = null;
         try {
@@ -698,7 +717,7 @@ function parseAnalysisH5(f, filename) {
             }
         }
 
-        progress('Built ' + frames.length + ' frames with pose data');
+        progress('Built ' + frames.length.toLocaleString('en-US') + ' frames with pose data');
 
         // --- Build video entry from filename ---
         // Strip .analysis.h5 or .h5 to get a base name
@@ -875,7 +894,7 @@ function openH5Lazy(file) {
             dataset: null,
         }];
 
-        progress('Lazy H5 ready: ' + lazyNFrames + ' frames, ' + lazyNTracks + ' tracks, ' + lazyNNodes + ' nodes');
+        progress('Lazy H5 ready: ' + lazyNFrames.toLocaleString('en-US') + ' frames, ' + lazyNTracks + ' tracks, ' + lazyNNodes + ' nodes');
 
         postMessage({
             type: 'metadata',
@@ -930,6 +949,7 @@ function extractFrameInstances(frameIdx) {
             }
         }
         if (!hasAnyPoint) continue;
+        // No per-node scores here: see the NOTE in parseAnalysisH5.
         instances.push({ trackIdx: tr, score: 0, type: 'predicted', points: points });
     }
     return instances;
@@ -998,6 +1018,9 @@ function closeLazy() {
  *   type[i]                            1 = predicted, 0 = user
  *   xy[(i*numNodes + k)*2 + 0|1]       node k's x,y — NaN,NaN when missing
  *   occluded[i*numNodes + k]           1 when the node has coords but visible=false
+ *   pointScore[i*numNodes + k]         a prediction's per-node model score
+ *                                      (`pred_points.score`); NaN for a user
+ *                                      instance or a node with no score
  *
  * WHY: the nested form is ~1.6M boxed `[x, y]` arrays + ~200k objects per
  * 36k-frame camera, and structured-cloning eight of those to the main thread was
@@ -1019,7 +1042,9 @@ function buildColumnarFrames(framesData, instancesData, pointsData, predPointsDa
     var type = new Uint8Array(nInstRows);
     var xy = new Float64Array(nInstRows * numNodes * 2);
     var occluded = new Uint8Array(nInstRows * numNodes);
+    var pointScore = new Float64Array(nInstRows * numNodes);
     xy.fill(NaN);
+    pointScore.fill(NaN);
     var nF = 0, nI = 0;
     for (var fi = 0; fi < nRows; fi++) {
         var instStart = Number(framesData.instance_id_start[fi]);
@@ -1033,6 +1058,7 @@ function buildColumnarFrames(framesData, instancesData, pointsData, predPointsDa
             var ptStart = Number(instancesData.point_id_start[ji]);
             var ptEnd = Number(instancesData.point_id_end[ji]);
             var base = nI * numNodes;
+            var scoreCol = instType === 1 ? pts.score : null;
             for (var ki = ptStart, k = 0; ki < ptEnd && k < numNodes; ki++, k++) {
                 if (ki >= pts.x.length) continue;          // stays NaN, not occluded
                 var px = Number(pts.x[ki]);
@@ -1042,6 +1068,7 @@ function buildColumnarFrames(framesData, instancesData, pointsData, predPointsDa
                     xy[(base + k) * 2 + 1] = py;
                     if (!pts.visible[ki]) occluded[base + k] = 1;
                 }
+                if (scoreCol) pointScore[base + k] = Number(scoreCol[ki]);
             }
             trackIdx[nI] = Number(instancesData.track[ji]);
             score[nI] = Number(instancesData.score[ji]);
@@ -1062,6 +1089,7 @@ function buildColumnarFrames(framesData, instancesData, pointsData, predPointsDa
         instOffsets: instOffsets.slice(0, nF + 1),
         trackIdx: trackIdx.slice(0, nI), score: score.slice(0, nI), type: type.slice(0, nI),
         xy: xy.slice(0, nI * numNodes * 2), occluded: occluded.slice(0, nI * numNodes),
+        pointScore: pointScore.slice(0, nI * numNodes),
     };
 }
 

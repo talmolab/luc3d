@@ -73,7 +73,7 @@
     {
         "imports": {
             "h5wasm": "../lib/h5wasm/hdf5_hl.js",
-            "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js",
+            "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/+esm",
             "mediabunny": "../lib/mediabunny/mediabunny.min.mjs",
             "pako": "../lib/pako/pako.esm.mjs"
         }
@@ -97,6 +97,8 @@
     <script src="test-skeleton-json.js"></script>
     <script src="test-triangulation.js"></script>
     <script src="test-triangulation-ba.js"></script>
+    <!-- Excluded views + the reprojection-error threshold in triangulateAndReproject -->
+    <script src="test-triangulation-robust.js"></script>
     <script src="test-file-io.js"></script>
     <script src="test-interaction.js"></script>
     <script src="test-regressions.js"></script>
@@ -124,7 +126,11 @@
     <script src="test-timeline-height.js"></script>
     <script src="test-timeline-sparse-occupancy.js"></script>
     <script src="test-timeline-playback-playhead.js"></script>
+    <script src="test-timeline-visible-band.js"></script>
     <script src="test-grouped-track-dropdown.js"></script>
+    <!-- The info panel's lazily-filled Track <select> (ui/lazy-select.js). Needs
+         window.__LazySelect from the bridge below. -->
+    <script src="test-lazy-select.js"></script>
     <script src="test-track-identity-modals.js"></script>
     <script src="test-video-controller.js"></script>
     <script src="test-playback-frame-sync.js"></script>
@@ -142,6 +148,12 @@
     <script src="test-timeline-3dpoints.js"></script>
     <script src="test-timeline-scroll.js"></script>
     <script src="test-timeline-toggle-shortcut.js"></script>
+
+    <!-- Prompt 4 / Block 2: per-session hidden cameras / tracks / identities
+         (ui/timeline-visibility.js) and what the timeline draws for them. -->
+    <script src="test-timeline-visibility-toggles.js"></script>
+    <script src="test-timeline-visibility-state.js"></script>
+    <script src="test-timeline-visibility-list.js"></script>
 
     <!-- Drag freeze regression tests -->
     <script src="test-drag-freeze.js"></script>
@@ -164,6 +176,9 @@
     <!-- Assignment mode tests -->
     <script src="test-assignment.js"></script>
     <script src="test-occlusion-node-availability.js"></script>
+    <!-- A prediction's per-node model scores on save (pred_points.score) -->
+    <script src="test-node-score-export.js"></script>
+    <script src="test-sio-pooled-instances.js"></script>
 
     <!-- Predicted double-click → user instance: selection transfer + multi-select preservation -->
     <script src="test-predicted-dblclick.js"></script>
@@ -191,11 +206,16 @@
          .slp files only brought back some of the views". -->
     <script src="test-percam-slp-choice.js"></script>
     <script src="test-lazy-camera-hydration.js"></script>
+    <!-- LazyFrameLoader (analysis .h5): one track list whichever worker answers
+         first, and frames re-indexed into it. Needs the LazyFrameLoader bridge
+         (pose/triangulation.js) below; stands in for Worker itself. -->
+    <script src="test-lazy-track-union.js"></script>
     <script src="test-occlusion-derive.js"></script>
 
     <!-- Tempdata triangulation pipeline tests -->
     <script src="test-tempdata-triangulation.js"></script>
     <script src="test-viewport3d-skeleton-pool.js"></script>
+    <script src="test-viewport3d-autofit.js"></script>
 
     <!-- Multi-session export/import tests -->
     <script src="test-multi-session-export.js"></script>
@@ -371,6 +391,11 @@
         // `collectDeletionTargets`/`previewCascade` are too generic to be globals.
         import * as __CustomDeleteOps from '../ui/custom-delete-ops.js';
         window.__CustomDeleteOps = __CustomDeleteOps;
+        // The status bar's counting rules (Labeled Frames / Instances /
+        // Triangulated). Imports no project modules; namespaced because names
+        // like `countFrameCounters` read as the app's, not a test helper's.
+        import * as __FrameCounters from '../ui/frame-counters.js';
+        window.__FrameCounters = __FrameCounters;
         // Pure geometry/settings half of "Export Video Overlays" — imports no
         // project modules (and, deliberately, no dockview), so it bridges without
         // dragging the modal's DOM/WebCodecs dependencies in. Own namespace: names
@@ -400,6 +425,10 @@
         // above, so it bridges without pulling app.js in.
         import * as __VisibilityMetadata from '../import-export/visibility-metadata.js';
         window.__VisibilityMetadata = __VisibilityMetadata;
+        // The info panel's lazily-filled Track <select>. Imports nothing, so it
+        // bridges without app.js. Namespaced: `buildLazySelect` is generic.
+        import * as __LazySelect from '../ui/lazy-select.js';
+        window.__LazySelect = __LazySelect;
         Object.assign(window, __PoseData, __AppState, __SkeletonJSON, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
                               __SlpMerge, __FileIO, __Video,

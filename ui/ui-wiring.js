@@ -27,13 +27,14 @@ import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance
 import { ensureLazyFrameData, batchLoadLazyFrames, getInstanceGroupsForFrame, evictLazyFrames,
          loadAllLazyFrames, updateTimelineForFrame, triangulateAndReproject,
          resolveTriangulationMethod } from '../pose/triangulation.js';
+import { LAZY_PLAYBACK_AHEAD } from '../pose/lazy-residency.js';
 import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          populateVideosTable, populateCamerasTable, populateSkeletonTable,
          setupPanelTabs, setupSkeletonEditing, exportSkeletonJSON,
          ensureSession, populateSessionAssignTable, populateUnassignedVideos,
          populateTimelineVisibility } from './info-panel.js';
-import { consumeInfoPanelStale } from './panel-visibility.js';
+import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js';
 // Block 2 (Prompt 4): rename migration for the per-session hidden-track
 // / hidden-identity Sets when the user renames an entity.
 import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js';
@@ -52,12 +53,23 @@ import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
 
 // Pass 3i-1: tracker functions moved out of app.js.
 import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js';
+// The toolbar's Animals field, beside Track Frame / Track All.
+import { wireAnimalCountField } from './animal-count-field.js';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
+// The deployed release beside the menu bar's Settings button.
+import { showVersionLabel } from './version-label.js';
 import { onColorByChange, setColorByIdentity } from './color-by.js';
+import { TRAIL_PRESETS, MAX_TRAIL_FRAMES, trailPresetFor, trailLabel, trailFrames, trailRate,
+         formatTrailSeconds, trailSecondsForFrames, parseTrailSeconds, parseTrailFrames,
+         setTrailSeconds, onTrailSecondsChange } from './trail-presets.js';
+import { TRAIL_SHADES, TRACK_COLORS, trailShadeFor, trailColor } from './overlays.js';
 import { installSeekbarTooltip } from './seekbar-tooltip.js';
+import { installSeekbarPreview } from './seekbar-preview.js';
+import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js';
 import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js';
+import { installSeekbarTicks, refreshSeekbarTicks } from './seekbar-ticks.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
 // User settings: default triangulation method + editable keyboard bindings.
@@ -69,19 +81,20 @@ import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js'
 import { showSettingsModal } from './settings-modal.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
 import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js';
-import { runIdSwitchChecks, setIdSwitchNavigator, updateIdSwitchProgress } from './id-switch-modal.js';
+import { runIdSwitchChecks, setIdSwitchNavigator, setIdSwitchRefresher, updateIdSwitchProgress } from './id-switch-modal.js';
+import { setTrackSummaryNavigator } from './track-summary-modal.js';
 // Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
 // (`swapTracks` joined this module in 3i-4; `seekToLabeledFrame` is now in-module.)
 import {
     assignTrackToSelected, assignIdentityToSelected, propagateIdentityForward, swapAssignTrack,
     startEditGroup, finishEditGroup,
-    startManualAssignment, runSingleFrameTriangulation, showMultiFrameModal,
+    startManualAssignment,
     purgeTriangulationDataForGroup,
     swapTracks,
 } from './identity-assignment.js';
 // Custom Instance Delete: DOM-free matching/cascade/durability logic. Imports no
 // project modules itself, which is why it can also be unit tested in isolation.
-import { collectDeletionTargets, executeDeletion } from './custom-delete-ops.js';
+import { collectDeletionTargets, executeDeletion, deleteTargetsFromStore, groupMemberTargets } from './custom-delete-ops.js';
 // Pass 3g: export-modals workflow symbols moved out of app.js.
 import {
     exportLabels, exportPoints3dH5, exportReprojH5,
@@ -840,6 +853,7 @@ export function setupMenus() {
     document.getElementById('menuSettings').addEventListener('click', openSettings);
     document.getElementById('menuBarDocs').addEventListener('click', openDocs);
     document.getElementById('menuBarSettings').addEventListener('click', openSettings);
+    showVersionLabel();
 
     // Tracks ▸ Tracking Wizard: opens the same Settings modal focused on the
     // Tracking Wizard panel (node weights, etc.).
@@ -865,11 +879,19 @@ export function setupMenus() {
     // Tracks ▸ Check ID Switches (Body Size): flag close encounters whose
     // post-encounter body sizes favour swapped identities (ui/id-switch-modal.js).
     setIdSwitchNavigator(navigateToFrame);   // also used when a tracking pass runs the checks itself
+    setTrackSummaryNavigator(navigateToFrame);   // the Track All summary's Identities samples and maps
+    // After the tab fixes (or un-fixes) a switch, repaint everything that shows identities.
+    setIdSwitchRefresher(function () {
+        drawAllOverlays(state.currentFrame);
+        update3DViewport(state.currentFrame);
+        updateInfoPanel();
+        if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
+    });
     document.getElementById('menuCheckSizeSwitches').addEventListener('click', function () {
         closeMenus();
         runIdSwitchChecks({ size: true, navigateToFrame: navigateToFrame });
     });
-    // Tracks ▸ Check ID Switches (Images): the same, by appearance — minutes, needs the videos + WebGPU.
+    // Tracks ▸ Check ID Switches (Images): the same, by appearance — minutes, needs the videos (GPU, else CPU).
     document.getElementById('menuCheckImageSwitches').addEventListener('click', function () {
         closeMenus();
         runIdSwitchChecks({ image: true, navigateToFrame: navigateToFrame });
@@ -885,8 +907,7 @@ export function setupMenus() {
         var res = session.propagateTracksToIdentities();
         // Mark tracks as trusted (persisted in project metadata) and show IDs.
         session.trustTracks = true;
-        state.colorByIdentity = true;
-        updateColorByToggle();
+        setColorByIdentity(state, true);
         drawAllOverlays(state.currentFrame);
         update3DViewport(state.currentFrame);  // recolor 3D instances instantly
         updateInfoPanel();
@@ -933,7 +954,7 @@ export function setupMenus() {
         }
     });
 
-    // Color by Tracks / ID toolbar toggle
+    // Color by Tracks / Identity toolbar toggle
     var colorByTracksBtn = document.getElementById('colorByTracks');
     var colorByIdBtn = document.getElementById('colorById');
 
@@ -949,6 +970,10 @@ export function setupMenus() {
         updateColorByToggle();
         drawAllOverlays(state.currentFrame);
         update3DViewport(state.currentFrame);  // recolor 3D instances instantly
+        // Track colors change palette with the mode (getTrackColor), so the
+        // timeline's track rows and the Visibility tab's track swatches too.
+        if (timeline) timeline.recolorTracks();
+        populateTimelineVisibility(state.session);
     });
 
     colorByTracksBtn.addEventListener('click', function () {
@@ -961,35 +986,245 @@ export function setupMenus() {
         setStatus('Coloring by Identity', 'success');
     });
 
-    // Node Trails presets (Tracks menu) — issue #102. A single active length;
-    // the checkmark tracks state.trailLength, and picking one repaints.
-    var trailPresets = [
-        { id: 'menuTrailsOff', len: 0 },
-        { id: 'menuTrails10', len: 10 },
-        { id: 'menuTrails50', len: 50 },
-        { id: 'menuTrails100', len: 100 },
-        { id: 'menuTrails250', len: 250 },
-        { id: 'menuTrails500', len: 500 },
-    ];
+    // Node Trails presets — issue #102. A single active length, picked from
+    // the Tracks ▸ Node Trails submenu or the toolbar's Trails button; both are
+    // built from TRAIL_PRESETS (ui/trail-presets.js) plus a "Custom…" item, and
+    // go through pickTrailSeconds, so their checkmarks and the button's tooltip
+    // always show state.trailSeconds. Track All also turns trails on when it
+    // finishes (pose/tracker.js): it goes through the same `setTrailSeconds`
+    // (ui/trail-presets.js), whose change handler, registered below, is what
+    // syncs the menus and redraws. A length is a span of TIME: its frame
+    // count, state.trailLength, is derived from state.fps, and the labels
+    // re-read it each time a menu opens — the rate changes when a video loads
+    // or the FPS pill is edited, and nothing here is told.
+    // The toolbar's menu opens on HOVER (pure CSS, like the Triangulate split
+    // buttons), so the only wiring it needs is its items. That is also why a
+    // custom length is typed into a dialog rather than into the menu: a field
+    // in a hover menu closes under the user the moment the pointer drifts.
+    // Both menus also carry the trail's SHADE (TRAIL_SHADES, ui/overlays.js), a
+    // second choice below the lengths: how much darker or lighter than its
+    // track a trail is drawn, so the skeleton on the current frame stands out
+    // from the history behind it. Unlike the length it is remembered in
+    // localStorage — display taste, like the Visibility panel's appearance
+    // prefs, so it never reaches the .slp.
+    var trailsBtn = document.getElementById('tbTrails');
+    var trailsDropdown = document.getElementById('trailsDropdown');
+    var trailsMenu = document.getElementById('trailsMenu');
+    var trailsParent = document.getElementById('menuTrailsParent');
+    var trailsSubmenu = document.getElementById('menuTrailsSubmenu');
+    var trailItems = [];    // { preset, el } for both menus; preset null = Custom…
+    var shadeItems = [];    // { shade, el } for both menus
+    var TRAIL_SHADE_STORAGE_KEY = 'nodeTrailShade';
+    try {
+        var storedShade = localStorage.getItem(TRAIL_SHADE_STORAGE_KEY);
+        if (trailShadeFor(storedShade)) state.trailShade = storedShade;
+    } catch (e) { /* storage unavailable: keep the default */ }
     function updateTrailChecks() {
-        trailPresets.forEach(function (p) {
-            var el = document.getElementById(p.id);
-            var chk = el && el.querySelector('.trail-check');
-            if (chk) chk.textContent = (state.trailLength === p.len) ? '✓' : '';
+        // A length no preset matches is custom — typed, or set in frames
+        // (state.trailLength = n).
+        var custom = state.trailSeconds > 0 && !trailPresetFor(state.trailSeconds);
+        trailItems.forEach(function (it) {
+            var on = it.preset ? state.trailSeconds === it.preset.seconds : custom;
+            it.el.querySelector('.trail-check').textContent = on ? '✓' : '';
+            it.el.querySelector('.trail-label').textContent = it.preset
+                ? trailLabel(it.preset.seconds, state.fps)
+                : (custom ? 'Custom: ' + trailLabel(state.trailSeconds, state.fps) + '…' : 'Custom…');
+            it.el.setAttribute('aria-checked', on ? 'true' : 'false');
+        });
+        shadeItems.forEach(function (it) {
+            var on = state.trailShade === it.shade.key;
+            it.el.querySelector('.trail-check').textContent = on ? '✓' : '';
+            it.el.setAttribute('aria-checked', on ? 'true' : 'false');
+        });
+        // The label is a bare "Trails ▾" to save toolbar width; the current
+        // length rides in the tooltip instead. While a trail is on the button
+        // wears the toolbar's `.active` blue (like 3D / Panel / Identity), so
+        // "trails are on" reads without hovering it.
+        if (trailsBtn) {
+            trailsBtn.title = 'Node trails: ' +
+                (state.trailSeconds > 0 ? trailLabel(state.trailSeconds, state.fps) : 'off');
+            trailsBtn.classList.toggle('active', state.trailSeconds > 0);
+        }
+    }
+    onTrailSecondsChange(function () {
+        updateTrailChecks();
+        drawAllOverlays(state.currentFrame);
+    });
+    function pickTrailSeconds(seconds) {
+        setTrailSeconds(state, seconds);
+        setStatus(seconds > 0 ? ('Node trails: ' + trailLabel(seconds, state.fps)) : 'Node trails off', 'success');
+    }
+    function setTrailShade(key) {
+        state.trailShade = key;
+        try { localStorage.setItem(TRAIL_SHADE_STORAGE_KEY, key); } catch (e) { /* not remembered */ }
+        updateTrailChecks();
+        drawAllOverlays(state.currentFrame);
+        setStatus('Node trail shade: ' + trailShadeFor(key).name +
+            (state.trailSeconds > 0 ? '' : ' (trails are off)'), 'success');
+    }
+    // A titled radio group: "Length" or "Shade". The heading is a label, not
+    // an item — the group's aria-label carries it for assistive tech.
+    function addTrailGroup(menu, heading, ariaLabel) {
+        var h = document.createElement('div');
+        h.className = 'trail-menu-heading';
+        h.setAttribute('aria-hidden', 'true');
+        h.textContent = heading;
+        menu.appendChild(h);
+        var group = document.createElement('div');
+        group.setAttribute('role', 'group');
+        group.setAttribute('aria-label', ariaLabel);
+        menu.appendChild(group);
+        return group;
+    }
+    function addTrailItems(menu, className, idPrefix, onPick) {
+        if (!menu) return;
+        var lengths = addTrailGroup(menu, 'Length', 'Trail length');
+        TRAIL_PRESETS.concat([null]).forEach(function (p) {
+            var item = document.createElement('div');
+            item.className = className;
+            if (idPrefix) item.id = idPrefix + (p ? p.key : 'Custom');
+            item.setAttribute('role', 'menuitemradio');
+            if (p) item.setAttribute('data-trail-sec', String(p.seconds));
+            else item.setAttribute('data-trail-custom', '');
+            item.innerHTML = '<span><span class="trail-check"></span><span class="trail-label"></span></span>';
+            item.addEventListener('click', function () {
+                onPick();
+                if (p) pickTrailSeconds(p.seconds);
+                else showCustomTrailModal();
+            });
+            lengths.appendChild(item);
+            trailItems.push({ preset: p, el: item });
+        });
+        var sep = document.createElement('div');
+        sep.className = 'menu-separator';
+        sep.setAttribute('role', 'separator');
+        menu.appendChild(sep);
+        // Each shade shows a sample: a stretch of track color (the skeleton on
+        // the current frame) running into the trail drawn in that shade, from
+        // its newest segment to its oldest — the contrast this choice is about.
+        var sample = TRACK_COLORS[0];
+        var shades = addTrailGroup(menu, 'Shade', 'Trail shade');
+        TRAIL_SHADES.forEach(function (shade) {
+            var item = document.createElement('div');
+            item.className = className;
+            if (idPrefix) item.id = idPrefix + 'Shade' + shade.key.charAt(0).toUpperCase() + shade.key.slice(1);
+            item.setAttribute('role', 'menuitemradio');
+            item.setAttribute('data-trail-shade', shade.key);
+            item.innerHTML = '<span><span class="trail-check"></span><span class="trail-label"></span></span>' +
+                '<span class="trail-shade-swatch" aria-hidden="true"></span>';
+            item.querySelector('.trail-label').textContent = shade.name;
+            item.querySelector('.trail-shade-swatch').style.background =
+                'linear-gradient(to right, ' + sample + ' 30%, ' + trailColor(sample, shade.key, 0) +
+                ' 30%, ' + trailColor(sample, shade.key, 1) + ')';
+            item.addEventListener('click', function () {
+                onPick();
+                setTrailShade(shade.key);
+            });
+            shades.appendChild(item);
+            shadeItems.push({ shade: shade, el: item });
         });
     }
-    updateTrailChecks();
-    trailPresets.forEach(function (p) {
-        var el = document.getElementById(p.id);
+    addTrailItems(trailsMenu, 'tri-dropdown-item', '', function () {});
+    addTrailItems(trailsSubmenu, 'menu-dropdown-item', 'menuTrails', closeMenus);
+    // Opening either menu (or hovering the button, whose tooltip names the
+    // frame count) re-reads state.fps.
+    [trailsDropdown, trailsParent].forEach(function (el) {
         if (!el) return;
-        el.addEventListener('click', function () {
-            state.trailLength = p.len;
-            updateTrailChecks();
-            closeMenus();
-            drawAllOverlays(state.currentFrame);
-            setStatus(p.len > 0 ? ('Node trails: ' + p.len + ' frames') : 'Node trails off', 'success');
-        });
+        el.addEventListener('mouseenter', updateTrailChecks);
+        el.addEventListener('focusin', updateTrailChecks);
     });
+    updateTrailChecks();
+
+    // Custom… — a length typed in SECONDS or in FRAMES. The two fields are the
+    // same length at the current rate: typing in either fills the other, and
+    // the field typed in last is the one applied. Either way it is stored in
+    // seconds, so a custom length follows the frame rate exactly like a preset
+    // (a length typed in frames is stored as frames / fps, exactly, so it draws
+    // the frames typed). Enter applies, Esc cancels.
+    function showCustomTrailModal() {
+        if (document.getElementById('trailCustomModal')) return;
+        var rate = trailRate(state.fps);
+        var overlay = document.createElement('div');
+        overlay.className = 'multi-frame-modal-overlay';
+        overlay.id = 'trailCustomModal';
+        var modal = document.createElement('div');
+        modal.className = 'multi-frame-modal trail-custom-modal';
+        modal.innerHTML =
+            '<h3>Custom Node Trail</h3>' +
+            '<div class="trail-custom-fields">' +
+            '<label class="trail-custom-field">Seconds' +
+            '<input type="text" inputmode="decimal" autocomplete="off" id="trailCustomSeconds"></label>' +
+            '<label class="trail-custom-field">Frames' +
+            '<input type="text" inputmode="numeric" autocomplete="off" id="trailCustomFrames"></label>' +
+            '</div>' +
+            '<p class="trail-custom-note" id="trailCustomNote"></p>' +
+            '<div class="modal-error" id="trailCustomError"></div>' +
+            '<div class="modal-actions">' +
+            '<button id="trailCustomCancel">Cancel</button>' +
+            '<button class="primary" id="trailCustomApply">Apply</button>' +
+            '</div>';
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+
+        var secInput = modal.querySelector('#trailCustomSeconds');
+        var frameInput = modal.querySelector('#trailCustomFrames');
+        var noteEl = modal.querySelector('#trailCustomNote');
+        var errorEl = modal.querySelector('#trailCustomError');
+        var applyBtn = modal.querySelector('#trailCustomApply');
+        var fpsText = (Math.round(rate * 100) / 100) + ' fps';
+        // The length Apply would set, or null. It opens on the CURRENT length,
+        // stored exactly: a length set from frames re-applies as itself, not as
+        // its 3-decimal display.
+        var seconds = state.trailSeconds > 0 ? state.trailSeconds : 1;
+        var error = '';
+        secInput.value = formatTrailSeconds(seconds);
+        frameInput.value = String(trailFrames(seconds, state.fps));
+
+        // `from` is the field just typed in. The OTHER field is rewritten, and
+        // only from a valid entry — an invalid one blanks it rather than
+        // leaving a stale equivalent beside it.
+        function refresh(from) {
+            if (from === 'seconds') {
+                seconds = parseTrailSeconds(secInput.value);
+                error = seconds == null ? 'Enter a number of seconds above 0.' : '';
+                frameInput.value = seconds == null ? '' : String(trailFrames(seconds, state.fps));
+            } else if (from === 'frames') {
+                var frames = parseTrailFrames(frameInput.value);
+                seconds = frames == null ? null : trailSecondsForFrames(frames, state.fps);
+                error = frames == null ? 'Enter a whole number of frames, 1 or more.' : '';
+                secInput.value = seconds == null ? '' : formatTrailSeconds(seconds);
+            }
+            // An emptied field disables Apply without scolding.
+            var typed = from === 'frames' ? frameInput : secInput;
+            errorEl.textContent = typed.value.trim() === '' ? '' : error;
+            applyBtn.disabled = seconds == null;
+            noteEl.textContent = 'At ' + fpsText + '.' +
+                (seconds != null && seconds * rate > MAX_TRAIL_FRAMES + 0.5
+                    ? ' A trail draws at most ' + MAX_TRAIL_FRAMES.toLocaleString('en-US') + ' frames.' : '');
+        }
+        function close() {
+            document.removeEventListener('keydown', onKey, true);
+            overlay.remove();
+        }
+        function apply() {
+            if (seconds == null) return;
+            var sec = seconds;
+            close();
+            pickTrailSeconds(sec);
+        }
+        function onKey(e) {
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+            else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); apply(); }
+        }
+        secInput.addEventListener('input', function () { refresh('seconds'); });
+        frameInput.addEventListener('input', function () { refresh('frames'); });
+        document.addEventListener('keydown', onKey, true);
+        modal.querySelector('#trailCustomCancel').addEventListener('click', close);
+        applyBtn.addEventListener('click', apply);
+        refresh();
+        secInput.focus();
+        secInput.select();
+    }
 
     // ============================================
     // Tracks Menu Handlers
@@ -1033,7 +1268,7 @@ export function setupMenus() {
 
         var count = swapTracks(a, b, frameStart, frameEnd);
         setStatus('Swapped ' + state.session.tracks[a] + ' ↔ ' + state.session.tracks[b] +
-            ' (' + count + ' instances, frames ' + (frameStart + 1) + '–' + (frameEnd + 1) + ')', 'success');
+            ' (' + count.toLocaleString('en-US') + ' instances, frames ' + (frameStart + 1).toLocaleString('en-US') + '–' + (frameEnd + 1).toLocaleString('en-US') + ')', 'success');
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session);
@@ -1233,6 +1468,22 @@ export function setupMenus() {
         closeMenus();
         toggleInfoPanel();
     });
+
+    // View ▸ Native Resolution (1:1). The tick is refreshed each time the menu
+    // opens rather than pushed on every zoom: whether it is on is derived from
+    // the views (a wheel zoom that snaps to 1:1 turns it on, one that leaves
+    // turns it off), so asking at open time cannot go stale.
+    document.getElementById('menuNativeResolution').addEventListener('click', function () {
+        closeMenus();
+        if (videoController) videoController.toggleNativeResolution();
+    });
+    var viewMenuEl = document.querySelector('.menu-item[data-menu="view"]');
+    if (viewMenuEl) {
+        viewMenuEl.addEventListener('click', function () {
+            var check = document.querySelector('#menuNativeResolution .trail-check');
+            if (check) check.textContent = (videoController && videoController.nativeResolutionActive()) ? '✓' : '';
+        });
+    }
 
     document.getElementById('menuResetView').addEventListener('click', function () {
         closeMenus();
@@ -1616,7 +1867,7 @@ function copySelectedInstance() {
         sourceView: viewName,
         sourceFrame: state.currentFrame
     });
-    setStatus('UserInstance copied in Video ' + viewName + ' Frame ' + (state.currentFrame + 1), 'success');
+    setStatus('UserInstance copied in Video ' + viewName + ' Frame ' + (state.currentFrame + 1).toLocaleString('en-US'), 'success');
 }
 
 // Paste the clipboard instance into the focused video at the current frame,
@@ -1647,7 +1898,7 @@ function pasteInstance() {
     // Reuse the smart-add path: targets lastInteractedView at the current frame,
     // creates a 'user' instance, fires onUserInstanceCreated, and redraws.
     interactionManager._addNewInstance(points);
-    setStatus('UserInstance pasted in Video ' + targetView + ' Frame ' + (state.currentFrame + 1), 'success');
+    setStatus('UserInstance pasted in Video ' + targetView + ' Frame ' + (state.currentFrame + 1).toLocaleString('en-US'), 'success');
 }
 
 export function setupUI() {
@@ -1669,7 +1920,7 @@ export function setupUI() {
         // Pre-load frames before starting playback for lazy sessions
         if (state.session && state.session.lazyLoader) {
             showLoading('Loading frames...');
-            batchLoadLazyFrames(state.currentFrame, 5000).then(function () {
+            batchLoadLazyFrames(state.currentFrame, LAZY_PLAYBACK_AHEAD).then(function () {
                 hideLoading();
                 if (videoController) videoController.startPlayback();
             }).catch(function(e) { hideLoading(); });
@@ -1704,6 +1955,11 @@ export function setupUI() {
             return m ? m.frame : frameAtFraction(frac);
         };
         installSeekbarMarkers(document.getElementById('seekbarMarks'), state.totalFrames);
+        // The time ruler under the bar (ui/seekbar-ticks.js).
+        installSeekbarTicks(document.getElementById('seekbarRuler'), {
+            getTotalFrames: function () { return state.totalFrames; },
+            getFps: function () { return state.fps; },
+        });
 
         // Hover tooltip with the frame (and timestamp) under the cursor (#142).
         installSeekbarTooltip(seekbar, {
@@ -1714,12 +1970,33 @@ export function setupUI() {
                 var m = seekbarMarkerAt(frac, widthPx);
                 return m ? { frame: m.frame, text: describeSwitchMarker(m) } : null;
             },
+            hoverLine: document.getElementById('seekbarHoverLine'),
+            // The selected view at that frame: the solo view, else the active
+            // pane's (.video-selected), else the first — not lastInteractedView,
+            // which follows the pointer across whichever views it passed on its
+            // way down to the bar.
+            preview: installSeekbarPreview(seekbar, {
+                getView: function () {
+                    if (state.viewMode === 'single' && state.views[state.singleViewIndex]) return state.views[state.singleViewIndex];
+                    return getActiveView() || state.views[0] || null;
+                },
+            }),
         });
 
         var _seekThrottle = { lastRender: 0, timer: null, pendingFrame: null };
 
+        // A click or drag on the bar leaves the video playing or paused, as it
+        // was. A scrub always stops playback (the play loop and the scrub must
+        // not fight over the frame), so a press that began while playing plays
+        // on from the new position on release. `resumePending` counts too: a
+        // second click before the first one's resume has started is still a
+        // click on a playing video.
+        var resumeOnRelease = false;
+
         seekbar.addEventListener('mousedown', function (e) {
             isDragging = true;
+            resumeOnRelease = state.isPlaying || !!(videoController && videoController.resumePending);
+            if (!hasRealVideo() && state.isPlaying) stopNoVideoPlayback();
             var frame = getFrameFromEvent(e);
             updateSeekbarVisual(frame);
             _seekThrottle.lastRender = performance.now();
@@ -1757,6 +2034,16 @@ export function setupUI() {
                 if (_seekThrottle.pendingFrame !== null && videoController) {
                     videoController.scrubToFrame(_seekThrottle.pendingFrame);
                     _seekThrottle.pendingFrame = null;
+                }
+                if (resumeOnRelease) {
+                    resumeOnRelease = false;
+                    if (!hasRealVideo()) startNoVideoPlayback();
+                    else if (videoController) videoController.resumeAfterScrub(function (frame) {
+                        // A lazy project hydrates the frames ahead first, as Play does.
+                        if (state.session && state.session.lazyLoader) {
+                            return batchLoadLazyFrames(frame, LAZY_PLAYBACK_AHEAD);
+                        }
+                    });
                 }
             }
         });
@@ -1917,6 +2204,15 @@ export function setupUI() {
             return;
         }
 
+        // Shift+0: View ▸ Native Resolution (1:1) on / off — the `0` that
+        // resets zoom, shifted. Matched by physical key: Shift+0 is ')' on a
+        // US layout and something else elsewhere.
+        if (e.code === 'Digit0' && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault();
+            videoController.toggleNativeResolution();
+            return;
+        }
+
         switch (e.key) {
             case 'ArrowRight':
                 if (e.shiftKey) return; // Shift+Arrow is unbound
@@ -1934,7 +2230,7 @@ export function setupUI() {
                 e.preventDefault();
                 if (state.isPlaying) { videoController.pausePlayback(); }
                 else if (state.session && state.session.lazyLoader) {
-                    batchLoadLazyFrames(state.currentFrame, 5000).then(function () {
+                    batchLoadLazyFrames(state.currentFrame, LAZY_PLAYBACK_AHEAD).then(function () {
                         if (videoController) videoController.startPlayback();
                     });
                 } else { videoController.togglePlayback(); }
@@ -2109,7 +2405,7 @@ export function setupUI() {
             case 'Enter': {
                 // Click the visible Continue/Group button in any active modal/toast
                 var continueBtn = null;
-                ['mfContinue', 'tfContinue', 'autoAssignContinue', 'manualAssignGroup'].forEach(function (id) {
+                ['tfContinue', 'manualAssignGroup'].forEach(function (id) {
                     if (continueBtn) return;
                     var btn = document.getElementById(id);
                     if (btn && btn.offsetParent !== null) continueBtn = btn;
@@ -2131,7 +2427,7 @@ export function setupUI() {
             case 'Escape': {
                 // Click the visible Cancel button in any active modal/toast
                 var cancelBtn = null;
-                ['mfCancel', 'tfCancel', 'autoAssignCancel', 'manualAssignCancel'].forEach(function (id) {
+                ['tfCancel', 'manualAssignCancel'].forEach(function (id) {
                     if (cancelBtn) return;
                     var btn = document.getElementById(id);
                     if (btn && btn.offsetParent !== null) cancelBtn = btn;
@@ -2722,6 +3018,8 @@ export function setupUI() {
         });
     }
 
+    wireAnimalCountField();
+
     // Context menu for instance groups
     document.getElementById('ctxUnlinkGroup').addEventListener('click', function () {
         var menu = document.getElementById('groupContextMenu');
@@ -2737,6 +3035,10 @@ export function setupUI() {
             if (interactionManager && interactionManager.selectedInstanceGroup === group) {
                 interactionManager.clearSelection();
             }
+            // The store rows first, exactly as the Delete key does — on a lazy
+            // project removing the group from memory alone is undone by the next
+            // re-hydration or save (see `_deleteSelected`, ui/interaction.js).
+            deleteTargetsFromStore(state.session, groupMemberTargets(state.currentFrame, group));
             state.session.removeInstanceGroup(state.currentFrame, group);
             markDirty();
             setStatus('Deleted group', 'success');
@@ -2760,7 +3062,7 @@ export function setupUI() {
     });
 
     // Frame counter and FPS
-    document.getElementById('totalFrames').textContent = state.totalFrames;
+    refreshReadoutTotals();
     document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
 
     window.addEventListener('beforeunload', function(e) {
@@ -2778,8 +3080,7 @@ export function setupUI() {
 
 export function updateSeekbar(frameIdx) {
     if (frameIdx === undefined) frameIdx = state.currentFrame;
-    updateSeekbarVisual(frameIdx);
-    document.getElementById('currentFrame').textContent = frameIdx + 1;
+    updateSeekbarVisual(frameIdx);   // also writes the frame/time readout
 
     // Update the 3D viewport on EVERY frame, playback included, so the 3D
     // skeleton moves as smoothly as the video and its 2D overlays. This used to
@@ -2794,8 +3095,9 @@ export function updateSeekbarVisual(frameIdx) {
     const pct = state.totalFrames > 1 ? (frameIdx / (state.totalFrames - 1)) * 100 : 0;
     document.getElementById('seekbarProgress').style.width = pct + '%';
     document.getElementById('seekbarThumb').style.left = pct + '%';
-    document.getElementById('currentFrame').textContent = frameIdx + 1;
+    showReadoutFrame(frameIdx);
     setSeekbarMarkerFrames(state.totalFrames);       // no-op unless the frame count changed
+    refreshSeekbarTicks();                           // no-op unless the frame count or FPS changed
     updateIdSwitchProgress(frameIdx);                // the ID Switches tab's selected-row bar (no-op without one)
 }
 
@@ -2807,13 +3109,19 @@ export function onPlaybackStateChange(isPlaying) {
     // Lazy H5: batch-load frames during playback
     if (state.session && state.session.lazyLoader) {
         if (isPlaying) {
-            // Background batch loader — loads 500 frames at a time ahead of playback
+            // Background batch loader: keeps LAZY_PLAYBACK_AHEAD frames hydrated
+            // ahead of the playhead, and lets the eviction drop what playback
+            // left behind (pose/lazy-residency.js) — without it every played
+            // frame stayed resident and the heap grew for as long as the video
+            // played. The lookahead was 5000 frames; eviction protects exactly
+            // this window, so the two must stay in step.
             (async function lazyPlaybackLoader() {
                 var session = state.session;
                 if (!session || !session.lazyLoader) return;
                 while (state.isPlaying && state.session === session) {
                     var cur = state.currentFrame;
-                    var loaded = await batchLoadLazyFrames(cur, 5000);
+                    var loaded = await batchLoadLazyFrames(cur, LAZY_PLAYBACK_AHEAD);
+                    evictLazyFrames(cur);
                     if (loaded === 0) {
                         // All nearby frames loaded, wait before checking again
                         await new Promise(function(r) { setTimeout(r, 100); });
@@ -2887,84 +3195,40 @@ export function refreshInfoPanelAfterShow() {
     updateInfoPanel();
 }
 
-// The two toolbar panel toggles, each with the label for both of its states.
-// Single source of truth: the updaters below read these, and
-// `lockPanelToggleWidths` sizes each button to whichever of its own two labels
-// is wider so the pair doesn't shimmy when a label swaps.
-const PANEL_TOGGLE_BUTTONS = [
-    { btnId: 'infoPanelToggleBtn', shown: 'Hide Panel', hidden: 'Show Panel' },
-    { btnId: 'viewport3dToggleBtn', shown: 'Hide 3D View', hidden: 'Show 3D View' },
-];
-
-function panelToggleLabels(btnId) {
-    for (var i = 0; i < PANEL_TOGGLE_BUTTONS.length; i++) {
-        if (PANEL_TOGGLE_BUTTONS[i].btnId === btnId) return PANEL_TOGGLE_BUTTONS[i];
-    }
-    return null;
-}
-
-/**
- * Pin each panel-toggle button to the width of its widest label.
- *
- * "Hide"/"Show" don't render to the same width in the toolbar's
- * proportional system font, so without this the buttons resize on every
- * toggle — and because they're right-aligned in a flex group, the one to the
- * left visibly jumps sideways when its neighbour changes width.
- *
- * Measured rather than hardcoded so it stays correct if a label, the font
- * size, or the button padding changes. `getBoundingClientRect()` is a
- * border-box width (`box-sizing: border-box` is global), which is what
- * `min-width` wants. Called once from `ui/layout-controls.js` at startup;
- * the app uses only system fonts, so there's no late web-font reflow to
- * re-measure for.
- */
-export function lockPanelToggleWidths() {
-    for (var i = 0; i < PANEL_TOGGLE_BUTTONS.length; i++) {
-        var spec = PANEL_TOGGLE_BUTTONS[i];
-        var btn = document.getElementById(spec.btnId);
-        if (!btn) continue;
-        var restore = btn.textContent;
-        // Clear any previous lock so a re-measure can shrink as well as grow.
-        btn.style.minWidth = '';
-        var widest = 0;
-        var labels = [spec.shown, spec.hidden];
-        for (var j = 0; j < labels.length; j++) {
-            btn.textContent = labels[j];
-            var w = btn.getBoundingClientRect().width;
-            if (w > widest) widest = w;
-        }
-        btn.textContent = restore;
-        if (widest > 0) btn.style.minWidth = Math.ceil(widest) + 'px';
-    }
+// The two toolbar panel toggles (issue #151) carry short FIXED labels, "3D"
+// and "Panel", and are highlighted (`.active`) while their panel is shown —
+// the same kind of toggle as the Sessions button at the toolbar's left edge.
+// The tooltip says what a click will do. They used to swap "Hide 3D View" /
+// "Show 3D View" and "Hide Panel" / "Show Panel", which cost ~95px of toolbar
+// width and needed each button pinned to its wider label so the swap did not
+// shove its neighbour sideways; a fixed label cannot resize.
+function syncPanelToggleBtn(btn, collapsed, what, key) {
+    btn.classList.toggle('active', !collapsed);
+    btn.setAttribute('aria-pressed', collapsed ? 'false' : 'true');
+    btn.title = (collapsed ? 'Show ' : 'Hide ') + what + ' (' + key + ')';
 }
 
 export function updateInfoPanelToggleBtn() {
     var wrapper = document.getElementById('infoPanelWrapper');
     var btn = document.getElementById('infoPanelToggleBtn');
-    if (btn) {
-        var l = panelToggleLabels('infoPanelToggleBtn');
-        btn.textContent = wrapper.classList.contains('collapsed') ? l.hidden : l.shown;
-    }
+    if (wrapper && btn) syncPanelToggleBtn(btn, wrapper.classList.contains('collapsed'), 'info panel', 'I');
 }
 
 /**
- * Keep the toolbar's 3D-viewer toggle label in sync with the panel's actual
+ * Keep the toolbar's 3D-viewer toggle in sync with the panel's actual
  * collapse state (issue #151).
  *
  * The button is only one of three ways to toggle the viewport — the `\`
- * shortcut and View ▸ Toggle 3D Viewport are the others — so the label is
+ * shortcut and View ▸ Toggle 3D Viewport are the others — so its state is
  * driven off the DOM rather than off whoever did the toggling.
  * `ui/layout-controls.js` also calls this from the `MutationObserver` that
- * already watches the container's class, which covers the initial label and
+ * already watches the container's class, which covers the initial state and
  * any collapse that happens without going through `toggle3DViewport`.
  */
 export function update3DViewportToggleBtn() {
     var container = document.getElementById('viewport3dContainer');
     var btn = document.getElementById('viewport3dToggleBtn');
-    if (container && btn) {
-        var l = panelToggleLabels('viewport3dToggleBtn');
-        btn.textContent = container.classList.contains('collapsed') ? l.hidden : l.shown;
-    }
+    if (container && btn) syncPanelToggleBtn(btn, container.classList.contains('collapsed'), '3D viewer', '\\');
 }
 
 /**
@@ -2987,12 +3251,7 @@ export function toggle3DViewport() {
     const container = document.getElementById('viewport3dContainer');
     var isCollapsing = !container.classList.contains('collapsed');
     if (isCollapsing) {
-        // Save current width so we can restore it when expanding
-        container._savedWidth = container.style.width || '';
-        // Clear inline width so the CSS .collapsed { width: 0 } rule takes effect
-        container.style.width = '';
-        container.classList.add('collapsed');
-        if (viewport3d) viewport3d.setVisible(false);
+        collapseViewport3D(viewport3d);
     } else {
         // Class off + width back FIRST: everything below reads the container's
         // collapse state (via ui/panel-visibility.js) or its size.
@@ -3035,6 +3294,43 @@ export {
 // ============================================
 
 var savedGridLayout = null; // cached dockview layout JSON from grid mode
+
+/**
+ * Is the cached grid layout still a layout of THIS set of views?
+ *
+ * `savedGridLayout` is a snapshot taken when `v` was pressed, and the view list
+ * can change while solo: removing a video (`removeVideoFile`) or loading one,
+ * and switching sessions replaces the list wholesale. Restoring the snapshot
+ * then re-created a pane for a view that no longer exists — an empty pane
+ * wearing the removed camera's name, which is the state the user sees as "the
+ * video went blank" (luc3d #216). A view that was ADDED while solo is the same
+ * mistake in the other direction: `g` would restore a grid missing it.
+ *
+ * Validated HERE, at the point of use, rather than invalidated at each site
+ * that mutates `state.views` — a list of invalidation call sites is a list
+ * something can be left off, and this cache has exactly one reader. A layout
+ * that fails is dropped so `setGridMode` falls back to a fresh
+ * `addAllViewsAsGrid()`, which is the honest answer: the arrangement the user
+ * saved is not an arrangement of the views they now have.
+ *
+ * Reads `params.viewName` off the SERIALIZED panel records — the `params` every
+ * pane is added with, part of dockview's documented `toJSON` shape, not one of
+ * the private internals `ui/overlay-export-modal.js` depends on.
+ */
+function savedGridLayoutMatchesViews() {
+    if (!savedGridLayout || !savedGridLayout.panels) return false;
+    var saved = [];
+    for (var id in savedGridLayout.panels) {
+        var rec = savedGridLayout.panels[id];
+        var name = rec && rec.params && rec.params.viewName;
+        if (name && saved.indexOf(name) < 0) saved.push(name);
+    }
+    if (saved.length !== state.views.length) return false;
+    for (var i = 0; i < state.views.length; i++) {
+        if (saved.indexOf(state.views[i].name) < 0) return false;
+    }
+    return true;
+}
 
 /**
  * Enter single-view ("solo") mode — the dock shows exactly ONE camera.
@@ -3124,15 +3420,14 @@ export function setGridMode() {
         ? state.views[state.singleViewIndex].name
         : null;
     state.viewMode = 'grid';
+    // A snapshot of a view list that no longer exists is worse than no
+    // snapshot: `fromJSON` would rebuild a pane for every view it names,
+    // including ones that have since been removed.
+    if (savedGridLayout && !savedGridLayoutMatchesViews()) savedGridLayout = null;
     if (savedGridLayout && paneManager.api) {
-        // Restore saved grid layout
-        var savedZoom = {};
-        for (var zi = 0; zi < state.views.length; zi++) {
-            var zv = state.views[zi];
-            if (zv.zoom) {
-                savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY };
-            }
-        }
+        // Restore saved grid layout. Each view's zoom rides through the rebuild
+        // on the view itself (`refreshPaneInteractions` keeps it and rescales
+        // its pan to the new cell).
         paneManager.clearAll();
         paneManager.api.fromJSON(savedGridLayout);
         // `fromJSON` builds panels behind `addVideoPanel`'s back, so the docked
@@ -3141,16 +3436,6 @@ export function setGridMode() {
         var emptyMsg = document.getElementById('videoDockEmpty');
         if (emptyMsg) emptyMsg.classList.add('hidden');
         refreshPaneInteractions();
-        // Restore zoom state
-        for (var ri = 0; ri < state.views.length; ri++) {
-            var rv = state.views[ri];
-            if (savedZoom[rv.name] && rv.zoom) {
-                rv.zoom.scale = savedZoom[rv.name].scale;
-                rv.zoom.offsetX = savedZoom[rv.name].offsetX;
-                rv.zoom.offsetY = savedZoom[rv.name].offsetY;
-                if (videoController) videoController.applyZoom(rv);
-            }
-        }
     } else {
         updateVideoGridDisplay();
     }
@@ -3159,14 +3444,9 @@ export function setGridMode() {
 
 export function updateVideoGridDisplay() {
     if (state.views.length === 0) return;
-    // Preserve zoom state across panel recreation
-    var savedZoom = {};
-    for (var zi = 0; zi < state.views.length; zi++) {
-        var zv = state.views[zi];
-        if (zv.zoom) {
-            savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY };
-        }
-    }
+    // No zoom save/restore around the rebuild: the zoom lives on the view, and
+    // `refreshPaneInteractions` keeps it and rescales its pan to the new cell.
+    // Writing saved offsets back afterwards would undo that rescale.
     if (state.viewMode === 'single') {
         // Show only the selected view
         var targetView = state.views[state.singleViewIndex];
@@ -3180,16 +3460,6 @@ export function updateVideoGridDisplay() {
         paneManager.clearAll();
         paneManager.addAllViewsAsGrid();
         refreshPaneInteractions();
-    }
-    // Restore zoom state
-    for (var ri = 0; ri < state.views.length; ri++) {
-        var rv = state.views[ri];
-        if (savedZoom[rv.name] && rv.zoom) {
-            rv.zoom.scale = savedZoom[rv.name].scale;
-            rv.zoom.offsetX = savedZoom[rv.name].offsetX;
-            rv.zoom.offsetY = savedZoom[rv.name].offsetY;
-            if (videoController) videoController.applyZoom(rv);
-        }
     }
 }
 
@@ -3270,7 +3540,7 @@ export function seekToLabeledFrame(direction) {
         if (timeline) timeline.setCurrentFrame(target);
         updateSeekbarVisual(target);
         videoController.scrubToFrame(target);
-        setStatus('Frame ' + (target + 1), 'info');
+        setStatus('Frame ' + (target + 1).toLocaleString('en-US'), 'info');
     }
 }
 
@@ -3302,16 +3572,17 @@ export function seekToLabeledFrame(direction) {
         input.select();
 
         function commit() {
-            var raw = input.value.trim();
+            // The readout shows "1,234", so accept it typed back that way.
+            var raw = input.value.trim().replace(/[,\s]/g, '');
             var num = parseInt(raw, 10);
             if (!isNaN(num) && num >= 1 && num <= state.totalFrames) {
                 if (videoController) videoController.seekToFrame(num - 1);
             }
-            frameEl.textContent = state.currentFrame + 1;
+            showReadoutFrame(state.currentFrame);
         }
 
         function cancel() {
-            frameEl.textContent = state.currentFrame + 1;
+            showReadoutFrame(state.currentFrame);
         }
 
         input.addEventListener('keydown', function (ev) {
@@ -3357,6 +3628,8 @@ export function seekToLabeledFrame(direction) {
                 }
             }
             fpsEl.textContent = (state.fps || 30).toFixed(1) + ' fps';
+            refreshReadoutTotals();   // the times are frame / fps
+            if (state.trailSeconds > 0) drawAllOverlays(state.currentFrame);   // trail frames are seconds × fps
         }
 
         function cancel() {

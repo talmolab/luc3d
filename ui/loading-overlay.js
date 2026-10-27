@@ -1,12 +1,16 @@
-// ui/loading-overlay.js — the full-window loading overlay (#loadingOverlay) and
-// its determinate progress bar, shared by every long-running bulk operation
-// (Track All, Triangulate All, Group by Identity, …).
+// ui/loading-overlay.js — the loading overlay (#loadingOverlay) and its
+// determinate progress bar, shared by every long-running bulk operation
+// (Track All, Triangulate All, Group by Identity, …): an opaque card styled
+// like the image ID-switch check's dialog — optional title, message, bar with a
+// playhead, a large percentage — on a transparent layer that blocks the app
+// without greying it out.
 //
 // Two pieces:
 //   - `showLoading` / `showLoadingProgress` / `hideLoading` own the overlay DOM.
 //     `showLoading(msg)` is the indeterminate form (spinner + text) and hides
 //     the bar; `showLoadingProgress(label, done, total)` writes the standard
-//     "<label>: done/total frames (pct%)…" line and drives the bar.
+//     "<label>: done/total frames…" line, the percentage under the bar, and
+//     drives the bar.
 //   - `createProgressPacer()` decides WHEN a chunked main-thread loop should
 //     report and yield. It is time-based, not every-N-frames: a frame count is
 //     either too chatty on fast work (each yield waits for a paint) or too
@@ -18,6 +22,17 @@
 // Transform transitions run on the compositor thread, so the bar keeps gliding
 // while the main thread is busy computing the next chunk — the same reason the
 // spinner keeps spinning.
+//
+// An operation that can clock its CPU time (Triangulate All's worker pool) — or
+// that runs on the main thread alone (Track All) — also gets a CPU line and a
+// graph of the last minute under the detail line: `setLoadingCpu`, built from
+// ui/load-graph.js like the image check's dialog. In Brave with its
+// fingerprinting protection on, a note under it explains that the core count is
+// a random one and how to stop that (ui/browser-hints.js).
+
+import { noteProgress } from './progress-delta.js';
+import { createLoadMeter, createBusyClock, createLoadGraph, formatCpuLoad, setLoadLine, cpuCores } from './load-graph.js';
+import { renderBraveFingerprintingHint } from './browser-hints.js';
 
 /** Default pacer interval. Each yield waits for one paint (~one display frame),
  *  so this bounds the overhead at roughly frame-time / interval (a few %). The
@@ -103,6 +118,11 @@ function _setEta(text, ms) {
     }
 }
 
+/** A count with thousands separators, as every frame count in the app is shown: 2000000 -> "2,000,000". */
+function _count(n) {
+    return typeof n === 'number' ? n.toLocaleString('en-US') : String(n);
+}
+
 function _el(id) {
     return (typeof document !== 'undefined' && document.getElementById)
         ? document.getElementById(id) : null;
@@ -111,24 +131,120 @@ function _el(id) {
 function _setBarVisible(on) {
     var wrap = _el('loadingProgress');
     if (wrap) wrap.classList.toggle('hidden', !on);
+    var pct = _el('loadingPct');
+    if (pct) pct.classList.toggle('hidden', !on);
+    // the spinner says "working" only where there is no bar to say how far
+    var spinner = _el('loadingSpinner');
+    if (spinner) spinner.classList.toggle('hidden', on);
     var sub = _el('loadingSubstatus');
     if (sub && !on) { sub.textContent = ''; sub.classList.add('hidden'); }
     if (!on) { _setEta(''); _etaReset(); }
 }
 
-export function showLoading(msg) {
+/**
+ * The card's title (#loadingTitle) — the operation, e.g. "Triangulate All" —
+ * set by a call that passes `opts.title` and KEPT until `hideLoading` (or a
+ * call passing another; '' clears it), so the progress calls deep inside a
+ * run need not repeat it. Operations that never pass one show none.
+ */
+function _setTitle(opts) {
+    if (!opts || opts.title == null) return;
+    var el = _el('loadingTitle');
+    if (!el) return;
+    el.textContent = opts.title;
+    el.classList.toggle('hidden', !opts.title);
+}
+
+/**
+ * The card with a message and a spinner, no progress bar (an operation that
+ * cannot say how far along it is). `opts.title`: see `_setTitle`.
+ * `opts.step` / `opts.steps` / `opts.detail` fill the detail line exactly as
+ * `showLoadingProgress` does, for a stage of a multi-step run that cannot
+ * count its own work (Save's file-writing steps).
+ */
+export function showLoading(msg, opts) {
     var overlay = _el('loadingOverlay');
     if (overlay) overlay.classList.remove('hidden');
+    _setTitle(opts);
     var status = _el('loadingStatus');
     if (status) status.textContent = msg || 'Loading...';
     _setBarVisible(false);
+    _setSubstatus(opts || {});
+}
+
+/** The detail line under the bar: "Step k of n" (only when n > 1) · detail. */
+function _setSubstatus(opts) {
+    var sub = _el('loadingSubstatus');
+    if (!sub) return;
+    var parts = [];
+    if (opts.steps > 1 && opts.step) parts.push('Step ' + opts.step + ' of ' + opts.steps);
+    if (opts.detail) parts.push(opts.detail);
+    sub.textContent = parts.join(' · ');
+    sub.classList.toggle('hidden', parts.length === 0);
 }
 
 export function hideLoading() {
     var overlay = _el('loadingOverlay');
     if (overlay) overlay.classList.add('hidden');
+    _setTitle({ title: '' });
     _setBarVisible(false);
     _setFill(0, false);
+    setLoadingCpu(null);
+}
+
+/** How often the overlay's CPU line and graph refresh (ms). */
+export var CPU_SAMPLE_MS = 1000;
+
+var _cpuTimer = null, _cpuGraph = null;
+// `{mainThread: true}`: the main thread's busy clock, and how many `yieldToPaint`s it is waiting in
+var _mainClock = null, _mainYields = 0;
+
+/**
+ * Show how busy the running operation keeps the CPU, under the detail line:
+ * "CPU: 12 cores · load 92%" and a graph of the last minute, sampled every
+ * CPU_SAMPLE_MS as a share of all the cores. `source` has
+ *   - `cpuBusyMs()`: busy thread-ms so far, summed over threads (e.g. a
+ *     pose/triangulation-pool.js solver's, or Track All's tracker worker), and/or
+ *   - `mainThread: true`: the overlay clocks the main thread itself — busy from
+ *     this call on, except while it waits in `yieldToPaint` for a paint (its
+ *     pacer's ~4 yields/s) or in `idleWhile` (on a worker), with `busyDuring`
+ *     counting the work a wait's handlers do. Both given: their sum.
+ * `counts` finishes the tooltip's "kept busy … by". Until `hideLoading()` or
+ * `setLoadingCpu(null)`; a source that throws stops it. CPU only: no GPU series
+ * — the operations that report here do not use one.
+ */
+export function setLoadingCpu(source) {
+    if (_cpuTimer) clearInterval(_cpuTimer);
+    _cpuTimer = null;
+    if (_mainClock) _mainClock.close();
+    _mainClock = null; _mainYields = 0;
+    var box = _el('loadingHardware'), line = _el('loadingCpu'), gbox = _el('loadingGraph'), hint = _el('loadingBraveHint');
+    if (box) box.classList.add('hidden');
+    if (line) setLoadLine(line, '', '', false);          // nothing of the last operation's left behind
+    if (hint) hint.hidden = true;
+    if (!source || !box || !line || !gbox) return;
+    var busyMs = source.cpuBusyMs;
+    if (source.mainThread) {
+        var main = _mainClock = createBusyClock(function () { return _clock(); }), other = source.cpuBusyMs;
+        main.begin('main');
+        busyMs = other ? function () { return main.ms() + other(); } : function () { return main.ms(); };
+    }
+    _cpuGraph = _cpuGraph || createLoadGraph(gbox);       // built once: the overlay's DOM is static
+    _cpuGraph.clear();
+    _cpuGraph.show(true);
+    var meter = createLoadMeter(), cores = cpuCores();
+    var tick = function () {
+        var now = _clock(), c;
+        try { c = formatCpuLoad(cores, meter(now, busyMs() / Math.max(1, cores)), source.counts || 'this operation'); }
+        catch (e) { setLoadingCpu(null); return; }
+        setLoadLine(line, c.text, c.title, true);
+        _cpuGraph.push(now, c.load, null);
+    };
+    tick();
+    box.classList.remove('hidden');
+    // In Brave with its fingerprinting protection on, the core count above is a random one: say so, and how to fix it
+    renderBraveFingerprintingHint(hint, cores);
+    _cpuTimer = setInterval(tick, CPU_SAMPLE_MS);
 }
 
 function _setFill(frac, animate) {
@@ -139,6 +255,13 @@ function _setFill(frac, animate) {
     fill.classList.toggle('no-anim', !animate);
     fill.style.transform = 'scaleX(' + frac + ')';
     fill.dataset.fraction = String(frac);
+    noteProgress(fill, frac, { animate: animate });   // light up the stretch just gained
+    // the playhead at the fill's leading edge: its full-width wrapper translated by the same fraction
+    var head = _el('loadingProgressHead');
+    if (head) {
+        head.classList.toggle('no-anim', !animate);
+        head.style.transform = 'translateX(' + (100 * frac) + '%)';
+    }
     var wrap = _el('loadingProgress');
     if (wrap) wrap.setAttribute('aria-valuenow', String(Math.round(frac * 100)));
 }
@@ -154,9 +277,13 @@ function _setFill(frac, animate) {
  * @param {number} [opts.steps]  how many stages the operation has
  * @param {string} [opts.detail] extra context for the line under the bar
  *                               (method, counts) — kept off the main line so it
- *                               always reads "<label>: done/total frames (pct%)…"
+ *                               always reads "<label>: done/total frames…"
  * @param {string} [opts.unit]   default 'frames'
+ * @param {string} [opts.title]  the operation, as the card's title (kept until
+ *                               hideLoading — see `_setTitle`)
  *
+ * The percentage is the large number under the bar (#loadingPct), as in the
+ * image ID-switch check's dialog, so the main line does not repeat it.
  * A second text line (#loadingEta) estimates the time remaining in the CURRENT
  * stage (see `estimateRemainingMs`); in a multi-stage run it says so.
  */
@@ -166,11 +293,11 @@ export function showLoadingProgress(label, done, total, opts) {
     var pct = Math.floor(frac * 100);
     var overlay = _el('loadingOverlay');
     if (overlay) overlay.classList.remove('hidden');
+    _setTitle(opts);
     var status = _el('loadingStatus');
-    if (status) {
-        status.textContent = label + ': ' + done + '/' + total + ' ' +
-            (opts.unit || 'frames') + ' (' + pct + '%)…';
-    }
+    if (status) status.textContent = label + ': ' + _count(done) + '/' + _count(total) + ' ' + (opts.unit || 'frames') + '…';
+    var pctEl = _el('loadingPct');
+    if (pctEl) pctEl.textContent = pct + '%';
     var wrap = _el('loadingProgress');
     // A stage starting over (bar hidden, or moving backwards) snaps; otherwise animate.
     var fill = _el('loadingProgressFill');
@@ -180,14 +307,7 @@ export function showLoadingProgress(label, done, total, opts) {
     _setBarVisible(true);
     _setFill(frac, animate);
     _updateEta(label, done, total, opts);
-    var sub = _el('loadingSubstatus');
-    if (sub) {
-        var parts = [];
-        if (opts.steps > 1 && opts.step) parts.push('Step ' + opts.step + ' of ' + opts.steps);
-        if (opts.detail) parts.push(opts.detail);
-        sub.textContent = parts.join(' · ');
-        sub.classList.toggle('hidden', parts.length === 0);
-    }
+    _setSubstatus(opts);
 }
 
 function _updateEta(label, done, total, opts) {
@@ -211,6 +331,32 @@ function _updateEta(label, done, total, opts) {
 }
 
 /**
+ * Await `promise` as main-thread IDLE time for a `{mainThread}` CPU line — the
+ * main thread waiting on a worker is not using the CPU (counted like the waits
+ * in `yieldToPaint`; overlapping waits reopen the lane once). No line: just the
+ * promise.
+ * @template T @param {Promise<T>} promise @returns {Promise<T>}
+ */
+export function idleWhile(promise) {
+    var mc = _mainClock;
+    if (!mc) return promise;
+    if (_mainYields++ === 0) mc.close('main');
+    var reopen = function () { if (_mainClock === mc && --_mainYields === 0) mc.begin('main'); };
+    return Promise.resolve(promise).then(function (v) { reopen(); return v; }, function (e) { reopen(); throw e; });
+}
+
+/**
+ * Run `fn` counted as main-thread CPU time even inside an `idleWhile` /
+ * `yieldToPaint` wait — a worker's results being written back from its message
+ * handler is main-thread work.
+ */
+export function busyDuring(fn) {
+    var mc = _mainClock;
+    if (mc) mc.begin('main');
+    try { return fn(); } finally { if (mc && _mainClock === mc) mc.end('main'); }
+}
+
+/**
  * Wait until the browser has had a chance to PAINT, then resume.
  *
  * `setTimeout(0)` alone does not guarantee a paint — the timer can fire before
@@ -221,11 +367,22 @@ function _updateEta(label, done, total, opts) {
  * (occluded window) from stalling the operation. A hidden tab needs no paint,
  * so it yields through a MessageChannel, which — unlike chained timers — is not
  * throttled to 1/s in background tabs.
+ *
+ * While a main-thread operation's CPU line is up (`setLoadingCpu({mainThread})`),
+ * the wait is not its CPU time: the main thread's lane closes for it (counted, so
+ * overlapping yields reopen it once, when the last one ends).
  */
 export function yieldToPaint() {
+    var mc = _mainClock;
+    if (mc && _mainYields++ === 0) mc.close('main');
     return new Promise(function (resolve) {
         var settled = false;
-        function go() { if (!settled) { settled = true; resolve(); } }
+        function go() {
+            if (settled) return;
+            settled = true;
+            if (mc && _mainClock === mc && --_mainYields === 0) mc.begin('main');
+            resolve();
+        }
         var visible = typeof document !== 'undefined' && document.visibilityState === 'visible';
         if (visible && typeof requestAnimationFrame === 'function') {
             requestAnimationFrame(function () { setTimeout(go, 0); });

@@ -24,6 +24,7 @@ import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { answerTrackSetup } from './fixtures/track-setup.js';
 import fs from 'node:fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -60,10 +61,11 @@ try {
     const page = await browser.newPage();
     page.on('pageerror', e => log(`  [${el()}] [pageerror] ` + String(e).slice(0, 300)));
     page.on('crash', () => { log(`  [${el()}] *** RENDERER CRASHED ***`); fails++; });
-    // Track All asks for the animal count via window.prompt(); Playwright
-    // auto-DISMISSES dialogs, which makes promptNumAnimals() return false and
-    // trackAll() bail in 2 ms. Answer it. 3 matches the real run's identity count.
+    // Track All asks for the animal count in its first-use dialog
+    // (ui/track-setup-modal.js); unanswered, trackAll() waits on it forever.
+    // Answer it. 3 matches the real run's identity count.
     page.on('dialog', async d => { await d.accept(process.env.NANIMALS || '3'); });
+    await answerTrackSetup(page, process.env.NANIMALS || '3');
     page.on('console', m => {
         const t = m.text();
         if (/phase:|\[slp-streaming-write\]|\[save-slp\]|MEM:|FETCH|\[session-folder\]/.test(t)) log(`  [${el()}] ${t.slice(0, 220)}`);

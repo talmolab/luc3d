@@ -35,6 +35,16 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
 
 ## Tests
 
+- **`move-video-lazy-members.mjs`** — moving a view to another session must
+  re-solve the origin session's groups from REAL 2D on a lazy project. A
+  synthetic 4-camera project is reopened lazily (so non-resident frames' group
+  members are `_lazy2d` placeholders, as after Track All since #280), a second
+  session is added, and one camera is moved through the real "Move videos"
+  modal. Each probed group's 3D must equal the app's own solve on its hydrated
+  2D without that camera — on non-resident frames and on the resident current
+  frame — no group may keep its stale 3D, and the members must be placeholders
+  again afterwards. (Fails against `moveVideosToSession` without the hydration:
+  0/10 non-resident groups re-solved, all 10 kept their stale 3D.)
 - **`session-video-scoping.mjs`** — regression guard for the multi-session
   "second session shows both videos" bug. Verifies that loading a video into one
   session never leaks its view / camera / `videoFileIndices` into another
@@ -85,3 +95,62 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
   with no error; the sink throws instead, and this test proves it. Every
   assertion was validated against the pre-patch writer first, so it pins
   equivalence rather than merely current behavior.
+- **`panel-tabs-scroller.mjs`** — the info panel's tab bar is ONE horizontal
+  scroller holding every tab, not a short bar plus a **"More ▾"** dropdown. The
+  dropdown demoted whichever tabs did not fit; at the default 300px width that
+  was five of the seven, so the panel's own name for what the user was looking
+  at was usually behind a control they had to open first, and which tabs were
+  behind it moved as the panel was resized. Asserts all seven tabs are in the
+  bar in markup order with no "More" control anywhere, that the bar really does
+  overflow at the default width (the precondition, so the rest cannot silently
+  stop testing a scroller), that a trackpad's VERTICAL two-finger swipe scrolls
+  it sideways (the gesture a 31px strip gets, and nothing else was using it),
+  that click-and-drag scrolls it **without** also switching tabs while a 2px
+  click still does — the whole risk in making a row of buttons draggable — that
+  a tab selected from code is scrolled into view, and that the edge fades track
+  which side has tabs behind it and both vanish once the panel is wide enough.
+  Confirmed to fail on the pre-change build (11 red, then the Cameras tab is
+  `display: none` and has no box to click, which is the bug itself).
+- **`videos-panel-buttons.mjs`** — the Videos tab's two buttons (luc3d #216).
+  Clicks **Load Videos** on a FRESH page with no session loaded (the bug: both
+  handlers were assigned inside `updateInfoPanel`, which returns early when
+  `state.session` is null, so the button carried no handler at all while
+  `File ▸ Load Videos…` worked), then selects a row and clicks **Remove Video**
+  and asserts the whole video goes: no dockview pane, no `.video-cell`, no
+  view-strip thumbnail, the decoder `close()`d and out of the pool, and
+  `session.videoFileIndices` remapped across the `state.videoFiles` splice —
+  with the second video keeping all of it as the control. Generates its own
+  tiny H.264 clips with ffmpeg (headless Chromium cannot decode the HEVC the
+  real sessions ship) and skips cleanly if ffmpeg is absent. §7 then covers the
+  solo-mode edge case: with `v` active, removing a *different* video used to
+  (a) leave the removed view in `savedGridLayout`, so `g` rebuilt an empty pane
+  wearing its name, and (b) drift `state.singleViewIndex`, which is positional,
+  onto the next camera along; removing the solo'd view itself (c) closed the
+  only pane and left the dock empty. Every behavioural assertion was confirmed
+  to fail on the pre-fix build.
+- **`fragmented-mp4-load.mjs`** — a FRAGMENTED MP4 (campy's default output)
+  loads whole. `_initMp4box` stopped at mp4box's `onReady`, which fires on the
+  empty moov, so only the first chunk's fragments were counted (a 1,200-frame
+  60 fps rig video: 420 frames at 21 fps in HTML5 mode; 1,200 frames but
+  `state.fps` 30 with mediabunny). Loads
+  `tests/fixtures/fragmented-60/fragmented-60.mp4` (1,200 barcode frames at
+  60 fps, campy's muxer flags) with small read sizes, in HTML5 and mediabunny
+  modes, and asserts the frame count, the fps, `updateTotalFrames`' fps, that
+  mdat payloads were skipped while mp4box held no earlier chunk, frames past
+  the first chunk by barcode, that a copy cut off mid-fragment counts only the
+  frames whose bytes are in the file (1,165, as ffprobe decodes), and that a
+  regular MP4 does no fragment scan. `RIG_VIDEO=<path>` (HEVC: with
+  `CHANNEL=chrome`) also loads a real recording. Fails 8 checks on the pre-fix
+  build.
+- **`info-panel-many-tracks.mjs`** — the Instances panel must not cost
+  O(rows x tracks) per update. Its Track `<select>`s are rebuilt on every
+  `updateFrameInfo` (~10 Hz in playback), and each used to hold an `<option>`
+  per session track: 863 tracks x ~40 rows on a real prediction project capped
+  playback at ~5 fps. Drives the real `updateFrameInfo` on 8 cameras with 10 and
+  with 1,000 tracks and asserts the same `<option>` count for both (at most 3
+  per closed Track select), that every closed select shows what the eager build
+  did, that a real click (and focus, the keyboard path) fills head + every track
+  in order + tail without resizing the select, and that picking a track (with
+  its swap), `(none)` on a group and `(+) New Track` still work. Confirmed to
+  fail on the eager build (43,387 options, ~228 ms per update, against 421 and
+  ~7 ms); the behaviour checks pass on both, so they pin equivalence.

@@ -8,7 +8,7 @@
 import { viewport3d, timeline } from './app-state.js';
 import {
     syncTimelineToggleButton, updateInfoPanelToggleBtn, toggleInfoPanel,
-    update3DViewportToggleBtn, toggle3DViewport, lockPanelToggleWidths,
+    update3DViewportToggleBtn, toggle3DViewport,
 } from './ui-wiring.js';
 
 
@@ -137,9 +137,4 @@ export function setupSplitHandles() {
     // Wire up the toggle buttons
     document.getElementById('infoPanelToggleBtn').addEventListener('click', toggleInfoPanel);
     document.getElementById('viewport3dToggleBtn').addEventListener('click', toggle3DViewport);
-
-    // Size each toggle to its widest label, so swapping Hide/Show doesn't
-    // resize the button and shove its neighbour sideways. After the labels
-    // above are set, so the measurement restores the correct current one.
-    lockPanelToggleWidths();
 }

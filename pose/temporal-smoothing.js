@@ -114,6 +114,7 @@
 import {
     POINT3D_STRIDE,
     points3dNodeCount,
+    NO_REPROJECTED_INSTANCES,
 } from './pose-data.js';
 
 // Identity id meaning "no identity" (matches `InstanceGroup`'s default).
@@ -346,12 +347,14 @@ export function collectTrajectories(session) {
 
 /**
  * Invalidate a group's reprojection caches after its 3D moved.
+ * `reprojectedInstances` goes back to the shared read-only empty map (as
+ * pose-data.js's `clearGroupReprojections` does): `clear()` on it throws.
  * @param {InstanceGroup} group
  */
 function invalidateReprojections(group) {
     group.reprojections = null;
-    if (group.reprojectedInstances && typeof group.reprojectedInstances.clear === 'function') {
-        group.reprojectedInstances.clear();
+    if (group.reprojectedInstances !== NO_REPROJECTED_INSTANCES) {
+        group.reprojectedInstances = NO_REPROJECTED_INSTANCES;
     }
 }
 

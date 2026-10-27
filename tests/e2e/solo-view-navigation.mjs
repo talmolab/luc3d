@@ -31,6 +31,12 @@
  *     `addVideoPanel`'s back — so this also covers `syncDockedViews()`, without
  *     which the restored grid reports nothing docked and a strip click on an
  *     on-screen view does nothing.
+ *  6. A grid rebuilt by a LOAD or session change while a view is solo'd leaves
+ *     solo mode. Those paths call `addAllViewsAsGrid()` after `clearAll()`, and
+ *     only `newProject` reset `state.viewMode` — so the grid came back with the
+ *     mode still 'single', the "camA (1/4)" chip left over it, and `v` (a no-op
+ *     when already solo) silently doing nothing until `g`. Driven through the
+ *     real `removeSession`, one of those paths.
  *
  * Run: node solo-view-navigation.mjs   (spawns its own http.server)
  */
@@ -346,6 +352,35 @@ try {
     s = await snap();
     check(s.mode === 'single' && s.docked.join() === 'camA',
         `v re-enters solo on the focused view (got [${s.docked}])`);
+
+    // 6 — a grid rebuilt by a session change while solo'd leaves solo mode
+    page.once('dialog', d => d.accept());               // removeSession's confirm()
+    await page.evaluate(async () => {
+        const AS = await import('/ui/app-state.js');
+        const pd = await import('/pose/pose-data.js');
+        const sp = await import('/ui/sessions-panes.js');
+        const s0 = AS.state.session;
+        s0._views = AS.state.views;                       // what switchSession stores per session
+        AS.state.sessions.push(new pd.Session(s0.cameras, s0.skeleton, ['track_0'], 'S2'));
+        sp.removeSession(1);                              // active stays 0 -> rebuilds its grid
+        await new Promise(r => setTimeout(r, 120));
+    });
+    s = await snap();
+    check(s.mode === 'grid' && s.docked.length === 4,
+        `a session change while solo'd shows the grid AND leaves solo mode (mode ${s.mode}, docked [${s.docked}])`);
+    check(s.indicator === null, `the solo chip is gone with it (got ${JSON.stringify(s.indicator)})`);
+    // click the PANE, as a user does (a strip click while stuck in 'single' would swap the solo view by itself)
+    const pane = await page.evaluate(async () => {
+        const AS = await import('/ui/app-state.js');
+        const r = AS.state.views.find(v => v.name === 'camC').wrapper.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    });
+    await page.mouse.click(pane.x, pane.y);
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(r)));
+    await press('v');
+    s = await snap();
+    check(s.mode === 'single' && s.docked.join() === 'camC',
+        `v then solos again, instead of doing nothing (mode ${s.mode}, docked [${s.docked}])`);
 
     await browser.close();
 } catch (e) {
