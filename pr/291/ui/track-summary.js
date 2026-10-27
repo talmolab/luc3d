@@ -10,7 +10,7 @@
 //
 // Imports only `id-switch-review.js`, which is import-free.
 
-import { idSwitchOnsets, idSwitchEncounterCount } from './id-switch-review.js?v=f688f417d14b';
+import { idSwitchOnsets, idSwitchEncounterCount } from './id-switch-review.js?v=db2d5e5454d3';
 
 /** Thousands separators, as everywhere else frame counts are shown. */
 function n(v) {
@@ -77,14 +77,16 @@ export function formatTrackingSpeed(frames, ms, recordingFps) {
  *
  * @param {Object} session
  * @param {{frames:number, animals:number, animalsAuto?:boolean, elapsedMs?:number, fps?:number,
- *          singleCamera?:string, untracked?:number, duplicates?:number, reviewPlaces?:number}} opts
+ *          singleCamera?:string, untracked?:number, filtered?:number, duplicates?:number,
+ *          reviewPlaces?:number}} opts
  *   `frames` — the frames the pass swept (the denominator); `animals` — the
  *   animal count it ran with; `animalsAuto` — whether that count was detected
  *   rather than entered; `elapsedMs` — how long tracking took; `fps` — the
  *   recording's frame rate, for the real-time multiplier (0/absent: none shown).
  *   A single-camera Track All (pose/single-camera-tracking.js) also passes its
  *   camera (`singleCamera`) and the detections it left without a track
- *   (`untracked`: over the animal count; `duplicates`: removed before tracking),
+ *   (`untracked`: over the animal count; `filtered`: removed by the Tracking
+ *   Wizard's detection filters, and `duplicates`, both before tracking),
  *   and the number of places on its review list (`reviewPlaces`, the ID Switches
  *   tab's 'review' rows), and is counted on the stand-in session
  *   `singleCameraCheckSession` builds.
@@ -121,6 +123,7 @@ export function summarizeTrackedIdentities(session, opts) {
         fps: opts.fps > 0 ? opts.fps : 0,
         singleCamera: opts.singleCamera || null,
         untracked: opts.untracked || 0,
+        filtered: opts.filtered || 0,
         duplicates: opts.duplicates || 0,
         reviewPlaces: opts.reviewPlaces || 0,
         identities: ids.map(function (id, i) {
@@ -375,10 +378,11 @@ function planSingleCameraSummary(s, checks) {
             detail: formatShare(s.completeFrames, s.frames),
         });
     }
-    var without = (s.untracked || 0) + (s.duplicates || 0);
+    var without = (s.untracked || 0) + (s.filtered || 0) + (s.duplicates || 0);
     if (without > 0) {
         var why = [];
         if (s.untracked) why.push(n(s.untracked) + ' over the animal count');
+        if (s.filtered) why.push(n(s.filtered) + ' removed by the detection filters');
         if (s.duplicates) why.push(n(s.duplicates) + ' duplicate' + (s.duplicates === 1 ? '' : 's') + ' removed first');
         stats.push({ label: 'Without a track', value: plural(without, 'detection'), detail: why.join(', '),
                      title: 'Detections Track All left without a track. They stay in the project.' });

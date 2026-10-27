@@ -16,33 +16,33 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=f688f417d14b';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=f688f417d14b';
-import { singleCameraName, singleCameraTrackerConfig, trackSingleCamera, reviewResult, SINGLE_CAMERA_LAZY_REASON } from './single-camera-tracking.js?v=f688f417d14b';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=f688f417d14b';
+} from './triangulation.js?v=db2d5e5454d3';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=db2d5e5454d3';
+import { singleCameraName, singleCameraTrackerConfig, trackSingleCamera, reviewResult, SINGLE_CAMERA_LAZY_REASON } from './single-camera-tracking.js?v=db2d5e5454d3';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=db2d5e5454d3';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=f688f417d14b';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=db2d5e5454d3';
 import {
     getNodeWeightArray, getNodeWeight, updateNodeWeights,
     getTrackingThresholds, getTrackingThreshold, isCameraTracked,
     getTrackingThresholdDefs, updateTrackingThresholds,
-} from '../ui/settings.js?v=f688f417d14b';
-import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=f688f417d14b';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=f688f417d14b';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=f688f417d14b';
-import { startTrackerWorker } from './tracker-pool.js?v=f688f417d14b';
-import { passesDetectionFilter } from './detection-filter-stats.js?v=f688f417d14b';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=f688f417d14b';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=f688f417d14b';
-import { updateInfoPanel } from '../ui/info-panel.js?v=f688f417d14b';
-import { setColorByIdentity } from '../ui/color-by.js?v=f688f417d14b';
-import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=f688f417d14b';
-import { runIdSwitchChecks, clearIdSwitchResults, setReviewList } from '../ui/id-switch-modal.js?v=f688f417d14b';
-import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=f688f417d14b';
-import { showTrackSummaryModal, rememberTrackSummary, summarySession } from '../ui/track-summary-modal.js?v=f688f417d14b';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=f688f417d14b';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=f688f417d14b';
+} from '../ui/settings.js?v=db2d5e5454d3';
+import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=db2d5e5454d3';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=db2d5e5454d3';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=db2d5e5454d3';
+import { startTrackerWorker } from './tracker-pool.js?v=db2d5e5454d3';
+import { passesDetectionFilter } from './detection-filter-stats.js?v=db2d5e5454d3';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=db2d5e5454d3';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=db2d5e5454d3';
+import { updateInfoPanel } from '../ui/info-panel.js?v=db2d5e5454d3';
+import { setColorByIdentity } from '../ui/color-by.js?v=db2d5e5454d3';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=db2d5e5454d3';
+import { runIdSwitchChecks, clearIdSwitchResults, setReviewList } from '../ui/id-switch-modal.js?v=db2d5e5454d3';
+import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=db2d5e5454d3';
+import { showTrackSummaryModal, rememberTrackSummary, summarySession } from '../ui/track-summary-modal.js?v=db2d5e5454d3';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=db2d5e5454d3';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=db2d5e5454d3';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -212,6 +212,8 @@ function crossViewScore(instA, camA, instB, camB) {
 //   filterMinMeanNodeScore — sleap-nn's mean node score (missing node = 0), only for predictions with node scores
 // `passesDetectionFilter` lives in pose/detection-filter-stats.js, which the
 // Tracking Wizard's readout also counts with, so the two cannot disagree.
+// Single-camera Track All (`runSingleCameraTrackAll`) applies the same gate,
+// with the same three settings, before SLEAP's tracker.
 
 function collectInstances(frameGroup, cameras, session) {
     var camInstances = {};
@@ -1780,11 +1782,17 @@ async function runSingleCameraTrackAll(session, bail) {
         oksStddev: getTrackingThreshold('scOksStddev'),
         connectBreaks: getTrackingThreshold('scConnectBreaks') > 0,
     });
+    // The Tracking Wizard's detection filters, read as the multi-camera pass reads them (`collectInstances`,
+    // `buildTrackerDetections`); all 0 (off) by default.
+    var filter = { minVisibleNodes: thr('filterMinVisibleNodes'), minInstanceScore: thr('filterMinInstanceScore'),
+                   minMeanNodeScore: thr('filterMinMeanNodeScore') };
+    var filtering = filter.minVisibleNodes > 0 || filter.minInstanceScore > 0 || filter.minMeanNodeScore > 0;
     // Opt-in: leave each frame's duplicate detections out (pose/single-camera-tracking.js DUPLICATE_DEFAULTS).
     var duplicates = getTrackingThreshold('scRemoveDuplicates') > 0
         ? { iou: getTrackingThreshold('scDuplicateIou'), oks: getTrackingThreshold('scDuplicateOks') } : null;
     console.log('[TrackAll] single camera (' + session.cameras[0].name + '): SLEAP tracker', cfg,
-        userCount ? '(animal count user-set)' : '(animal count auto-detected)', duplicates ? { duplicates: duplicates } : '');
+        userCount ? '(animal count user-set)' : '(animal count auto-detected)', filtering ? { filter: filter } : '',
+        duplicates ? { duplicates: duplicates } : '');
     console.time('[TrackAll] total');
 
     // Every bail-out is above (see runTrackingPass for why this is unconditional).
@@ -1801,6 +1809,7 @@ async function runSingleCameraTrackAll(session, bail) {
         var trackT0 = performance.now();
         var res = await trackSingleCamera(session, cfg, {
             fps: state.fps,
+            filter: filter,
             duplicates: duplicates,
             onProgress: async function (done, n) { showLoadingProgress('Tracking (SLEAP tracker)', done, n); await yieldToPaint(); },
         });
@@ -1827,6 +1836,8 @@ async function runSingleCameraTrackAll(session, bail) {
             res.frames.toLocaleString() + ' frames with SLEAP\'s tracker (one track per animal)' +
             (res.untracked ? ', ' + res.untracked.toLocaleString() + ' detection' + (res.untracked === 1 ? '' : 's') +
                 ' over the animal count left without a track' : '') +
+            (res.filtered ? ', ' + res.filtered.toLocaleString() + ' detection' + (res.filtered === 1 ? '' : 's') +
+                ' removed by the detection filters (left without a track)' : '') +
             (res.duplicates ? ', ' + res.duplicates.toLocaleString() + ' duplicate detection' + (res.duplicates === 1 ? '' : 's') +
                 ' removed first (left without a track)' : '') +
             (nReview ? ', ' + nReview.toLocaleString() + ' place' + (nReview === 1 ? '' : 's') + ' to review in the ID Switches tab' : '') +
@@ -1852,7 +1863,8 @@ async function runSingleCameraTrackAll(session, bail) {
             var summaryOpts = {
                 frames: res.frames, animals: numAnimals, animalsAuto: !userCount, elapsedMs: trackMs,
                 fps: state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 0),
-                singleCamera: session.cameras[0].name, untracked: res.untracked, duplicates: res.duplicates,
+                singleCamera: session.cameras[0].name, untracked: res.untracked, filtered: res.filtered,
+                duplicates: res.duplicates,
                 reviewPlaces: nReview,
             };
             var summaryChecks = {

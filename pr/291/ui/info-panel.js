@@ -5,44 +5,46 @@
 
 import {
     Skeleton, Camera, Session,
-} from '../pose/pose-data.js?v=f688f417d14b';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=f688f417d14b';
-import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=f688f417d14b';
-import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=f688f417d14b';
-import { isInteractiveClickTarget } from './interaction.js?v=f688f417d14b';
-import { persistSectionState } from './section-state.js?v=f688f417d14b';
-import { renderRecordingInfo } from './recording-info.js?v=f688f417d14b';
-import { buildLazySelect } from './lazy-select.js?v=f688f417d14b';
+} from '../pose/pose-data.js?v=db2d5e5454d3';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=db2d5e5454d3';
+import { meanNodeScore } from '../pose/detection-filter-stats.js?v=db2d5e5454d3';
+import { setInfoTip } from './info-tip.js?v=db2d5e5454d3';
+import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=db2d5e5454d3';
+import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=db2d5e5454d3';
+import { isInteractiveClickTarget } from './interaction.js?v=db2d5e5454d3';
+import { persistSectionState } from './section-state.js?v=db2d5e5454d3';
+import { renderRecordingInfo } from './recording-info.js?v=db2d5e5454d3';
+import { buildLazySelect } from './lazy-select.js?v=db2d5e5454d3';
 import { confirmSkeletonEdit, isSkeletonEditWarningSuppressed,
-         setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js?v=f688f417d14b';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=f688f417d14b';
-import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=f688f417d14b';
+         setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js?v=db2d5e5454d3';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=db2d5e5454d3';
+import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=db2d5e5454d3';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
-         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=f688f417d14b';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=f688f417d14b';
-import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=f688f417d14b';
+         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=db2d5e5454d3';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=db2d5e5454d3';
+import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=db2d5e5454d3';
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
     loadSingleSessionFromCache, removeVideoFile,
-} from '../loading/session-loader.js?v=f688f417d14b';
+} from '../loading/session-loader.js?v=db2d5e5454d3';
 
 // Circular import — these are still defined in app.js for now. They will be
 // retargeted as later passes land:
 // - swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu
 //   → ui/identity-assignment.js (Pass 3f)
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
-import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=f688f417d14b';
+import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=db2d5e5454d3';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
 // luc3d #172: every manual identity switch routes through applyIdentitySwitch,
 // which subsumes this file's former direct propagateIdentityForward calls.
 import {
     swapAssignTrack, applyIdentitySwitch, describeIdentitySwitch,
-} from './identity-assignment.js?v=f688f417d14b';
+} from './identity-assignment.js?v=db2d5e5454d3';
 // Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import {
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
-} from './sessions-panes.js?v=f688f417d14b';
+} from './sessions-panes.js?v=db2d5e5454d3';
 // Block 2 (Prompt 4): per-session timeline visibility toggles.
 import {
     toggleCameraVisibility,
@@ -51,7 +53,7 @@ import {
     getCameraVisibilityList,
     getTrackVisibilityList,
     getIdentityVisibilityList,
-} from './timeline-visibility.js?v=f688f417d14b';
+} from './timeline-visibility.js?v=db2d5e5454d3';
 
 // ============================================
 // Inline name entry for "+ New Track" / "+ New Identity"
@@ -1494,6 +1496,11 @@ function updateStatusBarForFrame(meanError) {
 // they line up. Covered by tests/e2e/info-panel-instance-tables.mjs.
 const STACKED_SELECT_PX = 80;
 
+// The Ungrouped table's "Score / Node" header.
+const SCORE_NODE_TIP = 'Top: the instance score. Below: the mean node score — the model\'s node scores averaged over ' +
+    'every node of the skeleton, a missing node counting as 0 (sleap-nn\'s), which the Tracking Wizard\'s ' +
+    '"Min mean node score" filter tests; "-" when there is none (e.g. a user instance).';
+
 function buildTrackSelect(trackIdx, noneLabel, maxWidth) {
     const session = state.session;
     const tracks = session.tracks || [];
@@ -2206,6 +2213,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
     const ulTbody = document.querySelector('#unlinkedTable tbody');
     const ulEmpty = document.getElementById('unlinkedEmpty');
     ulTbody.textContent = '';
+    setInfoTip(document.getElementById('unlinkedScoreHead'), SCORE_NODE_TIP);
 
     const fg = state.session.getFrameGroup(frameIdx);
     let hasUnlinked = false;
@@ -2393,9 +2401,20 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 const validPts = ul.instance.countPoints();
                 tdPoints.textContent = validPts + '/' + ul.instance.numNodes;
 
+                // "Score / Node": the instance score, and under it the mean node score the Tracking
+                // Wizard's "Min mean node score" filter tests (`meanNodeScore`, sleap-nn's: a missing
+                // node counts as 0; '-' with no node scores). Stacked like Track / Identity — a fifth
+                // column does not fit a 300 px panel with its scrollbar showing.
                 const tdScore = document.createElement('td');
                 tdScore.className = 'mono';
-                tdScore.textContent = ul.instance.score != null ? ul.instance.score.toFixed(2) : '-';
+                const instScoreLine = document.createElement('div');
+                instScoreLine.textContent = ul.instance.score != null ? ul.instance.score.toFixed(2) : '-';
+                const nodeScoreLine = document.createElement('div');
+                nodeScoreLine.className = 'unlinked-node-score';
+                const mns = meanNodeScore(ul.instance, state.session, cam.name, frameIdx);
+                nodeScoreLine.textContent = mns === mns ? mns.toFixed(2) : '-';
+                tdScore.appendChild(instScoreLine);
+                tdScore.appendChild(nodeScoreLine);
 
                 tr.appendChild(tdTrackUl);
                 tr.appendChild(tdType);

@@ -26,18 +26,28 @@
  * angle, so body size is a weaker cue on one camera, and optional there (not
  * run automatically after Track All).
  *
- * Opt-in, before the tracker sees them: DUPLICATE detections — a second
- * instance SLEAP placed on an animal it already detected — can be left out
- * (`duplicateDetections`, Tracking Wizard `scRemoveDuplicates`, off by
- * default). The port itself is untouched.
+ * Before the tracker sees them, two things can leave detections out, and the
+ * port itself is untouched:
+ *  - the Tracking Wizard's detection filters (the "Min …" settings, all off by
+ *    default), with the multi-camera tracker's own rule
+ *    (`passesDetectionFilter`, pose/detection-filter-stats.js) — so the
+ *    Wizard's readout counts exactly what is left out here;
+ *  - opt-in, DUPLICATE detections — a second instance SLEAP placed on an
+ *    animal it already detected (`duplicateDetections`, Tracking Wizard
+ *    `scRemoveDuplicates`, off by default), looked for among the detections
+ *    the filters kept.
+ * Either way the detection stays in the session with no track, and is
+ * counted. A frame left with no detection is skipped, as a frame that never
+ * had one is.
  *
  * Eager sessions only: a lazy (> 150 MB) single-camera project is refused with
  * a reason rather than tracked from its resident window.
  *
- * DOM-free. Depends on: pose/sleap-tracker.js.
+ * DOM-free. Depends on: pose/sleap-tracker.js, pose/detection-filter-stats.js.
  */
 
-import { runSleapTrackerAsync } from './sleap-tracker.js?v=f688f417d14b';
+import { runSleapTrackerAsync } from './sleap-tracker.js?v=db2d5e5454d3';
+import { passesDetectionFilter } from './detection-filter-stats.js?v=db2d5e5454d3';
 
 /** Why a lazy single-camera project is not tracked (shown in the status bar). */
 export const SINGLE_CAMERA_LAZY_REASON = 'single-camera tracking does not support a lazily loaded (> 150 MB) project yet';
@@ -201,14 +211,18 @@ function trackerPoints(inst) {
  * @param {Session} session  eager, one camera
  * @param {object} cfg       from `singleCameraTrackerConfig`
  * @param {{onProgress?: function(number, number): (void|Promise), signal?: AbortSignal,
- *          fps?: number, look?: object, duplicates?: object}} [opts]  `look` overrides
- *          `CANDIDATE_DEFAULTS`; `duplicates` (DUPLICATE_DEFAULTS overrides, or null/absent
- *          for off) leaves each frame's duplicate detections out of the tracking — they
- *          keep no track, and stay in the session
+ *          fps?: number, look?: object, duplicates?: object,
+ *          filter?: {minVisibleNodes?: number, minInstanceScore?: number, minMeanNodeScore?: number}}} [opts]
+ *          `look` overrides `CANDIDATE_DEFAULTS`; `filter` (the Tracking Wizard's detection
+ *          filters; absent, or every minimum 0, for off) and then `duplicates`
+ *          (DUPLICATE_DEFAULTS overrides, or null/absent for off) leave detections out of
+ *          the tracking — they keep no track, and stay in the session
  * @returns {Promise<{numIdentities: number, frames: number, tracked: number, untracked: number,
- *          duplicates: number, moments: Array, review: Array}>}  `untracked` excludes the `duplicates`;
- *          `moments` = the candidate moments plus returns (`returnMoments`), what the checks test;
- *          `review` = the candidate moments plus handovers (`handoverCandidates`), the review list's rows
+ *          filtered: number, duplicates: number, moments: Array, review: Array}>}  `frames` counts
+ *          the frames with a detection before anything was left out; `untracked` excludes the
+ *          `filtered` and the `duplicates`; `moments` = the candidate moments plus returns
+ *          (`returnMoments`), what the checks test; `review` = the candidate moments plus
+ *          handovers (`handoverCandidates`), the review list's rows
  */
 export async function trackSingleCamera(session, cfg, opts) {
     var cam = singleCameraName(session);
@@ -216,10 +230,22 @@ export async function trackSingleCamera(session, cfg, opts) {
     if (session.lazyLoader) throw new Error(SINGLE_CAMERA_LAZY_REASON);
     var frameIdx = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
     var dupOpts = opts && opts.duplicates ? opts.duplicates : null, removed = [];
-    var frames = [], insts = [], inputTracks = [];
+    var flt = opts && opts.filter ? opts.filter : {}, filtered = [];
+    var minVis = Number(flt.minVisibleNodes) || 0, minScore = Number(flt.minInstanceScore) || 0;
+    var minNode = Number(flt.minMeanNodeScore) || 0, filtering = minVis > 0 || minScore > 0 || minNode > 0;
+    var frames = [], insts = [], inputTracks = [], seenFrames = 0;
     for (var i = 0; i < frameIdx.length; i++) {
         var list = instancesOf(session.frameGroups.get(frameIdx[i]), cam);
         if (!list.length) continue;
+        seenFrames++;
+        if (filtering) {
+            list = list.filter(function (inst) {
+                if (passesDetectionFilter(inst, minVis, minScore, minNode, session, cam, frameIdx[i])) return true;
+                filtered.push(inst);
+                return false;
+            });
+            if (!list.length) continue;
+        }
         var dets = list.map(function (inst) {
             return { points: trackerPoints(inst), score: typeof inst.score === 'number' ? inst.score : NaN, isUser: inst.type === 'user' };
         });
@@ -259,8 +285,9 @@ export async function trackSingleCamera(session, cfg, opts) {
             tracked++;
         }
     }
-    // Duplicates were not tracked: no track, no identity (they stay in the session, as the over-count ones do).
-    removed.forEach(function (inst) { inst.identityId = null; inst.trackIdx = null; });
+    // Filtered detections and duplicates were not tracked: no track, no identity (they stay in the session,
+    // as the over-count ones do).
+    filtered.concat(removed).forEach(function (inst) { inst.identityId = null; inst.trackIdx = null; });
     // A single-camera session normally has no groups; keep any it has in step with its member's track.
     for (var groups of session.instanceGroups.values()) {
         for (var g = 0; g < groups.length; g++) {
@@ -275,8 +302,8 @@ export async function trackSingleCamera(session, cfg, opts) {
     var moments = candidateMoments(frames, out, inputTracks, ambiguous, look, fps).concat(returnMoments(frames, out, fps))
         .sort(function (x, y) { return x.frame - y.frame || x.identityA - y.identityA || x.identityB - y.identityB; });
     var review = candidateMoments(frames, out, inputTracks, ambiguous, look, fps, handoverCandidates(frames, out, fps));
-    return { numIdentities: nTracks, frames: frames.length, tracked: tracked, untracked: untracked,
-             duplicates: removed.length, moments: moments, review: review };
+    return { numIdentities: nTracks, frames: seenFrames, tracked: tracked, untracked: untracked,
+             filtered: filtered.length, duplicates: removed.length, moments: moments, review: review };
 }
 
 /**
