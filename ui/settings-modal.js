@@ -47,6 +47,7 @@ import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.
 import { installModalGeometry } from './modal-geometry.js';
 import { refreshIdSwitchHighlight } from './id-switch-highlight.js';
 import { buildDetectionFilterPreview } from './detection-filter-preview.js';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -527,6 +528,14 @@ export function showSettingsModal(initialPanel) {
         '1 = fully considered (2D reprojection + 3D point-to-ray); 0 = ignored during tracking. ' +
         'Changes apply when you click Apply.';
     nwSection.body.appendChild(nwHint);
+    if (skeletonNodes.length) {
+        const nwTip = document.createElement('div');
+        nwTip.className = 'settings-kbd-hint settings-node-weight-tip';
+        nwTip.style.marginTop = '0';
+        nwTip.style.marginBottom = '8px';
+        nwTip.textContent = NODE_WEIGHT_TIP;
+        nwSection.body.appendChild(nwTip);
+    }
 
     if (skeletonNodes.length === 0) {
         const nwEmpty = document.createElement('div');
