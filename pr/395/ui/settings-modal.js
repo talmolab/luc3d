@@ -40,13 +40,13 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=818a97430a59';
-import { getActiveSession, state, timeline } from './app-state.js?v=818a97430a59';
-import { drawAllOverlays } from './rendering.js?v=818a97430a59';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=818a97430a59';
-import { installModalGeometry } from './modal-geometry.js?v=818a97430a59';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=818a97430a59';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=818a97430a59';
+} from './settings.js?v=71f320f1b1b0';
+import { getActiveSession, state, timeline } from './app-state.js?v=71f320f1b1b0';
+import { drawAllOverlays } from './rendering.js?v=71f320f1b1b0';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=71f320f1b1b0';
+import { installModalGeometry } from './modal-geometry.js?v=71f320f1b1b0';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=71f320f1b1b0';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=71f320f1b1b0';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).

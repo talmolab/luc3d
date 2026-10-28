@@ -9,64 +9,64 @@ import {
     InstanceGroup, Session,
     asPoints3d, points3dNodeCount, someValidPoint3d, lazyPlaceholderXY, pooledPoints3d,
     markPoints3dFromFile,
-} from '../pose/pose-data.js?v=818a97430a59';
+} from '../pose/pose-data.js?v=71f320f1b1b0';
 import {
     getInstanceGroupsForFrame,
-} from '../pose/triangulation.js?v=818a97430a59';
+} from '../pose/triangulation.js?v=71f320f1b1b0';
 import {
     parseSlpH5, parseSlpViaSleapIO, instanceMatchesPoints, parsePoints3dH5, pickFiles,
-} from './file-io.js?v=818a97430a59';
+} from './file-io.js?v=71f320f1b1b0';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames,
-} from './slp-merge.js?v=818a97430a59';
-import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=818a97430a59';
+} from './slp-merge.js?v=71f320f1b1b0';
+import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=71f320f1b1b0';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController,
-} from '../ui/app-state.js?v=818a97430a59';
+} from '../ui/app-state.js?v=71f320f1b1b0';
 import {
     autoAssignVideosToCameras, forceVideoSelection, forceVideoSelectionWithFolder,
     showParentDirMatchSummary, createViewForVideoFile, updateTotalFrames,
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
     adoptCampyRecording,
-} from '../loading/session-loader.js?v=818a97430a59';
-import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=818a97430a59';
+} from '../loading/session-loader.js?v=71f320f1b1b0';
+import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=71f320f1b1b0';
 import {
     campyVideoFile, orderByCampyCameras, campyRecordingWarnings,
-} from '../loading/campy-session.js?v=818a97430a59';
-import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=818a97430a59';
-import { adoptSmoothingSource, readSmoothingMetadata } from './smoothing-metadata.js?v=818a97430a59';
-import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=818a97430a59';
-import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=818a97430a59';
-import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js?v=818a97430a59';
-import { stampFrameIdentitiesFromGroups, readFrameIdentityMetadata } from './frame-identity-metadata.js?v=818a97430a59';
+} from '../loading/campy-session.js?v=71f320f1b1b0';
+import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=71f320f1b1b0';
+import { adoptSmoothingSource, readSmoothingMetadata } from './smoothing-metadata.js?v=71f320f1b1b0';
+import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=71f320f1b1b0';
+import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=71f320f1b1b0';
+import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js?v=71f320f1b1b0';
+import { stampFrameIdentitiesFromGroups, readFrameIdentityMetadata } from './frame-identity-metadata.js?v=71f320f1b1b0';
 import {
     showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
-} from './save-load.js?v=818a97430a59';
+} from './save-load.js?v=71f320f1b1b0';
 
 // Circular import — these are still defined in app.js for now. They are only
 // invoked inside function bodies, never at module-init time, so live-binding
 // lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=818a97430a59';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=818a97430a59';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=818a97430a59';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=71f320f1b1b0';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=71f320f1b1b0';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=71f320f1b1b0';
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=818a97430a59';
+import { setup3DViewport } from '../pose/initialization.js?v=71f320f1b1b0';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
-import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=818a97430a59';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=818a97430a59';
+import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=71f320f1b1b0';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=71f320f1b1b0';
 // Block 1 (Prompt 4): keep timeline._uploadedCameras in sync after SLP
 // load so the gutter filters to the cameras that actually have video
 // assignments rather than every calibration camera.
-import { recomputeUploadedCameras } from '../loading/session-loader.js?v=818a97430a59';
+import { recomputeUploadedCameras } from '../loading/session-loader.js?v=71f320f1b1b0';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=818a97430a59';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=818a97430a59';
-import { readVisibilityMetadata } from './visibility-metadata.js?v=818a97430a59';
-import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=818a97430a59';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=71f320f1b1b0';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=71f320f1b1b0';
+import { readVisibilityMetadata } from './visibility-metadata.js?v=71f320f1b1b0';
+import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=71f320f1b1b0';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -1246,7 +1246,7 @@ export async function handleLoadSlpFile(slpFile) {
             // --- Embedded videos: use frame-worker for on-demand extraction ---
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=818a97430a59', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=71f320f1b1b0', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
@@ -1889,7 +1889,7 @@ export async function handleAddSlp() {
         if (hasEmbedded) {
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=818a97430a59', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=71f320f1b1b0', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
