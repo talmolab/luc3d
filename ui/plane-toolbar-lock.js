@@ -44,7 +44,7 @@ const PLANE_LOCKED_TOOLBAR_IDS = [
     'tbInstanceMenu', 'tbAddInstance', 'tbDeleteInstance',
     'tbGroupMenu', 'tbGroup', 'tbEditGroup',
     'tbTriangulateAll', 'tbTriangulate', 'tbTriangulateAllFrames',
-    'tbSmooth', 'tbSmoothFrame', 'tbSmoothAllFrames', 'tbSmoothRemove',
+    'tbSmooth', 'tbSmoothFrame', 'tbSmoothAllFrames', 'tbSmoothToggle',
     'tbTrackAll', 'tbTrackFrame', 'tbTrackAllFrames', 'tbTrackFrameRange',
 ];
 

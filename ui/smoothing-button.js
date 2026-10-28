@@ -2,8 +2,10 @@
  * smoothing-button.js — the toolbar's Smooth (Temporal Smoothing) button state (luc3d #134).
  *
  * The button (`#tbSmooth`) is blue (`.active`) while any 3D in the session is
- * smoothed, and its menu's Remove smoothing (`#tbSmoothRemove`) is enabled only
- * then (never while Defining Plane Mode has locked it). In its menu only the scope of the LAST run is lit (`.applied`):
+ * smoothed. Its menu's toggle (`#tbSmoothToggle`) reads Remove smoothing while
+ * anything is, Restore smoothing while a removal is kept
+ * (`hasRemovedSmoothing`), and is disabled otherwise (and while Defining Plane
+ * Mode has locked it). In its menu only the scope of the LAST run is lit (`.applied`):
  * "All frames" after an all-frames run, while anything is still smoothed;
  * "This frame" after a this-frame run, on the frames it smoothed — never both,
  * which read as if both had been picked. Smoothing lapses by itself
@@ -21,7 +23,7 @@
  */
 
 import { state } from './app-state.js';
-import { hasSmoothed3d } from '../pose/temporal-smoothing.js';
+import { hasSmoothed3d, hasRemovedSmoothing } from '../pose/temporal-smoothing.js';
 import { noteSmoothingRun, smoothingRunOf } from '../import-export/smoothing-metadata.js';
 
 /** Record the scope and settings a smoothing run just used (`runTemporalSmoothing`). */
@@ -38,10 +40,21 @@ export function syncSmoothingButton() {
     var run = smoothingRunOf(session);
     var scope = run ? run.scope : 'all';
     btn.classList.toggle('active', any);
-    var remove = document.getElementById('tbSmoothRemove');
-    // The plane-mode lock owns `disabled` while it holds the item; its unlock
-    // restores a snapshot, which the next draw re-derives here.
-    if (remove && !remove.classList.contains('plane-mode-locked')) remove.disabled = !any;
+    var toggle = document.getElementById('tbSmoothToggle');
+    if (toggle) {
+        var restore = !any && hasRemovedSmoothing(session);
+        var label = restore ? 'Restore smoothing' : 'Remove smoothing';
+        if (toggle.textContent !== label) toggle.textContent = label;
+        // The plane-mode lock owns `disabled` and the tooltip while it holds
+        // the item; its unlock restores a snapshot, which the next draw
+        // re-derives here.
+        if (!toggle.classList.contains('plane-mode-locked')) {
+            toggle.disabled = !any && !restore;
+            toggle.title = restore
+                ? 'Restore temporal smoothing: put back what Remove smoothing took off (recomputed only if the settings or 3D changed)'
+                : 'Remove temporal smoothing: put back the 3D from before smoothing, on every frame';
+        }
+    }
     var all = document.querySelector('#smoothingDropdown [data-scope="all"]');
     var frame = document.querySelector('#smoothingDropdown [data-scope="frame"]');
     if (all) all.classList.toggle('applied', any && scope === 'all');

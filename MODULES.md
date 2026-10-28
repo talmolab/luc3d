@@ -2402,7 +2402,23 @@ smoothed), and a third value there would erase the solver identity
 **Exports.** `normalizeWindow`, `sigmaForWindow`, `buildSegments`, `medianOf`,
 `smoothSignalInto`, `resolveSmoothingParams`, `collectTrajectories`,
 `smoothTrajectory`, `smoothSession`, `smoothSessionAsync`, `smoothFrame`,
-`unsmoothSession`, `hasSmoothed3d`, `noteSmoothedFrames`. `smoothFrame(session, params, frameIdx)`
+`unsmoothSession`, `hasSmoothed3d`, `noteSmoothedFrames`, `removeSmoothing`,
+`restoreSmoothing`, `hasRemovedSmoothing`. **Remove / Restore smoothing**:
+`removeSmoothing(session, {scope, config})` records the filter's whole input
+(`smoothingInputPrint`: every group with 3D in walk order, its frame,
+identity and `points3d` array in flat arrays; a smoothed group's
+pre-smoothing copy, otherwise a hash of its values), copies the smoothed
+values into ONE `Float64Array`, then `unsmoothSession`s. Kept per session in
+a `WeakMap`, in memory only (never saved). `restoreSmoothing(session, params)`
+puts them back, re-marking each group with its kept source, only when the
+settings resolve the same (`config`) and the input is unchanged
+(`inputUnchanged`: same groups, arrays, frames, identities, and values equal
+to the kept sources / hashes) — a smoothed value reads its neighbours' frames,
+so any change anywhere makes the kept values suspect. Else it writes nothing
+and returns `stale` with the scope and frames to smooth again. Either way the
+copy is dropped; any new run (`smoothSession*`, `smoothFrame`,
+`unsmoothSession`) drops it too. 400,000 poses x 15 nodes: remove ~0.3 s,
+restore ~0.2 s, vs ~2.9 s to smooth. `smoothFrame(session, params, frameIdx)`
 is Temporal Smoothing ▸ This frame: it writes exactly (bit for bit) what
 `smoothSession` writes on that frame, but reads only the frames that value
 depends on — within median + Gaussian radius, plus a walk out to the frame's
@@ -2426,7 +2442,9 @@ of a trajectory is written before its last step.
 no UI imports, so the module stays unit-testable in plain Node.
 
 **Imported by.** `ui/ui-wiring.js` (`smoothSessionAsync`, `smoothFrame`,
-`unsmoothSession`, `resolveSmoothingParams`),
+`unsmoothSession`, `resolveSmoothingParams`, `hasSmoothed3d`,
+`removeSmoothing`, `restoreSmoothing`), `ui/smoothing-button.js`
+(`hasSmoothed3d`, `hasRemovedSmoothing`),
 `import-export/smoothing-metadata.js` (`hasSmoothed3d`, `noteSmoothedFrames`).
 
 **Tests.** `tests/test-temporal-smoothing.mjs` (`smoothFrame` is checked bit
@@ -6382,7 +6400,7 @@ The Track / Triangulate / Smooth menus are NOT wrapper-locked:
 they also hold settings that stay live in the mode (Method, Animals,
 Settings…), so they open, and each run item is a `<button>` in
 `PLANE_LOCKED_TOOLBAR_IDS` (a new run item there must be too; Smooth's
-Remove smoothing, `tbSmoothRemove`, is one). A disabled
+Remove/Restore smoothing toggle, `tbSmoothToggle`, is one). A disabled
 button still opens its menu on hover (`tests/e2e/plane-mode-toolbar-lock.mjs`
 §4b).
 
@@ -10517,8 +10535,8 @@ typing in Animals does not lose it and Tab walks into the items.
   (Load Environment, via `resolveTriangulationMethod(group)` on a new group)
   use the default too.
 - **Smooth ▾** (`#smoothingDropdown`, `#tbSmooth`; Temporal Smoothing): also
-  has **Remove smoothing** (`#tbSmoothRemove`, `data-scope="remove"`) after
-  All frames; see below.
+  has the **Remove smoothing / Restore smoothing** toggle (`#tbSmoothToggle`,
+  `data-scope="toggle"`) after All frames; see below.
   Settings… → `'smoothing'`.
 - **Track ▾** (`#trackDropdown`): the button (Track All) and This frame keep
   their own handlers in `pose/tracker.js`'s IIFE; `ui-wiring.js` wires Frame
@@ -10542,11 +10560,17 @@ is closed; their shortcuts (`Mod+I`, `Delete`, `Shift+G`) still work.
 Covered by `tests/e2e/toolbar-hover-menus.mjs`.
 
 **Temporal Smoothing** (luc3d #134) runs the private async
-`runTemporalSmoothing(currentFrameOnly, remove)` (a re-entry guard drops a
-second click while one runs). The menu's **Remove smoothing**
-(`#tbSmoothRemove`, `remove`) restores the pre-smoothing 3D on every frame
-(`unsmoothSession`) whatever the settings, leaving them as they are ("Nothing
-is smoothed" if nothing was). Otherwise it reads `getSmoothingParams()`; when
+`runTemporalSmoothing(currentFrameOnly, toggle)` (a re-entry guard drops a
+second click while one runs). The menu's toggle (`#tbSmoothToggle`,
+`toggle`), for comparing with and without: while anything is smoothed,
+**Remove smoothing** restores the pre-smoothing 3D on every frame and keeps
+what it took off (`removeSmoothing`, with the settings as they are then);
+otherwise **Restore smoothing** (`restoreSmoothing`) copies it back with no
+recompute and no card, or, when the settings or any 3D changed since,
+smooths again with the current settings in the removed run's scope (all
+frames, or `smoothFrame` on each removed this-frame run's frames), its status
+ending "— recomputed…". "Nothing is smoothed" if neither applies. Otherwise
+it reads `getSmoothingParams()`; when
 both kernels are off it restores the pre-smoothing 3D (`unsmoothSession`), or, with nothing
 smoothed, says so and opens Settings ▸ Temporal Smoothing rather than silently
 doing nothing; otherwise All frames runs `smoothSessionAsync`
@@ -11150,10 +11174,12 @@ pixel-error minimum for Refined) and are hard-coded; the real solvers are
 `#tbSmooth` is blue (`.active`) while any 3D in the session is smoothed. Its
 menu lights (`.applied`) only the scope of the LAST run, never both: **All
 frames** after an all-frames run (while anything is still smoothed), **This
-frame** after a this-frame run, on the frames it smoothed. **Remove smoothing**
-(`#tbSmoothRemove`) is enabled only while something is smoothed, and never
-while it carries `.plane-mode-locked` (that lock owns `disabled` then; the
-next draw re-derives it after the unlock's snapshot restore).
+frame** after a this-frame run, on the frames it smoothed. The toggle
+(`#tbSmoothToggle`) reads **Remove smoothing** while something is smoothed,
+**Restore smoothing** while a removal is kept (`hasRemovedSmoothing`), and is
+disabled otherwise; its tooltip follows. Never while it carries
+`.plane-mode-locked` (that lock owns `disabled` and the tooltip then; the next
+draw re-derives them after the unlock's snapshot restore).
 
 **Key exports.** `syncSmoothingButton()` — re-derives that state from the
 session. `noteSmoothingScope(session, 'all' | 'frame', config)` — records the
@@ -11165,9 +11191,9 @@ calls this on every overlay draw and the pass calls it after running.
 `hasSmoothed3d` (`pose/temporal-smoothing.js`) keeps the per-draw cost small.
 
 **Imports.** `./app-state.js` (`state`), `../pose/temporal-smoothing.js`
-(`hasSmoothed3d`), `../import-export/smoothing-metadata.js` (`noteSmoothingRun`,
+(`hasSmoothed3d`, `hasRemovedSmoothing`), `../import-export/smoothing-metadata.js` (`noteSmoothingRun`,
 `smoothingRunOf`). **Imported by** `ui/rendering.js`, `ui/ui-wiring.js`.
-Covered by `tests/e2e/temporal-smoothing-display.mjs` §E–G and
+Covered by `tests/e2e/temporal-smoothing-display.mjs` §E–H and
 `tests/e2e/smoothing-save-reopen.mjs`.
 
 ### ui/section-state.js
@@ -12945,7 +12971,8 @@ session)`; `readSmoothingMetadata(session, lucid)`.
 JSON: `unsmoothedPoints3d` per group, the key at the session-dict level).
 Readers `import-export/slp-import.js` (both typed group rebuilders +
 `handleLoadSlpFile`), `loading/session-loader.js` (lazy reopen, single-SLP
-folder), `import-export/save-load.js`. `ui/smoothing-button.js`.
+folder), `import-export/save-load.js`. `ui/smoothing-button.js`;
+`ui/ui-wiring.js` (`smoothingRunOf`: the scope Remove smoothing keeps).
 
 **Tests.** `tests/e2e/smoothing-save-reopen.mjs` (eager + lazy reopen, both
 writers, two sessions, an edit after reopen, a never-smoothed project).

@@ -76,8 +76,10 @@ import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangula
 import { getDefaultTriangulationMethod, setDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler,
          dispatchEvent, getActions, formatBinding, getSmoothingParams } from './settings.js';
 // luc3d #134: post-triangulation temporal smoothing of the 3D tracks.
-import { smoothSessionAsync, smoothFrame, unsmoothSession, resolveSmoothingParams } from '../pose/temporal-smoothing.js';
+import { smoothSessionAsync, smoothFrame, unsmoothSession, resolveSmoothingParams, hasSmoothed3d,
+    removeSmoothing, restoreSmoothing } from '../pose/temporal-smoothing.js';
 import { syncSmoothingButton, noteSmoothingScope } from './smoothing-button.js';
+import { smoothingRunOf } from '../import-export/smoothing-metadata.js';
 import { showLoadingProgress, createProgressPacer, yieldToPaint } from './loading-overlay.js';
 import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js';
 import { showSettingsModal } from './settings-modal.js';
@@ -2897,37 +2899,69 @@ export function setupUI() {
     // toolbar button of that name, next to Triangulate All. `currentFrameOnly`
     // is its "This frame" item (`smoothFrame`): it reads only the frames within
     // the filter windows of the current one and writes that frame alone, with
-    // the same values an All frames run would give it. `remove` is the menu's
-    // Remove smoothing: it puts back the 3D from before smoothing on every
-    // frame, whatever the settings (the same path as both windows set to 0).
+    // the same values an All frames run would give it. `toggle` is the menu's
+    // Remove smoothing / Restore smoothing: Remove puts back the 3D from before
+    // smoothing on every frame and keeps the smoothed values
+    // (`removeSmoothing`); Restore copies them back with no recompute, unless
+    // the settings or the 3D changed since, when it smooths again with the
+    // current settings in the removed run's scope (`restoreSmoothing`).
     //
     // Touches only `points3d` on the already-resident `session.instanceGroups`
     // — no 2D hydration, no lazy sweep. On the main thread; All frames runs in
     // steps (`smoothSessionAsync`) with the shared progress card.
     var smoothingRunning = false;
-    async function runTemporalSmoothing(currentFrameOnly, remove) {
+    async function runTemporalSmoothing(currentFrameOnly, toggle) {
         var session = state.session;
         if (!session) { setStatus('No session loaded'); return; }
         if (smoothingRunning) return;
 
         var params = getSmoothingParams();
         var cfg = resolveSmoothingParams(params);
+        // Frames a this-frame style run smooths (null = all frames), and the
+        // frames whose info-panel results the write can leave stale.
+        var frameList = currentFrameOnly ? [state.currentFrame] : null;
         var writeFrames = currentFrameOnly ? new Set([state.currentFrame]) : null;
+        var resmooth = false;
         var stats, summary;
-        if (remove || !cfg.enabled) {
-            // Remove smoothing, or both kernels off: put back the 3D from
-            // before any smoothing (each run filters that, so this is the
-            // "window 0" result). With nothing smoothed there is nothing to
-            // do, so Smooth points at the settings.
-            stats = unsmoothSession(session, { writeFrames: writeFrames });
-            if (stats.frames === 0 && remove) {
+        if (toggle && hasSmoothed3d(session)) {
+            // Remove: keep what it takes off, with the settings as they are
+            // now, so Restore can tell whether they changed.
+            var run = smoothingRunOf(session);
+            stats = removeSmoothing(session, { scope: run ? run.scope : 'all', config: cfg });
+            summary = 'Removed temporal smoothing from ' + stats.frames.toLocaleString('en-US') + ' pose' +
+                (stats.frames === 1 ? '' : 's');
+        } else if (toggle) {
+            var back = restoreSmoothing(session, params);
+            if (!back.restored && !back.stale) {
                 setStatus('Nothing is smoothed');
                 syncSmoothingButton();
                 return;
             }
+            if (back.restored) {
+                writeFrames = new Set(back.smoothedFrames);
+                summary = 'Restored temporal smoothing on ' + back.frames.toLocaleString('en-US') + ' pose' +
+                    (back.frames === 1 ? '' : 's');
+            } else {
+                // The settings or the 3D changed since Remove: smooth again,
+                // with the current settings, where the removed run did.
+                resmooth = true;
+                if (back.scope === 'frame') {
+                    frameList = back.smoothedFrames;
+                    writeFrames = new Set(frameList);
+                }
+            }
+        }
+        if (summary) {
+            // Remove / Restore done above.
+        } else if (!cfg.enabled) {
+            // Both kernels off: put back the 3D from before any smoothing (each
+            // run filters that, so this is the "window 0" result). With nothing
+            // smoothed there is nothing to do, so point at the settings.
+            stats = unsmoothSession(session, { writeFrames: writeFrames });
             if (stats.frames === 0) {
                 setStatus('Temporal smoothing is off — set a median or Gaussian window in Settings ▸ Temporal Smoothing');
                 showSettingsModal('smoothing');
+                syncSmoothingButton();
                 return;
             }
             summary = 'Removed temporal smoothing from ' + stats.frames.toLocaleString('en-US') + ' pose' +
@@ -2941,8 +2975,13 @@ export function setupUI() {
             // All frames shows the progress card at once and paints it before
             // the pass holds the thread. This frame reads a few dozen frames
             // (well under a millisecond), so it shows no card.
-            if (currentFrameOnly) {
-                stats = smoothFrame(session, params, state.currentFrame);
+            if (frameList) {
+                stats = { frames: 0, tracks: 0 };
+                frameList.forEach(function (fi) {
+                    var r = smoothFrame(session, params, fi);
+                    stats.frames += r.frames;
+                    stats.tracks = Math.max(stats.tracks, r.tracks);
+                });
             } else {
                 var title = { title: 'Temporal Smoothing', unit: 'poses', detail: parts.join(' + ') };
                 smoothingRunning = true;
@@ -2966,20 +3005,22 @@ export function setupUI() {
                 setStatus(currentFrameOnly
                     ? 'Temporal smoothing: nothing to smooth on this frame'
                     : 'Temporal smoothing: no triangulated tracks to smooth');
+                syncSmoothingButton();
                 return;
             }
-            noteSmoothingScope(session, currentFrameOnly ? 'frame' : 'all', cfg);
+            noteSmoothingScope(session, frameList ? 'frame' : 'all', cfg);
             // `frames` counts groups written: one pose per animal per frame.
             summary = 'Smoothed ' + stats.frames.toLocaleString('en-US') + ' pose' + (stats.frames === 1 ? '' : 's') +
                 ' across ' + stats.tracks.toLocaleString('en-US') + ' track' + (stats.tracks === 1 ? '' : 's') +
-                ' (' + parts.join(' + ') + ')';
+                ' (' + parts.join(' + ') + ')' +
+                (resmooth ? ' — recomputed, since the settings or 3D changed after Remove smoothing' : '');
         }
 
         // The info panel's per-frame results still hold the pre-smoothing 3D
         // and errors of every group the pass wrote (its reprojections are now
         // null), and the reprojection fill APPENDS a fresh entry for each, so
-        // drop the stale ones or the panel would average both. This frame
-        // wrote only the current frame, so only its results can be stale.
+        // drop the stale ones or the panel would average both. A this-frame
+        // run (or a Restore) wrote only its frames, so only those can be stale.
         var staleFrames = writeFrames ? Array.from(writeFrames) : Array.from(state.triangulationResults.keys());
         staleFrames.forEach(function (fi) {
             var results = state.triangulationResults.get(fi);
@@ -3077,7 +3118,7 @@ export function setupUI() {
     wireActionMenu('smoothingDropdown', {
         all: function () { runTemporalSmoothing(false); },
         frame: function () { runTemporalSmoothing(true); },
-        remove: function () { runTemporalSmoothing(false, true); },
+        toggle: function () { runTemporalSmoothing(false, true); },
         settings: function () { showSettingsModal('smoothing'); },
     });
 
