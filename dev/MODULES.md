@@ -2401,8 +2401,20 @@ smoothed), and a third value there would erase the solver identity
 
 **Exports.** `normalizeWindow`, `sigmaForWindow`, `buildSegments`, `medianOf`,
 `smoothSignalInto`, `resolveSmoothingParams`, `collectTrajectories`,
-`smoothTrajectory`, `smoothSession`, `smoothSessionAsync`, `unsmoothSession`,
-`hasSmoothed3d`, `noteSmoothedFrames`. `smoothSessionAsync(session, params, {writeFrames, onProgress})`
+`smoothTrajectory`, `smoothSession`, `smoothSessionAsync`, `smoothFrame`,
+`unsmoothSession`, `hasSmoothed3d`, `noteSmoothedFrames`. `smoothFrame(session, params, frameIdx)`
+is Temporal Smoothing ▸ This frame: it writes exactly (bit for bit) what
+`smoothSession` writes on that frame, but reads only the frames that value
+depends on — within median + Gaussian radius, plus a walk out to the frame's
+segment edges (absent runs > `maxGap`), stopped once a present frame lies
+`max(reach, minSegment)` out, where the true edge can no longer change the
+result. It filters that slice with `smoothSignalInto`, passing the true segment
+in slice coordinates and `from`/`to` so only the samples the frame reads are
+computed (the sums run in the same order as the full pass). Identity bucketing
+matches `collectTrajectories`; the one whole-session walk
+(`hasAmbiguousNoIdentity`) runs only when the frame has an unidentified group.
+`skipped` counts that frame's groups. `unsmoothSession` with `writeFrames`
+walks only those frames. `smoothSessionAsync(session, params, {writeFrames, onProgress})`
 awaits `onProgress(done, total)` (poses) after each node coordinate of each
 track; both entry points run the same generators (`smoothTrajectorySteps`,
 `smoothSessionSteps`), so the result and the writes are identical, and nothing
@@ -2413,11 +2425,16 @@ of a trajectory is written before its last step.
 `isPoints3dSmoothed`, `unsmoothedPoints3d`, `clearPoints3dSmoothed`) only —
 no UI imports, so the module stays unit-testable in plain Node.
 
-**Imported by.** `ui/ui-wiring.js` (`smoothSession`, `resolveSmoothingParams`),
+**Imported by.** `ui/ui-wiring.js` (`smoothSessionAsync`, `smoothFrame`,
+`unsmoothSession`, `resolveSmoothingParams`),
 `import-export/smoothing-metadata.js` (`hasSmoothed3d`, `noteSmoothedFrames`).
 
-**Tests.** `tests/test-temporal-smoothing.mjs` (88 assertions); save/reopen in
-`tests/e2e/smoothing-save-reopen.mjs`. Verified by
+**Tests.** `tests/test-temporal-smoothing.mjs` (`smoothFrame` is checked bit
+for bit against the all-frames pass on every frame of noisy fixtures with
+holes, segment edges, duplicates and unidentified groups, over 270
+configurations); save/reopen in `tests/e2e/smoothing-save-reopen.mjs`. Bench:
+`tests/e2e/_bench-smoothing-this-frame.mjs` (Node) and
+`tests/e2e/_bench-smoothing-ui.mjs` (menu click to status, eager + lazy). Verified by
 mutation: removing the symmetric shrink, zero-padding instead of renormalizing,
 and filling gaps each fail with the specific artifact they represent.
 
@@ -10505,19 +10522,20 @@ Covered by `tests/e2e/toolbar-hover-menus.mjs`.
 click while one runs). It reads `getSmoothingParams()`; when both kernels are
 off it restores the pre-smoothing 3D (`unsmoothSession`), or, with nothing
 smoothed, says so and opens Settings ▸ Temporal Smoothing rather than silently
-doing nothing; otherwise it runs `smoothSessionAsync`
+doing nothing; otherwise All frames runs `smoothSessionAsync`
 (`pose/temporal-smoothing.js`; every run filters the pre-smoothing 3D, so it
 replaces the last) behind the shared progress card, counted in POSES (one per
-animal per frame): All frames shows the card at once and paints it
-(`yieldToPaint`) before the pass; This frame reads the same trajectories, so it
-shows the card only once a `createProgressPacer` interval has passed. Then it
+animal per frame), shown at once and painted (`yieldToPaint`) before the pass.
+This frame runs `smoothFrame(session, params, state.currentFrame)`
+synchronously with no card: it reads only the frames within the filter windows
+of the current one (~1–4 ms on 200,000 frames, vs ~1.3 s when it filtered whole
+trajectories) and writes the values an All frames run gives that frame. Then it
 records the scope (`noteSmoothingScope`), drops the `state.triangulationResults`
 entries of every group whose reprojections the pass cleared (the fill appends a
-fresh one, and the panel would average both), and runs `markDirty` +
-`drawAllOverlays` + `update3DViewport` + `updateInfoPanel`, setting the summary
-status last. "This frame" passes `writeFrames: new Set([state.currentFrame])` —
-the whole trajectory is still READ (a filter needs neighbours on both sides),
-only the current frame is WRITTEN. It touches only `points3d` on the
+fresh one, and the panel would average both; This frame checks only its own
+frame), and runs `markDirty` + `drawAllOverlays` + `update3DViewport` +
+`updateInfoPanel`, setting the summary status last. Both-windows-0 restores
+pass `writeFrames: new Set([state.currentFrame])` for This frame. It touches only `points3d` on the
 already-resident `session.instanceGroups`, hydrating no 2D. The button is blue
 while smoothing is applied, and the menu lights only the last run's scope
 (`ui/smoothing-button.js`, synced on every overlay draw).

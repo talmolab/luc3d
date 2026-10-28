@@ -29,6 +29,7 @@ import {
     smoothTrajectory,
     smoothSession,
     smoothSessionAsync,
+    smoothFrame,
     unsmoothSession,
     hasSmoothed3d,
 } from '../pose/temporal-smoothing.js';
@@ -459,6 +460,165 @@ group('smoothSessionAsync — same result, progress in poses');
     eq(calls.every(c => c[1] === 24), true, 'total is the pose count (12 frames x 2 animals)');
     eq(calls.every((c, i) => i === 0 || c[0] >= calls[i - 1][0]), true, 'progress never goes backwards');
     eq(calls[calls.length - 1][0], 24, 'and ends at the total');
+}
+
+// ---------------------------------------------------------------------------
+// smoothFrame ("This frame") must write exactly what an all-frames run writes
+// on that frame, bit for bit, while reading only the window around it.
+// ---------------------------------------------------------------------------
+
+/**
+ * A noisy many-identity session with everything that moves a frame's value:
+ * short holes (inside a segment) and long gaps (segment edges) near any frame,
+ * frames with no map entry, groups with every node NaN (absent, though the
+ * group exists), partially-NaN nodes, spikes, a duplicate identity on a frame,
+ * and unidentified groups (one per frame, or with `ambiguousNoId` two on one
+ * frame, which drops them all). Pooled like real groups.
+ */
+function noisySession(seed, { T = 90, ids = [1, 2, 3], noId = true, ambiguousNoId = false } = {}) {
+    let x = seed >>> 0;
+    const rnd = () => ((x = (Math.imul(x, 1664525) + 1013904223) >>> 0) / 4294967296);
+    const absentLeft = new Map();
+    const pts = (id, f) => {
+        const g = new InstanceGroup(1, id);
+        const p = makePoints3d(3);
+        const allNan = rnd() < 0.03;
+        for (let k = 0; k < 3; k++) {
+            if (allNan || rnd() < 0.08) { setPoint3d(p, k, [nan, nan, nan]); continue; }
+            const spike = rnd() < 0.05 ? 50 * (rnd() - 0.5) : 0;
+            setPoint3d(p, k, [f * 0.7 + id * 40 + k + spike + rnd(),
+                Math.sin(f / 9) * 20 + k * 3 + rnd(), id + k * 0.5 + rnd() * 2]);
+        }
+        g.points3d = pooledPoints3d(p);
+        return g;
+    };
+    const frames = [];
+    for (let f = 0; f < T; f++) {
+        if (rnd() < 0.04) continue;              // no map entry at all
+        const gs = [];
+        for (const id of [...ids, ...(noId ? [-1] : [])]) {
+            let left = absentLeft.get(id) || 0;
+            if (left === 0 && rnd() < 0.07) left = 1 + Math.floor(rnd() * 9);
+            if (left > 0) { absentLeft.set(id, left - 1); continue; }
+            gs.push(pts(id, f));
+            if (id !== -1 && rnd() < 0.03) gs.push(pts(id, f + 1000));   // duplicate id
+        }
+        if (ambiguousNoId && f === 40) gs.push(pts(-1, f), pts(-1, f + 2000));
+        frames.push([f, gs]);
+    }
+    return makeSession(frames);
+}
+
+const allPts = (sess) => [...sess.instanceGroups.entries()].map(([f, gs]) => [f, gs.map(g => Array.from(g.points3d))]);
+const framePts = (sess, f) => (sess.instanceGroups.get(f) || []).map(g => Array.from(g.points3d));
+/** Element-wise Object.is: bit-identical, NaN included. */
+function sameBits(a, b) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+        if (a[i].length !== b[i].length) return false;
+        for (let j = 0; j < a[i].length; j++) if (!Object.is(a[i][j], b[i][j])) return false;
+    }
+    return true;
+}
+
+group('smoothFrame — bit-identical to the all-frames pass on its frame');
+{
+    let configs = 0, mismatches = 0, frameChecks = 0;
+    const firstBad = [];
+    for (const med of [0, 3, 5, 7]) for (const gau of [0, 3, 5, 9]) {
+        if (!med && !gau) continue;
+        for (const maxGap of [0, 2, 5]) for (const minSeg of [1, 5, 12]) {
+            const params = { smoothMedianWindow: med, smoothGaussianWindow: gau, smoothMaxGap: maxGap, smoothMinSegment: minSeg };
+            for (const variant of [{ seed: 7 }, { seed: 11, ambiguousNoId: true }]) {
+                configs++;
+                const ref = noisySession(variant.seed, variant);
+                smoothSession(ref, params);
+                // One frame at a time over the whole recording: each call
+                // reads the pre-smoothing 3D of its neighbours, so frames
+                // already done must not change the next one's answer.
+                const one = noisySession(variant.seed, variant);
+                for (const f of one.instanceGroups.keys()) {
+                    smoothFrame(one, params, f);
+                    frameChecks++;
+                    if (!sameBits(framePts(one, f), framePts(ref, f))) {
+                        mismatches++;
+                        if (firstBad.length < 3) firstBad.push(JSON.stringify(params) + ' frame ' + f);
+                    }
+                }
+            }
+        }
+    }
+    eq(mismatches, 0, `every frame matches (${configs} configs, ${frameChecks} frames)` +
+        (firstBad.length ? ' first: ' + firstBad.join('; ') : ''));
+}
+
+group('smoothFrame — writes its frame only, and only what it changed');
+{
+    const params = { smoothMedianWindow: 5, smoothGaussianWindow: 7, smoothMaxGap: 3, smoothMinSegment: 4 };
+    let otherFramesMoved = 0, framesTried = 0, wrote = 0;
+    for (const f of [0, 5, 20, 41, 44, 60, 89]) {
+        const s = noisySession(7);
+        const before = allPts(s);
+        const r = smoothFrame(s, params, f);
+        framesTried++;
+        if (r.frames > 0) wrote++;
+        const after = allPts(s);
+        for (let i = 0; i < before.length; i++) {
+            if (before[i][0] === f) continue;
+            if (!sameBits(before[i][1], after[i][1])) otherFramesMoved++;
+        }
+        const ref = noisySession(7);
+        const all = smoothSession(ref, params, { writeFrames: new Set([f]) });
+        eq(r.frames, all.frames, `frame ${f}: same pose count as writeFrames {${f}}`);
+        eq(r.nodes, all.nodes, `frame ${f}: same node count`);
+        eq(r.tracks, all.tracks, `frame ${f}: same track count`);
+        eq(hasSmoothed3d(s, f), r.frames > 0, `frame ${f}: hasSmoothed3d follows the write`);
+    }
+    eq(otherFramesMoved, 0, 'no other frame is written');
+    ok(wrote >= 4, `most sampled frames had something to smooth (${wrote}/${framesTried})`);
+    eq(smoothFrame(noisySession(7), {}, 20).frames, 0, 'both windows off writes nothing');
+    eq(smoothFrame(noisySession(7), params, 12345).frames, 0, 'a frame with no groups writes nothing');
+}
+
+group('smoothFrame — a re-run replaces, windows 0 restores');
+{
+    const f = 44;
+    const narrow = { smoothGaussianWindow: 3, smoothMedianWindow: 3, smoothMaxGap: 5, smoothMinSegment: 1 };
+    const wide = { smoothGaussianWindow: 15, smoothMedianWindow: 9, smoothMaxGap: 5, smoothMinSegment: 1 };
+    const ref = noisySession(7);
+    smoothSession(ref, narrow);
+    // Neighbours already smoothed with other settings (an earlier All frames
+    // run), then This frame twice: the answer is the narrow pass alone.
+    const s = noisySession(7);
+    const raw = framePts(s, f);
+    smoothSession(s, wide);
+    smoothFrame(s, wide, f);
+    ok(!sameBits(framePts(s, f), framePts(ref, f)), 'precondition: the wide window gives another answer');
+    smoothFrame(s, narrow, f);
+    ok(sameBits(framePts(s, f), framePts(ref, f)), 'wide, then narrow on this frame == narrow alone');
+    // "Both windows 0" is unsmoothSession on this frame (ui-wiring).
+    const r = unsmoothSession(s, { writeFrames: new Set([f]) });
+    ok(r.frames > 0, 'restore reports the frame\'s poses');
+    ok(sameBits(framePts(s, f), raw), 'windows 0 restores the pre-smoothing 3D, bit for bit');
+    eq(hasSmoothed3d(s, f), false, 'and the frame is no longer smoothed');
+    eq(hasSmoothed3d(s, f + 1), true, 'its neighbours keep the all-frames run');
+}
+
+group('smoothFrame — reads a window, not the recording');
+{
+    // Cost check by counting: a long trajectory with a frame in the middle.
+    // smoothFrame looks up only frames near its own; the all-frames pass
+    // visits every one.
+    const T = 20000;
+    const frames = [];
+    for (let f = 0; f < T; f++) frames.push([f, [makeGroup(1, [[f, 0, 0], [f, 1, 0]])]]);
+    const s = makeSession(frames);
+    const map = s.instanceGroups;
+    let gets = 0;
+    const realGet = map.get.bind(map);
+    map.get = (k) => { gets++; return realGet(k); };
+    smoothFrame(s, { smoothMedianWindow: 5, smoothGaussianWindow: 9, smoothMaxGap: 5, smoothMinSegment: 5 }, T / 2);
+    ok(gets < 200, `frame lookups stay near the frame (${gets} for a ${T.toLocaleString('en-US')}-frame track)`);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
