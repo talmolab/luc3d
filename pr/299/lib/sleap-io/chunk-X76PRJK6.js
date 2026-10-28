@@ -36,7 +36,7 @@ import {
   resolveIdentity,
   resolveVideoFilename,
   sessionsReadError
-} from "./chunk-H7G4PJNA.js?v=db2bf10a9f59";
+} from "./chunk-H7G4PJNA.js?v=bcd39528161b";
 import {
   RemoteIOError,
   fetchRetrying,
@@ -48,7 +48,7 @@ import {
   redactedCauseSummary,
   resolveUrl,
   statusToMessage
-} from "./chunk-YS7Q6CO6.js?v=db2bf10a9f59";
+} from "./chunk-YS7Q6CO6.js?v=bcd39528161b";
 
 // src/model/centroid.ts
 var _centroidSkeleton = null;
@@ -12875,6 +12875,8 @@ async function readSessionDataStreaming(file) {
     instanceGroups,
     members,
     points3d: await matrix("points_3d", 3),
+    // LUCID local patch (smoothing source)
+    unsmoothedPoints3d: await matrix("unsmoothed_points_3d", 3),
     predPoints3d: await matrix("pred_points_3d", 4),
     frameGroupMeta: await meta("frame_group_meta"),
     instanceGroupMeta: await meta("instance_group_meta")
@@ -15384,6 +15386,16 @@ function writeSessions(file, sessions, videos, labeledFrames, identities) {
   const predPts3dTable = new LucidAppendTable(
     file, "session_data/pred_points_3d", 4, "<d", null, true, ensureSessionData
   );
+  // LUCID local patch (smoothing source): the 3D a temporally smoothed group
+  // held before smoothing (`Instance3D.lucidUnsmoothed`), row-parallel to
+  // `points_3d`; NaN rows for every group that has none. Created only once a
+  // group has one, so a never-smoothed project writes no such dataset.
+  const unsmoothedTable = new LucidAppendTable(
+    file, "session_data/unsmoothed_points_3d", 3, "<d", null, true, ensureSessionData
+  );
+  const padUnsmoothed = (rows) => {
+    while (unsmoothedTable.total < rows) unsmoothedTable.pushCoerced(null, 3);
+  };
   const fgMeta = [];
   const igMeta = [];
   const sessionsJson = [];
@@ -15450,6 +15462,12 @@ function writeSessions(file, sessions, videos, labeledFrames, identities) {
               else pts3dTable.pushCoerced(points3d[i], 3);
             }
             pts3dEnd = pts3dTable.total;
+            // LUCID local patch (smoothing source)
+            const unsmoothed = inst3d?.lucidUnsmoothed;
+            if (unsmoothed && ArrayBuffer.isView(unsmoothed) && unsmoothed.length === n3dRows * 3) {
+              padUnsmoothed(pts3dStart);
+              for (let i = 0; i < n3dRows; i++) unsmoothedTable.pushFlat(unsmoothed, i * 3, 3);
+            }
           }
           if (inst3d?.score != null) i3dScore = inst3d.score;
         }
@@ -15499,6 +15517,10 @@ function writeSessions(file, sessions, videos, labeledFrames, identities) {
   memberTable.finish(hasFrameGroups);
   pts3dTable.finish(false);
   predPts3dTable.finish(false);
+  // LUCID local patch (smoothing source): pad to `points_3d`'s length; absent
+  // when no group had a source.
+  if (unsmoothedTable.total > 0) padUnsmoothed(pts3dTable.total);
+  unsmoothedTable.finish(false);
   if (hasFrameGroups) {
     if (fgMeta.some((s) => s.length > 0)) {
       file.create_dataset({
@@ -18647,6 +18669,8 @@ function readSessionDataEager(file, emscripten) {
     instanceGroups,
     members,
     points3d: matrix("points_3d", 3),
+    // LUCID local patch (smoothing source)
+    unsmoothedPoints3d: matrix("unsmoothed_points_3d", 3),
     predPoints3d: matrix("pred_points_3d", 4),
     frameGroupMeta: meta("frame_group_meta"),
     instanceGroupMeta: meta("instance_group_meta")

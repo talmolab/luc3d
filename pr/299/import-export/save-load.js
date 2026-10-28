@@ -9,48 +9,49 @@ import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
     toBoxedPoints3d, someValidPoint3d, pooledPoints3d,
-} from '../pose/pose-data.js?v=db2bf10a9f59';
+} from '../pose/pose-data.js?v=bcd39528161b';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
-} from '../pose/triangulation.js?v=db2bf10a9f59';
-import { OnDemandVideoDecoder } from '../loading/video.js?v=db2bf10a9f59';
-import { createDemoSkeleton } from '../demo-data.js?v=db2bf10a9f59';
+} from '../pose/triangulation.js?v=bcd39528161b';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=bcd39528161b';
+import { createDemoSkeleton } from '../demo-data.js?v=bcd39528161b';
 import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
-} from './file-io.js?v=db2bf10a9f59';
+} from './file-io.js?v=bcd39528161b';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setInteractionManager,
-} from '../ui/app-state.js?v=db2bf10a9f59';
+} from '../ui/app-state.js?v=bcd39528161b';
 import {
     autoAssignVideosToCameras, forceVideoSelection, showParentDirMatchSummary,
     forceVideoSelectionWithFolder, createViewForVideoFile, updateTotalFrames,
     adoptLabeledFrameCount, rebuildVideoController, fitCanvasesToCells,
-} from '../loading/session-loader.js?v=db2bf10a9f59';
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=db2bf10a9f59';
-import { updateInfoPanel } from '../ui/info-panel.js?v=db2bf10a9f59';
+} from '../loading/session-loader.js?v=bcd39528161b';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=bcd39528161b';
+import { updateInfoPanel } from '../ui/info-panel.js?v=bcd39528161b';
 // Pass 3i-3: setupInteraction / setup3DViewport / hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, hideWelcomeOverlay,
-} from '../pose/initialization.js?v=db2bf10a9f59';
+} from '../pose/initialization.js?v=bcd39528161b';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=db2bf10a9f59';
-import { handleLoadSlpFile } from './slp-import.js?v=db2bf10a9f59';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=bcd39528161b';
+import { handleLoadSlpFile } from './slp-import.js?v=bcd39528161b';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
     openProjectWriter, streamSessionIntoWriter, finalizeProjectWriter,
-} from './slp-streaming-write.js?v=db2bf10a9f59';
-import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=db2bf10a9f59';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=db2bf10a9f59';
+} from './slp-streaming-write.js?v=bcd39528161b';
+import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=bcd39528161b';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=bcd39528161b';
 import {
     showLoading, hideLoading, showLoadingProgress, createProgressPacer, yieldToPaint,
-} from '../ui/loading-overlay.js?v=db2bf10a9f59';
-import { clearReadout } from '../ui/frame-readout.js?v=db2bf10a9f59';
-import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=db2bf10a9f59';
-import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=db2bf10a9f59';
-import { buildSaveProvenance } from './slp-provenance.js?v=db2bf10a9f59';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=db2bf10a9f59';
+} from '../ui/loading-overlay.js?v=bcd39528161b';
+import { clearReadout } from '../ui/frame-readout.js?v=bcd39528161b';
+import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=bcd39528161b';
+import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adoptSmoothingSource } from './smoothing-metadata.js?v=bcd39528161b';
+import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=bcd39528161b';
+import { buildSaveProvenance } from './slp-provenance.js?v=bcd39528161b';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=bcd39528161b';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -311,6 +312,9 @@ function serializeSessionFrames(session) {
             if (group.usedCameras) {
                 groupData.usedCameras = Array.from(group.usedCameras);
             }
+            // Temporal Smoothing's source (smoothing-metadata.js), only when smoothed.
+            var _unsmoothed = smoothingSourceFor(group);
+            if (_unsmoothed) groupData.unsmoothedPoints3d = toBoxedPoints3d(_unsmoothed);
             for (var [camName, inst] of group.instances) {
                 var instData = {
                     points: inst.toPointsArray(),
@@ -355,7 +359,7 @@ function serializeSessionFrames(session) {
 async function ensureSleapIO() {
     if (window.SleapIO) return window.SleapIO;
     // Relative to THIS module (import-export/), not the page — hence `../`.
-    var mod = await import('../lib/sleap-io/index.browser.js?v=db2bf10a9f59');
+    var mod = await import('../lib/sleap-io/index.browser.js?v=bcd39528161b');
     window.SleapIO = mod;
     return mod;
 }
@@ -1285,6 +1289,7 @@ export function saveProject() {
                 // JSON puts them at the session-dict level rather than under a
                 // `metadata.lucid`.
                 writeVisibilityMetadata(sessData, sess);
+                writeSmoothingMetadata(sessData, sess);
                 // Define Planes state, at the same session-dict level and under
                 // the same keys the `.slp` writers use.
                 return writePlaneMetadata(sessData, sess);
@@ -1332,6 +1337,7 @@ export function saveProject() {
     // Session-scoped Visibility-panel state (see the v3 branch above). `_restoreProjectV2`
     // reads these at this same level for both the v2 and v3 shapes.
     writeVisibilityMetadata(projectData, state.session);
+    writeSmoothingMetadata(projectData, state.session);
     writePlaneMetadata(projectData, state.session);
 
     // Serialize each frame
@@ -1356,6 +1362,9 @@ export function saveProject() {
             if (group.usedCameras) {
                 groupData.usedCameras = Array.from(group.usedCameras);
             }
+            // Temporal Smoothing's source (smoothing-metadata.js), only when smoothed.
+            var _unsmoothed = smoothingSourceFor(group);
+            if (_unsmoothed) groupData.unsmoothedPoints3d = toBoxedPoints3d(_unsmoothed);
             for (const [camName, inst] of group.instances) {
                 const instData = {
                     points: inst.toPointsArray(),
@@ -1461,7 +1470,7 @@ export async function handleLoadProject(prePickedFile) {
             var LARGE_SLP_BYTES = 200 * 1024 * 1024;
             if (ext === 'slp' && file.size > LARGE_SLP_BYTES) {
                 // Dynamic import avoids a session-loader ↔ save-load import cycle.
-                var _sl = await import('../loading/session-loader.js?v=db2bf10a9f59');
+                var _sl = await import('../loading/session-loader.js?v=bcd39528161b');
                 if (_sl && typeof _sl.handleLoadProjectSlpLazy === 'function') {
                     return _sl.handleLoadProjectSlpLazy(file);
                 }
@@ -1909,6 +1918,7 @@ function _restoreProjectV2(data) {
     // Session-scoped Visibility-panel state. Shared by the v2 (whole document)
     // and v3 (per-session dict) shapes — both put these keys at this level.
     readVisibilityMetadata(session, data);
+    readSmoothingMetadata(session, data);
     // Define Planes state. Project-scoped keys are ingested by whichever
     // session is read first; placements land on this one.
     readPlaneMetadata(session, data);
@@ -1938,6 +1948,10 @@ function _restoreProjectV2(data) {
                     var group = new InstanceGroup(groupData.id || Date.now(), loadedIdentityId);
                     if (groupData.points3d) {
                         group.points3d = pooledPoints3d(groupData.points3d);
+                        if (groupData.unsmoothedPoints3d) {
+                            adoptSmoothingSource(session, frameIdx, group,
+                                { lucidUnsmoothed: pooledPoints3d(groupData.unsmoothedPoints3d) });
+                        }
                     }
                     if (groupData.reprojections) {
                         group.reprojections = groupData.reprojections;

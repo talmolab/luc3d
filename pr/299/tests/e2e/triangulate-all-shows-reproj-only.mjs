@@ -7,9 +7,9 @@
  * on the shared BA rig fixture (`fixtures/ba-rig-fixture.js`, identities set):
  *   A. the Triangulate All button (Settings default DLT; identities exist, so
  *      it runs `groupByIdentityAndTriangulateAll`);
- *   B. Triangulate All ▸ Ref on a LAZY session — `triangulateAllFrames`' windowed
+ *   B. Triangulate ▸ Method Ref, then the button, on a LAZY session — `triangulateAllFrames`' windowed
  *      sweep, the path a reopened large project takes;
- *   C. Triangulate All ▸ Ref on an eager session — `triangulateAllFrames`'
+ *   C. the same on an eager session — `triangulateAllFrames`'
  *      in-memory path;
  *   D. Edit ▸ Group by Track & Triangulate All, through its dialog.
  * Each starts from all four boxes ticked and must end Reproj-only, with the
@@ -85,12 +85,26 @@ try {
     const succeeded = (msg) => /^(Triangulated|Grouped) /.test(msg);
 
     const routes = [
-        { key: 'A', label: 'Triangulate All button (group by identity)', eager: true,
+        { key: 'A', label: 'Triangulate button (all frames, group by identity)', eager: true,
           trigger: () => document.getElementById('tbTriangulateAll').click() },
-        { key: 'B', label: 'Triangulate All ▸ Ref, lazy session (windowed sweep)', eager: false,
-          trigger: () => document.querySelector('#triangulateAllDropdown .tri-dropdown-item[data-method="ba"]').click() },
-        { key: 'C', label: 'Triangulate All ▸ Ref, eager session (in-memory)', eager: true,
-          trigger: () => document.querySelector('#triangulateAllDropdown .tri-dropdown-item[data-method="ba"]').click() },
+        { key: 'B', label: 'Triangulate (Method: Ref), lazy session (windowed sweep)', eager: false,
+          trigger: () => {
+              // Ref through the menu's Method radio, then the button; DLT is put
+              // back at once (the run already has its method).
+              const pick = (m) => document.querySelector('#triangulateDropdown input[name="tbTriMethod"][value="' + m + '"]').click();
+              pick('ba');
+              document.getElementById('tbTriangulateAll').click();
+              pick('dlt');
+          } },
+        { key: 'C', label: 'Triangulate (Method: Ref), eager session (in-memory)', eager: true,
+          trigger: () => {
+              // Ref through the menu's Method radio, then the button; DLT is put
+              // back at once (the run already has its method).
+              const pick = (m) => document.querySelector('#triangulateDropdown input[name="tbTriMethod"][value="' + m + '"]').click();
+              pick('ba');
+              document.getElementById('tbTriangulateAll').click();
+              pick('dlt');
+          } },
         { key: 'D', label: 'Edit ▸ Group by Track & Triangulate All', eager: true,
           trigger: async () => {
               document.getElementById('menuGroupByTrack').click();

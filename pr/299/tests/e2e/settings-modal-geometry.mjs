@@ -118,7 +118,7 @@ try {
         `every one of the ${NODE_COUNT} skeleton nodes is rendered (got ${lists[0].rows})`);
 
     // ---- 2. The sections fold ----------------------------------------------
-    const sections = await page.evaluate(() => Array.from(document.querySelectorAll('.settings-section'))
+    const sections = await page.evaluate(() => Array.from(document.querySelectorAll('.settings-panel[data-panel="wizard"] .settings-section'))
         .map(d => ({
             title: d.querySelector('.settings-section-title').textContent,
             count: d.querySelector('.settings-section-count') ? d.querySelector('.settings-section-count').textContent : null,
@@ -126,7 +126,7 @@ try {
             tag: d.tagName,
         })));
     check(sections.length === 3 && sections.every(s => s.tag === 'DETAILS' && s.open),
-        `three <details> sections, all open by default (${JSON.stringify(sections.map(s => [s.title, s.open]))})`);
+        `the wizard has three <details> sections, all open by default (${JSON.stringify(sections.map(s => [s.title, s.open]))})`);
     check(sections.length === 3 &&
         sections[0].count === String(NODE_COUNT) && sections[1].count === '8',
         `each carries its row count (${JSON.stringify(sections.map(s => s.count))})`);
@@ -163,6 +163,32 @@ try {
     check(wideCols > narrowCols,
         `widening the modal gives the table more columns (${narrowCols} at 880px -> ${wideCols} at 1300px)`);
 
+    // ---- 3b. Width: 1040px by default; an unresized card keeps no size --------
+    // The card used to save its opening size on every close, so a later change
+    // of the default never reached anyone who had opened Settings once.
+    await closeModal();
+    await page.evaluate(() => {
+        localStorage.setItem('lucid.modalGeometry.v1',
+            JSON.stringify({ settings: { x: 260, y: 140, w: 880, h: 620 } }));
+    });
+    await openModal();
+    let opened = await rect();
+    check(opened.w === 1040 && opened.h === 620,
+        `an old record at the old 880x620 default opens at the new default (${opened.w}x${opened.h})`);
+    check(Math.abs((opened.x + opened.w / 2) - (260 + 440)) <= 1,
+        `...centred where the old card was (${opened.x})`);
+    await closeModal();
+    let rec = await page.evaluate(() => JSON.parse(localStorage.getItem('lucid.modalGeometry.v1')).settings);
+    check(rec.sized === false, `closing without resizing records no chosen size (${JSON.stringify(rec)})`);
+    await page.evaluate(() => {
+        localStorage.setItem('lucid.modalGeometry.v1',
+            JSON.stringify({ settings: { x: 150, y: 70, w: 900, h: 650 } }));
+    });
+    await openModal();
+    opened = await rect();
+    check(opened.w === 900 && opened.h === 650,
+        `an old record the user had resized keeps its size (${opened.w}x${opened.h})`);
+
     // ---- 4. Resizable, and the size is remembered ---------------------------
     const resizeStyle = await page.evaluate(() =>
         getComputedStyle(document.querySelector('.settings-modal')).resize);
@@ -180,7 +206,8 @@ try {
     let stored = await page.evaluate(() => {
         try { return JSON.parse(localStorage.getItem('lucid.modalGeometry.v1')); } catch (e) { return null; }
     });
-    check(stored && stored.settings && stored.settings.w === sized.w && stored.settings.h === sized.h,
+    check(stored && stored.settings && stored.settings.w === sized.w && stored.settings.h === sized.h &&
+        stored.settings.sized === true,
         `the size is written to localStorage on close (${JSON.stringify(stored && stored.settings)})`);
 
     await openModal();
