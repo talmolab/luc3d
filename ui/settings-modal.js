@@ -642,16 +642,12 @@ export function showSettingsModal(initialPanel) {
         input.step = String(def.step);
         input.value = formatThresholdValue(def, working.thresholds[def.id]);
         input.setAttribute('aria-label', def.label);
-        // what the value means on this machine (`note`, e.g. "5 of 10 cores"), kept in step as it is typed
-        const note = def.note ? document.createElement('span') : null;
-        if (note) { note.className = 'settings-threshold-note'; note.textContent = def.note(working.thresholds[def.id]); }
 
         const isFilter = def.id === 'filterMinVisibleNodes' || def.id === 'filterMinInstanceScore' ||
             def.id === 'filterMinMeanNodeScore';
         input.addEventListener('input', function () {
             const v = parseFloat(input.value);
             if (isFinite(v)) working.thresholds[def.id] = v;
-            if (note) note.textContent = def.note(working.thresholds[def.id]);
             if (isFilter) filterPreview.update();
         });
         input.addEventListener('blur', function () {
@@ -661,18 +657,11 @@ export function showSettingsModal(initialPanel) {
             if (v > def.max) v = def.max;
             working.thresholds[def.id] = v;
             input.value = formatThresholdValue(def, v);
-            if (note) note.textContent = def.note(v);
             if (isFilter) filterPreview.update();
         });
 
         row.appendChild(labelWrap);
-        if (note) {              // under its field, so the fields stay in one column
-            const field = document.createElement('div');
-            field.className = 'settings-threshold-field';
-            field.appendChild(input);
-            field.appendChild(note);
-            row.appendChild(field);
-        } else row.appendChild(input);
+        row.appendChild(input);
         body.appendChild(row);
         // The readout goes right under the last of the three filter fields.
         if (def.id === 'filterMinMeanNodeScore') body.appendChild(filterPreview.root);

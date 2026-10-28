@@ -8211,7 +8211,7 @@ and the CPU workers hold ~600 MB each. On a CPU run "About these flags" says the
 model ran on the CPU. Reads `imageCheckHz` (default 2), `imageChangeThreshold`
 (default -0.8 — a new id rather than the old `imageCheckThreshold`, because the
 image score's scale changed), `imageCheckMaxViews` (default 3, passed as
-`maxViewsPerAnimal`), `imageCheckGpuTimePct` / `imageCheckCpuCoresPct` (whole
+`maxViewsPerAnimal`), `imageCheckGpuTimePct` / `imageCheckCpuTimePct` (whole
 percentages, default 80 each, as `maxGpuPct` / `maxCpuPct`) and `imageCheckWebNN` (default 0, as `webnn`), and passes
 `inFlight: embedder.inFlight`. The embedder's `backend()` outcome is attached to
 the result as `model` (its note shown under "About these flags") and
@@ -8503,8 +8503,9 @@ keypoints before decoding); cameras no animal needs are not fetched.
 Cropping runs in a pool of module workers (`createCropPool`,
 `ui/image-crop-worker.js`; one per core but one, at most 8; one job = one view of
 one frame, its VideoFrame transferred and closed by the worker — a decoder-cached
-frame is sent as a `clone()`, anything else as an ImageBitmap copy). A failed
-worker drops that one view of that frame and the rest of the run crops inline;
+frame is sent as a `clone()`, anything else as an ImageBitmap copy). Jobs queue in
+the pool and each worker takes one at a time, idling after it under the CPU cap.
+A failed worker drops that one view of that frame and the rest of the run crops inline;
 `window.LUCID_CROP_WORKERS = 0` forces inline. `writeInputTensor`'s 160 -> 224
 sample positions are a precomputed table (same arithmetic, bit-identical).
 **GPU feeding.** (1) The model's output stays on the GPU
@@ -8651,18 +8652,17 @@ because on the CPU frames arrive in bursts); `opts.device` ('auto' | 'webgpu' |
 `SAMPLE_FRAMES_PER_RUN`, `SAMPLE_PIXELS_MAX`, `tensorToGrey(tensor)`, `greyToTensor(grey)` (sample crops on cached runs);
 `pickImageDevice()` -> `{kind: 'webgpu'|'cpu', adapter, why}`; `cpuModelWorkerCount(cores, memoryGB)`,
 `CPU_MODEL_MAX_WORKERS`; `createCpuModelPool(count, onStatus, clock?)` -> `{size, run(data, n) ->
-Promise<Float32Array[]>, terminate()}`; `createCropPool(clock?, count?)` -> `{broken, run(image, crops), terminate()}` | null
-(count: the CPU cap's crop workers)
-(`clock`: a `createBusyClock`, ui/load-graph.js);
+Promise<Float32Array[]>, terminate()}`; `createCropPool(clock?, maxCpuPct?)` -> `{broken, run(image, crops), terminate()}` | null
+(`clock`: a `createBusyClock`, ui/load-graph.js; `maxCpuPct`: the CPU cap, each worker's duty cycle);
 `loadImageModel(onStatus)` (WebGPU; once, cached promise);
 `importTransformers()` (the runtime, imported once; re-imported under a new fragment
 after a failure); `cannotRun(reason, cause)` (an Error whose message is the reason
 the check cannot run, flagged `cannotRun`); `asModelDownloadFailure(err)` (a failed
 download as `MODEL_OFFLINE_REASON`, else `err` unchanged); `MODEL_OFFLINE_REASON`;
 `selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`;
-the compute caps `capPct(pct)`, `paceRestMs(runMs, pct)`,
-`imageCheckThreads(cores, memoryGB, pct, onCpu)`, `IMAGE_CAP_MIN` and
-`createModelQueue(embed, sz, tm, {maxBatch, maxGpuPct})` -> `{enqueue, endRest}`;
+the compute caps `capPct(pct)`, `paceRestMs(runMs, pct)`, `IMAGE_CAP_MIN`,
+`CPU_CAP_CROPS_PER_WORKER` (4) and
+`createModelQueue(embed, sz, tm, {maxBatch, maxPct})` -> `{enqueue, endRest}`;
 `summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`;
 `describeAdapter(info)`, `gpuAdapterInfo(device, adapter)` -> `{name, fallback}`,
 `createLoadMeter` (re-exported from ui/load-graph.js, where it now lives), `GPU_LOAD_WINDOW_MS` (=
@@ -8685,35 +8685,38 @@ against `cutCrop` itself within 0.04 px, at any rotation);
 `TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_REVISION`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (224).
 
 **The compute caps** (`opts.maxGpuPct` / `opts.maxCpuPct`, from the "GPU time
-(%)" / "CPU cores (%)" settings `imageCheckGpuTimePct` / `imageCheckCpuCoresPct`,
-whole percentages 1–100, default 80). How much of the GPU and of the CPU the check
-may take is the USER's to set, and what it does not take stays free for other
-apps — even when nothing else wants it (an allocation, not an adaptive
-back-off). No browser API gives a page a share of either, so the check takes its
-share by how it runs:
-- **GPU** — after each FULL batch (`EMBED_MAX_BATCH`) an idle,
-  `paceRestMs(runMs, pct)` = `runMs × (100/pct − 1)`, so busy / (busy + idle) =
-  pct. Batches do NOT shrink with the cap: an earlier version scaled them
+(%)" / "CPU time (%)" settings `imageCheckGpuTimePct` / `imageCheckCpuTimePct`,
+whole percentages 1–100, default 80). How much of the GPU's and of the CPU's time
+the check may take is the USER's to set, and what it does not take stays free for
+other apps — even when nothing else wants it (an allocation, not an adaptive
+back-off). No browser API gives a page a share of either, so both caps are a duty
+cycle: whatever runs idles after each piece of work for
+`paceRestMs(runMs, pct)` = `runMs × (100/pct − 1)`, so busy / (busy + idle) = pct.
+- **GPU** — an idle after each FULL batch (`EMBED_MAX_BATCH`, `createModelQueue`).
+  Batches do NOT shrink with the cap: an earlier version scaled them
   (`64 × pct`), but small batches run each crop slower while the idle time alone
   already sets the share. Measured on an M-series GPU (200 frames of a real
   recording): 6.0–6.2 ms/crop uncapped, 5.6 at 50%, 5.8 at 25%, GPU busy 98% /
   50.1% / 25.3%. Not applied on the CPU path. Idle time is not counted in
   `busyMs()`, so the dialog's GPU line reads at most the cap.
-- **CPU** — fewer worker threads, all kept working, never idling:
-  `imageCheckThreads(cores, memoryGB, pct, onCpu)` -> `{model, crop, budget,
-  cores}`, a budget of floor(cores × pct/100) threads; on the CPU path the model
-  takes all but one (still within `cpuModelWorkerCount`'s memory limit), cropping
-  the rest; otherwise cropping takes it all. At least one of each. 10 cores at
-  50%: 4 model + 1 crop (uncapped 4 + 8). Video decoding (WebCodecs) and the main
+- **CPU** — the same worker threads as uncapped, each idling part of the time:
+  every crop worker after each job (`createCropPool`), and on the CPU path the
+  model workers after each model run (the same `createModelQueue`, paced by the
+  CPU cap; the workers run a batch together). Capped, CPU-path batches are cut
+  to `CPU_CAP_CROPS_PER_WORKER` (4) crops a worker, ~2 s of work between idles
+  rather than ~7 s at `EMBED_MAX_BATCH`. Replaced a thread-count cap
+  (floor(cores × pct) threads), whose meaning depended on the machine
+  (hyperthreads, rounding on few cores). Video decoding (WebCodecs) and the main
   thread are the browser's and not counted.
 100% is the uncapped behaviour for both; floor `IMAGE_CAP_MIN` = 1 (1% idles 99× each run).
 `releaseFrames` ends an idle in progress (`endRest`) LAST, after the CPU workers
 are terminated — `createCpuModelPool.terminate()` does not reject a job in
 flight, so a run started on a worker about to be killed would never settle.
-`stats()` adds `maxGpuPct` (null on the CPU path), `restS`, `maxCpuPct`,
-`threads` and `cores`; `formatEmbedTiming` adds "GPU time capped at N% (S s
-idle)" and/or "CPU capped at T of C cores". Covered by
-`tests/test-image-compute-caps.mjs` (incl. the queue, driven by a fake model) and
+`stats()` adds `maxGpuPct` (null on the CPU path), `restS` (the model queue's
+idle: the GPU's, or the CPU model workers' on the CPU path) and `maxCpuPct`;
+`formatEmbedTiming` adds "GPU time capped at N% (S s idle)" and/or "CPU time
+capped at N%". Covered by `tests/test-image-compute-caps.mjs` (the queue, driven
+by a fake model, and the crop pool, by a fake Worker) and
 `tests/e2e/image-check-cpu.mjs` §6.
 
 **The crop** (must match the calibration): rotate so the nose points right
@@ -8896,11 +8899,9 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   `getTrackingThresholds()` / `setTrackingThresholds(map)` — read/write the
   tracker's user-editable thresholds. `getTrackingThresholdDefs` returns the
   wizard's render catalog `[{ id, label, default, value, min, max, step, desc, kind,
-  decimals, note, tip }]` (`kind`: `'toggle'` for on/off settings, drawn as a
+  decimals, tip }]` (`kind`: `'toggle'` for on/off settings, drawn as a
   switch; else `'number'`; `decimals`: places the field shows, `formatThresholdValue`;
-  `note(value)`: a live hint beside the field — `cpuCoresNote` -> "5 of 10 cores",
-  the same budget as `imageCheckThreads`; `tip`: a one-line ⓘ in the Track
-  dialogs),
+  `tip`: a one-line ⓘ in the Track dialogs),
   **filtered to `WIZARD_THRESHOLD_IDS`** — the CrossViewTracker's free parameters
   only (`filterMinVisibleNodes`, `filterMinInstanceScore`, `filterMinMeanNodeScore`, `corr2dWeight`,
   `corr3dWeight`, `velocityThreshold`, `distanceThreshold`, `timePenalty`,
@@ -8913,11 +8914,12 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   `imageCheckHz` 2; `imageCheckBackgroundHz` 0.1 (crops per second away from contacts:
   `backgroundHz`, see pose/id-switch-check.js "Which samples are embedded"; Wizard only, not
   the Track All dialog); `imageCheckMaxViews` 3; `imageCheckGpuTimePct` 80 and
-  `imageCheckCpuCoresPct` 80 — labelled "GPU time (%)" / "CPU cores (%)", the share
-  of GPU time / of the CPU cores the image check may use, whole numbers 1..100,
-  100 = uncapped (new ids each time the scale changed — the unreleased
-  `imageCheckMaxGpu`/`Cpu` 10–100, then `imageCheckGpuTime`/`CpuCores` 0.10–1.00 —
-  so a value stored on an earlier scale is never read on this one); `imageCheckWebNN` — 0/1, try WebNN,
+  `imageCheckCpuTimePct` 80 — labelled "GPU time (%)" / "CPU time (%)", the share
+  of GPU time / of each CPU thread's time the image check may use, whole numbers 1..100,
+  100 = uncapped (new ids each time the meaning changed — the unreleased
+  `imageCheckMaxGpu`/`Cpu` 10–100, then `imageCheckGpuTime`/`CpuCores` 0.10–1.00, then
+  `imageCheckCpuCoresPct`, a share of the cores — so a value stored under an earlier
+  meaning is never read under this one); `imageCheckWebNN` — 0/1, try WebNN,
   default 0).
 - `ID_SWITCH_SETTING_IDS` — the Wizard settings shown in its "ID Switches"
   section rather than under Tracking Thresholds, in display order. The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
@@ -9559,11 +9561,9 @@ frame is never checked); Track Frame Range shows the same section.
 - `IMAGE_CHECK_IDS` — the image check's settings in dialog order, the switch
   first. In the options grid each row carries `data-row="<setting id>"`, and
   styles.css starts a new row at `imageCheckGpuTimePct` and at `imageCheckWebNN`, so
-  GPU time and CPU cores share a row with Try WebNN under them. A setting's `tip`
-  puts a short ⓘ after its label (`setInfoTip`) in place of the label's long
-  native `title`; its `note` ("5 of 10 cores") follows the label inside
-  `.track-setup-option-head`, so the note — not the label — is what an ellipsis
-  shortens in a narrow cell.
+  GPU time and CPU time share a row with Try WebNN under them. A setting's `tip`
+  puts a short ⓘ after its label (`setInfoTip`, both inside
+  `.track-setup-option-head`) in place of the label's long native `title`.
 - `buildImageCheckFields(defs)` → `{element, read, refresh}` — the image-check
   section: the switch, a one-line caution, and the options in the weight
   grid's compact markup, hidden while the switch is off. Labels are the
@@ -10792,7 +10792,7 @@ dismiss.
 `ICON_INFO`), `ui/plane-nodes-panel.js` (the Pinned column's ⓘ),
 `pose/initialization.js` (`installInfoTips`), `ui/node-tooltip.js`
 (`placeTipNear`), `ui/track-setup-modal.js` (`setInfoTip`, `ICON_INFO`: the image
-check's GPU time / CPU cores ⓘ).
+check's GPU time / CPU time ⓘ).
 
 Coverage: `tests/e2e/info-tip.mjs` (incl. that the status bar is left untouched
 and that an element created after startup is served with no wiring),

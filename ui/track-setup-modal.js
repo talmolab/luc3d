@@ -279,7 +279,7 @@ export function buildNodeWeightFields(nodes) {
  * Track All, in the order the dialog shows them: the on/off switch first.
  */
 export const IMAGE_CHECK_IDS = [
-    'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckGpuTimePct', 'imageCheckCpuCoresPct', 'imageCheckWebNN',
+    'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckGpuTimePct', 'imageCheckCpuTimePct', 'imageCheckWebNN',
 ];
 
 /**
@@ -369,12 +369,10 @@ export function buildImageCheckFields(defs, after) {
         label.textContent = shortLabel(def);
         label.title = def.desc || '';
         var head = label;
-        if (def.tip || def.note) {           // a short ⓘ (ui/info-tip.js) instead of the label's long native tooltip
+        if (def.tip) {           // a short ⓘ (ui/info-tip.js) instead of the label's long native tooltip
             head = document.createElement('div');
             head.className = 'track-setup-option-head';
             head.appendChild(label);
-        }
-        if (def.tip) {
             label.removeAttribute('title');
             var info = document.createElement('button');
             info.type = 'button';
@@ -392,13 +390,6 @@ export function buildImageCheckFields(defs, after) {
         input.value = def.decimals > 0 && isFinite(def.value) ? Number(def.value).toFixed(def.decimals) : String(def.value);   // 0.50, as the Wizard shows it
         input.dataset.setting = def.id;
         input.setAttribute('aria-label', def.label);
-        if (def.note) {          // what the value means on this machine ("5 of 10 cores"), in step as it is typed;
-            var note = document.createElement('span');   // after the label, so it — not the label — gives way first
-            note.className = 'settings-threshold-note';
-            note.textContent = def.note(def.value);
-            input.addEventListener('input', function () { note.textContent = def.note(Number(input.value)); });
-            head.appendChild(note);
-        }
         r.appendChild(head);
         r.appendChild(input);
         options.appendChild(r);

@@ -713,7 +713,7 @@ export const EMBED_MAX_BATCH = 64;
  */
 export const EMBED_IN_FLIGHT = 8;
 
-/** The lowest cap the image check takes (%; the `imageCheckGpuTimePct` / `imageCheckCpuCoresPct` settings' minimum). */
+/** The lowest cap the image check takes (%; the `imageCheckGpuTimePct` / `imageCheckCpuTimePct` settings' minimum). */
 export const IMAGE_CAP_MIN = 1;
 
 /** A cap as a percentage in IMAGE_CAP_MIN..100; anything not a positive number is 100, the uncapped check. */
@@ -723,56 +723,48 @@ export function capPct(pct) {
 }
 
 /*
- * The compute caps. The share of the GPU and of the CPU the image check may use is
- * the user's to set (`imageCheckGpuTimePct`, `imageCheckCpuCoresPct`: whole
- * percentages, 50 by default), so that what it does
- * not take is left for other work on the machine — held even when nothing else
- * wants it. No browser API gives a page a share of either, so the check takes its
- * share by how it runs: the GPU by idling after each full batch (paceRestMs), the
- * CPU by running fewer worker threads (imageCheckThreads).
+ * The compute caps. The share of the GPU's time and of the CPU's time the image
+ * check may use is the user's to set (`imageCheckGpuTimePct`, `imageCheckCpuTimePct`:
+ * whole percentages, 80 by default), so that what it does not take is left for other
+ * work on the machine — held even when nothing else wants it. No browser API gives a
+ * page a share of either, so the check takes its share as a duty cycle: whatever
+ * runs idles after each piece of work for paceRestMs of it. The GPU idles after each
+ * full model batch (createModelQueue); on the CPU each crop worker idles after each
+ * job (createCropPool), and the CPU model workers after each model run, whose batches
+ * are cut to CPU_CAP_CROPS_PER_WORKER crops a worker so the idle comes every second
+ * or two rather than after many seconds of work. Every thread runs, each part of the
+ * time — the same meaning on every machine, hyperthreaded or not.
  */
 
 /**
- * The GPU cap: how long to idle after a model run of `runMs`, so the model holds the
- * GPU at most `maxGpuPct`% of the time — busy / (busy + idle) = pct. 100 (or not a
- * number) idles 0 ms: the uncapped check. Batches stay FULL (EMBED_MAX_BATCH) at every
- * cap: scaling them with the cap (64 x pct, an earlier version) bought shorter holds of
- * the GPU at the cost of throughput — small batches run each crop slower — while the
- * idle time alone already sets the share. So a run is as efficient capped as uncapped.
+ * The duty cycle of a cap: how long to idle after `runMs` of work, so the work holds
+ * its device (the GPU, or one CPU thread) at most `maxPct`% of the time — busy /
+ * (busy + idle) = pct. 100 (or not a number) idles 0 ms: the uncapped check. The GPU's
+ * batches stay FULL (EMBED_MAX_BATCH) at every cap: scaling them with the cap (64 x
+ * pct, an earlier version) bought shorter holds of the GPU at the cost of throughput —
+ * small batches run each crop slower — while the idle time alone already sets the
+ * share. So a run is as efficient capped as uncapped.
  */
-export function paceRestMs(runMs, maxGpuPct) {
-    const p = capPct(maxGpuPct);
+export function paceRestMs(runMs, maxPct) {
+    const p = capPct(maxPct);
     if (p >= 100 || !(runMs > 0)) return 0;
     return runMs * (100 / p - 1);
 }
 
 /**
- * The CPU cap: the worker threads the image check runs, `{model, crop, budget, cores}` —
- * model workers (the CPU path only; 0 on the GPU path) and crop workers. Capped,
- * the budget is floor(cores x pct / 100) threads: on the CPU path the model takes
- * all but one (it is the slow part; never more than cpuModelWorkerCount allows for
- * memory) and cropping the rest, on the GPU path cropping takes it all (never more
- * than createCropPool's own cores - 1 and 8). At least one of each. Fewer threads
- * that all keep working, rather than every thread resting part of the time: the
- * cores left over are free for the whole run. 100% is the uncapped check.
+ * Crops a CPU model worker takes per run while the CPU is capped (the batch is this x
+ * the workers): one worker embeds ~2.4 crops/s, so ~2 s of work between idles. Uncapped,
+ * the CPU path batches like the GPU (EMBED_MAX_BATCH): ~7 s a run on 4 workers.
  */
-export function imageCheckThreads(cores, memoryGB, maxCpuPct, onCpu) {
-    const c = cores > 0 ? cores : 4, cropMax = Math.max(0, Math.min(c - 1, 8));
-    const model = onCpu ? cpuModelWorkerCount(c, memoryGB) : 0;
-    const p = capPct(maxCpuPct);
-    if (p >= 100) return { model: model, crop: cropMax, budget: c, cores: c };
-    const budget = Math.max(1, Math.floor(c * p / 100));
-    if (!onCpu) return { model: 0, crop: Math.min(cropMax, budget), budget: budget, cores: c };
-    const m = Math.max(1, Math.min(model, budget - 1));
-    return { model: m, crop: Math.min(cropMax, Math.max(1, budget - m)), budget: budget, cores: c };
-}
+export const CPU_CAP_CROPS_PER_WORKER = 4;
 
 /**
  * The model queue. Runs are serialised, but each takes EVERY crop queued up
  * meanwhile, up to `maxBatch`: the first frame runs alone, and while it runs the
  * next frames' crops accumulate into a bigger batch. A frame with more crops than
  * `maxBatch` is split across runs. After each run the queue rests for
- * `paceRestMs(run, maxGpuPct)` before starting the next — the GPU cap; 100 never rests.
+ * `paceRestMs(run, maxPct)` before starting the next — the GPU cap, or the CPU cap on the
+ * CPU path (whose workers run each batch together); 100 never rests.
  * `embed(data, n)` -> Promise<Float32Array[]> runs the model on `n` crops of `sz` floats.
  * Each frame's vectors carry the batch's `tag` (the model that made them) when `embed`'s result has one.
  * `tm` (the run's timing) gets `queueMs`, `batches`, `maxBatch` and `restMs` added to.
@@ -781,7 +773,7 @@ export function imageCheckThreads(cores, memoryGB, maxCpuPct, onCpu) {
  */
 export function createModelQueue(embed, sz, tm, limits) {
     const maxBatch = Math.max(1, Math.floor((limits && limits.maxBatch) || EMBED_MAX_BATCH));
-    const maxGpuPct = capPct(limits && limits.maxGpuPct);
+    const maxPct = capPct(limits && limits.maxPct);
     const queue = [];
     let running = false, restTimer = null, restResume = null;
     const pump = function () {
@@ -807,7 +799,7 @@ export function createModelQueue(embed, sz, tm, limits) {
         }, function (err) {
             take.forEach(function (q) { q.reject(err); });
         }).then(function () {
-            const rest = paceRestMs(performance.now() - runFrom, maxGpuPct);
+            const rest = paceRestMs(performance.now() - runFrom, maxPct);
             if (!(rest > 0)) { running = false; pump(); return; }
             const restFrom = performance.now();
             restResume = function () {
@@ -925,7 +917,7 @@ export function formatEmbedTiming(t) {
         Math.round(t.decodeMsPerFrame) + ' ms, crop ' + Math.round(t.cropMsPerFrame) + ' ms, queue ' + Math.round(t.queueMsPerFrame) + ' ms' +
         ' · ' + (cpu ? 'CPU (' + t.workers + ' workers)' : t.backend === 'webnn' ? 'WebNN' : 'WebGPU') + (t.dtype ? ' ' + t.dtype : '') +
         (t.maxGpuPct != null && t.maxGpuPct < 100 ? ' · GPU time capped at ' + Math.round(t.maxGpuPct) + '% (' + Math.round(t.restS || 0) + ' s idle)' : '') +
-        (t.maxCpuPct != null && t.maxCpuPct < 100 ? ' · CPU capped at ' + t.threads + ' of ' + t.cores + ' cores' : '') +
+        (t.maxCpuPct != null && t.maxCpuPct < 100 ? ' · CPU time capped at ' + Math.round(t.maxCpuPct) + '%' : '') +
         formatKeyframes(t.keyframes) + formatCached(t);
 }
 
@@ -947,49 +939,78 @@ function formatKeyframes(k) {
  * A pool of crop workers (ui/image-crop-worker.js), or null to crop inline:
  * no Worker support, or `window.LUCID_CROP_WORKERS` = 0. Size: one per core but
  * one, at most 8 (one camera view per job, and a frame has at most a few views
- * per animal). `run(image, crops)` transfers the image (the worker closes it) and
- * resolves to one input tensor per crop; a failed worker rejects its job and
- * the pool stops taking new ones (`broken`), so the caller falls back inline.
+ * per animal). `run(image, crops)` queues the job; a worker takes it when free,
+ * transfers the image (the worker closes it) and resolves to one input tensor per
+ * crop. Each worker takes one job at a time and, after it, idles
+ * `paceRestMs(job, maxCpuPct)` before the next — the CPU cap (100: never). A
+ * failed worker rejects its job and the pool stops taking new ones (`broken`), so
+ * the caller falls back inline; the others finish the queue.
  * `clock` (createBusyClock, optional) is told while each worker holds a job, for the CPU load.
  */
-export function createCropPool(clock, count) {
+export function createCropPool(clock, maxCpuPct) {
     const forced = typeof window !== 'undefined' ? window.LUCID_CROP_WORKERS : undefined;
     const hc = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 1;
-    const n = forced != null ? Math.max(0, forced | 0) : count != null ? Math.max(0, count | 0) : Math.max(0, Math.min(hc - 1, 8));
+    const n = forced != null ? Math.max(0, forced | 0) : Math.max(0, Math.min(hc - 1, 8));
     if (n < 1 || typeof Worker !== 'function') return null;
-    const workers = [], pending = new Map();
-    let nextId = 1;
+    const pct = capPct(maxCpuPct);
+    const workers = [], queue = [];
+    let nextId = 1, closed = false;
+    // hand queued jobs to the workers that are neither working, idling nor dead
+    const dispatch = function () {
+        workers.forEach(function (w) {
+            if (w.job || w.idle || w.dead || !queue.length) return;
+            const job = w.job = queue.shift();
+            job.id = nextId++;
+            w.from = performance.now();
+            if (clock) clock.begin(w);
+            w.worker.postMessage({ id: job.id, image: job.image, crops: job.crops }, [job.image]);
+            job.image = null;
+        });
+        if (queue.length && workers.every(function (w) { return w.dead; })) {
+            queue.splice(0).forEach(function (j) { if (j.image && j.image.close) j.image.close(); j.reject(new Error('no crop worker is running')); });
+        }
+    };
     const pool = {
         broken: false,
         run: function (image, crops) {
-            const w = workers.reduce(function (a, b) { return b.load < a.load ? b : a; });
-            const id = nextId++;
-            w.load++;
-            if (clock) clock.begin(w);
+            if (closed) return Promise.reject(new Error('crop pool closed'));
             return new Promise(function (resolve, reject) {
-                pending.set(id, { resolve: resolve, reject: reject, w: w });
-                w.worker.postMessage({ id: id, image: image, crops: crops }, [image]);
+                queue.push({ image: image, crops: crops, resolve: resolve, reject: reject });
+                dispatch();
             });
         },
         terminate: function () {
-            workers.forEach(function (w) { if (clock) clock.close(w); w.worker.terminate(); });
-            pending.forEach(function (p) { p.reject(new Error('crop pool closed')); });
-            pending.clear();
+            closed = true;
+            const err = new Error('crop pool closed');
+            workers.forEach(function (w) {
+                if (clock) clock.close(w);
+                clearTimeout(w.idle); w.idle = null;
+                w.worker.terminate();
+                if (w.job) { w.job.reject(err); w.job = null; }
+            });
+            queue.splice(0).forEach(function (j) { if (j.image && j.image.close) j.image.close(); j.reject(err); });
         },
     };
     const fail = function (w, msg) {
         pool.broken = true;
+        w.dead = true;
         if (clock) clock.close(w);
-        pending.forEach(function (p, id) { if (p.w === w) { pending.delete(id); p.reject(new Error(msg)); } });
+        if (w.job) { w.job.reject(new Error(msg)); w.job = null; }
+        dispatch();
     };
     try {
         for (let i = 0; i < n; i++) {
-            const w = { worker: new Worker(new URL('./image-crop-worker.js', import.meta.url), { type: 'module' }), load: 0 };
+            const w = { worker: new Worker(new URL('./image-crop-worker.js', import.meta.url), { type: 'module' }),
+                        job: null, idle: null, dead: false, from: 0 };
             w.worker.onmessage = function (e) {
-                const p = pending.get(e.data.id); if (!p) return;
-                pending.delete(e.data.id); w.load--;
+                const job = w.job;
+                if (!job || job.id !== e.data.id) return;
+                w.job = null;
                 if (clock) clock.end(w);
-                if (e.data.error) p.reject(new Error(e.data.error)); else p.resolve(e.data.tensors);
+                if (e.data.error) job.reject(new Error(e.data.error)); else job.resolve(e.data.tensors);
+                const rest = paceRestMs(performance.now() - w.from, pct);
+                if (rest > 0) w.idle = setTimeout(function () { w.idle = null; dispatch(); }, rest);
+                dispatch();
             };
             w.worker.onerror = function (e) { e.preventDefault(); fail(w, 'crop worker failed: ' + (e.message || 'error')); };
             workers.push(w);
@@ -1123,8 +1144,8 @@ function assembleItems(nItems, entries, cams) {
  * @param {{onStatus?: function(string), maxViewsPerAnimal?: number, webnn?: boolean|'force',
  *          device?: 'auto'|'webgpu'|'cpu', cpuWorkers?: number, cache?: boolean, model?: function,
  *          maxGpuPct?: number, maxCpuPct?: number}} [opts]
- *   `maxGpuPct` / `maxCpuPct`: the compute caps (%, IMAGE_CAP_MIN..100; default 100 = uncapped) — see
- *   paceRestMs and imageCheckThreads. `opts.cpuWorkers` still overrides the model-worker count.
+ *   `maxGpuPct` / `maxCpuPct`: the compute caps (%, IMAGE_CAP_MIN..100; default 100 = uncapped) — the
+ *   share of the GPU's / each CPU thread's time, see paceRestMs.
  * @returns {Promise<{getEmbeddings: function, prepareFrames: function, releaseFrames: function, backend: function,
  *          device: function, busyMs: function, cpuBusyMs: function, sampleCrops: function, views: string[]}>}
  */
@@ -1142,15 +1163,15 @@ export async function createImageEmbedder(session, opts) {
     let T = null, model = null, device = null, dtype = 'fp32', adapter = where.adapter, cpu = null, cpuWorkers = 0;
     // the CPU threads' busy time (cpuBusyMs): crop workers, CPU model workers, and crops cut on the main thread
     const cpuClock = createBusyClock();
-    // the compute caps (imageCheckThreads, paceRestMs): the user's share of the GPU and the CPU
+    // the compute caps (paceRestMs): the user's share of the GPU's time and of the CPU's
     const maxGpuPct = capPct(opts.maxGpuPct), maxCpuPct = capPct(opts.maxCpuPct);
-    const nav = typeof navigator !== 'undefined' ? navigator : {};
-    const threads = imageCheckThreads(nav.hardwareConcurrency, nav.deviceMemory, maxCpuPct, where.kind === 'cpu');
     if (where.kind === 'webgpu') ({ T, model, device, dtype, adapter } = await loadImageModel(opts.onStatus));
     else if (testModel) dtype = null;
     else {
         if (opts.onStatus) opts.onStatus('No GPU (' + where.why + ') — loading the image model to run on the CPU (' + 2 * IMAGE_MODEL_MB + ' MB on first use, cached afterwards)…');
-        cpu = await createCpuModelPool(opts.cpuWorkers > 0 ? Math.floor(opts.cpuWorkers) : threads.model, opts.onStatus, cpuClock);
+        const nav = typeof navigator !== 'undefined' ? navigator : {};
+        cpu = await createCpuModelPool(opts.cpuWorkers > 0 ? Math.floor(opts.cpuWorkers) : cpuModelWorkerCount(nav.hardwareConcurrency, nav.deviceMemory),
+                                       opts.onStatus, cpuClock);
         cpuWorkers = cpu.size;
     }
     // WebNN (opt-in, experimental): embed the first frames on both backends, then keep the faster consistent one
@@ -1288,9 +1309,12 @@ export async function createImageEmbedder(session, opts) {
     };
     // ---- Batching (createModelQueue): with the check keeping EMBED_IN_FLIGHT frames in flight, the GPU gets
     // the next batch as soon as it finishes one instead of waiting on one frame's decode + crop. The GPU cap
-    // idles after each full batch; on the CPU path the cap is the thread count instead. Each frame's
-    // vectors come back tagged with the model that made them (`tag`), which the cache stores them under.
-    const modelQueue = createModelQueue(embed, SZ, tm, { maxBatch: EMBED_MAX_BATCH, maxGpuPct: cpu ? 100 : maxGpuPct });
+    // idles after each full batch; on the CPU path the CPU cap does, after batches of CPU_CAP_CROPS_PER_WORKER
+    // crops a worker. Each frame's vectors come back tagged with the model that made them (`tag`), which
+    // the cache stores them under.
+    const modelQueue = createModelQueue(embed, SZ, tm, cpu
+        ? { maxBatch: maxCpuPct < 100 ? Math.min(EMBED_MAX_BATCH, CPU_CAP_CROPS_PER_WORKER * cpuWorkers) : EMBED_MAX_BATCH, maxPct: maxCpuPct }
+        : { maxBatch: EMBED_MAX_BATCH, maxPct: maxGpuPct });
     const enqueue = modelQueue.enqueue;
     // A view's keyframes (null: off or unknown). opts.keyframes may be a function (decoder -> keyframe indices):
     // a test / benchmark hook
@@ -1373,7 +1397,7 @@ export async function createImageEmbedder(session, opts) {
         };
         let tensors;
         try {
-            if (jobs.length && !pool && pool !== null) pool = createCropPool(cpuClock, threads.crop);
+            if (jobs.length && !pool && pool !== null) pool = createCropPool(cpuClock, maxCpuPct);
             tensors = await Promise.all(jobs.map(async function (job) {
                 if (!pool || pool.broken) return inline(job);
                 const im = images[job.vi];
@@ -1446,7 +1470,7 @@ export async function createImageEmbedder(session, opts) {
             const t = summarizeEmbedTiming(tm, backend, backend === 'webnn' ? 'fp16' : dtype);
             t.keyframes = summarizeKeyframePlans(plans);
             t.maxGpuPct = cpu ? null : maxGpuPct; t.restS = tm.restMs / 1000;
-            t.maxCpuPct = maxCpuPct; t.threads = (cpu ? cpuWorkers : 0) + threads.crop; t.cores = threads.cores;
+            t.maxCpuPct = maxCpuPct;
             if (cpu) t.workers = cpuWorkers;
             return t;
         },

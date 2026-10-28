@@ -127,8 +127,8 @@ try {
             imageOptions: [...m.querySelectorAll('.track-setup-options .settings-kbd-label, .track-setup-options .track-setup-switch-row')]
                 .map(e => e.textContent.trim()),
             gpuTime: (m.querySelector('input[data-setting="imageCheckGpuTimePct"]') || {}).value,
-            cpuCores: (m.querySelector('input[data-setting="imageCheckCpuCoresPct"]') || {}).value,
-            cpuNote: ((m.querySelector('input[data-setting="imageCheckCpuCoresPct"]') || {}).parentElement?.querySelector('.settings-threshold-note') || {}).textContent,
+            cpuTime: (m.querySelector('input[data-setting="imageCheckCpuTimePct"]') || {}).value,
+            notes: m.querySelectorAll('.settings-threshold-note').length,
             rows: [...m.querySelectorAll('.track-setup-weights .settings-node-weight-row')].map(r => ({
                 name: r.querySelector('.settings-kbd-label').textContent,
                 value: r.querySelector('input').value,
@@ -146,7 +146,7 @@ try {
             identities: s.session.identities.length,
             dirty: s.isDirty === true,
             weights: settings.getNodeWeights(),
-            image: ['autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckGpuTimePct', 'imageCheckCpuCoresPct', 'imageCheckWebNN']
+            image: ['autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckGpuTimePct', 'imageCheckCpuTimePct', 'imageCheckWebNN']
                 .map(id => settings.getTrackingThreshold(id)),
             status: document.getElementById('statusText').textContent,
             summary: !!document.getElementById('trackSummaryOverlay'),
@@ -177,24 +177,24 @@ try {
     await page.click(imageSwitch);
     d = await dialog();
     check(d.imageSwitch === true && d.imageOptionsShown &&
-        JSON.stringify(d.imageOptions) === JSON.stringify(['Flag threshold', 'Crops per second', 'Views per animal', 'GPU time (%)', 'CPU cores (%)', 'Try WebNN (experimental)']),
+        JSON.stringify(d.imageOptions) === JSON.stringify(['Flag threshold', 'Crops per second', 'Views per animal', 'GPU time (%)', 'CPU time (%)', 'Try WebNN (experimental)']),
         `switching it on shows its six options (${d.imageOptions.join(', ')})`);
-    check(d.gpuTime === '80' && d.cpuCores === '80' && /^\d+ of \d+ cores$/.test(d.cpuNote || ''),
-        `the two caps read as whole percentages (${d.gpuTime}, ${d.cpuCores}), the CPU one with what it means here ("${d.cpuNote}")`);
+    check(d.gpuTime === '80' && d.cpuTime === '80' && d.notes === 0,
+        `the two caps read as whole percentages (${d.gpuTime}, ${d.cpuTime}), with no "N of C cores" note`);
     {
-        // GPU time and CPU cores share a row, Try WebNN starts the row under them; each cap has a short ⓘ
+        // GPU time and CPU time share a row, Try WebNN starts the row under them; each cap has a short ⓘ
         const lay = await page.evaluate(() => {
             const row = id => document.querySelector(`.track-setup-modal .settings-node-weight-row[data-row="${id}"]`).getBoundingClientRect();
-            const g = row('imageCheckGpuTimePct'), c = row('imageCheckCpuCoresPct'), w = row('imageCheckWebNN');
+            const g = row('imageCheckGpuTimePct'), c = row('imageCheckCpuTimePct'), w = row('imageCheckWebNN');
             const tips = [...document.querySelectorAll('.track-setup-modal .track-setup-options [data-infotip]')].map(e => e.dataset.infotip);
-            const cpuLabel = document.querySelector('.track-setup-modal .settings-node-weight-row[data-row="imageCheckCpuCoresPct"] .settings-kbd-label');
+            const cpuLabel = document.querySelector('.track-setup-modal .settings-node-weight-row[data-row="imageCheckCpuTimePct"] .settings-kbd-label');
             return { sameRow: Math.abs(g.top - c.top) < 1 && c.left > g.left, webnnBelow: w.top >= g.bottom - 1 && Math.abs(w.left - g.left) < 1,
                      tips, cpuLabelWhole: cpuLabel.scrollWidth <= cpuLabel.clientWidth, cpuLabelTitle: cpuLabel.hasAttribute('title') };
         });
-        check(lay.sameRow && lay.webnnBelow, 'GPU time and CPU cores sit on one row, Try WebNN on the row under them');
+        check(lay.sameRow && lay.webnnBelow, 'GPU time and CPU time sit on one row, Try WebNN on the row under them');
         check(lay.tips.length === 2 && lay.tips.every(t => t.length <= 80 && /GPU|CPU/.test(t)) && !lay.cpuLabelTitle,
             `each cap has a short ⓘ instead of a native tooltip (${JSON.stringify(lay.tips)})`);
-        check(lay.cpuLabelWhole, '"CPU cores (%)" is shown whole, not cut off by its note');
+        check(lay.cpuLabelWhole, '"CPU time (%)" is shown whole');
         const btn = page.locator('.track-setup-modal .settings-node-weight-row[data-row="imageCheckGpuTimePct"] .info-tip-btn');
         const bb = await btn.boundingBox();
         await page.mouse.move(bb.x + bb.width / 2, bb.y + bb.height / 2);

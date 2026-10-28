@@ -1716,8 +1716,7 @@ body {
   grid-column-start: 1;
 }
 
-/* A label, its ⓘ and its note, together on the left of the row. The label keeps
-   its full width; the note is what gives way when the cell is narrow. */
+/* A label and its ⓘ, together on the left of the row; the label keeps its full width. */
 .track-setup-option-head {
   display: flex;
   align-items: center;
@@ -1727,13 +1726,6 @@ body {
 
 .track-setup-option-head .settings-kbd-label {
   flex: none;
-}
-
-.track-setup-option-head .settings-threshold-note {
-  margin-left: 4px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* An ⓘ outside the plane panel: the same look as .plane-pin-info. */
@@ -5172,25 +5164,6 @@ kbd {
   font-size: 11px;
   color: var(--text-muted);
   margin-top: 2px;
-}
-
-/* What a setting's value means on this machine ("5 of 10 cores"): beside its field in
-   the Track dialogs' compact grid, under it in the Wizard (.settings-threshold-field),
-   so the Wizard's fields stay in one column. */
-.settings-threshold-note {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-left: 8px;
-  white-space: nowrap;
-}
-.settings-threshold-field {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 3px;
-}
-.settings-threshold-field .settings-threshold-note {
-  margin-left: 0;
 }
 
 /* Tracking Wizard ▸ what the detection filters would remove

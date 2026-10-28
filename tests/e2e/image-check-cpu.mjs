@@ -21,9 +21,10 @@
  *     embeds frames, shows a real sample crop and a measured CPU line with the CPU
  *     alone in the load graph, and cancels. (The sample crops are
  *     also checked bit for bit against the inputs embedded, under 2-4.)
- *  6. The CPU cap (`maxCpuPct`, ui/image-embedder.js `imageCheckThreads`): at 50%
- *     the check runs the reduced model + crop worker count, never rests, and its
- *     summary says so. (The GPU cap's queue: tests/test-image-compute-caps.mjs.)
+ *  6. The CPU cap (`maxCpuPct`, a duty cycle — ui/image-embedder.js `paceRestMs`): at
+ *     50% the same workers run, in smaller batches, each followed by an idle as long
+ *     as it ran, and the summary says so. (The crop pool's pacing and the GPU cap's
+ *     queue: tests/test-image-compute-caps.mjs.)
  *
  * Run: node tests/e2e/image-check-cpu.mjs   (downloads the ~88 MB fp32 model)
  */
@@ -187,24 +188,28 @@ try {
     check(emb.samples.length === 4 && emb.samples.every(c => c.same) && new Set(emb.samples.map(c => c.id + c.camera)).size === 4,
           `one sample crop per frame, each bit-identical to the input embedded, rotating animal/camera (${emb.samples.map(c => 'f' + c.frame + ' id' + c.id + ' ' + c.camera).join(', ')})`);
 
-    // ---- 6. the CPU cap (imageCheckThreads, `imageCheckCpuCoresPct`): fewer threads, all working, never resting
+    // ---- 6. the CPU cap (`imageCheckCpuTimePct`): a duty cycle — the same workers, each idling after its work
     check(!/capped/.test(emb.timing), 'with no caps given the embedder is uncapped (nothing capped in its summary)');
     const capped = await page.evaluate(async () => {
         const E = await import('/ui/image-embedder.js'), AS = await import('/ui/app-state.js');
         const session = AS.state.session, itemsAt = (f) => session.instanceGroups.get(f).map((g, k) => ({ k, group: g }));
-        const want = E.imageCheckThreads(navigator.hardwareConcurrency, navigator.deviceMemory, 50, true);
-        const e = await E.createImageEmbedder(session, { maxViewsPerAnimal: 0, maxCpuPct: 50, maxGpuPct: 50 });
+        // the GPU cap is 10% here: on the CPU path it must do nothing, so the idle measured is the CPU cap's
+        const e = await E.createImageEmbedder(session, { cpuWorkers: 2, maxViewsPerAnimal: 0, maxCpuPct: 50, maxGpuPct: 10 });
         const device = e.device();
         await Promise.all([0, 4, 8, 12].map(f => e.getEmbeddings(f, itemsAt(f))));
         e.releaseFrames();
         const s = e.stats();
-        return { want, device, s, timing: E.formatEmbedTiming(s), cores: navigator.hardwareConcurrency };
+        return { device, s, timing: E.formatEmbedTiming(s), perWorker: E.CPU_CAP_CROPS_PER_WORKER };
     });
-    check(capped.device.workers === capped.want.model && capped.s.threads === capped.want.model + capped.want.crop,
-          `a 50% CPU cap on ${capped.cores} cores runs ${capped.want.model} model + ${capped.want.crop} crop workers (${capped.s.threads} threads)`);
-    check(capped.s.restS === 0 && capped.s.maxGpuPct === null,
-          `…and on the CPU path the GPU cap does nothing: no idle time (${capped.s.restS} s)`);
-    check(new RegExp(' · CPU capped at ' + capped.s.threads + ' of ' + capped.cores + ' cores').test(capped.timing) && !/GPU time capped/.test(capped.timing),
+    check(capped.device.workers === 2, `a 50% CPU cap runs the workers asked for, not fewer (${capped.device.workers})`);
+    check(capped.s.maxBatch <= 2 * capped.perWorker && capped.s.batches >= 2,
+          `…in batches of at most ${capped.perWorker} crops a worker (${capped.s.batches} batches, the largest ${capped.s.maxBatch})`);
+    {
+        const busy = capped.s.submitMs, idle = capped.s.restS * 1000, duty = 100 * busy / (busy + idle);
+        check(duty > 35 && duty < 65,
+              `…each followed by an idle as long as it ran: model busy ${(busy / 1000).toFixed(1)} s, idle ${(idle / 1000).toFixed(1)} s (${duty.toFixed(0)}% duty, the GPU cap's 10% unused)`);
+    }
+    check(/ · CPU time capped at 50%/.test(capped.timing) && !/GPU time capped/.test(capped.timing),
           `the summary reports the CPU cap alone: "${capped.timing}"`);
 
     // ---- 5. the real dialog, nothing injected: runs on the CPU instead of refusing

@@ -422,10 +422,11 @@ const TRACKING_THRESHOLDS = [
         tip: 'Fraction of GPU time to run image check, idling the remaining time.',
     },
     {
-        id: 'imageCheckCpuCoresPct', label: 'Image check: CPU cores (%)', default: 80,
-        min: 1, max: 100, step: 1, note: cpuCoresNote,
-        desc: 'The share of this computer\'s cores the image check may use; the rest are left for other apps.',
-        tip: 'Fraction of CPU cores to run image check, the remaining cores are left free.',
+        // a new id again: the unreleased imageCheckCpuCoresPct capped the thread count, not the time
+        id: 'imageCheckCpuTimePct', label: 'Image check: CPU time (%)', default: 80,
+        min: 1, max: 100, step: 1,
+        desc: 'The share of time each of the image check\'s CPU threads may run; the rest is left for other apps.',
+        tip: 'Fraction of CPU time to run image check, idling the remaining time.',
     },
     {
         id: 'imageCheckWebNN', label: 'Image check: try WebNN (experimental)', default: 0,
@@ -438,18 +439,6 @@ const TRACKING_THRESHOLDS = [
         desc: 'Robust triangulation: after an initial 3D solve, drop any 2D node whose reprojection error in a view exceeds this many pixels, then re-triangulate that node from the remaining reliable views. A node left with fewer than 2 reliable views is dropped from 3D. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless.',
     },
 ];
-
-/**
- * What an `imageCheckCpuCoresPct` value (a percentage) means on this machine, for
- * the note beside its field: "5 of 10 cores" — floor(cores x pct / 100), at least
- * one, the budget ui/image-embedder.js `imageCheckThreads` gives the check.
- */
-export function cpuCoresNote(pct, cores) {
-    const c = cores > 0 ? cores : (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 0;
-    const v = Number(pct);
-    if (!(c > 0) || !isFinite(v)) return '';
-    return Math.max(1, Math.floor(c * Math.min(100, Math.max(0, v)) / 100)) + ' of ' + c + ' cores';
-}
 
 /** A setting's value as its field shows it: `decimals` places when the setting has them (0.50), else as is. */
 export function formatThresholdValue(def, v) {
@@ -469,7 +458,7 @@ const WIZARD_THRESHOLD_IDS = new Set([
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
     'stale', 'matchGate', 'maxPenalty', 'matchReproj',
     'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz', 'imageCheckMaxViews',
-    'imageCheckGpuTimePct', 'imageCheckCpuCoresPct', 'imageCheckWebNN',
+    'imageCheckGpuTimePct', 'imageCheckCpuTimePct', 'imageCheckWebNN',
     'reprojErrorThreshold',
 ]);
 
@@ -481,7 +470,7 @@ const WIZARD_THRESHOLD_IDS = new Set([
  */
 export const ID_SWITCH_SETTING_IDS = [
     'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz',
-    'imageCheckMaxViews', 'imageCheckGpuTimePct', 'imageCheckCpuCoresPct', 'imageCheckWebNN',
+    'imageCheckMaxViews', 'imageCheckGpuTimePct', 'imageCheckCpuTimePct', 'imageCheckWebNN',
 ];
 
 // Clamp a value to a threshold's [min, max] range, or null if not a number.
@@ -503,7 +492,7 @@ export function getTrackingThresholdDefs() {
             id: t.id, label: t.label, default: t.default,
             value: getTrackingThreshold(t.id),
             min: t.min, max: t.max, step: t.step, desc: t.desc, kind: t.kind || 'number',
-            decimals: t.decimals || 0, note: t.note || null, tip: t.tip || '',
+            decimals: t.decimals || 0, tip: t.tip || '',
         };
     });
 }

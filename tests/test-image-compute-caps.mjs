@@ -1,13 +1,14 @@
 /**
  * test-image-compute-caps.mjs — the image ID-switch check's two compute caps
- * (ui/image-embedder.js; settings `imageCheckGpuTimePct`, `imageCheckCpuCoresPct`:
- * whole percentages 1-100, both 80 by default). The share of the GPU and of the CPU the check may take is the
- * user's to set, and held even when nothing else wants the rest:
- *  - GPU: full batches and an idle after each run (`paceRestMs`), so
- *    busy / (busy + idle) = the cap;
- *  - CPU: fewer worker threads (`imageCheckThreads`), all kept working.
- * The queue that applies the GPU cap (`createModelQueue`) is driven here with a
- * fake model, since headless runs have no GPU. The CPU cap on the real model:
+ * (ui/image-embedder.js; settings `imageCheckGpuTimePct`, `imageCheckCpuTimePct`:
+ * whole percentages 1-100, both 80 by default). The share of the GPU's and of the CPU's time the check may
+ * take is the user's to set, and held even when nothing else wants the rest. Both are a duty cycle
+ * (`paceRestMs`): busy / (busy + idle) = the cap.
+ *  - GPU: full batches and an idle after each run (`createModelQueue`);
+ *  - CPU: every crop worker idles after each job (`createCropPool`), and on the CPU
+ *    path the model workers after each (smaller) batch (`createModelQueue` again).
+ * The queue and the pool are driven here with a fake model and a fake Worker, since
+ * Node has neither a GPU nor workers. The CPU cap on the real model:
  * tests/e2e/image-check-cpu.mjs §6.
  *
  * Run:  node tests/test-image-compute-caps.mjs
@@ -19,9 +20,9 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ui = (f) => pathToFileURL(path.join(HERE, '..', 'ui', f)).href;
 globalThis.window = globalThis;
 const E = await import(ui('image-embedder.js'));
-const { capPct, paceRestMs, imageCheckThreads, createModelQueue, cpuModelWorkerCount,
+const { capPct, paceRestMs, createModelQueue, createCropPool, CPU_CAP_CROPS_PER_WORKER,
         IMAGE_CAP_MIN, EMBED_MAX_BATCH, formatEmbedTiming } = E;
-const { getTrackingThresholdDefs, cpuCoresNote, formatThresholdValue } = await import(ui('settings.js'));
+const { getTrackingThresholdDefs, formatThresholdValue } = await import(ui('settings.js'));
 const { IMAGE_CHECK_IDS } = await import(ui('track-setup-modal.js'));
 
 let passed = 0, failed = 0; const failures = [];
@@ -42,9 +43,14 @@ ok(!('gpuMaxBatch' in E), 'batches no longer shrink with the GPU cap (no gpuMaxB
 {
     // the embedder hands the queue full batches whatever the cap (source check: there is no GPU here to run it on)
     const src = (await import('node:fs')).readFileSync(path.join(HERE, '..', 'ui', 'image-embedder.js'), 'utf8');
-    ok(/createModelQueue\(embed, SZ, tm, \{ maxBatch: EMBED_MAX_BATCH, maxGpuPct: cpu \? 100 : maxGpuPct \}\)/.test(src),
-        'createImageEmbedder gives the queue EMBED_MAX_BATCH on the GPU path too');
+    ok(/: \{ maxBatch: EMBED_MAX_BATCH, maxPct: maxGpuPct \}\);/.test(src),
+        'createImageEmbedder gives the queue EMBED_MAX_BATCH on the GPU path, paced by the GPU cap');
+    ok(/\? \{ maxBatch: maxCpuPct < 100 \? Math\.min\(EMBED_MAX_BATCH, CPU_CAP_CROPS_PER_WORKER \* cpuWorkers\) : EMBED_MAX_BATCH, maxPct: maxCpuPct \}/.test(src),
+        'on the CPU path the queue is paced by the CPU cap, in batches of CPU_CAP_CROPS_PER_WORKER a worker while capped');
+    ok(/createCropPool\(cpuClock, maxCpuPct\)/.test(src), 'the crop pool is paced by the CPU cap');
+    ok(CPU_CAP_CROPS_PER_WORKER === 4, 'a capped CPU model worker takes 4 crops a run');
 }
+ok(!('imageCheckThreads' in E), 'the thread-count cap is gone (imageCheckThreads)');
 
 // ---- GPU, part 2: busy / (busy + rest) = the cap -----------------------------
 for (const pct of [10, 25, 50, 75, 90]) {
@@ -56,27 +62,87 @@ ok(paceRestMs(0, 50) === 0 && paceRestMs(NaN, 50) === 0, 'a zero / NaN run rests
 ok(near(paceRestMs(100, 1), 9900), '1%: a 99x idle');
 ok(near(paceRestMs(100, 0.5), 9900), 'below 1% holds at 1%');
 
-// ---- CPU: fewer threads, never more than uncapped --------------------------
-{
-    const up = imageCheckThreads(10, 8, 100, false), uc = imageCheckThreads(10, 8, 100, true);
-    ok(up.model === 0 && up.crop === 8, `100%, GPU path, 10 cores: 8 crop workers, as before (${JSON.stringify(up)})`);
-    ok(uc.model === cpuModelWorkerCount(10, 8) && uc.crop === 8, `100%, CPU path: cpuModelWorkerCount's ${uc.model} model workers + 8 crop, as before`);
-    const g = imageCheckThreads(10, 8, 50, false), c = imageCheckThreads(10, 8, 50, true);
-    ok(g.budget === 5 && g.model === 0 && g.crop === 5, `50%, GPU path, 10 cores: 5 crop workers (${JSON.stringify(g)})`);
-    ok(c.budget === 5 && c.model === 4 && c.crop === 1, `50%, CPU path, 10 cores: 4 model + 1 crop = 5 threads (${JSON.stringify(c)})`);
-    const c16 = imageCheckThreads(16, 8, 25, true);
-    ok(c16.model + c16.crop === 4 && c16.model === 3, `25%, CPU path, 16 cores: 4 threads, 3 for the model (${JSON.stringify(c16)})`);
-    const small = imageCheckThreads(2, 4, 10, true);
-    ok(small.model === 1 && small.crop === 1, `10% of 2 cores still runs one model and one crop worker (${JSON.stringify(small)})`);
-    const mem = imageCheckThreads(32, 4, 100, true);
-    ok(mem.model === cpuModelWorkerCount(32, 4) && mem.model <= 2, `memory still bounds the model workers (4 GB -> ${mem.model})`);
-    let never = true;
-    for (const cores of [2, 4, 8, 12, 16, 24]) for (const pct of [10, 25, 50, 75, 100]) for (const onCpu of [false, true]) {
-        const t = imageCheckThreads(cores, 8, pct, onCpu), u = imageCheckThreads(cores, 8, 100, onCpu);
-        if (t.model > u.model || t.crop > u.crop) never = false;
+// ---- CPU: each crop worker idles after each job --------------------------------
+// A fake crop worker: answers each job after JOB_MS, and records how many jobs it held at once
+// and when each ran, so the pool's pacing can be read back per worker.
+const JOB_MS = 40;
+const fakeWorkers = [];
+globalThis.Worker = class {
+    constructor() { this.held = 0; this.maxHeld = 0; this.runs = []; this.dead = false; fakeWorkers.push(this); }
+    postMessage(m) {
+        this.held++; this.maxHeld = Math.max(this.maxHeld, this.held);
+        const from = performance.now();
+        setTimeout(() => {
+            if (this.dead) return;
+            this.held--; this.runs.push([from, performance.now()]);
+            this.onmessage({ data: { id: m.id, tensors: m.crops.map(c => new Float32Array([c])) } });
+        }, JOB_MS);
     }
-    ok(never, 'a cap never runs MORE threads than uncapped, for any core count');
+    terminate() { this.dead = true; }
+};
+const cropRun = async (pct, workers, jobs) => {
+    fakeWorkers.length = 0;
+    window.LUCID_CROP_WORKERS = workers;
+    const pool = createCropPool(null, pct);
+    const t0 = performance.now();
+    const outs = await Promise.all(Array.from({ length: jobs }, (_, j) => pool.run({ close() {} }, [j])));
+    const wall = performance.now() - t0;
+    pool.terminate();
+    return { outs, wall, ws: fakeWorkers.slice() };
+};
+{
+    const u = await cropRun(100, 2, 8);
+    ok(u.outs.every((o, j) => o.length === 1 && o[0][0] === j), 'every crop job comes back with its own tensors');
+    ok(u.ws.every(w => w.maxHeld === 1), 'a worker holds one job at a time (the queue is the pool\'s)');
+    ok(u.ws.every(w => w.runs.length === 4), `the jobs are shared out over the workers (${u.ws.map(w => w.runs.length).join(', ')})`);
+    ok(u.wall < 4 * JOB_MS * 1.6, `at 100% no worker idles: 8 jobs on 2 workers took ${Math.round(u.wall)} ms (~${4 * JOB_MS} ms of work each)`);
+    const h = await cropRun(50, 2, 8);
+    // each worker: 4 runs and the 3 idles between them, each as long as a run
+    let duty = true;
+    h.ws.forEach(w => {
+        for (let i = 1; i < w.runs.length; i++) {
+            const run = w.runs[i - 1][1] - w.runs[i - 1][0], idle = w.runs[i][0] - w.runs[i - 1][1];
+            if (idle < 0.8 * run || idle > 2 * run) duty = false;
+        }
+    });
+    ok(duty, 'at 50% each worker idles about as long as its last job ran, before the next');
+    ok(h.wall >= 7 * JOB_MS * 0.9, `…so the same jobs took about twice as long: ${Math.round(h.wall)} ms vs ${Math.round(u.wall)} ms`);
+    ok(h.ws.length === u.ws.length, 'and the cap runs as many workers as uncapped: every thread works part of the time');
 }
+{
+    // terminate: queued jobs are rejected (their images closed), an idling worker never picks one up again
+    fakeWorkers.length = 0;
+    window.LUCID_CROP_WORKERS = 1;
+    const pool = createCropPool(null, 10);              // a 9x idle after each job
+    let closed = 0;
+    const img = () => ({ close() { closed++; } });
+    const first = pool.run(img(), [0]), queued = pool.run(img(), [1]);
+    await first;                                        // the worker is idling now, with one job queued
+    pool.terminate();
+    let rejected = false;
+    await queued.catch(() => { rejected = true; });
+    ok(rejected && closed === 1, 'terminate rejects a job still queued and closes its image');
+    await sleep(JOB_MS * 2);
+    ok(fakeWorkers[0].runs.length === 1, 'a terminated pool starts nothing once its worker\'s idle ends');
+    let late = false;
+    await pool.run(img(), [2]).catch(() => { late = true; });
+    ok(late, 'a terminated pool rejects new jobs');
+}
+{
+    // a worker that fails: its job is rejected, the pool is `broken`, the others finish the queue
+    fakeWorkers.length = 0;
+    window.LUCID_CROP_WORKERS = 2;
+    const pool = createCropPool(null, 100);
+    const jobs = Array.from({ length: 4 }, (_, j) => pool.run({ close() {} }, [j]).then(() => 'ok', () => 'failed'));
+    fakeWorkers[0].dead = true;
+    fakeWorkers[0].onerror({ preventDefault() {}, message: 'boom' });
+    const res = await Promise.all(jobs);
+    ok(pool.broken && res.filter(r => r === 'failed').length === 1 && res.filter(r => r === 'ok').length === 3,
+        `a failed worker rejects only its own job; the other worker finishes the queue (${res.join(', ')})`);
+    pool.terminate();
+}
+delete globalThis.Worker;
+delete window.LUCID_CROP_WORKERS;
 
 // ---- the queue: batches at most maxBatch, and a rest equal to the run at 50% ----
 const fakeModel = (ms, log) => async (data, n) => { log.push(n); await sleep(ms); return Array.from({ length: n }, (_, i) => new Float32Array([data[i * 2]])); };
@@ -84,7 +150,7 @@ const crops = (k, tag) => Array.from({ length: k }, (_, i) => new Float32Array([
 const newTm = () => ({ queueMs: 0, batches: 0, maxBatch: 0, restMs: 0 });
 {
     const log = [], tm = newTm();
-    const q = createModelQueue(fakeModel(40, log), 2, tm, { maxBatch: 8, maxGpuPct: 50 });
+    const q = createModelQueue(fakeModel(40, log), 2, tm, { maxBatch: 8, maxPct: 50 });
     const t0 = performance.now();
     const outs = await Promise.all([q.enqueue(crops(5, 1)), q.enqueue(crops(5, 2)), q.enqueue(crops(20, 3))]);
     const wall = performance.now() - t0;
@@ -98,7 +164,7 @@ const newTm = () => ({ queueMs: 0, batches: 0, maxBatch: 0, restMs: 0 });
 }
 {
     const log = [], tm = newTm();
-    const q = createModelQueue(fakeModel(30, log), 2, tm, { maxBatch: EMBED_MAX_BATCH, maxGpuPct: 100 });
+    const q = createModelQueue(fakeModel(30, log), 2, tm, { maxBatch: EMBED_MAX_BATCH, maxPct: 100 });
     await Promise.all([q.enqueue(crops(5, 1)), q.enqueue(crops(5, 2)), q.enqueue(crops(5, 3))]);
     await sleep(60);
     ok(tm.restMs === 0, 'at 100% the queue never rests');
@@ -106,7 +172,7 @@ const newTm = () => ({ queueMs: 0, batches: 0, maxBatch: 0, restMs: 0 });
 }
 {
     const log = [], tm = newTm();
-    const q = createModelQueue(fakeModel(50, log), 2, tm, { maxBatch: 8, maxGpuPct: 10 });
+    const q = createModelQueue(fakeModel(50, log), 2, tm, { maxBatch: 8, maxPct: 10 });
     await q.enqueue(crops(4, 1));                       // runs, then a 9x rest (~450 ms)
     const queued = q.enqueue(crops(4, 2));
     await sleep(20);
@@ -117,39 +183,31 @@ const newTm = () => ({ queueMs: 0, batches: 0, maxBatch: 0, restMs: 0 });
     ok(settled < 200, `endRest ends a rest at once: work queued behind it finished ${Math.round(settled)} ms later (the rest was ~450 ms)`);
 }
 
-// ---- the settings: two caps as whole percentages 1-100, both 50 by default ----
+// ---- the settings: two caps as whole percentages 1-100, both 80 by default ----
 const defs = getTrackingThresholdDefs();
-for (const [id, label] of [['imageCheckGpuTimePct', 'Image check: GPU time (%)'], ['imageCheckCpuCoresPct', 'Image check: CPU cores (%)']]) {
+for (const [id, label, tip] of [['imageCheckGpuTimePct', 'Image check: GPU time (%)', 'Fraction of GPU time to run image check, idling the remaining time.'],
+                                ['imageCheckCpuTimePct', 'Image check: CPU time (%)', 'Fraction of CPU time to run image check, idling the remaining time.']]) {
     const d = defs.find(x => x.id === id);
     ok(!!d && d.label === label, `${id} is labelled "${d && d.label}"`);
+    ok(!!d && d.tip === tip, `${id}'s tip: "${d && d.tip}"`);
+    ok(!!d && !('note' in d), `${id} has no per-machine note (a duty cycle means the same on every machine)`);
     ok(!!d && d.default === 80 && d.value === 80 && d.min === IMAGE_CAP_MIN && d.max === 100 && d.step === 1 && !d.decimals,
         `${id}: default 80, whole numbers 1..100`);
     ok(!!d && formatThresholdValue(d, d.value) === '80' && formatThresholdValue(d, 100) === '100', `${id} reads "80" (and "100") in its field`);
     ok(IMAGE_CHECK_IDS.includes(id), `${id} is offered in the Track All / Track Frame Range dialogs`);
 }
-ok(!defs.some(d => ['imageCheckMaxGpu', 'imageCheckMaxCpu', 'imageCheckGpuTime', 'imageCheckCpuCores'].includes(d.id)),
-    'the earlier-scale ids are gone (a stored 0.5 cannot be read as 1%, nor a stored 50 as uncapped)');
+ok(!defs.some(d => ['imageCheckMaxGpu', 'imageCheckMaxCpu', 'imageCheckGpuTime', 'imageCheckCpuCores', 'imageCheckCpuCoresPct'].includes(d.id)),
+    'the earlier ids are gone (a stored 0.5 cannot be read as 1%, nor a share of the cores as a share of the time)');
 ok(formatThresholdValue(defs.find(d => d.id === 'imageCheckHz'), 2) === '2', 'a setting without `decimals` is shown as before');
-
-// ---- the CPU cap's note: what the fraction means on this machine -------------
-const cpuDef = defs.find(d => d.id === 'imageCheckCpuCoresPct');
-ok(typeof cpuDef.note === 'function' && !defs.find(d => d.id === 'imageCheckGpuTimePct').note, 'only the CPU cap carries a note');
-ok(cpuCoresNote(50, 10) === '5 of 10 cores' && cpuCoresNote(100, 10) === '10 of 10 cores' && cpuCoresNote(25, 12) === '3 of 12 cores',
-    `50 of 10 -> "${cpuCoresNote(50, 10)}", 100 of 10 -> "${cpuCoresNote(100, 10)}", 25 of 12 -> "${cpuCoresNote(25, 12)}"`);
-ok(cpuCoresNote(1, 2) === '1 of 2 cores' && cpuCoresNote(1, 16) === '1 of 16 cores', 'never fewer than 1 core');
-for (const cores of [2, 4, 8, 10, 12, 16]) for (const v of [1, 10, 25, 33, 50, 75, 99]) {
-    const n = Number(cpuCoresNote(v, cores).split(' ')[0]);
-    ok(n === imageCheckThreads(cores, 8, v, false).budget, `the note agrees with the embedder's budget (${v}% of ${cores}: ${n})`);
-}
 
 // ---- the run summary says what was capped ------------------------------------
 const t = { crops: 90, cropsPerS: 9, seconds: 10, gpuBusyPct: 50, batches: 5, avgBatch: 18, modelMsPerCrop: 80,
     decodeMsPerFrame: 1, cropMsPerFrame: 40, queueMsPerFrame: 900, backend: 'webgpu', dtype: 'fp16' };
-const both = formatEmbedTiming(Object.assign({}, t, { maxGpuPct: 50, restS: 4.6, maxCpuPct: 50, threads: 5, cores: 10 }));
-ok(/ · GPU time capped at 50% \(5 s idle\) · CPU capped at 5 of 10 cores$/.test(both), `both caps in the summary: "${both.slice(both.indexOf(' · GPU'))}"`);
-const cpuRun = formatEmbedTiming(Object.assign({}, t, { backend: 'cpu', workers: 4, maxGpuPct: null, maxCpuPct: 50, threads: 5, cores: 10 }));
-ok(!/GPU time capped/.test(cpuRun) && / · CPU capped at 5 of 10 cores$/.test(cpuRun), 'on the CPU path only the CPU cap is reported');
-ok(!/capped/.test(formatEmbedTiming(Object.assign({}, t, { maxGpuPct: 100, maxCpuPct: 100, threads: 8, cores: 10 }))), 'an uncapped run says nothing about caps');
+const both = formatEmbedTiming(Object.assign({}, t, { maxGpuPct: 50, restS: 4.6, maxCpuPct: 50 }));
+ok(/ · GPU time capped at 50% \(5 s idle\) · CPU time capped at 50%$/.test(both), `both caps in the summary: "${both.slice(both.indexOf(' · GPU'))}"`);
+const cpuRun = formatEmbedTiming(Object.assign({}, t, { backend: 'cpu', workers: 4, maxGpuPct: null, maxCpuPct: 50 }));
+ok(!/GPU time capped/.test(cpuRun) && / · CPU time capped at 50%$/.test(cpuRun), 'on the CPU path only the CPU cap is reported');
+ok(!/capped/.test(formatEmbedTiming(Object.assign({}, t, { maxGpuPct: 100, maxCpuPct: 100 }))), 'an uncapped run says nothing about caps');
 
 console.log(`\ntest-image-compute-caps: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.map(f => '  - ' + f).join('\n')); process.exit(1); }
