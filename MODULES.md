@@ -9001,7 +9001,8 @@ and a graph of both loads to their right (`hardware(cpu, gpu)` /
   `cropPointsToInput`'s keypoints) on the dialog's canvas only; the model input
   is untouched. It changes every `CROP_PREVIEW_MS` (400 ms), cycling through the
   embedder's `sampleCrops()` by TIME, since crops/s differs ~15x between GPU and
-  CPU. An embedder without `sampleCrops` shows no square.
+  CPU. An embedder without `sampleCrops` shows no square, nor does the
+  coat-brightness check, which shares the dialog but cuts no crops.
 
 The dialog's `finally` also calls the embedder's `releaseFrames` (idempotent):
 `checkImageSwitches` does too, but not when it fails before its first frame,
