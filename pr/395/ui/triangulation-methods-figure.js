@@ -1,5 +1,9 @@
 // ui/triangulation-methods-figure.js
-// The DLT-vs-Refined diagram under the Settings ▸ Default Triangulation choices.
+// The Settings ▸ Default Triangulation choice: two cards, DLT and Refined, each
+// a diagram of how that method works. Clicking a card picks the method; the
+// caller (`ui/settings-modal.js`) wires that up through each card's
+// `data-method` (`'dlt'` | `'ba'`). The cards are `role="radio"` in a
+// `radiogroup`, so the caller also handles Enter/Space.
 //
 // Two top-down sketches of the SAME three cameras and detections, one per
 // method: each camera's 2D detection (orange) on its image plane, the line of
@@ -75,6 +79,17 @@ var REFINED_SKETCH = sketch([148.4, 81.3], [[91.2, 97.9], [148.8, 108], null],
     '<text x="226" y="77" class="tm-note tm-note-stray">stray,</text>'
     + '<text x="226" y="88" class="tm-note tm-note-stray">left out</text>');
 
+/** One selectable card: indicator, name, tagline, sketch, caption. */
+function card(method, name, tagline, sketchSvg, caption) {
+    return '<div class="tri-methods-col tri-method-choice" data-method="' + method + '"'
+        + ' role="radio" aria-checked="false" tabindex="0">'
+        + '<div class="tri-methods-head"><span class="settings-radio"></span>'
+        + '<span class="tri-methods-name">' + name + '<small>' + tagline + '</small></span></div>'
+        + sketchSvg
+        + '<p>' + caption + '</p>'
+        + '</div>';
+}
+
 /**
  * Build the figure. Static markup; text is HTML so it wraps with the panel.
  * @returns {HTMLElement}
@@ -86,22 +101,17 @@ export function buildTriangulationMethodsFigure() {
         '<p class="tri-methods-lead">Both methods start the same way: each camera\'s 2D point is a line of sight, '
         + 'and the 3D point is where those lines meet. Real detections never meet exactly. Here the right-hand '
         + 'camera\'s 2D prediction is placed wrong: an outlier, marked stray.</p>'
-        + '<div class="tri-methods-cols">'
-        + '<div class="tri-methods-col">'
-        + '<div class="tri-methods-head">DLT <span>one direct solve</span></div>'
-        + DLT_SKETCH
-        + '<p>Solves one set of equations for the point that fits every line at once, treating every camera '
-        + 'alike. Fast, but an outlier pulls the answer, so every camera ends up a little off.</p>'
-        + '</div>'
-        + '<div class="tri-methods-col">'
-        + '<div class="tri-methods-head">Refined <span>= bundle adjustment</span></div>'
-        + REFINED_SKETCH
-        + '<p>Starts at the DLT point, projects it back into every camera and moves it to shrink the pixel '
-        + 'errors. A camera that disagrees a lot counts less; here the outlier is left out and the answer '
-        + 'fits the two cameras that agree. '
-        + 'Use it when one view\'s 2D prediction may be placed wrong. '
-        + 'The cameras stay fixed; only the point moves. Slower, and never a larger error than DLT.</p>'
-        + '</div>'
+        + '<div class="tri-methods-cols" role="radiogroup" aria-label="Default triangulation method">'
+        + card('dlt', 'Direct Linear Transformation (DLT)', 'one direct solve · fast', DLT_SKETCH,
+            'Solves one set of linear equations (algebraic least squares) for the point that fits every '
+            + 'line at once, treating every camera alike. Fast, but an outlier pulls the answer, so every '
+            + 'camera ends up a little off.')
+        + card('ba', 'Refined (Ref)', 'bundle adjustment · slower', REFINED_SKETCH,
+            'Bundle adjustment: starts at the DLT point, projects it back into every camera and moves it to '
+            + 'shrink the pixel errors. A camera that disagrees a lot counts less, so it copes better with '
+            + 'outliers; here the outlier is left out and the answer fits the two cameras that agree. Use it '
+            + 'when one view\'s 2D prediction may be placed wrong. The cameras stay fixed; only the point '
+            + 'moves. Slower, and never a larger error than DLT.')
         + '</div>'
         + '<div class="tri-methods-legend">'
         + '<span><i class="tm-key-det"></i>2D detection in that camera</span>'

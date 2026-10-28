@@ -4854,7 +4854,7 @@ kbd {
 
 .settings-nav-item {
   padding: 9px 18px;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-secondary);
   cursor: pointer;
   white-space: nowrap;
@@ -4887,29 +4887,12 @@ kbd {
 }
 
 .settings-panel-title {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text-muted);
   margin-bottom: 14px;
-}
-
-.settings-radio-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  margin-bottom: 10px;
-  cursor: pointer;
-  transition: background var(--transition-fast),
-    border-color var(--transition-fast);
-}
-
-.settings-radio-row:hover {
-  background: var(--bg-button);
 }
 
 .settings-radio {
@@ -4923,12 +4906,12 @@ kbd {
     background var(--transition-fast);
 }
 
-.settings-radio-row.checked .settings-radio {
+.tri-method-choice.checked .settings-radio {
   border-color: var(--accent);
   background: var(--accent);
 }
 
-.settings-radio-row.checked .settings-radio::after {
+.tri-method-choice.checked .settings-radio::after {
   content: '\2713';
   position: absolute;
   top: 50%;
@@ -4937,26 +4920,6 @@ kbd {
   color: #fff;
   font-size: 11px;
   line-height: 1;
-}
-
-.settings-radio-row.checked {
-  border-color: var(--accent);
-  background: var(--accent-dim);
-}
-
-.settings-radio-label {
-  display: flex;
-  flex-direction: column;
-}
-
-.settings-radio-title {
-  font-size: 13px;
-  color: var(--text-primary);
-}
-
-.settings-radio-desc {
-  font-size: 11px;
-  color: var(--text-muted);
 }
 
 .settings-kbd-row {
@@ -4981,7 +4944,7 @@ kbd {
   border-radius: 4px;
   background: var(--bg-button);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
   transition: border-color var(--transition-fast);
 }
@@ -5010,7 +4973,7 @@ kbd {
 
 /* Category subheader within the Keyboard Shortcuts list. */
 .settings-kbd-category {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -5024,7 +4987,7 @@ kbd {
 }
 
 .settings-kbd-hint {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-muted);
   margin-top: 12px;
 }
@@ -5100,7 +5063,7 @@ kbd {
 }
 
 .settings-section-count {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted, #888);
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
@@ -5155,12 +5118,12 @@ kbd {
 }
 
 .settings-threshold-title {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-primary);
 }
 
 .settings-threshold-desc {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-muted);
   margin-top: 2px;
 }
@@ -5302,6 +5265,16 @@ kbd {
   margin-top: 14px;
 }
 
+/* The Track setup modal shares these two classes at their smaller sizes;
+   the Settings window, which is wider, reads larger. */
+.settings-modal .settings-kbd-label {
+  font-size: 14px;
+}
+
+.settings-modal .settings-num-input {
+  font-size: 13px;
+}
+
 /* Settings ▸ Default Triangulation: the DLT-vs-Refined diagram
    (ui/triangulation-methods-figure.js). */
 .tri-methods {
@@ -5310,7 +5283,7 @@ kbd {
 
 .tri-methods-lead,
 .tri-methods-col p {
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1.5;
   color: var(--text-secondary);
   margin: 0;
@@ -5330,16 +5303,43 @@ kbd {
   background: var(--bg-primary);
 }
 
+/* Each card is the choice (Settings ▸ Default Triangulation). */
+.tri-method-choice {
+  cursor: pointer;
+  transition: background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.tri-method-choice:hover {
+  border-color: var(--border-light);
+}
+
+.tri-method-choice:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.tri-method-choice.checked {
+  border-color: var(--accent);
+  background: rgba(102, 126, 234, 0.12);
+}
+
 .tri-methods-head {
-  font-size: 12px;
-  font-weight: 600;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 14px;
   color: var(--text-primary);
 }
 
-.tri-methods-head span {
-  font-weight: 400;
+.tri-methods-head .settings-radio {
+  margin-top: 1px;
+}
+
+.tri-methods-name small {
+  display: block;
+  font-size: 12px;
   color: var(--text-muted);
-  margin-left: 4px;
 }
 
 .tri-methods-col svg {
@@ -5357,7 +5357,7 @@ kbd {
   flex-wrap: wrap;
   gap: 6px 16px;
   margin-top: 10px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted);
 }
 
