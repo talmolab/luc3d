@@ -11095,7 +11095,8 @@ same three cameras: each camera's 2D detection on its image plane, its line of
 sight, the 3D answer, where that answer lands back in each camera and the pixel
 error between the two. One camera's detection is a stray: DLT is pulled toward
 it and every camera ends up a little off; Refined starts at the DLT point and
-fits the two cameras that agree, leaving the stray one off. Captions are HTML
+fits the two cameras that agree; in this layout that ignores the stray camera
+entirely, so it gets no line, landing spot or error (a `null` landing). Captions are HTML
 so they wrap; the sketches are inline SVG coloured by theme variables
 (`.tri-methods` in `styles.css`).
 
