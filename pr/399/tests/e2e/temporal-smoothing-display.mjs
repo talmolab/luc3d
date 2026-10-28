@@ -20,7 +20,11 @@
  *      blue (`.active`) exactly while smoothing is applied; its menu lights
  *      only the scope last run (never both All frames and This frame);
  *      "This frame" runs one frame and is lit only where that frame is smoothed;
- *      an all-frames run shows the progress card.
+ *      an all-frames run shows the progress card;
+ *   F. the menu's Remove smoothing is greyed out while nothing is smoothed,
+ *      live once something is (but locked in Defining Plane Mode), and a
+ *      real click on it gives back the original 3D exactly, leaving the
+ *      smoothing settings as they were.
  *
  * Run: node tests/e2e/temporal-smoothing-display.mjs
  */
@@ -187,6 +191,8 @@ try {
     const same = (x, y) => x.length === y.length && x.every((v, i) => (Number.isNaN(v) && Number.isNaN(y[i])) || Math.abs(v - y[i]) < 1e-9);
     const raw = await snapshot();
     check(JSON.stringify(await blue()) === '[false,false]', 'E. before smoothing, the button is not blue');
+    const removeDisabled = () => page.evaluate(() => document.getElementById('tbSmoothRemove').disabled);
+    check(await removeDisabled() === true, 'F. before smoothing, Remove smoothing is greyed out');
     // Watch the progress card while an all-frames run goes (the pass is tiny
     // here, so record what the card showed rather than racing it).
     await page.evaluate(() => {
@@ -217,6 +223,34 @@ try {
     await smooth(3);
     check(same(nineThenThree, await snapshot()), 'E. window 9 then window 3 == window 3 alone (runs replace, never stack)');
     check(!same(nineThenThree, raw), 'E. precondition: window 3 changed the 3D');
+
+    // Remove smoothing, through the menu with the real mouse.
+    await blue();
+    check(await removeDisabled() === false, 'F. with smoothing applied, Remove smoothing is live');
+    const planeLock = (on) => page.evaluate(async ({ on, MID }) => {
+        const PD = await import('/ui/plane-definition.js');
+        PD.planeState.active = on;
+        (await import('/ui/rendering.js')).drawAllOverlays(MID);
+        PD.applyPlaneModeToolbarLock();
+        (await import('/ui/smoothing-button.js')).syncSmoothingButton();
+        return document.getElementById('tbSmoothRemove').disabled;
+    }, { on, MID });
+    check(await planeLock(true) === true, 'F. Defining Plane Mode locks Remove smoothing');
+    check(await planeLock(false) === false, 'F. ...and leaving it makes it live again');
+    await page.evaluate(() => { document.getElementById('statusText').textContent = ''; });
+    await page.hover('#tbSmooth');
+    await page.waitForTimeout(200);
+    await page.click('#tbSmoothRemove');
+    await waitStatus(/^Removed /);
+    const msgRemove = await page.evaluate(() => document.getElementById('statusText').textContent);
+    check(/^Removed temporal smoothing from [\d,]+ poses/.test(msgRemove), `F. Remove smoothing removes it ("${msgRemove}")`);
+    check(same(await snapshot(), raw), 'F. ...and gives back the original 3D exactly');
+    check(JSON.stringify(await blue()) === '[false,false]', 'F. ...the button is no longer blue');
+    check(await removeDisabled() === true, 'F. ...and Remove smoothing is greyed out again');
+    const keptWindow = await page.evaluate(async () =>
+        (await import('/ui/settings.js')).getSmoothingParams().smoothGaussianWindow);
+    check(keptWindow === 3, `F. the smoothing settings are left as they were (Gaussian ${keptWindow})`);
+    await page.mouse.move(700, 600);
 
     // "This frame" through its menu item: only that frame is written and lit.
     await smooth(0);
