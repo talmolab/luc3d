@@ -43,6 +43,7 @@ import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-sum
 import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js';
 import { collapseTimeline } from '../ui/timeline-controller.js';
 import { collapseViewport3D } from '../ui/panel-visibility.js';
+import { noteTrackRun } from './run-state.js';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -1346,6 +1347,7 @@ export async function trackCurrentFrame() {
             ? createPoseCheckRun(pc.models, pc.uncommonAt, pc.outlierAt, getTrackingThreshold('poseExcludeOutliers') > 0) : null;
         var lr = runCrossViewTracker(session, trackedCameras, [state.currentFrame], false, effectiveNumAnimals,
             undefined, poseRun);
+        noteTrackRun(session);   // Track turns blue (ui/run-buttons.js)
         // Show what tracking produced: the predictions only (User, Reproj, Errors off).
         var predOnly = lr.numTargets > 0 && showPredictedOnly();
         drawAllOverlays(state.currentFrame);
@@ -1681,6 +1683,7 @@ async function runTrackingPass(range) {
         closeTrackerWorker(run);
         if (poseRun) session.poseCheck = finishPoseCheckRun(poseRun);
         var trackMs = performance.now() - trackStart;
+        noteTrackRun(session);   // Track turns blue (ui/run-buttons.js)
         hideLoading();
         // The run's product is identities, so show them (#242): switch Color
         // from Tracks to ID. Only when it assigned any — otherwise there is

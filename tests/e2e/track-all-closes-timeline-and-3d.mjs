@@ -154,7 +154,7 @@ try {
     await open3d();
     await page.evaluate(async () => { await (await import('/pose/tracker.js')).trackFrameRange(0, 2); });
     check(!(await tl()).collapsed && !(await v3()).collapsed, 'Track Frame Range leaves the Timeline and 3D viewer open');
-    await page.click('#tbTrackFrame');
+    await page.hover('#tbTrackAll'); await page.click('#tbTrackFrame');   // This frame, in the Track menu
     await page.waitForTimeout(300);
     check(!(await tl()).collapsed && !(await v3()).collapsed, 'Track Frame leaves the Timeline and 3D viewer open');
 
