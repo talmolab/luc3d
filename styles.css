@@ -5319,9 +5319,9 @@ kbd {
   outline-offset: 2px;
 }
 
+/* Selected = the checkbox and a blue outline; the card keeps its background. */
 .tri-method-choice.checked {
   border-color: var(--accent);
-  background: rgba(102, 126, 234, 0.12);
 }
 
 .tri-methods-head {
