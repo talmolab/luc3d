@@ -40,13 +40,14 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=4d1ba74d1e09';
-import { getActiveSession, state, timeline } from './app-state.js?v=4d1ba74d1e09';
-import { drawAllOverlays } from './rendering.js?v=4d1ba74d1e09';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=4d1ba74d1e09';
-import { installModalGeometry } from './modal-geometry.js?v=4d1ba74d1e09';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=4d1ba74d1e09';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=4d1ba74d1e09';
+} from './settings.js?v=b8b3b78a7755';
+import { getActiveSession, state, timeline } from './app-state.js?v=b8b3b78a7755';
+import { drawAllOverlays } from './rendering.js?v=b8b3b78a7755';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=b8b3b78a7755';
+import { installModalGeometry } from './modal-geometry.js?v=b8b3b78a7755';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=b8b3b78a7755';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=b8b3b78a7755';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=b8b3b78a7755';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -527,6 +528,14 @@ export function showSettingsModal(initialPanel) {
         '1 = fully considered (2D reprojection + 3D point-to-ray); 0 = ignored during tracking. ' +
         'Changes apply when you click Apply.';
     nwSection.body.appendChild(nwHint);
+    if (skeletonNodes.length) {
+        const nwTip = document.createElement('div');
+        nwTip.className = 'settings-kbd-hint settings-node-weight-tip';
+        nwTip.style.marginTop = '0';
+        nwTip.style.marginBottom = '8px';
+        nwTip.textContent = NODE_WEIGHT_TIP;
+        nwSection.body.appendChild(nwTip);
+    }
 
     if (skeletonNodes.length === 0) {
         const nwEmpty = document.createElement('div');

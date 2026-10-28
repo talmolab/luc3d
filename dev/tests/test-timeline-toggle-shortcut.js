@@ -49,7 +49,7 @@
  * (see test-runner.html — the module imports `app.js` transitively).
  * Block 1's implementation must extract the toggle / fit-to-data helpers
  * into a bridgeable module (e.g., `ui/timeline-controller.js`) and add a
- * matching `import * as __TimelineCtrl from '../ui/timeline-controller.js?v=4d1ba74d1e09'`
+ * matching `import * as __TimelineCtrl from '../ui/timeline-controller.js?v=b8b3b78a7755'`
  * line to test-runner.html's bridge so these tests can find the functions
  * on `window`. Until then, every test in this file fails at the
  * `getToggleFn()`/`fitFn` lookup with a clear "Block 1 must expose …"

@@ -9159,7 +9159,8 @@ capture phase, so a listener on the card would never run), **Keyboard Shortcuts*
 via `chordFromEvent`, until a click sets it or Esc cancels; duplicates are
 rejected; fixed entries show a greyed dashed chip), **Tracking Wizard**:
 **Node Weights** (number field `0–1` per node of the active skeleton; `0` drops
-the node from the association cost and greys the row), **Camera Views** (an
+the node from the association cost and greys the row; under the hint, the
+tracking dialogs' `NODE_WEIGHT_TIP` from `ui/track-setup-modal.js`), **Camera Views** (an
 on/off switch per camera, stored as a `0/1` weight; off excludes the view from
 tracking and greys the row), and **Tracking Thresholds** (one field per
 `getTrackingThresholdDefs()` entry, or an on/off switch stored as `1`/`0` for a
@@ -9195,7 +9196,8 @@ background shortcuts from firing while it is open, and is removed on teardown.
 (`buildDetectionFilterPreview`); `./app-state.js`
 (`getActiveSession`, `state`, `timeline`); `./rendering.js` (`drawAllOverlays`,
 for the post-Apply repaint); `./modal-geometry.js` (`installModalGeometry`);
-`./id-switch-highlight.js` (`refreshIdSwitchHighlight`, on Apply).
+`./id-switch-highlight.js` (`refreshIdSwitchHighlight`, on Apply);
+`./track-setup-modal.js` (`NODE_WEIGHT_TIP`, a leaf).
 
 **Imported by.** `ui/ui-wiring.js`.
 
@@ -9667,8 +9669,13 @@ Tracking Wizard's own settings. Track Frame's copy leaves it out (a single
 frame is never checked); Track Frame Range shows the same section.
 
 **Key exports.**
+- `NODE_WEIGHT_TIP` — the advice shown under the node weights here, in Track
+  Frame Range and in the Tracking Wizard (nodes with high tracking error, like
+  tail nodes, weighted 0 often prevent ID switches; consider 0 for every tail
+  node). Advice only: skeletons differ between projects, so
+  nothing picks the nodes or changes a weight for the user.
 - `buildNodeWeightFields(nodes)` → `{element, read, refresh}` — the node-weight
-  editor both tracking dialogs show (title, one sentence, the grid). `element`
+  editor both tracking dialogs show (title, one sentence, the tip, the grid). `element`
   is null for no nodes; `read()` returns `{nodeWeights}` or `{error}` (a weight
   outside `[0, 1]`, naming the node — never clamped); `refresh()` greys the
   rows weighted 0. Commits nothing. Also used by `ui/track-range-modal.js`.
@@ -9701,7 +9708,8 @@ field and the Tracking Wizard edit, so there is no second copy of any of them
 and no cycle with the tracker.
 
 **Imported by.** `pose/tracker.js`; `ui/track-range-modal.js`
-(`buildNodeWeightFields`, `buildImageCheckFields`, `IMAGE_CHECK_IDS`).
+(`buildNodeWeightFields`, `buildImageCheckFields`, `IMAGE_CHECK_IDS`);
+`ui/settings-modal.js` (`NODE_WEIGHT_TIP`).
 
 **User-facing features.** The count field (focused, `placeholder="auto"`),
 then one row per skeleton node in the Tracking Wizard's own markup
