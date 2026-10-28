@@ -24,7 +24,12 @@
  *   F. the menu's Remove smoothing is greyed out while nothing is smoothed,
  *      live once something is (but locked in Defining Plane Mode), and a
  *      real click on it gives back the original 3D exactly, leaving the
- *      smoothing settings as they were.
+ *      smoothing settings as they were;
+ *   G. a re-run with new median AND Gaussian windows replaces the last run
+ *      (median 5 + Gaussian 9, then median 3 + Gaussian 5 == median 3 +
+ *      Gaussian 5 alone), and right after each run the 3D view draws the
+ *      current frame's new 3D (it used to be handed no groups and go blank
+ *      until the next frame change).
  *
  * Run: node tests/e2e/temporal-smoothing-display.mjs
  */
@@ -251,6 +256,51 @@ try {
         (await import('/ui/settings.js')).getSmoothingParams().smoothGaussianWindow);
     check(keptWindow === 3, `F. the smoothing settings are left as they were (Gaussian ${keptWindow})`);
     await page.mouse.move(700, 600);
+
+    // G. Re-runs with new median + Gaussian windows, and the 3D view after each.
+    const smoothMG = async (med, gau) => {
+        await page.evaluate(async ({ MID, med, gau }) => {
+            (await import('/ui/settings.js')).setSmoothingParams({ smoothMedianWindow: med, smoothGaussianWindow: gau });
+            (await import('/ui/app-state.js')).state.currentFrame = MID;
+            document.getElementById('statusText').textContent = '';
+            document.getElementById('tbSmooth').click();
+        }, { MID, med, gau });
+        await waitStatus(/^Smoothed /);
+    };
+    // Max |marker - stored 3D| over the current frame's nodes (Infinity if the
+    // marker count differs), read with no redraw: what the run left on screen.
+    const view3d = () => page.evaluate(async () => {
+        const AS = await import('/ui/app-state.js');
+        const TRI = await import('/pose/triangulation.js');
+        const v = window.__lucid.viewport3d;
+        if (!v || !v._skeletonGroup) return { n: 0, want: -1, off: Infinity };
+        const key = p => p.join(',');
+        const pos = [];
+        v._skeletonGroup.children.forEach(ig => ig.children.forEach(n => {
+            if (n.name && n.name.startsWith('node_')) pos.push([n.position.x, n.position.y, n.position.z]);
+        }));
+        const want = [];
+        (TRI.getInstanceGroupsForFrame(AS.state.currentFrame) || []).forEach(g => {
+            for (let i = 0; i + 2 < g.points3d.length; i += 3) {
+                const p = [g.points3d[i], g.points3d[i + 1], g.points3d[i + 2]];
+                if (p.every(Number.isFinite)) want.push(p);
+            }
+        });
+        pos.sort((a, b) => key(a) < key(b) ? -1 : 1);
+        want.sort((a, b) => key(a) < key(b) ? -1 : 1);
+        const off = pos.length !== want.length ? Infinity
+            : Math.max(0, ...pos.map((p, i) => Math.max(...p.map((c, j) => Math.abs(c - want[i][j])))));
+        return { n: pos.length, want: want.length, off };
+    });
+    await smoothMG(3, 5);
+    const mgAlone = await snapshot();
+    await smoothMG(5, 9);
+    let v3 = await view3d();
+    check(v3.n > 0 && v3.off === 0, `G. right after a run the 3D view draws its 3D (${v3.n}/${v3.want} markers, off by ${v3.off})`);
+    await smoothMG(3, 5);
+    check(same(await snapshot(), mgAlone), 'G. median 5 + Gaussian 9, then median 3 + Gaussian 5 == median 3 + Gaussian 5 alone');
+    v3 = await view3d();
+    check(v3.n > 0 && v3.off === 0, `G. ...and the 3D view follows the re-run (${v3.n}/${v3.want} markers, off by ${v3.off})`);
 
     // "This frame" through its menu item: only that frame is written and lit.
     await smooth(0);

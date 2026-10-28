@@ -2991,7 +2991,9 @@ export function setupUI() {
 
         markDirty();
         drawAllOverlays(state.currentFrame);
-        update3DViewport();
+        // With no frame it would hand the 3D view frame `undefined`'s groups
+        // (none) and blank the skeletons until the next frame change.
+        update3DViewport(state.currentFrame);
         updateInfoPanel();
         syncSmoothingButton();
         setStatus(summary);

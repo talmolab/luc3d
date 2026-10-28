@@ -10560,7 +10560,8 @@ trajectories) and writes the values an All frames run gives that frame. Then it
 records the scope (`noteSmoothingScope`), drops the `state.triangulationResults`
 entries of every group whose reprojections the pass cleared (the fill appends a
 fresh one, and the panel would average both; This frame checks only its own
-frame), and runs `markDirty` + `drawAllOverlays` + `update3DViewport` +
+frame), and runs `markDirty` + `drawAllOverlays` + `update3DViewport(state.currentFrame)`
+(the frame matters: without it the 3D view got no groups and went blank) +
 `updateInfoPanel`, setting the summary status last. Both-windows-0 restores
 pass `writeFrames: new Set([state.currentFrame])` for This frame. It touches only `points3d` on the
 already-resident `session.instanceGroups`, hydrating no 2D. The button is blue
@@ -11166,7 +11167,7 @@ calls this on every overlay draw and the pass calls it after running.
 **Imports.** `./app-state.js` (`state`), `../pose/temporal-smoothing.js`
 (`hasSmoothed3d`), `../import-export/smoothing-metadata.js` (`noteSmoothingRun`,
 `smoothingRunOf`). **Imported by** `ui/rendering.js`, `ui/ui-wiring.js`.
-Covered by `tests/e2e/temporal-smoothing-display.mjs` §E–F and
+Covered by `tests/e2e/temporal-smoothing-display.mjs` §E–G and
 `tests/e2e/smoothing-save-reopen.mjs`.
 
 ### ui/section-state.js
