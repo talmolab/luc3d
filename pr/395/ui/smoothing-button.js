@@ -14,8 +14,8 @@
  * Depends on: ui/app-state.js, pose/temporal-smoothing.js
  */
 
-import { state } from './app-state.js?v=a4398e638a58';
-import { hasSmoothed3d } from '../pose/temporal-smoothing.js?v=a4398e638a58';
+import { state } from './app-state.js?v=a73c108dde74';
+import { hasSmoothed3d } from '../pose/temporal-smoothing.js?v=a73c108dde74';
 
 /** Session -> scope of its last smoothing run, 'all' | 'frame'. */
 var _lastScope = new WeakMap();

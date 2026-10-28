@@ -40,12 +40,13 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=a4398e638a58';
-import { getActiveSession, state, timeline } from './app-state.js?v=a4398e638a58';
-import { drawAllOverlays } from './rendering.js?v=a4398e638a58';
-import { installModalGeometry } from './modal-geometry.js?v=a4398e638a58';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=a4398e638a58';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=a4398e638a58';
+} from './settings.js?v=a73c108dde74';
+import { getActiveSession, state, timeline } from './app-state.js?v=a73c108dde74';
+import { drawAllOverlays } from './rendering.js?v=a73c108dde74';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=a73c108dde74';
+import { installModalGeometry } from './modal-geometry.js?v=a73c108dde74';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=a73c108dde74';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=a73c108dde74';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -344,7 +345,8 @@ export function showSettingsModal(initialPanel) {
         {
             method: 'ba',
             title: 'Refined (Ref)',
-            desc: 'Slower. Minimizes geometric reprojection error.',
+            desc: 'Slower. Bundle adjustment: minimizes geometric reprojection error, and copes better than DLT '
+                + 'with outliers (one view\'s 2D prediction placed wrong).',
         },
     ];
 
@@ -382,6 +384,9 @@ export function showSettingsModal(initialPanel) {
     });
     // Initialize checked row from current default.
     if (radioRows[working.method]) radioRows[working.method].classList.add('checked');
+
+    // How the two methods differ, drawn for a new user.
+    triPanel.appendChild(buildTriangulationMethodsFigure());
 
     // Docs link for additional information on triangulation methods.
     const triDocsNote = document.createElement('div');
@@ -857,5 +862,8 @@ export function showSettingsModal(initialPanel) {
         minW: 520,
         minH: 320,
         margin: 24,
+        // The opening size before it widened to 1040px; records holding it
+        // were saved without a resize, so they open at the new default.
+        legacyDefaultSize: { w: 880, h: 620 },
     });
 }
