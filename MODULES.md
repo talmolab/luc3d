@@ -981,8 +981,9 @@ shape as "no calibration" (`ui/view-align-modal.js` `isCalibrated`,
 `ui/sessions-panes.js` `originHasCalib`, Triangulate's `sessionHasCalibration()`
 gate). No loader sets up the 3D viewer for placeholders only (folder loaders,
 `handleLoadSlpFile`, `handleLoadProjectSlpLazy`), tracking refuses with the
-Calibration Required popup, and `handleLoadCalibration` replaces them when a
-real calibration is loaded.
+Calibration Required popup, a new group is not auto-triangulated
+(`reTriangulateGroup`), and `handleLoadCalibration` replaces them when a real
+calibration is loaded.
 
 **Key exports.**
 - `makePlaceholderCamera(name, width?, height?)`.
@@ -3066,7 +3067,9 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   reprojected instances, and `state.triangulationResults`; both Triangulate All
   paths and Group by Track call it before they start),
   `reTriangulateGroup` (preserves the group's existing method via
-  `resolveTriangulationMethod`),
+  `resolveTriangulationMethod`; the auto-triangulation of a group created by
+  Shift+G — does nothing without a real calibration, `sessionHasCalibration()`,
+  so placeholder cameras never produce 3D that would be saved and exported),
   `triangulateCurrentFrame(method)`, `triangulateAllFrames(method)`
   (`method` defaults to `'dlt'`), `sessionHasCalibration`,
   `showCalibrationRequiredPopup`,
