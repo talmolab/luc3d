@@ -11658,11 +11658,15 @@ pure function. Imports **nothing** — no project modules, no DOM — so it brid
 into `tests/test-runner.html` (session-loader pulls app.js through its import
 graph and cannot be loaded there).
 
-**Key export.** `chooseCameraSlp(slps)` → `{file, version, newer}`. See the
-`loading/session-loader.js` entry for the rule and why `lastModified` is
-deliberately NOT authoritative. `newer` is the most-recently-modified candidate
-when that is not the chosen file, else `null` — the signal that a leftover
-`_vN` is outranking a file the user just wrote.
+**Key export.** `chooseCameraSlp(slps, opts?)` → `{file, version, newer, by,
+versionPick}`. `opts.exportedAt(file)` gives when LUC3D wrote a candidate (ms,
+NaN for a file it did not write); when any candidate has one, the newest LUC3D
+export wins (`by: 'exported'`), else the highest `_vN` then `lastModified`
+(`by: 'version'`). `versionPick` is what the suffix rule alone would choose.
+`newer` is a more-recently-modified candidate that is not being loaded — under
+the stamp rule only a file LUC3D did not write can be one. With no `opts` it is
+exactly the old suffix rule. See the `loading/session-loader.js` entry for why
+(#214) and why `lastModified` is never authoritative.
 
 **Imports from project modules.** None (deliberately).
 
@@ -12023,22 +12027,35 @@ view, which would pin the whole camera buffer and make any structured clone of
 the instance copy all of it.
 
 **Per-camera `.slp` selection.** `handleLoadSessionFolderPerCamera` loads only
-**one** `.slp` per camera directory — the highest `_vN` version (first-wins on a
-tie / when unversioned). A camera dir accumulates successive exports
-(`<stem>_v1.slp`, `_v2.slp`, …); parsing every file would stack all versions'
-instances into the same (frame, camera) slot. Skipped files are logged. The
-choice lives in `loading/percam-slp-choice.js`'s `chooseCameraSlp(slps)` →
-`{file, version, newer}` (re-exported here), which adds two things to a bare
-max():
-- **`lastModified` breaks a same-version tie** (enumeration order is arbitrary).
-- **It reports when the version suffix disagrees with the disk** (`newer`, the
-  most-recently-modified candidate when that is NOT the chosen file; `null`
-  otherwise, including on equal mtimes). Writing fresh annotations to the
-  UNVERSIONED name makes a leftover `_v1` win. The version rule is deliberately
-  UNCHANGED (mtime survives neither copying nor syncing reliably, so it must not
-  decide which file is authoritative); the load just says a newer file was left
-  unread. Covered by `tests/test-percam-slp-choice.js` and
-  `tests/e2e/percam-slp-choice-and-failure.mjs`.
+**one** `.slp` per camera directory; parsing every file would stack all of them
+into the same (frame, camera) slot. Skipped files are logged. The choice lives
+in `loading/percam-slp-choice.js`'s `chooseCameraSlp(slps, opts)` (re-exported
+here):
+- **The newest LUC3D export wins** when LUC3D wrote any candidate, by the
+  `exported_at` it stamps in every file's provenance. Before choosing, Pass 1
+  reads the provenance of every `.slp` in each directory that HAS a choice
+  (`readSlpProvenances`, one worker, the `metadata` attribute only) and turns
+  it into ms with `lucidExportedAt`. The stamp travels inside the file, so a
+  copied or synced folder keeps its order. Why (#214): the `_vN` suffix is a
+  convention only "Export SLEAP File Per Session" follows — "By Cam" writes
+  `<camera>.slp` — so a By-Cam export dropped back into a camera dir lost to
+  any leftover `_v1`: every view reloaded stale data, and a camera whose `_v1`
+  was empty came back blank. The console says when the stamp overruled the
+  suffix.
+- **Otherwise the highest `_vN` wins** (unversioned = 0), `lastModified`
+  breaking a same-version tie (enumeration order is arbitrary). That is the
+  whole rule for folders of files other programs wrote (SLEAP's
+  `*.predictions.slp` + `*.analysis.h5`), and the fallback when the provenance
+  read fails or times out (`readSlpProvenances` never rejects).
+- **mtime is never authoritative** (it survives neither copying nor syncing
+  reliably); it only breaks ties and drives `newer`, which the status line
+  reports as "newer .slp present but not loaded". Under the stamp rule only a
+  file LUC3D did NOT write can be `newer` (a re-run of inference dropped next to
+  an older export: the export still loads, the status names the other file).
+Covered by `tests/test-percam-slp-choice.js`,
+`tests/e2e/percam-slp-choice-export-time.mjs` (six cameras, one per way the
+suffix rule lost data, plus the negative control) and
+`tests/e2e/percam-slp-choice-and-failure.mjs`.
 
 **Large `.slp` → lazy loading.** The chosen `.slp` files are routed by
 `shouldUseLazySlp` (`> 150 MB`): large prediction files go to a `SioLazyLoader`
@@ -12150,7 +12167,9 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
 - `../pose/placeholder-cameras.js` (`makePlaceholderCamera`,
   `hasRealCalibration`, `ensurePlaceholderCameras`),
 - `./calibration-pick.js` (`REBASED_CALIBRATION_NAME`, `pickCalibrationFile`),
-  `./percam-slp-choice.js` (`chooseCameraSlp`), `./video-file-pick.js`,
+  `./percam-slp-choice.js` (`chooseCameraSlp`), `../import-export/file-io.js`
+  (incl. `readSlpProvenances`), `../import-export/slp-provenance.js` (incl.
+  `lucidExportedAt`), `./video-file-pick.js`,
   `./video-codec-diagnosis.js` (`videoLoadFailureText`),
   `../ui/video-codec-notice.js` (`noteUnplayableVideos`),
   `../ui/app-state.js` (incl. `buildRememberedSkeleton`, and `isViewDocked` as the
@@ -12407,9 +12426,15 @@ open-and-stream-frames.
 - IN: `{type: 'getFrame', frameIdx, requestId}` — read one frame lazily.
 - IN: `{type: 'getFrames', startIdx, endIdx, requestId}` — read range.
 - IN: `{type: 'close'}` — close lazy file.
+- IN: `{type: 'readProvenance', files}` — each file's `provenance` dict and
+  nothing else (the `metadata` group's `json` attribute; no table is read).
+  A file that cannot be opened, is not an SLP or has no provenance gives `null`,
+  never an error. Used by `readSlpProvenances` (`import-export/file-io.js`) for
+  the per-camera folder loader's file choice (#214).
 - OUT: `{type: 'progress', message}`, `{type: 'result', data: {...}}`,
   `{type: 'metadata', data: {...}}`, `{type: 'frameData', ...}`,
-  `{type: 'framesData', ...}`, `{type: 'error', message}`.
+  `{type: 'framesData', ...}`, `{type: 'provenance', provenances}` (parallel to
+  `files`), `{type: 'error', message}`.
 
 **An unopenable file must reject, not resolve empty.** `new h5wasm.File(path,
 'r')` does **not** throw on non-HDF5 bytes, and every `f.get()` in `parseSlp` is
@@ -13502,7 +13527,10 @@ session's `name` + `fileProvenance`); `fileSessionProvenance(fileProv, names,
 index)` (what one loaded session keeps); `fileSessionNames(rawSessions)`
 (`metadata.lucid.sessionName` per `sessions_json` entry);
 `foreignProvenance(prov)` (the dict minus LUC3D's keys, deep-copied);
-`provenanceSessionKeys(names)`; `LUCID_PROVENANCE_SOURCE`,
+`provenanceSessionKeys(names)`; `lucidExportedAt(prov)` (when LUC3D wrote the
+file: the `exported_at` of LUC3D's own pair — top level, or under `lucid` when
+another program owns the top level — in ms, NaN otherwise; the per-camera folder
+loader's file choice, #214); `LUCID_PROVENANCE_SOURCE`,
 `LUCID_PROVENANCE_KEY` (`lucid`), `PROVENANCE_SESSIONS_KEY` (`lucid_sessions`).
 
 **Imports from project modules.** None.
@@ -13513,7 +13541,9 @@ and single-session streaming, `finalizeMultiSessionSave`). Readers (set
 `loading/session-loader.js` (`handleLoadSessionFolderSingleSlp`,
 `handleLoadProjectSlpLazy`). A new loader that builds a Session from an `.slp`
 must set it too, or a save drops the file's provenance. The per-camera and
-multi-session folder loaders do not (they read camera `.slp` files as 2D only).
+multi-session folder loaders do not (they read camera `.slp` files as 2D only);
+`handleLoadSessionFolderPerCamera` reads `lucidExportedAt` only to choose which
+of a camera dir's files to load.
 
 **Tests.** `tests/test-slp-provenance.mjs` (the rule),
 `tests/e2e/slp-provenance-roundtrip.mjs` (real load → Save → reopen: eager,
@@ -13689,6 +13719,11 @@ session's resident/total) rather than truncate silently. Covered by
   `parseSlpViaSleapIO` fallback, and for the per-camera session-folder load,
   which passes `{ columnar: true }` to receive the poses as flat transferred
   typed arrays (`data.columnar`) instead of nested `data.frames`.
+- Provenance only: `readSlpProvenances(files, {timeoutMs?})` → each file's
+  `provenance` dict (or null), from one `slp-import-worker.js` reading the
+  `metadata` attribute only. Never rejects: a worker error or no answer within
+  `timeoutMs` (30 s) resolves all-null. Used by the per-camera folder loader to
+  order a camera dir's candidates by `exported_at` (#214).
 - SLP parse (sleap-io.js): `parseSlpViaSleapIO(file, onProgress)` —
   drives `window.SleapIO.readSlpStreaming(file, {rawSessions:true})` and adapts
   the typed `Labels` into the `slpData` shape via the private

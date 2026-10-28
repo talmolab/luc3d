@@ -155,3 +155,24 @@ export function buildSaveProvenance(sessions, exportedAt) {
     if (per) out[PROVENANCE_SESSIONS_KEY] = per;
     return out;
 }
+
+/**
+ * When LUC3D wrote this file, read from its provenance: the `exported_at` of
+ * LUC3D's own pair — at the top level when `source` is LUC3D's, else under
+ * `lucid` (where it goes when another program owns `source`/`exported_at`).
+ * Milliseconds since the epoch, or NaN when the file is not LUC3D's or the
+ * stamp does not parse.
+ *
+ * The per-camera folder loader orders a camera directory's `.slp` candidates
+ * by this (`chooseCameraSlp`): it travels inside the file, so — unlike the
+ * filesystem's `lastModified` — copying or syncing a folder does not change it.
+ * @param {*} prov - a file's `provenance` dict
+ * @returns {number}
+ */
+export function lucidExportedAt(prov) {
+    if (!isPlainObject(prov)) return NaN;
+    var pair = LUCID_SOURCES.indexOf(prov.source) >= 0 ? prov
+        : (isLucidPair(prov[LUCID_PROVENANCE_KEY]) ? prov[LUCID_PROVENANCE_KEY] : null);
+    if (!pair || typeof pair.exported_at !== 'string') return NaN;
+    return Date.parse(pair.exported_at);
+}

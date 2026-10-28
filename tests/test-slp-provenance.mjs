@@ -9,7 +9,7 @@
  */
 import {
     buildSaveProvenance, foreignProvenance, fileSessionProvenance, fileSessionNames,
-    provenanceSessionKeys, LUCID_PROVENANCE_KEY, PROVENANCE_SESSIONS_KEY,
+    provenanceSessionKeys, LUCID_PROVENANCE_KEY, PROVENANCE_SESSIONS_KEY, lucidExportedAt,
 } from '../import-export/slp-provenance.js';
 
 let passed = 0, failed = 0;
@@ -124,6 +124,22 @@ console.log('\n-- the reader takes the names LUC3D wrote --');
     check(eq(fileSessionNames(raw), ['A', '', '']), 'metadata.lucid.sessionName, else ""');
     check(eq(fileSessionNames(undefined), []), 'no sessions_json: none');
     check(eq(fileSessionProvenance(CAMPY, [], 3), CAMPY), 'an index past the names: the top level');
+}
+
+console.log('\n-- lucidExportedAt: when LUC3D wrote a file (#214, the per-camera folder pick) --');
+{
+    const T = Date.parse(AT);
+    check(lucidExportedAt({ source: 'lucid', exported_at: AT }) === T, 'a 2D export / plain save: the top-level pair');
+    check(lucidExportedAt({ source: 'mv-gui', exported_at: AT }) === T, "LUC3D's earlier name counts too");
+    // A save of campy-live's file: campy owns the top level, LUC3D's pair is under `lucid`.
+    const saved = buildSaveProvenance([sess('S1', Object.assign({ source: 'campy', exported_at: '2020-01-01T00:00:00Z' }, CAMPY))], AT);
+    check(lucidExportedAt(saved) === T, "another program's source/exported_at: LUC3D's own pair under `lucid`");
+    check(Number.isNaN(lucidExportedAt(CAMPY)), 'a file only another program wrote: NaN');
+    check(Number.isNaN(lucidExportedAt({ source: 'sleap', exported_at: AT })), "another source's stamp is not LUC3D's");
+    check(Number.isNaN(lucidExportedAt({ source: 'lucid' })), 'no stamp: NaN');
+    check(Number.isNaN(lucidExportedAt({ source: 'lucid', exported_at: 'yesterday-ish' })), 'an unparseable stamp: NaN');
+    check(Number.isNaN(lucidExportedAt(null)) && Number.isNaN(lucidExportedAt([])) && Number.isNaN(lucidExportedAt('x')),
+        'not a dict: NaN');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -39,7 +39,7 @@ import { confirmFolderPick } from '../ui/folder-confirm-tip.js';
 import {
     pickFiles, pickFolder, pickVideoFiles,
     parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO,
-    loadCalibrationFile,
+    loadCalibrationFile, readSlpProvenances,
 } from '../import-export/file-io.js';
 
 import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js';
@@ -62,7 +62,7 @@ import {
     ensureLazyFrameData,
 } from '../pose/triangulation.js';
 import { SioLazyLoader } from './sio-lazy-loader.js';
-import { fileSessionNames, fileSessionProvenance } from '../import-export/slp-provenance.js';
+import { fileSessionNames, fileSessionProvenance, lucidExportedAt } from '../import-export/slp-provenance.js';
 import { unionTrackNames, remapTrackIdx } from './track-union.js';
 import {
     readCampyRecording, campyCameraFor, orderByCampyCameras, preferCampyVideo, campyVideoFile,
@@ -3409,29 +3409,72 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         var staleWarnings = []; // cameras whose chosen file is not the newest on disk
 
         // Pass 1 — choose exactly ONE `.slp` per camera.
+        //
+        // Where a camera directory holds more than one candidate, first ask each
+        // `.slp` when LUC3D wrote it: `chooseCameraSlp` loads the newest LUC3D
+        // export by that stamp, which travels inside the file, before falling
+        // back to the `_vN` suffix (#214 — "Export SLEAP File By Cam" writes no
+        // suffix, so its output used to lose to any leftover `_v1`). Only the
+        // `metadata` attribute is read, in one worker, and only for directories
+        // that actually have a choice to make. A failed read leaves the stamp
+        // unknown, which is the suffix rule — the behaviour before this pass.
+        var exportedAtByFile = new Map();
+        var stampCandidates = [];
+        for (var sci0 = 0; sci0 < matchedCameraDirs.length; sci0++) {
+            var scDir = matchedCameraDirs[sci0];
+            if (scDir.slps.length < 2) continue;
+            for (var scf = 0; scf < scDir.slps.length; scf++) {
+                if (/\.slp$/i.test(scDir.slps[scf].name)) stampCandidates.push(scDir.slps[scf]);
+            }
+        }
+        if (stampCandidates.length > 0) {
+            showLoading('Checking ' + stampCandidates.length.toLocaleString('en-US') + ' annotation files...');
+            var stampProvs = await readSlpProvenances(stampCandidates);
+            for (var spi = 0; spi < stampCandidates.length; spi++) {
+                exportedAtByFile.set(stampCandidates[spi], lucidExportedAt(stampProvs[spi]));
+            }
+            showLoading('Parsing annotations (' + matchedCameraDirs.length + ' cameras)...');
+        }
+        var exportedAtOf = function (file) {
+            var t = exportedAtByFile.get(file);
+            return t === undefined ? NaN : t;
+        };
+
         var slpChoices = [];
         for (var cdi = 0; cdi < matchedCameraDirs.length; cdi++) {
             var camDir = matchedCameraDirs[cdi];
             if (camDir.slps.length === 0) continue;
-            var chosen = chooseCameraSlp(camDir.slps);
+            var chosen = chooseCameraSlp(camDir.slps, { exportedAt: exportedAtOf });
             slpVersionsLoaded[camDir.camName] = chosen.version;
             if (camDir.slps.length > 1) {
                 console.log('[session-folder] ' + camDir.camName + ': '
                     + camDir.slps.length + ' .slp files found — loading only "'
-                    + chosen.file.name + '" (highest version), skipping '
-                    + (camDir.slps.length - 1) + ' older file(s).');
-                // "Highest `_vN`" is a naming convention, not a fact about the
-                // disk. Writing fresh annotations to the UNVERSIONED name while
-                // an older `_v1` export is still sitting in the directory — i.e.
-                // "replacing the .slp file" when the original had no suffix —
-                // silently loads the STALE one. Say so instead of only logging
-                // a line that calls the stale file "highest version".
+                    + chosen.file.name + '" ('
+                    + (chosen.by === 'exported'
+                        ? 'newest LUC3D export, ' + new Date(exportedAtOf(chosen.file)).toISOString()
+                        : 'highest version')
+                    + '), skipping ' + (camDir.slps.length - 1) + ' other file(s).');
+                if (chosen.file !== chosen.versionPick) {
+                    var vpStamp = exportedAtOf(chosen.versionPick);
+                    console.log('[session-folder] ' + camDir.camName + ': "'
+                        + chosen.versionPick.name + '" has the higher version suffix but '
+                        + (vpStamp === vpStamp
+                            ? '"' + chosen.file.name + '" was exported later — loading the later export.'
+                            : 'it is not a LUC3D export (or could not be read) — loading "' + chosen.file.name + '".'));
+                }
+                // A file that looks newer on disk but is not being loaded: under
+                // the suffix rule any newer file, and under the stamp rule a file
+                // another program wrote after the chosen export (a re-run of
+                // inference, say). Say so instead of only logging it.
                 if (chosen.newer) {
                     staleWarnings.push(camDir.camName + ': loading ' + chosen.file.name
                         + ' but ' + chosen.newer.name + ' is newer');
                     console.warn('[session-folder] ' + camDir.camName
                         + ': chosen "' + chosen.file.name + '" is OLDER on disk than "'
-                        + chosen.newer.name + '" — version suffix wins over mtime.');
+                        + chosen.newer.name + '" — '
+                        + (chosen.by === 'exported'
+                            ? 'the newest LUC3D export wins over files other programs wrote.'
+                            : 'version suffix wins over mtime.'));
                 }
             }
             slpChoices.push({ camName: camDir.camName, file: chosen.file });

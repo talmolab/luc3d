@@ -4,19 +4,16 @@
  * ("some views came back, some didn't") and neither of which used to say
  * anything in the UI.
  *
- *  1. **A leftover `_vN` outranks the file you just wrote.** Selection is
- *     "highest `_vN`, unversioned counts as 0", and "Export SLEAP File By Cam"
- *     writes `<stem>_v<N+1>.slp` every time, so directories accumulate
- *     versions. Put fresh annotations in `<stem>.slp` while an older
- *     `<stem>_v1.slp` is still sitting there — which is what "replacing the
- *     .slp file" means when the original had no suffix — and the STALE file
- *     wins, while the console cheerfully reports it as "highest version".
- *
- *     The version rule is deliberately KEPT (mtime survives neither copying nor
- *     syncing reliably, so it must not decide which file is authoritative); the
- *     fix is that the load now says a newer file was left unread, and that
- *     `lastModified` breaks a same-version tie that folder-enumeration order
- *     used to settle arbitrarily.
+ *  1. **A leftover `_vN` outranked the file you just wrote.** Selection was
+ *     "highest `_vN`, unversioned counts as 0", while "Export SLEAP File By
+ *     Cam" writes `<camera>.slp` with no suffix — so fresh annotations in
+ *     `<stem>.slp` next to an older `<stem>_v1.slp` loaded the STALE file.
+ *     Now the newest LUC3D export wins by the `exported_at` stamped inside the
+ *     file (#214; real-folder version: `percam-slp-choice-export-time.mjs`),
+ *     and the suffix rule — still pinned below through `chooseCameraSlp` with
+ *     no stamps — decides only among files LUC3D did not write. mtime is still
+ *     never authoritative (it survives neither copying nor syncing); it only
+ *     breaks a same-version tie and drives the "newer file not loaded" note.
  *
  *  2. **An unreadable `.slp` fails silently.** The parse was
  *     `parseSlpH5(bestSlp).catch(() => null)` followed by `if (!slpData)
@@ -118,8 +115,12 @@ try {
         for (const cn of CAMS) files.push(mkFile([mp4], ROOT + '/' + cn + '/' + cn + '.mp4', 'video/mp4'));
 
         // cam1 — fresh unversioned file, stale `_v1` still in the directory.
-        files.push(mkFile([await makeSlp('cam1', 'NEW', 3)], ROOT + '/cam1/cam1.slp', 'application/x-hdf5', NEW_T));
-        files.push(mkFile([await makeSlp('cam1', 'OLD', 1)], ROOT + '/cam1/cam1_v1.slp', 'application/x-hdf5', OLD_T));
+        // Exported in that order (OLD first), so the stamps say which is newer.
+        const oldCam1 = await makeSlp('cam1', 'OLD', 1);
+        await new Promise(res => setTimeout(res, 20));
+        const newCam1 = await makeSlp('cam1', 'NEW', 3);
+        files.push(mkFile([newCam1], ROOT + '/cam1/cam1.slp', 'application/x-hdf5', NEW_T));
+        files.push(mkFile([oldCam1], ROOT + '/cam1/cam1_v1.slp', 'application/x-hdf5', OLD_T));
         // cam2 — control: only the fresh unversioned file.
         files.push(mkFile([await makeSlp('cam2', 'NEW', 3)], ROOT + '/cam2/cam2.slp', 'application/x-hdf5', NEW_T));
         // cam3 — an unreadable .slp.
@@ -170,7 +171,7 @@ try {
     // ---- selection rules ---------------------------------------------------
     const c = r.choice;
     check(c.versionWins === 'a_v1.slp',
-        `the "highest _vN" rule is unchanged — a leftover _v1 still outranks an unversioned file (got ${c.versionWins})`);
+        `with no LUC3D stamps the "highest _vN" rule is unchanged — _v1 outranks an unversioned file (got ${c.versionWins})`);
     check(c.higherVersionWins === 'a_v2.slp',
         `higher version wins regardless of mtime (got ${c.higherVersionWins})`);
     check(c.mtimeBreaksTie === 'b.slp',
@@ -190,10 +191,10 @@ try {
     // ---- what actually loaded ---------------------------------------------
     check(r.views.length === 3, `all 3 views exist (got ${JSON.stringify(r.views)})`);
     check(r.perCam.cam2 === 12, `control camera loaded its fresh file (got ${r.perCam.cam2}, want 12)`);
-    check(r.perCam.cam1 === 4,
-        `cam1 still loads the highest-version file, stale or not — behavior deliberately unchanged (got ${r.perCam.cam1})`);
-    check(r.tracks.indexOf('OLD_track') >= 0,
-        'and it is demonstrably the OLD file (its track name is present)');
+    check(r.perCam.cam1 === 12,
+        `cam1 loads the file exported LAST, not the leftover _v1 (got ${r.perCam.cam1}, want 12) — #214`);
+    check(r.tracks.indexOf('NEW_track') >= 0 && r.tracks.indexOf('OLD_track') < 0,
+        `and it is demonstrably the NEW file (tracks ${JSON.stringify(r.tracks)})`);
 
     // ---- and the load now SAYS so -----------------------------------------
     check(/could not be read/.test(r.status || ''),

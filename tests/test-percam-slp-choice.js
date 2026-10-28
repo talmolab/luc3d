@@ -2,16 +2,20 @@
  * test-percam-slp-choice.js — `chooseCameraSlp`, the rule that decides which
  * `.slp` a camera directory is loaded from.
  *
- * A camera dir accumulates successive exports: "Export SLEAP File By Cam"
- * writes `<stem>_v<N+1>.slp` every time, so after a few rounds a directory
- * holds several files and only one of them reflects current state. Parsing all
+ * A camera dir accumulates successive exports: "Export SLEAP File Per Session"
+ * writes `<stem>_v<N+1>.slp` every time and "Export SLEAP File By Cam" writes
+ * `<camera>.slp`, so after a few rounds a directory holds several files and
+ * only one of them reflects current state. Parsing all
  * of them stacks every version's instances into the same (frame, camera) slot;
  * parsing the wrong one silently shows stale annotations for that view while
  * its siblings are correct — which is one of the ways "reload after replacing
  * the .slp files only brought back some of the views" happens.
  *
- * The rule is "highest `_vN`, unversioned counts as 0", and these tests exist
- * mostly to pin that it STAYS that way. `lastModified` is the more intuitive
+ * When LUC3D wrote any candidate, the newest LUC3D export wins, by the
+ * `exported_at` stamped inside the file (`opts.exportedAt`; see the last two
+ * describe blocks — #214). Otherwise the rule is "highest `_vN`, unversioned
+ * counts as 0", and the first blocks pin that it STAYS that way for files
+ * nothing stamped. `lastModified` is the more intuitive
  * signal and is deliberately NOT authoritative: it survives neither copying nor
  * syncing reliably, so a folder moved between machines would start loading a
  * different file than the one it loaded at home. mtime only breaks a tie the
@@ -34,7 +38,7 @@
     // NOT run yet while this classic script's body executes. Touching it here
     // throws, and a throw at this point takes the whole file's describe blocks
     // with it — the suite then silently reports the same total as before.
-    const choose = (files) => window.__PerCamSlpChoice.chooseCameraSlp(files);
+    const choose = (files, opts) => window.__PerCamSlpChoice.chooseCameraSlp(files, opts);
 
     // Minimal stand-in for a File: the rule reads `name` and `lastModified`.
     const OLD = 1000, MID = 2000, NEW = 3000;
@@ -148,6 +152,98 @@
             const r = choose([f('a.slp', OLD), f('b.slp', NEW)]);
             assertEqual(r.file.name, 'b.slp');
             assertNull(r.newer, 'the mtime winner cannot be out-dated by a loser');
+        });
+    });
+    describe('chooseCameraSlp — the newest LUC3D export wins (#214)', function () {
+        // `exportedAt` stands in for `lucidExportedAt(provenance)`: ms when LUC3D
+        // wrote the file, NaN for a file it did not write (or could not read).
+        const JUN = Date.parse('2026-06-26T09:15:32.783Z');
+        const OCT = Date.parse('2026-10-28T18:14:19.067Z');
+        function stamps(map) {
+            return { exportedAt: (file) => (file.name in map ? map[file.name] : NaN) };
+        }
+
+        it('a fresh unversioned export beats a stale _v1 export (the reported folder)', function () {
+            // The user's real camera dir: a June Per-Session export `_v1`, and a
+            // By-Cam export `side.slp` dropped in today. Suffix alone picks June.
+            const files = [f('side-…_v1.slp', OLD), f('side.slp', NEW)];
+            const r = choose(files, stamps({ 'side-…_v1.slp': JUN, 'side.slp': OCT }));
+            assertEqual(r.file.name, 'side.slp', 'the later export is loaded');
+            assertEqual(r.by, 'exported', 'and the stamp is what decided');
+            assertEqual(r.versionPick.name, 'side-…_v1.slp', 'versionPick names what the suffix alone chose');
+            assertEqual(r.version, 0, 'version reports the CHOSEN file');
+            assertNull(r.newer, 'nothing is left newer than what was loaded');
+        });
+
+        it('the stamp decides even when lastModified says the opposite', function () {
+            // A sync touched the old file after the new one was written.
+            const files = [f('a_v1.slp', NEW), f('a.slp', OLD)];
+            const r = choose(files, stamps({ 'a_v1.slp': JUN, 'a.slp': OCT }));
+            assertEqual(r.file.name, 'a.slp', 'exported later wins over modified later');
+            assertNull(r.newer, 'another LUC3D file is never "newer" — its own stamp ranked it');
+        });
+
+        it('a copied folder (equal lastModified) still loads the later export', function () {
+            const files = [f('a_v1.slp', MID), f('a.slp', MID)];
+            assertEqual(choose(files, stamps({ 'a_v1.slp': JUN, 'a.slp': OCT })).file.name, 'a.slp');
+        });
+
+        it('the later export wins whatever the order of the candidates', function () {
+            const m = stamps({ 'a_v1.slp': JUN, 'a.slp': OCT });
+            assertEqual(choose([f('a.slp', OLD), f('a_v1.slp', OLD)], m).file.name, 'a.slp');
+            assertEqual(choose([f('a_v1.slp', OLD), f('a.slp', OLD)], m).file.name, 'a.slp');
+        });
+
+        it('a stamp tie falls back to the version, then lastModified', function () {
+            assertEqual(choose([f('a.slp', NEW), f('a_v2.slp', OLD)], stamps({ 'a.slp': OCT, 'a_v2.slp': OCT })).file.name,
+                'a_v2.slp', 'same millisecond: the higher version');
+            assertEqual(choose([f('a.slp', OLD), f('b.slp', NEW)], stamps({ 'a.slp': OCT, 'b.slp': OCT })).file.name,
+                'b.slp', 'same millisecond and version: the newer file');
+        });
+
+        it('identical results to the suffix rule when nothing is stamped', function () {
+            const files = [f('a.slp', NEW), f('a_v1.slp', OLD)];
+            const plain = choose(files), none = choose(files, stamps({}));
+            assertEqual(none.file.name, plain.file.name, 'same pick');
+            assertEqual(none.by, 'version', 'decided by the suffix');
+            assertEqual(none.newer && none.newer.name, plain.newer && plain.newer.name, 'same warning');
+        });
+    });
+
+    describe('chooseCameraSlp — LUC3D exports beside files other programs wrote', function () {
+        const JUN = Date.parse('2026-06-26T09:15:32.783Z');
+        const OCT = Date.parse('2026-10-28T18:14:19.067Z');
+        function stamps(map) {
+            return { exportedAt: (file) => (file.name in map ? map[file.name] : NaN) };
+        }
+
+        it('the LUC3D export is loaded over a SLEAP prediction it came from', function () {
+            const files = [f('cam.predictions.slp', OLD), f('cam.analysis.h5', OLD), f('cam.slp', NEW)];
+            const r = choose(files, stamps({ 'cam.slp': OCT }));
+            assertEqual(r.file.name, 'cam.slp');
+            assertNull(r.newer, 'the unstamped files are older on disk, so nothing to report');
+        });
+
+        it('...even when the SLEAP file carries a higher version suffix', function () {
+            const r = choose([f('cam.slp', NEW), f('cam_v3.slp', OLD)], stamps({ 'cam.slp': OCT }));
+            assertEqual(r.file.name, 'cam.slp', 'only LUC3D\'s files are ranked by stamp, and they rank first');
+            assertEqual(r.versionPick.name, 'cam_v3.slp', 'the suffix rule would have taken the other file');
+        });
+
+        it('an unstamped file written AFTER the chosen export is still reported', function () {
+            // A re-run of inference dropped next to an older LUC3D export: the
+            // export still loads (it holds the corrections), and the load says so.
+            const files = [f('cam_v1.slp', OLD), f('cam.predictions.slp', NEW)];
+            const r = choose(files, stamps({ 'cam_v1.slp': JUN }));
+            assertEqual(r.file.name, 'cam_v1.slp', 'the LUC3D export is loaded');
+            assertNotNull(r.newer, 'and the newer unstamped file is flagged');
+            assertEqual(r.newer.name, 'cam.predictions.slp');
+        });
+
+        it('an unreadable candidate (no stamp) cannot beat a readable export by suffix', function () {
+            // A corrupt `_v2` used to win on its suffix and leave the view empty.
+            const r = choose([f('cam.slp', OLD), f('cam_v2.slp', OLD)], stamps({ 'cam.slp': OCT }));
+            assertEqual(r.file.name, 'cam.slp');
         });
     });
 })();

@@ -10,6 +10,7 @@
  *   { type: 'getFrame', frameIdx, requestId }  — Lazy mode: read single frame
  *   { type: 'getFrames', startIdx, endIdx, requestId } — Lazy mode: read frame range
  *   { type: 'close' }                          — Lazy mode: close file, free resources
+ *   { type: 'readProvenance', files: File[] }  — Each file's `provenance` dict only
  *
  * Messages OUT:
  *   { type: 'progress', message: string }
@@ -17,6 +18,7 @@
  *   { type: 'metadata', data: { skeleton, trackNames, nodeNames, nFrames, nTracks, nNodes, videos } }
  *   { type: 'frameData', frameIdx, requestId, instances }
  *   { type: 'framesData', startIdx, endIdx, requestId, frames }
+ *   { type: 'provenance', provenances: Array<Object|null> }  — parallel to `files`
  *   { type: 'error', message: string }
  */
 
@@ -76,7 +78,50 @@ async function handleMessage(data) {
         readFramesLazy(data.startIdx, data.endIdx, data.requestId);
     } else if (data.type === 'close') {
         closeLazy();
+    } else if (data.type === 'readProvenance' && data.files) {
+        readProvenances(data.files);
     }
+}
+
+/**
+ * Each file's `provenance` dict (from the `metadata` group's `json` attribute),
+ * and nothing else: no table is read, so this costs a file open and one small
+ * attribute however large the file is. The per-camera folder loader uses it to
+ * tell which of a camera directory's `.slp` files LUC3D wrote last
+ * (`chooseCameraSlp`). A file that cannot be opened, is not an SLP, or carries
+ * no provenance gives `null` — never an error: the loader then falls back to
+ * the version suffix for it, which is what it did before it asked.
+ */
+function readProvenances(files) {
+    var out = [];
+    for (var i = 0; i < files.length; i++) {
+        var file = files[i];
+        var f = null;
+        var prov = null;
+        try {
+            try { FS.mkdir('/work'); } catch (e) { /* exists */ }
+            try { FS.unmount('/work'); } catch (e) { /* not mounted */ }
+            FS.mount(FS.filesystems.WORKERFS, { files: [file] }, '/work');
+            f = new h5wasm.File('/work/' + file.name, 'r');
+            var keys = null;
+            try { keys = f.keys(); } catch (e) { keys = null; }
+            if (keys && keys.indexOf('metadata') >= 0) {
+                var attr = f.get('metadata').attrs['json'];
+                if (attr) {
+                    var str = typeof attr.value === 'string' ? attr.value : new TextDecoder().decode(attr.value);
+                    var meta = JSON.parse(str);
+                    if (meta && meta.provenance && typeof meta.provenance === 'object') prov = meta.provenance;
+                }
+            }
+        } catch (e) {
+            prov = null;
+        } finally {
+            if (f) { try { f.close(); } catch (e) { /* invalid id */ } }
+            try { FS.unmount('/work'); } catch (e) { /* not mounted */ }
+        }
+        out.push(prov);
+    }
+    postMessage({ type: 'provenance', provenances: out });
 }
 
 onmessage = async function (e) {
