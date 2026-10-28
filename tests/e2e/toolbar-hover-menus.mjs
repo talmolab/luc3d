@@ -1,6 +1,6 @@
 /**
- * toolbar-hover-menus.mjs — the toolbar's Instance and Group menus, and the
- * Temporal Smoothing button.
+ * toolbar-hover-menus.mjs — the toolbar's Instance and Group menus, its
+ * labelling / proofreading layout, and the Smooth (Temporal Smoothing) button.
  *
  * + Instance / - Instance and Group / Edit Group moved into menus that open on
  * HOVER (no click), to make room for Temporal Smoothing as its own button right
@@ -10,8 +10,13 @@
  *   2. a real click on an item in the open menu reaches that item's button;
  *   3. the Group button is blue while Group or Edit Group is (assignment mode),
  *      so the mode shows with the menu closed;
- *   4. Temporal Smoothing is the next control after Triangulate All, and the
- *      Triangulate menus no longer carry a smoothing item.
+ *   4. after Sessions, one group holds manual labelling (Instance, Group) and
+ *      the next proofreading in run order (Track, Triangulate, Smooth, then
+ *      the triangulation badge); the Triangulate menu carries no smoothing
+ *      item, the labels are short, and the toolbar fits a 1440px window;
+ *   5. Track, Triangulate and Smooth share one menu shape: This
+ *      frame, All frames, then settings ending in Settings…, and a click on
+ *      the button runs All frames.
  *
  * Run: node tests/e2e/toolbar-hover-menus.mjs
  */
@@ -95,23 +100,73 @@ try {
     check(JSON.stringify(await groupState(true)) === '[true,true]', '3. in assignment mode, Group and the Group button are blue');
     check(JSON.stringify(await groupState(false)) === '[false,false]', '3. and both turn off with it');
 
-    // ---- 4. Temporal Smoothing sits after Triangulate All -------------------------------
+    // ---- 4. labelling group, then proofreading in run order ----------------------------
     const order = await page.evaluate(() => {
-        const all = document.getElementById('triangulateAllDropdown');
+        const groups = Array.from(document.querySelectorAll('#toolbar > .toolbar-group'));
+        const ids = g => Array.from(g.children).map(c => c.id).filter(Boolean);
+        const label = id => document.getElementById(id).textContent.replace('▾', '').trim();
         return {
-            next: all.nextElementSibling && all.nextElementSibling.id,
-            nested: document.querySelectorAll('#triangulateDropdown [data-method="smooth"], #triangulateAllDropdown [data-method="smooth"]').length,
-            label: document.getElementById('tbSmooth').textContent.trim(),
+            first: ids(groups[0]),
+            labelling: ids(groups[1]),
+            labellingName: groups[1].getAttribute('aria-label'),
+            proofreading: ids(groups[2]),
+            proofreadingName: groups[2].getAttribute('aria-label'),
+            nested: document.getElementById('triangulateDropdown').querySelectorAll('[id^="tbSmooth"]').length,
+            labels: ['tbTrackAll', 'tbTriangulateAll', 'tbSmooth'].map(label),
+            smoothTitle: document.getElementById('tbSmooth').title,
         };
     });
-    check(order.next === 'smoothingDropdown', `4. Temporal Smoothing is the next control after Triangulate All (${order.next})`);
-    check(order.nested === 0, '4. the Triangulate menus no longer hold a smoothing item');
-    check(/^Temporal Smoothing/.test(order.label), `4. labelled "${order.label}"`);
+    check(JSON.stringify(order.first) === '["tbSessions"]', `4. Sessions stands alone (${order.first})`);
+    check(JSON.stringify(order.labelling) === '["instanceDropdown","groupDropdown"]' &&
+        order.labellingName === 'Manual labelling', `4. manual labelling: Instance, Group (${order.labelling})`);
+    check(JSON.stringify(order.proofreading) ===
+        '["trackDropdown","triangulateDropdown","smoothingDropdown","triangulationBadge"]' &&
+        order.proofreadingName === 'Proofreading', `4. proofreading: Track, Triangulate, Smooth (${order.proofreading})`);
+    check(order.nested === 0, '4. the Triangulate menu holds no smoothing item');
+    check(JSON.stringify(order.labels) === '["Track","Triangulate","Smooth"]', `4. short labels (${JSON.stringify(order.labels)})`);
+    check(/^Temporal smoothing/.test(order.smoothTitle), `4. Smooth's tooltip names Temporal smoothing ("${order.smoothTitle}")`);
     const tb = await page.evaluate(() => {
         const t = document.getElementById('toolbar');
         return { scroll: t.scrollWidth, client: t.clientWidth };
     });
     check(tb.scroll <= tb.client, `4. the toolbar still fits a 1440px window (scrollWidth ${tb.scroll} <= ${tb.client})`);
+
+    // ---- 5. one menu shape for Triangulate / Temporal Smoothing / Track ----------------
+    const MENUS = [['triangulateDropdown', 'tbTriangulateAll', 'triangulation'],
+        ['smoothingDropdown', 'tbSmooth', 'smoothing'], ['trackDropdown', 'tbTrackAll', 'wizard']];
+    for (const [dd, btn, panel] of MENUS) {
+        const shape = await page.evaluate((dd) => {
+            const items = [...document.querySelectorAll('#' + dd + ' .tri-dropdown-menu > button.tri-dropdown-item')];
+            return items.map(b => b.childNodes[0].textContent.trim());
+        }, dd);
+        check(shape[0] === 'This frame' && shape[1] === 'All frames' && shape[shape.length - 1] === 'Settings…',
+            `5. ${dd}: This frame, All frames, …, Settings… (${JSON.stringify(shape)})`);
+        // "All frames" is the button's own action: it forwards the click.
+        const forwarded = await page.evaluate(({ dd, btn }) => {
+            let n = 0;
+            const b = document.getElementById(btn);
+            const spy = (e) => { n++; e.stopImmediatePropagation(); e.preventDefault(); };
+            b.addEventListener('click', spy, true);
+            document.querySelector('#' + dd + ' [data-scope="all"]').click();
+            b.removeEventListener('click', spy, true);
+            return n;
+        }, { dd, btn });
+        check(forwarded === 1, `5. ${dd}: "All frames" runs the button's action (forwarded ${forwarded})`);
+        // Settings… opens that action's own panel.
+        await page.mouse.move(700, 600);
+        await page.waitForTimeout(450);
+        await page.hover('#' + btn);
+        await page.waitForTimeout(200);
+        await page.click('#' + dd + ' [data-scope="settings"]');
+        await page.waitForTimeout(200);
+        const shown = await page.evaluate(() => {
+            const vis = [...document.querySelectorAll('.settings-panel')].find(p => p.offsetParent !== null);
+            return vis ? vis.dataset.panel : null;
+        });
+        check(shown === panel, `5. ${dd}: Settings… opens Settings ▸ ${panel} (got ${shown})`);
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(150);
+    }
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

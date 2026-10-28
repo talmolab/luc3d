@@ -123,7 +123,7 @@ try {
 
     // ---- 3. Track Frame does not turn them on ----------------------------------------
     await pickLength('Off');
-    await page.click('#tbTrackFrame');
+    await page.hover('#tbTrackAll'); await page.click('#tbTrackFrame');   // This frame, in the Track menu
     await page.waitForTimeout(300);
     t = await read();
     check(t.sec === 0 && !t.blue, 'Track Frame (one frame) leaves trails off');

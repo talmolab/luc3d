@@ -43,9 +43,11 @@ import {
 } from './settings.js';
 import { getActiveSession, state, timeline } from './app-state.js';
 import { drawAllOverlays } from './rendering.js';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js';
 import { installModalGeometry } from './modal-geometry.js';
 import { refreshIdSwitchHighlight } from './id-switch-highlight.js';
 import { buildDetectionFilterPreview } from './detection-filter-preview.js';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -335,53 +337,25 @@ export function showSettingsModal(initialPanel) {
     triTitle.textContent = 'Default Triangulation';
     triPanel.appendChild(triTitle);
 
-    const TRI_METHODS = [
-        {
-            method: 'dlt',
-            title: 'Direct Linear Transformation (DLT)',
-            desc: 'Fast. Algebraic least-squares triangulation.',
-        },
-        {
-            method: 'ba',
-            title: 'Refined (Ref)',
-            desc: 'Slower. Minimizes geometric reprojection error.',
-        },
-    ];
-
-    const radioRows = {};
-    TRI_METHODS.forEach(function (m) {
-        const row = document.createElement('div');
-        row.className = 'settings-radio-row';
-        row.dataset.method = m.method;
-
-        const indicator = document.createElement('span');
-        indicator.className = 'settings-radio';
-        row.appendChild(indicator);
-
-        const labelWrap = document.createElement('div');
-        labelWrap.className = 'settings-radio-label';
-        const rTitle = document.createElement('div');
-        rTitle.className = 'settings-radio-title';
-        rTitle.textContent = m.title;
-        const rDesc = document.createElement('div');
-        rDesc.className = 'settings-radio-desc';
-        rDesc.textContent = m.desc;
-        labelWrap.appendChild(rTitle);
-        labelWrap.appendChild(rDesc);
-        row.appendChild(labelWrap);
-
-        row.addEventListener('click', function () {
-            working.method = m.method;
-            Object.keys(radioRows).forEach(function (key) {
-                radioRows[key].classList.toggle('checked', key === m.method);
-            });
+    // The two methods are chosen by clicking their diagram cards
+    // (`ui/triangulation-methods-figure.js`), not separate rows.
+    const triFigure = buildTriangulationMethodsFigure();
+    const methodCards = Array.from(triFigure.querySelectorAll('.tri-method-choice'));
+    function pickMethod(method) {
+        working.method = method;
+        methodCards.forEach(function (c) {
+            const on = c.dataset.method === method;
+            c.classList.toggle('checked', on);
+            c.setAttribute('aria-checked', on ? 'true' : 'false');
         });
-
-        triPanel.appendChild(row);
-        radioRows[m.method] = row;
+    }
+    // Enter/Space on a focused card is handled in `onDocKeyDown`: it stops
+    // every keydown in the capture phase, so a listener on the card never runs.
+    methodCards.forEach(function (c) {
+        c.addEventListener('click', function () { pickMethod(c.dataset.method); });
     });
-    // Initialize checked row from current default.
-    if (radioRows[working.method]) radioRows[working.method].classList.add('checked');
+    pickMethod(working.method);
+    triPanel.appendChild(triFigure);
 
     // Docs link for additional information on triangulation methods.
     const triDocsNote = document.createElement('div');
@@ -554,6 +528,14 @@ export function showSettingsModal(initialPanel) {
         '1 = fully considered (2D reprojection + 3D point-to-ray); 0 = ignored during tracking. ' +
         'Changes apply when you click Apply.';
     nwSection.body.appendChild(nwHint);
+    if (skeletonNodes.length) {
+        const nwTip = document.createElement('div');
+        nwTip.className = 'settings-kbd-hint settings-node-weight-tip';
+        nwTip.style.marginTop = '0';
+        nwTip.style.marginBottom = '8px';
+        nwTip.textContent = NODE_WEIGHT_TIP;
+        nwSection.body.appendChild(nwTip);
+    }
 
     if (skeletonNodes.length === 0) {
         const nwEmpty = document.createElement('div');
@@ -714,7 +696,7 @@ export function showSettingsModal(initialPanel) {
     // The post-triangulation filter's hyperparameters. Kept as its own panel
     // rather than a fourth section of the Tracking Wizard because it is NOT a
     // tracking parameter: it runs after triangulation, over 3D that the tracker
-    // has already finished with. Run it from the toolbar's Temporal Smoothing
+    // has already finished with. Run it from the toolbar's Smooth (Temporal Smoothing)
     // button (all frames; its menu also has "This frame").
     const smPanel = document.createElement('div');
     smPanel.className = 'settings-panel';
@@ -828,6 +810,12 @@ export function showSettingsModal(initialPanel) {
         // Don't intercept Escape while a key capture is in progress; the
         // capture's own listener handles it first.
         if (capturingState) return;
+        const choice = e.target && e.target.closest ? e.target.closest('.tri-method-choice') : null;
+        if (choice && (e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault();
+            pickMethod(choice.dataset.method);
+            return;
+        }
         if (e.key === 'Escape') {
             e.preventDefault();
             close();
@@ -857,5 +845,8 @@ export function showSettingsModal(initialPanel) {
         minW: 520,
         minH: 320,
         margin: 24,
+        // The opening size before it widened to 1040px; records holding it
+        // were saved without a resize, so they open at the new default.
+        legacyDefaultSize: { w: 880, h: 620 },
     });
 }

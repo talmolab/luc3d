@@ -30,6 +30,7 @@ import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseF
          dropDerivedReprojections, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from './initialization.js';
+import { noteTriangulateRun, carryTriangulateMark } from './run-state.js';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -2034,6 +2035,7 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
         onProgress: function () { if (onProgress) onProgress(completed, totalFrames); },
     });
 
+    noteTriangulateRun(state.session, frames);   // Triangulate turns blue (ui/run-buttons.js)
     return { triangulated: frames.length, totalGroups: totalGroups, errSum: errSum, errN: errN, frames: frames };
 }
 
@@ -2199,6 +2201,7 @@ export function reTriangulateGroup(instanceGroup) {
     // Only update if we got valid results
     var validPts = someValidPoint3d(result.points3d);
     if (validPts) {
+        carryTriangulateMark(oldPoints3d, result.points3d);
         instanceGroup.points3d = result.points3d;
         instanceGroup.reprojections = result.reprojections;
         storeReprojectedInstances(instanceGroup, result, cameras);
@@ -2500,6 +2503,7 @@ export function triangulateCurrentFrame(method) {
 
     // Show reproj/error UI elements now that triangulation has been run
     setReprojErrorVisible(true);
+    noteTriangulateRun(state.session, [frameIdx]);   // Triangulate turns blue (ui/run-buttons.js)
 
     // Update displays
     drawAllOverlays(frameIdx);
@@ -3009,6 +3013,7 @@ export async function triangulateAllFrames(method) {
         showLoadingProgress('Triangulating', 0, triLoader.nFrames,
             { detail: triangulationMethodLabel(method), title: 'Triangulate All' });   // the card's title, kept to hideLoading
         var swept = await sweepTriangulateAllFrames(state.session, cameras, method);
+        noteTriangulateRun(state.session, null);   // Triangulate turns blue (ui/run-buttons.js)
         setReprojErrorVisible(true, { checkBoxes: false });
         var reprojOnly = showReprojectionsOnly();   // #243: proofreading comes next
         drawAllOverlays(state.currentFrame);
@@ -3139,6 +3144,7 @@ export async function triangulateAllFrames(method) {
     // Show reproj/error UI elements, then only the reprojections (#243).
     setReprojErrorVisible(true, { checkBoxes: false });
     var reprojOnly = showReprojectionsOnly();
+    noteTriangulateRun(state.session, triangulatedFrames);   // Triangulate turns blue (ui/run-buttons.js)
 
     // Update display for current frame
     drawAllOverlays(state.currentFrame);

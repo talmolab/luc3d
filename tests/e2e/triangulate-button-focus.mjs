@@ -129,9 +129,15 @@ try {
     });
 
     // ---- 1 & 2. The reported bug, once per button --------------------------
+    // #tbTriangulateAll is the Triangulate button; #tbTriangulate is its menu's
+    // "This frame" item, reached by hovering the button like a user does.
+    const clickTri = async (id) => {
+        if (id === 'tbTriangulate') await page.hover('#tbTriangulateAll');
+        await page.click('#' + id);
+    };
     for (const id of ['tbTriangulate', 'tbTriangulateAll']) {
         await reset();
-        await page.click('#' + id);
+        await clickTri(id);
         let s = await snap();
         check(s.activeId !== id,
             `clicking #${id} does not leave it holding focus (activeElement=${s.activeId})`);
@@ -142,7 +148,7 @@ try {
             `Space after clicking #${id} reaches the transport (isPlaying=${s.playing})`);
 
         await reset();
-        await page.click('#' + id);
+        await clickTri(id);
         await page.keyboard.press('ArrowRight');
         s = await snap();
         check(s.frame === 1,
@@ -175,10 +181,11 @@ try {
     // Tab rather than .focus(): only a real keyboard focus sets :focus-visible,
     // which is what the blur rule keys on.
     await reset();
-    // The Group menu's button is the last toolbar control before Triangulate
-    // (its items are in a closed hover menu, which Tab skips).
-    await page.evaluate(() => { document.getElementById('tbGroupMenu').focus(); });
-    for (let i = 0; i < 6; i++) {
+    // Track is the toolbar control before Triangulate. Focus on it opens its
+    // menu (:focus-within), so Tab walks Track's items first, then reaches the
+    // Triangulate button, which opens its menu the same way, then This frame.
+    await page.evaluate(() => { document.getElementById('tbTrackAll').focus(); });
+    for (let i = 0; i < 12; i++) {
         await page.keyboard.press('Tab');
         const id = await page.evaluate(() => document.activeElement.id);
         if (id === 'tbTriangulate') break;

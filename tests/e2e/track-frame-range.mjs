@@ -295,16 +295,16 @@ try {
         window.__ASMOD.state.currentFrame = 4;
     });
 
-    const trackFrameBtn = page.locator('#tbTrackFrame');
-    check(await trackFrameBtn.count() === 1, 'Track Frame is still a clickable toolbar button');
-    check(await page.locator('#trackFrameDropdown #tbTrackFrameRange').count() === 1,
-        'the Track Frame split button carries a "Track Frame Range" dropdown item');
+    const trackFrameBtn = page.locator('#tbTrackAll');   // the Track ▾ button
+    check(await trackFrameBtn.count() === 1, 'Track is a clickable toolbar button');
+    check(await page.locator('#trackDropdown #tbTrackFrameRange').count() === 1,
+        'the Track menu carries a "Frame range…" item');
 
     // Hovering the button must reveal the menu (pure CSS, same as Triangulate).
     await trackFrameBtn.hover();
     await page.waitForTimeout(250);
     const rangeItem = page.locator('#tbTrackFrameRange');
-    check(await rangeItem.isVisible(), 'hovering Track Frame reveals the dropdown menu');
+    check(await rangeItem.isVisible(), 'hovering Track reveals the menu');
 
     // The menu is revealed purely by :hover, so every click on the item has to
     // re-establish hover first — a modal opening over the toolbar drops it.
