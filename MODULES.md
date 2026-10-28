@@ -9132,10 +9132,11 @@ right panel area (`settings-panel-container`), with a Cancel / Apply footer.
   `'keyboard'` | `'wizard'` | `'smoothing'` (default `'triangulation'`).
   Single-instance.
 
-**Behavior.** Four panels: **Default Triangulation** (DLT / Refined radio rows
-— `'ba'` is labelled "Refined (Ref)", described as bundle adjustment — then the
-DLT-vs-Refined diagram from `ui/triangulation-methods-figure.js` above the docs
-link), **Keyboard Shortcuts** (the
+**Behavior.** Four panels: **Default Triangulation** (the method is picked by
+clicking one of two diagram cards from `ui/triangulation-methods-figure.js`,
+DLT or "Refined (Ref)" = bundle adjustment — no separate rows; Enter/Space on a
+focused card is handled in `onDocKeyDown`, which stops every keydown in the
+capture phase, so a listener on the card would never run), **Keyboard Shortcuts** (the
 `getActions()` catalog by category; an editable entry's key chip captures a
 **chord or multi-key sequence** — keys accumulate, Ctrl/Cmd normalized to `Mod`
 via `chordFromEvent`, until a click sets it or Esc cancels; duplicates are
@@ -11089,8 +11090,10 @@ function, so the cycle through the info panel is hoist-safe).
 
 ### ui/triangulation-methods-figure.js
 
-**Purpose.** The diagram under Settings ▸ Default Triangulation that walks a new
-user through DLT vs Refined (bundle adjustment). Two top-down sketches of the
+**Purpose.** The Settings ▸ Default Triangulation choice: two cards that each
+explain one method (DLT, Refined = bundle adjustment) and are clicked to pick
+it (`role="radio"`, `data-method` `'dlt'`/`'ba'`; `ui/settings-modal.js` wires
+the selection). Two top-down sketches of the
 same three cameras: each camera's 2D detection on its image plane, its line of
 sight, the 3D answer, where that answer lands back in each camera and the pixel
 error between the two. One camera's detection is a stray: DLT is pulled toward

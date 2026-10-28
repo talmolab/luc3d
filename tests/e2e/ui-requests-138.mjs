@@ -120,9 +120,18 @@ try {
 
     // Change it the way a user does: Settings dialog -> "Refined" row -> Apply.
     await page.click('#menuBarSettings');
-    await page.click('.settings-radio-row[data-method="ba"]');
+    // The method is picked by clicking its diagram card (no separate rows).
+    await page.click('.tri-method-choice[data-method="ba"]');
+    const picked = await page.evaluate(() => Array.from(document.querySelectorAll('.tri-method-choice'))
+        .map(c => c.dataset.method + ':' + c.getAttribute('aria-checked') + ':' + c.classList.contains('checked')));
+    check(picked.join(',') === 'dlt:false:false,ba:true:true', `clicking the Refined card selects it (${picked})`);
+    await page.focus('.tri-method-choice[data-method="dlt"]');
+    await page.keyboard.press('Space');
+    const byKey = await page.evaluate(() => document.querySelector('.tri-method-choice[data-method="dlt"]').getAttribute('aria-checked'));
+    check(byKey === 'true', 'Space on the focused DLT card selects it');
+    await page.click('.tri-method-choice[data-method="ba"]');
     l = await labels();
-    check(l.text === 'Triangulate: DLT', 'picking a row without Apply changes nothing yet');
+    check(l.text === 'Triangulate: DLT', 'picking a card without Apply changes nothing yet');
     await page.click('.settings-btn-apply');
     l = await labels();
     check(l.text === 'Triangulate: Ref' && l.radio === 'ba', `after Apply: "${l.text}", radio ${l.radio}`);

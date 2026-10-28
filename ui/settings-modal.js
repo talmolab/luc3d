@@ -336,57 +336,25 @@ export function showSettingsModal(initialPanel) {
     triTitle.textContent = 'Default Triangulation';
     triPanel.appendChild(triTitle);
 
-    const TRI_METHODS = [
-        {
-            method: 'dlt',
-            title: 'Direct Linear Transformation (DLT)',
-            desc: 'Fast. Algebraic least-squares triangulation.',
-        },
-        {
-            method: 'ba',
-            title: 'Refined (Ref)',
-            desc: 'Slower. Bundle adjustment: minimizes geometric reprojection error, and copes better than DLT '
-                + 'with outliers (one view\'s 2D prediction placed wrong).',
-        },
-    ];
-
-    const radioRows = {};
-    TRI_METHODS.forEach(function (m) {
-        const row = document.createElement('div');
-        row.className = 'settings-radio-row';
-        row.dataset.method = m.method;
-
-        const indicator = document.createElement('span');
-        indicator.className = 'settings-radio';
-        row.appendChild(indicator);
-
-        const labelWrap = document.createElement('div');
-        labelWrap.className = 'settings-radio-label';
-        const rTitle = document.createElement('div');
-        rTitle.className = 'settings-radio-title';
-        rTitle.textContent = m.title;
-        const rDesc = document.createElement('div');
-        rDesc.className = 'settings-radio-desc';
-        rDesc.textContent = m.desc;
-        labelWrap.appendChild(rTitle);
-        labelWrap.appendChild(rDesc);
-        row.appendChild(labelWrap);
-
-        row.addEventListener('click', function () {
-            working.method = m.method;
-            Object.keys(radioRows).forEach(function (key) {
-                radioRows[key].classList.toggle('checked', key === m.method);
-            });
+    // The two methods are chosen by clicking their diagram cards
+    // (`ui/triangulation-methods-figure.js`), not separate rows.
+    const triFigure = buildTriangulationMethodsFigure();
+    const methodCards = Array.from(triFigure.querySelectorAll('.tri-method-choice'));
+    function pickMethod(method) {
+        working.method = method;
+        methodCards.forEach(function (c) {
+            const on = c.dataset.method === method;
+            c.classList.toggle('checked', on);
+            c.setAttribute('aria-checked', on ? 'true' : 'false');
         });
-
-        triPanel.appendChild(row);
-        radioRows[m.method] = row;
+    }
+    // Enter/Space on a focused card is handled in `onDocKeyDown`: it stops
+    // every keydown in the capture phase, so a listener on the card never runs.
+    methodCards.forEach(function (c) {
+        c.addEventListener('click', function () { pickMethod(c.dataset.method); });
     });
-    // Initialize checked row from current default.
-    if (radioRows[working.method]) radioRows[working.method].classList.add('checked');
-
-    // How the two methods differ, drawn for a new user.
-    triPanel.appendChild(buildTriangulationMethodsFigure());
+    pickMethod(working.method);
+    triPanel.appendChild(triFigure);
 
     // Docs link for additional information on triangulation methods.
     const triDocsNote = document.createElement('div');
@@ -833,6 +801,12 @@ export function showSettingsModal(initialPanel) {
         // Don't intercept Escape while a key capture is in progress; the
         // capture's own listener handles it first.
         if (capturingState) return;
+        const choice = e.target && e.target.closest ? e.target.closest('.tri-method-choice') : null;
+        if (choice && (e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault();
+            pickMethod(choice.dataset.method);
+            return;
+        }
         if (e.key === 'Escape') {
             e.preventDefault();
             close();
