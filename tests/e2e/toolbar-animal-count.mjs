@@ -10,9 +10,9 @@
  * count now lives on the SESSION (`Session.numAnimals`), saved in the `.slp`.
  *
  * Asserted, through the real app:
- *  1. It sits FIRST in the Track group, left of Track Frame on the same row —
- *     after Track All it read as "Track All Animals" — and starts blank, with
- *     an "auto" placeholder.
+ *  1. It sits in the Track menu (hover "Track"), below the run items (This
+ *     frame / All frames / Frame range…), and starts blank, with an "auto"
+ *     placeholder.
  *  2. The first-use dialog still opens once, and its answer appears in the
  *     field. A second run does not ask.
  *  3. Typing a count and pressing Enter sets it, hands focus back (so the
@@ -158,7 +158,7 @@ const clean = (page) => page.evaluate(async () => (await import('/import-export/
 
 // Replace the field's contents the way a user would, then press `key`.
 async function typeInto(page, text, key) {
-    await page.click('#tbNumAnimals');
+    await page.hover('#tbTrackAll'); await page.click('#tbNumAnimals');   // in the Track menu
     await page.keyboard.press('ControlOrMeta+a');
     await page.keyboard.press('Backspace');
     if (text) await page.keyboard.type(text);
@@ -184,36 +184,38 @@ try {
     // ------------------------------------------------------------ 1. placement
     const A = await openApp(browser, ['4']);
     const page = A.page;
+    const hiddenBefore = !(await page.locator('#tbNumAnimals').isVisible());
+    await page.hover('#tbTrackAll');
+    await page.waitForTimeout(200);
+    const shownOnHover = await page.locator('#tbNumAnimals').isVisible();
     const geo = await page.evaluate(() => {
         const f = document.getElementById('tbNumAnimals');
         const label = f.closest('label');
-        const tf = document.getElementById('tbTrackFrame');
-        const fr = f.getBoundingClientRect(), lr = label.getBoundingClientRect(), tr = tf.getBoundingClientRect();
+        const menu = document.querySelector('#trackDropdown .tri-dropdown-menu');
+        const range = document.getElementById('tbTrackFrameRange');
         return {
-            sameGroup: label.closest('.toolbar-group') === tf.closest('.toolbar-group'),
-            firstInGroup: label.closest('.toolbar-group').firstElementChild === label,
-            leftOfTrackFrame: lr.right <= tr.left,
-            sameRow: Math.abs((fr.top + fr.bottom) / 2 - (tr.top + tr.bottom) / 2) < 2,
+            inTrackMenu: !!menu && menu.contains(label),
+            belowRunItems: range.getBoundingClientRect().bottom <= label.getBoundingClientRect().top,
             labelText: label.textContent.trim(),
             placeholder: f.placeholder,
             value: f.value,
         };
     });
     console.log('1. placement');
-    check(geo.sameGroup && geo.firstInGroup, 'the field is first in the Track group');
-    check(geo.leftOfTrackFrame && geo.sameRow, 'it sits left of Track Frame, on the same row');
+    check(hiddenBefore && shownOnHover, 'the field is tucked in the Track menu and shows on hover');
+    check(geo.inTrackMenu && geo.belowRunItems, 'below This frame / All frames / Frame range…');
     check(geo.labelText === 'Animals', `labelled "${geo.labelText}"`);
     check(geo.value === '' && geo.placeholder === 'auto', `starts blank with an "auto" placeholder (value "${geo.value}")`);
 
     // ------------------------------------------------- 2. the dialog fills it
     console.log('2. the first-use dialog');
-    await page.click('#tbTrackFrame');
+    await page.hover('#tbTrackAll'); await page.click('#tbTrackFrame');   // This frame, in the Track menu
     let r = await read(page);
     let dl = await shown(A);
     check(dl.length === 1 && /Number of animals/.test(dl[0].message),
         `Track Frame asks once on first use (${dl.length} dialog(s))`);
     check(r.count === 4 && r.value === '4', `the dialog's answer shows in the field ("${r.value}")`);
-    await page.click('#tbTrackFrame');
+    await page.hover('#tbTrackAll'); await page.click('#tbTrackFrame');   // This frame, in the Track menu
     dl = await shown(A);
     check(dl.length === 1, `a second Track Frame does not ask (${dl.length} dialog(s))`);
 
@@ -260,7 +262,7 @@ try {
     await page.keyboard.press('p');
     check((await pred()) !== predBefore, '"p" outside the field toggles Predictions');
     await page.keyboard.press('p');
-    await page.click('#tbNumAnimals');
+    await page.hover('#tbTrackAll'); await page.click('#tbNumAnimals');   // in the Track menu
     await page.keyboard.press('p');
     check((await pred()) === predBefore, '"p" typed in the field does not toggle Predictions');
     await page.keyboard.press('Escape');
@@ -271,14 +273,14 @@ try {
     r = await read(page);
     check(r.count === null && r.value === '' && r.stored === 'auto',
         `clearing the field sets auto-detect (stored ${JSON.stringify(r.stored)})`);
-    await page.click('#tbTrackFrame');
+    await page.hover('#tbTrackAll'); await page.click('#tbTrackFrame');   // This frame, in the Track menu
     check((await shown(A)).length === 1, 'a cleared field does not bring the dialog back');
     await A.page.close();
 
     // A blank ANSWER in the dialog counts as an answer too.
     const B = await openApp(browser, ['', '2']);
-    await B.page.click('#tbTrackFrame');
-    await B.page.click('#tbTrackFrame');
+    await B.page.hover('#tbTrackAll'); await B.page.click('#tbTrackFrame');   // This frame, in the Track menu
+    await B.page.hover('#tbTrackAll'); await B.page.click('#tbTrackFrame');   // This frame, in the Track menu
     r = await read(B.page);
     dl = await shown(B);
     check(dl.length === 1, `a blank answer in the dialog is not asked again (${dl.length} dialog(s))`);
@@ -309,7 +311,7 @@ try {
     });
     r = await read(B.page);
     check(r.value === '' && r.stored === null, `a second session starts unanswered, and the field shows it (value "${r.value}")`);
-    await B.page.click('#tbTrackFrame');
+    await B.page.hover('#tbTrackAll'); await B.page.click('#tbTrackFrame');   // This frame, in the Track menu
     dl = await shown(B);
     check(dl.length === 2, `so Track Frame asks for it (${dl.length} dialog(s))`);
     check(dl.length === 2 && dl[1].def === '6',

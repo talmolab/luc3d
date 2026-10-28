@@ -38,6 +38,7 @@ import {
     campyVideoFile, orderByCampyCameras, campyRecordingWarnings,
 } from '../loading/campy-session.js';
 import { readBlobArrayBuffer } from '../loading/cold-read-guard.js';
+import { adoptSmoothingSource, readSmoothingMetadata } from './smoothing-metadata.js';
 import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js';
 import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js';
 import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js';
@@ -475,6 +476,8 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
                 // and `adoptPrior3d` can never match so every regroup re-solves.
                 group.triangulationMethod = (igLucid.triangulationMethod === 'ba') ? 'ba' : 'dlt';
                 markPoints3dFromFile(group.points3d);
+                // Temporal Smoothing's saved source, if any (smoothing-metadata.js).
+                adoptSmoothingSource(session, fgFrameIdx, group, i3d);
             }
 
             groups.push(group);
@@ -640,6 +643,8 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
                 // and `adoptPrior3d` can never match so every regroup re-solves.
                 group.triangulationMethod = (igLucid.triangulationMethod === 'ba') ? 'ba' : 'dlt';
                 markPoints3dFromFile(group.points3d);
+                // Temporal Smoothing's saved source, if any (smoothing-metadata.js).
+                adoptSmoothingSource(session, fgFrameIdx, group, i3d);
             }
 
             groups.push(group);
@@ -1136,6 +1141,8 @@ export async function handleLoadSlpFile(slpFile) {
         session.fileProvenance = fileSessionProvenance(slpData.provenance,
             fileSessionNames(slpData.sessions), slpSessIdx);
         readVisibilityMetadata(session, earlyVisibility);
+        // Temporal Smoothing's last run (the groups' sources come with the 3D).
+        readSmoothingMetadata(session, earlyVisibility);
         // Define Planes state — pool/planes/origin from the first session that
         // carries them, this session's per-view 2D onto this session.
         readPlaneMetadata(session, earlyVisibility);

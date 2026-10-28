@@ -67,7 +67,8 @@
 // DOM-free, so it is testable directly.
 
 import { applyOriginFrame, mulMat3Vec3, rebaseExtrinsics } from './origin-frame.js';
-import { points3dNodeCount, hasPoint3d, pooledPoints3d, isPoints3dFromFile, markPoints3dFromFile } from './pose-data.js';
+import { points3dNodeCount, hasPoint3d, pooledPoints3d, isPoints3dFromFile, markPoints3dFromFile,
+    unsmoothedPoints3d, markPoints3dSmoothed } from './pose-data.js';
 
 /**
  * The SESSION-scoped tally fields — exactly what one `perSession` record
@@ -343,6 +344,33 @@ export function countRebaseTargets(sessions, model) {
 }
 
 /**
+ * `p' = R·p + t` for every node of a flat points3d array, into a new array.
+ * Same length and NaN pattern as the source: a node without 3D must come out
+ * without 3D, not at the origin. NaN survives the arithmetic on its own, but
+ * copying it explicitly keeps that a stated property rather than a happy
+ * accident of IEEE 754.
+ * @param {Float64Array} src
+ * @param {number[][]} R
+ * @param {number[]} t
+ * @returns {Float64Array}
+ */
+function rebasePoints3d(src, R, t) {
+    var next = new Float64Array(src.length);
+    for (var k = 0, n = points3dNodeCount(src); k < n; k++) {
+        var o = k * 3;
+        if (!hasPoint3d(src, k)) {
+            next[o] = NaN; next[o + 1] = NaN; next[o + 2] = NaN;
+            continue;
+        }
+        var x = src[o], y = src[o + 1], z = src[o + 2];
+        next[o] = R[0][0] * x + R[0][1] * y + R[0][2] * z + t[0];
+        next[o + 1] = R[1][0] * x + R[1][1] * y + R[1][2] * z + t[1];
+        next[o + 2] = R[2][0] * x + R[2][1] * y + R[2][2] * z + t[2];
+    }
+    return next;
+}
+
+/**
  * Build every replacement buffer without touching a single stored value.
  *
  * Yields to the event loop every `opts.yieldEvery` units so the progress bar
@@ -373,7 +401,7 @@ export async function planOriginRebase(sessions, model, frame, opts) {
     var R = frame.R;
     var t = frame.translation;
 
-    /** @type {Array<{group:Object, next:Float64Array}>} */
+    /** @type {Array<{group:Object, next:Float64Array, nextUnsmoothed:Float64Array|null}>} */
     var groupPlans = [];
     /** @type {Array<{node:Object, next:Float64Array}>} */
     var nodePlans = [];
@@ -402,24 +430,14 @@ export async function planOriginRebase(sessions, model, frame, opts) {
             for (var gi = 0; gi < groups.length; gi++) {
                 var g = groups[gi];
                 if (!g.points3d) continue;
-                var src = g.points3d;
-                // Same length and NaN pattern as the source: a node without 3D
-                // must come out without 3D, not at the origin. NaN survives the
-                // arithmetic on its own, but copying it explicitly keeps that a
-                // stated property rather than a happy accident of IEEE 754.
-                var next = new Float64Array(src.length);
-                for (var k = 0, n = points3dNodeCount(src); k < n; k++) {
-                    var o = k * 3;
-                    if (!hasPoint3d(src, k)) {
-                        next[o] = NaN; next[o + 1] = NaN; next[o + 2] = NaN;
-                        continue;
-                    }
-                    var x = src[o], y = src[o + 1], z = src[o + 2];
-                    next[o] = R[0][0] * x + R[0][1] * y + R[0][2] * z + t[0];
-                    next[o + 1] = R[1][0] * x + R[1][1] * y + R[1][2] * z + t[1];
-                    next[o + 2] = R[2][0] * x + R[2][1] * y + R[2][2] * z + t[2];
-                }
-                groupPlans.push({ group: g, next: next });
+                // Smoothed 3D moves with its pre-smoothing copy, so a later
+                // smoothing run filters 3D in the new frame too.
+                var unsmoothed = unsmoothedPoints3d(g.points3d);
+                groupPlans.push({
+                    group: g,
+                    next: rebasePoints3d(g.points3d, R, t),
+                    nextUnsmoothed: unsmoothed ? rebasePoints3d(unsmoothed, R, t) : null,
+                });
                 await tick();
                 if (cancelled) break;
             }
@@ -518,9 +536,13 @@ export function applyOriginRebase(plan) {
         var g = plan.groups[i].group;
         var fromFile = isPoints3dFromFile(g.points3d);
         g.points3d = pooledPoints3d(plan.groups[i].next);
-        // The same 3D in the new frame: still the file's, not a solve's (see
-        // `markPoints3dFromFile` — the display reprojects it, never re-solves).
+        // The same 3D in the new frame: still the file's (or the smoothing
+        // pass's), not a solve's (see `markPoints3dFromFile` — the display
+        // reprojects it, never re-solves).
         if (fromFile) markPoints3dFromFile(g.points3d);
+        if (plan.groups[i].nextUnsmoothed) {
+            markPoints3dSmoothed(g.points3d, pooledPoints3d(plan.groups[i].nextUnsmoothed));
+        }
     }
     for (i = 0; i < plan.nodes.length; i++) {
         var node = plan.nodes[i].node, nn = plan.nodes[i].next;
