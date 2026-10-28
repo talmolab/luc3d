@@ -10,27 +10,27 @@
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
          setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d,
-         isPoints3dSmoothed } from './pose-data.js?v=a4913ba48952';
+         isPoints3dSmoothed } from './pose-data.js?v=e218595f4da6';
 // The Jacobi eigensolver and the least-squares plane fit live in
 // `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
 // importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
 // re-exported unchanged, because every existing caller and test reads it here.
-import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=a4913ba48952';
+import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=e218595f4da6';
 export { fitPlaneToPoints3d };
-import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=a4913ba48952';
+import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=e218595f4da6';
 // Pass 3i-2: triangulation orchestration moved out of app.js
-import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=a4913ba48952';
-import { updateTriangulationBadge } from '../ui/info-panel.js?v=a4913ba48952';
-import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=a4913ba48952';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=a4913ba48952';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=a4913ba48952';
-import { createGroupSolver } from './triangulation-pool.js?v=a4913ba48952';
-import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=a4913ba48952';
+import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=e218595f4da6';
+import { updateTriangulationBadge } from '../ui/info-panel.js?v=e218595f4da6';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=e218595f4da6';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=e218595f4da6';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=e218595f4da6';
+import { createGroupSolver } from './triangulation-pool.js?v=e218595f4da6';
+import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=e218595f4da6';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
-         dropDerivedReprojections, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=a4913ba48952';
+         dropDerivedReprojections, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=e218595f4da6';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from './initialization.js?v=a4913ba48952';
-import { noteTriangulateRun, carryTriangulateMark } from './run-state.js?v=a4913ba48952';
+import { update3DViewport } from './initialization.js?v=e218595f4da6';
+import { noteTriangulateRun, carryTriangulateMark } from './run-state.js?v=e218595f4da6';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -50,7 +50,7 @@ import {
     hungarianAlgorithm, cameraCenter, backProjectToRay, backProjectToRays,
     pointToRayDistance, pointsToRayDistances,
     computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
-} from './triangulation-core.js?v=a4913ba48952';
+} from './triangulation-core.js?v=e218595f4da6';
 export {
     triangulatePointDLT, triangulatePoints, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,
@@ -2179,6 +2179,11 @@ export function adoptPrior3d(group, prior, method) {
 export function reTriangulateGroup(instanceGroup) {
     if (!instanceGroup) return;
     if (!state.session || state.session.cameras.length < 2) return;
+    // Placeholder cameras only (no calibration loaded: all at the origin,
+    // `pose/placeholder-cameras.js`) — a "triangulation" from them is
+    // meaningless 3D that would be saved and exported as predictions. The
+    // explicit Triangulate paths refuse the same way (triangulateCurrentFrame).
+    if (!sessionHasCalibration()) return;
 
     var cameras = state.session.cameras;
     var groupCamNames = instanceGroup.cameraNames;
