@@ -173,6 +173,8 @@ try {
     check(re.button && re.reopened && re.stats === 'Tracks3for 3 animals', `the ID Switches tab reopens it (${JSON.stringify(re)})`);
 
     console.log('\n2. Track Frame and Track Frame Range refuse on one camera');
+    await page.hover('#tbTrackAll');                  // Track ▾: its menu opens on hover (#395); "This frame" is in it
+    await page.waitForTimeout(250);
     await page.click('#tbTrackFrame');
     check(/on a single camera use Track All/.test(await status()), 'Track Frame says to use Track All');
     const range = await page.evaluate(async () => { const t = await import('/pose/tracker.js'); return t.trackFrameRange(0, 300); });
