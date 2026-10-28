@@ -226,6 +226,27 @@ try {
     check(track.popup && track.ok === false && track.groups === 0,
         `Track All asks for a calibration and builds no groups (${JSON.stringify(track)})`);
 
+    // Grouping across views (Shift+G ends in onAssignmentGroupCreated, which
+    // auto-triangulates) must not "triangulate" from placeholder cameras: that
+    // 3D is meaningless (found on the real arm-reach folder: points_3d
+    // [[0,0,0],[0,0,1],[0,0,0]] saved, and exported as predictions).
+    const grouped = await page.evaluate(async () => {
+        const pd = await import('/pose/pose-data.js');
+        const AS = await import('/ui/app-state.js');
+        const S = AS.state;
+        const F = 9;
+        if (!S.session.frameGroups.has(F)) S.session.addFrameGroup(new pd.FrameGroup(F));
+        const g = new pd.InstanceGroup(9001, -1);
+        S.views.slice(0, 2).forEach((v, i) => g.addInstance(v.name, new pd.Instance([[60 + 10 * i, 8], [120 + 10 * i, 20]], 0, 'user', 1)));
+        S.session.instanceGroups.set(F, [g]);
+        AS.interactionManager.callbacks.onAssignmentGroupCreated(g);
+        const out = { points3d: g.points3d ? Array.from(g.points3d) : null, reproj: g.reprojectedInstances ? g.reprojectedInstances.size : 0 };
+        S.session.instanceGroups.delete(F);   // leave the project as it was saved
+        return out;
+    });
+    check(grouped.points3d === null && grouped.reproj === 0,
+        `a new cross-view group gets no 3D from placeholder cameras (${JSON.stringify(grouped)})`);
+
     // ---------------------------------------------------------------- 2 --
     console.log('\n-- 2. the saved file holds the videos and every pose --');
     // KEEP_SLP=<path> keeps the saved file, e.g. for scripts/validate_slp_sleap_compat.py.
