@@ -48,6 +48,7 @@ import {
 } from '../ui/loading-overlay.js';
 import { clearReadout } from '../ui/frame-readout.js';
 import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js';
+import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adoptSmoothingSource } from './smoothing-metadata.js';
 import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
 import { buildSaveProvenance } from './slp-provenance.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
@@ -311,6 +312,9 @@ function serializeSessionFrames(session) {
             if (group.usedCameras) {
                 groupData.usedCameras = Array.from(group.usedCameras);
             }
+            // Temporal Smoothing's source (smoothing-metadata.js), only when smoothed.
+            var _unsmoothed = smoothingSourceFor(group);
+            if (_unsmoothed) groupData.unsmoothedPoints3d = toBoxedPoints3d(_unsmoothed);
             for (var [camName, inst] of group.instances) {
                 var instData = {
                     points: inst.toPointsArray(),
@@ -1285,6 +1289,7 @@ export function saveProject() {
                 // JSON puts them at the session-dict level rather than under a
                 // `metadata.lucid`.
                 writeVisibilityMetadata(sessData, sess);
+                writeSmoothingMetadata(sessData, sess);
                 // Define Planes state, at the same session-dict level and under
                 // the same keys the `.slp` writers use.
                 return writePlaneMetadata(sessData, sess);
@@ -1332,6 +1337,7 @@ export function saveProject() {
     // Session-scoped Visibility-panel state (see the v3 branch above). `_restoreProjectV2`
     // reads these at this same level for both the v2 and v3 shapes.
     writeVisibilityMetadata(projectData, state.session);
+    writeSmoothingMetadata(projectData, state.session);
     writePlaneMetadata(projectData, state.session);
 
     // Serialize each frame
@@ -1356,6 +1362,9 @@ export function saveProject() {
             if (group.usedCameras) {
                 groupData.usedCameras = Array.from(group.usedCameras);
             }
+            // Temporal Smoothing's source (smoothing-metadata.js), only when smoothed.
+            var _unsmoothed = smoothingSourceFor(group);
+            if (_unsmoothed) groupData.unsmoothedPoints3d = toBoxedPoints3d(_unsmoothed);
             for (const [camName, inst] of group.instances) {
                 const instData = {
                     points: inst.toPointsArray(),
@@ -1909,6 +1918,7 @@ function _restoreProjectV2(data) {
     // Session-scoped Visibility-panel state. Shared by the v2 (whole document)
     // and v3 (per-session dict) shapes — both put these keys at this level.
     readVisibilityMetadata(session, data);
+    readSmoothingMetadata(session, data);
     // Define Planes state. Project-scoped keys are ingested by whichever
     // session is read first; placements land on this one.
     readPlaneMetadata(session, data);
@@ -1938,6 +1948,10 @@ function _restoreProjectV2(data) {
                     var group = new InstanceGroup(groupData.id || Date.now(), loadedIdentityId);
                     if (groupData.points3d) {
                         group.points3d = pooledPoints3d(groupData.points3d);
+                        if (groupData.unsmoothedPoints3d) {
+                            adoptSmoothingSource(session, frameIdx, group,
+                                { lucidUnsmoothed: pooledPoints3d(groupData.unsmoothedPoints3d) });
+                        }
                     }
                     if (groupData.reprojections) {
                         group.reprojections = groupData.reprojections;
