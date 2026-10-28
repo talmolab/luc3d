@@ -222,7 +222,18 @@ export function medianOf(buf, n) {
  * @param {Float64Array} src
  * @param {Float64Array} dst
  * @param {Array<{start:number,end:number}>} segments
- * @param {{kernel: 'median'|'gaussian', window: number, minSegment: number}} opts
+ * `opts.from` / `opts.to` (default the whole signal) limit the samples
+ * COMPUTED to `[from, to)`; the rest are copied through. A segment may then
+ * reach past either end of the signal (`smoothFrame` passes the true segment
+ * of a short slice): its length still decides `minSegment` and its edges the
+ * shrink, and no read leaves the signal as long as every computed sample's
+ * window fits in it.
+ *
+ * @param {Float64Array} src
+ * @param {Float64Array} dst
+ * @param {Array<{start:number,end:number}>} segments
+ * @param {{kernel: 'median'|'gaussian', window: number, minSegment: number,
+ *   from?: number, to?: number}} opts
  * @param {Float64Array} scratchV window values, length >= opts.window
  * @param {Float64Array} scratchW window weights, length >= opts.window
  */
@@ -235,13 +246,16 @@ export function smoothSignalInto(src, dst, segments, opts, scratchV, scratchW) {
     var sigma = isMedian ? 0 : sigmaForWindow(w);
     var twoSigmaSq = 2 * sigma * sigma;
     var minSeg = Math.max(1, Math.floor(opts.minSegment) || 1);
+    var from = Math.max(0, opts.from || 0);
+    var to = Math.min(src.length, opts.to == null ? src.length : opts.to);
 
     for (var s = 0; s < segments.length; s++) {
         var segStart = segments[s].start;
         var segEnd = segments[s].end;
         if (segEnd - segStart < minSeg) continue;
 
-        for (var t = segStart; t < segEnd; t++) {
+        var tEnd = Math.min(segEnd, to);
+        for (var t = Math.max(segStart, from); t < tEnd; t++) {
             if (Number.isNaN(src[t])) continue;
 
             // Symmetric shrink at the SEGMENT edges (not at holes): a one-sided
@@ -364,6 +378,68 @@ function invalidateReprojections(group) {
 }
 
 /**
+ * Copy one group's 3D — as it was before ANY smoothing, so a second run
+ * replaces the first rather than smoothing its output again — into
+ * `data[base..]`, leaving absent nodes NaN.
+ * @returns {number} nodes present; 0 = the frame is absent (skeleton-level)
+ */
+function gatherGroupInto(group, data, base) {
+    var pts = unsmoothedPoints3d(group.points3d) || group.points3d;
+    var have = 0;
+    var count = points3dNodeCount(pts);
+    for (var k = 0; k < count; k++) {
+        var o = k * POINT3D_STRIDE;
+        var x = pts[o], y = pts[o + 1], z = pts[o + 2];
+        // A partially-NaN triple is meaningless in 3D — treat it as absent,
+        // matching `hasPoint3d`.
+        if (Number.isNaN(x) || Number.isNaN(y) || Number.isNaN(z)) continue;
+        data[base + o] = x;
+        data[base + o + 1] = y;
+        data[base + o + 2] = z;
+        have++;
+    }
+    return have;
+}
+
+/** Node count of a group's pre-smoothing 3D (what `gatherGroupInto` reads). */
+function sourceNodeCount(group) {
+    return points3dNodeCount(unsmoothedPoints3d(group.points3d) || group.points3d);
+}
+
+/**
+ * Write filtered values `data[base..]` into a group's `points3d` in place,
+ * keeping its pre-smoothing copy and invalidating derived reprojections.
+ * @returns {number} nodes written (0 = untouched)
+ */
+function writeGroupFrom(g, data, base) {
+    var pts2 = g.points3d;
+    var source = unsmoothedPoints3d(pts2);
+    var count2 = points3dNodeCount(pts2);
+    var touched = 0;
+    for (var k2 = 0; k2 < count2; k2++) {
+        var o2 = k2 * POINT3D_STRIDE;
+        var nx = data[base + o2];
+        // Never resurrect a node that was missing: gaps are not filled.
+        if (Number.isNaN(nx)) continue;
+        // First smoothing of this array: keep what it held (in the slab
+        // pool, not one ArrayBuffer per group) before overwriting it. The
+        // slice matters: `pooledPoints3d` hands an already-pooled array
+        // back as-is, which would make the copy the array being written.
+        if (!source) source = pooledPoints3d(pts2.slice());
+        pts2[o2] = nx;
+        pts2[o2 + 1] = data[base + o2 + 1];
+        pts2[o2 + 2] = data[base + o2 + 2];
+        touched++;
+    }
+    if (touched > 0) {
+        invalidateReprojections(g);
+        markPoints3dSmoothed(pts2, source);
+        g.smoothed = true;
+    }
+    return touched;
+}
+
+/**
  * Smooth one identity's trajectory in place.
  *
  * @param {Map<number, InstanceGroup>} byFrame frameIdx -> group
@@ -398,8 +474,7 @@ function* smoothTrajectorySteps(byFrame, cfg, writeFrames) {
     // leaves the tail signals NaN, which the segmentation already tolerates.
     var nNodes = 0;
     for (var fi = 0; fi < frameIdxs.length; fi++) {
-        var gp = byFrame.get(frameIdxs[fi]).points3d;
-        var nc = points3dNodeCount(unsmoothedPoints3d(gp) || gp);
+        var nc = sourceNodeCount(byFrame.get(frameIdxs[fi]));
         if (nc > nNodes) nNodes = nc;
     }
     if (nNodes === 0) return { frames: 0, nodes: 0 };
@@ -415,26 +490,9 @@ function* smoothTrajectorySteps(byFrame, cfg, writeFrames) {
         var t = frameIdx - minFrame;
         var group = byFrame.get(frameIdx);
         groupAt[t] = group;
-        // Filter the 3D as it was before ANY smoothing, so a second run
-        // replaces the first rather than smoothing its output again.
-        var pts = unsmoothedPoints3d(group.points3d) || group.points3d;
-        var have = 0;
-        var count = points3dNodeCount(pts);
-        var base = t * stride;
-        for (var k = 0; k < count; k++) {
-            var o = k * POINT3D_STRIDE;
-            var x = pts[o], y = pts[o + 1], z = pts[o + 2];
-            // A partially-NaN triple is meaningless in 3D — treat it as absent,
-            // matching `hasPoint3d`.
-            if (Number.isNaN(x) || Number.isNaN(y) || Number.isNaN(z)) continue;
-            data[base + o] = x;
-            data[base + o + 1] = y;
-            data[base + o + 2] = z;
-            have++;
-        }
         // Skeleton-level presence: the frame counts as present when the group
         // has ANY triangulated node. Decided once here, applied to all signals.
-        if (have > 0) present[t] = 1;
+        if (gatherGroupInto(group, data, t * stride) > 0) present[t] = 1;
     }
 
     var segments = buildSegments(present, cfg.maxGap);
@@ -474,30 +532,8 @@ function* smoothTrajectorySteps(byFrame, cfg, writeFrames) {
         var g = groupAt[t2];
         if (!g || !present[t2]) continue;
         if (writeFrames && !writeFrames.has(t2 + minFrame)) continue;
-        var pts2 = g.points3d;
-        var source = unsmoothedPoints3d(pts2);
-        var count2 = points3dNodeCount(pts2);
-        var base2 = t2 * stride;
-        var touched = 0;
-        for (var k2 = 0; k2 < count2; k2++) {
-            var o2 = k2 * POINT3D_STRIDE;
-            var nx = data[base2 + o2];
-            // Never resurrect a node that was missing: gaps are not filled.
-            if (Number.isNaN(nx)) continue;
-            // First smoothing of this array: keep what it held (in the slab
-            // pool, not one ArrayBuffer per group) before overwriting it. The
-            // slice matters: `pooledPoints3d` hands an already-pooled array
-            // back as-is, which would make the copy the array being written.
-            if (!source) source = pooledPoints3d(pts2.slice());
-            pts2[o2] = nx;
-            pts2[o2 + 1] = data[base2 + o2 + 1];
-            pts2[o2 + 2] = data[base2 + o2 + 2];
-            touched++;
-        }
+        var touched = writeGroupFrom(g, data, t2 * stride);
         if (touched > 0) {
-            invalidateReprojections(g);
-            markPoints3dSmoothed(pts2, source);
-            g.smoothed = true;
             framesWritten++;
             nodesWritten += touched;
         }
@@ -584,6 +620,195 @@ function* smoothSessionSteps(session, params, opts) {
     return result;
 }
 
+/**
+ * The group `collectTrajectories` would put in identity `id`'s trajectory on
+ * `frameIdx`: the first one with 3D. null when there is none.
+ */
+function trajectoryGroupAt(session, frameIdx, id) {
+    var groups = session.instanceGroups.get(frameIdx);
+    if (!groups) return null;
+    for (var gi = 0; gi < groups.length; gi++) {
+        var g = groups[gi];
+        if (!g || !g.points3d) continue;
+        if (((g.identityId == null) ? NO_IDENTITY : g.identityId) === id) return g;
+    }
+    return null;
+}
+
+/** Is the frame present in identity `id`'s trajectory (any node triangulated)? */
+function trajectoryPresentAt(session, frameIdx, id) {
+    var g = trajectoryGroupAt(session, frameIdx, id);
+    if (!g) return false;
+    var pts = unsmoothedPoints3d(g.points3d) || g.points3d;
+    var count = points3dNodeCount(pts);
+    for (var k = 0; k < count; k++) {
+        var o = k * POINT3D_STRIDE;
+        if (!Number.isNaN(pts[o]) && !Number.isNaN(pts[o + 1]) && !Number.isNaN(pts[o + 2])) return true;
+    }
+    return false;
+}
+
+/** Does any frame hold two unidentified groups? (`collectTrajectories`' rule) */
+function hasAmbiguousNoIdentity(session) {
+    for (var [, groups] of session.instanceGroups) {
+        if (!groups || groups.length < 2) continue;
+        var seen = 0;
+        for (var gi = 0; gi < groups.length; gi++) {
+            var g = groups[gi];
+            if (!g || !g.points3d) continue;
+            if (g.identityId == null || g.identityId === NO_IDENTITY) {
+                if (++seen > 1) return true;
+            }
+        }
+    }
+    return false;
+}
+
+/**
+ * Smooth ONE frame — Temporal Smoothing ▸ "This frame" — reading only the
+ * frames its value depends on, so the cost follows the windows, not the
+ * recording length.
+ *
+ * Writes exactly what `smoothSession` (all frames, same params) writes on
+ * `frameIdx`, bit for bit, and nothing else. What that value depends on, per
+ * identity on the frame:
+ *   - the samples within median radius + Gaussian radius of the frame (the
+ *     Gaussian reads the median's output within its radius, and each of those
+ *     read the input within theirs);
+ *   - the frame's SEGMENT edges (the symmetric shrink) and length
+ *     (`minSegment`). They are found by walking out from the frame until an
+ *     absent run longer than `maxGap` ends the segment, or until a present
+ *     frame lies far enough out (past both radii and `minSegment`) that the
+ *     true edge can no longer change the result — that frame then stands in
+ *     for the edge, so the walk is bounded too.
+ * The slice is filtered by the same `smoothSignalInto`, with the true segment
+ * passed in slice coordinates (it may reach past the slice) and only the
+ * samples the frame reads computed (`from`/`to`), so every sum runs in the same
+ * order as the full pass.
+ *
+ * Identity bucketing follows `collectTrajectories` (first group per identity
+ * per frame; unidentified groups only when no frame anywhere holds two of them
+ * — the one whole-session walk here, and only when the frame has an
+ * unidentified group). `skipped` counts this frame's groups only.
+ *
+ * @param {Session} session
+ * @param {Object} params as `smoothSession`
+ * @param {number} frameIdx
+ * @returns {{tracks:number, frames:number, nodes:number, skipped:number,
+ *   config:Object, ran:boolean}} as `smoothSession`
+ */
+export function smoothFrame(session, params, frameIdx) {
+    var cfg = resolveSmoothingParams(params);
+    var result = {
+        tracks: 0, frames: 0, nodes: 0, skipped: 0, config: cfg, ran: false,
+    };
+    if (!session || !session.instanceGroups || !cfg.enabled) return result;
+    result.ran = true;
+    var groups = session.instanceGroups.get(frameIdx);
+    if (!groups || !groups.length) return result;
+
+    var ids = [];
+    var seenIds = new Set();
+    var noIdHere = 0;
+    for (var gi = 0; gi < groups.length; gi++) {
+        var g0 = groups[gi];
+        if (!g0 || !g0.points3d) continue;
+        var id0 = (g0.identityId == null) ? NO_IDENTITY : g0.identityId;
+        if (id0 === NO_IDENTITY) noIdHere++;
+        if (seenIds.has(id0)) { result.skipped++; continue; }
+        seenIds.add(id0);
+        ids.push(id0);
+    }
+    if (seenIds.has(NO_IDENTITY) && (noIdHere > 1 || hasAmbiguousNoIdentity(session))) {
+        ids.splice(ids.indexOf(NO_IDENTITY), 1);
+        result.skipped++;
+    }
+
+    var rm = cfg.medianWindow ? (cfg.medianWindow - 1) >> 1 : 0;
+    var rg = cfg.gaussianWindow ? (cfg.gaussianWindow - 1) >> 1 : 0;
+    var reach = rm + rg;
+    // A present frame this far out stands in for the segment edge: every
+    // sample computed is then at least its own radius from it (no shrink), and
+    // the segment is longer than `minSegment` either way.
+    var far = Math.max(reach, cfg.minSegment);
+    var maxWindow = Math.max(cfg.medianWindow, cfg.gaussianWindow);
+    var scratchV = new Float64Array(maxWindow);
+    var scratchW = new Float64Array(maxWindow);
+
+    for (var ii = 0; ii < ids.length; ii++) {
+        var id = ids[ii];
+        if (!trajectoryPresentAt(session, frameIdx, id)) continue;
+
+        // --- Segment edges (or stand-ins), as `buildSegments` would cut ----
+        var first = frameIdx, run = 0;
+        for (var f = frameIdx - 1; frameIdx - first < far; f--) {
+            if (trajectoryPresentAt(session, f, id)) { first = f; run = 0; }
+            else if (++run > cfg.maxGap) break;
+        }
+        var last = frameIdx;
+        run = 0;
+        for (var f2 = frameIdx + 1; last - frameIdx < far; f2++) {
+            if (trajectoryPresentAt(session, f2, id)) { last = f2; run = 0; }
+            else if (++run > cfg.maxGap) break;
+        }
+
+        // --- Gather the slice [lo, hi] the frame's value reads ---------------
+        var lo = Math.max(first, frameIdx - reach);
+        var hi = Math.min(last, frameIdx + reach);
+        var T = hi - lo + 1;
+        var nNodes = 0;
+        var at = new Array(T);
+        for (var t = 0; t < T; t++) {
+            at[t] = trajectoryGroupAt(session, lo + t, id);
+            if (at[t]) {
+                var nc = sourceNodeCount(at[t]);
+                if (nc > nNodes) nNodes = nc;
+            }
+        }
+        if (nNodes === 0) continue;
+        var stride = nNodes * POINT3D_STRIDE;
+        var data = new Float64Array(T * stride).fill(NaN);
+        for (var t1 = 0; t1 < T; t1++) {
+            if (at[t1]) gatherGroupInto(at[t1], data, t1 * stride);
+        }
+
+        // --- Filter: only the samples the frame's value reads ----------------
+        var segments = [{ start: first - lo, end: last + 1 - lo }];
+        var c = frameIdx - lo;
+        var src = new Float64Array(T);
+        var dst = new Float64Array(T);
+        var out = new Float64Array(stride);
+        for (var s = 0; s < stride; s++) {
+            for (var i = 0; i < T; i++) src[i] = data[i * stride + s];
+            if (cfg.medianWindow > 0) {
+                smoothSignalInto(src, dst, segments, {
+                    kernel: 'median', window: cfg.medianWindow, minSegment: cfg.minSegment,
+                    from: c - rg, to: c + rg + 1,
+                }, scratchV, scratchW);
+                src.set(dst);
+            }
+            if (cfg.gaussianWindow > 0) {
+                smoothSignalInto(src, dst, segments, {
+                    kernel: 'gaussian', window: cfg.gaussianWindow, minSegment: cfg.minSegment,
+                    from: c, to: c + 1,
+                }, scratchV, scratchW);
+                src.set(dst);
+            }
+            out[s] = src[c];
+        }
+
+        // --- Write back the frame only -----------------------------------------
+        var touched = writeGroupFrom(at[c], out, 0);
+        if (touched > 0) {
+            smoothedFramesOf(session).add(frameIdx);
+            result.tracks++;
+            result.frames++;
+            result.nodes += touched;
+        }
+    }
+    return result;
+}
+
 /** Session -> frames a pass smoothed something on (a superset; see `hasSmoothed3d`). */
 var _smoothedFrames = new WeakMap();
 
@@ -639,8 +864,11 @@ export function unsmoothSession(session, opts) {
     var writeFrames = (opts && opts.writeFrames) || null;
     var frames = 0;
     if (!session || !session.instanceGroups) return { frames: 0 };
-    for (var [frameIdx, groups] of session.instanceGroups) {
-        if (!groups || (writeFrames && !writeFrames.has(frameIdx))) continue;
+    // A frame list walks just those frames ("This frame"), not the session.
+    var frameIdxs = writeFrames ? writeFrames : session.instanceGroups.keys();
+    for (var frameIdx of frameIdxs) {
+        var groups = session.instanceGroups.get(frameIdx);
+        if (!groups) continue;
         for (var gi = 0; gi < groups.length; gi++) {
             var g = groups[gi];
             var source = g && unsmoothedPoints3d(g.points3d);

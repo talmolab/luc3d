@@ -76,7 +76,7 @@ import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangula
 import { getDefaultTriangulationMethod, setDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler,
          dispatchEvent, getActions, formatBinding, getSmoothingParams } from './settings.js';
 // luc3d #134: post-triangulation temporal smoothing of the 3D tracks.
-import { smoothSessionAsync, unsmoothSession, resolveSmoothingParams } from '../pose/temporal-smoothing.js';
+import { smoothSessionAsync, smoothFrame, unsmoothSession, resolveSmoothingParams } from '../pose/temporal-smoothing.js';
 import { syncSmoothingButton, noteSmoothingScope } from './smoothing-button.js';
 import { showLoadingProgress, createProgressPacer, yieldToPaint } from './loading-overlay.js';
 import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js';
@@ -2895,12 +2895,13 @@ export function setupUI() {
     // the Settings default method.
     // Temporal Smoothing (luc3d #134) — the post-triangulation pass behind the
     // toolbar button of that name, next to Triangulate All. `currentFrameOnly`
-    // is its "This frame" item: the whole trajectory is always READ (a filter
-    // needs neighbours on both sides), but only the current frame is WRITTEN.
+    // is its "This frame" item (`smoothFrame`): it reads only the frames within
+    // the filter windows of the current one and writes that frame alone, with
+    // the same values an All frames run would give it.
     //
     // Touches only `points3d` on the already-resident `session.instanceGroups`
-    // — no 2D hydration, no lazy sweep. On the main thread, in steps
-    // (`smoothSessionAsync`), with the shared progress card.
+    // — no 2D hydration, no lazy sweep. On the main thread; All frames runs in
+    // steps (`smoothSessionAsync`) with the shared progress card.
     var smoothingRunning = false;
     async function runTemporalSmoothing(currentFrameOnly) {
         var session = state.session;
@@ -2930,31 +2931,28 @@ export function setupUI() {
             // Each run filters the 3D from before ANY smoothing
             // (`unsmoothedPoints3d`), so it replaces the last run, never stacks.
             // All frames shows the progress card at once and paints it before
-            // the pass holds the thread; This frame filters the same
-            // trajectories (it reads every frame), so it shows the card too,
-            // but only once it has run past one pacer interval.
-            var title = { title: 'Temporal Smoothing', unit: 'poses', detail: parts.join(' + ') };
-            var shown = false;
-            smoothingRunning = true;
-            try {
-                if (!currentFrameOnly) {
+            // the pass holds the thread. This frame reads a few dozen frames
+            // (well under a millisecond), so it shows no card.
+            if (currentFrameOnly) {
+                stats = smoothFrame(session, params, state.currentFrame);
+            } else {
+                var title = { title: 'Temporal Smoothing', unit: 'poses', detail: parts.join(' + ') };
+                smoothingRunning = true;
+                try {
                     showLoadingProgress('Smoothing', 0, 1, title);
-                    shown = true;
                     await yieldToPaint();
+                    var pacer = createProgressPacer();
+                    stats = await smoothSessionAsync(session, params, {
+                        onProgress: async function (done, total) {
+                            if (!pacer.due()) return;
+                            showLoadingProgress('Smoothing', Math.round(done), total, title);
+                            await pacer.yield();
+                        },
+                    });
+                } finally {
+                    smoothingRunning = false;
+                    hideLoading();
                 }
-                var pacer = createProgressPacer();
-                stats = await smoothSessionAsync(session, params, {
-                    writeFrames: writeFrames,
-                    onProgress: async function (done, total) {
-                        if (!pacer.due()) return;
-                        showLoadingProgress('Smoothing', Math.round(done), total, title);
-                        shown = true;
-                        await pacer.yield();
-                    },
-                });
-            } finally {
-                smoothingRunning = false;
-                if (shown) hideLoading();
             }
             if (stats.frames === 0) {
                 setStatus(currentFrameOnly
@@ -2972,8 +2970,12 @@ export function setupUI() {
         // The info panel's per-frame results still hold the pre-smoothing 3D
         // and errors of every group the pass wrote (its reprojections are now
         // null), and the reprojection fill APPENDS a fresh entry for each, so
-        // drop the stale ones or the panel would average both.
-        state.triangulationResults.forEach(function (results, fi) {
+        // drop the stale ones or the panel would average both. This frame
+        // wrote only the current frame, so only its results can be stale.
+        var staleFrames = writeFrames ? Array.from(writeFrames) : Array.from(state.triangulationResults.keys());
+        staleFrames.forEach(function (fi) {
+            var results = state.triangulationResults.get(fi);
+            if (!results) return;
             var kept = results.filter(function (r) { return !r.group || !!r.group.reprojections; });
             if (kept.length === 0) state.triangulationResults.delete(fi);
             else if (kept.length !== results.length) state.triangulationResults.set(fi, kept);
