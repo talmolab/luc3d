@@ -10,8 +10,11 @@
  *   2. a real click on an item in the open menu reaches that item's button;
  *   3. the Group button is blue while Group or Edit Group is (assignment mode),
  *      so the mode shows with the menu closed;
- *   4. Temporal Smoothing is the next control after Triangulate All, and the
- *      Triangulate menus no longer carry a smoothing item.
+ *   4. Temporal Smoothing is the next control after Triangulate, and the
+ *      Triangulate menu carries no smoothing item;
+ *   5. Triangulate, Temporal Smoothing and Track share one menu shape: This
+ *      frame, All frames, then settings ending in Settings…, and a click on
+ *      the button runs All frames.
  *
  * Run: node tests/e2e/toolbar-hover-menus.mjs
  */
@@ -97,21 +100,58 @@ try {
 
     // ---- 4. Temporal Smoothing sits after Triangulate All -------------------------------
     const order = await page.evaluate(() => {
-        const all = document.getElementById('triangulateAllDropdown');
+        const tri = document.getElementById('triangulateDropdown');
         return {
-            next: all.nextElementSibling && all.nextElementSibling.id,
-            nested: document.querySelectorAll('#triangulateDropdown [data-method="smooth"], #triangulateAllDropdown [data-method="smooth"]').length,
+            next: tri.nextElementSibling && tri.nextElementSibling.id,
+            nested: tri.querySelectorAll('[id^="tbSmooth"]').length,
             label: document.getElementById('tbSmooth').textContent.trim(),
         };
     });
-    check(order.next === 'smoothingDropdown', `4. Temporal Smoothing is the next control after Triangulate All (${order.next})`);
-    check(order.nested === 0, '4. the Triangulate menus no longer hold a smoothing item');
+    check(order.next === 'smoothingDropdown', `4. Temporal Smoothing is the next control after Triangulate (${order.next})`);
+    check(order.nested === 0, '4. the Triangulate menu holds no smoothing item');
     check(/^Temporal Smoothing/.test(order.label), `4. labelled "${order.label}"`);
     const tb = await page.evaluate(() => {
         const t = document.getElementById('toolbar');
         return { scroll: t.scrollWidth, client: t.clientWidth };
     });
     check(tb.scroll <= tb.client, `4. the toolbar still fits a 1440px window (scrollWidth ${tb.scroll} <= ${tb.client})`);
+
+    // ---- 5. one menu shape for Triangulate / Temporal Smoothing / Track ----------------
+    const MENUS = [['triangulateDropdown', 'tbTriangulateAll', 'triangulation'],
+        ['smoothingDropdown', 'tbSmooth', 'smoothing'], ['trackDropdown', 'tbTrackAll', 'wizard']];
+    for (const [dd, btn, panel] of MENUS) {
+        const shape = await page.evaluate((dd) => {
+            const items = [...document.querySelectorAll('#' + dd + ' .tri-dropdown-menu > button.tri-dropdown-item')];
+            return items.map(b => b.childNodes[0].textContent.trim());
+        }, dd);
+        check(shape[0] === 'This frame' && shape[1] === 'All frames' && shape[shape.length - 1] === 'Settings…',
+            `5. ${dd}: This frame, All frames, …, Settings… (${JSON.stringify(shape)})`);
+        // "All frames" is the button's own action: it forwards the click.
+        const forwarded = await page.evaluate(({ dd, btn }) => {
+            let n = 0;
+            const b = document.getElementById(btn);
+            const spy = (e) => { n++; e.stopImmediatePropagation(); e.preventDefault(); };
+            b.addEventListener('click', spy, true);
+            document.querySelector('#' + dd + ' [data-scope="all"]').click();
+            b.removeEventListener('click', spy, true);
+            return n;
+        }, { dd, btn });
+        check(forwarded === 1, `5. ${dd}: "All frames" runs the button's action (forwarded ${forwarded})`);
+        // Settings… opens that action's own panel.
+        await page.mouse.move(700, 600);
+        await page.waitForTimeout(450);
+        await page.hover('#' + btn);
+        await page.waitForTimeout(200);
+        await page.click('#' + dd + ' [data-scope="settings"]');
+        await page.waitForTimeout(200);
+        const shown = await page.evaluate(() => {
+            const vis = [...document.querySelectorAll('.settings-panel')].find(p => p.offsetParent !== null);
+            return vis ? vis.dataset.panel : null;
+        });
+        check(shown === panel, `5. ${dd}: Settings… opens Settings ▸ ${panel} (got ${shown})`);
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(150);
+    }
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

@@ -40,12 +40,12 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=c088493ae1de';
-import { getActiveSession, state, timeline } from './app-state.js?v=c088493ae1de';
-import { drawAllOverlays } from './rendering.js?v=c088493ae1de';
-import { installModalGeometry } from './modal-geometry.js?v=c088493ae1de';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=c088493ae1de';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=c088493ae1de';
+} from './settings.js?v=640d3a8b8cf3';
+import { getActiveSession, state, timeline } from './app-state.js?v=640d3a8b8cf3';
+import { drawAllOverlays } from './rendering.js?v=640d3a8b8cf3';
+import { installModalGeometry } from './modal-geometry.js?v=640d3a8b8cf3';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=640d3a8b8cf3';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=640d3a8b8cf3';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).

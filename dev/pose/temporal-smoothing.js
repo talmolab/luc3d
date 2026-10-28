@@ -120,7 +120,7 @@ import {
     isPoints3dSmoothed,
     unsmoothedPoints3d,
     clearPoints3dSmoothed,
-} from './pose-data.js?v=c088493ae1de';
+} from './pose-data.js?v=640d3a8b8cf3';
 
 // Identity id meaning "no identity" (matches `InstanceGroup`'s default).
 const NO_IDENTITY = -1;
@@ -373,6 +373,20 @@ function invalidateReprojections(group) {
  * @returns {{frames: number, nodes: number}} counts actually written
  */
 export function smoothTrajectory(byFrame, cfg, writeFrames) {
+    var steps = smoothTrajectorySteps(byFrame, cfg, writeFrames);
+    var r;
+    while (!(r = steps.next()).done) { /* run straight through */ }
+    return r.value;
+}
+
+/**
+ * `smoothTrajectory` as a generator: yields the fraction of the filtering done
+ * (0..1) after each node coordinate, so `smoothSessionAsync` can show progress
+ * and let the page paint. Nothing is written until the last yield has passed —
+ * the write-back runs after the filter — so stopping early writes nothing.
+ * Returns the same `{frames, nodes}`.
+ */
+function* smoothTrajectorySteps(byFrame, cfg, writeFrames) {
     var frameIdxs = Array.from(byFrame.keys()).sort(function (a, b) { return a - b; });
     if (frameIdxs.length === 0) return { frames: 0, nodes: 0 };
 
@@ -450,6 +464,7 @@ export function smoothTrajectory(byFrame, cfg, writeFrames) {
         }
 
         for (var i2 = 0; i2 < T; i2++) data[i2 * stride + s] = src[i2];
+        yield (s + 1) / stride;
     }
 
     // --- Scatter: write back, invalidating derived reprojections -----------
@@ -497,11 +512,41 @@ export function smoothTrajectory(byFrame, cfg, writeFrames) {
  * @param {Session} session
  * @param {Object} params raw `{ smoothMedianWindow, smoothGaussianWindow,
  *   smoothMaxGap, smoothMinSegment }`
- * @param {{writeFrames?: Set<number>|null, onProgress?: function}} [opts]
+ * @param {{writeFrames?: Set<number>|null}} [opts]
  * @returns {{tracks:number, frames:number, nodes:number, skipped:number,
  *   config:Object, ran:boolean}}
  */
 export function smoothSession(session, params, opts) {
+    var steps = smoothSessionSteps(session, params, opts);
+    var r;
+    while (!(r = steps.next()).done) { /* run straight through */ }
+    return r.value;
+}
+
+/**
+ * `smoothSession` with progress: awaits `opts.onProgress(done, total)` between
+ * steps (one per node coordinate of each track), counted in POSES — one per
+ * animal per frame — so a caller can paint a progress card and yield. Same
+ * result, same writes.
+ *
+ * @param {Session} session
+ * @param {Object} params
+ * @param {{writeFrames?: Set<number>|null,
+ *   onProgress?: function(number, number): (Promise|void)}} [opts]
+ * @returns {Promise<Object>} as `smoothSession`
+ */
+export async function smoothSessionAsync(session, params, opts) {
+    var onProgress = opts && opts.onProgress;
+    var steps = smoothSessionSteps(session, params, opts);
+    var r;
+    while (!(r = steps.next()).done) {
+        if (onProgress) await onProgress(r.value.done, r.value.total);
+    }
+    return r.value;
+}
+
+/** The shared body: yields `{done, total}` in poses, returns the result. */
+function* smoothSessionSteps(session, params, opts) {
     opts = opts || {};
     var cfg = resolveSmoothingParams(params);
     var result = {
@@ -513,11 +558,17 @@ export function smoothSession(session, params, opts) {
     result.skipped = collected.skipped;
     var writeFrames = opts.writeFrames || null;
 
-    var total = collected.tracks.size;
+    var total = 0;
+    for (var [, bf] of collected.tracks) total += bf.size;
     var done = 0;
     var smoothedFrames = smoothedFramesOf(session);
     for (var [, byFrame] of collected.tracks) {
-        var stats = smoothTrajectory(byFrame, cfg, writeFrames);
+        var steps = smoothTrajectorySteps(byFrame, cfg, writeFrames);
+        var r;
+        while (!(r = steps.next()).done) {
+            yield { done: done + byFrame.size * r.value, total: total };
+        }
+        var stats = r.value;
         if (stats.frames > 0) {
             for (var [fi, g] of byFrame) {
                 if (isPoints3dSmoothed(g.points3d)) smoothedFrames.add(fi);
@@ -526,8 +577,8 @@ export function smoothSession(session, params, opts) {
         if (stats.frames > 0) result.tracks++;
         result.frames += stats.frames;
         result.nodes += stats.nodes;
-        done++;
-        if (opts.onProgress) opts.onProgress(done, total);
+        done += byFrame.size;
+        yield { done: done, total: total };
     }
     result.ran = true;
     return result;
@@ -540,6 +591,13 @@ function smoothedFramesOf(session) {
     var set = _smoothedFrames.get(session);
     if (!set) { set = new Set(); _smoothedFrames.set(session, set); }
     return set;
+}
+
+/** Add frames a file read back as smoothed (import-export/smoothing-metadata.js). */
+export function noteSmoothedFrames(session, frames) {
+    if (!session) return;
+    var set = smoothedFramesOf(session);
+    for (var fi of frames) set.add(fi);
 }
 
 /** Does any group on `frameIdx` hold smoothed 3D (`isPoints3dSmoothed`)? */

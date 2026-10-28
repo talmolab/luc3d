@@ -259,7 +259,7 @@ try {
     // ------------------------------------------------- 6. another session
     console.log('6. a second, unanswered session');
     await page.evaluate((NODES) => window.__activate([window.__first, window.__mkSession('SetupB', NODES)], 1), NODES);
-    await page.click('#tbTrackFrame');
+    await page.hover('#tbTrackAll'); await page.click('#tbTrackFrame');   // This frame, in the Track menu
     await page.waitForSelector('.track-setup-modal', { timeout: 5000 });
     d = await dialog();
     check(d.title === 'Track Frame', `Track Frame asks, titled "${d.title}"`);

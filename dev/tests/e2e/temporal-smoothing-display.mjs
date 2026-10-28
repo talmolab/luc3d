@@ -17,8 +17,10 @@
  *   D. re-triangulating replaces the smoothed 3D, and the display re-solves again;
  *   E. a second run replaces the first (window 9 then 3 == window 3 alone),
  *      both windows at 0 restores the original 3D, and the toolbar button is
- *      blue (`.active`) exactly while smoothing is applied; its "This frame"
- *      item runs one frame, and is lit only where that frame is smoothed.
+ *      blue (`.active`) exactly while smoothing is applied; its menu lights
+ *      only the scope last run (never both All frames and This frame);
+ *      "This frame" runs one frame and is lit only where that frame is smoothed;
+ *      an all-frames run shows the progress card.
  *
  * Run: node tests/e2e/temporal-smoothing-display.mjs
  */
@@ -185,8 +187,27 @@ try {
     const same = (x, y) => x.length === y.length && x.every((v, i) => (Number.isNaN(v) && Number.isNaN(y[i])) || Math.abs(v - y[i]) < 1e-9);
     const raw = await snapshot();
     check(JSON.stringify(await blue()) === '[false,false]', 'E. before smoothing, the button is not blue');
+    // Watch the progress card while an all-frames run goes (the pass is tiny
+    // here, so record what the card showed rather than racing it).
+    await page.evaluate(() => {
+        window.__smoothCard = [];
+        const ov = document.getElementById('loadingOverlay');
+        new MutationObserver(() => {
+            if (!ov.classList.contains('hidden')) {
+                window.__smoothCard.push((document.getElementById('loadingStatus') || {}).textContent || '');
+            }
+        }).observe(ov, { attributes: true, subtree: true, childList: true, characterData: true });
+    });
     await smooth(9);
-    check(JSON.stringify(await blue()) === '[true,true]', 'E. after smoothing, the button and "This frame" are blue');
+    const card = await page.evaluate(() => ({
+        seen: window.__smoothCard,
+        hidden: document.getElementById('loadingOverlay').classList.contains('hidden'),
+    }));
+    check(card.seen.some(t => /^Smoothing: [\d,]+\/[\d,]+ poses/.test(t)) && card.hidden,
+        `E. all frames shows the progress card in poses, and closes it (${JSON.stringify(card.seen.slice(0, 2))})`);
+    check(JSON.stringify(await blue()) === '[true,false]', 'E. after smoothing all frames, the button is blue and "This frame" is NOT lit');
+    const allLit = await page.evaluate(() => document.querySelector('#smoothingDropdown [data-scope="all"]').classList.contains('applied'));
+    check(allLit, 'E. ...only "All frames" is');
     await smooth(3);
     const nineThenThree = await snapshot();
     const msgOff = await smooth(0);

@@ -1117,38 +1117,53 @@ body {
   color: var(--accent);
 }
 
-/* A labelled value in the toolbar — the Track group's Animals field. Sized to
-   the checkbox labels' 11px and kept narrow: the whole toolbar has to fit a
-   1440px window (tests/e2e/toolbar-3d-toggle-button.mjs §7), and one or two
-   digits or the "auto" placeholder is all it ever holds. */
-.toolbar-field {
+/* A quick setting inside an action menu (index.html: Triangulate's Method,
+   Track's Animals): a label on the left, its control on the right, in the
+   menu's row height. Not a clickable row — no hover fill. */
+.tri-dropdown-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: default;
+}
+
+.tri-dropdown-setting-control {
+  display: inline-flex;
+  gap: 10px;
+}
+
+.tri-dropdown-setting-control label {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  white-space: nowrap;
+  color: var(--text-primary);
+  cursor: pointer;
 }
 
-.toolbar-field input {
-  width: 26px;
+.tri-dropdown-setting input[type="number"] {
+  width: 44px;
   height: 22px;
-  padding: 0 1px;
+  padding: 0 2px;
   border: 1px solid var(--border-light);
   border-radius: 4px;
   background: var(--bg-tertiary);
   color: var(--text-primary);
   font: inherit;
-  font-size: 11px;
+  font-size: 12px;
   text-align: center;
 }
 
-.toolbar-field input::placeholder {
+.tri-dropdown-setting input[type="number"]::placeholder {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
-.toolbar-field input:focus {
+.tri-dropdown-setting input[type="number"]:focus {
   outline: none;
   border-color: var(--accent);
 }
@@ -1295,7 +1310,10 @@ body {
 }
 
 .tri-dropdown:hover .tri-dropdown-menu,
-.tri-dropdown.open .tri-dropdown-menu {
+.tri-dropdown.open .tri-dropdown-menu,
+/* Focus inside keeps it open: typing in Track's Animals field must not lose
+   the menu when the pointer drifts off, and Tab can walk into the items. */
+.tri-dropdown:focus-within .tri-dropdown-menu {
   visibility: visible;
   opacity: 1;
   pointer-events: auto;
