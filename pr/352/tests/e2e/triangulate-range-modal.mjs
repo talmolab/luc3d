@@ -177,7 +177,7 @@ try {
   async function setDefaultMethod(method) {
     await page.locator('#menuSettings').dispatchEvent('click');
     await page.locator('.settings-overlay').getByText('Default Triangulation', { exact: true }).first().click();
-    await page.click(`.settings-radio-row[data-method="${method}"]`);
+    await page.click(`.tri-method-choice[data-method="${method}"]`);
     await page.click('.settings-btn-apply');
     return page.evaluate(async () => (await import('/ui/settings.js')).getDefaultTriangulationMethod());
   }

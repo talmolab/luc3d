@@ -1,9 +1,10 @@
 // ui/settings-modal.js
 // Builds and shows the LUCID "Settings" modal.
 //
-// The modal has three panels (selected via a left nav): the default
-// triangulation method, an editable list of keyboard shortcuts, and a
-// placeholder Tracking Wizard panel. All edits are kept in a local working
+// The modal has four panels (selected via a left nav): the default
+// triangulation method, an editable list of keyboard shortcuts, the Tracking
+// Wizard, and Temporal Smoothing (the post-triangulation 3D filter's
+// hyperparameters, luc3d #134). All edits are kept in a local working
 // state object and the visual DOM only — nothing is committed to settings.js
 // until the user clicks Apply. Cancel / close / backdrop / Escape discard.
 //
@@ -37,12 +38,16 @@ import {
     setCameraWeights,
     getTrackingThresholdDefs,
     setTrackingThresholds,
-} from './settings.js?v=ae427ed2883a';
-import { getActiveSession, state, timeline } from './app-state.js?v=ae427ed2883a';
-import { drawAllOverlays } from './rendering.js?v=ae427ed2883a';
-import { installModalGeometry } from './modal-geometry.js?v=ae427ed2883a';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=ae427ed2883a';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=ae427ed2883a';
+    getSmoothingParamDefs,
+    setSmoothingParams,
+} from './settings.js?v=17e9b3860106';
+import { getActiveSession, state, timeline } from './app-state.js?v=17e9b3860106';
+import { drawAllOverlays } from './rendering.js?v=17e9b3860106';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=17e9b3860106';
+import { installModalGeometry } from './modal-geometry.js?v=17e9b3860106';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=17e9b3860106';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=17e9b3860106';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=17e9b3860106';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -75,6 +80,94 @@ function chordFromEvent(e) {
     if (e.shiftKey) parts.push('Shift');
     parts.push(e.key);
     return parts.join('+');
+}
+
+/**
+ * An on/off switch (the app's standard .toggle-switch) for a 0/1 setting.
+ *
+ * @param {boolean} checked
+ * @param {string} ariaLabel
+ * @param {function(boolean): void} onChange
+ * @returns {HTMLElement}
+ */
+function makeToggle(checked, ariaLabel, onChange) {
+    const sw = document.createElement('label');
+    sw.className = 'toggle-switch settings-toggle';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = !!checked;
+    box.setAttribute('role', 'switch');
+    box.setAttribute('aria-label', ariaLabel);
+    box.addEventListener('change', function () { onChange(box.checked); });
+    const slider = document.createElement('span');
+    slider.className = 'slider';
+    sw.appendChild(box);
+    sw.appendChild(slider);
+    return sw;
+}
+
+/**
+ * A labelled row for one catalog parameter, bound to a working map.
+ *
+ * Shared by the Tracking Wizard's thresholds and the Temporal Smoothing panel —
+ * both render the same `{ id, label, desc, min, max, step }` catalog shape. A
+ * `kind: 'toggle'` def gets an on/off switch storing 1 / 0; everything else gets
+ * a number field that clamps on blur, so a typed out-of-range value is corrected
+ * in place rather than silently at Apply.
+ *
+ * @param {{id:string,label:string,desc:string,kind?:string,min:number,max:number,step:number}} def
+ * @param {Object.<string, number>} bag working map mutated on edit
+ * @param {?function(): void} [onEdit] called after each edit of a number field
+ * @returns {HTMLElement}
+ */
+function buildParamRow(def, bag, onEdit) {
+    const row = document.createElement('div');
+    row.className = 'settings-threshold-row';
+
+    const labelWrap = document.createElement('div');
+    labelWrap.className = 'settings-threshold-label-wrap';
+    const rowTitle = document.createElement('div');
+    rowTitle.className = 'settings-threshold-title';
+    rowTitle.textContent = def.label;
+    const rowDesc = document.createElement('div');
+    rowDesc.className = 'settings-threshold-desc';
+    rowDesc.textContent = def.desc;
+    labelWrap.appendChild(rowTitle);
+    labelWrap.appendChild(rowDesc);
+
+    if (def.kind === 'toggle') {             // on/off settings: a switch, stored as 1 / 0
+        row.appendChild(labelWrap);
+        row.appendChild(makeToggle(bag[def.id] > 0, def.label, function (on) { bag[def.id] = on ? 1 : 0; }));
+        return row;
+    }
+
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.className = 'settings-num-input';
+    input.min = String(def.min);
+    input.max = String(def.max);
+    input.step = String(def.step);
+    input.value = String(bag[def.id]);
+    input.setAttribute('aria-label', def.label);
+
+    input.addEventListener('input', function () {
+        const v = parseFloat(input.value);
+        if (isFinite(v)) bag[def.id] = v;
+        if (onEdit) onEdit();
+    });
+    input.addEventListener('blur', function () {
+        let v = parseFloat(input.value);
+        if (!isFinite(v)) v = bag[def.id];
+        if (v < def.min) v = def.min;
+        if (v > def.max) v = def.max;
+        bag[def.id] = v;
+        input.value = String(v);
+        if (onEdit) onEdit();
+    });
+
+    row.appendChild(labelWrap);
+    row.appendChild(input);
+    return row;
 }
 
 /**
@@ -117,9 +210,10 @@ function buildSection(title, count) {
 }
 
 // Show the Settings modal. `initialPanel` is one of 'triangulation' |
-// 'keyboard' | 'wizard' and defaults to 'triangulation'.
+// 'keyboard' | 'wizard' | 'smoothing' and defaults to 'triangulation'.
 export function showSettingsModal(initialPanel) {
-    const startPanel = (initialPanel === 'keyboard' || initialPanel === 'wizard')
+    const VALID_PANELS = ['keyboard', 'wizard', 'smoothing'];
+    const startPanel = VALID_PANELS.indexOf(initialPanel) >= 0
         ? initialPanel
         : 'triangulation';
 
@@ -134,6 +228,7 @@ export function showSettingsModal(initialPanel) {
         nodeWeights: {},
         cameraWeights: {},
         thresholds: {},
+        smoothing: {},
     };
     const actions = getActions();
     // Only editable actions are user-rebindable; the working map tracks those.
@@ -160,6 +255,10 @@ export function showSettingsModal(initialPanel) {
     const thresholdDefs = getTrackingThresholdDefs();
     thresholdDefs.forEach(function (def) { working.thresholds[def.id] = def.value; });
 
+    // Seed the working temporal-smoothing map the same way (luc3d #134).
+    const smoothingDefs = getSmoothingParamDefs();
+    smoothingDefs.forEach(function (def) { working.smoothing[def.id] = def.value; });
+
     // What the detection filters would remove at the values being typed, per
     // camera (ui/detection-filter-preview.js). Counts the session in the
     // background after the modal is up; each edit only re-counts.
@@ -174,23 +273,6 @@ export function showSettingsModal(initialPanel) {
         },
         isCameraIncluded: function (name) { return working.cameraWeights[name] !== 0; },
     });
-
-    // An on/off switch (the app's standard .toggle-switch) for a 0/1 setting.
-    function makeToggle(checked, ariaLabel, onChange) {
-        const sw = document.createElement('label');
-        sw.className = 'toggle-switch settings-toggle';
-        const box = document.createElement('input');
-        box.type = 'checkbox';
-        box.checked = !!checked;
-        box.setAttribute('role', 'switch');
-        box.setAttribute('aria-label', ariaLabel);
-        box.addEventListener('change', function () { onChange(box.checked); });
-        const slider = document.createElement('span');
-        slider.className = 'slider';
-        sw.appendChild(box);
-        sw.appendChild(slider);
-        return sw;
-    }
 
     // --- Build DOM --------------------------------------------------------
     const overlay = document.createElement('div');
@@ -230,6 +312,7 @@ export function showSettingsModal(initialPanel) {
         { panel: 'triangulation', label: 'Default Triangulation' },
         { panel: 'keyboard', label: 'Keyboard Shortcuts' },
         { panel: 'wizard', label: 'Tracking Wizard' },
+        { panel: 'smoothing', label: 'Temporal Smoothing' },
     ];
 
     const navItems = {};
@@ -254,53 +337,25 @@ export function showSettingsModal(initialPanel) {
     triTitle.textContent = 'Default Triangulation';
     triPanel.appendChild(triTitle);
 
-    const TRI_METHODS = [
-        {
-            method: 'dlt',
-            title: 'Direct Linear Transformation (DLT)',
-            desc: 'Fast. Algebraic least-squares triangulation.',
-        },
-        {
-            method: 'ba',
-            title: 'Refined (Ref)',
-            desc: 'Slower. Minimizes geometric reprojection error.',
-        },
-    ];
-
-    const radioRows = {};
-    TRI_METHODS.forEach(function (m) {
-        const row = document.createElement('div');
-        row.className = 'settings-radio-row';
-        row.dataset.method = m.method;
-
-        const indicator = document.createElement('span');
-        indicator.className = 'settings-radio';
-        row.appendChild(indicator);
-
-        const labelWrap = document.createElement('div');
-        labelWrap.className = 'settings-radio-label';
-        const rTitle = document.createElement('div');
-        rTitle.className = 'settings-radio-title';
-        rTitle.textContent = m.title;
-        const rDesc = document.createElement('div');
-        rDesc.className = 'settings-radio-desc';
-        rDesc.textContent = m.desc;
-        labelWrap.appendChild(rTitle);
-        labelWrap.appendChild(rDesc);
-        row.appendChild(labelWrap);
-
-        row.addEventListener('click', function () {
-            working.method = m.method;
-            Object.keys(radioRows).forEach(function (key) {
-                radioRows[key].classList.toggle('checked', key === m.method);
-            });
+    // The two methods are chosen by clicking their diagram cards
+    // (`ui/triangulation-methods-figure.js`), not separate rows.
+    const triFigure = buildTriangulationMethodsFigure();
+    const methodCards = Array.from(triFigure.querySelectorAll('.tri-method-choice'));
+    function pickMethod(method) {
+        working.method = method;
+        methodCards.forEach(function (c) {
+            const on = c.dataset.method === method;
+            c.classList.toggle('checked', on);
+            c.setAttribute('aria-checked', on ? 'true' : 'false');
         });
-
-        triPanel.appendChild(row);
-        radioRows[m.method] = row;
+    }
+    // Enter/Space on a focused card is handled in `onDocKeyDown`: it stops
+    // every keydown in the capture phase, so a listener on the card never runs.
+    methodCards.forEach(function (c) {
+        c.addEventListener('click', function () { pickMethod(c.dataset.method); });
     });
-    // Initialize checked row from current default.
-    if (radioRows[working.method]) radioRows[working.method].classList.add('checked');
+    pickMethod(working.method);
+    triPanel.appendChild(triFigure);
 
     // Docs link for additional information on triangulation methods.
     const triDocsNote = document.createElement('div');
@@ -473,6 +528,14 @@ export function showSettingsModal(initialPanel) {
         '1 = fully considered (2D reprojection + 3D point-to-ray); 0 = ignored during tracking. ' +
         'Changes apply when you click Apply.';
     nwSection.body.appendChild(nwHint);
+    if (skeletonNodes.length) {
+        const nwTip = document.createElement('div');
+        nwTip.className = 'settings-kbd-hint settings-node-weight-tip';
+        nwTip.style.marginTop = '0';
+        nwTip.style.marginBottom = '8px';
+        nwTip.textContent = NODE_WEIGHT_TIP;
+        nwSection.body.appendChild(nwTip);
+    }
 
     if (skeletonNodes.length === 0) {
         const nwEmpty = document.createElement('div');
@@ -606,55 +669,10 @@ export function showSettingsModal(initialPanel) {
     thSection.body.appendChild(thHint);
 
     thresholdDefs.forEach(function (def) {
-        const row = document.createElement('div');
-        row.className = 'settings-threshold-row';
-
-        const labelWrap = document.createElement('div');
-        labelWrap.className = 'settings-threshold-label-wrap';
-        const thTitle = document.createElement('div');
-        thTitle.className = 'settings-threshold-title';
-        thTitle.textContent = def.label;
-        const thDesc = document.createElement('div');
-        thDesc.className = 'settings-threshold-desc';
-        thDesc.textContent = def.desc;
-        labelWrap.appendChild(thTitle);
-        labelWrap.appendChild(thDesc);
-
-        if (def.kind === 'toggle') {             // on/off settings: a switch, stored as 1 / 0
-            row.appendChild(labelWrap);
-            row.appendChild(makeToggle(working.thresholds[def.id] > 0, def.label, function (on) { working.thresholds[def.id] = on ? 1 : 0; }));
-            thSection.body.appendChild(row);
-            return;
-        }
-        const input = document.createElement('input');
-        input.type = 'number';
-        input.className = 'settings-num-input';
-        input.min = String(def.min);
-        input.max = String(def.max);
-        input.step = String(def.step);
-        input.value = String(working.thresholds[def.id]);
-        input.setAttribute('aria-label', def.label);
-
         const isFilter = def.id === 'filterMinVisibleNodes' || def.id === 'filterMinInstanceScore' ||
             def.id === 'filterMinMeanNodeScore';
-        input.addEventListener('input', function () {
-            const v = parseFloat(input.value);
-            if (isFinite(v)) working.thresholds[def.id] = v;
-            if (isFilter) filterPreview.update();
-        });
-        input.addEventListener('blur', function () {
-            let v = parseFloat(input.value);
-            if (!isFinite(v)) v = working.thresholds[def.id];
-            if (v < def.min) v = def.min;
-            if (v > def.max) v = def.max;
-            working.thresholds[def.id] = v;
-            input.value = String(v);
-            if (isFilter) filterPreview.update();
-        });
-
-        row.appendChild(labelWrap);
-        row.appendChild(input);
-        thSection.body.appendChild(row);
+        thSection.body.appendChild(buildParamRow(def, working.thresholds,
+            isFilter ? function () { filterPreview.update(); } : null));
         // The readout goes right under the last of the three filter fields.
         if (def.id === 'filterMinMeanNodeScore') thSection.body.appendChild(filterPreview.root);
     });
@@ -672,6 +690,51 @@ export function showSettingsModal(initialPanel) {
 
     panelContainer.appendChild(wizPanel);
     panels.wizard = wizPanel;
+
+    // 4) Temporal Smoothing panel (luc3d #134).
+    //
+    // The post-triangulation filter's hyperparameters. Kept as its own panel
+    // rather than a fourth section of the Tracking Wizard because it is NOT a
+    // tracking parameter: it runs after triangulation, over 3D that the tracker
+    // has already finished with. Run it from the toolbar's Smooth (Temporal Smoothing)
+    // button (all frames; its menu also has "This frame").
+    const smPanel = document.createElement('div');
+    smPanel.className = 'settings-panel';
+    smPanel.dataset.panel = 'smoothing';
+    const smTitle = document.createElement('div');
+    smTitle.className = 'settings-panel-title';
+    smTitle.textContent = 'Temporal Smoothing';
+    smPanel.appendChild(smTitle);
+
+    const smHint = document.createElement('div');
+    smHint.className = 'settings-kbd-hint';
+    smHint.style.marginTop = '0';
+    smHint.style.marginBottom = '8px';
+    smHint.textContent = 'Smooths each node\'s 3D position over time, in two stages that both work along the frame ' +
+        'axis: a median first, to remove one-frame spikes, then a Gaussian on its output, to remove remaining ' +
+        'jitter. Each node\'s x, y and z are filtered separately; nodes are never mixed with each other. 2D labels ' +
+        'and predictions are never changed, and the reprojection overlays follow the smoothed 3D. Both stages are off (0) by ' +
+        'default — run the pass with the Temporal Smoothing button next to Triangulate All. Changes apply when you click Apply.';
+    smPanel.appendChild(smHint);
+
+    const smSection = buildSection('Filter Parameters', smoothingDefs.length || null);
+    smPanel.appendChild(smSection.root);
+    smoothingDefs.forEach(function (def) {
+        smSection.body.appendChild(buildParamRow(def, working.smoothing));
+    });
+
+    // The two dials of luc3d #134 pull against each other and the interaction is
+    // the opposite of what tuning two sliders suggests, so say so here.
+    const smNote = document.createElement('div');
+    smNote.className = 'settings-kbd-hint';
+    smNote.textContent = 'Tip: raising the Tracking Wizard\'s "Reprojection error threshold" drops unreliable ' +
+        'views, which removes a cause of jitter — but it also nulls nodes that fall below two reliable views, ' +
+        'creating more gaps. Gap edges are where a filter is least accurate, so turning both dials up hard is ' +
+        'worse than either alone. Try the threshold first, then smooth what is left.';
+    smPanel.appendChild(smNote);
+
+    panelContainer.appendChild(smPanel);
+    panels.smoothing = smPanel;
 
     // Footer.
     const footer = document.createElement('div');
@@ -726,6 +789,7 @@ export function showSettingsModal(initialPanel) {
         setNodeWeights(working.nodeWeights);
         setCameraWeights(working.cameraWeights);
         setTrackingThresholds(working.thresholds);
+        setSmoothingParams(working.smoothing);
         teardown();
         // Reflect committed camera-inclusion changes immediately: excluded views
         // grey out in both the video overlays and the timeline.
@@ -746,6 +810,12 @@ export function showSettingsModal(initialPanel) {
         // Don't intercept Escape while a key capture is in progress; the
         // capture's own listener handles it first.
         if (capturingState) return;
+        const choice = e.target && e.target.closest ? e.target.closest('.tri-method-choice') : null;
+        if (choice && (e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault();
+            pickMethod(choice.dataset.method);
+            return;
+        }
         if (e.key === 'Escape') {
             e.preventDefault();
             close();
@@ -775,5 +845,8 @@ export function showSettingsModal(initialPanel) {
         minW: 520,
         minH: 320,
         margin: 24,
+        // The opening size before it widened to 1040px; records holding it
+        // were saved without a resize, so they open at the new default.
+        legacyDefaultSize: { w: 880, h: 620 },
     });
 }
