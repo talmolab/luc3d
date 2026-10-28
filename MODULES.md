@@ -5282,6 +5282,17 @@ Gives a modal card a drag handle, a resize grip (CSS `resize: both`) and a
   the CSS resize via `ResizeObserver`, re-clamps on window resize, and returns a
   `dispose()` that also flushes the final rect (a resize that ended inside the
   200 ms persist debounce would otherwise be lost when the modal closes).
+- `rememberedSizeIsChosen(geom, legacyDefaultSize)` — whether a record's size
+  was the user's choice (see below).
+
+**Only a size the user chose is remembered.** Position always is; size only
+once the user resized the card with its grip (the `ResizeObserver` sees a size
+other than the one `apply()` set, and the record gets `sized: true`). Otherwise
+the card opens at the stylesheet's size, so changing the default reaches
+everyone who never resized. Records from before the flag saved the opening size
+on every close: `opts.legacyDefaultSize` names that old default, and such a
+record opens at the new default, centred where the old card was. Settings passes
+`{w: 880, h: 620}` (its default before it widened to 1040px).
 
 **This module is the ONE owner of the card's rect.** `.settings-modal`
 deliberately has no `max-width`/`max-height`, and `apply()` sets both to `none`
@@ -9119,7 +9130,9 @@ right panel area (`settings-panel-container`), with a Cancel / Apply footer.
   Single-instance.
 
 **Behavior.** Four panels: **Default Triangulation** (DLT / Refined radio rows
-— `'ba'` is labelled "Refined (Ref)"), **Keyboard Shortcuts** (the
+— `'ba'` is labelled "Refined (Ref)", described as bundle adjustment — then the
+DLT-vs-Refined diagram from `ui/triangulation-methods-figure.js` above the docs
+link), **Keyboard Shortcuts** (the
 `getActions()` catalog by category; an editable entry's key chip captures a
 **chord or multi-key sequence** — keys accumulate, Ctrl/Cmd normalized to `Mod`
 via `chordFromEvent`, until a click sets it or Esc cancels; duplicates are
@@ -11070,6 +11083,27 @@ browser-local), `renderRecordingInfo(session)` (called by `updateInfoPanel`),
 function, so the cycle through the info panel is hoist-safe).
 
 **Tests.** `tests/e2e/campy-session-folder.mjs`.
+
+### ui/triangulation-methods-figure.js
+
+**Purpose.** The diagram under Settings ▸ Default Triangulation that walks a new
+user through DLT vs Refined (bundle adjustment). Two top-down sketches of the
+same three cameras: each camera's 2D detection on its image plane, its line of
+sight, the 3D answer, where that answer lands back in each camera and the pixel
+error between the two. One camera's detection is a stray: DLT is pulled toward
+it and every camera ends up a little off; Refined starts at the DLT point and
+fits the two cameras that agree, leaving the stray one off. Captions are HTML
+so they wrap; the sketches are inline SVG coloured by theme variables
+(`.tri-methods` in `styles.css`).
+
+**The coordinates are an illustration, not solver output.** They were computed
+once for this layout (an equal-weight least-squares point for DLT, a robust
+pixel-error minimum for Refined) and are hard-coded; the real solvers are
+`triangulatePointDLT` / `triangulatePointBA` (`pose/triangulation-core.js`).
+
+**Key exports.** `buildTriangulationMethodsFigure()` → a `<figure>`.
+
+**Imports.** None. **Imported by** `ui/settings-modal.js`.
 
 ### ui/smoothing-button.js
 

@@ -4778,7 +4778,7 @@ kbd {
      24px gutter), so there is deliberately NO max-width/max-height here — a
      second cap would silently shrink a rect the clamp thought it had granted
      and leave the card flush against one edge. */
-  width: 880px;
+  width: 1040px;
   height: 620px;
   display: flex;
   flex-direction: column;
@@ -5301,6 +5301,99 @@ kbd {
 .settings-docs-note {
   margin-top: 14px;
 }
+
+/* Settings ▸ Default Triangulation: the DLT-vs-Refined diagram
+   (ui/triangulation-methods-figure.js). */
+.tri-methods {
+  margin: 16px 0 0;
+}
+
+.tri-methods-lead,
+.tri-methods-col p {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.tri-methods-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.tri-methods-col {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px 12px 12px;
+  background: var(--bg-primary);
+}
+
+.tri-methods-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tri-methods-head span {
+  font-weight: 400;
+  color: var(--text-muted);
+  margin-left: 4px;
+}
+
+.tri-methods-col svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* A wide card would otherwise push the captions below the fold. */
+  max-height: 190px;
+  margin: 6px 0 8px;
+  overflow: hidden;
+}
+
+.tri-methods-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.tri-methods-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tri-methods-legend i {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.tri-methods .tm-key-det { background: var(--warning-color); }
+.tri-methods .tm-key-point { background: var(--accent); }
+.tri-methods .tm-key-proj { border: 1.5px solid var(--accent); width: 7px; height: 7px; }
+.tri-methods .tm-key-gap { background: var(--error-color); width: 12px; height: 3px; border-radius: 2px; }
+
+.tri-methods .tm-ray { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.tri-methods .tm-ray-stray { stroke: var(--warning-color); opacity: 0.7; }
+.tri-methods .tm-back { stroke: var(--accent); stroke-width: 1; opacity: 0.35; }
+.tri-methods .tm-plane { stroke: var(--text-secondary); stroke-width: 2; stroke-linecap: round; }
+.tri-methods .tm-cam { fill: var(--bg-button); stroke: var(--text-secondary); stroke-width: 1; }
+.tri-methods .tm-gap { stroke: var(--error-color); stroke-width: 2.5; stroke-linecap: round; }
+.tri-methods .tm-det { fill: var(--warning-color); }
+.tri-methods .tm-proj { fill: none; stroke: var(--accent); stroke-width: 1.6; }
+.tri-methods .tm-point { fill: var(--accent); stroke: var(--text-primary); stroke-width: 1.2; }
+.tri-methods .tm-start { fill: none; stroke: var(--text-muted); stroke-width: 1.2; stroke-dasharray: 2 2; }
+.tri-methods .tm-move { stroke: var(--text-secondary); stroke-width: 1.2; }
+.tri-methods .tm-arrowhead { fill: var(--text-secondary); }
+.tri-methods .tm-leader { stroke: var(--text-muted); stroke-width: 0.8; }
+.tri-methods .tm-note { fill: var(--text-secondary); font-size: 10px; }
+.tri-methods .tm-note-stray { fill: var(--warning-color); }
 
 .settings-docs-note a {
   color: var(--accent);
