@@ -26,6 +26,7 @@ import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition
 import { syncAnimalCountField } from './animal-count-field.js';
 import { syncNodeTooltipFrame } from './node-tooltip.js';
 import { syncSmoothingButton } from './smoothing-button.js';
+import { syncRunButtons } from './run-buttons.js';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
 import { editGroupState, finishEditGroup } from './identity-assignment.js';
@@ -421,6 +422,7 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             !!(tbEditGroup && tbEditGroup.classList.contains('active')));
     }
     syncSmoothingButton();
+    syncRunButtons();
     // Defining Plane Mode blocks the pose-annotation buttons, and the two
     // above are recomputed on EVERY overlay draw — so the lock is re-asserted
     // here rather than only at `enterPlaneMode`, where it would survive until

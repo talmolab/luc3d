@@ -1983,6 +1983,8 @@ drifts upward.
   `computeInstanceDistanceTo`, `hungarianAlgorithm`, and `loadAllLazyFrames` /
   `sweepLazyFrameWindows` (the Track All sweeps).
 - `./cross-view-tracker.js` — `CrossViewTracker`, `Detection`.
+- `./run-state.js` — `noteTrackRun` (after `trackCurrentFrame`'s and
+  `runTrackingPass`'s run): the blue Track button.
 - `../ui/app-state.js` — `state`, `interactionManager`, `timeline`,
   `viewport3d`, `getActiveSession`.
 - `../ui/settings.js` — `getNodeWeightArray`, `getNodeWeight`,
@@ -2457,6 +2459,36 @@ mutation: removing the symmetric shrink, zero-padding instead of renormalizing,
 and filling gaps each fail with the specific artifact they represent.
 
 ---
+
+### pose/run-state.js
+
+**Purpose.** Has Track or Triangulate been run on a session, and does its result
+still stand? Drives the blue Track and Triangulate toolbar buttons
+(`ui/run-buttons.js`). A run is noted when it finishes; its result stands while
+the session shows it: Track while some instance group has an identity,
+Triangulate while some group still holds a 3D array the run produced or kept.
+Arrays are marked by reference (a `WeakSet`), so anything that replaces a
+group's 3D (Track All's own 3D, a re-solve outside a run, a skeleton edit)
+drops that group out, while a node move's re-solve keeps it
+(`carryTriangulateMark`); smoothing writes in place and keeps it. In memory
+only: a reopened project starts with neither noted (the user chose this over
+saving it).
+
+Asked on every overlay draw, so each answer keeps a WITNESS (frame + group that
+showed the result) and walks `session.instanceGroups` only when the witness
+stops holding: it finds a new one or forgets the run, after which nothing is
+walked until the next run.
+
+**Exports.** `noteTrackRun(session)`, `noteTriangulateRun(session, frames)`
+(marks the 3D of every group on `frames`, null = all, that has a
+`triangulationMethod` and valid 3D, solved or kept by the run),
+`carryTriangulateMark(old, new)`, `hasTrackResult(session)`,
+`hasTriangulateResult(session)`.
+
+**Imports.** `./pose-data.js` (`someValidPoint3d`). **Imported by**
+`pose/triangulation.js`, `pose/tracker.js`, `ui/export-modals.js`,
+`ui/run-buttons.js`. **Tests.** `tests/test-run-state.mjs`,
+`tests/e2e/run-buttons-blue.mjs`.
 
 ### pose/triangulation.js
 
@@ -3017,6 +3049,10 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
 - `./triangulation-core.js` — the pure math (re-exported) and
   `setTriangulationSettingsHooks`.
 - `./triangulation-pool.js` — `createGroupSolver` (Triangulate All's parallel solve).
+- `./run-state.js` — `noteTriangulateRun` (at the end of `triangulateAllFrames`,
+  both paths, `triangulateCurrentFrame` and `triangulateMultiFrameInstances`)
+  and `carryTriangulateMark` (`reTriangulateGroup`): the blue Triangulate
+  button.
 - `../loading/track-union.js` — `unionTrackNames`, `remapTrackIdx`,
   `isIdentityRemap` (`LazyFrameLoader`'s track union).
 - `./initialization.js` — `update3DViewport` (circular).
@@ -4314,6 +4350,9 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   `showReprojectionsOnly`, `REPROJ_ONLY_NOTE` (both group-and-triangulate-all
   paths end Reproj-only).
 - `./info-panel.js` — `updateInfoPanel`.
+- `../pose/run-state.js` — `noteTriangulateRun` (after
+  `groupByIdentityAndTriangulateAll`, Triangulate All's DLT path once
+  identities exist, and `groupByTrackAndTriangulateAll`).
 - `../import-export/save-load.js` — `showLoading`, `hideLoading`,
   `setStatus`.
 - `./loading-overlay.js` — `showLoadingProgress`, `yieldToPaint` (the
@@ -6286,6 +6325,7 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `countFrameCounters`, `nonResidentCameraCounts`, `refreshCountedFrame`.
 - `./plane-definition.js` — `drawPlaneOverlays`, `applyPlaneModeToolbarLock`.
 - `./smoothing-button.js` — `syncSmoothingButton` (every draw).
+- `./run-buttons.js` — `syncRunButtons` (every draw).
   **Circular** (that module imports `drawAllOverlays` back); safe because both
   call sites are inside function bodies.
 - `./animal-count-field.js` — `syncAnimalCountField`. **Circular** through
@@ -11195,6 +11235,20 @@ calls this on every overlay draw and the pass calls it after running.
 `smoothingRunOf`). **Imported by** `ui/rendering.js`, `ui/ui-wiring.js`.
 Covered by `tests/e2e/temporal-smoothing-display.mjs` §E–H and
 `tests/e2e/smoothing-save-reopen.mjs`.
+
+### ui/run-buttons.js
+
+**Purpose.** The toolbar's Track (`#tbTrackAll`) and Triangulate
+(`#tbTriangulateAll`) buttons are blue (`.active`) once that step has been run
+on the active session and while its result stands (`pose/run-state.js`), as
+Smooth is while smoothing is applied (`ui/smoothing-button.js`). Derived on
+every overlay draw, so session switches and results that go away (re-tracking
+replaces Triangulate's 3D) need no bookkeeping.
+
+**Exports.** `syncRunButtons()`. **Imports.** `./app-state.js` (`state`),
+`../pose/run-state.js` (`hasTrackResult`, `hasTriangulateResult`).
+**Imported by** `ui/rendering.js` (every `drawAllOverlays`). **Tests.**
+`tests/e2e/run-buttons-blue.mjs`.
 
 ### ui/section-state.js
 
