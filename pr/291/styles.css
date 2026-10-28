@@ -1274,11 +1274,6 @@ body {
   pointer-events: none;
 }
 
-/* "Triangulate: DLT" — the method a plain click runs (#138). */
-.tri-method {
-  opacity: 0.8;
-}
-
 .tri-caret {
   margin-left: 4px;
   font-size: 9px;

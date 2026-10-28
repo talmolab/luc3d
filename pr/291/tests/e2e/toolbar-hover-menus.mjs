@@ -1,6 +1,6 @@
 /**
- * toolbar-hover-menus.mjs — the toolbar's Instance and Group menus, and the
- * Temporal Smoothing button.
+ * toolbar-hover-menus.mjs — the toolbar's Instance and Group menus, its
+ * labelling / proofreading layout, and the Smooth (Temporal Smoothing) button.
  *
  * + Instance / - Instance and Group / Edit Group moved into menus that open on
  * HOVER (no click), to make room for Temporal Smoothing as its own button right
@@ -10,9 +10,11 @@
  *   2. a real click on an item in the open menu reaches that item's button;
  *   3. the Group button is blue while Group or Edit Group is (assignment mode),
  *      so the mode shows with the menu closed;
- *   4. Temporal Smoothing is the next control after Triangulate, and the
- *      Triangulate menu carries no smoothing item;
- *   5. Triangulate, Temporal Smoothing and Track share one menu shape: This
+ *   4. after Sessions, one group holds manual labelling (Instance, Group) and
+ *      the next proofreading in run order (Track, Triangulate, Smooth, then
+ *      the triangulation badge); the Triangulate menu carries no smoothing
+ *      item, the labels are short, and the toolbar fits a 1440px window;
+ *   5. Track, Triangulate and Smooth share one menu shape: This
  *      frame, All frames, then settings ending in Settings…, and a click on
  *      the button runs All frames.
  *
@@ -98,18 +100,31 @@ try {
     check(JSON.stringify(await groupState(true)) === '[true,true]', '3. in assignment mode, Group and the Group button are blue');
     check(JSON.stringify(await groupState(false)) === '[false,false]', '3. and both turn off with it');
 
-    // ---- 4. Temporal Smoothing sits after Triangulate All -------------------------------
+    // ---- 4. labelling group, then proofreading in run order ----------------------------
     const order = await page.evaluate(() => {
-        const tri = document.getElementById('triangulateDropdown');
+        const groups = Array.from(document.querySelectorAll('#toolbar > .toolbar-group'));
+        const ids = g => Array.from(g.children).map(c => c.id).filter(Boolean);
+        const label = id => document.getElementById(id).textContent.replace('▾', '').trim();
         return {
-            next: tri.nextElementSibling && tri.nextElementSibling.id,
-            nested: tri.querySelectorAll('[id^="tbSmooth"]').length,
-            label: document.getElementById('tbSmooth').textContent.trim(),
+            first: ids(groups[0]),
+            labelling: ids(groups[1]),
+            labellingName: groups[1].getAttribute('aria-label'),
+            proofreading: ids(groups[2]),
+            proofreadingName: groups[2].getAttribute('aria-label'),
+            nested: document.getElementById('triangulateDropdown').querySelectorAll('[id^="tbSmooth"]').length,
+            labels: ['tbTrackAll', 'tbTriangulateAll', 'tbSmooth'].map(label),
+            smoothTitle: document.getElementById('tbSmooth').title,
         };
     });
-    check(order.next === 'smoothingDropdown', `4. Temporal Smoothing is the next control after Triangulate (${order.next})`);
+    check(JSON.stringify(order.first) === '["tbSessions"]', `4. Sessions stands alone (${order.first})`);
+    check(JSON.stringify(order.labelling) === '["instanceDropdown","groupDropdown"]' &&
+        order.labellingName === 'Manual labelling', `4. manual labelling: Instance, Group (${order.labelling})`);
+    check(JSON.stringify(order.proofreading) ===
+        '["trackDropdown","triangulateDropdown","smoothingDropdown","triangulationBadge"]' &&
+        order.proofreadingName === 'Proofreading', `4. proofreading: Track, Triangulate, Smooth (${order.proofreading})`);
     check(order.nested === 0, '4. the Triangulate menu holds no smoothing item');
-    check(/^Temporal Smoothing/.test(order.label), `4. labelled "${order.label}"`);
+    check(JSON.stringify(order.labels) === '["Track","Triangulate","Smooth"]', `4. short labels (${JSON.stringify(order.labels)})`);
+    check(/^Temporal smoothing/.test(order.smoothTitle), `4. Smooth's tooltip names Temporal smoothing ("${order.smoothTitle}")`);
     const tb = await page.evaluate(() => {
         const t = document.getElementById('toolbar');
         return { scroll: t.scrollWidth, client: t.clientWidth };

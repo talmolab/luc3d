@@ -50,7 +50,7 @@ const LOCKED = ['tbInstanceMenu', 'tbAddInstance', 'tbDeleteInstance', 'tbGroupM
     'tbSmooth', 'tbSmoothFrame', 'tbSmoothAllFrames',
     'tbTrackAll', 'tbTrackFrame', 'tbTrackAllFrames', 'tbTrackFrameRange'];
 /** The hover-menu wrappers locked whole (menus of actions only). The
- *  Triangulate / Temporal Smoothing / Track menus also hold settings, so they
+ *  Track / Triangulate / Smooth menus also hold settings, so they
  *  stay open-able with their run buttons disabled — §4b. */
 const LOCKED_DROPDOWNS = ['instanceDropdown', 'groupDropdown'];
 /** Everything else in the toolbar, which must stay live. */
@@ -263,7 +263,7 @@ try {
     }
     await page.evaluate(async () => (await import('/ui/plane-definition.js')).exitPlaneMode());
     check(inMenu.tbTriangulateAll.opens && inMenu.tbSmooth.opens && inMenu.tbTrackAll.opens,
-        `hovering Triangulate / Temporal Smoothing / Track still opens each menu (${JSON.stringify(inMenu)})`);
+        `hovering Track / Triangulate / Smooth still opens each menu (${JSON.stringify(inMenu)})`);
     check(inMenu.animals.enabled && inMenu.animalsVisible, 'Track\'s Animals field is shown and live in the mode');
     check(inMenu.radio && inMenu.radioVisible, 'Triangulate\'s Method radios are shown and live in the mode');
 

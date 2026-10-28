@@ -35,10 +35,10 @@
 // refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary), ui/identity-gallery.js,
 // pose/single-camera-tracking.js (singleCameraName, singleCameraCheckSession).
 
-import { planTrackSummary, summarizeTrackedIdentities, describeSwitchCheck } from './track-summary.js?v=872edacf5f28';
-import { openIdSwitchPanel, refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary } from './id-switch-modal.js?v=872edacf5f28';
-import { renderIdentityGallery } from './identity-gallery.js?v=872edacf5f28';
-import { singleCameraName, singleCameraCheckSession } from '../pose/single-camera-tracking.js?v=872edacf5f28';
+import { planTrackSummary, summarizeTrackedIdentities, describeSwitchCheck } from './track-summary.js?v=90bdfe352c70';
+import { openIdSwitchPanel, refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary } from './id-switch-modal.js?v=90bdfe352c70';
+import { renderIdentityGallery } from './identity-gallery.js?v=90bdfe352c70';
+import { singleCameraName, singleCameraCheckSession } from '../pose/single-camera-tracking.js?v=90bdfe352c70';
 
 /**
  * The session the summary counts and draws from: the session itself, or for a

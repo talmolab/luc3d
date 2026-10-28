@@ -9,7 +9,7 @@
  *  2. The Speed popover offers 0.25x and 0.5x presets, they apply, and the
  *     (now wider) popover stays inside the window.
  *  3. The Triangulate / Triangulate All buttons say which method a plain click
- *     runs ("Triangulate: DLT"), and follow Settings ▸ Default Triangulation
+ *     runs (in its tooltip; the label stays "Triangulate"), and follow Settings ▸ Default Triangulation
  *     when it is changed through the real Settings dialog — immediately, and
  *     after a reload (the setting persists in localStorage).
  *
@@ -115,7 +115,7 @@ try {
         return { text: b.textContent.replace('▾', '').trim(), title: b.title, radio: on && on.value };
     });
     let l = await labels();
-    check(l.text === 'Triangulate: DLT' && l.radio === 'dlt', `default DLT: "${l.text}", radio ${l.radio}`);
+    check(l.text === 'Triangulate' && l.radio === 'dlt', `default DLT: "${l.text}", radio ${l.radio}`);
     check(/DLT \(fast\)/.test(l.title), 'tooltip names the method');
 
     // Change it the way a user does: Settings dialog -> "Refined" row -> Apply.
@@ -131,24 +131,24 @@ try {
     check(byKey === 'true', 'Space on the focused DLT card selects it');
     await page.click('.tri-method-choice[data-method="ba"]');
     l = await labels();
-    check(l.text === 'Triangulate: DLT', 'picking a card without Apply changes nothing yet');
+    check(/DLT \(fast\)/.test(l.title) && l.radio === 'dlt', 'picking a card without Apply changes nothing yet');
     await page.click('.settings-btn-apply');
     l = await labels();
-    check(l.text === 'Triangulate: Ref' && l.radio === 'ba', `after Apply: "${l.text}", radio ${l.radio}`);
-    check(/Ref \(slow & accurate\)/.test(l.title), 'tooltip follows too');
+    check(l.text === 'Triangulate' && l.radio === 'ba', `after Apply: "${l.text}", radio ${l.radio}`);
+    check(/Ref \(slower; helps when one view is clearly wrong\)/.test(l.title), 'tooltip follows too');
     const radioName = await page.evaluate(() =>
         document.querySelector('#triangulateDropdown input[value="ba"]').parentElement.textContent.trim());
-    check(radioName === 'Ref', 'the button uses the same name as its Method radio ("Ref")');
+    check(radioName === 'Ref', 'the tooltip uses the same name as its Method radio ("Ref")');
 
     await boot();
     l = await labels();
-    check(l.text === 'Triangulate: Ref' && l.radio === 'ba', 'after a reload the button still shows Ref');
+    check(/Ref \(slower; helps when one view is clearly wrong\)/.test(l.title) && l.radio === 'ba', 'after a reload the button still runs Ref');
 
     // Back to DLT through the menu's own radio this time, and leave the profile clean.
     await page.hover('#tbTriangulateAll');
     await page.click('#triangulateDropdown input[value="dlt"]');
     l = await labels();
-    check(l.text === 'Triangulate: DLT' && l.radio === 'dlt', 'the menu radio switches back to DLT and updates the button');
+    check(/DLT \(fast\)/.test(l.title) && l.radio === 'dlt', 'the menu radio switches back to DLT and updates the button');
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

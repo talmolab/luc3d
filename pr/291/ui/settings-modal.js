@@ -40,13 +40,14 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=872edacf5f28';
-import { getActiveSession, state, timeline } from './app-state.js?v=872edacf5f28';
-import { drawAllOverlays } from './rendering.js?v=872edacf5f28';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=872edacf5f28';
-import { installModalGeometry } from './modal-geometry.js?v=872edacf5f28';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=872edacf5f28';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=872edacf5f28';
+} from './settings.js?v=90bdfe352c70';
+import { getActiveSession, state, timeline } from './app-state.js?v=90bdfe352c70';
+import { drawAllOverlays } from './rendering.js?v=90bdfe352c70';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=90bdfe352c70';
+import { installModalGeometry } from './modal-geometry.js?v=90bdfe352c70';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=90bdfe352c70';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=90bdfe352c70';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=90bdfe352c70';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -527,6 +528,14 @@ export function showSettingsModal(initialPanel) {
         '1 = fully considered (2D reprojection + 3D point-to-ray); 0 = ignored during tracking. ' +
         'Changes apply when you click Apply.';
     nwSection.body.appendChild(nwHint);
+    if (skeletonNodes.length) {
+        const nwTip = document.createElement('div');
+        nwTip.className = 'settings-kbd-hint settings-node-weight-tip';
+        nwTip.style.marginTop = '0';
+        nwTip.style.marginBottom = '8px';
+        nwTip.textContent = NODE_WEIGHT_TIP;
+        nwSection.body.appendChild(nwTip);
+    }
 
     if (skeletonNodes.length === 0) {
         const nwEmpty = document.createElement('div');
@@ -687,7 +696,7 @@ export function showSettingsModal(initialPanel) {
     // The post-triangulation filter's hyperparameters. Kept as its own panel
     // rather than a fourth section of the Tracking Wizard because it is NOT a
     // tracking parameter: it runs after triangulation, over 3D that the tracker
-    // has already finished with. Run it from the toolbar's Temporal Smoothing
+    // has already finished with. Run it from the toolbar's Smooth (Temporal Smoothing)
     // button (all frames; its menu also has "This frame").
     const smPanel = document.createElement('div');
     smPanel.className = 'settings-panel';
