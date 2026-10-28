@@ -11212,6 +11212,13 @@ once for this layout (an equal-weight least-squares point for DLT, a robust
 pixel-error minimum for Refined) and are hard-coded; the real solvers are
 `triangulatePointDLT` / `triangulatePointBA` (`pose/triangulation-core.js`).
 
+**Don't call Refined more accurate in general.** Measured on held-out cameras
+(9 proofread SLAP sessions), shipped Refined beat DLT in only 1 of 9 (median
+3.32 vs 3.20 px): it wins when one view is clearly wrong, but its L1 polish
+step leaves everyday points slightly worse. Its "never worse than DLT" guard is
+on the in-sample reprojection error only. The caption (and the toolbar's Ref
+tooltip in `index.html`) say just that.
+
 **Key exports.** `buildTriangulationMethodsFigure()` → a `<figure>`.
 
 **Imports.** None. **Imported by** `ui/settings-modal.js`.
