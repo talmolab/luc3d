@@ -2600,10 +2600,18 @@ Measured 2026-10-21/27 offline through this code (the harness rebuilt in
 `~/luc3d-eval`, `measure_review.mjs` / `measure_fix.mjs`), a switch counting as on
 the list when one of its ends is within 2 s of a row:
 - **All of SLAP-2M (2026-10-28), the 195 multi-animal back/mid/top views whose raw
-  SLEAP tracks are not already the proofreading (1,773 min, 817 switches):** 1.45 rows
-  a minute, 95% of the switches on the list, 13.9% of the video within 2 s of a row;
-  2 mice 1.48 / 95% / 14.9%, 3–4 mice 1.37 / 91% / 10.9%; back pair 97%, mid and top
-  93%. The 57 views whose raw tracks equal the proofreading: 0.11 a minute, 20 of 20.
+  SLEAP tracks are not already the proofreading (1,632 min, 777 switches):** 1.52 rows
+  a minute, 96% of the switches on the list, 15.3% of the video within 2 s of a row;
+  2 mice 1.57 / 97% / 16.8%, 3–4 mice 1.37 / 91% / 10.9%; back pair 97%, mid 95%, top
+  94%. The 57 views whose raw tracks equal the proofreading: 0.12 a minute, 20 of 20.
+  (The 2022-10-19 recordings are 60 fps, the other dates 30; measured at 30 throughout
+  these were 1.45 / 95% of 817 / 13.9%. `~/luc3d-eval/lib.mjs` `slapFps`.)
+- **Mouse-Dyad-10M (2026-10-28; 2 mice, 150 fps; 244 of its 250 views, six left out
+  because their proofread file has 4–12 tracks):** its files hold only the proofread
+  detections (no SLEAP tracks, no videos), so Track All ran on them untracked: 90.24%
+  right, 172 switches. 2.09 rows a minute, 79% of the switches on the list, 16.1% of
+  the video; 84% with sleap-nn's default tracker standing in for the input's tracks. The
+  simulated reviewer takes every view to >= 99.93% (Spock `code/dyad-eval/`).
   Those 57 had flattered the earlier 87-view figures below (25 of them were in it):
   there the input-tracklet cue is the answer.
 - **87 proofread SLAP top/mid views:** 2 mice (held-out 16) 1.06 rows a minute,
@@ -2613,8 +2621,14 @@ the list when one of its ends is within 2 s of a row:
 - **207 sham_gdx conditions (2 mice, mostly a lone subject before its partner
   enters):** 1.13 rows a minute, 94% of 139, 9.3% (0.5 s: 1.05, 91%, 8.6%). A
   reviewer simulated on all 207 (it plays each row to the next place, keeping who is
-  who, and fixes where a mouse wears another label) takes the 108 videos with errors
-  from 88.1% to 99.90% correct on average, 95 of them to >= 99.9%.
+  who, and fixes where a mouse wears another label for most of half a second) takes
+  the 108 videos with errors from 88.1% to 99.96% correct on average, 101 of them to
+  >= 99.9%. In the app, after the image rows (2026-10-28, 193 videos): 94.03% ->
+  97.16% -> 99.97%, what the offline plan predicted.
+- **The simulated reviewer** (`~/luc3d-eval/oracle_lib.mjs` `playReviewN`, majority
+  rule since 2026-10-28): a wrong label must hold for most of a 0.5 s stretch (one-frame
+  flickers had made it swap and swap back), and a mouse not seen before the first place
+  is met in that place's clip. Both change the measurement only.
 - **Every close encounter instead** would be 0.5–1.8 rows a minute but long ones
   (median 3–16 s, p90 up to minutes), covering 34–80% of the video, which is why
   encounters are not on the list (the checks flag the ones worth a look).
@@ -2639,24 +2653,24 @@ anyway. Measured 2026-10-27 offline with the check's own code on precomputed coa
 vectors (`~/luc3d-eval/extract_bright.mjs`, `eval_bright.mjs`), the simulated reviewer
 working through the review list plus the check's rows:
 - **SLAP original six (3–4 mice of different coats, 23 views):** 1,450 returns tested
-  -> 21 rows, 19 at a real switch (12 rows once repeated returns after one swap share
-  a row, `momentChangePoints`); the check's rows 13 (9 real) -> 34 (28 real); after
-  review 99.74% -> 99.95% (150448/midL: two mice swapped from the start, put right
+  -> 13 rows, 11 at a real switch (2026-10-28: repeated returns after one swap share a
+  row, and a near-tie and a return at one place are one row, `momentChangePoints`); the
+  check's rows 13 (9 real) -> 21 (15 real); after review 99.75% -> 99.96% (150448/midL: two mice swapped from the start, put right
   while out of view, which the list had no place for: 96.0% -> 99.98%). In the app on
   that view: one return row, whose own Fix swaps 0:00.0–0:50.0 — 96.04% -> 99.86%.
   On 190807/top (brown, brown, white; Track All 66.5%) the app raised 5 return rows;
   accepting the 3 whose Fix made the labels right, as proposed, gave 85.0% (the other
   two: one changed nothing, one — renamed by an earlier Fix — would have hurt).
-- **SLAP held-out (2 mice, 64 views):** 14 rows, 10 real; after review unchanged (99.75%).
-- **sham_gdx (2 light-coated mice, 193 videos):** 2,464 returns -> 2 rows, both false;
-  unchanged (99.94%). Coat brightness cannot tell look-alikes apart.
+- **SLAP held-out (2 mice, 64 views):** 11 rows, 8 real; after review unchanged (99.90%).
+- **sham_gdx (2 light-coated mice, 193 videos):** 2,464 returns -> 1 row, false;
+  unchanged (99.97%). Coat brightness cannot tell look-alikes apart.
 - **All of SLAP-2M (2026-10-28):** every multi-animal back/mid/top view (and its L
   twin) with proofread labels — 252 views, 42 sessions. 57 (all 2 mice) were set apart
   because SLEAP's own tracks in the raw file already equal the proofreading (the
   input-tracklet cue is then the answer): Track All 98.7%, the list takes them to 100%,
-  no return rows. On the other 195 (1,773 min), after review with the list plus the
-  check's rows: back pair 99.29% -> 99.56%, mid 99.76% -> 99.88%, top 99.74% (same);
-  2 mice 99.62% -> 99.77%, 3–4 mice 99.55% -> 99.66%; 50 return rows, 35 real, Fix as
+  no return rows. On the other 195 (1,632 min), after review with the list plus the
+  check's rows: all 99.63% -> 99.77%; back pair 99.28% -> 99.55%, mid 99.77% -> 99.89%,
+  top 99.87% (same); 2 mice 99.68% -> 99.82%, 3–4 mice 99.56% -> 99.67%; 50 return rows, 35 real, Fix as
   proposed helping 36 / hurting 13; 2 views better (10302022030623/backL 66.1% -> 100%,
   150448/midL 96.0% -> 99.98%), none worse.
 - **Not adopted: search-zone stitching** after PrecisionTrack (Coulombe et al., 2025,
