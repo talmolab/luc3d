@@ -510,6 +510,56 @@ try {
     const note2 = await page.evaluate((s) => (document.querySelector(s + ' .id-switch-fixed-note') || {}).textContent || '', rowSel8);
     check(/^Fixed: .* swapped on frames [\d,]+–[\d,]+; again on frames [\d,]+–[\d,]+$/.test(note2), 'the row lists both fixes: ' + note2);
 
+    // A check's row on the review list (the tab shows the two as one row): its first Fix is the check's, and once
+    // fixed it keeps "Fix again…" — the place's own fix, from the frame you are on — as a review row does.
+    for (let k = 0; k < 2; k++) { await page.click(rowSel8 + ' .id-switch-line1'); await page.click(rowSel8 + ' .id-switch-undo'); }
+    check(JSON.stringify(await page.evaluate(() => window.__lone())) === JSON.stringify(before), 'Undo twice takes back both fixes');
+    const merged = await page.evaluate(async (key) => {
+        const S = window.__lucid.state.session, st = S._idSwitch, flags = st.results.review.flags;
+        const m = flags.find(x => 'review:' + x.frame + ':' + x.nameA + ':' + x.nameB === key);
+        if (!m) return null;
+        st.results.brightness = { ok: true, fps: 30, sampleHz: 10, step: 3, imageHz: 4, crops: 0, cameras: [S.cameras[0].name], encounters: [], changes: [], flags: [{ frame: m.frame, startFrame: m.startFrame,
+            identityA: m.identityA, identityB: m.identityB, nameA: m.nameA, nameB: m.nameB, kind: 'onset', score: -500, switchBackAt: null }] };
+        const R = await import('/ui/id-switch-review.js'), M = await import('/ui/id-switch-modal.js');
+        R.linkIdSwitchResults(st.results); M.refreshIdSwitchPanel(S);
+        return { key: 'brightness:' + m.frame + ':' + m.nameA + ':' + m.nameB, frame: m.frame, a: m.nameA, b: m.nameB, total: window.__lucid.state.totalFrames };
+    }, sel);
+    check(!!merged, 'the place to put a check row on');
+    const rowSelM = `#idSwitchPanel .id-switch-row[data-key="${merged.key}"]`;
+    check(await page.evaluate((s) => { const r = document.querySelector(s); return !!r && r.classList.contains('cue-both') && /on the review list/.test(r.textContent); }, rowSelM),
+        'the check row and the place show as one row, "on the review list"');
+    const beforeM = await page.evaluate(() => window.__lone());
+    await page.click(rowSelM + ' .id-switch-line1');
+    await page.click(rowSelM + ' .id-switch-fix');
+    const dlgM = await page.evaluate(() => (document.querySelector('.id-switch-fix-modal') || {}).textContent || '');
+    check(!/later places on the list fix their own stretches/.test(dlgM) && !(await page.$('#idSwitchFixA')),
+        'its first Fix is the check\'s own (no pair to pick, not "to the end of the video")');
+    await page.click('#idSwitchFixOk');
+    const actsM = await page.evaluate((s) => [...document.querySelectorAll(s + ' .id-switch-actions button')].map(b => b.textContent), rowSelM);
+    check(actsM.includes('Fix again…') && actsM.includes('Undo fix'), `once fixed it keeps "Fix again…" beside Undo (${actsM.join(', ')})`);
+    const midM = await page.evaluate(() => window.__lone());
+    const hereM = Math.min(merged.frame + 40, merged.total - 2);
+    await page.evaluate(async (f) => { const I = await import('/pose/initialization.js'); I.navigateToFrame(f); }, hereM);
+    await page.click(rowSelM + ' .id-switch-fix');
+    const dlgM2 = await page.evaluate(() => (document.querySelector('.id-switch-fix-modal') || {}).textContent || '');
+    check(/Starts at frame [\d,]+: the frame you are on/.test(dlgM2) && /the end of the video — later places on the list fix their own stretches/.test(dlgM2),
+        'Fix again is the place\'s fix: from the frame you are on to the end of the video');
+    const pa = await page.$eval('#idSwitchFixA', e => e.value).catch(() => merged.a), pb = await page.$eval('#idSwitchFixB', e => e.value).catch(() => merged.b);
+    await page.click('#idSwitchFixOk');
+    const afterM = await page.evaluate(() => window.__lone());
+    const ma = Number(pa.slice(3)), mb = Number(pb.slice(3));
+    bad = 0; swapped = 0;
+    for (let f = 0; f < midM.length; f++) for (let q = 0; q < midM[f].length; q++) {
+        const t = midM[f][q], want = f < hereM ? t : t === ma ? mb : t === mb ? ma : t;
+        if (afterM[f][q] !== want) bad++; else if (want !== t) swapped++;
+    }
+    check(bad === 0 && swapped > 0 && JSON.stringify(midM) !== JSON.stringify(beforeM),
+        `Fix again swaps ${pa} ↔ ${pb} from the frame you are on to the end (${swapped} detections moved, ${bad} wrong)`);
+    const noteM = await page.evaluate((s) => { const r = document.querySelector(s);
+        return { current: !!r && r.classList.contains('is-current'), note: (r && r.querySelector('.id-switch-fixed-note') || {}).textContent || '' }; }, rowSelM);
+    check(noteM.current && /^Fixed: .* swapped on frames [\d,]+–[\d,]+; again on frames [\d,]+–[\d,]+$/.test(noteM.note),
+        `the row stays selected and lists both fixes: ${noteM.note}`);
+
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {
     if (browser) await browser.close();

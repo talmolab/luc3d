@@ -2743,7 +2743,8 @@ filter counted in the Wizard, then left without a track by Track All and counted
 in the status and the summary box, §7c the Instances tab's mean node score, and §8 the
 review list after Track All: counted in the status and the summary box, listed in
 the tab, and a review row's Fix between two picked tracks, from here to the end,
-then Fix again from past its own window: only the stretch between stays swapped).
+then Fix again from past its own window: only the stretch between stays swapped;
+then a check row on the same place: the check's Fix, then the place's Fix again).
 `tests/e2e/_real-single-camera.mjs` runs the whole thing on a real SLEAP file
 through File ▸ Load SLP.
 
@@ -8798,7 +8799,11 @@ just after the place, to the END of the video — later rows fix their own
 stretches. A fixed review row keeps a **Fix again…** button and lists every fix
 made from it ("Fixed: … on frames a–end; again on frames b–end"): labels that swap
 back before the next place (a short flip, seen while playing the row through)
-take a second fix from where they do. With more than two tracks it lets the reviewer
+take a second fix from where they do. So does a fixed check row that is on the
+review list (`reviewPlace`): its first Fix is the check's own, a Fix again is the
+place's (from the frame you are on), and the row stays selected. Without it a person
+was stuck when a check's fix started a second too early (the walkthrough on a
+sham_gdx video: 90.2% instead of 99.9%). With more than two tracks it lets the reviewer
 pick the two tracks (`pairSelect`, `#idSwitchFixA` / `#idSwitchFixB`, defaulting to
 the row's pair): on 3–4 mice the row's own pair was the swapped one in only a third
 to two thirds of the switches found. The dialog keeps Esc / Cancel.
