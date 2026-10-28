@@ -2890,7 +2890,7 @@ export function setupUI() {
         startEditGroup(selectedGroup);
     });
     // Triangulate / Triangulate All are split buttons: hovering reveals a menu
-    // with DLT (Fast) and Ref (Slow & Accurate) (shown purely via CSS :hover) for
+    // with DLT and Ref (shown purely via CSS :hover) for
     // picking a method explicitly, while *clicking the button itself* runs the
     // Settings default method. Choosing a menu item runs that specific method.
     // Implicit triangulation (the keyboard shortcut and the Edit menu) also uses
@@ -3073,7 +3073,7 @@ export function setupUI() {
     // Triangulation, the one setting behind them (and behind `t`).
     function updateTriangulateButtonLabels() {
         var method = getDefaultTriangulationMethod();
-        var long = method === 'ba' ? 'Ref (slow & accurate)' : 'DLT (fast)';
+        var long = method === 'ba' ? 'Ref (slower; helps when one view is clearly wrong)' : 'DLT (fast)';
         var btn = document.getElementById('tbTriangulateAll');
         if (btn) {
             btn.title = 'Triangulate all frames with instance groups, with ' + long + '. ' +

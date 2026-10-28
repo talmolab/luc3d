@@ -135,14 +135,14 @@ try {
     await page.click('.settings-btn-apply');
     l = await labels();
     check(l.text === 'Triangulate' && l.radio === 'ba', `after Apply: "${l.text}", radio ${l.radio}`);
-    check(/Ref \(slow & accurate\)/.test(l.title), 'tooltip follows too');
+    check(/Ref \(slower; helps when one view is clearly wrong\)/.test(l.title), 'tooltip follows too');
     const radioName = await page.evaluate(() =>
         document.querySelector('#triangulateDropdown input[value="ba"]').parentElement.textContent.trim());
     check(radioName === 'Ref', 'the tooltip uses the same name as its Method radio ("Ref")');
 
     await boot();
     l = await labels();
-    check(/Ref \(slow & accurate\)/.test(l.title) && l.radio === 'ba', 'after a reload the button still runs Ref');
+    check(/Ref \(slower; helps when one view is clearly wrong\)/.test(l.title) && l.radio === 'ba', 'after a reload the button still runs Ref');
 
     // Back to DLT through the menu's own radio this time, and leave the profile clean.
     await page.hover('#tbTriangulateAll');
