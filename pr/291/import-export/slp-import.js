@@ -9,64 +9,65 @@ import {
     InstanceGroup, Session,
     asPoints3d, points3dNodeCount, someValidPoint3d, lazyPlaceholderXY, pooledPoints3d,
     markPoints3dFromFile,
-} from '../pose/pose-data.js?v=710c227d00a9';
+} from '../pose/pose-data.js?v=a5575256cd42';
 import {
     getInstanceGroupsForFrame,
-} from '../pose/triangulation.js?v=710c227d00a9';
+} from '../pose/triangulation.js?v=a5575256cd42';
 import {
     parseSlpH5, parseSlpViaSleapIO, instanceMatchesPoints, parsePoints3dH5, pickFiles,
-} from './file-io.js?v=710c227d00a9';
+} from './file-io.js?v=a5575256cd42';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames,
-} from './slp-merge.js?v=710c227d00a9';
-import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=710c227d00a9';
+    slpVideoByCamera, camerasAlreadyInSession,
+} from './slp-merge.js?v=a5575256cd42';
+import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=a5575256cd42';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController,
-} from '../ui/app-state.js?v=710c227d00a9';
+} from '../ui/app-state.js?v=a5575256cd42';
 import {
     autoAssignVideosToCameras, forceVideoSelection, forceVideoSelectionWithFolder,
     showParentDirMatchSummary, createViewForVideoFile, updateTotalFrames,
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
     adoptCampyRecording,
-} from '../loading/session-loader.js?v=710c227d00a9';
-import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=710c227d00a9';
+} from '../loading/session-loader.js?v=a5575256cd42';
+import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=a5575256cd42';
 import {
     campyVideoFile, orderByCampyCameras, campyRecordingWarnings,
-} from '../loading/campy-session.js?v=710c227d00a9';
-import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=710c227d00a9';
-import { adoptSmoothingSource, readSmoothingMetadata } from './smoothing-metadata.js?v=710c227d00a9';
-import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=710c227d00a9';
-import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=710c227d00a9';
-import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js?v=710c227d00a9';
-import { stampFrameIdentitiesFromGroups, readFrameIdentityMetadata } from './frame-identity-metadata.js?v=710c227d00a9';
+} from '../loading/campy-session.js?v=a5575256cd42';
+import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=a5575256cd42';
+import { adoptSmoothingSource, readSmoothingMetadata } from './smoothing-metadata.js?v=a5575256cd42';
+import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=a5575256cd42';
+import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=a5575256cd42';
+import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js?v=a5575256cd42';
+import { stampFrameIdentitiesFromGroups, readFrameIdentityMetadata } from './frame-identity-metadata.js?v=a5575256cd42';
 import {
     showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
-} from './save-load.js?v=710c227d00a9';
+} from './save-load.js?v=a5575256cd42';
 
 // Circular import — these are still defined in app.js for now. They are only
 // invoked inside function bodies, never at module-init time, so live-binding
 // lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=710c227d00a9';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=710c227d00a9';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=710c227d00a9';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=a5575256cd42';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=a5575256cd42';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=a5575256cd42';
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=710c227d00a9';
+import { setup3DViewport } from '../pose/initialization.js?v=a5575256cd42';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
-import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=710c227d00a9';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=710c227d00a9';
+import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=a5575256cd42';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=a5575256cd42';
 // Block 1 (Prompt 4): keep timeline._uploadedCameras in sync after SLP
 // load so the gutter filters to the cameras that actually have video
 // assignments rather than every calibration camera.
-import { recomputeUploadedCameras } from '../loading/session-loader.js?v=710c227d00a9';
+import { recomputeUploadedCameras } from '../loading/session-loader.js?v=a5575256cd42';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=710c227d00a9';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=710c227d00a9';
-import { readVisibilityMetadata } from './visibility-metadata.js?v=710c227d00a9';
-import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=710c227d00a9';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=a5575256cd42';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=a5575256cd42';
+import { readVisibilityMetadata } from './visibility-metadata.js?v=a5575256cd42';
+import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=a5575256cd42';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -1137,6 +1138,7 @@ export async function handleLoadSlpFile(slpFile) {
 
         var session = new Session(cameras, sessSkeleton, sessTracks);
         session.name = sessName;
+        session.slpVideoByCamera = slpVideoByCamera(slpData.videos, videoIdxToCameraName);
         // The file's provenance (e.g. campy-live-export's records), written back on save.
         session.fileProvenance = fileSessionProvenance(slpData.provenance,
             fileSessionNames(slpData.sessions), slpSessIdx);
@@ -1246,7 +1248,7 @@ export async function handleLoadSlpFile(slpFile) {
             // --- Embedded videos: use frame-worker for on-demand extraction ---
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=710c227d00a9', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=a5575256cd42', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
@@ -1827,61 +1829,85 @@ export async function handleAddSlp() {
             }
         }
 
-        var tracks = slpData.tracks.length > 0 ? slpData.tracks : ['track_0'];
-        var maxTrack = 0;
-        for (var fri = 0; fri < slpData.frames.length; fri++) {
-            var fd = slpData.frames[fri];
-            for (var ii = 0; ii < fd.instances.length; ii++) {
-                if (fd.instances[ii].trackIdx > maxTrack) maxTrack = fd.instances[ii].trackIdx;
-            }
-        }
-        while (tracks.length <= maxTrack) tracks.push('track_' + tracks.length);
-
-        // Validate skeleton compatibility (set-based, allows reordering)
-        var skelResult = validateSkeletonCompatibility(state.session.skeleton, skeleton);
-        console.log('[add-slp] Skeleton validation:', skelResult);
-        if (skelResult.error) {
+        // The same video again (Load SLP once more on a file whose camera this
+        // session already has, e.g. to attach the video after continuing
+        // without one): never add its camera a second time — the renamed copy
+        // made a one-camera session a two-camera one. If that camera has no
+        // video yet, only ask for it (below); its detections are already here.
+        var alreadyIn = camerasAlreadyInSession(state.session, slpVideoByCamera(slpData.videos, videoIdxToCameraName));
+        var hasViewFor = function (camName) {
+            return state.views.some(function (v) { return (v.cameraName || v.name) === camName; });
+        };
+        var attachOnly = alreadyIn.length > 0;
+        if (attachOnly && (alreadyIn.length < cameras.length || alreadyIn.some(hasViewFor))) {
+            console.log('[add-slp] already in this session, not added again:', alreadyIn);
             hideLoading();
-            setStatus('Skeleton mismatch: ' + skelResult.error, 'error');
+            setStatus('Already in this session: ' + alreadyIn.join(', ') + '. Nothing was added; to open ' +
+                slpFile.name + ' on its own, use File ▸ New Project first', 'warning');
             return;
         }
-        var nodeReorderMap = skelResult.reorderMap;
+        if (attachOnly) console.log('[add-slp] already in this session, asking only for the video of:', alreadyIn);
 
-        // Auto-rename duplicate camera names
-        for (var aci = 0; aci < cameras.length; aci++) {
-            var addCamName = cameras[aci].name;
-            var isDuplicate = state.session.cameras.some(function (c) { return c.name === addCamName; });
-            if (isDuplicate) {
-                var suffix = 2;
-                while (state.session.cameras.some(function (c) { return c.name === addCamName + '_' + suffix; })) {
-                    suffix++;
+        var affectedFrames = [];
+        if (!attachOnly) {
+            var tracks = slpData.tracks.length > 0 ? slpData.tracks : ['track_0'];
+            var maxTrack = 0;
+            for (var fri = 0; fri < slpData.frames.length; fri++) {
+                var fd = slpData.frames[fri];
+                for (var ii = 0; ii < fd.instances.length; ii++) {
+                    if (fd.instances[ii].trackIdx > maxTrack) maxTrack = fd.instances[ii].trackIdx;
                 }
-                var newName = addCamName + '_' + suffix;
-                console.log('[add-slp] Camera "' + addCamName + '" already exists, renaming to "' + newName + '"');
-                cameras[aci].name = newName;
-                for (var vk in videoIdxToCameraName) {
-                    if (videoIdxToCameraName[vk] === addCamName) {
-                        videoIdxToCameraName[vk] = newName;
+            }
+            while (tracks.length <= maxTrack) tracks.push('track_' + tracks.length);
+
+            // Validate skeleton compatibility (set-based, allows reordering)
+            var skelResult = validateSkeletonCompatibility(state.session.skeleton, skeleton);
+            console.log('[add-slp] Skeleton validation:', skelResult);
+            if (skelResult.error) {
+                hideLoading();
+                setStatus('Skeleton mismatch: ' + skelResult.error, 'error');
+                return;
+            }
+            var nodeReorderMap = skelResult.reorderMap;
+
+            // Auto-rename duplicate camera names
+            for (var aci = 0; aci < cameras.length; aci++) {
+                var addCamName = cameras[aci].name;
+                var isDuplicate = state.session.cameras.some(function (c) { return c.name === addCamName; });
+                if (isDuplicate) {
+                    var suffix = 2;
+                    while (state.session.cameras.some(function (c) { return c.name === addCamName + '_' + suffix; })) {
+                        suffix++;
+                    }
+                    var newName = addCamName + '_' + suffix;
+                    console.log('[add-slp] Camera "' + addCamName + '" already exists, renaming to "' + newName + '"');
+                    cameras[aci].name = newName;
+                    for (var vk in videoIdxToCameraName) {
+                        if (videoIdxToCameraName[vk] === addCamName) {
+                            videoIdxToCameraName[vk] = newName;
+                        }
                     }
                 }
             }
+
+            // Merge tracks
+            var trackRemap = mergeTracksIntoSession(state.session, tracks);
+
+            // Add cameras to session
+            for (var aci2 = 0; aci2 < cameras.length; aci2++) {
+                state.session.cameras.push(cameras[aci2]);
+            }
+            state.session.slpVideoByCamera = Object.assign(state.session.slpVideoByCamera || {},
+                slpVideoByCamera(slpData.videos, videoIdxToCameraName));
+
+            // Merge frames (with node reorder map if needed)
+            affectedFrames = mergeSlpFramesIntoSession(state.session, slpData, videoIdxToCameraName, cameras, trackRemap, nodeReorderMap);
+
+            // Rebuild instance groups for affected frames
+            rebuildInstanceGroupsForFrames(state.session, affectedFrames);
+
+            console.log('[add-slp] Merged ' + cameras.length + ' camera(s), ' + affectedFrames.length + ' frames affected');
         }
-
-        // Merge tracks
-        var trackRemap = mergeTracksIntoSession(state.session, tracks);
-
-        // Add cameras to session
-        for (var aci2 = 0; aci2 < cameras.length; aci2++) {
-            state.session.cameras.push(cameras[aci2]);
-        }
-
-        // Merge frames (with node reorder map if needed)
-        var affectedFrames = mergeSlpFramesIntoSession(state.session, slpData, videoIdxToCameraName, cameras, trackRemap, nodeReorderMap);
-
-        // Rebuild instance groups for affected frames
-        rebuildInstanceGroupsForFrames(state.session, affectedFrames);
-
-        console.log('[add-slp] Merged ' + cameras.length + ' camera(s), ' + affectedFrames.length + ' frames affected');
 
         // Create video views or prompt cells for new cameras
         var hasEmbedded = slpData.videos.some(function (v) { return v.embedded; });
@@ -1889,7 +1915,7 @@ export async function handleAddSlp() {
         if (hasEmbedded) {
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=710c227d00a9', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=a5575256cd42', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
@@ -2122,7 +2148,13 @@ export async function handleAddSlp() {
         hideLoading();
         var dockPanelCount = paneManager.api ? paneManager.api.panels.length : 0;
         console.log('[add-slp] Done. Dock panels: ' + dockPanelCount + ', Views: ' + state.views.length);
-        setStatus('Added SLP: ' + cameras.length + ' camera(s), ' + affectedFrames.length.toLocaleString('en-US') + ' frames merged. Panels: ' + dockPanelCount, 'success');
+        if (attachOnly) {
+            var attached = alreadyIn.filter(hasViewFor);
+            setStatus('Already in this session: ' + alreadyIn.join(', ') + ' (its detections were not added again)' +
+                (attached.length ? '; attached its video' : '; no video attached'), attached.length ? 'success' : 'warning');
+        } else {
+            setStatus('Added SLP: ' + cameras.length + ' camera(s), ' + affectedFrames.length.toLocaleString('en-US') + ' frames merged. Panels: ' + dockPanelCount, 'success');
+        }
     } catch (err) {
         console.error('[add-slp] FATAL:', err);
         hideLoading();
