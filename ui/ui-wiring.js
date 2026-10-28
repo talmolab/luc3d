@@ -2989,7 +2989,7 @@ export function setupUI() {
         setStatus(summary);
     }
 
-    // Triangulate ▾, Temporal Smoothing ▾ and Track ▾ share one shape
+    // Track ▾, Triangulate ▾ and Smooth ▾ share one shape
     // (index.html): a click on the button runs ALL frames; the hover menu has
     // This frame / All frames (Track: Frame range…), the action's quick
     // settings, and Settings…. The All frames item forwards to the button, so
@@ -3016,17 +3016,15 @@ export function setupUI() {
         });
     }
 
-    // The Triangulate button says which method it runs (#138) — "Triangulate:
-    // DLT" — and the menu's Method radios set it. Both follow Settings ▸
-    // Default Triangulation, the one setting behind them (and behind `t`).
+    // The Triangulate button's tooltip says which method it runs (#138); its
+    // label stays a bare "Triangulate" to save toolbar width, and the menu's
+    // Method radios show and set the method. All follow Settings ▸ Default
+    // Triangulation, the one setting behind them (and behind `t`).
     function updateTriangulateButtonLabels() {
         var method = getDefaultTriangulationMethod();
-        var short = method === 'ba' ? 'Ref' : 'DLT';
         var long = method === 'ba' ? 'Ref (slow & accurate)' : 'DLT (fast)';
         var btn = document.getElementById('tbTriangulateAll');
         if (btn) {
-            var span = btn.querySelector('.tri-method');
-            if (span) span.textContent = ': ' + short;
             btn.title = 'Triangulate all frames with instance groups, with ' + long + '. ' +
                 'Hover for this frame, the method and the settings.';
         }

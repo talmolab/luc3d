@@ -8985,8 +8985,8 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   read/write the default method used by implicit triangulation paths.
 - `onDefaultTriangulationMethodChange(fn)` — called with the new method when
   `setDefaultTriangulationMethod` actually changes it (a throwing listener is
-  ignored). `ui/ui-wiring.js` uses it to keep the toolbar's "Triangulate: DLT"
-  / "Triangulate: Ref" labels in step with Settings.
+  ignored). `ui/ui-wiring.js` uses it to keep the toolbar Triangulate button's
+  tooltip and its menu's Method radios in step with Settings.
 - `getNodeWeight(name)` / `getNodeWeights()` / `getNodeWeightArray(nodeNames)` /
   `setNodeWeights(map)` — read/write per-node tracking weights (clamped to
   `[0,1]`; entries equal to the default `1` are dropped). `getNodeWeightArray`
@@ -10168,9 +10168,9 @@ stopping at the last frame; the step transport buttons/keys stop it first.
 - Menu / setup: `setupMenus`, `setupUI`. The menu bar ends with a **Help**
   dropdown (Docs, Settings) after Hot Keys; Docs / Settings are ALSO direct
   buttons at its right end (`menuBarDocs` / `menuBarSettings`, sharing
-  `openDocs` / `openSettings`). The Triangulate / Triangulate All split buttons
-  carry a `.tri-method` span that `updateTriangulateButtonLabels` fills with
-  the Settings default (": DLT" / ": Ref"), refreshed via
+  `openDocs` / `openSettings`). `updateTriangulateButtonLabels` names the
+  Settings default method in the Triangulate button's tooltip and checks the
+  menu's Method radio (the label stays a bare "Triangulate"), refreshed via
   `onDefaultTriangulationMethodChange`. The Speed popover (0.25x–3x) is
   right-aligned to its button. Tracks menu: `Propagate Tracks → IDs`
   (`menuPropagateTracksToIds` — an identity per track, assigned to every group;
@@ -10487,7 +10487,14 @@ opens the docs site (`https://talmolab.github.io/luc3d-docs/`) in a new tab;
 **Hot Keys** modal is generated from `getActions()`, so it follows the catalog
 and user rebindings.
 
-**Triangulate, Temporal Smoothing and Track share one menu shape**
+**Toolbar layout.** After Sessions come two groups, one per kind of work:
+manual labelling (`#tbLabellingGroup`: Instance ▾, Group ▾), then
+proofreading in the order it runs (`#tbProofreadingGroup`: Track ▾,
+Triangulate ▾, Smooth ▾, then the triangulation badge). Labels are short to
+save width ("Smooth" is Temporal Smoothing; the tooltip says so). Covered by
+`tests/e2e/toolbar-hover-menus.mjs` §4.
+
+**Track, Triangulate and Smooth share one menu shape**
 (`wireActionMenu(dropdownId, handlers)`). Each is ONE button whose click runs
 **all frames**; its `:hover` menu (`.tri-dropdown.action-menu`) has **This
 frame**, **All frames** (Track also **Frame range…**), the action's quick
@@ -10500,15 +10507,15 @@ button keeps the id of the old all-frames button (`#tbTriangulateAll`,
 `<button>`s so Defining Plane Mode can disable the runs one by one while the
 settings in the same menu stay live. `:focus-within` keeps a menu open, so
 typing in Animals does not lose it and Tab walks into the items.
-- **Triangulate ▾** (`#triangulateDropdown`): label "Triangulate: DLT" (#138);
-  the Method radios (`input[name="tbTriMethod"]`) ARE Settings ▸ Default
+- **Triangulate ▾** (`#triangulateDropdown`): a bare "Triangulate"; the
+  tooltip names the method a click runs (#138); the Method radios (`input[name="tbTriMethod"]`) ARE Settings ▸ Default
   Triangulation (`setDefaultTriangulationMethod`; `updateTriangulateButtonLabels`
   re-checks them on `onDefaultTriangulationMethodChange`). This frame runs
   `triangulateCurrentFrame(default)`; Settings… → `'triangulation'`. Implicit
   triangulation (`t`, Edit ▸ Triangulate) and the environment-skeleton solve
   (Load Environment, via `resolveTriangulationMethod(group)` on a new group)
   use the default too.
-- **Temporal Smoothing ▾** (`#smoothingDropdown`, `#tbSmooth`): see below.
+- **Smooth ▾** (`#smoothingDropdown`, `#tbSmooth`; Temporal Smoothing): see below.
   Settings… → `'smoothing'`.
 - **Track ▾** (`#trackDropdown`): the button (Track All) and This frame keep
   their own handlers in `pose/tracker.js`'s IIFE; `ui-wiring.js` wires Frame

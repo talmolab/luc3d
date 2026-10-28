@@ -687,7 +687,7 @@ export function showSettingsModal(initialPanel) {
     // The post-triangulation filter's hyperparameters. Kept as its own panel
     // rather than a fourth section of the Tracking Wizard because it is NOT a
     // tracking parameter: it runs after triangulation, over 3D that the tracker
-    // has already finished with. Run it from the toolbar's Temporal Smoothing
+    // has already finished with. Run it from the toolbar's Smooth (Temporal Smoothing)
     // button (all frames; its menu also has "This frame").
     const smPanel = document.createElement('div');
     smPanel.className = 'settings-panel';

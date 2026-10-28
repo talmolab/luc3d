@@ -1,5 +1,5 @@
 /**
- * smoothing-button.js — the toolbar's Temporal Smoothing button state (luc3d #134).
+ * smoothing-button.js — the toolbar's Smooth (Temporal Smoothing) button state (luc3d #134).
  *
  * The button (`#tbSmooth`) is blue (`.active`) while any 3D in the session is
  * smoothed. In its menu only the scope of the LAST run is lit (`.applied`):
