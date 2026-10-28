@@ -16,7 +16,7 @@
 // because the binding is read INSIDE the function body, never at module top
 // level, where a circular import is still `undefined`.
 
-import { planeState } from './plane-definition.js?v=05378bd38987';
+import { planeState } from './plane-definition.js?v=d3e282419348';
 
 /**
  * The toolbar buttons Defining Plane Mode blocks.
@@ -44,7 +44,7 @@ const PLANE_LOCKED_TOOLBAR_IDS = [
     'tbInstanceMenu', 'tbAddInstance', 'tbDeleteInstance',
     'tbGroupMenu', 'tbGroup', 'tbEditGroup',
     'tbTriangulateAll', 'tbTriangulate', 'tbTriangulateAllFrames',
-    'tbSmooth', 'tbSmoothFrame', 'tbSmoothAllFrames', 'tbSmoothRemove',
+    'tbSmooth', 'tbSmoothFrame', 'tbSmoothAllFrames', 'tbSmoothToggle',
     'tbTrackAll', 'tbTrackFrame', 'tbTrackAllFrames', 'tbTrackFrameRange',
 ];
 

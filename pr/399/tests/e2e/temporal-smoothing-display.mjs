@@ -29,7 +29,11 @@
  *      (median 5 + Gaussian 9, then median 3 + Gaussian 5 == median 3 +
  *      Gaussian 5 alone), and right after each run the 3D view draws the
  *      current frame's new 3D (it used to be handed no groups and go blank
- *      until the next frame change).
+ *      until the next frame change);
+ *   H. Remove / Restore smoothing is a toggle: Restore puts back exactly what
+ *      Remove took off, with no recompute (no progress card) and the 3D view
+ *      following, any number of times; after a settings change or a 3D edit
+ *      it smooths again instead, matching a plain run.
  *
  * Run: node tests/e2e/temporal-smoothing-display.mjs
  */
@@ -196,7 +200,7 @@ try {
     const same = (x, y) => x.length === y.length && x.every((v, i) => (Number.isNaN(v) && Number.isNaN(y[i])) || Math.abs(v - y[i]) < 1e-9);
     const raw = await snapshot();
     check(JSON.stringify(await blue()) === '[false,false]', 'E. before smoothing, the button is not blue');
-    const removeDisabled = () => page.evaluate(() => document.getElementById('tbSmoothRemove').disabled);
+    const removeDisabled = () => page.evaluate(() => document.getElementById('tbSmoothToggle').disabled);
     check(await removeDisabled() === true, 'F. before smoothing, Remove smoothing is greyed out');
     // Watch the progress card while an all-frames run goes (the pass is tiny
     // here, so record what the card showed rather than racing it).
@@ -238,20 +242,24 @@ try {
         (await import('/ui/rendering.js')).drawAllOverlays(MID);
         PD.applyPlaneModeToolbarLock();
         (await import('/ui/smoothing-button.js')).syncSmoothingButton();
-        return document.getElementById('tbSmoothRemove').disabled;
+        return document.getElementById('tbSmoothToggle').disabled;
     }, { on, MID });
     check(await planeLock(true) === true, 'F. Defining Plane Mode locks Remove smoothing');
     check(await planeLock(false) === false, 'F. ...and leaving it makes it live again');
     await page.evaluate(() => { document.getElementById('statusText').textContent = ''; });
     await page.hover('#tbSmooth');
     await page.waitForTimeout(200);
-    await page.click('#tbSmoothRemove');
+    await page.click('#tbSmoothToggle');
     await waitStatus(/^Removed /);
     const msgRemove = await page.evaluate(() => document.getElementById('statusText').textContent);
     check(/^Removed temporal smoothing from [\d,]+ poses/.test(msgRemove), `F. Remove smoothing removes it ("${msgRemove}")`);
     check(same(await snapshot(), raw), 'F. ...and gives back the original 3D exactly');
     check(JSON.stringify(await blue()) === '[false,false]', 'F. ...the button is no longer blue');
-    check(await removeDisabled() === true, 'F. ...and Remove smoothing is greyed out again');
+    const after = await page.evaluate(() => {
+        const b = document.getElementById('tbSmoothToggle');
+        return { label: b.textContent.trim(), disabled: b.disabled };
+    });
+    check(after.label === 'Restore smoothing' && !after.disabled, `F. ...and the item now reads Restore smoothing (${JSON.stringify(after)})`);
     const keptWindow = await page.evaluate(async () =>
         (await import('/ui/settings.js')).getSmoothingParams().smoothGaussianWindow);
     check(keptWindow === 3, `F. the smoothing settings are left as they were (Gaussian ${keptWindow})`);
@@ -301,6 +309,69 @@ try {
     check(same(await snapshot(), mgAlone), 'G. median 5 + Gaussian 9, then median 3 + Gaussian 5 == median 3 + Gaussian 5 alone');
     v3 = await view3d();
     check(v3.n > 0 && v3.off === 0, `G. ...and the 3D view follows the re-run (${v3.n}/${v3.want} markers, off by ${v3.off})`);
+
+    // H. Remove / Restore smoothing as a toggle, with the real mouse.
+    const toggleItem = () => page.evaluate(() => {
+        const b = document.getElementById('tbSmoothToggle');
+        return b.textContent.trim() + (b.disabled ? ' (disabled)' : '');
+    });
+    const clickToggle = async () => {
+        await page.evaluate(() => { window.__smoothCard = []; document.getElementById('statusText').textContent = ''; });
+        await page.hover('#tbSmooth');
+        await page.waitForTimeout(150);
+        await page.click('#tbSmoothToggle');
+        await waitStatus(/^(Removed|Restored|Smoothed) /);
+        await page.mouse.move(700, 600);
+        return page.evaluate(() => ({ msg: document.getElementById('statusText').textContent, card: window.__smoothCard.length }));
+    };
+    const stepTo = (f) => page.evaluate(async (f) => (await import('/pose/initialization.js')).navigateToFrame(f), f);
+    await smoothMG(5, 9);
+    const sm59 = await snapshot();
+    check(await toggleItem() === 'Remove smoothing', 'H. smoothed: the item reads Remove smoothing');
+    for (let round = 1; round <= 3; round++) {
+        let r = await clickToggle();
+        check(/^Removed temporal smoothing from [\d,]+ poses$/.test(r.msg) && same(await snapshot(), raw) &&
+            await toggleItem() === 'Restore smoothing',
+            `H. round ${round}: Remove gives the original 3D and the item reads Restore smoothing ("${r.msg}")`);
+        await stepTo(MID + 3);   // moving around changes nothing it depends on
+        await stepTo(MID);
+        r = await clickToggle();
+        check(/^Restored temporal smoothing on [\d,]+ poses$/.test(r.msg) && r.card === 0,
+            `H. round ${round}: Restore puts it back without recomputing ("${r.msg}", progress card shown ${r.card} times)`);
+        check(same(await snapshot(), sm59), `H. round ${round}: ...exactly the smoothing that was removed`);
+        const vr = await view3d();
+        check(await toggleItem() === 'Remove smoothing' && JSON.stringify(await blue()) === '[true,false]' && vr.n > 0 && vr.off === 0,
+            `H. round ${round}: ...the button is blue, the item reads Remove smoothing, the 3D view shows it (${vr.n} markers, off ${vr.off})`);
+    }
+
+    // New settings since Remove: Restore smooths again with them.
+    await clickToggle();
+    await page.evaluate(async () => (await import('/ui/settings.js'))
+        .setSmoothingParams({ smoothMedianWindow: 3, smoothGaussianWindow: 5 }));
+    let rs = await clickToggle();
+    check(/^Smoothed [\d,]+ poses .*\(median 3 \+ Gaussian 5\) — recomputed/.test(rs.msg) && rs.card > 0,
+        `H. after a settings change, Restore recomputes with the new settings ("${rs.msg}", progress card shown ${rs.card} times)`);
+    check(same(await snapshot(), mgAlone), 'H. ...giving what median 3 + Gaussian 5 gives on its own');
+    let vr = await view3d();
+    check(vr.n > 0 && vr.off === 0, `H. ...and the 3D view shows it (${vr.n} markers, off ${vr.off})`);
+
+    // A 3D edit since Remove: Restore smooths the edited 3D.
+    await clickToggle();
+    const nudge = (d) => page.evaluate(async ({ MID, d }) => {
+        const TRI = await import('/pose/triangulation.js');
+        TRI.getInstanceGroupsForFrame(MID)[0].points3d[0] += d;
+    }, { MID, d });
+    await nudge(5);
+    const rawEdited = await snapshot();
+    rs = await clickToggle();
+    check(/ — recomputed/.test(rs.msg), `H. after a 3D edit, Restore recomputes ("${rs.msg}")`);
+    const restoredEdited = await snapshot();
+    await smoothMG(3, 5);
+    check(same(restoredEdited, await snapshot()), 'H. ...matching a plain run on the edited 3D');
+    await clickToggle();
+    check(same(await snapshot(), rawEdited), 'H. ...and Remove then gives back the edited 3D');
+    await nudge(-5);
+    check(same(await snapshot(), raw), 'H. (edit undone)');
 
     // "This frame" through its menu item: only that frame is written and lit.
     await smooth(0);

@@ -14,7 +14,10 @@
  *   - holes INSIDE a segment renormalize instead of pulling toward the origin,
  *   - 2D is never touched, and the reprojection caches derived from 3D are,
  *   - `triangulationMethod` survives (a smoothed BA group must not re-solve as
- *     DLT — the `resolveTriangulationMethod` contract).
+ *     DLT — the `resolveTriangulationMethod` contract),
+ *   - Remove / Restore smoothing (the Smooth menu's toggle) puts back exactly
+ *     what was removed, and refuses (`stale`) once the settings or any of the
+ *     3D it read changed.
  *
  * Run:  node tests/test-temporal-smoothing.mjs
  */
@@ -32,6 +35,9 @@ import {
     smoothFrame,
     unsmoothSession,
     hasSmoothed3d,
+    removeSmoothing,
+    restoreSmoothing,
+    hasRemovedSmoothing,
 } from '../pose/temporal-smoothing.js';
 import {
     InstanceGroup, Instance, makePoints3d, setPoint3d, pooledPoints3d,
@@ -619,6 +625,107 @@ group('smoothFrame — reads a window, not the recording');
     map.get = (k) => { gets++; return realGet(k); };
     smoothFrame(s, { smoothMedianWindow: 5, smoothGaussianWindow: 9, smoothMaxGap: 5, smoothMinSegment: 5 }, T / 2);
     ok(gets < 200, `frame lookups stay near the frame (${gets} for a ${T.toLocaleString('en-US')}-frame track)`);
+}
+
+group('removeSmoothing / restoreSmoothing — the Smooth menu toggle');
+{
+    const P = { smoothMedianWindow: 3, smoothGaussianWindow: 5, smoothMinSegment: 1 };
+    const build = () => {
+        const frames = [];
+        for (let f = 0; f < 15; f++) {
+            const a = makeGroup(1, [[f + (f % 3), f % 2, 0], [0, f, 1]]);
+            const b = makeGroup(2, [[40 - f, (f * 7) % 5, 2], [f, 3, f % 4]]);
+            a.points3d = pooledPoints3d(a.points3d);
+            b.points3d = pooledPoints3d(b.points3d);
+            frames.push([f, [a, b]]);
+        }
+        return makeSession(frames);
+    };
+    const all = (s) => Array.from(s.instanceGroups.values()).flatMap(gs => gs.map(g => Array.from(g.points3d)));
+    const run = (params, scope = 'all') => ({ scope, config: resolveSmoothingParams(params) });
+
+    const s = build();
+    const raw = all(s);
+    eq(removeSmoothing(s, run(P)).frames, 0, 'nothing smoothed: nothing to remove');
+    eq(hasRemovedSmoothing(s), false, '...and nothing kept');
+
+    smoothSession(s, P);
+    const smoothed = all(s);
+    ok(!sameBits(smoothed, raw), 'precondition: smoothing moved the 3D');
+    eq(removeSmoothing(s, run(P)).frames, 30, 'remove: every smoothed pose');
+    ok(sameBits(all(s), raw), 'remove gives back the original 3D, bit for bit');
+    eq(hasSmoothed3d(s), false, '...nothing is smoothed');
+    eq(hasRemovedSmoothing(s), true, '...and the removal is kept');
+
+    const back = restoreSmoothing(s, { ...P });
+    ok(back.restored && !back.stale && back.frames === 30, `restore with the same settings puts it back (${JSON.stringify(back)})`);
+    ok(sameBits(all(s), smoothed), '...bit for bit what was removed');
+    const g7 = s.instanceGroups.get(7)[0];
+    ok(isPoints3dSmoothed(g7.points3d), '...marked smoothed again');
+    ok(sameBits([Array.from(unsmoothedPoints3d(g7.points3d))], [raw[14]]), '...with the original 3D as its source');
+    eq(hasSmoothed3d(s), true, 'hasSmoothed3d sees it again');
+    eq(hasRemovedSmoothing(s), false, 'the kept copy is used up');
+    eq(restoreSmoothing(s, P).restored, false, 'a second restore has nothing to put back');
+
+    // Toggle again: still exact (the source survives the round trip).
+    removeSmoothing(s, run(P));
+    ok(sameBits(all(s), raw), 'a second remove still gives back the original');
+    restoreSmoothing(s, P);
+    ok(sameBits(all(s), smoothed), 'a second restore still gives back the smoothing');
+
+    // Anything the filter read changed -> stale, nothing written.
+    const staleAfter = (label, change, params = P) => {
+        const t = build();
+        smoothSession(t, P);
+        removeSmoothing(t, run(P));
+        change(t);
+        const before = all(t);
+        const r = restoreSmoothing(t, params);
+        ok(!r.restored && r.stale && r.scope === 'all', `${label}: stale (${JSON.stringify({ restored: r.restored, stale: r.stale })})`);
+        ok(sameBits(all(t), before), `${label}: nothing written`);
+        eq(hasRemovedSmoothing(t), false, `${label}: the kept copy is dropped`);
+    };
+    staleAfter('new Gaussian window', () => {}, { ...P, smoothGaussianWindow: 7 });
+    staleAfter('new median window', () => {}, { ...P, smoothMedianWindow: 5 });
+    staleAfter('new max gap', () => {}, { ...P, smoothMaxGap: 9 });
+    staleAfter('a node moved in place', (t) => { t.instanceGroups.get(7)[1].points3d[0] += 0.5; });
+    staleAfter('a 3D edit on a frame it only read', (t) => { t.instanceGroups.get(0)[0].points3d[4] -= 1; });
+    staleAfter('a re-solve into a new array (same values)', (t) => {
+        const g = t.instanceGroups.get(3)[0];
+        g.points3d = pooledPoints3d(g.points3d.slice());
+    });
+    staleAfter('an identity relabel', (t) => { t.instanceGroups.get(5)[0].identityId = 2; t.instanceGroups.get(5)[1].identityId = 1; });
+    staleAfter('a group deleted', (t) => { t.instanceGroups.get(9).pop(); });
+    staleAfter('a frame added', (t) => { t.instanceGroups.set(15, [makeGroup(1, [[15, 0, 0], [0, 15, 1]])]); });
+
+    // Settings that resolve the same are the same settings.
+    const u = build();
+    smoothSession(u, P);
+    removeSmoothing(u, run(P));
+    eq(restoreSmoothing(u, { ...P, smoothGaussianWindow: 4 }).restored, true,
+        'Gaussian 4 resolves to 5 (even windows round up): still a restore');
+
+    // A new run drops the kept copy.
+    for (const [label, after] of [
+        ['an all-frames run', (t) => smoothSession(t, P)],
+        ['a this-frame run', (t) => smoothFrame(t, P, 4)],
+        ['windows 0 (unsmoothSession)', (t) => unsmoothSession(t)],
+    ]) {
+        const t = build();
+        smoothSession(t, P);
+        removeSmoothing(t, run(P));
+        after(t);
+        eq(hasRemovedSmoothing(t), false, `${label} drops the kept removal`);
+    }
+
+    // A this-frame run: stale reports its scope and frames, for re-smoothing there.
+    const v = build();
+    smoothFrame(v, P, 6);
+    smoothFrame(v, P, 9);
+    removeSmoothing(v, run(P, 'frame'));
+    const rv = restoreSmoothing(v, { ...P, smoothGaussianWindow: 3 });
+    ok(rv.stale && rv.scope === 'frame' && JSON.stringify(rv.smoothedFrames) === '[6,9]',
+        `this-frame removal: stale reports scope "frame" and frames 6, 9 (${JSON.stringify(rv)})`);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
