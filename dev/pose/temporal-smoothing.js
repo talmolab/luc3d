@@ -120,7 +120,7 @@ import {
     isPoints3dSmoothed,
     unsmoothedPoints3d,
     clearPoints3dSmoothed,
-} from './pose-data.js?v=b8b3b78a7755';
+} from './pose-data.js?v=c340637a4417';
 
 // Identity id meaning "no identity" (matches `InstanceGroup`'s default).
 const NO_IDENTITY = -1;
@@ -589,6 +589,8 @@ function* smoothSessionSteps(session, params, opts) {
         tracks: 0, frames: 0, nodes: 0, skipped: 0, config: cfg, ran: false,
     };
     if (!session || !session.instanceGroups || !cfg.enabled) return result;
+    // A new run supersedes any removed smoothing kept for Restore.
+    _removedSmoothing.delete(session);
 
     var collected = collectTrajectories(session);
     result.skipped = collected.skipped;
@@ -703,6 +705,8 @@ export function smoothFrame(session, params, frameIdx) {
         tracks: 0, frames: 0, nodes: 0, skipped: 0, config: cfg, ran: false,
     };
     if (!session || !session.instanceGroups || !cfg.enabled) return result;
+    // A new run supersedes any removed smoothing kept for Restore.
+    _removedSmoothing.delete(session);
     result.ran = true;
     var groups = session.instanceGroups.get(frameIdx);
     if (!groups || !groups.length) return result;
@@ -871,6 +875,7 @@ export function unsmoothSession(session, opts) {
     var writeFrames = (opts && opts.writeFrames) || null;
     var frames = 0;
     if (!session || !session.instanceGroups) return { frames: 0 };
+    _removedSmoothing.delete(session);
     // A frame list walks just those frames ("This frame"), not the session.
     var frameIdxs = writeFrames ? writeFrames : session.instanceGroups.keys();
     for (var frameIdx of frameIdxs) {
@@ -888,4 +893,177 @@ export function unsmoothSession(session, opts) {
         }
     }
     return { frames: frames };
+}
+
+// --------------------------------------------------------------------------
+// Remove smoothing / Restore smoothing (the Smooth menu's toggle)
+// --------------------------------------------------------------------------
+
+/**
+ * Session -> the smoothing Remove smoothing took off, kept so Restore smoothing
+ * can put it back without recomputing (`removeSmoothing`). In memory only.
+ */
+var _removedSmoothing = new WeakMap();
+
+// Scratch for `points3dHash`: one double viewed as two 32-bit words.
+var _hashF64 = new Float64Array(1);
+var _hashU32 = new Uint32Array(_hashF64.buffer);
+
+/** FNV-1a over the bits of a group's 3D (NaN payloads included). */
+function points3dHash(pts) {
+    var h = 0x811c9dc5;
+    for (var i = 0; i < pts.length; i++) {
+        _hashF64[0] = pts[i];
+        h = Math.imul(h ^ _hashU32[0], 0x01000193);
+        h = Math.imul(h ^ _hashU32[1], 0x01000193);
+    }
+    return h >>> 0;
+}
+
+/** Same values, NaN equal to NaN. */
+function sameValues(a, b) {
+    if (a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+        var x = a[i], y = b[i];
+        if (x !== y && (x === x || y === y)) return false;
+    }
+    return true;
+}
+
+/**
+ * The smoothing filter's whole input, recorded by Remove smoothing: every
+ * group with 3D, in `instanceGroups` order, with its frame, identity and
+ * `points3d` array (flat arrays, nothing per group). A smoothed group also
+ * keeps its pre-smoothing copy (`sources`), which Remove restores it from and
+ * Restore checks it against; any other group keeps a hash of its values.
+ * Restore compares this with the session as it then stands: any difference
+ * (an edit, a re-solve, a relabel, an added or removed group) means the kept
+ * values may no longer be what smoothing would give, because each smoothed
+ * value reads its neighbours' frames too.
+ */
+function smoothingInputPrint(session) {
+    var groups = [], pts = [], frames = [], ids = [], sources = [], hashes = [];
+    for (var [frameIdx, list] of session.instanceGroups) {
+        if (!list) continue;
+        for (var gi = 0; gi < list.length; gi++) {
+            var g = list[gi];
+            if (!g || !g.points3d) continue;
+            var src = unsmoothedPoints3d(g.points3d);
+            groups.push(g);
+            pts.push(g.points3d);
+            frames.push(frameIdx);
+            ids.push(g.identityId == null ? NO_IDENTITY : g.identityId);
+            sources.push(src);
+            // Removing smoothing does not change an unsmoothed group.
+            hashes.push(src ? 0 : points3dHash(g.points3d));
+        }
+    }
+    return {
+        groups: groups, pts: pts, sources: sources,
+        frames: Int32Array.from(frames), ids: Int32Array.from(ids), hashes: Uint32Array.from(hashes),
+    };
+}
+
+/** Is the session's smoothing input still what `print` recorded? */
+function inputUnchanged(session, print) {
+    var i = 0, n = print.groups.length;
+    for (var [frameIdx, list] of session.instanceGroups) {
+        if (!list) continue;
+        for (var gi = 0; gi < list.length; gi++) {
+            var g = list[gi];
+            if (!g || !g.points3d) continue;
+            if (i >= n || print.groups[i] !== g || print.pts[i] !== g.points3d ||
+                print.frames[i] !== frameIdx ||
+                print.ids[i] !== (g.identityId == null ? NO_IDENTITY : g.identityId)) return false;
+            var src = print.sources[i];
+            if (src ? !sameValues(g.points3d, src) : points3dHash(g.points3d) !== print.hashes[i]) return false;
+            i++;
+        }
+    }
+    return i === n;
+}
+
+function sameSmoothingConfig(a, b) {
+    return a.medianWindow === b.medianWindow && a.gaussianWindow === b.gaussianWindow &&
+        a.maxGap === b.maxGap && a.minSegment === b.minSegment;
+}
+
+/**
+ * Remove smoothing, keeping it for `restoreSmoothing`: record the input
+ * (`smoothingInputPrint`, which keeps each smoothed group's pre-smoothing
+ * copy), copy the smoothed values into ONE buffer (no array per group), then
+ * put the pre-smoothing 3D back (`unsmoothSession`).
+ *
+ * @param {Session} session
+ * @param {{config: Object, scope: 'all'|'frame'}} run the run being removed:
+ *   its scope (`smoothingRunOf`) and the settings as they are now
+ *   (`resolveSmoothingParams`), which Restore compares with its own
+ * @returns {{frames: number}} groups restored to their pre-smoothing 3D
+ */
+export function removeSmoothing(session, run) {
+    if (!session || !session.instanceGroups) return { frames: 0 };
+    var print = smoothingInputPrint(session);
+    var total = 0, i;
+    for (i = 0; i < print.groups.length; i++) if (print.sources[i]) total += print.pts[i].length;
+    var values = new Float64Array(total);
+    var offset = 0;
+    for (i = 0; i < print.groups.length; i++) {
+        if (!print.sources[i]) continue;
+        values.set(print.pts[i], offset);
+        offset += print.pts[i].length;
+    }
+    var stats = unsmoothSession(session);
+    if (total > 0 && run && run.config) {
+        _removedSmoothing.set(session, { print: print, values: values, run: run });
+    }
+    return stats;
+}
+
+/** Is there removed smoothing that `restoreSmoothing` could put back? */
+export function hasRemovedSmoothing(session) {
+    return !!session && _removedSmoothing.has(session);
+}
+
+/**
+ * Put back the smoothing `removeSmoothing` took off, without recomputing it,
+ * when nothing it depends on has changed: the settings resolve the same
+ * (`params`) and every group's 3D, identity and place is as Remove left it.
+ * Otherwise writes nothing and reports `stale`, with the removed run's scope
+ * and frames, so the caller can smooth again with the current settings.
+ * Either way the kept copy is dropped.
+ *
+ * @param {Session} session
+ * @param {Object} params current smoothing settings
+ * @returns {{restored: boolean, stale: boolean, frames: number,
+ *   scope?: 'all'|'frame', smoothedFrames?: number[]}}
+ */
+export function restoreSmoothing(session, params) {
+    var kept = session && _removedSmoothing.get(session);
+    if (!kept) return { restored: false, stale: false, frames: 0 };
+    _removedSmoothing.delete(session);
+    var print = kept.print;
+    var frameSet = new Set();
+    for (var i = 0; i < print.groups.length; i++) if (print.sources[i]) frameSet.add(print.frames[i]);
+    var smoothedFrames = Array.from(frameSet).sort(function (a, b) { return a - b; });
+    if (!sameSmoothingConfig(resolveSmoothingParams(params), kept.run.config) ||
+        !inputUnchanged(session, print)) {
+        return { restored: false, stale: true, frames: 0, scope: kept.run.scope, smoothedFrames: smoothedFrames };
+    }
+    var set = smoothedFramesOf(session);
+    var offset = 0, frames = 0;
+    for (var k = 0; k < print.groups.length; k++) {
+        var source = print.sources[k];
+        if (!source) continue;
+        var g = print.groups[k], pts = print.pts[k];
+        // The kept source still holds exactly what `pts` does (checked above),
+        // so it is the pre-smoothing copy again, as before the removal.
+        pts.set(kept.values.subarray(offset, offset + pts.length));
+        offset += pts.length;
+        markPoints3dSmoothed(pts, source);
+        invalidateReprojections(g);
+        g.smoothed = true;
+        set.add(print.frames[k]);
+        frames++;
+    }
+    return { restored: true, stale: false, frames: frames, scope: kept.run.scope, smoothedFrames: smoothedFrames };
 }

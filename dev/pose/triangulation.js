@@ -10,26 +10,27 @@
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
          setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d,
-         isPoints3dSmoothed } from './pose-data.js?v=b8b3b78a7755';
+         isPoints3dSmoothed } from './pose-data.js?v=c340637a4417';
 // The Jacobi eigensolver and the least-squares plane fit live in
 // `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
 // importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
 // re-exported unchanged, because every existing caller and test reads it here.
-import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=b8b3b78a7755';
+import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=c340637a4417';
 export { fitPlaneToPoints3d };
-import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=b8b3b78a7755';
+import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=c340637a4417';
 // Pass 3i-2: triangulation orchestration moved out of app.js
-import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=b8b3b78a7755';
-import { updateTriangulationBadge } from '../ui/info-panel.js?v=b8b3b78a7755';
-import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=b8b3b78a7755';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=b8b3b78a7755';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=b8b3b78a7755';
-import { createGroupSolver } from './triangulation-pool.js?v=b8b3b78a7755';
-import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=b8b3b78a7755';
+import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=c340637a4417';
+import { updateTriangulationBadge } from '../ui/info-panel.js?v=c340637a4417';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=c340637a4417';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=c340637a4417';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=c340637a4417';
+import { createGroupSolver } from './triangulation-pool.js?v=c340637a4417';
+import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=c340637a4417';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
-         dropDerivedReprojections, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=b8b3b78a7755';
+         dropDerivedReprojections, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=c340637a4417';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from './initialization.js?v=b8b3b78a7755';
+import { update3DViewport } from './initialization.js?v=c340637a4417';
+import { noteTriangulateRun, carryTriangulateMark } from './run-state.js?v=c340637a4417';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -49,7 +50,7 @@ import {
     hungarianAlgorithm, cameraCenter, backProjectToRay, backProjectToRays,
     pointToRayDistance, pointsToRayDistances,
     computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
-} from './triangulation-core.js?v=b8b3b78a7755';
+} from './triangulation-core.js?v=c340637a4417';
 export {
     triangulatePointDLT, triangulatePoints, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,
@@ -2034,6 +2035,7 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
         onProgress: function () { if (onProgress) onProgress(completed, totalFrames); },
     });
 
+    noteTriangulateRun(state.session, frames);   // Triangulate turns blue (ui/run-buttons.js)
     return { triangulated: frames.length, totalGroups: totalGroups, errSum: errSum, errN: errN, frames: frames };
 }
 
@@ -2199,6 +2201,7 @@ export function reTriangulateGroup(instanceGroup) {
     // Only update if we got valid results
     var validPts = someValidPoint3d(result.points3d);
     if (validPts) {
+        carryTriangulateMark(oldPoints3d, result.points3d);
         instanceGroup.points3d = result.points3d;
         instanceGroup.reprojections = result.reprojections;
         storeReprojectedInstances(instanceGroup, result, cameras);
@@ -2500,6 +2503,7 @@ export function triangulateCurrentFrame(method) {
 
     // Show reproj/error UI elements now that triangulation has been run
     setReprojErrorVisible(true);
+    noteTriangulateRun(state.session, [frameIdx]);   // Triangulate turns blue (ui/run-buttons.js)
 
     // Update displays
     drawAllOverlays(frameIdx);
@@ -3009,6 +3013,7 @@ export async function triangulateAllFrames(method) {
         showLoadingProgress('Triangulating', 0, triLoader.nFrames,
             { detail: triangulationMethodLabel(method), title: 'Triangulate All' });   // the card's title, kept to hideLoading
         var swept = await sweepTriangulateAllFrames(state.session, cameras, method);
+        noteTriangulateRun(state.session, null);   // Triangulate turns blue (ui/run-buttons.js)
         setReprojErrorVisible(true, { checkBoxes: false });
         var reprojOnly = showReprojectionsOnly();   // #243: proofreading comes next
         drawAllOverlays(state.currentFrame);
@@ -3139,6 +3144,7 @@ export async function triangulateAllFrames(method) {
     // Show reproj/error UI elements, then only the reprojections (#243).
     setReprojErrorVisible(true, { checkBoxes: false });
     var reprojOnly = showReprojectionsOnly();
+    noteTriangulateRun(state.session, triangulatedFrames);   // Triangulate turns blue (ui/run-buttons.js)
 
     // Update display for current frame
     drawAllOverlays(state.currentFrame);

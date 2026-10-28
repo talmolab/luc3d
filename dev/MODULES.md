@@ -1983,6 +1983,8 @@ drifts upward.
   `computeInstanceDistanceTo`, `hungarianAlgorithm`, and `loadAllLazyFrames` /
   `sweepLazyFrameWindows` (the Track All sweeps).
 - `./cross-view-tracker.js` — `CrossViewTracker`, `Detection`.
+- `./run-state.js` — `noteTrackRun` (after `trackCurrentFrame`'s and
+  `runTrackingPass`'s run): the blue Track button.
 - `../ui/app-state.js` — `state`, `interactionManager`, `timeline`,
   `viewport3d`, `getActiveSession`.
 - `../ui/settings.js` — `getNodeWeightArray`, `getNodeWeight`,
@@ -2402,7 +2404,23 @@ smoothed), and a third value there would erase the solver identity
 **Exports.** `normalizeWindow`, `sigmaForWindow`, `buildSegments`, `medianOf`,
 `smoothSignalInto`, `resolveSmoothingParams`, `collectTrajectories`,
 `smoothTrajectory`, `smoothSession`, `smoothSessionAsync`, `smoothFrame`,
-`unsmoothSession`, `hasSmoothed3d`, `noteSmoothedFrames`. `smoothFrame(session, params, frameIdx)`
+`unsmoothSession`, `hasSmoothed3d`, `noteSmoothedFrames`, `removeSmoothing`,
+`restoreSmoothing`, `hasRemovedSmoothing`. **Remove / Restore smoothing**:
+`removeSmoothing(session, {scope, config})` records the filter's whole input
+(`smoothingInputPrint`: every group with 3D in walk order, its frame,
+identity and `points3d` array in flat arrays; a smoothed group's
+pre-smoothing copy, otherwise a hash of its values), copies the smoothed
+values into ONE `Float64Array`, then `unsmoothSession`s. Kept per session in
+a `WeakMap`, in memory only (never saved). `restoreSmoothing(session, params)`
+puts them back, re-marking each group with its kept source, only when the
+settings resolve the same (`config`) and the input is unchanged
+(`inputUnchanged`: same groups, arrays, frames, identities, and values equal
+to the kept sources / hashes) — a smoothed value reads its neighbours' frames,
+so any change anywhere makes the kept values suspect. Else it writes nothing
+and returns `stale` with the scope and frames to smooth again. Either way the
+copy is dropped; any new run (`smoothSession*`, `smoothFrame`,
+`unsmoothSession`) drops it too. 400,000 poses x 15 nodes: remove ~0.3 s,
+restore ~0.2 s, vs ~2.9 s to smooth. `smoothFrame(session, params, frameIdx)`
 is Temporal Smoothing ▸ This frame: it writes exactly (bit for bit) what
 `smoothSession` writes on that frame, but reads only the frames that value
 depends on — within median + Gaussian radius, plus a walk out to the frame's
@@ -2426,7 +2444,9 @@ of a trajectory is written before its last step.
 no UI imports, so the module stays unit-testable in plain Node.
 
 **Imported by.** `ui/ui-wiring.js` (`smoothSessionAsync`, `smoothFrame`,
-`unsmoothSession`, `resolveSmoothingParams`),
+`unsmoothSession`, `resolveSmoothingParams`, `hasSmoothed3d`,
+`removeSmoothing`, `restoreSmoothing`), `ui/smoothing-button.js`
+(`hasSmoothed3d`, `hasRemovedSmoothing`),
 `import-export/smoothing-metadata.js` (`hasSmoothed3d`, `noteSmoothedFrames`).
 
 **Tests.** `tests/test-temporal-smoothing.mjs` (`smoothFrame` is checked bit
@@ -2439,6 +2459,36 @@ mutation: removing the symmetric shrink, zero-padding instead of renormalizing,
 and filling gaps each fail with the specific artifact they represent.
 
 ---
+
+### pose/run-state.js
+
+**Purpose.** Has Track or Triangulate been run on a session, and does its result
+still stand? Drives the blue Track and Triangulate toolbar buttons
+(`ui/run-buttons.js`). A run is noted when it finishes; its result stands while
+the session shows it: Track while some instance group has an identity,
+Triangulate while some group still holds a 3D array the run produced or kept.
+Arrays are marked by reference (a `WeakSet`), so anything that replaces a
+group's 3D (Track All's own 3D, a re-solve outside a run, a skeleton edit)
+drops that group out, while a node move's re-solve keeps it
+(`carryTriangulateMark`); smoothing writes in place and keeps it. In memory
+only: a reopened project starts with neither noted (the user chose this over
+saving it).
+
+Asked on every overlay draw, so each answer keeps a WITNESS (frame + group that
+showed the result) and walks `session.instanceGroups` only when the witness
+stops holding: it finds a new one or forgets the run, after which nothing is
+walked until the next run.
+
+**Exports.** `noteTrackRun(session)`, `noteTriangulateRun(session, frames)`
+(marks the 3D of every group on `frames`, null = all, that has a
+`triangulationMethod` and valid 3D, solved or kept by the run),
+`carryTriangulateMark(old, new)`, `hasTrackResult(session)`,
+`hasTriangulateResult(session)`.
+
+**Imports.** `./pose-data.js` (`someValidPoint3d`). **Imported by**
+`pose/triangulation.js`, `pose/tracker.js`, `ui/export-modals.js`,
+`ui/run-buttons.js`. **Tests.** `tests/test-run-state.mjs`,
+`tests/e2e/run-buttons-blue.mjs`.
 
 ### pose/triangulation.js
 
@@ -2999,6 +3049,10 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
 - `./triangulation-core.js` — the pure math (re-exported) and
   `setTriangulationSettingsHooks`.
 - `./triangulation-pool.js` — `createGroupSolver` (Triangulate All's parallel solve).
+- `./run-state.js` — `noteTriangulateRun` (at the end of `triangulateAllFrames`,
+  both paths, `triangulateCurrentFrame` and `triangulateMultiFrameInstances`)
+  and `carryTriangulateMark` (`reTriangulateGroup`): the blue Triangulate
+  button.
 - `../loading/track-union.js` — `unionTrackNames`, `remapTrackIdx`,
   `isIdentityRemap` (`LazyFrameLoader`'s track union).
 - `./initialization.js` — `update3DViewport` (circular).
@@ -4296,6 +4350,9 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   `showReprojectionsOnly`, `REPROJ_ONLY_NOTE` (both group-and-triangulate-all
   paths end Reproj-only).
 - `./info-panel.js` — `updateInfoPanel`.
+- `../pose/run-state.js` — `noteTriangulateRun` (after
+  `groupByIdentityAndTriangulateAll`, Triangulate All's DLT path once
+  identities exist, and `groupByTrackAndTriangulateAll`).
 - `../import-export/save-load.js` — `showLoading`, `hideLoading`,
   `setStatus`.
 - `./loading-overlay.js` — `showLoadingProgress`, `yieldToPaint` (the
@@ -6268,6 +6325,7 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `countFrameCounters`, `nonResidentCameraCounts`, `refreshCountedFrame`.
 - `./plane-definition.js` — `drawPlaneOverlays`, `applyPlaneModeToolbarLock`.
 - `./smoothing-button.js` — `syncSmoothingButton` (every draw).
+- `./run-buttons.js` — `syncRunButtons` (every draw).
   **Circular** (that module imports `drawAllOverlays` back); safe because both
   call sites are inside function bodies.
 - `./animal-count-field.js` — `syncAnimalCountField`. **Circular** through
@@ -6378,10 +6436,11 @@ Adding a button to the lock means adding its id to `PLANE_LOCKED_TOOLBAR_IDS`;
 if it opens a menu, its wrapper also needs `PLANE_LOCKED_DROPDOWN_IDS`, since a
 `.tri-dropdown` menu opens on hover and its items are `div`s, so `disabled` on
 the button reaches neither. Locked menus: Instance and Group (actions only).
-The Triangulate / Temporal Smoothing / Track menus are NOT wrapper-locked:
+The Track / Triangulate / Smooth menus are NOT wrapper-locked:
 they also hold settings that stay live in the mode (Method, Animals,
 Settings…), so they open, and each run item is a `<button>` in
-`PLANE_LOCKED_TOOLBAR_IDS` (a new run item there must be too). A disabled
+`PLANE_LOCKED_TOOLBAR_IDS` (a new run item there must be too; Smooth's
+Remove/Restore smoothing toggle, `tbSmoothToggle`, is one). A disabled
 button still opens its menu on hover (`tests/e2e/plane-mode-toolbar-lock.mjs`
 §4b).
 
@@ -8985,8 +9044,8 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   read/write the default method used by implicit triangulation paths.
 - `onDefaultTriangulationMethodChange(fn)` — called with the new method when
   `setDefaultTriangulationMethod` actually changes it (a throwing listener is
-  ignored). `ui/ui-wiring.js` uses it to keep the toolbar's "Triangulate: DLT"
-  / "Triangulate: Ref" labels in step with Settings.
+  ignored). `ui/ui-wiring.js` uses it to keep the toolbar Triangulate button's
+  tooltip and its menu's Method radios in step with Settings.
 - `getNodeWeight(name)` / `getNodeWeights()` / `getNodeWeightArray(nodeNames)` /
   `setNodeWeights(map)` — read/write per-node tracking weights (clamped to
   `[0,1]`; entries equal to the default `1` are dropped). `getNodeWeightArray`
@@ -10176,9 +10235,9 @@ stopping at the last frame; the step transport buttons/keys stop it first.
 - Menu / setup: `setupMenus`, `setupUI`. The menu bar ends with a **Help**
   dropdown (Docs, Settings) after Hot Keys; Docs / Settings are ALSO direct
   buttons at its right end (`menuBarDocs` / `menuBarSettings`, sharing
-  `openDocs` / `openSettings`). The Triangulate / Triangulate All split buttons
-  carry a `.tri-method` span that `updateTriangulateButtonLabels` fills with
-  the Settings default (": DLT" / ": Ref"), refreshed via
+  `openDocs` / `openSettings`). `updateTriangulateButtonLabels` names the
+  Settings default method in the Triangulate button's tooltip and checks the
+  menu's Method radio (the label stays a bare "Triangulate"), refreshed via
   `onDefaultTriangulationMethodChange`. The Speed popover (0.25x–3x) is
   right-aligned to its button. Tracks menu: `Propagate Tracks → IDs`
   (`menuPropagateTracksToIds` — an identity per track, assigned to every group;
@@ -10495,7 +10554,14 @@ opens the docs site (`https://talmolab.github.io/luc3d-docs/`) in a new tab;
 **Hot Keys** modal is generated from `getActions()`, so it follows the catalog
 and user rebindings.
 
-**Triangulate, Temporal Smoothing and Track share one menu shape**
+**Toolbar layout.** After Sessions come two groups, one per kind of work:
+manual labelling (`#tbLabellingGroup`: Instance ▾, Group ▾), then
+proofreading in the order it runs (`#tbProofreadingGroup`: Track ▾,
+Triangulate ▾, Smooth ▾, then the triangulation badge). Labels are short to
+save width ("Smooth" is Temporal Smoothing; the tooltip says so). Covered by
+`tests/e2e/toolbar-hover-menus.mjs` §4.
+
+**Track, Triangulate and Smooth share one menu shape**
 (`wireActionMenu(dropdownId, handlers)`). Each is ONE button whose click runs
 **all frames**; its `:hover` menu (`.tri-dropdown.action-menu`) has **This
 frame**, **All frames** (Track also **Frame range…**), the action's quick
@@ -10508,15 +10574,17 @@ button keeps the id of the old all-frames button (`#tbTriangulateAll`,
 `<button>`s so Defining Plane Mode can disable the runs one by one while the
 settings in the same menu stay live. `:focus-within` keeps a menu open, so
 typing in Animals does not lose it and Tab walks into the items.
-- **Triangulate ▾** (`#triangulateDropdown`): label "Triangulate: DLT" (#138);
-  the Method radios (`input[name="tbTriMethod"]`) ARE Settings ▸ Default
+- **Triangulate ▾** (`#triangulateDropdown`): a bare "Triangulate"; the
+  tooltip names the method a click runs (#138); the Method radios (`input[name="tbTriMethod"]`) ARE Settings ▸ Default
   Triangulation (`setDefaultTriangulationMethod`; `updateTriangulateButtonLabels`
   re-checks them on `onDefaultTriangulationMethodChange`). This frame runs
   `triangulateCurrentFrame(default)`; Settings… → `'triangulation'`. Implicit
   triangulation (`t`, Edit ▸ Triangulate) and the environment-skeleton solve
   (Load Environment, via `resolveTriangulationMethod(group)` on a new group)
   use the default too.
-- **Temporal Smoothing ▾** (`#smoothingDropdown`, `#tbSmooth`): see below.
+- **Smooth ▾** (`#smoothingDropdown`, `#tbSmooth`; Temporal Smoothing): also
+  has the **Remove smoothing / Restore smoothing** toggle (`#tbSmoothToggle`,
+  `data-scope="toggle"`) after All frames; see below.
   Settings… → `'smoothing'`.
 - **Track ▾** (`#trackDropdown`): the button (Track All) and This frame keep
   their own handlers in `pose/tracker.js`'s IIFE; `ui-wiring.js` wires Frame
@@ -10540,9 +10608,18 @@ is closed; their shortcuts (`Mod+I`, `Delete`, `Shift+G`) still work.
 Covered by `tests/e2e/toolbar-hover-menus.mjs`.
 
 **Temporal Smoothing** (luc3d #134) runs the private async
-`runTemporalSmoothing(currentFrameOnly)` (a re-entry guard drops a second
-click while one runs). It reads `getSmoothingParams()`; when both kernels are
-off it restores the pre-smoothing 3D (`unsmoothSession`), or, with nothing
+`runTemporalSmoothing(currentFrameOnly, toggle)` (a re-entry guard drops a
+second click while one runs). The menu's toggle (`#tbSmoothToggle`,
+`toggle`), for comparing with and without: while anything is smoothed,
+**Remove smoothing** restores the pre-smoothing 3D on every frame and keeps
+what it took off (`removeSmoothing`, with the settings as they are then);
+otherwise **Restore smoothing** (`restoreSmoothing`) copies it back with no
+recompute and no card, or, when the settings or any 3D changed since,
+smooths again with the current settings in the removed run's scope (all
+frames, or `smoothFrame` on each removed this-frame run's frames), its status
+ending "— recomputed…". "Nothing is smoothed" if neither applies. Otherwise
+it reads `getSmoothingParams()`; when
+both kernels are off it restores the pre-smoothing 3D (`unsmoothSession`), or, with nothing
 smoothed, says so and opens Settings ▸ Temporal Smoothing rather than silently
 doing nothing; otherwise All frames runs `smoothSessionAsync`
 (`pose/temporal-smoothing.js`; every run filters the pre-smoothing 3D, so it
@@ -10555,7 +10632,8 @@ trajectories) and writes the values an All frames run gives that frame. Then it
 records the scope (`noteSmoothingScope`), drops the `state.triangulationResults`
 entries of every group whose reprojections the pass cleared (the fill appends a
 fresh one, and the panel would average both; This frame checks only its own
-frame), and runs `markDirty` + `drawAllOverlays` + `update3DViewport` +
+frame), and runs `markDirty` + `drawAllOverlays` + `update3DViewport(state.currentFrame)`
+(the frame matters: without it the 3D view got no groups and went blank) +
 `updateInfoPanel`, setting the summary status last. Both-windows-0 restores
 pass `writeFrames: new Set([state.currentFrame])` for This frame. It touches only `points3d` on the
 already-resident `session.instanceGroups`, hydrating no 2D. The button is blue
@@ -11144,7 +11222,12 @@ pixel-error minimum for Refined) and are hard-coded; the real solvers are
 `#tbSmooth` is blue (`.active`) while any 3D in the session is smoothed. Its
 menu lights (`.applied`) only the scope of the LAST run, never both: **All
 frames** after an all-frames run (while anything is still smoothed), **This
-frame** after a this-frame run, on the frames it smoothed.
+frame** after a this-frame run, on the frames it smoothed. The toggle
+(`#tbSmoothToggle`) reads **Remove smoothing** while something is smoothed,
+**Restore smoothing** while a removal is kept (`hasRemovedSmoothing`), and is
+disabled otherwise; its tooltip follows. Never while it carries
+`.plane-mode-locked` (that lock owns `disabled` and the tooltip then; the next
+draw re-derives them after the unlock's snapshot restore).
 
 **Key exports.** `syncSmoothingButton()` — re-derives that state from the
 session. `noteSmoothingScope(session, 'all' | 'frame', config)` — records the
@@ -11156,10 +11239,24 @@ calls this on every overlay draw and the pass calls it after running.
 `hasSmoothed3d` (`pose/temporal-smoothing.js`) keeps the per-draw cost small.
 
 **Imports.** `./app-state.js` (`state`), `../pose/temporal-smoothing.js`
-(`hasSmoothed3d`), `../import-export/smoothing-metadata.js` (`noteSmoothingRun`,
+(`hasSmoothed3d`, `hasRemovedSmoothing`), `../import-export/smoothing-metadata.js` (`noteSmoothingRun`,
 `smoothingRunOf`). **Imported by** `ui/rendering.js`, `ui/ui-wiring.js`.
-Covered by `tests/e2e/temporal-smoothing-display.mjs` §E and
+Covered by `tests/e2e/temporal-smoothing-display.mjs` §E–H and
 `tests/e2e/smoothing-save-reopen.mjs`.
+
+### ui/run-buttons.js
+
+**Purpose.** The toolbar's Track (`#tbTrackAll`) and Triangulate
+(`#tbTriangulateAll`) buttons are blue (`.active`) once that step has been run
+on the active session and while its result stands (`pose/run-state.js`), as
+Smooth is while smoothing is applied (`ui/smoothing-button.js`). Derived on
+every overlay draw, so session switches and results that go away (re-tracking
+replaces Triangulate's 3D) need no bookkeeping.
+
+**Exports.** `syncRunButtons()`. **Imports.** `./app-state.js` (`state`),
+`../pose/run-state.js` (`hasTrackResult`, `hasTriangulateResult`).
+**Imported by** `ui/rendering.js` (every `drawAllOverlays`). **Tests.**
+`tests/e2e/run-buttons-blue.mjs`.
 
 ### ui/section-state.js
 
@@ -12936,7 +13033,8 @@ session)`; `readSmoothingMetadata(session, lucid)`.
 JSON: `unsmoothedPoints3d` per group, the key at the session-dict level).
 Readers `import-export/slp-import.js` (both typed group rebuilders +
 `handleLoadSlpFile`), `loading/session-loader.js` (lazy reopen, single-SLP
-folder), `import-export/save-load.js`. `ui/smoothing-button.js`.
+folder), `import-export/save-load.js`. `ui/smoothing-button.js`;
+`ui/ui-wiring.js` (`smoothingRunOf`: the scope Remove smoothing keeps).
 
 **Tests.** `tests/e2e/smoothing-save-reopen.mjs` (eager + lazy reopen, both
 writers, two sessions, an edit after reopen, a never-smoothed project).

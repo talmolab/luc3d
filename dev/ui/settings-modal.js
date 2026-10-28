@@ -40,14 +40,14 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=b8b3b78a7755';
-import { getActiveSession, state, timeline } from './app-state.js?v=b8b3b78a7755';
-import { drawAllOverlays } from './rendering.js?v=b8b3b78a7755';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=b8b3b78a7755';
-import { installModalGeometry } from './modal-geometry.js?v=b8b3b78a7755';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=b8b3b78a7755';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=b8b3b78a7755';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=b8b3b78a7755';
+} from './settings.js?v=c340637a4417';
+import { getActiveSession, state, timeline } from './app-state.js?v=c340637a4417';
+import { drawAllOverlays } from './rendering.js?v=c340637a4417';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=c340637a4417';
+import { installModalGeometry } from './modal-geometry.js?v=c340637a4417';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=c340637a4417';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=c340637a4417';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=c340637a4417';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -696,7 +696,7 @@ export function showSettingsModal(initialPanel) {
     // The post-triangulation filter's hyperparameters. Kept as its own panel
     // rather than a fourth section of the Tracking Wizard because it is NOT a
     // tracking parameter: it runs after triangulation, over 3D that the tracker
-    // has already finished with. Run it from the toolbar's Temporal Smoothing
+    // has already finished with. Run it from the toolbar's Smooth (Temporal Smoothing)
     // button (all frames; its menu also has "This frame").
     const smPanel = document.createElement('div');
     smPanel.className = 'settings-panel';

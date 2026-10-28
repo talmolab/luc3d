@@ -181,11 +181,11 @@ try {
     // Tab rather than .focus(): only a real keyboard focus sets :focus-visible,
     // which is what the blur rule keys on.
     await reset();
-    // The Group menu's button is the last toolbar control before Triangulate
-    // (its items are in a closed hover menu, which Tab skips). Tab reaches the
-    // Triangulate button, which opens its menu (:focus-within), then This frame.
-    await page.evaluate(() => { document.getElementById('tbGroupMenu').focus(); });
-    for (let i = 0; i < 6; i++) {
+    // Track is the toolbar control before Triangulate. Focus on it opens its
+    // menu (:focus-within), so Tab walks Track's items first, then reaches the
+    // Triangulate button, which opens its menu the same way, then This frame.
+    await page.evaluate(() => { document.getElementById('tbTrackAll').focus(); });
+    for (let i = 0; i < 12; i++) {
         await page.keyboard.press('Tab');
         const id = await page.evaluate(() => document.activeElement.id);
         if (id === 'tbTriangulate') break;

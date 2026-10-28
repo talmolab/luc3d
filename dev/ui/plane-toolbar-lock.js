@@ -16,7 +16,7 @@
 // because the binding is read INSIDE the function body, never at module top
 // level, where a circular import is still `undefined`.
 
-import { planeState } from './plane-definition.js?v=b8b3b78a7755';
+import { planeState } from './plane-definition.js?v=c340637a4417';
 
 /**
  * The toolbar buttons Defining Plane Mode blocks.
@@ -44,7 +44,7 @@ const PLANE_LOCKED_TOOLBAR_IDS = [
     'tbInstanceMenu', 'tbAddInstance', 'tbDeleteInstance',
     'tbGroupMenu', 'tbGroup', 'tbEditGroup',
     'tbTriangulateAll', 'tbTriangulate', 'tbTriangulateAllFrames',
-    'tbSmooth', 'tbSmoothFrame', 'tbSmoothAllFrames',
+    'tbSmooth', 'tbSmoothFrame', 'tbSmoothAllFrames', 'tbSmoothToggle',
     'tbTrackAll', 'tbTrackFrame', 'tbTrackAllFrames', 'tbTrackFrameRange',
 ];
 
@@ -54,7 +54,7 @@ const PLANE_LOCKED_TOOLBAR_IDS = [
  * A `.tri-dropdown` menu opens on **hover** (CSS), so `disabled` on its
  * button does not stop the menu. The Instance and Group menus hold nothing but
  * actions, so their wrappers are locked and the menus do not even open. The
- * Triangulate / Temporal Smoothing / Track menus are NOT here: they also hold
+ * Track / Triangulate / Smooth menus are NOT here: they also hold
  * settings that stay live, so they open, and every run item in them is a
  * `<button>` disabled one by one (the list above). A new run item in those
  * menus must be a `<button>` and go in that list.
