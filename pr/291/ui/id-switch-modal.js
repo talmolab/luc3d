@@ -30,23 +30,23 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { noteProgress } from './progress-delta.js?v=9fb255093d30';
-import { state, getActiveSession } from './app-state.js?v=9fb255093d30';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=9fb255093d30';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=9fb255093d30';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=9fb255093d30';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=9fb255093d30';
-import { getTrackingThreshold } from './settings.js?v=9fb255093d30';
-import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=9fb255093d30';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions } from '../pose/single-camera-tracking.js?v=9fb255093d30';
+import { noteProgress } from './progress-delta.js?v=872edacf5f28';
+import { state, getActiveSession } from './app-state.js?v=872edacf5f28';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=872edacf5f28';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=872edacf5f28';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=872edacf5f28';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=872edacf5f28';
+import { getTrackingThreshold } from './settings.js?v=872edacf5f28';
+import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=872edacf5f28';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions } from '../pose/single-camera-tracking.js?v=872edacf5f28';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=9fb255093d30';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=9fb255093d30';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=9fb255093d30';
-import { createBrightnessSampler } from './brightness-sampler.js?v=9fb255093d30';
+         inputTensorToPixels, INPUT } from './image-embedder.js?v=872edacf5f28';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=872edacf5f28';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=872edacf5f28';
+import { createBrightnessSampler } from './brightness-sampler.js?v=872edacf5f28';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary } from './id-switch-review.js?v=9fb255093d30';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary } from './id-switch-review.js?v=872edacf5f28';
 
 const CUE_LABEL = { size: 'body size', image: 'images', brightness: 'coat brightness', review: 'review list' };
 
@@ -857,7 +857,7 @@ function applyFix(session, st, f, plan, idA, idB) {
     (st.fixes || (st.fixes = [])).push(fix);
     idSwitchRenameForFix(st, fix);
     st.reviewed.add(fix.key);
-    st.current = fix.key;
+    st.current = idSwitchIsSecondary(f) ? rowKey(f.agree) : fix.key;   // a place shown as a check's row: keep that row selected
     markDirty();
     var nav = st.navigate || _navigate;
     if (nav) nav(idSwitchLeadInFrame(f, state.fps, idSwitchLeadSeconds(session)));   // back to the lead-in: play to see the fixed labels
@@ -943,15 +943,25 @@ function lookNote(cues) {
 }
 
 /**
+ * The review-list place a row stands for: the row itself, or the place a check's row is linked to ("on the
+ * review list" — the tab shows the two as one row). Null for a check's row that is not on the list.
+ */
+function reviewPlace(f) {
+    return f.cue === 'review' ? f : f.agree && f.agree.cue === 'review' ? f.agree : null;
+}
+
+/**
  * What the selected row shows under its lines: the progress bar, then Fix switch… (or what was fixed, and Undo).
  * A review-list row can be fixed again — a swap that undoes itself before the next place takes two fixes — so it
- * lists every fix made from it and keeps a "Fix again…" button.
+ * lists every fix made from it and keeps a "Fix again…" button. So does a check's row on the review list, once
+ * fixed: its first fix is the check's, a Fix again is the place's (from the frame you are on).
  */
 function selectedHtml(st, f) {
     var fix = idSwitchFixFor(st, f), last = st.fixes && st.fixes.length ? st.fixes[st.fixes.length - 1] : null;
     var act;
-    if (fix && f.cue === 'review') {
-        var key = rowKey(f), mine = (st.fixes || []).filter(function (x) { return x.key === key; });
+    if (fix && reviewPlace(f)) {
+        var keys = [rowKey(f)].concat(f.agree ? [rowKey(f.agree)] : []);
+        var mine = (st.fixes || []).filter(function (x) { return keys.indexOf(x.key) >= 0 || keys.indexOf(x.partnerKey) >= 0; });
         act = '<span class="id-switch-fixed-note is-list">Fixed: ' + mine.map(function (x, i) {
             return (i ? 'again ' : escapeHtml(x.nameA) + ' ↔ ' + escapeHtml(x.nameB) + ' swapped ') + 'on frames ' +
                 (x.from + 1).toLocaleString() + '–' + (x.to + 1).toLocaleString();
@@ -1059,7 +1069,13 @@ export function refreshIdSwitchPanel(session) {
     host.querySelector('#idSwitchList').addEventListener('click', function (e) {
         var row = e.target.closest('.id-switch-row');
         if (!row || e.target.closest('.id-switch-pbar') || _scrubbing) return;    // the bar seeks (below), not re-lands
-        if (e.target.closest('.id-switch-fix')) { var fr = byKey.get(row.dataset.key); if (fr) openFixDialog(session, st, fr); return; }
+        if (e.target.closest('.id-switch-fix')) {
+            var fr = byKey.get(row.dataset.key);
+            // Fix again on a fixed check row that is on the review list: the place's own fix, from the frame you are on
+            if (fr && idSwitchFixFor(st, fr) && reviewPlace(fr)) fr = reviewPlace(fr);
+            if (fr) openFixDialog(session, st, fr);
+            return;
+        }
         if (e.target.closest('.id-switch-undo')) { undoLastFix(session, st); return; }
         if (e.target.classList.contains('id-switch-tick')) {
             if (e.target.checked) st.reviewed.add(row.dataset.key); else st.reviewed.delete(row.dataset.key);

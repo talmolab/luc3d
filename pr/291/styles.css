@@ -1117,38 +1117,53 @@ body {
   color: var(--accent);
 }
 
-/* A labelled value in the toolbar — the Track group's Animals field. Sized to
-   the checkbox labels' 11px and kept narrow: the whole toolbar has to fit a
-   1440px window (tests/e2e/toolbar-3d-toggle-button.mjs §7), and one or two
-   digits or the "auto" placeholder is all it ever holds. */
-.toolbar-field {
+/* A quick setting inside an action menu (index.html: Triangulate's Method,
+   Track's Animals): a label on the left, its control on the right, in the
+   menu's row height. Not a clickable row — no hover fill. */
+.tri-dropdown-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: default;
+}
+
+.tri-dropdown-setting-control {
+  display: inline-flex;
+  gap: 10px;
+}
+
+.tri-dropdown-setting-control label {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  white-space: nowrap;
+  color: var(--text-primary);
+  cursor: pointer;
 }
 
-.toolbar-field input {
-  width: 26px;
+.tri-dropdown-setting input[type="number"] {
+  width: 44px;
   height: 22px;
-  padding: 0 1px;
+  padding: 0 2px;
   border: 1px solid var(--border-light);
   border-radius: 4px;
   background: var(--bg-tertiary);
   color: var(--text-primary);
   font: inherit;
-  font-size: 11px;
+  font-size: 12px;
   text-align: center;
 }
 
-.toolbar-field input::placeholder {
+.tri-dropdown-setting input[type="number"]::placeholder {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
-.toolbar-field input:focus {
+.tri-dropdown-setting input[type="number"]:focus {
   outline: none;
   border-color: var(--accent);
 }
@@ -1295,7 +1310,10 @@ body {
 }
 
 .tri-dropdown:hover .tri-dropdown-menu,
-.tri-dropdown.open .tri-dropdown-menu {
+.tri-dropdown.open .tri-dropdown-menu,
+/* Focus inside keeps it open: typing in Track's Animals field must not lose
+   the menu when the pointer drifts off, and Tab can walk into the items. */
+.tri-dropdown:focus-within .tri-dropdown-menu {
   visibility: visible;
   opacity: 1;
   pointer-events: auto;
@@ -4785,7 +4803,7 @@ kbd {
      24px gutter), so there is deliberately NO max-width/max-height here — a
      second cap would silently shrink a rect the clamp thought it had granted
      and leave the card flush against one edge. */
-  width: 880px;
+  width: 1040px;
   height: 620px;
   display: flex;
   flex-direction: column;
@@ -4861,7 +4879,7 @@ kbd {
 
 .settings-nav-item {
   padding: 9px 18px;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-secondary);
   cursor: pointer;
   white-space: nowrap;
@@ -4894,29 +4912,12 @@ kbd {
 }
 
 .settings-panel-title {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text-muted);
   margin-bottom: 14px;
-}
-
-.settings-radio-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  margin-bottom: 10px;
-  cursor: pointer;
-  transition: background var(--transition-fast),
-    border-color var(--transition-fast);
-}
-
-.settings-radio-row:hover {
-  background: var(--bg-button);
 }
 
 .settings-radio {
@@ -4930,12 +4931,12 @@ kbd {
     background var(--transition-fast);
 }
 
-.settings-radio-row.checked .settings-radio {
+.tri-method-choice.checked .settings-radio {
   border-color: var(--accent);
   background: var(--accent);
 }
 
-.settings-radio-row.checked .settings-radio::after {
+.tri-method-choice.checked .settings-radio::after {
   content: '\2713';
   position: absolute;
   top: 50%;
@@ -4944,26 +4945,6 @@ kbd {
   color: #fff;
   font-size: 11px;
   line-height: 1;
-}
-
-.settings-radio-row.checked {
-  border-color: var(--accent);
-  background: var(--accent-dim);
-}
-
-.settings-radio-label {
-  display: flex;
-  flex-direction: column;
-}
-
-.settings-radio-title {
-  font-size: 13px;
-  color: var(--text-primary);
-}
-
-.settings-radio-desc {
-  font-size: 11px;
-  color: var(--text-muted);
 }
 
 .settings-kbd-row {
@@ -4988,7 +4969,7 @@ kbd {
   border-radius: 4px;
   background: var(--bg-button);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
   transition: border-color var(--transition-fast);
 }
@@ -5017,7 +4998,7 @@ kbd {
 
 /* Category subheader within the Keyboard Shortcuts list. */
 .settings-kbd-category {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -5031,7 +5012,7 @@ kbd {
 }
 
 .settings-kbd-hint {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-muted);
   margin-top: 12px;
 }
@@ -5107,7 +5088,7 @@ kbd {
 }
 
 .settings-section-count {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted, #888);
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
@@ -5162,12 +5143,12 @@ kbd {
 }
 
 .settings-threshold-title {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-primary);
 }
 
 .settings-threshold-desc {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-muted);
   margin-top: 2px;
 }
@@ -5308,6 +5289,147 @@ kbd {
 .settings-docs-note {
   margin-top: 14px;
 }
+
+/* The Track setup modal shares these two classes at their smaller sizes;
+   the Settings window, which is wider, reads larger. */
+.settings-modal .settings-kbd-label {
+  font-size: 14px;
+}
+
+.settings-modal .settings-num-input {
+  font-size: 13px;
+}
+
+/* Settings ▸ Default Triangulation: the DLT-vs-Refined diagram
+   (ui/triangulation-methods-figure.js). */
+.tri-methods {
+  margin: 16px 0 0;
+}
+
+.tri-methods-lead,
+.tri-methods-col p {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.tri-methods-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.tri-methods-col {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px 12px 12px;
+  background: var(--bg-primary);
+}
+
+/* Each card is the choice (Settings ▸ Default Triangulation). */
+.tri-method-choice {
+  cursor: pointer;
+  transition: background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.tri-method-choice:hover {
+  border-color: var(--border-light);
+}
+
+.tri-method-choice:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Selected = the checkbox and a blue outline; the card keeps its background. */
+.tri-method-choice.checked {
+  border-color: var(--accent);
+}
+
+.tri-methods-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.tri-methods-head .settings-radio {
+  margin-top: 1px;
+}
+
+.tri-methods-name small {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.tri-methods-col svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* A wide card would otherwise push the captions below the fold. */
+  max-height: 190px;
+  margin: 6px 0 8px;
+  overflow: hidden;
+}
+
+.tri-methods-col p.tri-methods-note {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color);
+}
+
+.tri-methods-note strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.tri-methods-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.tri-methods-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tri-methods-legend i {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.tri-methods .tm-key-det { background: var(--warning-color); }
+.tri-methods .tm-key-point { background: var(--accent); }
+.tri-methods .tm-key-proj { border: 1.5px solid var(--accent); width: 7px; height: 7px; }
+.tri-methods .tm-key-gap { background: var(--error-color); width: 12px; height: 3px; border-radius: 2px; }
+
+.tri-methods .tm-ray { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.tri-methods .tm-ray-stray { stroke: var(--warning-color); opacity: 0.7; }
+.tri-methods .tm-back { stroke: var(--accent); stroke-width: 1; opacity: 0.35; }
+.tri-methods .tm-plane { stroke: var(--text-secondary); stroke-width: 2; stroke-linecap: round; }
+.tri-methods .tm-cam { fill: var(--bg-button); stroke: var(--text-secondary); stroke-width: 1; }
+.tri-methods .tm-gap { stroke: var(--error-color); stroke-width: 2.5; stroke-linecap: round; }
+.tri-methods .tm-det { fill: var(--warning-color); }
+.tri-methods .tm-proj { fill: none; stroke: var(--accent); stroke-width: 1.6; }
+.tri-methods .tm-point { fill: var(--accent); stroke: var(--text-primary); stroke-width: 1.2; }
+.tri-methods .tm-start { fill: none; stroke: var(--text-muted); stroke-width: 1.2; stroke-dasharray: 2 2; }
+.tri-methods .tm-move { stroke: var(--text-secondary); stroke-width: 1.2; }
+.tri-methods .tm-arrowhead { fill: var(--text-secondary); }
+.tri-methods .tm-leader { stroke: var(--text-muted); stroke-width: 0.8; }
+.tri-methods .tm-note { fill: var(--text-secondary); font-size: 10px; }
+.tri-methods .tm-note-stray { fill: var(--warning-color); }
 
 .settings-docs-note a {
   color: var(--accent);

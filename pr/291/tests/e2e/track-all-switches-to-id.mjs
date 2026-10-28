@@ -118,7 +118,7 @@ try {
     await page.click('#colorByTracks');
     t = await toggle();
     check(t.tracks && !t.id && !t.state, 'the Tracks button still switches back');
-    await page.click('#tbTrackFrame');
+    await page.hover('#tbTrackAll'); await page.click('#tbTrackFrame');   // This frame, in the Track menu
     await page.waitForTimeout(300);
     t = await toggle();
     check(t.tracks && !t.state, 'Track Frame (one frame) leaves Color on Tracks');
