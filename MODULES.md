@@ -4217,8 +4217,15 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   Each camera column exports across all its selected sessions into one SLEAP
   file; **Download All** bulk-exports every included column, **always
   prompting** for a destination folder (no cached `state.exportDirHandle`), and
-  writes each included camera as a flat `<CamName>.slp` into it (falling back to
-  per-file `downloadBlob` downloads without the File System Access API). A cell
+  writes each included camera as a flat `<CamName>_v<K>.slp` into it (falling
+  back to per-file `downloadBlob` downloads without the File System Access API).
+  `K` is ONE version for the whole batch: 1 + the highest `slpMaxVersion` (the
+  top `_vN` a camera's directory held at load, recorded on each
+  `state.videoFiles` entry by `handleLoadSessionFolderPerCamera`) over every
+  exported column's selected sessions, so a file dropped back into its camera
+  dir outranks every `.slp` that was there under `chooseCameraSlp`'s
+  highest-`_vN` rule. An unversioned `<CamName>.slp` lost to any leftover `_v1`
+  (#214). A cell
   is a green ✓ (toggle on/off) only where the camera VIEW exists in that
   session — derived from `state.videoFiles` (real loaded views), plus cameras
   with labeled data for SLP-only projects; NOT from `session.cameras`, which is
@@ -11710,6 +11717,9 @@ max():
   decide which file is authoritative); the load just says a newer file was left
   unread. Covered by `tests/test-percam-slp-choice.js` and
   `tests/e2e/percam-slp-choice-and-failure.mjs`.
+- Each camera's highest `_vN` in its directory is kept on its `state.videoFiles`
+  entry as `slpMaxVersion` (beside `slpFilename`), so "Export SLEAP File By Cam"
+  can name its output above it (`showSlpExportByCamModal`).
 
 **Large `.slp` → lazy loading.** The chosen `.slp` files are routed by
 `shouldUseLazySlp` (`> 150 MB`): large prediction files go to a `SioLazyLoader`

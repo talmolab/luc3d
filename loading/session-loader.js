@@ -3720,6 +3720,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                         frameCount: 0,
                         assignedCamera: assignCam,
                         slpFilename: slpFilenameForCam,
+                        slpMaxVersion: highestVersion,
                         videoPath: videoFile.webkitRelativePath || videoFile.name,
                         sessionIdx: sessionIdx,
                     });
@@ -3744,6 +3745,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                             frameCount: decoder.samples.length,
                             assignedCamera: assignCam,
                             slpFilename: slpFilenameForCam,
+                            slpMaxVersion: highestVersion,
                             videoPath: videoFile.webkitRelativePath || videoFile.name,
                             sessionIdx: sessionIdx,
                         });

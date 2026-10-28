@@ -1781,6 +1781,20 @@ export function showSlpExportByCamModal() {
             }
         }
 
+        // One version for the whole batch, above every `_vN` any exported
+        // camera's directory held at load (`slpMaxVersion`, recorded by the
+        // per-camera folder loader). The folder loader picks the highest `_vN`
+        // in a camera dir (`chooseCameraSlp`), so an unversioned `<cam>.slp`
+        // dropped back next to a leftover `_v1` silently lost to it (#214).
+        var batchVersion = 1;
+        for (var bv = 0; bv < cols.length; bv++) {
+            var bvSel = buildColumnSelections(cols[bv]);
+            for (var bvs = 0; bvs < bvSel.length; bvs++) {
+                var mv = bvSel[bvs].videoFileInfo && bvSel[bvs].videoFileInfo.slpMaxVersion;
+                if (typeof mv === 'number' && mv + 1 > batchVersion) batchVersion = mv + 1;
+            }
+        }
+
         exporting = true;
         cancelled = false;
         dlAllBtn.disabled = true;
@@ -1793,7 +1807,7 @@ export function showSlpExportByCamModal() {
                 var camName = cols[i];
                 dlAllBtn.textContent = 'Downloading... (' + (i + 1) + '/' + cols.length + ')';
                 var selections = buildColumnSelections(camName);
-                var outName = sanitizeFilename(camName);
+                var outName = sanitizeFilename(camName).replace(/\.slp$/, '_v' + batchVersion + '.slp');
                 var blob = await exportSlpMultiSession(selections, reprojAsUser, instanceFilter);
                 if (cancelled) break;
                 if (useDirectory) {
