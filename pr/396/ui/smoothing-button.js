@@ -11,18 +11,21 @@
  * `syncSmoothingButton` on every overlay draw, and the pass calls it after
  * running. `hasSmoothed3d` keeps that cheap (see its docstring).
  *
- * Depends on: ui/app-state.js, pose/temporal-smoothing.js
+ * The last run's scope is kept with its settings by
+ * import-export/smoothing-metadata.js, which also saves it, so a reopened
+ * project lights the same item.
+ *
+ * Depends on: ui/app-state.js, pose/temporal-smoothing.js,
+ * import-export/smoothing-metadata.js
  */
 
-import { state } from './app-state.js?v=db81b6c3b9ab';
-import { hasSmoothed3d } from '../pose/temporal-smoothing.js?v=db81b6c3b9ab';
+import { state } from './app-state.js?v=99b060c3310e';
+import { hasSmoothed3d } from '../pose/temporal-smoothing.js?v=99b060c3310e';
+import { noteSmoothingRun, smoothingRunOf } from '../import-export/smoothing-metadata.js?v=99b060c3310e';
 
-/** Session -> scope of its last smoothing run, 'all' | 'frame'. */
-var _lastScope = new WeakMap();
-
-/** Record the scope a smoothing run just used (`runTemporalSmoothing`). */
-export function noteSmoothingScope(session, scope) {
-    if (session) _lastScope.set(session, scope);
+/** Record the scope and settings a smoothing run just used (`runTemporalSmoothing`). */
+export function noteSmoothingScope(session, scope, config) {
+    noteSmoothingRun(session, scope, config);
 }
 
 /** Re-derive the button's and its menu items' on-state from the session. */
@@ -31,7 +34,8 @@ export function syncSmoothingButton() {
     if (!btn) return;
     var session = state.session;
     var any = hasSmoothed3d(session);
-    var scope = (session && _lastScope.get(session)) || 'all';
+    var run = smoothingRunOf(session);
+    var scope = run ? run.scope : 'all';
     btn.classList.toggle('active', any);
     var all = document.querySelector('#smoothingDropdown [data-scope="all"]');
     var frame = document.querySelector('#smoothingDropdown [data-scope="frame"]');

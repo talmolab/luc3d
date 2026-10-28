@@ -120,7 +120,7 @@ import {
     isPoints3dSmoothed,
     unsmoothedPoints3d,
     clearPoints3dSmoothed,
-} from './pose-data.js?v=db81b6c3b9ab';
+} from './pose-data.js?v=99b060c3310e';
 
 // Identity id meaning "no identity" (matches `InstanceGroup`'s default).
 const NO_IDENTITY = -1;
@@ -816,6 +816,13 @@ function smoothedFramesOf(session) {
     var set = _smoothedFrames.get(session);
     if (!set) { set = new Set(); _smoothedFrames.set(session, set); }
     return set;
+}
+
+/** Add frames a file read back as smoothed (import-export/smoothing-metadata.js). */
+export function noteSmoothedFrames(session, frames) {
+    if (!session) return;
+    var set = smoothedFramesOf(session);
+    for (var fi of frames) set.add(fi);
 }
 
 /** Does any group on `frameIdx` hold smoothed 3D (`isPoints3dSmoothed`)? */

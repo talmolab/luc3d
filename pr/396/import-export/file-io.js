@@ -12,14 +12,15 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=db81b6c3b9ab';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=db81b6c3b9ab';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=db81b6c3b9ab';
+         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=99b060c3310e';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=99b060c3310e';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=99b060c3310e';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=db81b6c3b9ab';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=db81b6c3b9ab';
-import { writePlaneMetadata } from './plane-metadata.js?v=db81b6c3b9ab';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=99b060c3310e';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=99b060c3310e';
+import { writePlaneMetadata } from './plane-metadata.js?v=99b060c3310e';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=99b060c3310e';
 
 // ============================================
 // Generic file picker
@@ -2287,6 +2288,8 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
     // every session's dict) plus THIS session's per-view 2D. Same omit-the-
     // defaults rule, so a project that never opened the feature is unchanged.
     writePlaneMetadata(sioSession.metadata.lucid, session);
+    // Temporal Smoothing's last run, only while something is smoothed.
+    writeSmoothingMetadata(sioSession.metadata.lucid, session);
     session.cameras.forEach(function (cam, i) {
         sioSession.addVideo(sioVideos[i], sioCameras[i]);
     });
@@ -2386,6 +2389,10 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
             // accepts boxed rows, so don't reject them here.
             if (group.points3d && group.points3d.length > 0) {
                 instance3d = new SIO.Instance3D({ points: group.points3d, skeleton: skeleton });
+                // Temporal Smoothing's source (smoothing-metadata.js): the vendored
+                // writer stores it row-parallel to `points_3d`.
+                var unsmoothed = smoothingSourceFor(group);
+                if (unsmoothed) instance3d.lucidUnsmoothed = unsmoothed;
             }
 
             // Resolve identity
@@ -2830,7 +2837,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=db81b6c3b9ab', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=99b060c3310e', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },
