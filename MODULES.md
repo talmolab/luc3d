@@ -1471,6 +1471,10 @@ session graph that holds them.
   - **`fileProvenance`** — the provenance of the `.slp` it was loaded from,
     without LUC3D's own keys (null when none); in memory only, written back on
     save by `import-export/slp-provenance.js`.
+  - **`slpVideoByCamera`** — camera name → the video path the `.slp` gave for
+    it, set by File ▸ Load SLP (`handleLoadSlpFile`, `handleAddSlp`); in memory
+    only, never saved. Lets a second Load SLP of the same video be recognised
+    (`camerasAlreadyInSession`, `import-export/slp-merge.js`).
   - **`predictedNodeScore(cameraName, frameIdx, inst, k)`** is the one answer to
     "what did the model score this node?" — the node tooltip and the streaming
     writer's overlay both ask it. NaN unless `inst` is `'predicted'` (an edit
@@ -14596,7 +14600,14 @@ first track.
   `readVisibilityMetadata` / `readPlaneMetadata` itself.
 - Occlusion of **unlinked** user labels is restored in pass 1 by
   `nulledNodesFromOcclusion` (`import-export/import-track-resolve.js`).
-- `handleAddSlp()` — additive merge into current session.
+- `handleAddSlp()` — additive merge into current session. A camera the
+  session already has from the SAME video (`camerasAlreadyInSession`: same
+  name and same `.slp` video path) is never added again — the old `<name>_2`
+  copy turned a one-camera session into a two-camera one. If that camera has
+  no view yet, it only asks for the video (Load SLP again after continuing
+  without video); otherwise it changes nothing and says so. A same-named camera
+  from another video (campy's `0.mp4`) is still added as `<name>_2`. Test:
+  `tests/e2e/load-slp-same-video-twice.mjs`.
 - `handleLoadPoints3dH5()` — overlay 3D points from H5. Requires only a loaded
   **skeleton** (not a full session): a camera-less skeleton-only project is
   accepted, the 3D viewport is force-created (bypassing the calibration gate)
@@ -14805,6 +14816,12 @@ compatibility check, track merging, frame merging, group rebuild.
   `nodeReorderMap` exactly as its points are.
 - `rebuildInstanceGroupsForFrames(session, frameIndices)` — groups by `trackIdx`;
   trackless instances of any type are skipped (not bucketed into track 0).
+- `slpVideoByCamera(videos, videoIdxToCameraName)` — camera name → the video
+  path the file gives (`sourceFilename`, else `filename`; '.' left out), kept
+  on `Session.slpVideoByCamera`.
+- `camerasAlreadyInSession(session, incoming)` — the incoming cameras the
+  session already has: same name AND same recorded video path. `handleAddSlp`
+  never adds these again.
 
 **Imports from project modules.**
 - `../pose/pose-data.js` — `Skeleton`, `Camera`, `Instance`,

@@ -19,6 +19,7 @@ import {
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames,
+    slpVideoByCamera, camerasAlreadyInSession,
 } from './slp-merge.js';
 import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js';
 import {
@@ -1137,6 +1138,7 @@ export async function handleLoadSlpFile(slpFile) {
 
         var session = new Session(cameras, sessSkeleton, sessTracks);
         session.name = sessName;
+        session.slpVideoByCamera = slpVideoByCamera(slpData.videos, videoIdxToCameraName);
         // The file's provenance (e.g. campy-live-export's records), written back on save.
         session.fileProvenance = fileSessionProvenance(slpData.provenance,
             fileSessionNames(slpData.sessions), slpSessIdx);
@@ -1827,61 +1829,85 @@ export async function handleAddSlp() {
             }
         }
 
-        var tracks = slpData.tracks.length > 0 ? slpData.tracks : ['track_0'];
-        var maxTrack = 0;
-        for (var fri = 0; fri < slpData.frames.length; fri++) {
-            var fd = slpData.frames[fri];
-            for (var ii = 0; ii < fd.instances.length; ii++) {
-                if (fd.instances[ii].trackIdx > maxTrack) maxTrack = fd.instances[ii].trackIdx;
-            }
-        }
-        while (tracks.length <= maxTrack) tracks.push('track_' + tracks.length);
-
-        // Validate skeleton compatibility (set-based, allows reordering)
-        var skelResult = validateSkeletonCompatibility(state.session.skeleton, skeleton);
-        console.log('[add-slp] Skeleton validation:', skelResult);
-        if (skelResult.error) {
+        // The same video again (Load SLP once more on a file whose camera this
+        // session already has, e.g. to attach the video after continuing
+        // without one): never add its camera a second time — the renamed copy
+        // made a one-camera session a two-camera one. If that camera has no
+        // video yet, only ask for it (below); its detections are already here.
+        var alreadyIn = camerasAlreadyInSession(state.session, slpVideoByCamera(slpData.videos, videoIdxToCameraName));
+        var hasViewFor = function (camName) {
+            return state.views.some(function (v) { return (v.cameraName || v.name) === camName; });
+        };
+        var attachOnly = alreadyIn.length > 0;
+        if (attachOnly && (alreadyIn.length < cameras.length || alreadyIn.some(hasViewFor))) {
+            console.log('[add-slp] already in this session, not added again:', alreadyIn);
             hideLoading();
-            setStatus('Skeleton mismatch: ' + skelResult.error, 'error');
+            setStatus('Already in this session: ' + alreadyIn.join(', ') + '. Nothing was added; to open ' +
+                slpFile.name + ' on its own, use File ▸ New Project first', 'warning');
             return;
         }
-        var nodeReorderMap = skelResult.reorderMap;
+        if (attachOnly) console.log('[add-slp] already in this session, asking only for the video of:', alreadyIn);
 
-        // Auto-rename duplicate camera names
-        for (var aci = 0; aci < cameras.length; aci++) {
-            var addCamName = cameras[aci].name;
-            var isDuplicate = state.session.cameras.some(function (c) { return c.name === addCamName; });
-            if (isDuplicate) {
-                var suffix = 2;
-                while (state.session.cameras.some(function (c) { return c.name === addCamName + '_' + suffix; })) {
-                    suffix++;
+        var affectedFrames = [];
+        if (!attachOnly) {
+            var tracks = slpData.tracks.length > 0 ? slpData.tracks : ['track_0'];
+            var maxTrack = 0;
+            for (var fri = 0; fri < slpData.frames.length; fri++) {
+                var fd = slpData.frames[fri];
+                for (var ii = 0; ii < fd.instances.length; ii++) {
+                    if (fd.instances[ii].trackIdx > maxTrack) maxTrack = fd.instances[ii].trackIdx;
                 }
-                var newName = addCamName + '_' + suffix;
-                console.log('[add-slp] Camera "' + addCamName + '" already exists, renaming to "' + newName + '"');
-                cameras[aci].name = newName;
-                for (var vk in videoIdxToCameraName) {
-                    if (videoIdxToCameraName[vk] === addCamName) {
-                        videoIdxToCameraName[vk] = newName;
+            }
+            while (tracks.length <= maxTrack) tracks.push('track_' + tracks.length);
+
+            // Validate skeleton compatibility (set-based, allows reordering)
+            var skelResult = validateSkeletonCompatibility(state.session.skeleton, skeleton);
+            console.log('[add-slp] Skeleton validation:', skelResult);
+            if (skelResult.error) {
+                hideLoading();
+                setStatus('Skeleton mismatch: ' + skelResult.error, 'error');
+                return;
+            }
+            var nodeReorderMap = skelResult.reorderMap;
+
+            // Auto-rename duplicate camera names
+            for (var aci = 0; aci < cameras.length; aci++) {
+                var addCamName = cameras[aci].name;
+                var isDuplicate = state.session.cameras.some(function (c) { return c.name === addCamName; });
+                if (isDuplicate) {
+                    var suffix = 2;
+                    while (state.session.cameras.some(function (c) { return c.name === addCamName + '_' + suffix; })) {
+                        suffix++;
+                    }
+                    var newName = addCamName + '_' + suffix;
+                    console.log('[add-slp] Camera "' + addCamName + '" already exists, renaming to "' + newName + '"');
+                    cameras[aci].name = newName;
+                    for (var vk in videoIdxToCameraName) {
+                        if (videoIdxToCameraName[vk] === addCamName) {
+                            videoIdxToCameraName[vk] = newName;
+                        }
                     }
                 }
             }
+
+            // Merge tracks
+            var trackRemap = mergeTracksIntoSession(state.session, tracks);
+
+            // Add cameras to session
+            for (var aci2 = 0; aci2 < cameras.length; aci2++) {
+                state.session.cameras.push(cameras[aci2]);
+            }
+            state.session.slpVideoByCamera = Object.assign(state.session.slpVideoByCamera || {},
+                slpVideoByCamera(slpData.videos, videoIdxToCameraName));
+
+            // Merge frames (with node reorder map if needed)
+            affectedFrames = mergeSlpFramesIntoSession(state.session, slpData, videoIdxToCameraName, cameras, trackRemap, nodeReorderMap);
+
+            // Rebuild instance groups for affected frames
+            rebuildInstanceGroupsForFrames(state.session, affectedFrames);
+
+            console.log('[add-slp] Merged ' + cameras.length + ' camera(s), ' + affectedFrames.length + ' frames affected');
         }
-
-        // Merge tracks
-        var trackRemap = mergeTracksIntoSession(state.session, tracks);
-
-        // Add cameras to session
-        for (var aci2 = 0; aci2 < cameras.length; aci2++) {
-            state.session.cameras.push(cameras[aci2]);
-        }
-
-        // Merge frames (with node reorder map if needed)
-        var affectedFrames = mergeSlpFramesIntoSession(state.session, slpData, videoIdxToCameraName, cameras, trackRemap, nodeReorderMap);
-
-        // Rebuild instance groups for affected frames
-        rebuildInstanceGroupsForFrames(state.session, affectedFrames);
-
-        console.log('[add-slp] Merged ' + cameras.length + ' camera(s), ' + affectedFrames.length + ' frames affected');
 
         // Create video views or prompt cells for new cameras
         var hasEmbedded = slpData.videos.some(function (v) { return v.embedded; });
@@ -2122,7 +2148,13 @@ export async function handleAddSlp() {
         hideLoading();
         var dockPanelCount = paneManager.api ? paneManager.api.panels.length : 0;
         console.log('[add-slp] Done. Dock panels: ' + dockPanelCount + ', Views: ' + state.views.length);
-        setStatus('Added SLP: ' + cameras.length + ' camera(s), ' + affectedFrames.length.toLocaleString('en-US') + ' frames merged. Panels: ' + dockPanelCount, 'success');
+        if (attachOnly) {
+            var attached = alreadyIn.filter(hasViewFor);
+            setStatus('Already in this session: ' + alreadyIn.join(', ') + ' (its detections were not added again)' +
+                (attached.length ? '; attached its video' : '; no video attached'), attached.length ? 'success' : 'warning');
+        } else {
+            setStatus('Added SLP: ' + cameras.length + ' camera(s), ' + affectedFrames.length.toLocaleString('en-US') + ' frames merged. Panels: ' + dockPanelCount, 'success');
+        }
     } catch (err) {
         console.error('[add-slp] FATAL:', err);
         hideLoading();
