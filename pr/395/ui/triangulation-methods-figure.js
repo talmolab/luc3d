@@ -79,14 +79,15 @@ var REFINED_SKETCH = sketch([148.4, 81.3], [[91.2, 97.9], [148.8, 108], null],
     '<text x="226" y="77" class="tm-note tm-note-stray">stray,</text>'
     + '<text x="226" y="88" class="tm-note tm-note-stray">left out</text>');
 
-/** One selectable card: indicator, name, tagline, sketch, caption. */
-function card(method, name, tagline, sketchSvg, caption) {
+/** One selectable card: indicator, name, tagline, sketch, caption, optional note. */
+function card(method, name, tagline, sketchSvg, caption, note) {
     return '<div class="tri-methods-col tri-method-choice" data-method="' + method + '"'
         + ' role="radio" aria-checked="false" tabindex="0">'
         + '<div class="tri-methods-head"><span class="settings-radio"></span>'
         + '<span class="tri-methods-name">' + name + '<small>' + tagline + '</small></span></div>'
         + sketchSvg
         + '<p>' + caption + '</p>'
+        + (note ? '<p class="tri-methods-note">' + note + '</p>' : '')
         + '</div>';
 }
 
@@ -98,7 +99,8 @@ export function buildTriangulationMethodsFigure() {
     var fig = document.createElement('figure');
     fig.className = 'tri-methods';
     fig.innerHTML =
-        '<p class="tri-methods-lead">Both methods start the same way: each camera\'s 2D point is a line of sight, '
+        '<p class="tri-methods-lead">Both methods triangulate each node of the skeleton on its own (the sketches '
+        + 'show one node, from above) and start the same way: each camera\'s 2D point is a line of sight, '
         + 'and the 3D point is where those lines meet. Real detections never meet exactly. Here the right-hand '
         + 'camera\'s 2D prediction is placed wrong: an outlier, marked stray.</p>'
         + '<div class="tri-methods-cols" role="radiogroup" aria-label="Default triangulation method">'
@@ -111,7 +113,10 @@ export function buildTriangulationMethodsFigure() {
             + 'shrink the pixel errors. A camera that disagrees a lot counts less, so it copes better with '
             + 'outliers; here the outlier is left out and the answer fits the two cameras that agree. Use it '
             + 'when one view\'s 2D prediction may be placed wrong. The cameras stay fixed; only the point '
-            + 'moves. Slower, and never a larger error than DLT.')
+            + 'moves. Slower, and never a larger error than DLT.',
+            '<strong>Per node:</strong> a camera is left out or counted less only for the node where its 2D '
+            + 'point disagrees. If one camera misplaces the nose, it still counts for every other node it '
+            + 'sees well.')
         + '</div>'
         + '<div class="tri-methods-legend">'
         + '<span><i class="tm-key-det"></i>2D detection in that camera</span>'
