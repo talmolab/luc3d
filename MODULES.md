@@ -2391,8 +2391,9 @@ copies it back and drops the mark (the "both windows 0" action);
 anywhere) is smoothed; the session-wide answer walks only the frames a pass
 wrote (a per-session `WeakMap` set), dropping each one found no longer
 smoothed, because `ui/smoothing-button.js` asks on every overlay draw.
-Not persisted: a reopened project's 3D is the smoothed
-values, and only re-triangulating gets back to the unsmoothed 3D.
+Saved with the project: the source goes in the file and comes back marked
+(`import-export/smoothing-metadata.js`), and a reader registers the frames it
+re-marked with `noteSmoothedFrames(session, frames)` so the button finds them.
 `triangulationMethod` is deliberately UNTOUCHED: smoothing is
 orthogonal to which solver produced the points (a group can be BA-solved AND
 smoothed), and a third value there would erase the solver identity
@@ -2401,7 +2402,7 @@ smoothed), and a third value there would erase the solver identity
 **Exports.** `normalizeWindow`, `sigmaForWindow`, `buildSegments`, `medianOf`,
 `smoothSignalInto`, `resolveSmoothingParams`, `collectTrajectories`,
 `smoothTrajectory`, `smoothSession`, `smoothSessionAsync`, `unsmoothSession`,
-`hasSmoothed3d`. `smoothSessionAsync(session, params, {writeFrames, onProgress})`
+`hasSmoothed3d`, `noteSmoothedFrames`. `smoothSessionAsync(session, params, {writeFrames, onProgress})`
 awaits `onProgress(done, total)` (poses) after each node coordinate of each
 track; both entry points run the same generators (`smoothTrajectorySteps`,
 `smoothSessionSteps`), so the result and the writes are identical, and nothing
@@ -2412,9 +2413,11 @@ of a trajectory is written before its last step.
 `isPoints3dSmoothed`, `unsmoothedPoints3d`, `clearPoints3dSmoothed`) only —
 no UI imports, so the module stays unit-testable in plain Node.
 
-**Imported by.** `ui/ui-wiring.js` (`smoothSession`, `resolveSmoothingParams`).
+**Imported by.** `ui/ui-wiring.js` (`smoothSession`, `resolveSmoothingParams`),
+`import-export/smoothing-metadata.js` (`hasSmoothed3d`, `noteSmoothedFrames`).
 
-**Tests.** `tests/test-temporal-smoothing.mjs` (88 assertions). Verified by
+**Tests.** `tests/test-temporal-smoothing.mjs` (88 assertions); save/reopen in
+`tests/e2e/smoothing-save-reopen.mjs`. Verified by
 mutation: removing the symmetric shrink, zero-padding instead of renormalizing,
 and filling gaps each fail with the specific artifact they represent.
 
@@ -11080,15 +11083,19 @@ frames** after an all-frames run (while anything is still smoothed), **This
 frame** after a this-frame run, on the frames it smoothed.
 
 **Key exports.** `syncSmoothingButton()` — re-derives that state from the
-session. `noteSmoothingScope(session, 'all' | 'frame')` — records the scope a
-run used (per session, `WeakMap`). Smoothing lapses by itself when a re-solve or edit replaces a group's
+session. `noteSmoothingScope(session, 'all' | 'frame', config)` — records the
+scope and resolved windows a run used, kept by
+`import-export/smoothing-metadata.js` (`noteSmoothingRun` / `smoothingRunOf`),
+which saves them so a reopened project lights the same item. Smoothing lapses by itself when a re-solve or edit replaces a group's
 3D (`isPoints3dSmoothed` keys the array), so nothing tracks it: `ui/rendering.js`
 calls this on every overlay draw and the pass calls it after running.
 `hasSmoothed3d` (`pose/temporal-smoothing.js`) keeps the per-draw cost small.
 
 **Imports.** `./app-state.js` (`state`), `../pose/temporal-smoothing.js`
-(`hasSmoothed3d`). **Imported by** `ui/rendering.js`, `ui/ui-wiring.js`.
-Covered by `tests/e2e/temporal-smoothing-display.mjs` §E.
+(`hasSmoothed3d`), `../import-export/smoothing-metadata.js` (`noteSmoothingRun`,
+`smoothingRunOf`). **Imported by** `ui/rendering.js`, `ui/ui-wiring.js`.
+Covered by `tests/e2e/temporal-smoothing-display.mjs` §E and
+`tests/e2e/smoothing-save-reopen.mjs`.
 
 ### ui/section-state.js
 
@@ -11476,7 +11483,8 @@ filesystem enumeration, decoder rebuild.
   (`parseSlpViaSleapIO`, raw `parseSlpH5` only as fallback) and restores
   grouping, `nulledNodes`/occlusion, identities and 3D via the shared
   `restoreGroupingAndUnlink` (`import-export/slp-import.js`), then the rest of
-  `metadata.lucid` through `readVisibilityMetadata` and `readPlaneMetadata`.
+  `metadata.lucid` through `readVisibilityMetadata`, `readSmoothingMetadata`
+  and `readPlaneMetadata`.
   Unlike the other readers it **adds** a session (it is also the Sessions list's
   "Add session folder"), so it calls `resetPlaneState()` only when no session is
   open. With a project open its planes stay, and the new session's 2D is seated
@@ -11753,6 +11761,7 @@ stack. See `ui/calibration-notice.js`.
   `yieldToPaint`), `../import-export/import-track-resolve.js`,
   `../pose/initialization.js`, `../ui/sessions-panes.js`, `../ui/ui-wiring.js`,
   `../import-export/visibility-metadata.js` (`readVisibilityMetadata`),
+  `../import-export/smoothing-metadata.js` (`readSmoothingMetadata`),
   `../import-export/frame-identity-metadata.js` (`readFrameIdentityMetadata`,
   called by `handleLoadProjectSlpLazy` after the groups are rebuilt) and
   `../import-export/plane-metadata.js` (`readPlaneMetadata`, `resetPlaneState`,
@@ -12820,6 +12829,56 @@ instance), so it sits outside the slp-import / session-loader import graph.
 
 ---
 
+### import-export/smoothing-metadata.js
+
+**Purpose.** Temporal Smoothing's state in the project file, so a reopened
+project is exactly as smoothed as the saved one: button and last scope lit, a
+re-run replaces the last run (filters the source, not its output), windows 0
+restores the 3D from before smoothing. DOM-free.
+
+**What is stored** (only while something is smoothed, so a never-smoothed
+project saves byte-identically — `save-golden-digest.mjs`):
+- per group, its source (`unsmoothedPoints3d`): the writers set
+  `Instance3D.lucidUnsmoothed`, the vendored writer appends it to
+  `/session_data/unsmoothed_points_3d` (N x 3 f64, gzip), ROW-PARALLEL to
+  `points_3d` with NaN rows for groups that have none, created only once a group
+  has one (LUCID local patch (smoothing source)); the vendored reader returns
+  it per group (all-NaN rows = none) and `adoptSmoothingSource` re-marks it;
+- per session, `metadata.lucid.temporalSmoothing` = `{scope, medianWindow,
+  gaussianWindow, maxGap, minSegment}` of the last run (the windows are
+  informational; a re-run uses the current Settings).
+
+A full copy, not "re-triangulate on demand": the source is not reproducible from
+the 2D when the 3D was imported (campy-live), the triangulation settings or the
+calibration changed, and a re-solve would cost a Triangulate All on reopen. Cost
+is about one more `points_3d`: ~0.89 of its raw size after gzip (191 MB raw on
+the 5-camera, 180,210-frame project). The state still lapses per group as
+before: the mark is keyed by the `points3d` array, which every re-solve or edit
+replaces.
+
+**Key exports.** `SMOOTHING_METADATA_KEYS`; `noteSmoothingRun(session, scope,
+config)` / `smoothingRunOf(session)` (the last run, per session `WeakMap`);
+`smoothingSourceFor(group)` (writers); `adoptSmoothingSource(session, frameIdx,
+group, instance3d)` (readers, after `points3d` is final: marks, sets
+`group.smoothed`, registers the frame); `writeSmoothingMetadata(lucid,
+session)`; `readSmoothingMetadata(session, lucid)`.
+
+**Imports.** `pose/pose-data.js` (`unsmoothedPoints3d`, `markPoints3dSmoothed`,
+`pooledPoints3d`), `pose/temporal-smoothing.js` (`hasSmoothed3d`,
+`noteSmoothedFrames`).
+
+**Imported by.** Writers `import-export/file-io.js`,
+`import-export/slp-streaming-write.js`, `import-export/save-load.js` (project
+JSON: `unsmoothedPoints3d` per group, the key at the session-dict level).
+Readers `import-export/slp-import.js` (both typed group rebuilders +
+`handleLoadSlpFile`), `loading/session-loader.js` (lazy reopen, single-SLP
+folder), `import-export/save-load.js`. `ui/smoothing-button.js`.
+
+**Tests.** `tests/e2e/smoothing-save-reopen.mjs` (eager + lazy reopen, both
+writers, two sessions, an edit after reopen, a never-smoothed project).
+
+---
+
 ### import-export/mesh-export.js
 
 **Purpose.** A 3D mesh object as a file another program can open: **binary
@@ -13205,6 +13264,8 @@ session's resident/total) rather than truncate silently. Covered by
 - `./frame-identity-metadata.js` — `writeFrameIdentityMetadata` (fills
   `metadata.lucid.frameIdentityMap` in `buildSlpLabelsAllViews`; no imports).
 - `./plane-metadata.js` — `writePlaneMetadata`.
+- `./smoothing-metadata.js` — `writeSmoothingMetadata`, and `smoothingSourceFor`
+  (each smoothed group's source rides on its `Instance3D` as `lucidUnsmoothed`).
 
 **Imported by.** `import-export/save-load.js`,
 `import-export/slp-import.js`, `import-export/slp-streaming-write.js`
@@ -13375,7 +13436,9 @@ full grouping (identities + 3D) + 2D corrections.
 `writeVisibilityMetadata` (`import-export/visibility-metadata.js` — must stay in
 lockstep with the eager writer in `file-io.js`, which is why both call the one
 helper); `writeFrameIdentityMetadata` (`import-export/frame-identity-metadata.js`,
-same reason); `writePlaneMetadata` (`import-export/plane-metadata.js`, same reason).
+same reason); `writePlaneMetadata` (`import-export/plane-metadata.js`, same reason);
+`writeSmoothingMetadata` + `smoothingSourceFor` (`import-export/smoothing-metadata.js`,
+same reason).
 **Imported by.** `import-export/save-load.js`
 (`buildSlpBytes`, `saveAllSessionsStreaming`, `commitSessionForMultiSessionSave`,
 `finalizeMultiSessionSave`).
@@ -13551,6 +13614,8 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   settings in the legacy v2/v3 project JSON — same keys and omit-the-defaults
   rule as the `.slp` writers, at the session-dict level), `./plane-metadata.js`
   (`writePlaneMetadata`/`readPlaneMetadata`/`resetPlaneState`, same reason),
+  `./smoothing-metadata.js` (Temporal Smoothing: `unsmoothedPoints3d` per group
+  and the session-level key in the project JSON, same reason),
   `./slp-provenance.js` (`buildSaveProvenance` — every `.slp` project save keeps
   the loaded files' provenance).
 - `../lib/sleap-io/index.browser.js` — dynamic `import()` in the private
@@ -13768,7 +13833,8 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
   sets the frame count), `../ui/sessions-panes.js`, `./visibility-metadata.js`
   (`readVisibilityMetadata`), `./frame-identity-metadata.js`
   (`stampFrameIdentitiesFromGroups`, `readFrameIdentityMetadata`), `./plane-metadata.js` (`readPlaneMetadata`,
-  `resetPlaneState`), `./import-track-resolve.js`
+  `resetPlaneState`), `./smoothing-metadata.js` (`readSmoothingMetadata`, and
+  `adoptSmoothingSource` in both typed group rebuilders), `./import-track-resolve.js`
   (`remapGlobalTrackToSession`, `nulledNodesFromOcclusion`),
   `./slp-provenance.js` (`fileSessionProvenance`, `fileSessionNames` — each
   session keeps its part of the file's provenance),

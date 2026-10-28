@@ -593,6 +593,13 @@ function smoothedFramesOf(session) {
     return set;
 }
 
+/** Add frames a file read back as smoothed (import-export/smoothing-metadata.js). */
+export function noteSmoothedFrames(session, frames) {
+    if (!session) return;
+    var set = smoothedFramesOf(session);
+    for (var fi of frames) set.add(fi);
+}
+
 /** Does any group on `frameIdx` hold smoothed 3D (`isPoints3dSmoothed`)? */
 function frameHasSmoothed3d(session, frameIdx) {
     var groups = session.instanceGroups.get(frameIdx);
