@@ -99,6 +99,7 @@ import {
 } from '../ui/ui-wiring.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from '../import-export/visibility-metadata.js';
+import { readSmoothingMetadata } from '../import-export/smoothing-metadata.js';
 import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js';
 
 // Module-private debounce timer for the zoom-redraw callback in
@@ -2295,6 +2296,7 @@ export async function handleLoadSessionFolderSingleSlp() {
         var startsProject = state.sessions.length === 0;
         if (startsProject) resetPlaneState();
         readVisibilityMetadata(session, sessLucid);
+        readSmoothingMetadata(session, sessLucid);   // Temporal Smoothing's last run
         var planeConflict = startsProject ? null : planeMetadataConflict(sessLucid);
         if (planeConflict) {
             console.warn('[single-slp] not reading the plane state in ' + slpFile.name +
@@ -2884,6 +2886,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         // Session-scoped Visibility-panel state — the lazy-reopen mirror of the
         // eager read in import-export/slp-import.js.
         readVisibilityMetadata(session, lucid);
+        readSmoothingMetadata(session, lucid);   // Temporal Smoothing's last run
         // Define Planes state — the lazy-reopen mirror of the eager read in
         // `import-export/slp-import.js`.
         readPlaneMetadata(session, lucid);

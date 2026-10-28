@@ -2962,7 +2962,7 @@ export function setupUI() {
                     : 'Temporal smoothing: no triangulated tracks to smooth');
                 return;
             }
-            noteSmoothingScope(session, currentFrameOnly ? 'frame' : 'all');
+            noteSmoothingScope(session, currentFrameOnly ? 'frame' : 'all', cfg);
             // `frames` counts groups written: one pose per animal per frame.
             summary = 'Smoothed ' + stats.frames.toLocaleString('en-US') + ' pose' + (stats.frames === 1 ? '' : 's') +
                 ' across ' + stats.tracks.toLocaleString('en-US') + ' track' + (stats.tracks === 1 ? '' : 's') +
