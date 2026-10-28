@@ -6378,10 +6378,11 @@ Adding a button to the lock means adding its id to `PLANE_LOCKED_TOOLBAR_IDS`;
 if it opens a menu, its wrapper also needs `PLANE_LOCKED_DROPDOWN_IDS`, since a
 `.tri-dropdown` menu opens on hover and its items are `div`s, so `disabled` on
 the button reaches neither. Locked menus: Instance and Group (actions only).
-The Triangulate / Temporal Smoothing / Track menus are NOT wrapper-locked:
+The Track / Triangulate / Smooth menus are NOT wrapper-locked:
 they also hold settings that stay live in the mode (Method, Animals,
 Settings…), so they open, and each run item is a `<button>` in
-`PLANE_LOCKED_TOOLBAR_IDS` (a new run item there must be too). A disabled
+`PLANE_LOCKED_TOOLBAR_IDS` (a new run item there must be too; Smooth's
+Remove smoothing, `tbSmoothRemove`, is one). A disabled
 button still opens its menu on hover (`tests/e2e/plane-mode-toolbar-lock.mjs`
 §4b).
 
@@ -10515,7 +10516,9 @@ typing in Animals does not lose it and Tab walks into the items.
   triangulation (`t`, Edit ▸ Triangulate) and the environment-skeleton solve
   (Load Environment, via `resolveTriangulationMethod(group)` on a new group)
   use the default too.
-- **Smooth ▾** (`#smoothingDropdown`, `#tbSmooth`; Temporal Smoothing): see below.
+- **Smooth ▾** (`#smoothingDropdown`, `#tbSmooth`; Temporal Smoothing): also
+  has **Remove smoothing** (`#tbSmoothRemove`, `data-scope="remove"`) after
+  All frames; see below.
   Settings… → `'smoothing'`.
 - **Track ▾** (`#trackDropdown`): the button (Track All) and This frame keep
   their own handlers in `pose/tracker.js`'s IIFE; `ui-wiring.js` wires Frame
@@ -10539,9 +10542,12 @@ is closed; their shortcuts (`Mod+I`, `Delete`, `Shift+G`) still work.
 Covered by `tests/e2e/toolbar-hover-menus.mjs`.
 
 **Temporal Smoothing** (luc3d #134) runs the private async
-`runTemporalSmoothing(currentFrameOnly)` (a re-entry guard drops a second
-click while one runs). It reads `getSmoothingParams()`; when both kernels are
-off it restores the pre-smoothing 3D (`unsmoothSession`), or, with nothing
+`runTemporalSmoothing(currentFrameOnly, remove)` (a re-entry guard drops a
+second click while one runs). The menu's **Remove smoothing**
+(`#tbSmoothRemove`, `remove`) restores the pre-smoothing 3D on every frame
+(`unsmoothSession`) whatever the settings, leaving them as they are ("Nothing
+is smoothed" if nothing was). Otherwise it reads `getSmoothingParams()`; when
+both kernels are off it restores the pre-smoothing 3D (`unsmoothSession`), or, with nothing
 smoothed, says so and opens Settings ▸ Temporal Smoothing rather than silently
 doing nothing; otherwise All frames runs `smoothSessionAsync`
 (`pose/temporal-smoothing.js`; every run filters the pre-smoothing 3D, so it
@@ -11143,7 +11149,10 @@ pixel-error minimum for Refined) and are hard-coded; the real solvers are
 `#tbSmooth` is blue (`.active`) while any 3D in the session is smoothed. Its
 menu lights (`.applied`) only the scope of the LAST run, never both: **All
 frames** after an all-frames run (while anything is still smoothed), **This
-frame** after a this-frame run, on the frames it smoothed.
+frame** after a this-frame run, on the frames it smoothed. **Remove smoothing**
+(`#tbSmoothRemove`) is enabled only while something is smoothed, and never
+while it carries `.plane-mode-locked` (that lock owns `disabled` then; the
+next draw re-derives it after the unlock's snapshot restore).
 
 **Key exports.** `syncSmoothingButton()` — re-derives that state from the
 session. `noteSmoothingScope(session, 'all' | 'frame', config)` — records the
@@ -11157,7 +11166,7 @@ calls this on every overlay draw and the pass calls it after running.
 **Imports.** `./app-state.js` (`state`), `../pose/temporal-smoothing.js`
 (`hasSmoothed3d`), `../import-export/smoothing-metadata.js` (`noteSmoothingRun`,
 `smoothingRunOf`). **Imported by** `ui/rendering.js`, `ui/ui-wiring.js`.
-Covered by `tests/e2e/temporal-smoothing-display.mjs` §E and
+Covered by `tests/e2e/temporal-smoothing-display.mjs` §E–F and
 `tests/e2e/smoothing-save-reopen.mjs`.
 
 ### ui/section-state.js

@@ -2897,13 +2897,15 @@ export function setupUI() {
     // toolbar button of that name, next to Triangulate All. `currentFrameOnly`
     // is its "This frame" item (`smoothFrame`): it reads only the frames within
     // the filter windows of the current one and writes that frame alone, with
-    // the same values an All frames run would give it.
+    // the same values an All frames run would give it. `remove` is the menu's
+    // Remove smoothing: it puts back the 3D from before smoothing on every
+    // frame, whatever the settings (the same path as both windows set to 0).
     //
     // Touches only `points3d` on the already-resident `session.instanceGroups`
     // — no 2D hydration, no lazy sweep. On the main thread; All frames runs in
     // steps (`smoothSessionAsync`) with the shared progress card.
     var smoothingRunning = false;
-    async function runTemporalSmoothing(currentFrameOnly) {
+    async function runTemporalSmoothing(currentFrameOnly, remove) {
         var session = state.session;
         if (!session) { setStatus('No session loaded'); return; }
         if (smoothingRunning) return;
@@ -2912,11 +2914,17 @@ export function setupUI() {
         var cfg = resolveSmoothingParams(params);
         var writeFrames = currentFrameOnly ? new Set([state.currentFrame]) : null;
         var stats, summary;
-        if (!cfg.enabled) {
-            // Both kernels off: put back the 3D from before any smoothing (each
-            // run filters that, so this is the "window 0" result). With nothing
-            // smoothed there is nothing to do, so point at the settings.
+        if (remove || !cfg.enabled) {
+            // Remove smoothing, or both kernels off: put back the 3D from
+            // before any smoothing (each run filters that, so this is the
+            // "window 0" result). With nothing smoothed there is nothing to
+            // do, so Smooth points at the settings.
             stats = unsmoothSession(session, { writeFrames: writeFrames });
+            if (stats.frames === 0 && remove) {
+                setStatus('Nothing is smoothed');
+                syncSmoothingButton();
+                return;
+            }
             if (stats.frames === 0) {
                 setStatus('Temporal smoothing is off — set a median or Gaussian window in Settings ▸ Temporal Smoothing');
                 showSettingsModal('smoothing');
@@ -3067,6 +3075,7 @@ export function setupUI() {
     wireActionMenu('smoothingDropdown', {
         all: function () { runTemporalSmoothing(false); },
         frame: function () { runTemporalSmoothing(true); },
+        remove: function () { runTemporalSmoothing(false, true); },
         settings: function () { showSettingsModal('smoothing'); },
     });
 

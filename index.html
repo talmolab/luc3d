@@ -306,6 +306,11 @@
                             title="Smooth the current frame (its neighbours are read, not written)">This frame</button>
                         <button class="tri-dropdown-item" id="tbSmoothAllFrames" data-scope="all" role="menuitem"
                             title="Smooth every frame">All frames</button>
+                        <!-- Undo: put back the 3D from before smoothing, every
+                             frame. Disabled while nothing is smoothed
+                             (ui/smoothing-button.js). -->
+                        <button class="tri-dropdown-item" id="tbSmoothRemove" data-scope="remove" role="menuitem"
+                            title="Remove temporal smoothing: put back the 3D from before smoothing, on every frame" disabled>Remove smoothing</button>
                         <div class="tri-dropdown-sep"></div>
                         <button class="tri-dropdown-item" data-scope="settings" role="menuitem"
                             title="Settings ▸ Temporal Smoothing: the median and Gaussian windows">Settings…</button>
