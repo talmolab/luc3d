@@ -11303,7 +11303,8 @@ tooltip in `index.html`) say just that.
 **Purpose.** The figure at the top of Settings ▸ Temporal Smoothing: what the
 Median window and the Gaussian window each do, as two cards (stage 1, stage 2).
 Both plot one made-up trace (one node's x over 40 frames: a slow movement,
-dashed, plus jitter and two one-frame spikes, as dots) and draw what the stage
+dashed, with one fast real move up and back on the right, plus jitter and one
+one-frame spike) and draw what the stage
 makes of its input, the window around one frame (shaded) and stems at the
 bottom of that window: for the Gaussian its weights, for the median the
 window's values sorted low to high, the middle one (the median, what the spike
@@ -11312,14 +11313,16 @@ cards (its line on the left, with the same green dot at every frame as the
 Gaussian's input dots on the right); the Gaussian's output is blue, with an
 open black circle at every frame. Raw samples
 are open grey rings drawn over the green dots, since a median keeps many
-samples exactly and a filled dot would hide under the green one.
+samples exactly and a filled dot would hide under the green one. The Gaussian's
+window sits on the fast move, which survives the example windows and is
+flattened by long ones (over-smoothing).
 
 **The lines are the real filter, not drawn by hand.** `update(params)` runs
 `smoothSignalInto` (`pose/temporal-smoothing.js`) on the trace with the panel's
 working windows, so the cards follow what is typed. A window that is off (0)
 is drawn with an example (median 5, Gaussian 9) and labelled so. The Gaussian
 card's input is the median's output, except with the median off and the
-Gaussian on: then it is the raw trace and a note says the spikes become bumps
+Gaussian on: then it is the raw trace and a note says the spike becomes a bump
 (why the median runs first). Colours come from `.smooth-fig` in `styles.css`.
 
 **Key exports.** `buildSmoothingWindowsFigure()` → `{ el, update(params) }`.
