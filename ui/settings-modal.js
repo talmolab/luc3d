@@ -309,11 +309,13 @@ export function showSettingsModal(initialPanel) {
     panelContainer.className = 'settings-panel-container';
     body.appendChild(panelContainer);
 
+    // In the order they are used, as on the toolbar (Track, Triangulate,
+    // Smooth); Keyboard Shortcuts is not a step, so it goes last.
     const NAV_ITEMS = [
-        { panel: 'triangulation', label: 'Default Triangulation' },
-        { panel: 'keyboard', label: 'Keyboard Shortcuts' },
         { panel: 'wizard', label: 'Tracking Wizard' },
+        { panel: 'triangulation', label: 'Default Triangulation' },
         { panel: 'smoothing', label: 'Temporal Smoothing' },
+        { panel: 'keyboard', label: 'Keyboard Shortcuts' },
     ];
 
     const navItems = {};

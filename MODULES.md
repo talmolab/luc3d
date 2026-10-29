@@ -9280,7 +9280,9 @@ right panel area (`settings-panel-container`), with a Cancel / Apply footer.
   `'keyboard'` | `'wizard'` | `'smoothing'` (default `'triangulation'`).
   Single-instance.
 
-**Behavior.** Four panels: **Default Triangulation** (the method is picked by
+**Behavior.** Four panels, listed in the nav in the order they are used (Tracking
+Wizard, Default Triangulation, Temporal Smoothing, then Keyboard Shortcuts):
+**Default Triangulation** (the method is picked by
 clicking one of two diagram cards from `ui/triangulation-methods-figure.js`,
 DLT or "Refined (Ref)" = bundle adjustment — no separate rows; Enter/Space on a
 focused card is handled in `onDocKeyDown`, which stops every keydown in the
