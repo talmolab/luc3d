@@ -38,7 +38,7 @@ try {
     page.on('console', m => { if (m.type() === 'error') errs.push('console.error: ' + m.text().slice(0, 300)); });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // An 18-node skeleton over 8 cameras: long enough that the old 240px cap hid
     // most of it, which is the condition the reporter was in.

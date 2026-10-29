@@ -55,7 +55,7 @@ try {
     const page = await browser.newPage();
     page.on('pageerror', e => { console.log('  [pageerror] ' + String(e).slice(0, 300)); fails++; });
     await page.goto(`http://localhost:${PORT}/index.html`, { waitUntil: 'domcontentloaded', timeout: 120000 });
-    await page.waitForFunction(() => window.SleapIO && window.h5wasm && window.__lucid, { timeout: 120000 });
+    await page.waitForFunction(() => window.SleapIO && window.h5wasm && window.__lucid, null, { timeout: 120000 });
 
     // ---- fixture: build, save, hand the bytes to Node ----
     const b64 = await page.evaluate(async ({ FRAMES, CAMS, NODES }) => {

@@ -74,7 +74,7 @@ try {
     page.on('dialog', async d => { native.push(d.message()); await d.dismiss(); });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // Two synthetic animals seen by three calibrated cameras (the rig of
     // track-all-turns-on-trails.mjs), with a mouse-like skeleton.
