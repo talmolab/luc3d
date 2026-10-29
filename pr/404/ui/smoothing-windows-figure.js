@@ -22,7 +22,7 @@
 // Depends on: pose/temporal-smoothing.js (`smoothSignalInto`, `normalizeWindow`,
 // `sigmaForWindow`). Colours come from `styles.css` (`.smooth-fig`).
 
-import { smoothSignalInto, normalizeWindow, sigmaForWindow } from '../pose/temporal-smoothing.js?v=0682ad96f11c';
+import { smoothSignalInto, normalizeWindow, sigmaForWindow } from '../pose/temporal-smoothing.js?v=81cf1144290e';
 
 var N = 40;                              // frames in the trace
 var SPIKES = [[11, 13], [28, -13]];      // [frame, mm] one-frame spikes
@@ -103,7 +103,7 @@ function dots(values, showSpikes, cls) {
 function outNodes(values) {
     var s = '';
     for (var t = 0; t < values.length; t++) {
-        s += '<circle cx="' + f1(px(t)) + '" cy="' + f1(py(values[t])) + '" r="2.6" class="sf-out-node"/>';
+        s += '<circle cx="' + f1(px(t)) + '" cy="' + f1(py(values[t])) + '" r="2.2" class="sf-out-node"/>';
     }
     return s;
 }
