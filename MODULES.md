@@ -2698,7 +2698,12 @@ the list when one of its ends is within 2 s of a row:
   who, and fixes where a mouse wears another label for most of half a second) takes
   the 108 videos with errors from 88.1% to 99.96% correct on average, 101 of them to
   >= 99.9%. In the app, after the image rows (2026-10-28, 193 videos): 94.03% ->
-  97.16% -> 99.97%, what the offline plan predicted.
+  96.30% -> 99.95% (the list alone 99.98%); on 64 hard SLAP-2M views 70.79% ->
+  81.38% -> 98.61% (alone 99.01%). The gap is places the reviewer could not fix: a
+  row shared with a check offers the check's Fix first (wrong on its stretch at 10
+  places), and a fixed check row that is not on the list offers only Undo (7). Each
+  Fix there is judged on the stretch it changes, by each mouse's first-seen label:
+  the whole-video score drops for a right Fix while most of the video is swapped.
 - **The simulated reviewer** (`~/luc3d-eval/oracle_lib.mjs` `playReviewN`, majority
   rule since 2026-10-28): a wrong label must hold for most of a 0.5 s stretch (one-frame
   flickers had made it swap and swap back), and a mouse not seen before the first place
