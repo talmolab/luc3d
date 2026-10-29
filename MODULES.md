@@ -2697,13 +2697,16 @@ the list when one of its ends is within 2 s of a row:
   reviewer simulated on all 207 (it plays each row to the next place, keeping who is
   who, and fixes where a mouse wears another label for most of half a second) takes
   the 108 videos with errors from 88.1% to 99.96% correct on average, 101 of them to
-  >= 99.9%. In the app, after the image rows (2026-10-28, 193 videos): 94.03% ->
-  96.30% -> 99.95% (the list alone 99.98%); on 64 hard SLAP-2M views 70.79% ->
-  81.38% -> 98.61% (alone 99.01%). The gap is places the reviewer could not fix: a
-  row shared with a check offers the check's Fix first (wrong on its stretch at 10
-  places), and a fixed check row that is not on the list offers only Undo (7). Each
-  Fix there is judged on the stretch it changes, by each mouse's first-seen label:
-  the whole-video score drops for a right Fix while most of the video is swapped.
+  >= 99.9%. In the app, after the image rows (2026-10-29, 193 videos, by minutes):
+  94.03% -> 96.30% -> 99.97% (the list alone 99.98%); on 64 hard SLAP-2M views
+  70.79% -> 81.38% -> 98.91% (alone 99.01%). Since every row that stands for a place
+  offers the place's own fix, every video ends exactly at the simulated reviewer's
+  plan, with no place it could not fix (before: 98.61% on SLAP, 17 places blocked).
+  What is left is that plan itself: started from the labels the image rows leave, it
+  ends lower on 5 videos (one SLAP view, 161055/backL, 93.91% vs 98.17% alone, is
+  nearly all of the 0.10 points). An image row's Fix is accepted when it is right on
+  the stretch it changes, by each mouse's first-seen label: the whole-video score
+  drops for a right Fix while most of the video is swapped.
 - **The simulated reviewer** (`~/luc3d-eval/oracle_lib.mjs` `playReviewN`, majority
   rule since 2026-10-28): a wrong label must hold for most of a 0.5 s stretch (one-frame
   flickers had made it swap and swap back), and a mouse not seen before the first place
@@ -9002,9 +9005,9 @@ once fixed, as **Fix again…** (both carry `data-place`, and the dialog then
 explains the place's fix), and the row stays selected. Before 2026-10-29 only a
 review-list row offered it before the check's Fix, and a fixed check row with a
 return behind it offered only Undo: the walkthrough's reviewer could not make 13
-place fixes on the 64 hard SLAP-2M views (0.38 points) and 4 on sham_gdx; a
-check's fix starting a second too early once cost a sham_gdx video 90.2% instead
-of 99.9%. With more than two tracks it lets the reviewer
+place fixes on the 64 hard SLAP-2M views (0.38 points) and 4 on sham_gdx; with it,
+none (SLAP 98.61% -> 98.91%, sham_gdx 99.95% -> 99.97%). A check's fix starting a
+second too early once cost a sham_gdx video 90.2% instead of 99.9%. With more than two tracks it lets the reviewer
 pick the two tracks (`pairSelect`, `#idSwitchFixA` / `#idSwitchFixB`, defaulting to
 the row's pair): on 3–4 mice the row's own pair was the swapped one in only a third
 to two thirds of the switches found. The dialog keeps Esc / Cancel.
