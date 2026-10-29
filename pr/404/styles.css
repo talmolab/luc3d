@@ -5489,6 +5489,55 @@ kbd {
 .smooth-fig .sf-spike { fill: var(--error-color); stroke: var(--bg-primary); stroke-width: 0.8; }
 .smooth-fig .sf-out { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
 .smooth-fig .sf-out-node { fill: none; stroke: #000; stroke-width: 1.2; }
+.smooth-fig .sf-ahead { opacity: 0.22; }
+.smooth-fig .sf-current { fill: none; stroke: var(--text-primary); stroke-width: 1.4; }
+
+.smooth-fig-ctrl {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 8px;
+}
+
+.smooth-fig .sf-ctl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.smooth-fig .sf-ctl-name {
+  width: 52px;
+  flex: none;
+}
+
+.smooth-fig .sf-ctl input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.smooth-fig .sf-ctl-val {
+  min-width: 76px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.smooth-fig .sf-play {
+  flex: none;
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-primary);
+  background: var(--bg-button);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.smooth-fig .sf-play:hover { border-color: var(--border-light); }
 .smooth-fig .sf-out-median { stroke: var(--success-color); }
 .smooth-fig .sf-med { fill: var(--success-color); stroke: var(--bg-primary); stroke-width: 0.8; }
 .smooth-fig .sf-move { stroke: var(--text-secondary); stroke-width: 1.2; }
