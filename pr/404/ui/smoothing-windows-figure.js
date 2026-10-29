@@ -31,7 +31,7 @@
 // Depends on: pose/temporal-smoothing.js (`smoothSignalInto`, `normalizeWindow`,
 // `sigmaForWindow`). Colours come from `styles.css` (`.smooth-fig`).
 
-import { smoothSignalInto, normalizeWindow, sigmaForWindow } from '../pose/temporal-smoothing.js?v=7a9a2de1fb85';
+import { smoothSignalInto, normalizeWindow, sigmaForWindow } from '../pose/temporal-smoothing.js?v=d97c4019e2e0';
 
 var N = 40;                              // frames in the trace
 var SPIKES = [[11, 13]];                 // [frame, mm] one-frame spikes
@@ -268,8 +268,9 @@ export function buildSmoothingWindowsFigure(opts) {
         + controls('gaussian')
         + '<p>Runs on the median\'s output (green dots: the line on the left). A weighted average over the window: '
         + 'the frame itself counts most and the weights fall off as a bell curve (stems). Removes the jitter the '
-        + 'median leaves. A long window also flattens fast real movement: compare the blue line with the dashed '
-        + 'true movement at the fast move.</p>'
+        + 'median leaves. 3 frames barely changes anything (each frame keeps about 98% of its own value); 5 is '
+        + 'the smallest window that smooths. A long window also flattens fast real movement: compare the blue line '
+        + 'with the dashed true movement at the fast move.</p>'
         + '<p class="smooth-fig-warn" hidden>The median is off, so the Gaussian spreads the spike into a bump.</p></div>'
         + '</div>'
         + '<div class="smooth-fig-legend">'
