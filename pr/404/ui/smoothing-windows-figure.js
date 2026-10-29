@@ -5,8 +5,10 @@
 // Both cards plot the same made-up trace: one node's x position over 40 frames
 // (a slow back-and-forth movement, dashed), as triangulation would give it with
 // a little jitter and two one-frame spikes (dots). Each card draws what its
-// stage makes of its input (blue line), the window around one frame (shaded),
-// and for the Gaussian the weights inside that window (a bell of stems).
+// stage makes of its input, the window around one frame (shaded), and for the
+// Gaussian the weights inside that window (a bell of stems). The median's
+// output is green in both cards, a line on the left and the Gaussian's input
+// dots on the right, so the hand-off reads; the Gaussian's output is blue.
 //
 // The filtering is NOT hand-drawn: it runs LUC3D's own `smoothSignalInto` on
 // the trace, one segment, so the sketch is exactly what the filter does to it.
@@ -20,7 +22,7 @@
 // Depends on: pose/temporal-smoothing.js (`smoothSignalInto`, `normalizeWindow`,
 // `sigmaForWindow`). Colours come from `styles.css` (`.smooth-fig`).
 
-import { smoothSignalInto, normalizeWindow, sigmaForWindow } from '../pose/temporal-smoothing.js?v=c235873d359c';
+import { smoothSignalInto, normalizeWindow, sigmaForWindow } from '../pose/temporal-smoothing.js?v=f0480c70f1d7';
 
 var N = 40;                              // frames in the trace
 var SPIKES = [[11, 9], [28, -9]];        // [frame, mm] one-frame spikes
@@ -81,12 +83,12 @@ function band(t, window) {
         + (2 * r + 1) + ' frames</text>';
 }
 
-/** Dots for a trace; spikes still in it are drawn red. */
-function dots(values, showSpikes) {
+/** Dots for a trace (class `cls`, default the raw grey); spikes still in it are drawn red. */
+function dots(values, showSpikes, cls) {
     var s = '';
     for (var t = 0; t < values.length; t++) {
         s += '<circle cx="' + f1(px(t)) + '" cy="' + f1(py(values[t])) + '" r="2.2" class="'
-            + (showSpikes && isSpike(t) ? 'sf-spike' : 'sf-raw') + '"/>';
+            + (showSpikes && isSpike(t) ? 'sf-spike' : cls || 'sf-raw') + '"/>';
     }
     return s;
 }
@@ -106,7 +108,7 @@ function medianChart(window, out) {
         + '<path d="M0 0 L8 4 L0 8 Z" class="sf-arrowhead"/></marker></defs>'
         + band(t, window)
         + '<path d="' + path(TRUTH) + '" class="sf-true"/>'
-        + '<path d="' + path(out) + '" class="sf-out"/>'
+        + '<path d="' + path(out) + '" class="sf-out sf-out-median"/>'
         + dots(RAW, true)
         + '<line x1="' + f1(px(t)) + '" y1="' + f1(py(RAW[t]) + 4) + '" x2="' + f1(px(t)) + '" y2="' + f1(py(out[t]) - 4)
         + '" class="sf-move" marker-end="url(#sf-arrow)"/>'
@@ -125,7 +127,7 @@ function gaussianChart(window, input, out, inputHasSpikes) {
         band(t, window) + stems
         + '<path d="' + path(TRUTH) + '" class="sf-true"/>'
         + '<path d="' + path(out) + '" class="sf-out"/>'
-        + dots(input, inputHasSpikes));
+        + dots(input, inputHasSpikes, inputHasSpikes ? 'sf-raw' : 'sf-med'));
 }
 
 function tagline(window, example) {
@@ -142,9 +144,10 @@ export function buildSmoothingWindowsFigure() {
     fig.className = 'smooth-fig';
     fig.innerHTML =
         '<p class="smooth-fig-lead">One node\'s x position over 40 frames, made up for this sketch: the true '
-        + 'movement (dashed) and its 3D as triangulated, with jitter and two one-frame spikes (dots). The blue line '
-        + 'is what each stage makes of it, computed with LUC3D\'s own filter, and follows the windows you enter '
-        + 'below. y and z, and every node, are filtered the same way, each on its own.</p>'
+        + 'movement (dashed) and its 3D as triangulated, with jitter and two one-frame spikes (grey dots). The '
+        + 'median\'s output (green) is the Gaussian\'s input, and the Gaussian\'s output is blue; both are computed '
+        + 'with LUC3D\'s own filter and follow the windows you enter below. y and z, and every node, are filtered '
+        + 'the same way, each on its own.</p>'
         + '<div class="smooth-fig-cols">'
         + '<div class="smooth-fig-col" data-stage="median">'
         + '<div class="smooth-fig-name">1 · Median window<small></small></div><div class="smooth-fig-chart"></div>'
@@ -153,16 +156,17 @@ export function buildSmoothingWindowsFigure() {
         + 'short for fast motion.</p></div>'
         + '<div class="smooth-fig-col" data-stage="gaussian">'
         + '<div class="smooth-fig-name">2 · Gaussian window<small></small></div><div class="smooth-fig-chart"></div>'
-        + '<p>Runs on the median\'s output. A weighted average over the window: the frame itself counts most '
+        + '<p>Runs on the median\'s output (green dots: the line on the left). A weighted average over the window: the frame itself counts most '
         + 'and the weights fall off as a bell curve (stems). Removes the jitter the median leaves. A long window '
-        + 'also flattens real peaks: compare the line with the dashed true movement.</p>'
+        + 'also flattens real peaks: compare the blue line with the dashed true movement.</p>'
         + '<p class="smooth-fig-warn" hidden>The median is off, so the Gaussian spreads each spike into a bump.</p></div>'
         + '</div>'
         + '<div class="smooth-fig-legend">'
         + '<span><i class="sf-key-true"></i>true movement</span>'
         + '<span><i class="sf-key-raw"></i>3D as triangulated</span>'
         + '<span><i class="sf-key-spike"></i>one-frame spike</span>'
-        + '<span><i class="sf-key-out"></i>after this stage</span>'
+        + '<span><i class="sf-key-med"></i>after the median</span>'
+        + '<span><i class="sf-key-out"></i>after the Gaussian</span>'
         + '<span><i class="sf-key-band"></i>window around one frame</span>'
         + '</div>';
 
