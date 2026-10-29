@@ -110,10 +110,10 @@ export function buildTriangulationMethodsFigure() {
             + 'camera ends up a little off.')
         + card('ba', 'Refined (Ref)', 'bundle adjustment · slower', REFINED_SKETCH,
             'Bundle adjustment: starts at the DLT point, projects it back into every camera and moves it to '
-            + 'shrink the pixel errors. A camera that disagrees a lot counts less, so it copes better with '
-            + 'outliers; here the outlier is left out and the answer fits the two cameras that agree. Use it '
-            + 'when one view\'s 2D prediction may be placed wrong. The cameras stay fixed; only the point '
-            + 'moves. Slower, and never a larger error than DLT.',
+            + 'shrink the pixel errors. A camera that disagrees a lot counts less, which helps when one '
+            + 'view\'s 2D prediction is clearly wrong; here the outlier is left out and the answer fits the '
+            + 'two cameras that agree. When the views roughly agree, it gives about the same point as DLT, '
+            + 'sometimes slightly worse. The cameras stay fixed; only the point moves. Slower.',
             '<strong>Per node:</strong> a camera is left out or counted less only for the node where its 2D '
             + 'point disagrees. If one camera misplaces the nose, it still counts for every other node it '
             + 'sees well.')

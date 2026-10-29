@@ -2179,6 +2179,11 @@ export function adoptPrior3d(group, prior, method) {
 export function reTriangulateGroup(instanceGroup) {
     if (!instanceGroup) return;
     if (!state.session || state.session.cameras.length < 2) return;
+    // Placeholder cameras only (no calibration loaded: all at the origin,
+    // `pose/placeholder-cameras.js`) — a "triangulation" from them is
+    // meaningless 3D that would be saved and exported as predictions. The
+    // explicit Triangulate paths refuse the same way (triangulateCurrentFrame).
+    if (!sessionHasCalibration()) return;
 
     var cameras = state.session.cameras;
     var groupCamNames = instanceGroup.cameraNames;
