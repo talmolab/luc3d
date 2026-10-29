@@ -24,14 +24,16 @@
  * Depends on: pose/tracker.js (the run itself), ui/app-state.js, save-load.js.
  */
 
-import { state, getActiveSession } from './app-state.js?v=a6ad1e0248b4';
-import { setStatus } from '../import-export/save-load.js?v=a6ad1e0248b4';
-import { getNodeWeight, updateNodeWeights, getTrackingThresholdDefs, updateTrackingThresholds } from './settings.js?v=a6ad1e0248b4';
-import { buildNodeWeightFields, buildImageCheckFields, IMAGE_CHECK_IDS } from './track-setup-modal.js?v=a6ad1e0248b4';
+import { state, getActiveSession } from './app-state.js?v=d6b09a9b5f60';
+import { setStatus } from '../import-export/save-load.js?v=d6b09a9b5f60';
+import { getNodeWeight, updateNodeWeights, getTrackingThresholdDefs, updateTrackingThresholds } from './settings.js?v=d6b09a9b5f60';
+import { buildNodeWeightFields, buildImageCheckFields, IMAGE_CHECK_IDS } from './track-setup-modal.js?v=d6b09a9b5f60';
 import {
     trackFrameRange, trackableFrameBounds,
     getTrackerNumAnimals, setTrackerNumAnimals,
-} from '../pose/tracker.js?v=a6ad1e0248b4';
+} from '../pose/tracker.js?v=d6b09a9b5f60';
+import { hasRealCalibration } from '../pose/placeholder-cameras.js?v=d6b09a9b5f60';
+import { singleCameraName } from '../pose/single-camera-tracking.js?v=d6b09a9b5f60';
 
 // Frames pre-filled into the End field, measured from the current frame. The
 // feature is for narrow windows around a suspected switch, so the default is a
@@ -77,6 +79,18 @@ export function showTrackRangeModal(opts) {
     var session = getActiveSession();
     if (!session || !session.cameras || session.cameras.length === 0) {
         setStatus('No session with cameras loaded', 'error');
+        return;
+    }
+    // One camera: SLEAP's tracker runs on the whole video only (runTrackingPass
+    // refuses a range), and needs no calibration, so say that rather than ask for one.
+    if (singleCameraName(session)) {
+        setStatus('Track Frame Range is for multi-camera sessions; on a single camera use Track All', 'warning');
+        return;
+    }
+    // Placeholder cameras only (no calibration loaded): tracking would refuse
+    // after the dialog (runTrackingPass), so say so before opening it.
+    if (!hasRealCalibration(session)) {
+        setStatus('Tracking needs a calibration — load one with File \u2192 Load Calibration', 'error');
         return;
     }
     var bounds = trackableFrameBounds(session);
