@@ -9278,7 +9278,9 @@ right panel area (`settings-panel-container`), with a Cancel / Apply footer.
 
 **Key exports.**
 - `showSettingsModal(initialPanel)` — `initialPanel` ∈ `'triangulation'` |
-  `'keyboard'` | `'wizard'` | `'smoothing'` (default `'triangulation'`).
+  `'keyboard'` | `'wizard'` | `'smoothing'`. Without one (Help ▸ Settings and its
+  shortcut) it opens on the panel last shown (`localStorage.settingsLastPanel`,
+  browser-local, written by `selectPanel`), else the first, Tracking Wizard.
   Single-instance.
 
 **Behavior.** Four panels, listed in the nav in the order they are used (Tracking

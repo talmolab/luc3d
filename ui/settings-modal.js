@@ -210,13 +210,30 @@ function buildSection(title, count) {
     return { root: root, body: body };
 }
 
-// Show the Settings modal. `initialPanel` is one of 'triangulation' |
-// 'keyboard' | 'wizard' | 'smoothing' and defaults to 'triangulation'.
+// The panel Settings was last left on, so Help ▸ Settings reopens there.
+// Browser-local display taste (`localStorage`), never the `.slp`; storage that
+// throws just means the first panel.
+const LAST_PANEL_KEY = 'settingsLastPanel';
+const SETTINGS_PANELS = ['wizard', 'triangulation', 'smoothing', 'keyboard'];
+
+function readLastPanel() {
+    try {
+        const v = localStorage.getItem(LAST_PANEL_KEY);
+        return SETTINGS_PANELS.indexOf(v) >= 0 ? v : null;
+    } catch (e) { return null; }
+}
+
+function writeLastPanel(name) {
+    try { localStorage.setItem(LAST_PANEL_KEY, name); } catch (e) { /* best effort */ }
+}
+
+// Show the Settings modal. `initialPanel` is one of 'wizard' | 'triangulation'
+// | 'smoothing' | 'keyboard'; without one (Help ▸ Settings, its shortcut) it
+// opens on the panel last shown, else the first, Tracking Wizard.
 export function showSettingsModal(initialPanel) {
-    const VALID_PANELS = ['keyboard', 'wizard', 'smoothing'];
-    const startPanel = VALID_PANELS.indexOf(initialPanel) >= 0
+    const startPanel = SETTINGS_PANELS.indexOf(initialPanel) >= 0
         ? initialPanel
-        : 'triangulation';
+        : (readLastPanel() || SETTINGS_PANELS[0]);
 
     // Enforce a single instance.
     const existing = document.querySelector('.settings-overlay');
@@ -713,11 +730,10 @@ export function showSettingsModal(initialPanel) {
     smHint.className = 'settings-kbd-hint';
     smHint.style.marginTop = '0';
     smHint.style.marginBottom = '8px';
-    smHint.textContent = 'Smooths each node\'s 3D position over time, in two stages that both work along the frame ' +
-        'axis: a median first, to remove one-frame spikes, then a Gaussian on its output, to remove remaining ' +
-        'jitter. Each node\'s x, y and z are filtered separately; nodes are never mixed with each other. 2D labels ' +
-        'and predictions are never changed, and the reprojection overlays follow the smoothed 3D. Both stages are off (0) by ' +
-        'default — run the pass with the Temporal Smoothing button next to Triangulate All. Changes apply when you click Apply.';
+    smHint.textContent = 'Smooths each node\'s 3D over time, after triangulation: a median first, then a Gaussian. ' +
+        '2D labels and predictions never change; the reprojections follow the smoothed 3D. Both stages are off (0) ' +
+        'by default. Run it from the toolbar\'s Smooth ▾ (a click runs all frames; its menu also has This frame and ' +
+        'Remove smoothing). Changes here apply when you click Apply.';
     smPanel.appendChild(smHint);
 
     // What the two windows do, redrawn as they are typed
@@ -777,6 +793,7 @@ export function showSettingsModal(initialPanel) {
             panels[key].classList.toggle('active', key === name);
         });
         if (name === 'wizard') filterPreview.start();
+        writeLastPanel(name);
     }
     NAV_ITEMS.forEach(function (item) {
         navItems[item.panel].addEventListener('click', function () {

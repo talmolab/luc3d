@@ -75,7 +75,9 @@ try {
         AS.state.sessions = o.none ? [] : [s]; AS.state.session = o.none ? null : s; AS.state.activeSessionIdx = 0;
     }, Object.assign({ scores: true, frames: 400, none: false }, opts));
 
-    const openSettings = () => page.evaluate(() => document.getElementById('menuSettings').click());
+    // On another panel first, so the lazy start can be checked (Help ▸ Settings
+    // reopens on the panel last shown, which may be the wizard).
+    const openSettings = () => page.evaluate(async () => (await import('/ui/settings-modal.js')).showSettingsModal('triangulation'));
     const openWizard = () => page.evaluate(() => document.querySelector('.settings-nav-item[data-panel="wizard"]').click());
     const waitCounted = () => page.waitForFunction(() => {
         const r = document.querySelector('[data-testid="detection-filter-preview"]');
