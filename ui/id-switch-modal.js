@@ -46,7 +46,8 @@ import { renderBraveFingerprintingHint } from './browser-hints.js';
 import { createBrightnessSampler } from './brightness-sampler.js';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary } from './id-switch-review.js';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary,
+         idSwitchPlaceOf } from './id-switch-review.js';
 
 const CUE_LABEL = { size: 'body size', image: 'images', brightness: 'coat brightness', review: 'review list' };
 
@@ -762,11 +763,15 @@ function afterIdentityChange(session) {
     refreshIdSwitchHighlight();
 }
 
-/** The confirmation dialog for fixing row `f`. Cancel / Esc change nothing. */
-function openFixDialog(session, st, f) {
+/**
+ * The confirmation dialog for fixing row `f` — with `asPlace`, the place's own fix (from the frame you are on
+ * to the end of the video), not the check's. Cancel / Esc change nothing.
+ */
+function openFixDialog(session, st, f, asPlace) {
     var res = st.results[f.cue] || st.results.size;
     var rr = rowRange(f);                          // the row's window: its progress bar, lead-in .. lead-out
-    var plan = idSwitchFixPlan(f, res, { currentFrame: state.currentFrame, totalFrames: state.totalFrames, window: [rr.p0, rr.p1] });
+    var plan = idSwitchFixPlan(f, res, { currentFrame: state.currentFrame, totalFrames: state.totalFrames, window: [rr.p0, rr.p1],
+                                         place: asPlace, results: st.results });
     if (!plan) { setStatus('Nothing to fix here: the stretch this switch covers is empty', 'warning'); return; }
     var idA = identityIdByName(session, plan.nameA), idB = identityIdByName(session, plan.nameB);
     if (idA == null || idB == null) {
@@ -775,11 +780,12 @@ function openFixDialog(session, st, f) {
     }
     var fr = function (x) { return 'frame ' + (x + 1).toLocaleString(); };
     var startWhy, endWhy;
-    // A review-list row is a place, not a scored change: it swaps from the frame you are on (or just after the
-    // place) to the end of the video, and later rows fix their own stretches in turn. With more than two tracks
-    // its pair is the cue's guess, so the two tracks to swap can be chosen (on 3-4 mice the cue named the
-    // swapped pair in about a third to two thirds of the switches it found).
-    var isReview = f.cue === 'review';
+    // A place's own fix (a review-list row's, or any row's that stands for a place) is not a scored change: it
+    // swaps from the frame you are on (or just after the place) to the end of the video, and later rows fix
+    // their own stretches in turn. With more than two tracks its pair is the cue's guess, so the two tracks to
+    // swap can be chosen (on 3-4 mice the cue named the swapped pair in about a third to two thirds of the
+    // switches it found).
+    var isReview = !!asPlace || f.cue === 'review';
     var pickPair = isReview && (session.identities || []).length > 2;
     if (isReview) {
         startWhy = plan.start === 'current' ? 'the frame you are on'
@@ -807,8 +813,8 @@ function openFixDialog(session, st, f) {
         '<li>Ends at ' + fr(plan.to) + ': ' + endWhy + '.</li></ul>' +
         (f.followOf != null ? '<p class="id-switch-fix-warn">This flag follows the switch at ' + fmtTime(f.followOf) +
             ', and is often a side effect of it. Fix that one first if you have not.</p>' : '') +
-        '<p class="id-switch-fix-tip">To ' + (f.kind === 'end' ? 'end' : 'start') + ' somewhere else, go to that frame on the row\'s ' +
-        'progress bar (click it, step or play) and click Fix switch again.' + (isReview ? ' If the labels swap back before ' +
+        '<p class="id-switch-fix-tip">To ' + (f.kind === 'end' && !isReview ? 'end' : 'start') + ' somewhere else, go to that frame on the row\'s ' +
+        'progress bar (click it, step or play) and click ' + (isReview ? 'this button' : 'Fix switch') + ' again.' + (isReview ? ' If the labels swap back before ' +
         'the next place, go to where they do and click Fix again on this row.' : '') + '</p>' +
         '<div class="modal-actions"><button id="idSwitchFixCancel">Cancel</button>' +
         '<button id="idSwitchFixOk" class="primary">Swap identities</button></div></div>';
@@ -944,38 +950,36 @@ function lookNote(cues) {
 }
 
 /**
- * The review-list place a row stands for: the row itself, or the place a check's row is linked to ("on the
- * review list" — the tab shows the two as one row). Null for a check's row that is not on the list.
- */
-function reviewPlace(f) {
-    return f.cue === 'review' ? f : f.agree && f.agree.cue === 'review' ? f.agree : null;
-}
-
-/**
  * What the selected row shows under its lines: the progress bar, then Fix switch… (or what was fixed, and Undo).
- * A review-list row can be fixed again — a swap that undoes itself before the next place takes two fixes — so it
- * lists every fix made from it and keeps a "Fix again…" button. So does a check's row on the review list, once
- * fixed: its first fix is the check's, a Fix again is the place's (from the frame you are on).
+ * A row that stands for a place (idSwitchPlaceOf: a review-list place, or a check's row at a moment such as an
+ * animal coming back) always offers the place's own fix, from the frame you are on to the end of the video:
+ * unfixed, a check's row shows it as "Fix from here…" beside the check's own "Fix switch…"; once fixed, as
+ * "Fix again…" (a swap that undoes itself before the next place takes two fixes), listing every fix made from it.
  */
 function selectedHtml(st, f) {
     var fix = idSwitchFixFor(st, f), last = st.fixes && st.fixes.length ? st.fixes[st.fixes.length - 1] : null;
-    var act;
-    if (fix && reviewPlace(f)) {
+    var place = idSwitchPlaceOf(f), act;
+    var placeBtn = function (label, title) { return '<button class="panel-btn id-switch-fix" data-place="1" title="' + title + '">' + label + '</button>'; };
+    if (fix && place) {
         var keys = [rowKey(f)].concat(f.agree ? [rowKey(f.agree)] : []);
         var mine = (st.fixes || []).filter(function (x) { return keys.indexOf(x.key) >= 0 || keys.indexOf(x.partnerKey) >= 0; });
         act = '<span class="id-switch-fixed-note is-list">Fixed: ' + mine.map(function (x, i) {
             return (i ? 'again ' : escapeHtml(x.nameA) + ' ↔ ' + escapeHtml(x.nameB) + ' swapped ') + 'on frames ' +
                 (x.from + 1).toLocaleString() + '–' + (x.to + 1).toLocaleString();
         }).join('; ') + '</span>' +
-            '<button class="panel-btn id-switch-fix" title="Swap the two tracks again, from the frame you are on — for labels that swap back before the next place">Fix again…</button>' +
+            placeBtn('Fix again…', 'Swap the two tracks again, from the frame you are on to the end of the video — for labels that swap back before the next place') +
             (mine.indexOf(last) >= 0 ? '<button class="panel-btn id-switch-undo" title="Swap the same frames back">Undo fix</button>' : '');
     } else if (fix) {
         act = '<span class="id-switch-fixed-note">Fixed: ' + escapeHtml(fix.nameA) + ' ↔ ' + escapeHtml(fix.nameB) +
             ' swapped on frames ' + (fix.from + 1).toLocaleString() + '–' + (fix.to + 1).toLocaleString() + '</span>' +
             (fix === last ? '<button class="panel-btn id-switch-undo" title="Swap the same frames back">Undo fix</button>' : '');
     } else if (!f.continues) {
-        act = '<button class="panel-btn id-switch-fix" title="Swap these two identities over the frames this switch covers — ' +
-            'a dialog shows exactly which, before anything changes">Fix switch…</button>';
+        act = f.cue === 'review' ? placeBtn('Fix switch…', 'Swap the two tracks from the frame you are on to the end of the video — ' +
+                'a dialog shows exactly which frames, before anything changes')
+            : '<button class="panel-btn id-switch-fix" title="Swap these two identities over the frames this switch covers — ' +
+                'a dialog shows exactly which, before anything changes">Fix switch…</button>' +
+              (place ? placeBtn('Fix from here…', 'Swap the two tracks from the frame you are on to the end of the video — ' +
+                'this place\'s own fix, for when the check\'s Fix switch… covers the wrong frames') : '');
     } else return progressHtml(f);
     return progressHtml(f) + '<div class="id-switch-actions">' + act + '</div>';
 }
@@ -1070,11 +1074,12 @@ export function refreshIdSwitchPanel(session) {
     host.querySelector('#idSwitchList').addEventListener('click', function (e) {
         var row = e.target.closest('.id-switch-row');
         if (!row || e.target.closest('.id-switch-pbar') || _scrubbing) return;    // the bar seeks (below), not re-lands
-        if (e.target.closest('.id-switch-fix')) {
-            var fr = byKey.get(row.dataset.key);
-            // Fix again on a fixed check row that is on the review list: the place's own fix, from the frame you are on
-            if (fr && idSwitchFixFor(st, fr) && reviewPlace(fr)) fr = reviewPlace(fr);
-            if (fr) openFixDialog(session, st, fr);
+        var fixBtn = e.target.closest('.id-switch-fix');
+        if (fixBtn) {
+            var fr = byKey.get(row.dataset.key), asPlace = fixBtn.dataset.place === '1';
+            // Fix from here / Fix again: the fix of the place the row stands for, from the frame you are on
+            if (fr && asPlace) fr = idSwitchPlaceOf(fr) || fr;
+            if (fr) openFixDialog(session, st, fr, asPlace);
             return;
         }
         if (e.target.closest('.id-switch-undo')) { undoLastFix(session, st); return; }

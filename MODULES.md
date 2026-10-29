@@ -2837,7 +2837,9 @@ in the status and the summary box, §7c the Instances tab's mean node score, and
 review list after Track All: counted in the status and the summary box, listed in
 the tab, and a review row's Fix between two picked tracks, from here to the end,
 then Fix again from past its own window: only the stretch between stays swapped;
-then a check row on the same place: the check's Fix, then the place's Fix again).
+then a check row on the same place: both Fixes offered, the check's taken, then the
+place's Fix again; then an image row shown with a coat-brightness return, not on the
+list: once its Fix is taken, Fix again is the return's, from here to the end).
 `tests/e2e/_real-single-camera.mjs` runs the whole thing on a real SLEAP file
 through File ▸ Load SLP.
 
@@ -8991,11 +8993,18 @@ just after the place, to the END of the video — later rows fix their own
 stretches. A fixed review row keeps a **Fix again…** button and lists every fix
 made from it ("Fixed: … on frames a–end; again on frames b–end"): labels that swap
 back before the next place (a short flip, seen while playing the row through)
-take a second fix from where they do. So does a fixed check row that is on the
-review list (`reviewPlace`): its first Fix is the check's own, a Fix again is the
-place's (from the frame you are on), and the row stays selected. Without it a person
-was stuck when a check's fix started a second too early (the walkthrough on a
-sham_gdx video: 90.2% instead of 99.9%). With more than two tracks it lets the reviewer
+take a second fix from where they do. **Every row that stands for a place** has
+that fix too (`idSwitchPlaceOf`: a review-list place, or a check's row at a moment
+such as an animal coming back after being out of sight — `look`, so on one camera
+every coat-brightness row at a candidate moment or a return). Unfixed, a check's
+row shows the place's fix as **Fix from here…** beside its own **Fix switch…**;
+once fixed, as **Fix again…** (both carry `data-place`, and the dialog then
+explains the place's fix), and the row stays selected. Before 2026-10-29 only a
+review-list row offered it before the check's Fix, and a fixed check row with a
+return behind it offered only Undo: the walkthrough's reviewer could not make 13
+place fixes on the 64 hard SLAP-2M views (0.38 points) and 4 on sham_gdx; a
+check's fix starting a second too early once cost a sham_gdx video 90.2% instead
+of 99.9%. With more than two tracks it lets the reviewer
 pick the two tracks (`pairSelect`, `#idSwitchFixA` / `#idSwitchFixB`, defaulting to
 the row's pair): on 3–4 mice the row's own pair was the swapped one in only a third
 to two thirds of the switches found. The dialog keeps Esc / Cancel.
@@ -9224,12 +9233,15 @@ single-camera Track All's review list, unscored rows (score 0, `look` = cues) sa
 under `checks.review` with no image fields; last, so a check's row at the same
 place is the one shown);
 `idSwitchIsSecondary(m)` (the later half of a "Both" pair — listed and drawn
-through its partner);
+through its partner); `idSwitchIsPlace(m)` (a row that stands for a place, not a
+scored encounter: a review-list row, or a check's row at a moment, `look`);
+`idSwitchPlaceOf(m)` (the place a tab row stands for: a review-list place first —
+itself or its linked row — else itself or its linked row when at a moment; null);
 `serializeIdSwitchReview(session)` -> payload or `null` (no check results -> no
 key, so untouched projects keep their bytes); `ingestIdSwitchReview(session,
 payload)` (rebuilds `session._idSwitch`, re-links "Both"; ignores anything
 malformed, never throws); `idSwitchFixPlan(m, res, {currentFrame,
-totalFrames, window?})` -> `{key, partnerKey, nameA, nameB, from, to, start
+totalFrames, window?, place?, results?})` -> `{key, partnerKey, nameA, nameB, from, to, start
 ('current' | 'separate'), edge}` or null
 — what fixing row `m` swaps (see below); `idSwitchFixFor(st, m)` (the fix covering
 a row, its own or its partner's); `idSwitchRenameForFix(st, fix)` (renames the
@@ -9239,9 +9251,13 @@ other pairs' rows inside a fixed stretch — an involution, keys follow).
 row's window (`o.window` — in the app the whole progress bar), so the user puts
 it where they saw the labels flip; outside the window it falls back to e + 1
 (where the animals separate). Without `o.window` the window is the close spell
-[s, e + 1]. A review-list row's window reaches on to just before the next place on
-its list (`nextPlaceStart`; the end of the video after the last), so a swap that
-undoes itself between two places is fixed from that row twice. An onset swaps from there to its `switchBackAt` encounter's last
+[s, e + 1]. A place's own fix (`place`, always for a review-list row) swaps from
+the boundary to the END of the video, with no partner, and its window reaches on to
+just before the next place (`nextPlaceStart`; the end of the video after the last),
+so a swap that undoes itself between two places is fixed from that row twice. The
+next place is the next row standing for one on ANY list (`results`, else `res`),
+not counting the row itself, its linked row, or a place of the same pair at the same
+contact on another list (the same place, listed twice). An onset swaps from there to its `switchBackAt` encounter's last
 close frame, or the last frame; an 'end' swaps the stretch BEFORE it, from just
 after `switchedAt` (or frame 0) to the frame before its boundary. The change point
 at the other edge is the fix's `partnerKey`. Results restored from a file saved

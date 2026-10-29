@@ -425,6 +425,36 @@ group('9. The review list: handovers, rows, Fix plan, saved checklist');
     plan = RV.idSwitchFixPlan(scored, { flags: [scored, { ...p2, cue: 'brightness' }], changes: [] }, { currentFrame: 299, totalFrames: N, window: win(p1) });
     ok(plan.start === 'separate', 'a check\'s row keeps its own window');
 
+    // Every row that stands for a place has the place's own fix (`place`): a coat-brightness row at a moment (an
+    // animal coming back, 'end' here: the labels BEFORE it look swapped, linked back to frame 40) swaps from the
+    // frame you are on to the end of the video, not its check's stretch; the next place on ANY list ends its reach.
+    eq(RV.idSwitchIsPlace(p1), true, 'a review-list row stands for a place');
+    const ret = { frame: 200, startFrame: 190, identityA: 0, identityB: 1, nameA: p1.nameA, nameB: p1.nameB, kind: 'end', score: -300,
+                   switchedAt: 40, look: ['return'], cue: 'brightness' };
+    const enc = { frame: 250, startFrame: 240, identityA: 0, identityB: 1, nameA: p1.nameA, nameB: p1.nameB, kind: 'onset', score: -300,
+                  switchBackAt: null, cue: 'brightness' };
+    const bres = { ok: true, fps: 30, flags: [enc], changes: [ret] };
+    ok(RV.idSwitchIsPlace(ret) && !RV.idSwitchIsPlace(enc), '…so does a check\'s row at a moment (`look`), and not one at an encounter');
+    const results = { brightness: bres, review: two };
+    plan = RV.idSwitchFixPlan(ret, bres, { currentFrame: 230, totalFrames: N, window: win(ret) });
+    ok(plan.from === 41 && plan.to === 229, `the check's own fix of the return row: its swapped stretch before it (${plan.from}–${plan.to})`);
+    plan = RV.idSwitchFixPlan(ret, bres, { currentFrame: 280, totalFrames: N, window: win(ret), place: true, results });
+    ok(plan.from === 280 && plan.to === N - 1 && plan.start === 'current' && plan.partnerKey === '',
+        `its place's fix: from the frame you are on to the end (${plan.from}–${plan.to}), up to just before the next place (300)`);
+    plan = RV.idSwitchFixPlan(ret, bres, { currentFrame: 300, totalFrames: N, window: win(ret), place: true, results });
+    ok(plan.from === 201 && plan.start === 'separate', '…and from the next place on, from just after itself');
+    plan = RV.idSwitchFixPlan(p1, two, { currentFrame: 299, totalFrames: N, window: win(p1), place: true, results });
+    ok(plan.from === 111 && plan.start === 'separate', 'a return row is a place for the review row before it too: its reach ends at 190');
+    const twin = { ...ret, frame: 112, startFrame: 100, switchedAt: null };
+    plan = RV.idSwitchFixPlan(p1, two, { currentFrame: 299, totalFrames: N, window: win(p1), results: { brightness: { ok: true, fps: 30, flags: [], changes: [twin] }, review: two } });
+    ok(plan.from === 299, 'the same place on another list (same pair, same contact) does not end it');
+    eq(RV.idSwitchPlaceOf(enc), null, 'idSwitchPlaceOf: an encounter row stands for no place');
+    eq(RV.idSwitchPlaceOf(ret), ret, '…a row at a moment for itself');
+    const shared = { ...enc, agree: p1 }, sharedRet = { ...enc, agree: ret };
+    ok(RV.idSwitchPlaceOf(shared) === p1 && RV.idSwitchPlaceOf(sharedRet) === ret,
+        '…and a check\'s row for the place linked to it (a review-list place, else a row at a moment)');
+    ok(RV.idSwitchPlaceOf({ ...ret, agree: p1 }) === p1, '…the review-list place first, when both are');
+
     // The saved checklist keeps the review rows, their cues and the ticks.
     S._idSwitch = { results: { review: rr }, reviewed: new Set([RV.idSwitchRowKey(m0)]), fixes: [] };
     RV.linkIdSwitchResults(S._idSwitch.results);
