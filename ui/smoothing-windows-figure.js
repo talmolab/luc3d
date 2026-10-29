@@ -99,6 +99,15 @@ function dots(values, showSpikes, cls) {
     return s;
 }
 
+/** The Gaussian's output at every frame: open black circles on the blue line. */
+function outNodes(values) {
+    var s = '';
+    for (var t = 0; t < values.length; t++) {
+        s += '<circle cx="' + f1(px(t)) + '" cy="' + f1(py(values[t])) + '" r="2.6" class="sf-out-node"/>';
+    }
+    return s;
+}
+
 function chart(label, inner) {
     return '<svg viewBox="0 0 300 140" role="img" aria-label="' + label + '">'
         + '<line x1="' + X0 + '" y1="' + (Y1 + 3) + '" x2="' + X1 + '" y2="' + (Y1 + 3) + '" class="sf-axis"/>'
@@ -162,7 +171,8 @@ function gaussianChart(window, input, out, inputHasSpikes) {
         band(t, window) + stems
         + '<path d="' + path(TRUTH) + '" class="sf-true"/>'
         + '<path d="' + path(out) + '" class="sf-out"/>'
-        + dots(input, inputHasSpikes, inputHasSpikes ? 'sf-raw' : 'sf-med'));
+        + dots(input, inputHasSpikes, inputHasSpikes ? 'sf-raw' : 'sf-med')
+        + outNodes(out));
 }
 
 function tagline(window, example) {

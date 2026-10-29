@@ -11309,7 +11309,8 @@ bottom of that window: for the Gaussian its weights, for the median the
 window's values sorted low to high, the middle one (the median, what the spike
 frame becomes) green and the spike red. The median's output is green in both
 cards (its line on the left, with the same green dot at every frame as the
-Gaussian's input dots on the right); the Gaussian's output is blue. Raw samples
+Gaussian's input dots on the right); the Gaussian's output is blue, with an
+open black circle at every frame. Raw samples
 are open grey rings drawn over the green dots, since a median keeps many
 samples exactly and a filled dot would hide under the green one.
 
