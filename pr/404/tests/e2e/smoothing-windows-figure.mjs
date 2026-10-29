@@ -11,7 +11,7 @@
  *     below the red dot).
  *  3. Median off + Gaussian on feeds the Gaussian the raw 3D: the card says the
  *     spike becomes a bump; turning the median on hides that note again.
- *  4. Each card's Window slider sets the stage's window and the matching field,
+ *  4. Each card's Window slider (down to 1 frame) sets the stage's window and the matching field,
  *     and Apply stores it; the Frame slider moves the shaded window and fades
  *     the output after that frame; ▶ slides the window forward and pauses.
  *
@@ -97,6 +97,9 @@ try {
         const set = (el, v) => { el.value = String(v); el.dispatchEvent(new Event('input')); };
         const field = (l) => document.querySelector(`.settings-panel[data-panel="smoothing"] input[aria-label="${l}"]`);
         const out = {};
+        set(card('median').querySelector('.sf-size'), 1);
+        out.oneTag = card('median').querySelector('small').textContent;
+        out.oneField = field('Median window (frames)').value;
         set(card('gaussian').querySelector('.sf-size'), 11);
         out.gauField = field('Gaussian window (frames)').value;
         out.gauTag = card('gaussian').querySelector('small').textContent;
@@ -120,6 +123,7 @@ try {
         out.stored = S.getSmoothingParam('smoothGaussianWindow');
         return out;
     });
+    check(sl.oneTag === '1 frame · no smoothing' && sl.oneField === '1', `Window slider goes down to 1 frame (${sl.oneTag}, field ${sl.oneField})`);
     check(sl.gauField === '11' && sl.gauTag === '11 frames', `Window slider sets the field and the stage (${sl.gauField}, ${sl.gauTag})`);
     check(sl.bandMoved, 'Frame slider moves the shaded window');
     check(sl.faded > 0 && sl.posLabel === '31 / 40', `output after the frame faded (${sl.faded} marks, ${sl.posLabel})`);
