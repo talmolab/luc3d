@@ -9299,7 +9299,7 @@ tracking and greys the row), and **Tracking Thresholds** (one field per
 #134 — one **Filter Parameters** section rendering `getSmoothingParamDefs()`:
 median window, Gaussian window, max gap, minimum segment, under a figure from
 `ui/smoothing-windows-figure.js` that the two window fields redraw through
-`onEdit`. Its own panel because
+`onEdit`, and whose Window sliders set those fields back through `onWindow`. Its own panel because
 it is not a tracking parameter — it runs after triangulation, on 3D the tracker
 has finished with. A note warns that raising the reprojection-error threshold
 creates more gaps, hence more gap edges where the filter is least accurate. The
@@ -11325,7 +11325,14 @@ card's input is the median's output, except with the median off and the
 Gaussian on: then it is the raw trace and a note says the spike becomes a bump
 (why the median runs first). Colours come from `.smooth-fig` in `styles.css`.
 
-**Key exports.** `buildSmoothingWindowsFigure()` → `{ el, update(params) }`.
+**Sliders.** Each card has a Window slider (3–31 frames) that redraws the card
+and calls `onWindow(id, value)` so the panel sets its working value and field
+(Apply then stores it), and a Frame slider with ▶ that slides the shaded window
+along the 40 frames (90 ms a frame; stops at the end, on a second click, or once
+the figure leaves the page). While a frame is picked, that stage's output is
+solid up to it and faint after it, with a ring on its value.
+
+**Key exports.** `buildSmoothingWindowsFigure({ onWindow })` → `{ el, update(params) }`.
 
 **Imports.** `pose/temporal-smoothing.js`. **Imported by** `ui/settings-modal.js`.
 

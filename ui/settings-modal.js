@@ -719,8 +719,16 @@ export function showSettingsModal(initialPanel) {
     smPanel.appendChild(smHint);
 
     // What the two windows do, redrawn as they are typed
-    // (`ui/smoothing-windows-figure.js`).
-    const smFigure = buildSmoothingWindowsFigure();
+    // (`ui/smoothing-windows-figure.js`). Its Window sliders set the same
+    // working values and the matching field.
+    const smFigure = buildSmoothingWindowsFigure({
+        onWindow: function (id, value) {
+            working.smoothing[id] = value;
+            const def = smoothingDefs.find(function (d) { return d.id === id; });
+            const field = def && smSection.body.querySelector('input[aria-label="' + def.label + '"]');
+            if (field) field.value = String(value);
+        },
+    });
     smFigure.update(working.smoothing);
     smPanel.appendChild(smFigure.el);
 

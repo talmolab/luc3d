@@ -10,7 +10,10 @@
  *     the blue line drops the spike (its point at the spike frame sits well
  *     below the red dot).
  *  3. Median off + Gaussian on feeds the Gaussian the raw 3D: the card says the
- *     spikes become bumps; turning the median on hides that note again.
+ *     spike becomes a bump; turning the median on hides that note again.
+ *  4. Each card's Window slider sets the stage's window and the matching field,
+ *     and Apply stores it; the Frame slider moves the shaded window and fades
+ *     the output after that frame; ▶ slides the window forward and pauses.
  *
  * Run: node tests/e2e/smoothing-windows-figure.mjs
  */
@@ -84,9 +87,44 @@ try {
     await type('Gaussian window (frames)', 15);
     const g = await read();
     check(g.gauTag === '15 frames', `Gaussian card relabelled (${g.gauTag})`);
-    check(g.warn, 'note: spikes spread into bumps');
+    check(g.warn, 'note: the spike spreads into a bump');
     await type('Median window (frames)', 5);
     check(!(await read()).warn, 'note hidden once the median is on');
+
+    console.log('4. sliders');
+    const sl = await page.evaluate(async () => {
+        const card = (s) => document.querySelector(`.smooth-fig [data-stage="${s}"]`);
+        const set = (el, v) => { el.value = String(v); el.dispatchEvent(new Event('input')); };
+        const field = (l) => document.querySelector(`.settings-panel[data-panel="smoothing"] input[aria-label="${l}"]`);
+        const out = {};
+        set(card('gaussian').querySelector('.sf-size'), 11);
+        out.gauField = field('Gaussian window (frames)').value;
+        out.gauTag = card('gaussian').querySelector('small').textContent;
+        const bandX = () => +card('median').querySelector('rect.sf-band').getAttribute('x');
+        const x0 = bandX();
+        set(card('median').querySelector('.sf-pos'), 30);
+        out.bandMoved = bandX() > x0 + 50;
+        out.faded = card('median').querySelectorAll('.sf-ahead').length;
+        out.posLabel = card('median').querySelector('.sf-pos-val').textContent;
+        const play = card('gaussian').querySelector('.sf-play');
+        play.click();
+        await new Promise(r => setTimeout(r, 500));
+        out.playing = play.getAttribute('aria-pressed');
+        play.click();
+        const p1 = +card('gaussian').querySelector('.sf-pos').value;
+        await new Promise(r => setTimeout(r, 300));
+        out.advanced = p1 > 0;
+        out.paused = +card('gaussian').querySelector('.sf-pos').value === p1;
+        document.querySelector('.settings-btn-apply').click();
+        const S = await import('/ui/settings.js');
+        out.stored = S.getSmoothingParam('smoothGaussianWindow');
+        return out;
+    });
+    check(sl.gauField === '11' && sl.gauTag === '11 frames', `Window slider sets the field and the stage (${sl.gauField}, ${sl.gauTag})`);
+    check(sl.bandMoved, 'Frame slider moves the shaded window');
+    check(sl.faded > 0 && sl.posLabel === '31 / 40', `output after the frame faded (${sl.faded} marks, ${sl.posLabel})`);
+    check(sl.playing === 'true' && sl.advanced && sl.paused, 'play slides the window forward, a second click pauses it');
+    check(sl.stored === 11, `Apply stores the slider's window (${sl.stored})`);
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {
