@@ -40,15 +40,15 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=d97c4019e2e0';
-import { getActiveSession, state, timeline } from './app-state.js?v=d97c4019e2e0';
-import { drawAllOverlays } from './rendering.js?v=d97c4019e2e0';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=d97c4019e2e0';
-import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=d97c4019e2e0';
-import { installModalGeometry } from './modal-geometry.js?v=d97c4019e2e0';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=d97c4019e2e0';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=d97c4019e2e0';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=d97c4019e2e0';
+} from './settings.js?v=079839f0f55a';
+import { getActiveSession, state, timeline } from './app-state.js?v=079839f0f55a';
+import { drawAllOverlays } from './rendering.js?v=079839f0f55a';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=079839f0f55a';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=079839f0f55a';
+import { installModalGeometry } from './modal-geometry.js?v=079839f0f55a';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=079839f0f55a';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=079839f0f55a';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=079839f0f55a';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -309,11 +309,13 @@ export function showSettingsModal(initialPanel) {
     panelContainer.className = 'settings-panel-container';
     body.appendChild(panelContainer);
 
+    // In the order they are used, as on the toolbar (Track, Triangulate,
+    // Smooth); Keyboard Shortcuts is not a step, so it goes last.
     const NAV_ITEMS = [
-        { panel: 'triangulation', label: 'Default Triangulation' },
-        { panel: 'keyboard', label: 'Keyboard Shortcuts' },
         { panel: 'wizard', label: 'Tracking Wizard' },
+        { panel: 'triangulation', label: 'Default Triangulation' },
         { panel: 'smoothing', label: 'Temporal Smoothing' },
+        { panel: 'keyboard', label: 'Keyboard Shortcuts' },
     ];
 
     const navItems = {};

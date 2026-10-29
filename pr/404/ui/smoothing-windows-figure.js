@@ -31,7 +31,7 @@
 // Depends on: pose/temporal-smoothing.js (`smoothSignalInto`, `normalizeWindow`,
 // `sigmaForWindow`). Colours come from `styles.css` (`.smooth-fig`).
 
-import { smoothSignalInto, normalizeWindow, sigmaForWindow } from '../pose/temporal-smoothing.js?v=d97c4019e2e0';
+import { smoothSignalInto, normalizeWindow, sigmaForWindow } from '../pose/temporal-smoothing.js?v=079839f0f55a';
 
 var N = 40;                              // frames in the trace
 var SPIKES = [[11, 13]];                 // [frame, mm] one-frame spikes
