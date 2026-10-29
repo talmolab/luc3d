@@ -13,9 +13,10 @@ test-board recording (one frame per still pose) is written for held-out scoring.
 
 What it leaves out: compression artefacts, uneven lighting and glare, the hand and
 cage occluding the board, and rolling-shutter / sync error. The first of these is
-stood in for by ``--corner-jitter`` (Gaussian noise added to every detected corner, in
-pixels), set so a simulated recording of the rig's real board gives the same
-reprojection error as the real recording.
+stood in for by ``corner_jitter`` (Gaussian noise added to every detected corner, in
+pixels, when a study loads the simulated detections; the saved detections are
+noise-free), set with ``fit-jitter`` so a simulated recording of the rig's real board
+gives the same reprojection error as the real recording.
 """
 from __future__ import annotations
 
@@ -37,7 +38,7 @@ _w = {}
 
 
 def _plate_texture(bid: str, max_px: int = 5000):
-    plate, *_ = B.CALIBIO[bid]
+    plate, *_ = B.plate_info(bid)
     board = B.catalogue_board(bid)
     # texels per mm: plate sizes divisible by 16 (exact texture pyramid levels)
     ppm = next(p for p in (16, 12, 8, 4, 2) if max(plate) * p <= max_px and all(v * p % 16 == 0 for v in plate))
@@ -63,7 +64,7 @@ def _cam_maps(cam):
 def _init(cal_path, bid, params):
     cv2.setNumThreads(1)
     _w["cal"] = read_calibration(cal_path)
-    _w["board"] = B.catalogue_board(bid) if bid in B.CALIBIO else None
+    _w["board"] = B.catalogue_board(bid)
     _w["bid"] = bid
     _w["tex"] = _plate_texture(bid)
     tex = _w["tex"][0]
@@ -159,8 +160,6 @@ def _frame_task(task):
         acc += rng.normal(0, p["noise"], acc.shape)
         g = np.clip(np.round(acc), 0, 255).astype(np.uint8)
         ids, xy, nm = detect_gray(_w["det"], g, offset=(org[1], org[0]))
-        if p.get("corner_jitter_px", 0) > 0:  # what rendering leaves out (compression etc.), fitted to real data
-            xy = xy + rng.normal(0, p["corner_jitter_px"], xy.shape).astype(np.float32)
         W, H = cam.size
         keep = (xy[:, 0] >= 0) & (xy[:, 0] < W) & (xy[:, 1] >= 0) & (xy[:, 1] < H)
         out.append((f, ids[keep], xy[keep], nm, float(g.mean())))
@@ -332,7 +331,7 @@ def main(a):
     dist = float(np.median([np.linalg.norm(c.center - c0) for c in cal.cameras]))
     volume = a.volume_mm or 0.6 * dist
     params = {"exposure_ms": a.exposure_ms, "noise": a.noise, "white": a.white, "black": a.black,
-              "background": 0.5 * (a.white + a.black) * 0.6, "defocus": 0.6, "corner_jitter_px": a.corner_jitter}
+              "background": 0.5 * (a.white + a.black) * 0.6, "defocus": 0.6}
     lines = [f'[study]\nname = "Simulated {a.rig}"\nnote = "Synthetic recordings (scripts/board_study/simulate.py) '
              f'of a copy of the {a.rig} rig from {rig_cal.name}; motion from '
              f'{"a real recording (" + a.trajectory_take + ")" if a.trajectory else "a random walk"}."\n']
@@ -360,7 +359,7 @@ def main(a):
                 render_take(rig_cal, bid, poses, n, fps, params, d, a.seed * 7 + k, a.workers)
                 print(f"  {tid}: rendered {n} frames x {len(cal.cameras)} cameras")
             lines.append(f'[[take]]\nid = "{tid}"\nrig = "{a.rig}"\nsession = "sim"\nboard = "{bid}"\n'
-                         f'path = "{d}"\ntruth = "truth.toml"\nsimulated = true\n')
+                         f'path = "{d}"\ntruth = "truth.toml"\nsimulated = true\ncorner_jitter = {a.corner_jitter}\n')
     if a.test_poses:
         tb = a.test_board or _largest_fitting(cal, volume)
         d = out / f"sim-{a.rig}-test-{tb.replace('calibio-', '')}"
@@ -369,7 +368,7 @@ def main(a):
             p2 = {**params, "exposure_ms": 0.0}
             render_take(rig_cal, tb, poses, a.test_poses, 1.0, p2, d, a.seed + 999, a.workers)
         lines.append(f'[[take]]\nid = "sim-{a.rig}-test"\nrig = "{a.rig}"\nsession = "sim"\nboard = "{tb}"\n'
-                     f'path = "{d}"\nkind = "test"\ntruth = "truth.toml"\nsimulated = true\n')
+                     f'path = "{d}"\nkind = "test"\ntruth = "truth.toml"\nsimulated = true\ncorner_jitter = {a.corner_jitter}\n')
     (out / "study.toml").write_text("\n".join(lines))
     print(f"wrote {out / 'study.toml'}")
 
@@ -381,3 +380,37 @@ def _largest_fitting(cal: Calibration, volume: float) -> str:
         if pat == "coarse" and max(plate) <= volume and max(plate) > max(B.CALIBIO[best][0]):
             best = bid
     return best
+
+
+def fit_jitter(take_dir: Path, target_px: float, lo: float = 0.0, hi: float = 1.5, iters: int = 7) -> float:
+    """Corner noise (px) at which an anipose calibration of this simulated take has the
+    given median reprojection error (bisection)."""
+    import metrics as M
+    from engines import calibrate_anipose
+    truth = read_calibration(take_dir / "truth.toml")
+    board = B.read_board(take_dir / "board.toml")
+    base = [Detections.load(take_dir / "detections" / f"{c}.npz") for c in truth.names]
+
+    def err(sig):
+        rng = np.random.default_rng(1)
+        dets = [jittered(d, sig, rng) for d in base]
+        cal, _ = calibrate_anipose(dets, board)
+        fr, obs = M.stack(dets, board)
+        e = M.reprojection(cal, obs)["median_px"]
+        print(f"  corner jitter {sig:.3f} px -> reprojection {e:.3f} px (target {target_px:.3f})")
+        return e
+
+    for _ in range(iters):
+        mid = 0.5 * (lo + hi)
+        if err(mid) < target_px:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+def jittered(d: Detections, sigma: float, rng) -> Detections:
+    if sigma <= 0:
+        return d
+    return Detections(d.camera, d.size, d.fps, d.n_frames, d.frames, d.count, d.n_markers, d.ids,
+                      (d.xy + rng.normal(0, sigma, d.xy.shape)).astype(np.float32), d.brightness)

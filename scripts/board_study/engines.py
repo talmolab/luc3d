@@ -8,7 +8,8 @@
   (https://talmolab.github.io/calibrat3/), driven headless through its own
   ``tests/e2e/real-session.mjs`` harness (detection, intrinsics, extrinsics, bundle
   adjustment, export). Needs a calibrat3 checkout with ``tests/e2e`` npm-installed.
-  Subsets are cut into frame-exact H.264 copies first.
+  It is always given frame-exact H.264 copies (Playwright's Chromium cannot decode
+  HEVC), of the whole take or of the chosen frames.
 """
 from __future__ import annotations
 

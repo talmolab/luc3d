@@ -12,6 +12,7 @@ Commands:
     simulate ...      render synthetic recordings of catalogue boards in a rig taken from a
                       real calibration.toml (see simulate.py), and write a study.toml for them
     boards            print the calib.io catalogue used here
+    fit-jitter T PX   corner noise that makes simulated take T match a real reprojection error PX
     selftest          simulate a 3-camera rig, run everything, check the result against the truth
 
 See README.md next to this file for the protocol and the study.toml format.
@@ -57,7 +58,7 @@ def main(argv=None):
     s.add_argument("--volume-mm", type=float, default=None, help="size of the region the board is waved through")
     s.add_argument("--exposure-ms", type=float, default=2.0)
     s.add_argument("--noise", type=float, default=2.0, help="sensor noise, grey levels")
-    s.add_argument("--corner-jitter", type=float, default=0.0, help="noise added to detected corners, px (fit to real data)")
+    s.add_argument("--corner-jitter", type=float, default=0.0, help="corner_jitter written to the study.toml, px (see fit-jitter)")
     s.add_argument("--white", type=float, default=200, help="grey level of a white square")
     s.add_argument("--black", type=float, default=20)
     s.add_argument("--test-poses", type=int, default=12, help="static test-board recording (0 = none)")
@@ -68,6 +69,9 @@ def main(argv=None):
     sc = sub.add_parser("scan")
     sc.add_argument("root", type=Path)
     sc.add_argument("--out", type=Path, help="write here instead of printing")
+    fj = sub.add_parser("fit-jitter")
+    fj.add_argument("take", type=Path, help="a simulated take folder (simulate output) of the rig's real board")
+    fj.add_argument("target_px", type=float, help="median reprojection error of the real recording (results.json, anipose/full)")
     st = sub.add_parser("selftest")
     st.add_argument("--keep", type=Path, help="work here instead of a temporary folder")
     sub.add_parser("boards")
@@ -76,6 +80,10 @@ def main(argv=None):
     if a.cmd == "boards":
         for k, (plate, pat, sq, mk, bx, by, usd, pn) in B.CALIBIO.items():
             print(f"{k:28s} {plate[0]}x{plate[1]} mm  {bx}x{by} squares  {sq:g}/{mk:g} mm  ${usd}  {pn}")
+        return
+    if a.cmd == "fit-jitter":
+        import simulate
+        print(f"corner_jitter = {simulate.fit_jitter(a.take, a.target_px):.3f}")
         return
     if a.cmd == "selftest":
         import selftest

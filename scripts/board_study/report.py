@@ -20,6 +20,16 @@ def _med(vals):
     return float(np.median(v)) if v else float("nan")
 
 
+def _span(vals, d=2, unit=""):
+    """One value, or 'median (min–max)' over several."""
+    v = [x for x in vals if x is not None and np.isfinite(x)]
+    if not v:
+        return "–"
+    if len(v) == 1:
+        return _f(v[0], d, unit)
+    return f"{_f(float(np.median(v)), d, unit)} ({_f(min(v), d)}–{_f(max(v), d)})"
+
+
 def _board_label(bid: str) -> str:
     if bid in B.CALIBIO:
         plate, pat, sq, mk, bx, by, usd, pn = B.CALIBIO[bid]
@@ -37,6 +47,7 @@ def _board_order(bid: str):
 def write(out: Path) -> Path:
     import matplotlib
     matplotlib.use("Agg")
+    import matplotlib.ticker
     import matplotlib.pyplot as plt
 
     r = json.loads((out / "results.json").read_text())
@@ -74,7 +85,8 @@ def write(out: Path) -> Path:
               "3D spread: how far the same 3D points move between repeated calibrations, mm (median). "
               "Camera spread: camera-position spread between repeats, mm. Focal spread: SD of focal length, %. "
               "Smallest squares found: 5th percentile of square size, in pixels, among detections. "
-              "Repeats are separate recordings when there are several, else 3 disjoint parts of each recording.", "",
+              "Repeats are separate recordings of one sitting when there are several, else 3 disjoint parts of each recording; "
+              "with several recordings the spread columns show median (min–max).", "",
               "| " + " | ".join(hdr) + " |", "|" + "---|" * len(hdr)]
         for bid in boards_:
             full = [c for c in cals if c["board"] == bid and c["variant"] == "full" and c["engine"] == "anipose"]
@@ -94,9 +106,9 @@ def write(out: Path) -> Path:
                    _f(_med([h["reprojection"]["median_px"] for h in ho]), 2, " px"),
                    _f(_med([h["geometry"]["long_length_err_pct"] for h in ho]), 3, " %"),
                    _f(_med([h["geometry"]["fit_rms_mm"] for h in ho]), 2, " mm"),
-                   _f(_med([x.get("points3d_sd_mm") for x in rsep]), 2, " mm"),
-                   _f(_med([x.get("camera_pos_sd_mm") for x in rsep]), 1, " mm"),
-                   _f(_med([x.get("fx_sd_pct") for x in rsep]), 2, " %"),
+                   _span([x.get("points3d_sd_mm") for x in rsep], 2, " mm"),
+                   _span([x.get("camera_pos_sd_mm") for x in rsep], 1, " mm"),
+                   _span([x.get("fx_sd_pct") for x in rsep], 2, " %"),
                    _f(sq, 0, " px"), _f(tilt, 0, "°")]
             if has_truth:
                 row.insert(6, _f(_med([(c.get("truth") or {}).get("vs_truth_median_mm") for c in scored]), 2, " mm"))
@@ -157,6 +169,9 @@ def write(out: Path) -> Path:
                 ax.set_ylim(0, 102)
                 ax.grid(alpha=0.3)
             axs[0].set_xscale("log")
+            axs[0].set_xticks([5, 10, 20, 40, 80])
+            axs[0].xaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter())
+            axs[0].xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
             axs[1].legend(fontsize=7)
             fig.suptitle(rig)
             fig.tight_layout()
@@ -165,6 +180,19 @@ def write(out: Path) -> Path:
             L += ["### Where each board is still found", "",
                   "Board poses known from the other cameras, fully inside a camera's image: was it found there?", "",
                   f"![]({'figures/' + rig + '_detection.png'})", ""]
+        # --- repeatability per recording -------------------------------------------------
+        reps = [x for x in r["repeatability"] if x["rig"] == rig]
+        if reps:
+            L += ["### Repeatability", "",
+                  "| Board | Repeats | Engine | 3D spread (median / p95) | Camera position spread (median / worst) | "
+                  "Camera angle spread | Camera distance SD | Focal SD | k1 SD |", "|---|---|---|---|---|---|---|---|---|"]
+            for x in sorted(reps, key=lambda x: (_board_order(x["board"]), x["take"])):
+                L.append(f"| {_board_label(x['board'])} | {x['kind']}: {x['take']} | {x['engine']} | "
+                         f"{_f(x.get('points3d_sd_mm'), 2)} / {_f(x.get('points3d_sd_p95_mm'), 2)} mm | "
+                         f"{_f(x.get('camera_pos_sd_mm'), 1)} / {_f(x.get('camera_pos_sd_max_mm'), 1)} mm | "
+                         f"{_f(x.get('camera_rot_sd_deg'), 2, '°')} | {_f(x.get('pair_distance_sd_mm'), 1, ' mm')} | "
+                         f"{_f(x.get('fx_sd_pct'), 2, ' %')} | {_f(x.get('k1_sd'), 3)} |")
+            L.append("")
         # --- engines ----------------------------------------------------------------
         engs = sorted({c["engine"] for c in cals if c["variant"] == "full"})
         if len(engs) > 1:

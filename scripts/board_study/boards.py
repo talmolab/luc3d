@@ -37,6 +37,17 @@ CALIBIO = {
 }
 
 
+# Boards the lab printed itself, for simulations (same tuple layout; no price).
+LAB = {
+    # charuco_8x11x4.toml: 8 x 11 squares of 24 mm on letter paper (216 x 279 mm)
+    "printed-8x11-24mm-4x4": ((216, 279), "printed", 24.0, 18.75, 8, 11, 0, "letter paper"),
+}
+
+
+def plate_info(board_id: str):
+    return CALIBIO.get(board_id) or LAB[board_id]
+
+
 @dataclass
 class Board:
     board_x: int
@@ -117,6 +128,9 @@ def read_board(path: str | Path) -> Board:
 
 
 def catalogue_board(board_id: str) -> Board:
+    if board_id in LAB:
+        _, _, sq, mk, bx, by, _, _ = LAB[board_id]
+        return Board(bx, by, sq, mk, 4, 1000, False, board_id)
     _, _, sq, mk, bx, by, _, _ = CALIBIO[board_id]
     return Board(bx, by, sq, mk, 5, 1000, False, board_id)
 

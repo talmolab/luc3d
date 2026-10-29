@@ -50,20 +50,25 @@ reference = "calibration.toml"
 [[take]]
 id = "polina-start"
 rig = "polina"
-session = "2026-06"
+# start and end disagree by ~9 px: the cameras moved in between, so they are separate sittings
+session = "2026-06-start"
 board = "calibio-300x200-coarse"
 path = "/Users/soline/Documents/luc3d/polinatracking4stefan/calibration"
 stride = 4
 reference = "calibration.toml"
+# Camera1 has fewer frames than the others (1036 / 986 vs 1527 / 1453): dropped frames, so its frame numbers do not match
+cameras = ["Camera0", "Camera2", "Camera3", "Camera4", "Camera5", "Camera6", "Camera7"]
 
 [[take]]
 id = "polina-end"
 rig = "polina"
-session = "2026-06"
+session = "2026-06-end"
 board = "calibio-300x200-coarse"
 path = "/Users/soline/Documents/luc3d/polinatracking4stefan/calibration_end/calibration"
 stride = 4
 reference = "calibration.toml"
+# Camera1 has fewer frames than the others (1036 / 986 vs 1527 / 1453): dropped frames, so its frame numbers do not match
+cameras = ["Camera0", "Camera2", "Camera3", "Camera4", "Camera5", "Camera6", "Camera7"]
 
 [[take]]
 id = "chronicrecord-2026-10-26"

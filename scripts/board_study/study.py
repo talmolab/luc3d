@@ -51,6 +51,7 @@ class Take:
     reference: Path | None = None
     truth: Path | None = None  # ground-truth calibration (simulations)
     stride: int = 0            # detect every Nth frame (0 = the run's --stride)
+    corner_jitter: float = 0.0 # simulations: noise added to the corners when loaded, px
 
 
 def _find_videos(path: Path, cameras: list[str] | None) -> dict[str, str]:
@@ -88,7 +89,7 @@ def load_study(path: Path) -> tuple[dict, list[Take], list[dict]]:
         if not p.is_absolute():
             p = (path.parent / p).resolve()
         bid = t.get("board")
-        if bid in B.CALIBIO:
+        if bid in B.CALIBIO or bid in B.LAB:
             board = B.catalogue_board(bid)
         else:
             bp = p / "board.toml"
@@ -103,7 +104,8 @@ def load_study(path: Path) -> tuple[dict, list[Take], list[dict]]:
         else:
             videos = _find_videos(p, t.get("cameras"))
         takes.append(Take(t["id"], t["rig"], str(t.get("session", "")), board, bid, p, t.get("kind", "calibration"),
-                          videos, (p / ref) if ref else None, (p / truth) if truth else None, int(t.get("stride", 0))))
+                          videos, (p / ref) if ref else None, (p / truth) if truth else None, int(t.get("stride", 0)),
+                          float(t.get("corner_jitter", 0.0))))
     rulers = [{**r, "ruler": True} for r in d.get("ruler", [])]
     return d.get("study", {}), takes, d.get("poses", []) + rulers
 
@@ -120,7 +122,12 @@ def detections(take: Take, cache_root: Path, stride: int = 1, log=print) -> list
         if video is None:
             f = take.path / "detections" / f"{cam}.npz"
         if f.exists():
-            dets.append(Detections.load(f))
+            d = Detections.load(f)
+            if take.corner_jitter > 0:
+                import zlib
+                from simulate import jittered
+                d = jittered(d, take.corner_jitter, np.random.default_rng(zlib.crc32(f"{take.id}/{cam}".encode())))
+            dets.append(d)
             continue
         if not dets and board.board_y % 2 == 0:
             board = probe_legacy(board, video)
@@ -399,9 +406,8 @@ def _calibrate(engine: str, take: Take, dets, frames, out: Path, calibrat3: Path
             raise RuntimeError("--calibrat3 <checkout> is required for the calibrat3 engine")
         work = out / "calibrat3" / take.id
         work.mkdir(parents=True, exist_ok=True)
-        if frames is None:
-            session = take.path if (take.path / "board.toml").exists() else engines.cut_session(
-                take.videos, np.unique(np.concatenate([d.frames for d in dets])), take.board, work / "full")
+        if frames is None:  # always an H.264 copy: Playwright's Chromium has no HEVC decoder
+            session = engines.cut_session(take.videos, np.arange(max(d.n_frames for d in dets)), take.board, work / "full")
             tag = "full"
         else:
             tag = f"f{int(frames[0])}-{int(frames[-1])}-{len(frames)}"
