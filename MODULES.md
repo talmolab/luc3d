@@ -11306,7 +11306,8 @@ Both plot one made-up trace (one node's x over 40 frames: a slow movement,
 dashed, plus jitter and two one-frame spikes, as dots) and draw what the stage
 makes of its input, the window around one frame (shaded) and, for the
 Gaussian, the weights inside it (stems). The median's output is green in both
-cards (its line on the left, the Gaussian's input dots on the right); the
+cards (its line on the left, with an open black circle at every frame, and
+the Gaussian's input dots on the right); the
 Gaussian's output is blue.
 
 **The lines are the real filter, not drawn by hand.** `update(params)` runs
