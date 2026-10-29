@@ -19,7 +19,7 @@
 // example window instead, labelled as an example.
 //
 // Each card has two sliders. Window (1 = no smoothing) sets that stage's window size and reports
-// it through `onWindow(id, value)`, so the panel can set its number field (and
+// it through `onParam(id, value)`, so the panel can set its number field (and
 // the stage turns on). Frame slides the shaded window along the trace, and its
 // play button animates the slide: while a frame is picked, the output is drawn
 // solid up to that frame and faint after it, so the line builds frame by frame.
@@ -28,10 +28,19 @@
 // median is off and the Gaussian is on: then it is the raw trace, and the card
 // shows the spike being spread into a bump (why the median runs first).
 //
+// A third, full-width card shows Max gap and Minimum segment length on its own
+// trace (60 frames with a 2-frame hole, a 7-frame and a 6-frame absence, and a
+// 3-frame stretch between them; the node is somewhere else after the first long
+// absence). It runs both stages at the windows the first two cards show, over
+// the segments `buildSegments` cuts, exactly as the real pass does: a short
+// absence stays a hole inside its segment, a longer one splits the trace and no
+// window crosses it, and a segment shorter than the minimum is left as is. Its
+// two sliders report through the same `onParam`.
+//
 // Depends on: pose/temporal-smoothing.js (`smoothSignalInto`, `normalizeWindow`,
-// `sigmaForWindow`). Colours come from `styles.css` (`.smooth-fig`).
+// `sigmaForWindow`, `buildSegments`). Colours come from `styles.css` (`.smooth-fig`).
 
-import { smoothSignalInto, normalizeWindow, sigmaForWindow } from '../pose/temporal-smoothing.js?v=079839f0f55a';
+import { smoothSignalInto, normalizeWindow, sigmaForWindow, buildSegments } from '../pose/temporal-smoothing.js?v=1d644d94b5ec';
 
 var N = 40;                              // frames in the trace
 var SPIKES = [[11, 13]];                 // [frame, mm] one-frame spikes
@@ -213,6 +222,84 @@ function gaussianChart(window, input, out, inputHasSpikes, t, upto) {
         + fastLabel(), t);
 }
 
+// ---- Card 3: gaps and segments ----------------------------------------------
+
+var GN = 60;                                     // frames in the gap card's trace
+// Frames with no 3D: a 2-frame hole, a 7-frame absence, then (after a 3-frame
+// stretch) a 6-frame one. The node comes back 12 mm away after the 7-frame one.
+var ABSENT = [[9, 10], [20, 26], [30, 35]];
+var GAP_DEFAULT = { maxGap: 5, minSegment: 5 };  // the settings' defaults (`ui/settings.js`)
+var GAP_SLIDER_MAX = 15;
+var GTRUTH = new Float64Array(GN), GRAW = new Float64Array(GN), PRESENT = new Uint8Array(GN);
+(function () {
+    var seed = 11;
+    function rand() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
+    for (var t = 0; t < GN; t++) {
+        GTRUTH[t] = 5 * Math.sin(2 * Math.PI * t / 34) + 12 / (1 + Math.exp(-(t - 23)));
+        var absent = ABSENT.some(function (a) { return t >= a[0] && t <= a[1]; });
+        PRESENT[t] = absent ? 0 : 1;
+        var noise = 6 * (rand() + rand() - 1);
+        GRAW[t] = absent ? NaN : GTRUTH[t] + noise;
+    }
+})();
+var GX0 = 8, GX1 = 592, GY0 = 22, GY1 = 104;
+var G_MIN = Infinity, G_MAX = -Infinity;
+GTRUTH.forEach(function (v) { G_MIN = Math.min(G_MIN, v); G_MAX = Math.max(G_MAX, v); });
+GRAW.forEach(function (v) { if (v === v) { G_MIN = Math.min(G_MIN, v); G_MAX = Math.max(G_MAX, v); } });
+function gx(t) { return GX0 + (GX1 - GX0) * t / (GN - 1); }
+function gy(v) { return GY1 - (GY1 - GY0) * (v - G_MIN) / (G_MAX - G_MIN); }
+
+/** Both stages over `segments`, as the real pass runs them (same segments for both). */
+function runSegments(medWindow, gauWindow, segments, minSegment) {
+    var mid = new Float64Array(GN), out = new Float64Array(GN);
+    smoothSignalInto(GRAW, mid, segments, { kernel: 'median', window: medWindow, minSegment: minSegment }, SCRATCH_V, SCRATCH_W);
+    smoothSignalInto(mid, out, segments, { kernel: 'gaussian', window: gauWindow, minSegment: minSegment }, SCRATCH_V, SCRATCH_W);
+    return out;
+}
+
+/** A path over frames [from, to), broken wherever a value is missing. */
+function gPath(values, from, to) {
+    var d = '', pen = false;
+    for (var t = from; t < to; t++) {
+        if (values[t] !== values[t]) { pen = false; continue; }
+        d += (pen ? 'L' : 'M') + f1(gx(t)) + ' ' + f1(gy(values[t]));
+        pen = true;
+    }
+    return d;
+}
+
+function gapChart(medWindow, gauWindow, maxGap, minSegment) {
+    var segments = buildSegments(PRESENT, maxGap), out = runSegments(medWindow, gauWindow, segments, minSegment);
+    var half = (GX1 - GX0) / (GN - 1) / 2, s = '';
+    // Each absence: a dashed box, labelled by what it does to the trace.
+    ABSENT.forEach(function (a) {
+        var n = a[1] - a[0] + 1, splits = n > maxGap, x = gx(a[0]) - half, w = gx(a[1]) + half - x;
+        s += '<rect x="' + f1(x) + '" y="' + GY0 + '" width="' + f1(w) + '" height="' + (GY1 - GY0) + '" class="sf-absent' + (splits ? ' sf-absent-split' : '') + '"/>'
+            + '<text x="' + f1(x + w / 2) + '" y="' + (GY0 - 8) + '" text-anchor="middle" class="sf-note' + (splits ? ' sf-note-split' : '') + '">'
+            + n + (splits ? ' missing · splits' : ' missing · hole') + '</text>';
+    });
+    s += '<path d="' + gPath(GTRUTH, 0, GN) + '" class="sf-true"/>';
+    // The output, one piece per segment: blue where smoothed, grey where left as is.
+    segments.forEach(function (sg) {
+        var short = sg.end - sg.start < minSegment;
+        s += '<path d="' + gPath(out, sg.start, sg.end) + '" class="sf-out' + (short ? ' sf-left' : '') + '"/>';
+    });
+    for (var t = 0; t < GN; t++) {
+        if (PRESENT[t]) s += '<circle cx="' + f1(gx(t)) + '" cy="' + f1(gy(GRAW[t])) + '" r="3.4" class="sf-raw"/>';
+    }
+    // The segments as bars under the trace.
+    segments.forEach(function (sg) {
+        var short = sg.end - sg.start < minSegment, x = gx(sg.start) - half + 1, w = gx(sg.end - 1) + half - 1 - x;
+        s += '<rect x="' + f1(x) + '" y="112" width="' + f1(Math.max(w, 2)) + '" height="5" rx="2" class="sf-seg' + (short ? ' sf-seg-short' : '') + '"/>'
+            + '<text x="' + f1(x + w / 2) + '" y="130" text-anchor="middle" class="sf-note">'
+            + (sg.end - sg.start) + (short ? ' frames · too short, left as is' : ' frames') + '</text>';
+    });
+    var label = 'Gaps and segments: absences up to the max gap stay holes inside a segment; longer ones split the trace; '
+        + 'segments shorter than the minimum are left as they are.';
+    return '<svg viewBox="0 0 600 140" role="img" aria-label="' + label + '">' + s
+        + '<text x="' + GX1 + '" y="139" text-anchor="end" class="sf-note">frames →</text></svg>';
+}
+
 function tagline(window, example) {
     if (example) return 'off (0) · example with ' + window + ' frames';
     return window === 1 ? '1 frame · no smoothing' : window + ' frames';
@@ -237,11 +324,12 @@ function controls(stage) {
 
 /**
  * Build the figure.
- * @param {{onWindow?: function(string, number): void}} [opts] `onWindow(id, value)`
- *   is called when a card's Window slider moves (`id` is `smoothMedianWindow` or
- *   `smoothGaussianWindow`), so the panel can set its field to match.
+ * @param {{onParam?: function(string, number): void}} [opts] `onParam(id, value)`
+ *   is called when a card's slider sets a setting (`smoothMedianWindow`,
+ *   `smoothGaussianWindow`, `smoothMaxGap`, `smoothMinSegment`), so the panel can
+ *   set its field to match.
  * @returns {{el: HTMLElement, update: function(Object): void}} `update` takes the
- *   panel's working map (`smoothMedianWindow`, `smoothGaussianWindow`).
+ *   panel's working map (those four ids).
  */
 export function buildSmoothingWindowsFigure(opts) {
     opts = opts || {};
@@ -273,6 +361,23 @@ export function buildSmoothingWindowsFigure(opts) {
         + 'with the dashed true movement at the fast move.</p>'
         + '<p class="smooth-fig-warn" hidden>The median is off, so the Gaussian spreads the spike into a bump.</p></div>'
         + '</div>'
+        + '<div class="smooth-fig-col smooth-fig-wide" data-stage="gaps">'
+        + '<div class="smooth-fig-name">3 · Gaps and segments<small></small></div><div class="smooth-fig-chart"></div>'
+        + '<div class="smooth-fig-ctrl">'
+        + '<label class="sf-ctl"><span class="sf-ctl-name">Max gap</span>'
+        + '<input type="range" class="sf-gap" min="0" max="' + GAP_SLIDER_MAX + '" step="1" aria-label="Max gap to smooth across (frames)">'
+        + '<output class="sf-ctl-val sf-gap-val"></output></label>'
+        + '<label class="sf-ctl"><span class="sf-ctl-name">Min segment</span>'
+        + '<input type="range" class="sf-minseg" min="1" max="' + GAP_SLIDER_MAX + '" step="1" aria-label="Minimum segment length (frames)">'
+        + '<output class="sf-ctl-val sf-minseg-val"></output></label></div>'
+        + '<p>Another made-up node, 60 frames, smoothed by both stages at the windows above. Frames with no 3D are '
+        + 'never filled in. An absence up to Max gap frames long is a hole inside its segment, and the windows skip '
+        + 'over it. A longer one splits the trace into segments (bars), and no window reaches across a split, so the '
+        + 'line never cuts straight through the time the node was missing; here it comes back 12 mm away. Raise Max '
+        + 'gap past an absence and it becomes a hole: the frames next to it then average data from one side only, '
+        + 'which pulls them toward that side. Try Max gap 7 with a Gaussian window of 15 and look at the first frame '
+        + 'after the 6-frame absence. A segment shorter than Minimum segment length is left as it is (grey). Near a segment\'s ends the window shrinks '
+        + 'evenly, so smoothing is weakest there.</p></div>'
         + '<div class="smooth-fig-legend">'
         + '<span><i class="sf-key-true"></i>true movement</span>'
         + '<span><i class="sf-key-raw"></i>3D as triangulated</span>'
@@ -280,6 +385,9 @@ export function buildSmoothingWindowsFigure(opts) {
         + '<span><i class="sf-key-med"></i>after the median</span>'
         + '<span><i class="sf-key-out"></i>after the Gaussian</span>'
         + '<span><i class="sf-key-band"></i>window around one frame</span>'
+        + '<span><i class="sf-key-absent"></i>no 3D</span>'
+        + '<span><i class="sf-key-seg"></i>segment</span>'
+        + '<span><i class="sf-key-left"></i>too short, left as is</span>'
         + '</div>';
 
     var PARAM = { median: 'smoothMedianWindow', gaussian: 'smoothGaussianWindow' };
@@ -296,7 +404,7 @@ export function buildSmoothingWindowsFigure(opts) {
             Object.keys(params).forEach(function (id) { next[id] = params[id]; });
             next[PARAM[k]] = v;
             update(next);
-            if (opts.onWindow) opts.onWindow(PARAM[k], v);
+            if (opts.onParam) opts.onParam(PARAM[k], v);
         });
         pos.addEventListener('input', function () {
             stop(k);
@@ -317,6 +425,19 @@ export function buildSmoothingWindowsFigure(opts) {
                 if (state[k].pos >= N - 1) stop(k);
                 render(k);
             }, STEP_MS);
+        });
+    });
+
+    // Card 3's sliders: Max gap and Minimum segment length.
+    var gapCard = fig.querySelector('[data-stage="gaps"]');
+    [['.sf-gap', 'smoothMaxGap'], ['.sf-minseg', 'smoothMinSegment']].forEach(function (c) {
+        var input = gapCard.querySelector(c[0]);
+        input.addEventListener('input', function () {
+            var v = +input.value, next = {};
+            Object.keys(params).forEach(function (id) { next[id] = params[id]; });
+            next[c[1]] = v;
+            update(next);
+            if (opts.onParam) opts.onParam(c[1], v);
         });
     });
 
@@ -367,6 +488,16 @@ export function buildSmoothingWindowsFigure(opts) {
             render(c[0]);
         });
         cards.gaussian.querySelector('.smooth-fig-warn').hidden = !rawIntoGaussian;
+
+        var maxGap = params.smoothMaxGap == null ? GAP_DEFAULT.maxGap : Math.max(0, Math.floor(+params.smoothMaxGap) || 0);
+        var minSeg = params.smoothMinSegment == null ? GAP_DEFAULT.minSegment : Math.max(1, Math.floor(+params.smoothMinSegment) || 1);
+        gapCard.querySelector('small').textContent = 'max gap ' + maxGap + ' · minimum segment ' + minSeg
+            + ' · median ' + medShown + ', Gaussian ' + gauShown;
+        gapCard.querySelector('.sf-gap').value = String(Math.min(maxGap, GAP_SLIDER_MAX));
+        gapCard.querySelector('.sf-gap-val').textContent = maxGap + (maxGap === 1 ? ' frame' : ' frames');
+        gapCard.querySelector('.sf-minseg').value = String(Math.min(minSeg, GAP_SLIDER_MAX));
+        gapCard.querySelector('.sf-minseg-val').textContent = minSeg + (minSeg === 1 ? ' frame' : ' frames');
+        gapCard.querySelector('.smooth-fig-chart').innerHTML = gapChart(medShown, gauShown, maxGap, minSeg);
     }
 
     return { el: fig, update: update };

@@ -40,15 +40,15 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=079839f0f55a';
-import { getActiveSession, state, timeline } from './app-state.js?v=079839f0f55a';
-import { drawAllOverlays } from './rendering.js?v=079839f0f55a';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=079839f0f55a';
-import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=079839f0f55a';
-import { installModalGeometry } from './modal-geometry.js?v=079839f0f55a';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=079839f0f55a';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=079839f0f55a';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=079839f0f55a';
+} from './settings.js?v=1d644d94b5ec';
+import { getActiveSession, state, timeline } from './app-state.js?v=1d644d94b5ec';
+import { drawAllOverlays } from './rendering.js?v=1d644d94b5ec';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=1d644d94b5ec';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=1d644d94b5ec';
+import { installModalGeometry } from './modal-geometry.js?v=1d644d94b5ec';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=1d644d94b5ec';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=1d644d94b5ec';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=1d644d94b5ec';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -721,10 +721,10 @@ export function showSettingsModal(initialPanel) {
     smPanel.appendChild(smHint);
 
     // What the two windows do, redrawn as they are typed
-    // (`ui/smoothing-windows-figure.js`). Its Window sliders set the same
-    // working values and the matching field.
+    // (`ui/smoothing-windows-figure.js`). Its sliders set the same working
+    // values and the matching field.
     const smFigure = buildSmoothingWindowsFigure({
-        onWindow: function (id, value) {
+        onParam: function (id, value) {
             working.smoothing[id] = value;
             const def = smoothingDefs.find(function (d) { return d.id === id; });
             const field = def && smSection.body.querySelector('input[aria-label="' + def.label + '"]');
