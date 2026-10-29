@@ -5,7 +5,7 @@
  * Used by index.html for the additive merge path in handleAddSlp().
  */
 
-import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, Session } from '../pose/pose-data.js?v=c0ad2c96104b';
+import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, Session } from '../pose/pose-data.js?v=57f903c7a470';
 
 /**
  * Validate that incoming skeleton is compatible with existing session skeleton.

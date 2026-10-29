@@ -93,16 +93,12 @@ export function linkIdSwitchResults(results) {
     ran.forEach(function (cue) { idSwitchMarkers(results[cue]).forEach(function (m) { m.cue = cue; delete m.agree; }); });
     if (ran.length < 2) return;
     var tol = Math.max(1, Math.round(results[ran[0]].fps || 30));
-    var sameContact = function (x, m) {
-        if (Math.abs(x.frame - m.frame) <= tol) return true;
-        return x.startFrame != null && m.startFrame != null && x.startFrame <= m.frame + tol && m.startFrame <= x.frame + tol;
-    };
     ran.forEach(function (cue, i) {
         idSwitchPrimary(results[cue]).forEach(function (m) {
             for (var j = 0; j < i && !m.agree; j++) {
                 var hit = null;
                 idSwitchPrimary(results[ran[j]]).forEach(function (x) {
-                    if (!x.agree && samePair(x, m) && sameContact(x, m) && (!hit || Math.abs(x.frame - m.frame) < Math.abs(hit.frame - m.frame))) hit = x;
+                    if (!x.agree && samePair(x, m) && sameContact(x, m, tol) && (!hit || Math.abs(x.frame - m.frame) < Math.abs(hit.frame - m.frame))) hit = x;
                 });
                 if (hit) { m.agree = hit; hit.agree = m; }
             }
@@ -112,6 +108,40 @@ export function linkIdSwitchResults(results) {
 
 function samePair(a, b) {
     return (a.nameA === b.nameA && a.nameB === b.nameB) || (a.nameA === b.nameB && a.nameB === b.nameA);
+}
+
+/** 1 s, in frames of the first result listed (what "the same contact" allows either way). */
+function contactTolerance(results) {
+    var cue = ID_SWITCH_CUES.filter(function (c) { return hasRows(results[c]); })[0];
+    return Math.max(1, Math.round((cue && results[cue].fps) || 30));
+}
+
+function hasRows(r) { return !!(r && (r.ok || r.flags)); }
+
+/** Two change points at the same contact: ending within `tol` frames, or close spells overlapping give or take `tol`. */
+function sameContact(x, m, tol) {
+    if (Math.abs(x.frame - m.frame) <= tol) return true;
+    return x.startFrame != null && m.startFrame != null && x.startFrame <= m.frame + tol && m.startFrame <= x.frame + tol;
+}
+
+/**
+ * True for a row that stands for a PLACE to look at, not a scored encounter: a review-list row, or a check's
+ * row at a moment (`look`: on one camera, a candidate moment or an animal coming back after being out of
+ * sight). A place has its own fix: from the frame you are on to the end of the video (idSwitchFixPlan `place`).
+ */
+export function idSwitchIsPlace(m) {
+    return !!m && (m.cue === 'review' || !!(m.look && m.look.length));
+}
+
+/**
+ * The place a row of the tab stands for, or null: a review-list place first (the row itself, or the place a
+ * check's row is linked to, "on the review list"), else the row itself or its linked row when at a moment.
+ */
+export function idSwitchPlaceOf(m) {
+    if (!m) return null;
+    if (m.cue === 'review') return m;
+    if (m.agree && m.agree.cue === 'review') return m.agree;
+    return idSwitchIsPlace(m) ? m : idSwitchIsPlace(m.agree) ? m.agree : null;
 }
 
 /**
@@ -148,24 +178,30 @@ function linkedFrame(m, res) {
  * to the frame before its boundary. The change point at the other edge, when the
  * list shows one, is the fix's `partnerKey`: the same stretch, fixed by the same swap.
  *
- * A review-list row (`cue` 'review') is a place, not an encounter: its window
- * reaches on to just before the next place on the list (the end of the video
- * after the last), so a swap that undoes itself between two places can be fixed
- * from this row twice — once where the labels swap, again where they swap back.
+ * A place's own fix (`o.place`, always for a review-list row, `cue` 'review';
+ * see idSwitchIsPlace) is not an encounter's: it swaps from the boundary to the
+ * end of the video — later places fix their own stretches — and its window
+ * reaches on to just before the next place (the end of the video after the
+ * last), so a swap that undoes itself between two places can be fixed from this
+ * row twice — once where the labels swap, again where they swap back. The next
+ * place is the next row that stands for one, on any list (`o.results`, else
+ * `res` alone), not counting the row itself, its linked row, or a place of the
+ * same pair at the same contact (the same place, on another list).
  *
  * @param {object} m          a change point (a row of the ID Switches tab)
  * @param {object} res        the check result it came from
- * @param {{currentFrame:number, totalFrames:number, window?:number[]}} o  `window`: [first, last] frame
+ * @param {{currentFrame:number, totalFrames:number, window?:number[], place?:boolean, results?:object}} o
+ *   `window`: [first, last] frame; `place`: the place's own fix; `results`: every check's result, for the next place
  * @returns {?{key, partnerKey, nameA, nameB, from, to, start:'current'|'separate', edge:?number}}
  *   null when the stretch is empty. `edge` is the linked frame (null = session end / start).
  */
 export function idSwitchFixPlan(m, res, o) {
     var s = m.startFrame != null && m.startFrame <= m.frame ? m.startFrame : m.frame, e = m.frame;
-    var w = o.window || [s, e + 1];
-    if (m.cue === 'review') w = [w[0], Math.max(w[1], nextPlaceStart(m, res, o.totalFrames) - 1)];
+    var w = o.window || [s, e + 1], place = !!o.place || m.cue === 'review';
+    if (place) w = [w[0], Math.max(w[1], nextPlaceStart(m, o.results || { [m.cue || 'size']: res }, o.totalFrames) - 1)];
     var cur = o.currentFrame, here = cur != null && cur >= w[0] && cur <= w[1];
-    var split = here ? cur : e + 1, edge = linkedFrame(m, res), from, to;
-    if (m.kind === 'end') { from = edge == null ? 0 : edge + 1; to = split - 1; }
+    var split = here ? cur : e + 1, edge = place ? null : linkedFrame(m, res), from, to;
+    if (m.kind === 'end' && !place) { from = edge == null ? 0 : edge + 1; to = split - 1; }
     else { from = split; to = edge == null ? Math.max(0, (o.totalFrames || 0) - 1) : edge; }
     if (!(to >= from)) return null;
     var partner = edge == null ? null : idSwitchMarkers(res).find(function (x) {
@@ -175,13 +211,18 @@ export function idSwitchFixPlan(m, res, o) {
              from: from, to: to, start: here ? 'current' : 'separate', edge: edge };
 }
 
-/** Where the next place on `m`'s list starts (its first frame), or `totalFrames` after the last. */
-function nextPlaceStart(m, res, totalFrames) {
-    var next = Math.max(0, totalFrames || 0);
-    idSwitchMarkers(res).forEach(function (x) {
-        if (x.frame <= m.frame) return;
-        var xs = x.startFrame != null && x.startFrame <= x.frame ? x.startFrame : x.frame;
-        if (xs < next) next = xs;
+/** Where the next place after `m` starts (its first frame), on any of `results`, or `totalFrames` after the last. */
+function nextPlaceStart(m, results, totalFrames) {
+    var next = Math.max(0, totalFrames || 0), tol = contactTolerance(results);
+    ID_SWITCH_CUES.forEach(function (cue) {
+        var r = results[cue];
+        if (!hasRows(r)) return;
+        idSwitchPrimary(r).forEach(function (x) {
+            if (x.frame <= m.frame || x === m || x === m.agree || !idSwitchIsPlace(x)) return;
+            if (x.cue !== m.cue && samePair(x, m) && sameContact(x, m, tol)) return;   // this place, on another list
+            var xs = x.startFrame != null && x.startFrame <= x.frame ? x.startFrame : x.frame;
+            if (xs < next) next = xs;
+        });
     });
     return next;
 }
