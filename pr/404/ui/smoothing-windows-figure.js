@@ -4,7 +4,9 @@
 //
 // Both cards plot the same made-up trace: one node's x position over 40 frames
 // (a slow back-and-forth movement, dashed), as triangulation would give it with
-// a little jitter and two one-frame spikes (dots). Each card draws what its
+// a little jitter (rings), one one-frame spike (red) and, on the right, a fast
+// real movement: a quick dart up and back over a few frames, which too long a
+// window flattens (over-smoothing). Each card draws what its
 // stage makes of its input, the window around one frame (shaded), and for the
 // Gaussian the weights inside that window (a bell of stems). The median's
 // output is green in both cards, a line on the left and the Gaussian's input
@@ -17,18 +19,19 @@
 // example window instead, labelled as an example. The Gaussian
 // card's input is the median's output, as in the real pass, except when the
 // median is off and the Gaussian is on: then it is the raw trace, and the card
-// shows the spikes being spread into bumps (why the median runs first).
+// shows the spike being spread into a bump (why the median runs first).
 //
 // Depends on: pose/temporal-smoothing.js (`smoothSignalInto`, `normalizeWindow`,
 // `sigmaForWindow`). Colours come from `styles.css` (`.smooth-fig`).
 
-import { smoothSignalInto, normalizeWindow, sigmaForWindow } from '../pose/temporal-smoothing.js?v=81cf1144290e';
+import { smoothSignalInto, normalizeWindow, sigmaForWindow } from '../pose/temporal-smoothing.js?v=01a93ab59169';
 
 var N = 40;                              // frames in the trace
-var SPIKES = [[11, 13], [28, -13]];      // [frame, mm] one-frame spikes
+var SPIKES = [[11, 13]];                 // [frame, mm] one-frame spikes
+var FAST = { frame: 25, height: 16, sigma: 2 };     // fast real movement: a quick dart, mm and frames
 var EXAMPLE = { median: 5, gaussian: 9 };
 var MEDIAN_FOCUS = SPIKES[0][0];         // spike whose window card 1 shades and circles
-var GAUSSIAN_FOCUS = 20;                 // frame whose window card 2 shades
+var GAUSSIAN_FOCUS = FAST.frame;         // frame whose window card 2 shades
 
 // The true movement and the trace triangulation gives of it. The jitter is a
 // fixed pseudo-random sequence so the figure is the same every time.
@@ -38,7 +41,8 @@ var RAW = new Float64Array(N);
     var seed = 7;
     function rand() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
     for (var t = 0; t < N; t++) {
-        TRUTH[t] = 6 * Math.sin(2 * Math.PI * (t - 2) / 30);
+        TRUTH[t] = 6 * Math.sin(2 * Math.PI * (t - 2) / 30)
+            + FAST.height * Math.exp(-(t - FAST.frame) * (t - FAST.frame) / (2 * FAST.sigma * FAST.sigma));
         RAW[t] = TRUTH[t] + 8 * (rand() + rand() - 1);
     }
     SPIKES.forEach(function (s) { RAW[s[0]] = TRUTH[s[0]] + s[1]; });
@@ -108,6 +112,11 @@ function outNodes(values) {
     return s;
 }
 
+/** "fast move" beside the true path's peak at the fast movement. */
+function fastLabel() {
+    return '<text x="' + f1(px(FAST.frame) + 9) + '" y="' + f1(py(TRUTH[FAST.frame]) + 3) + '" class="sf-note">fast move</text>';
+}
+
 function chart(label, inner) {
     return '<svg viewBox="0 0 300 140" role="img" aria-label="' + label + '">'
         + '<line x1="' + X0 + '" y1="' + (Y1 + 3) + '" x2="' + X1 + '" y2="' + (Y1 + 3) + '" class="sf-axis"/>'
@@ -156,7 +165,8 @@ function medianChart(window, out) {
         + '<path d="' + path(out) + '" class="sf-out sf-out-median"/>'
         + dots(out, false, 'sf-med')
         + dots(RAW, true)
-        + SPIKES.map(function (sp) { return spikeArrow(sp[0], out); }).join(''));
+        + SPIKES.map(function (sp) { return spikeArrow(sp[0], out); }).join('')
+        + fastLabel());
 }
 
 function gaussianChart(window, input, out, inputHasSpikes) {
@@ -172,7 +182,8 @@ function gaussianChart(window, input, out, inputHasSpikes) {
         + '<path d="' + path(TRUTH) + '" class="sf-true"/>'
         + '<path d="' + path(out) + '" class="sf-out"/>'
         + dots(input, inputHasSpikes, inputHasSpikes ? 'sf-raw' : 'sf-med')
-        + outNodes(out));
+        + outNodes(out)
+        + fastLabel());
 }
 
 function tagline(window, example) {
@@ -189,7 +200,8 @@ export function buildSmoothingWindowsFigure() {
     fig.className = 'smooth-fig';
     fig.innerHTML =
         '<p class="smooth-fig-lead">One node\'s x position over 40 frames, made up for this sketch: the true '
-        + 'movement (dashed) and its 3D as triangulated (grey rings), with jitter and two one-frame spikes (red). The '
+        + 'movement (dashed), with one fast move on the right, and its 3D as triangulated (grey rings), with jitter and '
+        + 'a one-frame spike (red). The '
         + 'median\'s output (green) is the Gaussian\'s input, and the Gaussian\'s output is blue; both are computed '
         + 'with LUC3D\'s own filter and follow the windows you enter below. y and z, and every node, are filtered '
         + 'the same way, each on its own.</p>'
@@ -199,13 +211,14 @@ export function buildSmoothingWindowsFigure() {
         + '<p>Each frame takes the middle value of the frames in its window. The stems are the window around the '
         + 'left spike sorted by value: the middle one (green) is what that frame becomes, so a one-frame spike '
         + '(red) is dropped rather than averaged in. Real movement shorter than about half the window is erased '
-        + 'too, so keep it short for fast motion.</p></div>'
+        + 'too: raise the window and watch the fast move flatten.</p></div>'
         + '<div class="smooth-fig-col" data-stage="gaussian">'
         + '<div class="smooth-fig-name">2 · Gaussian window<small></small></div><div class="smooth-fig-chart"></div>'
-        + '<p>Runs on the median\'s output (green dots: the line on the left). A weighted average over the window: the frame itself counts most '
-        + 'and the weights fall off as a bell curve (stems). Removes the jitter the median leaves. A long window '
-        + 'also flattens real peaks: compare the blue line with the dashed true movement.</p>'
-        + '<p class="smooth-fig-warn" hidden>The median is off, so the Gaussian spreads each spike into a bump.</p></div>'
+        + '<p>Runs on the median\'s output (green dots: the line on the left). A weighted average over the window: '
+        + 'the frame itself counts most and the weights fall off as a bell curve (stems). Removes the jitter the '
+        + 'median leaves. A long window also flattens fast real movement: compare the blue line with the dashed '
+        + 'true movement at the fast move.</p>'
+        + '<p class="smooth-fig-warn" hidden>The median is off, so the Gaussian spreads the spike into a bump.</p></div>'
         + '</div>'
         + '<div class="smooth-fig-legend">'
         + '<span><i class="sf-key-true"></i>true movement</span>'
@@ -226,7 +239,7 @@ export function buildSmoothingWindowsFigure() {
         var medShown = mw || EXAMPLE.median;
         var medOut = run(RAW, 'median', medShown);
         // The real pass feeds the Gaussian the median's output; with only the
-        // Gaussian on, it gets the raw 3D, spikes and all.
+        // Gaussian on, it gets the raw 3D, spike and all.
         var rawIntoGaussian = !mw && !!gw;
         var gauIn = rawIntoGaussian ? RAW : medOut;
         var gauShown = gw || EXAMPLE.gaussian;

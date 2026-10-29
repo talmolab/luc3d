@@ -5,12 +5,12 @@
 // purgeTriangulationDataForGroup, the detach-reprojection helper every
 // grouping workflow needs after unlinking/removing a group.
 
-import { state, interactionManager, viewport3d, timeline } from './app-state.js?v=81cf1144290e';
-import { UnlinkedInstance } from '../pose/pose-data.js?v=81cf1144290e';
-import { getInstanceGroupsForFrame, updateTimelineForFrame } from '../pose/triangulation.js?v=81cf1144290e';
-import { drawAllOverlays } from './rendering.js?v=81cf1144290e';
-import { updateInfoPanel } from './info-panel.js?v=81cf1144290e';
-import { markDirty, setStatus } from '../import-export/save-load.js?v=81cf1144290e';
+import { state, interactionManager, viewport3d, timeline } from './app-state.js?v=01a93ab59169';
+import { UnlinkedInstance } from '../pose/pose-data.js?v=01a93ab59169';
+import { getInstanceGroupsForFrame, updateTimelineForFrame } from '../pose/triangulation.js?v=01a93ab59169';
+import { drawAllOverlays } from './rendering.js?v=01a93ab59169';
+import { updateInfoPanel } from './info-panel.js?v=01a93ab59169';
+import { markDirty, setStatus } from '../import-export/save-load.js?v=01a93ab59169';
 
 // ============================================
 // Track/Identity helpers (top-level so all code can access)
