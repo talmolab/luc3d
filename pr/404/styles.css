@@ -5488,6 +5488,7 @@ kbd {
 .smooth-fig .sf-raw { fill: none; stroke: var(--text-secondary); stroke-width: 1.1; }
 .smooth-fig .sf-spike { fill: var(--error-color); stroke: var(--bg-primary); stroke-width: 0.8; }
 .smooth-fig .sf-out { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.smooth-fig .sf-out-node { fill: none; stroke: #000; stroke-width: 1.2; }
 .smooth-fig .sf-out-median { stroke: var(--success-color); }
 .smooth-fig .sf-med { fill: var(--success-color); stroke: var(--bg-primary); stroke-width: 0.8; }
 .smooth-fig .sf-move { stroke: var(--text-secondary); stroke-width: 1.2; }
