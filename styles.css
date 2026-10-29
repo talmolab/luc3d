@@ -5474,6 +5474,7 @@ kbd {
 .smooth-fig .sf-key-true { width: 14px; border-top: 1.5px dashed var(--text-secondary); }
 .smooth-fig .sf-key-raw { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
 .smooth-fig .sf-key-spike { width: 6px; height: 6px; border-radius: 50%; background: var(--error-color); }
+.smooth-fig .sf-key-med { width: 14px; height: 2px; border-radius: 1px; background: var(--success-color); }
 .smooth-fig .sf-key-out { width: 14px; height: 2px; border-radius: 1px; background: var(--accent); }
 .smooth-fig .sf-key-band { width: 12px; height: 10px; background: var(--accent); opacity: 0.18; }
 
@@ -5484,6 +5485,8 @@ kbd {
 .smooth-fig .sf-raw { fill: var(--text-muted); stroke: var(--bg-primary); stroke-width: 0.8; }
 .smooth-fig .sf-spike { fill: var(--error-color); stroke: var(--bg-primary); stroke-width: 0.8; }
 .smooth-fig .sf-out { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.smooth-fig .sf-out-median { stroke: var(--success-color); }
+.smooth-fig .sf-med { fill: var(--success-color); stroke: var(--bg-primary); stroke-width: 0.8; }
 .smooth-fig .sf-move { stroke: var(--text-secondary); stroke-width: 1.2; }
 .smooth-fig .sf-arrowhead { fill: var(--text-secondary); }
 .smooth-fig .sf-note { font-size: 10px; fill: var(--text-muted); }

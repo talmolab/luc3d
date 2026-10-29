@@ -11304,8 +11304,10 @@ tooltip in `index.html`) say just that.
 Median window and the Gaussian window each do, as two cards (stage 1, stage 2).
 Both plot one made-up trace (one node's x over 40 frames: a slow movement,
 dashed, plus jitter and two one-frame spikes, as dots) and draw what the stage
-makes of its input (blue line), the window around one frame (shaded) and, for
-the Gaussian, the weights inside it (stems).
+makes of its input, the window around one frame (shaded) and, for the
+Gaussian, the weights inside it (stems). The median's output is green in both
+cards (its line on the left, the Gaussian's input dots on the right); the
+Gaussian's output is blue.
 
 **The lines are the real filter, not drawn by hand.** `update(params)` runs
 `smoothSignalInto` (`pose/temporal-smoothing.js`) on the trace with the panel's
