@@ -22,7 +22,7 @@
 // Depends on: pose/temporal-smoothing.js (`smoothSignalInto`, `normalizeWindow`,
 // `sigmaForWindow`). Colours come from `styles.css` (`.smooth-fig`).
 
-import { smoothSignalInto, normalizeWindow, sigmaForWindow } from '../pose/temporal-smoothing.js?v=342136a2031b';
+import { smoothSignalInto, normalizeWindow, sigmaForWindow } from '../pose/temporal-smoothing.js?v=d6537baf168d';
 
 var N = 40;                              // frames in the trace
 var SPIKES = [[11, 9], [28, -9]];        // [frame, mm] one-frame spikes
@@ -93,15 +93,6 @@ function dots(values, showSpikes, cls) {
     return s;
 }
 
-/** The median line's value at every frame, as open black circles. */
-function nodes(values) {
-    var s = '';
-    for (var t = 0; t < values.length; t++) {
-        s += '<circle cx="' + f1(px(t)) + '" cy="' + f1(py(values[t])) + '" r="2.6" class="sf-med-node"/>';
-    }
-    return s;
-}
-
 function chart(label, inner) {
     return '<svg viewBox="0 0 300 140" role="img" aria-label="' + label + '">'
         + '<line x1="' + X0 + '" y1="' + (Y1 + 3) + '" x2="' + X1 + '" y2="' + (Y1 + 3) + '" class="sf-axis"/>'
@@ -119,7 +110,7 @@ function medianChart(window, out) {
         + '<path d="' + path(TRUTH) + '" class="sf-true"/>'
         + '<path d="' + path(out) + '" class="sf-out sf-out-median"/>'
         + dots(RAW, true)
-        + nodes(out)
+        + dots(out, false, 'sf-med')
         + '<line x1="' + f1(px(t)) + '" y1="' + f1(py(RAW[t]) + 4) + '" x2="' + f1(px(t)) + '" y2="' + f1(py(out[t]) - 4)
         + '" class="sf-move" marker-end="url(#sf-arrow)"/>'
         + '<text x="' + f1(px(t) + 6) + '" y="' + f1(py(RAW[t]) + 4) + '" class="sf-note sf-note-spike">spike</text>');
