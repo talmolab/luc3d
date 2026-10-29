@@ -11325,7 +11325,8 @@ card's input is the median's output, except with the median off and the
 Gaussian on: then it is the raw trace and a note says the spike becomes a bump
 (why the median runs first). Colours come from `.smooth-fig` in `styles.css`.
 
-**Sliders.** Each card has a Window slider (3–31 frames) that redraws the card
+**Sliders.** Each card has a Window slider (1–31 frames; under 3 the filter
+leaves the 3D as it is, drawn as a 1-frame window) that redraws the card
 and calls `onWindow(id, value)` so the panel sets its working value and field
 (Apply then stores it), and a Frame slider with ▶ that slides the shaded window
 along the 40 frames (90 ms a frame; stops at the end, on a second click, or once

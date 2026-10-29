@@ -18,7 +18,7 @@
 // the windows as they are typed. A stage that is off (0) is drawn with an
 // example window instead, labelled as an example.
 //
-// Each card has two sliders. Window sets that stage's window size and reports
+// Each card has two sliders. Window (1 = no smoothing) sets that stage's window size and reports
 // it through `onWindow(id, value)`, so the panel can set its number field (and
 // the stage turns on). Frame slides the shaded window along the trace, and its
 // play button animates the slide: while a frame is picked, the output is drawn
@@ -153,9 +153,10 @@ function chart(label, inner, t) {
 /** An arrow from the spike at frame `t` to where the median puts it, and its label. */
 function spikeArrow(t, out) {
     var down = out[t] < RAW[t] ? 1 : -1, y0 = py(RAW[t]), y1 = py(out[t]);
+    var label = '<text x="' + f1(px(t) + 6) + '" y="' + f1(y0 + 4) + '" class="sf-note sf-note-spike">spike</text>';
+    if (Math.abs(y1 - y0) < 10) return label;     // a 1-frame window leaves it where it is
     return '<line x1="' + f1(px(t)) + '" y1="' + f1(y0 + 4 * down) + '" x2="' + f1(px(t)) + '" y2="' + f1(y1 - 4 * down)
-        + '" class="sf-move" marker-end="url(#sf-arrow)"/>'
-        + '<text x="' + f1(px(t) + 6) + '" y="' + f1(y0 + 4) + '" class="sf-note sf-note-spike">spike</text>';
+        + '" class="sf-move" marker-end="url(#sf-arrow)"/>' + label;
 }
 
 /**
@@ -213,7 +214,8 @@ function gaussianChart(window, input, out, inputHasSpikes, t, upto) {
 }
 
 function tagline(window, example) {
-    return example ? 'off (0) · example with ' + window + ' frames' : window + ' frames';
+    if (example) return 'off (0) · example with ' + window + ' frames';
+    return window === 1 ? '1 frame · no smoothing' : window + ' frames';
 }
 
 var SIZE_MAX = 31;     // the Window sliders' top; a longer typed window still shows, the slider sits at its end
@@ -224,7 +226,7 @@ function controls(stage) {
     var name = stage === 'median' ? 'median' : 'Gaussian';
     return '<div class="smooth-fig-ctrl">'
         + '<label class="sf-ctl"><span class="sf-ctl-name">Window</span>'
-        + '<input type="range" class="sf-size" min="3" max="' + SIZE_MAX + '" step="2" aria-label="' + name + ' window size (frames)">'
+        + '<input type="range" class="sf-size" min="1" max="' + SIZE_MAX + '" step="2" aria-label="' + name + ' window size (frames)">'
         + '<output class="sf-ctl-val sf-size-val"></output></label>'
         + '<div class="sf-ctl"><span class="sf-ctl-name">Frame</span>'
         + '<input type="range" class="sf-pos" min="0" max="' + (N - 1) + '" step="1" aria-label="Frame the ' + name + ' window is on">'
@@ -340,20 +342,23 @@ export function buildSmoothingWindowsFigure(opts) {
 
     function update(next) {
         params = next || {};
-        var mw = normalizeWindow(params.smoothMedianWindow);
-        var gw = normalizeWindow(params.smoothGaussianWindow);
-        var medShown = mw || EXAMPLE.median;
+        // The filter treats a window under 3 as off (`normalizeWindow`), which
+        // leaves the 3D as it is: drawn as a 1-frame window. Only 0 gets the example.
+        var mSet = +params.smoothMedianWindow || 0, gSet = +params.smoothGaussianWindow || 0;
+        var mw = normalizeWindow(mSet);
+        var gw = normalizeWindow(gSet);
+        var medShown = mw || (mSet > 0 ? 1 : EXAMPLE.median);
         var medOut = run(RAW, 'median', medShown);
         // The real pass feeds the Gaussian the median's output; with only the
         // Gaussian on, it gets the raw 3D, spike and all.
         var rawIntoGaussian = !mw && !!gw;
         var gauIn = rawIntoGaussian ? RAW : medOut;
-        var gauShown = gw || EXAMPLE.gaussian;
+        var gauShown = gw || (gSet > 0 ? 1 : EXAMPLE.gaussian);
         var gauOut = run(gauIn, 'gaussian', gauShown);
         data = { medShown: medShown, medOut: medOut, gauShown: gauShown, gauIn: gauIn, gauOut: gauOut,
             rawIntoGaussian: rawIntoGaussian };
 
-        [['median', medShown, !mw], ['gaussian', gauShown, !gw]].forEach(function (c) {
+        [['median', medShown, !(mSet > 0)], ['gaussian', gauShown, !(gSet > 0)]].forEach(function (c) {
             var el = cards[c[0]];
             el.querySelector('small').textContent = tagline(c[1], c[2]);
             el.querySelector('.sf-size').value = String(Math.min(c[1], SIZE_MAX));
