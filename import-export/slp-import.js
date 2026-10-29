@@ -13,6 +13,7 @@ import {
 import {
     getInstanceGroupsForFrame,
 } from '../pose/triangulation.js';
+import { hasRealCalibration } from '../pose/placeholder-cameras.js';
 import {
     parseSlpH5, parseSlpViaSleapIO, instanceMatchesPoints, parsePoints3dH5, pickFiles,
 } from './file-io.js';
@@ -1621,8 +1622,10 @@ export async function handleLoadSlpFile(slpFile) {
             await videoController.seekToFrame(firstFrame);
         }
 
-        // 3. Set up 3D viewport
-        if (state.session && state.session.cameras.length > 0) {
+        // 3. Set up 3D viewport — only for a real calibration. Placeholder
+        // cameras (a SLEAP file, or a project saved with no calibration) all
+        // sit at the origin; Load Calibration sets the viewport up later.
+        if (state.session && hasRealCalibration(state.session)) {
             if (viewport3d) {
                 viewport3d.cameras = state.session.cameras;
                 viewport3d.skeleton = skeleton;

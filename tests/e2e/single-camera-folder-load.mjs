@@ -5,21 +5,23 @@
  *
  * A SLEAP user's folder for one view is a video and its predictions `.slp`.
  * Without a calibration file this loader used to load the video and the poses
- * but create NO camera — right for a multi-camera folder waiting for its
- * calibration, wrong for one view, where single-camera Track All then refused
- * ("No session with cameras loaded"). Asserted:
+ * but create NO camera, so single-camera Track All refused ("No session with
+ * cameras loaded"). Every uncalibrated camera directory now gets a placeholder
+ * camera (`pose/placeholder-cameras.js`), and exactly one of them is a
+ * single-camera session. Asserted:
  *  1. `sess/Camera0/{Camera0.mp4, Camera0.slp}` picked as the session folder:
- *     one stand-in camera named after the directory, the view and the poses on
+ *     one placeholder camera named after the directory, the view and the poses on
  *     it, a status saying it is a single-camera session, and Track All runs
  *     SLEAP's tracker.
  *  2. The camera's OWN folder picked (`Camera0/` with the video and `.slp` at its
  *     top and a `calibration_images/` clip below): the folder is the camera,
  *     named after it, and the calibration clip is not loaded as a view.
  *  3. An `.slp` with no video (the loader's "Missing Video Files" popup answered
- *     with Continue): the camera is still created (File ▸ Load SLP's identity
- *     stand-in), so the session is single-camera from the start.
- *  4. Negative control — TWO camera directories and no calibration load as they
- *     always did: views, no cameras, the "load calibration" status.
+ *     with Continue): the camera is still created (the default-size
+ *     placeholder), so the session is single-camera from the start.
+ *  4. Negative control — TWO camera directories and no calibration: two views,
+ *     two placeholder cameras, not a single-camera session, and the "load
+ *     calibration" status.
  *
  * Track All's first-run dialog on one camera (ui/track-setup-modal.js) asks the
  * animal count and offers the image check, but shows no node weights.
@@ -91,7 +93,7 @@ try {
     console.log('\n1. A session folder with ONE camera directory and no calibration');
     const r1 = await page.evaluate(() => { const { mp4, file, SLP } = window.__fx;
         return window.__load([file([mp4], 'sess/Camera0/Camera0.mp4', 'video/mp4'), file([SLP], 'sess/Camera0/Camera0.slp')]); });
-    check(JSON.stringify(r1.cameras) === '["Camera0"]' && r1.single === 'Camera0', `one stand-in camera, named after the directory (${JSON.stringify(r1.cameras)})`);
+    check(JSON.stringify(r1.cameras) === '["Camera0"]' && r1.single === 'Camera0', `one placeholder camera, named after the directory (${JSON.stringify(r1.cameras)})`);
     check(JSON.stringify(r1.views) === '["Camera0"]' && JSON.stringify(r1.poseCams) === '["Camera0"]' && r1.poses === 60,
         `the view and all ${r1.poses} poses are on it (views ${JSON.stringify(r1.views)}, poses on ${JSON.stringify(r1.poseCams)})`);
     check(/single-camera session: no calibration needed/.test(r1.status), 'the status says it is a single-camera session: ' + r1.status.slice(0, 120));
@@ -126,12 +128,12 @@ try {
     check(JSON.stringify(r3.cameras) === '["Camera0"]' && r3.single === 'Camera0' && r3.poses === 60,
         `the camera exists without a video (${JSON.stringify(r3.cameras)}, ${r3.poses} poses, views ${JSON.stringify(r3.views)})`);
 
-    console.log('\n4. Negative control: TWO camera directories, no calibration — unchanged');
+    console.log('\n4. Negative control: TWO camera directories, no calibration — not single-camera');
     const r4 = await page.evaluate(() => { const { mp4, file, SLP_A, SLP_B } = window.__fx;
         return window.__load([file([mp4], 'sess/camA/camA.mp4', 'video/mp4'), file([SLP_A], 'sess/camA/camA.slp'),
                               file([mp4], 'sess/camB/camB.mp4', 'video/mp4'), file([SLP_B], 'sess/camB/camB.slp')]); });
-    check(r4.cameras.length === 0 && r4.single === null && r4.views.length === 2,
-        `views but no cameras until a calibration is loaded (${JSON.stringify(r4.cameras)}, ${r4.views.length} views)`);
+    check(JSON.stringify(r4.cameras) === '["camA","camB"]' && r4.single === null && r4.views.length === 2,
+        `two views, a placeholder camera each, not a single-camera session (${JSON.stringify(r4.cameras)}, ${r4.views.length} views, single ${r4.single})`);
     check(/no calibration — load separately/.test(r4.status), 'and the status still asks for the calibration: ' + r4.status.slice(0, 100));
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));

@@ -33,7 +33,8 @@ import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js
 import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js';
 import { startTrackerWorker } from './tracker-pool.js';
 import { passesDetectionFilter } from './detection-filter-stats.js';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js';
+import { loadAllLazyFrames, sweepLazyFrameWindows, showCalibrationRequiredPopup } from './triangulation.js';
+import { hasRealCalibration } from './placeholder-cameras.js';
 import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
 import { setColorByIdentity } from '../ui/color-by.js';
@@ -1300,6 +1301,20 @@ export async function trackCurrentFrame() {
         setStatus('No session with cameras loaded', 'error');
         return;
     }
+    if (singleCameraName(session)) {
+        // SLEAP's tracker is temporal: one frame on its own has nothing to match against.
+        // Before the calibration test: one camera needs none, so that refusal would mislead.
+        setStatus('Track Frame matches views of one frame; on a single camera use Track All', 'warning');
+        return;
+    }
+    // Cross-view tracking needs a real calibration, as Triangulate does.
+    // Placeholder cameras (a folder loaded with no calibration.toml,
+    // `pose/placeholder-cameras.js`) all sit at the world origin, so tracking
+    // on them would build groups from 3D with no baseline.
+    if (!hasRealCalibration(session)) {
+        showCalibrationRequiredPopup();
+        return;
+    }
     var fg = session.getFrameGroup(state.currentFrame);
     if (!fg) {
         setStatus('No frame data at frame ' + displayFrame(state.currentFrame), 'error');
@@ -1316,11 +1331,6 @@ export async function trackCurrentFrame() {
     // Honor per-view tracking inclusion from the Tracking Wizard: excluded views
     // are dropped from the association math entirely (still visible in the GUI).
     var trackedCameras = session.cameras.filter(function (c) { return isCameraTracked(c.name); });
-    if (singleCameraName(session)) {
-        // SLEAP's tracker is temporal: one frame on its own has nothing to match against.
-        setStatus('Track Frame matches views of one frame; on a single camera use Track All', 'warning');
-        return;
-    }
     if (trackedCameras.length < 2) {
         setStatus('Need at least 2 views included in tracking (check the Tracking Wizard ▸ Camera Views)', 'warning');
         return;
@@ -1491,6 +1501,14 @@ async function runTrackingPass(range) {
 
     if (session.cameras.length < 2) {
         setStatus('Need at least 2 cameras', 'warning');
+        return bail;
+    }
+    // Cross-view tracking needs a real calibration, as Triangulate does.
+    // Placeholder cameras (a folder loaded with no calibration.toml,
+    // `pose/placeholder-cameras.js`) all sit at the world origin, so tracking
+    // on them would build groups from 3D with no baseline.
+    if (!hasRealCalibration(session)) {
+        showCalibrationRequiredPopup();
         return bail;
     }
 

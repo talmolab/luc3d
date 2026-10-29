@@ -10,6 +10,7 @@ import {
     InstanceGroup, Session,
     toBoxedPoints3d, someValidPoint3d, pooledPoints3d,
 } from '../pose/pose-data.js';
+import { ensurePlaceholderCameras } from '../pose/placeholder-cameras.js';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
 } from '../pose/triangulation.js';
@@ -570,6 +571,27 @@ function sessionsToSave() {
     return state.sessions.length > 0 ? state.sessions : [state.session];
 }
 
+/** The views of `session`: on screen for the active one, its stash otherwise. */
+function sessionViewsForSave(session) {
+    if (session === state.session) return state.views || [];
+    return session._views || [];
+}
+
+/**
+ * The video files of `session`: by its `videoFileIndices`, or — for a session
+ * whose videos were loaded with File ▸ Load Videos, which tags `vf.sessionIdx`
+ * but does not index them — by that tag.
+ */
+function sessionVideoFilesForSave(session) {
+    var vfs = state.videoFiles || [];
+    var idxs = session.videoFileIndices || [];
+    if (idxs.length > 0) {
+        return idxs.map(function (i) { return vfs[i]; }).filter(Boolean);
+    }
+    var si = state.sessions.indexOf(session);
+    return vfs.filter(function (vf) { return vf && vf.sessionIdx === si; });
+}
+
 // ---- The Save progress card ----
 // Save used to say only "Saving..." / "Building SLP..." in the status bar while
 // it held the main thread for up to minutes on a large project — and in Brave,
@@ -650,6 +672,23 @@ async function buildSlpBytes(opts) {
     var seenTrackNames = new Set();
 
     var sessionsToExport = sessionsToSave();
+
+    // Every path below writes one video per `session.cameras` entry and picks
+    // the views, videos and poses to write by that list — a view or pose whose
+    // camera is missing is dropped without a word. An uncalibrated session
+    // could have none at all (a folder loaded without calibration.toml), and
+    // saved as an EMPTY .slp ("Saved (0.0 MB)"). Give it its placeholder
+    // cameras first. Sessions with a real calibration are left untouched, so
+    // their bytes do not change.
+    for (var _pci = 0; _pci < sessionsToExport.length; _pci++) {
+        var _pcs = sessionsToExport[_pci];
+        if (!_pcs) continue;
+        var _pcAdded = ensurePlaceholderCameras(_pcs, sessionViewsForSave(_pcs), sessionVideoFilesForSave(_pcs));
+        if (_pcAdded.length > 0) {
+            console.log('[save-slp] Session "' + (_pcs.name || _pci) + '" has no calibration: placeholder camera(s) for',
+                _pcAdded.join(', '));
+        }
+    }
 
     // Large lazy prediction sessions: build the file INCREMENTALLY via sleap-io.js's
     // streaming writer so the whole ~108k×N-frame graph is never resident and no

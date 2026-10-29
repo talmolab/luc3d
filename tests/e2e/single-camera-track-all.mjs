@@ -12,8 +12,8 @@
  *     dirty, turns node trails on at ¼ s (as after a multi-camera Track All),
  *     and says the body-size check is not run automatically on one camera
  *     (it is optional there; the menu runs it — see 3).
- *  2. Track Frame and Track Frame Range refuse on one camera, saying why, and
- *     change nothing.
+ *  2. Track Frame and Track Frame Range (the call and its dialog) refuse on one
+ *     camera, saying why — not asking for a calibration — and change nothing.
  *  3. A swap planted in the tracks (animals 0 and 1 exchanged for the last 26%)
  *     is found by Tracks ▸ Check ID Switches (Body Size) as a row; Fix switch
  *     names the TRACKS in its dialog and puts every detection back on its
@@ -179,6 +179,13 @@ try {
     check(/on a single camera use Track All/.test(await status()), 'Track Frame says to use Track All');
     const range = await page.evaluate(async () => { const t = await import('/pose/tracker.js'); return t.trackFrameRange(0, 300); });
     check(range.ok === false && /Track Frame Range is for multi-camera sessions/.test(await status()), 'Track Frame Range refuses, saying why');
+    // Its dialog refuses the same way, before opening, and does not ask for a calibration (one camera needs none).
+    await page.evaluate(() => { document.getElementById('statusText').textContent = ''; });
+    const dlgOpened = await page.evaluate(async () => { const m = await import('/ui/track-range-modal.js');
+        m.showTrackRangeModal({}); const el = document.querySelector('.track-range-modal'); if (el) el.closest('.multi-frame-modal-overlay').remove(); return !!el; });
+    const rangeMsg = await status();
+    check(!dlgOpened && /Track Frame Range is for multi-camera sessions/.test(rangeMsg) && !/calibration/i.test(rangeMsg),
+        `…and so does its dialog, without asking for a calibration (opened ${dlgOpened}: ${rangeMsg.slice(0, 90)})`);
     check(JSON.stringify(await page.evaluate(() => window.__tracks())) === JSON.stringify(tr), '…and neither changed a track');
 
     console.log('\n3. A planted swap: found, fixed on the tracks, undone');

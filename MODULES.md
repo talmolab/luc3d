@@ -947,17 +947,20 @@ against it. Each difference gets a `kind`:
 (`ui/calibration-notice.js`) does NOT branch on it — it lists only which
 sessions differ; the classification is for the console log and the tests.
 
-**Three deliberate details.** A session with NO cameras is excluded from the
-comparison and listed in `withoutCalibration` rather than counted as a third
-calibration — a per-camera folder load with no `.toml` would otherwise raise the
-modal on a perfectly consistent project. A camera whose rotation or translation
+**Three deliberate details.** A session with NO calibration — no cameras, or
+only placeholders (`hasRealCalibration` false: every camera has all-zero
+extrinsics, which is what a folder loaded with no `.toml` now gets) — is excluded
+from the comparison and listed in `withoutCalibration` rather than counted as a
+third calibration; it would otherwise raise the modal on a perfectly consistent
+project. A rig with only its reference camera at the origin is still compared. A camera whose rotation or translation
 will not read (NaN, wrong length) is DROPPED, so one malformed entry cannot
 masquerade as a divergence. And only cameras whose LENS matches contribute to the
 frame solve: a re-focused camera's extrinsics are not a statement about the origin.
 
 **Imports from project modules.** `./origin-frame.js` (`rotationAboutAxis`,
 `rotationMatrixToAxisAngle`, `normalize3`) — an `rvec` converts by handing
-`rotationAboutAxis` the vector and its own magnitude. DOM-free.
+`rotationAboutAxis` the vector and its own magnitude; `./placeholder-cameras.js`
+(`hasRealCalibration`). DOM-free.
 
 **Imported by.** `ui/calibration-notice.js`.
 
@@ -965,6 +968,64 @@ frame solve: a re-focused camera's extrinsics are not a statement about the orig
 app's own `buildOriginFrame` + `rebaseExtrinsics`, so the detector and the
 re-base cannot drift apart silently) and
 `tests/e2e/multi-session-calibration-notice.mjs` (the real calibrations off disk).
+
+---
+
+### pose/placeholder-cameras.js
+
+**Purpose.** The stand-in `Camera` a view gets when there is no calibration, and
+the rule that every view and every 2D camera key of an UNCALIBRATED session has
+one. The `.slp` writer (`buildSlpLabelsAllViews`) writes one video per
+`session.cameras` entry and skips any 2D instance whose camera is not in that
+list, and the save paths choose the views and videos to write by the same list —
+so a session with no cameras saved as an empty file ("Saved (0.0 MB)") and
+reopened with no views and no poses. A folder loaded with no `calibration.toml`
+was exactly that.
+
+**The placeholder** is the camera File ▸ Load Videos has always made:
+`rvec = tvec = [0,0,0]`, no distortion, f = 600, principal point at the image
+centre, sized from the video (640×480 when unknown). The app already reads that
+shape as "no calibration" (`ui/view-align-modal.js` `isCalibrated`,
+`ui/sessions-panes.js` `originHasCalib`, Triangulate's `sessionHasCalibration()`
+gate). No loader sets up the 3D viewer for placeholders only (folder loaders,
+`handleLoadSlpFile`, `handleLoadProjectSlpLazy`), tracking refuses with the
+Calibration Required popup, a new group is not auto-triangulated
+(`reTriangulateGroup`), and `handleLoadCalibration` replaces them when a real
+calibration is loaded.
+
+**Key exports.**
+- `makePlaceholderCamera(name, width?, height?)`.
+- `isPlaceholderCamera(cam)` — all-zero rotation AND translation (a 3×3
+  rotation matrix is calibrated).
+- `hasRealCalibration(session)` — any non-placeholder camera. Same rule as
+  `pose/triangulation.js` `sessionHasCalibration()` (which takes no argument and
+  reads `state.session`); this one takes any session and needs no app state.
+- `cameraNamesInUse(session, views?, videoFiles?)` — views (on-screen order),
+  then videos (`assignedCamera || name`), then 2D keys: frame-group instances
+  and unlinked instances (non-empty lists only), instance-group members, a lazy
+  loader's per-camera stores (`labelsByCam`).
+- `ensurePlaceholderCameras(session, views?, videoFiles?)` — appends a
+  placeholder for each name in use with no camera and assigns each unassigned
+  video to the camera named after it; returns the names added. **Does nothing
+  to a session with a real calibration**: a stand-in at the world origin would
+  join triangulation and corrupt the 3D.
+- `PLACEHOLDER_FOCAL`, `PLACEHOLDER_DEFAULT_SIZE`.
+
+**Imports from project modules.** `./pose-data.js` (`Camera`). DOM-free and
+state-free (callers pass the session's views and videos), so it loads under Node.
+
+**Imported by.** `loading/session-loader.js` (per-camera and single-SLP folder
+loaders; `handleLoadProjectSlpLazy`'s 3D gate), `import-export/save-load.js`
+(`buildSlpBytes`, for every session before writing), `import-export/slp-import.js`
+(`handleLoadSlpFile`'s 3D gate), `pose/calibration-compare.js` (placeholder-only
+sessions are not compared), `pose/tracker.js` and `ui/track-range-modal.js`
+(tracking needs a real calibration).
+
+**Tests.** `tests/test-placeholder-cameras.mjs`;
+`tests/e2e/nocalib-folder-save-reopen.mjs` (per-camera folder with no `.toml`:
+load → Track All refuses → annotate → Save As → File ▸ Open with the videos;
+deferred videos; a hand-built camera-less session; the single-SLP folder loader
+and its reopen).
 
 ---
 
@@ -1676,8 +1737,8 @@ session graph that holds them.
 
 **Imported by.** `demo-data.js`; `pose/` — `cross-view-tracker.js`,
 `id-switch-check.js`, `initialization.js`, `lazy-residency.js`,
-`origin-rebase.js`, `plane-data.js`, `plane-fit.js`, `tracker.js`,
-`tracker-worker.js`, `triangulation.js`, `triangulation-core.js`,
+`origin-rebase.js`, `placeholder-cameras.js`, `plane-data.js`, `plane-fit.js`,
+`tracker.js`, `tracker-worker.js`, `triangulation.js`, `triangulation-core.js`,
 `triangulation-pool.js`, `triangulation-worker.js`; `import-export/` —
 `file-io.js`, `save-load.js`, `skeleton-json.js`, `slp-import.js`,
 `slp-merge.js`, `slp-streaming-write.js`; `loading/session-loader.js`; `ui/` —
@@ -2031,8 +2092,14 @@ drifts upward.
   array).
 - `./triangulation.js` — `computeFundamentalMatrix`, `triangulatePointDLT`,
   `triangulatePoints`, `reprojectPoint`, `reprojectPoints`,
-  `computeInstanceDistanceTo`, `hungarianAlgorithm`, and `loadAllLazyFrames` /
-  `sweepLazyFrameWindows` (the Track All sweeps).
+  `computeInstanceDistanceTo`, `hungarianAlgorithm`, `loadAllLazyFrames` /
+  `sweepLazyFrameWindows` (the Track All sweeps), and
+  `showCalibrationRequiredPopup`.
+- `./placeholder-cameras.js` — `hasRealCalibration`: Track This Frame and
+  `runTrackingPass` (Track All, Track Frame Range) refuse with the Calibration
+  Required popup when every camera is a placeholder (a folder loaded with no
+  calibration), as Triangulate does — cross-view tracking on cameras that all
+  sit at the origin would build groups from 3D with no baseline.
 - `./cross-view-tracker.js` — `CrossViewTracker`, `Detection`.
 - `./run-state.js` — `noteTrackRun` (after `trackCurrentFrame`'s and
   `runTrackingPass`'s run): the blue Track button.
@@ -3443,7 +3510,9 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   reprojected instances, and `state.triangulationResults`; both Triangulate All
   paths and Group by Track call it before they start),
   `reTriangulateGroup` (preserves the group's existing method via
-  `resolveTriangulationMethod`),
+  `resolveTriangulationMethod`; the auto-triangulation of a group created by
+  Shift+G — does nothing without a real calibration, `sessionHasCalibration()`,
+  so placeholder cameras never produce 3D that would be saved and exported),
   `triangulateCurrentFrame(method)`, `triangulateAllFrames(method)`
   (`method` defaults to `'dlt'`), `sessionHasCalibration`,
   `showCalibrationRequiredPopup`,
@@ -10308,7 +10377,9 @@ window (e.g. around a known ID switch) while iterating on settings.
 **Imports from project modules.** `ui/app-state.js` (`state`,
 `getActiveSession`), `import-export/save-load.js` (`setStatus`),
 `pose/tracker.js` (`trackFrameRange`, `trackableFrameBounds`,
-`getTrackerNumAnimals`, `setTrackerNumAnimals`), `ui/settings.js`
+`getTrackerNumAnimals`, `setTrackerNumAnimals`), `pose/placeholder-cameras.js`
+(`hasRealCalibration` — with placeholder cameras only, the dialog does not open
+and the status says tracking needs a calibration), `ui/settings.js`
 (`getNodeWeight`, `updateNodeWeights`, `getTrackingThresholdDefs`,
 `updateTrackingThresholds`), `ui/track-setup-modal.js`
 (`buildNodeWeightFields`, `buildImageCheckFields`, `IMAGE_CHECK_IDS`; a leaf).
@@ -12435,8 +12506,9 @@ filesystem enumeration, decoder rebuild.
   fps readout's `title`; the estimate is kept as `videoFrameRate` when it
   differs by > 1%); views follow campy's camera order (the calibration's own
   camera list keeps its order); each camera loads the file at campy's `video`
-  path; with no calibration, views are named after campy's cameras, not the
-  video stem (campy's are all `0.mp4`); the single-SLP loader takes videos from
+  path; with no calibration, views are named after campy's cameras (as every
+  uncalibrated camera folder's view is, never by video stem — campy's are all
+  `0.mp4`); the single-SLP loader takes videos from
   session.json when there is no `videos/` and reads the root `.slp` over
   campy-live-export's `points3d.h5`; the load's final status gains the
   warnings (`withCampyWarnings`). `forceVideoSelectionWithFolder`'s folder
@@ -12495,15 +12567,16 @@ view, which would pin the whole camera buffer and make any structured clone of
 the instance copy all of it.
 
 **One camera, no calibration = a single-camera session.** Without a calibration
-file `handleLoadSessionFolderPerCamera` loads every camera directory's video and
-poses but creates NO camera, so a multi-camera folder waits for File ▸ Load
-Calibration. With exactly ONE camera directory that is a single-camera session
-instead: a SLEAP predictions file and its video, which need no calibration.
-- **The stand-in camera:** the directory gets a camera named after it, the same
-  stand-in File ▸ Load SLP gives a one-video file. It is sized to the video by
-  the video step, or Load SLP's identity 640x480 one when there is no video or
+file `handleLoadSessionFolderPerCamera` gives every camera directory with a video
+or a `.slp` a placeholder camera (`pose/placeholder-cameras.js`), with 3D off
+until File ▸ Load Calibration. With exactly ONE such directory that is a
+single-camera session: a SLEAP predictions file and its video, which need no
+calibration.
+- **Its camera is the directory's placeholder,** named after it, sized to the
+  video by the video step, or the default 640x480 one when there is no video or
   videos are deferred. The view and the poses are on it, so single-camera Track
-  All (`pose/single-camera-tracking.js`) runs.
+  All (`pose/single-camera-tracking.js`, `session.cameras.length === 1`) runs,
+  and the status says it is a single-camera session.
 - **The camera's own folder picked:** a picked folder with no camera
   subdirectories but a video or `.slp` at its top IS one camera, named after
   the folder. Videos under a `calibration_images/` subfolder
@@ -12619,7 +12692,28 @@ neither step (`tests/e2e/lazy-reopen-group-identities.mjs`).
 in, and queued behind the skeleton prompt (as its `onDone`) so two modals never
 stack. See `ui/calibration-notice.js`.
 
+**No calibration → placeholder cameras, so the folder can be saved.** A folder
+loaded with no `calibration.toml` (and nothing embedded) gets one PLACEHOLDER
+camera per view (`pose/placeholder-cameras.js`: all-zero extrinsics, f = 600,
+sized from the video — the shape Load Videos always made). Per-camera loader: the
+view, the video's `assignedCamera` and the folder's 2D are all keyed by the
+camera directory's name (campy's camera name when it names one); the camera is
+made in the video loop when the video decodes, else after it (deferred, failed or
+missing video), and the cameras are then put in folder order (the order they are
+written and reopened in). Single-SLP loader: `ensurePlaceholderCameras` after the video
+loop (after the campy step, which compares the real calibration names), and a
+recovered EMBEDDED calibration of placeholders only sets `hasCalibration` false,
+so 3D stays off on reopen — as in `handleLoadProjectSlpLazy`. Before, both loaders created NO camera: the `.slp`
+writer writes one video per `session.cameras` entry and drops every pose whose
+camera is missing, so Save wrote an empty file ("Saved (0.0 MB)"), and the
+per-camera loader named views by video stem — `cam1/video.mp4` and
+`cam2/video.mp4` were both `video`, and the folder's own poses (`cam1`, `cam2`)
+reached no view. A placeholder is never added to a session that has a real
+calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
+
 **Imports from project modules.**
+- `../pose/placeholder-cameras.js` (`makePlaceholderCamera`,
+  `hasRealCalibration`, `ensurePlaceholderCameras`),
 - `./calibration-pick.js` (`REBASED_CALIBRATION_NAME`, `pickCalibrationFile`),
   `./percam-slp-choice.js` (`chooseCameraSlp`), `./video-file-pick.js`,
   `./video-codec-diagnosis.js` (`videoLoadFailureText`),
@@ -14369,7 +14463,17 @@ loading-overlay/status-text UI helpers.
   decoder to size it, so `state.totalFrames` comes from the last labeled frame
   (`adoptLabeledFrameCount`), the view opens on the first, and the status line
   says to attach videos via File ▸ Load Videos.
-- `buildSlpBytes` (internal) assembles the multi-session SLP. **When EVERY
+- `buildSlpBytes` (internal) assembles the multi-session SLP. **First, every
+  UNCALIBRATED session gets a placeholder camera for each view, video and 2D
+  camera key that has none** (`ensurePlaceholderCameras`, with
+  `sessionViewsForSave` — `state.views` for the active session, its `_views`
+  stash otherwise — and `sessionVideoFilesForSave` — its `videoFileIndices`, or
+  the `vf.sessionIdx` tag Load Videos leaves). Every path below writes one video
+  per `session.cameras` entry and drops any view or pose whose camera is
+  missing, so a session with none (a folder loaded without calibration.toml)
+  used to save as an EMPTY file. A session with a real calibration is never
+  touched (`ensurePlaceholderCameras` returns early; `tests/test-placeholder-cameras.mjs`
+  §5), so what it writes does not change. **When EVERY
   session in `state.sessions` has an open `lazyLoader`, it routes to the
   memory-bounded streaming path** — `buildSessionSlpBytesStreaming`
   (`import-export/slp-streaming-write.js`) for a single lazy session, or
@@ -14484,6 +14588,7 @@ project save/reload — matching the SLP import path in `slp-import.js`.
 
 **Imports from project modules.**
 - `../pose/pose-data.js`, `../pose/triangulation.js`,
+  `../pose/placeholder-cameras.js` (`ensurePlaceholderCameras`),
   `../ui/browser-hints.js` (`fileSystemAccessHint` — `saveProjectSlp`, the
   download fallback when there is no save-file picker, says why and how to
   enable it in Brave), `../loading/video.js`, `../demo-data.js`, `./file-io.js`,
@@ -14707,6 +14812,9 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
 **Imports from project modules.**
 - `../pose/pose-data.js` (incl. `lazyPlaceholderXY`, `markPoints3dFromFile`),
   `../pose/triangulation.js` (`getInstanceGroupsForFrame`),
+  `../pose/placeholder-cameras.js` (`hasRealCalibration` — `handleLoadSlpFile`
+  sets up the 3D viewer only for a real calibration, not for the placeholder
+  cameras of a SLEAP file or of a project saved without one),
   `../pose/lazy-residency.js` (`dropGroupDerivedReprojections`), `./file-io.js`,
   `./slp-merge.js`, `../loading/video.js`, `../ui/app-state.js`,
   `../loading/session-loader.js`, `./save-load.js`,
