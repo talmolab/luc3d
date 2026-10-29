@@ -4,7 +4,7 @@
  * (ui/smoothing-windows-figure.js).
  *
  * Asserted, in the real Settings ▸ Temporal Smoothing:
- *  1. Two cards (median, Gaussian), each with a chart; with both windows off
+ *  1. Three cards (median, Gaussian, gaps), each with a chart; with both windows off
  *     (the default) each is labelled as an example.
  *  2. Typing a median window relabels its card and widens its shaded window;
  *     the blue line drops the spike (its point at the spike frame sits well
@@ -14,6 +14,10 @@
  *  4. Each card's Window slider (down to 1 frame) sets the stage's window and the matching field,
  *     and Apply stores it; the Frame slider moves the shaded window and fades
  *     the output after that frame; ▶ slides the window forward and pauses.
+ *  5. The gaps card: at the default Max gap 5 / Minimum segment 5 its trace is
+ *     three segments, the middle 3-frame one left as is; Max gap 7 merges them
+ *     into one; Minimum segment 2 smooths the short one; both sliders set their
+ *     fields.
  *
  * Run: node tests/e2e/smoothing-windows-figure.mjs
  */
@@ -71,7 +75,7 @@ try {
 
     console.log('1. defaults');
     const d = await read();
-    check(d.cards && d.charts === 2, 'two cards with a chart each');
+    check(d.cards && d.charts === 3, 'three cards with a chart each (median, Gaussian, gaps)');
     check(/example with 5 frames/.test(d.medTag) && /example with 9 frames/.test(d.gauTag), `both labelled as examples (${d.medTag} | ${d.gauTag})`);
     check(!d.warn, 'no spike note with both off');
 
@@ -129,6 +133,25 @@ try {
     check(sl.faded > 0 && sl.posLabel === '31 / 40', `output after the frame faded (${sl.faded} marks, ${sl.posLabel})`);
     check(sl.playing === 'true' && sl.advanced && sl.paused, 'play slides the window forward, a second click pauses it');
     check(sl.stored === 11, `Apply stores the slider's window (${sl.stored})`);
+
+    console.log('5. gaps card');
+    await page.evaluate(() => { document.getElementById('menuSettings').click(); document.querySelector('.settings-nav-item[data-panel="smoothing"]').click(); });
+    const gp = await page.evaluate(() => {
+        const card = document.querySelector('.smooth-fig [data-stage="gaps"]');
+        const set = (el, v) => { el.value = String(v); el.dispatchEvent(new Event('input')); };
+        const field = (l) => document.querySelector(`.settings-panel[data-panel="smoothing"] input[aria-label="${l}"]`);
+        const bars = () => ({ all: card.querySelectorAll('rect.sf-seg').length, short: card.querySelectorAll('rect.sf-seg-short').length });
+        const out = { start: bars() };
+        set(card.querySelector('.sf-gap'), 7);
+        out.merged = bars(); out.gapField = field('Max gap to smooth across (frames)').value;
+        set(card.querySelector('.sf-gap'), 5);
+        set(card.querySelector('.sf-minseg'), 2);
+        out.minSeg2 = bars(); out.minField = field('Minimum segment length (frames)').value;
+        return out;
+    });
+    check(gp.start.all === 3 && gp.start.short === 1, `defaults: 3 segments, 1 left as is (${JSON.stringify(gp.start)})`);
+    check(gp.merged.all === 1 && gp.gapField === '7', `Max gap 7 merges them into one and sets the field (${JSON.stringify(gp.merged)}, ${gp.gapField})`);
+    check(gp.minSeg2.all === 3 && gp.minSeg2.short === 0 && gp.minField === '2', `Minimum segment 2 smooths the short one (${JSON.stringify(gp.minSeg2)}, ${gp.minField})`);
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

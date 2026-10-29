@@ -2516,7 +2516,8 @@ no UI imports, so the module stays unit-testable in plain Node.
 (`hasSmoothed3d`, `hasRemovedSmoothing`),
 `import-export/smoothing-metadata.js` (`hasSmoothed3d`, `noteSmoothedFrames`),
 `ui/smoothing-windows-figure.js` (`smoothSignalInto`, `normalizeWindow`,
-`sigmaForWindow`, to draw the Settings figure with the real filter).
+`sigmaForWindow`, `buildSegments`, to draw the Settings figure with the real
+filter).
 
 **Tests.** `tests/test-temporal-smoothing.mjs` (`smoothFrame` is checked bit
 for bit against the all-frames pass on every frame of noisy fixtures with
@@ -9302,7 +9303,8 @@ tracking and greys the row), and **Tracking Thresholds** (one field per
 #134 — one **Filter Parameters** section rendering `getSmoothingParamDefs()`:
 median window, Gaussian window, max gap, minimum segment, under a figure from
 `ui/smoothing-windows-figure.js` that the two window fields redraw through
-`onEdit`, and whose Window sliders set those fields back through `onWindow`. Its own panel because
+`onEdit`, and whose sliders set the window, max gap and minimum segment fields
+back through `onParam`. Its own panel because
 it is not a tracking parameter — it runs after triangulation, on 3D the tracker
 has finished with. A note warns that raising the reprojection-error threshold
 creates more gaps, hence more gap edges where the filter is least accurate. The
@@ -11330,15 +11332,25 @@ Gaussian on: then it is the raw trace and a note says the spike becomes a bump
 
 **Sliders.** Each card has a Window slider (1–31 frames; under 3 the filter
 leaves the 3D as it is, drawn as a 1-frame window) that redraws the card
-and calls `onWindow(id, value)` so the panel sets its working value and field
+and calls `onParam(id, value)` so the panel sets its working value and field
 (Apply then stores it), and a Frame slider with ▶ that slides the shaded window
 along the 40 frames (90 ms a frame; stops at the end, on a second click, or once
 the figure leaves the page). While a frame is picked, that stage's output is
 solid up to it and faint after it, with a ring on its value.
 
-**Key exports.** `buildSmoothingWindowsFigure({ onWindow })` → `{ el, update(params) }`.
+**Card 3, gaps and segments** (full width, below the two): Max gap and Minimum
+segment length on its own 60-frame trace (a 2-frame hole, a 7-frame and a
+6-frame absence with a 3-frame stretch between them; the node comes back 12 mm
+away after the 7-frame one). It runs both stages at the windows the other cards
+show over the segments `buildSegments` cuts, as the real pass does, and draws
+each absence (labelled hole or split), the output per segment (grey where too
+short to smooth) and the segments as bars. Its Max gap (0–15) and Min segment
+(1–15) sliders report through `onParam` like the Window sliders.
 
-**Imports.** `pose/temporal-smoothing.js`. **Imported by** `ui/settings-modal.js`.
+**Key exports.** `buildSmoothingWindowsFigure({ onParam })` → `{ el, update(params) }`.
+
+**Imports.** `pose/temporal-smoothing.js` (`smoothSignalInto`, `normalizeWindow`,
+`sigmaForWindow`, `buildSegments`). **Imported by** `ui/settings-modal.js`.
 
 **Tests.** `tests/e2e/smoothing-windows-figure.mjs`.
 

@@ -5491,6 +5491,20 @@ kbd {
 .smooth-fig .sf-out { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
 .smooth-fig .sf-out-node { fill: none; stroke: #000; stroke-width: 1.2; }
 .smooth-fig .sf-ahead { opacity: 0.22; }
+.smooth-fig .sf-out.sf-left { stroke: var(--text-muted); }
+.smooth-fig .sf-absent { fill: var(--text-muted); opacity: 0.08; }
+.smooth-fig .sf-absent.sf-absent-split { fill: var(--warning-color); opacity: 0.14; }
+.smooth-fig .sf-note.sf-note-split { fill: var(--warning-color); }
+.smooth-fig .sf-seg { fill: var(--accent); }
+.smooth-fig .sf-seg.sf-seg-short { fill: var(--text-muted); }
+.smooth-fig .sf-key-absent { width: 12px; height: 10px; background: var(--warning-color); opacity: 0.35; }
+.smooth-fig .sf-key-seg { width: 14px; height: 5px; border-radius: 2px; background: var(--accent); }
+.smooth-fig .sf-key-left { width: 14px; height: 2px; border-radius: 1px; background: var(--text-muted); }
+
+/* Card 3 (gaps and segments) spans both columns, with a wider, shorter chart. */
+.smooth-fig-wide { margin-top: 10px; }
+.smooth-fig-wide svg { max-height: 300px; }
+.smooth-fig .smooth-fig-wide .sf-ctl-name { width: 96px; white-space: nowrap; }
 .smooth-fig .sf-current { fill: none; stroke: var(--text-primary); stroke-width: 1.4; }
 
 .smooth-fig-ctrl {
