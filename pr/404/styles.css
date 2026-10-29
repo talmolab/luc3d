@@ -5481,6 +5481,9 @@ kbd {
 .smooth-fig .sf-axis { stroke: var(--border-color); stroke-width: 1; }
 .smooth-fig .sf-band { fill: var(--accent); opacity: 0.16; }
 .smooth-fig .sf-weight { stroke: var(--accent); stroke-width: 1.5; opacity: 0.55; }
+.smooth-fig .sf-rank { stroke: var(--text-muted); stroke-width: 1.5; opacity: 0.7; }
+.smooth-fig .sf-rank-mid { stroke: var(--success-color); stroke-width: 2.5; opacity: 1; }
+.smooth-fig .sf-rank-spike { stroke: var(--error-color); opacity: 0.85; }
 .smooth-fig .sf-true { fill: none; stroke: var(--text-secondary); stroke-width: 1.2; stroke-dasharray: 4 3; opacity: 0.7; }
 .smooth-fig .sf-raw { fill: var(--text-muted); stroke: var(--bg-primary); stroke-width: 0.8; }
 .smooth-fig .sf-spike { fill: var(--error-color); stroke: var(--bg-primary); stroke-width: 0.8; }

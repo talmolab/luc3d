@@ -22,12 +22,12 @@
 // Depends on: pose/temporal-smoothing.js (`smoothSignalInto`, `normalizeWindow`,
 // `sigmaForWindow`). Colours come from `styles.css` (`.smooth-fig`).
 
-import { smoothSignalInto, normalizeWindow, sigmaForWindow } from '../pose/temporal-smoothing.js?v=d6537baf168d';
+import { smoothSignalInto, normalizeWindow, sigmaForWindow } from '../pose/temporal-smoothing.js?v=920bd7f7c770';
 
 var N = 40;                              // frames in the trace
-var SPIKES = [[11, 9], [28, -9]];        // [frame, mm] one-frame spikes
+var SPIKES = [[11, 13], [28, -13]];      // [frame, mm] one-frame spikes
 var EXAMPLE = { median: 5, gaussian: 9 };
-var MEDIAN_FOCUS = SPIKES[0][0];         // frame whose window card 1 shades
+var MEDIAN_FOCUS = SPIKES[0][0];         // spike whose window card 1 shades and circles
 var GAUSSIAN_FOCUS = 20;                 // frame whose window card 2 shades
 
 // The true movement and the trace triangulation gives of it. The jitter is a
@@ -39,7 +39,7 @@ var RAW = new Float64Array(N);
     function rand() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
     for (var t = 0; t < N; t++) {
         TRUTH[t] = 6 * Math.sin(2 * Math.PI * (t - 2) / 30);
-        RAW[t] = TRUTH[t] + 3.4 * (rand() + rand() - 1);
+        RAW[t] = TRUTH[t] + 8 * (rand() + rand() - 1);
     }
     SPIKES.forEach(function (s) { RAW[s[0]] = TRUTH[s[0]] + s[1]; });
 })();
@@ -101,19 +101,47 @@ function chart(label, inner) {
         + '</svg>';
 }
 
+/** An arrow from the spike at frame `t` to where the median puts it, and its label. */
+function spikeArrow(t, out) {
+    var down = out[t] < RAW[t] ? 1 : -1, y0 = py(RAW[t]), y1 = py(out[t]);
+    return '<line x1="' + f1(px(t)) + '" y1="' + f1(y0 + 4 * down) + '" x2="' + f1(px(t)) + '" y2="' + f1(y1 - 4 * down)
+        + '" class="sf-move" marker-end="url(#sf-arrow)"/>'
+        + '<text x="' + f1(px(t) + 6) + '" y="' + f1(y0 + 4) + '" class="sf-note sf-note-spike">spike</text>';
+}
+
+/**
+ * The median's counterpart of the Gaussian's weight stems: the window around
+ * frame `t` sorted by value, as stems rising from the bottom of the band (lowest
+ * value on the left, height relative to the window's lowest). The middle one is
+ * the median (green), the value the filter writes at `t`; a spike is red.
+ */
+function medianStems(t, window) {
+    var r = shownRadius(window, t), order = [], H = 26, lo = Infinity, hi = -Infinity;
+    for (var d = -r; d <= r; d++) {
+        order.push(t + d);
+        lo = Math.min(lo, RAW[t + d]); hi = Math.max(hi, RAW[t + d]);
+    }
+    order.sort(function (a, b) { return RAW[a] - RAW[b]; });
+    var s = '';
+    order.forEach(function (f, k) {
+        var h = 3 + (H - 3) * (hi > lo ? (RAW[f] - lo) / (hi - lo) : 0), x = f1(px(t - r + k));
+        s += '<line x1="' + x + '" y1="' + Y1 + '" x2="' + x + '" y2="' + f1(Y1 - h) + '" class="sf-rank'
+            + (k === r ? ' sf-rank-mid' : isSpike(f) ? ' sf-rank-spike' : '') + '"/>';
+    });
+    return s;
+}
+
 function medianChart(window, out) {
     var t = MEDIAN_FOCUS;
     return chart('Median filter: a one-frame spike is replaced by the median of the frames around it.',
         '<defs><marker id="sf-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">'
         + '<path d="M0 0 L8 4 L0 8 Z" class="sf-arrowhead"/></marker></defs>'
-        + band(t, window)
+        + band(t, window) + medianStems(t, window)
         + '<path d="' + path(TRUTH) + '" class="sf-true"/>'
         + '<path d="' + path(out) + '" class="sf-out sf-out-median"/>'
         + dots(RAW, true)
         + dots(out, false, 'sf-med')
-        + '<line x1="' + f1(px(t)) + '" y1="' + f1(py(RAW[t]) + 4) + '" x2="' + f1(px(t)) + '" y2="' + f1(py(out[t]) - 4)
-        + '" class="sf-move" marker-end="url(#sf-arrow)"/>'
-        + '<text x="' + f1(px(t) + 6) + '" y="' + f1(py(RAW[t]) + 4) + '" class="sf-note sf-note-spike">spike</text>');
+        + SPIKES.map(function (sp) { return spikeArrow(sp[0], out); }).join(''));
 }
 
 function gaussianChart(window, input, out, inputHasSpikes) {
@@ -152,9 +180,10 @@ export function buildSmoothingWindowsFigure() {
         + '<div class="smooth-fig-cols">'
         + '<div class="smooth-fig-col" data-stage="median">'
         + '<div class="smooth-fig-name">1 · Median window<small></small></div><div class="smooth-fig-chart"></div>'
-        + '<p>Each frame takes the middle value of the frames in its window, so a one-frame spike is dropped '
-        + 'rather than averaged in. Real movement shorter than about half the window is erased too, so keep it '
-        + 'short for fast motion.</p></div>'
+        + '<p>Each frame takes the middle value of the frames in its window. The stems are the window around the '
+        + 'left spike sorted by value: the middle one (green) is what that frame becomes, so a one-frame spike '
+        + '(red) is dropped rather than averaged in. Real movement shorter than about half the window is erased '
+        + 'too, so keep it short for fast motion.</p></div>'
         + '<div class="smooth-fig-col" data-stage="gaussian">'
         + '<div class="smooth-fig-name">2 · Gaussian window<small></small></div><div class="smooth-fig-chart"></div>'
         + '<p>Runs on the median\'s output (green dots: the line on the left). A weighted average over the window: the frame itself counts most '
