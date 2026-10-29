@@ -40,15 +40,15 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=db04fe1916ef';
-import { getActiveSession, state, timeline } from './app-state.js?v=db04fe1916ef';
-import { drawAllOverlays } from './rendering.js?v=db04fe1916ef';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=db04fe1916ef';
-import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=db04fe1916ef';
-import { installModalGeometry } from './modal-geometry.js?v=db04fe1916ef';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=db04fe1916ef';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=db04fe1916ef';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=db04fe1916ef';
+} from './settings.js?v=7a9a2de1fb85';
+import { getActiveSession, state, timeline } from './app-state.js?v=7a9a2de1fb85';
+import { drawAllOverlays } from './rendering.js?v=7a9a2de1fb85';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=7a9a2de1fb85';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=7a9a2de1fb85';
+import { installModalGeometry } from './modal-geometry.js?v=7a9a2de1fb85';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=7a9a2de1fb85';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=7a9a2de1fb85';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=7a9a2de1fb85';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -862,8 +862,9 @@ export function showSettingsModal(initialPanel) {
         minW: 520,
         minH: 320,
         margin: 24,
-        // The opening size before it widened to 1040px; records holding it
-        // were saved without a resize, so they open at the new default.
+        // The opening size before it widened (to 1040x620, now 1320x800);
+        // records holding it were saved without a resize, so they open at the
+        // current default. Later records carry `sized`, so they follow it too.
         legacyDefaultSize: { w: 880, h: 620 },
     });
 }

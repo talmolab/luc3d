@@ -36,7 +36,7 @@ import {
   resolveIdentity,
   resolveVideoFilename,
   sessionsReadError
-} from "./chunk-H7G4PJNA.js?v=db04fe1916ef";
+} from "./chunk-H7G4PJNA.js?v=7a9a2de1fb85";
 import {
   RemoteIOError,
   fetchRetrying,
@@ -48,7 +48,7 @@ import {
   redactedCauseSummary,
   resolveUrl,
   statusToMessage
-} from "./chunk-YS7Q6CO6.js?v=db04fe1916ef";
+} from "./chunk-YS7Q6CO6.js?v=7a9a2de1fb85";
 
 // src/model/centroid.ts
 var _centroidSkeleton = null;

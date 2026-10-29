@@ -4773,8 +4773,8 @@ kbd {
      24px gutter), so there is deliberately NO max-width/max-height here — a
      second cap would silently shrink a rect the clamp thought it had granted
      and leave the card flush against one edge. */
-  width: 1040px;
-  height: 620px;
+  width: 1320px;
+  height: 800px;
   display: flex;
   flex-direction: column;
   /* `resize` needs a non-visible overflow, which this already had. The grip is
@@ -5442,7 +5442,8 @@ kbd {
   display: block;
   width: 100%;
   height: auto;
-  max-height: 190px;
+  /* High enough that the chart fills a wide card (300:140 viewBox). */
+  max-height: 320px;
   margin: 6px 0 8px;
   overflow: hidden;
 }
