@@ -103,7 +103,7 @@ function dots(values, showSpikes, cls) {
 function outNodes(values) {
     var s = '';
     for (var t = 0; t < values.length; t++) {
-        s += '<circle cx="' + f1(px(t)) + '" cy="' + f1(py(values[t])) + '" r="2.6" class="sf-out-node"/>';
+        s += '<circle cx="' + f1(px(t)) + '" cy="' + f1(py(values[t])) + '" r="2.2" class="sf-out-node"/>';
     }
     return s;
 }
