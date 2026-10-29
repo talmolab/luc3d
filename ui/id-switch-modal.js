@@ -439,6 +439,7 @@ async function runBrightness(session, rate, inject, moments, single) {
     try { sampler = (inject.createBrightnessSampler || createBrightnessSampler)(session, {}); }
     catch (e) { return { ok: false, reason: e.message }; }
     var prog = openProgressDialog('Checking ID switches (coat brightness)');
+    prog.crop(null);   // it reads grey levels at the keypoints and cuts no crops: no empty sample square
     var t0 = performance.now();
     try {
         var opts = {

@@ -27,6 +27,8 @@
  *     there, gets a row AT the moment, saying why it was looked at — which
  *     survives the saved checklist (metadata.lucid.idSwitchReview) — on top of
  *     the encounter rows, which are what they were without it.
+ *     Its progress dialog has no sample-crop square: that is the image
+ *     check's, and this check cuts no crops (it showed an empty black one).
  *  5. A swap planted at a contact, which both the (label-free) size check and the
  *     coat-brightness check find, is ONE "Both" row on the size result (violet +
  *     amber), and its ticks are on the seekbar.
@@ -243,6 +245,9 @@ try {
             let seed = 9; const r = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
             return { views: ['mouse_video'], inFlight: 2, prepareFrames: async () => {}, releaseFrames: () => {},
                 getEmbeddings: async (frame, items) => items.map(it => {
+                    // what the progress dialog shows while it reads: the sample-crop square is the image check's
+                    const sq = document.querySelector('.id-switch-progress-crop');
+                    window.__brightSquare = window.__brightSquare || (sq ? (sq.hidden ? 'hidden' : 'shown') : 'no dialog');
                     const inst = it.group.instances.get('mouse_video');
                     return [{ camera: 'mouse_video', vector: B.brightnessFeatures(Array.from({ length: 11 }, () => coatOf.get(inst) * (0.85 + 0.3 * r()))) }];
                 }) };
@@ -269,7 +274,7 @@ try {
         const copy = { _idSwitch: null };
         R.ingestIdSwitchReview(copy, saved);
         const back = copy._idSwitch ? copy._idSwitch.results.brightness.flags.filter(m => m.look) : [];
-        return { rows, without, repeats, back: back.map(m => [m.frame, m.look]) };
+        return { rows, without, repeats, back: back.map(m => [m.frame, m.look]), square: window.__brightSquare };
     }, [t0, t1, tr]);
     const mrow = row4.rows.find(r => Math.abs(r.frame - 1800) <= 2);
     check(!row4.without.some(r => Math.abs(r.frame - 1800) <= 2) && mrow, `the moment adds a row AT the switch (rows ${row4.rows.map(r => r.frame).join(', ')}; without it ${row4.without.map(r => r.frame).join(', ')})`);
@@ -285,6 +290,7 @@ try {
     check(mrow && /input tracklet changes animal/.test(mrow.text) && !/close/.test(mrow.text),
         'the row says why it was looked at, and does not call it a close encounter: ' + (mrow || {}).text);
     check(row4.back.length === 1 && JSON.stringify(row4.back[0][1]) === '["tracklet"]', 'the cue survives the saved checklist: ' + JSON.stringify(row4.back));
+    check(row4.square === 'hidden', 'its progress dialog shows no sample-crop square (it cuts no crops; it was an empty black one): ' + row4.square);
 
     console.log('\n5. "Both": a swap at a contact, found by the size and coat-brightness checks');
     const br = await page.evaluate(async (planted) => {
