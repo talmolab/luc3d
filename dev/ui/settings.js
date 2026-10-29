@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=e218595f4da6';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=1b505daa3378';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -508,7 +508,7 @@ export const SMOOTHING_PARAMS = [
     {
         id: 'smoothGaussianWindow', label: 'Gaussian window (frames)', default: 0,
         min: 0, max: 101, step: 2,
-        desc: 'Stage 2, over time, applied to the median\'s output. A weighted average of each node\'s x, y and z over this many frames, with sigma = (window-1)/6, so the window spans +/-3 sigma and the current frame counts most. Removes broadband jitter. Coerced to the next odd value. 0 = off.',
+        desc: 'Stage 2, over time, applied to the median\'s output. A weighted average of each node\'s x, y and z over this many frames, with sigma = (window-1)/6, so the window spans +/-3 sigma and the current frame counts most. Removes broadband jitter. 3 barely changes anything (each frame keeps about 98% of its own value); 5 is the smallest window that smooths. Coerced to the next odd value. 0 = off.',
     },
     {
         id: 'smoothMaxGap', label: 'Max gap to smooth across (frames)', default: 5,
