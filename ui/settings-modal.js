@@ -44,6 +44,7 @@ import {
 import { getActiveSession, state, timeline } from './app-state.js';
 import { drawAllOverlays } from './rendering.js';
 import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js';
 import { installModalGeometry } from './modal-geometry.js';
 import { refreshIdSwitchHighlight } from './id-switch-highlight.js';
 import { buildDetectionFilterPreview } from './detection-filter-preview.js';
@@ -717,10 +718,18 @@ export function showSettingsModal(initialPanel) {
         'default — run the pass with the Temporal Smoothing button next to Triangulate All. Changes apply when you click Apply.';
     smPanel.appendChild(smHint);
 
+    // What the two windows do, redrawn as they are typed
+    // (`ui/smoothing-windows-figure.js`).
+    const smFigure = buildSmoothingWindowsFigure();
+    smFigure.update(working.smoothing);
+    smPanel.appendChild(smFigure.el);
+
     const smSection = buildSection('Filter Parameters', smoothingDefs.length || null);
     smPanel.appendChild(smSection.root);
     smoothingDefs.forEach(function (def) {
-        smSection.body.appendChild(buildParamRow(def, working.smoothing));
+        smSection.body.appendChild(buildParamRow(def, working.smoothing, function () {
+            smFigure.update(working.smoothing);
+        }));
     });
 
     // The two dials of luc3d #134 pull against each other and the interaction is

@@ -2514,7 +2514,9 @@ no UI imports, so the module stays unit-testable in plain Node.
 `unsmoothSession`, `resolveSmoothingParams`, `hasSmoothed3d`,
 `removeSmoothing`, `restoreSmoothing`), `ui/smoothing-button.js`
 (`hasSmoothed3d`, `hasRemovedSmoothing`),
-`import-export/smoothing-metadata.js` (`hasSmoothed3d`, `noteSmoothedFrames`).
+`import-export/smoothing-metadata.js` (`hasSmoothed3d`, `noteSmoothedFrames`),
+`ui/smoothing-windows-figure.js` (`smoothSignalInto`, `normalizeWindow`,
+`sigmaForWindow`, to draw the Settings figure with the real filter).
 
 **Tests.** `tests/test-temporal-smoothing.mjs` (`smoothFrame` is checked bit
 for bit against the all-frames pass on every frame of noisy fixtures with
@@ -9295,7 +9297,9 @@ tracking and greys the row), and **Tracking Thresholds** (one field per
 `kind: 'toggle'` entry, via `makeToggle`). Covered by
 `tests/e2e/settings-wizard-toggles.mjs`. And **Temporal Smoothing** (luc3d
 #134 — one **Filter Parameters** section rendering `getSmoothingParamDefs()`:
-median window, Gaussian window, max gap, minimum segment. Its own panel because
+median window, Gaussian window, max gap, minimum segment, under a figure from
+`ui/smoothing-windows-figure.js` that the two window fields redraw through
+`onEdit`. Its own panel because
 it is not a tracking parameter — it runs after triangulation, on 3D the tracker
 has finished with. A note warns that raising the reprojection-error threshold
 creates more gaps, hence more gap edges where the filter is least accurate. The
@@ -11293,6 +11297,29 @@ tooltip in `index.html`) say just that.
 **Key exports.** `buildTriangulationMethodsFigure()` → a `<figure>`.
 
 **Imports.** None. **Imported by** `ui/settings-modal.js`.
+
+### ui/smoothing-windows-figure.js
+
+**Purpose.** The figure at the top of Settings ▸ Temporal Smoothing: what the
+Median window and the Gaussian window each do, as two cards (stage 1, stage 2).
+Both plot one made-up trace (one node's x over 40 frames: a slow movement,
+dashed, plus jitter and two one-frame spikes, as dots) and draw what the stage
+makes of its input (blue line), the window around one frame (shaded) and, for
+the Gaussian, the weights inside it (stems).
+
+**The lines are the real filter, not drawn by hand.** `update(params)` runs
+`smoothSignalInto` (`pose/temporal-smoothing.js`) on the trace with the panel's
+working windows, so the cards follow what is typed. A window that is off (0)
+is drawn with an example (median 5, Gaussian 9) and labelled so. The Gaussian
+card's input is the median's output, except with the median off and the
+Gaussian on: then it is the raw trace and a note says the spikes become bumps
+(why the median runs first). Colours come from `.smooth-fig` in `styles.css`.
+
+**Key exports.** `buildSmoothingWindowsFigure()` → `{ el, update(params) }`.
+
+**Imports.** `pose/temporal-smoothing.js`. **Imported by** `ui/settings-modal.js`.
+
+**Tests.** `tests/e2e/smoothing-windows-figure.mjs`.
 
 ### ui/smoothing-button.js
 
