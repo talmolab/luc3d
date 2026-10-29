@@ -22,7 +22,7 @@
 // Depends on: pose/temporal-smoothing.js (`smoothSignalInto`, `normalizeWindow`,
 // `sigmaForWindow`). Colours come from `styles.css` (`.smooth-fig`).
 
-import { smoothSignalInto, normalizeWindow, sigmaForWindow } from '../pose/temporal-smoothing.js?v=920bd7f7c770';
+import { smoothSignalInto, normalizeWindow, sigmaForWindow } from '../pose/temporal-smoothing.js?v=1136f9b62520';
 
 var N = 40;                              // frames in the trace
 var SPIKES = [[11, 13], [28, -13]];      // [frame, mm] one-frame spikes
@@ -83,12 +83,18 @@ function band(t, window) {
         + (2 * r + 1) + ' frames</text>';
 }
 
-/** Dots for a trace (class `cls`, default the raw grey); spikes still in it are drawn red. */
+/**
+ * Dots for a trace (class `cls`, default the raw grey); spikes still in it are
+ * drawn red. Raw samples are open rings, a little larger than the filled dots
+ * and drawn over them: a median keeps many samples exactly (its output IS one
+ * of the window's samples), so a filled raw dot would hide under the green one.
+ */
 function dots(values, showSpikes, cls) {
     var s = '';
     for (var t = 0; t < values.length; t++) {
-        s += '<circle cx="' + f1(px(t)) + '" cy="' + f1(py(values[t])) + '" r="2.2" class="'
-            + (showSpikes && isSpike(t) ? 'sf-spike' : cls || 'sf-raw') + '"/>';
+        var c = showSpikes && isSpike(t) ? 'sf-spike' : cls || 'sf-raw';
+        s += '<circle cx="' + f1(px(t)) + '" cy="' + f1(py(values[t])) + '" r="' + (c === 'sf-raw' ? 3.4 : 2.2)
+            + '" class="' + c + '"/>';
     }
     return s;
 }
@@ -139,8 +145,8 @@ function medianChart(window, out) {
         + band(t, window) + medianStems(t, window)
         + '<path d="' + path(TRUTH) + '" class="sf-true"/>'
         + '<path d="' + path(out) + '" class="sf-out sf-out-median"/>'
-        + dots(RAW, true)
         + dots(out, false, 'sf-med')
+        + dots(RAW, true)
         + SPIKES.map(function (sp) { return spikeArrow(sp[0], out); }).join(''));
 }
 
@@ -173,7 +179,7 @@ export function buildSmoothingWindowsFigure() {
     fig.className = 'smooth-fig';
     fig.innerHTML =
         '<p class="smooth-fig-lead">One node\'s x position over 40 frames, made up for this sketch: the true '
-        + 'movement (dashed) and its 3D as triangulated, with jitter and two one-frame spikes (grey dots). The '
+        + 'movement (dashed) and its 3D as triangulated (grey rings), with jitter and two one-frame spikes (red). The '
         + 'median\'s output (green) is the Gaussian\'s input, and the Gaussian\'s output is blue; both are computed '
         + 'with LUC3D\'s own filter and follow the windows you enter below. y and z, and every node, are filtered '
         + 'the same way, each on its own.</p>'
