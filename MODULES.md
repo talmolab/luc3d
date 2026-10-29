@@ -5440,7 +5440,8 @@ the card opens at the stylesheet's size, so changing the default reaches
 everyone who never resized. Records from before the flag saved the opening size
 on every close: `opts.legacyDefaultSize` names that old default, and such a
 record opens at the new default, centred where the old card was. Settings passes
-`{w: 880, h: 620}` (its default before it widened to 1040px).
+`{w: 880, h: 620}` (its default before it widened; it now opens at 1320x800,
+wide enough for the Temporal Smoothing figure's two charts).
 
 **This module is the ONE owner of the card's rect.** `.settings-modal`
 deliberately has no `max-width`/`max-height`, and `apply()` sets both to `none`
