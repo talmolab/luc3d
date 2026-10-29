@@ -14,6 +14,9 @@
  *  5. The pool's busy clock (`createBusyClock`, the progress dialog's CPU load):
  *     while jobs are in flight it grows at least as fast as the wall clock and at
  *     most workers x as fast, and it stops when they are done and on terminate.
+ *  6. The read token: no two workers ever cut crops from a frame at once (every
+ *     grant is handed back before the next), one grant per job; a job whose crops
+ *     reach past the frame's border is bit-identical to inline crops too.
  *
  * Run: node tests/e2e/image-crop-worker.mjs
  */
@@ -54,6 +57,8 @@ try {
             return E.cropGeometry({ getPoint: i => pts[i] || null }, sk);
         };
         const geos = [animal(200, 200, 0.3, 1.2), animal(300, 260, 2.5, 1.0), animal(450, 150, -1.2, 0.9)];
+        // a fourth near the bottom-left corner, rotated: its crop reaches past the frame's border
+        const edgeGeo = animal(28, 455, 0.7, 1.0);
         const crops = geos.map((g, i) => ({ g, others: geos.filter((x, j) => j !== i).map(x => x.hull) }));
         const SZ = 3 * E.INPUT * E.INPUT, canvas = new OffscreenCanvas(E.CROP, E.CROP);
         const vf0 = new VideoFrame(cv, { timestamp: 0 });
@@ -61,8 +66,16 @@ try {
         const same = (a, b) => a.length === b.length && a.every((t, i) => t.length === b[i].length && t.every((v, k) => Object.is(v, b[i][k])));
         const nonBlank = inline.every(t => new Set(t).size > 200 && t.some(v => v < -2) && t.some(v => v > 0));
 
+        // watch the read token: grants the pool posts, releases the workers post
+        const tok = { holders: 0, max: 0, grants: 0, releases: 0 };
+        const post = Worker.prototype.postMessage;
+        Worker.prototype.postMessage = function (m, t) { if (m && m.grant) { tok.grants++; tok.max = Math.max(tok.max, ++tok.holders); } return post.call(this, m, t); };
+        const NativeWorker = window.Worker;
+        window.Worker = function (url, o) { const w = new NativeWorker(url, o); w.addEventListener('message', (e) => { if (e.data && e.data.release) { tok.releases++; tok.holders--; } }); return w; };
+        window.Worker.prototype = NativeWorker.prototype;
         window.LUCID_CROP_WORKERS = 3;
         const clock = (await import('/ui/load-graph.js')).createBusyClock(), pool = E.createCropPool(clock);
+        window.Worker = NativeWorker;
         const fromFrame = await pool.run(vf0.clone(), crops);
         // an ImageBitmap source (the getFrame fallback's cached frames) against inline crops of the same bitmap
         const bm = await createImageBitmap(vf0);
@@ -74,6 +87,13 @@ try {
         const many = await Promise.all(subsets.map(ix => pool.run(vf0.clone(), ix.map(i => crops[i]))));
         const manyWall = performance.now() - t0, manyBusy = clock.ms() - busy0;
         const manyOk = many.every((ts, k) => same(ts, subsets[k].map(i => inline[i])));
+        // the border: the corner animal's crop and the others in one job
+        const edgeCrops = [{ g: edgeGeo, others: geos.map(x => x.hull) }].concat(crops);
+        const edgeInline = edgeCrops.map(cc => { const t = new Float32Array(SZ); E.writeInputTensor(E.cutCrop(vf0, cc.g, cc.others, canvas), t, 0); return t; });
+        const edgeOk = same(await pool.run(vf0.clone(), edgeCrops), edgeInline);
+        const reach = (g) => (E.CROP / 2 / g.scale) * (Math.abs(Math.cos(g.angle)) + Math.abs(Math.sin(g.angle))) + 4 + 8 / g.scale;
+        const edgeOutside = edgeGeo.cx - reach(edgeGeo) < 0 || edgeGeo.cy + reach(edgeGeo) > H, othersInside = geos.every(g => g.cx - reach(g) >= 0 && g.cy - reach(g) >= 0 && g.cx + reach(g) <= W && g.cy + reach(g) <= H);
+        const jobsSoFar = 3 + subsets.length;
         let badMsg = null;
         try { await pool.run(vf0.clone(), [{ g: null, others: [] }]); } catch (e) { badMsg = e.message; }
         const afterBad = await pool.run(vf0.clone(), crops);
@@ -87,7 +107,8 @@ try {
         const off = E.createCropPool();
         delete window.LUCID_CROP_WORKERS;
         vf0.close();
-        return { nonBlank, frameOk: same(fromFrame, inline), bitmapOk: same(fromBitmap, inlineBm), manyOk,
+        Worker.prototype.postMessage = post;
+        return { tok, jobsSoFar, edgeOk, edgeOutside, othersInside, nonBlank, frameOk: same(fromFrame, inline), bitmapOk: same(fromBitmap, inlineBm), manyOk,
                  badMsg, afterBadOk: same(afterBad, inline), broken, off, manyWall, manyBusy, idleGrew, closedGrew };
     });
     check(r.nonBlank, 'fixture crops have real content (masking/resampling are exercised)');
@@ -99,6 +120,10 @@ try {
     check(r.manyBusy >= 0.5 * r.manyWall && r.manyBusy <= 3 * r.manyWall + 1,
           `busy clock: ${r.manyBusy.toFixed(1)} thread-ms over ${r.manyWall.toFixed(1)} ms of five jobs on 3 workers (at least ~1x, at most 3x)`);
     check(r.idleGrew === 0 && r.closedGrew === 0, `…and it stops when the workers are idle (+${r.idleGrew}) and once terminated mid-job (+${r.closedGrew})`);
+    check(r.edgeOutside && r.othersInside, 'precondition: one crop reaches past the frame\'s border, the other three lie inside it');
+    check(r.edgeOk, 'a job with a crop reaching past the frame\'s border is bit-identical to inline crops');
+    check(r.tok.max === 1 && r.tok.grants >= r.jobsSoFar && r.tok.releases === r.tok.grants,
+          `read token: at most ${r.tok.max} worker cutting at a time, ${r.tok.grants} grants, ${r.tok.releases} handed back`);
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } catch (e) {
     console.error(e); fails++;

@@ -37,6 +37,9 @@
  * recordings whose keyframes are about as dense as the samples (e.g. one every
  * 0.5 s) each sample is moved to its nearest keyframe and decoded as that ONE
  * frame — see `planKeyframeSamples` (pose/id-switch-check.js) and keyframeIndices.
+ * A camera decodes only the frames where it has a crop to cut, and frames that no
+ * other frame is predicted from (B-frames, in most H.264/HEVC encodes with them)
+ * are not decoded unless they are a sample — see `referenceFormat`.
  *
  * Repeat runs: every crop's embedding is remembered (pose/embedding-cache.js,
  * keyed on everything the crop's pixels depend on — see `embeddingCacheScope`
@@ -45,7 +48,7 @@
  *
  * Depends on: ui/app-state.js (state.views, state.sessions), pose/id-switch-check.js
  * (planKeyframeSamples, KEYFRAME_GAP_TOLERANCE), pose/embedding-cache.js, ui/load-graph.js (the busy clock, the
- * load meter and the CPU line, for the progress dialog), mediabunny (EncodedPacketSink, imported lazily, for the keyframe index);
+ * load meter and the CPU line, for the progress dialog), mediabunny (EncodedPacketSink, VideoSampleSink, imported lazily: the keyframe index, `referenceFormat`);
  * spawns ui/image-crop-worker.js and ui/image-model-worker.js.
  */
 
@@ -639,6 +642,124 @@ export function keyframeIndices(decoder) {
 }
 
 /**
+ * How to tell, from an encoded packet's bytes, that no other picture is predicted
+ * from it, for a decoder config (`VideoDecoderConfig`: `codec`, `description`) — or
+ * null (another codec, no avcC/hvcC, or anything unexpected: every packet is then
+ * decoded). The rule (`isUnreferenced`), on the packet's first slice NAL unit:
+ *   - HEVC: a sub-layer non-reference type (TRAIL_N, TSA_N, STSA_N, RADL_N, RASL_N,
+ *     or a reserved _N type: even, below 16) at the HIGHEST temporal sub-layer the
+ *     SPS declares — such a picture is never in a reference picture set (a lower
+ *     layer's _N picture can still be a higher layer's reference, so those are kept);
+ *   - H.264: `nal_ref_idc` 0.
+ * Every picture that IS referenced (keyframes included) is decoded as before, so a
+ * frame decodes to the same pixels with or without the skipped ones before it.
+ * x265's defaults (the SLAP recordings) make ~59% of frames TRAIL_N.
+ * @returns {?{codec: 'hevc'|'avc', lengthSize: number, maxTid: number}}
+ */
+export function referenceFormat(config) {
+    const codec = config && typeof config.codec === 'string' ? config.codec : '';
+    const d = config && config.description;
+    if (!d) return null;
+    const b = d instanceof Uint8Array ? d : ArrayBuffer.isView(d) ? new Uint8Array(d.buffer, d.byteOffset, d.byteLength) : new Uint8Array(d);
+    if (/^(hev1|hvc1)\./.test(codec)) {
+        if (b.length < 23 || b[0] !== 1) return null;
+        const lengthSize = (b[21] & 3) + 1;
+        let at = 23, maxTid = -1;                 // hvcC arrays: the SPS's sps_max_sub_layers_minus1
+        for (let a = 0, na = b[22]; a < na && at + 3 <= b.length; a++) {
+            const type = b[at] & 0x3f, n = (b[at + 1] << 8) | b[at + 2];
+            at += 3;
+            for (let k = 0; k < n && at + 2 <= b.length; k++) {
+                const len = (b[at] << 8) | b[at + 1];
+                if (type === 33 && len >= 3 && at + 4 < b.length) maxTid = Math.max(maxTid, (b[at + 4] >> 1) & 7);
+                at += 2 + len;
+            }
+        }
+        return maxTid >= 0 ? { codec: 'hevc', lengthSize: lengthSize, maxTid: maxTid } : null;
+    }
+    if (/^avc[13]\./.test(codec)) {
+        if (b.length < 7 || b[0] !== 1) return null;
+        return { codec: 'avc', lengthSize: (b[4] & 3) + 1, maxTid: 0 };
+    }
+    return null;
+}
+
+/** Is the picture in `data` (length-prefixed NAL units, `fmt` from referenceFormat) one no other picture is
+ *  predicted from? false when unsure (no slice found, or a malformed length). */
+export function isUnreferenced(data, fmt) {
+    const L = fmt.lengthSize;
+    for (let at = 0; at + L < data.length;) {
+        let len = 0;
+        for (let i = 0; i < L; i++) len = len * 256 + data[at + i];
+        const h = at + L;
+        if (len < 1 || h + len > data.length) return false;
+        if (fmt.codec === 'hevc') {
+            if (len < 2) return false;
+            const type = (data[h] >> 1) & 0x3f;
+            if (type < 32) return type < 16 && type % 2 === 0 && (data[h + 1] & 7) - 1 === fmt.maxTid;   // first slice
+        } else {
+            const type = data[h] & 0x1f;
+            if (type >= 1 && type <= 5) return ((data[h] >> 5) & 3) === 0;
+        }
+        at = h + len;
+    }
+    return false;
+}
+
+const _refFormats = new WeakMap();   // mediabunny backend -> Promise<?{VideoSampleSink, track, fmt}>
+/**
+ * What streamingReader needs to skip unreferenced frames in a decoder's video:
+ * mediabunny's VideoSampleSink class, the video track and its referenceFormat —
+ * or null (no mediabunny backend, a codec it does not read, or
+ * `window.LUCID_IMAGE_SKIP_UNREFERENCED` = 0): every frame is decoded then.
+ */
+export function unreferencedSkipper(decoder) {
+    const be = decoder && decoder._mbBackend;
+    if (!be || !be.input || (typeof window !== 'undefined' && window.LUCID_IMAGE_SKIP_UNREFERENCED === 0)) return Promise.resolve(null);
+    if (!_refFormats.has(be)) {
+        _refFormats.set(be, (async function () {
+            const { VideoSampleSink } = await import('mediabunny');
+            const track = await be.input.getPrimaryVideoTrack();
+            const fmt = referenceFormat(await track.getDecoderConfig());
+            const probe = fmt && new VideoSampleSink(track);   // the two methods streamingReader wraps
+            return probe && typeof probe._createDecoder === 'function' && typeof probe._createPacketSink === 'function'
+                ? { VideoSampleSink: VideoSampleSink, track: track, fmt: fmt } : null;
+        })().catch(function () { return null; }));
+    }
+    return _refFormats.get(be);
+}
+
+/**
+ * `samplesAtTimestamps(ts)` on a sink of its own that does not decode the packets
+ * no other picture is predicted from, unless they are one of `ts` (`skipper` from
+ * unreferencedSkipper). mediabunny reads each target's packet (`getPacket`) before
+ * decoding up to it, so the targets are known by packet before any is decoded; the
+ * rest of mediabunny's streaming is unchanged. `count.skipped` counts the packets
+ * left out.
+ */
+export function skippingSamples(skipper, ts, count) {
+    const sink = new skipper.VideoSampleSink(skipper.track), targets = new Set(), fmt = skipper.fmt;
+    const makePackets = sink._createPacketSink, makeDecoder = sink._createDecoder;
+    sink._createPacketSink = function () {
+        const ps = makePackets.call(this), get = ps.getPacket;
+        ps.getPacket = async function () {
+            const p = await get.apply(this, arguments);
+            if (p) targets.add(p.sequenceNumber);
+            return p;
+        };
+        return ps;
+    };
+    sink._createDecoder = async function () {
+        const d = await makeDecoder.apply(this, arguments), decode = d.decode;
+        d.decode = function (p) {
+            if (!targets.has(p.sequenceNumber) && p.type !== 'key' && isUnreferenced(p.data, fmt)) { count.skipped++; return; }
+            return decode.call(this, p);
+        };
+        return d;
+    };
+    return sink.samplesAtTimestamps(ts);
+}
+
+/**
  * A per-camera reader that STREAMS a known, increasing list of frames instead of
  * seeking to each one. `decoder.getFrame(i)` asks mediabunny for one sample at a
  * time, which decodes from the previous keyframe every call (up to a whole GOP —
@@ -646,17 +767,19 @@ export function keyframeIndices(decoder) {
  * list decodes forward once, and jumps straight to a later keyframe when a target
  * sits in a later GOP. `decode[i]` is the frame actually decoded for `frames[i]`
  * (planKeyframeSamples: a keyframe up to half a sample spacing away, so each
- * sample is ONE decoded frame; or the frame itself). Returns null when the
+ * sample is ONE decoded frame; or the frame itself). With `skipper`
+ * (unreferencedSkipper) it skips the frames nothing is predicted from
+ * (skippingSamples, counted in `count.skipped`). Returns null when the
  * decoder has no mediabunny backend (the HTML5 fallback), so the caller uses
  * `getFrame`.
  */
-function streamingReader(decoder, frames, decode) {
+function streamingReader(decoder, frames, decode, skipper, count) {
     decode = decode || frames;
     if (!canStream(decoder, decode)) return null;
     const be = decoder._mbBackend;
     const ts = decode.map(function (f) { return be._frameTimes[f]; });
     const pos = new Map(frames.map(function (f, i) { return [f, i]; }));
-    const it = be.sink.samplesAtTimestamps(ts)[Symbol.asyncIterator]();
+    const it = (skipper ? skippingSamples(skipper, ts, count) : be.sink.samplesAtTimestamps(ts))[Symbol.asyncIterator]();
     let ptr = 0, chain = Promise.resolve();
     return {
         /** The frame decoded (and to crop keypoints from) for requested `frame`. */
@@ -737,6 +860,8 @@ export function summarizeEmbedTiming(tm, backend, dtype) {
         decodeMsPerFrame: per(tm.decodeMs, tm.frames), cropMsPerFrame: per(tm.cropMs, tm.frames), queueMsPerFrame: per(tm.queueMs, tm.frames),
         // reused from an earlier run (pose/embedding-cache.js): crops, and frames with nothing left to decode
         cachedCrops: tm.cachedCrops || 0, cachedFrames: tm.cachedFrames || 0, cacheLookupMs: tm.cacheLookupMs || 0,
+        // frames no other frame is predicted from, left undecoded (unreferencedSkipper)
+        skippedFrames: tm.skipped || 0,
     };
 }
 
@@ -805,7 +930,11 @@ export function formatEmbedTiming(t) {
     return Math.round(t.cropsPerS) + ' crops/s over ' + t.seconds.toFixed(0) + ' s · ' + (cpu ? 'model busy ' : 'GPU busy ') + Math.round(t.gpuBusyPct) + '% (' +
         t.batches + ' batches of ~' + Math.round(t.avgBatch) + ', ' + t.modelMsPerCrop.toFixed(1) + ' ms/crop) · per frame: decode ' +
         Math.round(t.decodeMsPerFrame) + ' ms, crop ' + Math.round(t.cropMsPerFrame) + ' ms, queue ' + Math.round(t.queueMsPerFrame) + ' ms' +
-        ' · ' + (cpu ? 'CPU (' + t.workers + ' workers)' : t.backend === 'webnn' ? 'WebNN' : 'WebGPU') + (t.dtype ? ' ' + t.dtype : '') + formatKeyframes(t.keyframes) + formatCached(t);
+        ' · ' + (cpu ? 'CPU (' + t.workers + ' workers)' : t.backend === 'webnn' ? 'WebNN' : 'WebGPU') + (t.dtype ? ' ' + t.dtype : '') + formatKeyframes(t.keyframes) + formatSkipped(t) + formatCached(t);
+}
+
+function formatSkipped(t) {
+    return t.skippedFrames ? ' · ' + t.skippedFrames.toLocaleString('en-US') + ' unreferenced frames not decoded' : '';
 }
 
 function formatCached(t) {
@@ -829,6 +958,9 @@ function formatKeyframes(k) {
  * per animal). `run(image, crops)` transfers the image (the worker closes it) and
  * resolves to one input tensor per crop; a failed worker rejects its job and
  * the pool stops taking new ones (`broken`), so the caller falls back inline.
+ * The pool hands out the read token: one worker at a time cuts crops from a frame
+ * (two at once sometimes got another picture's pixels — see ui/image-crop-worker.js);
+ * turning crops into model inputs stays parallel.
  * `clock` (createBusyClock, optional) is told while each worker holds a job, for the CPU load.
  */
 export function createCropPool(clock) {
@@ -838,6 +970,16 @@ export function createCropPool(clock) {
     if (n < 1 || typeof Worker !== 'function') return null;
     const workers = [], pending = new Map();
     let nextId = 1;
+    // the read token (see ui/image-crop-worker.js): one worker at a time cuts crops from a frame
+    let holder = null;
+    const wanting = [];
+    const grantNext = function () {
+        while (!holder && wanting.length) {
+            const w = wanting.shift();
+            if (w.dead) continue;
+            holder = w; w.worker.postMessage({ grant: true });
+        }
+    };
     const pool = {
         broken: false,
         run: function (image, crops) {
@@ -858,6 +1000,8 @@ export function createCropPool(clock) {
     };
     const fail = function (w, msg) {
         pool.broken = true;
+        w.dead = true;
+        if (holder === w) { holder = null; grantNext(); }
         if (clock) clock.close(w);
         pending.forEach(function (p, id) { if (p.w === w) { pending.delete(id); p.reject(new Error(msg)); } });
     };
@@ -865,6 +1009,8 @@ export function createCropPool(clock) {
         for (let i = 0; i < n; i++) {
             const w = { worker: new Worker(new URL('./image-crop-worker.js', import.meta.url), { type: 'module' }), load: 0 };
             w.worker.onmessage = function (e) {
+                if (e.data.want) { wanting.push(w); grantNext(); return; }
+                if (e.data.release) { if (holder === w) holder = null; grantNext(); return; }
                 const p = pending.get(e.data.id); if (!p) return;
                 pending.delete(e.data.id); w.load--;
                 if (clock) clock.end(w);
@@ -1043,7 +1189,7 @@ export async function createImageEmbedder(session, opts) {
     const SZ = 3 * INPUT * INPUT;
     // timing breakdown for this run (stats()): where the time goes, measured on the user's machine
     const tm = { frames: 0, crops: 0, batches: 0, t0: 0, t1: 0, decodeMs: 0, cropMs: 0, queueMs: 0, runMs: 0, readMs: 0, maxBatch: 0, busySince: 0,
-                 cachedCrops: 0, cachedFrames: 0, cacheLookupMs: 0 };
+                 cachedCrops: 0, cachedFrames: 0, cacheLookupMs: 0, skipped: 0 };
     // which model produced a batch of vectors: the cache keeps each vector under its producer
     const tagged = function (vecs, tag) { vecs.tag = tag; return vecs; };
     // busySince: when the model run in flight started (0: none) — busyMs() counts it while it runs
@@ -1136,6 +1282,9 @@ export async function createImageEmbedder(session, opts) {
         return trial ? null : backend === 'webnn' ? 'webnn/fp16' : backend === 'cpu' ? 'cpu/fp32' : backend === 'test' ? 'test' : 'webgpu/' + dtype;
     };
     let cachedFrames = null, cachedCrops = null;   // frame -> its finished answer; key body -> vector (partly cached frames)
+    // frame -> the crops prepareFrames planned there (planFrameCrops), so getEmbeddings cuts exactly the crops whose
+    // cameras' readers decode that frame
+    let plannedCrops = null;
     // sampleFrames: the frames whose sample crop's pixels are kept (SAMPLE_FRAMES_PER_RUN a run);
     // cachedSamples: frame -> the stored sample crop shown when that frame is answered from the cache
     let sampleFrames = null, cachedSamples = null, cachedSampleSeq = 0;
@@ -1228,8 +1377,12 @@ export async function createImageEmbedder(session, opts) {
             return done;
         }
         // crop geometry comes from the 2D keypoints alone, so the crops to cut are known before decoding
-        const at = views.map(function (v, vi) { return decodedAt(vi, frame); });
-        const crops = planFrameCrops(frameCropGeometry(session, frame, items, cams, at, sk), items, at);
+        let crops = plannedCrops && plannedCrops.get(frame);
+        if (crops) plannedCrops.delete(frame);
+        else {
+            const at = views.map(function (v, vi) { return decodedAt(vi, frame); });
+            crops = planFrameCrops(frameCropGeometry(session, frame, items, cams, at, sk), items, at);
+        }
         const hits = [], byView = new Map();     // byView: vi -> the crops still to cut there
         crops.forEach(function (c) {
             const v = cachedCrops && c.body !== null ? cachedCrops.get(c.body) : undefined;
@@ -1362,17 +1515,28 @@ export async function createImageEmbedder(session, opts) {
             cachedFrames = new Map(); cachedCrops = new Map(); cachedSamples = new Map();
             const sampleEvery = Math.max(1, Math.ceil(frames.length / SAMPLE_FRAMES_PER_RUN));
             sampleFrames = new Set(frames.filter(function (f, i) { return i % sampleEvery === 0; }));
-            // per view: the indices (into frames) it still has to decode; null = all of them
+            // per view: the indices (into frames) it has to decode — the frames where it has a crop to cut, less the
+            // cached ones; null = all of them (no items given). A camera with no crop on a frame skips it, and a whole
+            // keyframe gap when it has none there: streaming decodes every frame from the keyframe up to the last one asked
             let need = null;
+            plannedCrops = null;
             const tag = modelTag();
-            if (cachePrefix && tag && _filledScopes.has(cachePrefix + tag) && Array.isArray(itemsPerFrame) && itemsPerFrame.length === frames.length) {
-                const t0 = performance.now(), scope = cachePrefix + tag + '|';
+            if (Array.isArray(itemsPerFrame) && itemsPerFrame.length === frames.length) {
+                const lookup = !!(cachePrefix && tag && _filledScopes.has(cachePrefix + tag));
+                const t0 = performance.now(), scope = lookup ? cachePrefix + tag + '|' : null;
                 need = views.map(function () { return []; });
+                plannedCrops = new Map();
                 frames.forEach(function (f, i) {
                     const items = itemsPerFrame[i] || [];
                     const at = views.map(function (v, vi) { return round[vi].decode[i]; });
+                    const crops = planFrameCrops(frameCropGeometry(session, f, items, cams, at, sk), items, at);
+                    if (!lookup) {
+                        plannedCrops.set(f, crops);
+                        new Set(crops.map(function (c) { return c.vi; })).forEach(function (vi) { need[vi].push(i); });
+                        return;
+                    }
                     const hits = [], missing = new Set();
-                    planFrameCrops(frameCropGeometry(session, f, items, cams, at, sk), items, at).forEach(function (c) {
+                    crops.forEach(function (c) {
                         const v = _embedCache.get(scope + c.body);
                         if (v) hits.push({ c: c, v: v }); else missing.add(c.vi);
                     });
@@ -1386,17 +1550,20 @@ export async function createImageEmbedder(session, opts) {
                             }
                         }
                     } else {
+                        plannedCrops.set(f, crops);
                         hits.forEach(function (h) { cachedCrops.set(h.c.body, h.v); });
                         missing.forEach(function (vi) { need[vi].push(i); });
                     }
                 });
-                tm.cacheLookupMs += performance.now() - t0;
+                if (lookup) tm.cacheLookupMs += performance.now() - t0;
             }
+            const skippers = await Promise.all(views.map(function (v, vi) { return srcKind[vi] === 's' ? unreferencedSkipper(v.decoder) : null; }));
             readers = views.map(function (v, vi) {
                 if (srcKind[vi] !== 's') return null;
-                if (!need) return streamingReader(v.decoder, frames, round[vi].decode);
+                if (!need) return streamingReader(v.decoder, frames, round[vi].decode, skippers[vi], tm);
                 if (!need[vi].length) return null;            // every crop of this view cached: nothing to decode
-                return streamingReader(v.decoder, need[vi].map(function (i) { return frames[i]; }), need[vi].map(function (i) { return round[vi].decode[i]; }));
+                return streamingReader(v.decoder, need[vi].map(function (i) { return frames[i]; }), need[vi].map(function (i) { return round[vi].decode[i]; }),
+                                       skippers[vi], tm);
             });
             plans.forEach(function (p, vi) {                   // (stats() runs after releaseFrames)
                 p.streamed = srcKind[vi] === 's';
@@ -1417,7 +1584,7 @@ export async function createImageEmbedder(session, opts) {
         },
         releaseFrames: function () {
             if (readers) readers.forEach(function (r) { if (r) r.close(); });
-            readers = null; decodeOf = null; srcKind = null; cachedFrames = null; cachedCrops = null; cachedSamples = null; sampleFrames = null;
+            readers = null; decodeOf = null; srcKind = null; cachedFrames = null; cachedCrops = null; plannedCrops = null; cachedSamples = null; sampleFrames = null;
             if (pool) pool.terminate();
             pool = undefined;
             if (trial) { const d = chooseBackend(trial); note = d.note.replace(/ — using WebNN/, ' — WebNN would have been used'); trial = null; }
