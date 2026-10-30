@@ -65,7 +65,7 @@ try {
   page.on('pageerror', e => errs.push(String(e)));
   page.on('console', m => { if (m.type() === 'error') errs.push('console: ' + m.text().slice(0, 300)); });
   await page.goto(`http://localhost:${PORT}/index.html`);
-  await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 60000 });
+  await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 60000 });
 
   // Helpers shared by every phase, installed once on the page.
   await page.evaluate(async () => {
@@ -314,7 +314,7 @@ try {
   const dl = page.waitForEvent('download', { timeout: 300000 });
   await page.evaluate(() => document.getElementById('ovExport').click());
   const download = await dl;
-  await page.waitForFunction(() => !document.getElementById('ovExportOverlay'), { timeout: 60000 });
+  await page.waitForFunction(() => !document.getElementById('ovExportOverlay'), null, { timeout: 60000 });
   const E = await page.evaluate(async () => {
     const H = window.__H;
     const AS = await import('/ui/app-state.js');

@@ -71,7 +71,7 @@ try {
     });
 
     await page.goto(`http://localhost:${PORT}/index.html`, { waitUntil: 'domcontentloaded', timeout: 120000 });
-    await page.waitForFunction(() => window.SleapIO && window.h5wasm && window.__lucid, { timeout: 120000 });
+    await page.waitForFunction(() => window.SleapIO && window.h5wasm && window.__lucid, null, { timeout: 120000 });
 
     // ---- fixtures ----
     await page.evaluate(async ({ FRAMES, CAMS, ANIMALS, NODES }) => {

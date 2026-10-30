@@ -12,15 +12,15 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=e932319066ea';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=e932319066ea';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=e932319066ea';
+         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=9aab3ba0af2d';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=9aab3ba0af2d';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=9aab3ba0af2d';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=e932319066ea';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=e932319066ea';
-import { writePlaneMetadata } from './plane-metadata.js?v=e932319066ea';
-import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=e932319066ea';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=9aab3ba0af2d';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=9aab3ba0af2d';
+import { writePlaneMetadata } from './plane-metadata.js?v=9aab3ba0af2d';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=9aab3ba0af2d';
 
 // ============================================
 // Generic file picker
@@ -2837,6 +2837,39 @@ export function readSlpProvenances(files, opts) {
 }
 
 /**
+ * A SLEAP analysis `.h5` rewritten as an `.slp`, in memory (#414): the
+ * `analysisToSlp` message of `loading/slp-import-worker.js`, which builds the
+ * tables as typed arrays — no per-instance objects — and posts the file's
+ * bytes. The per-camera folder loader uses it when a lazy session mixes `.slp`
+ * and analysis `.h5` cameras, so `SioLazyLoader` can read every camera.
+ *
+ * @param {File} file - a SLEAP analysis `.h5`
+ * @returns {Promise<File>} `<name>.slp`, same `lastModified`; rejects when the
+ *   file is not an analysis `.h5` or the worker fails
+ */
+export function convertAnalysisH5ToSlp(file) {
+    return new Promise(function (resolve, reject) {
+        var workerUrl = new URL('loading/slp-import-worker.js?v=' + Date.now(), document.baseURI);
+        var worker = new Worker(workerUrl, { type: 'module' });
+        worker.onmessage = function (e) {
+            var msg = e.data;
+            if (msg.type === 'slpBytes') {
+                worker.terminate();
+                resolve(new File([msg.bytes], msg.name, { type: 'application/x-hdf5', lastModified: file.lastModified }));
+            } else if (msg.type === 'error') {
+                worker.terminate();
+                reject(new Error(msg.message));
+            }
+        };
+        worker.onerror = function (err) {
+            worker.terminate();
+            reject(new Error('Analysis .h5 conversion worker error: ' + (err.message || 'unknown')));
+        };
+        worker.postMessage({ type: 'analysisToSlp', file: file });
+    });
+}
+
+/**
  * Parse a SLEAP .slp file through sleap-io.js's streaming reader
  * (`readSlpStreaming`, PR #196) and adapt the typed `Labels` into the SAME
  * `slpData` shape that `parseSlpH5` (the raw-h5wasm worker) resolves to, so the
@@ -2891,7 +2924,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=e932319066ea', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=9aab3ba0af2d', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },

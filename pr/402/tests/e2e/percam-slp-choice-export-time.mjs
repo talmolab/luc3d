@@ -18,11 +18,14 @@
  *   cam1  the reported folder: stale `cam1_v1.slp` (older on disk) + fresh
  *         unversioned `cam1.slp` (newer on disk)          → the fresh file
  *   cam2  the same pair copied in one go (equal mtimes)   → the fresh file
- *   cam3  mtimes INVERTED (a sync touched the old file)   → the fresh file,
- *         and no "newer file" note: the stamp outranks mtime between LUC3D files
+ *   cam3  mtimes INVERTED (a sync touched the old file)   → the chooser asks
+ *         (disk order disagrees with export order: a SLEAP re-save of an older
+ *         export keeps its stamp, so only the user can tell), with the fresh
+ *         file pre-selected — the old file never loads on its own
  *   cam4  the stale `_v1` is EMPTY (the blank-view case)  → the fresh file
- *   cam5  a LUC3D export + a SLEAP prediction written AFTER it → the export
- *         loads (it holds the corrections), and the status names the SLEAP file
+ *   cam5  a LUC3D export + a SLEAP prediction written AFTER it → the only
+ *         camera the data-file chooser asks about (#413), with the export
+ *         pre-selected; Save Options loads it and remembers the choice
  *   cam6  an unreadable `cam6_v2.slp` beside a good export → the good export
  *         (the suffix used to pick the broken file and leave the view empty)
  *
@@ -53,7 +56,7 @@ try {
     const pageErrs = [];
     const logs = [];
     page.on('pageerror', e => pageErrs.push(String(e).slice(0, 300)));
-    page.on('console', m => { if (/\[session-folder\]|\[slp-provenance\]/.test(m.text())) logs.push(m.text()); });
+    page.on('console', m => { if (/\[data-files\]|\[slp-provenance\]/.test(m.text())) logs.push(m.text()); });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 30000 });
@@ -195,7 +198,23 @@ try {
 
         AS.state.sessions = []; AS.state.activeSessionIdx = 0;
         AS.state.videoFiles = []; AS.state.session = null; AS.state.views = [];
+        try { localStorage.removeItem('lucidDataFileChoices'); } catch (e) { /* ignore */ }
+        // Answer the data-file chooser as a user who keeps its defaults would,
+        // recording what it showed.
+        const dialogs = [];
+        const poll = setInterval(() => {
+            const m = document.querySelector('.data-file-chooser');
+            if (!m) return;
+            dialogs.push([...m.querySelectorAll('tbody tr')].map(tr => ({
+                cam: tr.querySelector('.dfc-cam').textContent, cls: tr.className,
+                sel: tr.querySelector('select').selectedOptions[0].textContent,
+            })));
+            m.querySelector('#dfcSave').click();
+        }, 50);
         await loader.handleLoadSessionFolderPerCamera(files, false);
+        clearInterval(poll);
+        let saved = null;
+        try { saved = JSON.parse(localStorage.getItem('lucidDataFileChoices')); } catch (e) { /* ignore */ }
 
         const s = AS.state.session;
         const per = {}, userPer = {}, predPer = {};
@@ -213,6 +232,7 @@ try {
             tracks: s.tracks.slice(),
             per, userPer, predPer, suffixPick,
             provs: provs.map(p => p && { source: p.source, exported_at: p.exported_at }),
+            dialogs, saved, dataFileChoices: s.dataFileChoices,
             status: (document.getElementById('statusText') || {}).textContent || '',
             statusDot: (document.getElementById('statusDot') || {}).className || '',
         };
@@ -236,7 +256,7 @@ try {
     check(r.views.length === 6, `all 6 views exist (got ${JSON.stringify(r.views)})`);
     check(r.per.cam1 === 12, `cam1 (the reported folder): the later export, not the stale _v1 (got ${r.per.cam1}, want 12)`);
     check(r.per.cam2 === 12, `cam2 (copied folder, equal mtimes): the later export (got ${r.per.cam2})`);
-    check(r.per.cam3 === 12, `cam3 (old file touched later): the stamp beats mtime (got ${r.per.cam3})`);
+    check(r.per.cam3 === 12, `cam3 (old file touched later): the later export, the chooser's default (got ${r.per.cam3})`);
     check(r.per.cam4 === 12, `cam4 (stale _v1 is EMPTY): the view is not blank (got ${r.per.cam4})`);
     check(r.per.cam5 === 12 && r.userPer.cam5 === 12 && r.predPer.cam5 === 0,
         `cam5: the LUC3D export loads over the later SLEAP file (got ${r.userPer.cam5} user / ${r.predPer.cam5} predicted)`);
@@ -244,14 +264,30 @@ try {
     check(r.tracks.every(t => t.startsWith('NEW_')),
         `only the files exported last were read (tracks ${JSON.stringify(r.tracks)})`);
 
+    // ---- the one question asked ----------------------------------------------
+    const d = r.dialogs[0] || [];
+    const asked = d.filter(x => /dfc-attention|dfc-missing/.test(x.cls)).map(x => x.cam);
+    check(r.dialogs.length === 1 && JSON.stringify(asked) === '["cam3","cam5"]',
+        `the chooser opened once, asking about cam3 and cam5 only (got ${JSON.stringify(r.dialogs)})`);
+    const c3 = d.find(x => x.cam === 'cam3');
+    check(c3 && /^LUC3D export, .* — cam3\.slp$/.test(c3.sel),
+        `cam3's later export is pre-selected over the old file touched later (got ${JSON.stringify(c3)})`);
+    const c5 = d.find(x => x.cam === 'cam5');
+    check(c5 && /^LUC3D export, .* — cam5_v1\.slp$/.test(c5.sel),
+        `with cam5's LUC3D export pre-selected over the later SLEAP file (got ${JSON.stringify(c5)})`);
+    const c1 = d.find(x => x.cam === 'cam1');
+    check(c1 && /^LUC3D export, .* — cam1\.slp$/.test(c1.sel), `the settled rows show the file the rule chose (got ${JSON.stringify(c1)})`);
+    check(r.saved && JSON.stringify(r.saved.sess) === '{"cam3":"cam3.slp","cam5":"cam5_v1.slp"}',
+        `Save Options remembers only the rows the user decided (got ${JSON.stringify(r.saved)})`);
+    check(r.dataFileChoices && JSON.stringify(r.dataFileChoices) === '{"cam3":"cam3/cam3.slp","cam5":"cam5/cam5_v1.slp"}',
+        `and the session carries it for project.slp (got ${JSON.stringify(r.dataFileChoices)})`);
+
     // ---- and what it said ----------------------------------------------------
-    check(/newer \.slp present but not loaded/.test(r.status) && /cam5\.predictions\.slp/.test(r.status),
-        `the status names the SLEAP file written after cam5's export (got "${r.status}")`);
-    check(!/cam[1-46]:/.test(r.status),
-        'and no other camera — a LUC3D file is never "newer" than the later LUC3D export');
-    check(/warning/.test(r.statusDot), `the note is a warning (got "${r.statusDot}")`);
-    check(logs.some(l => /cam1: "cam1_v1\.slp" has the higher version suffix but "cam1\.slp" was exported later/.test(l)),
-        'the console says when the stamp overruled the suffix');
+    check(r.status === 'Loaded 6 camera(s)', `a plain success (got "${r.status}")`);
+    check(logs.some(l => /cam1: "cam1\.slp" \(auto, newest-export\)/.test(l)),
+        'the console says the newest export was chosen on its own');
+    check(logs.some(l => /cam5: "cam5_v1\.slp" \(chosen\)/.test(l)),
+        'and that cam5 was the user\'s choice');
 
     check(pageErrs.length === 0, `no uncaught page errors (got ${JSON.stringify(pageErrs.slice(0, 2))})`);
     await browser.close();

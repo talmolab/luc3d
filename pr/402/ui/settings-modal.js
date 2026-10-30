@@ -40,14 +40,15 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=e932319066ea';
-import { getActiveSession, state, timeline } from './app-state.js?v=e932319066ea';
-import { drawAllOverlays } from './rendering.js?v=e932319066ea';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=e932319066ea';
-import { installModalGeometry } from './modal-geometry.js?v=e932319066ea';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=e932319066ea';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=e932319066ea';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=e932319066ea';
+} from './settings.js?v=9aab3ba0af2d';
+import { getActiveSession, state, timeline } from './app-state.js?v=9aab3ba0af2d';
+import { drawAllOverlays } from './rendering.js?v=9aab3ba0af2d';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=9aab3ba0af2d';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=9aab3ba0af2d';
+import { installModalGeometry } from './modal-geometry.js?v=9aab3ba0af2d';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=9aab3ba0af2d';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=9aab3ba0af2d';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=9aab3ba0af2d';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -209,13 +210,30 @@ function buildSection(title, count) {
     return { root: root, body: body };
 }
 
-// Show the Settings modal. `initialPanel` is one of 'triangulation' |
-// 'keyboard' | 'wizard' | 'smoothing' and defaults to 'triangulation'.
+// The panel Settings was last left on, so Help ▸ Settings reopens there.
+// Browser-local display taste (`localStorage`), never the `.slp`; storage that
+// throws just means the first panel.
+const LAST_PANEL_KEY = 'settingsLastPanel';
+const SETTINGS_PANELS = ['wizard', 'triangulation', 'smoothing', 'keyboard'];
+
+function readLastPanel() {
+    try {
+        const v = localStorage.getItem(LAST_PANEL_KEY);
+        return SETTINGS_PANELS.indexOf(v) >= 0 ? v : null;
+    } catch (e) { return null; }
+}
+
+function writeLastPanel(name) {
+    try { localStorage.setItem(LAST_PANEL_KEY, name); } catch (e) { /* best effort */ }
+}
+
+// Show the Settings modal. `initialPanel` is one of 'wizard' | 'triangulation'
+// | 'smoothing' | 'keyboard'; without one (Help ▸ Settings, its shortcut) it
+// opens on the panel last shown, else the first, Tracking Wizard.
 export function showSettingsModal(initialPanel) {
-    const VALID_PANELS = ['keyboard', 'wizard', 'smoothing'];
-    const startPanel = VALID_PANELS.indexOf(initialPanel) >= 0
+    const startPanel = SETTINGS_PANELS.indexOf(initialPanel) >= 0
         ? initialPanel
-        : 'triangulation';
+        : (readLastPanel() || SETTINGS_PANELS[0]);
 
     // Enforce a single instance.
     const existing = document.querySelector('.settings-overlay');
@@ -308,11 +326,13 @@ export function showSettingsModal(initialPanel) {
     panelContainer.className = 'settings-panel-container';
     body.appendChild(panelContainer);
 
+    // In the order they are used, as on the toolbar (Track, Triangulate,
+    // Smooth); Keyboard Shortcuts is not a step, so it goes last.
     const NAV_ITEMS = [
-        { panel: 'triangulation', label: 'Default Triangulation' },
-        { panel: 'keyboard', label: 'Keyboard Shortcuts' },
         { panel: 'wizard', label: 'Tracking Wizard' },
+        { panel: 'triangulation', label: 'Default Triangulation' },
         { panel: 'smoothing', label: 'Temporal Smoothing' },
+        { panel: 'keyboard', label: 'Keyboard Shortcuts' },
     ];
 
     const navItems = {};
@@ -710,17 +730,32 @@ export function showSettingsModal(initialPanel) {
     smHint.className = 'settings-kbd-hint';
     smHint.style.marginTop = '0';
     smHint.style.marginBottom = '8px';
-    smHint.textContent = 'Smooths each node\'s 3D position over time, in two stages that both work along the frame ' +
-        'axis: a median first, to remove one-frame spikes, then a Gaussian on its output, to remove remaining ' +
-        'jitter. Each node\'s x, y and z are filtered separately; nodes are never mixed with each other. 2D labels ' +
-        'and predictions are never changed, and the reprojection overlays follow the smoothed 3D. Both stages are off (0) by ' +
-        'default — run the pass with the Temporal Smoothing button next to Triangulate All. Changes apply when you click Apply.';
+    smHint.textContent = 'Smooths each node\'s 3D over time, after triangulation: a median first, then a Gaussian. ' +
+        '2D labels and predictions never change; the reprojections follow the smoothed 3D. Both stages are off (0) ' +
+        'by default. Run it from the toolbar\'s Smooth ▾ (a click runs all frames; its menu also has This frame and ' +
+        'Remove smoothing). Changes here apply when you click Apply.';
     smPanel.appendChild(smHint);
+
+    // What the two windows do, redrawn as they are typed
+    // (`ui/smoothing-windows-figure.js`). Its sliders set the same working
+    // values and the matching field.
+    const smFigure = buildSmoothingWindowsFigure({
+        onParam: function (id, value) {
+            working.smoothing[id] = value;
+            const def = smoothingDefs.find(function (d) { return d.id === id; });
+            const field = def && smSection.body.querySelector('input[aria-label="' + def.label + '"]');
+            if (field) field.value = String(value);
+        },
+    });
+    smFigure.update(working.smoothing);
+    smPanel.appendChild(smFigure.el);
 
     const smSection = buildSection('Filter Parameters', smoothingDefs.length || null);
     smPanel.appendChild(smSection.root);
     smoothingDefs.forEach(function (def) {
-        smSection.body.appendChild(buildParamRow(def, working.smoothing));
+        smSection.body.appendChild(buildParamRow(def, working.smoothing, function () {
+            smFigure.update(working.smoothing);
+        }));
     });
 
     // The two dials of luc3d #134 pull against each other and the interaction is
@@ -758,6 +793,7 @@ export function showSettingsModal(initialPanel) {
             panels[key].classList.toggle('active', key === name);
         });
         if (name === 'wizard') filterPreview.start();
+        writeLastPanel(name);
     }
     NAV_ITEMS.forEach(function (item) {
         navItems[item.panel].addEventListener('click', function () {
@@ -845,8 +881,9 @@ export function showSettingsModal(initialPanel) {
         minW: 520,
         minH: 320,
         margin: 24,
-        // The opening size before it widened to 1040px; records holding it
-        // were saved without a resize, so they open at the new default.
+        // The opening size before it widened (to 1040x620, now 1320x800);
+        // records holding it were saved without a resize, so they open at the
+        // current default. Later records carry `sized`, so they follow it too.
         legacyDefaultSize: { w: 880, h: 620 },
     });
 }

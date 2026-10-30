@@ -92,7 +92,7 @@ async function openApp(browser, answers, opts) {
         }).observe(document, { childList: true, subtree: true });
     }, answers);
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
     await page.evaluate(async ({ NF, install }) => {
         const { Skeleton, Camera, Instance, FrameGroup, Session } = await import('/pose/pose-data.js');
         const AS = await import('/ui/app-state.js');

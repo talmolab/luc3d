@@ -16,33 +16,34 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=e932319066ea';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=e932319066ea';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=e932319066ea';
+} from './triangulation.js?v=9aab3ba0af2d';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=9aab3ba0af2d';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=9aab3ba0af2d';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=e932319066ea';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=9aab3ba0af2d';
 import {
     getNodeWeightArray, getNodeWeight, updateNodeWeights,
     getTrackingThresholds, getTrackingThreshold, isCameraTracked,
     getTrackingThresholdDefs, updateTrackingThresholds,
-} from '../ui/settings.js?v=e932319066ea';
-import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=e932319066ea';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=e932319066ea';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=e932319066ea';
-import { startTrackerWorker } from './tracker-pool.js?v=e932319066ea';
-import { passesDetectionFilter } from './detection-filter-stats.js?v=e932319066ea';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=e932319066ea';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=e932319066ea';
-import { updateInfoPanel } from '../ui/info-panel.js?v=e932319066ea';
-import { setColorByIdentity } from '../ui/color-by.js?v=e932319066ea';
-import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=e932319066ea';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=e932319066ea';
-import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=e932319066ea';
-import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=e932319066ea';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=e932319066ea';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=e932319066ea';
-import { noteTrackRun } from './run-state.js?v=e932319066ea';
+} from '../ui/settings.js?v=9aab3ba0af2d';
+import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=9aab3ba0af2d';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=9aab3ba0af2d';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=9aab3ba0af2d';
+import { startTrackerWorker } from './tracker-pool.js?v=9aab3ba0af2d';
+import { passesDetectionFilter } from './detection-filter-stats.js?v=9aab3ba0af2d';
+import { loadAllLazyFrames, sweepLazyFrameWindows, showCalibrationRequiredPopup } from './triangulation.js?v=9aab3ba0af2d';
+import { hasRealCalibration } from './placeholder-cameras.js?v=9aab3ba0af2d';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=9aab3ba0af2d';
+import { updateInfoPanel } from '../ui/info-panel.js?v=9aab3ba0af2d';
+import { setColorByIdentity } from '../ui/color-by.js?v=9aab3ba0af2d';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=9aab3ba0af2d';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=9aab3ba0af2d';
+import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=9aab3ba0af2d';
+import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=9aab3ba0af2d';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=9aab3ba0af2d';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=9aab3ba0af2d';
+import { noteTrackRun } from './run-state.js?v=9aab3ba0af2d';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -1296,6 +1297,14 @@ export async function trackCurrentFrame() {
         setStatus('No session with cameras loaded', 'error');
         return;
     }
+    // Cross-view tracking needs a real calibration, as Triangulate does.
+    // Placeholder cameras (a folder loaded with no calibration.toml,
+    // `pose/placeholder-cameras.js`) all sit at the world origin, so tracking
+    // on them would build groups from 3D with no baseline.
+    if (!hasRealCalibration(session)) {
+        showCalibrationRequiredPopup();
+        return;
+    }
     var fg = session.getFrameGroup(state.currentFrame);
     if (!fg) {
         setStatus('No frame data at frame ' + displayFrame(state.currentFrame), 'error');
@@ -1473,6 +1482,14 @@ async function runTrackingPass(range) {
 
     if (session.cameras.length < 2) {
         setStatus('Need at least 2 cameras', 'warning');
+        return bail;
+    }
+    // Cross-view tracking needs a real calibration, as Triangulate does.
+    // Placeholder cameras (a folder loaded with no calibration.toml,
+    // `pose/placeholder-cameras.js`) all sit at the world origin, so tracking
+    // on them would build groups from 3D with no baseline.
+    if (!hasRealCalibration(session)) {
+        showCalibrationRequiredPopup();
         return bail;
     }
 

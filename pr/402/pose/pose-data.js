@@ -1818,6 +1818,14 @@ export class Session {
          * `setTrackerNumAnimals`), which also marks the project dirty.
          */
         this.numAnimals = null;
+        /**
+         * @type {Object<string, string|null>|null} For each camera whose data
+         * file the user chose in the per-camera folder loader's chooser (#413):
+         * `"<camera dir>/<file name>"`, or null for "None". Null when the
+         * loader settled every camera on its own. Persisted as
+         * `metadata.lucid.dataFileChoices` (import-export/visibility-metadata.js).
+         */
+        this.dataFileChoices = null;
         /** @type {LazyFrameLoader|null} Set when using lazy H5 loading */
         this.lazyLoader = null;
         /** @type {Map<string,{data:Uint8Array,nTracks:number,nFrames:number}>|null} Per-camera track occupancy for timeline */
