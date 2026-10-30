@@ -80,10 +80,13 @@ async function installHelpers(page) {
         const tri = await import('./pose/triangulation.js');
         const pad = new Uint8Array(tri.LAZY_SLP_THRESHOLD + (1 << 20));
         const canon = n => CANON.indexOf(n === 'Snout' ? 'Nose' : n);
+        // No camera sits exactly at the origin: an all-zero camera is a
+        // placeholder (pose/placeholder-cameras.js), and a one-camera session
+        // with only that would count as uncalibrated.
         const toml = cams => cams.map((cn, i) => '[cam_' + i + ']\nname = "' + cn + '"\nsize = [64, 64]\n'
             + 'matrix = [[600.0, 0.0, 32.0], [0.0, 600.0, 32.0], [0.0, 0.0, 1.0]]\n'
             + 'distortions = [0.0, 0.0, 0.0, 0.0, 0.0]\n'
-            + 'rotation = [0.0, ' + (0.2 * i) + ', 0.0]\ntranslation = [' + (15 * i) + ', 0.0, 0.0]\n\n').join('');
+            + 'rotation = [0.0, ' + (0.2 * i) + ', 0.0]\ntranslation = [' + (5 + 15 * i) + ', 0.0, 0.0]\n\n').join('');
         const fileH = (name, data, type) => ({ kind: 'file', name,
             getFile: async () => new File(Array.isArray(data) ? data : [data], name, { type: type || 'application/octet-stream' }) });
         const dirH = (name, entries) => ({ kind: 'directory', name,
