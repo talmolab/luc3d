@@ -24,15 +24,15 @@
  * Depends on: pose/tracker.js (the run itself), ui/app-state.js, save-load.js.
  */
 
-import { state, getActiveSession } from './app-state.js?v=941ce5942106';
-import { setStatus } from '../import-export/save-load.js?v=941ce5942106';
-import { getNodeWeight, updateNodeWeights, getTrackingThresholdDefs, updateTrackingThresholds } from './settings.js?v=941ce5942106';
-import { buildNodeWeightFields, buildImageCheckFields, IMAGE_CHECK_IDS } from './track-setup-modal.js?v=941ce5942106';
+import { state, getActiveSession } from './app-state.js?v=693797943874';
+import { setStatus } from '../import-export/save-load.js?v=693797943874';
+import { getNodeWeight, updateNodeWeights, getTrackingThresholdDefs, updateTrackingThresholds } from './settings.js?v=693797943874';
+import { buildNodeWeightFields, buildImageCheckFields, IMAGE_CHECK_IDS } from './track-setup-modal.js?v=693797943874';
 import {
     trackFrameRange, trackableFrameBounds,
     getTrackerNumAnimals, setTrackerNumAnimals,
-} from '../pose/tracker.js?v=941ce5942106';
-import { hasRealCalibration } from '../pose/placeholder-cameras.js?v=941ce5942106';
+} from '../pose/tracker.js?v=693797943874';
+import { hasRealCalibration } from '../pose/placeholder-cameras.js?v=693797943874';
 
 // Frames pre-filled into the End field, measured from the current frame. The
 // feature is for narrow windows around a suspected switch, so the default is a

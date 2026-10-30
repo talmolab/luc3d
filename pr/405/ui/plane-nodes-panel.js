@@ -19,19 +19,19 @@
 // a circular import is still `undefined`. That rule is what makes this feature's
 // existing cycles safe, and it applies here unchanged.
 
-import { state } from './app-state.js?v=941ce5942106';
-import { setInfoTip } from './info-tip.js?v=941ce5942106';
-import { showPlaneDialog } from './plane-dialog.js?v=941ce5942106';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=941ce5942106';
-import { PIN_STATES } from '../pose/plane-nodes.js?v=941ce5942106';
-import { nodeFreezeState } from '../pose/plane-data.js?v=941ce5942106';
-import { reprojectPointCamera } from '../pose/triangulation.js?v=941ce5942106';
-import { isOriginModeActive } from './origin-definition.js?v=941ce5942106';
+import { state } from './app-state.js?v=693797943874';
+import { setInfoTip } from './info-tip.js?v=693797943874';
+import { showPlaneDialog } from './plane-dialog.js?v=693797943874';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=693797943874';
+import { PIN_STATES } from '../pose/plane-nodes.js?v=693797943874';
+import { nodeFreezeState } from '../pose/plane-data.js?v=693797943874';
+import { reprojectPointCamera } from '../pose/triangulation.js?v=693797943874';
+import { isOriginModeActive } from './origin-definition.js?v=693797943874';
 import {
     ICON_PIN, ICON_INFO, makeDeleteButton, setEmptyState, redraw,
     planeModel, planePool, planeState, refreshPlanePanel,
     refreshTriangulationErrors, syncPlanes3D, syncSelectedNode3D,
-} from './plane-definition.js?v=941ce5942106';
+} from './plane-definition.js?v=693797943874';
 
 /**
  * User-facing names for the three pin states.

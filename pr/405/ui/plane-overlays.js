@@ -11,13 +11,13 @@
 // module back. Circular, and safe for the same reason documented in
 // `ui/plane-toolbar-lock.js`: both are read inside function bodies only.
 
-import { interactionManager } from './app-state.js?v=941ce5942106';
-import { makeVideoToCanvasTransform } from './overlays.js?v=941ce5942106';
+import { interactionManager } from './app-state.js?v=693797943874';
+import { makeVideoToCanvasTransform } from './overlays.js?v=693797943874';
 import {
     planeEdgesPoolIndices, planeFillOrderPoolIndices, planeCentroid2d,
-} from '../pose/plane-data.js?v=941ce5942106';
-import { planeModel, planeState } from './plane-definition.js?v=941ce5942106';
-import { planeVisibility } from './plane-visibility.js?v=941ce5942106';
+} from '../pose/plane-data.js?v=693797943874';
+import { planeModel, planeState } from './plane-definition.js?v=693797943874';
+import { planeVisibility } from './plane-visibility.js?v=693797943874';
 
 const PLANE_LABEL_SIZE = 11;
 const NULLED_COLOR = '#777777';

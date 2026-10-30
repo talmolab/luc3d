@@ -22,88 +22,89 @@ import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, VIEW_NAMES, buildRememberedSkeleton, setProjectSkeleton,
     isViewDocked,
-} from '../ui/app-state.js?v=941ce5942106';
+} from '../ui/app-state.js?v=693797943874';
 
 import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
-} from '../pose/pose-data.js?v=941ce5942106';
+} from '../pose/pose-data.js?v=693797943874';
 import {
     makePlaceholderCamera, hasRealCalibration, ensurePlaceholderCameras,
-} from '../pose/placeholder-cameras.js?v=941ce5942106';
+} from '../pose/placeholder-cameras.js?v=693797943874';
 
-import { OnDemandVideoDecoder, VideoController, releaseViewsFrames } from './video.js?v=941ce5942106';
-import { videoLoadFailureText } from './video-codec-diagnosis.js?v=941ce5942106';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=941ce5942106';
-import { confirmFolderPick } from '../ui/folder-confirm-tip.js?v=941ce5942106';
+import { OnDemandVideoDecoder, VideoController, releaseViewsFrames } from './video.js?v=693797943874';
+import { videoLoadFailureText } from './video-codec-diagnosis.js?v=693797943874';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=693797943874';
+import { confirmFolderPick } from '../ui/folder-confirm-tip.js?v=693797943874';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
     parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO,
     loadCalibrationFile,
-} from '../import-export/file-io.js?v=941ce5942106';
+} from '../import-export/file-io.js?v=693797943874';
 
-import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=941ce5942106';
+import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=693797943874';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
 // the browser test runner (session-loader itself pulls app.js) — same reason
 // and same shape as `resolveImportTrackIdx` above.
-import { chooseCameraSlp } from './percam-slp-choice.js?v=941ce5942106';
+import { chooseCameraSlp } from './percam-slp-choice.js?v=693797943874';
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy, stampFrameIdentitiesFromGroups } from '../import-export/slp-import.js?v=941ce5942106';
-import { readFrameIdentityMetadata } from '../import-export/frame-identity-metadata.js?v=941ce5942106';
-import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=941ce5942106';
+import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy, stampFrameIdentitiesFromGroups } from '../import-export/slp-import.js?v=693797943874';
+import { readFrameIdentityMetadata } from '../import-export/frame-identity-metadata.js?v=693797943874';
+import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=693797943874';
 import {
     isCalibrationImagesVideo, preferNonCalibrationVideos, matchVideoToCamera,
-} from './video-file-pick.js?v=941ce5942106';
+} from './video-file-pick.js?v=693797943874';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,
     ensureLazyFrameData,
-} from '../pose/triangulation.js?v=941ce5942106';
-import { SioLazyLoader } from './sio-lazy-loader.js?v=941ce5942106';
-import { fileSessionNames, fileSessionProvenance } from '../import-export/slp-provenance.js?v=941ce5942106';
-import { unionTrackNames, remapTrackIdx } from './track-union.js?v=941ce5942106';
+} from '../pose/triangulation.js?v=693797943874';
+import { SioLazyLoader } from './sio-lazy-loader.js?v=693797943874';
+import { fileSessionNames, fileSessionProvenance } from '../import-export/slp-provenance.js?v=693797943874';
+import { unionTrackNames, remapTrackIdx } from './track-union.js?v=693797943874';
 import {
     readCampyRecording, campyCameraFor, orderByCampyCameras, preferCampyVideo, campyVideoFile,
     compareCampyCameraNames, compareCalibrationSha256, sha256Hex, frameRatesDisagree,
     withCampyWarnings, findCampyManifestFiles,
-} from './campy-session.js?v=941ce5942106';
-import { readBlobArrayBuffer } from './cold-read-guard.js?v=941ce5942106';
+} from './campy-session.js?v=693797943874';
+import { readBlobArrayBuffer } from './cold-read-guard.js?v=693797943874';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
     setStatus, showLoading, hideLoading, ensureNo3dImportBlockingLoad,
-} from '../import-export/save-load.js?v=941ce5942106';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=941ce5942106';
+} from '../import-export/save-load.js?v=693797943874';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=693797943874';
 
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=941ce5942106';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=941ce5942106';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=941ce5942106';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=941ce5942106';
-import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=941ce5942106';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=693797943874';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=693797943874';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=693797943874';
+import { noteUnplayableVideos } from '../ui/video-codec-notice.js?v=693797943874';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=693797943874';
+import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=693797943874';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, setupTimeline,
     updateFpsDisplay,
     hideWelcomeOverlay,
-} from '../pose/initialization.js?v=941ce5942106';
+} from '../pose/initialization.js?v=693797943874';
 // Pass 3h: populateViewStrip / populateSessionStrip / switchSession moved to sessions-panes.js.
 import {
     populateViewStrip, populateSessionStrip, switchSession, multiSelectViews,
-} from '../ui/sessions-panes.js?v=941ce5942106';
+} from '../ui/sessions-panes.js?v=693797943874';
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
 import {
     updateSeekbar, fitTimelineToData, onPlaybackStateChange, updateVideoGridDisplay,
-} from '../ui/ui-wiring.js?v=941ce5942106';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=941ce5942106';
-import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=941ce5942106';
-import { readSmoothingMetadata } from '../import-export/smoothing-metadata.js?v=941ce5942106';
-import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js?v=941ce5942106';
+} from '../ui/ui-wiring.js?v=693797943874';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=693797943874';
+import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=693797943874';
+import { readSmoothingMetadata } from '../import-export/smoothing-metadata.js?v=693797943874';
+import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js?v=693797943874';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -278,6 +279,7 @@ export async function handleLoadVideos() {
         // matching `session.cameras` entry, so the timeline (which builds rows
         // from `session.cameras`) drew nothing for instances added there.
         var failedVideos = [];
+        var codecFailures = [];   // { name, error } for ui/video-codec-notice.js
         var newVideoFiles = [];
         for (let i = 0; i < files.length; i++) {
             const file = files[i];
@@ -325,6 +327,7 @@ export async function handleLoadVideos() {
                 // The decoder attaches a codec diagnosis (e.g. "HEVC tagged hev1 —
                 // re-tag with …") when the browser can't play the file.
                 failedVideos.push(videoLoadFailureText(stem, videoErr));
+                codecFailures.push({ name: file.name, error: videoErr });
             }
         }
 
@@ -438,6 +441,7 @@ export async function handleLoadVideos() {
         } else {
             setStatus('Loaded ' + files.length + ' video(s), ' + state.views.length + ' views active', 'success');
         }
+        noteUnplayableVideos(codecFailures, files.length);
     } catch (err) {
         console.error('Failed to load videos:', err);
         hideLoading();
@@ -2409,6 +2413,7 @@ export async function handleLoadSessionFolderSingleSlp() {
         }
 
         var failedVideos = [];
+        var codecFailures = [];   // { name, error } for ui/video-codec-notice.js
         for (var vfi = 0; vfi < videoFiles.length; vfi++) {
             var vFile = videoFiles[vfi];
             var vStemName = vFile.name.replace(/\.[^.]+$/, '');
@@ -2452,6 +2457,7 @@ export async function handleLoadSessionFolderSingleSlp() {
             } catch (e) {
                 console.error('[single-slp] Failed to load video:', vFile.name, e);
                 failedVideos.push(videoLoadFailureText(vFile.name, e));
+                codecFailures.push({ name: vFile.name, error: e });
             }
         }
 
@@ -2528,6 +2534,7 @@ export async function handleLoadSessionFolderSingleSlp() {
         }
         var campyFinal = withCampyWarnings(finalMsg, finalKind, session.campyRecording);
         setStatus(campyFinal.message, campyFinal.kind);
+        noteUnplayableVideos(codecFailures, videoFiles.length);
     } catch (err) {
         console.error('[single-slp] Error:', err);
         hideLoading();
@@ -2666,10 +2673,12 @@ export async function attachVideosForLazyReopen(session, loader, pickedFilesOver
 
     var attachedNames = [];
     var failed = [];
+    var codecFailures = [];   // { name, error } for ui/video-codec-notice.js
     for (var li = 0; li < toLoad.length; li++) {
         var lEntry = toLoad[li];
         if (!lEntry.decoder) {
             failed.push(lEntry.error ? videoLoadFailureText(lEntry.file.name, lEntry.error) : lEntry.file.name);
+            if (lEntry.error) codecFailures.push({ name: lEntry.file.name, error: lEntry.error });
             continue;
         }
         var vfEntry = {
@@ -2689,6 +2698,7 @@ export async function attachVideosForLazyReopen(session, loader, pickedFilesOver
     if (attachedNames.length === 0) {
         hideLoading();
         if (failed.length > 0) setStatus('All videos failed to load: ' + failed.join('; '), 'error');
+        noteUnplayableVideos(codecFailures, toLoad.length);
         return false;
     }
 
@@ -2716,6 +2726,7 @@ export async function attachVideosForLazyReopen(session, loader, pickedFilesOver
     hideLoading();
     if (failed.length > 0) {
         setStatus('Attached ' + attachedNames.length + ' video(s), ' + failed.length + ' failed: ' + failed[0], 'warning');
+        noteUnplayableVideos(codecFailures, toLoad.length);
     }
     return true;
 }
@@ -3817,7 +3828,8 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                         // message. Reported in the final status below.
                         console.error('[session-folder] Failed to load video ' + videoFile.name + ':', vidErr);
                         videoFailures.push({ text: videoLoadFailureText(videoFile.name, vidErr),
-                            kind: (vidErr && vidErr.codecDiagnosis && vidErr.codecDiagnosis.kind) || null });
+                            kind: (vidErr && vidErr.codecDiagnosis && vidErr.codecDiagnosis.kind) || null,
+                            name: videoFile.name, error: vidErr });
                     }
                 }
             }
@@ -4033,6 +4045,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         }
         var campyStatus = withCampyWarnings(statusMsg, statusKind, state.session && state.session.campyRecording);
         setStatus(campyStatus.message, campyStatus.kind);
+        noteUnplayableVideos(videoFailures, nVideosToLoad);
 
     } catch (err) {
         console.error('[session-folder] Error:', err);

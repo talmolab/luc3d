@@ -8,9 +8,9 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
-import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=941ce5942106';
-import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=941ce5942106';
-import { readBlobRange, guardedRangeSource } from './cold-read-guard.js?v=941ce5942106';
+import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=693797943874';
+import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=693797943874';
+import { readBlobRange, guardedRangeSource } from './cold-read-guard.js?v=693797943874';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -2221,19 +2221,40 @@ function videoFrameCaptureUnsafe() {
 }
 
 /**
+ * How long `judgeVideoFrameTimestamps` may keep a decoder undecided (ms of
+ * wall time since its first look) before a timestamp that stands still or
+ * trails the clock counts as unusable. A slow playback start trails for a
+ * while: on Chrome 156 (Windows, an integrated GPU, over Remote Desktop) the
+ * first picture change came 359 and 799 ms after play, and the old one-look
+ * verdict then sent all 8 views to the fallback for good (luc3d #411).
+ * `window.LUCID_VF_JUDGE_MS` overrides it.
+ */
+export const VF_JUDGE_WINDOW_MS = 2000;
+
+/**
  * Decide, per decoder, whether `new VideoFrame(<video>).timestamp` tracks the
  * picture — the per-refresh loop's frame index depends on it. Chrome: yes.
  * Safari 27: 0 or the clock (and never asked — `videoFrameCaptureUnsafe`).
- * Firefox 157: a constant. Judged once the video clock has advanced a few
- * frames since the first capture: usable only if the timestamp moved, agrees
+ * Firefox 157: a constant. Looked at once the video clock has advanced a few
+ * frames since the previous look: usable once the timestamp moved, agrees
  * with the clock to within max(3 frames, 50 ms) — the presented frame trails
  * the clock by the compositor's latency, which at 150 fps on a 60 Hz display
  * exceeds 3 frames and made Brave fall back mid-session — and is not simply
  * the clock itself (equal to `currentTime` to the microsecond while off the
- * frame grid: a real frame's timestamp sits on it). Cached on the decoder as
- * `_vfTimestamps` ('ok' | 'bad'); undefined while undecided.
+ * frame grid: a real frame's timestamp sits on it).
  *
- * @returns {'ok'|'bad'|undefined}
+ * Only two signs are final at once: a clock copy (any browser) and a
+ * timestamp that stands still in Firefox (its known constant). Elsewhere a
+ * timestamp that stands still or trails the clock is what a slow start looks
+ * like too (Chrome, luc3d #411), so the look is repeated until it agrees or
+ * VF_JUDGE_WINDOW_MS has passed. Meanwhile a MOVING timestamp is the captured
+ * picture's own, so the loop paints the captures at their own index
+ * ('lagging'); a still one keeps the paused frame. Cached on the decoder as
+ * `_vfTimestamps` ('ok' | 'bad'); undefined while undecided. A 'bad' reached
+ * only by running out of time (`_vfTsWhy` 'timeout') is judged again at the
+ * next `startPlayback`.
+ *
+ * @returns {'ok'|'bad'|'lagging'|undefined}
  */
 function judgeVideoFrameTimestamps(dec, cap) {
     var el = dec._videoEl;
@@ -2242,20 +2263,31 @@ function judgeVideoFrameTimestamps(dec, cap) {
     var ctIdx = Math.floor(el.currentTime * fps + 1e-6);
     var chk = dec._vfTsCheck;
     if (!chk || ctIdx < chk.ct) {   // first look (or the clock went back: a seek) — start over
-        dec._vfTsCheck = { ts: cap.frame.timestamp, ct: ctIdx };
+        dec._vfTsCheck = { ts: cap.frame.timestamp, ct: ctIdx, t0: performance.now(), lagging: false };
         return undefined;
     }
-    if (ctIdx - chk.ct < 4) return undefined;
+    if (ctIdx - chk.ct < 4) return chk.lagging ? 'lagging' : undefined;
     var ts = cap.frame.timestamp;
     var moved = ts !== chk.ts;
     var agrees = Math.abs(cap.index - ctIdx) <= Math.max(3, Math.ceil(0.05 * fps));
     var pos = ts / 1e6 * fps;
     var isClock = Math.abs(ts - el.currentTime * 1e6) < 1 && Math.abs(pos - Math.round(pos)) > 0.02;
+    var win = (typeof window !== 'undefined' && window.LUCID_VF_JUDGE_MS != null) ? +window.LUCID_VF_JUDGE_MS : VF_JUDGE_WINDOW_MS;
+    var why = null;
+    if (moved && agrees && !isClock) why = 'ok';
+    else if (isClock) why = 'clock';
+    else if (!moved && rvfcCallbacksCoalesced()) why = 'constant';
+    else if (performance.now() - chk.t0 >= win) why = 'timeout';
+    if (!why) {   // not yet: look again a few frames on, from here
+        dec._vfTsCheck = { ts: ts, ct: ctIdx, t0: chk.t0, lagging: moved };
+        return moved ? 'lagging' : undefined;
+    }
     dec._vfTsCheck = null;
-    dec._vfTimestamps = (moved && agrees && !isClock) ? 'ok' : 'bad';
+    dec._vfTimestamps = why === 'ok' ? 'ok' : 'bad';
+    dec._vfTsWhy = why;
     videoLog('Playback: VideoFrame timestamps ' + (dec._vfTimestamps === 'ok'
         ? 'track the video — painting captured frames'
-        : 'do NOT track the video in this browser — drawing the <video> directly, frame index from '
+        : 'do NOT track the video in this browser (' + why + ') — drawing the <video> directly, frame index from '
           + (el.requestVideoFrameCallback ? 'requestVideoFrameCallback' : 'its clock')));
     return dec._vfTimestamps;
 }
@@ -2940,6 +2972,11 @@ export class VideoController {
             if (!d) return;
             if (typeof d.releaseFrames === 'function') d.releaseFrames();
             else if (d.releaseStepCursor) d.releaseStepCursor();
+            // VideoFrame timestamps (judgeVideoFrameTimestamps): a judgement
+            // still open belongs to the last playback, and a 'bad' that only
+            // ran out of time gets another look in this one.
+            d._vfTsCheck = null;
+            if (d._vfTimestamps === 'bad' && d._vfTsWhy === 'timeout') { d._vfTimestamps = undefined; d._vfTsWhy = null; }
         });
 
         // ------------------------------------------------------------------
@@ -3178,7 +3215,9 @@ export class VideoController {
                     var tsMode = dec._vfTimestamps;
                     caps[j] = (tsMode !== 'bad' && dec.captureCurrentFrame) ? dec.captureCurrentFrame() : null;
                     if (caps[j] && tsMode === undefined) tsMode = judgeVideoFrameTimestamps(dec, caps[j]);
-                    if (caps[j] && tsMode === 'ok') {
+                    if (caps[j] && (tsMode === 'ok' || tsMode === 'lagging')) {
+                        // 'lagging': still judging, but the timestamp moves —
+                        // it is this capture's own frame (judgeVideoFrameTimestamps).
                         idx[j] = caps[j].index;
                     } else if (caps[j] && tsMode === undefined) {
                         // Still judging the timestamps: nothing about this
