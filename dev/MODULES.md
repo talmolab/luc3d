@@ -4919,7 +4919,9 @@ edit-group mode, keyboard shortcuts.
   `getAssignmentSelectedIds`, `onMouseDown`/`onMouseMove`/`onMouseUp`/
   `onMouseLeave`/`onWheel`, `onKeyDown`, `_addNewInstance` (used by smart-add;
   lays out a new skeleton via an inline BFS fan-out from the highest-degree
-  root, with a vertical-line fallback when there are no edges).
+  root, with a vertical-line fallback when there are no edges). Edge hit tests
+  measure from the wedge when that instance type draws wedges
+  (`_edgeWedgeHalf`, `wedgeHalfWidth` from `ui/overlays.js`).
   `canvasToVideo(clientX, clientY, viewName)` maps a pointer to video pixels;
   on a ROTATED view it must use `zoom.scaleY` for the vertical axis (it differs
   a hair from `zoom.scale` at native resolution), or a click lands up to ~0.3%
@@ -5937,6 +5939,25 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `[4, 4]` dash only when no style is passed) and `drawUnlinkedInstances`
   (`instNodeShape`). `drawFrameOverlays` passes the per-type Node Style as
   `nodeShape`.
+- Wedge edges: `lineStyle: 'wedge'` (SLEAP's Edge Style > Wedge) draws an edge
+  as a triangle from its source node to a tip on its destination:
+  `wedgeHalfWidth(nodeSize)` (half the node radius) each side at the source,
+  half-opacity fill, full-colour outline at the edge weight. `drawSkeleton`,
+  `drawReprojectedSkeleton`, `drawUnlinkedInstances` and
+  `drawSelectionHighlight` (`options.wedgeNodeSize`) share `traceEdge` +
+  `paintEdges`; `drawDragPreview` stays lines. `ui/interaction.js` hit-tests the
+  same shape. Test: `tests/e2e/edge-style-wedge.mjs`.
+- Symmetry edges: `symmetricNodePairs(names)` finds left/right node pairs from
+  the names alone (`.slp` symmetries are not read), `symmetryEdgesFor(skeleton)`
+  leaves out pairs that are already edges and remembers the last answer.
+  `drawFrameOverlays` (`showSymmetryEdges`, `symmetryEdgeWeight`) passes them to
+  `drawSkeleton`, `drawReprojectedSkeleton` and `drawUnlinkedInstances`, which draw
+  them solid grey behind their edges, 2D only, not clickable. Test:
+  `tests/test-symmetry-edges.mjs`, `tests/e2e/symmetry-edges.mjs`.
+- Reprojection node color: `reprojNodeColor` is `'white'`, `'black'`, `'track'`
+  (the Brightness-adjusted track color) or `'dark'` (that color in the Dark
+  trail shade, `trailColor`). Test:
+  `tests/e2e/reprojection-fallback-color-setting.mjs`.
 - Independent node/edge visibility: `drawSkeleton` and
   `drawReprojectedSkeleton` accept `options.showNodes` / `options.showEdges`,
   **defaulting to `true`**. Only the overlay-video export sets them; they ride
