@@ -608,10 +608,9 @@ export function onTrackingThresholdsChange(fn) {
 }
 
 // Commit SOME thresholds (Track All's first-use dialog: the image check's
-// settings), keeping every other stored override. `edited`, as for
-// `setTrackingThresholds`: the ids the user chose, stored even at their default.
-export function updateTrackingThresholds(map, edited) {
-    setTrackingThresholds(Object.assign({}, _settings.trackingThresholds, map || {}), edited);
+// settings), keeping every other stored override.
+export function updateTrackingThresholds(map) {
+    setTrackingThresholds(Object.assign({}, _settings.trackingThresholds, map || {}));
 }
 
 // --- Keyboard catalog ------------------------------------------------------

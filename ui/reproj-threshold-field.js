@@ -44,8 +44,7 @@ export function wireReprojThresholdField() {
         }
         var next = {};
         next[ID] = n;
-        // A value typed here is a choice, so it is kept even at the default.
-        updateTrackingThresholds(next, [ID]);
+        updateTrackingThresholds(next);
     }
     show(input);
     onTrackingThresholdsChange(function () { show(input); });

@@ -6541,8 +6541,7 @@ stays reachable at its original path) and `ui/plane-nodes-panel.js`;
 Method: shows and edits the Tracking Wizard's `reprojErrorThreshold`, which every
 Triangulate run reads when it starts. Blank is off (`placeholder="off"`); the
 setting's 0 shows as blank and typing 0 means the same; at the 50 px default it
-shows 50. A value typed here counts as chosen (`edited`), so it is stored even at
-the default. Browser-wide, not per
+shows 50. Browser-wide, not per
 session, so it only follows the setting (`onTrackingThresholdsChange`, e.g.
 Settings ▸ Apply).
 
@@ -9292,10 +9291,9 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   included or tracking aborts with a warning.
 - `onTrackingThresholdsChange(fn)` — told after every commit of the thresholds
   (`ui/reproj-threshold-field.js` follows it).
-- `updateTrackingThresholds(map, edited)` — commit SOME thresholds, keeping every
-  other stored override (the two tracking dialogs write the image-check settings
-  through it). `edited` as for `setTrackingThresholds`; only the toolbar's
-  Reprojection error field passes it.
+- `updateTrackingThresholds(map)` — commit SOME thresholds, keeping every other
+  stored override (the two tracking dialogs write the image-check settings
+  through it).
 - `getTrackingThresholdDefs()` / `getTrackingThreshold(id)` /
   `getTrackingThresholds()` / `setTrackingThresholds(map, edited)` — read/write the
   tracker's user-editable thresholds. `getTrackingThresholdDefs` returns the
@@ -9499,7 +9497,8 @@ and smoothing rows share one `buildParamRow(def, bag, onEdit, edited)` helper (s
 `{ id, label, desc, min, max, step }` catalog shape, clamp on blur, `kind:
 'toggle'` → switch; `onEdit` lets the filter fields re-count the preview;
 `edited`, passed only by the thresholds, collects `editedThresholds` — the ids
-of every field or switch the user actually changed, not merely blurred).
+of every field or switch the user actually changed, not merely blurred; Apply
+stays disabled until some value differs, so one retyped alone commits nothing).
 Edits mutate a local `working` state only; nothing commits until **Apply**
 (`setDefaultTriangulationMethod` + `applyBindings` + `setNodeWeights` +
 `setCameraWeights` + `setTrackingThresholds(working.thresholds, editedThresholds)`,

@@ -5,9 +5,9 @@
  *
  * Asserted, through the real app:
  *  1. Hovering Triangulate shows it below Method, above Settings…, showing the
- *     50 px default, and a solve at the default drops the stray camera. Typing
- *     the default is a choice: it is stored, so a later default change cannot
- *     move it.
+ *     50 px default, and a solve at the default drops the stray camera. Coming
+ *     back to the default from another value stays stored, so a later default
+ *     change cannot move it.
  *  2. Typing 25 and pressing Enter stores it, hands focus back, and survives a
  *     reload. A real solve then uses it: the same group solved with no options
  *     drops a stray camera at 25 and keeps it when the field is blank.
@@ -94,8 +94,9 @@ try {
     const inStorage = () => page.evaluate(() =>
         (JSON.parse(localStorage.getItem('lucid.settings.v1') || '{}').trackingThresholds || {}).reprojErrorThreshold);
     check(await inStorage() === undefined, 'untouched, the default is not stored');
+    await enter('30');
     await enter('50');
-    check(await inStorage() === 50, 'typing the default stores it');
+    check(await inStorage() === 50, 'coming back to the default keeps it stored');
 
     console.log('2. typing a value');
     await enter('25');
