@@ -33,28 +33,35 @@ import { planeState } from './plane-definition.js';
  * The VISIBILITY controls are deliberately absent from this list, and so are
  * Sessions, Tracks / Identity and the Panel toggle. Those change what is DRAWN, not what is
  * annotated — turning Predictions off to see the plane you are placing is
- * exactly the kind of thing this mode is for. So is the Track group's Animals
- * field (`#tbNumAnimals`): a setting a run reads when it starts, not an action.
+ * exactly the kind of thing this mode is for. So are the quick SETTINGS in the
+ * action menus — Track's Animals field (`#tbNumAnimals`), Triangulate's Method
+ * radios, each menu's Settings… — which a run reads when it starts; only the
+ * menus' run buttons are here.
  *
  * @type {string[]}
  */
 const PLANE_LOCKED_TOOLBAR_IDS = [
-    'tbAddInstance', 'tbDeleteInstance',
-    'tbGroup', 'tbEditGroup', 'tbTriangulate', 'tbTriangulateAll',
-    'tbTrackFrame', 'tbTrackAll',
+    'tbInstanceMenu', 'tbAddInstance', 'tbDeleteInstance',
+    'tbGroupMenu', 'tbGroup', 'tbEditGroup',
+    'tbTriangulateAll', 'tbTriangulate', 'tbTriangulateAllFrames',
+    'tbSmooth', 'tbSmoothFrame', 'tbSmoothAllFrames', 'tbSmoothToggle',
+    'tbTrackAll', 'tbTrackFrame', 'tbTrackAllFrames', 'tbTrackFrameRange',
 ];
 
 /**
  * The dropdown WRAPPERS whose menus must be locked with their button.
  *
- * `#tbTriangulate` / `#tbTriangulateAll` each sit inside a `.tri-dropdown`
- * whose menu opens on **hover** (CSS) and whose DLT / BA entries are `div`s
- * with their own click handlers. `disabled` on the button reaches neither, so
- * without this the button greys out while its menu still triangulates.
+ * A `.tri-dropdown` menu opens on **hover** (CSS), so `disabled` on its
+ * button does not stop the menu. The Instance and Group menus hold nothing but
+ * actions, so their wrappers are locked and the menus do not even open. The
+ * Track / Triangulate / Smooth menus are NOT here: they also hold
+ * settings that stay live, so they open, and every run item in them is a
+ * `<button>` disabled one by one (the list above). A new run item in those
+ * menus must be a `<button>` and go in that list.
  *
  * @type {string[]}
  */
-const PLANE_LOCKED_DROPDOWN_IDS = ['triangulateDropdown', 'triangulateAllDropdown'];
+const PLANE_LOCKED_DROPDOWN_IDS = ['instanceDropdown', 'groupDropdown'];
 
 /** Suffix appended to a locked button's tooltip, so "why?" is answered in place. */
 const LOCKED_TITLE_SUFFIX = ' — not available in Defining Plane Mode';

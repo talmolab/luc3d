@@ -20,6 +20,7 @@ import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPoints
 import { writeVisibilityMetadata } from './visibility-metadata.js';
 import { writeFrameIdentityMetadata } from './frame-identity-metadata.js';
 import { writePlaneMetadata } from './plane-metadata.js';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js';
 
 // ============================================
 // Generic file picker
@@ -2287,6 +2288,8 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
     // every session's dict) plus THIS session's per-view 2D. Same omit-the-
     // defaults rule, so a project that never opened the feature is unchanged.
     writePlaneMetadata(sioSession.metadata.lucid, session);
+    // Temporal Smoothing's last run, only while something is smoothed.
+    writeSmoothingMetadata(sioSession.metadata.lucid, session);
     session.cameras.forEach(function (cam, i) {
         sioSession.addVideo(sioVideos[i], sioCameras[i]);
     });
@@ -2386,6 +2389,10 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
             // accepts boxed rows, so don't reject them here.
             if (group.points3d && group.points3d.length > 0) {
                 instance3d = new SIO.Instance3D({ points: group.points3d, skeleton: skeleton });
+                // Temporal Smoothing's source (smoothing-metadata.js): the vendored
+                // writer stores it row-parallel to `points_3d`.
+                var unsmoothed = smoothingSourceFor(group);
+                if (unsmoothed) instance3d.lucidUnsmoothed = unsmoothed;
             }
 
             // Resolve identity

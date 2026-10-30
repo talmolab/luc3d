@@ -37,7 +37,7 @@ try {
     const page = await browser.newPage();
     page.on('pageerror', e => console.log('  [pageerror]', String(e).slice(0, 200)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     const out = await page.evaluate(async (texts) => {
         const FIO = await import('/import-export/file-io.js');

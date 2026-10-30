@@ -10,6 +10,7 @@ import {
     InstanceGroup, Session,
     toBoxedPoints3d, someValidPoint3d, pooledPoints3d,
 } from '../pose/pose-data.js';
+import { ensurePlaceholderCameras } from '../pose/placeholder-cameras.js';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
 } from '../pose/triangulation.js';
@@ -48,6 +49,7 @@ import {
 } from '../ui/loading-overlay.js';
 import { clearReadout } from '../ui/frame-readout.js';
 import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js';
+import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adoptSmoothingSource } from './smoothing-metadata.js';
 import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
 import { buildSaveProvenance } from './slp-provenance.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
@@ -311,6 +313,9 @@ function serializeSessionFrames(session) {
             if (group.usedCameras) {
                 groupData.usedCameras = Array.from(group.usedCameras);
             }
+            // Temporal Smoothing's source (smoothing-metadata.js), only when smoothed.
+            var _unsmoothed = smoothingSourceFor(group);
+            if (_unsmoothed) groupData.unsmoothedPoints3d = toBoxedPoints3d(_unsmoothed);
             for (var [camName, inst] of group.instances) {
                 var instData = {
                     points: inst.toPointsArray(),
@@ -566,6 +571,27 @@ function sessionsToSave() {
     return state.sessions.length > 0 ? state.sessions : [state.session];
 }
 
+/** The views of `session`: on screen for the active one, its stash otherwise. */
+function sessionViewsForSave(session) {
+    if (session === state.session) return state.views || [];
+    return session._views || [];
+}
+
+/**
+ * The video files of `session`: by its `videoFileIndices`, or — for a session
+ * whose videos were loaded with File ▸ Load Videos, which tags `vf.sessionIdx`
+ * but does not index them — by that tag.
+ */
+function sessionVideoFilesForSave(session) {
+    var vfs = state.videoFiles || [];
+    var idxs = session.videoFileIndices || [];
+    if (idxs.length > 0) {
+        return idxs.map(function (i) { return vfs[i]; }).filter(Boolean);
+    }
+    var si = state.sessions.indexOf(session);
+    return vfs.filter(function (vf) { return vf && vf.sessionIdx === si; });
+}
+
 // ---- The Save progress card ----
 // Save used to say only "Saving..." / "Building SLP..." in the status bar while
 // it held the main thread for up to minutes on a large project — and in Brave,
@@ -646,6 +672,23 @@ async function buildSlpBytes(opts) {
     var seenTrackNames = new Set();
 
     var sessionsToExport = sessionsToSave();
+
+    // Every path below writes one video per `session.cameras` entry and picks
+    // the views, videos and poses to write by that list — a view or pose whose
+    // camera is missing is dropped without a word. An uncalibrated session
+    // could have none at all (a folder loaded without calibration.toml), and
+    // saved as an EMPTY .slp ("Saved (0.0 MB)"). Give it its placeholder
+    // cameras first. Sessions with a real calibration are left untouched, so
+    // their bytes do not change.
+    for (var _pci = 0; _pci < sessionsToExport.length; _pci++) {
+        var _pcs = sessionsToExport[_pci];
+        if (!_pcs) continue;
+        var _pcAdded = ensurePlaceholderCameras(_pcs, sessionViewsForSave(_pcs), sessionVideoFilesForSave(_pcs));
+        if (_pcAdded.length > 0) {
+            console.log('[save-slp] Session "' + (_pcs.name || _pci) + '" has no calibration: placeholder camera(s) for',
+                _pcAdded.join(', '));
+        }
+    }
 
     // Large lazy prediction sessions: build the file INCREMENTALLY via sleap-io.js's
     // streaming writer so the whole ~108k×N-frame graph is never resident and no
@@ -1285,6 +1328,7 @@ export function saveProject() {
                 // JSON puts them at the session-dict level rather than under a
                 // `metadata.lucid`.
                 writeVisibilityMetadata(sessData, sess);
+                writeSmoothingMetadata(sessData, sess);
                 // Define Planes state, at the same session-dict level and under
                 // the same keys the `.slp` writers use.
                 return writePlaneMetadata(sessData, sess);
@@ -1332,6 +1376,7 @@ export function saveProject() {
     // Session-scoped Visibility-panel state (see the v3 branch above). `_restoreProjectV2`
     // reads these at this same level for both the v2 and v3 shapes.
     writeVisibilityMetadata(projectData, state.session);
+    writeSmoothingMetadata(projectData, state.session);
     writePlaneMetadata(projectData, state.session);
 
     // Serialize each frame
@@ -1356,6 +1401,9 @@ export function saveProject() {
             if (group.usedCameras) {
                 groupData.usedCameras = Array.from(group.usedCameras);
             }
+            // Temporal Smoothing's source (smoothing-metadata.js), only when smoothed.
+            var _unsmoothed = smoothingSourceFor(group);
+            if (_unsmoothed) groupData.unsmoothedPoints3d = toBoxedPoints3d(_unsmoothed);
             for (const [camName, inst] of group.instances) {
                 const instData = {
                     points: inst.toPointsArray(),
@@ -1909,6 +1957,7 @@ function _restoreProjectV2(data) {
     // Session-scoped Visibility-panel state. Shared by the v2 (whole document)
     // and v3 (per-session dict) shapes — both put these keys at this level.
     readVisibilityMetadata(session, data);
+    readSmoothingMetadata(session, data);
     // Define Planes state. Project-scoped keys are ingested by whichever
     // session is read first; placements land on this one.
     readPlaneMetadata(session, data);
@@ -1938,6 +1987,10 @@ function _restoreProjectV2(data) {
                     var group = new InstanceGroup(groupData.id || Date.now(), loadedIdentityId);
                     if (groupData.points3d) {
                         group.points3d = pooledPoints3d(groupData.points3d);
+                        if (groupData.unsmoothedPoints3d) {
+                            adoptSmoothingSource(session, frameIdx, group,
+                                { lucidUnsmoothed: pooledPoints3d(groupData.unsmoothedPoints3d) });
+                        }
                     }
                     if (groupData.reprojections) {
                         group.reprojections = groupData.reprojections;

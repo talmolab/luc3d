@@ -50,7 +50,7 @@ try {
     // index.html carries the importmap that resolves the bare `mediabunny`
     // specifier, so the module under test has to be loaded from that page.
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // Encode a few frames of a moving square, both streamed and buffered.
     const out = await page.evaluate(async () => {
