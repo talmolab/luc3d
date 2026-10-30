@@ -61,7 +61,7 @@ try {
     // (close() itself throws a pre-existing TypeError from the <video> load listener — not this test's subject)
     page.on('pageerror', e => { if (!/reading 'error'/.test(String(e))) { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; } });
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.SleapIO && window.SleapIO.MediaBunnyVideoBackend, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.SleapIO && window.SleapIO.MediaBunnyVideoBackend, null, { timeout: 30000 });
     await page.evaluate(() => {
         const inp = document.createElement('input'); inp.type = 'file'; inp.id = '__vid'; document.body.appendChild(inp);
         window.__decoded = 0;

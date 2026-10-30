@@ -38,7 +38,7 @@ try {
     await answerTrackSetup(page, 2);
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     await page.evaluate(async () => {
         const pd = await import('/pose/pose-data.js');
@@ -154,7 +154,7 @@ try {
     await open3d();
     await page.evaluate(async () => { await (await import('/pose/tracker.js')).trackFrameRange(0, 2); });
     check(!(await tl()).collapsed && !(await v3()).collapsed, 'Track Frame Range leaves the Timeline and 3D viewer open');
-    await page.click('#tbTrackFrame');
+    await page.hover('#tbTrackAll'); await page.click('#tbTrackFrame');   // This frame, in the Track menu
     await page.waitForTimeout(300);
     check(!(await tl()).collapsed && !(await v3()).collapsed, 'Track Frame leaves the Timeline and 3D viewer open');
 

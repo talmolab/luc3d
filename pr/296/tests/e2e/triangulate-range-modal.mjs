@@ -67,7 +67,7 @@ try {
   page.on('pageerror', e => errs.push(String(e)));
   page.on('console', m => { if (m.type() === 'error') errs.push('console: ' + m.text()); });
   await page.goto(`http://localhost:${PORT}/index.html`);
-  await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+  await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
   // ---- page-side helpers ----------------------------------------------------
   await page.evaluate(async (NF) => {
@@ -177,7 +177,7 @@ try {
   async function setDefaultMethod(method) {
     await page.locator('#menuSettings').dispatchEvent('click');
     await page.locator('.settings-overlay').getByText('Default Triangulation', { exact: true }).first().click();
-    await page.click(`.settings-radio-row[data-method="${method}"]`);
+    await page.click(`.tri-method-choice[data-method="${method}"]`);
     await page.click('.settings-btn-apply');
     return page.evaluate(async () => (await import('/ui/settings.js')).getDefaultTriangulationMethod());
   }

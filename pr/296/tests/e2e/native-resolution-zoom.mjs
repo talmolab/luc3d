@@ -56,7 +56,7 @@ await new Promise(r => setTimeout(r, 1200));
 /** A project of `cams` ([{name, w, h}]), each canvas filled with its own noise. */
 async function loadProject(page, cams) {
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     await page.evaluate(async (cams) => {
         const pd = await import('/pose/pose-data.js');
         const AS = await import('/ui/app-state.js');

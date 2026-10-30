@@ -1800,6 +1800,22 @@ function reconstructColumnarFrameGroups(cameras, skeletons, identities, sessionD
             if (predicted) pointScores[r - pts3dStart] = flat[base + 3];
           }
           instance3d = predicted ? new PredictedInstance3D({ points, skeleton, score: score2, pointScores }) : new Instance3D({ points, skeleton, score: score2 });
+          // LUCID local patch (smoothing source): the group's 3D from before
+          // temporal smoothing, row-parallel to `points_3d` (all-NaN rows = none).
+          const us = !predicted && sessionData.unsmoothedPoints3d;
+          if (us && pts3dEnd * us.ncols <= us.flat.length) {
+            const unsmoothed = new Float64Array(nPts3d * 3);
+            let any = false;
+            for (let r = pts3dStart; r < pts3dEnd; r++) {
+              const base = r * us.ncols;
+              const out = (r - pts3dStart) * 3;
+              unsmoothed[out] = us.flat[base];
+              unsmoothed[out + 1] = us.flat[base + 1];
+              unsmoothed[out + 2] = us.flat[base + 2];
+              if (!any && !(Number.isNaN(unsmoothed[out]) && Number.isNaN(unsmoothed[out + 1]) && Number.isNaN(unsmoothed[out + 2]))) any = true;
+            }
+            if (any) instance3d.lucidUnsmoothed = unsmoothed;
+          }
         }
       }
       const scoreRaw = num(ig.score, g);

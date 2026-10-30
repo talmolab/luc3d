@@ -50,7 +50,7 @@ try {
     });
 
     await page.goto(`http://localhost:${PORT}/index.html`, { waitUntil: 'domcontentloaded', timeout: 120000 });
-    await page.waitForFunction(() => window.SleapIO && window.h5wasm, { timeout: 120000 });
+    await page.waitForFunction(() => window.SleapIO && window.h5wasm, null, { timeout: 120000 });
 
     await page.evaluate(() => {
         const inp = document.createElement('input');

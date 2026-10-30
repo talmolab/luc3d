@@ -16,6 +16,9 @@
 // line with a dark outline, the ID Switches tab's playhead colours, bigger
 // than an ID-switch tick so it reads among them, at the frame's own position — so it snaps onto an ID-switch tick exactly as a
 // click does. It hides during a drag, when the thumb is already there.
+//
+// Above the bubble, the selected view's thumbnail at that frame (the `preview`
+// option, ui/seekbar-preview.js), hidden during a drag like the line.
 
 /**
  * Format a time in seconds as `mm:ss.mmm`, or `h:mm:ss.mmm` from one hour up.
@@ -74,6 +77,10 @@ export function seekbarTooltipText(frameIdx, fps) {
  *                                            // handlers snap to it too) and its text is appended
  *   hoverLine?: HTMLElement,                 // the line marking that frame on the bar; positioned
  *                                            // in px from the cached rect, so moving stays layout-free
+ *   preview?: {show: (frame: number, x: number, barWidth: number) => void, hide: () => void},
+ *                                            // the selected view's thumbnail at that frame
+ *                                            // (ui/seekbar-preview.js); hidden during a drag, when
+ *                                            // the views themselves are scrubbing to it
  * }} opts
  * @returns {HTMLElement} the tooltip element
  */
@@ -86,6 +93,7 @@ export function installSeekbarTooltip(seekbar, opts) {
     seekbar.appendChild(tip);
 
     var line = opts.hoverLine || null;
+    var preview = opts.preview || null;
     var hovering = false, dragging = false;
     var rect = null;                      // cached seekbar rect (left, width)
     var measuredLen = -1, halfWidth = 0;  // cached bubble half-width, by text length
@@ -113,6 +121,10 @@ export function installSeekbarTooltip(seekbar, opts) {
             line.style.left = (frame / (total - 1) * rect.width) + 'px';
             line.hidden = dragging;
         }
+        if (preview) {
+            if (dragging) preview.hide();
+            else preview.show(frame, x, rect.width);
+        }
         var text = seekbarTooltipText(frame, opts.getFps()) + (hit ? ' — ' + hit.text : '');
         tip.textContent = text;
         tip.hidden = false;
@@ -124,7 +136,7 @@ export function installSeekbarTooltip(seekbar, opts) {
         // instead of hanging off either end.
         tip.style.left = Math.max(halfWidth, Math.min(rect.width - halfWidth, x)) + 'px';
     }
-    function hide() { tip.hidden = true; if (line) line.hidden = true; }
+    function hide() { tip.hidden = true; if (line) line.hidden = true; if (preview) preview.hide(); }
 
     seekbar.addEventListener('mouseenter', function (e) { hovering = true; rect = null; show(e); });
     seekbar.addEventListener('mousemove', function (e) { if (!dragging) show(e); });
@@ -133,11 +145,11 @@ export function installSeekbarTooltip(seekbar, opts) {
     // Document-level, like the scrub handlers: a drag keeps reporting the frame
     // it is scrubbing to even once the pointer has left the bar.
     document.addEventListener('mousemove', function (e) { if (dragging) show(e); });
-    document.addEventListener('mouseup', function () {
+    document.addEventListener('mouseup', function (e) {
         if (!dragging) return;
         dragging = false;
         if (!hovering) hide();
-        else if (line && !tip.hidden) line.hidden = false;   // back from under the thumb, where the drag left it
+        else if (!tip.hidden) show(e);   // the hover line and preview, back from under the thumb
     });
     return tip;
 }

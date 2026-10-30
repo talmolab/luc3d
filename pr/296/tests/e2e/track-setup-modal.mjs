@@ -13,8 +13,10 @@
  *     "Track All", the count field focused, blank, "auto" placeholder; one row
  *     per skeleton node IN ORDER, each showing the weight a run would use (two
  *     stored overrides among them), a weight of 0 greyed as in the Wizard.
- *     Under them, the image ID-switch check: its switch (off, the default) and
- *     its options, hidden while it is off.
+ *     Above the rows, the tip on tail nodes — advice only: the tail weights
+ *     are the stored ones, nothing set for the user. Under them, the image
+ *     ID-switch check: its switch (off, the default) and its options, hidden
+ *     while it is off.
  *  2. Esc, and the Cancel button, close it with nothing changed: no run, no
  *     count, no weight or image-check setting written, the project not dirty —
  *     and the next Track All asks again.
@@ -24,14 +26,14 @@
  *  4. Continue (typed count + typed weight + image check switched on with two
  *     options changed + Enter) runs Track All with that count; the weights are
  *     written to the SAME setting the Tracking Wizard edits (its field shows the
- *     new value) and merged into the stored ones — a weight kept for a node of
+ *     new value, under the same tip) and merged into the stored ones — a weight kept for a node of
  *     ANOTHER skeleton survives; the image-check settings are stored, and the
  *     run itself attempted the check (skipped here: no videos are loaded).
  *  5. Answered once, it is not asked again: a second Track All runs at once.
  *  6. A second session is unanswered, so Track Frame asks — titled "Track
  *     Frame", pre-filled with the last count given, and with no image-check
  *     section (a single frame is never checked).
- *  7. Track Frame Range shows the same weight grid and image-check section
+ *  7. Track Frame Range shows the same weight grid, tip and image-check section
  *     with the stored values: a bad weight disables Continue, Esc writes
  *     nothing, and Continue writes the edited weight (merged) and image-check
  *     option before the range runs — and that range run attempts the check.
@@ -57,6 +59,9 @@ const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fa
 const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
 await new Promise(r => setTimeout(r, 1200));
 
+const TIP = 'Tip: weighting nodes that tend to have high tracking error, like tail nodes, to 0 often ' +
+    'helps prevent ID switches. For more accurate tracking, consider setting the tracking weight of ' +
+    'all tail nodes to 0.';
 const NODES = ['Nose', 'Head', 'LeftEar', 'RightEar', 'Neck', 'TailBase', 'TailMid', 'TailTip'];
 
 let browser;
@@ -69,7 +74,7 @@ try {
     page.on('dialog', async d => { native.push(d.message()); await d.dismiss(); });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // Two synthetic animals seen by three calibrated cameras (the rig of
     // track-all-turns-on-trails.mjs), with a mouse-like skeleton.
@@ -126,6 +131,7 @@ try {
             imageOptionsShown: !!m.querySelector('.track-setup-options') && !m.querySelector('.track-setup-options').hidden,
             imageOptions: [...m.querySelectorAll('.track-setup-options .settings-kbd-label, .track-setup-options .track-setup-switch-row')]
                 .map(e => e.textContent.trim()),
+            tip: (m.querySelector('.track-weights-block .track-setup-tip') || {}).textContent,
             rows: [...m.querySelectorAll('.track-setup-weights .settings-node-weight-row')].map(r => ({
                 name: r.querySelector('.settings-kbd-label').textContent,
                 value: r.querySelector('input').value,
@@ -166,6 +172,9 @@ try {
         `each shows the weight a run would use, stored ones included (${d.rows.map(r => r.value).join(', ')})`);
     check(JSON.stringify(d.rows.map(r => r.greyed)) === JSON.stringify([false, false, false, false, false, false, false, true]),
         'a node weighted 0 is greyed out, as in the Tracking Wizard');
+    check(d.tip === TIP, `the node weights carry the tail-node tip ("${d.tip}")`);
+    check(d.rows.find(r => r.name === 'TailMid').value === '0.5' && d.rows.find(r => r.name === 'TailBase').value === '1',
+        'it is advice only: no tail weight was changed for the user');
     check(d.imageSwitch === false && !d.imageOptionsShown,
         'the image ID-switch check is offered, off (the default), its options hidden');
     const IMAGE_DEFAULTS = JSON.stringify([0, -0.8, 2, 3, 0]);
@@ -242,12 +251,14 @@ try {
     const wizard = await page.evaluate(async () => {
         (await import('/ui/settings-modal.js')).showSettingsModal('wizard');
         const v = document.querySelector('input[aria-label="Weight for node TailMid"]').value;
+        const tip = (document.querySelector('.settings-node-weight-tip') || {}).textContent;
         // Close it properly: removing the overlay would leave its document-level
         // keydown listener behind, swallowing every key after it.
         document.querySelector('.settings-modal-close').click();
-        return v;
+        return { v, tip };
     });
-    check(wizard === '0.25', `the Tracking Wizard shows the same weight ("${wizard}")`);
+    check(wizard.tip === TIP, `the Tracking Wizard's Node Weights show the same tip ("${wizard.tip}")`);
+    check(wizard.v === '0.25', `the Tracking Wizard shows the same weight ("${wizard.v}")`);
 
     // ---------------------------------------------------------- 5. not again
     console.log('5. answered once');
@@ -259,7 +270,7 @@ try {
     // ------------------------------------------------- 6. another session
     console.log('6. a second, unanswered session');
     await page.evaluate((NODES) => window.__activate([window.__first, window.__mkSession('SetupB', NODES)], 1), NODES);
-    await page.click('#tbTrackFrame');
+    await page.hover('#tbTrackAll'); await page.click('#tbTrackFrame');   // This frame, in the Track menu
     await page.waitForSelector('.track-setup-modal', { timeout: 5000 });
     d = await dialog();
     check(d.title === 'Track Frame', `Track Frame asks, titled "${d.title}"`);
@@ -284,6 +295,9 @@ try {
     check(JSON.stringify(rr.map(r => r.name)) === JSON.stringify(NODES), 'it lists every skeleton node, in order');
     check(JSON.stringify(rr.map(r => r.value)) === JSON.stringify(['1', '1', '1', '1', '1', '1', '0.25', '0']) && rr[7].greyed,
         `with the stored weights, 0 greyed (${rr.map(r => r.value).join(', ')})`);
+    const rangeTip = await page.evaluate(() =>
+        (document.querySelector('.track-range-modal .track-weights-block .track-setup-tip') || {}).textContent);
+    check(rangeTip === TIP, `and the same tail-node tip ("${rangeTip}")`);
     const rangeImage = () => page.evaluate(() => {
         const m = document.querySelector('.track-range-modal');
         const opts = m.querySelector('.track-setup-options');

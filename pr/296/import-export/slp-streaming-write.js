@@ -53,11 +53,12 @@
  * streams from the columnar store untouched.
  */
 
-import { _buildSioPoints } from './file-io.js?v=42cf1b1eef13';
-import { points3dNodeCount } from '../pose/pose-data.js?v=42cf1b1eef13';
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=42cf1b1eef13';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=42cf1b1eef13';
-import { writePlaneMetadata } from './plane-metadata.js?v=42cf1b1eef13';
+import { _buildSioPoints } from './file-io.js?v=95415559d105';
+import { points3dNodeCount } from '../pose/pose-data.js?v=95415559d105';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=95415559d105';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=95415559d105';
+import { writePlaneMetadata } from './plane-metadata.js?v=95415559d105';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=95415559d105';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;
@@ -412,6 +413,8 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     // Define Planes state — the streaming mirror of the eager writer in
     // `file-io.js` (both call the one helper, so they cannot drift).
     writePlaneMetadata(sioSession.metadata.lucid, session);
+    // Temporal Smoothing's last run, only while something is smoothed.
+    writeSmoothingMetadata(sioSession.metadata.lucid, session);
     for (var av = 0; av < sioCameras.length; av++) sioSession.addVideo(ctx.allVideos[sessionVideoIndices[av]], sioCameras[av]);
 
     var camByName = new Map();
@@ -638,6 +641,10 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
             // accepts boxed rows, so don't reject them here.
             if (group.points3d && group.points3d.length > 0) {
                 instance3d = new SIO.Instance3D({ points: group.points3d, skeleton: skeleton });
+                // Temporal Smoothing's source (smoothing-metadata.js): the vendored
+                // writer stores it row-parallel to `points_3d`.
+                var unsmoothed = smoothingSourceFor(group);
+                if (unsmoothed) instance3d.lucidUnsmoothed = unsmoothed;
             }
             var identity = undefined;
             if (group.identityId != null && group.identityId >= 0) identity = lucidIdToSioId.get(group.identityId);
