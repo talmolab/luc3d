@@ -679,6 +679,19 @@
                             <span class="slider"></span>
                         </label>
                     </div>
+                    <h3>Symmetrical Nodes</h3>
+                    <div class="vis-slider-row">
+                        <span title="Draw a thin grey line between each left/right pair of nodes, found from their names: Ear_L and Ear_R, Shoulder_left and Shoulder_right, EarL and EarR. Applies to all instance types, in the 2D views.">Symmetry Edges</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visSymmetryEdges">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Edge Weight</span>
+                        <input type="range" id="visSymmetryEdgeWeight" min="1" max="10" value="1" step="1">
+                        <span class="vis-val" id="visSymmetryEdgeWeightVal">1</span>
+                    </div>
                     <!-- Planes. The planes the user annotated are scene geometry
                          and are drawn in EVERY mode, so these four say which of
                          their parts survive OUTSIDE Defining Plane Mode. Inside

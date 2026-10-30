@@ -5914,6 +5914,13 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `drawSelectionHighlight` (`options.wedgeNodeSize`) share `traceEdge` +
   `paintEdges`; `drawDragPreview` stays lines. `ui/interaction.js` hit-tests the
   same shape. Test: `tests/e2e/edge-style-wedge.mjs`.
+- Symmetry edges: `symmetricNodePairs(names)` finds left/right node pairs from
+  the names alone (`.slp` symmetries are not read), `symmetryEdgesFor(skeleton)`
+  leaves out pairs that are already edges and remembers the last answer.
+  `drawFrameOverlays` (`showSymmetryEdges`, `symmetryEdgeWeight`) passes them to
+  `drawSkeleton`, `drawReprojectedSkeleton` and `drawUnlinkedInstances`, which draw
+  them solid grey behind their edges, 2D only, not clickable. Test:
+  `tests/test-symmetry-edges.mjs`, `tests/e2e/symmetry-edges.mjs`.
 - Reprojection node color: `reprojNodeColor` is `'white'`, `'black'`, `'track'`
   (the Brightness-adjusted track color) or `'dark'` (that color in the Dark
   trail shade, `trailColor`). Test:

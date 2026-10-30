@@ -118,6 +118,8 @@ export function settingsFromVisibilityPanel() {
     s.layers.reproj = !!vis.showReprojected;
     s.layers.errors = !!vis.showErrors;
     s.layers.legend = !!vis.showLegend;
+    s.layers.symmetryEdges = !!vis.showSymmetryEdges;
+    s.symmetryEdgeWeight = vis.symmetryEdgeWeight;
     s.trailLength = state.trailLength || 0;
     s.trailShade = state.trailShade || DEFAULT_TRAIL_SHADE;
     s.colorBy = state.colorByIdentity ? 'identity' : 'track';
@@ -1362,6 +1364,8 @@ export function showOverlayExportModal() {
         addCheck(gLayers.body, 'Reprojections', settings.layers, 'reproj');
         addCheck(gLayers.body, 'Reprojection errors', settings.layers, 'errors');
         addCheck(gLayers.body, 'Legend', settings.layers, 'legend');
+        addCheck(gLayers.body, 'Symmetry edges', settings.layers, 'symmetryEdges');
+        addNumber(gLayers.body, 'Symmetry edge width', settings, 'symmetryEdgeWeight', 0.5, 15, 0.5);
         addSelect(gLayers.body, 'Color by', settings, 'colorBy',
             [['track', 'Track'], ['identity', 'Identity']], 'ovColorBy');
         addNumber(gLayers.body, 'Node trails (frames)', settings, 'trailLength', 0, 500, 10);

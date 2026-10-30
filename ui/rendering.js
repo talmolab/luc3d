@@ -139,6 +139,8 @@ export function getVisibilitySettings() {
         // The "?" badge on unlinked instances. Defaults TRUE when the control is
         // absent, so the affordance is never lost by accident.
         showUnlinkedBadge: checkVal('visUnlinkedBadge', true),
+        showSymmetryEdges: checkVal('visSymmetryEdges', false),
+        symmetryEdgeWeight: parseInt((document.getElementById('visSymmetryEdgeWeight') || {}).value) || 1,
         userOpts: {
             nodeSize: parseInt(document.getElementById('visUserNodeSize').value) || 4,
             lineWidth: parseInt(document.getElementById('visUserEdgeWeight').value) || 2,
@@ -594,6 +596,8 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             showReprojected: vis.showReprojected,
             reprojNodeColor: vis.reprojNodeColor,
             showErrors: vis.showErrors,
+            showSymmetryEdges: vis.showSymmetryEdges,
+            symmetryEdgeWeight: vis.symmetryEdgeWeight,
             userOpts: vis.userOpts,
             predictedOpts: vis.predictedOpts,
             reprojOpts: vis.reprojOpts,
