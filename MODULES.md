@@ -5489,7 +5489,7 @@ Gives a modal card a drag handle, a resize grip (CSS `resize: both`) and a
   height and width along each axis the user has not dragged, and follows it, centred
   until moved. A record older than `heightChosen` / `widthChosen` fills. Settings uses
   this, up to 1700 px wide. With `fillWidth` the returned dispose also has
-  `setSizePreset('default'|'full')` and `sizePreset()`; `opts.onSizePreset` hears changes), and returns a
+  `setSizePreset('narrow'|'default'|'full')` and `sizePreset()`; `opts.onSizePreset` hears changes), and returns a
   `dispose()` that also flushes the final rect (a resize that ended inside the
   200 ms persist debounce would otherwise be lost when the modal closes).
 - `rememberedSizeIsChosen(geom, legacyDefaultSize)` — whether a record's size
@@ -9415,7 +9415,8 @@ the backdrop discard what has not been applied. Covered by
 
 **Resizable, draggable, and it remembers.** Until the user drags it, the card fills the
 browser's height and, up to 1700 px, its width (`fillHeight`, `fillWidth`). The footer's
-Window buttons pick Default (that) or Full (the whole browser), and forget any drag. The card carries CSS `resize: both`
+Window buttons pick Narrow (1320 × 800, centred), Default (that) or Full (the whole
+browser), and forget any drag. The card carries CSS `resize: both`
 and is dragged by its header (minus the ×, via `noDragSelector`);
 `installModalGeometry` (`ui/modal-geometry.js`, id `settings`) restores the last
 size/position on open and records it on close. It is installed AFTER the
