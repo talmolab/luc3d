@@ -30,9 +30,10 @@
 //
 // With `fillHeight`, a card whose HEIGHT the user has not chosen takes the viewport's
 // whole height (less the margin) and follows it as the window changes, so a large
-// screen means less scrolling. Dragging the grip's height takes over from there
-// (`heightChosen` in the record). A width dragged on its own leaves the height filling,
-// and so does a record older than the flag: its height was only ever chosen because
+// screen means less scrolling. `fillWidth` (a cap in px) does the same for the width,
+// up to the cap and centred until the card is dragged. Dragging the grip's height or
+// width takes over for that axis only (`heightChosen`, `widthChosen`, `moved` in the
+// record). A record older than those flags fills: its size was only ever chosen because
 // the card could not fill the window then.
 //
 // ## Clamping is the load-bearing part
@@ -138,6 +139,8 @@ export function readGeometry(id, storage) {
     // `sized` is absent on records written before it existed.
     if (typeof g.sized === 'boolean') out.sized = g.sized;
     if (g.heightChosen === true) out.heightChosen = true;
+    if (g.widthChosen === true) out.widthChosen = true;
+    if (g.moved === true) out.moved = true;
     return out;
 }
 
@@ -165,6 +168,8 @@ export function writeGeometry(id, geom, storage) {
         sized: geom.sized === true,
     };
     if (geom.heightChosen === true) all[id].heightChosen = true;
+    if (geom.widthChosen === true) all[id].widthChosen = true;
+    if (geom.moved === true) all[id].moved = true;
     try {
         s.setItem(STORAGE_KEY, JSON.stringify(all));
         return true;
@@ -200,7 +205,8 @@ export function clearGeometry(id, storage) {
  * @param {HTMLElement} card
  * @param {{id:string, handle?:HTMLElement, minW?:number, minH?:number,
  *          margin?:number, storage?:Storage, noDragSelector?:string,
- *          legacyDefaultSize?:{w:number,h:number}, fillHeight?:boolean}} opts
+ *          legacyDefaultSize?:{w:number,h:number}, fillHeight?:boolean,
+ *          fillWidth?:number}} opts
  * @returns {function(): void} dispose — removes every listener it added
  */
 export function installModalGeometry(card, opts) {
@@ -225,6 +231,8 @@ export function installModalGeometry(card, opts) {
     let appliedH = 0;
     let sized = false;
     let heightChosen = false;
+    let widthChosen = false;
+    let moved = false;
 
     function apply(geom) {
         if (!geom) return;
@@ -245,13 +253,21 @@ export function installModalGeometry(card, opts) {
 
     function current() {
         const r = card.getBoundingClientRect();
-        return { x: r.left, y: r.top, w: r.width, h: r.height, sized: sized, heightChosen: heightChosen };
+        return { x: r.left, y: r.top, w: r.width, h: r.height, sized: sized, heightChosen: heightChosen, widthChosen: widthChosen, moved: moved };
     }
 
-    // `geom`, at the viewport's full height if the user has not chosen a height.
+    // `geom`, filling the viewport along each axis the user has not chosen.
     function filled(geom) {
-        if (!o.fillHeight || heightChosen) return geom;
-        return { x: geom.x, y: min.margin, w: geom.w, h: viewport().height - 2 * min.margin };
+        const v = viewport(), out = { x: geom.x, y: geom.y, w: geom.w, h: geom.h };
+        if (o.fillHeight && !heightChosen) {
+            out.y = min.margin;
+            out.h = v.height - 2 * min.margin;
+        }
+        if (o.fillWidth && !widthChosen) {
+            out.w = Math.min(o.fillWidth, v.width - 2 * min.margin);
+            if (!moved) out.x = (v.width - out.w) / 2;
+        }
+        return out;
     }
 
     // --- Restore, or centre at the size the stylesheet asked for ------------
@@ -262,8 +278,11 @@ export function installModalGeometry(card, opts) {
     if (stored && rememberedSizeIsChosen(stored, o.legacyDefaultSize)) {
         sized = true;
         heightChosen = stored.heightChosen === true;
+        widthChosen = stored.widthChosen === true;
+        moved = stored.moved === true;
         apply(clampGeometry(filled(stored), viewport(), min));
     } else if (stored) {
+        moved = stored.moved === true;
         apply(clampGeometry(filled({
             x: stored.x + (stored.w - base.width) / 2,
             y: stored.y + (stored.h - base.height) / 2,
@@ -308,6 +327,7 @@ export function installModalGeometry(card, opts) {
         if (!drag) return;
         drag = null;
         card.classList.remove('modal-dragging');
+        moved = !!o.fillWidth;
         writeGeometry(id, current(), o.storage);
     }
 
@@ -323,9 +343,11 @@ export function installModalGeometry(card, opts) {
             if (drag) return;
             const r = card.getBoundingClientRect();
             const heightMoved = Math.abs(r.height - appliedH) > 1;
-            if (Math.abs(r.width - appliedW) > 1 || heightMoved) {
+            const widthMoved = Math.abs(r.width - appliedW) > 1;
+            if (widthMoved || heightMoved) {
                 sized = true;
                 if (heightMoved && o.fillHeight) heightChosen = true;
+                if (widthMoved && o.fillWidth) widthChosen = true;
                 appliedW = r.width;
                 appliedH = r.height;
             }

@@ -42,16 +42,16 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=7ec5371bf3f2';
-import { getActiveSession, state, timeline } from './app-state.js?v=7ec5371bf3f2';
-import { drawAllOverlays } from './rendering.js?v=7ec5371bf3f2';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=7ec5371bf3f2';
-import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=7ec5371bf3f2';
-import { buildThresholdExamples } from './threshold-examples-panel.js?v=7ec5371bf3f2';
-import { installModalGeometry } from './modal-geometry.js?v=7ec5371bf3f2';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=7ec5371bf3f2';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=7ec5371bf3f2';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=7ec5371bf3f2';
+} from './settings.js?v=a3d823fd6cb7';
+import { getActiveSession, state, timeline } from './app-state.js?v=a3d823fd6cb7';
+import { drawAllOverlays } from './rendering.js?v=a3d823fd6cb7';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=a3d823fd6cb7';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=a3d823fd6cb7';
+import { buildThresholdExamples } from './threshold-examples-panel.js?v=a3d823fd6cb7';
+import { installModalGeometry } from './modal-geometry.js?v=a3d823fd6cb7';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=a3d823fd6cb7';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=a3d823fd6cb7';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=a3d823fd6cb7';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -947,6 +947,7 @@ export function showSettingsModal(initialPanel) {
         minH: 320,
         margin: 24,
         fillHeight: true,
+        fillWidth: 1700,
         // The opening size before it widened (to 1040x620, now 1320x800);
         // records holding it were saved without a resize, so they open at the
         // current default. Later records carry `sized`, so they follow it too.
