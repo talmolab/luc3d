@@ -8212,7 +8212,7 @@ model ran on the CPU. Reads `imageCheckHz` (default 2), `imageChangeThreshold`
 (default -0.8 — a new id rather than the old `imageCheckThreshold`, because the
 image score's scale changed), `imageCheckMaxViews` (default 3, passed as
 `maxViewsPerAnimal`), `imageCheckGpuTimePct` / `imageCheckCpuTimePct` (whole
-percentages, default 80 each, as `maxGpuPct` / `maxCpuPct`) and `imageCheckWebNN` (default 0, as `webnn`), and passes
+percentages, default 100 — uncapped — each, as `maxGpuPct` / `maxCpuPct`) and `imageCheckWebNN` (default 0, as `webnn`), and passes
 `inFlight: embedder.inFlight`. The embedder's `backend()` outcome is attached to
 the result as `model` (its note shown under "About these flags") and
 `embedder.stats()` as `timing` (logged, and shown there as "Image check speed on
@@ -8660,7 +8660,7 @@ after a failure); `cannotRun(reason, cause)` (an Error whose message is the reas
 the check cannot run, flagged `cannotRun`); `asModelDownloadFailure(err)` (a failed
 download as `MODEL_OFFLINE_REASON`, else `err` unchanged); `MODEL_OFFLINE_REASON`;
 `selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`;
-the compute caps `capPct(pct)`, `paceRestMs(runMs, pct)`, `IMAGE_CAP_MIN`,
+the compute caps `capPct(pct)`, `paceRestMs(runMs, pct)`, `restTimer(ms, fn)` -> cancel, `IMAGE_CAP_MIN`,
 `CPU_CAP_CROPS_PER_WORKER` (4) and
 `createModelQueue(embed, sz, tm, {maxBatch, maxPct})` -> `{enqueue, endRest}`;
 `summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`;
@@ -8686,7 +8686,7 @@ against `cutCrop` itself within 0.04 px, at any rotation);
 
 **The compute caps** (`opts.maxGpuPct` / `opts.maxCpuPct`, from the "GPU time
 (%)" / "CPU time (%)" settings `imageCheckGpuTimePct` / `imageCheckCpuTimePct`,
-whole percentages 1–100, default 80). How much of the GPU's and of the CPU's time
+whole percentages 1–100, default 100 = uncapped). How much of the GPU's and of the CPU's time
 the check may take is the USER's to set, and what it does not take stays free for
 other apps — even when nothing else wants it (an allocation, not an adaptive
 back-off). No browser API gives a page a share of either, so both caps are a duty
@@ -8709,6 +8709,32 @@ cycle: whatever runs idles after each piece of work for
   (hyperthreads, rounding on few cores). Video decoding (WebCodecs) and the main
   thread are the browser's and not counted.
 100% is the uncapped behaviour for both; floor `IMAGE_CAP_MIN` = 1 (1% idles 99× each run).
+**Why the default is 100, not a cap.** Measured on real data (the 8-camera
+`10072022145420` session, Track All then the check with the cache off; M5 MacBook
+Pro, 10 cores, Chrome 154, 2026-10-30) with a 1080p60 YouTube video playing in
+another app beside it, 150 s per setting: no setting — GPU at 100/80/50/25%, CPU
+path at 100/80/50% with 4 model + 8 crop workers — dropped a single video frame,
+the video page's event-loop lag stayed at its idle p95 (10 ms), and the system's
+CPU pressure (`PressureObserver`, read in the video page) stayed `nominal`
+throughout. Capping bought nothing measurable there and cost throughput, so it is
+opt-in. One machine: re-run `tests/e2e/_bench-background-load.page.js` on weaker
+hardware before changing the default.
+**The rests are timed in a worker (`restTimer`).** A hidden page — its tab in the
+background, or its window covered by another app's, i.e. exactly when the user
+is doing something else — has its `setTimeout` throttled to ~1 s, and after
+5 minutes hidden to once a minute. With page timers a few-ms rest became a
+second: on that same machine, with LUCID's window behind another app's, the 80%
+GPU cap ran at 26 crops/s instead of 124 (GPU busy 23%), 50% at 28 (23%), 25% at
+12 (13%), and the CPU path's 80% at 6.4 instead of 12.6 (45% busy). `restTimer(ms,
+fn)` hands the wait to one shared worker made from a blob (worker timers are not
+throttled, and its message reaches a hidden page at once) and returns a cancel
+function; no page (Node) or no Worker falls back to `setTimeout`, as does
+everything after the worker fails. With it, hidden: GPU 80% → 125 crops/s, 50% →
+84 (GPU busy 49%), CPU 80% → 11.5 (busy 80%). Covered by
+`tests/test-image-rest-timer.mjs`.
+**`PressureObserver` cannot drive an adaptive cap here.** In that run it delivered
+samples every second to the video page (in the focused app) and NONE to LUCID's
+tab, whose window was not focused — the case an adaptive back-off would exist for.
 `releaseFrames` ends an idle in progress (`endRest`) LAST, after the CPU workers
 are terminated — `createCpuModelPool.terminate()` does not reject a job in
 flight, so a run started on a worker about to be killed would never settle.
@@ -8913,8 +8939,8 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   0/1, the image check likewise, default 0; `imageChangeThreshold` -0.8;
   `imageCheckHz` 2; `imageCheckBackgroundHz` 0.1 (crops per second away from contacts:
   `backgroundHz`, see pose/id-switch-check.js "Which samples are embedded"; Wizard only, not
-  the Track All dialog); `imageCheckMaxViews` 3; `imageCheckGpuTimePct` 80 and
-  `imageCheckCpuTimePct` 80 — labelled "GPU time (%)" / "CPU time (%)", the share
+  the Track All dialog); `imageCheckMaxViews` 3; `imageCheckGpuTimePct` 100 and
+  `imageCheckCpuTimePct` 100 (uncapped; see ui/image-embedder.js "Why the default is 100") — labelled "GPU time (%)" / "CPU time (%)", the share
   of GPU time / of each CPU thread's time the image check may use, whole numbers 1..100,
   100 = uncapped (new ids each time the meaning changed — the unreleased
   `imageCheckMaxGpu`/`Cpu` 10–100, then `imageCheckGpuTime`/`CpuCores` 0.10–1.00, then

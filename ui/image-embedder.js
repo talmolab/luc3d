@@ -725,7 +725,7 @@ export function capPct(pct) {
 /*
  * The compute caps. The share of the GPU's time and of the CPU's time the image
  * check may use is the user's to set (`imageCheckGpuTimePct`, `imageCheckCpuTimePct`:
- * whole percentages, 80 by default), so that what it does not take is left for other
+ * whole percentages, 100 — uncapped — by default), so that what it does not take is left for other
  * work on the machine — held even when nothing else wants it. No browser API gives a
  * page a share of either, so the check takes its share as a duty cycle: whatever
  * runs idles after each piece of work for paceRestMs of it. The GPU idles after each

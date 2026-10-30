@@ -1,7 +1,7 @@
 /**
  * test-image-compute-caps.mjs — the image ID-switch check's two compute caps
  * (ui/image-embedder.js; settings `imageCheckGpuTimePct`, `imageCheckCpuTimePct`:
- * whole percentages 1-100, both 80 by default). The share of the GPU's and of the CPU's time the check may
+ * whole percentages 1-100, both 100 — uncapped — by default). The share of the GPU's and of the CPU's time the check may
  * take is the user's to set, and held even when nothing else wants the rest. Both are a duty cycle
  * (`paceRestMs`): busy / (busy + idle) = the cap.
  *  - GPU: full batches and an idle after each run (`createModelQueue`);
@@ -183,7 +183,7 @@ const newTm = () => ({ queueMs: 0, batches: 0, maxBatch: 0, restMs: 0 });
     ok(settled < 200, `endRest ends a rest at once: work queued behind it finished ${Math.round(settled)} ms later (the rest was ~450 ms)`);
 }
 
-// ---- the settings: two caps as whole percentages 1-100, both 80 by default ----
+// ---- the settings: two caps as whole percentages 1-100, both 100 (uncapped) by default ----
 const defs = getTrackingThresholdDefs();
 for (const [id, label, tip] of [['imageCheckGpuTimePct', 'Image check: GPU time (%)', 'Fraction of GPU time to run image check, idling the remaining time.'],
                                 ['imageCheckCpuTimePct', 'Image check: CPU time (%)', 'Fraction of CPU time to run image check, idling the remaining time.']]) {
@@ -191,9 +191,9 @@ for (const [id, label, tip] of [['imageCheckGpuTimePct', 'Image check: GPU time 
     ok(!!d && d.label === label, `${id} is labelled "${d && d.label}"`);
     ok(!!d && d.tip === tip, `${id}'s tip: "${d && d.tip}"`);
     ok(!!d && !('note' in d), `${id} has no per-machine note (a duty cycle means the same on every machine)`);
-    ok(!!d && d.default === 80 && d.value === 80 && d.min === IMAGE_CAP_MIN && d.max === 100 && d.step === 1 && !d.decimals,
-        `${id}: default 80, whole numbers 1..100`);
-    ok(!!d && formatThresholdValue(d, d.value) === '80' && formatThresholdValue(d, 100) === '100', `${id} reads "80" (and "100") in its field`);
+    ok(!!d && d.default === 100 && d.value === 100 && d.min === IMAGE_CAP_MIN && d.max === 100 && d.step === 1 && !d.decimals,
+        `${id}: default 100 (uncapped), whole numbers 1..100`);
+    ok(!!d && formatThresholdValue(d, 80) === '80' && formatThresholdValue(d, d.value) === '100', `${id} reads "100" (and "80") in its field`);
     ok(IMAGE_CHECK_IDS.includes(id), `${id} is offered in the Track All / Track Frame Range dialogs`);
 }
 ok(!defs.some(d => ['imageCheckMaxGpu', 'imageCheckMaxCpu', 'imageCheckGpuTime', 'imageCheckCpuCores', 'imageCheckCpuCoresPct'].includes(d.id)),

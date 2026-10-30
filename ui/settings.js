@@ -416,14 +416,16 @@ const TRACKING_THRESHOLDS = [
         // A whole percentage (1-100). New ids, as each time the scale changed (the unreleased
         // imageCheckMaxGpu/Cpu were 10-100, then imageCheckGpuTime/CpuCores 0.10-1.00), so a value saved on
         // an earlier scale is never read on this one — a stored 0.5 would otherwise become 1%.
-        id: 'imageCheckGpuTimePct', label: 'Image check: GPU time (%)', default: 80,
+        // 100 (uncapped) by default: on real data (M5 MacBook Pro, 2026-10-30) the uncapped check, GPU or CPU,
+        // dropped no frame of a 1080p60 YouTube video playing beside it — see MODULES.md ui/image-embedder.js.
+        id: 'imageCheckGpuTimePct', label: 'Image check: GPU time (%)', default: 100,
         min: 1, max: 100, step: 1,
         desc: 'The share of time the image check may use the GPU (or WebNN device); the rest is left for other apps.',
         tip: 'Fraction of GPU time to run image check, idling the remaining time.',
     },
     {
         // a new id again: the unreleased imageCheckCpuCoresPct capped the thread count, not the time
-        id: 'imageCheckCpuTimePct', label: 'Image check: CPU time (%)', default: 80,
+        id: 'imageCheckCpuTimePct', label: 'Image check: CPU time (%)', default: 100,
         min: 1, max: 100, step: 1,
         desc: 'The share of time each of the image check\'s CPU threads may run; the rest is left for other apps.',
         tip: 'Fraction of CPU time to run image check, idling the remaining time.',
