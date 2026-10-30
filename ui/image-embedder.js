@@ -751,6 +751,43 @@ export function paceRestMs(runMs, maxPct) {
     return runMs * (100 / p - 1);
 }
 
+/*
+ * The rests' timer. A page that is hidden — its tab in the background, or its window
+ * covered by another app's, which is exactly when the user is doing something else —
+ * has its timers throttled by the browser: a rest of a few milliseconds fires after
+ * ~1 s. Measured on an M5 MacBook Pro (Chrome 154) with LUCID's window behind the
+ * Claude app's: the 80% GPU cap ran the check at 26 crops/s instead of 124, the GPU
+ * busy 23% of the time, because every few-ms rest had become a second. A worker's
+ * timers are not throttled, and a message from it reaches a hidden page at once, so
+ * the rests are timed there. Without workers it falls back to setTimeout.
+ */
+let _restWorker = null, _restNext = 0;
+const _restWaiting = new Map();
+function restWorker() {
+    if (_restWorker !== null) return _restWorker;
+    _restWorker = false;
+    // a page only (Node tests stub Worker with a crop-worker fake): elsewhere nothing throttles setTimeout
+    if (typeof document === 'undefined' || typeof Worker !== 'function' || typeof Blob !== 'function' || typeof URL === 'undefined' || !URL.createObjectURL) return false;
+    try {
+        const src = 'onmessage=function(e){var d=e.data;setTimeout(function(){postMessage(d.id)},d.ms)};';
+        const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+        w.onmessage = function (e) { const fn = _restWaiting.get(e.data); if (fn) { _restWaiting.delete(e.data); fn(); } };
+        w.onerror = function () { _restWorker = false; _restWaiting.forEach(function (fn) { setTimeout(fn, 0); }); _restWaiting.clear(); };
+        _restWorker = w;
+    } catch (e) { _restWorker = false; }
+    return _restWorker;
+}
+
+/** Call `fn` after `ms`, on a clock a hidden page does not throttle (see above). Returns a cancel function. */
+export function restTimer(ms, fn) {
+    const w = restWorker();
+    if (!w) { const t = setTimeout(fn, ms); return function () { clearTimeout(t); }; }
+    const id = ++_restNext;
+    _restWaiting.set(id, fn);
+    w.postMessage({ id: id, ms: ms });
+    return function () { _restWaiting.delete(id); };
+}
+
 /**
  * Crops a CPU model worker takes per run while the CPU is capped (the batch is this x
  * the workers): one worker embeds ~2.4 crops/s, so ~2 s of work between idles. Uncapped,
@@ -775,7 +812,7 @@ export function createModelQueue(embed, sz, tm, limits) {
     const maxBatch = Math.max(1, Math.floor((limits && limits.maxBatch) || EMBED_MAX_BATCH));
     const maxPct = capPct(limits && limits.maxPct);
     const queue = [];
-    let running = false, restTimer = null, restResume = null;
+    let running = false, restCancel = null, restResume = null;
     const pump = function () {
         if (running || !queue.length) return;
         const take = [];
@@ -803,11 +840,11 @@ export function createModelQueue(embed, sz, tm, limits) {
             if (!(rest > 0)) { running = false; pump(); return; }
             const restFrom = performance.now();
             restResume = function () {
-                clearTimeout(restTimer); restTimer = null; restResume = null;
+                if (restCancel) restCancel(); restCancel = null; restResume = null;
                 tm.restMs += performance.now() - restFrom;
                 running = false; pump();
             };
-            restTimer = setTimeout(restResume, rest);
+            restCancel = restTimer(rest, restResume);
         });
     };
     const enqueueOne = function (tensors) {
@@ -984,7 +1021,7 @@ export function createCropPool(clock, maxCpuPct) {
             const err = new Error('crop pool closed');
             workers.forEach(function (w) {
                 if (clock) clock.close(w);
-                clearTimeout(w.idle); w.idle = null;
+                if (w.idle) w.idle(); w.idle = null;
                 w.worker.terminate();
                 if (w.job) { w.job.reject(err); w.job = null; }
             });
@@ -1009,7 +1046,7 @@ export function createCropPool(clock, maxCpuPct) {
                 if (clock) clock.end(w);
                 if (e.data.error) job.reject(new Error(e.data.error)); else job.resolve(e.data.tensors);
                 const rest = paceRestMs(performance.now() - w.from, pct);
-                if (rest > 0) w.idle = setTimeout(function () { w.idle = null; dispatch(); }, rest);
+                if (rest > 0) w.idle = restTimer(rest, function () { w.idle = null; dispatch(); });
                 dispatch();
             };
             w.worker.onerror = function (e) { e.preventDefault(); fail(w, 'crop worker failed: ' + (e.message || 'error')); };
