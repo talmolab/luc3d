@@ -1,2 +1,2 @@
 // LUCID app entry point. Importing pose/initialization.js triggers init() at module-load.
-import './pose/initialization.js?v=7080dc377701';
+import './pose/initialization.js?v=08a966c2ccee';

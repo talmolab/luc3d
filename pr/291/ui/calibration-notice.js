@@ -32,7 +32,7 @@
 // here would mean writing to the user's session folders during a load, which
 // is not what a load is for.
 
-import { compareSessionCalibrations } from '../pose/calibration-compare.js?v=7080dc377701';
+import { compareSessionCalibrations } from '../pose/calibration-compare.js?v=08a966c2ccee';
 
 /** Thousands separators, matching the origin dialogs. */
 function n(v) {

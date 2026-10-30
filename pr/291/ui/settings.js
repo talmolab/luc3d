@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=7080dc377701';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=08a966c2ccee';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -428,9 +428,9 @@ const TRACKING_THRESHOLDS = [
     {
         // A new id, not 'imageCheckThreshold': the score's scale changed (2026-10-09, -4..+4 instead of summed
         // log-probabilities), and an old saved -25 would otherwise be clamped to -4 and flag almost nothing.
-        id: 'imageChangeThreshold', label: 'Image check: flag threshold', default: -0.8,
+        id: 'imageChangeThreshold', label: 'Image check: flag threshold', default: -1,
         min: -4, max: 0, step: 0.1,
-        desc: 'A contact is a possible switch when its score falls below this. The score compares how each animal looks just before and just after the contact: about +2 means each still looks like itself, about -2 that they look like each other, near 0 that they cannot be told apart there. Closer to 0 catches more but flags more clean contacts: over 8 proofread or tail-marked recordings (1 h 45 min), -0.8 caught 10 of 12 real relabels with 2 false marks; -0.5 caught the same with 6; -1.2 caught 8 with none.',
+        desc: 'A contact is a possible switch when its score falls below this. The score compares how each animal looks just before and just after the contact: about +2 means each still looks like itself, about -2 that they look like each other, near 0 that they cannot be told apart there. Closer to 0 catches more but flags more clean contacts: over 24 proofread or tail-marked recordings (4 h 30 min), -1 caught 25 label changes with 1 false mark; -0.8 caught the same with 4; -1.2 caught 24 with none.',
     },
     {
         id: 'imageCheckHz', label: 'Image check: crops per second', default: 2,
@@ -556,7 +556,7 @@ export const SMOOTHING_PARAMS = [
     {
         id: 'smoothGaussianWindow', label: 'Gaussian window (frames)', default: 0,
         min: 0, max: 101, step: 2,
-        desc: 'Stage 2, over time, applied to the median\'s output. A weighted average of each node\'s x, y and z over this many frames, with sigma = (window-1)/6, so the window spans +/-3 sigma and the current frame counts most. Removes broadband jitter. Coerced to the next odd value. 0 = off.',
+        desc: 'Stage 2, over time, applied to the median\'s output. A weighted average of each node\'s x, y and z over this many frames, with sigma = (window-1)/6, so the window spans +/-3 sigma and the current frame counts most. Removes broadband jitter. 3 barely changes anything (each frame keeps about 98% of its own value); 5 is the smallest window that smooths. Coerced to the next odd value. 0 = off.',
     },
     {
         id: 'smoothMaxGap', label: 'Max gap to smooth across (frames)', default: 5,

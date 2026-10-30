@@ -57,7 +57,7 @@ try {
     page.on('console', m => { if (m.type() === 'error') console.log('[console.error]', m.text().slice(0, 200)); });
 
     await page.goto(`http://localhost:${PORT}/index.html`, { waitUntil: 'domcontentloaded', timeout: 120000 });
-    await page.waitForFunction(() => window.SleapIO && window.h5wasm, { timeout: 120000 });
+    await page.waitForFunction(() => window.SleapIO && window.h5wasm, null, { timeout: 120000 });
 
     console.log('reopen-store-columns-typed:');
 

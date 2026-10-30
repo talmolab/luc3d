@@ -71,7 +71,7 @@ try {
     });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     const out = await page.evaluate(async ({ LOCKED, LOCKED_DROPDOWNS, FREE_BUTTONS, FREE_CHECKBOXES }) => {
         const P = await import('/ui/plane-definition.js');
