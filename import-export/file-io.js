@@ -2783,6 +2783,93 @@ export function parseSlpH5(file, onProgress, opts) {
 }
 
 /**
+ * Read each file's `provenance` dict and nothing else — one worker
+ * (`loading/slp-import-worker.js`, `readProvenance`) opens the files in turn and
+ * reads only the `metadata` attribute, so the cost does not grow with a file's
+ * size. Used by the per-camera folder loader to order a camera directory's
+ * `.slp` candidates by when LUC3D wrote them (`lucidExportedAt`).
+ *
+ * Never rejects: a worker that fails or does not answer within `timeoutMs`
+ * resolves to all-null, the same as files with no provenance, so the caller
+ * falls back to the rule it used before it asked.
+ *
+ * @param {File[]} files
+ * @param {{timeoutMs?: number}} [opts] - default 30 s
+ * @returns {Promise<Array<Object|null>>} parallel to `files`
+ */
+export function readSlpProvenances(files, opts) {
+    var none = files.map(function () { return null; });
+    if (!files.length) return Promise.resolve(none);
+    var timeoutMs = (opts && opts.timeoutMs) || 30000;
+    return new Promise(function (resolve) {
+        var worker;
+        var timer = null;
+        var done = false;
+        function finish(result, why) {
+            if (done) return;
+            done = true;
+            if (timer) clearTimeout(timer);
+            try { worker.terminate(); } catch (e) { /* already gone */ }
+            if (why) console.warn('[slp-provenance] ' + why + ' — choosing by file name instead');
+            resolve(result);
+        }
+        try {
+            var workerUrl = new URL('loading/slp-import-worker.js?v=' + Date.now(), document.baseURI);
+            worker = new Worker(workerUrl, { type: 'module' });
+        } catch (e) {
+            resolve(none);
+            return;
+        }
+        worker.onmessage = function (e) {
+            var msg = e.data;
+            if (msg.type === 'provenance') {
+                var got = Array.isArray(msg.provenances) && msg.provenances.length === files.length
+                    ? msg.provenances : none;
+                finish(got, null);
+            } else if (msg.type === 'error') {
+                finish(none, 'worker error: ' + msg.message);
+            }
+        };
+        worker.onerror = function (err) { finish(none, 'worker error: ' + (err.message || 'unknown')); };
+        timer = setTimeout(function () { finish(none, 'no answer in ' + timeoutMs + ' ms'); }, timeoutMs);
+        worker.postMessage({ type: 'readProvenance', files: files });
+    });
+}
+
+/**
+ * A SLEAP analysis `.h5` rewritten as an `.slp`, in memory (#414): the
+ * `analysisToSlp` message of `loading/slp-import-worker.js`, which builds the
+ * tables as typed arrays — no per-instance objects — and posts the file's
+ * bytes. The per-camera folder loader uses it when a lazy session mixes `.slp`
+ * and analysis `.h5` cameras, so `SioLazyLoader` can read every camera.
+ *
+ * @param {File} file - a SLEAP analysis `.h5`
+ * @returns {Promise<File>} `<name>.slp`, same `lastModified`; rejects when the
+ *   file is not an analysis `.h5` or the worker fails
+ */
+export function convertAnalysisH5ToSlp(file) {
+    return new Promise(function (resolve, reject) {
+        var workerUrl = new URL('loading/slp-import-worker.js?v=' + Date.now(), document.baseURI);
+        var worker = new Worker(workerUrl, { type: 'module' });
+        worker.onmessage = function (e) {
+            var msg = e.data;
+            if (msg.type === 'slpBytes') {
+                worker.terminate();
+                resolve(new File([msg.bytes], msg.name, { type: 'application/x-hdf5', lastModified: file.lastModified }));
+            } else if (msg.type === 'error') {
+                worker.terminate();
+                reject(new Error(msg.message));
+            }
+        };
+        worker.onerror = function (err) {
+            worker.terminate();
+            reject(new Error('Analysis .h5 conversion worker error: ' + (err.message || 'unknown')));
+        };
+        worker.postMessage({ type: 'analysisToSlp', file: file });
+    });
+}
+
+/**
  * Parse a SLEAP .slp file through sleap-io.js's streaming reader
  * (`readSlpStreaming`, PR #196) and adapt the typed `Labels` into the SAME
  * `slpData` shape that `parseSlpH5` (the raw-h5wasm worker) resolves to, so the

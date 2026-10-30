@@ -1537,6 +1537,10 @@ session graph that holds them.
     been asked, which is what makes Track Frame / Track All prompt. Saved as
     `metadata.lucid.numAnimals` (`import-export/visibility-metadata.js`), read
     and set through `pose/tracker.js`.
+  - **`dataFileChoices`** — `{camera: 'dir/file' | null}` for the cameras whose
+    data file the user chose in the per-camera folder loader's chooser, or
+    null. Set by `handleLoadSessionFolderPerCamera`; saved as
+    `metadata.lucid.dataFileChoices`.
   - `numFrames` returns `lazyLoader.nFrames` on a lazy session (`frameGroups`
     there holds only the resident window) and `frameGroups.size` otherwise.
   - **Tracks and identities are per-session.** The constructor copies the
@@ -2992,7 +2996,9 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   Promise of the frames loaded and keeps at most one request in flight. Nearly
   free when the window is already resident (`tests/e2e/_bench-trail-window.mjs`).
   `LazyFrameLoader` spawns `loading/slp-import-worker.js` (resolved against
-  `document.baseURI` so sub-path deployments work) for HDF5 reads.
+  `document.baseURI` so sub-path deployments work) for HDF5 reads. A camera
+  whose `open` fails terminates its own worker (it is never registered, so
+  `close()` would not reach it; #415).
   **`LazyFrameLoader`'s tracks are the union over its cameras, whichever worker
   answers first.** Each worker's `metadata` message goes through
   `_registerCamera`, which picks the skeleton of the first camera BY NAME and
@@ -7768,6 +7774,33 @@ un-foldable: `ui/origin-rebase.js`'s folding rules are scoped to
 
 ---
 
+### ui/data-file-chooser.js
+
+**Purpose.** The "Choose data files" dialog of the per-camera folder loaders
+(#413 / #414): one row per camera (Camera | Video | Data file), the data file a
+`<select>` of that camera folder's `.slp`/`.h5` files (each labelled with its
+kind: `LUC3D export, <local date time>`, proofread, predictions, analysis
+`.h5`, reprojections, `copy of X`, SLEAP file) plus "None (no annotations)".
+Rows the loader would not decide on its own are marked (`dfc-attention`); a
+saved file that is gone is drawn red with "Saved file not found: X"
+(`dfc-missing`). A multi-session load gets one tab per session (`.dfc-tab`; a
+dot marks tabs that need a choice; the first such tab opens). **Save Options**
+(`#dfcSave`) resolves `{sessionKey: {camName: value}}`; Cancel (`#dfcCancel`)
+and `Esc` resolve null, which ends the load. One scroller (the modal). Draws
+only what it is handed — the rule and the defaults are
+`loading/percam-slp-choice.js`'s, the saving `loading/data-file-resolve.js`'s.
+
+**Key exports.** `showDataFileChooser(sessions)`, `dataFileKindLabel(option)`.
+
+**Imports from project modules.** None. Styles: `.data-file-chooser` in
+`styles.css` (on the shared `.multi-frame-modal` shell).
+
+**Imported by.** `loading/data-file-resolve.js`.
+
+**Tests.** `tests/e2e/percam-data-file-chooser.mjs`.
+
+---
+
 ### ui/plane-angle.js
 
 **Purpose.** The dialog and the commit for **Set Angle Between Two Planes** —
@@ -11653,24 +11686,112 @@ frames (off-main-thread to keep UI responsive).
 
 ### loading/percam-slp-choice.js
 
-**Purpose.** The rule for which `.slp` a camera directory is loaded from, as a
-pure function. Imports **nothing** — no project modules, no DOM — so it bridges
-into `tests/test-runner.html` (session-loader pulls app.js through its import
-graph and cannot be loaded there).
+**Purpose.** The rules for which data file a camera directory loads, and when
+the user must say, as pure functions. Imports **nothing** — no project modules,
+no DOM — so it bridges into `tests/test-runner.html` and loads in Node
+(session-loader pulls app.js through its import graph and cannot be loaded
+there).
 
-**Key export.** `chooseCameraSlp(slps)` → `{file, version, newer}`. See the
-`loading/session-loader.js` entry for the rule and why `lastModified` is
-deliberately NOT authoritative. `newer` is the most-recently-modified candidate
-when that is not the chosen file, else `null` — the signal that a leftover
-`_vN` is outranking a file the user just wrote.
+**Key exports.**
+- `planCameraDataFile(files, opts?)` → `{auto, needsChoice, reason,
+  defaultFile, options}` — the per-camera folder loader's rule (#413 / #414),
+  over a camera dir's `.slp`/`.h5` files. Loads without asking only when there
+  is nothing to decide: one data file (`'single'`), or only `.slp` files with
+  the newest LUC3D export (by `opts.exportedAt`) also the newest file on disk,
+  ties allowed (`'newest-export'`, via `chooseCameraSlp`). Anything else needs
+  the user: any `.slp` NEWER on disk than the newest export
+  (`'newer-than-export'`, default the export) — stamped ones too, since SLEAP
+  and sleap-io keep the provenance when they re-save, so a file proofread in
+  SLEAP from an older export still carries that export's stamp — several
+  unstamped `.slp`
+  (`'several-slp'`), any mix with an `.h5` (`'several-files'`). `options` are
+  every file, best first by `DATA_FILE_KIND_RANK` (LUC3D export, proofread,
+  predictions, other `.slp`, analysis `.h5`, reprojections, derived copies),
+  then export time, `_vN`, mtime, name; the first is the default. An `.h5`
+  named after an `.slp` in the same dir (`X.slp.analysis.h5`, `X.slp.h5`:
+  `derivedFromSlp`) is SLEAP's export of that file and does not compete, but is
+  listed. Reprojections are never the default over real poses: guessing by date
+  loaded `*.reprojections.slp` into every view of a SLAP-2M session (#413).
+- `derivedFromSlp(name, slpNames)`, `dataFileKind(name, isLucidExport,
+  derivedFrom)`, `DATA_FILE_KIND_RANK`.
+- `chooseCameraSlp(slps, opts?)` → `{file, version, newer, by,
+versionPick}`. `opts.exportedAt(file)` gives when LUC3D wrote a candidate (ms,
+NaN for a file it did not write); when any candidate has one, the newest LUC3D
+export wins (`by: 'exported'`), else the highest `_vN` then `lastModified`
+(`by: 'version'`). `versionPick` is what the suffix rule alone would choose.
+`newer` is a more-recently-modified candidate that is not being loaded — under
+the stamp rule only a file LUC3D did not write can be one. With no `opts` it is
+exactly the old suffix rule. See the `loading/session-loader.js` entry for why
+(#214) and why `lastModified` is never authoritative.
 
 **Imports from project modules.** None (deliberately).
 
-**Imported by.** `loading/session-loader.js`, which re-exports it so its own
-import site is unchanged; bridged into the test runner as
-`window.__PerCamSlpChoice`.
+**Imported by.** `loading/data-file-resolve.js` (`planCameraDataFile`);
+`loading/session-loader.js` re-exports `chooseCameraSlp` so its import site is
+unchanged; bridged into the test runner as `window.__PerCamSlpChoice`.
 
-**Tests.** `tests/test-percam-slp-choice.js`.
+**Tests.** `tests/test-percam-slp-choice.js`, `tests/test-data-file-plan.mjs`.
+
+---
+
+### loading/data-file-choices.js
+
+**Purpose.** The per-camera data files a user picked in the chooser
+(`ui/data-file-chooser.js`), remembered in this browser (#413).
+`localStorage.lucidDataFileChoices` = `{ <session folder name>: { <camera dir>:
+<file name> | null } }` (null = "None"). Browser storage because the folder
+picker is read-only; a project saved afterwards carries the same choices as
+`metadata.lucid.dataFileChoices` (`import-export/visibility-metadata.js`).
+Best-effort: unreadable or unwritable storage only means the chooser asks again.
+Imports nothing, so Node tests load it.
+
+**Key exports.** `DATA_FILE_CHOICES_KEY`; `savedDataFileChoices(folderName,
+storage?)` → the folder's map or null; `saveDataFileChoices(folderName, entries,
+storage?)` merges (other folders and dirs keep theirs; never throws, returns
+whether it wrote); `applySavedChoice(saved, dirName, files)` → `{state: 'none'}`,
+`{state: 'use', file}` (the saved file, or `file: null` for "None") or
+`{state: 'missing', name}`. A file added to the folder after a save is ignored
+on purpose — the saved choice stands until the user changes it.
+
+**Imports from project modules.** None (deliberately).
+
+**Imported by.** `loading/data-file-resolve.js`.
+
+**Tests.** `tests/test-data-file-plan.mjs`, `tests/e2e/percam-data-file-chooser.mjs`.
+
+---
+
+### loading/data-file-resolve.js
+
+**Purpose.** Settles, BEFORE anything loads, which data file every camera of
+every session being loaded reads — so Cancel leaves the app exactly as it was.
+`resolveDataFiles(plans, {onAsk?, onAnswered?, ask?})`; one plan per session
+(`{key, title, folderName, cameras: [{camName, dirName, videoName, files}]}`,
+built by session-loader's `sessionDataFilePlan`). Per camera: a saved choice
+(`loading/data-file-choices.js`) whose file is still there is used; a saved
+file that is gone puts the row in the dialog in red; otherwise
+`planCameraDataFile` decides, reading LUC3D export stamps first
+(`readSlpProvenances` + `lucidExportedAt`, only for dirs with ≥ 2 files).
+Anything undecided opens ONE dialog (`showDataFileChooser`, one tab per
+session); `onAsk` runs first (the loaders hide the loading card). On Save
+Options the rows the user had to decide or changed are saved; rows the rule
+settled stay automatic. Returns `{[key]: {files: {cam: File|null}, how: {cam:
+'auto'|'saved'|'chosen'}, chosen: {cam: 'dir/file'|null}, asked}}`, or null on
+Cancel/Esc. `chosen` is what the session keeps as `Session.dataFileChoices`.
+Logs one `[data-files] <session> / <cam>: "<file>" (<how>[, <reason>])` line
+per camera.
+
+**Imports from project modules.** `../import-export/file-io.js`
+(`readSlpProvenances`), `../import-export/slp-provenance.js`
+(`lucidExportedAt`), `./percam-slp-choice.js` (`planCameraDataFile`),
+`./data-file-choices.js`, `../ui/data-file-chooser.js` (`showDataFileChooser`,
+`dataFileKindLabel`).
+
+**Imported by.** `loading/session-loader.js`
+(`handleLoadSessionFolderPerCamera`, `handleLoadMultiSession`).
+
+**Tests.** `tests/e2e/percam-data-file-chooser.mjs`,
+`tests/e2e/percam-slp-choice-export-time.mjs`.
 
 ---
 
@@ -11870,6 +11991,11 @@ filesystem enumeration, decoder rebuild.
   `attachVideosForLazyReopen`. Also `addColumnarFramesToSession` (the
   per-camera load's Instance builder from the SLP worker's columnar result;
   exported for `tests/e2e/slp-import-fast-compound.mjs`).
+  `scanPerCameraFolder(files)` is the per-camera load's side-effect-free first
+  half (categorize, calibration pick + parse, campy, camera ↔ dir matching),
+  shared with `handleLoadMultiSession` so it can settle every session's data
+  files before loading any; `sessionDataFilePlan(key, folderName,
+  matchedCameraDirs)` turns its result into a `resolveDataFiles` plan.
   `handleLoadSessionFolderSingleSlp()` loads a folder holding a project `.slp`
   plus `videos/` + calibration. It reads the SLP with the **typed** reader
   (`parseSlpViaSleapIO`, raw `parseSlpH5` only as fallback) and restores
@@ -12022,31 +12148,64 @@ predictions only) as the nested-`frames` loop (kept for results without
 view, which would pin the whole camera buffer and make any structured clone of
 the instance copy all of it.
 
-**Per-camera `.slp` selection.** `handleLoadSessionFolderPerCamera` loads only
-**one** `.slp` per camera directory — the highest `_vN` version (first-wins on a
-tie / when unversioned). A camera dir accumulates successive exports
-(`<stem>_v1.slp`, `_v2.slp`, …); parsing every file would stack all versions'
-instances into the same (frame, camera) slot. Skipped files are logged. The
-choice lives in `loading/percam-slp-choice.js`'s `chooseCameraSlp(slps)` →
-`{file, version, newer}` (re-exported here), which adds two things to a bare
-max():
-- **`lastModified` breaks a same-version tie** (enumeration order is arbitrary).
-- **It reports when the version suffix disagrees with the disk** (`newer`, the
-  most-recently-modified candidate when that is NOT the chosen file; `null`
-  otherwise, including on equal mtimes). Writing fresh annotations to the
-  UNVERSIONED name makes a leftover `_v1` win. The version rule is deliberately
-  UNCHANGED (mtime survives neither copying nor syncing reliably, so it must not
-  decide which file is authoritative); the load just says a newer file was left
-  unread. Covered by `tests/test-percam-slp-choice.js` and
-  `tests/e2e/percam-slp-choice-and-failure.mjs`.
+**Per-camera data-file selection.** `handleLoadSessionFolderPerCamera` loads
+only **one** data file per camera directory; parsing every file would stack all
+of them into the same (frame, camera) slot. Which one is settled before
+anything else happens, by `resolveDataFiles` (`loading/data-file-resolve.js`)
+— for `handleLoadMultiSession`, for all sessions at once, then handed to each
+session's load as `opts.dataFiles`:
+- **No question when there is nothing to decide**
+  (`planCameraDataFile`, `loading/percam-slp-choice.js`): one data file, or only
+  `.slp` files with the newest LUC3D export (by the `exported_at` LUC3D stamps
+  in every file's provenance) also the newest file on disk (ties allowed: a
+  folder copied in one go). Why (#214): the `_vN` suffix is a convention only "Export SLEAP File
+  Per Session" follows — "By Cam" writes `<camera>.slp` — so a By-Cam export
+  dropped back into a camera dir lost to any leftover `_v1`.
+- **Otherwise the data-file chooser** (`ui/data-file-chooser.js`): several
+  `.slp` none of which LUC3D exported (a SLAP-2M camera folder holds
+  predictions, a proofread copy, reprojections and `.h5` exports; guessing by
+  date loaded the reprojections everywhere, #413), a NEWER `.slp` beside the
+  newest LUC3D export (from SLEAP or sleap-nn, a SLEAP re-save of an older
+  export — which keeps that export's stamp — or an old export a sync touched),
+  or `.slp` mixed with `.h5`. One row per
+  camera with a sensible default and "None"; one tab per session. The loading
+  card is hidden while it is up (`onAsk`). **Cancel/Esc ends the load before the
+  previous session is touched** ("Load cancelled — no data files chosen").
+- **Save Options remembers the answer** in this browser per session folder +
+  camera dir (`loading/data-file-choices.js`); the next load uses it without
+  asking while the file exists, ignoring files added since. A saved file that
+  disappeared brings the dialog back with that row in red. The cameras the user
+  decided (now or before) go on `Session.dataFileChoices`, which a project save
+  writes as `metadata.lucid.dataFileChoices`.
+- **mtime never picks a file** (it survives neither copying nor syncing
+  reliably): the stamp picks the default, and mtime only decides whether to ask.
+  Analysis `.h5` conversions in a lazy mixed folder run one at a time (each
+  holds a whole `.h5` plus the `.slp` it writes); the converted `.slp` stays in
+  memory as the lazy store's source for the session.
+Covered by `tests/test-data-file-plan.mjs`, `tests/test-percam-slp-choice.js`,
+`tests/e2e/percam-data-file-chooser.mjs` (no-question load, dialog, saved
+choice reused, missing file in red, Cancel, multi-session tabs),
+`tests/e2e/percam-slp-choice-export-time.mjs` (six cameras, one per way the
+suffix rule lost data, plus the negative control) and
+`tests/e2e/percam-slp-choice-and-failure.mjs`.
 
-**Large `.slp` → lazy loading.** The chosen `.slp` files are routed by
-`shouldUseLazySlp` (`> 150 MB`): large prediction files go to a `SioLazyLoader`
-instead of the eager `parseSlpH5` worker, which OOMs the tab on 100k-frame
-predictions. The lazy loader is chosen when all lazy jobs are `.slp` (analysis
-`.h5` folders still use `LazyFrameLoader`); a lazy-open failure surfaces an error
-rather than falling back to the OOM-prone eager path. It plugs into the
-`state.session.lazyLoader` seam, so rendering/scrubbing are unchanged.
+**Large files → lazy loading.** The chosen files are routed by
+`shouldUseLazySlp` (`> 150 MB`) / `shouldUseLazyH5` (`> 20 MB`): large files go
+to a lazy loader instead of the eager `parseSlpH5` worker, which OOMs the tab on
+100k-frame predictions. A folder of analysis `.h5` files only uses
+`LazyFrameLoader`; any other lazy set uses `SioLazyLoader`, and **each analysis
+`.h5` in a mixed set is first rewritten as an in-memory `.slp`**
+(`convertAnalysisH5ToSlp`, the worker's `analysisToSlp`; typed arrays,
+predictions, no per-node scores as on every analysis-`.h5` path). One reader
+picked for the whole set by "are they all `.slp`" handed every `.slp` to the
+`.h5`-only reader and loaded no view at all (#414). Each camera opens on its
+own: a failed one is named in the status line (`slpFailures`) and the rest
+load; only when none opens does the load fail ("Failed to load annotations
+(lazy): …"). Once the load has ended (`loadEnded`), a straggling camera's
+progress callback is ignored, so it cannot bring the loading card back over the
+result (#415). It plugs into the `state.session.lazyLoader` seam, so
+rendering/scrubbing are unchanged. Covered by
+`tests/e2e/percam-mixed-format-lazy.mjs`.
 
 **One `session.tracks` for the folder, whichever path and whichever file
 opens first** — the union rule in `loading/track-union.js`. The eager loop
@@ -12150,7 +12309,9 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
 - `../pose/placeholder-cameras.js` (`makePlaceholderCamera`,
   `hasRealCalibration`, `ensurePlaceholderCameras`),
 - `./calibration-pick.js` (`REBASED_CALIBRATION_NAME`, `pickCalibrationFile`),
-  `./percam-slp-choice.js` (`chooseCameraSlp`), `./video-file-pick.js`,
+  `./percam-slp-choice.js` (`chooseCameraSlp`), `../import-export/file-io.js`
+  (incl. `readSlpProvenances`), `../import-export/slp-provenance.js` (incl.
+  `lucidExportedAt`), `./video-file-pick.js`,
   `./video-codec-diagnosis.js` (`videoLoadFailureText`),
   `../ui/video-codec-notice.js` (`noteUnplayableVideos`),
   `../ui/app-state.js` (incl. `buildRememberedSkeleton`, and `isViewDocked` as the
@@ -12162,7 +12323,8 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
   called wherever an outgoing session's views are stashed in `_views`: empty
   session, single-SLP folder, per-camera folder), `../import-export/file-io.js`,
   `../pose/triangulation.js` (`shouldUseLazyH5`, `shouldUseLazySlp`, `LazyFrameLoader`),
-  `./sio-lazy-loader.js` (`SioLazyLoader`),
+  `./sio-lazy-loader.js` (`SioLazyLoader`), `./data-file-resolve.js`
+  (`resolveDataFiles`), `./percam-slp-choice.js` (`chooseCameraSlp`, re-exported),
   `./track-union.js` (`unionTrackNames`, `remapTrackIdx`),
   `../import-export/save-load.js`,
   `../ui/rendering.js` (`drawAllOverlays`, `setReprojErrorVisible`),
@@ -12407,9 +12569,24 @@ open-and-stream-frames.
 - IN: `{type: 'getFrame', frameIdx, requestId}` — read one frame lazily.
 - IN: `{type: 'getFrames', startIdx, endIdx, requestId}` — read range.
 - IN: `{type: 'close'}` — close lazy file.
+- IN: `{type: 'readProvenance', files}` — each file's `provenance` dict and
+  nothing else (the `metadata` group's `json` attribute; no table is read).
+  A file that cannot be opened, is not an SLP or has no provenance gives `null`,
+  never an error. Used by `readSlpProvenances` (`import-export/file-io.js`) for
+  the per-camera folder loader's file choice (#214).
+- IN: `{type: 'analysisToSlp', file}` — a SLEAP analysis `.h5` rewritten as an
+  SLP (format 1.4, written with h5wasm in MEMFS): the frames / instances /
+  pred_points tables built in typed arrays from `tracks`, `track_occupancy`,
+  `instance_scores`, `tracking_scores`, node names, edges and track names;
+  every instance predicted; per-node scores NaN (as every analysis-`.h5` path,
+  luc3d #322); `provenance: {converted_from}`. Used by `convertAnalysisH5ToSlp`
+  so one `SioLazyLoader` reads a lazy folder that mixes `.slp` and `.h5` (#414).
+  A file with no `tracks` dataset errors ("Not a SLEAP analysis .h5").
 - OUT: `{type: 'progress', message}`, `{type: 'result', data: {...}}`,
   `{type: 'metadata', data: {...}}`, `{type: 'frameData', ...}`,
-  `{type: 'framesData', ...}`, `{type: 'error', message}`.
+  `{type: 'framesData', ...}`, `{type: 'provenance', provenances}` (parallel to
+  `files`), `{type: 'slpBytes', bytes, name}` (transferred; `name` is the
+  `.h5`'s name + `.slp`), `{type: 'error', message}`.
 
 **An unopenable file must reject, not resolve empty.** `new h5wasm.File(path,
 'r')` does **not** throw on non-HDF5 bytes, and every `f.get()` in `parseSlp` is
@@ -13178,7 +13355,9 @@ keyboard transport.
 SESSION-SCOPED settings — and for the other per-session state that belongs in
 the project file: the ID Switches tab's review checklist (`idSwitchReview`,
 `ui/id-switch-review.js`) and the number of animals tracking uses
-(`numAnimals` ↔ `Session.numAnimals`, the toolbar's Animals field). One module
+(`numAnimals` ↔ `Session.numAnimals`, the toolbar's Animals field) and the
+data files the user chose in the per-camera folder loader's chooser
+(`dataFileChoices` ↔ `Session.dataFileChoices`). One module
 owns the key list so a writer and a reader cannot drift: adding a setting means
 touching this file and nothing else.
 
@@ -13191,6 +13370,14 @@ leaves `null`, never a stale value. The two helpers (`serializeNumAnimals` /
 `pose/tracker.js`, which this module cannot import: tracker.js pulls in the
 whole UI, and this module is bridged into `tests/test-runner.html`, which must
 not load the app.
+
+**`dataFileChoices`.** `{ <camera>: "<camera dir>/<file name>" | null }` (null =
+"None"), only for cameras whose file the USER decided in the chooser (now or in
+an earlier load, `loading/data-file-resolve.js`); cameras the loader settled on
+its own are not listed, and a session with none writes nothing. Written in
+sorted camera order. A record only: no loader reads it back into a choice yet
+(the browser's `localStorage.lucidDataFileChoices` is what the loader uses).
+The read assigns unconditionally (null when absent or malformed).
 
 **What it covers, and what it deliberately does not.**
 - **Session-scoped** (handled here) — per-camera video brightness / contrast /
@@ -13205,7 +13392,8 @@ not load the app.
 **Key exports.**
 - `VISIBILITY_METADATA_KEYS` — every key this module may write
   (`videoBrightness`, `videoContrast`, `videoRotation`, `hiddenCameras`,
-  `hiddenTracks`, `hiddenIdentities`, `idSwitchReview`, `numAnimals`). Exported so tests can assert a default
+  `hiddenTracks`, `hiddenIdentities`, `idSwitchReview`, `numAnimals`,
+  `dataFileChoices`). Exported so tests can assert a default
   project carries none of them without duplicating the list.
 - `writeVisibilityMetadata(lucid, session)` — mutate a `metadata.lucid` dict in
   place, adding only non-default settings; returns the same dict.
@@ -13502,7 +13690,10 @@ session's `name` + `fileProvenance`); `fileSessionProvenance(fileProv, names,
 index)` (what one loaded session keeps); `fileSessionNames(rawSessions)`
 (`metadata.lucid.sessionName` per `sessions_json` entry);
 `foreignProvenance(prov)` (the dict minus LUC3D's keys, deep-copied);
-`provenanceSessionKeys(names)`; `LUCID_PROVENANCE_SOURCE`,
+`provenanceSessionKeys(names)`; `lucidExportedAt(prov)` (when LUC3D wrote the
+file: the `exported_at` of LUC3D's own pair — top level, or under `lucid` when
+another program owns the top level — in ms, NaN otherwise; the per-camera folder
+loader's file choice, #214); `LUCID_PROVENANCE_SOURCE`,
 `LUCID_PROVENANCE_KEY` (`lucid`), `PROVENANCE_SESSIONS_KEY` (`lucid_sessions`).
 
 **Imports from project modules.** None.
@@ -13513,7 +13704,9 @@ and single-session streaming, `finalizeMultiSessionSave`). Readers (set
 `loading/session-loader.js` (`handleLoadSessionFolderSingleSlp`,
 `handleLoadProjectSlpLazy`). A new loader that builds a Session from an `.slp`
 must set it too, or a save drops the file's provenance. The per-camera and
-multi-session folder loaders do not (they read camera `.slp` files as 2D only).
+multi-session folder loaders do not (they read camera `.slp` files as 2D only);
+`handleLoadSessionFolderPerCamera` reads `lucidExportedAt` only to choose which
+of a camera dir's files to load.
 
 **Tests.** `tests/test-slp-provenance.mjs` (the rule),
 `tests/e2e/slp-provenance-roundtrip.mjs` (real load → Save → reopen: eager,
@@ -13689,6 +13882,15 @@ session's resident/total) rather than truncate silently. Covered by
   `parseSlpViaSleapIO` fallback, and for the per-camera session-folder load,
   which passes `{ columnar: true }` to receive the poses as flat transferred
   typed arrays (`data.columnar`) instead of nested `data.frames`.
+- Provenance only: `readSlpProvenances(files, {timeoutMs?})` → each file's
+  `provenance` dict (or null), from one `slp-import-worker.js` reading the
+  `metadata` attribute only. Never rejects: a worker error or no answer within
+  `timeoutMs` (30 s) resolves all-null. Used by the per-camera folder loader to
+  order a camera dir's candidates by `exported_at` (#214).
+- Analysis `.h5` → `.slp`: `convertAnalysisH5ToSlp(file)` → Promise<File>
+  (`<name>.slp`, in memory), from one worker's `analysisToSlp`. Rejects on a
+  file that is not an analysis `.h5`. Used by the per-camera loader's lazy
+  branch for a set that mixes `.slp` and `.h5` (#414).
 - SLP parse (sleap-io.js): `parseSlpViaSleapIO(file, onProgress)` —
   drives `window.SleapIO.readSlpStreaming(file, {rawSessions:true})` and adapts
   the typed `Labels` into the `slpData` shape via the private

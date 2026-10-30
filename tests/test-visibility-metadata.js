@@ -408,6 +408,43 @@
 
     // ---- Session integration ----
 
+    describe('Visibility metadata - dataFileChoices (#413)', function () {
+        it('writes nothing for a session whose files no one chose', function () {
+            var m = M();
+            var s = fakeSession();
+            var lucid = m.writeVisibilityMetadata(fakeLucid(), s);
+            assertFalse(Object.prototype.hasOwnProperty.call(lucid, 'dataFileChoices'), 'absent when unset');
+            s.dataFileChoices = {};
+            lucid = m.writeVisibilityMetadata(fakeLucid(), s);
+            assertFalse(Object.prototype.hasOwnProperty.call(lucid, 'dataFileChoices'), 'absent when empty');
+        });
+        it('round-trips the chosen files, "None" as null, in a stable key order', function () {
+            var m = M();
+            var src = fakeSession();
+            src.dataFileChoices = { side: null, back: 'back/back.predictions.proofread.slp' };
+            var lucid = m.writeVisibilityMetadata(fakeLucid(), src);
+            assertEqual(JSON.stringify(lucid.dataFileChoices),
+                '{"back":"back/back.predictions.proofread.slp","side":null}', 'sorted by camera');
+            var dst = fakeSession('dst');
+            m.readVisibilityMetadata(dst, lucid);
+            assertDeepEqual(dst.dataFileChoices, { back: 'back/back.predictions.proofread.slp', side: null });
+        });
+        it('a file without the key, or with junk in it, reads as no choices', function () {
+            var m = M();
+            var dst = fakeSession();
+            dst.dataFileChoices = { stale: 'x.slp' };
+            m.readVisibilityMetadata(dst, fakeLucid());
+            assertNull(dst.dataFileChoices, 'a reopened session does not keep the previous one\'s choices');
+            var lucid = fakeLucid();
+            lucid.dataFileChoices = { a: 5, b: 'b/b.slp', c: [1] };
+            m.readVisibilityMetadata(dst, lucid);
+            assertDeepEqual(dst.dataFileChoices, { b: 'b/b.slp' }, 'only names and null survive');
+            lucid.dataFileChoices = ['b/b.slp'];
+            m.readVisibilityMetadata(dst, lucid);
+            assertNull(dst.dataFileChoices, 'an array is not a choice map');
+        });
+    });
+
     describe('Visibility metadata - Session integration', function () {
         it('a fresh Session declares empty brightness and rotation maps', function () {
             var Session = pick('Session'), Skeleton = pick('Skeleton');

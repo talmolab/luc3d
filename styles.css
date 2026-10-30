@@ -1951,6 +1951,98 @@ button.tri-dropdown-item:disabled {
   min-width: 680px;
 }
 
+/* Data-file chooser (ui/data-file-chooser.js, #413/#414): one row per camera,
+   a drop-down of that camera folder's data files. ONE scroller: the dialog
+   itself, capped at the viewport; the table never scrolls on its own. */
+.data-file-chooser {
+  width: min(920px, 94vw);
+  max-width: 94vw;
+  max-height: 86vh;
+  overflow-y: auto;
+}
+.data-file-chooser .dfc-note {
+  margin-bottom: 12px;
+}
+.data-file-chooser .dfc-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border-color);
+  user-select: none;
+}
+.data-file-chooser .dfc-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  padding: 6px 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.data-file-chooser .dfc-tab.active {
+  background: var(--bg-tertiary);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+.data-file-chooser .dfc-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-left: 4px;
+  vertical-align: middle;
+}
+.data-file-chooser .dfc-table {
+  width: 100%;
+  table-layout: fixed;
+}
+/* Fixed columns: the data file gets the room, the video name is context. */
+.data-file-chooser .dfc-table th:nth-child(1) { width: 76px; }
+.data-file-chooser .dfc-table th:nth-child(2) { width: 30%; }
+.data-file-chooser .dfc-table th,
+.data-file-chooser .dfc-table td {
+  text-align: left;
+  vertical-align: top;
+}
+.data-file-chooser .dfc-cam,
+.data-file-chooser .dfc-video {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.data-file-chooser .dfc-cam {
+  font-weight: 600;
+}
+.data-file-chooser .dfc-video {
+  color: var(--text-secondary);
+}
+.data-file-chooser .dfc-select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 3px 4px;
+  font-size: 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  border-radius: 3px;
+}
+.data-file-chooser tr.dfc-attention .dfc-cam {
+  color: var(--accent);
+}
+.data-file-chooser tr.dfc-missing .dfc-cam,
+.data-file-chooser .dfc-missing-note {
+  color: var(--error-color);
+}
+.data-file-chooser .dfc-missing-note {
+  font-size: 12px;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
 /* Multi-session (two-panel) SLP export layout */
 .slp-export-multi {
   min-width: 820px;

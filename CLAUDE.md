@@ -83,7 +83,7 @@ Loaded via `index.html` script tags / importmap (mirrored in `tests/test-runner.
 ## Project state in `metadata.lucid` (Visibility + Temporal Smoothing + Define Planes)
 
 Per-session state, written to each session's dict by exactly three modules:
-- `import-export/visibility-metadata.js` (`VISIBILITY_METADATA_KEYS`): `videoBrightness`/`videoContrast`/`videoRotation`, `hiddenCameras`/`hiddenTracks`/`hiddenIdentities`, `idSwitchReview`, `numAnimals` (a count or `"auto"`; absent until asked, so a reopened session asks again; changing it marks the project dirty).
+- `import-export/visibility-metadata.js` (`VISIBILITY_METADATA_KEYS`): `videoBrightness`/`videoContrast`/`videoRotation`, `hiddenCameras`/`hiddenTracks`/`hiddenIdentities`, `idSwitchReview`, `numAnimals` (a count or `"auto"`; absent until asked, so a reopened session asks again; changing it marks the project dirty), `dataFileChoices` (the camera data files the user picked in the per-camera folder loader's chooser, `loading/data-file-resolve.js`; a record — the loader itself uses `localStorage.lucidDataFileChoices`).
 - `import-export/smoothing-metadata.js` (`SMOOTHING_METADATA_KEYS`): `temporalSmoothing` (last run's scope + windows), written only while something is smoothed. Each smoothed group's source 3D goes with the 3D instead (`/session_data/unsmoothed_points_3d`, the `(smoothing source)` patch); readers re-mark it with `adoptSmoothingSource` once `points3d` is final.
 - `import-export/plane-metadata.js` (`PLANE_METADATA_KEYS`, mapping in DOM-free `pose/plane-serialization.js`). `planeNodes`/`planes`/`meshObjects`/`planeOrigin` are project-scoped: the same in every session, read from the first one ingested. `planePlacements` is per session and must not leak.
 
