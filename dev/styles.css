@@ -7398,6 +7398,7 @@ body.origin-mode-lock .timeline-container {
    saying which sessions loaded which calibration, and nothing else. */
 .origin-rebase-modal,
 .calib-notice-modal,
+.video-codec-notice-modal,
 .skeleton-edit-modal {
   min-width: 440px;
   max-width: 560px;
@@ -7415,6 +7416,7 @@ body.origin-mode-lock .timeline-container {
    keeps this row out of the scrolled flow. */
 .origin-rebase-modal .modal-actions,
 .calib-notice-modal .modal-actions,
+.video-codec-notice-modal .modal-actions,
 .skeleton-edit-modal .modal-actions {
   position: sticky;
   bottom: -20px;
@@ -7963,3 +7965,31 @@ div.track-summary-steps { padding-left: 0; }
 .identity-gallery-map-canvas { display: block; border-radius: 3px; }
 .identity-gallery-map-tip { display: none; position: absolute; pointer-events: none; font-size: 10px; padding: 1px 4px; border-radius: 3px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-color); font-variant-numeric: tabular-nums; }
 @media (max-width: 820px) { .identity-gallery-row { grid-template-columns: 1fr; } }
+
+/* ui/video-codec-notice.js: why the videos won't play and what to change. The
+   steps are a numbered list; the ffmpeg command is selectable code that wraps
+   rather than widening the modal. */
+.video-codec-notice-modal #videoCodecNoticeWhy {
+  margin: 10px 0 14px;
+  line-height: 1.45;
+}
+.video-codec-notice-steps {
+  margin: 6px 0 4px;
+  padding-left: 20px;
+  line-height: 1.45;
+}
+.video-codec-notice-steps li + li {
+  margin-top: 6px;
+}
+.video-codec-notice-command {
+  display: block;
+  margin-top: 4px;
+  padding: 6px 8px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--bg-tertiary, rgba(255, 255, 255, 0.06));
+  border-radius: 4px;
+  user-select: text;
+}
