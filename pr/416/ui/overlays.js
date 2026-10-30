@@ -357,6 +357,97 @@ function paintEdges(ctx, wedgeHalf) {
 }
 
 // ============================================
+// Symmetry edges
+// ============================================
+
+// Thin grey lines between a skeleton's left/right node pairs (Ear_L to Ear_R).
+// Drawn behind the skeleton and always solid, so they read as background.
+const SYMMETRY_EDGE_COLOR = '#888888';
+
+// One name's side and what is left of it once the side is taken out, or null:
+// `left`/`right` anywhere (Shoulder_left, leftEar), L/R as its own token, digits
+// allowed (Ear_L, r_paw, Paw.L1), or L/R against a capital boundary (EarL, LEar;
+// not LED, whose "L" starts an acronym).
+function nodeSide(name) {
+    let m = /left|right/i.exec(name);
+    if (m) return { side: m[0].charAt(0).toLowerCase(), rest: name.slice(0, m.index) + '\0' + name.slice(m.index + m[0].length) };
+    m = /(?:^|[^a-zA-Z0-9])([LlRr])(?=\d*(?:$|[^a-zA-Z0-9]))/.exec(name)
+        || /[a-z0-9]([LR])(?=\d*$)/.exec(name)
+        || /^([LR])(?=[A-Z][a-z])/.exec(name);
+    if (!m) return null;
+    const at = m.index + m[0].length - 1;
+    return { side: m[1].toLowerCase(), rest: name.slice(0, at) + '\0' + name.slice(at + 1) };
+}
+
+/**
+ * Left/right node pairs, found from the node names alone, as index pairs.
+ * Case-insensitive. A name with no single opposite (two `ear_l`s) pairs with
+ * nothing, because the line would be a guess.
+ *
+ * @param {string[]} names
+ * @returns {number[][]} [leftIdx, rightIdx] pairs, in order of the left node
+ */
+export function symmetricNodePairs(names) {
+    const sides = new Map();    // rest of the name -> { l: [indices], r: [indices] }
+    names.forEach(function (name, i) {
+        const found = nodeSide(String(name));
+        if (!found) return;
+        const key = found.rest.toLowerCase();
+        if (!sides.has(key)) sides.set(key, { l: [], r: [] });
+        sides.get(key)[found.side].push(i);
+    });
+    const pairs = [];
+    sides.forEach(function (s) {
+        if (s.l.length === 1 && s.r.length === 1) pairs.push([s.l[0], s.r[0]]);
+    });
+    return pairs.sort(function (a, b) { return a[0] - b[0]; });
+}
+
+// The pairs that are not already skeleton edges. Asked for once per drawn view
+// per frame, so the last answer is kept; the key follows skeleton edits, which
+// change `nodes` and `edges` in place.
+let _symmetryKey = null, _symmetryEdges = null;
+export function symmetryEdgesFor(skeleton) {
+    const names = (skeleton.nodes || []).map(function (node) {
+        return typeof node === 'string' ? node : (node && node.name) || '';
+    });
+    const edges = skeleton.edges || [];
+    const key = names.join('\0') + '\u0001' + edges.join(';');
+    if (key !== _symmetryKey) {
+        _symmetryKey = key;
+        _symmetryEdges = symmetricNodePairs(names).filter(function (p) {
+            return !edges.some(function (e) {
+                return (e[0] === p[0] && e[1] === p[1]) || (e[0] === p[1] && e[1] === p[0]);
+            });
+        });
+    }
+    return _symmetryEdges;
+}
+
+// Behind the skeleton's own edges, so call it first. Takes its pairs and width
+// from `options` (`drawFrameOverlays` fills them in only while the option is on)
+// and leaves out a nulled node's lines, like the node itself.
+function drawSymmetryEdges(ctx, canvasPoints, nulledNodes, options) {
+    const pairs = options.symmetryEdges;
+    if (!pairs || pairs.length === 0) return;
+    ctx.save();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = SYMMETRY_EDGE_COLOR;
+    ctx.lineWidth = options.symmetryLineWidth;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (let i = 0; i < pairs.length; i++) {
+        const a = canvasPoints[pairs[i][0]], b = canvasPoints[pairs[i][1]];
+        if (!a || !b) continue;
+        if (nulledNodes && (nulledNodes.has(pairs[i][0]) || nulledNodes.has(pairs[i][1]))) continue;
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+    }
+    ctx.stroke();
+    ctx.restore();
+}
+
+// ============================================
 // Coordinate transforms
 // ============================================
 
@@ -841,6 +932,7 @@ export function drawSkeleton(ctx, instance, skeleton, options) {
 
     // --- 1. Draw edges ---
     if (skeleton.edges && showEdges) {
+        drawSymmetryEdges(ctx, canvasPoints, nulledNodes, options);
         ctx.lineCap = 'round';
         if (dashPattern.length) ctx.setLineDash(dashPattern);
         // Draw normal edges first, then grayed edges
@@ -1003,6 +1095,7 @@ export function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, option
     // --- 1. Draw edges as dashed lines (track-colored) ---
     // `showEdges`/`showNodes` default true (issue #190 SLEAP-parity toggles).
     if (skeleton.edges && options.showEdges !== false) {
+        drawSymmetryEdges(ctx, canvasPoints, null, options);
         ctx.strokeStyle = edgeColor;
         // Honor the Visibility panel's reprojection Edge Style; callers that
         // pass no lineStyle keep this primitive's historical [4, 4] dash.
@@ -1948,6 +2041,7 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
                 ? predictedRender.lineStyle : (options.lineStyle || 'dashed');
             const instDashPattern = getLineDashPattern(instLineStyle);
             const instWedgeHalf = instLineStyle === 'wedge' ? wedgeHalfWidth(instNodeSize) : 0;
+            drawSymmetryEdges(ctx, canvasPoints, nulledNodes, options);
             ctx.lineWidth = instLineWidth;
             ctx.lineCap = 'round';
             if (instDashPattern.length) ctx.setLineDash(instDashPattern);
@@ -2597,12 +2691,19 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
         ? options.overlaySizeScale : 1;
     const scaleSize = (v, dflt) => (v != null ? v : dflt) * sizeScale;
 
+    const symmetryEdges = options.showSymmetryEdges ? symmetryEdgesFor(skeleton) : null;
+    const symmetryLineWidth = scaleSize(options.symmetryEdgeWeight, 1);
+
     // Build per-type render option sets with geometry info
     function makeRenderOpts(typeOpts) {
         const o = Object.assign({}, typeOpts, geoOpts);
         if (sizeScale !== 1) {
             o.nodeSize = scaleSize(o.nodeSize, 4);
             o.lineWidth = scaleSize(o.lineWidth, 2);
+        }
+        if (symmetryEdges) {
+            o.symmetryEdges = symmetryEdges;
+            o.symmetryLineWidth = symmetryLineWidth;
         }
         return o;
     }

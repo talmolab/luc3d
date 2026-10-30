@@ -27,8 +27,8 @@
  * drift from the thing it is keying.
  */
 
-import { state } from './app-state.js?v=9ddb7b7e0c49';
-import { TRACK_COLORS, REPROJECTION_COLOR } from './overlays.js?v=9ddb7b7e0c49';
+import { state } from './app-state.js?v=c9fd76959ef3';
+import { TRACK_COLORS, REPROJECTION_COLOR } from './overlays.js?v=c9fd76959ef3';
 
 const LEGEND_CLASS = 'view-legend';
 

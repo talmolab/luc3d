@@ -24,23 +24,23 @@
 
 // Pinned to 6.6.1 — keep in sync with the dockview.css pin in index.html and the
 // import in ui/sessions-panes.js (see CLAUDE.md › Dependencies).
-import { noteProgress } from './progress-delta.js?v=9ddb7b7e0c49';
+import { noteProgress } from './progress-delta.js?v=c9fd76959ef3';
 import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockview-core@6.6.1/+esm';
 
-import { state, videoController, getActiveSession } from './app-state.js?v=9ddb7b7e0c49';
-import { Viewport3D } from './viewport3d.js?v=9ddb7b7e0c49';
+import { state, videoController, getActiveSession } from './app-state.js?v=c9fd76959ef3';
+import { Viewport3D } from './viewport3d.js?v=c9fd76959ef3';
 import {
     drawFrameOverlays, drawLegend, drawViewNameLabel, getTrackColor, getGroupColor,
     TRAIL_SHADES, DEFAULT_TRAIL_SHADE, trailShadeFor,
-} from './overlays.js?v=9ddb7b7e0c49';
-import { getVisibilitySettings, fillLazyReprojections } from './rendering.js?v=9ddb7b7e0c49';
+} from './overlays.js?v=c9fd76959ef3';
+import { getVisibilitySettings, fillLazyReprojections } from './rendering.js?v=c9fd76959ef3';
 import {
     getInstanceGroupsForFrame,
     ensureLazyFrameData,
     ensureLazyTrailWindow,
     sessionHasCalibration,
-} from '../pose/triangulation.js?v=9ddb7b7e0c49';
-import { setStatus } from '../import-export/save-load.js?v=9ddb7b7e0c49';
+} from '../pose/triangulation.js?v=c9fd76959ef3';
+import { setStatus } from '../import-export/save-load.js?v=c9fd76959ef3';
 
 import {
     TILE_3D, RES_PRESETS, RES_CUSTOM, MAX_OUT_DIM,
@@ -50,16 +50,16 @@ import {
     defaultOverlayExportSettings, applyStoredSettings, saveOverlayExportSettings,
     overlayOptionsFrom, seedLayoutPlan,
     distributeAxisSizes, SASH_SHARE_FAR,
-} from './overlay-export-layout.js?v=9ddb7b7e0c49';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=9ddb7b7e0c49';
-import { fileSystemAccessHint } from './browser-hints.js?v=9ddb7b7e0c49';
+} from './overlay-export-layout.js?v=c9fd76959ef3';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=c9fd76959ef3';
+import { fileSystemAccessHint } from './browser-hints.js?v=c9fd76959ef3';
 // The main window's per-camera display settings. `ui/video-filters.js` imports NO
 // project modules, so this adds no cycle — and going through the SAME
 // `buildVideoFilter` the live canvases use is what stops the export drifting from
 // what the user sees (`applyVideoFilters` in ui/sessions-panes.js).
 import {
     buildVideoFilter, getSessionBrightness, getSessionContrast, getSessionRotation,
-} from './video-filters.js?v=9ddb7b7e0c49';
+} from './video-filters.js?v=c9fd76959ef3';
 
 // Re-exported so callers/tests have one import site for the feature.
 export { TILE_3D };
@@ -118,6 +118,8 @@ export function settingsFromVisibilityPanel() {
     s.layers.reproj = !!vis.showReprojected;
     s.layers.errors = !!vis.showErrors;
     s.layers.legend = !!vis.showLegend;
+    s.layers.symmetryEdges = !!vis.showSymmetryEdges;
+    s.symmetryEdgeWeight = vis.symmetryEdgeWeight;
     s.trailLength = state.trailLength || 0;
     s.trailShade = state.trailShade || DEFAULT_TRAIL_SHADE;
     s.colorBy = state.colorByIdentity ? 'identity' : 'track';
@@ -1362,6 +1364,8 @@ export function showOverlayExportModal() {
         addCheck(gLayers.body, 'Reprojections', settings.layers, 'reproj');
         addCheck(gLayers.body, 'Reprojection errors', settings.layers, 'errors');
         addCheck(gLayers.body, 'Legend', settings.layers, 'legend');
+        addCheck(gLayers.body, 'Symmetry edges', settings.layers, 'symmetryEdges');
+        addNumber(gLayers.body, 'Symmetry edge width', settings, 'symmetryEdgeWeight', 0.5, 15, 0.5);
         addSelect(gLayers.body, 'Color by', settings, 'colorBy',
             [['track', 'Track'], ['identity', 'Identity']], 'ovColorBy');
         addNumber(gLayers.body, 'Node trails (frames)', settings, 'trailLength', 0, 500, 10);
