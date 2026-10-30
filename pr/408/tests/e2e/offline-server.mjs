@@ -83,7 +83,7 @@ try {
 
   // The globals each vendored package is responsible for. If a rewrite is wrong
   // or a package is missing, one of these is undefined.
-  await page.waitForFunction(() => window.THREE !== undefined, { timeout: 20000 })
+  await page.waitForFunction(() => window.THREE !== undefined, null, { timeout: 30000 })
     .catch(() => fail('THREE global never appeared (three.js did not load)'));
 
   const probe = await page.evaluate(() => ({

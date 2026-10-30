@@ -92,7 +92,7 @@ def write(out: Path) -> Path:
             full = [c for c in cals if c["board"] == bid and c["variant"] == "full" and c["engine"] == "anipose"]
             if not full:
                 full = [c for c in cals if c["board"] == bid and c["variant"] == "full"]
-            splits = [c for c in cals if c["board"] == bid and c["variant"].startswith("split")]
+            splits = [c for c in cals if c["board"] == bid and c["variant"].startswith("split") and c["engine"] == "anipose"]
             scored = full if any(c.get("heldout") for c in full) else splits
             ho = [c["heldout"] for c in scored if c.get("heldout")]
             rep = [x for x in r["repeatability"] if x["rig"] == rig and x["board"] == bid and x["engine"] == "anipose"]
@@ -225,6 +225,28 @@ def write(out: Path) -> Path:
                 for rid, rr in c["rulers"].items():
                     L.append(f"| {c['take']} {c['engine']}/{c['variant']} ({rid}) | {_f(rr.get('median_error_mm'), 2, ' mm')} | "
                              f"{_f(rr.get('median_abs_error_mm'), 2, ' mm')} ({_f(rr.get('median_abs_error_pct'), 2, ' %')}) | {_f(rr.get('p95_abs_error_mm'), 2, ' mm')} |")
+            L.append("")
+        # --- tools compared over the disjoint parts ---------------------------------------
+        split_engs = sorted({c["engine"] for c in cals if c["variant"].startswith("split")})
+        if len(split_engs) > 1:
+            L += ["### Calibration tools on the same parts of each recording", "",
+                  "Each tool calibrated the same disjoint parts; each part is scored on the others. "
+                  "Medians over parts; spreads are between the parts' calibrations.", "",
+                  "| Recording | Tool | Reprojection | Held-out reprojection | Ruler error | Board fit | 3D spread | Camera position spread |",
+                  "|---|---|---|---|---|---|---|---|"]
+            for take in sorted({c["take"] for c in cals if c["variant"].startswith("split")}):
+                for eng in split_engs:
+                    ps = [c for c in cals if c["take"] == take and c["engine"] == eng and c["variant"].startswith("split")]
+                    if not ps:
+                        continue
+                    ho = [c["heldout"] for c in ps if c.get("heldout")]
+                    rp = next((x for x in r["repeatability"] if x["take"] == take and x["engine"] == eng
+                               and "disjoint" in x["kind"]), {})
+                    L.append(f"| {take} | {eng} ({len(ps)} parts) | {_f(_med([(c.get('self') or {}).get('median_px') for c in ps]), 2, ' px')} | "
+                             f"{_f(_med([h['reprojection']['median_px'] for h in ho]), 2, ' px')} | "
+                             f"{_f(_med([h['geometry']['long_length_err_pct'] for h in ho]), 3, ' %')} | "
+                             f"{_f(_med([h['geometry']['fit_rms_mm'] for h in ho]), 2, ' mm')} | "
+                             f"{_f(rp.get('points3d_sd_mm'), 2, ' mm')} | {_f(rp.get('camera_pos_sd_mm'), 1, ' mm')} |")
             L.append("")
         # --- per recording ----------------------------------------------------------
         L += ["### Recordings", "", "| Recording | Board | Length | Board found per camera |", "|---|---|---|---|"]

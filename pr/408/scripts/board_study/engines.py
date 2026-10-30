@@ -110,7 +110,8 @@ def cut_session(videos: dict[str, str], frames: np.ndarray, board: Board, out: P
         dst = out / f"{cam}.mp4"
         if dst.exists():
             continue
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", v, "-filter_script:v", str(script), "-an",
+        # passthrough: keep exactly the selected frames (otherwise ffmpeg pads to 25 fps with duplicates)
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", v, "-filter_script:v", str(script), "-an", "-fps_mode", "passthrough",
                         "-c:v", "libx264", "-crf", "6", "-preset", "fast", "-pix_fmt", "yuv420p",
                         "-g", "10", str(dst)], check=True)
     return out

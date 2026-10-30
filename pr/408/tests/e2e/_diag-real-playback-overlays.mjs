@@ -82,7 +82,7 @@ try {
     });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 30000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
     log(`[${el()}] app booted`);
 
     // ---------------- helpers injected into the page ----------------
@@ -267,7 +267,7 @@ try {
         page2.on('crash', () => { log(`  [${el()}] *** p2 RENDERER CRASHED ***`); fails++; });
         page2.on('console', m => { const t = m.text(); if (/MEM:|phase:/.test(t)) log(`  [${el()}] ${t.slice(0, 220)}`); });
         await page2.goto(`http://localhost:${PORT}/index.html`);
-        await page2.waitForFunction(() => window.__lucid && window.SleapIO, { timeout: 30000 });
+        await page2.waitForFunction(() => window.__lucid && window.SleapIO, null, { timeout: 30000 });
         // Auto-dismiss the missing-files popup and the "attach videos" modal
         // that handleLoadProjectSlpLazy awaits near its end.
         await page2.evaluate(() => {

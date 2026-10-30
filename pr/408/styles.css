@@ -4773,8 +4773,8 @@ kbd {
      24px gutter), so there is deliberately NO max-width/max-height here — a
      second cap would silently shrink a rect the clamp thought it had granted
      and leave the card flush against one edge. */
-  width: 1040px;
-  height: 620px;
+  width: 1320px;
+  height: 800px;
   display: flex;
   flex-direction: column;
   /* `resize` needs a non-visible overflow, which this already had. The grip is
@@ -5398,6 +5398,167 @@ kbd {
 .tri-methods .tm-move { stroke: var(--text-secondary); stroke-width: 1.2; }
 .tri-methods .tm-arrowhead { fill: var(--text-secondary); }
 .tri-methods .tm-leader { stroke: var(--text-muted); stroke-width: 0.8; }
+
+/* Settings ▸ Temporal Smoothing: what the Median and Gaussian windows do
+   (ui/smoothing-windows-figure.js). */
+.smooth-fig {
+  margin: 0 0 12px;
+}
+
+.smooth-fig-lead,
+.smooth-fig-col p {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.smooth-fig-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.smooth-fig-col {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px 12px 12px;
+  background: var(--bg-primary);
+}
+
+.smooth-fig-name {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.smooth-fig-name small {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.smooth-fig-col svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* High enough that the chart fills a wide card (300:140 viewBox). */
+  max-height: 320px;
+  margin: 6px 0 8px;
+  overflow: hidden;
+}
+
+.smooth-fig-col p.smooth-fig-warn {
+  margin-top: 8px;
+  color: var(--warning-color);
+}
+
+.smooth-fig-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.smooth-fig-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.smooth-fig-legend i {
+  display: inline-block;
+}
+
+.smooth-fig .sf-key-true { width: 14px; border-top: 1.5px dashed var(--text-secondary); }
+.smooth-fig .sf-key-raw { width: 6px; height: 6px; border-radius: 50%; border: 1.2px solid var(--text-secondary); }
+.smooth-fig .sf-key-spike { width: 6px; height: 6px; border-radius: 50%; background: var(--error-color); }
+.smooth-fig .sf-key-med { width: 14px; height: 2px; border-radius: 1px; background: var(--success-color); }
+.smooth-fig .sf-key-out { width: 14px; height: 2px; border-radius: 1px; background: var(--accent); }
+.smooth-fig .sf-key-band { width: 12px; height: 10px; background: var(--accent); opacity: 0.18; }
+
+.smooth-fig .sf-axis { stroke: var(--border-color); stroke-width: 1; }
+.smooth-fig .sf-band { fill: var(--accent); opacity: 0.16; }
+.smooth-fig .sf-weight { stroke: var(--accent); stroke-width: 1.5; opacity: 0.55; }
+.smooth-fig .sf-rank { stroke: var(--text-muted); stroke-width: 1.5; opacity: 0.7; }
+.smooth-fig .sf-rank-mid { stroke: var(--success-color); stroke-width: 2.5; opacity: 1; }
+.smooth-fig .sf-rank-spike { stroke: var(--error-color); opacity: 0.85; }
+.smooth-fig .sf-true { fill: none; stroke: var(--text-secondary); stroke-width: 1.2; stroke-dasharray: 4 3; opacity: 0.7; }
+.smooth-fig .sf-raw { fill: none; stroke: var(--text-secondary); stroke-width: 1.1; }
+.smooth-fig .sf-spike { fill: var(--error-color); stroke: var(--bg-primary); stroke-width: 0.8; }
+.smooth-fig .sf-out { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.smooth-fig .sf-out-node { fill: none; stroke: #000; stroke-width: 1.2; }
+.smooth-fig .sf-ahead { opacity: 0.22; }
+.smooth-fig .sf-out.sf-left { stroke: var(--text-muted); }
+.smooth-fig .sf-absent { fill: var(--text-muted); opacity: 0.08; }
+.smooth-fig .sf-absent.sf-absent-split { fill: var(--warning-color); opacity: 0.14; }
+.smooth-fig .sf-note.sf-note-split { fill: var(--warning-color); }
+.smooth-fig .sf-seg { fill: var(--accent); }
+.smooth-fig .sf-seg.sf-seg-short { fill: var(--text-muted); }
+.smooth-fig .sf-key-absent { width: 12px; height: 10px; background: var(--warning-color); opacity: 0.35; }
+.smooth-fig .sf-key-seg { width: 14px; height: 5px; border-radius: 2px; background: var(--accent); }
+.smooth-fig .sf-key-left { width: 14px; height: 2px; border-radius: 1px; background: var(--text-muted); }
+
+/* Card 3 (gaps and segments) spans both columns, with a wider, shorter chart. */
+.smooth-fig-wide { margin-top: 10px; }
+.smooth-fig-wide svg { max-height: 300px; }
+.smooth-fig .smooth-fig-wide .sf-ctl-name { width: 96px; white-space: nowrap; }
+.smooth-fig .sf-current { fill: none; stroke: var(--text-primary); stroke-width: 1.4; }
+
+.smooth-fig-ctrl {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 8px;
+}
+
+.smooth-fig .sf-ctl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.smooth-fig .sf-ctl-name {
+  width: 52px;
+  flex: none;
+}
+
+.smooth-fig .sf-ctl input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.smooth-fig .sf-ctl-val {
+  min-width: 76px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.smooth-fig .sf-play {
+  flex: none;
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-primary);
+  background: var(--bg-button);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.smooth-fig .sf-play:hover { border-color: var(--border-light); }
+.smooth-fig .sf-out-median { stroke: var(--success-color); }
+.smooth-fig .sf-med { fill: var(--success-color); stroke: var(--bg-primary); stroke-width: 0.8; }
+.smooth-fig .sf-move { stroke: var(--text-secondary); stroke-width: 1.2; }
+.smooth-fig .sf-arrowhead { fill: var(--text-secondary); }
+.smooth-fig .sf-note { font-size: 10px; fill: var(--text-muted); }
+.smooth-fig .sf-note-spike { fill: var(--error-color); }
 .tri-methods .tm-note { fill: var(--text-secondary); font-size: 10px; }
 .tri-methods .tm-note-stray { fill: var(--warning-color); }
 

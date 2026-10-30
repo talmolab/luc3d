@@ -43,7 +43,7 @@ try {
     });
     const boot = async () => {
         await page.goto(`http://localhost:${PORT}/index.html`);
-        await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+        await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     };
     await boot();
     // Start from the default method regardless of what this browser profile held.
@@ -69,6 +69,16 @@ try {
 
     await page.click('#menuSettings');
     check(await page.isVisible('.settings-btn-cancel'), 'Help ▸ Settings opens the Settings dialog');
+    const activePanel = () => page.evaluate(() => {
+        const a = document.querySelector('.settings-nav-item.active');
+        return a && a.dataset.panel;
+    });
+    check(await activePanel() === 'wizard', 'the first time, it opens on the first panel, Tracking Wizard');
+    await page.click('.settings-nav-item[data-panel="smoothing"]');
+    await page.click('.settings-btn-cancel');
+    await page.click('.menu-item[data-menu="help"]');
+    await page.click('#menuSettings');
+    check(await activePanel() === 'smoothing', 'then it reopens on the panel last shown');
     await page.click('.settings-btn-cancel');
     await page.click('#menuBarSettings');
     check(await page.isVisible('.settings-btn-cancel'), 'the Settings button opens the Settings dialog');
@@ -120,6 +130,7 @@ try {
 
     // Change it the way a user does: Settings dialog -> "Refined" row -> Apply.
     await page.click('#menuBarSettings');
+    await page.click('.settings-nav-item[data-panel="triangulation"]');
     // The method is picked by clicking its diagram card (no separate rows).
     await page.click('.tri-method-choice[data-method="ba"]');
     const picked = await page.evaluate(() => Array.from(document.querySelectorAll('.tri-method-choice'))

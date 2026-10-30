@@ -314,28 +314,31 @@ def run(study_path: Path, out: Path, engine_names=("anipose",), splits: int = 3,
                     r = record(ref.subset(cams), "reference", "full", fr_all, {"file": str(t.reference)}, held_data, held_kind)
                     _log_rec(log, r)
 
-            # 2. Disjoint interleaved time blocks: pseudo-repeats from one recording.
+            # 2. Disjoint interleaved time blocks: pseudo-repeats from one recording (every engine).
             if splits >= 2:
                 groups = _blocks(dets, block_s, splits)
-                split_cals = []
-                for j, g in enumerate(groups):
-                    others = np.concatenate([x for k, x in enumerate(groups) if k != j])
-                    ho = [([d.subset(others) for d in dets], t.board)]
-                    try:
-                        cal, ex = _calibrate("anipose", t, dets, g, out, calibrat3)
-                    except Exception as e:
-                        log(f"  split {j} failed on {t.id}: {e}")
-                        continue
-                    split_cals.append(cal)
-                    r = record(cal, "anipose", f"split{j + 1}of{splits}", g, ex,
-                               held_data or ho, held_kind or "other blocks of the same take")
-                if len(split_cals) >= 2:
-                    test_data = held_data or [(dets, t.board)]
-                    Xs = [_score(c, test_data)[1] for c in split_cals]
-                    Xs = [np.concatenate([x.reshape(-1, 3) for x in xs]) for xs in Xs]
-                    rp = M.repeatability(split_cals, Xs)
-                    results["repeatability"].append({"rig": rig, "session": sess, "board": t.board_id, "take": t.id,
-                                                     "kind": f"{splits} disjoint parts of one recording", "engine": "anipose", **rp})
+                for eng in engine_names:
+                    split_cals = []
+                    for j, g in enumerate(groups):
+                        others = np.concatenate([x for k, x in enumerate(groups) if k != j])
+                        ho = [([d.subset(others) for d in dets], t.board)]
+                        try:
+                            cal, ex = _calibrate(eng, t, dets, g, out, calibrat3)
+                        except Exception as e:
+                            log(f"  {eng} split {j} failed on {t.id}: {e}")
+                            continue
+                        split_cals.append(cal)
+                        r = record(cal, eng, f"split{j + 1}of{splits}", g, ex,
+                                   held_data or ho, held_kind or "other blocks of the same take")
+                        if eng != "anipose":
+                            _log_rec(log, r)
+                    if len(split_cals) >= 2:
+                        test_data = held_data or [(dets, t.board)]
+                        Xs = [_score(c, test_data)[1] for c in split_cals]
+                        Xs = [np.concatenate([x.reshape(-1, 3) for x in xs]) for xs in Xs]
+                        rp = M.repeatability(split_cals, Xs)
+                        results["repeatability"].append({"rig": rig, "session": sess, "board": t.board_id, "take": t.id,
+                                                         "kind": f"{splits} disjoint parts of one recording", "engine": eng, **rp})
 
             # 3. First N seconds of the take (how long to record).
             if prefixes and "anipose" in engine_names:
@@ -413,8 +416,9 @@ def _calibrate(engine: str, take: Take, dets, frames, out: Path, calibrat3: Path
             tag = f"f{int(frames[0])}-{int(frames[-1])}-{len(frames)}"
             session = engines.cut_session(take.videos, frames, take.board, work / tag)
         target = len(np.unique(np.concatenate([d.frames for d in dets]))) if frames is None else len(frames)
-        return engines.calibrate_calibrat3(Path(session), work / f"{tag}.toml", calibrat3, min(target, 2000),
-                                           work / f"{tag}.log")
+        cal, ex = engines.calibrate_calibrat3(Path(session), work / f"{tag}.toml", calibrat3, min(target, 2000),
+                                              work / f"{tag}.log")
+        return cal.subset([d.camera for d in dets]), ex  # calibrat3 orders cameras its own way; match by name
     raise ValueError(engine)
 
 
