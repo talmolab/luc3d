@@ -4,7 +4,7 @@ Multi-view pose annotation GUI. Vanilla JS ES modules served as static files —
 
 ## Architecture
 `index.html` loads `app.js` (`<script type="module">`), which only imports `pose/initialization.js`. Per-module purpose/exports/dependents: **`MODULES.md`** (repo root).
-- `pose/` — data model, cross-view tracking, DLT triangulation, plane/mesh/origin models, ID-switch checks, lazy residency, the tracker's detection-filter rule (`detection-filter-stats.js`, also what the Tracking Wizard counts with), app init (pure logic, mostly DOM-free). Workers: Track All runs on one (`tracker-pool.js`); triangulation math is `triangulation-core.js`, solved in parallel by `triangulation-pool.js`.
+- `pose/` — data model, cross-view tracking, DLT triangulation, plane/mesh/origin models, ID-switch checks, lazy residency, the tracker's detection-filter rule (`detection-filter-stats.js`, also what the Tracking Wizard counts with), SLEAP's single-camera tracker (`sleap-tracker.js`, driven by `single-camera-tracking.js`), app init (pure logic, mostly DOM-free). Workers: Track All runs on one (`tracker-pool.js`); triangulation math is `triangulation-core.js`, solved in parallel by `triangulation-pool.js`.
 - `ui/` — rendering, interaction, panels, modals, timeline, 3D viewport, settings, exports.
 - `loading/` — video decoding, session/SLP loading, file selection, web workers.
 - `import-export/` — save/load, SLP import/merge, `metadata.lucid` serializers, mesh export.
@@ -116,12 +116,28 @@ On a lazy project `session.frameGroups` holds only hydrated frames. Playback evi
 
 Tests: `test-lazy-residency.mjs`, e2e `lazy-playback-eviction`, `sequence-lazy-workflow`.
 
+## Single-camera Track All is sleap-nn's tracker — keep it a faithful port
+
+A session with ONE camera (File ▸ Load SLP, or Load Single Session Folder on one camera folder with no calibration) has no 3D, so Track All runs `pose/sleap-tracker.js`, a port of `sleap_nn.tracking` (sleap-nn @ `3d21684419ca`), driven by `pose/single-camera-tracking.js` in the known-count setup (`local_queues`, `max_tracks` = the animal count, connect single breaks).
+- **Give `sleap-nn track`'s answer, ties included.** OKS ties are routine, so the port carries SciPy's `linear_sum_assignment`, numpy's unstable argsort (`SMALL_QUICKSORT = 15`), CPython 3.11 set order and numpy's pairwise sum. A JS built-in is still optimal and still wrong. `test-sleap-tracker.mjs` compares every track id with upstream (regenerate with `tests/fixtures/sleap-tracker/make_fixture.py`).
+- **It writes TRACKS** (plus identity k for track k), as sleap-nn does; an ID Switches Fix swaps tracks there (`swapSingleCameraIdentities`).
+- **One deliberate departure: OKS stddev 0.1, not 0.025** (`scOksStddev`): 85.8 → 93.6% correct on 35 proofread SLAP videos. **Duplicate removal is opt-in** (`scRemoveDuplicates`: box IoU ≥ 0.5 AND OKS ≥ 0.6 against a stronger detection) and runs BEFORE the port; neutral on SLAP, so off by default.
+- **The first run asks through `ui/track-setup-modal.js` without node weights** (`askTrackSetup(..., noWeights)`): the port does not read them.
+- **The Wizard's detection filters apply on one camera too**: the same three "Min …" settings through the same `passesDetectionFilter`, BEFORE the port and before duplicate removal, so the Wizard's readout counts exactly what is left out. A filtered detection, like a duplicate, stays in the session with no track and is counted (`filtered`; the summary's "Without a track"); a frame left with none is skipped, as a frame that never had one. All three default to 0 (off): keep it so unless measured — dropping detections with < 3 visible nodes cost 99.75 → 99.05% after review on SLAP held-out (2026-10-27), because it drops real, partly visible animals.
+- **The checks read a 2D stand-in** (`singleCameraCheckSession`: `points3d` = (x, y, 0); `pixelCamera` for the summary gallery). The automatic check is coat brightness (`ui/brightness-sampler.js`, the classifier path, which tests Track All's candidate moments on both sides, plus every return of an animal after > 1 s out of sight, `returnMoments`: it catches the out-of-sight switches where coats differ); image and size are label-free and take no moments; size is optional on one camera.
+- **The review list** (`trackSingleCamera`'s `review` → `reviewResult` → `setReviewList`): candidate moments plus handovers (a lone animal's track changing in place, `handoverCandidates`), as unscored 'review' rows in the ID Switches tab — about 1.1–1.5 a minute (2.1 on Mouse-Dyad-10M's 150 fps), within 2 s of 96% of the switches on proofread SLAP-2M (195 views; 91% on 3–4 mice), 94% on sham_gdx and 79–84% on Mouse-Dyad (handovers look back 1 s: a mouse often comes back from half a second undetected on the other track). The checks keep testing `moments` only (what they were calibrated on). Close encounters are deliberately NOT on it: they cover 34–80% of the video. A review row's Fix runs from the current frame (anywhere before the next place) to the end; a fixed row can be fixed again (a swap that undoes itself before the next place), and with > 2 tracks the reviewer picks the pair. **Every row that stands for a place** (`idSwitchPlaceOf`: a review-list place, or a check's row at a moment, e.g. a coat-brightness return) offers that fix, before the check's Fix ("Fix from here…") and after it ("Fix again…"); the next place is the next such row on any list.
+- **Eager only:** a lazy single-camera project is refused, never tracked from its resident window.
+- **Load SLP never adds a camera the session already has from the same video** (`camerasAlreadyInSession`, `handleAddSlp`): the old `<name>_2` copy made a one-video session two-camera, so Track All and the ID Switches tab took the multi-camera path. The same file loaded again only attaches a missing video. Test: e2e `load-slp-same-video-twice`.
+
+Tests: `test-sleap-tracker.mjs`, `test-single-camera-tracking.mjs`, `test-id-switch-check.mjs`, e2e `single-camera-track-all`, `single-camera-folder-load`.
+
 ## Per-node prediction scores
 
 `ui/node-tooltip.js` shows a node's name and, on a prediction, that node's score, with a stripe in its skeleton colour. Take the colour from `getGroupColor`/`unlinkedBaseColor` (`ui/overlays.js`); never compute it separately.
 - **Eager instances:** scores go into shared `Float32Array` pool chunks (`Instance.setPointScores`), and the instance keeps only the integer `_ps`. Never use one array per instance.
 - **Lazy instances:** the store is the only copy. `SioLazyLoader.predictedPointScore` looks the score up by `_rawInstIndex` and node NAME (a skeleton edit re-indexes resident instances, not the store). Never copy scores onto hydrated instances.
 - **Ask `Session.predictedNodeScore` for a score.** It returns NaN unless the instance type is `'predicted'`.
+- **An instance's mean node score comes from `meanNodeScore`** (`pose/detection-filter-stats.js`: sleap-nn's, a missing node counting as 0), never a separate average: it is what the "Min mean node score" filter tests, and the Instances tab's Ungrouped table shows it under each instance score ("Score / Node").
 - **Every writer writes each node's own score** (`_buildSioPoints`), and uses the instance score only for a node with none.
 - SLEAP analysis `.h5` `point_scores` are dropped on purpose (see the NOTE in `loading/slp-import-worker.js` `parseAnalysisH5`).
 

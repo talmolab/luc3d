@@ -53,7 +53,7 @@
  */
 
 import { state } from './app-state.js';
-import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js';
+import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE, findNode, isTailNode } from '../pose/id-switch-check.js';
 import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js';
 import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js';
 import { EmbeddingCache, cropKeyHash, hullsReachingCrop } from '../pose/embedding-cache.js';
@@ -410,12 +410,12 @@ function cosine(a, b) {
     return ab / Math.sqrt(aa * bb);
 }
 
-/** Body-node indices of a skeleton (everything but the tail), plus Nose / TTI. */
+/** Body-node indices of a skeleton (everything but the tail), plus Nose / TTI — found regardless of case (`findNode`). */
 export function skeletonIndex(nodes) {
     const names = nodes.map(function (n) { return typeof n === 'string' ? n : n && n.name; });
     return {
-        nose: names.indexOf(NOSE), tti: names.indexOf(TTI),
-        body: names.map(function (n, i) { return i; }).filter(function (i) { return names[i] && !/^tail/i.test(names[i]); }),
+        nose: findNode(names, NOSE), tti: findNode(names, TTI),
+        body: names.map(function (n, i) { return i; }).filter(function (i) { return names[i] && !isTailNode(names[i]); }),
         n: names.length,
     };
 }
@@ -493,6 +493,18 @@ function identityGroupsAt(session, frame) {
  * @returns {Array<Array<Object|null>>} geo[vi][itemIndex]
  */
 export function frameCropGeometry(session, frame, items, cams, atFrames, sk) {
+    return mapFrameInstances(session, frame, items, cams, atFrames, function (inst) { return cropGeometry(inst, sk); });
+}
+
+/**
+ * `fn(instance)` for each camera `cams[vi]` and each item, on the frame view vi
+ * decodes (`atFrames[vi]`) — the walk behind `frameCropGeometry`, shared with the
+ * coat-brightness sampler (ui/brightness-sampler.js). Hydrates and releases a lazy
+ * project's frames around the read (see frameCropGeometry). A missing instance
+ * maps to null without calling `fn`.
+ * @returns {Array<Array<*>>} out[vi][itemIndex]
+ */
+export function mapFrameInstances(session, frame, items, cams, atFrames, fn) {
     const touched = new Set([frame]);
     atFrames.forEach(function (f) { touched.add(f); });
     const hydrated = [];
@@ -504,7 +516,7 @@ export function frameCropGeometry(session, frame, items, cams, atFrames, sk) {
             return items.map(function (it) {
                 const g = groups ? groups.get(it.group.identityId) : it.group;
                 const inst = g && g.instances && g.instances.get(cam);
-                return inst ? cropGeometry(inst, sk) : null;
+                return inst ? fn(inst) : null;
             });
         });
     } finally {
@@ -773,7 +785,7 @@ export function skippingSamples(skipper, ts, count) {
  * decoder has no mediabunny backend (the HTML5 fallback), so the caller uses
  * `getFrame`.
  */
-function streamingReader(decoder, frames, decode, skipper, count) {
+export function streamingReader(decoder, frames, decode, skipper, count) {
     decode = decode || frames;
     if (!canStream(decoder, decode)) return null;
     const be = decoder._mbBackend;

@@ -3,8 +3,9 @@
 //
 // One tick per marker at its frame, on the same frame -> position mapping the
 // seekbar's thumb uses (`frame / (totalFrames - 1)`): amber for the body-size
-// check, cyan for images, both colours for a change point both checks found
-// ("Both" — drawn once, on its size marker); a follow-on is fainter, a
+// check, cyan for images, violet for coat brightness, both colours for a change
+// point two checks found ("Both" — drawn once, on the earlier check's marker:
+// size, then images, then brightness); a follow-on is fainter, a
 // still-swapped repeat a short faint tick, and one ticked "reviewed" in the tab
 // is dimmed. The ticks never take the pointer: the seekbar's own handlers stay
 // in charge, and `seekbarMarkerAt` lets them snap a click / the hover tooltip to
@@ -46,8 +47,12 @@ export function setSeekbarMarkerFrames(totalFrames) {
     if (totalFrames > 0 && totalFrames !== _total) { _total = totalFrames; render(); }
 }
 
-/** A "Both" pair is drawn once, on its size marker. */
-function drawn(m) { return !(m.cue === 'image' && m.agree); }
+var CUES = ['size', 'image', 'brightness', 'review'];   // precedence, as ui/id-switch-review.js ID_SWITCH_CUES
+var CUE_NAME = { size: 'size', image: 'image', brightness: 'brightness', review: 'review list' };
+function cueOf(m) { return CUES.indexOf(m.cue) >= 0 ? m.cue : 'size'; }
+
+/** A "Both" pair is drawn once, on the earlier check's marker. */
+function drawn(m) { return !(m.agree && CUES.indexOf(cueOf(m)) > CUES.indexOf(cueOf(m.agree))); }
 
 function fraction(frame) { return _total > 1 ? frame / (_total - 1) : 0; }
 
@@ -69,10 +74,14 @@ export function seekbarMarkerAt(frac, widthPx, tolPx) {
     return best;
 }
 
-/** "possible ID switch: id_1 ↔ id_3 (size score -50, still swapped, reviewed)". */
+/** "possible ID switch: id_1 ↔ id_3 (size score -50, still swapped, reviewed)"; a review-list row has no score. */
 export function describeSwitchMarker(m) {
-    var cue = m.agree ? 'size and images agree; size score ' + Math.round(m.score) + ', image ' + Math.round(m.agree.score)
-        : (m.cue === 'image' ? 'image' : 'size') + ' score ' + Math.round(m.score);
+    if (cueOf(m) === 'review' && !m.agree) {
+        return 'place to review: ' + m.nameA + ' ↔ ' + m.nameB + (m.reviewed ? ' (reviewed)' : '');
+    }
+    var scoreOf = function (x) { return cueOf(x) === 'review' ? 'on the review list' : CUE_NAME[cueOf(x)] + ' score ' + Math.round(x.score); };
+    var cue = m.agree ? CUE_NAME[cueOf(m)] + ' and ' + CUE_NAME[cueOf(m.agree)] + ' agree; ' + scoreOf(m) + ', ' + scoreOf(m.agree)
+        : scoreOf(m);
     return 'possible ID switch: ' + m.nameA + ' ↔ ' + m.nameB + ' (' + cue +
         (m.continues ? ', still swapped' : m.followOf != null ? ', follows an earlier switch'
             : m.kind === 'end' ? ', labelling changes here' : '') + (m.reviewed ? ', reviewed' : '') + ')';
@@ -85,7 +94,7 @@ function render() {
     for (var i = 0; i < _markers.length; i++) {
         var m = _markers[i];
         if (!drawn(m)) continue;
-        var cls = 'seekbar-mark cue-' + (m.agree ? 'both' : (m.cue === 'image' ? 'image' : 'size')) +
+        var cls = 'seekbar-mark cue-' + (m.agree ? 'both cue-both-' + cueOf(m) + '-' + cueOf(m.agree) : cueOf(m)) +
             (m.continues ? ' is-repeat' : m.followOf != null ? ' is-follow' : '') + (m.reviewed ? ' is-reviewed' : '');
         html += '<div class="' + cls + '" data-frame="' + m.frame + '" style="left:' + (100 * fraction(m.frame)).toFixed(4) + '%"></div>';
     }

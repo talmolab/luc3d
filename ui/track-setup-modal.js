@@ -98,9 +98,12 @@ export function showTrackSetupModal(opts) {
 
         var note = document.createElement('p');
         note.className = 'track-setup-note track-setup-later';
+        // Name only what the dialog shows: single-camera Track All has no node weights.
+        var kept = [weights.element ? 'node weights' : null, imageCheck.element ? 'the image check' : null].filter(Boolean);
+        var keptText = kept.join(' and ');
         note.textContent = 'To change these later: the Animals field beside Track Frame, and ' +
-            'Tracks ▸ Tracking Wizard. Node weights' + (imageCheck.element ? ' and the image check' : '') +
-            ' are saved in this browser, for every project.';
+            'Tracks ▸ Tracking Wizard.' + (kept.length ? ' ' + keptText.charAt(0).toUpperCase() + keptText.slice(1) +
+            (kept.length > 1 ? ' are' : ' is') + ' saved in this browser, for every project.' : '');
         modal.appendChild(note);
 
         var errorEl = document.createElement('div');

@@ -3031,6 +3031,14 @@ button.tri-dropdown-item:disabled {
 }
 .seekbar-mark.cue-image { background: #4cc9f0; }
 .seekbar-mark.cue-both { background: linear-gradient(to bottom, #ffb020 50%, #4cc9f0 50%); }
+.seekbar-mark.cue-brightness { background: #c77dff; }
+.seekbar-mark.cue-both-size-brightness { background: linear-gradient(to bottom, #ffb020 50%, #c77dff 50%); }
+.seekbar-mark.cue-both-image-brightness { background: linear-gradient(to bottom, #4cc9f0 50%, #c77dff 50%); }
+/* The single-camera review list: places to look, not a check's flags — grey, apart from the three checks' hues. */
+.seekbar-mark.cue-review { background: #9aa5b1; }
+.seekbar-mark.cue-both-size-review { background: linear-gradient(to bottom, #ffb020 50%, #9aa5b1 50%); }
+.seekbar-mark.cue-both-image-review { background: linear-gradient(to bottom, #4cc9f0 50%, #9aa5b1 50%); }
+.seekbar-mark.cue-both-brightness-review { background: linear-gradient(to bottom, #c77dff 50%, #9aa5b1 50%); }
 .seekbar-mark.is-follow { opacity: 0.7; height: 12px; }
 .seekbar-mark.is-repeat { opacity: 0.4; width: 2px; height: 10px; box-shadow: none; }
 .seekbar-mark.is-reviewed { opacity: 0.3; }
@@ -3518,6 +3526,23 @@ button.tri-dropdown-item:disabled {
 .data-table .mono {
   font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
   font-size: 11px;
+}
+
+/* The Ungrouped table's mean node score, under the instance score (ui/info-panel.js).
+   The header's `width: 1px` keeps its column at its narrowest ("SCORE /" over
+   "NODE"), so the extra width goes to the others and "Track / Identity" stays on
+   one line. */
+#unlinkedTable #unlinkedScoreHead {
+  width: 1px;
+}
+
+#unlinkedTable #unlinkedScoreHead span {
+  white-space: nowrap;
+}
+
+#unlinkedTable .unlinked-node-score {
+  margin-top: 3px;
+  color: var(--text-secondary);
 }
 
 .data-table .badge {
@@ -7767,6 +7792,14 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-row.cue-size { border-left-color: #ffb020; }
 .id-switch-row.cue-image { border-left-color: #4cc9f0; }
 .id-switch-row.cue-both { border-image: linear-gradient(to right, #ffb020 50%, #4cc9f0 50%) 1; }
+.id-switch-row.cue-brightness { border-left-color: #c77dff; }
+.id-switch-row.cue-both-size-brightness { border-image: linear-gradient(to right, #ffb020 50%, #c77dff 50%) 1; }
+.id-switch-row.cue-both-image-brightness { border-image: linear-gradient(to right, #4cc9f0 50%, #c77dff 50%) 1; }
+.id-switch-row.cue-review { border-left-color: #9aa5b1; }
+.id-switch-row.cue-both-size-review { border-image: linear-gradient(to right, #ffb020 50%, #9aa5b1 50%) 1; }
+.id-switch-row.cue-both-image-review { border-image: linear-gradient(to right, #4cc9f0 50%, #9aa5b1 50%) 1; }
+.id-switch-row.cue-both-brightness-review { border-image: linear-gradient(to right, #c77dff 50%, #9aa5b1 50%) 1; }
+.id-switch-pair-pick { font: inherit; margin: 0 2px; }
 .id-switch-row.is-repeat .id-switch-main { opacity: 0.65; }
 .id-switch-row.is-reviewed .id-switch-main { opacity: 0.45; }
 .id-switch-row.is-reviewed .id-switch-pair { text-decoration: line-through; }
@@ -7779,6 +7812,8 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-actions .panel-btn { flex: none; }
 .id-switch-fix:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .id-switch-fixed-note { color: var(--success-color); flex: 1; min-width: 0; }
+/* a review row's note lists every fix made from it, above Fix again… and Undo */
+.id-switch-fixed-note.is-list { flex-basis: 100%; }
 .id-switch-tick { margin: 2px 0 0; flex: none; cursor: pointer; }
 .id-switch-main { flex: 1; min-width: 0; }
 .id-switch-line1 { display: flex; gap: 8px; font-size: 12px; }

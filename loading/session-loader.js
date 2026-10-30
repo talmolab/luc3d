@@ -3135,6 +3135,9 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
 
         // Build per-directory map
         var cameraDirs = {};  // dirName -> { videos: [File], slps: [File], envSlps: [File], dirNameLower: string }
+        // Videos / annotations directly in the picked folder: used only when it has no camera
+        // subdirectories, i.e. the user picked ONE camera's folder itself (see below).
+        var rootCamera = { videos: [], slps: [], envSlps: [] };
         for (var fi = 0; fi < allFiles.length; fi++) {
             var file = allFiles[fi];
             var relPath = file.webkitRelativePath || file.name;
@@ -3143,11 +3146,16 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             // Root-level files (parts.length === 2)
             if (parts.length === 2) {
                 var fileNameLower = parts[1].toLowerCase();
+                var rootExt = fileNameLower.substring(fileNameLower.lastIndexOf('.'));
                 if ((fileNameLower.endsWith('.toml') || fileNameLower.endsWith('.json'))
                     && fileNameLower.indexOf('calib') >= 0) {
                     calibMatches.push(file);
                 } else if (fileNameLower.endsWith('.json') && fileNameLower.indexOf('skeleton') >= 0) {
                     skeletonFile = file;
+                } else if (videoExtensions.indexOf(rootExt) >= 0) {
+                    rootCamera.videos.push(file);
+                } else if (fileNameLower.endsWith('.slp') || fileNameLower.endsWith('.h5')) {
+                    (fileNameLower.indexOf('.externals.') >= 0 ? rootCamera.envSlps : rootCamera.slps).push(file);
                 }
                 continue;
             }
@@ -3164,6 +3172,9 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
 
                 var ext = fnLower.substring(fnLower.lastIndexOf('.'));
                 if (videoExtensions.indexOf(ext) >= 0) {
+                    // A calibration clip (`<camera>/calibration_images/…`) is never a camera's video —
+                    // reachable at this depth when the picked folder is one camera's own folder.
+                    if (isCalibrationVideoFile(file)) continue;
                     cameraDirs[dirName].videos.push(file);
                 } else if (fnLower.endsWith('.slp') || fnLower.endsWith('.h5')) {
                     // Separate environment files from main annotation files
@@ -3174,6 +3185,19 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                     }
                 }
             }
+        }
+
+        // ONE camera's folder picked directly (its video and `.slp` at the top, no camera
+        // subdirectories): the folder itself is that camera, named after it.
+        var hasCameraDir = Object.keys(cameraDirs).some(function (d) {
+            return cameraDirs[d].videos.length > 0 || cameraDirs[d].slps.length > 0;
+        });
+        if (!hasCameraDir && (rootCamera.videos.length > 0 || rootCamera.slps.length > 0)) {
+            var rootCamName = folderName || 'Camera';
+            cameraDirs = {};
+            cameraDirs[rootCamName] = { videos: rootCamera.videos, slps: rootCamera.slps, envSlps: rootCamera.envSlps,
+                                        dirNameLower: rootCamName.toLowerCase() };
+            console.log('[session-folder] No camera subdirectories — "' + rootCamName + '" is one camera\'s folder');
         }
 
         // One camera directory is one camera, so the directory IS the group a
@@ -3224,6 +3248,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         // 1. Load calibration if found
         var cameras = [];
         var hasCalibration = false;
+        var singleCamera = false;   // one camera directory and no calibration (see step 2)
         if (calibFile) {
             showLoading('Loading calibration...');
             var calibText = await calibFile.text();
@@ -3283,6 +3308,13 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             // no camera here made File ▸ Save write an EMPTY .slp: the writer
             // writes one video per `session.cameras` entry and drops every pose
             // whose camera is not in that list.
+            // Exactly ONE such directory is a single-camera session (a SLEAP
+            // predictions file and its video), which needs no calibration: its one
+            // placeholder camera is what single-camera Track All and the ID-switch
+            // checks look for (`session.cameras.length === 1`).
+            singleCamera = Object.keys(cameraDirs).filter(function (d) {
+                return cameraDirs[d].videos.length > 0 || cameraDirs[d].slps.length > 0;
+            }).length === 1;
             for (var dirName in cameraDirs) {
                 if (cameraDirs[dirName].videos.length > 0 || cameraDirs[dirName].slps.length > 0) {
                     // A campy recording names its cameras (session.json); the
@@ -4020,7 +4052,8 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         // failure, so an unreadable file downgrades this to a warning that
         // names the camera and the file.
         var statusMsg = 'Loaded ' + matchedCameraDirs.length + ' camera(s)';
-        if (!calibFile) statusMsg += ' (no calibration — load separately via File > Load Calibration)';
+        if (singleCamera) statusMsg = 'Loaded 1 camera (' + matchedCameraDirs[0].camName + ') — a single-camera session: no calibration needed, Track All runs SLEAP\'s tracker';
+        else if (!calibFile) statusMsg += ' (no calibration — load separately via File > Load Calibration)';
         var statusKind = 'success';
         if (slpFailures.length > 0) {
             statusMsg += ' — ' + slpFailures.length + ' annotation file(s) could not be read: '

@@ -16,9 +16,10 @@
  * fitted models:
  *
  *   { v: 1,
- *     checks: { size?|image?: { encounters, sampleHz, step, fps, fpsFromVideo,
+ *     checks: { size?|image?|brightness?|review?: { encounters, sampleHz, step, fps, fpsFromVideo,
  *                                [imageHz, crops, cameras, model: {name, note}],
- *                                points: [[frame, nameA, nameB, score, kind, followOf, continues, startFrame, link], …] } },
+ *                                points: [[frame, nameA, nameB, score, kind, followOf, continues, startFrame, link,
+ *                                          look?], …] } },
  *     reviewed: [rowKey, …],
  *     fixes: [[key, partnerKey, nameA, nameB, from, to], …] }      // only when something was fixed
  *
@@ -28,7 +29,10 @@
  * it was added, which then land on `frame`. `link` is the other edge of a change
  * point's swapped stretch — an onset's `switchBackAt`, an 'end''s `switchedAt` —
  * or -1 for none (the session's end / start); files saved before it was added
- * have no `link`, and a fix then pairs rows by what the list shows. Rows are keyed by check,
+ * have no `link`, and a fix then pairs rows by what the list shows. `look`,
+ * written only for a point scored at a candidate moment rather than an encounter
+ * (single camera, see pose/single-camera-tracking.js), lists its cues; every
+ * 'review' point has one (its score is 0: the review list is not scored). Rows are keyed by check,
  * frame and identity NAMES (`rowKey`) — names, not ids, are what a reopened
  * project still agrees on. Nothing is written for a session no check has run on,
  * so such a project's bytes are unchanged. Reads tolerate absence and garbage.
@@ -63,38 +67,81 @@ export function idSwitchEncounterCount(res) {
 }
 
 /**
- * Tag every marker with its check, and link change points both checks found as
+ * The checks, in order of precedence: when two find the same change point, the
+ * row is shown once, on the earlier check's result ("Both"). 'review' is not a
+ * check: it is the list of places single-camera Track All leaves to look at
+ * (pose/single-camera-tracking.js `reviewResult`), rows with no score. Last, so a
+ * check flagging the same place shows its own row, marked as on the list too.
+ */
+export const ID_SWITCH_CUES = ['size', 'image', 'brightness', 'review'];
+
+/** True for the later half of a "Both" pair — drawn and listed through its partner. */
+export function idSwitchIsSecondary(m) {
+    return !!(m && m.agree && ID_SWITCH_CUES.indexOf(m.cue) > ID_SWITCH_CUES.indexOf(m.agree.cue));
+}
+
+/**
+ * Tag every marker with its check, and link change points two checks found as
  * `agree`: the same pair, at the same contact — their close spells overlap, give
- * or take 1 s (the two checks merge contacts by their own evidence, so one may
- * span a longer stretch than the other) — or, for results restored without a
- * start, ending within 1 s.
+ * or take 1 s (the checks merge contacts by their own evidence, so one may span a
+ * longer stretch than another) — or, for results restored without a start,
+ * ending within 1 s. Each change point of a later check is linked to the nearest
+ * unlinked one of an earlier check (size before images before brightness).
  */
 export function linkIdSwitchResults(results) {
-    ['size', 'image'].forEach(function (cue) {
-        var r = results[cue];
-        if (r && r.ok) idSwitchMarkers(r).forEach(function (m) { m.cue = cue; delete m.agree; });
-    });
-    var s = results.size, im = results.image;
-    if (!(s && s.ok && im && im.ok)) return;
-    var tol = Math.max(1, Math.round(s.fps || 30));
-    var samePair = function (a, b) {
-        return (a.nameA === b.nameA && a.nameB === b.nameB) || (a.nameA === b.nameB && a.nameB === b.nameA);
-    };
-    var sameContact = function (x, m) {
-        if (Math.abs(x.frame - m.frame) <= tol) return true;
-        return x.startFrame != null && m.startFrame != null && x.startFrame <= m.frame + tol && m.startFrame <= x.frame + tol;
-    };
-    idSwitchPrimary(im).forEach(function (m) {
-        var hit = null;
-        idSwitchPrimary(s).forEach(function (x) {
-            if (!x.agree && samePair(x, m) && sameContact(x, m) && (!hit || Math.abs(x.frame - m.frame) < Math.abs(hit.frame - m.frame))) hit = x;
+    var ran = ID_SWITCH_CUES.filter(function (cue) { return results[cue] && results[cue].ok; });
+    ran.forEach(function (cue) { idSwitchMarkers(results[cue]).forEach(function (m) { m.cue = cue; delete m.agree; }); });
+    if (ran.length < 2) return;
+    var tol = Math.max(1, Math.round(results[ran[0]].fps || 30));
+    ran.forEach(function (cue, i) {
+        idSwitchPrimary(results[cue]).forEach(function (m) {
+            for (var j = 0; j < i && !m.agree; j++) {
+                var hit = null;
+                idSwitchPrimary(results[ran[j]]).forEach(function (x) {
+                    if (!x.agree && samePair(x, m) && sameContact(x, m, tol) && (!hit || Math.abs(x.frame - m.frame) < Math.abs(hit.frame - m.frame))) hit = x;
+                });
+                if (hit) { m.agree = hit; hit.agree = m; }
+            }
         });
-        if (hit) { m.agree = hit; hit.agree = m; }
     });
 }
 
 function samePair(a, b) {
     return (a.nameA === b.nameA && a.nameB === b.nameB) || (a.nameA === b.nameB && a.nameB === b.nameA);
+}
+
+/** 1 s, in frames of the first result listed (what "the same contact" allows either way). */
+function contactTolerance(results) {
+    var cue = ID_SWITCH_CUES.filter(function (c) { return hasRows(results[c]); })[0];
+    return Math.max(1, Math.round((cue && results[cue].fps) || 30));
+}
+
+function hasRows(r) { return !!(r && (r.ok || r.flags)); }
+
+/** Two change points at the same contact: ending within `tol` frames, or close spells overlapping give or take `tol`. */
+function sameContact(x, m, tol) {
+    if (Math.abs(x.frame - m.frame) <= tol) return true;
+    return x.startFrame != null && m.startFrame != null && x.startFrame <= m.frame + tol && m.startFrame <= x.frame + tol;
+}
+
+/**
+ * True for a row that stands for a PLACE to look at, not a scored encounter: a review-list row, or a check's
+ * row at a moment (`look`: on one camera, a candidate moment or an animal coming back after being out of
+ * sight). A place has its own fix: from the frame you are on to the end of the video (idSwitchFixPlan `place`).
+ */
+export function idSwitchIsPlace(m) {
+    return !!m && (m.cue === 'review' || !!(m.look && m.look.length));
+}
+
+/**
+ * The place a row of the tab stands for, or null: a review-list place first (the row itself, or the place a
+ * check's row is linked to, "on the review list"), else the row itself or its linked row when at a moment.
+ */
+export function idSwitchPlaceOf(m) {
+    if (!m) return null;
+    if (m.cue === 'review') return m;
+    if (m.agree && m.agree.cue === 'review') return m.agree;
+    return idSwitchIsPlace(m) ? m : idSwitchIsPlace(m.agree) ? m.agree : null;
 }
 
 /**
@@ -131,17 +178,30 @@ function linkedFrame(m, res) {
  * to the frame before its boundary. The change point at the other edge, when the
  * list shows one, is the fix's `partnerKey`: the same stretch, fixed by the same swap.
  *
+ * A place's own fix (`o.place`, always for a review-list row, `cue` 'review';
+ * see idSwitchIsPlace) is not an encounter's: it swaps from the boundary to the
+ * end of the video — later places fix their own stretches — and its window
+ * reaches on to just before the next place (the end of the video after the
+ * last), so a swap that undoes itself between two places can be fixed from this
+ * row twice — once where the labels swap, again where they swap back. The next
+ * place is the next row that stands for one, on any list (`o.results`, else
+ * `res` alone), not counting the row itself, its linked row, or a place of the
+ * same pair at the same contact (the same place, on another list).
+ *
  * @param {object} m          a change point (a row of the ID Switches tab)
  * @param {object} res        the check result it came from
- * @param {{currentFrame:number, totalFrames:number, window?:number[]}} o  `window`: [first, last] frame
+ * @param {{currentFrame:number, totalFrames:number, window?:number[], place?:boolean, results?:object}} o
+ *   `window`: [first, last] frame; `place`: the place's own fix; `results`: every check's result, for the next place
  * @returns {?{key, partnerKey, nameA, nameB, from, to, start:'current'|'separate', edge:?number}}
  *   null when the stretch is empty. `edge` is the linked frame (null = session end / start).
  */
 export function idSwitchFixPlan(m, res, o) {
     var s = m.startFrame != null && m.startFrame <= m.frame ? m.startFrame : m.frame, e = m.frame;
-    var w = o.window || [s, e + 1], cur = o.currentFrame, here = cur != null && cur >= w[0] && cur <= w[1];
-    var split = here ? cur : e + 1, edge = linkedFrame(m, res), from, to;
-    if (m.kind === 'end') { from = edge == null ? 0 : edge + 1; to = split - 1; }
+    var w = o.window || [s, e + 1], place = !!o.place || m.cue === 'review';
+    if (place) w = [w[0], Math.max(w[1], nextPlaceStart(m, o.results || { [m.cue || 'size']: res }, o.totalFrames) - 1)];
+    var cur = o.currentFrame, here = cur != null && cur >= w[0] && cur <= w[1];
+    var split = here ? cur : e + 1, edge = place ? null : linkedFrame(m, res), from, to;
+    if (m.kind === 'end' && !place) { from = edge == null ? 0 : edge + 1; to = split - 1; }
     else { from = split; to = edge == null ? Math.max(0, (o.totalFrames || 0) - 1) : edge; }
     if (!(to >= from)) return null;
     var partner = edge == null ? null : idSwitchMarkers(res).find(function (x) {
@@ -149,6 +209,22 @@ export function idSwitchFixPlan(m, res, o) {
     });
     return { key: idSwitchRowKey(m), partnerKey: partner ? idSwitchRowKey(partner) : '', nameA: m.nameA, nameB: m.nameB,
              from: from, to: to, start: here ? 'current' : 'separate', edge: edge };
+}
+
+/** Where the next place after `m` starts (its first frame), on any of `results`, or `totalFrames` after the last. */
+function nextPlaceStart(m, results, totalFrames) {
+    var next = Math.max(0, totalFrames || 0), tol = contactTolerance(results);
+    ID_SWITCH_CUES.forEach(function (cue) {
+        var r = results[cue];
+        if (!hasRows(r)) return;
+        idSwitchPrimary(r).forEach(function (x) {
+            if (x.frame <= m.frame || x === m || x === m.agree || !idSwitchIsPlace(x)) return;
+            if (x.cue !== m.cue && samePair(x, m) && sameContact(x, m, tol)) return;   // this place, on another list
+            var xs = x.startFrame != null && x.startFrame <= x.frame ? x.startFrame : x.frame;
+            if (xs < next) next = xs;
+        });
+    });
+    return next;
 }
 
 /** The fix that covers row `m` (its own, or its partner's), or null. */
@@ -170,7 +246,7 @@ export function idSwitchFixFor(st, m) {
  */
 export function idSwitchRenameForFix(st, fix) {
     var remap = new Map();
-    ['size', 'image'].forEach(function (cue) {
+    ID_SWITCH_CUES.forEach(function (cue) {
         var r = st.results[cue];
         if (!(r && r.ok)) return;
         idSwitchMarkers(r).forEach(function (m) {
@@ -200,18 +276,20 @@ export function serializeIdSwitchReview(session) {
     var st = session && session._idSwitch;
     if (!st || !st.results) return null;
     var checks = {};
-    ['size', 'image'].forEach(function (cue) {
+    ID_SWITCH_CUES.forEach(function (cue) {
         var r = st.results[cue];
         if (!(r && r.ok)) return;
         var c = {
             encounters: idSwitchEncounterCount(r), sampleHz: r.sampleHz, step: r.step, fps: r.fps, fpsFromVideo: !!r.fpsFromVideo,
             points: idSwitchMarkers(r).map(function (m) {
-                return [m.frame, String(m.nameA), String(m.nameB), Math.round(m.score * 10) / 10, m.kind === 'end' ? 'end' : '',
-                        m.followOf == null ? -1 : m.followOf, m.continues ? 1 : 0, m.startFrame == null ? -1 : m.startFrame,
-                        linkOf(m)];
+                var p = [m.frame, String(m.nameA), String(m.nameB), Math.round(m.score * 10) / 10, m.kind === 'end' ? 'end' : '',
+                         m.followOf == null ? -1 : m.followOf, m.continues ? 1 : 0, m.startFrame == null ? -1 : m.startFrame,
+                         linkOf(m)];
+                if (m.look && m.look.length) p.push(m.look.map(String));   // a candidate moment's cues; absent otherwise
+                return p;
             }),
         };
-        if (cue === 'image') {
+        if (cue === 'image' || cue === 'brightness') {          // samples per second, samples, views
             c.imageHz = r.imageHz; c.crops = r.crops; c.cameras = (r.cameras || []).slice();
             if (r.model && r.model.note) c.model = { name: r.model.name, note: r.model.note };
         }
@@ -239,7 +317,7 @@ export function ingestIdSwitchReview(session, payload) {
     try {
         if (!payload || typeof payload !== 'object' || payload.v !== 1 || !payload.checks || typeof payload.checks !== 'object') return session;
         var results = {};
-        ['size', 'image'].forEach(function (cue) {
+        ID_SWITCH_CUES.forEach(function (cue) {
             var c = payload.checks[cue];
             if (!c || typeof c !== 'object' || !Array.isArray(c.points)) return;
             var flags = [];
@@ -254,12 +332,16 @@ export function ingestIdSwitchReview(session, payload) {
                     var link = p[8] >= 0 ? p[8] : null;
                     if (m.kind === 'end') m.switchedAt = link; else m.switchBackAt = link;
                 }
+                if (Array.isArray(p[9])) {                        // written only for a candidate moment (its cues)
+                    var look = p[9].filter(function (x) { return typeof x === 'string'; });
+                    if (look.length) m.look = look;
+                }
                 flags.push(m);
             });
             var r = { ok: true, restored: true, flags: flags, changes: [], encounterCount: isNum(c.encounters) ? c.encounters : 0,
                       sampleHz: isNum(c.sampleHz) ? c.sampleHz : 0, step: isNum(c.step) ? c.step : 1, fps: isNum(c.fps) ? c.fps : 0,
                       fpsFromVideo: !!c.fpsFromVideo };
-            if (cue === 'image') {
+            if (cue === 'image' || cue === 'brightness') {
                 r.imageHz = isNum(c.imageHz) ? c.imageHz : 0; r.crops = isNum(c.crops) ? c.crops : 0;
                 r.cameras = Array.isArray(c.cameras) ? c.cameras.filter(function (x) { return typeof x === 'string'; }) : [];
                 if (c.model && typeof c.model.note === 'string') r.model = { name: String(c.model.name || ''), note: c.model.note };
