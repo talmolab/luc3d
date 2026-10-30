@@ -1403,7 +1403,7 @@ export function showOverlayExportModal() {
         addNumber(gRep.body, 'Opacity', settings.reproj, 'alpha', 0.1, 1, 0.05);
         addSelect(gRep.body, 'Line style', settings.reproj, 'lineStyle', LINES);
         addSelect(gRep.body, 'Marker color', settings.reproj, 'nodeColor',
-            [['white', 'white'], ['black', 'black'], ['track', 'track']]);
+            [['white', 'white'], ['black', 'black'], ['track', 'track'], ['dark', 'dark']]);
         addNumber(gRep.body, 'Brightness', settings.reproj, 'brightness', 0.1, 1, 0.05);
         addCheck(gRep.body, 'Show nodes', settings.reproj, 'showNodes');
         addCheck(gRep.body, 'Show edges', settings.reproj, 'showEdges');

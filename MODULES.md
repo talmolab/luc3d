@@ -5914,6 +5914,10 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `drawSelectionHighlight` (`options.wedgeNodeSize`) share `traceEdge` +
   `paintEdges`; `drawDragPreview` stays lines. `ui/interaction.js` hit-tests the
   same shape. Test: `tests/e2e/edge-style-wedge.mjs`.
+- Reprojection node color: `reprojNodeColor` is `'white'`, `'black'`, `'track'`
+  (the Brightness-adjusted track color) or `'dark'` (that color in the Dark
+  trail shade, `trailColor`). Test:
+  `tests/e2e/reprojection-fallback-color-setting.mjs`.
 - Independent node/edge visibility: `drawSkeleton` and
   `drawReprojectedSkeleton` accept `options.showNodes` / `options.showEdges`,
   **defaulting to `true`**. Only the overlay-video export sets them; they ride
