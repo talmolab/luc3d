@@ -78,6 +78,7 @@ try {
     const grey = await page.evaluate((s) => document.querySelector(s).closest('.settings-node-weight-row').classList.contains('settings-view-excluded'), sw('Include view camB in tracking'));
     check(grey, 'switching a camera off greys its row');
     await page.click('.settings-btn-apply');
+    await page.click('.settings-modal-close');
     const applied = await page.evaluate(async () => { const S = await import('/ui/settings.js');
         return { webnn: S.getTrackingThreshold('imageCheckWebNN'), size: S.getTrackingThreshold('autoSwitchCheck'), camB: S.getCameraWeight('camB'), camA: S.getCameraWeight('camA') }; });
     check(applied.webnn === 1 && applied.size === 0 && applied.camB === 0 && applied.camA === 1, `Apply stores the switches as 1 / 0 (${JSON.stringify(applied)})`);
@@ -100,14 +101,20 @@ try {
     }, [label, v]);
     const reprojDefault = await page.evaluate(async () =>
         (await import('/ui/settings.js')).getTrackingThresholdDefs().find(d => d.id === 'reprojErrorThreshold').default);
+    // Apply is disabled until some value differs, so each step makes one real
+    // change (the time penalty) beside what it is checking.
+    let penalty = 1;
+    const changeSomething = () => typeNumber('Time penalty', penalty++);
     await open();
     await typeNumber('Reprojection error threshold (px)', reprojDefault);
+    await changeSomething();
     await page.click('.settings-btn-apply');
     let st = await stored();
     check(st.reprojErrorThreshold === reprojDefault,
         `a value TYPED at its default (${reprojDefault}) is stored, so a later default change cannot move it (stored ${JSON.stringify(st)})`);
     check(!('distanceThreshold' in st), 'an untouched value at its default is not stored, so it follows the default');
     await open();
+    await changeSomething();
     await page.click('.settings-btn-apply');
     st = await stored();
     check(st.reprojErrorThreshold === reprojDefault, 'an earlier choice stays stored across an Apply that does not touch it');
@@ -115,6 +122,7 @@ try {
         (await import('/ui/settings.js')).getTrackingThresholdDefs().find(d => d.id === 'matchGate').default);
     await open();
     await page.evaluate((s) => { const el = document.querySelector(s); el.click(); el.click(); }, sw('Reject negative matches (gate)'));
+    await changeSomething();
     await page.click('.settings-btn-apply');
     st = await stored();
     check(st.matchGate === gateDefault, `a switch flipped and flipped back is a choice too (stored ${st.matchGate}, default ${gateDefault})`);

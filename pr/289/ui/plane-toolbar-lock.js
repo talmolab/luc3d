@@ -16,7 +16,7 @@
 // because the binding is read INSIDE the function body, never at module top
 // level, where a circular import is still `undefined`.
 
-import { planeState } from './plane-definition.js?v=b63ad30d0b27';
+import { planeState } from './plane-definition.js?v=685dcd48ef25';
 
 /**
  * The toolbar buttons Defining Plane Mode blocks.
@@ -35,7 +35,8 @@ import { planeState } from './plane-definition.js?v=b63ad30d0b27';
  * annotated — turning Predictions off to see the plane you are placing is
  * exactly the kind of thing this mode is for. So are the quick SETTINGS in the
  * action menus — Track's Animals field (`#tbNumAnimals`), Triangulate's Method
- * radios, each menu's Settings… — which a run reads when it starts; only the
+ * radios and Reprojection error field (`#tbReprojThreshold`), each menu's
+ * Settings… — which a run reads when it starts; only the
  * menus' run buttons are here.
  *
  * @type {string[]}
