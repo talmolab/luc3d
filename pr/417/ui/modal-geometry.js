@@ -36,7 +36,8 @@
 // record). A record older than those flags fills: its size was only ever chosen because
 // the card could not fill the window then. `setSizePreset('full')` (`full` in the
 // record) drops the cap and the margin, so the card takes the whole viewport;
-// `setSizePreset('default')` goes back to filling, forgetting any drag.
+// `setSizePreset('narrow')` (`narrow` in the record) centres it at `opts.narrowSize`;
+// `setSizePreset('default')` goes back to filling. Each forgets any drag.
 //
 // ## Clamping is the load-bearing part
 //
@@ -144,6 +145,7 @@ export function readGeometry(id, storage) {
     if (g.widthChosen === true) out.widthChosen = true;
     if (g.moved === true) out.moved = true;
     if (g.full === true) out.full = true;
+    if (g.narrow === true) out.narrow = true;
     return out;
 }
 
@@ -174,6 +176,7 @@ export function writeGeometry(id, geom, storage) {
     if (geom.widthChosen === true) all[id].widthChosen = true;
     if (geom.moved === true) all[id].moved = true;
     if (geom.full === true) all[id].full = true;
+    if (geom.narrow === true) all[id].narrow = true;
     try {
         s.setItem(STORAGE_KEY, JSON.stringify(all));
         return true;
@@ -210,9 +213,10 @@ export function clearGeometry(id, storage) {
  * @param {{id:string, handle?:HTMLElement, minW?:number, minH?:number,
  *          margin?:number, storage?:Storage, noDragSelector?:string,
  *          legacyDefaultSize?:{w:number,h:number}, fillHeight?:boolean,
- *          fillWidth?:number, onSizePreset?:function(?string): void}} opts
+ *          fillWidth?:number, narrowSize?:{w:number,h:number},
+ *          onSizePreset?:function(?string): void}} opts
  * @returns {function(): void} dispose — removes every listener it added. With
- *   `fillWidth` it also has `setSizePreset('default'|'full')` and `sizePreset()`, the
+ *   `fillWidth` it also has `setSizePreset('narrow'|'default'|'full')` and `sizePreset()`, the
  *   preset in force, or null once the card has been dragged or resized away from it.
  */
 export function installModalGeometry(card, opts) {
@@ -239,16 +243,16 @@ export function installModalGeometry(card, opts) {
     let heightChosen = false;
     let widthChosen = false;
     let moved = false;
-    let full = false;
+    let preset = 'default';
 
     // The clamp's limits now: Full has no gutter.
     function limits() {
-        return full ? { minW: min.minW, minH: min.minH, margin: 0 } : min;
+        return preset === 'full' ? { minW: min.minW, minH: min.minH, margin: 0 } : min;
     }
 
     function sizePreset() {
         if (heightChosen || widthChosen || moved) return null;
-        return full ? 'full' : 'default';
+        return preset;
     }
 
     function notePreset() {
@@ -274,18 +278,22 @@ export function installModalGeometry(card, opts) {
 
     function current() {
         const r = card.getBoundingClientRect();
-        return { x: r.left, y: r.top, w: r.width, h: r.height, sized: sized, heightChosen: heightChosen, widthChosen: widthChosen, moved: moved, full: full };
+        return { x: r.left, y: r.top, w: r.width, h: r.height, sized: sized, heightChosen: heightChosen, widthChosen: widthChosen, moved: moved,
+            full: preset === 'full', narrow: preset === 'narrow' };
     }
 
     // `geom`, filling the viewport along each axis the user has not chosen.
     function filled(geom) {
         const v = viewport(), m = limits().margin, out = { x: geom.x, y: geom.y, w: geom.w, h: geom.h };
+        const narrow = preset === 'narrow' && o.narrowSize;
         if (o.fillHeight && !heightChosen) {
-            out.y = m;
-            out.h = v.height - 2 * m;
+            out.h = narrow ? Math.min(narrow.h, v.height - 2 * m) : v.height - 2 * m;
+            if (!narrow) out.y = m;
+            else if (!moved) out.y = (v.height - out.h) / 2;
         }
         if (o.fillWidth && !widthChosen) {
-            out.w = full ? v.width : Math.min(o.fillWidth, v.width - 2 * m);
+            out.w = narrow ? Math.min(narrow.w, v.width - 2 * m)
+                : preset === 'full' ? v.width : Math.min(o.fillWidth, v.width - 2 * m);
             if (!moved) out.x = (v.width - out.w) / 2;
         }
         return out;
@@ -296,7 +304,7 @@ export function installModalGeometry(card, opts) {
     // user chose it. Otherwise the stylesheet's size, keeping the old centre.
     const base = card.getBoundingClientRect();
     const stored = readGeometry(id, o.storage);
-    full = !!(stored && stored.full && o.fillWidth);
+    if (stored && o.fillWidth) preset = stored.full ? 'full' : (stored.narrow && o.narrowSize) ? 'narrow' : 'default';
     if (stored && rememberedSizeIsChosen(stored, o.legacyDefaultSize)) {
         sized = true;
         heightChosen = stored.heightChosen === true;
@@ -404,7 +412,7 @@ export function installModalGeometry(card, opts) {
     if (o.fillWidth) {
         dispose.sizePreset = sizePreset;
         dispose.setSizePreset = function (name) {
-            full = name === 'full';
+            preset = name === 'full' || (name === 'narrow' && o.narrowSize) ? name : 'default';
             sized = heightChosen = widthChosen = moved = false;
             apply(clampGeometry(filled(current()), viewport(), limits()));
             writeGeometry(id, current(), o.storage);
