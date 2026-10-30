@@ -203,6 +203,9 @@ try {
         // declared key (talmolab/luc3d#312). Until then nothing writes it, and
         // the checks below compare only the keys the module declares.
         s.numAnimals = 3;
+        // The data files the per-camera chooser recorded (#413): a record
+        // that rides the same module.
+        s.dataFileChoices = { camA: 'camA/camA.predictions.proofread.slp', camB: null };
 
         // ---- the ID Switches checklist (shapes as in pose/id-switch-check.js) ----
         const pt = (frame, a, b, score, extra) => Object.assign(

@@ -1311,12 +1311,18 @@ export class LazyFrameLoader {
                         var cb3 = self._pending.get(msg.requestId);
                         if (cb3) { self._pending.delete(msg.requestId); cb3.reject(new Error(msg.message)); return; }
                     }
+                    // A camera that failed to open is never registered, so
+                    // nothing else would ever end its worker (#415).
+                    if (self.workers.get(cameraName) !== worker) { try { worker.terminate(); } catch (e) { /* gone */ } }
                     reject(new Error(msg.message));
                 } else if (msg.type === 'progress' && onProgress) {
                     onProgress(msg.message);
                 }
             };
-            worker.onerror = function (e) { reject(new Error('Worker error: ' + e.message)); };
+            worker.onerror = function (e) {
+                if (self.workers.get(cameraName) !== worker) { try { worker.terminate(); } catch (e2) { /* gone */ } }
+                reject(new Error('Worker error: ' + e.message));
+            };
             worker.postMessage({ type: 'open', file: file });
         });
     }
