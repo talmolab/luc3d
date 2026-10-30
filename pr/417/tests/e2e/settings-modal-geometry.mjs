@@ -317,13 +317,13 @@ try {
     await page.click('.settings-size-btn[data-size="narrow"]');
     let fullRect = await rect();
     sz = await sizeState();
-    check(fullRect.w === 1320 && fullRect.h === 800 && fullRect.x === 340 && fullRect.y === 200 && sz.pressed === 'Narrow', `Narrow is the old default, 1320 x 800, centred (${JSON.stringify(fullRect)})`);
+    check(fullRect.w === 1320 && fullRect.h === 1152 && fullRect.x === 340 && fullRect.y === 24 && sz.pressed === 'Narrow', `Narrow is the old 1320 px width, centred, at the full height (${JSON.stringify(fullRect)})`);
     check(sz.apply, 'and leaves nothing to Apply');
     await closeModal();
     await openModal();
     fullRect = await rect();
     sz = await sizeState();
-    check(fullRect.w === 1320 && fullRect.h === 800 && sz.pressed === 'Narrow', `reopening keeps Narrow (${JSON.stringify(fullRect)})`);
+    check(fullRect.w === 1320 && fullRect.h === 1152 && sz.pressed === 'Narrow', `reopening keeps Narrow (${JSON.stringify(fullRect)})`);
     await page.setViewportSize({ width: 1000, height: 600 });
     await page.waitForTimeout(100);
     fullRect = await rect();
@@ -331,7 +331,7 @@ try {
     await page.setViewportSize({ width: 2000, height: 1200 });
     await page.waitForTimeout(100);
     fullRect = await rect();
-    check(fullRect.w === 1320 && fullRect.h === 800 && fullRect.x === 340, `and comes back (${JSON.stringify(fullRect)})`);
+    check(fullRect.w === 1320 && fullRect.h === 1152 && fullRect.x === 340, `and comes back (${JSON.stringify(fullRect)})`);
     await page.click('.settings-size-btn[data-size="full"]');
     fullRect = await rect();
     sz = await sizeState();
