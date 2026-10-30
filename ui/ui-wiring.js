@@ -55,6 +55,7 @@ import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
 import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js';
 // The toolbar's Animals field, beside Track Frame / Track All.
 import { wireAnimalCountField } from './animal-count-field.js';
+import { wireReprojThresholdField } from './reproj-threshold-field.js';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
@@ -3150,6 +3151,7 @@ export function setupUI() {
     });
 
     wireAnimalCountField();
+    wireReprojThresholdField();
 
     // Context menu for instance groups
     document.getElementById('ctxUnlinkGroup').addEventListener('click', function () {

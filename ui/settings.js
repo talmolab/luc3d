@@ -423,8 +423,8 @@ const TRACKING_THRESHOLDS = [
     },
     {
         id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 0,
-        min: 0, max: 500, step: 1,
-        desc: 'Robust triangulation: after an initial 3D solve, drop any 2D node whose reprojection error in a view exceeds this many pixels, then re-triangulate that node from the remaining reliable views. A node left with fewer than 2 reliable views is dropped from 3D. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless.',
+        min: 0, max: 640, step: 1,
+        desc: 'Robust triangulation: after the 3D solve, if a node\'s reprojection error in any view (the distance on that view\'s 2D image between the prediction and the reprojection) is over this many pixels, the view that misses by most is dropped for that node and the node is re-triangulated from the rest; this repeats while more than 2 views are left. A node whose last 2 views still miss by more gets no 3D point. 100 to 15 px is the recommended range: lower can drop good views too. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless. Settings ▸ Default Triangulation draws it.',
     },
 ];
 
@@ -582,6 +582,18 @@ export function setTrackingThresholds(map) {
     }
     _settings.trackingThresholds = next;
     persist();
+    for (var i = 0; i < _thresholdListeners.length; i++) {
+        try { _thresholdListeners[i](); } catch (e) { /* ignore */ }
+    }
+}
+
+// Told after every commit of the thresholds, so a control outside Settings can
+// show them (the Triangulate menu's Reprojection error field). A listener that
+// throws must not stop the others.
+var _thresholdListeners = [];
+
+export function onTrackingThresholdsChange(fn) {
+    if (typeof fn === 'function') _thresholdListeners.push(fn);
 }
 
 // Commit SOME thresholds (Track All's first-use dialog: the image check's
