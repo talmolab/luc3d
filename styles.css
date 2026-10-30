@@ -6084,7 +6084,10 @@ kbd {
 .settings-size-btns span { margin-right: 4px; }
 
 .settings-size-btn {
-  padding: 4px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px 4px 8px;
   border: 1px solid var(--border-color);
   border-radius: 4px;
   background: var(--bg-button);
