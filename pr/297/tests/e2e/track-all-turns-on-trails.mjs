@@ -42,7 +42,7 @@ try {
     await answerTrackSetup(page, 2);
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     await page.evaluate(async () => {
         const pd = await import('/pose/pose-data.js');
@@ -123,7 +123,7 @@ try {
 
     // ---- 3. Track Frame does not turn them on ----------------------------------------
     await pickLength('Off');
-    await page.click('#tbTrackFrame');
+    await page.hover('#tbTrackAll'); await page.click('#tbTrackFrame');   // This frame, in the Track menu
     await page.waitForTimeout(300);
     t = await read();
     check(t.sec === 0 && !t.blue, 'Track Frame (one frame) leaves trails off');

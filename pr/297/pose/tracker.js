@@ -16,32 +16,34 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=13e2706efa3a';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=13e2706efa3a';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=13e2706efa3a';
+} from './triangulation.js?v=78058ee33dd8';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=78058ee33dd8';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=78058ee33dd8';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=13e2706efa3a';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=78058ee33dd8';
 import {
     getNodeWeightArray, getNodeWeight, updateNodeWeights,
     getTrackingThresholds, getTrackingThreshold, isCameraTracked,
     getTrackingThresholdDefs, updateTrackingThresholds,
-} from '../ui/settings.js?v=13e2706efa3a';
-import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=13e2706efa3a';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=13e2706efa3a';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=13e2706efa3a';
-import { startTrackerWorker } from './tracker-pool.js?v=13e2706efa3a';
-import { passesDetectionFilter } from './detection-filter-stats.js?v=13e2706efa3a';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=13e2706efa3a';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=13e2706efa3a';
-import { updateInfoPanel } from '../ui/info-panel.js?v=13e2706efa3a';
-import { setColorByIdentity } from '../ui/color-by.js?v=13e2706efa3a';
-import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=13e2706efa3a';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=13e2706efa3a';
-import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=13e2706efa3a';
-import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=13e2706efa3a';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=13e2706efa3a';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=13e2706efa3a';
+} from '../ui/settings.js?v=78058ee33dd8';
+import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=78058ee33dd8';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=78058ee33dd8';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=78058ee33dd8';
+import { startTrackerWorker } from './tracker-pool.js?v=78058ee33dd8';
+import { passesDetectionFilter } from './detection-filter-stats.js?v=78058ee33dd8';
+import { loadAllLazyFrames, sweepLazyFrameWindows, showCalibrationRequiredPopup } from './triangulation.js?v=78058ee33dd8';
+import { hasRealCalibration } from './placeholder-cameras.js?v=78058ee33dd8';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=78058ee33dd8';
+import { updateInfoPanel } from '../ui/info-panel.js?v=78058ee33dd8';
+import { setColorByIdentity } from '../ui/color-by.js?v=78058ee33dd8';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=78058ee33dd8';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=78058ee33dd8';
+import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=78058ee33dd8';
+import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=78058ee33dd8';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=78058ee33dd8';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=78058ee33dd8';
+import { noteTrackRun } from './run-state.js?v=78058ee33dd8';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -1295,6 +1297,14 @@ export async function trackCurrentFrame() {
         setStatus('No session with cameras loaded', 'error');
         return;
     }
+    // Cross-view tracking needs a real calibration, as Triangulate does.
+    // Placeholder cameras (a folder loaded with no calibration.toml,
+    // `pose/placeholder-cameras.js`) all sit at the world origin, so tracking
+    // on them would build groups from 3D with no baseline.
+    if (!hasRealCalibration(session)) {
+        showCalibrationRequiredPopup();
+        return;
+    }
     var fg = session.getFrameGroup(state.currentFrame);
     if (!fg) {
         setStatus('No frame data at frame ' + displayFrame(state.currentFrame), 'error');
@@ -1327,6 +1337,7 @@ export async function trackCurrentFrame() {
         // frame's prior tracker groups so repeated runs don't stack.
         session.instanceGroups.set(state.currentFrame, []);
         var lr = runCrossViewTracker(session, trackedCameras, [state.currentFrame], false, effectiveNumAnimals);
+        noteTrackRun(session);   // Track turns blue (ui/run-buttons.js)
         // Show what tracking produced: the predictions only (User, Reproj, Errors off).
         var predOnly = lr.numTargets > 0 && showPredictedOnly();
         drawAllOverlays(state.currentFrame);
@@ -1471,6 +1482,14 @@ async function runTrackingPass(range) {
 
     if (session.cameras.length < 2) {
         setStatus('Need at least 2 cameras', 'warning');
+        return bail;
+    }
+    // Cross-view tracking needs a real calibration, as Triangulate does.
+    // Placeholder cameras (a folder loaded with no calibration.toml,
+    // `pose/placeholder-cameras.js`) all sit at the world origin, so tracking
+    // on them would build groups from 3D with no baseline.
+    if (!hasRealCalibration(session)) {
+        showCalibrationRequiredPopup();
         return bail;
     }
 
@@ -1638,6 +1657,7 @@ async function runTrackingPass(range) {
             : await trackFrameListProgress(session, run, frameIndices, onProgress);
         closeTrackerWorker(run);
         var trackMs = performance.now() - trackStart;
+        noteTrackRun(session);   // Track turns blue (ui/run-buttons.js)
         hideLoading();
         // The run's product is identities, so show them (#242): switch Color
         // from Tracks to ID. Only when it assigned any — otherwise there is

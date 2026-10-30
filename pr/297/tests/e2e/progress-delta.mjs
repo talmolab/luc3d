@@ -43,7 +43,7 @@ try {
     const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // The tint's box, as a fraction of its track, plus its state.
     await page.evaluate(() => {

@@ -29,7 +29,7 @@ try {
     page.on('pageerror', e => errs.push(String(e)));
     page.on('console', m => { if (m.type() === 'error') errs.push('console.error: ' + m.text().slice(0, 200)); });
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // Inject a session into the real app-state singleton: 3 cameras, one
     // all-predicted group + one MIXED group (so the cascade line has something to
@@ -160,7 +160,7 @@ try {
 
     // ---- Esc closes ---------------------------------------------------------
     await page.keyboard.press('Escape');
-    await page.waitForFunction(() => !document.querySelector('.multi-frame-modal'), { timeout: 5000 });
+    await page.waitForFunction(() => !document.querySelector('.multi-frame-modal'), null, { timeout: 30000 });
     check(true, 'Esc closes the dialog (CLAUDE.md modal convention)');
 
     // ---- Delete actually mutates the model ---------------------------------
@@ -175,7 +175,7 @@ try {
         return (fg.getUnlinkedInstances('cam3') || []).length;
     });
     await page.click('#cdApply');
-    await page.waitForFunction(() => !document.querySelector('.multi-frame-modal'), { timeout: 5000 });
+    await page.waitForFunction(() => !document.querySelector('.multi-frame-modal'), null, { timeout: 30000 });
     const afterDel = await page.evaluate(() => {
         const fg = window.__lucid.state.session.getFrameGroup(0);
         return {

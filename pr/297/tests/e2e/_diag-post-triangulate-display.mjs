@@ -98,7 +98,7 @@ try {
     const endSink = () => { if (sink.fd !== null) fs.closeSync(sink.fd); return sink.bytes; };
 
     await page.goto(`http://localhost:${PORT}/index.html`, { waitUntil: 'domcontentloaded', timeout: 120000 });
-    await page.waitForFunction(() => window.SleapIO && window.h5wasm, { timeout: 120000 });
+    await page.waitForFunction(() => window.SleapIO && window.h5wasm, null, { timeout: 120000 });
     log('app booted');
 
     // Install the save-picker mock + shared page helpers once.
