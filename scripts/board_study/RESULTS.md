@@ -14,10 +14,11 @@
   0.13 mm 3D spread.
 - **Large rigs (18 cameras, marmoset cages): the 600×400 coarse (40 mm squares), owned.**
   In a copy of the 18-camera rig the 600×400 coarse, the 800×600 coarse and the 9 × 15
-  custom board all gave 0.13–0.19 mm, no better than smaller boards. The real 18-camera
-  calibrations are 4× worse than the simulation even with the rig's own noise level,
-  which points at something other than the board: the printed paper board not being flat,
-  or lens distortion that the one-term (k1) lens model of sleap-anipose cannot fit.
+  custom board all gave 0.13–0.19 mm, no better than smaller boards. **The real 18-camera
+  rig's problem was the lens model, not the board:** calibrated with calibrat3 (lens
+  centre free, two distortion terms) instead of sleap-anipose's solver (lens centre fixed
+  at the image centre, one term), the same recording with the same printed board goes from
+  0.48 % to 0.13 % ruler error and from 0.36 to 0.05 mm 3D spread (details below).
 - **No fine boards, and no 9 × 15 custom board.** Fine boards were at best 0.02 mm better
   (once), stopped being readable at distances where coarse boards still were (7.5 mm
   squares were unreadable from ChronicRecord's farther cameras), and 4 of 12
@@ -106,8 +107,9 @@ What this says:
    fail.
 4. **Large rigs and few-camera rigs are where calibrations are poor today:** the
    18-camera rig (1.3–1.9 px with the printed board), the 5-camera marmoset rig (1 px,
-   1.1 % ruler error, 3D spread 8 mm) and Rig205 (3 cameras, 2 % ruler error). These are
-   the rigs where a better board and recording would help most.
+   1.1 % ruler error, 3D spread 8 mm) and Rig205 (3 cameras, 2 % ruler error). On the
+   18-camera rig the cause turned out to be the calibration tool (next section); the other
+   two have not been checked that way yet.
 5. **Proofread poses barely notice calibration differences on SLAP.** Triangulating the
    proofread poses of five 2022-10-19 SLAP sessions (6 cameras), each calibration gives a
    leave-one-camera-out error of 3.98–4.12 px; the calibration saved at the time 4.12 px,
@@ -122,6 +124,28 @@ What this says:
    others, so it is out of step and was left out) and the cameras moved between the start
    and end calibrations; the remaining ~1 px suggests other cameras dropped frames too.
    Rig205's second recording finds the board in only 7 % of frames.
+
+## The 18-camera rig: lens model, not board
+
+The 2024-12-06 recording (17 cameras, the printed 8 × 11 board) was calibrated with both
+tools on the same three disjoint parts, each part scored on the other two, all on this
+study's detections (`studies/cam18-tools.toml`, `results/cam18-tools/report.md`):
+
+| Calibration tool | Reprojection | Held-out reprojection | Ruler error | Board fit | 3D spread | Camera position spread |
+|---|---|---|---|---|---|---|
+| aniposelib (sleap-anipose): lens centre fixed, k1 | 1.09 px | 1.25 px | 0.48 % | 0.77 mm | 0.36 mm | 2.8 mm |
+| calibrat3: lens centre free, k1 + k2 | 0.45 px | 0.46 px | 0.13 % | 0.20 mm | 0.05 mm | 0.2 mm |
+
+On the whole recording: aniposelib 1.26 px, calibrat3 0.46 px, the calibration saved in
+2024 1.49 px. calibrat3 puts every camera's lens centre off the image centre (840, 600) in
+the same direction: x 869–905, y 618–656 across all 17 cameras (median 45 px right, 37 px
+down), which a fixed-centre model cannot represent.
+
+**This supports the lens-model explanation, not board flatness:** once the lens centre is
+free, the same printed board fits a flat plane to 0.20 mm and the rig calibrates as well
+as the small and medium rigs (0.13 % ruler error), so the board was flat enough. The
+practical fix for the 18-camera rig is to calibrate it with calibrat3 (or any tool with a
+free lens centre); a new board is not needed for it.
 
 ## Simulations: boards compared in copies of three rigs
 
@@ -183,9 +207,9 @@ In order of usefulness. Nothing here needs a purchase.
 2. **A ruler in each of those sittings** (a steel rule with two marks, held still at 8
    places, the two marks labelled in LUC3D): the one check that does not rely on a
    ChArUco board.
-3. **For the 18-camera rig, the same recording calibrated with calibrat3** (free principal
-   point, k1 + k2) next to aniposelib, to tell a lens-model problem from a board-flatness
-   problem. `board_study run … --engine anipose,calibrat3 --calibrat3 <checkout>` does it.
+3. **Done (see above):** the 18-camera recording calibrated with calibrat3 next to
+   aniposelib. Worth doing the same for the 5-camera marmoset rig and Rig205, whose
+   calibrations are also poor.
 4. **Make these Google Drive recordings available offline** (they are online-only, and
    `run` reads every frame): the 8-camera arena's calibrations of 2026-05-18, 05-28 and
    06-05 (same board, repeatability across days); the 18-camera rig's 2024-11-20, 11-21 and
