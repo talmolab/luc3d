@@ -32,7 +32,8 @@ import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js
 import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js';
 import { startTrackerWorker } from './tracker-pool.js';
 import { passesDetectionFilter } from './detection-filter-stats.js';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js';
+import { loadAllLazyFrames, sweepLazyFrameWindows, showCalibrationRequiredPopup } from './triangulation.js';
+import { hasRealCalibration } from './placeholder-cameras.js';
 import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
 import { setColorByIdentity } from '../ui/color-by.js';
@@ -42,6 +43,7 @@ import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-sum
 import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js';
 import { collapseTimeline } from '../ui/timeline-controller.js';
 import { collapseViewport3D } from '../ui/panel-visibility.js';
+import { noteTrackRun } from './run-state.js';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -1295,6 +1297,14 @@ export async function trackCurrentFrame() {
         setStatus('No session with cameras loaded', 'error');
         return;
     }
+    // Cross-view tracking needs a real calibration, as Triangulate does.
+    // Placeholder cameras (a folder loaded with no calibration.toml,
+    // `pose/placeholder-cameras.js`) all sit at the world origin, so tracking
+    // on them would build groups from 3D with no baseline.
+    if (!hasRealCalibration(session)) {
+        showCalibrationRequiredPopup();
+        return;
+    }
     var fg = session.getFrameGroup(state.currentFrame);
     if (!fg) {
         setStatus('No frame data at frame ' + displayFrame(state.currentFrame), 'error');
@@ -1327,6 +1337,7 @@ export async function trackCurrentFrame() {
         // frame's prior tracker groups so repeated runs don't stack.
         session.instanceGroups.set(state.currentFrame, []);
         var lr = runCrossViewTracker(session, trackedCameras, [state.currentFrame], false, effectiveNumAnimals);
+        noteTrackRun(session);   // Track turns blue (ui/run-buttons.js)
         // Show what tracking produced: the predictions only (User, Reproj, Errors off).
         var predOnly = lr.numTargets > 0 && showPredictedOnly();
         drawAllOverlays(state.currentFrame);
@@ -1471,6 +1482,14 @@ async function runTrackingPass(range) {
 
     if (session.cameras.length < 2) {
         setStatus('Need at least 2 cameras', 'warning');
+        return bail;
+    }
+    // Cross-view tracking needs a real calibration, as Triangulate does.
+    // Placeholder cameras (a folder loaded with no calibration.toml,
+    // `pose/placeholder-cameras.js`) all sit at the world origin, so tracking
+    // on them would build groups from 3D with no baseline.
+    if (!hasRealCalibration(session)) {
+        showCalibrationRequiredPopup();
         return bail;
     }
 
@@ -1638,6 +1657,7 @@ async function runTrackingPass(range) {
             : await trackFrameListProgress(session, run, frameIndices, onProgress);
         closeTrackerWorker(run);
         var trackMs = performance.now() - trackStart;
+        noteTrackRun(session);   // Track turns blue (ui/run-buttons.js)
         hideLoading();
         // The run's product is identities, so show them (#242): switch Color
         // from Tracks to ID. Only when it assigned any — otherwise there is

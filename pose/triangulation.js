@@ -9,7 +9,8 @@
 
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
-         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d } from './pose-data.js';
+         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d,
+         isPoints3dSmoothed } from './pose-data.js';
 // The Jacobi eigensolver and the least-squares plane fit live in
 // `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
 // importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
@@ -29,6 +30,7 @@ import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseF
          dropDerivedReprojections, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from './initialization.js';
+import { noteTriangulateRun, carryTriangulateMark } from './run-state.js';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -2033,6 +2035,7 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
         onProgress: function () { if (onProgress) onProgress(completed, totalFrames); },
     });
 
+    noteTriangulateRun(state.session, frames);   // Triangulate turns blue (ui/run-buttons.js)
     return { triangulated: frames.length, totalGroups: totalGroups, errSum: errSum, errN: errN, frames: frames };
 }
 
@@ -2138,6 +2141,9 @@ export function findEquivalentPriorGroup(priorGroups, group) {
  * reprojections"), leaving the Info Panel with no results to show. Same reason
  * the memory-bounded sweeps drop it; `points3d` is what save/export reads.
  *
+ * Smoothed 3D (`isPoints3dSmoothed`) is never adopted: it is the filter's
+ * output, not the method's solution, and re-triangulating undoes the pass.
+ *
  * `triangulationMethod` IS persisted (per-group
  * `metadata.lucid.triangulationMethod`, written by both SLP writers and restored
  * by the importer), so this check still works on a REOPENED project. It was not,
@@ -2157,6 +2163,9 @@ export function adoptPrior3d(group, prior, method) {
     // and the group is re-solved rather than trusted.
     var want = (method === 'ba') ? 'ba' : 'dlt';
     if (prior.triangulationMethod !== want) return false;
+    // Smoothed 3D (pose/temporal-smoothing.js) is not what the solve produces
+    // either: re-triangulating is how a user undoes the pass.
+    if (isPoints3dSmoothed(prior.points3d)) return false;
     group.points3d = prior.points3d;
     group.triangulationMethod = want;
     if (prior.usedCameras && prior.usedCameras.size) group.usedCameras = prior.usedCameras;
@@ -2170,6 +2179,11 @@ export function adoptPrior3d(group, prior, method) {
 export function reTriangulateGroup(instanceGroup) {
     if (!instanceGroup) return;
     if (!state.session || state.session.cameras.length < 2) return;
+    // Placeholder cameras only (no calibration loaded: all at the origin,
+    // `pose/placeholder-cameras.js`) — a "triangulation" from them is
+    // meaningless 3D that would be saved and exported as predictions. The
+    // explicit Triangulate paths refuse the same way (triangulateCurrentFrame).
+    if (!sessionHasCalibration()) return;
 
     var cameras = state.session.cameras;
     var groupCamNames = instanceGroup.cameraNames;
@@ -2192,6 +2206,7 @@ export function reTriangulateGroup(instanceGroup) {
     // Only update if we got valid results
     var validPts = someValidPoint3d(result.points3d);
     if (validPts) {
+        carryTriangulateMark(oldPoints3d, result.points3d);
         instanceGroup.points3d = result.points3d;
         instanceGroup.reprojections = result.reprojections;
         storeReprojectedInstances(instanceGroup, result, cameras);
@@ -2493,6 +2508,7 @@ export function triangulateCurrentFrame(method) {
 
     // Show reproj/error UI elements now that triangulation has been run
     setReprojErrorVisible(true);
+    noteTriangulateRun(state.session, [frameIdx]);   // Triangulate turns blue (ui/run-buttons.js)
 
     // Update displays
     drawAllOverlays(frameIdx);
@@ -3002,6 +3018,7 @@ export async function triangulateAllFrames(method) {
         showLoadingProgress('Triangulating', 0, triLoader.nFrames,
             { detail: triangulationMethodLabel(method), title: 'Triangulate All' });   // the card's title, kept to hideLoading
         var swept = await sweepTriangulateAllFrames(state.session, cameras, method);
+        noteTriangulateRun(state.session, null);   // Triangulate turns blue (ui/run-buttons.js)
         setReprojErrorVisible(true, { checkBoxes: false });
         var reprojOnly = showReprojectionsOnly();   // #243: proofreading comes next
         drawAllOverlays(state.currentFrame);
@@ -3132,6 +3149,7 @@ export async function triangulateAllFrames(method) {
     // Show reproj/error UI elements, then only the reprojections (#243).
     setReprojErrorVisible(true, { checkBoxes: false });
     var reprojOnly = showReprojectionsOnly();
+    noteTriangulateRun(state.session, triangulatedFrames);   // Triangulate turns blue (ui/run-buttons.js)
 
     // Update display for current frame
     drawAllOverlays(state.currentFrame);

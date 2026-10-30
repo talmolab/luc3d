@@ -190,8 +190,17 @@ export function showTrackSetupModal(opts) {
 }
 
 /**
+ * Advice on node weights, shown under them in both tracking dialogs and in the
+ * Tracking Wizard. Advice only: skeletons differ from project to project, so
+ * nothing picks the nodes or changes a weight for the user.
+ */
+export const NODE_WEIGHT_TIP = 'Tip: weighting nodes that tend to have high tracking error, like tail nodes, to 0 often ' +
+    'helps prevent ID switches. For more accurate tracking, consider setting the tracking weight of ' +
+    'all tail nodes to 0.';
+
+/**
  * The node-weight editor both tracking dialogs show: a title, one sentence,
- * and one row per node in the Tracking Wizard's own markup and classes, so the
+ * the tip (`NODE_WEIGHT_TIP`), and one row per node in the Tracking Wizard's own markup and classes, so the
  * editors of one setting look the same (the grid is narrower here, styles.css).
  * Used by this dialog and by Track Frame Range (`ui/track-range-modal.js`).
  * Commits nothing.
@@ -220,6 +229,10 @@ export function buildNodeWeightFields(nodes) {
         hint.textContent = 'How much each node counts when matching animals: ' +
             '1 = full weight, 0 = ignored.';
         element.appendChild(hint);
+        var tip = document.createElement('p');
+        tip.className = 'track-setup-note track-setup-tip';
+        tip.textContent = NODE_WEIGHT_TIP;
+        element.appendChild(tip);
 
         var list = document.createElement('div');
         list.className = 'settings-node-weight-list track-setup-weights';

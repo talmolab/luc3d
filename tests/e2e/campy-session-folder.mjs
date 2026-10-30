@@ -106,7 +106,7 @@ try {
     page.on('console', m => { if (m.type() === 'error') console.log('  [console.error]', m.text().slice(0, 300)); });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
 
     // Videos: 20 frames at 20 fps and at 10 fps, and a 7-frame decoy.
     const videos = Object.fromEntries(Object.entries(await page.evaluate(async () => {

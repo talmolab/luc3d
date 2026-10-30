@@ -63,7 +63,7 @@ try {
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.SleapIO && window.SleapIO.MediaBunnyVideoBackend,
-        { timeout: 20000 });
+        null, { timeout: 30000 });
     await page.evaluate(() => {
         const inp = document.createElement('input');
         inp.type = 'file'; inp.id = '__vid';

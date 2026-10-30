@@ -27,6 +27,9 @@ import {
 import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
 } from '../pose/pose-data.js';
+import {
+    makePlaceholderCamera, hasRealCalibration, ensurePlaceholderCameras,
+} from '../pose/placeholder-cameras.js';
 
 import { OnDemandVideoDecoder, VideoController, releaseViewsFrames } from './video.js';
 import { videoLoadFailureText } from './video-codec-diagnosis.js';
@@ -100,6 +103,7 @@ import {
 } from '../ui/ui-wiring.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from '../import-export/visibility-metadata.js';
+import { readSmoothingMetadata } from '../import-export/smoothing-metadata.js';
 import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js';
 
 // Module-private debounce timer for the zoom-redraw callback in
@@ -2256,8 +2260,12 @@ export async function handleLoadSessionFolderSingleSlp() {
                 ));
             }
             if (cameras.length > 0) {
-                hasCalibration = true;
-                console.log('[single-slp] Recovered embedded calibration for', cameras.length, 'camera(s) from project .slp');
+                // A project saved WITHOUT a calibration embeds its placeholder
+                // cameras (`pose/placeholder-cameras.js`): they still name the
+                // views, but they are not a calibration, so 3D stays off.
+                hasCalibration = hasRealCalibration({ cameras: cameras });
+                console.log('[single-slp] Recovered embedded ' + (hasCalibration ? 'calibration' : 'placeholder (uncalibrated) cameras') +
+                    ' for', cameras.length, 'camera(s) from project .slp');
             }
         }
 
@@ -2346,6 +2354,7 @@ export async function handleLoadSessionFolderSingleSlp() {
         var startsProject = state.sessions.length === 0;
         if (startsProject) resetPlaneState();
         readVisibilityMetadata(session, sessLucid);
+        readSmoothingMetadata(session, sessLucid);   // Temporal Smoothing's last run
         var planeConflict = startsProject ? null : planeMetadataConflict(sessLucid);
         if (planeConflict) {
             console.warn('[single-slp] not reading the plane state in ' + slpFile.name +
@@ -2511,6 +2520,19 @@ export async function handleLoadSessionFolderSingleSlp() {
                 calibFile: calibFile,
                 calibrationNames: cameras.map(function (c) { return c.name; }),
             });
+        }
+
+        // No calibration (no .toml, nothing embedded): give every view and
+        // every 2D camera key a placeholder camera and assign the videos, so
+        // the session can be saved — the .slp writer drops any view or pose
+        // whose camera is not in `session.cameras`. After the campy step, which
+        // compares `cameras` against campy-live's calibration.
+        if (!hasCalibration) {
+            var _sessVfs = session.videoFileIndices.map(function (i) { return state.videoFiles[i]; });
+            var _added = ensurePlaceholderCameras(session, state.views, _sessVfs);
+            if (_added.length > 0) {
+                console.log('[single-slp] No calibration: placeholder camera(s) for', _added.join(', '));
+            }
         }
 
         // Finalize
@@ -2911,7 +2933,9 @@ export async function handleLoadProjectSlpLazy(slpFile) {
                 ));
             }
         }
-        var hasCalibration = cameras.length > 0;
+        // Placeholder cameras (a project saved with no calibration) name the
+        // views but are not a calibration: 3D stays off.
+        var hasCalibration = hasRealCalibration({ cameras: cameras });
 
         var skeleton = new Skeleton(loader.skeleton.name, loader.skeleton.nodes, loader.skeleton.edges);
         var tracks = loader.trackNames.length ? loader.trackNames.slice() : ['track_0'];
@@ -2943,6 +2967,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         // Session-scoped Visibility-panel state — the lazy-reopen mirror of the
         // eager read in import-export/slp-import.js.
         readVisibilityMetadata(session, lucid);
+        readSmoothingMetadata(session, lucid);   // Temporal Smoothing's last run
         // Define Planes state — the lazy-reopen mirror of the eager read in
         // `import-export/slp-import.js`.
         readPlaneMetadata(session, lucid);
@@ -3321,8 +3346,14 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             }
 
         } else {
-            // No calibration — load videos from all directories but do NOT create cameras.
-            // Videos can be viewed but camera assignments and 3D features require calibration.
+            // No calibration — every camera directory with a video or a .slp
+            // becomes a view named after the directory (or campy's camera), with
+            // a PLACEHOLDER camera (all-zero extrinsics, created in the video
+            // loop below; `pose/placeholder-cameras.js`). 3D stays off until a
+            // real calibration is loaded (`hasCalibration` is false). Creating
+            // no camera here made File ▸ Save write an EMPTY .slp: the writer
+            // writes one video per `session.cameras` entry and drops every pose
+            // whose camera is not in that list.
             for (var dirName in cameraDirs) {
                 if (cameraDirs[dirName].videos.length > 0 || cameraDirs[dirName].slps.length > 0) {
                     // A campy recording names its cameras (session.json); the
@@ -3332,7 +3363,6 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                     matchedCameraDirs.push({
                         dirName: dirName,
                         camName: ncCampy ? ncCampy.name : dirName,
-                        campyName: ncCampy ? ncCampy.name : null,
                         videos: cameraDirs[dirName].videos,
                         slps: cameraDirs[dirName].slps,
                         envSlps: cameraDirs[dirName].envSlps,
@@ -3850,9 +3880,15 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 }
 
                 var sessionIdx = state.sessions.indexOf(state.session);
-                var videoStem = videoFile.name.replace(/\.[^.]+$/, '');
-                var assignCam = camDir.noCalibration ? null : camName;
-                var viewName = camDir.noCalibration ? (camDir.campyName || videoStem) : camName;
+                // The view, the video's camera and the 2D data (keyed by
+                // `camName` in the .slp loop above) all use ONE name, with or
+                // without calibration. The uncalibrated branch used to name the
+                // view by the video's stem and assign no camera, so the folder's
+                // own poses (under `cam1`) never reached a view, two cameras
+                // whose videos share a stem (`cam1/video.mp4`, `cam2/video.mp4`)
+                // collapsed into one view name, and nothing was saved.
+                var assignCam = camName;
+                var viewName = camName;
 
                 if (deferVideos) {
                     // Store file ref only — decoder created on session switch
@@ -3896,11 +3932,12 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                             state.session.videoFileIndices.push(loadedVfIdx);
                         }
 
-                        if (assignCam && !state.session.cameras.some(function (c) { return c.name === camName; })) {
-                            state.session.cameras.push(
-                                new Camera(camName, [[600,0,vw/2],[0,600,vh/2],[0,0,1]],
-                                    [0,0,0,0,0], [0,0,0], [0,0,0], [vw, vh])
-                            );
+                        // Uncalibrated only: never mix a stand-in into a session
+                        // that recovered a real calibration (it would join
+                        // triangulation at the world origin).
+                        if (assignCam && !hasRealCalibration(state.session) &&
+                            !state.session.cameras.some(function (c) { return c.name === camName; })) {
+                            state.session.cameras.push(makePlaceholderCamera(camName, vw, vh));
                         }
 
                         state.views.push({
@@ -3931,6 +3968,25 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                     }
                 }
             }
+        }
+
+        // No calibration: a camera directory whose video is deferred, failed to
+        // decode, or is missing (a .slp only) still holds poses under its name,
+        // so it needs its placeholder camera too — sized by the video when one
+        // was decoded above, else the default. Calibrated loads never get here
+        // (their cameras all come from the calibration).
+        if (state.session && cameras.length === 0 && !hasRealCalibration(state.session)) {
+            for (var pci = 0; pci < matchedCameraDirs.length; pci++) {
+                var pcDir = matchedCameraDirs[pci];
+                if (!pcDir.noCalibration) continue;
+                if (state.session.cameras.some(function (c) { return c.name === pcDir.camName; })) continue;
+                state.session.cameras.push(makePlaceholderCamera(pcDir.camName));
+            }
+            // Folder order, whichever loop made each camera: it is the order
+            // the cameras (and so the videos) are written and reopened in.
+            var pcOrder = matchedCameraDirs.map(function (d) { return d.camName; });
+            var pcRank = function (c) { var r = pcOrder.indexOf(c.name); return r < 0 ? pcOrder.length : r; };
+            state.session.cameras.sort(function (a, b) { return pcRank(a) - pcRank(b); });
         }
 
         // Paint the finished video step, naming the tail: what follows (instance

@@ -54,7 +54,7 @@ try {
     });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
 
     // =================================================================
     // 1 + 2 + 3 — UI, canvas filter, dirty flag, session switch
