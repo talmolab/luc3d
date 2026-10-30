@@ -45,6 +45,7 @@ import {
 import { update3DViewport } from '../pose/initialization.js';
 import { createMp4Writer, videoEncodingAvailable } from './video-encode.js';
 import { fileSystemAccessHint } from './browser-hints.js';
+import { noteTriangulateRun } from '../pose/run-state.js';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
 // private copies of all four and had silently drifted apart (a 2x bitrate floor
@@ -536,6 +537,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
         },
     });
     await gSolver.finish();
+    noteTriangulateRun(session, null);   // Triangulate turns blue (ui/run-buttons.js)
     } catch (e) {
         gSolver.cancel();
         throw e;
@@ -800,6 +802,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
     });
 
     // Post-triangulation updates — hide loading first so user sees results
+    noteTriangulateRun(session, null);   // Triangulate turns blue (ui/run-buttons.js)
     hideLoading();
     setReprojErrorVisible(true, { checkBoxes: false });
     var reprojOnly = showReprojectionsOnly();   // #243: proofreading comes next

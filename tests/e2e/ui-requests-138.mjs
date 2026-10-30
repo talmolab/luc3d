@@ -9,7 +9,7 @@
  *  2. The Speed popover offers 0.25x and 0.5x presets, they apply, and the
  *     (now wider) popover stays inside the window.
  *  3. The Triangulate / Triangulate All buttons say which method a plain click
- *     runs ("Triangulate: DLT"), and follow Settings ▸ Default Triangulation
+ *     runs (in its tooltip; the label stays "Triangulate"), and follow Settings ▸ Default Triangulation
  *     when it is changed through the real Settings dialog — immediately, and
  *     after a reload (the setting persists in localStorage).
  *
@@ -43,7 +43,7 @@ try {
     });
     const boot = async () => {
         await page.goto(`http://localhost:${PORT}/index.html`);
-        await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+        await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     };
     await boot();
     // Start from the default method regardless of what this browser profile held.
@@ -69,6 +69,16 @@ try {
 
     await page.click('#menuSettings');
     check(await page.isVisible('.settings-btn-cancel'), 'Help ▸ Settings opens the Settings dialog');
+    const activePanel = () => page.evaluate(() => {
+        const a = document.querySelector('.settings-nav-item.active');
+        return a && a.dataset.panel;
+    });
+    check(await activePanel() === 'wizard', 'the first time, it opens on the first panel, Tracking Wizard');
+    await page.click('.settings-nav-item[data-panel="smoothing"]');
+    await page.click('.settings-btn-cancel');
+    await page.click('.menu-item[data-menu="help"]');
+    await page.click('#menuSettings');
+    check(await activePanel() === 'smoothing', 'then it reopens on the panel last shown');
     await page.click('.settings-btn-cancel');
     await page.click('#menuBarSettings');
     check(await page.isVisible('.settings-btn-cancel'), 'the Settings button opens the Settings dialog');
@@ -107,38 +117,49 @@ try {
     }
     await page.mouse.click(10, 400);   // close the popover
 
-    // ---- 3. triangulate labels ------------------------------------------------------------
-    const labels = () => page.evaluate(() => ['tbTriangulate', 'tbTriangulateAll'].map(id => {
-        const b = document.getElementById(id);
-        return { text: b.textContent.replace('▾', '').trim(), title: b.title };
-    }));
+    // ---- 3. triangulate label + the menu's Method radios ---------------------------------
+    // One Triangulate button now; its menu's Method radios are the same setting.
+    const labels = () => page.evaluate(() => {
+        const b = document.getElementById('tbTriangulateAll');
+        const on = document.querySelector('#triangulateDropdown input[name="tbTriMethod"]:checked');
+        return { text: b.textContent.replace('▾', '').trim(), title: b.title, radio: on && on.value };
+    });
     let l = await labels();
-    check(l[0].text === 'Triangulate: DLT' && l[1].text === 'Triangulate All: DLT', `default DLT: "${l[0].text}", "${l[1].text}"`);
-    check(/DLT \(fast\), the default set in Settings/.test(l[0].title), 'tooltip names the default and where it is set');
+    check(l.text === 'Triangulate' && l.radio === 'dlt', `default DLT: "${l.text}", radio ${l.radio}`);
+    check(/DLT \(fast\)/.test(l.title), 'tooltip names the method');
 
     // Change it the way a user does: Settings dialog -> "Refined" row -> Apply.
     await page.click('#menuBarSettings');
-    await page.click('.settings-radio-row[data-method="ba"]');
+    await page.click('.settings-nav-item[data-panel="triangulation"]');
+    // The method is picked by clicking its diagram card (no separate rows).
+    await page.click('.tri-method-choice[data-method="ba"]');
+    const picked = await page.evaluate(() => Array.from(document.querySelectorAll('.tri-method-choice'))
+        .map(c => c.dataset.method + ':' + c.getAttribute('aria-checked') + ':' + c.classList.contains('checked')));
+    check(picked.join(',') === 'dlt:false:false,ba:true:true', `clicking the Refined card selects it (${picked})`);
+    await page.focus('.tri-method-choice[data-method="dlt"]');
+    await page.keyboard.press('Space');
+    const byKey = await page.evaluate(() => document.querySelector('.tri-method-choice[data-method="dlt"]').getAttribute('aria-checked'));
+    check(byKey === 'true', 'Space on the focused DLT card selects it');
+    await page.click('.tri-method-choice[data-method="ba"]');
     l = await labels();
-    check(l[0].text === 'Triangulate: DLT', 'picking a row without Apply changes nothing yet');
+    check(/DLT \(fast\)/.test(l.title) && l.radio === 'dlt', 'picking a card without Apply changes nothing yet');
     await page.click('.settings-btn-apply');
     l = await labels();
-    check(l[0].text === 'Triangulate: Ref' && l[1].text === 'Triangulate All: Ref', `after Apply: "${l[0].text}", "${l[1].text}"`);
-    check(/Ref \(slow & accurate\)/.test(l[1].title), 'tooltip follows too');
-    const dropdownName = await page.evaluate(() =>
-        document.querySelector('#triangulateDropdown .tri-dropdown-item[data-method="ba"]').firstChild.textContent.trim());
-    check(dropdownName === 'Ref', 'the button uses the same name as its dropdown item ("Ref")');
+    check(l.text === 'Triangulate' && l.radio === 'ba', `after Apply: "${l.text}", radio ${l.radio}`);
+    check(/Ref \(slower; helps when one view is clearly wrong\)/.test(l.title), 'tooltip follows too');
+    const radioName = await page.evaluate(() =>
+        document.querySelector('#triangulateDropdown input[value="ba"]').parentElement.textContent.trim());
+    check(radioName === 'Ref', 'the tooltip uses the same name as its Method radio ("Ref")');
 
     await boot();
     l = await labels();
-    check(l[0].text === 'Triangulate: Ref' && l[1].text === 'Triangulate All: Ref', 'after a reload the buttons still show Ref');
+    check(/Ref \(slower; helps when one view is clearly wrong\)/.test(l.title) && l.radio === 'ba', 'after a reload the button still runs Ref');
 
-    // Back to DLT through the dialog, and leave the profile clean.
-    await page.click('#menuBarSettings');
-    await page.click('.settings-radio-row[data-method="dlt"]');
-    await page.click('.settings-btn-apply');
+    // Back to DLT through the menu's own radio this time, and leave the profile clean.
+    await page.hover('#tbTriangulateAll');
+    await page.click('#triangulateDropdown input[value="dlt"]');
     l = await labels();
-    check(l[0].text === 'Triangulate: DLT', 'switching back to DLT updates the buttons');
+    check(/DLT \(fast\)/.test(l.title) && l.radio === 'dlt', 'the menu radio switches back to DLT and updates the button');
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

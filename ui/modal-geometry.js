@@ -19,6 +19,15 @@
 // for the Visibility panel's global appearance preferences. Where someone likes
 // their Settings window on THIS screen says nothing about the project.
 //
+// ## Only a size the user chose is remembered
+//
+// Position is always remembered, but size only once the user has actually
+// resized the card (`sized: true` in the record). Otherwise the card opens at
+// the stylesheet's size, so a later change of the default reaches everyone who
+// never resized it. Records written before the flag existed saved the opening
+// size on every close; a caller can name its old default (`legacyDefaultSize`)
+// so such a record counts as unsized.
+//
 // ## Clamping is the load-bearing part
 //
 // Restoring a remembered rect blindly is how a modal ends up off-screen: the
@@ -118,7 +127,22 @@ export function readGeometry(id, storage) {
     const all = readAll(storage);
     const g = all[id];
     if (!g || !isNum(g.x) || !isNum(g.y) || !isNum(g.w) || !isNum(g.h)) return null;
-    return { x: g.x, y: g.y, w: g.w, h: g.h };
+    const out = { x: g.x, y: g.y, w: g.w, h: g.h };
+    // `sized` is absent on records written before it existed.
+    if (typeof g.sized === 'boolean') out.sized = g.sized;
+    return out;
+}
+
+/**
+ * Whether a remembered rect's SIZE was chosen by the user. A record with no
+ * `sized` flag predates it: it counts as chosen unless its size is exactly the
+ * caller's old default (`legacyDefaultSize`), which every close used to save.
+ */
+export function rememberedSizeIsChosen(geom, legacyDefaultSize) {
+    if (!geom) return false;
+    if (typeof geom.sized === 'boolean') return geom.sized;
+    const old = legacyDefaultSize;
+    return !(old && Math.round(geom.w) === old.w && Math.round(geom.h) === old.h);
 }
 
 /** Remember `geom` for `id`. Rounds to whole pixels — sub-pixel noise is churn. */
@@ -130,6 +154,7 @@ export function writeGeometry(id, geom, storage) {
     all[id] = {
         x: Math.round(geom.x), y: Math.round(geom.y),
         w: Math.round(geom.w), h: Math.round(geom.h),
+        sized: geom.sized === true,
     };
     try {
         s.setItem(STORAGE_KEY, JSON.stringify(all));
@@ -165,7 +190,8 @@ export function clearGeometry(id, storage) {
  *
  * @param {HTMLElement} card
  * @param {{id:string, handle?:HTMLElement, minW?:number, minH?:number,
- *          margin?:number, storage?:Storage, noDragSelector?:string}} opts
+ *          margin?:number, storage?:Storage, noDragSelector?:string,
+ *          legacyDefaultSize?:{w:number,h:number}}} opts
  * @returns {function(): void} dispose — removes every listener it added
  */
 export function installModalGeometry(card, opts) {
@@ -184,8 +210,16 @@ export function installModalGeometry(card, opts) {
         return { width: window.innerWidth, height: window.innerHeight };
     };
 
+    // The size this module last set; a card size that differs from it was
+    // changed by the user's resize grip.
+    let appliedW = 0;
+    let appliedH = 0;
+    let sized = false;
+
     function apply(geom) {
         if (!geom) return;
+        appliedW = geom.w;
+        appliedH = geom.h;
         card.style.position = 'absolute';
         card.style.margin = '0';
         // The rect below is already viewport-clamped; a stylesheet `max-width`
@@ -201,16 +235,25 @@ export function installModalGeometry(card, opts) {
 
     function current() {
         const r = card.getBoundingClientRect();
-        return { x: r.left, y: r.top, w: r.width, h: r.height };
+        return { x: r.left, y: r.top, w: r.width, h: r.height, sized: sized };
     }
 
     // --- Restore, or centre at the size the stylesheet asked for ------------
-    const remembered = clampGeometry(readGeometry(id, o.storage), viewport(), min);
-    if (remembered) {
-        apply(remembered);
+    // A remembered position comes back as is; a remembered size only if the
+    // user chose it. Otherwise the stylesheet's size, keeping the old centre.
+    const base = card.getBoundingClientRect();
+    const stored = readGeometry(id, o.storage);
+    if (stored && rememberedSizeIsChosen(stored, o.legacyDefaultSize)) {
+        sized = true;
+        apply(clampGeometry(stored, viewport(), min));
+    } else if (stored) {
+        apply(clampGeometry({
+            x: stored.x + (stored.w - base.width) / 2,
+            y: stored.y + (stored.h - base.height) / 2,
+            w: base.width, h: base.height,
+        }, viewport(), min));
     } else {
-        const r = card.getBoundingClientRect();
-        apply(centerGeometry(r.width, r.height, viewport(), min));
+        apply(centerGeometry(base.width, base.height, viewport(), min));
     }
 
     let persistTimer = 0;
@@ -259,7 +302,14 @@ export function installModalGeometry(card, opts) {
     let ro = null;
     if (typeof ResizeObserver !== 'undefined') {
         ro = new ResizeObserver(function () {
-            if (!drag) persistSoon();
+            if (drag) return;
+            const r = card.getBoundingClientRect();
+            if (Math.abs(r.width - appliedW) > 1 || Math.abs(r.height - appliedH) > 1) {
+                sized = true;
+                appliedW = r.width;
+                appliedH = r.height;
+            }
+            persistSoon();
         });
         ro.observe(card);
     }

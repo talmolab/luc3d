@@ -42,7 +42,7 @@ try {
     await answerTrackSetup(page, 2);
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     await page.evaluate(async () => {
         const pd = await import('/pose/pose-data.js');
@@ -118,7 +118,7 @@ try {
     await page.click('#colorByTracks');
     t = await toggle();
     check(t.tracks && !t.id && !t.state, 'the Tracks button still switches back');
-    await page.click('#tbTrackFrame');
+    await page.hover('#tbTrackAll'); await page.click('#tbTrackFrame');   // This frame, in the Track menu
     await page.waitForTimeout(300);
     t = await toggle();
     check(t.tracks && !t.state, 'Track Frame (one frame) leaves Color on Tracks');
