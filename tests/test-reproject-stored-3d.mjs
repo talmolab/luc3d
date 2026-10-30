@@ -20,8 +20,9 @@
  *     and the e2e test uses it to tell this path from a re-solve);
  *   * NEGATIVE CONTROL: with a reprojection-error threshold the solve drops an
  *     outlying observation, and its UNDISTORTED errors leave it out, which the
- *     stored 3D cannot reproduce — the reason the fill re-solves when a
- *     threshold is set. The native-pixel errors still agree.
+ *     stored 3D cannot reproduce. The display accepts that rather than
+ *     re-solve to a different 3D than the stored one
+ *     (`fillLazyReprojections`, ui/rendering.js). The native-pixel errors still agree.
  *   * `triangulationSummary` keeps the 3D and the means, nothing else.
  *
  * Run: node tests/test-reproject-stored-3d.mjs
@@ -137,7 +138,7 @@ group('negative control: a reprojection-error threshold');
     const got = tri.reprojectStoredPoints3d(g, cams);
     ok(ref.errorsUndistorted.c2[3] === null, 'precondition: the solve dropped the outlying observation (c2, node 3)');
     ok(got.errorsUndistorted.c2[3] !== null && got.errorsUndistorted.c2[3] > 8,
-        `the stored 3D cannot know it was dropped: undistorted error ${got.errorsUndistorted.c2[3]} — so the fill re-solves when a threshold is set`);
+        `the stored 3D cannot know it was dropped: undistorted error ${got.errorsUndistorted.c2[3]} — the one figure the display cannot reproduce from the stored 3D`);
     ok(!Object.is(got.meanErrorUndistorted, ref.meanErrorUndistorted), 'and the undistorted mean differs');
     let errSame = true;
     for (const c of members) if (!same(got.errors[c.name], ref.errors[c.name])) errSame = false;

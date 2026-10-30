@@ -9,6 +9,12 @@
  *  2. Flipping a camera off greys its row live.
  *  3. Apply stores the switches as 1 / 0 (what the tracker and checks read).
  *  4. Cancel discards a flip.
+ *  5. A value the user CHOSE is stored even when it equals the default (typed,
+ *     or a switch flipped and flipped back), and stays stored across an Apply
+ *     that does not touch it; an untouched one is not stored, so it follows the
+ *     default. Before, a user who chose 0 when 0 was the default had nothing
+ *     stored, and was moved to 50 when the reprojection error threshold's
+ *     default became 50.
  *
  * Run: node tests/e2e/settings-wizard-toggles.mjs
  */
@@ -83,6 +89,43 @@ try {
     await page.click('.settings-btn-cancel');
     const kept = await page.evaluate(async () => (await import('/ui/settings.js')).getTrackingThreshold('imageCheckWebNN'));
     check(kept === 1, 'Cancel discards a flip');
+
+    // A chosen value is stored even at its default; an untouched one is not.
+    const stored = () => page.evaluate(() =>
+        (JSON.parse(localStorage.getItem('lucid.settings.v1') || '{}').trackingThresholds) || {});
+    const typeNumber = (label, v) => page.evaluate(([l, val]) => {
+        const el = document.querySelector(`.settings-num-input[aria-label="${l}"]`);
+        el.value = String(val);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('blur'));
+    }, [label, v]);
+    const reprojDefault = await page.evaluate(async () =>
+        (await import('/ui/settings.js')).getTrackingThresholdDefs().find(d => d.id === 'reprojErrorThreshold').default);
+    // Apply is disabled until some value differs, so each step makes one real
+    // change (the time penalty) beside what it is checking.
+    let penalty = 1;
+    const changeSomething = () => typeNumber('Time penalty', penalty++);
+    await open();
+    await typeNumber('Reprojection error threshold (px)', reprojDefault);
+    await changeSomething();
+    await page.click('.settings-btn-apply');
+    let st = await stored();
+    check(st.reprojErrorThreshold === reprojDefault,
+        `a value TYPED at its default (${reprojDefault}) is stored, so a later default change cannot move it (stored ${JSON.stringify(st)})`);
+    check(!('distanceThreshold' in st), 'an untouched value at its default is not stored, so it follows the default');
+    await open();
+    await changeSomething();
+    await page.click('.settings-btn-apply');
+    st = await stored();
+    check(st.reprojErrorThreshold === reprojDefault, 'an earlier choice stays stored across an Apply that does not touch it');
+    const gateDefault = await page.evaluate(async () =>
+        (await import('/ui/settings.js')).getTrackingThresholdDefs().find(d => d.id === 'matchGate').default);
+    await open();
+    await page.evaluate((s) => { const el = document.querySelector(s); el.click(); el.click(); }, sw('Reject negative matches (gate)'));
+    await changeSomething();
+    await page.click('.settings-btn-apply');
+    st = await stored();
+    check(st.matchGate === gateDefault, `a switch flipped and flipped back is a choice too (stored ${st.matchGate}, default ${gateDefault})`);
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } catch (e) {
     console.error(e); fails++;

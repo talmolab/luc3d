@@ -122,9 +122,12 @@ function makeToggle(checked, ariaLabel, onChange) {
  * @param {{id:string,label:string,desc:string,kind?:string,min:number,max:number,step:number}} def
  * @param {Object.<string, number>} bag working map mutated on edit
  * @param {?function(): void} [onEdit] called after each edit of a number field
+ * @param {Set<string>} [edited] collects the ids of fields and switches the user
+ *   actually changed (not merely blurred), so Apply can store a chosen value
+ *   even when it equals the default (`setTrackingThresholds`)
  * @returns {HTMLElement}
  */
-function buildParamRow(def, bag, onEdit) {
+function buildParamRow(def, bag, onEdit, edited) {
     const row = document.createElement('div');
     row.className = 'settings-threshold-row';
 
@@ -141,7 +144,7 @@ function buildParamRow(def, bag, onEdit) {
 
     if (def.kind === 'toggle') {             // on/off settings: a switch, stored as 1 / 0
         row.appendChild(labelWrap);
-        row.appendChild(makeToggle(bag[def.id] > 0, def.label, function (on) { bag[def.id] = on ? 1 : 0; }));
+        row.appendChild(makeToggle(bag[def.id] > 0, def.label, function (on) { bag[def.id] = on ? 1 : 0; if (edited) edited.add(def.id); }));
         return row;
     }
 
@@ -157,6 +160,7 @@ function buildParamRow(def, bag, onEdit) {
     input.addEventListener('input', function () {
         const v = parseFloat(input.value);
         if (isFinite(v)) bag[def.id] = v;
+        if (edited) edited.add(def.id);
         if (onEdit) onEdit();
     });
     input.addEventListener('blur', function () {
@@ -281,8 +285,11 @@ export function showSettingsModal(initialPanel) {
     cameraNames.forEach(function (name) { working.cameraWeights[name] = getCameraWeight(name); });
 
     // Seed the working tracking-threshold map from the catalog's effective values.
+    // `editedThresholds` records which ones the user changed here: Apply stores
+    // those even when they equal the default (see `setTrackingThresholds`).
     const thresholdDefs = getTrackingThresholdDefs();
     thresholdDefs.forEach(function (def) { working.thresholds[def.id] = def.value; });
+    const editedThresholds = new Set();
 
     // Seed the working temporal-smoothing map the same way (luc3d #134).
     const smoothingDefs = getSmoothingParamDefs();
@@ -728,7 +735,7 @@ export function showSettingsModal(initialPanel) {
             : def.id === 'reprojErrorThreshold'
                 ? function () { triFigure.update({ threshold: working.thresholds.reprojErrorThreshold }); }
                 : null;
-        thSection.body.appendChild(buildParamRow(def, working.thresholds, onEdit));
+        thSection.body.appendChild(buildParamRow(def, working.thresholds, onEdit, editedThresholds));
         // The readout goes right under the last of the three filter fields.
         if (def.id === 'filterMinMeanNodeScore') thSection.body.appendChild(filterPreview.root);
     });
@@ -927,7 +934,7 @@ export function showSettingsModal(initialPanel) {
         applyBindings(working.keyMap);
         setNodeWeights(working.nodeWeights);
         setCameraWeights(working.cameraWeights);
-        setTrackingThresholds(working.thresholds);
+        setTrackingThresholds(working.thresholds, editedThresholds);
         setSmoothingParams(working.smoothing);
         storedSnapshot = JSON.stringify(working);
         appliedOnce = true;

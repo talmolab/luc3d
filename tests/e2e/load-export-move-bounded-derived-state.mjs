@@ -28,7 +28,10 @@
  *      numbers, value for value, by reprojecting the FILE's 3D; with a
  *      reprojection-error threshold set the file's 3D is still reprojected,
  *      never re-solved — and the negative control (the same 3D in an array not
- *      read from the file) IS re-solved, so it is the file mark that holds it.
+ *      read from the file, with no recorded method, as Track All leaves it) IS
+ *      re-solved, so it is the file mark that holds it. (A triangulated group
+ *      keeps its stored 3D under a threshold too, so the control drops the
+ *      method: otherwise it would be held by that, not by the file mark.)
  *   E. Overlay export of every frame, through the real modal: at most
  *      DERIVED_FRAMES_KEEP frames keep derived state (the old build kept all of
  *      them); the exported frames' reprojections are the stored 3D's, not a
@@ -237,7 +240,14 @@ try {
       LR.dropDerivedReprojections(s, 10, AS.state.triangulationResults);
       const badThr = showAndVerify(10);
       res.thresholdBad = badThr;
-      // Negative control: the same 3D, in an array not read from the file.
+      // The file mark alone holds it: the file's 3D with no recorded method.
+      res.controlMethod = g10.triangulationMethod;
+      g10.triangulationMethod = undefined;
+      LR.dropDerivedReprojections(s, 10, AS.state.triangulationResults);
+      res.fileNoMethodBad = showAndVerify(10);
+      // Negative control: the same 3D, in an array not read from the file, and
+      // with no recorded method — a triangulated group keeps its stored 3D
+      // under a threshold too, so with its method it would be held by that.
       g10.points3d = Float64Array.from(g10.points3d);
       LR.dropDerivedReprojections(s, 10, AS.state.triangulationResults);
       AS.state.currentFrame = 10;
@@ -245,6 +255,7 @@ try {
       const r = (AS.state.triangulationResults.get(10) || []).find(x => x.group === g10);
       res.controlResolved = !!r && r.points3d !== g10.points3d;
     } finally {
+      if ('controlMethod' in res) g10.triangulationMethod = res.controlMethod;
       SET.setTrackingThresholds(prevThr);
     }
     return res;
@@ -262,8 +273,10 @@ try {
   check(L.threshold === 5 && L.thresholdBad.length === 0,
     `L: with a ${L.threshold} px reprojection-error threshold the file's 3D is still reprojected, not re-solved ` +
     `(${JSON.stringify(L.thresholdBad)})`);
+  check(L.fileNoMethodBad.length === 0,
+    `L: the file's 3D with no recorded method is still reprojected (${JSON.stringify(L.fileNoMethodBad)})`);
   check(L.controlResolved === true,
-    'L negative control: the same 3D in an array not read from the file IS re-solved under the threshold');
+    'L negative control: the same 3D in an array not read from the file, with no recorded method, IS re-solved');
 
   // ===========================================================================
   // E. Export Video Overlays, every frame

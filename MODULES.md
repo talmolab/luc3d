@@ -2715,9 +2715,13 @@ of the geometric reprojection error, cameras fixed — aniposelib's
 `CameraGroup.optim_points`, what sleap-anipose runs for pose triangulation.
 Costs ~5x DLT per keypoint.
 
-**`'ba'` is guaranteed never worse than DLT on the reported error.** Three
-properties make that true, documented at length above `BA_ROBUST_SCALE_PX` in
-`pose/triangulation-core.js`:
+**With the reprojection error threshold off, `'ba'` is guaranteed never worse
+than DLT on the reported error.** With it on (the Tracking Wizard default),
+almost: each method excludes views on its OWN solution and `meanError` still
+counts them, which BA's guard never sees — 1 group in 150 at 1.005x in
+`tests/test-triangulation-ba.js`'s gross-outlier sweep, which pins the threshold
+off for that reason. Three properties make the threshold-off guarantee true,
+documented at length above `BA_ROBUST_SCALE_PX` in `pose/triangulation-core.js`:
 1. *Residual space.* Residuals are in the camera's **native (distorted)** pixel
    space — where the detections live and where `meanError` is reported.
    `distortJacobian` supplies the analytic Brown–Conrady derivative and
@@ -2927,6 +2931,8 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   `options.reprojErrorThreshold`; returns
   `.method`, `.meanError`/`.errors` distorted-space and
   `.meanErrorUndistorted`/`.errorsUndistorted` ideal-pinhole-space),
+  `reprojectStoredPoints3d(group, cameras, options?)` (the same result for the
+  3D the group already holds, with no solve — see `pose/triangulation-core.js`),
   `storeReprojectedInstances(group, triangulationResult, allCameras)`.
   **`storeReprojectedInstances` eagerly builds a full `Instance` (+ its own
   `occluded` array) per camera per group — a real memory cost project-wide**, so
@@ -2959,8 +2965,8 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   **Two robustness features:** (1) views excluded in the Tracking Wizard's Camera
   Views panel (`isCameraTracked`, or `options.includedCameras` override) never
   contribute to the 3D solve, but are still reprojected INTO. (2)
-  Reprojection-error threshold (Tracking Wizard `reprojErrorThreshold` px, opt-in /
-  default 0 = off, or `options.reprojErrorThreshold`): excludes a
+  Reprojection-error threshold (Tracking Wizard `reprojErrorThreshold` px,
+  default 50, 0 = off, or `options.reprojErrorThreshold`): excludes a
   **node-in-a-view** (one 2D keypoint) whose reprojection error exceeds it — never
   a whole view (the wizard's job) — the single worst per node per pass,
   re-triangulating between passes; a node left with <2 views under the threshold
@@ -3280,8 +3286,9 @@ cover every camera. The two functions share `_collectObservations` /
 numbers are identical (Object.is) — except, with a reprojection-error
 threshold, the UNDISTORTED errors: the solve leaves out the observations it
 dropped, which the stored 3D does not record. ~20x cheaper than re-solving
-Refined. Used by `ui/rendering.js`'s reprojection fill.
-**`triangulationSummary(result)`** — `{points3d, meanError,
+Refined. Used by `ui/rendering.js`'s reprojection fill — with a threshold too:
+the display accepts the undistorted-error difference rather than re-solve to a
+different 3D than the stored one. **`triangulationSummary(result)`** — `{points3d, meanError,
 meanErrorUndistorted, method}`, what a pool reply carries under `summaryOnly`.
 Covered by `tests/test-reproject-stored-3d.mjs` (incl. the threshold negative
 control).
@@ -6367,9 +6374,14 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 
   **It reprojects the stored 3D instead of re-solving when that 3D is current**
   — `reprojectStoredPoints3d` (`pose/triangulation-core.js`) when the group has a
-  `triangulationMethod`, is not `dirty`, and no reprojection-error threshold is
-  set (with one, the solve's error leaves out observations the stored 3D does
-  not record). Same numbers, ~20x cheaper than re-solving Refined — and no bulk
+  `triangulationMethod` and is not `dirty`, WHATEVER the reprojection error
+  threshold. #351 first re-solved under a threshold, since the solve's
+  undistorted error leaves out observations the stored 3D does not record; but
+  a re-solve draws a different 3D than the 3D view and the saved file once the
+  solve's inputs have changed (review of PR #289), so the undistorted error is
+  now the one figure that can differ. Covered by
+  `tests/e2e/reopen-reprojects-stored-3d.mjs` and §4 of
+  `tests/e2e/triangulate-all-bounded-derived-state.mjs`. Same numbers, ~20x cheaper than re-solving Refined — and no bulk
   triangulation path keeps derived state, so this runs for every frame shown
   after one. **3D read from a file** (`isPoints3dFromFile`: a loaded `.slp`'s,
   an imported points3d `.h5`'s) is reprojected whenever the group is clean,
@@ -6469,8 +6481,7 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 - `./overlays.js` — `drawFrameOverlays`.
 - `./view-legend.js` — `syncViewLegends`.
 - `./settings.js` — `isCameraTracked` (passed to `drawFrameOverlays` as
-  `trackingExcluded` so views excluded in the Tracking Wizard render grey),
-  `getTrackingThreshold` (the reprojection fill's threshold check).
+  `trackingExcluded` so views excluded in the Tracking Wizard render grey).
 - `./identity-assignment.js` — `editGroupState`, `finishEditGroup`.
 - `./info-panel.js` — `updateFrameInfo`.
 - `./frame-counters.js` — `computeFrameCounterBaseline`,
@@ -6529,7 +6540,8 @@ stays reachable at its original path) and `ui/plane-nodes-panel.js`;
 (`#tbReprojThreshold`), in the Triangulate menu (hover **Triangulate ▾**) below
 Method: shows and edits the Tracking Wizard's `reprojErrorThreshold`, which every
 Triangulate run reads when it starts. Blank is off (`placeholder="off"`); the
-setting's 0 shows as blank and typing 0 means the same. Browser-wide, not per
+setting's 0 shows as blank and typing 0 means the same; at the 50 px default it
+shows 50. Browser-wide, not per
 session, so it only follows the setting (`onTrackingThresholdsChange`, e.g.
 Settings ▸ Apply).
 
@@ -9283,7 +9295,7 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   stored override (the two tracking dialogs write the image-check settings
   through it).
 - `getTrackingThresholdDefs()` / `getTrackingThreshold(id)` /
-  `getTrackingThresholds()` / `setTrackingThresholds(map)` — read/write the
+  `getTrackingThresholds()` / `setTrackingThresholds(map, edited)` — read/write the
   tracker's user-editable thresholds. `getTrackingThresholdDefs` returns the
   wizard's render catalog `[{ id, label, default, value, min, max, step, desc, kind }]`
   (`kind`: `'toggle'` for on/off settings, drawn as a switch; else `'number'`),
@@ -9293,7 +9305,8 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   `stale`, `matchGate` (0/1 toggle for the CrossViewTracker match gate),
   `maxPenalty` / `matchReproj` — the misplaced-node options, 0 (off) by
   default (the tracker's third, `birthMedian`, is not in the wizard),
-  `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
+  `reprojErrorThreshold` (px, default `REPROJ_ERROR_THRESHOLD_DEFAULT` = 50, which
+  its `desc` quotes; 0 = off), `autoSwitchCheck` — 0/1, run the body-size ID-switch
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
   0/1, the image check likewise, default 0; `imageChangeThreshold` -1;
   `imageCheckHz` 2; `imageCheckBackgroundHz` 0.1 (crops per second away from contacts:
@@ -9303,20 +9316,26 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   `reprojWeight`, `minMatchScore`, `prevIdentityBonus`, `reprojGate2/3/4`,
   `track3dWeight`) drive the bench-only luc3d matcher and are hidden from the UI
   but still resolve via `getTrackingThreshold`. `getTrackingThresholds` returns
-  the effective `{ id: value }` map the tracker snapshots per run; values clamp to
-  range and entries equal to the default are dropped.
+  the effective `{ id: value }` map the tracker snapshots per run. On
+  `setTrackingThresholds(map, edited)` values clamp to range, and an entry equal
+  to its default is dropped — it then follows the default if that ever changes —
+  UNLESS the user chose it: its id is in `edited` (the ids changed in the
+  dialog) or it was already stored. Dropping every default-valued entry is what
+  moved users who had deliberately set the reprojection error threshold to 0
+  onto 50 when 50 became the default: with 0 the default, nothing had been
+  stored. Covered by `tests/e2e/settings-wizard-toggles.mjs`.
 - `SMOOTHING_PARAMS` / `getSmoothingParamDefs()` / `getSmoothingParam(id)` /
   `getSmoothingParams()` / `setSmoothingParams(map)` — the Temporal Smoothing
   hyperparameters (luc3d #134): `smoothMedianWindow`, `smoothGaussianWindow`
-  (both default **0 = off**, matching `reprojErrorThreshold`, so shipping the
-  feature changes no existing project's 3D), `smoothMaxGap` (5),
+  (both default **0 = off**, so shipping the feature changes no existing
+  project's 3D), `smoothMaxGap` (5),
   `smoothMinSegment` (5). A SEPARATE catalog from `TRACKING_THRESHOLDS`, not more
   entries in it: these are post-triangulation filter parameters rather than
   cross-view tracker knobs, and the Tracking Wizard's Thresholds section renders
   every threshold the catalog exposes. Note the `smooth*` prefix — `filter*` is
   already taken here for DETECTION filtering (`filterMinVisibleNodes`,
-  `filterMinInstanceScore`). Same clamp + drop-if-default persistence as the
-  thresholds, under `_settings.smoothingParams`. Read by `ui/ui-wiring.js` and
+  `filterMinInstanceScore`). Clamp + drop-if-default persistence under
+  `_settings.smoothingParams` (without the thresholds' `edited` rule). Read by `ui/ui-wiring.js` and
   passed to `smoothSession` (`pose/temporal-smoothing.js`).
 - `getActions()` — catalog snapshot `[{ id, label, category, binding,
   defaultBinding, editable, dispatched }]` with effective bindings, for the modal.
@@ -9474,12 +9493,17 @@ it is not a tracking parameter — it runs after triangulation, on 3D the tracke
 has finished with. A note warns that raising the reprojection-error threshold
 creates more gaps, hence more gap edges where the filter is least accurate. The
 pass itself runs from the Triangulate / Triangulate All dropdowns.) Threshold
-and smoothing rows share one `buildParamRow(def, bag, onEdit)` helper (same
+and smoothing rows share one `buildParamRow(def, bag, onEdit, edited)` helper (same
 `{ id, label, desc, min, max, step }` catalog shape, clamp on blur, `kind:
-'toggle'` → switch; `onEdit` lets the filter fields re-count the preview).
+'toggle'` → switch; `onEdit` lets the filter fields re-count the preview;
+`edited`, passed only by the thresholds, collects `editedThresholds` — the ids
+of every field or switch the user actually changed, not merely blurred; Apply
+stays disabled until some value differs, so one retyped alone commits nothing).
 Edits mutate a local `working` state only; nothing commits until **Apply**
 (`setDefaultTriangulationMethod` + `applyBindings` + `setNodeWeights` +
-`setCameraWeights` + `setTrackingThresholds` + `setSmoothingParams`), which
+`setCameraWeights` + `setTrackingThresholds(working.thresholds, editedThresholds)`,
+which stores a changed value even when it equals the default, +
+`setSmoothingParams`), which
 repaints overlays + timeline and re-fits the ID-switch box
 (`refreshIdSwitchHighlight`, which encloses only nonzero-weight nodes). Cancel /
 × / backdrop / Escape discard. Under the three detection-filter fields sits

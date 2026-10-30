@@ -6,7 +6,7 @@
  * solvers by tests/test-triangulation-threshold-figure.mjs).
  *
  * Asserted, in the real Settings modal:
- *  1. With the threshold off (the default) the sketch opens at off, "Your setting"
+ *  1. With the threshold off (set here: the default is on) the sketch opens at off, "Your setting"
  *     says off, and the large value is what the sketch shows. At 15 px, DLT's first
  *     solve misses all three cameras by more; only the worst is dropped.
  *  2. A value typed in the Tracking Wizard is the setting, and the sketch follows.
@@ -53,6 +53,8 @@ try {
     page.on('pageerror', e => errs.push(String(e).slice(0, 300)));
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
+    // This story starts from "off", which is no longer the default.
+    await page.evaluate(async () => (await import('/ui/settings.js')).setTrackingThresholds({ reprojErrorThreshold: 0 }));
     const open = () => page.evaluate(() => {
         document.getElementById('menuSettings').click();
         document.querySelector('.settings-nav-item[data-panel="triangulation"]').click();
@@ -119,7 +121,7 @@ try {
         };
     }, FIELD);
 
-    console.log('1. threshold off (default)');
+    console.log('1. threshold off');
     let r = await read();
     check(r.setting === 'off' && r.field === '0', `"Your setting" says off (${r.setting}, field ${r.field})`);
     check(r.big === 'off' && r.num === '0' && r.slider === '0', `the sketch opens at off, in large text (${r.big})`);

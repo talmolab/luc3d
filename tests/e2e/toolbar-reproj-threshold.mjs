@@ -4,8 +4,10 @@
  * Wizard's `reprojErrorThreshold` from the toolbar, like Track's Animals field.
  *
  * Asserted, through the real app:
- *  1. Hovering Triangulate shows it below Method, above Settings…, blank with an
- *     "off" placeholder at the default.
+ *  1. Hovering Triangulate shows it below Method, above Settings…, showing the
+ *     50 px default, and a solve at the default drops the stray camera. Coming
+ *     back to the default from another value stays stored, so a later default
+ *     change cannot move it.
  *  2. Typing 25 and pressing Enter stores it, hands focus back, and survives a
  *     reload. A real solve then uses it: the same group solved with no options
  *     drops a stray camera at 25 and keeps it when the field is blank.
@@ -76,7 +78,7 @@ try {
     });
     const same = (a, b) => a.every((v, i) => Object.is(v, b[i]));
 
-    console.log('1. in the Triangulate menu, off by default');
+    console.log('1. in the Triangulate menu, on at its default');
     await hoverMenu();
     check(await page.locator('#tbReprojThreshold').isVisible(), 'shown when hovering Triangulate');
     const order = await page.evaluate(() => {
@@ -85,10 +87,16 @@ try {
         return [at(k => k.getAttribute('role') === 'radiogroup'), at(k => !!k.querySelector && !!k.querySelector('#tbReprojThreshold')), at(k => k.dataset && k.dataset.scope === 'settings')];
     });
     check(order[0] < order[1] && order[1] < order[2], `below Method, above Settings… (${order})`);
-    check(await value() === '' && await page.getAttribute('#tbReprojThreshold', 'placeholder') === 'off', 'blank, with an "off" placeholder');
-    check(await stored() === 0, 'setting is 0');
+    check(await value() === '50' && await page.getAttribute('#tbReprojThreshold', 'placeholder') === 'off', 'shows the default, with an "off" placeholder for blank');
+    check(await stored() === 50, 'setting is 50');
     let r = await solve();
-    check(same(r.setting, r.all), 'a solve uses every camera while it is off');
+    check(same(r.setting, r.two) && !same(r.setting, r.all), 'a solve at the default drops the stray camera');
+    const inStorage = () => page.evaluate(() =>
+        (JSON.parse(localStorage.getItem('lucid.settings.v1') || '{}').trackingThresholds || {}).reprojErrorThreshold);
+    check(await inStorage() === undefined, 'untouched, the default is not stored');
+    await enter('30');
+    await enter('50');
+    check(await inStorage() === 50, 'coming back to the default keeps it stored');
 
     console.log('2. typing a value');
     await enter('25');

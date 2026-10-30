@@ -15,7 +15,7 @@ import {
 import { dropDerivedReprojections } from '../pose/lazy-residency.js';
 import { drawFrameOverlays } from './overlays.js';
 import { syncViewLegends } from './view-legend.js';
-import { isCameraTracked, getTrackingThreshold } from './settings.js';
+import { isCameraTracked } from './settings.js';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
@@ -197,12 +197,10 @@ const MAX_OVERLAY_AREA = 268435456; // 2^28 px
 // the project (see `sweepTriangulateAllFrames`' docstring in
 // pose/triangulation.js), so after one this fill is what produces them, one
 // shown frame at a time. Two things keep that cheap:
-//  - **It reprojects the stored 3D rather than re-solving**
-//    (`reprojectStoredPoints3d`) whenever that 3D is current: the group was
-//    triangulated (`triangulationMethod` set), has not been edited since
-//    (`dirty` clear), and no reprojection-error threshold is set (with one the
-//    solve drops observations the stored 3D does not record, and its
-//    undistorted error leaves them out). Measured on a 17-camera project:
+//  - **It reprojects the stored 3D rather than re-solving** whenever that 3D
+//    is current — triangulated and not edited since — whatever the
+//    reprojection error threshold: a re-solve drew a different 3D than the 3D
+//    view and the saved file once the threshold was on by default. Measured on a 17-camera project:
 //    0.1 ms per frame with one animal and 0.2 ms with three, against 2.4 and
 //    5.0 ms to re-solve Refined — at 120 fps a frame has 8.3 ms. 3D READ
 //    FROM A FILE (`isPoints3dFromFile`: a loaded `.slp`'s, an imported
@@ -225,16 +223,20 @@ const MAX_OVERLAY_AREA = 268435456; // 2^28 px
 export function fillLazyReprojections(fi, instanceGroups) {
     if (instanceGroups && state.session.cameras.length >= 2) {
         var _lazyFrameResults = null;
-        var _threshold = null;
         for (var _rg = 0; _rg < instanceGroups.length; _rg++) {
             var _grp = instanceGroups[_rg];
             if (points3dNodeCount(_grp.points3d) > 0 &&
                 (!_grp.reprojectedInstances || _grp.reprojectedInstances.size === 0) &&
                 (!_grp.reprojections || Object.keys(_grp.reprojections).length === 0)) {
-                if (_threshold == null) _threshold = getTrackingThreshold('reprojErrorThreshold') || 0;
+                // The stored 3D, whenever it is the project's own: read from a
+                // file, or triangulated and not edited since — WHATEVER the
+                // reprojection error threshold. Re-solving such a group drew a
+                // different 3D than the 3D view and the saved file once the
+                // threshold was on by default (review of #289). Anything else
+                // (Track All's provisional 3D, an edited group) is re-solved.
                 var _triRes;
                 if (!_grp.dirty && (isPoints3dFromFile(_grp.points3d) || isPoints3dSmoothed(_grp.points3d) ||
-                    (_grp.triangulationMethod != null && !(_threshold > 0)))) {
+                    _grp.triangulationMethod != null)) {
                     _triRes = reprojectStoredPoints3d(_grp, state.session.cameras);
                 } else {
                     // Re-solve with WHICHEVER METHOD this group was last triangulated

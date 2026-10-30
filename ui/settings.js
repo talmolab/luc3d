@@ -272,6 +272,10 @@ export function setCameraWeights(map) {
 // Tracking Wizard's "Tracking Thresholds" section AND the default the tracker
 // falls back to. `min`/`max`/`step` drive the number field; `desc` is the inline
 // explanation shown under the label.
+//
+// The reprojection error threshold's default (px), named because its `desc`
+// quotes it too, and two hand-written copies of one number drift apart.
+const REPROJ_ERROR_THRESHOLD_DEFAULT = 50;
 const TRACKING_THRESHOLDS = [
     {
         id: 'epipolarDecay', label: 'Epipolar error decay', default: 10,
@@ -422,9 +426,9 @@ const TRACKING_THRESHOLDS = [
         desc: 'Also try the browser\'s WebNN API, which on Windows can use NVIDIA tensor cores (Chrome: enable chrome://flags/#web-machine-learning-neural-network). The first frames are embedded both ways; WebNN is kept only if it is faster and its embeddings match the calibrated WebGPU model. "About these flags" in the ID Switches tab says which was used. On macOS (Chrome 154) it measured ~10x slower, CPU only, so the trial keeps WebGPU there.',
     },
     {
-        id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 0,
+        id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: REPROJ_ERROR_THRESHOLD_DEFAULT,
         min: 0, max: 640, step: 1,
-        desc: 'Robust triangulation: after the 3D solve, if a node\'s reprojection error in any view (the distance on that view\'s 2D image between the prediction and the reprojection) is over this many pixels, the view that misses by most is dropped for that node and the node is re-triangulated from the rest; this repeats while more than 2 views are left. A node whose last 2 views still miss by more gets no 3D point. 100 to 15 px is the recommended range: lower can drop good views too. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless. Settings ▸ Default Triangulation draws it.',
+        desc: 'Robust triangulation: after the 3D solve, if a node\'s reprojection error in any view (the distance on that view\'s 2D image between the prediction and the reprojection) is over this many pixels, the view that misses by most is dropped for that node and the node is re-triangulated from the rest; this repeats while more than 2 views are left. A node whose last 2 views still miss by more gets no 3D point. 100 to 15 px is the recommended range: lower can drop good views too. Default ' + REPROJ_ERROR_THRESHOLD_DEFAULT + '; 0 = disabled (use all views). It is in image pixels, so the same number is a tighter tolerance on high-resolution video than on low-resolution video. Views excluded in the Camera Views panel never contribute to triangulation regardless. Settings ▸ Default Triangulation draws it.',
     },
 ];
 
@@ -497,8 +501,8 @@ export function getTrackingThresholds() {
 // `filterMinInstanceScore`), so a `filter*` smoothing parameter would read as
 // one of those.
 //
-// Both kernels default to 0 = off, matching `reprojErrorThreshold`: shipping
-// this must not change the 3D of any existing project until someone asks for it.
+// Both kernels default to 0 = off: shipping this must not change the 3D of any
+// existing project until someone asks for it.
 export const SMOOTHING_PARAMS = [
     {
         id: 'smoothMedianWindow', label: 'Median window (frames)', default: 0,
@@ -568,16 +572,23 @@ export function setSmoothingParams(map) {
 }
 
 // Commit an { id: value } override map (from the Tracking Wizard's Apply button).
-// Values are clamped to each threshold's range; entries equal to the default are
-// dropped so the stored set stays minimal.
-export function setTrackingThresholds(map) {
+// Values are clamped to each threshold's range. A value equal to its default is
+// dropped, so it keeps following the default if that ever changes — unless the
+// user CHOSE it: `edited` lists the ids changed in this dialog, and a value
+// already stored was an earlier choice. Dropping every default-valued entry is
+// what moved users who had deliberately set the reprojection error threshold to
+// 0 onto 50 when 50 became the default: with 0 the default, nothing was stored.
+export function setTrackingThresholds(map, edited) {
+    var prev = _settings.trackingThresholds || {};
+    var chosen = new Set(edited || []);
     var next = {};
     if (map && typeof map === 'object') {
         Object.keys(map).forEach(function (id) {
             var def = _thrById.get(id);
             if (!def) return;
             var v = clampThreshold(def, map[id]);
-            if (v != null && v !== def.default) next[id] = v;
+            if (v == null) return;
+            if (v !== def.default || chosen.has(id) || Object.prototype.hasOwnProperty.call(prev, id)) next[id] = v;
         });
     }
     _settings.trackingThresholds = next;
