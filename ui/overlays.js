@@ -304,7 +304,56 @@ export function unlinkedBaseColor(instance, dupIdx, session, cameraName, useIden
 export function getLineDashPattern(style) {
     if (style === 'dotted') return [2, 3];
     if (style === 'dashed') return [6, 4];
-    return []; // solid
+    return []; // solid (and wedge, which is filled and outlined solid)
+}
+
+// ============================================
+// Wedge edges
+// ============================================
+
+// SLEAP's View > Edge Style > Wedge (`QtEdge.setLine`): a triangle with its base
+// on the edge's source node and its tip on the destination, so an edge shows its
+// direction. Half the node radius wide on each side, filled at half opacity and
+// outlined in the full colour at the edge weight.
+const WEDGE_FILL_ALPHA = 0.5;
+
+/** Half-width of a wedge at its source node, for a node radius. Hit tests use it too. */
+export function wedgeHalfWidth(nodeSize) {
+    return nodeSize / 2;
+}
+
+/**
+ * Add one edge to the current path: a line, or a wedge when `wedgeHalf` > 0.
+ * Every wedge winds the same way, so a path of them fills as one shape and
+ * overlapping wedges do not darken or cancel, just as one stroked path of lines.
+ */
+function traceEdge(ctx, src, dst, wedgeHalf) {
+    if (!wedgeHalf) {
+        ctx.moveTo(src.x, src.y);
+        ctx.lineTo(dst.x, dst.y);
+        return;
+    }
+    const dx = dst.x - src.x, dy = dst.y - src.y;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (!(len > 0)) return;     // no direction to point in (also catches NaN)
+    const nx = -dy / len * wedgeHalf, ny = dx / len * wedgeHalf;
+    ctx.moveTo(src.x + nx, src.y + ny);
+    ctx.lineTo(dst.x, dst.y);
+    ctx.lineTo(src.x - nx, src.y - ny);
+    ctx.closePath();
+}
+
+/** Paint a path built by `traceEdge` in the current `strokeStyle` and `globalAlpha`. */
+function paintEdges(ctx, wedgeHalf) {
+    if (wedgeHalf) {
+        const alpha = ctx.globalAlpha;
+        ctx.lineJoin = 'round';     // a miter join would spike past the tip
+        ctx.fillStyle = ctx.strokeStyle;
+        ctx.globalAlpha = alpha * WEDGE_FILL_ALPHA;
+        ctx.fill();
+        ctx.globalAlpha = alpha;
+    }
+    ctx.stroke();
 }
 
 // ============================================
@@ -767,6 +816,7 @@ export function drawSkeleton(ctx, instance, skeleton, options) {
     const nodeShape = options.nodeShape || 'circle';
     const nodeSize = baseNodeSize;
     const lineWidth = baseLineWidth;
+    const wedgeHalf = lineStyle === 'wedge' ? wedgeHalfWidth(nodeSize) : 0;
     const nulledNodes = instance.nulledNodes || null;
     // SLEAP-parity independent node/edge visibility (issue #190). Default true so
     // every existing caller keeps drawing both.
@@ -809,12 +859,10 @@ export function drawSkeleton(ctx, instance, skeleton, options) {
                 var dstNulled = nulledNodes && nulledNodes.has(dstIdx);
                 var edgeGray = srcNulled || dstNulled;
                 if (pass === 0 && !edgeGray) {
-                    ctx.moveTo(src.x, src.y);
-                    ctx.lineTo(dst.x, dst.y);
+                    traceEdge(ctx, src, dst, wedgeHalf);
                     hasStrokes = true;
                 } else if (pass === 1 && edgeGray) {
-                    ctx.moveTo(src.x, src.y);
-                    ctx.lineTo(dst.x, dst.y);
+                    traceEdge(ctx, src, dst, wedgeHalf);
                     hasStrokes = true;
                 }
             }
@@ -825,7 +873,7 @@ export function drawSkeleton(ctx, instance, skeleton, options) {
                     ctx.strokeStyle = '#888888';
                     ctx.globalAlpha = alpha * 0.4;
                 }
-                ctx.stroke();
+                paintEdges(ctx, wedgeHalf);
                 if (pass === 1) ctx.globalAlpha = alpha;
             }
         }
@@ -959,17 +1007,15 @@ export function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, option
         // Honor the Visibility panel's reprojection Edge Style; callers that
         // pass no lineStyle keep this primitive's historical [4, 4] dash.
         ctx.setLineDash(options.lineStyle ? getLineDashPattern(options.lineStyle) : [4, 4]);
+        const wedgeHalf = options.lineStyle === 'wedge' ? wedgeHalfWidth(markerSize) : 0;
         ctx.beginPath();
         for (let i = 0; i < skeleton.edges.length; i++) {
             const edge = skeleton.edges[i];
             const src = canvasPoints[edge[0]];
             const dst = canvasPoints[edge[1]];
-            if (src && dst) {
-                ctx.moveTo(src.x, src.y);
-                ctx.lineTo(dst.x, dst.y);
-            }
+            if (src && dst) traceEdge(ctx, src, dst, wedgeHalf);
         }
-        ctx.stroke();
+        paintEdges(ctx, wedgeHalf);
         ctx.setLineDash([]);
     }
 
@@ -1131,6 +1177,10 @@ export function drawSelectionHighlight(ctx, points, skeleton, options) {
 
     // --- 2. Thicker, brighter edges ---
     if (skeleton.edges) {
+        // Retrace wedges as wedges. `wedgeNodeSize` is the size the instance drew
+        // them at, because a selected prediction's size is not this `nodeSize`.
+        const wedgeHalf = options.lineStyle === 'wedge'
+            ? wedgeHalfWidth(options.wedgeNodeSize != null ? options.wedgeNodeSize : nodeSize) : 0;
         ctx.lineWidth = lineWidth * 2;
         ctx.lineCap = 'round';
         // Two-pass: normal edges, then grayed (nulled) edges
@@ -1146,12 +1196,10 @@ export function drawSelectionHighlight(ctx, points, skeleton, options) {
                 var dstNulled = nulledNodes && nulledNodes.has(edge[1]);
                 var edgeGray = srcNulled || dstNulled;
                 if (ePass === 0 && !edgeGray) {
-                    ctx.moveTo(src.x, src.y);
-                    ctx.lineTo(dst.x, dst.y);
+                    traceEdge(ctx, src, dst, wedgeHalf);
                     hasEdgeStrokes = true;
                 } else if (ePass === 1 && edgeGray) {
-                    ctx.moveTo(src.x, src.y);
-                    ctx.lineTo(dst.x, dst.y);
+                    traceEdge(ctx, src, dst, wedgeHalf);
                     hasEdgeStrokes = true;
                 }
             }
@@ -1163,7 +1211,7 @@ export function drawSelectionHighlight(ctx, points, skeleton, options) {
                     ctx.strokeStyle = '#888888';
                     ctx.globalAlpha = 0.8 * 0.4;
                 }
-                ctx.stroke();
+                paintEdges(ctx, wedgeHalf);
             }
         }
         ctx.globalAlpha = 1.0;
@@ -1899,6 +1947,7 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
             const instLineStyle = isPredicted && predictedRender && predictedRender.lineStyle
                 ? predictedRender.lineStyle : (options.lineStyle || 'dashed');
             const instDashPattern = getLineDashPattern(instLineStyle);
+            const instWedgeHalf = instLineStyle === 'wedge' ? wedgeHalfWidth(instNodeSize) : 0;
             ctx.lineWidth = instLineWidth;
             ctx.lineCap = 'round';
             if (instDashPattern.length) ctx.setLineDash(instDashPattern);
@@ -1915,12 +1964,10 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
                     var dstNulled = nulledNodes && nulledNodes.has(edge[1]);
                     var edgeGray = srcNulled || dstNulled;
                     if (ePass === 0 && !edgeGray) {
-                        ctx.moveTo(src.x, src.y);
-                        ctx.lineTo(dst.x, dst.y);
+                        traceEdge(ctx, src, dst, instWedgeHalf);
                         hasEdgeStrokes = true;
                     } else if (ePass === 1 && edgeGray) {
-                        ctx.moveTo(src.x, src.y);
-                        ctx.lineTo(dst.x, dst.y);
+                        traceEdge(ctx, src, dst, instWedgeHalf);
                         hasEdgeStrokes = true;
                     }
                 }
@@ -1931,7 +1978,7 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
                         ctx.strokeStyle = '#888888';
                         ctx.globalAlpha = alpha * 0.4;
                     }
-                    ctx.stroke();
+                    paintEdges(ctx, instWedgeHalf);
                     if (ePass === 1) ctx.globalAlpha = alpha;
                 }
             }
@@ -2831,13 +2878,23 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
         }));
     }
 
+    // The highlight retraces a group member's edges, so it takes that member's
+    // edge style and, for a wedge, its width.
+    const highlightEdgeOpts = (inst) => {
+        const isPredicted = inst.type === 'predicted';
+        return {
+            lineStyle: (isPredicted ? predictedOpts : userOpts).postLineStyle,
+            wedgeNodeSize: (isPredicted ? predictedRender : userRender).nodeSize,
+        };
+    };
+
     // 5. Selection highlight
     if (selectedInstanceGroup && !selectedReprojected) {
         const selInst = selectedInstanceGroup.getInstance
             ? selectedInstanceGroup.getInstance(viewName)
             : (selectedInstanceGroup.instances ? selectedInstanceGroup.instances[viewName] : null);
         if (selInst && selInst.numNodes > 0) {
-            drawSelectionHighlight(ctx, selInst.toPointsArray(), skeleton, Object.assign({}, userRender, {
+            drawSelectionHighlight(ctx, selInst.toPointsArray(), skeleton, Object.assign({}, userRender, highlightEdgeOpts(selInst), {
                 color: '#ffffff',
                 selectedNodeIdx: selectedNodeIdx,
                 nulledNodes: selInst.nulledNodes || null,
@@ -2852,7 +2909,7 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
             ? editGroupTarget.getInstance(viewName)
             : null;
         if (egInst && egInst.numNodes > 0) {
-            drawSelectionHighlight(ctx, egInst.toPointsArray(), skeleton, Object.assign({}, userRender, {
+            drawSelectionHighlight(ctx, egInst.toPointsArray(), skeleton, Object.assign({}, userRender, highlightEdgeOpts(egInst), {
                 color: '#ffffff',
                 selectedNodeIdx: -1,
                 nulledNodes: egInst.nulledNodes || null,

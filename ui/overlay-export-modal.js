@@ -1329,7 +1329,7 @@ export function showOverlayExportModal() {
 
     var MARKERS = [['circle', 'circle'], ['square', 'square'], ['diamond', 'diamond'],
         ['triangle', 'triangle'], ['cross', 'cross'], ['x', 'x']];
-    var LINES = [['solid', 'solid'], ['dashed', 'dashed'], ['dotted', 'dotted']];
+    var LINES = [['solid', 'solid'], ['dashed', 'dashed'], ['dotted', 'dotted'], ['wedge', 'wedge']];
 
     function buildSettings() {
         settingsEl.textContent = '';
