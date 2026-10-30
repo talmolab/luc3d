@@ -186,8 +186,8 @@ try {
     });
     await openModal();
     opened = await rect();
-    check(opened.w === 900 && opened.h === 650,
-        `an old record the user had resized keeps its size (${opened.w}x${opened.h})`);
+    check(opened.w === 900 && opened.h === 900 - 48 && opened.y === 24,
+        `an old record the user had resized keeps its width and fills the height (${opened.w}x${opened.h})`);
 
     // ---- 4. Resizable, and the size is remembered ---------------------------
     const resizeStyle = await page.evaluate(() =>
@@ -226,10 +226,10 @@ try {
     const beforeDrag = await rect();
     await page.mouse.move(header ? header.x : 0, header ? header.y : 0);
     await page.mouse.down();
-    await page.mouse.move((header ? header.x : 0) - 80, (header ? header.y : 0) - 30, { steps: 8 });
+    await page.mouse.move((header ? header.x : 0) - 80, (header ? header.y : 0) + 30, { steps: 8 });
     await page.mouse.up();
     const afterDrag = await rect();
-    check(afterDrag.x === beforeDrag.x - 80 && afterDrag.y === beforeDrag.y - 30,
+    check(afterDrag.x === beforeDrag.x - 80 && afterDrag.y === beforeDrag.y + 30,
         `dragging the header moves the card by exactly the pointer delta ` +
         `(${beforeDrag.x},${beforeDrag.y} -> ${afterDrag.x},${afterDrag.y})`);
 
@@ -273,7 +273,25 @@ try {
         `(${JSON.stringify(clamped)} in ${vp.width}x${vp.height})`);
     await closeModal();
 
-    // ---- 7. Until the user chooses a size, the card fills the window's height --
+    // ---- 6b. A returning visitor: one origin serves every channel and preview, so a
+    // size dragged long ago on any of them comes back. The clean profile passes either way.
+    for (const [what, record] of [
+        ['a size resized before the height filled', { x: 500, y: 100, w: 970, h: 855, sized: true }],
+        ['the same with no flag at all', { x: 500, y: 100, w: 970, h: 855 }],
+    ]) {
+        await page.evaluate((r) => localStorage.setItem('lucid.modalGeometry.v1', JSON.stringify({ settings: r })), record);
+        await page.setViewportSize({ width: 2000, height: 1200 });
+        await openModal();
+        const back = await rect();
+        check(back.w === 970 && back.x === 500 && back.h === 1200 - 48 && back.y === 24,
+            `${what}: keeps its width and place, fills the height (${JSON.stringify(back)})`);
+        await closeModal();
+        const kept = await page.evaluate(() => JSON.parse(localStorage.getItem('lucid.modalGeometry.v1')).settings);
+        check(!kept.heightChosen && kept.sized === true && kept.w === 970, `and closing does not turn it into a chosen height (${JSON.stringify(kept)})`);
+    }
+    await page.setViewportSize({ width: 1400, height: 900 });
+
+    // ---- 7. Until the user chooses a height, the card fills the window's height --
     await page.evaluate(() => localStorage.removeItem('lucid.modalGeometry.v1'));
     await page.setViewportSize({ width: 1400, height: 1400 });
     await openModal();
@@ -295,6 +313,19 @@ try {
     await page.mouse.up();
     tall = await rect();
     check(tall.x === before - 10 && tall.h === 1300 - 48, `dragging it sideways keeps the height (${JSON.stringify(tall)})`);
+    // A width dragged on its own leaves the height filling.
+    await page.evaluate(() => { document.querySelector('.settings-modal').style.width = '1100px'; });
+    await page.waitForTimeout(300);
+    await closeModal();
+    await openModal();
+    tall = await rect();
+    check(tall.w === 1100 && tall.h === 1300 - 48, `a width dragged on its own stays, and the height still fills (${JSON.stringify(tall)})`);
+    await page.setViewportSize({ width: 1400, height: 1200 });
+    await page.waitForTimeout(100);
+    tall = await rect();
+    check(tall.h === 1200 - 48, `and still follows the window (${tall.h})`);
+    await page.setViewportSize({ width: 1400, height: 1300 });
+    await page.waitForTimeout(100);
     await page.evaluate(() => {
         const c = document.querySelector('.settings-modal');
         c.style.height = '700px';

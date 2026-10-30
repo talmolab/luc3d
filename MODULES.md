@@ -5485,8 +5485,9 @@ Gives a modal card a drag handle, a resize grip (CSS `resize: both`) and a
   remembered size.
 - `installModalGeometry(card, opts)` — restores, wires the header drag, watches
   the CSS resize via `ResizeObserver`, re-clamps on window resize (with
-  `opts.fillHeight`, a card whose size the user has not chosen takes the viewport's
-  whole height and follows it; Settings uses this), and returns a
+  `opts.fillHeight`, a card whose height the user has not chosen takes the viewport's
+  whole height and follows it, a width dragged on its own or a record older than
+  `heightChosen` leaving it filling; Settings uses this), and returns a
   `dispose()` that also flushes the final rect (a resize that ended inside the
   200 ms persist debounce would otherwise be lost when the modal closes).
 - `rememberedSizeIsChosen(geom, legacyDefaultSize)` — whether a record's size
@@ -9410,7 +9411,7 @@ figures what is now stored, which clears their "not saved" notes. Cancel, ×, Es
 the backdrop discard what has not been applied. Covered by
 `tests/e2e/settings-apply-stays-open.mjs`.
 
-**Resizable, draggable, and it remembers.** Until the user resizes it, the card
+**Resizable, draggable, and it remembers.** Until the user drags its height, the card
 fills the browser's height (`fillHeight`). The card carries CSS `resize: both`
 and is dragged by its header (minus the ×, via `noDragSelector`);
 `installModalGeometry` (`ui/modal-geometry.js`, id `settings`) restores the last
