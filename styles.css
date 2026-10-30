@@ -4767,14 +4767,13 @@ kbd {
   border: 1px solid var(--border-color);
   border-radius: 8px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-  /* Opening width only. `ui/modal-geometry.js` measures this on first open,
-     centres the card, and thereafter restores whatever size the user left it
-     at as inline width/height. Until they choose one it takes the viewport's
-     whole height (`fillHeight`). It also owns the viewport fit (clamping to a
+  /* Before `ui/modal-geometry.js` takes over. Until the user chooses a size it fills
+     the viewport's height and, up to 1700px, its width (`fillHeight`, `fillWidth`),
+     and thereafter restores whatever size they left it at as inline width/height. It also owns the viewport fit (clamping to a
      24px gutter), so there is deliberately NO max-width/max-height here — a
      second cap would silently shrink a rect the clamp thought it had granted
      and leave the card flush against one edge. */
-  width: 1320px;
+  width: min(1700px, calc(100vw - 48px));
   height: calc(100vh - 48px);
   display: flex;
   flex-direction: column;
@@ -5332,7 +5331,7 @@ kbd {
   position: absolute;
   right: 0;
   bottom: 8px;
-  width: min(150px, 38%);
+  width: 38%;
   max-height: none;
   margin: 0;
   pointer-events: none;
@@ -5342,7 +5341,7 @@ kbd {
   position: absolute;
   left: 0;
   bottom: 8px;
-  width: 120px;
+  width: max(120px, 35%);
   max-height: none;
   margin: 0;
   pointer-events: none;
@@ -5375,8 +5374,8 @@ kbd {
   display: block;
   width: 100%;
   height: auto;
-  /* A wide card would otherwise push the captions below the fold. */
-  max-height: 330px;
+  /* Grows with a wider Settings window, up to where the captions would be pushed far down. */
+  max-height: 600px;
   margin: 6px 0 8px;
   overflow: hidden;
 }
@@ -5643,6 +5642,11 @@ kbd {
   grid-template-columns: calc((100% - 110px) / 3 + 6px) repeat(2, calc((100% - 110px) / 3 + 36px));
   gap: 16px;
   align-items: start;
+}
+
+/* Too narrow for three columns: small tiles, then the large crop, then the 3D view. */
+@media (max-width: 1000px) {
+  .thr-ex-body { grid-template-columns: minmax(0, 1fr); }
 }
 
 .thr-ex-grid { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }

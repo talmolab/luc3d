@@ -365,7 +365,11 @@ try {
     await page.setViewportSize({ width: 800, height: 900 });
     await page.waitForTimeout(100);
     const narrow = await layout();
-    check(narrow.aligned.flat().every(v => Math.abs(v) <= 1), 'and they still line up');
+    const stacked = await page.evaluate(() => {
+        const R = (q) => document.querySelector(q).getBoundingClientRect();
+        return R('.thr-ex-grid').bottom <= R('.thr-ex-large').top + 1 && R('.thr-ex-large').bottom <= R('.thr-ex-3d').top + 1 && R('.thr-ex-tile canvas').width > 100;
+    });
+    check(stacked, 'in a narrow window the tiles, large crop and 3D view stack, at a usable size');
     check(!narrow.overflow, `nothing overflows in a narrow window (${JSON.stringify(narrow.aligned)})`);
     await page.setViewportSize({ width: 1440, height: 1000 });
     await close();

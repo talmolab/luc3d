@@ -947,6 +947,7 @@ export function showSettingsModal(initialPanel) {
         minH: 320,
         margin: 24,
         fillHeight: true,
+        fillWidth: 1700,
         // The opening size before it widened (to 1040x620, now 1320x800);
         // records holding it were saved without a resize, so they open at the
         // current default. Later records carry `sized`, so they follow it too.
