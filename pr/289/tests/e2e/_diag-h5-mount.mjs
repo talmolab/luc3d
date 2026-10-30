@@ -30,7 +30,7 @@ try {
     const page = await browser.newPage();
     page.on('pageerror', e => console.log('  [pageerror]', String(e).slice(0, 300)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.h5wasm !== undefined || window.__lucid, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.h5wasm !== undefined || window.__lucid, null, { timeout: 30000 });
 
     const r = await page.evaluate(async () => {
         const out = {};

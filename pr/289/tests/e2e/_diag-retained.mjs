@@ -31,7 +31,7 @@ try {
     const page = await browser.newPage();
     page.on('pageerror', e => console.log('  [pageerror]', String(e).slice(0, 200)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.SleapIO, { timeout: 30000 });
+    await page.waitForFunction(() => window.__lucid && window.SleapIO, null, { timeout: 30000 });
 
     // dismiss modals
     await page.evaluate(() => setInterval(() => {

@@ -39,7 +39,8 @@
 // DOM-free, and its only import is the rotation maths it would otherwise
 // duplicate, so `tests/test-calibration-compare.mjs` can run it under Node.
 
-import { rotationAboutAxis, rotationMatrixToAxisAngle, normalize3 } from './origin-frame.js?v=4252feadb328';
+import { rotationAboutAxis, rotationMatrixToAxisAngle, normalize3 } from './origin-frame.js?v=b63ad30d0b27';
+import { hasRealCalibration } from './placeholder-cameras.js?v=b63ad30d0b27';
 
 // "The same number", for values that came from parsing the same file twice, or
 // from one f64 round trip through a `.slp`. Deliberately not `===`: a TOML
@@ -266,6 +267,10 @@ export function compareSessionCalibrations(sessions) {
     for (var i = 0; i < list.length; i++) {
         var s = list[i];
         var name = (s && s.name) || ('Session ' + (i + 1));
+        // A folder loaded with no calibration has only PLACEHOLDER cameras
+        // (all-zero extrinsics, `pose/placeholder-cameras.js`) — they name its
+        // views, they are not a calibration, so the session is not compared.
+        if (!hasRealCalibration(s)) { withoutCalibration.push(name); continue; }
         var idx = indexCameras(s);
         if (!idx.names.length) { withoutCalibration.push(name); continue; }
         idx.sessionName = name;

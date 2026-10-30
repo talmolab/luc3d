@@ -13,7 +13,7 @@ await new Promise(r => setTimeout(r, 1200));
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
 await page.goto(`http://localhost:${PORT}/index.html`);
-await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 const shoot = async (name) => {
     const el = await page.$('#toolbar');
     await el.screenshot({ path: path.join(OUT, name) });
