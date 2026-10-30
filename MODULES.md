@@ -9400,6 +9400,10 @@ commas. One scroller: the block grows to its full height.
 
 ### ui/settings-modal.js
 
+The Default Triangulation panel's footer adds **Triangulate All** ("Apply & Triangulate All" with
+edits pending): it applies them, closes Settings and clicks `#tbTriangulateAll`, so it runs what the
+toolbar runs. It is disabled when that button is, or with no session.
+
 **The threshold card's examples.** It builds `buildThresholdExamples`
 (`ui/threshold-examples-panel.js`), hands it to the figure as `opts.examples`, starts it
 when the Default Triangulation panel is first shown, re-solves it when a Camera Views
@@ -10098,8 +10102,9 @@ unit-tested in Node (`tests/test-track-summary.mjs`). It gives every outcome
   `clear` / `skipped` / `failed` / `cancelled` / `off` / `na` (one identity).
   Switches are `idSwitchOnsets` — the "possible switches" count the tab uses.
 - `planTrackSummary(summary, checks)` — the rows, the notes, the next step and the
-  buttons. Recommends **Review switches** when any check found one; **Triangulate
-  All** otherwise (with "Check by images…" / "Check by body size" offered when that
+  buttons. Recommends **Review switches** when any check found one; **Default
+  Triangulation…** otherwise (it opens that Settings panel, whose footer has
+  Triangulate All) (with "Check by images…" / "Check by body size" offered when that
   check did not run, and a caveat that body size cannot separate similar-sized
   animals when only size came back clear); **Tracking Wizard…** when nothing was
   matched. A skipped check never gets a "nothing found" headline. Notes flag more
@@ -10172,7 +10177,7 @@ summary through `reopenTrackSummary`'s `latest`, so the row reads e.g.
 **Notes / caveats.**
 - **A note, not a prompt.** Nothing changes until a button is pressed; Close,
   `Esc` and a backdrop click dismiss it. Each action button clicks the existing
-  control — `#tbTriangulateAll`, `#menuCheckImageSwitches`,
+  control — `#tbTriangulateSettings`, `#menuCheckImageSwitches`,
   `#menuCheckSizeSwitches` (both through `clickCheckFromSummary`, so the box comes
   back when the check ends), `#menuTrackingWizard` — so it runs exactly what the
   user would have run by hand (a disabled button, e.g. under Defining Plane Mode,

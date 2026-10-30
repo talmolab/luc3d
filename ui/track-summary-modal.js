@@ -53,7 +53,7 @@ var ACTIONS = {
         var next = document.getElementById('idSwitchNext');
         if (next && !next.disabled) next.click();
     },
-    triangulate: function () { clickById('tbTriangulateAll'); },
+    triangulationSettings: function () { clickById('tbTriangulateSettings'); },
     // These two come back here when the check ends, with its result in the box.
     imageCheck: function () { clickCheckFromSummary('menuCheckImageSwitches'); },
     sizeCheck: function () { clickCheckFromSummary('menuCheckSizeSwitches'); },
