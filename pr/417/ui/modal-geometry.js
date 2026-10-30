@@ -34,7 +34,9 @@
 // up to the cap and centred until the card is dragged. Dragging the grip's height or
 // width takes over for that axis only (`heightChosen`, `widthChosen`, `moved` in the
 // record). A record older than those flags fills: its size was only ever chosen because
-// the card could not fill the window then.
+// the card could not fill the window then. `setSizePreset('full')` (`full` in the
+// record) drops the cap and the margin, so the card takes the whole viewport;
+// `setSizePreset('default')` goes back to filling, forgetting any drag.
 //
 // ## Clamping is the load-bearing part
 //
@@ -141,6 +143,7 @@ export function readGeometry(id, storage) {
     if (g.heightChosen === true) out.heightChosen = true;
     if (g.widthChosen === true) out.widthChosen = true;
     if (g.moved === true) out.moved = true;
+    if (g.full === true) out.full = true;
     return out;
 }
 
@@ -170,6 +173,7 @@ export function writeGeometry(id, geom, storage) {
     if (geom.heightChosen === true) all[id].heightChosen = true;
     if (geom.widthChosen === true) all[id].widthChosen = true;
     if (geom.moved === true) all[id].moved = true;
+    if (geom.full === true) all[id].full = true;
     try {
         s.setItem(STORAGE_KEY, JSON.stringify(all));
         return true;
@@ -206,8 +210,10 @@ export function clearGeometry(id, storage) {
  * @param {{id:string, handle?:HTMLElement, minW?:number, minH?:number,
  *          margin?:number, storage?:Storage, noDragSelector?:string,
  *          legacyDefaultSize?:{w:number,h:number}, fillHeight?:boolean,
- *          fillWidth?:number}} opts
- * @returns {function(): void} dispose — removes every listener it added
+ *          fillWidth?:number, onSizePreset?:function(?string): void}} opts
+ * @returns {function(): void} dispose — removes every listener it added. With
+ *   `fillWidth` it also has `setSizePreset('default'|'full')` and `sizePreset()`, the
+ *   preset in force, or null once the card has been dragged or resized away from it.
  */
 export function installModalGeometry(card, opts) {
     const o = opts || {};
@@ -233,6 +239,21 @@ export function installModalGeometry(card, opts) {
     let heightChosen = false;
     let widthChosen = false;
     let moved = false;
+    let full = false;
+
+    // The clamp's limits now: Full has no gutter.
+    function limits() {
+        return full ? { minW: min.minW, minH: min.minH, margin: 0 } : min;
+    }
+
+    function sizePreset() {
+        if (heightChosen || widthChosen || moved) return null;
+        return full ? 'full' : 'default';
+    }
+
+    function notePreset() {
+        if (o.onSizePreset) o.onSizePreset(sizePreset());
+    }
 
     function apply(geom) {
         if (!geom) return;
@@ -253,18 +274,18 @@ export function installModalGeometry(card, opts) {
 
     function current() {
         const r = card.getBoundingClientRect();
-        return { x: r.left, y: r.top, w: r.width, h: r.height, sized: sized, heightChosen: heightChosen, widthChosen: widthChosen, moved: moved };
+        return { x: r.left, y: r.top, w: r.width, h: r.height, sized: sized, heightChosen: heightChosen, widthChosen: widthChosen, moved: moved, full: full };
     }
 
     // `geom`, filling the viewport along each axis the user has not chosen.
     function filled(geom) {
-        const v = viewport(), out = { x: geom.x, y: geom.y, w: geom.w, h: geom.h };
+        const v = viewport(), m = limits().margin, out = { x: geom.x, y: geom.y, w: geom.w, h: geom.h };
         if (o.fillHeight && !heightChosen) {
-            out.y = min.margin;
-            out.h = v.height - 2 * min.margin;
+            out.y = m;
+            out.h = v.height - 2 * m;
         }
         if (o.fillWidth && !widthChosen) {
-            out.w = Math.min(o.fillWidth, v.width - 2 * min.margin);
+            out.w = full ? v.width : Math.min(o.fillWidth, v.width - 2 * m);
             if (!moved) out.x = (v.width - out.w) / 2;
         }
         return out;
@@ -275,22 +296,23 @@ export function installModalGeometry(card, opts) {
     // user chose it. Otherwise the stylesheet's size, keeping the old centre.
     const base = card.getBoundingClientRect();
     const stored = readGeometry(id, o.storage);
+    full = !!(stored && stored.full && o.fillWidth);
     if (stored && rememberedSizeIsChosen(stored, o.legacyDefaultSize)) {
         sized = true;
         heightChosen = stored.heightChosen === true;
         widthChosen = stored.widthChosen === true;
         moved = stored.moved === true;
-        apply(clampGeometry(filled(stored), viewport(), min));
+        apply(clampGeometry(filled(stored), viewport(), limits()));
     } else if (stored) {
         moved = stored.moved === true;
         apply(clampGeometry(filled({
             x: stored.x + (stored.w - base.width) / 2,
             y: stored.y + (stored.h - base.height) / 2,
             w: base.width, h: base.height,
-        }), viewport(), min));
+        }), viewport(), limits()));
     } else {
-        const centred = centerGeometry(base.width, base.height, viewport(), min);
-        apply(centred && clampGeometry(filled(centred), viewport(), min));
+        const centred = centerGeometry(base.width, base.height, viewport(), limits());
+        apply(centred && clampGeometry(filled(centred), viewport(), limits()));
     }
 
     let persistTimer = 0;
@@ -308,7 +330,7 @@ export function installModalGeometry(card, opts) {
         if (e.button !== undefined && e.button !== 0) return;
         if (noDrag && e.target && e.target.closest && e.target.closest(noDrag)) return;
         const r = card.getBoundingClientRect();
-        drag = { dx: e.clientX - r.left, dy: e.clientY - r.top, id: e.pointerId };
+        drag = { dx: e.clientX - r.left, dy: e.clientY - r.top, id: e.pointerId, x0: r.left, y0: r.top };
         card.classList.add('modal-dragging');
         if (handle.setPointerCapture && e.pointerId !== undefined) {
             try { handle.setPointerCapture(e.pointerId); } catch (err) { /* not captured */ }
@@ -320,15 +342,18 @@ export function installModalGeometry(card, opts) {
         const r = card.getBoundingClientRect();
         const next = clampGeometry(
             { x: e.clientX - drag.dx, y: e.clientY - drag.dy, w: r.width, h: r.height },
-            viewport(), min);
+            viewport(), limits());
         apply(next);
     }
     function onPointerUp() {
         if (!drag) return;
+        const r = card.getBoundingClientRect();
+        // A click on the header that went nowhere is not a move.
+        if (o.fillWidth && (Math.abs(r.left - drag.x0) > 1 || Math.abs(r.top - drag.y0) > 1)) moved = true;
         drag = null;
         card.classList.remove('modal-dragging');
-        moved = !!o.fillWidth;
         writeGeometry(id, current(), o.storage);
+        notePreset();
     }
 
     handle.addEventListener('pointerdown', onPointerDown);
@@ -348,6 +373,7 @@ export function installModalGeometry(card, opts) {
                 sized = true;
                 if (heightMoved && o.fillHeight) heightChosen = true;
                 if (widthMoved && o.fillWidth) widthChosen = true;
+                notePreset();
                 appliedW = r.width;
                 appliedH = r.height;
             }
@@ -358,12 +384,12 @@ export function installModalGeometry(card, opts) {
 
     // --- Keep the card reachable when the window changes size ---------------
     function onWindowResize() {
-        apply(clampGeometry(filled(current()), viewport(), min));
+        apply(clampGeometry(filled(current()), viewport(), limits()));
         persistSoon();
     }
     window.addEventListener('resize', onWindowResize);
 
-    return function dispose() {
+    function dispose() {
         if (persistTimer) { clearTimeout(persistTimer); persistTimer = 0; }
         // Capture the final rect — a resize that ended inside the debounce
         // window would otherwise be lost when the modal closes.
@@ -374,5 +400,16 @@ export function installModalGeometry(card, opts) {
         handle.removeEventListener('pointercancel', onPointerUp);
         window.removeEventListener('resize', onWindowResize);
         if (ro) ro.disconnect();
-    };
+    }
+    if (o.fillWidth) {
+        dispose.sizePreset = sizePreset;
+        dispose.setSizePreset = function (name) {
+            full = name === 'full';
+            sized = heightChosen = widthChosen = moved = false;
+            apply(clampGeometry(filled(current()), viewport(), limits()));
+            writeGeometry(id, current(), o.storage);
+            notePreset();
+        };
+    }
+    return dispose;
 }

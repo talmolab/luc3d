@@ -42,16 +42,16 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=a3d823fd6cb7';
-import { getActiveSession, state, timeline } from './app-state.js?v=a3d823fd6cb7';
-import { drawAllOverlays } from './rendering.js?v=a3d823fd6cb7';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=a3d823fd6cb7';
-import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=a3d823fd6cb7';
-import { buildThresholdExamples } from './threshold-examples-panel.js?v=a3d823fd6cb7';
-import { installModalGeometry } from './modal-geometry.js?v=a3d823fd6cb7';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=a3d823fd6cb7';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=a3d823fd6cb7';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=a3d823fd6cb7';
+} from './settings.js?v=905a331c322c';
+import { getActiveSession, state, timeline } from './app-state.js?v=905a331c322c';
+import { drawAllOverlays } from './rendering.js?v=905a331c322c';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=905a331c322c';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=905a331c322c';
+import { buildThresholdExamples } from './threshold-examples-panel.js?v=905a331c322c';
+import { installModalGeometry } from './modal-geometry.js?v=905a331c322c';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=905a331c322c';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=905a331c322c';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=905a331c322c';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -812,6 +812,37 @@ export function showSettingsModal(initialPanel) {
     // Footer.
     const footer = document.createElement('div');
     footer.className = 'settings-modal-footer';
+    // Window size: display taste, kept with the card's geometry, so Apply has nothing to do with it.
+    const sizeBtns = document.createElement('div');
+    sizeBtns.className = 'settings-size-btns';
+    sizeBtns.setAttribute('role', 'group');
+    sizeBtns.setAttribute('aria-label', 'Window size');
+    const sizeLabel = document.createElement('span');
+    sizeLabel.textContent = 'Window';
+    sizeBtns.appendChild(sizeLabel);
+    const SIZE_PRESETS = [
+        { name: 'default', label: 'Default', tip: 'Fill the browser\'s height, up to 1700 px wide, centred' },
+        { name: 'full', label: 'Full', tip: 'Fill the whole browser window' },
+    ];
+    const sizeButtons = SIZE_PRESETS.map(function (preset) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'settings-size-btn';
+        btn.dataset.size = preset.name;
+        btn.textContent = preset.label;
+        btn.title = preset.tip;
+        btn.addEventListener('click', function () {
+            if (disposeGeometry && disposeGeometry.setSizePreset) disposeGeometry.setSizePreset(preset.name);
+        });
+        sizeBtns.appendChild(btn);
+        return btn;
+    });
+    function paintSizeButtons(current) {
+        sizeButtons.forEach(function (btn) {
+            btn.setAttribute('aria-pressed', btn.dataset.size === current ? 'true' : 'false');
+        });
+    }
+    footer.appendChild(sizeBtns);
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'settings-btn settings-btn-cancel';
     cancelBtn.textContent = 'Cancel';
@@ -948,9 +979,11 @@ export function showSettingsModal(initialPanel) {
         margin: 24,
         fillHeight: true,
         fillWidth: 1700,
+        onSizePreset: paintSizeButtons,
         // The opening size before it widened (to 1040x620, now 1320x800);
         // records holding it were saved without a resize, so they open at the
         // current default. Later records carry `sized`, so they follow it too.
         legacyDefaultSize: { w: 880, h: 620 },
     });
+    if (disposeGeometry.sizePreset) paintSizeButtons(disposeGeometry.sizePreset());
 }
