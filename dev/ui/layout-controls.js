@@ -5,11 +5,11 @@
 // mousedown drag interaction (via setupDragHandle) and updates layout
 // CSS based on cursor delta.
 
-import { viewport3d, timeline } from './app-state.js?v=55e25b95066c';
+import { viewport3d, timeline } from './app-state.js?v=4ba06f2edd7d';
 import {
     syncTimelineToggleButton, updateInfoPanelToggleBtn, toggleInfoPanel,
     update3DViewportToggleBtn, toggle3DViewport,
-} from './ui-wiring.js?v=55e25b95066c';
+} from './ui-wiring.js?v=4ba06f2edd7d';
 
 
 // ============================================
