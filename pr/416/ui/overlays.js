@@ -2685,6 +2685,9 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
                 var reprojXColor = isSelected ? '#ffffff'
                     : reprojNodeColor === 'black' ? '#000000'
                     : reprojNodeColor === 'track' ? reprojTrackColor
+                    // From the Brightness-adjusted color, so nodes stay darker
+                    // than their edges at any Brightness.
+                    : reprojNodeColor === 'dark' ? trailColor(reprojTrackColor, 'dark')
                     : '#ffffff';
 
                 if (reprojInst) {
