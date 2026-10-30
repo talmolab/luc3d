@@ -7,7 +7,7 @@
  * check runs and finds nothing, the case where the next step used to be unclear.
  *  1. Clicking Track All opens ONE summary: identities for the animal count,
  *     frames tracked, frames with both animals, how long tracking took (with its
- *     fps and real-time multiplier), a row per
+ *     fps and real-time multiplier), what the 2D pose check flagged, a row per
  *     identity, the body-size check "No close encounters to check" with its own
  *     time, the image check "Not run" (no time), and a Next step that says size cannot separate similar animals —
  *     with Triangulate All as the focused primary button and "Check by images…"
@@ -30,7 +30,8 @@
  *  5. Track Frame Range does not open it.
  * Fixture B (one camera sees nothing): nothing is matched across views.
  *  6. The summary says "Nothing was tracked.", lists no checks, and its primary
- *     opens the Tracking Wizard.
+ *     opens the Tracking Wizard. Its 60 frames are too few for the 2D pose check
+ *     to learn from, and its row says "Not checked".
  * Fixture C (labels swapped after one encounter, as in track-auto-size-switch-check):
  *  7. With a switch found, the primary is "Review switches": it closes the box,
  *     shows the ID Switches tab and lands on the first flagged switch.
@@ -162,6 +163,9 @@ try {
     const tm = /^Tracking time\|(?:<0\.1|\d+(?:\.\d)?) s\|([\d,.]+) fps · ([\d,.]+)×$/.exec(s.stats[3] || '');
     const tfps = tm ? +tm[1].replace(/,/g, '') : NaN, tx = tm ? +tm[2].replace(/,/g, '') : NaN;
     check(tm && Math.abs(tfps / 30 - tx) <= Math.max(0.05, tx * 0.02), `tracking time row with fps and real-time multiplier: ${s.stats[3]}`);
+    // The 2D pose check ran on every detection (pose/pose-check.js); the fixture's poses are clean.
+    check(/^2D poses\|None flagged\|of [\d,]+$/.test(s.stats[4] || '') && s.stats.length === 5,
+        `2D poses row, nothing flagged in clean poses: ${s.stats[4]}`);
     check(JSON.stringify(s.ids) === JSON.stringify(['id_0 100%', 'id_1 100%']), `a row per identity: ${JSON.stringify(s.ids)}`);
     const size = s.checks.find(c => c.cue === 'size'), image = s.checks.find(c => c.cue === 'image');
     // The fixture keeps the animals apart, so there is nothing for the check to score.
@@ -332,8 +336,10 @@ try {
     });
     s = await summary();
     check(s.count === 1 && s.headline === 'Nothing was tracked.', `nothing matched: "${s.headline}"`);
+    // 60 frames are too few for the 2D pose check to learn a camera's poses from, and the row says so.
     check(s.stats[0] === 'Identities|0|for 2 animals' && s.stats[1] === 'Frames tracked|0 of 60|0.0%' &&
-        /^Tracking time\|/.test(s.stats[2]) && s.stats.length === 3, `stats (no all-animals row): ${JSON.stringify(s.stats)}`);
+        /^Tracking time\|/.test(s.stats[2]) && s.stats[3] === '2D poses|Not checked|too few complete poses to learn from' &&
+        s.stats.length === 4, `stats (no all-animals row): ${JSON.stringify(s.stats)}`);
     check(s.checks.length === 0 && s.ids.length === 0, 'no check rows and no identity rows');
     check(s.primary === 'Tracking Wizard…', `primary: ${s.primary}`);
     await page.click('#trackSummaryPrimary');

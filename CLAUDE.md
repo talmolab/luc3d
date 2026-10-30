@@ -4,7 +4,7 @@ Multi-view pose annotation GUI. Vanilla JS ES modules served as static files —
 
 ## Architecture
 `index.html` loads `app.js` (`<script type="module">`), which only imports `pose/initialization.js`. Per-module purpose/exports/dependents: **`MODULES.md`** (repo root).
-- `pose/` — data model, cross-view tracking, DLT triangulation, plane/mesh/origin models, ID-switch checks, lazy residency, the tracker's detection-filter rule (`detection-filter-stats.js`, also what the Tracking Wizard counts with), app init (pure logic, mostly DOM-free). Workers: Track All runs on one (`tracker-pool.js`); triangulation math is `triangulation-core.js`, solved in parallel by `triangulation-pool.js`.
+- `pose/` — data model, cross-view tracking, DLT triangulation, plane/mesh/origin models, ID-switch checks, Track All's 2D pose check (`pose-check.js` + `pose-check-session.js`), lazy residency, the tracker's detection-filter rule (`detection-filter-stats.js`, also what the Tracking Wizard counts with), app init (pure logic, mostly DOM-free). Workers: Track All runs on one (`tracker-pool.js`); triangulation math is `triangulation-core.js`, solved in parallel by `triangulation-pool.js`.
 - `ui/` — rendering, interaction, panels, modals, timeline, 3D viewport, settings, exports.
 - `loading/` — video decoding, session/SLP loading, file selection, web workers.
 - `import-export/` — save/load, SLP import/merge, `metadata.lucid` serializers, mesh export.
@@ -126,6 +126,18 @@ Tests: `test-lazy-residency.mjs`, e2e `lazy-playback-eviction`, `sequence-lazy-w
 - SLEAP analysis `.h5` `point_scores` are dropped on purpose (see the NOTE in `loading/slp-import-worker.js` `parseAnalysisH5`).
 
 Tests: `test-node-scores.mjs`, `test-node-score-export.js`, e2e `node-score-tooltip`.
+
+## Track All's 2D pose check: common, uncommon, outlier
+
+Every tracking pass scores every 2D prediction by how common its shape is among its own camera's poses (`pose/pose-check.js`, applied by `pose/pose-check-session.js`): Procrustes to the camera's mean shape, then a Mahalanobis distance normalized by its degrees of freedom (the "pose score", about 0 when typical). ≥ `poseUncommonZ` (10) is uncommon, ≥ `poseOutlierZ` (15) outlier. Both are counted in the Track All summary, marked in the views (amber ?, red ✕) and on the seekbar (`ui/seekbar-pose-flags.js`, one canvas column per pixel — a check can flag tens of thousands of frames), and named in the node tooltip; `]` / `[` step through the flagged frames. User instances are never checked.
+- **Leaving outliers out of tracking is opt-in (`poseExcludeOutliers`, default off).** Measured: it fixed two swaps and caused two (a new lasting swap on the 5-mouse recording; 150448 98.7 → 80.9% with the match gate on). Never turn it on by default without a benchmark. `buildTrackerInputs` and `buildTrackerDetections` drop outliers at the same point, so worker == inline.
+- **Never project the residual off the mean shape's direction.** An unalignable pose gets scale ≈ 0 and residual = −mean, so projecting it out scores the worst poses as typical.
+- Missing nodes use their own visibility pattern's covariance, from complete poses re-aligned on those nodes, not a sub-block of the full one.
+- The fit set is picked by a hash of each pose's coordinates, so eager and lazy loads give the same model.
+- **`session.poseCheck` is transient**, never saved, and nothing is written onto an Instance. Tracks ▸ Check Poses (`ui/pose-check-command.js`) brings the verdicts back without tracking and without marking the project dirty. `trimPosePatterns` (128 patterns per camera) runs only after a check, never during one.
+- **The thresholds are calibrated on real data; a model change voids them.** At 10, 1 good pose in 542 is flagged; at 15, 1 in 13,312 (vs the reprojection of proofread 3D on six SLAP sessions). Proofreaders' deletions are not the yardstick (mostly well-shaped extras and fragments).
+
+Tests: `test-pose-check.mjs`, `test-track-summary.mjs`, e2e `track-all-pose-check`, `check-poses-command` (shared scene in `tests/e2e/fixtures/pose-check-scene.js`).
 
 ## Triangulation must not depend on where the origin is
 

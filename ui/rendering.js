@@ -16,6 +16,9 @@ import { dropDerivedReprojections } from '../pose/lazy-residency.js';
 import { drawFrameOverlays } from './overlays.js';
 import { syncViewLegends } from './view-legend.js';
 import { isCameraTracked, getTrackingThreshold } from './settings.js';
+import { poseCheckOf } from '../pose/pose-check-session.js';
+import { syncSeekbarPoseFlags } from './seekbar-pose-flags.js';
+
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
@@ -35,6 +38,11 @@ import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
 } from './frame-counters.js';
+
+// A view's verdict function for drawFrameOverlays' pose-check marks.
+function poseCheckOfView(session, viewName) {
+    return function (inst) { return poseCheckOf(session, viewName, inst); };
+}
 
 // ============================================
 // Reproj/Error visibility
@@ -335,6 +343,9 @@ export function drawAllOverlays(frameIdx, viewFrames) {
     // A node tooltip names a node on the frame it was hovered on; on any other
     // frame that node has moved out from under the pointer.
     syncNodeTooltipFrame(frameIdx);
+    // The seekbar's flagged-pose ticks follow the session's pose check, which
+    // Track All and Check Poses replace and then redraw (a no-op otherwise).
+    syncSeekbarPoseFlags(state.session, state.totalFrames);
 
     // Lazy H5: fetch frame data on demand if not yet loaded
     if (state.session.lazyLoader && !state.session.frameGroups.has(frameIdx)) {
@@ -618,6 +629,9 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             selectedUnlinkedId: selectedUnlinked ? selectedUnlinked.id : null,
             editGroupTarget: editGroupTarget,
             trackingExcluded: !isCameraTracked(view.name),
+            // The 2D pose check's verdicts (after Track All), for its marks.
+            poseCheckOf: state.session && state.session.poseCheck
+                ? poseCheckOfView(state.session, view.name) : null,
         });
 
         // Annotated planes (View ▸ Define Planes). Frame-independent, so they
