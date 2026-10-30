@@ -28,6 +28,10 @@
 // size on every close; a caller can name its old default (`legacyDefaultSize`)
 // so such a record counts as unsized.
 //
+// With `fillHeight`, a card whose size the user has not chosen takes the viewport's
+// whole height (less the margin) and follows it as the window changes, so a large
+// screen means less scrolling. Dragging the resize grip takes over from there.
+//
 // ## Clamping is the load-bearing part
 //
 // Restoring a remembered rect blindly is how a modal ends up off-screen: the
@@ -191,7 +195,7 @@ export function clearGeometry(id, storage) {
  * @param {HTMLElement} card
  * @param {{id:string, handle?:HTMLElement, minW?:number, minH?:number,
  *          margin?:number, storage?:Storage, noDragSelector?:string,
- *          legacyDefaultSize?:{w:number,h:number}}} opts
+ *          legacyDefaultSize?:{w:number,h:number}, fillHeight?:boolean}} opts
  * @returns {function(): void} dispose — removes every listener it added
  */
 export function installModalGeometry(card, opts) {
@@ -238,6 +242,12 @@ export function installModalGeometry(card, opts) {
         return { x: r.left, y: r.top, w: r.width, h: r.height, sized: sized };
     }
 
+    // `geom`, at the viewport's full height if the user has not chosen a size.
+    function filled(geom) {
+        if (!o.fillHeight || sized) return geom;
+        return { x: geom.x, y: min.margin, w: geom.w, h: viewport().height - 2 * min.margin };
+    }
+
     // --- Restore, or centre at the size the stylesheet asked for ------------
     // A remembered position comes back as is; a remembered size only if the
     // user chose it. Otherwise the stylesheet's size, keeping the old centre.
@@ -247,13 +257,14 @@ export function installModalGeometry(card, opts) {
         sized = true;
         apply(clampGeometry(stored, viewport(), min));
     } else if (stored) {
-        apply(clampGeometry({
+        apply(clampGeometry(filled({
             x: stored.x + (stored.w - base.width) / 2,
             y: stored.y + (stored.h - base.height) / 2,
             w: base.width, h: base.height,
-        }, viewport(), min));
+        }), viewport(), min));
     } else {
-        apply(centerGeometry(base.width, base.height, viewport(), min));
+        const centred = centerGeometry(base.width, base.height, viewport(), min);
+        apply(centred && clampGeometry(filled(centred), viewport(), min));
     }
 
     let persistTimer = 0;
@@ -316,7 +327,7 @@ export function installModalGeometry(card, opts) {
 
     // --- Keep the card reachable when the window changes size ---------------
     function onWindowResize() {
-        apply(clampGeometry(current(), viewport(), min));
+        apply(clampGeometry(filled(current()), viewport(), min));
         persistSoon();
     }
     window.addEventListener('resize', onWindowResize);

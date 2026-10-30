@@ -173,8 +173,8 @@ try {
     });
     await openModal();
     let opened = await rect();
-    check(opened.w === 1320 && opened.h === 800,
-        `an old record at the old 880x620 default opens at the new default (${opened.w}x${opened.h})`);
+    check(opened.w === 1320 && opened.h === 900 - 48 && opened.y === 24,
+        `an old record at the old 880x620 default opens at the new default: the window's height (${opened.w}x${opened.h})`);
     check(Math.abs((opened.x + opened.w / 2) - (260 + 440)) <= 1,
         `...centred where the old card was (${opened.x})`);
     await closeModal();
@@ -271,6 +271,43 @@ try {
         clamped.x + clamped.w <= vp.width + 1 && clamped.y + clamped.h <= vp.height + 1,
         `a rect remembered from a bigger screen is pulled fully back into view ` +
         `(${JSON.stringify(clamped)} in ${vp.width}x${vp.height})`);
+    await closeModal();
+
+    // ---- 7. Until the user chooses a size, the card fills the window's height --
+    await page.evaluate(() => localStorage.removeItem('lucid.modalGeometry.v1'));
+    await page.setViewportSize({ width: 1400, height: 1400 });
+    await openModal();
+    let tall = await rect();
+    check(tall.h === 1400 - 48 && tall.y === 24 && tall.w === 1320, `on a tall window it opens at the full height (${JSON.stringify(tall)})`);
+    await page.setViewportSize({ width: 1400, height: 1100 });
+    await page.waitForTimeout(100);
+    tall = await rect();
+    check(tall.h === 1100 - 48 && tall.y === 24, `and follows the window down (${JSON.stringify(tall)})`);
+    await page.setViewportSize({ width: 1400, height: 1300 });
+    await page.waitForTimeout(100);
+    tall = await rect();
+    check(tall.h === 1300 - 48 && tall.y === 24, `and back up (${JSON.stringify(tall)})`);
+    const before = tall.x;
+    const hdr = await page.evaluate(() => { const r = document.querySelector('.settings-modal-title').getBoundingClientRect(); return { x: r.left + 20, y: r.top + 5 }; });
+    await page.mouse.move(hdr.x, hdr.y);
+    await page.mouse.down();
+    await page.mouse.move(hdr.x - 10, hdr.y + 30, { steps: 4 });
+    await page.mouse.up();
+    tall = await rect();
+    check(tall.x === before - 10 && tall.h === 1300 - 48, `dragging it sideways keeps the height (${JSON.stringify(tall)})`);
+    await page.evaluate(() => {
+        const c = document.querySelector('.settings-modal');
+        c.style.height = '700px';
+    });
+    await page.waitForTimeout(300);
+    await closeModal();
+    await openModal();
+    tall = await rect();
+    check(tall.h === 700, `a size the user chose stays, even on a tall window (${tall.h})`);
+    await page.setViewportSize({ width: 1400, height: 1500 });
+    await page.waitForTimeout(100);
+    tall = await rect();
+    check(tall.h === 700, `and does not follow the window (${tall.h})`);
     await closeModal();
 
     check(errs.length === 0, `no page/console errors (got ${JSON.stringify(errs)})`);

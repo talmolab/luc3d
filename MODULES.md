@@ -2750,7 +2750,7 @@ stop being a diagnostic — are spelled out in the "LUCID DOES NON-LINEAR
 TRIANGULATION ONLY" comment in `pose/triangulation-core.js`.
 
 Naming note: the user-facing label is **"Refined" / "Ref"** (Settings ▸ Default
-Triangulation shows "Refined (Ref)"; the Triangulate / Triangulate All dropdowns
+Triangulation shows "Refined (Bundle adjustment), per node"; the Triangulate / Triangulate All dropdowns
 show "Ref"), not "Bundle Adjustment", which wrongly implied camera refinement.
 The method key is still `'ba'` in `options.method`,
 `group.triangulationMethod`, `localStorage`, and the per-group
@@ -3695,6 +3695,27 @@ order, slot recycling, copies, pooling, freeing); end to end
 `tests/e2e/image-check-cache.mjs`.
 
 ---
+
+### pose/threshold-examples.js
+
+**Purpose.** The session's own nodes for the reprojection error threshold card.
+`scanThresholdExamples` solves up to `EXAMPLE_MAX_FRAMES` frames with the threshold
+off, a slice per task, and lists every node 3 or more cameras see, smallest worst
+camera error first; `firstOverThreshold` counts those over a threshold, and
+`pickRepresentativeExamples` takes a fixed set spread on a log scale of error.
+`solveExample` runs the rule on one node solve by solve, through
+`triangulateAndReproject` on a one-node view of the group with `includedCameras`, so
+it matches a real Triangulate. Read-only; a lazy frame's members are hydrated for the
+read and given back.
+
+**Key exports.** `EXAMPLE_MAX_FRAMES`, `EXAMPLE_MIN_CAMERAS`, `EXAMPLE_SET_SIZE`,
+`pickRepresentativeExamples`, `calibratedCameras`,
+`sampleExampleFrames`, `firstOverThreshold`, `scanThresholdExamples`, `solveExample`,
+`solveExample3d`, `solveFrame3d`, `frameFromPoints`, `lineOfSight`, `pickShownCameras`.
+
+**Imports.** `pose/triangulation-core.js`, `pose/lazy-residency.js`,
+`pose/placeholder-cameras.js`. **Imported by** `ui/threshold-examples-panel.js`.
+**Tests.** `tests/test-threshold-examples.mjs`.
 
 ### pose/view-align.js
 
@@ -5463,7 +5484,9 @@ Gives a modal card a drag handle, a resize grip (CSS `resize: both`) and a
   clamping on the way in would let one small window permanently shrink the
   remembered size.
 - `installModalGeometry(card, opts)` — restores, wires the header drag, watches
-  the CSS resize via `ResizeObserver`, re-clamps on window resize, and returns a
+  the CSS resize via `ResizeObserver`, re-clamps on window resize (with
+  `opts.fillHeight`, a card whose size the user has not chosen takes the viewport's
+  whole height and follows it; Settings uses this), and returns a
   `dispose()` that also flushes the final rect (a resize that ended inside the
   200 ms persist debounce would otherwise be lost when the modal closes).
 - `rememberedSizeIsChosen(geom, legacyDefaultSize)` — whether a record's size
@@ -6496,6 +6519,30 @@ A **LEAF module**: it imports nothing.
 stays reachable at its original path) and `ui/plane-nodes-panel.js`;
 `ui/plane-angle.js` and `ui/origin-definition.js` reach it through the
 `ui/plane-definition.js` re-export.
+
+### ui/reproj-threshold-field.js
+
+**Purpose.** The toolbar's **Reprojection error (px)** field
+(`#tbReprojThreshold`), in the Triangulate menu (hover **Triangulate ▾**) below
+Method: shows and edits the Tracking Wizard's `reprojErrorThreshold`, which every
+Triangulate run reads when it starts. Blank is off (`placeholder="off"`); the
+setting's 0 shows as blank and typing 0 means the same. Browser-wide, not per
+session, so it only follows the setting (`onTrackingThresholdsChange`, e.g.
+Settings ▸ Apply).
+
+**Editing.** As the Animals field: commits on `change` (Enter or blur), Enter
+blurs, Esc reverts and blurs. An entry out of the setting's range, or text
+`value` reports as `''` (`validity.badInput`, a stray "e"), reverts with an error
+status rather than being read as blank, and changes nothing. A change does not
+touch 3D already solved. Not in Defining Plane Mode's toolbar lock: a setting, not
+an action.
+
+**Key exports.** `wireReprojThresholdField()`.
+
+**Imports.** `./settings.js` (`getTrackingThreshold`, `getTrackingThresholdDefs`,
+`updateTrackingThresholds`, `onTrackingThresholdsChange`),
+`../import-export/save-load.js` (`setStatus`). **Imported by** `ui/ui-wiring.js`.
+Test: `tests/e2e/toolbar-reproj-threshold.mjs`.
 
 ### ui/animal-count-field.js
 
@@ -9227,6 +9274,8 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   persist). `isCameraTracked` is the boolean the tracker filters cameras by
   (`pose/tracker.js` `trackAll`/`trackCurrentFrame`); at least 2 views must stay
   included or tracking aborts with a warning.
+- `onTrackingThresholdsChange(fn)` — told after every commit of the thresholds
+  (`ui/reproj-threshold-field.js` follows it).
 - `updateTrackingThresholds(map)` — commit SOME thresholds, keeping every other
   stored override (the two tracking dialogs write the image-check settings
   through it).
@@ -9348,7 +9397,21 @@ commas. One scroller: the block grows to its full height.
 
 ### ui/settings-modal.js
 
-**Resizable, draggable, and it remembers.** The card carries CSS `resize: both`
+**The threshold card's examples.** It builds `buildThresholdExamples`
+(`ui/threshold-examples-panel.js`), hands it to the figure as `opts.examples`, starts it
+when the Default Triangulation panel is first shown, re-solves it when a Camera Views
+switch changes, and routes ← → to it while focus is inside it.
+
+**Apply keeps the window open.** Every write to `working` (a `Proxy`) repaints the
+footer by comparing it with what is stored: Apply is disabled with nothing pending
+and reads "Applied ✓" (`.is-applied`) once clicked, until the next edit; the other
+button reads Cancel with edits pending, otherwise Close. Apply also tells both
+figures what is now stored, which clears their "not saved" notes. Cancel, ×, Esc and
+the backdrop discard what has not been applied. Covered by
+`tests/e2e/settings-apply-stays-open.mjs`.
+
+**Resizable, draggable, and it remembers.** Until the user resizes it, the card
+fills the browser's height (`fillHeight`). The card carries CSS `resize: both`
 and is dragged by its header (minus the ×, via `noDragSelector`);
 `installModalGeometry` (`ui/modal-geometry.js`, id `settings`) restores the last
 size/position on open and records it on close. It is installed AFTER the
@@ -9378,9 +9441,13 @@ right panel area (`settings-panel-container`), with a Cancel / Apply footer.
 Wizard, Default Triangulation, Temporal Smoothing, then Keyboard Shortcuts):
 **Default Triangulation** (the method is picked by
 clicking one of two diagram cards from `ui/triangulation-methods-figure.js`,
-DLT or "Refined (Ref)" = bundle adjustment — no separate rows; Enter/Space on a
+DLT or "Refined (Bundle adjustment)" — no separate rows; Enter/Space on a
 focused card is handled in `onDocKeyDown`, which stops every keydown in the
-capture phase, so a listener on the card would never run), **Keyboard Shortcuts** (the
+capture phase, so a listener on the card would never run; the figure's third
+card draws the wizard's reprojection error threshold: `pickMethod` and the wizard
+field's `onEdit` redraw it, its slider only tries values, and its Use and Turn off
+buttons set `working.thresholds.reprojErrorThreshold` and the wizard field through
+`onThreshold`), **Keyboard Shortcuts** (the
 `getActions()` catalog by category; an editable entry's key chip captures a
 **chord or multi-key sequence** — keys accumulate, Ctrl/Cmd normalized to `Mod`
 via `chordFromEvent`, until a click sets it or Esc cancels; duplicates are
@@ -9395,9 +9462,9 @@ tracking and greys the row), and **Tracking Thresholds** (one field per
 `tests/e2e/settings-wizard-toggles.mjs`. And **Temporal Smoothing** (luc3d
 #134 — one **Filter Parameters** section rendering `getSmoothingParamDefs()`:
 median window, Gaussian window, max gap, minimum segment, under a figure from
-`ui/smoothing-windows-figure.js` that the two window fields redraw through
-`onEdit`, and whose sliders set the window, max gap and minimum segment fields
-back through `onParam`. Its own panel because
+`ui/smoothing-windows-figure.js` that the fields redraw through `onEdit`. Its
+sliders only try values; its Use and Turn off buttons set the window, max gap and
+minimum segment fields back through `onParam`. Its own panel because
 it is not a tracking parameter — it runs after triangulation, on 3D the tracker
 has finished with. A note warns that raising the reprojection-error threshold
 creates more gaps, hence more gap edges where the filter is least accurate. The
@@ -10683,6 +10750,8 @@ Edit Group, `startManualAssignment`, `purgeTriangulationDataForGroup`,
 dropdown item),
 `animal-count-field.js` (`wireAnimalCountField`, the Track group's Animals
 field),
+`reproj-threshold-field.js` (`wireReprojThresholdField`, the Triangulate menu's
+Reprojection error field),
 `view-align-modal.js` (`showAlignViewsModal`, View ▸ "Align Views to
 References…"),
 `seekbar-tooltip.js` (`installSeekbarTooltip`),
@@ -11365,6 +11434,70 @@ function, so the cycle through the info panel is hoist-safe).
 
 **Tests.** `tests/e2e/campy-session-folder.mjs`.
 
+### ui/figure-try-controls.js
+
+**Purpose.** The controls shared by the Settings figures, so that someone playing
+with a demo cannot change a setting by accident: `tryStrip` / `tryControl` (a dashed
+"changes the sketch only" strip of sliders, each with a text box) and `settingRow`
+(an outlined row saying what the setting is, with the only buttons that change it:
+Use, Turn off, plus Reset sketch, and "not saved until you click Apply").
+
+**Key exports.** `tryStrip`, `tryControl`, `wireTryControl(root, key, o, onValue)` →
+`{ set(value, sliderValue) }` (never rewrites the box while it has focus; ignores a
+half-typed or out-of-range entry; a slider may map positions to values, `toSlider` /
+`fromSlider`, with `ticks` under the track and a `zone` behind it), `settingRow`, `wireSettingRow(root, key, on)` →
+a function showing the setting.
+
+**Imports.** None. **Imported by** `ui/triangulation-methods-figure.js`,
+`ui/smoothing-windows-figure.js`.
+
+### ui/threshold-examples-panel.js
+
+**Purpose.** The threshold card's "In this session" band, its last section, below the
+controls and the sketches: up to four small tiles, one large one, then the
+animal in 3D. The tiles are all at one scale, each a crop of a camera's video around the
+node's prediction with the skeleton as Predictions are drawn in the views (`drawSkeleton`
+in the Visibility panel's style, `getGroupColor`), the node's prediction (orange once
+outside the threshold and no longer used), the reprojection after the rule has run, the reprojection error, the threshold as a dashed
+ring and, where a camera was dropped, the first solve's reprojection. The tiles are the
+cameras with the largest errors (`pickShownCameras`), and a line names the rest. Clicking
+a tile enlarges it; the pick holds while that camera has a tile, otherwise the largest
+error is enlarged. The arrows
+(and the ← → keys, through the modal's `onDocKeyDown`) walk a fixed set of 12 examples,
+spread from small errors to large (`pickRepresentativeExamples`), opening on the first
+at 50 px or more. The slider and the DLT / Refined switch never change the example, the
+tiles' cameras or the crops, which all come from a DLT solve with the threshold off
+(`baselineFor`): only the marks and numbers move. Never changes a setting or the
+session. The session is solved once when the panel is first shown, and once more for
+Refined's count if tried; only the example on screen decodes video
+(`view.decoder.getFrame`), a crop is copied at once, and only the newest request per
+camera runs.
+
+**Key exports.** `buildThresholdExamples({ session, isCameraIncluded })` →
+`{ el, start, update({ threshold, method }), step(by), setActive(on), invalidate, dispose }`,
+`SMALL_TILES`, `exampleResultText`, `tileVerdict`, `cropSide`.
+
+**Imports.** `pose/threshold-examples.js`, `ui/threshold-examples-3d.js`,
+`ui/app-state.js`, `ui/frame-readout.js`, `ui/overlays.js`, `ui/rendering.js`.
+**Imported by** `ui/settings-modal.js`. **Tests.**
+`tests/e2e/threshold-session-examples.mjs`; on a real recording,
+`tests/e2e/_real-threshold-examples.mjs` (no assertions).
+
+### ui/threshold-examples-3d.js
+
+**Purpose.** The 3D view in "In this session": the app's own `Viewport3D`, styled from
+Visibility ▸ 3D Viewer as the overlay export's tile is, with no cameras and with sizes
+grown to suit the close framing, showing every animal in the example's frame from the solve being tried. On top go the example node's 3D point, the
+first solve's point if a camera was dropped, and each camera's line of sight (orange if
+dropped). The framing is set per example and holds as values are tried; a drag turns it,
+the angle holds between examples, and the wheel is left to the panel's scroller.
+
+**Key exports.** `build3dView(host, { session, getGroupColor })` →
+`{ setScene, setFraming, setVisible, dispose }`; throws without WebGL or three.js.
+
+**Imports.** `ui/viewport3d.js`, `ui/overlays.js`. **Imported by**
+`ui/threshold-examples-panel.js`.
+
 ### ui/triangulation-methods-figure.js
 
 **Purpose.** The Settings ▸ Default Triangulation choice: two cards that each
@@ -11380,10 +11513,61 @@ entirely, so it gets no line, landing spot or error (a `null` landing). Captions
 so they wrap; the sketches are inline SVG coloured by theme variables
 (`.tri-methods` in `styles.css`).
 
-**The coordinates are an illustration, not solver output.** They were computed
-once for this layout (an equal-weight least-squares point for DLT, a robust
-pixel-error minimum for Refined) and are hard-coded; the real solvers are
-`triangulatePointDLT` / `triangulatePointBA` (`pose/triangulation-core.js`).
+Every sketch is the same scene from above: four cameras, one node, a green cross at
+the true position (the target), and each camera's line of sight dashed from the camera
+on (grey if the camera is a little off, orange if stray). Cameras 0, 1 and 2 are 14-16 px
+off and camera 3 is a stray, chosen so that DLT at a 50 px threshold drops it and solves again. DLT is pulled well away; Refined counts the stray less and
+lands closer, two marker diameters from the target, with the stray still counted; the
+threshold removes it, and set too low it also drops a camera that was only a little off.
+`sketch()` draws them from `FIGURE_SCENE`. A legend at the bottom-left of each card
+(`SKETCH_LEGEND`, pinned by `.tm-sketch`, clear of the centred scene) names its target, projection, prediction, reprojection,
+reprojection error and ground truth error; the legend below the figures covers the rest. Bars at the
+bottom-right (`errorTotals`, one scale in every sketch) stack each numbered camera's
+reprojection error above their sum, so DLT's larger sum can be seen against Refined's. A
+dark red line, over every other line and under the markers, is the ground truth error:
+how far the projection is from the target, also a row in the bars (in 3D, so it counts
+the part out of the page; about 52 for DLT, 20 for Refined, 15 after the threshold). The left and bottom cameras are a little off and
+the right one is a stray. DLT is pulled well away; Refined counts the stray less and
+lands close to the true position, with the stray still counted; the threshold removes
+it. `sketch()` draws them from `FIGURE_SCENE`.
+
+**The answers are the real solvers', not hand-drawn.** `FIGURE_SCENE.solves` holds
+`triangulateAndReproject`'s output (3D, landings, errors) for each method and set of
+cameras. `tests/test-triangulation-threshold-figure.mjs` re-solves it, checks every
+threshold from 1 to 120 px and the captions' claims, and on a mismatch prints the
+right numbers. The layout itself is hand-picked so that the stray is the worst
+camera for both methods (it often isn't: with no majority of good cameras, the real
+solvers can make a good camera look worst). Change it and update the wiki's
+copy (`docs/assets/triangulation/` in talmolab/luc3d-docs) too.
+
+A third, full-width card (`.tri-thr`, not a choice) shows the Tracking Wizard's
+**reprojection error threshold** (`reprojErrorThreshold`) in up to three more sketches,
+one per solve, each titled with the method: every re-solve uses the first solve's. In a
+re-solve, each camera dropped so far is drawn faded (`.tm-dropped`), its prediction
+orange (`.tm-det-out`), as in the session tiles. On every
+image plane still checked, a band `threshold` px either side of the detection (2 px
+per sketch unit, cut at the plane's ends) is where the answer may land, green /
+orange / red as that camera is within / over / over and dropped; a verdict line per
+camera sits under each sketch, and a sentence says what becomes of the node.
+Which camera is dropped, and whether the node keeps its 3D, comes from
+`thresholdPasses`, the rule `triangulateAndReproject` applies.
+
+**Trying a value never changes a setting** (`ui/figure-try-controls.js`). The
+slider, its text box and the DLT/Refined switch only redraw the sketch. Only Use
+and Turn off change the threshold, through `opts.onThreshold`; Apply saves it.
+`update({ method, threshold, saved })` follows the picked method and the setting;
+the sketch jumps to a value set elsewhere, and opens at the setting. The slider runs from
+off (every camera counts, no band, nothing dropped), then from 640 px (half of a 1280 px
+monitor, also the setting's top) down to 1 px on a log scale (`thresholdSliderPos`,
+`thresholdFromSliderPos`), with a recommended zone from 100 to 15 px. In the scene DLT
+drops camera 3 at 53 px, inside the zone, and a good camera only at 8 px, past it. The large value (`.fig-big`) is what the sketch shows.
+
+**The card never changes size as the value moves.** Every step keeps its place (a
+faded scene when the rule does not reach it, its verdict rows kept but hidden), and
+every line whose wording changes is a `stack()`: all its wordings in one grid cell,
+only the current one visible, so it is always as tall as its longest wording at any
+width. Keep new changing text in a `stack()`;
+`tests/e2e/triangulation-threshold-figure.mjs` §4 checks one size across 32 states.
 
 **Don't call Refined more accurate in general.** Measured on held-out cameras
 (9 proofread SLAP sessions), shipped Refined beat DLT in only 1 of 9 (median
@@ -11392,60 +11576,92 @@ step leaves everyday points slightly worse. Its "never worse than DLT" guard is
 on the in-sample reprojection error only. The caption (and the toolbar's Ref
 tooltip in `index.html`) say just that.
 
-**Key exports.** `buildTriangulationMethodsFigure()` → a `<figure>`.
+**Keep the threshold card's rule the solver's.** `thresholdPasses(cameras,
+solve, threshold)` restates the loop in `triangulateAndReproject` (drop only the
+worst view over the threshold per pass, never below 2 views, an error equal to
+the threshold is not over it, a node whose last views still miss is cleared).
+`tests/test-triangulation-threshold-figure.mjs` feeds it the solver's own
+errors on noisy scenes and checks it predicts the solver node for node; change
+both together. The card also says the threshold is not used by Track All's
+matching (`pose/cross-view-tracker.js` solves plain DLT on every view).
 
-**Imports.** None. **Imported by** `ui/settings-modal.js`.
+**Key exports.** `buildTriangulationMethodsFigure(opts)` → `{ el, update }`
+(`opts.onThreshold(px)`, `opts.examples`: a `buildThresholdExamples` panel, shown
+last in the threshold card and told what is being tried); `thresholdPasses` and `FIGURE_SCENE` (pure, Node-importable).
+
+**Imports.** `./figure-try-controls.js`. **Imported by** `ui/settings-modal.js`,
+`tests/test-triangulation-threshold-figure.mjs`. e2e:
+`tests/e2e/triangulation-threshold-figure.mjs`.
 
 ### ui/smoothing-windows-figure.js
 
 **Purpose.** The figure at the top of Settings ▸ Temporal Smoothing: what the
 Median window and the Gaussian window each do, as two cards (stage 1, stage 2).
-Both plot one made-up trace (one node's x over 40 frames: a slow movement,
-dashed, with one fast real move up and back on the right, plus jitter and one
+Both plot one made-up trace (one node's x over 40 frames: a slow movement, a
+solid white line under everything else that ends low, with one fast real move
+up and back, tall enough that a Gaussian visibly damps it, plus jitter and one
 one-frame spike) and draw what the stage
 makes of its input, the window around one frame (shaded) and stems at the
 bottom of that window: for the Gaussian its weights, for the median the
 window's values sorted low to high, the middle one (the median, what the spike
 frame becomes) green and the spike red. The median's output is green in both
-cards (its line on the left, with the same green dot at every frame as the
-Gaussian's input dots on the right); the Gaussian's output is blue, with an
-open black circle at every frame. Raw samples
-are open grey rings drawn over the green dots, since a median keeps many
-samples exactly and a filled dot would hide under the green one. The Gaussian's
+cards (the same line and dots, on the right as the Gaussian's input); the
+Gaussian's output is blue, with an open black circle at every frame. Raw samples
+are open grey rings joined by a grey line, the rings drawn over the green dots,
+since a median keeps many samples exactly and a filled dot would hide under the
+green one. Each card has its own legend, naming only what that card draws (the
+top two stand it in the card's top right corner, over the space above the trace's
+low end, or under the title in a narrow card; the gaps card keeps it under the chart): the Gaussian's second row follows its input (raw with the median off),
+and a key for the ring appears while a frame is picked. The legend has a fixed
+width and every entry a fixed row, blank while its mark is not drawn, so nothing
+in it moves as a stage is turned on or off. The Gaussian's
 window sits on the fast move, which survives the example windows and is
 flattened by long ones (over-smoothing).
 
 **The lines are the real filter, not drawn by hand.** `update(params)` runs
 `smoothSignalInto` (`pose/temporal-smoothing.js`) on the trace with the panel's
-working windows, so the cards follow what is typed. A window that is off (0)
-is drawn with an example (median 5, Gaussian 9) and labelled so. The Gaussian
-card's input is the median's output, except with the median off and the
-Gaussian on: then it is the raw trace and a note says the spike becomes a bump
-(why the median runs first). Colours come from `.smooth-fig` in `styles.css`.
+working windows, so the cards follow what is typed. A stage that is off (0) draws
+no window and no output, only its input, and its Frame control is disabled. The
+Gaussian card's input is the median's output, except with the median off: then it
+is the raw trace, and with the Gaussian on a note says the spike becomes a bump
+(why the median runs first). The gaps card still smooths with an example (median 5,
+Gaussian 9, labelled so) while a stage is off, because it is about the segments. Colours come from `.smooth-fig` in `styles.css`.
 
-**Sliders.** Each card has a Window slider (1–31 frames; under 3 the filter
-leaves the 3D as it is, drawn as a 1-frame window) that redraws the card
-and calls `onParam(id, value)` so the panel sets its working value and field
-(Apply then stores it), and a Frame slider with ▶ that slides the shaded window
-along the 40 frames (90 ms a frame; stops at the end, on a second click, or once
-the figure leaves the page). While a frame is picked, that stage's output is
-solid up to it and faint after it, with a ring on its value.
+**Trying a value never changes a setting** (`ui/figure-try-controls.js`). Each card
+has a Window slider with a text box (slider off, then 1–31 frames, box up to 101; under 3 the
+filter leaves the 3D as it is, drawn as a 1-frame window) and a Frame slider with a
+text box and ▶ that slides the shaded window along the 40 frames (90 ms a frame;
+stops at the end, on a second click, or once the figure leaves the page). They only
+redraw the sketch (`tried`, kept apart from `setting`). While a frame is picked,
+that stage's output is solid up to it and faint after it, with a ring on its value.
+Only a card's Use and Turn off buttons change a setting, through `onParam(id, value)`
+(the panel sets its working value and field; Apply stores it). The large value
+(`.fig-big`) is what the sketch shows.
 
 **Card 3, gaps and segments** (full width, below the two): Max gap and Minimum
 segment length on its own 60-frame trace (a 2-frame hole, a 7-frame and a
 6-frame absence with a 3-frame stretch between them; the node comes back 12 mm
-away after the 7-frame one). It runs both stages at the windows the other cards
+away after the 7-frame one, and is moving fast after the 6-frame one, so raising
+Max gap past it visibly pulls the first frame back ahead of the true movement). It runs both stages at the windows the other cards
 show over the segments `buildSegments` cuts, as the real pass does, and draws
-each absence (labelled hole or split), the output per segment (grey where too
-short to smooth) and the segments as bars. Its Max gap (0–15) and Min segment
-(1–15) sliders report through `onParam` like the Window sliders.
+each absence (labelled hole or split), the measurements' grey line (broken at
+every absence), the output per segment (grey where too
+short to smooth) and the segments as bars. Its Max gap and Min segment sliders
+(0–15, 1–15; the text boxes go further) try values the same way; its Use button
+sets both through `onParam`.
 
-**Key exports.** `buildSmoothingWindowsFigure({ onParam })` → `{ el, update(params) }`.
+**Key exports.** `buildSmoothingWindowsFigure({ onParam, saved })` → `{ el, update(params) }`;
+`stageSketch(stage, window, { medianWindow, frame })` → `{ svg, keys, truth, raw, medOut, out }`,
+one card's sketch with no controls, DOM-free, and `gapSketch({ median, gaussian, maxGap, minSegment })`
+→ `{ svg, keys, segments, truth, raw, out }`, the gaps card's; `scripts/smoothing-wiki-figures.mjs`
+draws the docs' step figures from them.
 
 **Imports.** `pose/temporal-smoothing.js` (`smoothSignalInto`, `normalizeWindow`,
-`sigmaForWindow`, `buildSegments`). **Imported by** `ui/settings-modal.js`.
+`sigmaForWindow`, `buildSegments`). **Imported by** `ui/settings-modal.js`,
+`scripts/smoothing-wiki-figures.mjs`.
 
-**Tests.** `tests/e2e/smoothing-windows-figure.mjs`.
+**Tests.** `tests/e2e/smoothing-windows-figure.mjs`; `tests/test-smoothing-figure-steps.mjs`
+(what the docs' step captions claim about the trace).
 
 ### ui/smoothing-button.js
 

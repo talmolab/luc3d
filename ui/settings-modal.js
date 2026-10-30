@@ -6,7 +6,9 @@
 // Wizard, and Temporal Smoothing (the post-triangulation 3D filter's
 // hyperparameters, luc3d #134). All edits are kept in a local working
 // state object and the visual DOM only — nothing is committed to settings.js
-// until the user clicks Apply. Cancel / close / backdrop / Escape discard.
+// until the user clicks Apply. Apply keeps the modal open and its button reads
+// "Applied ✓" until the next edit. Cancel / × / backdrop / Escape discard what
+// has not been applied; with nothing pending, Cancel reads "Close".
 //
 // Styling lives in a separate CSS file; this module only assigns the agreed
 // class names. Only one modal instance may exist at a time.
@@ -45,6 +47,7 @@ import { getActiveSession, state, timeline } from './app-state.js';
 import { drawAllOverlays } from './rendering.js';
 import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js';
 import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js';
+import { buildThresholdExamples } from './threshold-examples-panel.js';
 import { installModalGeometry } from './modal-geometry.js';
 import { refreshIdSwitchHighlight } from './id-switch-highlight.js';
 import { buildDetectionFilterPreview } from './detection-filter-preview.js';
@@ -239,15 +242,23 @@ export function showSettingsModal(initialPanel) {
     const existing = document.querySelector('.settings-overlay');
     if (existing) existing.remove();
 
-    // --- Working state: all edits mutate this, never settings.js directly. ---
-    const working = {
-        method: getDefaultTriangulationMethod(),
-        keyMap: {},
-        nodeWeights: {},
-        cameraWeights: {},
-        thresholds: {},
-        smoothing: {},
+    // Set once the footer exists: every write to `working` repaints its buttons.
+    let onWorkingEdit = function () {};
+    const watched = function (obj) {
+        return new Proxy(obj, {
+            set: function (target, key, value) { target[key] = value; onWorkingEdit(); return true; },
+        });
     };
+
+    // --- Working state: all edits mutate this, never settings.js directly. ---
+    const working = watched({
+        method: getDefaultTriangulationMethod(),
+        keyMap: watched({}),
+        nodeWeights: watched({}),
+        cameraWeights: watched({}),
+        thresholds: watched({}),
+        smoothing: watched({}),
+    });
     const actions = getActions();
     // Only editable actions are user-rebindable; the working map tracks those.
     actions.forEach(function (a) { if (a.editable) working.keyMap[a.id] = a.binding; });
@@ -306,9 +317,12 @@ export function showSettingsModal(initialPanel) {
     const title = document.createElement('div');
     title.className = 'settings-modal-title';
     title.textContent = 'Settings';
-    const closeBtn = document.createElement('div');
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
     closeBtn.className = 'settings-modal-close';
     closeBtn.textContent = '×';
+    closeBtn.setAttribute('aria-label', 'Close Settings');
+    closeBtn.title = 'Close Settings';
     header.appendChild(title);
     header.appendChild(closeBtn);
     card.appendChild(header);
@@ -358,9 +372,25 @@ export function showSettingsModal(initialPanel) {
     triPanel.appendChild(triTitle);
 
     // The two methods are chosen by clicking their diagram cards
-    // (`ui/triangulation-methods-figure.js`), not separate rows.
-    const triFigure = buildTriangulationMethodsFigure();
-    const methodCards = Array.from(triFigure.querySelectorAll('.tri-method-choice'));
+    // (`ui/triangulation-methods-figure.js`), not separate rows. Its third card
+    // shows the Tracking Wizard's reprojection error threshold. Its slider only
+    // redraws the sketch; its Use and Turn off buttons set the same working value
+    // and the wizard's field.
+    const reprojThresholdDef = thresholdDefs.find(function (d) { return d.id === 'reprojErrorThreshold'; });
+    const thrExamples = buildThresholdExamples({
+        session: activeSession,
+        isCameraIncluded: function (name) { return working.cameraWeights[name] !== 0; },
+    });
+    const triFigure = buildTriangulationMethodsFigure({
+        examples: thrExamples,
+        onThreshold: function (value) {
+            working.thresholds.reprojErrorThreshold = value;
+            const field = reprojThresholdDef && panelContainer.querySelector(
+                '.settings-panel[data-panel="wizard"] input[aria-label="' + reprojThresholdDef.label + '"]');
+            if (field) field.value = String(value);
+        },
+    });
+    const methodCards = Array.from(triFigure.el.querySelectorAll('.tri-method-choice'));
     function pickMethod(method) {
         working.method = method;
         methodCards.forEach(function (c) {
@@ -368,14 +398,16 @@ export function showSettingsModal(initialPanel) {
             c.classList.toggle('checked', on);
             c.setAttribute('aria-checked', on ? 'true' : 'false');
         });
+        triFigure.update({ method: method });
     }
     // Enter/Space on a focused card is handled in `onDocKeyDown`: it stops
     // every keydown in the capture phase, so a listener on the card never runs.
     methodCards.forEach(function (c) {
         c.addEventListener('click', function () { pickMethod(c.dataset.method); });
     });
+    triFigure.update({ threshold: working.thresholds.reprojErrorThreshold, saved: working.thresholds.reprojErrorThreshold });
     pickMethod(working.method);
-    triPanel.appendChild(triFigure);
+    triPanel.appendChild(triFigure.el);
 
     // Docs link for additional information on triangulation methods.
     const triDocsNote = document.createElement('div');
@@ -660,6 +692,7 @@ export function showSettingsModal(initialPanel) {
             // An on/off switch: on = the view takes part in tracking (1), off = excluded (0).
             const sw = makeToggle(working.cameraWeights[name] !== 0, 'Include view ' + name + ' in tracking', function (on) {
                 working.cameraWeights[name] = on ? 1 : 0;
+                thrExamples.invalidate();
                 reflectExcluded();
                 filterPreview.update();
             });
@@ -691,8 +724,11 @@ export function showSettingsModal(initialPanel) {
     thresholdDefs.forEach(function (def) {
         const isFilter = def.id === 'filterMinVisibleNodes' || def.id === 'filterMinInstanceScore' ||
             def.id === 'filterMinMeanNodeScore';
-        thSection.body.appendChild(buildParamRow(def, working.thresholds,
-            isFilter ? function () { filterPreview.update(); } : null));
+        const onEdit = isFilter ? function () { filterPreview.update(); }
+            : def.id === 'reprojErrorThreshold'
+                ? function () { triFigure.update({ threshold: working.thresholds.reprojErrorThreshold }); }
+                : null;
+        thSection.body.appendChild(buildParamRow(def, working.thresholds, onEdit));
         // The readout goes right under the last of the three filter fields.
         if (def.id === 'filterMinMeanNodeScore') thSection.body.appendChild(filterPreview.root);
     });
@@ -737,9 +773,11 @@ export function showSettingsModal(initialPanel) {
     smPanel.appendChild(smHint);
 
     // What the two windows do, redrawn as they are typed
-    // (`ui/smoothing-windows-figure.js`). Its sliders set the same working
-    // values and the matching field.
+    // (`ui/smoothing-windows-figure.js`). Its sliders only redraw the sketch;
+    // its Use and Turn off buttons set the same working values and the
+    // matching field.
     const smFigure = buildSmoothingWindowsFigure({
+        saved: Object.assign({}, working.smoothing),
         onParam: function (id, value) {
             working.smoothing[id] = value;
             const def = smoothingDefs.find(function (d) { return d.id === id; });
@@ -784,6 +822,20 @@ export function showSettingsModal(initialPanel) {
     footer.appendChild(applyBtn);
     card.appendChild(footer);
 
+    // The buttons follow `working` against what is stored: an edit undone by hand
+    // has nothing to apply. "Applied" is only said once Apply has been clicked.
+    let storedSnapshot = JSON.stringify(working);
+    let appliedOnce = false;
+    function paintFooter() {
+        const pending = JSON.stringify(working) !== storedSnapshot;
+        applyBtn.disabled = !pending;
+        applyBtn.classList.toggle('is-applied', !pending && appliedOnce);
+        applyBtn.textContent = !pending && appliedOnce ? 'Applied ✓' : 'Apply';
+        cancelBtn.textContent = pending ? 'Cancel' : 'Close';
+    }
+    onWorkingEdit = paintFooter;
+    paintFooter();
+
     // --- Nav behavior -----------------------------------------------------
     function selectPanel(name) {
         Object.keys(navItems).forEach(function (key) {
@@ -793,6 +845,8 @@ export function showSettingsModal(initialPanel) {
             panels[key].classList.toggle('active', key === name);
         });
         if (name === 'wizard') filterPreview.start();
+        if (name === 'triangulation') thrExamples.start();
+        thrExamples.setActive(name === 'triangulation');
         writeLastPanel(name);
     }
     NAV_ITEMS.forEach(function (item) {
@@ -810,6 +864,7 @@ export function showSettingsModal(initialPanel) {
     function teardown() {
         document.removeEventListener('keydown', onDocKeyDown, true);
         filterPreview.dispose();
+        thrExamples.dispose();
         if (disposeGeometry) { disposeGeometry(); disposeGeometry = null; }
         overlay.remove();
     }
@@ -826,7 +881,12 @@ export function showSettingsModal(initialPanel) {
         setCameraWeights(working.cameraWeights);
         setTrackingThresholds(working.thresholds);
         setSmoothingParams(working.smoothing);
-        teardown();
+        storedSnapshot = JSON.stringify(working);
+        appliedOnce = true;
+        paintFooter();
+        // The figures' "not saved until you click Apply" notes measure from here now.
+        triFigure.update({ saved: working.thresholds.reprojErrorThreshold });
+        smFigure.update(working.smoothing, Object.assign({}, working.smoothing));
         // Reflect committed camera-inclusion changes immediately: excluded views
         // grey out in both the video overlays and the timeline.
         try { drawAllOverlays(state.currentFrame); } catch (e) { /* no active render yet */ }
@@ -850,6 +910,11 @@ export function showSettingsModal(initialPanel) {
         if (choice && (e.key === 'Enter' || e.key === ' ')) {
             e.preventDefault();
             pickMethod(choice.dataset.method);
+            return;
+        }
+        if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && e.target && e.target.closest && e.target.closest('.thr-ex')) {
+            e.preventDefault();
+            thrExamples.step(e.key === 'ArrowLeft' ? -1 : 1);
             return;
         }
         if (e.key === 'Escape') {
@@ -881,6 +946,7 @@ export function showSettingsModal(initialPanel) {
         minW: 520,
         minH: 320,
         margin: 24,
+        fillHeight: true,
         // The opening size before it widened (to 1040x620, now 1320x800);
         // records holding it were saved without a resize, so they open at the
         // current default. Later records carry `sized`, so they follow it too.
