@@ -8822,7 +8822,12 @@ Model runs are serialised on a queue, so the check's one-ahead request decodes
 and crops the next frame while the GPU embeds the current one.
 `maxViewsPerAnimal` (from `imageCheckMaxViews`) embeds only each animal's N
 largest views (`selectViews`, by Nose–TTI pixel length, decided from the
-keypoints before decoding); cameras no animal needs are not fetched.
+keypoints before decoding); a camera decodes only the frames where it has a crop to
+cut: `prepareFrames` plans every frame's crops (`planFrameCrops`) before it opens the
+readers, each camera's reader gets only its frames, and `getEmbeddings` cuts exactly
+the planned crops. Streaming decodes from a keyframe up to the last frame asked in its
+gap, so a camera saves where it has no crop in the rest of a gap (CD1, 3 mice: 18%
+fewer frames decoded; SLAP 145420, 4 mice: 1%).
 Cropping runs in a pool of module workers (`createCropPool`,
 `ui/image-crop-worker.js`; one per core but one, at most 8; one job = one view of
 one frame, its VideoFrame transferred and closed by the worker — a decoder-cached
@@ -8857,7 +8862,22 @@ other apps' GPU use is not in it (no browser API reports it), and its tooltip
 says so. WebNN is not called a GPU (the browser picks its device).
 **Decode workers were tried and removed** (no gain on an M2 Pro, half speed on
 a Windows RTX VM). Cheaper decoding has to come from the recordings (dense
-keyframes — see below).
+keyframes — see below) or from decoding fewer frames: on an M2 Pro the check
+decodes at the hardware's rate for each stream (SLAP's open-GOP B-frame HEVC ~2,150
+frames/s for 8 cameras, CD1's P-only HEVC ~4,400; a bare decoder never flushed, mediabunny's
+queue caps and two decoders per camera all measured the same, 2026-10-28).
+**Unreferenced frames are not decoded** unless they are a sample
+(`unreferencedSkipper`, `skippingSamples`): each streaming reader gets a
+`VideoSampleSink` of its own whose packet sink notes each target's packet (mediabunny
+reads it before decoding up to it) and whose decoder drops every other packet that
+`isUnreferenced` (`referenceFormat` of the track's decoder config: HEVC `_N` slice
+types at the SPS's highest temporal sub-layer, H.264 `nal_ref_idc` 0; other codecs,
+or no avcC/hvcC: nothing dropped). No picture is predicted from those, so every sample
+decodes to the same pixels (raw planes compared on the SLAP videos and in
+`tests/e2e/image-unreferenced-skip.mjs`). x265's defaults (the SLAP recordings) make
+~59% of frames TRAIL_N; recordings without B-frames (campy NVENC/QSV) have none.
+Playback's sink is untouched. `window.LUCID_IMAGE_SKIP_UNREFERENCED = 0` turns it off;
+`stats().skippedFrames` counts them (the speed line: "· N unreferenced frames not decoded").
 **Keyframe sampling.** `prepareFrames` reads each camera's keyframes from the
 container's packet index (`keyframeIndices`: mediabunny
 `EncodedPacketSink.packets(…, {metadataOnly: true})`, `type === 'key'`, mapped to
@@ -8978,7 +8998,9 @@ Promise<Float32Array[]>, terminate()}`; `createCropPool(clock?)` -> `{broken, ru
 after a failure); `cannotRun(reason, cause)` (an Error whose message is the reason
 the check cannot run, flagged `cannotRun`); `asModelDownloadFailure(err)` (a failed
 download as `MODEL_OFFLINE_REASON`, else `err` unchanged); `MODEL_OFFLINE_REASON`;
-`selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
+`selectViews(geos, maxViews)`; `referenceFormat(config)` -> `{codec: 'hevc'|'avc', lengthSize, maxTid}` | null,
+`isUnreferenced(data, fmt)`, `unreferencedSkipper(decoder)` -> Promise<`{VideoSampleSink, track, fmt}` | null>,
+`skippingSamples(skipper, ts, count)` (unreferenced frames, above); `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
 `summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`;
 `describeAdapter(info)`, `gpuAdapterInfo(device, adapter)` -> `{name, fallback}`,
 `createLoadMeter` (re-exported from ui/load-graph.js, where it now lives), `GPU_LOAD_WINDOW_MS` (=
@@ -9032,7 +9054,8 @@ any version bump.
 `pose/lazy-residency.js` (`hydrateFrameMembers2d`, `releaseFrameMembers2d` — DOM-free,
 so the crop worker can load it), `ui/load-graph.js` (`createLoadMeter`,
 `createBusyClock`, `formatCpuLoad`, `LOAD_WINDOW_MS`); `mediabunny`
-(`EncodedPacketSink`, imported LAZILY inside `keyframeIndices` — a static bare
+(`EncodedPacketSink` and `VideoSampleSink`, imported LAZILY inside `keyframeIndices` and
+`unreferencedSkipper` — a static bare
 import would break this module in Node tests and in the crop worker, which has no
 importmap). Spawns `ui/image-crop-worker.js` and `ui/image-model-worker.js`.
 
@@ -9071,6 +9094,19 @@ bit-identical (asserted).
 [{g: cropGeometry, others: [hull]}]}` — one camera view of one frame; OUT `{id,
 tensors: [Float32Array(3 x INPUT x INPUT)]}` (transferred, one per crop, in order) or
 `{id, error}`. The worker owns the image and closes it.
+
+**Read token.** Cutting is serialised across the pool; turning crops into model inputs
+is not. A job posts `{want: id}`, waits for the pool's `{grant: true}`, cuts all its
+crops, closes the frame and posts `{release: id}`. The pool (`createCropPool`) grants
+one worker at a time. Why: Chrome on an M2 Pro sometimes gave a worker ANOTHER
+picture's pixels when two workers drew hardware-decoded VideoFrames at once — whole
+frames, about one camera-frame per run of SLAP 145420 (11,345 crops), at a different
+place every run; never with one worker, never on the main thread, and more often
+the faster frames arrive (2026-10-28; in 4 of 9 runs with the faster decoding, 1 of 9
+before it). With the token, 8 + 4 runs gave the old code's crops bit for bit, at
+~315 crops/s (above the model's ~132 crops/s at the 224-px input, ~243 at 168). Cutting from a 1:1 canvas copy of the frame
+outside the token is NOT a substitute: the frame's border is drawn differently (hard
+vs anti-aliased edge), and for a software-made VideoFrame every pixel can differ.
 
 **Imports from project modules.** `ui/image-embedder.js` (`cutCrop`,
 `writeInputTensor`, `CROP`, `INPUT`; that module's static imports —
