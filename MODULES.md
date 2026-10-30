@@ -9665,7 +9665,7 @@ of case through `pose/id-switch-check.js` `findNode`, the body = every node
 `isTailNode` does not call tail),
 `frameCropGeometry(session, frame, items, cams, atFrames, sk)` -> `geo[view][item]`, built on
 `mapFrameInstances(session, frame, items, cams, atFrames, fn)` and `streamingReader(decoder,
-frames, decode)` — both shared with `ui/brightness-sampler.js`; constants
+frames, decode, skipper?, count?)` — both shared with `ui/brightness-sampler.js`; constants
 `TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (168; 224 until 2026-10-22).
 
 **The crop** (must match the calibration): rotate so the nose points right
