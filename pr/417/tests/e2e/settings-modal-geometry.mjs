@@ -309,6 +309,11 @@ try {
     let sz = await sizeState();
     check(sz.labels === 'Default,Full' && sz.left, `Default and Full sit at the footer's left (${sz.labels})`);
     check(sz.pressed === 'Default', `Default is marked to begin with (${sz.pressed})`);
+    const icons = await page.evaluate(() => Array.from(document.querySelectorAll('.settings-size-btn')).map(b => {
+        const v = b.querySelector('svg'), r = v && v.getBoundingClientRect();
+        return v && v.getAttribute('aria-hidden') === 'true' && r.width > 10 ? v.innerHTML : null;
+    }));
+    check(icons.every(Boolean) && icons[0] !== icons[1], 'each button has its own icon');
     await page.click('.settings-size-btn[data-size="full"]');
     let fullRect = await rect();
     sz = await sizeState();

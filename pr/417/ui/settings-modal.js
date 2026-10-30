@@ -42,16 +42,16 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=905a331c322c';
-import { getActiveSession, state, timeline } from './app-state.js?v=905a331c322c';
-import { drawAllOverlays } from './rendering.js?v=905a331c322c';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=905a331c322c';
-import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=905a331c322c';
-import { buildThresholdExamples } from './threshold-examples-panel.js?v=905a331c322c';
-import { installModalGeometry } from './modal-geometry.js?v=905a331c322c';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=905a331c322c';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=905a331c322c';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=905a331c322c';
+} from './settings.js?v=aef66f4c4e73';
+import { getActiveSession, state, timeline } from './app-state.js?v=aef66f4c4e73';
+import { drawAllOverlays } from './rendering.js?v=aef66f4c4e73';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=aef66f4c4e73';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=aef66f4c4e73';
+import { buildThresholdExamples } from './threshold-examples-panel.js?v=aef66f4c4e73';
+import { installModalGeometry } from './modal-geometry.js?v=aef66f4c4e73';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=aef66f4c4e73';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=aef66f4c4e73';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=aef66f4c4e73';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -821,15 +821,26 @@ export function showSettingsModal(initialPanel) {
     sizeLabel.textContent = 'Window';
     sizeBtns.appendChild(sizeLabel);
     const SIZE_PRESETS = [
-        { name: 'default', label: 'Default', tip: 'Fill the browser\'s height, up to 1700 px wide, centred' },
-        { name: 'full', label: 'Full', tip: 'Fill the whole browser window' },
+        {
+            name: 'default', label: 'Default', tip: 'Fill the browser\'s height, up to 1700 px wide, centred',
+            // A window centred in the browser, with room either side.
+            icon: '<rect x="1" y="2.5" width="14" height="11" rx="1.5" fill="none" stroke="currentColor" opacity="0.55"/>'
+                + '<rect x="4.5" y="4" width="7" height="8" rx="0.75" fill="currentColor"/>',
+        },
+        {
+            name: 'full', label: 'Full', tip: 'Fill the whole browser window',
+            // Four corners pushed out to the edges: the usual full-screen mark.
+            icon: '<path d="M1.5 5.5V2.5a1 1 0 0 1 1-1h3M10.5 1.5h3a1 1 0 0 1 1 1v3M14.5 10.5v3a1 1 0 0 1-1 1h-3M5.5 14.5h-3a1 1 0 0 1-1-1v-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>'
+                + '<rect x="4.5" y="4.5" width="7" height="7" rx="0.75" fill="currentColor"/>',
+        },
     ];
     const sizeButtons = SIZE_PRESETS.map(function (preset) {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'settings-size-btn';
         btn.dataset.size = preset.name;
-        btn.textContent = preset.label;
+        btn.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">' + preset.icon + '</svg>';
+        btn.appendChild(document.createTextNode(preset.label));
         btn.title = preset.tip;
         btn.addEventListener('click', function () {
             if (disposeGeometry && disposeGeometry.setSizePreset) disposeGeometry.setSizePreset(preset.name);
