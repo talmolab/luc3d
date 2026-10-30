@@ -28,9 +28,12 @@
 // size on every close; a caller can name its old default (`legacyDefaultSize`)
 // so such a record counts as unsized.
 //
-// With `fillHeight`, a card whose size the user has not chosen takes the viewport's
+// With `fillHeight`, a card whose HEIGHT the user has not chosen takes the viewport's
 // whole height (less the margin) and follows it as the window changes, so a large
-// screen means less scrolling. Dragging the resize grip takes over from there.
+// screen means less scrolling. Dragging the grip's height takes over from there
+// (`heightChosen` in the record). A width dragged on its own leaves the height filling,
+// and so does a record older than the flag: its height was only ever chosen because
+// the card could not fill the window then.
 //
 // ## Clamping is the load-bearing part
 //
@@ -134,6 +137,7 @@ export function readGeometry(id, storage) {
     const out = { x: g.x, y: g.y, w: g.w, h: g.h };
     // `sized` is absent on records written before it existed.
     if (typeof g.sized === 'boolean') out.sized = g.sized;
+    if (g.heightChosen === true) out.heightChosen = true;
     return out;
 }
 
@@ -160,6 +164,7 @@ export function writeGeometry(id, geom, storage) {
         w: Math.round(geom.w), h: Math.round(geom.h),
         sized: geom.sized === true,
     };
+    if (geom.heightChosen === true) all[id].heightChosen = true;
     try {
         s.setItem(STORAGE_KEY, JSON.stringify(all));
         return true;
@@ -219,6 +224,7 @@ export function installModalGeometry(card, opts) {
     let appliedW = 0;
     let appliedH = 0;
     let sized = false;
+    let heightChosen = false;
 
     function apply(geom) {
         if (!geom) return;
@@ -239,12 +245,12 @@ export function installModalGeometry(card, opts) {
 
     function current() {
         const r = card.getBoundingClientRect();
-        return { x: r.left, y: r.top, w: r.width, h: r.height, sized: sized };
+        return { x: r.left, y: r.top, w: r.width, h: r.height, sized: sized, heightChosen: heightChosen };
     }
 
-    // `geom`, at the viewport's full height if the user has not chosen a size.
+    // `geom`, at the viewport's full height if the user has not chosen a height.
     function filled(geom) {
-        if (!o.fillHeight || sized) return geom;
+        if (!o.fillHeight || heightChosen) return geom;
         return { x: geom.x, y: min.margin, w: geom.w, h: viewport().height - 2 * min.margin };
     }
 
@@ -255,7 +261,8 @@ export function installModalGeometry(card, opts) {
     const stored = readGeometry(id, o.storage);
     if (stored && rememberedSizeIsChosen(stored, o.legacyDefaultSize)) {
         sized = true;
-        apply(clampGeometry(stored, viewport(), min));
+        heightChosen = stored.heightChosen === true;
+        apply(clampGeometry(filled(stored), viewport(), min));
     } else if (stored) {
         apply(clampGeometry(filled({
             x: stored.x + (stored.w - base.width) / 2,
@@ -315,8 +322,10 @@ export function installModalGeometry(card, opts) {
         ro = new ResizeObserver(function () {
             if (drag) return;
             const r = card.getBoundingClientRect();
-            if (Math.abs(r.width - appliedW) > 1 || Math.abs(r.height - appliedH) > 1) {
+            const heightMoved = Math.abs(r.height - appliedH) > 1;
+            if (Math.abs(r.width - appliedW) > 1 || heightMoved) {
                 sized = true;
+                if (heightMoved && o.fillHeight) heightChosen = true;
                 appliedW = r.width;
                 appliedH = r.height;
             }
