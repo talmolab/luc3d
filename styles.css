@@ -6072,6 +6072,34 @@ kbd {
   border-top: 1px solid var(--border-color);
 }
 
+.settings-size-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.settings-size-btns span { margin-right: 4px; }
+
+.settings-size-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-button);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.settings-size-btn:hover { color: var(--text-primary); }
+
+.settings-size-btn[aria-pressed="true"] {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
 .settings-btn {
   padding: 7px 18px;
   border-radius: 5px;

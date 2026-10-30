@@ -812,6 +812,37 @@ export function showSettingsModal(initialPanel) {
     // Footer.
     const footer = document.createElement('div');
     footer.className = 'settings-modal-footer';
+    // Window size: display taste, kept with the card's geometry, so Apply has nothing to do with it.
+    const sizeBtns = document.createElement('div');
+    sizeBtns.className = 'settings-size-btns';
+    sizeBtns.setAttribute('role', 'group');
+    sizeBtns.setAttribute('aria-label', 'Window size');
+    const sizeLabel = document.createElement('span');
+    sizeLabel.textContent = 'Window';
+    sizeBtns.appendChild(sizeLabel);
+    const SIZE_PRESETS = [
+        { name: 'default', label: 'Default', tip: 'Fill the browser\'s height, up to 1700 px wide, centred' },
+        { name: 'full', label: 'Full', tip: 'Fill the whole browser window' },
+    ];
+    const sizeButtons = SIZE_PRESETS.map(function (preset) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'settings-size-btn';
+        btn.dataset.size = preset.name;
+        btn.textContent = preset.label;
+        btn.title = preset.tip;
+        btn.addEventListener('click', function () {
+            if (disposeGeometry && disposeGeometry.setSizePreset) disposeGeometry.setSizePreset(preset.name);
+        });
+        sizeBtns.appendChild(btn);
+        return btn;
+    });
+    function paintSizeButtons(current) {
+        sizeButtons.forEach(function (btn) {
+            btn.setAttribute('aria-pressed', btn.dataset.size === current ? 'true' : 'false');
+        });
+    }
+    footer.appendChild(sizeBtns);
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'settings-btn settings-btn-cancel';
     cancelBtn.textContent = 'Cancel';
@@ -948,9 +979,11 @@ export function showSettingsModal(initialPanel) {
         margin: 24,
         fillHeight: true,
         fillWidth: 1700,
+        onSizePreset: paintSizeButtons,
         // The opening size before it widened (to 1040x620, now 1320x800);
         // records holding it were saved without a resize, so they open at the
         // current default. Later records carry `sized`, so they follow it too.
         legacyDefaultSize: { w: 880, h: 620 },
     });
+    if (disposeGeometry.sizePreset) paintSizeButtons(disposeGeometry.sizePreset());
 }

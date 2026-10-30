@@ -291,6 +291,66 @@ try {
     }
     await page.setViewportSize({ width: 1400, height: 900 });
 
+    // ---- 6c. The Window buttons, bottom left: Default and Full -------------------
+    await page.evaluate(() => localStorage.removeItem('lucid.modalGeometry.v1'));
+    await page.setViewportSize({ width: 2000, height: 1200 });
+    await openModal();
+    const sizeState = () => page.evaluate(() => {
+        const footer = document.querySelector('.settings-modal-footer').getBoundingClientRect();
+        const group = document.querySelector('.settings-size-btns').getBoundingClientRect();
+        const close = document.querySelector('.settings-btn-cancel').getBoundingClientRect();
+        return {
+            pressed: Array.from(document.querySelectorAll('.settings-size-btn[aria-pressed="true"]')).map(b => b.textContent).join(),
+            labels: Array.from(document.querySelectorAll('.settings-size-btn')).map(b => b.textContent).join(),
+            left: group.left - footer.left < 30 && group.right < close.left,
+            apply: document.querySelector('.settings-btn-apply').disabled,
+        };
+    });
+    let sz = await sizeState();
+    check(sz.labels === 'Default,Full' && sz.left, `Default and Full sit at the footer's left (${sz.labels})`);
+    check(sz.pressed === 'Default', `Default is marked to begin with (${sz.pressed})`);
+    await page.click('.settings-size-btn[data-size="full"]');
+    let fullRect = await rect();
+    sz = await sizeState();
+    check(fullRect.x === 0 && fullRect.y === 0 && fullRect.w === 2000 && fullRect.h === 1200 && sz.pressed === 'Full', `Full takes the whole window (${JSON.stringify(fullRect)})`);
+    check(sz.apply, 'and leaves nothing to Apply');
+    await page.setViewportSize({ width: 1800, height: 1000 });
+    await page.waitForTimeout(100);
+    fullRect = await rect();
+    check(fullRect.w === 1800 && fullRect.h === 1000, `it follows the window (${JSON.stringify(fullRect)})`);
+    await page.setViewportSize({ width: 2000, height: 1200 });
+    await page.waitForTimeout(100);
+    await closeModal();
+    await openModal();
+    fullRect = await rect();
+    sz = await sizeState();
+    check(fullRect.w === 2000 && fullRect.h === 1200 && sz.pressed === 'Full', `reopening keeps Full (${JSON.stringify(fullRect)})`);
+    await page.click('.settings-size-btn[data-size="default"]');
+    fullRect = await rect();
+    sz = await sizeState();
+    check(fullRect.w === 1700 && fullRect.x === 150 && fullRect.y === 24 && fullRect.h === 1152 && sz.pressed === 'Default', `Default goes back (${JSON.stringify(fullRect)})`);
+    await page.evaluate(() => { document.querySelector('.settings-modal').style.width = '1200px'; });
+    await page.waitForTimeout(300);
+    sz = await sizeState();
+    check(sz.pressed === '', `a dragged size marks neither (${JSON.stringify(sz.pressed)})`);
+    await page.click('.settings-size-btn[data-size="default"]');
+    await page.waitForTimeout(300);
+    fullRect = await rect();
+    sz = await sizeState();
+    check(fullRect.w === 1700 && fullRect.x === 150 && sz.pressed === 'Default', `and Default forgets the drag (${JSON.stringify(fullRect)})`);
+    await closeModal();
+    await openModal();
+    fullRect = await rect();
+    check(fullRect.w === 1700, `for good (${fullRect.w})`);
+    const titleBox = await page.evaluate(() => { const r = document.querySelector('.settings-modal-title').getBoundingClientRect(); return { x: r.left + 10, y: r.top + 5 }; });
+    await page.mouse.click(titleBox.x, titleBox.y);
+    await page.waitForTimeout(50);
+    sz = await sizeState();
+    check(sz.pressed === 'Default', `a click on the title bar that goes nowhere changes nothing (${sz.pressed})`);
+    await closeModal();
+    await page.evaluate(() => localStorage.removeItem('lucid.modalGeometry.v1'));
+    await page.setViewportSize({ width: 1400, height: 900 });
+
     // ---- 7. Until the user chooses a height, the card fills the window's height --
     await page.evaluate(() => localStorage.removeItem('lucid.modalGeometry.v1'));
     await page.setViewportSize({ width: 1400, height: 1400 });
