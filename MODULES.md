@@ -12703,10 +12703,17 @@ stops when the primary `<video>` ends.
   are detected per decoder by `judgeVideoFrameTimestamps` (the timestamp must
   move, agree with the clock within max(3 frames, 50 ms) — 3 frames alone
   misjudged Chrome at 150 fps on 60 Hz — and not BE the clock; cached as
-  `decoder._vfTimestamps = 'ok'|'bad'`). **WebKit never captures at all**
+  `decoder._vfTimestamps = 'ok'|'bad'`, with the reason in `_vfTsWhy`). Only a
+  clock copy, and a timestamp that stands still in Firefox, are final at the
+  first look. Elsewhere a timestamp that stands still or trails the clock is
+  also what a slow start looks like (Chrome on an integrated GPU, first picture
+  359-799 ms after play, luc3d #411), so the look repeats until it agrees or
+  `VF_JUDGE_WINDOW_MS` (2 s) has passed. A 'bad' reached by that timeout is
+  judged again at the next `startPlayback`. **WebKit never captures at all**
   (`videoFrameCaptureUnsafe()`): Safari's capture timestamp rarely names the
   captured picture yet can pass judging, and captures cost it presented frames.
-  While a view is still being judged it is not drawn.
+  While a view is still being judged it is not drawn, unless its timestamp
+  already moves (`'lagging'`): then its captures are painted at their own index.
 - A `'bad'` view stops capturing, is painted with `drawCurrentFrame`, and is
   indexed from a per-view requestVideoFrameCallback. **Safari** (one callback
   per shown picture) is painted INSIDE the callback at its `mediaTime`, but only
@@ -12857,6 +12864,7 @@ How it behaves:
 - `STEP_CURSOR_IDLE_MS` (3000) — idle time before a paused-stepping stream closes.
 - `STEP_BACK_CHUNK` (24) — frames decoded and cached per backward step.
 - `STEP_BACK_WARM_MS` (250) — pause after landing on a frame before warming the chunk behind it.
+- `VF_JUDGE_WINDOW_MS` (2000) — longest a playback's VideoFrame-timestamp judgement stays open before a still or trailing timestamp counts as unusable (`window.LUCID_VF_JUDGE_MS`).
 - `snapZoomToNative(oldScale, newScale, nativeScale)` → `{scale, snapped}` — the
   pure snap rule. `NATIVE_SNAP_TOL` (0.02), `NATIVE_SNAP_HOLD_MS` (250).
 - `zoomPercentLabel(scale, nativeScale, isNative)` → the pane badge's read-out
