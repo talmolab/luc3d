@@ -4083,6 +4083,42 @@ export function isPoints3dFromFile(points3d) {
     return !!points3d && _filePoints3d.has(points3d);
 }
 
+/** Smoothed `points3d` array -> the same group's 3D before any smoothing. */
+var _smoothedPoints3d = new WeakMap();
+
+/**
+ * Record that `points3d` holds SMOOTHED 3D (`pose/temporal-smoothing.js`) and
+ * what it held before the first smoothing (`source`, same layout). Two uses:
+ *  - the reprojection fill reprojects smoothed 3D like 3D read from a file: a
+ *    re-solve from the 2D would draw the unsmoothed answer, and the pass would
+ *    look as if it did nothing;
+ *  - every later pass filters `source`, not the already-smoothed values, so a
+ *    second run replaces the first instead of smoothing on top of it, and
+ *    turning both kernels off restores it.
+ * The pass writes in place, so this keys the group's own array; like
+ * `markPoints3dFromFile` it lapses when a re-solve or edit assigns a new one.
+ * @param {Float64Array|null} points3d
+ * @param {Float64Array} source
+ */
+export function markPoints3dSmoothed(points3d, source) {
+    if (points3d) _smoothedPoints3d.set(points3d, source);
+}
+
+/** Does `points3d` hold smoothed 3D? (`markPoints3dSmoothed`) */
+export function isPoints3dSmoothed(points3d) {
+    return !!points3d && _smoothedPoints3d.has(points3d);
+}
+
+/** The 3D `points3d` held before it was first smoothed, or null. */
+export function unsmoothedPoints3d(points3d) {
+    return (points3d && _smoothedPoints3d.get(points3d)) || null;
+}
+
+/** Forget that `points3d` is smoothed (after its source is copied back). */
+export function clearPoints3dSmoothed(points3d) {
+    if (points3d) _smoothedPoints3d.delete(points3d);
+}
+
 
 // --------------------------------------------------------------------------
 // Linear algebra helpers (module-level utility functions)

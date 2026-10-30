@@ -15,7 +15,7 @@ try {
   await page.waitForFunction(() => {
     const el = document.querySelector('.test-summary');
     return el && /\d+\s*\/\s*\d+/.test(el.textContent);
-  }, { timeout: 90000 });
+  }, null, { timeout: 90000 });
 
   // The summary element appears while async suites are STILL registering tests,
   // so sampling here undercounts (and does so differently run to run). Wait for

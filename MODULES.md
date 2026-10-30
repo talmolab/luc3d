@@ -731,7 +731,10 @@ is no hydration sweep and no resident-only hazard here.
 `mulMat3Vec3`, `rebaseExtrinsics`), `./pose-data.js` (`pooledPoints3d` — `applyOriginRebase` stores each re-based group in the slab pool — `points3dNodeCount`,
 `hasPoint3d`, `isPoints3dFromFile` / `markPoints3dFromFile` — a group whose 3D
 was read from a file keeps that mark across the re-base, so the display still
-reprojects it rather than re-solving). DOM-free.
+reprojects it rather than re-solving — and `unsmoothedPoints3d` /
+`markPoints3dSmoothed`: a smoothed group's pre-smoothing copy is re-based by the
+same `rebasePoints3d` (the plan's `nextUnsmoothed`), so a later smoothing run
+filters 3D in the new frame). DOM-free.
 
 **Imported by.** `ui/origin-rebase.js`.
 
@@ -936,17 +939,20 @@ against it. Each difference gets a `kind`:
 (`ui/calibration-notice.js`) does NOT branch on it — it lists only which
 sessions differ; the classification is for the console log and the tests.
 
-**Three deliberate details.** A session with NO cameras is excluded from the
-comparison and listed in `withoutCalibration` rather than counted as a third
-calibration — a per-camera folder load with no `.toml` would otherwise raise the
-modal on a perfectly consistent project. A camera whose rotation or translation
+**Three deliberate details.** A session with NO calibration — no cameras, or
+only placeholders (`hasRealCalibration` false: every camera has all-zero
+extrinsics, which is what a folder loaded with no `.toml` now gets) — is excluded
+from the comparison and listed in `withoutCalibration` rather than counted as a
+third calibration; it would otherwise raise the modal on a perfectly consistent
+project. A rig with only its reference camera at the origin is still compared. A camera whose rotation or translation
 will not read (NaN, wrong length) is DROPPED, so one malformed entry cannot
 masquerade as a divergence. And only cameras whose LENS matches contribute to the
 frame solve: a re-focused camera's extrinsics are not a statement about the origin.
 
 **Imports from project modules.** `./origin-frame.js` (`rotationAboutAxis`,
 `rotationMatrixToAxisAngle`, `normalize3`) — an `rvec` converts by handing
-`rotationAboutAxis` the vector and its own magnitude. DOM-free.
+`rotationAboutAxis` the vector and its own magnitude; `./placeholder-cameras.js`
+(`hasRealCalibration`). DOM-free.
 
 **Imported by.** `ui/calibration-notice.js`.
 
@@ -954,6 +960,64 @@ frame solve: a re-focused camera's extrinsics are not a statement about the orig
 app's own `buildOriginFrame` + `rebaseExtrinsics`, so the detector and the
 re-base cannot drift apart silently) and
 `tests/e2e/multi-session-calibration-notice.mjs` (the real calibrations off disk).
+
+---
+
+### pose/placeholder-cameras.js
+
+**Purpose.** The stand-in `Camera` a view gets when there is no calibration, and
+the rule that every view and every 2D camera key of an UNCALIBRATED session has
+one. The `.slp` writer (`buildSlpLabelsAllViews`) writes one video per
+`session.cameras` entry and skips any 2D instance whose camera is not in that
+list, and the save paths choose the views and videos to write by the same list —
+so a session with no cameras saved as an empty file ("Saved (0.0 MB)") and
+reopened with no views and no poses. A folder loaded with no `calibration.toml`
+was exactly that.
+
+**The placeholder** is the camera File ▸ Load Videos has always made:
+`rvec = tvec = [0,0,0]`, no distortion, f = 600, principal point at the image
+centre, sized from the video (640×480 when unknown). The app already reads that
+shape as "no calibration" (`ui/view-align-modal.js` `isCalibrated`,
+`ui/sessions-panes.js` `originHasCalib`, Triangulate's `sessionHasCalibration()`
+gate). No loader sets up the 3D viewer for placeholders only (folder loaders,
+`handleLoadSlpFile`, `handleLoadProjectSlpLazy`), tracking refuses with the
+Calibration Required popup, a new group is not auto-triangulated
+(`reTriangulateGroup`), and `handleLoadCalibration` replaces them when a real
+calibration is loaded.
+
+**Key exports.**
+- `makePlaceholderCamera(name, width?, height?)`.
+- `isPlaceholderCamera(cam)` — all-zero rotation AND translation (a 3×3
+  rotation matrix is calibrated).
+- `hasRealCalibration(session)` — any non-placeholder camera. Same rule as
+  `pose/triangulation.js` `sessionHasCalibration()` (which takes no argument and
+  reads `state.session`); this one takes any session and needs no app state.
+- `cameraNamesInUse(session, views?, videoFiles?)` — views (on-screen order),
+  then videos (`assignedCamera || name`), then 2D keys: frame-group instances
+  and unlinked instances (non-empty lists only), instance-group members, a lazy
+  loader's per-camera stores (`labelsByCam`).
+- `ensurePlaceholderCameras(session, views?, videoFiles?)` — appends a
+  placeholder for each name in use with no camera and assigns each unassigned
+  video to the camera named after it; returns the names added. **Does nothing
+  to a session with a real calibration**: a stand-in at the world origin would
+  join triangulation and corrupt the 3D.
+- `PLACEHOLDER_FOCAL`, `PLACEHOLDER_DEFAULT_SIZE`.
+
+**Imports from project modules.** `./pose-data.js` (`Camera`). DOM-free and
+state-free (callers pass the session's views and videos), so it loads under Node.
+
+**Imported by.** `loading/session-loader.js` (per-camera and single-SLP folder
+loaders; `handleLoadProjectSlpLazy`'s 3D gate), `import-export/save-load.js`
+(`buildSlpBytes`, for every session before writing), `import-export/slp-import.js`
+(`handleLoadSlpFile`'s 3D gate), `pose/calibration-compare.js` (placeholder-only
+sessions are not compared), `pose/tracker.js` and `ui/track-range-modal.js`
+(tracking needs a real calibration).
+
+**Tests.** `tests/test-placeholder-cameras.mjs`;
+`tests/e2e/nocalib-folder-save-reopen.mjs` (per-camera folder with no `.toml`:
+load → Track All refuses → annotate → Save As → File ▸ Open with the videos;
+deferred videos; a hand-built camera-less session; the single-SLP folder loader
+and its reopen).
 
 ---
 
@@ -1195,8 +1259,19 @@ points3d `.h5` import). `ui/rendering.js`'s reprojection fill reprojects marked
 3D rather than re-solving it, even with a reprojection-error threshold set,
 since a re-solve would show LUCID's answer instead of the file's. Keyed by the
 ARRAY so it lapses by itself: every path that re-solves or edits a group's 3D
-assigns a new array, and nothing writes a group's `points3d` in place. The
-origin re-base (`applyOriginRebase`) carries the mark to the re-based array.
+assigns a new array, and nothing but the smoothing pass writes a group's
+`points3d` in place. The origin re-base (`applyOriginRebase`) carries the mark
+to the re-based array.
+
+**Smoothed 3D is marked the same way.** `markPoints3dSmoothed(points3d, source)` /
+`isPoints3dSmoothed(points3d)` — a `WeakMap` from each array
+`pose/temporal-smoothing.js` wrote (in place) to a pooled copy of what it held
+before its FIRST smoothing (`unsmoothedPoints3d(points3d)`;
+`clearPoints3dSmoothed` forgets it). Every later pass filters that copy, so runs
+replace each other instead of stacking. The reprojection fill reprojects marked
+3D (a re-solve would draw the unsmoothed answer), `adoptPrior3d` never adopts it
+(re-triangulating undoes the pass), and the origin re-base re-bases the copy
+with the points.
 
 **`InstanceGroup.points3d` on the bulk paths lives in a slab pool.**
 `pooledPoints3d(points)` returns a `Float64Array` VIEW of exactly the group's 3N
@@ -1654,8 +1729,8 @@ session graph that holds them.
 
 **Imported by.** `demo-data.js`; `pose/` — `cross-view-tracker.js`,
 `id-switch-check.js`, `initialization.js`, `lazy-residency.js`,
-`origin-rebase.js`, `plane-data.js`, `plane-fit.js`, `tracker.js`,
-`tracker-worker.js`, `triangulation.js`, `triangulation-core.js`,
+`origin-rebase.js`, `placeholder-cameras.js`, `plane-data.js`, `plane-fit.js`,
+`tracker.js`, `tracker-worker.js`, `triangulation.js`, `triangulation-core.js`,
 `triangulation-pool.js`, `triangulation-worker.js`; `import-export/` —
 `file-io.js`, `save-load.js`, `skeleton-json.js`, `slp-import.js`,
 `slp-merge.js`, `slp-streaming-write.js`; `loading/session-loader.js`; `ui/` —
@@ -1878,9 +1953,10 @@ identity colors).
   `triangulateCurrentFrame` (`triangulation.js`) and
   `groupByIdentityAndTriangulateAll` (`ui/export-modals.js`).
 
-**WHICH function the "Triangulate All" button calls.** `ui/ui-wiring.js`
-(`wireTriDropdown('triangulateAllDropdown', …)`)
-routes the toolbar split-button by method AND by session state: `'ba'` →
+**WHICH function the Triangulate button calls.** `ui/ui-wiring.js`
+(`wireActionMenu('triangulateDropdown', …)`, its `all` handler — a click on
+the button, or its menu's All frames) routes by the default method AND by
+session state: `'ba'` →
 `triangulateAllFrames('ba')`; default/DLT with **any identities present** →
 `groupByIdentityAndTriangulateAll('dlt')` (`ui/export-modals.js`); DLT with no
 identities → `triangulateAllFrames('dlt')`. Any real tracked project takes the
@@ -1965,9 +2041,17 @@ drifts upward.
   array).
 - `./triangulation.js` — `computeFundamentalMatrix`, `triangulatePointDLT`,
   `triangulatePoints`, `reprojectPoint`, `reprojectPoints`,
-  `computeInstanceDistanceTo`, `hungarianAlgorithm`, and `loadAllLazyFrames` /
-  `sweepLazyFrameWindows` (the Track All sweeps).
+  `computeInstanceDistanceTo`, `hungarianAlgorithm`, `loadAllLazyFrames` /
+  `sweepLazyFrameWindows` (the Track All sweeps), and
+  `showCalibrationRequiredPopup`.
+- `./placeholder-cameras.js` — `hasRealCalibration`: Track This Frame and
+  `runTrackingPass` (Track All, Track Frame Range) refuse with the Calibration
+  Required popup when every camera is a placeholder (a folder loaded with no
+  calibration), as Triangulate does — cross-view tracking on cameras that all
+  sit at the origin would build groups from 3D with no baseline.
 - `./cross-view-tracker.js` — `CrossViewTracker`, `Detection`.
+- `./run-state.js` — `noteTrackRun` (after `trackCurrentFrame`'s and
+  `runTrackingPass`'s run): the blue Track button.
 - `../ui/app-state.js` — `state`, `interactionManager`, `timeline`,
   `viewport3d`, `getActiveSession`.
 - `../ui/settings.js` — `getNodeWeightArray`, `getNodeWeight`,
@@ -2307,6 +2391,175 @@ load in `pose/tracker-worker.js`. Keep every import of this module worker-safe.
 
 ---
 
+### pose/temporal-smoothing.js
+
+**Purpose.** Post-triangulation temporal filtering of the 3D tracks — the
+smoothing half of luc3d #134 ("3d projection would benefit from anipose's
+temporal smoothing and RPE flags"). The RPE half of that issue already shipped
+as the Tracking Wizard's `reprojErrorThreshold` in `triangulateAndReproject`
+(`pose/triangulation.js`). Reads and writes `InstanceGroup.points3d` ONLY;
+`Instance._xy` (`'user'` and `'predicted'` 2D) is never modified.
+
+**Where it sits.** AFTER triangulation, never inside tracking, and never on 2D.
+Pipeline: track → proofread identities → triangulate → smooth. Smoothing before
+identities are proofread smooths ACROSS an ID swap, welding two animals'
+trajectories together; `CrossViewTracker` is causal and frame-by-frame while a
+smoother is non-causal; and the tracker's hyperparameters are measured against
+benchmark corpora that changing its 3D state would invalidate. 2D filtering was
+rejected because the low-acceleration prior is physically true in 3D and only
+approximately true under perspective projection, and because interpolating a
+missing view fabricates an observation that then votes in triangulation as if
+it were real data.
+
+**Algorithm.** Two independently switchable stages over each node's 1D
+coordinate signals (15 nodes = 45 signals per identity; nodes never enter each
+other's windows):
+1. **Median** (despike) — nonlinear, rank-based, removes impulses.
+2. **Gaussian** (smooth) — weighted mean, `sigma = (window-1)/6`, removes
+   broadband noise.
+Order is fixed: Gaussian-first would smear an isolated outlier across its
+window, after which the median can no longer remove it. Windows are coerced to
+ODD (`normalizeWindow`) so they stay centered — an even window is a half-frame
+phase shift against the video.
+
+**Missing data.** Two regimes, deliberately distinguished. ISOLATED HOLES (gap
+<= `smoothMaxGap`) are skipped with the Gaussian weights renormalized over
+present samples. SEGMENT BOUNDARIES (longer gaps, and the ends of the
+trajectory) shrink the window SYMMETRICALLY — a one-sided window is an
+extrapolation, biased toward whichever side still has data by roughly
+`velocity x half-window` (~15 mm at 10 mm/frame with a 7-window), which reads
+as the skeleton lurching at every occlusion edge. Presence is decided ONCE at
+the SKELETON level and applied to all 45 signals, because a single 1D signal
+cannot distinguish "occluded in 4 of 5 cameras" from "the animal left", and
+per-node segmentation would deform the skeleton. Gaps are NEVER filled — a NaN
+input is a NaN output — unlike anipose's `filter_3d.py`, which `np.interp`s
+across gaps of any length before filtering. This also keeps the gap structure
+invariant across the two stages, so segments are computed once and reused.
+
+**Not a lazy sweep.** `session.instanceGroups` is fully resident
+(`sweepLazyFrameWindows` releases `frameGroups`, never `instanceGroups`, and
+the SLP 2.8 columnar reader materializes every group's 3D on load — luc3d
+#189), so this walks the map directly and hydrates no 2D. It therefore cannot
+fall into the resident-only bug class of luc3d #194/#195.
+
+**Provenance.** Sets `InstanceGroup.smoothed = true` and clears the derived
+reprojection caches (`group.reprojections`; `group.reprojectedInstances` goes back
+to the shared `NO_REPROJECTED_INSTANCES`, never `clear()`ed), which refill lazily.
+It also marks the written array (`markPoints3dSmoothed`), so that refill
+reprojects the smoothed 3D instead of re-solving the 2D — without the mark,
+groups with no `triangulationMethod` (Track All's) or any group under a
+reprojection-error threshold drew the unsmoothed answer.
+
+**Runs replace, never stack.** The mark keeps a pooled copy of the group's 3D
+from before its first smoothing (taken just before the first write; the
+`slice()` matters, since `pooledPoints3d` returns an already-pooled array as-is),
+and the gather reads that copy (`unsmoothedPoints3d`), so window 60 then
+window 3 gives window 3's result. `unsmoothSession(session, {writeFrames})`
+copies it back and drops the mark (the "both windows 0" action);
+`hasSmoothed3d(session, frameIdx?)` says whether any group (on a frame, or
+anywhere) is smoothed; the session-wide answer walks only the frames a pass
+wrote (a per-session `WeakMap` set), dropping each one found no longer
+smoothed, because `ui/smoothing-button.js` asks on every overlay draw.
+Saved with the project: the source goes in the file and comes back marked
+(`import-export/smoothing-metadata.js`), and a reader registers the frames it
+re-marked with `noteSmoothedFrames(session, frames)` so the button finds them.
+`triangulationMethod` is deliberately UNTOUCHED: smoothing is
+orthogonal to which solver produced the points (a group can be BA-solved AND
+smoothed), and a third value there would erase the solver identity
+`resolveTriangulationMethod` exists to preserve.
+
+**Exports.** `normalizeWindow`, `sigmaForWindow`, `buildSegments`, `medianOf`,
+`smoothSignalInto`, `resolveSmoothingParams`, `collectTrajectories`,
+`smoothTrajectory`, `smoothSession`, `smoothSessionAsync`, `smoothFrame`,
+`unsmoothSession`, `hasSmoothed3d`, `noteSmoothedFrames`, `removeSmoothing`,
+`restoreSmoothing`, `hasRemovedSmoothing`. **Remove / Restore smoothing**:
+`removeSmoothing(session, {scope, config})` records the filter's whole input
+(`smoothingInputPrint`: every group with 3D in walk order, its frame,
+identity and `points3d` array in flat arrays; a smoothed group's
+pre-smoothing copy, otherwise a hash of its values), copies the smoothed
+values into ONE `Float64Array`, then `unsmoothSession`s. Kept per session in
+a `WeakMap`, in memory only (never saved). `restoreSmoothing(session, params)`
+puts them back, re-marking each group with its kept source, only when the
+settings resolve the same (`config`) and the input is unchanged
+(`inputUnchanged`: same groups, arrays, frames, identities, and values equal
+to the kept sources / hashes) — a smoothed value reads its neighbours' frames,
+so any change anywhere makes the kept values suspect. Else it writes nothing
+and returns `stale` with the scope and frames to smooth again. Either way the
+copy is dropped; any new run (`smoothSession*`, `smoothFrame`,
+`unsmoothSession`) drops it too. 400,000 poses x 15 nodes: remove ~0.3 s,
+restore ~0.2 s, vs ~2.9 s to smooth. `smoothFrame(session, params, frameIdx)`
+is Temporal Smoothing ▸ This frame: it writes exactly (bit for bit) what
+`smoothSession` writes on that frame, but reads only the frames that value
+depends on — within median + Gaussian radius, plus a walk out to the frame's
+segment edges (absent runs > `maxGap`), stopped once a present frame lies
+`max(reach, minSegment)` out, where the true edge can no longer change the
+result. It filters that slice with `smoothSignalInto`, passing the true segment
+in slice coordinates and `from`/`to` so only the samples the frame reads are
+computed (the sums run in the same order as the full pass). Identity bucketing
+matches `collectTrajectories`; the one whole-session walk
+(`hasAmbiguousNoIdentity`) runs only when the frame has an unidentified group.
+`skipped` counts that frame's groups. `unsmoothSession` with `writeFrames`
+walks only those frames. `smoothSessionAsync(session, params, {writeFrames, onProgress})`
+awaits `onProgress(done, total)` (poses) after each node coordinate of each
+track; both entry points run the same generators (`smoothTrajectorySteps`,
+`smoothSessionSteps`), so the result and the writes are identical, and nothing
+of a trajectory is written before its last step.
+
+**Imports.** `pose/pose-data.js` (`POINT3D_STRIDE`, `points3dNodeCount`,
+`NO_REPROJECTED_INSTANCES`, `pooledPoints3d`, `markPoints3dSmoothed`,
+`isPoints3dSmoothed`, `unsmoothedPoints3d`, `clearPoints3dSmoothed`) only —
+no UI imports, so the module stays unit-testable in plain Node.
+
+**Imported by.** `ui/ui-wiring.js` (`smoothSessionAsync`, `smoothFrame`,
+`unsmoothSession`, `resolveSmoothingParams`, `hasSmoothed3d`,
+`removeSmoothing`, `restoreSmoothing`), `ui/smoothing-button.js`
+(`hasSmoothed3d`, `hasRemovedSmoothing`),
+`import-export/smoothing-metadata.js` (`hasSmoothed3d`, `noteSmoothedFrames`),
+`ui/smoothing-windows-figure.js` (`smoothSignalInto`, `normalizeWindow`,
+`sigmaForWindow`, `buildSegments`, to draw the Settings figure with the real
+filter).
+
+**Tests.** `tests/test-temporal-smoothing.mjs` (`smoothFrame` is checked bit
+for bit against the all-frames pass on every frame of noisy fixtures with
+holes, segment edges, duplicates and unidentified groups, over 270
+configurations); save/reopen in `tests/e2e/smoothing-save-reopen.mjs`. Bench:
+`tests/e2e/_bench-smoothing-this-frame.mjs` (Node) and
+`tests/e2e/_bench-smoothing-ui.mjs` (menu click to status, eager + lazy). Verified by
+mutation: removing the symmetric shrink, zero-padding instead of renormalizing,
+and filling gaps each fail with the specific artifact they represent.
+
+---
+
+### pose/run-state.js
+
+**Purpose.** Has Track or Triangulate been run on a session, and does its result
+still stand? Drives the blue Track and Triangulate toolbar buttons
+(`ui/run-buttons.js`). A run is noted when it finishes; its result stands while
+the session shows it: Track while some instance group has an identity,
+Triangulate while some group still holds a 3D array the run produced or kept.
+Arrays are marked by reference (a `WeakSet`), so anything that replaces a
+group's 3D (Track All's own 3D, a re-solve outside a run, a skeleton edit)
+drops that group out, while a node move's re-solve keeps it
+(`carryTriangulateMark`); smoothing writes in place and keeps it. In memory
+only: a reopened project starts with neither noted (the user chose this over
+saving it).
+
+Asked on every overlay draw, so each answer keeps a WITNESS (frame + group that
+showed the result) and walks `session.instanceGroups` only when the witness
+stops holding: it finds a new one or forgets the run, after which nothing is
+walked until the next run.
+
+**Exports.** `noteTrackRun(session)`, `noteTriangulateRun(session, frames)`
+(marks the 3D of every group on `frames`, null = all, that has a
+`triangulationMethod` and valid 3D, solved or kept by the run),
+`carryTriangulateMark(old, new)`, `hasTrackResult(session)`,
+`hasTriangulateResult(session)`.
+
+**Imports.** `./pose-data.js` (`someValidPoint3d`). **Imported by**
+`pose/triangulation.js`, `pose/tracker.js`, `ui/export-modals.js`,
+`ui/run-buttons.js`. **Tests.** `tests/test-run-state.mjs`,
+`tests/e2e/run-buttons-blue.mjs`.
+
 ### pose/triangulation.js
 
 **Purpose.** DLT triangulation, bundle-adjustment refinement, reprojection
@@ -2532,7 +2785,8 @@ a Refined solve with a DLT one behind the user's back. Three helpers:
   `triangulationMethod` and `usedCameras`; returns true when `group` therefore
   needs no solve. Requires identical membership **AND**
   `prior.triangulationMethod === method`, so it only fires when re-solving would
-  be a provable no-op (an *unknown* prior method never matches). Does **not**
+  be a provable no-op (an *unknown* prior method never matches; smoothed 3D,
+  `isPoints3dSmoothed`, never matches either). Does **not**
   copy `reprojections` — leaving them empty is what lets `ui/rendering.js`'s fill
   regenerate them (and `state.triangulationResults`) with the adopted method.
 
@@ -2822,7 +3076,9 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   reprojected instances, and `state.triangulationResults`; both Triangulate All
   paths and Group by Track call it before they start),
   `reTriangulateGroup` (preserves the group's existing method via
-  `resolveTriangulationMethod`),
+  `resolveTriangulationMethod`; the auto-triangulation of a group created by
+  Shift+G — does nothing without a real calibration, `sessionHasCalibration()`,
+  so placeholder cameras never produce 3D that would be saved and exported),
   `triangulateCurrentFrame(method)`, `triangulateAllFrames(method)`
   (`method` defaults to `'dlt'`), `sessionHasCalibration`,
   `showCalibrationRequiredPopup`,
@@ -2871,6 +3127,10 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
 - `./triangulation-core.js` — the pure math (re-exported) and
   `setTriangulationSettingsHooks`.
 - `./triangulation-pool.js` — `createGroupSolver` (Triangulate All's parallel solve).
+- `./run-state.js` — `noteTriangulateRun` (at the end of `triangulateAllFrames`,
+  both paths, `triangulateCurrentFrame` and `triangulateMultiFrameInstances`)
+  and `carryTriangulateMark` (`reTriangulateGroup`): the blue Triangulate
+  button.
 - `../loading/track-union.js` — `unionTrackNames`, `remapTrackIdx`,
   `isIdentityRemap` (`LazyFrameLoader`'s track union).
 - `./initialization.js` — `update3DViewport` (circular).
@@ -4169,6 +4429,9 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   `showReprojectionsOnly`, `REPROJ_ONLY_NOTE` (both group-and-triangulate-all
   paths end Reproj-only).
 - `./info-panel.js` — `updateInfoPanel`.
+- `../pose/run-state.js` — `noteTriangulateRun` (after
+  `groupByIdentityAndTriangulateAll`, Triangulate All's DLT path once
+  identities exist, and `groupByTrackAndTriangulateAll`).
 - `../import-export/save-load.js` — `showLoading`, `hideLoading`,
   `setStatus`.
 - `./loading-overlay.js` — `showLoadingProgress`, `yieldToPaint` (the
@@ -4853,8 +5116,8 @@ The `blur()` is deferred a turn: focus from a label click lands *after* the
 listener runs, and `input`/`change` are still dispatching.
 
 The listener is in the **capture** phase (issue #230) so a control whose own
-handler calls `e.stopPropagation()` (the Triangulate split buttons,
-`wireTriDropdown`) cannot opt itself out of focus release and keep `Space`.
+handler calls `e.stopPropagation()` (the toolbar's action menus,
+`wireActionMenu`) cannot opt itself out of focus release and keep `Space`.
 
 **Imports from project modules.** None — every predicate reads only
 `tagName` / `type` / `role` / `isContentEditable` off its argument, so it
@@ -5175,6 +5438,18 @@ Gives a modal card a drag handle, a resize grip (CSS `resize: both`) and a
   the CSS resize via `ResizeObserver`, re-clamps on window resize, and returns a
   `dispose()` that also flushes the final rect (a resize that ended inside the
   200 ms persist debounce would otherwise be lost when the modal closes).
+- `rememberedSizeIsChosen(geom, legacyDefaultSize)` — whether a record's size
+  was the user's choice (see below).
+
+**Only a size the user chose is remembered.** Position always is; size only
+once the user resized the card with its grip (the `ResizeObserver` sees a size
+other than the one `apply()` set, and the record gets `sized: true`). Otherwise
+the card opens at the stylesheet's size, so changing the default reaches
+everyone who never resized. Records from before the flag saved the opening size
+on every close: `opts.legacyDefaultSize` names that old default, and such a
+record opens at the new default, centred where the old card was. Settings passes
+`{w: 880, h: 620}` (its default before it widened; it now opens at 1320x800,
+wide enough for the Temporal Smoothing figure's two charts).
 
 **This module is the ONE owner of the card's rect.** `.settings-modal`
 deliberately has no `max-width`/`max-height`, and `apply()` sets both to `none`
@@ -6031,8 +6306,10 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   after one. **3D read from a file** (`isPoints3dFromFile`: a loaded `.slp`'s,
   an imported points3d `.h5`'s) is reprojected whenever the group is clean,
   threshold or not, method or not — a re-solve would show LUCID's answer
-  instead of the 3D the project holds. Anything else (Track All's provisional
-  3D, an edited group) is re-solved. The `.slp` load, moving a view between
+  instead of the 3D the project holds. **Smoothed 3D** (`isPoints3dSmoothed`)
+  is reprojected the same way, or the overlay would re-solve the unsmoothed
+  answer (`tests/e2e/temporal-smoothing-display.mjs`). Anything else (Track
+  All's provisional 3D, an edited group) is re-solved. The `.slp` load, moving a view between
   sessions and the overlay video export also leave derived state to this fill
   (`tests/e2e/load-export-move-bounded-derived-state.mjs`).
 
@@ -6096,6 +6373,11 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   every frame and in every mode (planes are static scene geometry). Pinned by
   `tests/e2e/define-plane-mode.mjs`.
 
+  **The Group menu button and Temporal Smoothing are synced here too.**
+  `#tbGroupMenu` (the hover menu holding Group / Edit Group) is `.active` while
+  either item is, and `syncSmoothingButton()` (`ui/smoothing-button.js`)
+  re-derives the Temporal Smoothing button's blue state on every draw.
+
   **Defining Plane Mode's toolbar lock is re-asserted here.** `drawAllOverlays`
   RECOMPUTES `tbGroup.disabled` / `tbEditGroup.disabled` from the pose selection
   on every draw, so `applyPlaneModeToolbarLock()` (`ui/plane-toolbar-lock.js`,
@@ -6115,7 +6397,7 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `getInstanceGroupsForFrame`, `triangulateAndReproject`,
   `reprojectStoredPoints3d`, `storeReprojectedInstances`.
 - `../pose/lazy-residency.js` — `dropDerivedReprojections`.
-- `../pose/pose-data.js` — `points3dNodeCount`, `isPoints3dFromFile`.
+- `../pose/pose-data.js` — `points3dNodeCount`, `isPoints3dFromFile`, `isPoints3dSmoothed`.
 - `./overlays.js` — `drawFrameOverlays`.
 - `./view-legend.js` — `syncViewLegends`.
 - `./settings.js` — `isCameraTracked` (passed to `drawFrameOverlays` as
@@ -6126,6 +6408,8 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `computeLazyCameraBaseline`, `createFrameCounterBaselineBuilder`,
   `countFrameCounters`, `nonResidentCameraCounts`, `refreshCountedFrame`.
 - `./plane-definition.js` — `drawPlaneOverlays`, `applyPlaneModeToolbarLock`.
+- `./smoothing-button.js` — `syncSmoothingButton` (every draw).
+- `./run-buttons.js` — `syncRunButtons` (every draw).
   **Circular** (that module imports `drawAllOverlays` back); safe because both
   call sites are inside function bodies.
 - `./animal-count-field.js` — `syncAnimalCountField`. **Circular** through
@@ -6172,8 +6456,8 @@ stays reachable at its original path) and `ui/plane-nodes-panel.js`;
 
 ### ui/animal-count-field.js
 
-**Purpose.** The toolbar's **Animals** field (`#tbNumAnimals`), first in the
-Track group: shows and edits the ACTIVE session's animal count, the number every
+**Purpose.** The toolbar's **Animals** field (`#tbNumAnimals`), in the Track
+menu (hover **Track ▾**) below its run items: shows and edits the ACTIVE session's animal count, the number every
 tracking run caps identities at (`Session.numAnimals`, through
 `pose/tracker.js`). Blank is
 auto-detect (`placeholder="auto"`), as in the first-use dialog
@@ -6235,7 +6519,14 @@ from the rest of the panel.
 Adding a button to the lock means adding its id to `PLANE_LOCKED_TOOLBAR_IDS`;
 if it opens a menu, its wrapper also needs `PLANE_LOCKED_DROPDOWN_IDS`, since a
 `.tri-dropdown` menu opens on hover and its items are `div`s, so `disabled` on
-the button reaches neither.
+the button reaches neither. Locked menus: Instance and Group (actions only).
+The Track / Triangulate / Smooth menus are NOT wrapper-locked:
+they also hold settings that stay live in the mode (Method, Animals,
+Settings…), so they open, and each run item is a `<button>` in
+`PLANE_LOCKED_TOOLBAR_IDS` (a new run item there must be too; Smooth's
+Remove/Restore smoothing toggle, `tbSmoothToggle`, is one). A disabled
+button still opens its menu on hover (`tests/e2e/plane-mode-toolbar-lock.mjs`
+§4b).
 
 **Imports** `planeState` from `ui/plane-definition.js` — circular, and safe only
 because the binding is read INSIDE the function body. **Imported by**
@@ -8837,8 +9128,8 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   read/write the default method used by implicit triangulation paths.
 - `onDefaultTriangulationMethodChange(fn)` — called with the new method when
   `setDefaultTriangulationMethod` actually changes it (a throwing listener is
-  ignored). `ui/ui-wiring.js` uses it to keep the toolbar's "Triangulate: DLT"
-  / "Triangulate: Ref" labels in step with Settings.
+  ignored). `ui/ui-wiring.js` uses it to keep the toolbar Triangulate button's
+  tooltip and its menu's Method radios in step with Settings.
 - `getNodeWeight(name)` / `getNodeWeights()` / `getNodeWeightArray(nodeNames)` /
   `setNodeWeights(map)` — read/write per-node tracking weights (clamped to
   `[0,1]`; entries equal to the default `1` are dropped). `getNodeWeightArray`
@@ -8882,13 +9173,26 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   `track3dWeight`) drive the bench-only luc3d matcher and are hidden from the UI
   but still resolve via `getTrackingThreshold`. `getTrackingThresholds` returns
   the effective `{ id: value }` map the tracker snapshots per run. On
-  `setTrackingThresholds` values clamp to range, and an entry equal to its
-  default is dropped — it then follows the default if that ever changes — UNLESS
-  the user chose it: its id is in `edited` (the ids changed in the dialog) or it
-  was already stored. Dropping every default-valued entry is what moved users
-  who had deliberately set the reprojection error threshold to 0 onto 50 when 50
-  became the default: with 0 the default, nothing had been stored. Covered by
-  `tests/e2e/settings-wizard-toggles.mjs`.
+  `setTrackingThresholds(map, edited)` values clamp to range, and an entry equal
+  to its default is dropped — it then follows the default if that ever changes —
+  UNLESS the user chose it: its id is in `edited` (the ids changed in the
+  dialog) or it was already stored. Dropping every default-valued entry is what
+  moved users who had deliberately set the reprojection error threshold to 0
+  onto 50 when 50 became the default: with 0 the default, nothing had been
+  stored. Covered by `tests/e2e/settings-wizard-toggles.mjs`.
+- `SMOOTHING_PARAMS` / `getSmoothingParamDefs()` / `getSmoothingParam(id)` /
+  `getSmoothingParams()` / `setSmoothingParams(map)` — the Temporal Smoothing
+  hyperparameters (luc3d #134): `smoothMedianWindow`, `smoothGaussianWindow`
+  (both default **0 = off**, so shipping the feature changes no existing
+  project's 3D), `smoothMaxGap` (5),
+  `smoothMinSegment` (5). A SEPARATE catalog from `TRACKING_THRESHOLDS`, not more
+  entries in it: these are post-triangulation filter parameters rather than
+  cross-view tracker knobs, and the Tracking Wizard's Thresholds section renders
+  every threshold the catalog exposes. Note the `smooth*` prefix — `filter*` is
+  already taken here for DETECTION filtering (`filterMinVisibleNodes`,
+  `filterMinInstanceScore`). Clamp + drop-if-default persistence under
+  `_settings.smoothingParams` (without the thresholds' `edited` rule). Read by `ui/ui-wiring.js` and
+  passed to `smoothSession` (`pose/temporal-smoothing.js`).
 - `getActions()` — catalog snapshot `[{ id, label, category, binding,
   defaultBinding, editable, dispatched }]` with effective bindings, for the modal.
 - `getBinding(id)` — effective binding string (user override or catalog default).
@@ -8992,50 +9296,76 @@ right panel area (`settings-panel-container`), with a Cancel / Apply footer.
 
 **Key exports.**
 - `showSettingsModal(initialPanel)` — `initialPanel` ∈ `'triangulation'` |
-  `'keyboard'` | `'wizard'` (default `'triangulation'`). Single-instance.
+  `'keyboard'` | `'wizard'` | `'smoothing'`. Without one (Help ▸ Settings and its
+  shortcut) it opens on the panel last shown (`localStorage.settingsLastPanel`,
+  browser-local, written by `selectPanel`), else the first, Tracking Wizard.
+  Single-instance.
 
-**Behavior.** Three panels: **Default Triangulation** (DLT / Refined radio rows
-— `'ba'` is labelled "Refined (Ref)"), **Keyboard Shortcuts** (the
+**Behavior.** Four panels, listed in the nav in the order they are used (Tracking
+Wizard, Default Triangulation, Temporal Smoothing, then Keyboard Shortcuts):
+**Default Triangulation** (the method is picked by
+clicking one of two diagram cards from `ui/triangulation-methods-figure.js`,
+DLT or "Refined (Ref)" = bundle adjustment — no separate rows; Enter/Space on a
+focused card is handled in `onDocKeyDown`, which stops every keydown in the
+capture phase, so a listener on the card would never run), **Keyboard Shortcuts** (the
 `getActions()` catalog by category; an editable entry's key chip captures a
 **chord or multi-key sequence** — keys accumulate, Ctrl/Cmd normalized to `Mod`
 via `chordFromEvent`, until a click sets it or Esc cancels; duplicates are
-rejected; fixed entries show a greyed dashed chip), and **Tracking Wizard**:
+rejected; fixed entries show a greyed dashed chip), **Tracking Wizard**:
 **Node Weights** (number field `0–1` per node of the active skeleton; `0` drops
-the node from the association cost and greys the row), **Camera Views** (an
+the node from the association cost and greys the row; under the hint, the
+tracking dialogs' `NODE_WEIGHT_TIP` from `ui/track-setup-modal.js`), **Camera Views** (an
 on/off switch per camera, stored as a `0/1` weight; off excludes the view from
 tracking and greys the row), and **Tracking Thresholds** (one field per
 `getTrackingThresholdDefs()` entry, or an on/off switch stored as `1`/`0` for a
 `kind: 'toggle'` entry, via `makeToggle`). Covered by
-`tests/e2e/settings-wizard-toggles.mjs`. Edits mutate a local `working` state
-only; nothing commits until **Apply** (`setDefaultTriangulationMethod` +
-`applyBindings` + `setNodeWeights` + `setCameraWeights` +
-`setTrackingThresholds`, passed `editedThresholds` — the ids of every threshold
-field or switch the user changed, stored even when they equal the default),
-which repaints overlays + timeline and re-fits the
-ID-switch box (`refreshIdSwitchHighlight`, which encloses only nonzero-weight
-nodes). Cancel / × / backdrop / Escape discard. Under the three
-detection-filter fields sits `ui/detection-filter-preview.js`'s per-camera
-readout of what they would remove; it re-counts on every `input` and camera
-switch (it reads `working`, so it moves before Apply), and its one walk of the
-session starts the first time the wizard panel is SHOWN (`selectPanel`), so
-Settings opened for anything else walks nothing. Teardown disposes it. A capture-phase document keydown
-listener keeps background shortcuts from firing while it is open, and is
-removed on teardown.
+`tests/e2e/settings-wizard-toggles.mjs`. And **Temporal Smoothing** (luc3d
+#134 — one **Filter Parameters** section rendering `getSmoothingParamDefs()`:
+median window, Gaussian window, max gap, minimum segment, under a figure from
+`ui/smoothing-windows-figure.js` that the two window fields redraw through
+`onEdit`, and whose sliders set the window, max gap and minimum segment fields
+back through `onParam`. Its own panel because
+it is not a tracking parameter — it runs after triangulation, on 3D the tracker
+has finished with. A note warns that raising the reprojection-error threshold
+creates more gaps, hence more gap edges where the filter is least accurate. The
+pass itself runs from the Triangulate / Triangulate All dropdowns.) Threshold
+and smoothing rows share one `buildParamRow(def, bag, onEdit, edited)` helper (same
+`{ id, label, desc, min, max, step }` catalog shape, clamp on blur, `kind:
+'toggle'` → switch; `onEdit` lets the filter fields re-count the preview;
+`edited`, passed only by the thresholds, collects `editedThresholds` — the ids
+of every field or switch the user actually changed, not merely blurred).
+Edits mutate a local `working` state only; nothing commits until **Apply**
+(`setDefaultTriangulationMethod` + `applyBindings` + `setNodeWeights` +
+`setCameraWeights` + `setTrackingThresholds(working.thresholds, editedThresholds)`,
+which stores a changed value even when it equals the default, +
+`setSmoothingParams`), which
+repaints overlays + timeline and re-fits the ID-switch box
+(`refreshIdSwitchHighlight`, which encloses only nonzero-weight nodes). Cancel /
+× / backdrop / Escape discard. Under the three detection-filter fields sits
+`ui/detection-filter-preview.js`'s per-camera readout of what they would remove;
+it re-counts on every `input` and camera switch (it reads `working`, so it moves
+before Apply), and its one walk of the session starts the first time the wizard
+panel is SHOWN (`selectPanel`), so Settings opened for anything else walks
+nothing. Teardown disposes it. A capture-phase document keydown listener keeps
+background shortcuts from firing while it is open, and is removed on teardown.
 
 **Imports from project modules.** `./settings.js` (`getDefaultTriangulationMethod`,
 `setDefaultTriangulationMethod`, `getActions`, `applyBindings`, `formatBinding`,
 `getNodeWeight`, `setNodeWeights`, `getCameraWeight`, `setCameraWeights`,
-`getTrackingThresholdDefs`, `setTrackingThresholds`); `./detection-filter-preview.js`
+`getTrackingThresholdDefs`, `setTrackingThresholds`, `getSmoothingParamDefs`,
+`setSmoothingParams`); `./detection-filter-preview.js`
 (`buildDetectionFilterPreview`); `./app-state.js`
 (`getActiveSession`, `state`, `timeline`); `./rendering.js` (`drawAllOverlays`,
 for the post-Apply repaint); `./modal-geometry.js` (`installModalGeometry`);
-`./id-switch-highlight.js` (`refreshIdSwitchHighlight`, on Apply).
+`./id-switch-highlight.js` (`refreshIdSwitchHighlight`, on Apply);
+`./track-setup-modal.js` (`NODE_WEIGHT_TIP`, a leaf).
 
 **Imported by.** `ui/ui-wiring.js`.
 
 **User-facing features.** Settings modal — choose default triangulation method,
-remap keyboard shortcuts, set per-node tracking weights, and exclude camera views
-from tracking (Tracking Wizard, also reachable via Tracks ▸ Tracking Wizard).
+remap keyboard shortcuts, set per-node tracking weights, exclude camera views
+from tracking (Tracking Wizard, also reachable via Tracks ▸ Tracking Wizard),
+and tune the Temporal Smoothing filter (luc3d #134).
 
 ---
 
@@ -9431,7 +9761,9 @@ window (e.g. around a known ID switch) while iterating on settings.
 **Imports from project modules.** `ui/app-state.js` (`state`,
 `getActiveSession`), `import-export/save-load.js` (`setStatus`),
 `pose/tracker.js` (`trackFrameRange`, `trackableFrameBounds`,
-`getTrackerNumAnimals`, `setTrackerNumAnimals`), `ui/settings.js`
+`getTrackerNumAnimals`, `setTrackerNumAnimals`), `pose/placeholder-cameras.js`
+(`hasRealCalibration` — with placeholder cameras only, the dialog does not open
+and the status says tracking needs a calibration), `ui/settings.js`
 (`getNodeWeight`, `updateNodeWeights`, `getTrackingThresholdDefs`,
 `updateTrackingThresholds`), `ui/track-setup-modal.js`
 (`buildNodeWeightFields`, `buildImageCheckFields`, `IMAGE_CHECK_IDS`; a leaf).
@@ -9500,8 +9832,13 @@ Tracking Wizard's own settings. Track Frame's copy leaves it out (a single
 frame is never checked); Track Frame Range shows the same section.
 
 **Key exports.**
+- `NODE_WEIGHT_TIP` — the advice shown under the node weights here, in Track
+  Frame Range and in the Tracking Wizard (nodes with high tracking error, like
+  tail nodes, weighted 0 often prevent ID switches; consider 0 for every tail
+  node). Advice only: skeletons differ between projects, so
+  nothing picks the nodes or changes a weight for the user.
 - `buildNodeWeightFields(nodes)` → `{element, read, refresh}` — the node-weight
-  editor both tracking dialogs show (title, one sentence, the grid). `element`
+  editor both tracking dialogs show (title, one sentence, the tip, the grid). `element`
   is null for no nodes; `read()` returns `{nodeWeights}` or `{error}` (a weight
   outside `[0, 1]`, naming the node — never clamped); `refresh()` greys the
   rows weighted 0. Commits nothing. Also used by `ui/track-range-modal.js`.
@@ -9534,7 +9871,8 @@ field and the Tracking Wizard edit, so there is no second copy of any of them
 and no cycle with the tracker.
 
 **Imported by.** `pose/tracker.js`; `ui/track-range-modal.js`
-(`buildNodeWeightFields`, `buildImageCheckFields`, `IMAGE_CHECK_IDS`).
+(`buildNodeWeightFields`, `buildImageCheckFields`, `IMAGE_CHECK_IDS`);
+`ui/settings-modal.js` (`NODE_WEIGHT_TIP`).
 
 **User-facing features.** The count field (focused, `placeholder="auto"`),
 then one row per skeleton node in the Tracking Wizard's own markup
@@ -10001,9 +10339,9 @@ stopping at the last frame; the step transport buttons/keys stop it first.
 - Menu / setup: `setupMenus`, `setupUI`. The menu bar ends with a **Help**
   dropdown (Docs, Settings) after Hot Keys; Docs / Settings are ALSO direct
   buttons at its right end (`menuBarDocs` / `menuBarSettings`, sharing
-  `openDocs` / `openSettings`). The Triangulate / Triangulate All split buttons
-  carry a `.tri-method` span that `updateTriangulateButtonLabels` fills with
-  the Settings default (": DLT" / ": Ref"), refreshed via
+  `openDocs` / `openSettings`). `updateTriangulateButtonLabels` names the
+  Settings default method in the Triangulate button's tooltip and checks the
+  menu's Method radio (the label stays a bare "Triangulate"), refreshed via
   `onDefaultTriangulationMethodChange`. The Speed popover (0.25x–3x) is
   right-aligned to its button. Tracks menu: `Propagate Tracks → IDs`
   (`menuPropagateTracksToIds` — an identity per track, assigned to every group;
@@ -10320,22 +10658,91 @@ opens the docs site (`https://talmolab.github.io/luc3d-docs/`) in a new tab;
 **Hot Keys** modal is generated from `getActions()`, so it follows the catalog
 and user rebindings.
 
-**Triangulate dropdowns + default method.** `Triangulate` / `Triangulate All`
-are **split buttons**: the button runs `getDefaultTriangulationMethod()`; the
-hover menu picks DLT / BA explicitly (`wireTriDropdown`). Both handlers
-`stopPropagation()`, which is why `ui/keyboard-target.js`'s focus-release
-listener must run in the **capture** phase (in bubble these buttons kept focus
-and swallowed `Space`/`Enter`). Implicit triangulation (`t`, Edit ▸
-Triangulate) and the environment-skeleton solve (Load Environment, via
-`resolveTriangulationMethod(group)` on a new group) use the default too.
+**Toolbar layout.** After Sessions come two groups, one per kind of work:
+manual labelling (`#tbLabellingGroup`: Instance ▾, Group ▾), then
+proofreading in the order it runs (`#tbProofreadingGroup`: Track ▾,
+Triangulate ▾, Smooth ▾, then the triangulation badge). Labels are short to
+save width ("Smooth" is Temporal Smoothing; the tooltip says so). Covered by
+`tests/e2e/toolbar-hover-menus.mjs` §4.
 
-**Track Frame is a split button too.** Same `.tri-dropdown` markup, but NOT
-`wireTriDropdown` — its button keeps its own handler in `pose/tracker.js`'s
-IIFE (`trackCurrentFrame`); `ui-wiring.js` wires only `#tbTrackFrameRange` to
-`showTrackRangeModal()`, passing `navigateToFrame` as `onTracked` (injected to
-avoid the `initialization.js` → `ui-wiring.js` → modal cycle). The menu is
-pure `:hover`: in a test, a modal opening over the toolbar drops hover, so a
-second click must re-hover the button first (`tests/e2e/track-frame-range.mjs`).
+**Track, Triangulate and Smooth share one menu shape**
+(`wireActionMenu(dropdownId, handlers)`). Each is ONE button whose click runs
+**all frames**; its `:hover` menu (`.tri-dropdown.action-menu`) has **This
+frame**, **All frames** (Track also **Frame range…**), the action's quick
+settings, and **Settings…** for its Settings panel. The All frames item
+forwards to the button (`button.click()`), so the two cannot differ and a
+disabled button disables both; other items call `handlers[data-scope]`. Each
+button keeps the id of the old all-frames button (`#tbTriangulateAll`,
+`#tbTrackAll`), so a click on it does what it always did; This frame is
+`#tbTriangulate` / `#tbSmoothFrame` / `#tbTrackFrame`. All items are
+`<button>`s so Defining Plane Mode can disable the runs one by one while the
+settings in the same menu stay live. `:focus-within` keeps a menu open, so
+typing in Animals does not lose it and Tab walks into the items.
+- **Triangulate ▾** (`#triangulateDropdown`): a bare "Triangulate"; the
+  tooltip names the method a click runs (#138); the Method radios (`input[name="tbTriMethod"]`) ARE Settings ▸ Default
+  Triangulation (`setDefaultTriangulationMethod`; `updateTriangulateButtonLabels`
+  re-checks them on `onDefaultTriangulationMethodChange`). This frame runs
+  `triangulateCurrentFrame(default)`; Settings… → `'triangulation'`. Implicit
+  triangulation (`t`, Edit ▸ Triangulate) and the environment-skeleton solve
+  (Load Environment, via `resolveTriangulationMethod(group)` on a new group)
+  use the default too.
+- **Smooth ▾** (`#smoothingDropdown`, `#tbSmooth`; Temporal Smoothing): also
+  has the **Remove smoothing / Restore smoothing** toggle (`#tbSmoothToggle`,
+  `data-scope="toggle"`) after All frames; see below.
+  Settings… → `'smoothing'`.
+- **Track ▾** (`#trackDropdown`): the button (Track All) and This frame keep
+  their own handlers in `pose/tracker.js`'s IIFE; `ui-wiring.js` wires Frame
+  range… to `showTrackRangeModal()`, passing `navigateToFrame` as `onTracked`
+  (injected to avoid the `initialization.js` → `ui-wiring.js` → modal cycle),
+  and Settings… → `'wizard'`. The Animals field sits in this menu.
+The menus are pure `:hover`: in a test, a modal opening over the toolbar drops
+hover, so a second click must re-hover the button first
+(`tests/e2e/track-frame-range.mjs`). Shape covered by
+`tests/e2e/toolbar-hover-menus.mjs` §5.
+
+**Instance and Group are hover menus.** To save toolbar width, `+ Instance` /
+`- Instance` sit under an **Instance ▾** button (`#tbInstanceMenu`,
+`#instanceDropdown`) and `Group` / `Edit Group` under **Group ▾**
+(`#tbGroupMenu`, `#groupDropdown`), opening on `:hover`. The four items are
+still the original `<button>`s with their ids and handlers
+(`button.tri-dropdown-item` restyles them as rows), so `ui/rendering.js` keeps
+rewriting Group's label and both items' `disabled` / `.active`; it also turns
+`#tbGroupMenu` blue whenever either item is. Tab skips the items while the menu
+is closed; their shortcuts (`Mod+I`, `Delete`, `Shift+G`) still work.
+Covered by `tests/e2e/toolbar-hover-menus.mjs`.
+
+**Temporal Smoothing** (luc3d #134) runs the private async
+`runTemporalSmoothing(currentFrameOnly, toggle)` (a re-entry guard drops a
+second click while one runs). The menu's toggle (`#tbSmoothToggle`,
+`toggle`), for comparing with and without: while anything is smoothed,
+**Remove smoothing** restores the pre-smoothing 3D on every frame and keeps
+what it took off (`removeSmoothing`, with the settings as they are then);
+otherwise **Restore smoothing** (`restoreSmoothing`) copies it back with no
+recompute and no card, or, when the settings or any 3D changed since,
+smooths again with the current settings in the removed run's scope (all
+frames, or `smoothFrame` on each removed this-frame run's frames), its status
+ending "— recomputed…". "Nothing is smoothed" if neither applies. Otherwise
+it reads `getSmoothingParams()`; when
+both kernels are off it restores the pre-smoothing 3D (`unsmoothSession`), or, with nothing
+smoothed, says so and opens Settings ▸ Temporal Smoothing rather than silently
+doing nothing; otherwise All frames runs `smoothSessionAsync`
+(`pose/temporal-smoothing.js`; every run filters the pre-smoothing 3D, so it
+replaces the last) behind the shared progress card, counted in POSES (one per
+animal per frame), shown at once and painted (`yieldToPaint`) before the pass.
+This frame runs `smoothFrame(session, params, state.currentFrame)`
+synchronously with no card: it reads only the frames within the filter windows
+of the current one (~1–4 ms on 200,000 frames, vs ~1.3 s when it filtered whole
+trajectories) and writes the values an All frames run gives that frame. Then it
+records the scope (`noteSmoothingScope`), drops the `state.triangulationResults`
+entries of every group whose reprojections the pass cleared (the fill appends a
+fresh one, and the panel would average both; This frame checks only its own
+frame), and runs `markDirty` + `drawAllOverlays` + `update3DViewport(state.currentFrame)`
+(the frame matters: without it the 3D view got no groups and went blank) +
+`updateInfoPanel`, setting the summary status last. Both-windows-0 restores
+pass `writeFrames: new Set([state.currentFrame])` for This frame. It touches only `points3d` on the
+already-resident `session.instanceGroups`, hydrating no 2D. The button is blue
+while smoothing is applied, and the menu lights only the last run's scope
+(`ui/smoothing-button.js`, synced on every overlay draw).
 
 **The Animals field (`#tbNumAnimals`)** is wired by `wireAnimalCountField()`
 from `ui/animal-count-field.js`, which owns it (see that entry).
@@ -10889,6 +11296,130 @@ function, so the cycle through the info panel is hoist-safe).
 
 **Tests.** `tests/e2e/campy-session-folder.mjs`.
 
+### ui/triangulation-methods-figure.js
+
+**Purpose.** The Settings ▸ Default Triangulation choice: two cards that each
+explain one method (DLT, Refined = bundle adjustment) and are clicked to pick
+it (`role="radio"`, `data-method` `'dlt'`/`'ba'`; `ui/settings-modal.js` wires
+the selection). Two top-down sketches of the
+same three cameras: each camera's 2D detection on its image plane, its line of
+sight, the 3D answer, where that answer lands back in each camera and the pixel
+error between the two. One camera's detection is a stray: DLT is pulled toward
+it and every camera ends up a little off; Refined starts at the DLT point and
+fits the two cameras that agree; in this layout that ignores the stray camera
+entirely, so it gets no line, landing spot or error (a `null` landing). Captions are HTML
+so they wrap; the sketches are inline SVG coloured by theme variables
+(`.tri-methods` in `styles.css`).
+
+**The coordinates are an illustration, not solver output.** They were computed
+once for this layout (an equal-weight least-squares point for DLT, a robust
+pixel-error minimum for Refined) and are hard-coded; the real solvers are
+`triangulatePointDLT` / `triangulatePointBA` (`pose/triangulation-core.js`).
+
+**Don't call Refined more accurate in general.** Measured on held-out cameras
+(9 proofread SLAP sessions), shipped Refined beat DLT in only 1 of 9 (median
+3.32 vs 3.20 px): it wins when one view is clearly wrong, but its L1 polish
+step leaves everyday points slightly worse. Its "never worse than DLT" guard is
+on the in-sample reprojection error only. The caption (and the toolbar's Ref
+tooltip in `index.html`) say just that.
+
+**Key exports.** `buildTriangulationMethodsFigure()` → a `<figure>`.
+
+**Imports.** None. **Imported by** `ui/settings-modal.js`.
+
+### ui/smoothing-windows-figure.js
+
+**Purpose.** The figure at the top of Settings ▸ Temporal Smoothing: what the
+Median window and the Gaussian window each do, as two cards (stage 1, stage 2).
+Both plot one made-up trace (one node's x over 40 frames: a slow movement,
+dashed, with one fast real move up and back on the right, plus jitter and one
+one-frame spike) and draw what the stage
+makes of its input, the window around one frame (shaded) and stems at the
+bottom of that window: for the Gaussian its weights, for the median the
+window's values sorted low to high, the middle one (the median, what the spike
+frame becomes) green and the spike red. The median's output is green in both
+cards (its line on the left, with the same green dot at every frame as the
+Gaussian's input dots on the right); the Gaussian's output is blue, with an
+open black circle at every frame. Raw samples
+are open grey rings drawn over the green dots, since a median keeps many
+samples exactly and a filled dot would hide under the green one. The Gaussian's
+window sits on the fast move, which survives the example windows and is
+flattened by long ones (over-smoothing).
+
+**The lines are the real filter, not drawn by hand.** `update(params)` runs
+`smoothSignalInto` (`pose/temporal-smoothing.js`) on the trace with the panel's
+working windows, so the cards follow what is typed. A window that is off (0)
+is drawn with an example (median 5, Gaussian 9) and labelled so. The Gaussian
+card's input is the median's output, except with the median off and the
+Gaussian on: then it is the raw trace and a note says the spike becomes a bump
+(why the median runs first). Colours come from `.smooth-fig` in `styles.css`.
+
+**Sliders.** Each card has a Window slider (1–31 frames; under 3 the filter
+leaves the 3D as it is, drawn as a 1-frame window) that redraws the card
+and calls `onParam(id, value)` so the panel sets its working value and field
+(Apply then stores it), and a Frame slider with ▶ that slides the shaded window
+along the 40 frames (90 ms a frame; stops at the end, on a second click, or once
+the figure leaves the page). While a frame is picked, that stage's output is
+solid up to it and faint after it, with a ring on its value.
+
+**Card 3, gaps and segments** (full width, below the two): Max gap and Minimum
+segment length on its own 60-frame trace (a 2-frame hole, a 7-frame and a
+6-frame absence with a 3-frame stretch between them; the node comes back 12 mm
+away after the 7-frame one). It runs both stages at the windows the other cards
+show over the segments `buildSegments` cuts, as the real pass does, and draws
+each absence (labelled hole or split), the output per segment (grey where too
+short to smooth) and the segments as bars. Its Max gap (0–15) and Min segment
+(1–15) sliders report through `onParam` like the Window sliders.
+
+**Key exports.** `buildSmoothingWindowsFigure({ onParam })` → `{ el, update(params) }`.
+
+**Imports.** `pose/temporal-smoothing.js` (`smoothSignalInto`, `normalizeWindow`,
+`sigmaForWindow`, `buildSegments`). **Imported by** `ui/settings-modal.js`.
+
+**Tests.** `tests/e2e/smoothing-windows-figure.mjs`.
+
+### ui/smoothing-button.js
+
+**Purpose.** The toolbar's Temporal Smoothing button state (luc3d #134):
+`#tbSmooth` is blue (`.active`) while any 3D in the session is smoothed. Its
+menu lights (`.applied`) only the scope of the LAST run, never both: **All
+frames** after an all-frames run (while anything is still smoothed), **This
+frame** after a this-frame run, on the frames it smoothed. The toggle
+(`#tbSmoothToggle`) reads **Remove smoothing** while something is smoothed,
+**Restore smoothing** while a removal is kept (`hasRemovedSmoothing`), and is
+disabled otherwise; its tooltip follows. Never while it carries
+`.plane-mode-locked` (that lock owns `disabled` and the tooltip then; the next
+draw re-derives them after the unlock's snapshot restore).
+
+**Key exports.** `syncSmoothingButton()` — re-derives that state from the
+session. `noteSmoothingScope(session, 'all' | 'frame', config)` — records the
+scope and resolved windows a run used, kept by
+`import-export/smoothing-metadata.js` (`noteSmoothingRun` / `smoothingRunOf`),
+which saves them so a reopened project lights the same item. Smoothing lapses by itself when a re-solve or edit replaces a group's
+3D (`isPoints3dSmoothed` keys the array), so nothing tracks it: `ui/rendering.js`
+calls this on every overlay draw and the pass calls it after running.
+`hasSmoothed3d` (`pose/temporal-smoothing.js`) keeps the per-draw cost small.
+
+**Imports.** `./app-state.js` (`state`), `../pose/temporal-smoothing.js`
+(`hasSmoothed3d`, `hasRemovedSmoothing`), `../import-export/smoothing-metadata.js` (`noteSmoothingRun`,
+`smoothingRunOf`). **Imported by** `ui/rendering.js`, `ui/ui-wiring.js`.
+Covered by `tests/e2e/temporal-smoothing-display.mjs` §E–H and
+`tests/e2e/smoothing-save-reopen.mjs`.
+
+### ui/run-buttons.js
+
+**Purpose.** The toolbar's Track (`#tbTrackAll`) and Triangulate
+(`#tbTriangulateAll`) buttons are blue (`.active`) once that step has been run
+on the active session and while its result stands (`pose/run-state.js`), as
+Smooth is while smoothing is applied (`ui/smoothing-button.js`). Derived on
+every overlay draw, so session switches and results that go away (re-tracking
+replaces Triangulate's 3D) need no bookkeeping.
+
+**Exports.** `syncRunButtons()`. **Imports.** `./app-state.js` (`state`),
+`../pose/run-state.js` (`hasTrackResult`, `hasTriangulateResult`).
+**Imported by** `ui/rendering.js` (every `drawAllOverlays`). **Tests.**
+`tests/e2e/run-buttons-blue.mjs`.
+
 ### ui/section-state.js
 
 **Purpose.** Remember which collapsible `<details>` sections a user left open,
@@ -11275,7 +11806,8 @@ filesystem enumeration, decoder rebuild.
   (`parseSlpViaSleapIO`, raw `parseSlpH5` only as fallback) and restores
   grouping, `nulledNodes`/occlusion, identities and 3D via the shared
   `restoreGroupingAndUnlink` (`import-export/slp-import.js`), then the rest of
-  `metadata.lucid` through `readVisibilityMetadata` and `readPlaneMetadata`.
+  `metadata.lucid` through `readVisibilityMetadata`, `readSmoothingMetadata`
+  and `readPlaneMetadata`.
   Unlike the other readers it **adds** a session (it is also the Sessions list's
   "Add session folder"), so it calls `resetPlaneState()` only when no session is
   open. With a project open its planes stay, and the new session's 2D is seated
@@ -11361,8 +11893,9 @@ filesystem enumeration, decoder rebuild.
   fps readout's `title`; the estimate is kept as `videoFrameRate` when it
   differs by > 1%); views follow campy's camera order (the calibration's own
   camera list keeps its order); each camera loads the file at campy's `video`
-  path; with no calibration, views are named after campy's cameras, not the
-  video stem (campy's are all `0.mp4`); the single-SLP loader takes videos from
+  path; with no calibration, views are named after campy's cameras (as every
+  uncalibrated camera folder's view is, never by video stem — campy's are all
+  `0.mp4`); the single-SLP loader takes videos from
   session.json when there is no `videos/` and reads the root `.slp` over
   campy-live-export's `points3d.h5`; the load's final status gains the
   warnings (`withCampyWarnings`). `forceVideoSelectionWithFolder`'s folder
@@ -11525,7 +12058,28 @@ neither step (`tests/e2e/lazy-reopen-group-identities.mjs`).
 in, and queued behind the skeleton prompt (as its `onDone`) so two modals never
 stack. See `ui/calibration-notice.js`.
 
+**No calibration → placeholder cameras, so the folder can be saved.** A folder
+loaded with no `calibration.toml` (and nothing embedded) gets one PLACEHOLDER
+camera per view (`pose/placeholder-cameras.js`: all-zero extrinsics, f = 600,
+sized from the video — the shape Load Videos always made). Per-camera loader: the
+view, the video's `assignedCamera` and the folder's 2D are all keyed by the
+camera directory's name (campy's camera name when it names one); the camera is
+made in the video loop when the video decodes, else after it (deferred, failed or
+missing video), and the cameras are then put in folder order (the order they are
+written and reopened in). Single-SLP loader: `ensurePlaceholderCameras` after the video
+loop (after the campy step, which compares the real calibration names), and a
+recovered EMBEDDED calibration of placeholders only sets `hasCalibration` false,
+so 3D stays off on reopen — as in `handleLoadProjectSlpLazy`. Before, both loaders created NO camera: the `.slp`
+writer writes one video per `session.cameras` entry and drops every pose whose
+camera is missing, so Save wrote an empty file ("Saved (0.0 MB)"), and the
+per-camera loader named views by video stem — `cam1/video.mp4` and
+`cam2/video.mp4` were both `video`, and the folder's own poses (`cam1`, `cam2`)
+reached no view. A placeholder is never added to a session that has a real
+calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
+
 **Imports from project modules.**
+- `../pose/placeholder-cameras.js` (`makePlaceholderCamera`,
+  `hasRealCalibration`, `ensurePlaceholderCameras`),
 - `./calibration-pick.js` (`REBASED_CALIBRATION_NAME`, `pickCalibrationFile`),
   `./percam-slp-choice.js` (`chooseCameraSlp`), `./video-file-pick.js`,
   `./video-codec-diagnosis.js` (`videoLoadFailureText`),
@@ -11552,6 +12106,7 @@ stack. See `ui/calibration-notice.js`.
   `yieldToPaint`), `../import-export/import-track-resolve.js`,
   `../pose/initialization.js`, `../ui/sessions-panes.js`, `../ui/ui-wiring.js`,
   `../import-export/visibility-metadata.js` (`readVisibilityMetadata`),
+  `../import-export/smoothing-metadata.js` (`readSmoothingMetadata`),
   `../import-export/frame-identity-metadata.js` (`readFrameIdentityMetadata`,
   called by `handleLoadProjectSlpLazy` after the groups are rebuilt) and
   `../import-export/plane-metadata.js` (`readPlaneMetadata`, `resetPlaneState`,
@@ -12619,6 +13174,57 @@ instance), so it sits outside the slp-import / session-loader import graph.
 
 ---
 
+### import-export/smoothing-metadata.js
+
+**Purpose.** Temporal Smoothing's state in the project file, so a reopened
+project is exactly as smoothed as the saved one: button and last scope lit, a
+re-run replaces the last run (filters the source, not its output), windows 0
+restores the 3D from before smoothing. DOM-free.
+
+**What is stored** (only while something is smoothed, so a never-smoothed
+project saves byte-identically — `save-golden-digest.mjs`):
+- per group, its source (`unsmoothedPoints3d`): the writers set
+  `Instance3D.lucidUnsmoothed`, the vendored writer appends it to
+  `/session_data/unsmoothed_points_3d` (N x 3 f64, gzip), ROW-PARALLEL to
+  `points_3d` with NaN rows for groups that have none, created only once a group
+  has one (LUCID local patch (smoothing source)); the vendored reader returns
+  it per group (all-NaN rows = none) and `adoptSmoothingSource` re-marks it;
+- per session, `metadata.lucid.temporalSmoothing` = `{scope, medianWindow,
+  gaussianWindow, maxGap, minSegment}` of the last run (the windows are
+  informational; a re-run uses the current Settings).
+
+A full copy, not "re-triangulate on demand": the source is not reproducible from
+the 2D when the 3D was imported (campy-live), the triangulation settings or the
+calibration changed, and a re-solve would cost a Triangulate All on reopen. Cost
+is about one more `points_3d`: ~0.89 of its raw size after gzip (191 MB raw on
+the 5-camera, 180,210-frame project). The state still lapses per group as
+before: the mark is keyed by the `points3d` array, which every re-solve or edit
+replaces.
+
+**Key exports.** `SMOOTHING_METADATA_KEYS`; `noteSmoothingRun(session, scope,
+config)` / `smoothingRunOf(session)` (the last run, per session `WeakMap`);
+`smoothingSourceFor(group)` (writers); `adoptSmoothingSource(session, frameIdx,
+group, instance3d)` (readers, after `points3d` is final: marks, sets
+`group.smoothed`, registers the frame); `writeSmoothingMetadata(lucid,
+session)`; `readSmoothingMetadata(session, lucid)`.
+
+**Imports.** `pose/pose-data.js` (`unsmoothedPoints3d`, `markPoints3dSmoothed`,
+`pooledPoints3d`), `pose/temporal-smoothing.js` (`hasSmoothed3d`,
+`noteSmoothedFrames`).
+
+**Imported by.** Writers `import-export/file-io.js`,
+`import-export/slp-streaming-write.js`, `import-export/save-load.js` (project
+JSON: `unsmoothedPoints3d` per group, the key at the session-dict level).
+Readers `import-export/slp-import.js` (both typed group rebuilders +
+`handleLoadSlpFile`), `loading/session-loader.js` (lazy reopen, single-SLP
+folder), `import-export/save-load.js`. `ui/smoothing-button.js`;
+`ui/ui-wiring.js` (`smoothingRunOf`: the scope Remove smoothing keeps).
+
+**Tests.** `tests/e2e/smoothing-save-reopen.mjs` (eager + lazy reopen, both
+writers, two sessions, an edit after reopen, a never-smoothed project).
+
+---
+
 ### import-export/mesh-export.js
 
 **Purpose.** A 3D mesh object as a file another program can open: **binary
@@ -13004,6 +13610,8 @@ session's resident/total) rather than truncate silently. Covered by
 - `./frame-identity-metadata.js` — `writeFrameIdentityMetadata` (fills
   `metadata.lucid.frameIdentityMap` in `buildSlpLabelsAllViews`; no imports).
 - `./plane-metadata.js` — `writePlaneMetadata`.
+- `./smoothing-metadata.js` — `writeSmoothingMetadata`, and `smoothingSourceFor`
+  (each smoothed group's source rides on its `Instance3D` as `lucidUnsmoothed`).
 
 **Imported by.** `import-export/save-load.js`,
 `import-export/slp-import.js`, `import-export/slp-streaming-write.js`
@@ -13174,7 +13782,9 @@ full grouping (identities + 3D) + 2D corrections.
 `writeVisibilityMetadata` (`import-export/visibility-metadata.js` — must stay in
 lockstep with the eager writer in `file-io.js`, which is why both call the one
 helper); `writeFrameIdentityMetadata` (`import-export/frame-identity-metadata.js`,
-same reason); `writePlaneMetadata` (`import-export/plane-metadata.js`, same reason).
+same reason); `writePlaneMetadata` (`import-export/plane-metadata.js`, same reason);
+`writeSmoothingMetadata` + `smoothingSourceFor` (`import-export/smoothing-metadata.js`,
+same reason).
 **Imported by.** `import-export/save-load.js`
 (`buildSlpBytes`, `saveAllSessionsStreaming`, `commitSessionForMultiSessionSave`,
 `finalizeMultiSessionSave`).
@@ -13219,7 +13829,17 @@ loading-overlay/status-text UI helpers.
   decoder to size it, so `state.totalFrames` comes from the last labeled frame
   (`adoptLabeledFrameCount`), the view opens on the first, and the status line
   says to attach videos via File ▸ Load Videos.
-- `buildSlpBytes` (internal) assembles the multi-session SLP. **When EVERY
+- `buildSlpBytes` (internal) assembles the multi-session SLP. **First, every
+  UNCALIBRATED session gets a placeholder camera for each view, video and 2D
+  camera key that has none** (`ensurePlaceholderCameras`, with
+  `sessionViewsForSave` — `state.views` for the active session, its `_views`
+  stash otherwise — and `sessionVideoFilesForSave` — its `videoFileIndices`, or
+  the `vf.sessionIdx` tag Load Videos leaves). Every path below writes one video
+  per `session.cameras` entry and drops any view or pose whose camera is
+  missing, so a session with none (a folder loaded without calibration.toml)
+  used to save as an EMPTY file. A session with a real calibration is never
+  touched (`ensurePlaceholderCameras` returns early; `tests/test-placeholder-cameras.mjs`
+  §5), so what it writes does not change. **When EVERY
   session in `state.sessions` has an open `lazyLoader`, it routes to the
   memory-bounded streaming path** — `buildSessionSlpBytesStreaming`
   (`import-export/slp-streaming-write.js`) for a single lazy session, or
@@ -13334,6 +13954,7 @@ project save/reload — matching the SLP import path in `slp-import.js`.
 
 **Imports from project modules.**
 - `../pose/pose-data.js`, `../pose/triangulation.js`,
+  `../pose/placeholder-cameras.js` (`ensurePlaceholderCameras`),
   `../ui/browser-hints.js` (`fileSystemAccessHint` — `saveProjectSlp`, the
   download fallback when there is no save-file picker, says why and how to
   enable it in Brave), `../loading/video.js`, `../demo-data.js`, `./file-io.js`,
@@ -13350,6 +13971,8 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   settings in the legacy v2/v3 project JSON — same keys and omit-the-defaults
   rule as the `.slp` writers, at the session-dict level), `./plane-metadata.js`
   (`writePlaneMetadata`/`readPlaneMetadata`/`resetPlaneState`, same reason),
+  `./smoothing-metadata.js` (Temporal Smoothing: `unsmoothedPoints3d` per group
+  and the session-level key in the project JSON, same reason),
   `./slp-provenance.js` (`buildSaveProvenance` — every `.slp` project save keeps
   the loaded files' provenance).
 - `../lib/sleap-io/index.browser.js` — dynamic `import()` in the private
@@ -13555,6 +14178,9 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
 **Imports from project modules.**
 - `../pose/pose-data.js` (incl. `lazyPlaceholderXY`, `markPoints3dFromFile`),
   `../pose/triangulation.js` (`getInstanceGroupsForFrame`),
+  `../pose/placeholder-cameras.js` (`hasRealCalibration` — `handleLoadSlpFile`
+  sets up the 3D viewer only for a real calibration, not for the placeholder
+  cameras of a SLEAP file or of a project saved without one),
   `../pose/lazy-residency.js` (`dropGroupDerivedReprojections`), `./file-io.js`,
   `./slp-merge.js`, `../loading/video.js`, `../ui/app-state.js`,
   `../loading/session-loader.js`, `./save-load.js`,
@@ -13567,7 +14193,8 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
   sets the frame count), `../ui/sessions-panes.js`, `./visibility-metadata.js`
   (`readVisibilityMetadata`), `./frame-identity-metadata.js`
   (`stampFrameIdentitiesFromGroups`, `readFrameIdentityMetadata`), `./plane-metadata.js` (`readPlaneMetadata`,
-  `resetPlaneState`), `./import-track-resolve.js`
+  `resetPlaneState`), `./smoothing-metadata.js` (`readSmoothingMetadata`, and
+  `adoptSmoothingSource` in both typed group rebuilders), `./import-track-resolve.js`
   (`remapGlobalTrackToSession`, `nulledNodesFromOcclusion`),
   `./slp-provenance.js` (`fileSessionProvenance`, `fileSessionNames` — each
   session keeps its part of the file's provenance),

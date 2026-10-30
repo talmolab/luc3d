@@ -39,7 +39,7 @@ try {
     const errs = [];
     page.on('pageerror', e => errs.push(String(e).slice(0, 300)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     await page.evaluate(async () => {
         const pd = await import('/pose/pose-data.js'); const AS = await import('/ui/app-state.js');
         const K = [[600, 0, 320], [0, 600, 240], [0, 0, 1]];
