@@ -44,7 +44,7 @@ try {
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // ---- a cage with a known corner, built through the real model ----------
     // (0, 0, 300) is 300mm straight UP in LUCID. Every axis assertion below

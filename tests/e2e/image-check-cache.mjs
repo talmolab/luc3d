@@ -54,7 +54,7 @@ try {
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
     page.on('console', m => { if (m.type() === 'error') errs.push('console: ' + m.text().slice(0, 300)); });
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     await page.evaluate(async () => {
         const pd = await import('/pose/pose-data.js'), AS = await import('/ui/app-state.js');
@@ -117,7 +117,7 @@ try {
         AS.state.totalFrames = T * STEP; AS.state.currentFrame = 0; AS.state.fps = FPS;
         AS.state.views = CAMS.map(c => ({ cameraName: c, decoder: makeDecoder(c) }));
         // ---- the model: a fixed random projection of the input (any changed pixel moves the vector), plus the crop's mean
-        const SZ = 3 * E.INPUT * E.INPUT, D = 384, TAPS = 48;
+        const SZ = 3 * E.INPUT * E.INPUT, D = 384, TAPS = 48, c0 = E.INPUT >> 1, hw = Math.round(20 * E.INPUT / 224);
         let seed = 99; const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
         const idx = Int32Array.from({ length: D * TAPS }, () => Math.floor(rnd() * SZ)), w = Float32Array.from({ length: D * TAPS }, () => rnd() - 0.5);
         const model = { crops: 0 };
@@ -125,9 +125,9 @@ try {
             model.crops += n; const out = [];
             for (let c = 0; c < n; c++) {
                 const off = c * SZ, v = new Float32Array(D);
-                // the centre of the crop is the animal's body: its grey says which animal it is
-                let m = 0; for (let y = 92; y < 132; y++) for (let x = 92; x < 132; x++) m += data[off + y * E.INPUT + x];
-                for (let d = 0; d < 32; d++) v[d] = 3 * Math.cos((d + 1) * 0.9 * m / 1600);   // a non-linear map: three greys, three directions
+                // the centre of the crop is the animal's body: its grey says which animal it is (a 40-px window at 224, scaled with INPUT)
+                let m = 0; for (let y = c0 - hw; y < c0 + hw; y++) for (let x = c0 - hw; x < c0 + hw; x++) m += data[off + y * E.INPUT + x];
+                for (let d = 0; d < 32; d++) v[d] = 3 * Math.cos((d + 1) * 0.9 * m / (4 * hw * hw));   // a non-linear map: three greys, three directions
                 for (let d = 32; d < D; d++) { let s = 0; for (let j = 0; j < TAPS; j++) s += w[d * TAPS + j] * data[off + idx[d * TAPS + j]]; v[d] = s / 8; }
                 out.push(v);
             }

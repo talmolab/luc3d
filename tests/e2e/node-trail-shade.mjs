@@ -54,7 +54,7 @@ try {
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.evaluate(() => { try { localStorage.removeItem('nodeTrailShade'); } catch (e) { /* none */ } });
     await page.reload();
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 60000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 60000 });
 
     const settleOpen = () => page.waitForTimeout(250);
     const settleClose = () => page.waitForTimeout(700);
@@ -314,14 +314,14 @@ try {
     // ---- 4. remembered across a reload --------------------------------------------
     await page.evaluate(() => localStorage.setItem('nodeTrailShade', 'veryLight'));
     await page.reload();
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 60000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 60000 });
     m = await menus();
     cs = checkedShade(m);
     check(m.shade === 'veryLight' && JSON.stringify(cs) === '{"toolbar":["Very light"],"menubar":["Very light"]}',
         'after a reload the remembered shade is restored and checked in both menus', { shade: m.shade, cs });
     await page.evaluate(() => localStorage.setItem('nodeTrailShade', 'sepia'));
     await page.reload();
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 60000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 60000 });
     m = await menus();
     check(m.shade === 'dark', `an unrecognised stored shade falls back to Dark (${m.shade})`);
     await page.evaluate(() => localStorage.removeItem('nodeTrailShade'));

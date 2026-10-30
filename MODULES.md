@@ -2971,7 +2971,10 @@ no UI imports, so the module stays unit-testable in plain Node.
 `unsmoothSession`, `resolveSmoothingParams`, `hasSmoothed3d`,
 `removeSmoothing`, `restoreSmoothing`), `ui/smoothing-button.js`
 (`hasSmoothed3d`, `hasRemovedSmoothing`),
-`import-export/smoothing-metadata.js` (`hasSmoothed3d`, `noteSmoothedFrames`).
+`import-export/smoothing-metadata.js` (`hasSmoothed3d`, `noteSmoothedFrames`),
+`ui/smoothing-windows-figure.js` (`smoothSignalInto`, `normalizeWindow`,
+`sigmaForWindow`, `buildSegments`, to draw the Settings figure with the real
+filter).
 
 **Tests.** `tests/test-temporal-smoothing.mjs` (`smoothFrame` is checked bit
 for bit against the all-frames pass on every frame of noisy fixtures with
@@ -3945,7 +3948,7 @@ keyframeGap, maxShift}` (which frame each image sample decodes in one camera —
 `episodeGapSeconds` 3, `minApartSeconds` 3, `windowSeconds` 10,
 `maxSpanSeconds` 60, `followSeconds` 5, `metricPcaDims` 64, `metricDims` 16,
 `metricReg` 0.1, `signal`; `threshold` -1, `maxTrainRows` 200000);
-`IMAGE_CHECK_DEFAULTS` (the same shared ones; `threshold` -0.8, `maxTrainRows`
+`IMAGE_CHECK_DEFAULTS` (the same shared ones; `threshold` -1, `maxTrainRows`
 20000, `imageHz` 2, `backgroundHz` 0.1, `getEmbeddings` REQUIRED: `async (frame,
 items[{k, group}]) -> per item [{camera, vector}]`, STARTED in increasing frame order
 with up to `inFlight` (default 2; the image embedder asks for 8) in flight; optional
@@ -4128,6 +4131,39 @@ wrong pair, 2 false), 68 of 232; topC both swaps, 3 false rows; no row at all on
 the 39 views Track All gets >= 99.9% right. 113 of the 276 swaps are one track
 changing animal alone, which no contact check can see. Harness:
 `tests/e2e/_real-single-camera.mjs` (`IMAGE=1`), scored in a session scratchpad.
+
+**Recalibrated for the 168-px model input (2026-10-22; `INPUT` was 224, the crop
+stays 160 — `ui/image-embedder.js`).** Same contacts and tracking (Track All
+defaults), scored per truth change point (a row is right when it lies within
+its contact ± 3 s of one), on 24 recordings: the 22 proofread SLAP sessions,
+five white mice, CD1FSCR3_CSI (4 h 30 min):
+
+| | original six + 5 mice + CD1 | 16 held-out | all 24 |
+|---|---|---|---|
+| 224 at -0.8 (before) | 12 caught, 12 rows, 2 false | 13 caught, 11 rows, 0 false | 25, 23 rows, 2 false |
+| **168 at -1** | 12 caught, 11 rows, 1 false | 13 caught, 11 rows, 0 false | 25, 22 rows, 1 false |
+| 168 at -0.8 | 12 caught, 14 rows, 4 false | 13 caught, 11 rows, 0 false | 25, 25 rows, 4 false |
+
+The same change points are caught; the extra false rows at -0.8 are all on five
+white mice (contacts that sat just above -0.8 at 224). The held-out set is
+identical at every threshold from -0.4 to -1.2 (per-contact AUC 1.000). A
+repeat 224 run is bit-identical, so these differences are the input size, not
+noise. Cutting the crop at 168 directly (one resample) was no better (2 false at
+-1); 140 lost a real swap. Separation of same-animal vs different-animal
+10 s means (the check's metric, proofread labels): AUC 0.962 at 224, 0.955 at
+168; same-coat pairs 0.877 / 0.861. Speed: model alone 132 -> 243 crops/s
+(WebGPU fp16, M2 Pro), CPU workers 10.9 -> 19.2; the whole check on that Mac
+only 11-14% faster (CD1 114 -> 101 s, 145420 86 -> 74 s), because video decoding
+becomes the limit once the model is faster. Raw CLS embeddings of the same crop
+at 168 vs 224: median cosine 0.86 — irrelevant to the check, which learns its
+metric per recording, but it means any embedding saved at one size cannot be
+compared with another.
+Re-checked after #375 (sampling near contacts + 0.1 Hz background), 2026-10-27:
+on all 24 recordings, 168 at -1 flags exactly the same rows with that sampling
+as with every sample embedded (25 caught, 22 rows, 1 false), on 70% of the
+crops. Margins tighten: two real swaps sit at -1.09 (181300 0:37) and -1.11
+(183527 8:28) instead of -1.74 / -1.49, and the closest clean contact at -0.96
+(05mice 26:53) — so -1.2 would lose those two swaps.
 
 **Imports from project modules.** `pose/pose-data.js` (`readPoint3d`).
 
@@ -5980,7 +6016,8 @@ the card opens at the stylesheet's size, so changing the default reaches
 everyone who never resized. Records from before the flag saved the opening size
 on every close: `opts.legacyDefaultSize` names that old default, and such a
 record opens at the new default, centred where the old card was. Settings passes
-`{w: 880, h: 620}` (its default before it widened to 1040px).
+`{w: 880, h: 620}` (its default before it widened; it now opens at 1320x800,
+wide enough for the Temporal Smoothing figure's two charts).
 
 **This module is the ONE owner of the card's rect.** `.settings-modal`
 deliberately has no `max-width`/`max-height`, and `apply()` sets both to `none`
@@ -9094,7 +9131,7 @@ The dialog's `finally` also calls the embedder's `releaseFrames` (idempotent):
 `checkImageSwitches` does too, but not when it fails before its first frame,
 and the CPU workers hold ~600 MB each. On a CPU run "About these flags" says the
 model ran on the CPU. Reads `imageCheckHz` (default 2), `imageChangeThreshold`
-(default -0.8 — a new id rather than the old `imageCheckThreshold`, because the
+(default -1, -0.8 before the 168-px input — a new id rather than the old `imageCheckThreshold`, because the
 image score's scale changed), `imageCheckMaxViews` (default 3, passed as
 `maxViewsPerAnimal`) and `imageCheckWebNN` (default 0, as `webnn`), and passes
 `inFlight: embedder.inFlight`. The embedder's `backend()` outcome is attached to
@@ -9412,12 +9449,12 @@ Cropping runs in a pool of module workers (`createCropPool`,
 one frame, its VideoFrame transferred and closed by the worker — a decoder-cached
 frame is sent as a `clone()`, anything else as an ImageBitmap copy). A failed
 worker drops that one view of that frame and the rest of the run crops inline;
-`window.LUCID_CROP_WORKERS = 0` forces inline. `writeInputTensor`'s 160 -> 224
+`window.LUCID_CROP_WORKERS = 0` forces inline. `writeInputTensor`'s 160 -> 168
 sample positions are a precomputed table (same arithmetic, bit-identical).
 **GPU feeding.** (1) The model's output stays on the GPU
 (`preferredOutputLocation: 'gpu-buffer'`; its ONLY output is `last_hidden_state`
-[n, 257, 384]) and `clsFromGpu` copies just token 0 of each crop into a staging
-buffer — bit-identical, 1/257 of the readback. (2) Model runs are a greedy BATCH
+[n, 145, 384] at the 168-px input) and `clsFromGpu` copies just token 0 of each crop into a staging
+buffer — bit-identical, 1/145 of the readback. (2) Model runs are a greedy BATCH
 QUEUE: one run at a time, each taking every crop queued meanwhile (up to
 `EMBED_MAX_BATCH` = 64), with the check keeping `EMBED_IN_FLIGHT` = 8 frames in
 flight (`inFlight` on the provider) so batches fill while the GPU works (M2 Pro:
@@ -9500,7 +9537,7 @@ the cache, F frames not decoded" (or "all N crops from the cache" when the model
 never ran). **Sample crops on cached runs:** a frame answered from the cache cuts
 no crop, so each run keeps the grey pixels (`tensorToGrey`, INPUT² bytes) of the
 dialog's sample crop on `SAMPLE_FRAMES_PER_RUN` (200) evenly spaced frames, under
-that crop's cache key (at most `SAMPLE_PIXELS_MAX` = 256 kept, 12.8 MB, dropped with
+that crop's cache key (at most `SAMPLE_PIXELS_MAX` = 256 kept, 7.2 MB at the 168-px input, dropped with
 the vectors); when such a frame comes from the cache, `sampleCrops()` gets that
 crop back (`greyToTensor`: channel 0 only, all `inputTensorToPixels` reads, so the
 dialog shows the same bytes), marked `cached: true`, with the skeleton overlay
@@ -9574,7 +9611,7 @@ the CPU model, fitting — not video decoding); `inputTensorToPixels(tensor, rgb
 (a model input back to grey RGBA, the inverse of `writeInputTensor`'s normalisation),
 `SAMPLE_CROPS` (12); `cropPointsToInput(g)` (`g.pts`, the keypoints `cropGeometry` also
 records, NaN when missing, into model-input pixels: cutCrop's rotate-about-the-body-centre
-and scale, then x 224/160 — exact for an align_corners=false resize; pinned
+and scale, then x INPUT/CROP — exact for an align_corners=false resize; pinned
 against `cutCrop` itself within 0.04 px, at any rotation);
 `keyframeIndices(decoder)` -> `Promise<Int32Array|null>` (cached per video);
 `summarizeKeyframePlans(plans)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
@@ -9586,13 +9623,14 @@ of case through `pose/id-switch-check.js` `findNode`, the body = every node
 `frameCropGeometry(session, frame, items, cams, atFrames, sk)` -> `geo[view][item]`, built on
 `mapFrameInstances(session, frame, items, cams, atFrames, fn)` and `streamingReader(decoder,
 frames, decode)` — both shared with `ui/brightness-sampler.js`; constants
-`TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (224).
+`TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (168; 224 until 2026-10-22).
 
 **The crop** (must match the calibration): rotate so the nose points right
 (Nose − TTI), centre on the mean of the body keypoints, side 1.3 x body length,
 160 x 160, greyscale; outside the animal's convex hull dilated by a quarter body
 length is black, and so are the other animals' hulls in that view; resized to
-224 (bilinear) and ImageNet-normalised; embedding = CLS token of
+168 (bilinear; 12 x 12 patches of 14 px — any multiple of 14 runs, the model resizes its 37 x 37
+position table) and ImageNet-normalised; embedding = CLS token of
 `last_hidden_state` (post-layernorm). Checked against the offline pipeline on
 real crops: embeddings cosine 0.971 (vs 0.644 between different crops).
 
@@ -9699,7 +9737,7 @@ bit-identical (asserted).
 
 **Messages.** IN `{id, image: VideoFrame|ImageBitmap (transferred), crops:
 [{g: cropGeometry, others: [hull]}]}` — one camera view of one frame; OUT `{id,
-tensors: [Float32Array(3 x 224 x 224)]}` (transferred, one per crop, in order) or
+tensors: [Float32Array(3 x INPUT x INPUT)]}` (transferred, one per crop, in order) or
 `{id, error}`. The worker owns the image and closes it.
 
 **Imports from project modules.** `ui/image-embedder.js` (`cutCrop`,
@@ -9729,7 +9767,7 @@ cross-origin isolation. See
 (`cannotRun`: a failed download, `message` then being `MODEL_OFFLINE_REASON` —
 classified here by `asModelDownloadFailure`, where the error is still a real
 one); IN `{type:
-'run', id, data: Float32Array(n x 3 x 224 x 224) (transferred), n}` -> `{type:
+'run', id, data: Float32Array(n x 3 x INPUT x INPUT) (transferred), n}` -> `{type:
 'result', id, cls: Float32Array(n x 384) (transferred), dim}` — each crop's CLS
 token, read exactly as the main thread's `clsVectors` does — or `{type: 'error',
 id, message}`.
@@ -9824,7 +9862,7 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   `scDuplicateIou`, `scDuplicateOks` (single camera),
   `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
-  0/1, the image check likewise, default 0; `imageChangeThreshold` -0.8;
+  0/1, the image check likewise, default 0; `imageChangeThreshold` -1;
   `imageCheckHz` 2; `imageCheckBackgroundHz` 0.1 (crops per second away from contacts:
   `backgroundHz`, see pose/id-switch-check.js "Which samples are embedded"; Wizard only, not
   the Track All dialog); `imageCheckMaxViews` 3; `imageCheckWebNN` — 0/1, try WebNN,
@@ -9952,10 +9990,14 @@ right panel area (`settings-panel-container`), with a Cancel / Apply footer.
 
 **Key exports.**
 - `showSettingsModal(initialPanel)` — `initialPanel` ∈ `'triangulation'` |
-  `'keyboard'` | `'wizard'` | `'smoothing'` (default `'triangulation'`).
+  `'keyboard'` | `'wizard'` | `'smoothing'`. Without one (Help ▸ Settings and its
+  shortcut) it opens on the panel last shown (`localStorage.settingsLastPanel`,
+  browser-local, written by `selectPanel`), else the first, Tracking Wizard.
   Single-instance.
 
-**Behavior.** Four panels: **Default Triangulation** (the method is picked by
+**Behavior.** Four panels, listed in the nav in the order they are used (Tracking
+Wizard, Default Triangulation, Temporal Smoothing, then Keyboard Shortcuts):
+**Default Triangulation** (the method is picked by
 clicking one of two diagram cards from `ui/triangulation-methods-figure.js`,
 DLT or "Refined (Ref)" = bundle adjustment — no separate rows; Enter/Space on a
 focused card is handled in `onDocKeyDown`, which stops every keydown in the
@@ -9973,7 +10015,10 @@ tracking and greys the row), and **Tracking Thresholds** (one field per
 `kind: 'toggle'` entry, via `makeToggle`). Covered by
 `tests/e2e/settings-wizard-toggles.mjs`. And **Temporal Smoothing** (luc3d
 #134 — one **Filter Parameters** section rendering `getSmoothingParamDefs()`:
-median window, Gaussian window, max gap, minimum segment. Its own panel because
+median window, Gaussian window, max gap, minimum segment, under a figure from
+`ui/smoothing-windows-figure.js` that the two window fields redraw through
+`onEdit`, and whose sliders set the window, max gap and minimum segment fields
+back through `onParam`. Its own panel because
 it is not a tracking parameter — it runs after triangulation, on 3D the tracker
 has finished with. A note warns that raising the reprojection-error threshold
 creates more gaps, hence more gap edges where the filter is least accurate. The
@@ -12020,6 +12065,57 @@ tooltip in `index.html`) say just that.
 
 **Imports.** None. **Imported by** `ui/settings-modal.js`.
 
+### ui/smoothing-windows-figure.js
+
+**Purpose.** The figure at the top of Settings ▸ Temporal Smoothing: what the
+Median window and the Gaussian window each do, as two cards (stage 1, stage 2).
+Both plot one made-up trace (one node's x over 40 frames: a slow movement,
+dashed, with one fast real move up and back on the right, plus jitter and one
+one-frame spike) and draw what the stage
+makes of its input, the window around one frame (shaded) and stems at the
+bottom of that window: for the Gaussian its weights, for the median the
+window's values sorted low to high, the middle one (the median, what the spike
+frame becomes) green and the spike red. The median's output is green in both
+cards (its line on the left, with the same green dot at every frame as the
+Gaussian's input dots on the right); the Gaussian's output is blue, with an
+open black circle at every frame. Raw samples
+are open grey rings drawn over the green dots, since a median keeps many
+samples exactly and a filled dot would hide under the green one. The Gaussian's
+window sits on the fast move, which survives the example windows and is
+flattened by long ones (over-smoothing).
+
+**The lines are the real filter, not drawn by hand.** `update(params)` runs
+`smoothSignalInto` (`pose/temporal-smoothing.js`) on the trace with the panel's
+working windows, so the cards follow what is typed. A window that is off (0)
+is drawn with an example (median 5, Gaussian 9) and labelled so. The Gaussian
+card's input is the median's output, except with the median off and the
+Gaussian on: then it is the raw trace and a note says the spike becomes a bump
+(why the median runs first). Colours come from `.smooth-fig` in `styles.css`.
+
+**Sliders.** Each card has a Window slider (1–31 frames; under 3 the filter
+leaves the 3D as it is, drawn as a 1-frame window) that redraws the card
+and calls `onParam(id, value)` so the panel sets its working value and field
+(Apply then stores it), and a Frame slider with ▶ that slides the shaded window
+along the 40 frames (90 ms a frame; stops at the end, on a second click, or once
+the figure leaves the page). While a frame is picked, that stage's output is
+solid up to it and faint after it, with a ring on its value.
+
+**Card 3, gaps and segments** (full width, below the two): Max gap and Minimum
+segment length on its own 60-frame trace (a 2-frame hole, a 7-frame and a
+6-frame absence with a 3-frame stretch between them; the node comes back 12 mm
+away after the 7-frame one). It runs both stages at the windows the other cards
+show over the segments `buildSegments` cuts, as the real pass does, and draws
+each absence (labelled hole or split), the output per segment (grey where too
+short to smooth) and the segments as bars. Its Max gap (0–15) and Min segment
+(1–15) sliders report through `onParam` like the Window sliders.
+
+**Key exports.** `buildSmoothingWindowsFigure({ onParam })` → `{ el, update(params) }`.
+
+**Imports.** `pose/temporal-smoothing.js` (`smoothSignalInto`, `normalizeWindow`,
+`sigmaForWindow`, `buildSegments`). **Imported by** `ui/settings-modal.js`.
+
+**Tests.** `tests/e2e/smoothing-windows-figure.mjs`.
+
 ### ui/smoothing-button.js
 
 **Purpose.** The toolbar's Temporal Smoothing button state (luc3d #134):
@@ -12746,6 +12842,7 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
 - `./calibration-pick.js` (`REBASED_CALIBRATION_NAME`, `pickCalibrationFile`),
   `./percam-slp-choice.js` (`chooseCameraSlp`), `./video-file-pick.js`,
   `./video-codec-diagnosis.js` (`videoLoadFailureText`),
+  `../ui/video-codec-notice.js` (`noteUnplayableVideos`),
   `../ui/app-state.js` (incl. `buildRememberedSkeleton`, and `isViewDocked` as the
   rebuilt video controller's `isViewShown`), `../pose/pose-data.js`,
   `../ui/browser-hints.js` (`fileSystemAccessHint`),
@@ -13162,7 +13259,12 @@ actionable message. Measured cases (`tests/e2e/_probe-capabilities.mjs`):
 Safari plays HEVC-in-MP4 only when tagged `hvc1` (`hev1` → canPlayType "") — a
 lossless `ffmpeg -c copy -tag:v hvc1` re-tag fixes it; Safari decodes AV1 only
 with hardware AV1 (Apple M3+), while Chrome/Firefox decode it in software;
-otherwise suggest another browser / converting to H.264. Cheap on multi-GB
+Chrome and Edge have no HEVC decoder of their own and play it only on the GPU,
+so for them the advice depends on WebGL's renderer (`graphicsRenderer`): no GPU
+(Microsoft Basic Render Driver, llvmpipe, a virtual machine's adapter: measured
+on a Windows 11 VM, Chrome 155) → add a GPU and its driver; SwiftShader or a
+real GPU → turn on graphics acceleration / update the driver; otherwise suggest
+another browser / converting to H.264 (`-fps_mode passthrough` keeps every frame). Cheap on multi-GB
 recordings: it walks top-level box headers with random-access reads
 (`Blob.slice`, or HTTP Range for URLs) and reads only `moov` (often at the
 END, after the `mdat`). No diagnosis (null) when the codec can't be read or the
@@ -13172,8 +13274,13 @@ browser claims support — the original error then stands.
 - `sniffMp4VideoCodec(source)` → `{fourcc, codecName}|null` (File/Blob/URL).
 - `videoFourccFromMoov(moovBytes)` — first video sample-entry fourcc in a `moov`.
 - `explainUnplayableCodec(fourcc, fileName, env?)` → `{fourcc, codecName, kind,
-  message}|null`; pure (`env.canPlayType`, `env.isSafari` injectable). Kinds:
-  `hevc-hev1-tag`, `av1-unsupported`, `hevc-unsupported`, `unsupported`, `encrypted`.
+  message, title?, why?, steps?, command?}|null`; pure (`env.canPlayType`,
+  `env.isSafari`, `env.isChromium`, `env.renderer` injectable). Kinds:
+  `hevc-hev1-tag`, `av1-unsupported`, `hevc-no-gpu`, `hevc-gpu-no-decode`,
+  `hevc-unsupported`, `unsupported`, `encrypted`. The three HEVC-unsupported
+  kinds carry `title`/`why`/`steps` for `ui/video-codec-notice.js`.
+- `graphicsRenderer()` — WebGL's unmasked renderer string, cached ('' unknown).
+- `rendererHasGpu(renderer)` → true / false (software or virtual adapter) / null.
 - `diagnoseUnplayableVideo(source, fileName?, env?)` — sniff + explain.
 - `videoLoadFailureText(name, err)` — one-line reason for loaders' status
   messages: `err.codecDiagnosis.message` when present, else the error text.
@@ -13185,8 +13292,40 @@ browser claims support — the original error then stands.
 `loading/session-loader.js` (`videoLoadFailureText`).
 
 **Tests.** `tests/test-video-codec-diagnosis.js` (synthetic MP4s, every message
-kind, decoder integration); real browsers via the `decoderErrors` step of
-`tests/e2e/_probe-capabilities.html`.
+kind, renderer classes, decoder integration); real browsers via the
+`decoderErrors` step of `tests/e2e/_probe-capabilities.html`;
+`tests/e2e/video-codec-notice.mjs` (the notice, through File ▸ Load Videos).
+
+### ui/video-codec-notice.js
+
+**Purpose.** The note a load leaves when its videos can't play in this browser:
+why, and what to change. The loaders also put the one-line diagnosis in the
+status line, but on a multi-camera project that line runs off the window and
+the fix was cut off (H.265 in Chrome on a Windows VM with no GPU: poses loaded,
+every view black).
+
+**When.** Only for a failure whose `err.codecDiagnosis` has `steps` (the HEVC
+kinds), so corrupt or undiagnosed files keep the status line alone. One note per
+load, for the first such diagnosis, counting every file with the same kind. It
+waits for any other open overlay (`.plane-confirm-overlay`, `*modal-overlay`, the
+loading overlay) to close rather than stacking on it, and never opens twice.
+
+**Layout.** Title, the files ("N of M videos could not be played: …", 4 names),
+the why paragraph, "What to change" as a numbered list with the ffmpeg command
+as selectable code, one **Got it** button; Esc closes it. Changes nothing.
+
+**Key exports.** `noteUnplayableVideos(failures, totalVideos?)` (`failures`:
+`[{name, error}]`; returns the diagnosis shown or null; never throws) and
+`showVideoCodecNotice(diag, fileNames, totalVideos?)`.
+
+**Imported by.** `loading/session-loader.js` — after the final status of
+`handleLoadVideos`, the single-SLP folder loader, the attach-videos path and the
+session-folder loader.
+
+**Tests.** `tests/e2e/video-codec-notice.mjs` (a VM with no GPU simulated: H.265
+hidden from canPlayType, WebGL renderer "Microsoft Basic Render Driver"; one note
+for three files; Esc / Got it; waits for another dialog; SwiftShader; none for a
+non-video).
 
 ### loading/video.js
 
@@ -13388,10 +13527,17 @@ stops when the primary `<video>` ends.
   are detected per decoder by `judgeVideoFrameTimestamps` (the timestamp must
   move, agree with the clock within max(3 frames, 50 ms) — 3 frames alone
   misjudged Chrome at 150 fps on 60 Hz — and not BE the clock; cached as
-  `decoder._vfTimestamps = 'ok'|'bad'`). **WebKit never captures at all**
+  `decoder._vfTimestamps = 'ok'|'bad'`, with the reason in `_vfTsWhy`). Only a
+  clock copy, and a timestamp that stands still in Firefox, are final at the
+  first look. Elsewhere a timestamp that stands still or trails the clock is
+  also what a slow start looks like (Chrome on an integrated GPU, first picture
+  359-799 ms after play, luc3d #411), so the look repeats until it agrees or
+  `VF_JUDGE_WINDOW_MS` (2 s) has passed. A 'bad' reached by that timeout is
+  judged again at the next `startPlayback`. **WebKit never captures at all**
   (`videoFrameCaptureUnsafe()`): Safari's capture timestamp rarely names the
   captured picture yet can pass judging, and captures cost it presented frames.
-  While a view is still being judged it is not drawn.
+  While a view is still being judged it is not drawn, unless its timestamp
+  already moves (`'lagging'`): then its captures are painted at their own index.
 - A `'bad'` view stops capturing, is painted with `drawCurrentFrame`, and is
   indexed from a per-view requestVideoFrameCallback. **Safari** (one callback
   per shown picture) is painted INSIDE the callback at its `mediaTime`, but only
@@ -13542,6 +13688,7 @@ How it behaves:
 - `STEP_CURSOR_IDLE_MS` (3000) — idle time before a paused-stepping stream closes.
 - `STEP_BACK_CHUNK` (24) — frames decoded and cached per backward step.
 - `STEP_BACK_WARM_MS` (250) — pause after landing on a frame before warming the chunk behind it.
+- `VF_JUDGE_WINDOW_MS` (2000) — longest a playback's VideoFrame-timestamp judgement stays open before a still or trailing timestamp counts as unusable (`window.LUCID_VF_JUDGE_MS`).
 - `snapZoomToNative(oldScale, newScale, nativeScale)` → `{scale, snapped}` — the
   pure snap rule. `NATIVE_SNAP_TOL` (0.02), `NATIVE_SNAP_HOLD_MS` (250).
 - `zoomPercentLabel(scale, nativeScale, isNative)` → the pane badge's read-out
@@ -15060,3 +15207,26 @@ checks pinning the API each package must still expose), `check_pins()`
 **Imported by.** `server.py`; `tests/e2e/offline-server.mjs` shells out to it.
 
 **User-facing features.** Offline install and the distributable bundle.
+
+---
+
+### scripts/board_study/
+
+**Purpose.** Offline study tool, not part of the app: compares ChArUco calibration
+boards across camera rigs. Detects corners in calibration videos (cached), calibrates
+whole recordings, disjoint parts and first-N-second prefixes (aniposelib, as
+sleap-anipose; or calibrat3 headless), and scores every calibration the same way:
+reprojection, held-out board geometry ("ruler" lengths, flat-board fit), repeatability
+(intrinsics, camera poses, 3D points), detection range (square size in pixels, tilt),
+proofread-pose and ruler errors. `simulate` renders calib.io boards into a copy of a real
+rig. Protocol and shopping list in `PROTOCOL.md`, usage in `README.md`, findings in
+`RESULTS.md`.
+
+**CLI.** `uv run --no-project --with numpy --with scipy --with opencv-contrib-python-headless
+--with aniposelib --with matplotlib --with sleap-io python scripts/board_study
+{boards|scan|run|report|simulate}`.
+
+**Imports from project modules.** None (Python; reads the same anipose
+`calibration.toml` format LUC3D loads).
+
+**User-facing features.** None in the app; its recommendations feed the calibration docs.
