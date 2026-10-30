@@ -822,10 +822,10 @@ export function showSettingsModal(initialPanel) {
     sizeBtns.appendChild(sizeLabel);
     const SIZE_PRESETS = [
         {
-            name: 'narrow', label: 'Narrow', tip: 'A smaller window, 1320 × 800 px, centred',
-            // A small window with room all round.
+            name: 'narrow', label: 'Narrow', tip: 'Fill the browser\'s height, up to 1320 px wide, centred',
+            // A slimmer window, with more room either side.
             icon: '<rect x="1" y="2.5" width="14" height="11" rx="1.5" fill="none" stroke="currentColor" opacity="0.55"/>'
-                + '<rect x="5.5" y="5.5" width="5" height="5" rx="0.75" fill="currentColor"/>',
+                + '<rect x="5.75" y="4" width="4.5" height="8" rx="0.75" fill="currentColor"/>',
         },
         {
             name: 'default', label: 'Default', tip: 'Fill the browser\'s height, up to 1700 px wide, centred',
@@ -996,7 +996,7 @@ export function showSettingsModal(initialPanel) {
         margin: 24,
         fillHeight: true,
         fillWidth: 1700,
-        narrowSize: { w: 1320, h: 800 },
+        narrowWidth: 1320,
         onSizePreset: paintSizeButtons,
         // The opening size before it widened (to 1040x620, now 1320x800);
         // records holding it were saved without a resize, so they open at the
