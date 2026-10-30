@@ -291,6 +291,14 @@
                                 <label title="Refined: slower; helps when one view's 2D point is clearly wrong"><input type="radio" name="tbTriMethod" value="ba"> Ref</label>
                             </span>
                         </div>
+                        <!-- The reprojection error threshold every Triangulate run uses
+                             (the Tracking Wizard's setting). Blank = off.
+                             Wired in ui/ui-wiring.js (wireReprojThresholdField). -->
+                        <label class="tri-dropdown-setting" title="Reprojection error threshold: a camera whose reprojection error (the distance on its 2D image between the prediction and the reprojection) is over this many pixels is dropped for that node, the worst first, and the node is solved again. 100 to 15 px is recommended; lower can drop good views too. Leave blank for off. Used by the next Triangulate.">
+                            <span class="tri-dropdown-setting-label">Reprojection error (px)</span>
+                            <input type="number" id="tbReprojThreshold" min="0" max="640" step="1" inputmode="decimal"
+                                placeholder="off" autocomplete="off" aria-label="Reprojection error threshold (px)">
+                        </label>
                         <button class="tri-dropdown-item" data-scope="settings" role="menuitem"
                             title="Settings ▸ Default Triangulation">Settings…</button>
                     </div>
@@ -555,17 +563,19 @@
                     <div class="vis-line-style-row">
                         <span>Pre-ID Edge</span>
                         <div class="line-style-options" id="visUserPreLineStyle" data-value="solid">
-                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
-                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
-                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn" data-style="wedge" title="Wedge: wide at the edge's first node, pointing at its second (SLEAP's Edge Style &gt; Wedge)"><svg width="28" height="12"><polygon points="3,2 25,6 3,10" fill="currentColor" fill-opacity="0.5" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg></button>
                         </div>
                     </div>
                     <div class="vis-line-style-row">
                         <span>Post-ID Edge</span>
                         <div class="line-style-options" id="visUserPostLineStyle" data-value="solid">
-                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
-                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
-                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn" data-style="wedge" title="Wedge: wide at the edge's first node, pointing at its second (SLEAP's Edge Style &gt; Wedge)"><svg width="28" height="12"><polygon points="3,2 25,6 3,10" fill="currentColor" fill-opacity="0.5" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg></button>
                         </div>
                     </div>
                     <h3>Predictions</h3>
@@ -596,17 +606,19 @@
                     <div class="vis-line-style-row">
                         <span>Pre-ID Edge</span>
                         <div class="line-style-options" id="visPredPreLineStyle" data-value="dotted">
-                            <button class="line-style-btn" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
-                            <button class="line-style-btn active" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
-                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn" data-style="solid" title="Solid"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn active" data-style="dotted" title="Dotted"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn" data-style="wedge" title="Wedge: wide at the edge's first node, pointing at its second (SLEAP's Edge Style &gt; Wedge)"><svg width="28" height="12"><polygon points="3,2 25,6 3,10" fill="currentColor" fill-opacity="0.5" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg></button>
                         </div>
                     </div>
                     <div class="vis-line-style-row">
                         <span>Post-ID Edge</span>
                         <div class="line-style-options" id="visPredPostLineStyle" data-value="dotted">
-                            <button class="line-style-btn" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
-                            <button class="line-style-btn active" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
-                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn" data-style="solid" title="Solid"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn active" data-style="dotted" title="Dotted"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn" data-style="wedge" title="Wedge: wide at the edge's first node, pointing at its second (SLEAP's Edge Style &gt; Wedge)"><svg width="28" height="12"><polygon points="3,2 25,6 3,10" fill="currentColor" fill-opacity="0.5" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg></button>
                         </div>
                     </div>
                     <h3>Reprojections</h3>
@@ -652,9 +664,10 @@
                     <div class="vis-line-style-row">
                         <span>Edge Style</span>
                         <div class="line-style-options" id="visReprojLineStyle" data-value="solid">
-                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
-                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
-                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="28" height="12"><line x1="2" y1="6" x2="26" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn" data-style="wedge" title="Wedge: wide at the edge's first node, pointing at its second (SLEAP's Edge Style &gt; Wedge)"><svg width="28" height="12"><polygon points="3,2 25,6 3,10" fill="currentColor" fill-opacity="0.5" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg></button>
                         </div>
                     </div>
                     <div class="vis-line-style-row">
@@ -663,6 +676,7 @@
                             <button class="line-style-btn active" data-style="white" title="White">White</button>
                             <button class="line-style-btn" data-style="black" title="Black">Black</button>
                             <button class="line-style-btn" data-style="track" title="Track Color">Track</button>
+                            <button class="line-style-btn" data-style="dark" title="Darker than the track color, the same shade as Dark node trails">Dark</button>
                         </div>
                     </div>
                     <h3>Unlinked Instances</h3>
@@ -672,6 +686,19 @@
                             <input type="checkbox" id="visUnlinkedBadge" checked>
                             <span class="slider"></span>
                         </label>
+                    </div>
+                    <h3>Symmetrical Nodes</h3>
+                    <div class="vis-slider-row">
+                        <span title="Draw a thin grey line between each left/right pair of nodes, found from their names: Ear_L and Ear_R, Shoulder_left and Shoulder_right, EarL and EarR. Applies to all instance types, in the 2D views.">Symmetry Edges</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visSymmetryEdges">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Edge Weight</span>
+                        <input type="range" id="visSymmetryEdgeWeight" min="1" max="10" value="1" step="1">
+                        <span class="vis-val" id="visSymmetryEdgeWeightVal">1</span>
                     </div>
                     <!-- Planes. The planes the user annotated are scene geometry
                          and are drawn in EVERY mode, so these four say which of

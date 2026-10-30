@@ -83,6 +83,7 @@ import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/lo
 import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
 import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js';
 import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js';
+import { noteUnplayableVideos } from '../ui/video-codec-notice.js';
 import { refreshReadoutTotals } from '../ui/frame-readout.js';
 import { parseSkeletonJSON } from '../import-export/skeleton-json.js';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
@@ -278,6 +279,7 @@ export async function handleLoadVideos() {
         // matching `session.cameras` entry, so the timeline (which builds rows
         // from `session.cameras`) drew nothing for instances added there.
         var failedVideos = [];
+        var codecFailures = [];   // { name, error } for ui/video-codec-notice.js
         var newVideoFiles = [];
         for (let i = 0; i < files.length; i++) {
             const file = files[i];
@@ -325,6 +327,7 @@ export async function handleLoadVideos() {
                 // The decoder attaches a codec diagnosis (e.g. "HEVC tagged hev1 —
                 // re-tag with …") when the browser can't play the file.
                 failedVideos.push(videoLoadFailureText(stem, videoErr));
+                codecFailures.push({ name: file.name, error: videoErr });
             }
         }
 
@@ -438,6 +441,7 @@ export async function handleLoadVideos() {
         } else {
             setStatus('Loaded ' + files.length + ' video(s), ' + state.views.length + ' views active', 'success');
         }
+        noteUnplayableVideos(codecFailures, files.length);
     } catch (err) {
         console.error('Failed to load videos:', err);
         hideLoading();
@@ -2409,6 +2413,7 @@ export async function handleLoadSessionFolderSingleSlp() {
         }
 
         var failedVideos = [];
+        var codecFailures = [];   // { name, error } for ui/video-codec-notice.js
         for (var vfi = 0; vfi < videoFiles.length; vfi++) {
             var vFile = videoFiles[vfi];
             var vStemName = vFile.name.replace(/\.[^.]+$/, '');
@@ -2452,6 +2457,7 @@ export async function handleLoadSessionFolderSingleSlp() {
             } catch (e) {
                 console.error('[single-slp] Failed to load video:', vFile.name, e);
                 failedVideos.push(videoLoadFailureText(vFile.name, e));
+                codecFailures.push({ name: vFile.name, error: e });
             }
         }
 
@@ -2528,6 +2534,7 @@ export async function handleLoadSessionFolderSingleSlp() {
         }
         var campyFinal = withCampyWarnings(finalMsg, finalKind, session.campyRecording);
         setStatus(campyFinal.message, campyFinal.kind);
+        noteUnplayableVideos(codecFailures, videoFiles.length);
     } catch (err) {
         console.error('[single-slp] Error:', err);
         hideLoading();
@@ -2666,10 +2673,12 @@ export async function attachVideosForLazyReopen(session, loader, pickedFilesOver
 
     var attachedNames = [];
     var failed = [];
+    var codecFailures = [];   // { name, error } for ui/video-codec-notice.js
     for (var li = 0; li < toLoad.length; li++) {
         var lEntry = toLoad[li];
         if (!lEntry.decoder) {
             failed.push(lEntry.error ? videoLoadFailureText(lEntry.file.name, lEntry.error) : lEntry.file.name);
+            if (lEntry.error) codecFailures.push({ name: lEntry.file.name, error: lEntry.error });
             continue;
         }
         var vfEntry = {
@@ -2689,6 +2698,7 @@ export async function attachVideosForLazyReopen(session, loader, pickedFilesOver
     if (attachedNames.length === 0) {
         hideLoading();
         if (failed.length > 0) setStatus('All videos failed to load: ' + failed.join('; '), 'error');
+        noteUnplayableVideos(codecFailures, toLoad.length);
         return false;
     }
 
@@ -2716,6 +2726,7 @@ export async function attachVideosForLazyReopen(session, loader, pickedFilesOver
     hideLoading();
     if (failed.length > 0) {
         setStatus('Attached ' + attachedNames.length + ' video(s), ' + failed.length + ' failed: ' + failed[0], 'warning');
+        noteUnplayableVideos(codecFailures, toLoad.length);
     }
     return true;
 }
@@ -3817,7 +3828,8 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                         // message. Reported in the final status below.
                         console.error('[session-folder] Failed to load video ' + videoFile.name + ':', vidErr);
                         videoFailures.push({ text: videoLoadFailureText(videoFile.name, vidErr),
-                            kind: (vidErr && vidErr.codecDiagnosis && vidErr.codecDiagnosis.kind) || null });
+                            kind: (vidErr && vidErr.codecDiagnosis && vidErr.codecDiagnosis.kind) || null,
+                            name: videoFile.name, error: vidErr });
                     }
                 }
             }
@@ -4033,6 +4045,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         }
         var campyStatus = withCampyWarnings(statusMsg, statusKind, state.session && state.session.campyRecording);
         setStatus(campyStatus.message, campyStatus.kind);
+        noteUnplayableVideos(videoFailures, nVideosToLoad);
 
     } catch (err) {
         console.error('[session-folder] Error:', err);

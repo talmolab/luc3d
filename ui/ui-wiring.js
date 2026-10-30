@@ -55,6 +55,7 @@ import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
 import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js';
 // The toolbar's Animals field, beside Track Frame / Track All.
 import { wireAnimalCountField } from './animal-count-field.js';
+import { wireReprojThresholdField } from './reproj-threshold-field.js';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
@@ -64,7 +65,7 @@ import { onColorByChange, setColorByIdentity } from './color-by.js';
 import { TRAIL_PRESETS, MAX_TRAIL_FRAMES, trailPresetFor, trailLabel, trailFrames, trailRate,
          formatTrailSeconds, trailSecondsForFrames, parseTrailSeconds, parseTrailFrames,
          setTrailSeconds, onTrailSecondsChange } from './trail-presets.js';
-import { TRAIL_SHADES, TRACK_COLORS, trailShadeFor, trailColor } from './overlays.js';
+import { TRAIL_SHADES, TRACK_COLORS, trailShadeFor, trailColor, symmetryEdgesFor } from './overlays.js';
 import { installSeekbarTooltip } from './seekbar-tooltip.js';
 import { installSeekbarPreview } from './seekbar-preview.js';
 import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js';
@@ -2517,6 +2518,22 @@ export function setupUI() {
     setupVisSlider('visReprojBrightness', 'visReprojBrightnessVal', 'pct');
     setupVisSlider('visReprojLabelSize', 'visReprojLabelSizeVal');
     setupVisSlider('visReprojLabelAlpha', 'visReprojLabelAlphaVal', 'float');
+    setupVisSlider('visSymmetryEdgeWeight', 'visSymmetryEdgeWeightVal');
+
+    // Symmetry edges come from the node names, so a skeleton without left/right
+    // names draws nothing: say so, or the toggle looks broken.
+    var symmetryToggle = document.getElementById('visSymmetryEdges');
+    if (symmetryToggle) {
+        symmetryToggle.addEventListener('change', function() {
+            drawAllOverlays(state.currentFrame);
+            if (!symmetryToggle.checked || !state.session || !state.session.skeleton) return;
+            var nPairs = symmetryEdgesFor(state.session.skeleton).length;
+            setStatus(nPairs > 0
+                ? 'Symmetry edges: ' + nPairs.toLocaleString('en-US') + (nPairs === 1 ? ' pair' : ' pairs')
+                : 'Symmetry edges: no left/right node pairs to add in this skeleton',
+                nPairs > 0 ? 'info' : 'warning');
+        });
+    }
 
     // Checkbox toggles. `visUnlinkedBadge` only changes what is PAINTED — it
     // cannot hide the instance a selection points at, so the deselect sweep below
@@ -2607,9 +2624,10 @@ export function setupUI() {
         'visReprojBrightness', 'visReprojLabelSize', 'visReprojLabelAlpha',
         'vis3dLabelSize', 'vis3dSphereSize', 'vis3dPyramidLength',
         'vis3dNodeSize', 'vis3dEdgeWeight', 'vis3dBrightness',
+        'visSymmetryEdgeWeight',
     ];
     var visCheckIds = ['visLegend', 'visUser', 'visPredicted', 'visReprojections', 'visErrors',
-        'visUnlinkedBadge',
+        'visUnlinkedBadge', 'visSymmetryEdges',
         'vis3dLabelShow', 'vis3dSphereShow', 'vis3dPyramidShow',
         'vis3dNodeShow', 'vis3dEdgeShow'].concat(planeVisCheckIds);
     var visStyleIds = [
@@ -3133,6 +3151,7 @@ export function setupUI() {
     });
 
     wireAnimalCountField();
+    wireReprojThresholdField();
 
     // Context menu for instance groups
     document.getElementById('ctxUnlinkGroup').addEventListener('click', function () {

@@ -29,6 +29,12 @@
  *  5. The key leaves out masked hulls that cannot reach the crop square
  *     (`hullsReachingCrop`), so a neighbour moving far away does not invalidate a
  *     crop: cutting with only those hulls gives the very same pixels.
+ *  6. A camera decodes only the frames where it has a crop to cut: with two
+ *     views per animal and camB's 2D removed on a third of the frames, camA
+ *     streams every sample, camB and camC only the frames where an animal
+ *     picked them (camC mostly where camB has no 2D) — and the run equals
+ *     one that streams every sample in every camera (same flags, scores and
+ *     vectors bit for bit).
  *
  * Run: node tests/e2e/image-check-cache.mjs   (PORT=… to pick the server port)
  */
@@ -117,7 +123,7 @@ try {
         AS.state.totalFrames = T * STEP; AS.state.currentFrame = 0; AS.state.fps = FPS;
         AS.state.views = CAMS.map(c => ({ cameraName: c, decoder: makeDecoder(c) }));
         // ---- the model: a fixed random projection of the input (any changed pixel moves the vector), plus the crop's mean
-        const SZ = 3 * E.INPUT * E.INPUT, D = 384, TAPS = 48;
+        const SZ = 3 * E.INPUT * E.INPUT, D = 384, TAPS = 48, c0 = E.INPUT >> 1, hw = Math.round(20 * E.INPUT / 224);
         let seed = 99; const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
         const idx = Int32Array.from({ length: D * TAPS }, () => Math.floor(rnd() * SZ)), w = Float32Array.from({ length: D * TAPS }, () => rnd() - 0.5);
         const model = { crops: 0 };
@@ -125,9 +131,9 @@ try {
             model.crops += n; const out = [];
             for (let c = 0; c < n; c++) {
                 const off = c * SZ, v = new Float32Array(D);
-                // the centre of the crop is the animal's body: its grey says which animal it is
-                let m = 0; for (let y = 92; y < 132; y++) for (let x = 92; x < 132; x++) m += data[off + y * E.INPUT + x];
-                for (let d = 0; d < 32; d++) v[d] = 3 * Math.cos((d + 1) * 0.9 * m / 1600);   // a non-linear map: three greys, three directions
+                // the centre of the crop is the animal's body: its grey says which animal it is (a 40-px window at 224, scaled with INPUT)
+                let m = 0; for (let y = c0 - hw; y < c0 + hw; y++) for (let x = c0 - hw; x < c0 + hw; x++) m += data[off + y * E.INPUT + x];
+                for (let d = 0; d < 32; d++) v[d] = 3 * Math.cos((d + 1) * 0.9 * m / (4 * hw * hw));   // a non-linear map: three greys, three directions
                 for (let d = 32; d < D; d++) { let s = 0; for (let j = 0; j < TAPS; j++) s += w[d * TAPS + j] * data[off + idx[d * TAPS + j]]; v[d] = s / 8; }
                 out.push(v);
             }
@@ -137,11 +143,13 @@ try {
         window.__fx = { session, CAMS, sk, E, SC, AS, makeDecoder, render };
         window.__embedOpts = { model: fakeModel, maxViewsPerAnimal: 0, keyframes: () => KF };
         // one check through the real embedder; every returned vector recorded as frame|identity|camera
-        window.__run = async (cache) => {
+        // allFrames: prepareFrames is not told the items, so every camera streams every sample (the reference for 6.)
+        window.__run = async (cache, allFrames) => {
             CAMS.forEach(c => { io.streamed[c] = []; io.fetched[c] = []; }); model.crops = 0;
             const emb = await E.createImageEmbedder(session, Object.assign({ cache }, window.__embedOpts));
             const vecs = new Map(), fresh = [];
-            const res = await SC.checkImageSwitches(session, { fps: FPS, prepareFrames: emb.prepareFrames, croppable: emb.croppable, keyframes: emb.keyframes, inFlight: emb.inFlight, releaseFrames: emb.releaseFrames,
+            const prepareFrames = allFrames ? (frames, items, grid) => emb.prepareFrames(frames, null, grid) : emb.prepareFrames;
+            const res = await SC.checkImageSwitches(session, { fps: FPS, prepareFrames, croppable: emb.croppable, keyframes: emb.keyframes, inFlight: emb.inFlight, releaseFrames: emb.releaseFrames,
                 getEmbeddings: async (frame, items) => { const out = await emb.getEmbeddings(frame, items);
                     out.forEach((l, ii) => l.forEach(e => { const k = frame + '|' + items[ii].group.identityId + '|' + e.camera; vecs.set(k, e.vector); if (!e.cached) fresh.push(k); }));
                     return out; } });
@@ -312,6 +320,35 @@ try {
         return { before, cached: on.stats.cachedCrops, model: on.modelCrops, after: E.embeddingCacheInfo().entries };
     });
     check(r4.before > 0 && r4.cached === 0 && r4.after === r4.model, `new videos: nothing reused (${r4.cached} cached, ${r4.model} embedded), the old ${r4.before} entries dropped (now ${r4.after})`);
+
+    // ---- 6. a camera decodes only the frames where it has a crop to cut
+    const r6 = await page.evaluate(async () => {
+        const { session } = window.__fx;
+        const removed = [];   // camB's 2D on every third grid sample: those frames' second-largest view is camC
+        for (const [f, gs] of session.instanceGroups) {
+            if ((f / 4) % 3 !== 0) continue;
+            gs.forEach(g => { const ins = g.instances.get('camB'); if (ins) { removed.push([g, ins]); g.instances.delete('camB'); } });
+        }
+        const saved = window.__embedOpts;
+        window.__embedOpts = Object.assign({}, saved, { maxViewsPerAnimal: 2 });
+        try {
+            const skip = await window.__run(false), all = await window.__run(false, true);
+            return { same: window.__same(all, skip), crops: skip.res.crops, modelSkip: skip.modelCrops, modelAll: all.modelCrops,
+                     skip: Object.fromEntries(Object.entries(skip.streamed).map(([c, a]) => [c, a.length])),
+                     all: Object.fromEntries(Object.entries(all.streamed).map(([c, a]) => [c, a.length])),
+                     camASame: skip.streamed.camA.join() === all.streamed.camA.join() };
+        } finally {
+            window.__embedOpts = saved;
+            removed.forEach(([g, ins]) => g.instances.set('camB', ins));
+        }
+    });
+    // (the fake decoder yields lazily, so the reference streams each camera up to the last frame asked of it)
+    check(r6.camASame && r6.skip.camC > 0 && r6.skip.camB > 0 && r6.skip.camB < r6.all.camB && r6.skip.camC < r6.all.camC &&
+          r6.skip.camB + r6.skip.camC >= r6.skip.camA,
+          `each camera streams only the frames it has a crop on: camA ${r6.skip.camA}, camB ${r6.skip.camB}, camC ${r6.skip.camC} ` +
+          `(streaming every sample: ${r6.all.camA}/${r6.all.camB}/${r6.all.camC})`);
+    check(r6.same.result && r6.same.vecDiff === 0 && r6.same.missing === 0 && r6.same.sizes[0] === r6.same.sizes[1] && r6.modelSkip === r6.modelAll,
+          `…and the run equals one streaming every frame in every camera: same flags, scores and ${r6.same.sizes[0]} vectors bit for bit (${JSON.stringify(r6.same)})`);
 
     check(errs.length === 0, `no page errors${errs.length ? ': ' + errs.join(' | ') : ''}`);
 } catch (e) {
