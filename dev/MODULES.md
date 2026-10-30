@@ -14370,3 +14370,26 @@ checks pinning the API each package must still expose), `check_pins()`
 **Imported by.** `server.py`; `tests/e2e/offline-server.mjs` shells out to it.
 
 **User-facing features.** Offline install and the distributable bundle.
+
+---
+
+### scripts/board_study/
+
+**Purpose.** Offline study tool, not part of the app: compares ChArUco calibration
+boards across camera rigs. Detects corners in calibration videos (cached), calibrates
+whole recordings, disjoint parts and first-N-second prefixes (aniposelib, as
+sleap-anipose; or calibrat3 headless), and scores every calibration the same way:
+reprojection, held-out board geometry ("ruler" lengths, flat-board fit), repeatability
+(intrinsics, camera poses, 3D points), detection range (square size in pixels, tilt),
+proofread-pose and ruler errors. `simulate` renders calib.io boards into a copy of a real
+rig. Protocol and shopping list in `PROTOCOL.md`, usage in `README.md`, findings in
+`RESULTS.md`.
+
+**CLI.** `uv run --no-project --with numpy --with scipy --with opencv-contrib-python-headless
+--with aniposelib --with matplotlib --with sleap-io python scripts/board_study
+{boards|scan|run|report|simulate}`.
+
+**Imports from project modules.** None (Python; reads the same anipose
+`calibration.toml` format LUC3D loads).
+
+**User-facing features.** None in the app; its recommendations feed the calibration docs.
