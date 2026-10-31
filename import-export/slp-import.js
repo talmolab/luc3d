@@ -1011,6 +1011,8 @@ export async function handleLoadSlpFile(slpFile) {
 
         // Whether the session loaded last — the one left active — has 3D.
         var lastSessionHas3d = false;
+        // Picked videos that matched no camera, per session, for the status.
+        var unboundVideoWarn = [];
         for (var slpSessIdx = 0; slpSessIdx < numSlpSessions; slpSessIdx++) {
         showLoading('Building session ' + (slpSessIdx + 1) + '/' + numSlpSessions + '...');
         await new Promise(function (r) { setTimeout(r, 0); });
@@ -1572,6 +1574,32 @@ export async function handleLoadSlpFile(slpFile) {
 
                 autoAssignVideosToCameras();
 
+                // One camera and one picked video that no rule above matched:
+                // the video is that camera's whatever it is called (a renamed
+                // copy or export of the file the SLP references). Runs after
+                // every name rule, so it only decides what they left open.
+                var sessVfs = state.videoFiles.filter(function (o) { return o.sessionIdx === slpSessIdx; });
+                if (cameras.length === 1 && vidFiles.length === 1 && sessVfs.length === 1
+                        && !sessVfs[0].assignedCamera) {
+                    sessVfs[0].assignedCamera = cameras[0].name;
+                    console.log('[load-slp] video "' + sessVfs[0].file.name + '" matches no camera by name; ' +
+                        'bound to the session\'s only camera "' + cameras[0].name + '"');
+                }
+                // Any other picked video that matched no camera gets no view.
+                // Say so on the final status, with the cameras left without one.
+                var unboundNames = sessVfs.filter(function (o) { return !o.assignedCamera; })
+                    .map(function (o) { return o.file.name; });
+                if (unboundNames.length) {
+                    var camsNoVideo = cameraNames.filter(function (cn) {
+                        return !sessVfs.some(function (o) { return o.assignedCamera === cn; });
+                    });
+                    var unboundText = (unboundNames.length > 1 ? 'videos ' : 'video ') +
+                        unboundNames.join(', ') + ' matched no camera, not loaded' +
+                        (camsNoVideo.length ? '; no video for ' + camsNoVideo.join(', ') : '');
+                    console.warn('[load-slp] ' + unboundText);
+                    unboundVideoWarn.push({ session: session, text: unboundText });
+                }
+
                 // Don't create views yet — wait until after session loop
                 // so we only create views for the active session
             }
@@ -1691,14 +1719,19 @@ export async function handleLoadSlpFile(slpFile) {
         if (state.session) statusParts.push(state.session.numFrames.toLocaleString('en-US') + ' labeled frames');
         if (state.views.length > 0) statusParts.push(state.views.length + ' views');
         // A campy recording's warnings (status, cameras), per session.
-        var campyWarn = [];
+        var loadWarn = [];
         state.sessions.forEach(function (cs) {
             campyRecordingWarnings(cs.campyRecording).forEach(function (w) {
-                campyWarn.push(state.sessions.length > 1 ? cs.name + ': ' + w : w);
+                loadWarn.push(state.sessions.length > 1 ? cs.name + ': ' + w : w);
             });
         });
+        // Videos that matched no camera (a session whose load failed is gone).
+        unboundVideoWarn.forEach(function (u) {
+            if (state.sessions.indexOf(u.session) < 0) return;
+            loadWarn.push(state.sessions.length > 1 ? u.session.name + ': ' + u.text : u.text);
+        });
         setStatus('SLP loaded (' + statusParts.join(', ') + ')'
-            + (campyWarn.length ? ' — ' + campyWarn.join('; ') : ''), campyWarn.length ? 'warning' : 'success');
+            + (loadWarn.length ? ' — ' + loadWarn.join('; ') : ''), loadWarn.length ? 'warning' : 'success');
 
         // One skeleton per project: a multi-session .slp otherwise carries a
         // per-session skeleton each. Prompt for a single unifying skeleton file,

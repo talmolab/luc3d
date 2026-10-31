@@ -14359,6 +14359,17 @@ rate is session.json's, and the final status gains each session's warnings
 (`campyRecordingWarnings`). No calibration hash check here: the calibration
 came from the `.slp`.
 
+**Picked videos that match no camera.** `handleLoadSlpFile` binds each picked
+video by name only (`slpMatchCam`: parent directory, exact stem, the file name
+the SLP references; then `autoAssignVideosToCameras`). After all of those, a
+session with exactly ONE camera and exactly ONE picked video (after the
+extension, calibration-clip and `preferNonCalibrationVideos` filters) that none
+matched binds it to that camera (logged), since a renamed copy or export of a
+single-camera video is otherwise dropped. Any other unmatched video still gets
+no view, and the final status becomes a warning naming the unused videos and
+the cameras left without one (per session). Test:
+`tests/e2e/slp-load-unmatched-video.mjs`.
+
 The `.slp` parse is dispatched by the private `parseSlpForImport(file,
 onProgress)`: real `.slp` files go through `parseSlpViaSleapIO` (sleap-io.js
 streaming reader), with `parseSlpH5` (raw h5wasm worker) kept for SLEAP
