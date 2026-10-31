@@ -23,6 +23,7 @@ import {
     resolveTriangulationMethod,
     findEquivalentPriorGroup,
     adoptPrior3d,
+    triangulationSettingsKey,
     triangulationMethodLabel,
     dropAllDerivedTriangulationState,
 } from '../pose/triangulation.js';
@@ -348,9 +349,11 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
     // itself stays on the main thread. Results land in submission order.
     var gSolver = createGroupSolver(cameras,
         { method: prefMethod, triangulateOnly: true, expectedGroups: totalFrames });
+    var gSettingsKey = triangulationSettingsKey(cameras);
     function applyIdentitySolve(group, triResult) {
         group.points3d = pooledPoints3d(triResult.points3d);   // slab-pooled (pose-data.js)
         group.triangulationMethod = triResult.method;
+        group.solveSettings = gSettingsKey;
         if (triResult.method === 'ba') solvedBa++; else solvedDlt++;
     }
 
@@ -508,7 +511,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
             // read `group.points3d`, so the exported file stopped matching what
             // the user had computed and was looking at.
             var prior = findEquivalentPriorGroup(_existing, group);
-            if (adoptPrior3d(group, prior, prefMethod)) {
+            if (adoptPrior3d(group, prior, prefMethod, gSettingsKey)) {
                 reused3d++;
             } else {
                 // Still `triangulateOnly` (reprojections are recomputed on demand
@@ -601,6 +604,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
     // therefore its cost, BA running ~3x-6x DLT per group — is visible rather
     // than a surprise.
     var prefMethodT = resolveTriangulationMethod(null);
+    var tSettingsKey = triangulationSettingsKey(allCameras);
 
     showLoadingProgress('Grouping & triangulating', 0, totalFrames,
         { detail: triangulationMethodLabel(prefMethodT) });
@@ -751,7 +755,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
             // read `group.points3d`, so the exported file no longer matched what
             // the user had computed and was looking at.
             var priorT = findEquivalentPriorGroup(priorGroups, group);
-            if (adoptPrior3d(group, priorT, prefMethodT)) {
+            if (adoptPrior3d(group, priorT, prefMethodT, tSettingsKey)) {
                 reused3dT++;
                 group.markClean();
                 // No error stats: the errors belong to the adopted solve, which
@@ -764,6 +768,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
             var result = triangulateAndReproject(group, groupCameras,
                 { method: prefMethodT });
             group.triangulationMethod = result.method;
+            group.solveSettings = tSettingsKey;
             if (result.method === 'ba') solvedBaT++; else solvedDltT++;
 
             // Only the 3D is stored (see `dropAllDerivedTriangulationState`
