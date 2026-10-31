@@ -1500,6 +1500,7 @@ session graph that holds them.
   re-runs that test.
 - `InstanceGroup` — cross-view grouped instances + triangulated `points3d`
   + cached `reprojectedInstances`. `markDirty`/`markClean`. Also
+  `solveSettings` (`triangulationSettingsKey`, in memory only) and
   `triangulationMethod` (`'ba'`|`'dlt'`|undefined), recording WHICH SOLVER
   produced `points3d`. Read by `resolveTriangulationMethod`,
   `ui/rendering.js`'s lazy reprojection fill, `adoptPrior3d` and the Info Panel's
@@ -2822,12 +2823,18 @@ a Refined solve with a DLT one behind the user's back. Three helpers:
   `triangulationMethod` exactly.
 - `findEquivalentPriorGroup(priorGroups, group)` → the prior group with identical
   membership (camera for camera, by `Instance` object identity), or null.
-- `adoptPrior3d(group, prior, method)` → copies `points3d`,
-  `triangulationMethod` and `usedCameras`; returns true when `group` therefore
-  needs no solve. Requires identical membership **AND**
-  `prior.triangulationMethod === method`, so it only fires when re-solving would
-  be a provable no-op (an *unknown* prior method never matches; smoothed 3D,
-  `isPoints3dSmoothed`, never matches either). Does **not**
+- `triangulationSettingsKey(cameras)` → a string naming the settings a solve reads
+  besides its method and 2D input: the reprojection error threshold and the
+  cameras included in tracking. Every solve stores it on the group
+  (`solveSettings`, in memory only).
+- `adoptPrior3d(group, prior, method, settingsKey)` → copies `points3d`,
+  `triangulationMethod`, `solveSettings` and `usedCameras`; returns true when
+  `group` therefore needs no solve. Requires identical membership **AND**
+  `prior.triangulationMethod === method` **AND** `prior.solveSettings ===
+  settingsKey`, so it only fires when re-solving would be a provable no-op (an
+  *unknown* prior method never matches; smoothed 3D, `isPoints3dSmoothed`, never
+  matches; 3D read from a file has no `solveSettings`, so it never matches and is
+  re-solved). Does **not**
   copy `reprojections` — leaving them empty is what lets `ui/rendering.js`'s fill
   regenerate them (and `state.triangulationResults`) with the adopted method.
 
@@ -3105,8 +3112,9 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   `frameHasGroupedUserInstances`, `updateTimelineForFrame`.
 - Method preservation ("exported 3D == displayed 3D", see above):
   `resolveTriangulationMethod(group)`, `findEquivalentPriorGroup(priorGroups,
-  group)`, `adoptPrior3d(group, prior, method)` (not `reprojections`,
-  deliberately). The latter two exist for the regrouping sweeps, which rebuild
+  group)`, `triangulationSettingsKey(cameras)`,
+  `adoptPrior3d(group, prior, method, settingsKey)` (not `reprojections`,
+  deliberately). The latter three exist for the regrouping sweeps, which rebuild
   `InstanceGroup` objects around unchanged `Instance`s.
 - Orchestration: `triangulateMultiFrameInstances(start, end, onProgress, method)`
   -> `{ triangulated, totalGroups, errSum, errN, frames }` (keeps only the 3D;
@@ -4381,7 +4389,8 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   Settings ▸ Default Triangulation) and every group ends up with 3D from that
   method. A group is ADOPTED — `findEquivalentPriorGroup` + `adoptPrior3d`, no
   solve — only when its membership is unchanged AND its existing 3D already
-  came from that same method, i.e. only when re-solving is a provable no-op.
+  came from that same method under the same threshold and cameras
+  (`triangulationSettingsKey`), i.e. only when re-solving is a provable no-op.
   Switching the default to BA re-solves the project (~3-6x the DLT cost); that
   is the user's explicit choice, so both sweeps name the method and report 3D
   provenance ("N kept existing 3D, N solved via Bundle Adjustment, N via DLT")
@@ -4513,7 +4522,8 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   `sessionHasCalibration`, `showCalibrationRequiredPopup`,
   `getInstanceGroupsForFrame`, `sweepLazyFrameWindows`,
   `resolveTriangulationMethod`, `findEquivalentPriorGroup`, `adoptPrior3d`,
-  `triangulationMethodLabel` (the last four for the adopt-don't-downgrade rule),
+  `triangulationSettingsKey`, `triangulationMethodLabel` (the last five for the
+  adopt-don't-downgrade rule),
   `dropAllDerivedTriangulationState` (Group by Track keeps only the 3D).
 - `./viewport3d.js` — `Viewport3D` (Export 3D Video modal).
 - `./overlays.js` — `getTrackColor`, `getGroupColor` (Export 3D Video modal).
