@@ -158,7 +158,7 @@ try {
     // Phase A — Triangulate All ▸ BA, then "Group by Identity".
     // Lazy session, so this is the real reopened-project path.
     //
-    // Settings ▸ Default Triangulation = BA, because that is the user this bug
+    // Settings ▸ Triangulation Wizard = BA, because that is the user this bug
     // was reported by: someone who has selected Bundle Adjustment. Under the
     // governance rule the setting is exactly what keeps BA 3D across a regroup.
     // (Pre-fix these sweeps ignored the setting entirely and always produced DLT,
