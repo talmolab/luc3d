@@ -249,6 +249,7 @@ try {
     await page.evaluate(async () => (await import('/ui/settings-modal.js')).showSettingsModal('wizard'));
     await page.fill('input[aria-label="Weight for node TTI"]', '0');
     await page.click('.settings-btn-apply');
+    await page.click('.settings-modal-close');
     await page.waitForTimeout(200);
     const tight = await tailCensus();
     const frameAfterApply = await cur();

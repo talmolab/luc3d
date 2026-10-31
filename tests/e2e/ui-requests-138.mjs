@@ -144,6 +144,7 @@ try {
     l = await labels();
     check(/DLT \(fast\)/.test(l.title) && l.radio === 'dlt', 'picking a card without Apply changes nothing yet');
     await page.click('.settings-btn-apply');
+    await page.click('.settings-modal-close');
     l = await labels();
     check(l.text === 'Triangulate' && l.radio === 'ba', `after Apply: "${l.text}", radio ${l.radio}`);
     check(/Ref \(slower; helps when one view is clearly wrong\)/.test(l.title), 'tooltip follows too');

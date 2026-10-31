@@ -296,7 +296,15 @@
                                 <label title="Refined: slower; helps when one view's 2D point is clearly wrong"><input type="radio" name="tbTriMethod" value="ba"> Ref</label>
                             </span>
                         </div>
-                        <button class="tri-dropdown-item" data-scope="settings" role="menuitem"
+                        <!-- The reprojection error threshold every Triangulate run uses
+                             (the Tracking Wizard's setting). Blank = off.
+                             Wired in ui/ui-wiring.js (wireReprojThresholdField). -->
+                        <label class="tri-dropdown-setting" title="Reprojection error threshold: a camera whose reprojection error (the distance on its 2D image between the prediction and the reprojection) is over this many pixels is dropped for that node, the worst first, and the node is solved again. 100 to 15 px is recommended; lower can drop good views too. Leave blank for off. Used by the next Triangulate.">
+                            <span class="tri-dropdown-setting-label">Reprojection error (px)</span>
+                            <input type="number" id="tbReprojThreshold" min="0" max="640" step="1" inputmode="decimal"
+                                placeholder="off" autocomplete="off" aria-label="Reprojection error threshold (px)">
+                        </label>
+                        <button class="tri-dropdown-item" id="tbTriangulateSettings" data-scope="settings" role="menuitem"
                             title="Settings ▸ Default Triangulation">Settings…</button>
                     </div>
                 </div>

@@ -173,10 +173,10 @@ try {
     });
     await openModal();
     let opened = await rect();
-    check(opened.w === 1320 && opened.h === 800,
-        `an old record at the old 880x620 default opens at the new default (${opened.w}x${opened.h})`);
+    check(opened.w === 1400 - 48 && opened.h === 900 - 48 && opened.y === 24,
+        `an old record at the old 880x620 default opens at the new default: filling the window (${opened.w}x${opened.h})`);
     check(Math.abs((opened.x + opened.w / 2) - (260 + 440)) <= 1,
-        `...centred where the old card was (${opened.x})`);
+        `...centred (${opened.x})`);
     await closeModal();
     let rec = await page.evaluate(() => JSON.parse(localStorage.getItem('lucid.modalGeometry.v1')).settings);
     check(rec.sized === false, `closing without resizing records no chosen size (${JSON.stringify(rec)})`);
@@ -186,8 +186,8 @@ try {
     });
     await openModal();
     opened = await rect();
-    check(opened.w === 900 && opened.h === 650,
-        `an old record the user had resized keeps its size (${opened.w}x${opened.h})`);
+    check(opened.w === 1400 - 48 && opened.h === 900 - 48 && opened.y === 24,
+        `an old record the user had resized fills too: it could not have chosen otherwise then (${opened.w}x${opened.h})`);
 
     // ---- 4. Resizable, and the size is remembered ---------------------------
     const resizeStyle = await page.evaluate(() =>
@@ -226,10 +226,10 @@ try {
     const beforeDrag = await rect();
     await page.mouse.move(header ? header.x : 0, header ? header.y : 0);
     await page.mouse.down();
-    await page.mouse.move((header ? header.x : 0) - 80, (header ? header.y : 0) - 30, { steps: 8 });
+    await page.mouse.move((header ? header.x : 0) + 80, (header ? header.y : 0) + 30, { steps: 8 });
     await page.mouse.up();
     const afterDrag = await rect();
-    check(afterDrag.x === beforeDrag.x - 80 && afterDrag.y === beforeDrag.y - 30,
+    check(afterDrag.x === beforeDrag.x + 80 && afterDrag.y === beforeDrag.y + 30,
         `dragging the header moves the card by exactly the pointer delta ` +
         `(${beforeDrag.x},${beforeDrag.y} -> ${afterDrag.x},${afterDrag.y})`);
 
@@ -271,6 +271,170 @@ try {
         clamped.x + clamped.w <= vp.width + 1 && clamped.y + clamped.h <= vp.height + 1,
         `a rect remembered from a bigger screen is pulled fully back into view ` +
         `(${JSON.stringify(clamped)} in ${vp.width}x${vp.height})`);
+    await closeModal();
+
+    // ---- 6b. A returning visitor: one origin serves every channel and preview, so a
+    // size dragged long ago on any of them comes back. The clean profile passes either way.
+    for (const [what, record] of [
+        ['a size resized before the height filled', { x: 500, y: 100, w: 970, h: 855, sized: true }],
+        ['the same with no flag at all', { x: 500, y: 100, w: 970, h: 855 }],
+    ]) {
+        await page.evaluate((r) => localStorage.setItem('lucid.modalGeometry.v1', JSON.stringify({ settings: r })), record);
+        await page.setViewportSize({ width: 2000, height: 1200 });
+        await openModal();
+        const back = await rect();
+        check(back.w === 1700 && back.x === 150 && back.h === 1200 - 48 && back.y === 24,
+            `${what}: fills the height and, up to 1700 px, the width, centred (${JSON.stringify(back)})`);
+        await closeModal();
+        const kept = await page.evaluate(() => JSON.parse(localStorage.getItem('lucid.modalGeometry.v1')).settings);
+        check(!kept.heightChosen && !kept.widthChosen, `and closing does not turn it into a chosen size (${JSON.stringify(kept)})`);
+    }
+    await page.setViewportSize({ width: 1400, height: 900 });
+
+    // ---- 6c. The Window buttons, bottom left: Default and Full -------------------
+    await page.evaluate(() => localStorage.removeItem('lucid.modalGeometry.v1'));
+    await page.setViewportSize({ width: 2000, height: 1200 });
+    await openModal();
+    const sizeState = () => page.evaluate(() => {
+        const footer = document.querySelector('.settings-modal-footer').getBoundingClientRect();
+        const group = document.querySelector('.settings-size-btns').getBoundingClientRect();
+        const close = document.querySelector('.settings-btn-cancel').getBoundingClientRect();
+        return {
+            pressed: Array.from(document.querySelectorAll('.settings-size-btn[aria-pressed="true"]')).map(b => b.textContent).join(),
+            labels: Array.from(document.querySelectorAll('.settings-size-btn')).map(b => b.textContent).join(),
+            left: group.left - footer.left < 30 && group.right < close.left,
+            apply: document.querySelector('.settings-btn-apply').disabled,
+        };
+    });
+    let sz = await sizeState();
+    check(sz.labels === 'Narrow,Default,Full' && sz.left, `Narrow, Default and Full sit at the footer's left (${sz.labels})`);
+    check(sz.pressed === 'Default', `Default is marked to begin with (${sz.pressed})`);
+    const icons = await page.evaluate(() => Array.from(document.querySelectorAll('.settings-size-btn')).map(b => {
+        const v = b.querySelector('svg'), r = v && v.getBoundingClientRect();
+        return v && v.getAttribute('aria-hidden') === 'true' && r.width > 10 ? v.innerHTML : null;
+    }));
+    check(icons.every(Boolean) && new Set(icons).size === 3, 'each button has its own icon');
+    await page.click('.settings-size-btn[data-size="narrow"]');
+    let fullRect = await rect();
+    sz = await sizeState();
+    check(fullRect.w === 1320 && fullRect.h === 1152 && fullRect.x === 340 && fullRect.y === 24 && sz.pressed === 'Narrow', `Narrow is the old 1320 px width, centred, at the full height (${JSON.stringify(fullRect)})`);
+    check(sz.apply, 'and leaves nothing to Apply');
+    await closeModal();
+    await openModal();
+    fullRect = await rect();
+    sz = await sizeState();
+    check(fullRect.w === 1320 && fullRect.h === 1152 && sz.pressed === 'Narrow', `reopening keeps Narrow (${JSON.stringify(fullRect)})`);
+    await page.setViewportSize({ width: 1000, height: 600 });
+    await page.waitForTimeout(100);
+    fullRect = await rect();
+    check(fullRect.w === 952 && fullRect.h === 552 && fullRect.x === 24 && fullRect.y === 24, `in a small window Narrow fits it (${JSON.stringify(fullRect)})`);
+    await page.setViewportSize({ width: 2000, height: 1200 });
+    await page.waitForTimeout(100);
+    fullRect = await rect();
+    check(fullRect.w === 1320 && fullRect.h === 1152 && fullRect.x === 340, `and comes back (${JSON.stringify(fullRect)})`);
+    await page.click('.settings-size-btn[data-size="full"]');
+    fullRect = await rect();
+    sz = await sizeState();
+    check(fullRect.x === 0 && fullRect.y === 0 && fullRect.w === 2000 && fullRect.h === 1200 && sz.pressed === 'Full', `Full takes the whole window (${JSON.stringify(fullRect)})`);
+    check(sz.apply, 'and leaves nothing to Apply');
+    await page.setViewportSize({ width: 1800, height: 1000 });
+    await page.waitForTimeout(100);
+    fullRect = await rect();
+    check(fullRect.w === 1800 && fullRect.h === 1000, `it follows the window (${JSON.stringify(fullRect)})`);
+    await page.setViewportSize({ width: 2000, height: 1200 });
+    await page.waitForTimeout(100);
+    await closeModal();
+    await openModal();
+    fullRect = await rect();
+    sz = await sizeState();
+    check(fullRect.w === 2000 && fullRect.h === 1200 && sz.pressed === 'Full', `reopening keeps Full (${JSON.stringify(fullRect)})`);
+    await page.click('.settings-size-btn[data-size="default"]');
+    fullRect = await rect();
+    sz = await sizeState();
+    check(fullRect.w === 1700 && fullRect.x === 150 && fullRect.y === 24 && fullRect.h === 1152 && sz.pressed === 'Default', `Default goes back (${JSON.stringify(fullRect)})`);
+    await page.evaluate(() => { document.querySelector('.settings-modal').style.width = '1200px'; });
+    await page.waitForTimeout(300);
+    sz = await sizeState();
+    check(sz.pressed === '', `a dragged size marks neither (${JSON.stringify(sz.pressed)})`);
+    await page.click('.settings-size-btn[data-size="default"]');
+    await page.waitForTimeout(300);
+    fullRect = await rect();
+    sz = await sizeState();
+    check(fullRect.w === 1700 && fullRect.x === 150 && sz.pressed === 'Default', `and Default forgets the drag (${JSON.stringify(fullRect)})`);
+    await closeModal();
+    await openModal();
+    fullRect = await rect();
+    check(fullRect.w === 1700, `for good (${fullRect.w})`);
+    const titleBox = await page.evaluate(() => { const r = document.querySelector('.settings-modal-title').getBoundingClientRect(); return { x: r.left + 10, y: r.top + 5 }; });
+    await page.mouse.click(titleBox.x, titleBox.y);
+    await page.waitForTimeout(50);
+    sz = await sizeState();
+    check(sz.pressed === 'Default', `a click on the title bar that goes nowhere changes nothing (${sz.pressed})`);
+    await closeModal();
+    await page.evaluate(() => localStorage.removeItem('lucid.modalGeometry.v1'));
+    await page.setViewportSize({ width: 1400, height: 900 });
+
+    // ---- 7. Until the user chooses a height, the card fills the window's height --
+    await page.evaluate(() => localStorage.removeItem('lucid.modalGeometry.v1'));
+    await page.setViewportSize({ width: 1400, height: 1400 });
+    await openModal();
+    let tall = await rect();
+    check(tall.h === 1400 - 48 && tall.y === 24 && tall.w === 1400 - 48, `on a tall window it opens at the full height (${JSON.stringify(tall)})`);
+    await page.setViewportSize({ width: 1400, height: 1100 });
+    await page.waitForTimeout(100);
+    tall = await rect();
+    check(tall.h === 1100 - 48 && tall.y === 24, `and follows the window down (${JSON.stringify(tall)})`);
+    await page.setViewportSize({ width: 1400, height: 1300 });
+    await page.waitForTimeout(100);
+    tall = await rect();
+    check(tall.h === 1300 - 48 && tall.y === 24, `and back up (${JSON.stringify(tall)})`);
+    // The width: up to 1700 px, centred, and it follows the window.
+    await page.setViewportSize({ width: 2560, height: 1300 });
+    await page.waitForTimeout(100);
+    tall = await rect();
+    check(tall.w === 1700 && tall.x === (2560 - 1700) / 2, `a very wide window stops at 1700 px, centred (${JSON.stringify(tall)})`);
+    await page.setViewportSize({ width: 900, height: 1300 });
+    await page.waitForTimeout(100);
+    tall = await rect();
+    check(tall.w === 900 - 48 && tall.x === 24, `a small window is filled, not overflowed (${JSON.stringify(tall)})`);
+    await page.setViewportSize({ width: 2000, height: 1300 });
+    await page.waitForTimeout(100);
+    tall = await rect();
+    check(tall.w === 1700 && tall.x === 150, `and back up (${JSON.stringify(tall)})`);
+    const before = tall.x;
+    const hdr = await page.evaluate(() => { const r = document.querySelector('.settings-modal-title').getBoundingClientRect(); return { x: r.left + 20, y: r.top + 5 }; });
+    await page.mouse.move(hdr.x, hdr.y);
+    await page.mouse.down();
+    await page.mouse.move(hdr.x - 10, hdr.y + 30, { steps: 4 });
+    await page.mouse.up();
+    tall = await rect();
+    check(tall.x === before - 10 && tall.h === 1300 - 48, `dragging it sideways keeps the height (${JSON.stringify(tall)})`);
+    // A width dragged on its own leaves the height filling.
+    await page.evaluate(() => { document.querySelector('.settings-modal').style.width = '1100px'; });
+    await page.waitForTimeout(300);
+    await closeModal();
+    await openModal();
+    tall = await rect();
+    check(tall.w === 1100 && tall.h === 1300 - 48, `a width dragged on its own stays, and the height still fills (${JSON.stringify(tall)})`);
+    await page.setViewportSize({ width: 2000, height: 1200 });
+    await page.waitForTimeout(100);
+    tall = await rect();
+    check(tall.h === 1200 - 48, `and still follows the window (${tall.h})`);
+    await page.setViewportSize({ width: 2000, height: 1300 });
+    await page.waitForTimeout(100);
+    await page.evaluate(() => {
+        const c = document.querySelector('.settings-modal');
+        c.style.height = '700px';
+    });
+    await page.waitForTimeout(300);
+    await closeModal();
+    await openModal();
+    tall = await rect();
+    check(tall.h === 700 && tall.w === 1100, `a size the user chose stays, even on a tall window (${tall.w}x${tall.h})`);
+    await page.setViewportSize({ width: 2000, height: 1500 });
+    await page.waitForTimeout(100);
+    tall = await rect();
+    check(tall.h === 700, `and does not follow the window (${tall.h})`);
     await closeModal();
 
     check(errs.length === 0, `no page/console errors (got ${JSON.stringify(errs)})`);

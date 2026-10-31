@@ -35,7 +35,8 @@ import { planeState } from './plane-definition.js';
  * annotated — turning Predictions off to see the plane you are placing is
  * exactly the kind of thing this mode is for. So are the quick SETTINGS in the
  * action menus — Track's Animals field (`#tbNumAnimals`), Triangulate's Method
- * radios, each menu's Settings… — which a run reads when it starts; only the
+ * radios and Reprojection error field (`#tbReprojThreshold`), each menu's
+ * Settings… — which a run reads when it starts; only the
  * menus' run buttons are here.
  *
  * @type {string[]}
