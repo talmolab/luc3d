@@ -1,4 +1,4 @@
-import ModuleFactory from './hdf5_util.js?v=07faed6477b6';
+import ModuleFactory from './hdf5_util.js?v=44be1835e547';
 export var Module; //: H5WasmModule = null;
 export var FS = null;
 const ready = ModuleFactory({ noInitialRun: true }).then(result => { Module = result; FS = Module.FS; return Module; });
