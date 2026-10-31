@@ -939,17 +939,20 @@ against it. Each difference gets a `kind`:
 (`ui/calibration-notice.js`) does NOT branch on it — it lists only which
 sessions differ; the classification is for the console log and the tests.
 
-**Three deliberate details.** A session with NO cameras is excluded from the
-comparison and listed in `withoutCalibration` rather than counted as a third
-calibration — a per-camera folder load with no `.toml` would otherwise raise the
-modal on a perfectly consistent project. A camera whose rotation or translation
+**Three deliberate details.** A session with NO calibration — no cameras, or
+only placeholders (`hasRealCalibration` false: every camera has all-zero
+extrinsics, which is what a folder loaded with no `.toml` now gets) — is excluded
+from the comparison and listed in `withoutCalibration` rather than counted as a
+third calibration; it would otherwise raise the modal on a perfectly consistent
+project. A rig with only its reference camera at the origin is still compared. A camera whose rotation or translation
 will not read (NaN, wrong length) is DROPPED, so one malformed entry cannot
 masquerade as a divergence. And only cameras whose LENS matches contribute to the
 frame solve: a re-focused camera's extrinsics are not a statement about the origin.
 
 **Imports from project modules.** `./origin-frame.js` (`rotationAboutAxis`,
 `rotationMatrixToAxisAngle`, `normalize3`) — an `rvec` converts by handing
-`rotationAboutAxis` the vector and its own magnitude. DOM-free.
+`rotationAboutAxis` the vector and its own magnitude; `./placeholder-cameras.js`
+(`hasRealCalibration`). DOM-free.
 
 **Imported by.** `ui/calibration-notice.js`.
 
@@ -957,6 +960,64 @@ frame solve: a re-focused camera's extrinsics are not a statement about the orig
 app's own `buildOriginFrame` + `rebaseExtrinsics`, so the detector and the
 re-base cannot drift apart silently) and
 `tests/e2e/multi-session-calibration-notice.mjs` (the real calibrations off disk).
+
+---
+
+### pose/placeholder-cameras.js
+
+**Purpose.** The stand-in `Camera` a view gets when there is no calibration, and
+the rule that every view and every 2D camera key of an UNCALIBRATED session has
+one. The `.slp` writer (`buildSlpLabelsAllViews`) writes one video per
+`session.cameras` entry and skips any 2D instance whose camera is not in that
+list, and the save paths choose the views and videos to write by the same list —
+so a session with no cameras saved as an empty file ("Saved (0.0 MB)") and
+reopened with no views and no poses. A folder loaded with no `calibration.toml`
+was exactly that.
+
+**The placeholder** is the camera File ▸ Load Videos has always made:
+`rvec = tvec = [0,0,0]`, no distortion, f = 600, principal point at the image
+centre, sized from the video (640×480 when unknown). The app already reads that
+shape as "no calibration" (`ui/view-align-modal.js` `isCalibrated`,
+`ui/sessions-panes.js` `originHasCalib`, Triangulate's `sessionHasCalibration()`
+gate). No loader sets up the 3D viewer for placeholders only (folder loaders,
+`handleLoadSlpFile`, `handleLoadProjectSlpLazy`), tracking refuses with the
+Calibration Required popup, a new group is not auto-triangulated
+(`reTriangulateGroup`), and `handleLoadCalibration` replaces them when a real
+calibration is loaded.
+
+**Key exports.**
+- `makePlaceholderCamera(name, width?, height?)`.
+- `isPlaceholderCamera(cam)` — all-zero rotation AND translation (a 3×3
+  rotation matrix is calibrated).
+- `hasRealCalibration(session)` — any non-placeholder camera. Same rule as
+  `pose/triangulation.js` `sessionHasCalibration()` (which takes no argument and
+  reads `state.session`); this one takes any session and needs no app state.
+- `cameraNamesInUse(session, views?, videoFiles?)` — views (on-screen order),
+  then videos (`assignedCamera || name`), then 2D keys: frame-group instances
+  and unlinked instances (non-empty lists only), instance-group members, a lazy
+  loader's per-camera stores (`labelsByCam`).
+- `ensurePlaceholderCameras(session, views?, videoFiles?)` — appends a
+  placeholder for each name in use with no camera and assigns each unassigned
+  video to the camera named after it; returns the names added. **Does nothing
+  to a session with a real calibration**: a stand-in at the world origin would
+  join triangulation and corrupt the 3D.
+- `PLACEHOLDER_FOCAL`, `PLACEHOLDER_DEFAULT_SIZE`.
+
+**Imports from project modules.** `./pose-data.js` (`Camera`). DOM-free and
+state-free (callers pass the session's views and videos), so it loads under Node.
+
+**Imported by.** `loading/session-loader.js` (per-camera and single-SLP folder
+loaders; `handleLoadProjectSlpLazy`'s 3D gate), `import-export/save-load.js`
+(`buildSlpBytes`, for every session before writing), `import-export/slp-import.js`
+(`handleLoadSlpFile`'s 3D gate), `pose/calibration-compare.js` (placeholder-only
+sessions are not compared), `pose/tracker.js` and `ui/track-range-modal.js`
+(tracking needs a real calibration).
+
+**Tests.** `tests/test-placeholder-cameras.mjs`;
+`tests/e2e/nocalib-folder-save-reopen.mjs` (per-camera folder with no `.toml`:
+load → Track All refuses → annotate → Save As → File ▸ Open with the videos;
+deferred videos; a hand-built camera-less session; the single-SLP folder loader
+and its reopen).
 
 ---
 
@@ -1668,8 +1729,8 @@ session graph that holds them.
 
 **Imported by.** `demo-data.js`; `pose/` — `cross-view-tracker.js`,
 `id-switch-check.js`, `initialization.js`, `lazy-residency.js`,
-`origin-rebase.js`, `plane-data.js`, `plane-fit.js`, `tracker.js`,
-`tracker-worker.js`, `triangulation.js`, `triangulation-core.js`,
+`origin-rebase.js`, `placeholder-cameras.js`, `plane-data.js`, `plane-fit.js`,
+`tracker.js`, `tracker-worker.js`, `triangulation.js`, `triangulation-core.js`,
 `triangulation-pool.js`, `triangulation-worker.js`; `import-export/` —
 `file-io.js`, `save-load.js`, `skeleton-json.js`, `slp-import.js`,
 `slp-merge.js`, `slp-streaming-write.js`; `loading/session-loader.js`; `ui/` —
@@ -2000,8 +2061,14 @@ drifts upward.
   array).
 - `./triangulation.js` — `computeFundamentalMatrix`, `triangulatePointDLT`,
   `triangulatePoints`, `reprojectPoint`, `reprojectPoints`,
-  `computeInstanceDistanceTo`, `hungarianAlgorithm`, and `loadAllLazyFrames` /
-  `sweepLazyFrameWindows` (the Track All sweeps).
+  `computeInstanceDistanceTo`, `hungarianAlgorithm`, `loadAllLazyFrames` /
+  `sweepLazyFrameWindows` (the Track All sweeps), and
+  `showCalibrationRequiredPopup`.
+- `./placeholder-cameras.js` — `hasRealCalibration`: Track This Frame and
+  `runTrackingPass` (Track All, Track Frame Range) refuse with the Calibration
+  Required popup when every camera is a placeholder (a folder loaded with no
+  calibration), as Triangulate does — cross-view tracking on cameras that all
+  sit at the origin would build groups from 3D with no baseline.
 - `./cross-view-tracker.js` — `CrossViewTracker`, `Detection`.
 - `./run-state.js` — `noteTrackRun` (after `trackCurrentFrame`'s and
   `runTrackingPass`'s run): the blue Track button.
@@ -2469,7 +2536,10 @@ no UI imports, so the module stays unit-testable in plain Node.
 `unsmoothSession`, `resolveSmoothingParams`, `hasSmoothed3d`,
 `removeSmoothing`, `restoreSmoothing`), `ui/smoothing-button.js`
 (`hasSmoothed3d`, `hasRemovedSmoothing`),
-`import-export/smoothing-metadata.js` (`hasSmoothed3d`, `noteSmoothedFrames`).
+`import-export/smoothing-metadata.js` (`hasSmoothed3d`, `noteSmoothedFrames`),
+`ui/smoothing-windows-figure.js` (`smoothSignalInto`, `normalizeWindow`,
+`sigmaForWindow`, `buildSegments`, to draw the Settings figure with the real
+filter).
 
 **Tests.** `tests/test-temporal-smoothing.mjs` (`smoothFrame` is checked bit
 for bit against the all-frames pass on every frame of noisy fixtures with
@@ -3022,7 +3092,9 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   reprojected instances, and `state.triangulationResults`; both Triangulate All
   paths and Group by Track call it before they start),
   `reTriangulateGroup` (preserves the group's existing method via
-  `resolveTriangulationMethod`),
+  `resolveTriangulationMethod`; the auto-triangulation of a group created by
+  Shift+G — does nothing without a real calibration, `sessionHasCalibration()`,
+  so placeholder cameras never produce 3D that would be saved and exported),
   `triangulateCurrentFrame(method)`, `triangulateAllFrames(method)`
   (`method` defaults to `'dlt'`), `sessionHasCalibration`,
   `showCalibrationRequiredPopup`,
@@ -3420,7 +3492,7 @@ keyframeGap, maxShift}` (which frame each image sample decodes in one camera —
 `episodeGapSeconds` 3, `minApartSeconds` 3, `windowSeconds` 10,
 `maxSpanSeconds` 60, `followSeconds` 5, `metricPcaDims` 64, `metricDims` 16,
 `metricReg` 0.1, `signal`; `threshold` -1, `maxTrainRows` 200000);
-`IMAGE_CHECK_DEFAULTS` (the same shared ones; `threshold` -0.8, `maxTrainRows`
+`IMAGE_CHECK_DEFAULTS` (the same shared ones; `threshold` -1, `maxTrainRows`
 20000, `imageHz` 2, `backgroundHz` 0.1, `getEmbeddings` REQUIRED: `async (frame,
 items[{k, group}]) -> per item [{camera, vector}]`, STARTED in increasing frame order
 with up to `inFlight` (default 2; the image embedder asks for 8) in flight; optional
@@ -3550,6 +3622,39 @@ dips just past -1 now and then (2 of 24 contacts in the synthetic fixture of
 `tests/e2e/id-switch-image-check.mjs`). Analysis after embedding takes seconds
 per session. (Those sessions also carry `*.predictions.static.externals.slp`
 per camera, which a harness must leave out of the folder pick.)
+
+**Recalibrated for the 168-px model input (2026-10-22; `INPUT` was 224, the crop
+stays 160 — `ui/image-embedder.js`).** Same contacts and tracking (Track All
+defaults), scored per truth change point (a row is right when it lies within
+its contact ± 3 s of one), on 24 recordings: the 22 proofread SLAP sessions,
+five white mice, CD1FSCR3_CSI (4 h 30 min):
+
+| | original six + 5 mice + CD1 | 16 held-out | all 24 |
+|---|---|---|---|
+| 224 at -0.8 (before) | 12 caught, 12 rows, 2 false | 13 caught, 11 rows, 0 false | 25, 23 rows, 2 false |
+| **168 at -1** | 12 caught, 11 rows, 1 false | 13 caught, 11 rows, 0 false | 25, 22 rows, 1 false |
+| 168 at -0.8 | 12 caught, 14 rows, 4 false | 13 caught, 11 rows, 0 false | 25, 25 rows, 4 false |
+
+The same change points are caught; the extra false rows at -0.8 are all on five
+white mice (contacts that sat just above -0.8 at 224). The held-out set is
+identical at every threshold from -0.4 to -1.2 (per-contact AUC 1.000). A
+repeat 224 run is bit-identical, so these differences are the input size, not
+noise. Cutting the crop at 168 directly (one resample) was no better (2 false at
+-1); 140 lost a real swap. Separation of same-animal vs different-animal
+10 s means (the check's metric, proofread labels): AUC 0.962 at 224, 0.955 at
+168; same-coat pairs 0.877 / 0.861. Speed: model alone 132 -> 243 crops/s
+(WebGPU fp16, M2 Pro), CPU workers 10.9 -> 19.2; the whole check on that Mac
+only 11-14% faster (CD1 114 -> 101 s, 145420 86 -> 74 s), because video decoding
+becomes the limit once the model is faster. Raw CLS embeddings of the same crop
+at 168 vs 224: median cosine 0.86 — irrelevant to the check, which learns its
+metric per recording, but it means any embedding saved at one size cannot be
+compared with another.
+Re-checked after #375 (sampling near contacts + 0.1 Hz background), 2026-10-27:
+on all 24 recordings, 168 at -1 flags exactly the same rows with that sampling
+as with every sample embedded (25 caught, 22 rows, 1 false), on 70% of the
+crops. Margins tighten: two real swaps sit at -1.09 (181300 0:37) and -1.11
+(183527 8:28) instead of -1.74 / -1.49, and the closest clean contact at -0.96
+(05mice 26:53) — so -1.2 would lose those two swaps.
 
 **Imports from project modules.** `pose/pose-data.js` (`readPoint3d`).
 
@@ -5038,7 +5143,9 @@ edit-group mode, keyboard shortcuts.
   `getAssignmentSelectedIds`, `onMouseDown`/`onMouseMove`/`onMouseUp`/
   `onMouseLeave`/`onWheel`, `onKeyDown`, `_addNewInstance` (used by smart-add;
   lays out a new skeleton via an inline BFS fan-out from the highest-degree
-  root, with a vertical-line fallback when there are no edges).
+  root, with a vertical-line fallback when there are no edges). Edge hit tests
+  measure from the wedge when that instance type draws wedges
+  (`_edgeWedgeHalf`, `wedgeHalfWidth` from `ui/overlays.js`).
   `canvasToVideo(clientX, clientY, viewName)` maps a pointer to video pixels;
   on a ROTATED view it must use `zoom.scaleY` for the vertical axis (it differs
   a hair from `zoom.scale` at native resolution), or a click lands up to ~0.3%
@@ -5599,7 +5706,8 @@ the card opens at the stylesheet's size, so changing the default reaches
 everyone who never resized. Records from before the flag saved the opening size
 on every close: `opts.legacyDefaultSize` names that old default, and such a
 record opens at the new default, centred where the old card was. Settings passes
-`{w: 880, h: 620}` (its default before it widened to 1040px).
+`{w: 880, h: 620}` (its default before it widened; it now opens at 1320x800,
+wide enough for the Temporal Smoothing figure's two charts).
 
 **This module is the ONE owner of the card's rect.** `.settings-modal`
 deliberately has no `max-width`/`max-height`, and `apply()` sets both to `none`
@@ -6061,6 +6169,25 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `[4, 4]` dash only when no style is passed) and `drawUnlinkedInstances`
   (`instNodeShape`). `drawFrameOverlays` passes the per-type Node Style as
   `nodeShape`.
+- Wedge edges: `lineStyle: 'wedge'` (SLEAP's Edge Style > Wedge) draws an edge
+  as a triangle from its source node to a tip on its destination:
+  `wedgeHalfWidth(nodeSize)` (half the node radius) each side at the source,
+  half-opacity fill, full-colour outline at the edge weight. `drawSkeleton`,
+  `drawReprojectedSkeleton`, `drawUnlinkedInstances` and
+  `drawSelectionHighlight` (`options.wedgeNodeSize`) share `traceEdge` +
+  `paintEdges`; `drawDragPreview` stays lines. `ui/interaction.js` hit-tests the
+  same shape. Test: `tests/e2e/edge-style-wedge.mjs`.
+- Symmetry edges: `symmetricNodePairs(names)` finds left/right node pairs from
+  the names alone (`.slp` symmetries are not read), `symmetryEdgesFor(skeleton)`
+  leaves out pairs that are already edges and remembers the last answer.
+  `drawFrameOverlays` (`showSymmetryEdges`, `symmetryEdgeWeight`) passes them to
+  `drawSkeleton`, `drawReprojectedSkeleton` and `drawUnlinkedInstances`, which draw
+  them solid grey behind their edges, 2D only, not clickable. Test:
+  `tests/test-symmetry-edges.mjs`, `tests/e2e/symmetry-edges.mjs`.
+- Reprojection node color: `reprojNodeColor` is `'white'`, `'black'`, `'track'`
+  (the Brightness-adjusted track color) or `'dark'` (that color in the Dark
+  trail shade, `trailColor`). Test:
+  `tests/e2e/reprojection-fallback-color-setting.mjs`.
 - Independent node/edge visibility: `drawSkeleton` and
   `drawReprojectedSkeleton` accept `options.showNodes` / `options.showEdges`,
   **defaulting to `true`**. Only the overlay-video export sets them; they ride
@@ -8720,7 +8847,7 @@ The dialog's `finally` also calls the embedder's `releaseFrames` (idempotent):
 `checkImageSwitches` does too, but not when it fails before its first frame,
 and the CPU workers hold ~600 MB each. On a CPU run "About these flags" says the
 model ran on the CPU. Reads `imageCheckHz` (default 2), `imageChangeThreshold`
-(default -0.8 — a new id rather than the old `imageCheckThreshold`, because the
+(default -1, -0.8 before the 168-px input — a new id rather than the old `imageCheckThreshold`, because the
 image score's scale changed), `imageCheckMaxViews` (default 3, passed as
 `maxViewsPerAnimal`) and `imageCheckWebNN` (default 0, as `webnn`), and passes
 `inFlight: embedder.inFlight`. The embedder's `backend()` outcome is attached to
@@ -9009,18 +9136,23 @@ Model runs are serialised on a queue, so the check's one-ahead request decodes
 and crops the next frame while the GPU embeds the current one.
 `maxViewsPerAnimal` (from `imageCheckMaxViews`) embeds only each animal's N
 largest views (`selectViews`, by Nose–TTI pixel length, decided from the
-keypoints before decoding); cameras no animal needs are not fetched.
+keypoints before decoding); a camera decodes only the frames where it has a crop to
+cut: `prepareFrames` plans every frame's crops (`planFrameCrops`) before it opens the
+readers, each camera's reader gets only its frames, and `getEmbeddings` cuts exactly
+the planned crops. Streaming decodes from a keyframe up to the last frame asked in its
+gap, so a camera saves where it has no crop in the rest of a gap (CD1, 3 mice: 18%
+fewer frames decoded; SLAP 145420, 4 mice: 1%).
 Cropping runs in a pool of module workers (`createCropPool`,
 `ui/image-crop-worker.js`; one per core but one, at most 8; one job = one view of
 one frame, its VideoFrame transferred and closed by the worker — a decoder-cached
 frame is sent as a `clone()`, anything else as an ImageBitmap copy). A failed
 worker drops that one view of that frame and the rest of the run crops inline;
-`window.LUCID_CROP_WORKERS = 0` forces inline. `writeInputTensor`'s 160 -> 224
+`window.LUCID_CROP_WORKERS = 0` forces inline. `writeInputTensor`'s 160 -> 168
 sample positions are a precomputed table (same arithmetic, bit-identical).
 **GPU feeding.** (1) The model's output stays on the GPU
 (`preferredOutputLocation: 'gpu-buffer'`; its ONLY output is `last_hidden_state`
-[n, 257, 384]) and `clsFromGpu` copies just token 0 of each crop into a staging
-buffer — bit-identical, 1/257 of the readback. (2) Model runs are a greedy BATCH
+[n, 145, 384] at the 168-px input) and `clsFromGpu` copies just token 0 of each crop into a staging
+buffer — bit-identical, 1/145 of the readback. (2) Model runs are a greedy BATCH
 QUEUE: one run at a time, each taking every crop queued meanwhile (up to
 `EMBED_MAX_BATCH` = 64), with the check keeping `EMBED_IN_FLIGHT` = 8 frames in
 flight (`inFlight` on the provider) so batches fill while the GPU works (M2 Pro:
@@ -9044,7 +9176,22 @@ other apps' GPU use is not in it (no browser API reports it), and its tooltip
 says so. WebNN is not called a GPU (the browser picks its device).
 **Decode workers were tried and removed** (no gain on an M2 Pro, half speed on
 a Windows RTX VM). Cheaper decoding has to come from the recordings (dense
-keyframes — see below).
+keyframes — see below) or from decoding fewer frames: on an M2 Pro the check
+decodes at the hardware's rate for each stream (SLAP's open-GOP B-frame HEVC ~2,150
+frames/s for 8 cameras, CD1's P-only HEVC ~4,400; a bare decoder never flushed, mediabunny's
+queue caps and two decoders per camera all measured the same, 2026-10-28).
+**Unreferenced frames are not decoded** unless they are a sample
+(`unreferencedSkipper`, `skippingSamples`): each streaming reader gets a
+`VideoSampleSink` of its own whose packet sink notes each target's packet (mediabunny
+reads it before decoding up to it) and whose decoder drops every other packet that
+`isUnreferenced` (`referenceFormat` of the track's decoder config: HEVC `_N` slice
+types at the SPS's highest temporal sub-layer, H.264 `nal_ref_idc` 0; other codecs,
+or no avcC/hvcC: nothing dropped). No picture is predicted from those, so every sample
+decodes to the same pixels (raw planes compared on the SLAP videos and in
+`tests/e2e/image-unreferenced-skip.mjs`). x265's defaults (the SLAP recordings) make
+~59% of frames TRAIL_N; recordings without B-frames (campy NVENC/QSV) have none.
+Playback's sink is untouched. `window.LUCID_IMAGE_SKIP_UNREFERENCED = 0` turns it off;
+`stats().skippedFrames` counts them (the speed line: "· N unreferenced frames not decoded").
 **Keyframe sampling.** `prepareFrames` reads each camera's keyframes from the
 container's packet index (`keyframeIndices`: mediabunny
 `EncodedPacketSink.packets(…, {metadataOnly: true})`, `type === 'key'`, mapped to
@@ -9103,7 +9250,7 @@ the cache, F frames not decoded" (or "all N crops from the cache" when the model
 never ran). **Sample crops on cached runs:** a frame answered from the cache cuts
 no crop, so each run keeps the grey pixels (`tensorToGrey`, INPUT² bytes) of the
 dialog's sample crop on `SAMPLE_FRAMES_PER_RUN` (200) evenly spaced frames, under
-that crop's cache key (at most `SAMPLE_PIXELS_MAX` = 256 kept, 12.8 MB, dropped with
+that crop's cache key (at most `SAMPLE_PIXELS_MAX` = 256 kept, 7.2 MB at the 168-px input, dropped with
 the vectors); when such a frame comes from the cache, `sampleCrops()` gets that
 crop back (`greyToTensor`: channel 0 only, all `inputTensorToPixels` reads, so the
 dialog shows the same bytes), marked `cached: true`, with the skeleton overlay
@@ -9165,7 +9312,9 @@ Promise<Float32Array[]>, terminate()}`; `createCropPool(clock?)` -> `{broken, ru
 after a failure); `cannotRun(reason, cause)` (an Error whose message is the reason
 the check cannot run, flagged `cannotRun`); `asModelDownloadFailure(err)` (a failed
 download as `MODEL_OFFLINE_REASON`, else `err` unchanged); `MODEL_OFFLINE_REASON`;
-`selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
+`selectViews(geos, maxViews)`; `referenceFormat(config)` -> `{codec: 'hevc'|'avc', lengthSize, maxTid}` | null,
+`isUnreferenced(data, fmt)`, `unreferencedSkipper(decoder)` -> Promise<`{VideoSampleSink, track, fmt}` | null>,
+`skippingSamples(skipper, ts, count)` (unreferenced frames, above); `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
 `summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`;
 `describeAdapter(info)`, `gpuAdapterInfo(device, adapter)` -> `{name, fallback}`,
 `createLoadMeter` (re-exported from ui/load-graph.js, where it now lives), `GPU_LOAD_WINDOW_MS` (=
@@ -9177,7 +9326,7 @@ the CPU model, fitting — not video decoding); `inputTensorToPixels(tensor, rgb
 (a model input back to grey RGBA, the inverse of `writeInputTensor`'s normalisation),
 `SAMPLE_CROPS` (12); `cropPointsToInput(g)` (`g.pts`, the keypoints `cropGeometry` also
 records, NaN when missing, into model-input pixels: cutCrop's rotate-about-the-body-centre
-and scale, then x 224/160 — exact for an align_corners=false resize; pinned
+and scale, then x INPUT/CROP — exact for an align_corners=false resize; pinned
 against `cutCrop` itself within 0.04 px, at any rotation);
 `keyframeIndices(decoder)` -> `Promise<Int32Array|null>` (cached per video);
 `summarizeKeyframePlans(plans)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
@@ -9185,13 +9334,14 @@ against `cutCrop` itself within 0.04 px, at any rotation);
 `cropGeometry` (also `pts`: every keypoint, for the overlay — cutCrop ignores it), `cutCrop`,
 `convexHull`, `writeInputTensor`, `skeletonIndex(nodes)` (also `n`, the node count),
 `frameCropGeometry(session, frame, items, cams, atFrames, sk)` -> `geo[view][item]`; constants
-`TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (224).
+`TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (168; 224 until 2026-10-22).
 
 **The crop** (must match the calibration): rotate so the nose points right
 (Nose − TTI), centre on the mean of the body keypoints, side 1.3 x body length,
 160 x 160, greyscale; outside the animal's convex hull dilated by a quarter body
 length is black, and so are the other animals' hulls in that view; resized to
-224 (bilinear) and ImageNet-normalised; embedding = CLS token of
+168 (bilinear; 12 x 12 patches of 14 px — any multiple of 14 runs, the model resizes its 37 x 37
+position table) and ImageNet-normalised; embedding = CLS token of
 `last_hidden_state` (post-layernorm). Checked against the offline pipeline on
 real crops: embeddings cosine 0.971 (vs 0.644 between different crops).
 
@@ -9218,7 +9368,8 @@ any version bump.
 `pose/lazy-residency.js` (`hydrateFrameMembers2d`, `releaseFrameMembers2d` — DOM-free,
 so the crop worker can load it), `ui/load-graph.js` (`createLoadMeter`,
 `createBusyClock`, `formatCpuLoad`, `LOAD_WINDOW_MS`); `mediabunny`
-(`EncodedPacketSink`, imported LAZILY inside `keyframeIndices` — a static bare
+(`EncodedPacketSink` and `VideoSampleSink`, imported LAZILY inside `keyframeIndices` and
+`unreferencedSkipper` — a static bare
 import would break this module in Node tests and in the crop worker, which has no
 importmap). Spawns `ui/image-crop-worker.js` and `ui/image-model-worker.js`.
 
@@ -9255,8 +9406,21 @@ bit-identical (asserted).
 
 **Messages.** IN `{id, image: VideoFrame|ImageBitmap (transferred), crops:
 [{g: cropGeometry, others: [hull]}]}` — one camera view of one frame; OUT `{id,
-tensors: [Float32Array(3 x 224 x 224)]}` (transferred, one per crop, in order) or
+tensors: [Float32Array(3 x INPUT x INPUT)]}` (transferred, one per crop, in order) or
 `{id, error}`. The worker owns the image and closes it.
+
+**Read token.** Cutting is serialised across the pool; turning crops into model inputs
+is not. A job posts `{want: id}`, waits for the pool's `{grant: true}`, cuts all its
+crops, closes the frame and posts `{release: id}`. The pool (`createCropPool`) grants
+one worker at a time. Why: Chrome on an M2 Pro sometimes gave a worker ANOTHER
+picture's pixels when two workers drew hardware-decoded VideoFrames at once — whole
+frames, about one camera-frame per run of SLAP 145420 (11,345 crops), at a different
+place every run; never with one worker, never on the main thread, and more often
+the faster frames arrive (2026-10-28; in 4 of 9 runs with the faster decoding, 1 of 9
+before it). With the token, 8 + 4 runs gave the old code's crops bit for bit, at
+~315 crops/s (above the model's ~132 crops/s at the 224-px input, ~243 at 168). Cutting from a 1:1 canvas copy of the frame
+outside the token is NOT a substitute: the frame's border is drawn differently (hard
+vs anti-aliased edge), and for a software-made VideoFrame every pixel can differ.
 
 **Imports from project modules.** `ui/image-embedder.js` (`cutCrop`,
 `writeInputTensor`, `CROP`, `INPUT`; that module's static imports —
@@ -9285,7 +9449,7 @@ cross-origin isolation. See
 (`cannotRun`: a failed download, `message` then being `MODEL_OFFLINE_REASON` —
 classified here by `asModelDownloadFailure`, where the error is still a real
 one); IN `{type:
-'run', id, data: Float32Array(n x 3 x 224 x 224) (transferred), n}` -> `{type:
+'run', id, data: Float32Array(n x 3 x INPUT x INPUT) (transferred), n}` -> `{type:
 'result', id, cls: Float32Array(n x 384) (transferred), dim}` — each crop's CLS
 token, read exactly as the main thread's `clsVectors` does — or `{type: 'error',
 id, message}`.
@@ -9377,7 +9541,7 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   default (the tracker's third, `birthMedian`, is not in the wizard),
   `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
-  0/1, the image check likewise, default 0; `imageChangeThreshold` -0.8;
+  0/1, the image check likewise, default 0; `imageChangeThreshold` -1;
   `imageCheckHz` 2; `imageCheckBackgroundHz` 0.1 (crops per second away from contacts:
   `backgroundHz`, see pose/id-switch-check.js "Which samples are embedded"; Wizard only, not
   the Track All dialog); `imageCheckMaxViews` 3; `imageCheckWebNN` — 0/1, try WebNN,
@@ -9503,10 +9667,14 @@ right panel area (`settings-panel-container`), with a Cancel / Apply footer.
 
 **Key exports.**
 - `showSettingsModal(initialPanel)` — `initialPanel` ∈ `'triangulation'` |
-  `'keyboard'` | `'wizard'` | `'smoothing'` (default `'triangulation'`).
+  `'keyboard'` | `'wizard'` | `'smoothing'`. Without one (Help ▸ Settings and its
+  shortcut) it opens on the panel last shown (`localStorage.settingsLastPanel`,
+  browser-local, written by `selectPanel`), else the first, Tracking Wizard.
   Single-instance.
 
-**Behavior.** Four panels: **Default Triangulation** (the method is picked by
+**Behavior.** Four panels, listed in the nav in the order they are used (Tracking
+Wizard, Default Triangulation, Temporal Smoothing, then Keyboard Shortcuts):
+**Default Triangulation** (the method is picked by
 clicking one of two diagram cards from `ui/triangulation-methods-figure.js`,
 DLT or "Refined (Ref)" = bundle adjustment — no separate rows; Enter/Space on a
 focused card is handled in `onDocKeyDown`, which stops every keydown in the
@@ -9524,7 +9692,10 @@ tracking and greys the row), and **Tracking Thresholds** (one field per
 `kind: 'toggle'` entry, via `makeToggle`). Covered by
 `tests/e2e/settings-wizard-toggles.mjs`. And **Temporal Smoothing** (luc3d
 #134 — one **Filter Parameters** section rendering `getSmoothingParamDefs()`:
-median window, Gaussian window, max gap, minimum segment. Its own panel because
+median window, Gaussian window, max gap, minimum segment, under a figure from
+`ui/smoothing-windows-figure.js` that the two window fields redraw through
+`onEdit`, and whose sliders set the window, max gap and minimum segment fields
+back through `onParam`. Its own panel because
 it is not a tracking parameter — it runs after triangulation, on 3D the tracker
 has finished with. A note warns that raising the reprojection-error threshold
 creates more gaps, hence more gap edges where the filter is least accurate. The
@@ -9957,7 +10128,9 @@ window (e.g. around a known ID switch) while iterating on settings.
 **Imports from project modules.** `ui/app-state.js` (`state`,
 `getActiveSession`), `import-export/save-load.js` (`setStatus`),
 `pose/tracker.js` (`trackFrameRange`, `trackableFrameBounds`,
-`getTrackerNumAnimals`, `setTrackerNumAnimals`), `ui/settings.js`
+`getTrackerNumAnimals`, `setTrackerNumAnimals`), `pose/placeholder-cameras.js`
+(`hasRealCalibration` — with placeholder cameras only, the dialog does not open
+and the status says tracking needs a calibration), `ui/settings.js`
 (`getNodeWeight`, `updateNodeWeights`, `getTrackingThresholdDefs`,
 `updateTrackingThresholds`), `ui/track-setup-modal.js`
 (`buildNodeWeightFields`, `buildImageCheckFields`, `IMAGE_CHECK_IDS`; a leaf).
@@ -11585,9 +11758,67 @@ once for this layout (an equal-weight least-squares point for DLT, a robust
 pixel-error minimum for Refined) and are hard-coded; the real solvers are
 `triangulatePointDLT` / `triangulatePointBA` (`pose/triangulation-core.js`).
 
+**Don't call Refined more accurate in general.** Measured on held-out cameras
+(9 proofread SLAP sessions), shipped Refined beat DLT in only 1 of 9 (median
+3.32 vs 3.20 px): it wins when one view is clearly wrong, but its L1 polish
+step leaves everyday points slightly worse. Its "never worse than DLT" guard is
+on the in-sample reprojection error only. The caption (and the toolbar's Ref
+tooltip in `index.html`) say just that.
+
 **Key exports.** `buildTriangulationMethodsFigure()` → a `<figure>`.
 
 **Imports.** None. **Imported by** `ui/settings-modal.js`.
+
+### ui/smoothing-windows-figure.js
+
+**Purpose.** The figure at the top of Settings ▸ Temporal Smoothing: what the
+Median window and the Gaussian window each do, as two cards (stage 1, stage 2).
+Both plot one made-up trace (one node's x over 40 frames: a slow movement,
+dashed, with one fast real move up and back on the right, plus jitter and one
+one-frame spike) and draw what the stage
+makes of its input, the window around one frame (shaded) and stems at the
+bottom of that window: for the Gaussian its weights, for the median the
+window's values sorted low to high, the middle one (the median, what the spike
+frame becomes) green and the spike red. The median's output is green in both
+cards (its line on the left, with the same green dot at every frame as the
+Gaussian's input dots on the right); the Gaussian's output is blue, with an
+open black circle at every frame. Raw samples
+are open grey rings drawn over the green dots, since a median keeps many
+samples exactly and a filled dot would hide under the green one. The Gaussian's
+window sits on the fast move, which survives the example windows and is
+flattened by long ones (over-smoothing).
+
+**The lines are the real filter, not drawn by hand.** `update(params)` runs
+`smoothSignalInto` (`pose/temporal-smoothing.js`) on the trace with the panel's
+working windows, so the cards follow what is typed. A window that is off (0)
+is drawn with an example (median 5, Gaussian 9) and labelled so. The Gaussian
+card's input is the median's output, except with the median off and the
+Gaussian on: then it is the raw trace and a note says the spike becomes a bump
+(why the median runs first). Colours come from `.smooth-fig` in `styles.css`.
+
+**Sliders.** Each card has a Window slider (1–31 frames; under 3 the filter
+leaves the 3D as it is, drawn as a 1-frame window) that redraws the card
+and calls `onParam(id, value)` so the panel sets its working value and field
+(Apply then stores it), and a Frame slider with ▶ that slides the shaded window
+along the 40 frames (90 ms a frame; stops at the end, on a second click, or once
+the figure leaves the page). While a frame is picked, that stage's output is
+solid up to it and faint after it, with a ring on its value.
+
+**Card 3, gaps and segments** (full width, below the two): Max gap and Minimum
+segment length on its own 60-frame trace (a 2-frame hole, a 7-frame and a
+6-frame absence with a 3-frame stretch between them; the node comes back 12 mm
+away after the 7-frame one). It runs both stages at the windows the other cards
+show over the segments `buildSegments` cuts, as the real pass does, and draws
+each absence (labelled hole or split), the output per segment (grey where too
+short to smooth) and the segments as bars. Its Max gap (0–15) and Min segment
+(1–15) sliders report through `onParam` like the Window sliders.
+
+**Key exports.** `buildSmoothingWindowsFigure({ onParam })` → `{ el, update(params) }`.
+
+**Imports.** `pose/temporal-smoothing.js` (`smoothSignalInto`, `normalizeWindow`,
+`sigmaForWindow`, `buildSegments`). **Imported by** `ui/settings-modal.js`.
+
+**Tests.** `tests/e2e/smoothing-windows-figure.mjs`.
 
 ### ui/smoothing-button.js
 
@@ -12104,8 +12335,9 @@ filesystem enumeration, decoder rebuild.
   fps readout's `title`; the estimate is kept as `videoFrameRate` when it
   differs by > 1%); views follow campy's camera order (the calibration's own
   camera list keeps its order); each camera loads the file at campy's `video`
-  path; with no calibration, views are named after campy's cameras, not the
-  video stem (campy's are all `0.mp4`); the single-SLP loader takes videos from
+  path; with no calibration, views are named after campy's cameras (as every
+  uncalibrated camera folder's view is, never by video stem — campy's are all
+  `0.mp4`); the single-SLP loader takes videos from
   session.json when there is no `videos/` and reads the root `.slp` over
   campy-live-export's `points3d.h5`; the load's final status gains the
   warnings (`withCampyWarnings`). `forceVideoSelectionWithFolder`'s folder
@@ -12268,10 +12500,32 @@ neither step (`tests/e2e/lazy-reopen-group-identities.mjs`).
 in, and queued behind the skeleton prompt (as its `onDone`) so two modals never
 stack. See `ui/calibration-notice.js`.
 
+**No calibration → placeholder cameras, so the folder can be saved.** A folder
+loaded with no `calibration.toml` (and nothing embedded) gets one PLACEHOLDER
+camera per view (`pose/placeholder-cameras.js`: all-zero extrinsics, f = 600,
+sized from the video — the shape Load Videos always made). Per-camera loader: the
+view, the video's `assignedCamera` and the folder's 2D are all keyed by the
+camera directory's name (campy's camera name when it names one); the camera is
+made in the video loop when the video decodes, else after it (deferred, failed or
+missing video), and the cameras are then put in folder order (the order they are
+written and reopened in). Single-SLP loader: `ensurePlaceholderCameras` after the video
+loop (after the campy step, which compares the real calibration names), and a
+recovered EMBEDDED calibration of placeholders only sets `hasCalibration` false,
+so 3D stays off on reopen — as in `handleLoadProjectSlpLazy`. Before, both loaders created NO camera: the `.slp`
+writer writes one video per `session.cameras` entry and drops every pose whose
+camera is missing, so Save wrote an empty file ("Saved (0.0 MB)"), and the
+per-camera loader named views by video stem — `cam1/video.mp4` and
+`cam2/video.mp4` were both `video`, and the folder's own poses (`cam1`, `cam2`)
+reached no view. A placeholder is never added to a session that has a real
+calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
+
 **Imports from project modules.**
+- `../pose/placeholder-cameras.js` (`makePlaceholderCamera`,
+  `hasRealCalibration`, `ensurePlaceholderCameras`),
 - `./calibration-pick.js` (`REBASED_CALIBRATION_NAME`, `pickCalibrationFile`),
   `./percam-slp-choice.js` (`chooseCameraSlp`), `./video-file-pick.js`,
   `./video-codec-diagnosis.js` (`videoLoadFailureText`),
+  `../ui/video-codec-notice.js` (`noteUnplayableVideos`),
   `../ui/app-state.js` (incl. `buildRememberedSkeleton`, and `isViewDocked` as the
   rebuilt video controller's `isViewShown`), `../pose/pose-data.js`,
   `../ui/browser-hints.js` (`fileSystemAccessHint`),
@@ -12688,7 +12942,12 @@ actionable message. Measured cases (`tests/e2e/_probe-capabilities.mjs`):
 Safari plays HEVC-in-MP4 only when tagged `hvc1` (`hev1` → canPlayType "") — a
 lossless `ffmpeg -c copy -tag:v hvc1` re-tag fixes it; Safari decodes AV1 only
 with hardware AV1 (Apple M3+), while Chrome/Firefox decode it in software;
-otherwise suggest another browser / converting to H.264. Cheap on multi-GB
+Chrome and Edge have no HEVC decoder of their own and play it only on the GPU,
+so for them the advice depends on WebGL's renderer (`graphicsRenderer`): no GPU
+(Microsoft Basic Render Driver, llvmpipe, a virtual machine's adapter: measured
+on a Windows 11 VM, Chrome 155) → add a GPU and its driver; SwiftShader or a
+real GPU → turn on graphics acceleration / update the driver; otherwise suggest
+another browser / converting to H.264 (`-fps_mode passthrough` keeps every frame). Cheap on multi-GB
 recordings: it walks top-level box headers with random-access reads
 (`Blob.slice`, or HTTP Range for URLs) and reads only `moov` (often at the
 END, after the `mdat`). No diagnosis (null) when the codec can't be read or the
@@ -12698,8 +12957,13 @@ browser claims support — the original error then stands.
 - `sniffMp4VideoCodec(source)` → `{fourcc, codecName}|null` (File/Blob/URL).
 - `videoFourccFromMoov(moovBytes)` — first video sample-entry fourcc in a `moov`.
 - `explainUnplayableCodec(fourcc, fileName, env?)` → `{fourcc, codecName, kind,
-  message}|null`; pure (`env.canPlayType`, `env.isSafari` injectable). Kinds:
-  `hevc-hev1-tag`, `av1-unsupported`, `hevc-unsupported`, `unsupported`, `encrypted`.
+  message, title?, why?, steps?, command?}|null`; pure (`env.canPlayType`,
+  `env.isSafari`, `env.isChromium`, `env.renderer` injectable). Kinds:
+  `hevc-hev1-tag`, `av1-unsupported`, `hevc-no-gpu`, `hevc-gpu-no-decode`,
+  `hevc-unsupported`, `unsupported`, `encrypted`. The three HEVC-unsupported
+  kinds carry `title`/`why`/`steps` for `ui/video-codec-notice.js`.
+- `graphicsRenderer()` — WebGL's unmasked renderer string, cached ('' unknown).
+- `rendererHasGpu(renderer)` → true / false (software or virtual adapter) / null.
 - `diagnoseUnplayableVideo(source, fileName?, env?)` — sniff + explain.
 - `videoLoadFailureText(name, err)` — one-line reason for loaders' status
   messages: `err.codecDiagnosis.message` when present, else the error text.
@@ -12711,8 +12975,40 @@ browser claims support — the original error then stands.
 `loading/session-loader.js` (`videoLoadFailureText`).
 
 **Tests.** `tests/test-video-codec-diagnosis.js` (synthetic MP4s, every message
-kind, decoder integration); real browsers via the `decoderErrors` step of
-`tests/e2e/_probe-capabilities.html`.
+kind, renderer classes, decoder integration); real browsers via the
+`decoderErrors` step of `tests/e2e/_probe-capabilities.html`;
+`tests/e2e/video-codec-notice.mjs` (the notice, through File ▸ Load Videos).
+
+### ui/video-codec-notice.js
+
+**Purpose.** The note a load leaves when its videos can't play in this browser:
+why, and what to change. The loaders also put the one-line diagnosis in the
+status line, but on a multi-camera project that line runs off the window and
+the fix was cut off (H.265 in Chrome on a Windows VM with no GPU: poses loaded,
+every view black).
+
+**When.** Only for a failure whose `err.codecDiagnosis` has `steps` (the HEVC
+kinds), so corrupt or undiagnosed files keep the status line alone. One note per
+load, for the first such diagnosis, counting every file with the same kind. It
+waits for any other open overlay (`.plane-confirm-overlay`, `*modal-overlay`, the
+loading overlay) to close rather than stacking on it, and never opens twice.
+
+**Layout.** Title, the files ("N of M videos could not be played: …", 4 names),
+the why paragraph, "What to change" as a numbered list with the ffmpeg command
+as selectable code, one **Got it** button; Esc closes it. Changes nothing.
+
+**Key exports.** `noteUnplayableVideos(failures, totalVideos?)` (`failures`:
+`[{name, error}]`; returns the diagnosis shown or null; never throws) and
+`showVideoCodecNotice(diag, fileNames, totalVideos?)`.
+
+**Imported by.** `loading/session-loader.js` — after the final status of
+`handleLoadVideos`, the single-SLP folder loader, the attach-videos path and the
+session-folder loader.
+
+**Tests.** `tests/e2e/video-codec-notice.mjs` (a VM with no GPU simulated: H.265
+hidden from canPlayType, WebGL renderer "Microsoft Basic Render Driver"; one note
+for three files; Esc / Got it; waits for another dialog; SwiftShader; none for a
+non-video).
 
 ### loading/video.js
 
@@ -12914,10 +13210,17 @@ stops when the primary `<video>` ends.
   are detected per decoder by `judgeVideoFrameTimestamps` (the timestamp must
   move, agree with the clock within max(3 frames, 50 ms) — 3 frames alone
   misjudged Chrome at 150 fps on 60 Hz — and not BE the clock; cached as
-  `decoder._vfTimestamps = 'ok'|'bad'`). **WebKit never captures at all**
+  `decoder._vfTimestamps = 'ok'|'bad'`, with the reason in `_vfTsWhy`). Only a
+  clock copy, and a timestamp that stands still in Firefox, are final at the
+  first look. Elsewhere a timestamp that stands still or trails the clock is
+  also what a slow start looks like (Chrome on an integrated GPU, first picture
+  359-799 ms after play, luc3d #411), so the look repeats until it agrees or
+  `VF_JUDGE_WINDOW_MS` (2 s) has passed. A 'bad' reached by that timeout is
+  judged again at the next `startPlayback`. **WebKit never captures at all**
   (`videoFrameCaptureUnsafe()`): Safari's capture timestamp rarely names the
   captured picture yet can pass judging, and captures cost it presented frames.
-  While a view is still being judged it is not drawn.
+  While a view is still being judged it is not drawn, unless its timestamp
+  already moves (`'lagging'`): then its captures are painted at their own index.
 - A `'bad'` view stops capturing, is painted with `drawCurrentFrame`, and is
   indexed from a per-view requestVideoFrameCallback. **Safari** (one callback
   per shown picture) is painted INSIDE the callback at its `mediaTime`, but only
@@ -13068,6 +13371,7 @@ How it behaves:
 - `STEP_CURSOR_IDLE_MS` (3000) — idle time before a paused-stepping stream closes.
 - `STEP_BACK_CHUNK` (24) — frames decoded and cached per backward step.
 - `STEP_BACK_WARM_MS` (250) — pause after landing on a frame before warming the chunk behind it.
+- `VF_JUDGE_WINDOW_MS` (2000) — longest a playback's VideoFrame-timestamp judgement stays open before a still or trailing timestamp counts as unusable (`window.LUCID_VF_JUDGE_MS`).
 - `snapZoomToNative(oldScale, newScale, nativeScale)` → `{scale, snapped}` — the
   pure snap rule. `NATIVE_SNAP_TOL` (0.02), `NATIVE_SNAP_HOLD_MS` (250).
 - `zoomPercentLabel(scale, nativeScale, isNative)` → the pane badge's read-out
@@ -14018,7 +14322,17 @@ loading-overlay/status-text UI helpers.
   decoder to size it, so `state.totalFrames` comes from the last labeled frame
   (`adoptLabeledFrameCount`), the view opens on the first, and the status line
   says to attach videos via File ▸ Load Videos.
-- `buildSlpBytes` (internal) assembles the multi-session SLP. **When EVERY
+- `buildSlpBytes` (internal) assembles the multi-session SLP. **First, every
+  UNCALIBRATED session gets a placeholder camera for each view, video and 2D
+  camera key that has none** (`ensurePlaceholderCameras`, with
+  `sessionViewsForSave` — `state.views` for the active session, its `_views`
+  stash otherwise — and `sessionVideoFilesForSave` — its `videoFileIndices`, or
+  the `vf.sessionIdx` tag Load Videos leaves). Every path below writes one video
+  per `session.cameras` entry and drops any view or pose whose camera is
+  missing, so a session with none (a folder loaded without calibration.toml)
+  used to save as an EMPTY file. A session with a real calibration is never
+  touched (`ensurePlaceholderCameras` returns early; `tests/test-placeholder-cameras.mjs`
+  §5), so what it writes does not change. **When EVERY
   session in `state.sessions` has an open `lazyLoader`, it routes to the
   memory-bounded streaming path** — `buildSessionSlpBytesStreaming`
   (`import-export/slp-streaming-write.js`) for a single lazy session, or
@@ -14133,6 +14447,7 @@ project save/reload — matching the SLP import path in `slp-import.js`.
 
 **Imports from project modules.**
 - `../pose/pose-data.js`, `../pose/triangulation.js`,
+  `../pose/placeholder-cameras.js` (`ensurePlaceholderCameras`),
   `../ui/browser-hints.js` (`fileSystemAccessHint` — `saveProjectSlp`, the
   download fallback when there is no save-file picker, says why and how to
   enable it in Brave), `../loading/video.js`, `../demo-data.js`, `./file-io.js`,
@@ -14356,6 +14671,9 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
 **Imports from project modules.**
 - `../pose/pose-data.js` (incl. `lazyPlaceholderXY`, `markPoints3dFromFile`),
   `../pose/triangulation.js` (`getInstanceGroupsForFrame`),
+  `../pose/placeholder-cameras.js` (`hasRealCalibration` — `handleLoadSlpFile`
+  sets up the 3D viewer only for a real calibration, not for the placeholder
+  cameras of a SLEAP file or of a project saved without one),
   `../pose/lazy-residency.js` (`dropGroupDerivedReprojections`), `./file-io.js`,
   `./slp-merge.js`, `../loading/video.js`, `../ui/app-state.js`,
   `../loading/session-loader.js`, `./save-load.js`,
@@ -14559,3 +14877,26 @@ checks pinning the API each package must still expose), `check_pins()`
 **Imported by.** `server.py`; `tests/e2e/offline-server.mjs` shells out to it.
 
 **User-facing features.** Offline install and the distributable bundle.
+
+---
+
+### scripts/board_study/
+
+**Purpose.** Offline study tool, not part of the app: compares ChArUco calibration
+boards across camera rigs. Detects corners in calibration videos (cached), calibrates
+whole recordings, disjoint parts and first-N-second prefixes (aniposelib, as
+sleap-anipose; or calibrat3 headless), and scores every calibration the same way:
+reprojection, held-out board geometry ("ruler" lengths, flat-board fit), repeatability
+(intrinsics, camera poses, 3D points), detection range (square size in pixels, tilt),
+proofread-pose and ruler errors. `simulate` renders calib.io boards into a copy of a real
+rig. Protocol and shopping list in `PROTOCOL.md`, usage in `README.md`, findings in
+`RESULTS.md`.
+
+**CLI.** `uv run --no-project --with numpy --with scipy --with opencv-contrib-python-headless
+--with aniposelib --with matplotlib --with sleap-io python scripts/board_study
+{boards|scan|run|report|simulate}`.
+
+**Imports from project modules.** None (Python; reads the same anipose
+`calibration.toml` format LUC3D loads).
+
+**User-facing features.** None in the app; its recommendations feed the calibration docs.

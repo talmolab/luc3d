@@ -64,7 +64,7 @@ try {
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
     await answerTrackSetup(page, 2);   // Track All asks for the animal count the first time
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     await page.evaluate(() => {
         // Fixture A, or B with `blindCam` (that camera sees no animal, so nothing is matched).

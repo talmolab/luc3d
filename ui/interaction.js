@@ -19,7 +19,7 @@ import { getOrComputeReprojectedInstance } from '../pose/triangulation.js';
 import { shouldIgnoreShortcut } from './keyboard-target.js';
 import { deleteTargetsFromStore, groupMemberTargets, unlinkedTarget } from './custom-delete-ops.js';
 import { nodeTooltipText, setNodeTooltipTarget, hideNodeTooltip } from './node-tooltip.js';
-import { getGroupColor, unlinkedDupIndices, unlinkedBaseColor } from './overlays.js';
+import { getGroupColor, unlinkedDupIndices, unlinkedBaseColor, wedgeHalfWidth } from './overlays.js';
 import { poseCheckOf, poseTooltipLine } from '../pose/pose-check-session.js';
 
 // ============================================
@@ -377,9 +377,11 @@ export class InteractionManager {
     /**
      * Compute the shortest distance from point (px, py) to a line segment
      * defined by endpoints (ax, ay) and (bx, by).
+     * With `wedgeHalf` > 0 the edge is drawn as a wedge from A (that half-width)
+     * to a tip at B, and the distance is measured from the wedge, 0 inside it.
      * @returns {number} Distance in the same coordinate space.
      */
-    _pointToSegmentDist(px, py, ax, ay, bx, by) {
+    _pointToSegmentDist(px, py, ax, ay, bx, by, wedgeHalf) {
         const dx = bx - ax;
         const dy = by - ay;
         const lenSq = dx * dx + dy * dy;
@@ -390,7 +392,20 @@ export class InteractionManager {
         if (t > 1) t = 1;
         const projX = ax + t * dx;
         const projY = ay + t * dy;
-        return Math.sqrt((px - projX) * (px - projX) + (py - projY) * (py - projY));
+        const dist = Math.sqrt((px - projX) * (px - projX) + (py - projY) * (py - projY));
+        return wedgeHalf ? Math.max(0, dist - wedgeHalf * (1 - t)) : dist;
+    }
+
+    /**
+     * Half-width of the wedges an instance type is drawn with, 0 when it draws
+     * lines. `lineStyleId` is the Visibility row that styles it.
+     * @private
+     */
+    _edgeWedgeHalf(lineStyleId, nodeSizeId) {
+        const styleEl = document.getElementById(lineStyleId);
+        if (!styleEl || styleEl.getAttribute('data-value') !== 'wedge') return 0;
+        const sizeEl = document.getElementById(nodeSizeId);
+        return wedgeHalfWidth(sizeEl ? parseInt(sizeEl.value) || 4 : 4);
     }
 
     /**
@@ -527,6 +542,11 @@ export class InteractionManager {
 
                     // --- Edge hit testing (only if no node was hit for this instance) ---
                     if (edges && !best) {
+                        const wedgeHalf = hitReprojected
+                            ? this._edgeWedgeHalf('visReprojLineStyle', 'visReprojNodeSize')
+                            : instance.type === 'predicted'
+                                ? this._edgeWedgeHalf('visPredPostLineStyle', 'visPredNodeSize')
+                                : this._edgeWedgeHalf('visUserPostLineStyle', 'visUserNodeSize');
                         for (let ei = 0; ei < edges.length; ei++) {
                             const edge = edges[ei];
                             if (!instance.hasPoint(edge[0]) || !instance.hasPoint(edge[1])) continue;
@@ -534,7 +554,7 @@ export class InteractionManager {
                             const edgeDist = this._pointToSegmentDist(
                                 videoX, videoY,
                                 instance.getX(edge[0]), instance.getY(edge[0]),
-                                instance.getX(edge[1]), instance.getY(edge[1]));
+                                instance.getX(edge[1]), instance.getY(edge[1]), wedgeHalf);
 
                             if (edgeDist < edgeThreshold && edgeDist < bestDist) {
                                 bestDist = edgeDist;
@@ -768,6 +788,9 @@ export class InteractionManager {
 
                 // --- Edge hit testing (only if no node was hit for this instance) ---
                 if (edges && !best) {
+                    const wedgeHalf = ulType === 'predicted'
+                        ? this._edgeWedgeHalf('visPredPreLineStyle', 'visPredNodeSize')
+                        : this._edgeWedgeHalf('visUserPreLineStyle', 'visUserNodeSize');
                     for (let ei = 0; ei < edges.length; ei++) {
                         const edge = edges[ei];
                         if (!ul.instance.hasPoint(edge[0]) || !ul.instance.hasPoint(edge[1])) continue;
@@ -775,7 +798,7 @@ export class InteractionManager {
                         const edgeDist = this._pointToSegmentDist(
                             videoX, videoY,
                             ul.instance.getX(edge[0]), ul.instance.getY(edge[0]),
-                            ul.instance.getX(edge[1]), ul.instance.getY(edge[1]));
+                            ul.instance.getX(edge[1]), ul.instance.getY(edge[1]), wedgeHalf);
 
                         if (edgeDist < edgeThreshold && edgeDist <= bestDist) {
                             bestDist = edgeDist;

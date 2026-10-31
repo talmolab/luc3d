@@ -38,7 +38,7 @@ try {
     page.on('console', m => { if (m.type() === 'error') errs.push('console.error: ' + m.text().slice(0, 300)); });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // An 18-node skeleton over 8 cameras: long enough that the old 240px cap hid
     // most of it, which is the condition the reporter was in.
@@ -163,7 +163,7 @@ try {
     check(wideCols > narrowCols,
         `widening the modal gives the table more columns (${narrowCols} at 880px -> ${wideCols} at 1300px)`);
 
-    // ---- 3b. Width: 1040px by default; an unresized card keeps no size --------
+    // ---- 3b. 1320x800 by default; an unresized card keeps no size ---------
     // The card used to save its opening size on every close, so a later change
     // of the default never reached anyone who had opened Settings once.
     await closeModal();
@@ -173,7 +173,7 @@ try {
     });
     await openModal();
     let opened = await rect();
-    check(opened.w === 1040 && opened.h === 620,
+    check(opened.w === 1320 && opened.h === 800,
         `an old record at the old 880x620 default opens at the new default (${opened.w}x${opened.h})`);
     check(Math.abs((opened.x + opened.w / 2) - (260 + 440)) <= 1,
         `...centred where the old card was (${opened.x})`);

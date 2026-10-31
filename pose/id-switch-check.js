@@ -82,7 +82,7 @@ export const IMAGE_CHECK_DEFAULTS = Object.assign({}, SWITCH_CHECK_DEFAULTS, {
     imageHz: 2,             // crops per second per identity (on the contact grid), where the scoring reads them;
     backgroundHz: 0.1,      // elsewhere only this many (planImageSamples), so the metric still sees the whole
                             // session; >= imageHz embeds every image sample
-    threshold: -0.8,        // a contact whose score is below this is a possible switch
+    threshold: -1,          // a contact whose score is below this is a possible switch (-0.8 at the old 224-px input)
     maxTrainRows: 20000,    // crops per camera the metric is learned from
     getEmbeddings: null,   // REQUIRED: async (frame, items[{k, group}]) -> per item [{camera, vector}];
                            // STARTED in increasing frame order, at most `inFlight` in flight

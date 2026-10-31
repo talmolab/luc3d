@@ -94,12 +94,59 @@
             assertTrue(/M3/.test(d.message) && /Chrome or Firefox/.test(d.message) && /libx264/.test(d.message), d.message);
         });
 
-        it('HEVC in a browser with no HEVC: suggests Chrome/Safari or H.264 (and not the re-tag)', function () {
+        it('HEVC in a non-Chromium browser with no HEVC: suggests Safari/Chrome or H.264 (and not the re-tag)', function () {
             if (typeof explainUnplayableCodec === 'undefined') return;
-            var d = explainUnplayableCodec('hvc1', 'cam.mp4', { canPlayType: NO_HEVC, isSafari: false });
+            var d = explainUnplayableCodec('hvc1', 'cam.mp4', { canPlayType: NO_HEVC, isSafari: false, isChromium: false });
             assertEqual(d.kind, 'hevc-unsupported', 'kind');
             assertTrue(d.message.indexOf('-tag:v') < 0 && /libx264/.test(d.message), d.message);
             assertTrue(d.message.indexOf('this browser') >= 0, 'generic browser wording off Safari');
+            assertTrue(d.steps.length === 2 && /-fps_mode passthrough/.test(d.command), 'steps + a frame-keeping command');
+        });
+
+        // WebGL renderers as reported: a Windows 11 VM with no GPU (Chrome 155),
+        // Chrome with acceleration off, and a real GPU.
+        var BASIC = 'ANGLE (Microsoft, Microsoft Basic Render Driver (0x0000008C) Direct3D11 vs_5_0 ps_5_0, D3D11)';
+        var SWIFT = 'ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)';
+        var RTX = 'ANGLE (NVIDIA, NVIDIA RTX 4000 Ada Generation (0x000027B0) Direct3D11 vs_5_0 ps_5_0, D3D11)';
+
+        it('HEVC in Chrome with no GPU: says Chrome needs one, names the adapter, gives the steps', function () {
+            if (typeof explainUnplayableCodec === 'undefined') return;
+            var d = explainUnplayableCodec('hvc1', 'Camera0_topB.mp4', { canPlayType: NO_HEVC, isSafari: false, isChromium: true, renderer: BASIC });
+            assertEqual(d.kind, 'hevc-no-gpu', 'kind');
+            assertTrue(/no H\.265 decoder of their own/.test(d.why), 'why: ' + d.why);
+            assertTrue(d.why.indexOf('"Microsoft Basic Render Driver"') >= 0, 'adapter named without ANGLE wrapping: ' + d.why);
+            assertTrue(/GPU/.test(d.steps[0]) && /driver/.test(d.steps[0]), 'first step: a GPU and its driver');
+            assertTrue(/Remote Desktop/.test(d.steps[1]), 'RDP policy');
+            assertTrue(/Microsoft Basic Render Driver/.test(d.message) && /libx264/.test(d.message), 'one-line form: ' + d.message);
+            assertTrue(!/open the project in Chrome/i.test(d.message), 'never tells a Chrome user to use Chrome');
+        });
+
+        it('HEVC in Chrome drawing in SwiftShader: points at graphics acceleration', function () {
+            if (typeof explainUnplayableCodec === 'undefined') return;
+            var d = explainUnplayableCodec('hev1', 'cam.mp4', { canPlayType: NO_HEVC, isSafari: false, isChromium: true, renderer: SWIFT });
+            assertEqual(d.kind, 'hevc-gpu-no-decode', 'kind');
+            assertTrue(/SwiftShader/.test(d.why) && /graphics acceleration/.test(d.steps[0]), d.why);
+        });
+
+        it('HEVC in Chrome with a GPU but no decode: driver / acceleration, names the GPU', function () {
+            if (typeof explainUnplayableCodec === 'undefined') return;
+            var d = explainUnplayableCodec('hvc1', 'cam.mp4', { canPlayType: NO_HEVC, isSafari: false, isChromium: true, renderer: RTX });
+            assertEqual(d.kind, 'hevc-gpu-no-decode', 'kind');
+            assertTrue(d.why.indexOf('"NVIDIA RTX 4000 Ada Generation"') >= 0, d.why);
+            assertTrue(/chrome:\/\/gpu/.test(d.steps.join(' ')), 'chrome://gpu check');
+            var u = explainUnplayableCodec('hvc1', 'cam.mp4', { canPlayType: NO_HEVC, isSafari: false, isChromium: true, renderer: '' });
+            assertEqual(u.kind, 'hevc-gpu-no-decode', 'unknown renderer: the setting/driver advice');
+        });
+
+        it('rendererHasGpu: software and virtual adapters are not GPUs', function () {
+            if (typeof rendererHasGpu === 'undefined') return;
+            assertEqual(rendererHasGpu(BASIC), false, 'Basic Render Driver');
+            assertEqual(rendererHasGpu(SWIFT), false, 'SwiftShader');
+            assertEqual(rendererHasGpu('llvmpipe (LLVM 15.0.7, 256 bits)'), false, 'llvmpipe');
+            assertEqual(rendererHasGpu('ANGLE (VMware, Inc., VMware SVGA 3D (0x00000405) Direct3D11 vs_5_0 ps_5_0, D3D11)'), false, 'VMware');
+            assertEqual(rendererHasGpu(RTX), true, 'NVIDIA');
+            assertEqual(rendererHasGpu('ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)'), true, 'Apple');
+            assertEqual(rendererHasGpu(''), null, 'unknown');
         });
 
         it('no diagnosis when the browser says it can play the codec', function () {

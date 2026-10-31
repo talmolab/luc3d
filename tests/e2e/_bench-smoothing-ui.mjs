@@ -24,7 +24,7 @@ try {
     const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
     page.on('pageerror', e => console.log('pageerror: ' + String(e).slice(0, 300)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     const waitStatus = (re) => page.waitForFunction(
         (src) => new RegExp(src).test(document.getElementById('statusText').textContent),
         re.source, { timeout: 600000 });
