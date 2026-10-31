@@ -22,7 +22,7 @@
  *
  * DOM-free and state-free: callers pass the session's views and videoFiles.
  */
-import { Camera } from './pose-data.js?v=da15011ba119';
+import { Camera } from './pose-data.js?v=d6c1e77aa3cc';
 
 /** Focal length (px) of a placeholder camera — the value Load Videos uses. */
 export var PLACEHOLDER_FOCAL = 600;

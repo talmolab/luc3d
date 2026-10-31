@@ -34,12 +34,15 @@
  * reads, in the tracker's target order: frame i has nT[i] targets — each one
  * holding a detection from >= 2 cameras THIS frame — target t has trackIds[t],
  * nMem[t] members as (camera index, slot) pairs in `mem`, in its `detsByCam`
- * order, and a copy of its 3D as the next p3len[t] values of `p3` (-1: none).
+ * order, and a copy of its MEMBERS' 3D (`membersPoints3d`, not the target's own
+ * `points3d`, which also fuses stale views) as the next p3len[t] values of `p3`
+ * (-1: none). The main thread rebuilds each target from its this-frame members
+ * only, so the stale views — and the chance to leave them out — end here.
  * live[i] is the tracker's target count after frame i (the run's `numTargets`).
  * All transferred. pose/tracker-pool.js decodes it.
  */
-import { Camera, Instance } from './pose-data.js?v=da15011ba119';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=da15011ba119';
+import { Camera, Instance } from './pose-data.js?v=d6c1e77aa3cc';
+import { CrossViewTracker, Detection, membersPoints3d } from './cross-view-tracker.js?v=d6c1e77aa3cc';
 
 let trk = null, cams = null, camIndex = null;
 
@@ -106,10 +109,11 @@ function trackFrames(m) {
             nT[i]++;
             trackIds.push(t.trackId);
             nMem.push(k);
-            if (t.points3d) {                                    // a copy: the target's array lives on
-                const L = t.points3d.length;
+            const g3 = membersPoints3d(t, fi);                   // the group's 3D: members only
+            if (g3) {                                            // a copy: the target's array lives on
+                const L = g3.length;
                 p3 = grown(p3, p3used, L);
-                p3.set(t.points3d, p3used);
+                p3.set(g3, p3used);
                 p3used += L;
                 p3len.push(L);
             } else p3len.push(-1);

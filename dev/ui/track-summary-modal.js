@@ -28,9 +28,9 @@
 // Depends on: ui/track-summary.js, ui/id-switch-modal.js (openIdSwitchPanel,
 // refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary), ui/identity-gallery.js.
 
-import { planTrackSummary, summarizeTrackedIdentities, describeSwitchCheck } from './track-summary.js?v=da15011ba119';
-import { openIdSwitchPanel, refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary } from './id-switch-modal.js?v=da15011ba119';
-import { renderIdentityGallery } from './identity-gallery.js?v=da15011ba119';
+import { planTrackSummary, summarizeTrackedIdentities, describeSwitchCheck } from './track-summary.js?v=d6c1e77aa3cc';
+import { openIdSwitchPanel, refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary } from './id-switch-modal.js?v=d6c1e77aa3cc';
+import { renderIdentityGallery } from './identity-gallery.js?v=d6c1e77aa3cc';
 
 // The viewer's frame navigation, registered once by ui-wiring (as the ID Switches tab's is):
 // the tracker that opens this box cannot import pose/initialization.js.

@@ -66,9 +66,9 @@
 //
 // DOM-free, so it is testable directly.
 
-import { applyOriginFrame, mulMat3Vec3, rebaseExtrinsics } from './origin-frame.js?v=da15011ba119';
+import { applyOriginFrame, mulMat3Vec3, rebaseExtrinsics } from './origin-frame.js?v=d6c1e77aa3cc';
 import { points3dNodeCount, hasPoint3d, pooledPoints3d, isPoints3dFromFile, markPoints3dFromFile,
-    unsmoothedPoints3d, markPoints3dSmoothed } from './pose-data.js?v=da15011ba119';
+    unsmoothedPoints3d, markPoints3dSmoothed } from './pose-data.js?v=d6c1e77aa3cc';
 
 /**
  * The SESSION-scoped tally fields — exactly what one `perSession` record

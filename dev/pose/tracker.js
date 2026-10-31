@@ -16,34 +16,34 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=da15011ba119';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=da15011ba119';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=da15011ba119';
+} from './triangulation.js?v=d6c1e77aa3cc';
+import { CrossViewTracker, Detection, membersPoints3d } from './cross-view-tracker.js?v=d6c1e77aa3cc';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=d6c1e77aa3cc';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=da15011ba119';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=d6c1e77aa3cc';
 import {
     getNodeWeightArray, getNodeWeight, updateNodeWeights,
     getTrackingThresholds, getTrackingThreshold, isCameraTracked,
     getTrackingThresholdDefs, updateTrackingThresholds,
-} from '../ui/settings.js?v=da15011ba119';
-import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=da15011ba119';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=da15011ba119';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=da15011ba119';
-import { startTrackerWorker } from './tracker-pool.js?v=da15011ba119';
-import { passesDetectionFilter } from './detection-filter-stats.js?v=da15011ba119';
-import { loadAllLazyFrames, sweepLazyFrameWindows, showCalibrationRequiredPopup } from './triangulation.js?v=da15011ba119';
-import { hasRealCalibration } from './placeholder-cameras.js?v=da15011ba119';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=da15011ba119';
-import { updateInfoPanel } from '../ui/info-panel.js?v=da15011ba119';
-import { setColorByIdentity } from '../ui/color-by.js?v=da15011ba119';
-import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=da15011ba119';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=da15011ba119';
-import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=da15011ba119';
-import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=da15011ba119';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=da15011ba119';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=da15011ba119';
-import { noteTrackRun } from './run-state.js?v=da15011ba119';
+} from '../ui/settings.js?v=d6c1e77aa3cc';
+import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=d6c1e77aa3cc';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=d6c1e77aa3cc';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=d6c1e77aa3cc';
+import { startTrackerWorker } from './tracker-pool.js?v=d6c1e77aa3cc';
+import { passesDetectionFilter } from './detection-filter-stats.js?v=d6c1e77aa3cc';
+import { loadAllLazyFrames, sweepLazyFrameWindows, showCalibrationRequiredPopup } from './triangulation.js?v=d6c1e77aa3cc';
+import { hasRealCalibration } from './placeholder-cameras.js?v=d6c1e77aa3cc';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=d6c1e77aa3cc';
+import { updateInfoPanel } from '../ui/info-panel.js?v=d6c1e77aa3cc';
+import { setColorByIdentity } from '../ui/color-by.js?v=d6c1e77aa3cc';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=d6c1e77aa3cc';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=d6c1e77aa3cc';
+import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=d6c1e77aa3cc';
+import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=d6c1e77aa3cc';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=d6c1e77aa3cc';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=d6c1e77aa3cc';
+import { noteTrackRun } from './run-state.js?v=d6c1e77aa3cc';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -981,8 +981,10 @@ function buildTrackerDetections(frameGroup, cameras, frameIdx, session) {
 }
 
 // Persist a tracked frame: for each live target with a cross-view bundle THIS
-// frame, create an InstanceGroup, map the target's stable trackId to a session
-// Identity, write the per-frame identity entries, and promote unlinked members.
+// frame, create an InstanceGroup of those members — with 3D solved from them
+// alone, not from the stale views the target also holds (`membersPoints3d`) —
+// map the target's stable trackId to a session Identity, write the per-frame
+// identity entries, and promote unlinked members.
 //
 // Raw-trackIdx collision guard (2D-viewer color bug, most visible on the
 // first frame or two of a video): `session.setFrameIdentity` keys
@@ -1040,10 +1042,17 @@ export function commitTrackedFrame(session, trk, frameIdx, trackToIdentity, iden
         }
 
         var group = new InstanceGroup(nextGroupId(), identityId);
+        // The 3D of THESE members only. `target.points3d` also fuses any stale
+        // view the target still holds for association (a camera that missed it
+        // this frame), which is not a member — see `membersPoints3d`.
+        // `triangulationMethod` is deliberately left unset: this is the
+        // tracker's normalized-coordinate DLT, not the app's pixel-space 'dlt',
+        // and tagging it 'dlt' would let Triangulate All ▸ DLT ADOPT it
+        // (`adoptPrior3d`) instead of re-solving.
         // A COPY in the slab pool (pose-data.js `pooledPoints3d`): one
         // ArrayBuffer per group was 539,545 of them for a full Track All, and it
         // also stops the group sharing the tracker target's live array.
-        group.points3d = pooledPoints3d(target.points3d);
+        group.points3d = pooledPoints3d(membersPoints3d(target, frameIdx));
         for (var m = 0; m < members.length; m++) {
             var camName = members[m].camName;
             var det = members[m].det;
@@ -1157,7 +1166,9 @@ function submitTrackerFrame(session, run, fi) {
 // Commit one frame the worker tracked: `targets` as tracker-worker.js returns
 // them, rebuilt into the shape commitTrackedFrame reads off a CrossViewTracker
 // (targets in order; each one's this-frame members in its detsByCam order), so
-// the commit itself is the inline one, unchanged.
+// the commit itself is the inline one, unchanged. The shim holds no stale view,
+// so its `points3d` must already be the members' — the worker sends
+// `membersPoints3d`, not the target's own 3D.
 function commitWorkerFrame(session, run, fi, targets) {
     var metas = run.pending.get(fi);
     run.pending.delete(fi);
