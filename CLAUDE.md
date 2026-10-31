@@ -134,6 +134,7 @@ Tests: `test-node-scores.mjs`, `test-node-score-export.js`, e2e `node-score-tool
 - The tracker always uses DLT, never BA. Fix the estimator, not the setting.
 - Test with noisy fixtures: noiseless rays pass on a broken build.
 - New tracker cost terms must not read absolute world coordinates.
+- `backProjectToRay(s)` cast rays from M⁻¹ (P = [M | p4]), never through the pseudo-inverse point, which is NaN for a camera at the world origin; campy puts cam_0 there. Test: `tests/test-back-projection.mjs`.
 - `dltHomogeneousFlat`'s frame arguments are optional; leaving them out must be bit-identical to the raw rows (`tests/test-triangulation-kernels.mjs`).
 - `smallestEigvec4Inverse` must iterate until it converges, with the Jacobi kernel as fallback. Never loosen `INVERSE_TOL` (1e-15); invariance tests fail. Before changing the solve, A/B Track All identities with `tests/e2e/_diag-trackall-ab.mjs`.
 Test: `tests/e2e/triangulation-frame-invariant.mjs`.
@@ -260,6 +261,7 @@ node tests/run-mjs-tests.mjs        # tests/test-*.mjs, Node (optional substring
 node tests/e2e/<name>.mjs           # Playwright, one file per behavior
 ```
 - `tests/*.js` run only if `tests/test-runner.html` has a `<script>` tag for them; `tests/test-classic-tests-registered.mjs` fails on an untagged one. No Node runner for these; don't add one.
+- NaN must fail a check. `assertApprox` fails on NaN and non-numbers (to expect NaN, pass NaN as `expected`). In hand-rolled checks write the failure condition as `!(err <= tol)`, never `err > tol`, and never take a maximum with `if (d > worst) worst = d` (it skips NaN).
 - `tests/test-*.mjs` are auto-discovered. Put ESM tests nowhere else.
 - `tests/e2e/_diag-*`, `_bench-*`, `_real-*` are investigation tools, not assertions.
 - Notable e2e: `sequence-lazy-workflow.mjs` (lazy-project regression harness; catches resident-only bugs, incl. edits: interactive deletes must use `deleteTargetsFromStore`, cycle 5c); `video-encode-streaming.mjs` (only coverage of streaming video export; run it if you touch `ui/video-encode.js`); `overlay-export-modal.mjs` / `export-3d-video.mjs` (the video modals); `_real-roundtrip.mjs` (real-data acceptance, needs a large `.slp`).

@@ -33,9 +33,8 @@ const { CrossViewTracker, Detection } =
 function makeCam(name, rvec, tvec) {
     return new Camera(name, [[600, 0, 320], [0, 600, 240], [0, 0, 1]], [0, 0, 0, 0, 0], rvec, tvec, [640, 480]);
 }
-// Non-degenerate rig: no camera sits at the world origin ([I|0] would make the
-// back-projection pinv produce a point at infinity), so the 3D point-to-ray term
-// is genuinely exercised.
+// No camera sits at the world origin here; a camera that does is tested in its
+// own group below (its back-projected rays used to be NaN).
 const CAMS = [
     makeCam('c0', [0, 0, 0], [0, 0, 40]),
     makeCam('c1', [0, 0.35, 0], [-12, 0, 43]),
@@ -263,6 +262,34 @@ group('Score caches — rays per detection, projection per target: same scores, 
     const swapped = scores(dets);
     ok(!same(p3, swapped), 'control: replacing a target\'s 3D changes its scores');
     ok(same(swapped, fresh()), 'and the cached projection follows it exactly');
+}
+
+// ===========================================================================
+group('3D term — a camera at the world origin keeps it (its rays were NaN, so it scored 0)');
+{
+    // campy writes cam_0 as [I | 0]. The same rig with the world moved 100 mm
+    // along z puts no camera at the origin, and must score the same.
+    const score3d = (shift) => {
+        // World moved by +shift along z: t' = t − R·(0, 0, shift).
+        const cams = [['c0', [0, 0, 0], [0, 0, 0]], ['c1', [0, 0.35, 0], [-12, 0, 3]], ['c2', [0.35, 0, 0], [0, -12, 3]]]
+            .map(([n, r, t]) => { const R = makeCam(n, r, t).rotationMatrix; return makeCam(n, r, t.map((v, i) => v - R[i][2] * shift)); });
+        const dets = (f, ctrs) => {
+            const m = new Map();
+            cams.forEach(cam => m.set(cam.name, ctrs.map((ctr, ai) => new Detection(
+                new Instance(nodes3d([ctr[0], ctr[1], ctr[2] + shift]).map(p => cam.project(p)), ai, 'predicted', 1.0), cam, f, ai))));
+            return m;
+        };
+        const trk = new CrossViewTracker(HP);
+        trk.trackFrame(dets(0, [[-7, 0, 48], [7, 0, 48]]), cams);
+        const next = dets(1, [[-6, 0.5, 48], [6, -0.5, 48]]).get('c0');
+        return trk.targets.map(t => next.map(d => trk._adjacency3d(t, d, cams[0])));
+    };
+    const atOrigin = score3d(0), shifted = score3d(100);
+    const flat = atOrigin.flat();
+    ok(flat.length === 4 && flat.every(Number.isFinite) && flat.some(v => v !== 0),
+        `c0's 3D term is live, not silently 0 (got ${flat.map(v => v.toFixed(2)).join(', ')})`);
+    const diff = Math.max(...flat.map((v, i) => Math.abs(v - shifted.flat()[i])));
+    ok(diff < 1e-6, `and equals the score with the world origin moved off the camera (max diff ${diff.toExponential(1)})`);
 }
 
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);
