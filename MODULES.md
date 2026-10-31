@@ -1866,6 +1866,26 @@ falling back to `session.fps`), and each check's own `elapsedMs` (stamped by
 already succeeded, so a summary failure only logs. Covered by
 `tests/e2e/track-all-summary.mjs`.
 
+**The 2D pose check runs inside every tracking pass** (`pose/pose-check.js`,
+`pose/pose-check-session.js`; Tracking Wizard `poseCheck`, default on). After its
+clears, `runTrackingPass` fits each tracked camera's pose model
+(`fitSessionPoseModels`, overlay step "Learning each camera's poses") and puts a
+run on `run.pose`; both input builders — `buildTrackerInputs` (worker) and
+`buildTrackerDetections` (inline) — call `poseCheckExcludes` right after
+`passesDetectionFilter`, so every prediction is scored once, an outlier pose is
+dropped before the tracker sees it when the run excludes outliers
+(`poseExcludeOutliers`, off by default — measured, see
+`pose/pose-check-session.js`), and the worker and inline paths stay identical
+(`tests/e2e/track-all-worker.mjs`). At the
+end the result goes on `session.poseCheck` (cleared at the start, so a failed
+pass leaves no stale verdicts) and into the summary (`summaryOpts.poses`). Track
+Frame reuses the models and thresholds of the last Track All or Check Poses
+(`runCrossViewTracker`'s `poseRun`): one frame is too little to learn from.
+Whether it leaves outliers out follows the Tracking Wizard now, not the earlier
+pass — a Check Poses leaves `excluded: false` on the session, and that is not a
+statement about how Track Frame should track. A failure to fit only logs —
+tracking goes ahead unchecked. Covered by `tests/e2e/track-all-pose-check.mjs`.
+
 **Every tracking pass marks the project dirty.** Track Frame, Track Frame Range
 and Track All rewrite `session.instanceGroups`, `session.frameIdentityMap` and
 `session.identities`, so each calls `markDirty()` — `trackCurrentFrame` before it
@@ -2074,6 +2094,8 @@ drifts upward.
   line's, status line's and summary box's thousands commas.
 - `./tracker-pool.js` — `startTrackerWorker` (see "Track All runs its tracker on
   a worker" below).
+- `./pose-check-session.js` — `fitSessionPoseModels`, `createPoseCheckRun`,
+  `poseCheckExcludes`, `finishPoseCheckRun` (the 2D pose check, above).
 - `../ui/track-setup-modal.js` — `showTrackSetupModal`, `IMAGE_CHECK_IDS`: the
   first-use dialog (`askTrackSetup`, above). A leaf, so no cycle.
 - `../ui/rendering.js` — `drawAllOverlays`, `showPredictedOnly`,
@@ -3749,6 +3771,208 @@ order, slot recycling, copies, pooling, freeing); end to end
 
 ---
 
+### pose/pose-check.js
+
+**Purpose.** The 2D pose check Track All runs on every prediction: is this pose
+**common**, **uncommon** or an **outlier**? Both flagged classes are marked for
+inspection; outliers are also left out of tracking when the Tracking Wizard says so
+(`poseExcludeOutliers`, OFF by default — see `pose/pose-check-session.js` for why).
+A point-distribution model — the
+"is this shape plausible" test of Active Shape Models — fitted per camera on the
+session itself, with no labels. DOM-free and import-free.
+
+**How a pose is scored.** It is aligned to the camera's mean shape (generalized
+Procrustes on the fit poses) by the least-squares similarity — translation,
+rotation, scale — so where the animal is, which way it faces and how far it is
+from the camera do not count. Its residual is measured against the covariance of
+the fit poses' residuals (Mahalanobis; a ridge of `POSE_RIDGE` = 1% of the mean
+variance), and the squared distance is turned into a z-like **pose score** by its
+degrees of freedom (`wilsonHilferty`, df = 2·visible − 4), so a pose with missing
+nodes reads on the same scale as a complete one. About 0 is typical; the score
+grows the rarer the shape. Correlated motion the animal makes all the time (a
+swinging tail, a curling body) costs little; a configuration it never makes
+costs a lot.
+
+**Load-bearing details, each measured.**
+- **Missing nodes get the covariance of exactly their visibility pattern**,
+  estimated from `POSE_PATTERN_SAMPLE` (300) complete fit poses RE-ALIGNED on
+  those nodes and cached per pattern (a bitmask over the modelled nodes). The
+  sub-block of the full covariance is not the same thing — re-aligning on fewer
+  nodes absorbs a different part of the residual — and it cost a third of the
+  bad poses found at the same false-flag rate. 300 poses matched 2,000; fewer
+  than ~300 inflate the score.
+- **The residual is NOT projected off the mean shape's direction.** A pose that
+  resembles the mean shape not at all gets a best-fit scale near 0, so its
+  residual IS minus the mean shape; projecting that direction out (an earlier
+  version did) scored the most garbled poses as the most typical — a head/tail
+  swap with an ear missing came out at −5 — and found a third fewer outliers.
+- **Every node is modelled** unless fewer than `POSE_FIT_ENOUGH` (1,000) sampled
+  poses have them all; then the least-often-predicted node is dropped,
+  repeatedly. A 50%-visibility rule dropped TailTip (42% visible on a SLAP top
+  camera), and a tail tip on the wrong animal went unseen.
+- **The fit set is chosen by a hash of each pose's coordinates**
+  (`hashPose`, first `POSE_FIT_MAX` = 2,000 complete poses), so the model does
+  not depend on the order poses were offered in: an eager load and the lazy
+  store list a frame's instances differently and must get the same model.
+- **The fit set is not trimmed.** Dropping its worst 5% twice before refitting gave the same
+  discrimination and a less stable score scale from sample to sample.
+- A camera with fewer than `POSE_FIT_MIN` (200) complete poses gets no model, and
+  a pose with fewer than `POSE_MIN_NODES` (4) modelled nodes visible no score —
+  "not checked", never a guess.
+
+**Calibration.** Measured with this module on the six proofread 3–4-mouse SLAP
+sessions (2.1M labelled predictions; a prediction is "bad" when a node lies more
+than half a body size from the reprojection of the proofread 3D, "badly wrong"
+when a third of them do or it is on no animal): at score ≥ 10 (`POSE_UNCOMMON_DEFAULT`)
+1 good pose in 542 is flagged and 65% of what is flagged is bad; at ≥ 15
+(`POSE_OUTLIER_DEFAULT`) 1 in 13,312, 92% bad; at ≥ 20, 1 in 261,254. AUC
+bad-vs-good 0.80. Checked by eye on SLAP, the 5-mouse flippers recording and
+CD1: 10–15 is a mix of real odd poses (climbing, grooming, curled) and wrong ones;
+above 15 nearly everything is nodes scattered or stretched over two animals. The
+test is blind to a WELL-SHAPED pose in the wrong place (a duplicate, a
+reflection) — the tracker's geometry handles those — and proofreaders' deletions
+are mostly such extras and fragments, which is why they are not the yardstick.
+A model change means re-running that measurement.
+
+**Speed.** ~0.65 µs per pose once its pattern is cached, ~0.085 ms per new
+pattern (about 1,000–2,000 per camera on SLAP).
+
+**Memory: the pattern cache is trimmed once a check is done.** Each pattern
+counts its uses; `trimPosePatterns(model, keep)` keeps the `POSE_PATTERN_KEEP`
+(128) most-used and drops the rest, which rebuild bit-identically when a view
+draws a pose that needs one. On the 5-mouse recording a full check built 9,022
+patterns across 8 cameras — 34 MB of the 41 MB the verdicts held for as long as
+the session does; trimmed, the verdicts hold 12 MB. Never trim DURING a check: a
+scan meets the rare patterns again and again, and rebuilding each one every time
+would cost seconds.
+
+**Key exports.** `createPoseSample(numNodes)` (`offer(xy)` keeps poses with ≥ 4
+nodes), `fitPoseModel(poses, numNodes)` → model | null, `poseScore(model, xy)` →
+number | NaN, `trimPosePatterns(model, keep)` (above), `poseClassOf(score, uncommonAt, outlierAt)` (outlierAt ≤ 0: nothing
+is an outlier) and `poseClassName`, `wilsonHilferty(d2, df)`,
+`poseSampleStride(nFrames)` (every Nth frame for ~`POSE_SAMPLE_FRAMES` = 3,000),
+the tunables above and `POSE_UNTESTED` / `POSE_COMMON` / `POSE_UNCOMMON` /
+`POSE_OUTLIER`.
+
+**Imports from project modules.** None.
+
+**Imported by.** `pose/pose-check-session.js`.
+
+**User-facing features.** The 2D pose check of Track All / Track Frame Range /
+Track Frame (Tracking Wizard: "Check 2D poses during tracking", "Pose check:
+uncommon from", "Pose check: outlier from", "Pose check: leave outliers out of
+tracking").
+
+Covered by `tests/test-pose-check.mjs` and `tests/e2e/track-all-pose-check.mjs`.
+
+---
+
+### pose/pose-check-session.js
+
+**Purpose.** The 2D pose check (`pose/pose-check.js`) applied to a session: fit
+each camera's model, score the detections a tracking pass is about to use, count
+what it found, and answer "what is this pose?" for the views and the tooltip.
+DOM-free.
+
+**Where the fit comes from.** The predictions of every `poseSampleStride`-th
+frame. An eager session reads `session.frameGroups` (linked and unlinked); a
+windowed lazy project, whose `frameGroups` is only the resident window, reads its
+loader one frame at a time (`getFrameSync`) and `releaseFrame`s each again
+UNLESS it was already in the loader's cache or resident — sampling never grows
+what is held, and never drops a frame someone else is holding. User instances are
+never sampled or checked: a person placed them.
+
+**What a run records.** `createPoseCheckRun(models, uncommonAt, outlierAt, exclude)`;
+`poseCheckExcludes(run, camName, inst, frameIdx)` scores one detection, counts it
+per camera (checked / untested / common / uncommon / outliers), records a flag
+`{frame, camera, score, cls}` for uncommon poses and outliers, and returns true
+only for an outlier in a run that EXCLUDES outliers — the caller then leaves it out.
+`finishPoseCheckRun(run)` is what goes on the session as `session.poseCheck`: the
+models, the thresholds, `excluded`, the counts per camera and in total, and the
+flags in frame order. **Transient** — never saved with the project (re-running
+Track All recomputes it).
+
+**Leaving outliers out of tracking is OPT-IN, and that is a measured choice.** A
+garbled pose is usually still the right animal — its centroid and most of its
+nodes are on it — and with the match gate off (the default) the tracker's
+assignment is forced, so taking a detection away can hand its target to the
+wrong one. Measured with Track All's identities against proofread / tail-mark
+truth (`gt_trackall.mjs` + `verify/gt-trackall-2026-10-07/eval_trackall.py`):
+- 22 proofread SLAP sessions, defaults: 21 change ONLY by the outliers now left
+  unlabelled (−0.01 to −0.17 points, the "no identity" share rising by the same
+  amount, switch counts unchanged); 190807 goes 49.7 → 71.1% (a 3½-minute
+  brown/brown swap at 5:52 becomes a 25 s wobble).
+- The 5-mouse flippers recording, defaults: a NEW lasting swap at 14:33.6 — the
+  check had left out a dozen of that mouse's own garbled poses, in five cameras,
+  during a close encounter — so lasting relabels 4 → 6 and time on the wrong
+  identity 17.8% → 32.2% against the tail-mark-verified reference (gate on, tails
+  weighted 0). With THAT configuration it changes nothing but the excluded
+  detections (0 relabels either way).
+- The 22 SLAP sessions with the match gate ON: 144215 82.6 → 91.2%, but 150448
+  98.7 → 80.9% (switches 22 → 34); the other 20 change only by the outliers left
+  unlabelled.
+So over 46 runs it fixed two lasting swaps and caused two, whichever way the
+gate is set — the same failure mode as the instance-score filter. By default
+outliers are therefore flagged and counted but still tracked.
+
+**Tracks ▸ Check Poses: `checkSessionPoses(session, cameras, uncommonAt,
+outlierAt, {onProgress})`.** Fits every camera's model and scores EVERY
+prediction of the project, tracking nothing — the way a reopened project gets its
+marks back, since verdicts are never saved. Its result is a finished run with
+`excluded: false`. On a windowed lazy project it reads each RESIDENT frame from
+the session (what is on screen, edits included) and every other frame from the
+loader (`getFrameSync`), releasing each frame it loaded unless it was already in
+the loader's cache; anything else must hold every frame in `frameGroups` (the
+caller materializes a non-windowed lazy session first). `onProgress(done, total)`
+is called every 256 frames and awaited. `describePoseCheck(poseCheck)` is its
+status line: "2D poses: 13 uncommon, 3 outliers of 431,112 checked — marked ? and
+✕ in the views; hover a node for its score" ("none flagged", or "not checked —
+too few complete poses to learn from"). Measured on the real lazy 5-mouse
+recording: the same 4,220,071 / 40,907 / 14,242 counts Track All's own check
+reports, in 17 s, with the resident window and the loader cache unchanged after
+it and no heap growth across repeated runs.
+
+**Stepping through the flags (`]` / `[`).** `flaggedFrames(poseCheck)` — the
+distinct frames holding a flagged pose, ascending, read off `flags` and cached on
+the result (against the `flags` array it came from, so a replaced array is
+re-read); `nextFlaggedFrame(poseCheck, frame, dir)` — the next one strictly after
+`frame` (dir > 0) or the previous strictly before it, -1 when there is none (no
+wrap-around); `describeFlaggedFrame(poseCheck, frame)` — "Flagged frame 3 of 412
+(frame 1,235): outlier in Camera1_topC (score 18.2), uncommon in …", frames shown
+1-based; `describeNoFlaggedFrame(poseCheck, frame, dir)` — no check yet, nothing
+flagged, or nothing past `frame` that way. For the seekbar's ticks
+(`ui/seekbar-pose-flags.js`): `flaggedFrameClasses(poseCheck)` — the worst class
+on each of those frames, index for index (`Uint8Array`, outlier beats uncommon),
+cached with them; `describeFlagsAt(poseCheck, frame)` — just the "outlier in …
+(score …), uncommon in …" part, by binary search ('' on a clean frame), which
+`describeFlaggedFrame` also uses.
+
+**The views score what they draw.** Nothing is written onto an Instance (a lazy
+project's instances come and go), so `poseCheckOf(session, camName, inst)` scores
+the instance against the run's models on demand (about a microsecond) →
+`{cls, score}` | null; `poseTooltipLine(verdict, poseCheck)` is the node
+tooltip's line: "Pose: uncommon (score 12.3)", "Pose: outlier (score 18.0), not
+tracked", "Pose: too few nodes to check".
+
+**Imports from project modules.** `./pose-check.js`.
+
+**Imported by.** `pose/tracker.js`, `ui/rendering.js`, `ui/interaction.js`,
+`ui/pose-check-command.js`, `ui/seekbar-pose-flags.js`.
+
+**User-facing features.** The "2D poses" row of the Track All summary, the ?/✕
+marks in the views, the tooltip line, (opt-in) outliers left out of tracking,
+Tracks ▸ Check Poses, and the flagged frames' ticks on the seekbar.
+
+Covered by `tests/test-pose-check.mjs` (§10: eager and lazy sampling agree, the
+lazy sampler's release rule, the run's counts and flags, user instances, the
+default keeping outliers, outlier threshold 0; §11: Check Poses on an eager and a
+lazy session, resident frames read from the session, the release rule, the
+status line; §12: trimming leaves every score bit-identical; §13: the stops and
+their status lines; §14: the seekbar's columns and snapping),
+`tests/e2e/track-all-pose-check.mjs` and `tests/e2e/check-poses-command.mjs`.
+
+---
+
 ### pose/threshold-examples.js
 
 **Purpose.** The session's own nodes for the reprojection error threshold card.
@@ -5139,6 +5363,12 @@ the in-memory edit applies. Covered by
   `hideNodeTooltip`.
 - `./overlays.js` — `getGroupColor`, `unlinkedDupIndices`, `unlinkedBaseColor`
   (the node tooltip's color; `overlays.js` imports nothing, so no cycle).
+- `../pose/pose-check-session.js` — `poseCheckOf`, `poseTooltipLine`: after Track
+  All, the node tooltip gets a third line with the 2D pose check's verdict on
+  the hovered PREDICTION — "Pose: common (score 1.2)", "Pose: uncommon
+  (score 12.3)", "Pose: outlier (score 18.0)" (", not tracked" when the pass left
+  outliers out), "Pose: too few nodes to check". None on a user instance or a
+  reprojection, or before any Track All.
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`.
 
@@ -6257,6 +6487,14 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `showReprojected` layer switches, the per-type `lineWidth`s and
   `reprojOpts.brightness` through to `drawNodeTrails`. Covered by
   `tests/test-node-trails.mjs` §12 and `tests/e2e/node-trail-shade.mjs`.
+  **Pose-check marks (step 7.4):** with `options.poseCheckOf(inst)` (set by
+  `rendering.js` while `session.poseCheck` exists) and predictions shown, every
+  predicted instance whose verdict is uncommon or outlier gets
+  `drawPoseFlag(ctx, inst, cls, opts)`: an amber "?" badge
+  (`POSE_FLAG_COLORS.uncommon`) at the BOTTOM-right of its box (the top corner
+  covered the name label), or a red "✕" (`POSE_FLAG_COLORS.outlier`) on a
+  dashed red box. Screen-sized and upright (`beginUprightFrame`), like a name
+  label; drawn before the tracking-excluded wash.
   **`options.overlaySizeScale` (issue #200).** `nodeSize` and `lineWidth` are
   in BACKING-store pixels, which do not track zoom exactly (see `ui/rendering.js`
   ▸ overlay backing-store budget), so `drawAllOverlays` passes the ratio it
@@ -6526,6 +6764,13 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 - `./settings.js` — `isCameraTracked` (passed to `drawFrameOverlays` as
   `trackingExcluded` so views excluded in the Tracking Wizard render grey),
   `getTrackingThreshold` (the reprojection fill's threshold check).
+- `../pose/pose-check-session.js` — `poseCheckOf`: while the session has a 2D
+  pose check (`session.poseCheck`, after Track All or Check Poses), each view
+  passes `drawFrameOverlays` a verdict function (`poseCheckOfView`) for its ?/✕
+  marks. The instance is scored on demand, nothing cached — about a microsecond each.
+- `./seekbar-pose-flags.js` — `syncSeekbarPoseFlags`: every `drawAllOverlays`
+  keeps the seekbar's flagged-pose strip on the session's current check (Track
+  All and Check Poses replace it, then redraw); a no-op when nothing changed.
 - `./identity-assignment.js` — `editGroupState`, `finishEditGroup`.
 - `./info-panel.js` — `updateFrameInfo`.
 - `./frame-counters.js` — `computeFrameCounterBaseline`,
@@ -8142,6 +8387,54 @@ timeline, hover text, click snaps to the tick's frame, reviewed dimming).
 
 ---
 
+### ui/seekbar-pose-flags.js
+
+**Purpose.** The frames the last 2D pose check flagged (Track All or Tracks ▸
+Check Poses — `session.poseCheck`, `pose/pose-check-session.js`), as a strip of
+ticks on the transport seekbar: a `<canvas id="seekbarPoseFlags">` exactly over
+the 6 px track, red where a frame holds an outlier, amber where it holds only
+uncommon poses. Under the ID-switch ticks (`ui/seekbar-markers.js`) and the
+thumb, `pointer-events: none`.
+
+**Drawing.** One canvas, a column per device pixel — never an element per frame:
+a check can flag tens of thousands of frames (~40,000 uncommon and ~14,000
+outlier poses on the 5-mouse recording), more than the bar has pixels. A column
+takes the worst class of the flagged frames under it (`poseFlagColumns`, the
+thumb's `frame / (totalFrames - 1)` mapping), and every marked column is drawn at
+least `MIN_TICK_CSS_PX` (2) wide, so one flagged frame in an hour still shows;
+red is drawn after amber, so it wins where they meet.
+
+**Key exports.** `installSeekbarPoseFlags(canvas)` (redraws on resize via a
+`ResizeObserver`); `syncSeekbarPoseFlags(session, totalFrames)` — redraws only
+when the session's `poseCheck`, its `flags` array or the frame count changed, so
+it is called on every `updateSeekbarVisual` and every `drawAllOverlays` (which
+Track All and Check Poses end with) for a few comparisons; a session without a
+check clears the strip; `poseFlagColumns(frames, worst, totalFrames, columns)`
+(pure); `seekbarPoseFlagAt(frac, widthPx, tolPx = POSE_FLAG_SNAP_PX)` — the
+flagged frame within 3 px of the cursor, an OUTLIER in reach before a nearer
+uncommon one (so a red tick among amber ones can be hit), with the tooltip line
+"flagged pose: outlier in c0 (score 18.2)"; `SEEKBAR_POSE_COLORS` (the views'
+`POSE_FLAG_COLORS`).
+
+**Snapping.** `ui/ui-wiring.js`'s seekbar `markerAt` asks the ID-switch ticks
+first, then this: a click or drag lands on the flagged frame, and the tooltip
+names that same frame ("Frame 901 · 00:30.000 — flagged pose: outlier in c0
+(score 82.0)").
+
+**Imports from project modules.** `../pose/pose-check-session.js`
+(`flaggedFrames`, `flaggedFrameClasses`, `describeFlagsAt`).
+
+**Imported by.** `ui/ui-wiring.js`, `ui/rendering.js`.
+
+**Coverage.** `tests/test-pose-check.mjs` §14 (columns, worst class, dense
+flags, snapping and its outlier priority); `tests/e2e/check-poses-command.mjs`
+(red ticks exactly at the planted frames, amber with "outlier from" 0, the hover
+text, a click snapping, empty without a check) and
+`tests/e2e/track-all-pose-check.mjs` (ticks after Track All, cleared with the
+check off).
+
+---
+
 ### ui/seekbar-ticks.js
 
 **Purpose.** A time ruler under the transport seekbar (`#seekbarRuler` inside
@@ -9290,8 +9583,10 @@ the association math but still shown in the GUI), the cross-view **tracking thre
 and the benchmark-derived levers `track3dWeight` / `filterMinVisibleNodes` /
 `filterMinInstanceScore`; see `pose/tracker.js`), plus a comprehensive **catalog
 of every keyboard shortcut**
-(`ACTION_CATALOG`). Settings persist to `localStorage` (`lucid.settings.v1`) and
-survive reloads. The catalog is the single source of truth for the Settings ▸
+(`ACTION_CATALOG`; the Navigation group includes `nextFlaggedPose` `]` and
+`prevFlaggedPose` `[`, editable and dispatched — the 2D pose check's flagged
+frames, see `ui/pose-check-command.js`). Settings persist to `localStorage`
+(`lucid.settings.v1`) and survive reloads. The catalog is the single source of truth for the Settings ▸
 Keyboard Shortcuts panel — see the keyboard-shortcuts note in `CLAUDE.md`.
 
 **Catalog entries.** `{ id, label, category, binding, editable, dispatched }`.
@@ -9343,7 +9638,10 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   wizard's render catalog `[{ id, label, default, value, min, max, step, desc, kind }]`
   (`kind`: `'toggle'` for on/off settings, drawn as a switch; else `'number'`),
   **filtered to `WIZARD_THRESHOLD_IDS`** — the CrossViewTracker's free parameters
-  only (`filterMinVisibleNodes`, `filterMinInstanceScore`, `filterMinMeanNodeScore`, `corr2dWeight`,
+  only (`filterMinVisibleNodes`, `filterMinInstanceScore`, `filterMinMeanNodeScore`, the 2D pose check's
+  `poseCheck` — 0/1, default 1, `poseUncommonZ` 10, `poseOutlierZ` 15 (0 = no
+  outlier class) and `poseExcludeOutliers` — 0/1, default 0 (see
+  `pose/pose-check-session.js` for why), `corr2dWeight`,
   `corr3dWeight`, `velocityThreshold`, `distanceThreshold`, `timePenalty`,
   `stale`, `matchGate` (0/1 toggle for the CrossViewTracker match gate),
   `maxPenalty` / `matchReproj` — the misplaced-node options, 0 (off) by
@@ -10145,6 +10443,61 @@ different duration on every camera). DOM-free and import-free, so
 
 **Imported by.** `ui/app-state.js`, `ui/ui-wiring.js`, `pose/tracker.js`.
 
+### ui/pose-check-command.js
+
+**Purpose.** Tracks ▸ **Check Poses**: the 2D pose check (`pose/pose-check.js`)
+on its own, tracking nothing. Track All's verdicts are never saved, so a reopened
+project has no ?/✕ marks, no tooltip line and no counts until the next Track All;
+this brings them back. `checkPoses()` fits each camera's model and scores every
+prediction of the project (`checkSessionPoses`), with the Tracking Wizard's
+CURRENT thresholds, on a progress card titled "Check Poses" (a worker-backed lazy
+loader holds every frame first, as Track All does for it), then sets
+`session.poseCheck`, redraws the views and puts `describePoseCheck`'s line in the
+status bar. Returns the result, or null when there was nothing to check or it
+failed (the status bar says which).
+
+**Rules.**
+- **It does NOT mark the project dirty.** It changes no annotation and no
+  identity, and the verdicts are not saved.
+- **It runs whatever the "Check 2D poses during tracking" toggle says.** That
+  toggle governs Track All; this is an explicit request.
+- **It leaves outliers in whatever state tracking left them** — it only scores.
+  After a Track All that left outliers out, those detections stay ungrouped, and
+  the tooltip stops saying "not tracked" because this check did not track.
+
+**Next / Previous Flagged Pose.** `gotoFlaggedPose(dir)` goes to the next
+(+1) or previous (−1) frame the last check (Track All or Check Poses) flagged and
+puts `describeFlaggedFrame`'s line in the status bar; at either end, with nothing
+flagged or with no check yet, it stays put and says why — it never wraps. Bound to
+`]` / `[` (catalog `nextFlaggedPose` / `prevFlaggedPose`, rebindable) and the
+Tracks menu. The stops are the check's own flags, so a pose edited since is still
+a stop until the next check. It navigates through `setPoseCheckNavigator`'s
+`navigateToFrame` (registered by `ui/ui-wiring.js`), because this module cannot
+import `pose/initialization.js`, which imports it.
+
+**Key exports.** `checkPoses()`, `gotoFlaggedPose(dir)`, `setPoseCheckNavigator(fn)`.
+
+**Imports from project modules.** `./app-state.js` (`state`, `getActiveSession`),
+`./settings.js` (`getTrackingThreshold`), `../import-export/save-load.js`
+(`setStatus`), `./loading-overlay.js` (`showLoadingProgress`,
+`createProgressPacer`, `yieldToPaint`, `hideLoading`), `./rendering.js`
+(`drawAllOverlays`), `../pose/triangulation.js` (`loadAllLazyFrames`),
+`../pose/pose-check-session.js` (`checkSessionPoses`, `describePoseCheck`,
+`nextFlaggedFrame`, `describeFlaggedFrame`, `describeNoFlaggedFrame`).
+
+**Imported by.** `ui/ui-wiring.js` (`#menuCheckPoses`, `#menuNextFlaggedPose`,
+`#menuPrevFlaggedPose`, the `]` / `[` handlers).
+
+**User-facing features.** Tracks ▸ Check Poses; Next / Previous Flagged Pose
+(`]` / `[`).
+
+Covered by `tests/e2e/check-poses-command.mjs` (no session; the real menu item on
+an untracked session — status line, flags, badges, tooltip; nothing tracked,
+nothing moved, not dirty; the Wizard's thresholds read at run time; after a Track
+All that left outliers out; real `]` / `[` presses stepping through exactly the
+planted frames, the end of the list, the menu items, the catalog entries, and no
+check yet) and `tests/test-pose-check.mjs` §11 and §13.
+
 ### ui/track-summary.js
 
 **Purpose.** What the Track All summary box says, DOM-free so the decision tree is
@@ -10152,10 +10505,19 @@ unit-tested in Node (`tests/test-track-summary.mjs`). It gives every outcome
 (switches found, nothing flagged, check not run) a visible next step.
 
 **Key exports.**
-- `summarizeTrackedIdentities(session, {frames, animals, animalsAuto, elapsedMs, fps})`
+- `summarizeTrackedIdentities(session, {frames, animals, animalsAuto, elapsedMs, fps, poses})`
   — frames per identity, frames with any identity, frames with every animal, from
   `session.instanceGroups` (never evicted on a lazy project, so the whole project).
-  An identity listed twice in one frame counts once.
+  An identity listed twice in one frame counts once. `poses` is the 2D pose
+  check's result (`session.poseCheck`), summarized by `summarizePoseCheck`.
+- `summarizePoseCheck(poseCheck)` — the pose check's totals, whether outliers were
+  left out (`excluded`) and a row per camera, or null when it did not run.
+  `planTrackSummary` turns it into the **"2D poses"** stat row: "13 uncommon,
+  3 outliers" of N checked, plus "· outliers not tracked" when they were left out
+  ("None flagged" when clean,
+  "Not checked — too few complete poses to learn from" when no camera could be
+  modelled), with a line per camera — and the untested count — on hover; and,
+  when anything was flagged, a note that the views mark it (? / ✕).
 - `describeSwitchCheck(enabled, res, identities, whyNotRun)` — one check's outcome
   as `{state, switches, encounters, reason, elapsedMs}`, state one of `found` /
   `clear` / `skipped` / `failed` / `cancelled` / `off` / `na` (one identity).
@@ -10559,6 +10921,13 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `setIdSwitchRefresher` (the repaint after the tab fixes a switch) are called
   once at setup, as is `setTrackSummaryNavigator` (`ui/track-summary-modal.js`:
   the Track All summary's Identities samples and maps go to a frame).
+  Tracks ▸ **Check Poses** (`menuCheckPoses`) calls `checkPoses()`
+  (`ui/pose-check-command.js`): the 2D pose check on its own, tracking nothing.
+  Tracks ▸ **Next / Previous Flagged Pose** (`menuNextFlaggedPose` /
+  `menuPrevFlaggedPose`) and their catalog shortcuts **`]`** / **`[`**
+  (`nextFlaggedPose` / `prevFlaggedPose`, `setHandler`) call
+  `gotoFlaggedPose(±1)`; `setPoseCheckNavigator(navigateToFrame)` is called once
+  at setup, beside `setTrackSummaryNavigator`.
 - Color-by toggle: the Tracks / Identity control is in the top toolbar
   (`colorByTracks` / `colorById`; group `aria-label="Color by"`).
   `updateColorByToggle()` reflects `state.colorByIdentity`. Every change goes
@@ -10832,6 +11201,10 @@ and the FPS pill),
 `seekbar-markers.js` (`installSeekbarMarkers`, `seekbarMarkerAt`,
 `describeSwitchMarker`, `setSeekbarMarkerFrames` — the possible-ID-switch ticks:
 the scrub handlers and the tooltip snap to a tick within 5 px),
+`seekbar-pose-flags.js` (`installSeekbarPoseFlags`, `syncSeekbarPoseFlags`,
+`seekbarPoseFlagAt` — the flagged-pose strip: synced from `updateSeekbarVisual`,
+and the scrub handlers and the tooltip snap to its ticks after the ID-switch
+ones),
 `seekbar-ticks.js` (`installSeekbarTicks`, `refreshSeekbarTicks` — the time
 ruler under the seekbar; `updateSeekbarVisual` calls the refresh, a no-op
 unless the frame count or FPS changed),

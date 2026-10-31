@@ -20,6 +20,7 @@ import { shouldIgnoreShortcut } from './keyboard-target.js';
 import { deleteTargetsFromStore, groupMemberTargets, unlinkedTarget } from './custom-delete-ops.js';
 import { nodeTooltipText, setNodeTooltipTarget, hideNodeTooltip } from './node-tooltip.js';
 import { getGroupColor, unlinkedDupIndices, unlinkedBaseColor, wedgeHalfWidth } from './overlays.js';
+import { poseCheckOf, poseTooltipLine } from '../pose/pose-check-session.js';
 
 // ============================================
 // Alt + wheel instance rotation
@@ -1571,9 +1572,12 @@ export class InteractionManager {
         }
         const name = nodeIdx >= 0 ? session.skeleton.nodes[nodeIdx] : undefined;
         if (name == null) return null;
+        // ...and, after Track All, what the 2D pose check made of this prediction's pose.
+        const poseLine = poseTooltipLine(poseCheckOf(session, viewName, inst), session.poseCheck);
         return {
             key: viewName + '|' + frameIdx + '|' + who + '|' + nodeIdx,
-            text: nodeTooltipText(name, session.predictedNodeScore(viewName, frameIdx, inst, nodeIdx)),
+            text: nodeTooltipText(name, session.predictedNodeScore(viewName, frameIdx, inst, nodeIdx)) +
+                (poseLine ? '\n' + poseLine : ''),
             frameIdx: frameIdx,
             color: color || null,
         };

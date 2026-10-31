@@ -31,6 +31,7 @@ import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js
 import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js';
 import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js';
 import { startTrackerWorker } from './tracker-pool.js';
+import { fitSessionPoseModels, createPoseCheckRun, poseCheckExcludes, finishPoseCheckRun } from './pose-check-session.js';
 import { passesDetectionFilter } from './detection-filter-stats.js';
 import { loadAllLazyFrames, sweepLazyFrameWindows, showCalibrationRequiredPopup } from './triangulation.js';
 import { hasRealCalibration } from './placeholder-cameras.js';
@@ -950,9 +951,12 @@ function crossViewHyperparams() {
 }
 
 // Build Map(camName -> Detection[]) for one frame from linked + unlinked
-// instances (honoring the detection filter). Each Detection records whether it
-// came from the unlinked pool so commit can promote it into a group.
-function buildTrackerDetections(frameGroup, cameras, frameIdx, session) {
+// instances (honoring the detection filter, and the 2D pose check when the run
+// has one: `poseRun`, pose/pose-check-session.js — it scores every prediction,
+// and leaves an outlier pose out when the run excludes outliers).
+// Each Detection records whether it came from the unlinked pool so commit can
+// promote it into a group.
+function buildTrackerDetections(frameGroup, cameras, frameIdx, session, poseRun) {
     var minVis = thr('filterMinVisibleNodes');
     var minScore = thr('filterMinInstanceScore');
     var minNode = thr('filterMinMeanNodeScore');
@@ -964,6 +968,7 @@ function buildTrackerDetections(frameGroup, cameras, frameIdx, session) {
         var linked = frameGroup.getInstances(cam.name);
         if (linked) for (var i = 0; i < linked.length; i++) {
             if (!passesDetectionFilter(linked[i], minVis, minScore, minNode, session, cam.name, frameIdx)) continue;
+            if (poseRun && poseCheckExcludes(poseRun, cam.name, linked[i], frameIdx)) continue;
             var dl = new Detection(linked[i], cam, frameIdx, slot++);
             dl.unlinkedId = null;
             dets.push(dl);
@@ -971,6 +976,7 @@ function buildTrackerDetections(frameGroup, cameras, frameIdx, session) {
         var unlinked = frameGroup.getUnlinkedInstances(cam.name);
         if (unlinked) for (var j = 0; j < unlinked.length; j++) {
             if (!passesDetectionFilter(unlinked[j].instance, minVis, minScore, minNode, session, cam.name, frameIdx)) continue;
+            if (poseRun && poseCheckExcludes(poseRun, cam.name, unlinked[j].instance, frameIdx)) continue;
             var du = new Detection(unlinked[j].instance, cam, frameIdx, slot++);
             du.unlinkedId = unlinked[j].id;
             dets.push(du);
@@ -1098,6 +1104,8 @@ function createTrackerRun(session, cameras, maxTargets, identityPool) {
         identityPool: identityPool ? identityPool.slice() : null,
         // The tracker worker (attachTrackerWorker), or null to track inline.
         pool: null, pending: null, committedFi: -Infinity, liveTargets: 0,
+        // The 2D pose check (pose/pose-check-session.js), or null for none.
+        pose: null,
     };
 }
 
@@ -1110,11 +1118,12 @@ function createTrackerRun(session, cameras, maxTargets, identityPool) {
 // identities, groups and 3D are bit-identical to `stepTrackerFrame`'s
 // (tests/e2e/track-all-worker.mjs; tests/e2e/_diag-trackall-ab.mjs on real data).
 
-// The worker's input for one frame: buildTrackerDetections' filter and slot
-// order exactly, minus the Detection — per camera (run order), each passing
-// detection's flat 2D (the pool copies it on submit; `Detection` reads nothing
-// else of its Instance), and, kept here, what commit needs back for each slot.
-function buildTrackerInputs(frameGroup, cameras, frameIdx, session) {
+// The worker's input for one frame: buildTrackerDetections' filter (pose check
+// included) and slot order exactly, minus the Detection — per camera (run
+// order), each passing detection's flat 2D (the pool copies it on submit;
+// `Detection` reads nothing else of its Instance), and, kept here, what commit
+// needs back for each slot.
+function buildTrackerInputs(frameGroup, cameras, frameIdx, session, poseRun) {
     var minVis = thr('filterMinVisibleNodes');
     var minScore = thr('filterMinInstanceScore');
     var minNode = thr('filterMinMeanNodeScore');
@@ -1124,12 +1133,14 @@ function buildTrackerInputs(frameGroup, cameras, frameIdx, session) {
         var linked = frameGroup.getInstances(cam.name);
         if (linked) for (var i = 0; i < linked.length; i++) {
             if (!passesDetectionFilter(linked[i], minVis, minScore, minNode, session, cam.name, frameIdx)) continue;
+            if (poseRun && poseCheckExcludes(poseRun, cam.name, linked[i], frameIdx)) continue;
             xy.push(linked[i]._xy);
             meta.push({ frameIdx: frameIdx, instance: linked[i], unlinkedId: null });
         }
         var unlinked = frameGroup.getUnlinkedInstances(cam.name);
         if (unlinked) for (var j = 0; j < unlinked.length; j++) {
             if (!passesDetectionFilter(unlinked[j].instance, minVis, minScore, minNode, session, cam.name, frameIdx)) continue;
+            if (poseRun && poseCheckExcludes(poseRun, cam.name, unlinked[j].instance, frameIdx)) continue;
             xy.push(unlinked[j].instance._xy);
             meta.push({ frameIdx: frameIdx, instance: unlinked[j].instance, unlinkedId: unlinked[j].id });
         }
@@ -1157,7 +1168,7 @@ async function attachTrackerWorker(session, run) {
 function submitTrackerFrame(session, run, fi) {
     var fg = session.getFrameGroup(fi);
     if (!fg) return undefined;
-    var inp = buildTrackerInputs(fg, run.cameras, fi, session);
+    var inp = buildTrackerInputs(fg, run.cameras, fi, session, run.pose);
     run.pending.set(fi, inp.metas);
     run.pool.submit(fi, inp.xys);
     return run.pool.saturated() ? idleWhile(run.pool.throttle()) : undefined;
@@ -1197,7 +1208,7 @@ function trackRunResult(session, run) {
 function stepTrackerFrame(session, run, fi) {
     var fg = session.getFrameGroup(fi);
     if (!fg) return;
-    var detsByCam = buildTrackerDetections(fg, run.cameras, fi, session);
+    var detsByCam = buildTrackerDetections(fg, run.cameras, fi, session, run.pose);
     run.trk.trackFrame(detsByCam, run.cameras);
     commitTrackedFrame(session, run.trk, fi, run.trackToIdentity, run.identityPool);
 }
@@ -1211,8 +1222,9 @@ function stepTrackerFrame(session, run, fi) {
 // tracking and by the bench/test harnesses that read the return value directly.
 // For a repaint-friendly Track All with a live counter, use
 // `runCrossViewTrackerProgress`.
-export function runCrossViewTracker(session, cameras, frameIndices, propagate, maxTargets, identityPool) {
+export function runCrossViewTracker(session, cameras, frameIndices, propagate, maxTargets, identityPool, poseRun) {
     var run = createTrackerRun(session, cameras, maxTargets, identityPool);
+    run.pose = poseRun || null;
     for (var f = 0; f < frameIndices.length; f++) {
         stepTrackerFrame(session, run, frameIndices[f]);
     }
@@ -1347,7 +1359,14 @@ export async function trackCurrentFrame() {
         // trackIdx/session.tracks are only rewritten by Track All. Drop this
         // frame's prior tracker groups so repeated runs don't stack.
         session.instanceGroups.set(state.currentFrame, []);
-        var lr = runCrossViewTracker(session, trackedCameras, [state.currentFrame], false, effectiveNumAnimals);
+        // The 2D pose check, with the models and thresholds of the last Track All
+        // or Check Poses (it needs the whole session to fit them, and one frame is
+        // not that); whether outliers are left out follows the Tracking Wizard.
+        var pc = session.poseCheck;
+        var poseRun = pc && getTrackingThreshold('poseCheck') > 0
+            ? createPoseCheckRun(pc.models, pc.uncommonAt, pc.outlierAt, getTrackingThreshold('poseExcludeOutliers') > 0) : null;
+        var lr = runCrossViewTracker(session, trackedCameras, [state.currentFrame], false, effectiveNumAnimals,
+            undefined, poseRun);
         noteTrackRun(session);   // Track turns blue (ui/run-buttons.js)
         // Show what tracking produced: the predictions only (User, Reproj, Errors off).
         var predOnly = lr.numTargets > 0 && showPredictedOnly();
@@ -1636,6 +1655,28 @@ async function runTrackingPass(range) {
     }
 
     var stageOpts = { step: STEPS, steps: STEPS };
+
+    // The 2D pose check (pose/pose-check.js): learn each camera's poses from the
+    // session first, so every detection the tracker is offered can be scored —
+    // uncommon poses and outliers are marked, and outliers left out when the
+    // Tracking Wizard says so (`poseExcludeOutliers`, off by default: a garbled pose
+    // is usually still the right animal). Its previous result describes the
+    // detections this pass is about to replace.
+    session.poseCheck = null;
+    var poseRun = null;
+    if (getTrackingThreshold('poseCheck') > 0) {
+        showLoadingProgress('Learning each camera\'s poses', 0, 1, Object.assign({ title: human }, stageOpts));
+        await yieldToPaint();
+        try {
+            poseRun = createPoseCheckRun(fitSessionPoseModels(session, cameras),
+                getTrackingThreshold('poseUncommonZ'), getTrackingThreshold('poseOutlierZ'),
+                getTrackingThreshold('poseExcludeOutliers') > 0);
+        } catch (e) {
+            // The check is an aid: tracking goes ahead without it.
+            console.error('[' + label + '] pose check could not start:', e);
+        }
+    }
+
     showLoadingProgress('Assigning identities', 0, totalFrameCount, Object.assign({ title: human }, stageOpts));   // the card's title, kept to hideLoading
 
     // Drive the CrossViewTracker across the frames and populate IDENTITIES +
@@ -1649,6 +1690,7 @@ async function runTrackingPass(range) {
         // The tracker steps the frames in order — on one worker (pose/tracker-pool.js) while this thread
         // hydrates frames and commits the results, or inline when the worker cannot start.
         run = createTrackerRun(session, cameras, effectiveNumAnimals, identityPool);
+        run.pose = poseRun;
         var onWorker = await attachTrackerWorker(session, run);
         // ...with its CPU line and graph (ui/loading-overlay.js; hideLoading stops it): the worker's busy
         // time plus this thread's, or, inline, this thread alone — one core's share at most.
@@ -1667,6 +1709,7 @@ async function runTrackingPass(range) {
             ? await sweepTrackAllFrames(session, run, onProgress, { start: lo, end: hi })
             : await trackFrameListProgress(session, run, frameIndices, onProgress);
         closeTrackerWorker(run);
+        if (poseRun) session.poseCheck = finishPoseCheckRun(poseRun);
         var trackMs = performance.now() - trackStart;
         noteTrackRun(session);   // Track turns blue (ui/run-buttons.js)
         hideLoading();
@@ -1730,6 +1773,8 @@ async function runTrackingPass(range) {
                     // The recording's rate, as the ID-switch checks read it (measured
                     // from the video when one is loaded), for the real-time multiplier.
                     fps: state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 0),
+                    // The 2D pose check's counts (pose/pose-check-session.js), when it ran.
+                    poses: session.poseCheck || null,
                 };
                 var summaryChecks = {
                     size: describeSwitchCheck(autoSize, checkRes && checkRes.size, lres.numIdentities, noSkeletons),
