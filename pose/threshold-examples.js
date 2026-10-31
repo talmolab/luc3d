@@ -1,5 +1,5 @@
 // pose/threshold-examples.js — the session's own nodes, for the reprojection
-// error threshold card in Settings ▸ Default Triangulation
+// error threshold card in Settings ▸ Triangulation Wizard
 // (ui/threshold-examples-panel.js). DOM-free; Node-tested
 // (tests/test-threshold-examples.mjs).
 //
