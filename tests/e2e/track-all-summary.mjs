@@ -29,6 +29,8 @@
  *     Triangulation, and nothing is triangulated. The panel's Triangulate All is
  *     on that panel only; with an edit pending it reads "Apply & Triangulate All"
  *     and stores the edit before running; it closes Settings and runs Triangulate All.
+ *     A re-run keeps existing 3D only while the threshold and cameras it was solved
+ *     under still stand.
  *  4. A second Track All replaces the box rather than stacking another.
  *  5. Track Frame Range does not open it.
  * Fixture B (one camera sees nothing): nothing is matched across views.
@@ -325,7 +327,7 @@ try {
     check(tb.shown && !tb.disabled && tb.text === 'Triangulate All', `the panel offers Triangulate All (${JSON.stringify(tb)})`);
     await page.click('.settings-nav-item:has-text("Temporal Smoothing")');
     check(!(await triBtnInfo()).shown, '…on that panel only');
-    await page.click('.settings-nav-item:has-text("Default Triangulation")');
+    await page.click('.settings-nav-item[data-panel="triangulation"]');
     // An edit pending: it says so, and is stored by the time the toolbar button runs.
     const stored3 = () => page.evaluate(async () => (await import('/ui/settings.js')).getDefaultTriangulationMethod());
     const before3 = await stored3();
@@ -354,6 +356,44 @@ try {
         .catch(() => {});
     const st3 = await statusText();
     check(TRI.test(st3) && !(await page.$('.settings-overlay')), `…and ran Triangulate All, Settings closed ("${st3.slice(0, 80)}")`);
+
+    // A re-run keeps 3D only while the settings it was solved under still stand.
+    const provenance3 = async () => {
+        await page.waitForFunction(() => /kept existing 3D/.test(document.getElementById('statusText').textContent), null, { timeout: 60000 });
+        const m = /([\d,]+) kept existing 3D, [\d,]+ solved via Refined, ([\d,]+) via DLT/.exec(await statusText());
+        return m && { kept: +m[1].replace(/,/g, ''), solved: +m[2].replace(/,/g, '') };
+    };
+    const clearStatus3 = () => page.evaluate(() => { document.getElementById('statusText').textContent = ''; });
+    const rerun3 = async () => {
+        await clearStatus3();
+        await page.evaluate(() => document.getElementById('tbTriangulateAll').click());
+        return provenance3();
+    };
+    const first3 = await rerun3();
+    check(first3 && first3.kept > 0 && first3.solved === 0, `nothing changed: the re-run keeps every group (${JSON.stringify(first3)})`);
+    const N3 = first3.kept;
+    await page.evaluate(async () => (await import('/ui/settings-modal.js')).showSettingsModal('triangulation'));
+    await page.fill('.tri-thr [data-try="threshold"] .fig-num', '25');
+    await page.locator('.tri-thr button', { hasText: /^Use/ }).first().click();
+    check((await triBtnInfo()).text === 'Apply & Triangulate All', 'a new threshold is an edit pending');
+    await clearStatus3();
+    await page.click(triBtn);
+    const thr3 = await provenance3();
+    check(thr3 && thr3.kept === 0 && thr3.solved === N3, `a changed threshold re-solves every group through the panel's button (${JSON.stringify(thr3)})`);
+    const same3 = await rerun3();
+    check(same3 && same3.kept === N3 && same3.solved === 0, `…and the next run with that threshold keeps them (${JSON.stringify(same3)})`);
+    await page.evaluate(async () => (await import('/ui/settings.js')).setCameraWeights({ c2: 0 }));
+    const cam3 = await rerun3();
+    check(cam3 && cam3.kept === 0, `leaving a camera out re-solves too (${JSON.stringify(cam3)})`);
+    await page.evaluate(async () => (await import('/ui/settings.js')).setCameraWeights({}));
+    await rerun3();
+    // What a group read from a file looks like: the settings it was solved under are not saved.
+    await page.evaluate(() => {
+        for (const list of window.__lucid.state.session.instanceGroups.values()) for (const g of list) g.solveSettings = undefined;
+    });
+    const file3 = await rerun3();
+    check(file3 && file3.kept === 0 && file3.solved === N3, `3D with no record of its settings is re-solved (${JSON.stringify(file3)})`);
+    await page.evaluate(async () => (await import('/ui/settings.js')).setTrackingThresholds({ reprojErrorThreshold: 0 }));
 
     // ---- 4. a second Track All replaces the box ---------------------------------------------
     await page.evaluate(async () => {

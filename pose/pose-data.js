@@ -1573,6 +1573,14 @@ export class InstanceGroup {
          */
         this.triangulationMethod = undefined;
         /**
+         * The solve settings `points3d` was produced under
+         * (`triangulationSettingsKey`, pose/triangulation.js): `adoptPrior3d` only
+         * reuses 3D solved under the settings in force now. In memory only, so 3D
+         * read from a file has none and is re-solved rather than trusted.
+         * @type {string|undefined}
+         */
+        this.solveSettings = undefined;
+        /**
          * @type {Map<string, Instance>} camera name -> reprojected instance.
          * Starts as the shared read-only `NO_REPROJECTED_INSTANCES`; write
          * through `addReprojectedInstance`.
