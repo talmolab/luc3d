@@ -1,16 +1,17 @@
 // ui/settings-modal.js
 // Builds and shows the LUCID "Settings" modal.
 //
-// The modal has four panels (selected via a left nav): the default
-// triangulation method, an editable list of keyboard shortcuts, the Tracking
+// The modal has four panels (selected via a left nav): the Triangulation Wizard
+// (default method), an editable list of keyboard shortcuts, the Tracking
 // Wizard, and Temporal Smoothing (the post-triangulation 3D filter's
 // hyperparameters, luc3d #134). All edits are kept in a local working
 // state object and the visual DOM only — nothing is committed to settings.js
 // until the user clicks Apply. Apply keeps the modal open and its button reads
 // "Applied ✓" until the next edit. Cancel / × / backdrop / Escape discard what
-// has not been applied; with nothing pending, Cancel reads "Close". The Default
-// Triangulation panel's footer also has Triangulate All: it applies what is
-// pending, closes the modal and clicks the toolbar button.
+// has not been applied; with nothing pending, Cancel reads "Close". The
+// Triangulation Wizard panel's footer also says what will be used (method and
+// reprojection error threshold, with what each was if changed) and has Triangulate
+// All: it applies what is pending, closes the modal and clicks the toolbar button.
 //
 // Styling lives in a separate CSS file; this module only assigns the agreed
 // class names. Only one modal instance may exist at a time.
@@ -44,16 +45,16 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=79eeb337f123';
-import { getActiveSession, state, timeline } from './app-state.js?v=79eeb337f123';
-import { drawAllOverlays } from './rendering.js?v=79eeb337f123';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=79eeb337f123';
-import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=79eeb337f123';
-import { buildThresholdExamples } from './threshold-examples-panel.js?v=79eeb337f123';
-import { installModalGeometry } from './modal-geometry.js?v=79eeb337f123';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=79eeb337f123';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=79eeb337f123';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=79eeb337f123';
+} from './settings.js?v=64d208b428b1';
+import { getActiveSession, state, timeline } from './app-state.js?v=64d208b428b1';
+import { drawAllOverlays } from './rendering.js?v=64d208b428b1';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=64d208b428b1';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=64d208b428b1';
+import { buildThresholdExamples } from './threshold-examples-panel.js?v=64d208b428b1';
+import { installModalGeometry } from './modal-geometry.js?v=64d208b428b1';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=64d208b428b1';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=64d208b428b1';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=64d208b428b1';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -346,7 +347,7 @@ export function showSettingsModal(initialPanel) {
     // Smooth); Keyboard Shortcuts is not a step, so it goes last.
     const NAV_ITEMS = [
         { panel: 'wizard', label: 'Tracking Wizard' },
-        { panel: 'triangulation', label: 'Default Triangulation' },
+        { panel: 'triangulation', label: 'Triangulation Wizard' },
         { panel: 'smoothing', label: 'Temporal Smoothing' },
         { panel: 'keyboard', label: 'Keyboard Shortcuts' },
     ];
@@ -370,7 +371,7 @@ export function showSettingsModal(initialPanel) {
     triPanel.dataset.panel = 'triangulation';
     const triTitle = document.createElement('div');
     triTitle.className = 'settings-panel-title';
-    triTitle.textContent = 'Default Triangulation';
+    triTitle.textContent = 'Triangulation Wizard';
     triPanel.appendChild(triTitle);
 
     // The two methods are chosen by clicking their diagram cards
@@ -862,6 +863,34 @@ export function showSettingsModal(initialPanel) {
         });
     }
     footer.appendChild(sizeBtns);
+    // Only on the Triangulation Wizard panel (`selectPanel`): what Triangulate All
+    // will use, whatever the panel is scrolled to. A value not yet applied is lit,
+    // with what it was.
+    const triReadout = document.createElement('div');
+    triReadout.className = 'settings-tri-readout';
+    triReadout.setAttribute('aria-live', 'polite');
+    function addTriReadoutRow(name) {
+        const row = document.createElement('div');
+        row.className = 'settings-tri-readout-row';
+        row.appendChild(document.createTextNode(name + ': '));
+        const value = document.createElement('strong');
+        row.appendChild(value);
+        const was = document.createElement('span');
+        was.className = 'settings-tri-readout-was';
+        row.appendChild(was);
+        triReadout.appendChild(row);
+        return function (current, stored) {
+            const changed = current !== stored;
+            row.classList.toggle('is-changed', changed);
+            value.textContent = current;
+            was.textContent = changed ? ' (was ' + stored + ')' : '';
+        };
+    }
+    const paintTriMethod = addTriReadoutRow('Method');
+    const paintTriThreshold = addTriReadoutRow('Reprojection error threshold');
+    const methodName = function (method) { return method === 'ba' ? 'Refined' : 'DLT'; };
+    const thresholdName = function (px) { return px > 0 ? px + ' px' : 'off'; };
+    footer.appendChild(triReadout);
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'settings-btn settings-btn-cancel';
     cancelBtn.textContent = 'Cancel';
@@ -870,7 +899,7 @@ export function showSettingsModal(initialPanel) {
     applyBtn.textContent = 'Apply';
     footer.appendChild(cancelBtn);
     footer.appendChild(applyBtn);
-    // Only on the Default Triangulation panel (`selectPanel`). Same as the toolbar
+    // Only on the Triangulation Wizard panel (`selectPanel`). Same as the toolbar
     // button, so it is off when that one is, and with no project to triangulate.
     const toolbarTriangulate = document.getElementById('tbTriangulateAll');
     const triangulateBtn = document.createElement('button');
@@ -891,6 +920,9 @@ export function showSettingsModal(initialPanel) {
         applyBtn.textContent = !pending && appliedOnce ? 'Applied ✓' : 'Apply';
         cancelBtn.textContent = pending ? 'Cancel' : 'Close';
         triangulateBtn.textContent = pending ? 'Apply & Triangulate All' : 'Triangulate All';
+        const stored = JSON.parse(storedSnapshot);
+        paintTriMethod(methodName(working.method), methodName(stored.method));
+        paintTriThreshold(thresholdName(working.thresholds.reprojErrorThreshold), thresholdName(stored.thresholds.reprojErrorThreshold));
     }
     onWorkingEdit = paintFooter;
     paintFooter();
@@ -907,6 +939,7 @@ export function showSettingsModal(initialPanel) {
         if (name === 'triangulation') thrExamples.start();
         thrExamples.setActive(name === 'triangulation');
         triangulateBtn.style.display = name === 'triangulation' ? '' : 'none';
+        triReadout.style.display = name === 'triangulation' ? '' : 'none';
         writeLastPanel(name);
     }
     NAV_ITEMS.forEach(function (item) {

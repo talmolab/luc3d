@@ -8,9 +8,9 @@
 //
 // Extracted from app.js per the consolidated Pass 3 plan, Module 13.
 
-import { noteProgress } from './progress-delta.js?v=79eeb337f123';
-import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=79eeb337f123';
-import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=79eeb337f123';
+import { noteProgress } from './progress-delta.js?v=64d208b428b1';
+import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=64d208b428b1';
+import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=64d208b428b1';
 import {
     triangulateAndReproject,
     frameHasGroupedUserInstances,
@@ -26,34 +26,34 @@ import {
     triangulationSettingsKey,
     triangulationMethodLabel,
     dropAllDerivedTriangulationState,
-} from '../pose/triangulation.js?v=79eeb337f123';
-import { Viewport3D } from './viewport3d.js?v=79eeb337f123';
-import { getTrackColor, getGroupColor } from './overlays.js?v=79eeb337f123';
-import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=79eeb337f123';
-import { updateInfoPanel } from './info-panel.js?v=79eeb337f123';
-import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=79eeb337f123';
-import { showLoadingProgress, yieldToPaint } from './loading-overlay.js?v=79eeb337f123';
-import { createGroupSolver } from '../pose/triangulation-pool.js?v=79eeb337f123';
+} from '../pose/triangulation.js?v=64d208b428b1';
+import { Viewport3D } from './viewport3d.js?v=64d208b428b1';
+import { getTrackColor, getGroupColor } from './overlays.js?v=64d208b428b1';
+import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=64d208b428b1';
+import { updateInfoPanel } from './info-panel.js?v=64d208b428b1';
+import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=64d208b428b1';
+import { showLoadingProgress, yieldToPaint } from './loading-overlay.js?v=64d208b428b1';
+import { createGroupSolver } from '../pose/triangulation-pool.js?v=64d208b428b1';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
     findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
-} from '../import-export/file-io.js?v=79eeb337f123';
+} from '../import-export/file-io.js?v=64d208b428b1';
 
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from '../pose/initialization.js?v=79eeb337f123';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=79eeb337f123';
-import { fileSystemAccessHint } from './browser-hints.js?v=79eeb337f123';
-import { noteTriangulateRun } from '../pose/run-state.js?v=79eeb337f123';
+import { update3DViewport } from '../pose/initialization.js?v=64d208b428b1';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=64d208b428b1';
+import { fileSystemAccessHint } from './browser-hints.js?v=64d208b428b1';
+import { noteTriangulateRun } from '../pose/run-state.js?v=64d208b428b1';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
 // private copies of all four and had silently drifted apart (a 2x bitrate floor
 // gap at the smallest tier, and two disagreeing level tables).
 import {
     RES_PRESETS, bitrateFor, estimatedBytes, h264CodecFor, shouldStreamToDisk,
-} from './overlay-export-layout.js?v=79eeb337f123';
+} from './overlay-export-layout.js?v=64d208b428b1';
 
 // ============================================
 // Group by Track & Triangulate All
@@ -288,7 +288,7 @@ async function sweepTriangulationFrames(session, onFrame, opts) {
  * @param {'ba'|'dlt'} [explicitMethod] - the method the user explicitly asked
  *   for, when they did. "Triangulate All ▸ DLT" routes here and passes `'dlt'`,
  *   so an explicit pick stays honest. Omitted (Tracks ▸ Group by Identity) means
- *   "use my configured default" — Settings ▸ Default Triangulation. Either way the
+ *   "use my configured default" — Settings ▸ Triangulation Wizard. Either way the
  *   resulting method GOVERNS the whole sweep: with Bundle Adjustment selected,
  *   every group ends up with BA 3D, including groups that already held valid DLT
  *   3D with unchanged membership (see `adoptPrior3d`).
@@ -320,7 +320,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
     }
 
     // THE governing method for this whole sweep: an explicit user pick if there
-    // was one, else Settings ▸ Default Triangulation. Named in the progress text
+    // was one, else Settings ▸ Triangulation Wizard. Named in the progress text
     // and the final status line so the method (and therefore its cost — BA runs
     // ~3x-6x DLT per group) is visible rather than a surprise.
     var prefMethod = explicitMethod
@@ -2587,7 +2587,7 @@ async function runMultiFrameTriangulation(startFrame, endFrame, overlayEl) {
     var progressLabel = document.getElementById('tfProgressLabel');
     var progressFill = document.getElementById('tfProgressFill');
 
-    // THE method for the whole range: Settings ▸ Default Triangulation, as for
+    // THE method for the whole range: Settings ▸ Triangulation Wizard, as for
     // Group by Track. This modal has no method picker, so the configured default
     // is the user's instruction; it used to pass none, which solved with DLT
     // whatever the setting said. Named in the progress, summary and status text

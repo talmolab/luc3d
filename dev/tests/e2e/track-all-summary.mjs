@@ -10,7 +10,7 @@
  *     fps and real-time multiplier), a row per
  *     identity, the body-size check "No close encounters to check" with its own
  *     time, the image check "Not run" (no time), and a Next step that says size cannot separate similar animals —
- *     with Default Triangulation… as the focused primary button and "Check by images…"
+ *     with Triangulation Wizard… as the focused primary button and "Check by images…"
  *     beside it.
  *  2. While it is open the app's shortcuts do not act under it (`p` leaves
  *     Predicted alone); Esc closes it, and the shortcut works again after.
@@ -176,8 +176,8 @@ try {
     check(image && image.text === 'Not run' && image.time === '', `image check row, with no time: "${image && image.text}"`);
     check(s.headline === 'No ID switches were flagged.', `next-step headline: "${s.headline}"`);
     check(/similar size/.test(s.caveat), `says body size cannot separate similar animals: "${s.caveat}"`);
-    check(s.steps.some(t => /Default Triangulation/.test(t) && /Triangulate All/.test(t)), `next steps say to choose, then triangulate: ${JSON.stringify(s.steps)}`);
-    check(JSON.stringify(s.buttons) === JSON.stringify(['Check by images…', 'Close', 'Default Triangulation…']),
+    check(s.steps.some(t => /Triangulation Wizard/.test(t) && /Triangulate All/.test(t)), `next steps say to choose, then triangulate: ${JSON.stringify(s.steps)}`);
+    check(JSON.stringify(s.buttons) === JSON.stringify(['Check by images…', 'Close', 'Triangulation Wizard…']),
         `buttons: ${JSON.stringify(s.buttons)}`);
     check(s.focused === 'trackSummaryPrimary', `the recommended step is focused (${s.focused})`);
     check(/^Assigned 2 identities/.test(await statusText()), 'the status line still carries the pass\'s message');
@@ -243,7 +243,7 @@ try {
     check(s.checks.every(c => c.text === 'Not run'), `after Clear, both checks read "Not run": ${JSON.stringify(s.checks.map(c => c.text))}`);
 
     // ---- 2c. a check run from the box comes back to the box ------------------------------------
-    check(JSON.stringify(s.buttons) === JSON.stringify(['Check by body size', 'Check by images…', 'Close', 'Default Triangulation…']),
+    check(JSON.stringify(s.buttons) === JSON.stringify(['Check by body size', 'Check by images…', 'Close', 'Triangulation Wizard…']),
         `precondition: the reopened box offers both checks (${JSON.stringify(s.buttons)})`);
     const onTab = () => page.evaluate(() => !!document.querySelector('#tabIdSwitches.active'));
     const leaveTab = () => page.evaluate(() => document.querySelector('.panel-tab:not([data-tab="tabIdSwitches"])').click());
@@ -260,7 +260,7 @@ try {
     let szc = s.checks.find(c => c.cue === 'size'), imc = s.checks.find(c => c.cue === 'image');
     check(s.count === 1 && szc.text === 'No close encounters to check' && /is-clear/.test(szc.cls) && /^(<0\.1|\d+(\.\d)?) s$/.test(szc.time),
         `"Check by body size" ends back in the box, its row filled in with its time: "${szc.text}" (${szc.time})`);
-    check(imc.text === 'Not run' && JSON.stringify(s.buttons) === JSON.stringify(['Check by images…', 'Close', 'Default Triangulation…']),
+    check(imc.text === 'Not run' && JSON.stringify(s.buttons) === JSON.stringify(['Check by images…', 'Close', 'Triangulation Wizard…']),
         `…the image check still not run and still offered (${JSON.stringify(s.buttons)})`);
     check(JSON.stringify(s.ids) === JSON.stringify(first.ids) && s.stats[1] === first.stats[1] && s.stats[3] === first.stats[3],
         '…with the counts and tracking time re-shown');
@@ -287,7 +287,7 @@ try {
     imc = s.checks.find(c => c.cue === 'image');
     check(s.count === 1 && imc.text === 'No close encounters to check' && /is-clear/.test(imc.cls) && /s$/.test(imc.time),
         `"Check by images…" ends back in the box, its row filled in: "${imc.text}" (${imc.time})`);
-    check(s.headline === 'Neither check flagged an ID switch.' && JSON.stringify(s.buttons) === JSON.stringify(['Close', 'Default Triangulation…']),
+    check(s.headline === 'Neither check flagged an ID switch.' && JSON.stringify(s.buttons) === JSON.stringify(['Close', 'Triangulation Wizard…']),
         `…the next step follows from it ("${s.headline}", ${JSON.stringify(s.buttons)})`);
     check(s.focused === 'trackSummaryPrimary' && !(await onTab()), '…its primary focused, and the tab not opened');
     check(/^Check ID Switches \(images\): nothing flagged/.test(await statusText()), 'the status line still reports the check');
@@ -305,7 +305,7 @@ try {
         (await import('/ui/id-switch-modal.js')).refreshIdSwitchPanel(); });
     check(!(await tab()).button, 'a session without a Track All has no button');
 
-    // ---- 3. Enter presses the primary: Default Triangulation opens, nothing runs -------------
+    // ---- 3. Enter presses the primary: Triangulation Wizard opens, nothing runs -------------
     await page.evaluate(async () => { await window.__buildTrackable('A2'); await (await import('/pose/tracker.js')).trackAll(); });
     check((await summary()).focused === 'trackSummaryPrimary', 'precondition: summary open with its primary focused');
     const st3Before = await statusText();
@@ -316,7 +316,7 @@ try {
         return { open: !!o, panel: panel && panel.dataset.panel, triBlue: document.getElementById('tbTriangulateAll').classList.contains('active') };
     });
     check((await summary()).count === 0, 'Enter closed the summary');
-    check(shown3.open && shown3.panel === 'triangulation', `…and opened Settings on Default Triangulation (${JSON.stringify(shown3)})`);
+    check(shown3.open && shown3.panel === 'triangulation', `…and opened Settings on Triangulation Wizard (${JSON.stringify(shown3)})`);
     check(!shown3.triBlue && (await statusText()) === st3Before, '…without triangulating');
     const triBtn = '.settings-btn-triangulate';
     const triBtnInfo = () => page.evaluate(sel => {

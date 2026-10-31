@@ -1,5 +1,5 @@
 /**
- * triangulation-threshold-figure.mjs — Settings ▸ Default Triangulation shows
+ * triangulation-threshold-figure.mjs — Settings ▸ Triangulation Wizard shows
  * the reprojection error threshold on the four cameras of its sketches, and
  * trying a value there never changes a setting (ui/triangulation-methods-figure.js,
  * ui/figure-try-controls.js; the keep/drop rule and the numbers are pinned to the
