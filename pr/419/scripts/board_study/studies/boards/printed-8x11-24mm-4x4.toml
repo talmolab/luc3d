@@ -1,9 +1,0 @@
-# The lab's printed 8 x 11 ChArUco ("charuco_8x11x4.toml"): 24 mm squares, 18.75 mm markers, DICT_4X4_1000.
-board_type = "charuco"
-board_x = 8
-board_y = 11
-square_length = 24.0
-marker_length = 18.75
-marker_bits = 4
-dict_size = 1000
-name = "printed-8x11-24mm-4x4"
