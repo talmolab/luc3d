@@ -24,14 +24,15 @@
  * Depends on: pose/tracker.js (the run itself), ui/app-state.js, save-load.js.
  */
 
-import { state, getActiveSession } from './app-state.js?v=17e9b3860106';
-import { setStatus } from '../import-export/save-load.js?v=17e9b3860106';
-import { getNodeWeight, updateNodeWeights, getTrackingThresholdDefs, updateTrackingThresholds } from './settings.js?v=17e9b3860106';
-import { buildNodeWeightFields, buildImageCheckFields, IMAGE_CHECK_IDS } from './track-setup-modal.js?v=17e9b3860106';
+import { state, getActiveSession } from './app-state.js?v=2ab40f313884';
+import { setStatus } from '../import-export/save-load.js?v=2ab40f313884';
+import { getNodeWeight, updateNodeWeights, getTrackingThresholdDefs, updateTrackingThresholds } from './settings.js?v=2ab40f313884';
+import { buildNodeWeightFields, buildImageCheckFields, IMAGE_CHECK_IDS } from './track-setup-modal.js?v=2ab40f313884';
 import {
     trackFrameRange, trackableFrameBounds,
     getTrackerNumAnimals, setTrackerNumAnimals,
-} from '../pose/tracker.js?v=17e9b3860106';
+} from '../pose/tracker.js?v=2ab40f313884';
+import { hasRealCalibration } from '../pose/placeholder-cameras.js?v=2ab40f313884';
 
 // Frames pre-filled into the End field, measured from the current frame. The
 // feature is for narrow windows around a suspected switch, so the default is a
@@ -77,6 +78,12 @@ export function showTrackRangeModal(opts) {
     var session = getActiveSession();
     if (!session || !session.cameras || session.cameras.length === 0) {
         setStatus('No session with cameras loaded', 'error');
+        return;
+    }
+    // Placeholder cameras only (no calibration loaded): tracking would refuse
+    // after the dialog (runTrackingPass), so say so before opening it.
+    if (!hasRealCalibration(session)) {
+        setStatus('Tracking needs a calibration — load one with File \u2192 Load Calibration', 'error');
         return;
     }
     var bounds = trackableFrameBounds(session);

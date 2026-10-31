@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=17e9b3860106';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=2ab40f313884';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -421,9 +421,9 @@ const TRACKING_THRESHOLDS = [
     {
         // A new id, not 'imageCheckThreshold': the score's scale changed (2026-10-09, -4..+4 instead of summed
         // log-probabilities), and an old saved -25 would otherwise be clamped to -4 and flag almost nothing.
-        id: 'imageChangeThreshold', label: 'Image check: flag threshold', default: -0.8,
+        id: 'imageChangeThreshold', label: 'Image check: flag threshold', default: -1,
         min: -4, max: 0, step: 0.1,
-        desc: 'A contact is a possible switch when its score falls below this. The score compares how each animal looks just before and just after the contact: about +2 means each still looks like itself, about -2 that they look like each other, near 0 that they cannot be told apart there. Closer to 0 catches more but flags more clean contacts: over 8 proofread or tail-marked recordings (1 h 45 min), -0.8 caught 10 of 12 real relabels with 2 false marks; -0.5 caught the same with 6; -1.2 caught 8 with none.',
+        desc: 'A contact is a possible switch when its score falls below this. The score compares how each animal looks just before and just after the contact: about +2 means each still looks like itself, about -2 that they look like each other, near 0 that they cannot be told apart there. Closer to 0 catches more but flags more clean contacts: over 24 proofread or tail-marked recordings (4 h 30 min), -1 caught 25 label changes with 1 false mark; -0.8 caught the same with 4; -1.2 caught 24 with none.',
     },
     {
         id: 'imageCheckHz', label: 'Image check: crops per second', default: 2,
@@ -447,8 +447,8 @@ const TRACKING_THRESHOLDS = [
     },
     {
         id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 0,
-        min: 0, max: 500, step: 1,
-        desc: 'Robust triangulation: after an initial 3D solve, drop any 2D node whose reprojection error in a view exceeds this many pixels, then re-triangulate that node from the remaining reliable views. A node left with fewer than 2 reliable views is dropped from 3D. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless.',
+        min: 0, max: 640, step: 1,
+        desc: 'Robust triangulation: after the 3D solve, if a node\'s reprojection error in any view (the distance on that view\'s 2D image between the prediction and the reprojection) is over this many pixels, the view that misses by most is dropped for that node and the node is re-triangulated from the rest; this repeats while more than 2 views are left. A node whose last 2 views still miss by more gets no 3D point. 100 to 15 px is the recommended range: lower can drop good views too. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless. Settings ▸ Triangulation Wizard draws it.',
     },
 ];
 
@@ -533,7 +533,7 @@ export const SMOOTHING_PARAMS = [
     {
         id: 'smoothGaussianWindow', label: 'Gaussian window (frames)', default: 0,
         min: 0, max: 101, step: 2,
-        desc: 'Stage 2, over time, applied to the median\'s output. A weighted average of each node\'s x, y and z over this many frames, with sigma = (window-1)/6, so the window spans +/-3 sigma and the current frame counts most. Removes broadband jitter. Coerced to the next odd value. 0 = off.',
+        desc: 'Stage 2, over time, applied to the median\'s output. A weighted average of each node\'s x, y and z over this many frames, with sigma = (window-1)/6, so the window spans +/-3 sigma and the current frame counts most. Removes broadband jitter. 3 barely changes anything (each frame keeps about 98% of its own value); 5 is the smallest window that smooths. Coerced to the next odd value. 0 = off.',
     },
     {
         id: 'smoothMaxGap', label: 'Max gap to smooth across (frames)', default: 5,
@@ -607,6 +607,18 @@ export function setTrackingThresholds(map) {
     }
     _settings.trackingThresholds = next;
     persist();
+    for (var i = 0; i < _thresholdListeners.length; i++) {
+        try { _thresholdListeners[i](); } catch (e) { /* ignore */ }
+    }
+}
+
+// Told after every commit of the thresholds, so a control outside Settings can
+// show them (the Triangulate menu's Reprojection error field). A listener that
+// throws must not stop the others.
+var _thresholdListeners = [];
+
+export function onTrackingThresholdsChange(fn) {
+    if (typeof fn === 'function') _thresholdListeners.push(fn);
 }
 
 // Commit SOME thresholds (Track All's first-use dialog: the image check's

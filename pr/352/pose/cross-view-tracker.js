@@ -130,6 +130,8 @@
  *   - The 3D term ignores the time gap (Δt forced to 0 in the reference).
  *   - 3D velocity is zero (no motion prediction); re-triangulation is plain DLT
  *     over all of a target's (now freshness-filtered) per-view detections.
+ *     That is the 3D used for MATCHING. A group committed from the target
+ *     carries the 3D of its members only — see "WHAT GETS COMMITTED" below.
  *
  * Depends on: pose/triangulation.js, reused directly by passing the bare
  * extrinsic + normalized points.
@@ -157,6 +159,22 @@
  * and the pixels, or of `points3d`, and never of absolute world coordinates.
  * Note this path calls `triangulatePoints` (DLT) unconditionally — the
  * Settings "Refined" / `ba` method does NOT reach the tracker.
+ *
+ * ## WHAT GETS COMMITTED: THE MEMBERS' 3D, NOT THE TARGET'S
+ *
+ * `commitTrackedFrame` (pose/tracker.js) turns a target into an InstanceGroup
+ * whose members are the target's detections FROM THE FRAME BEING COMMITTED. A
+ * camera that did not match the target this frame still holds its old
+ * detection (up to `stale` frames), and `target.points3d` fuses it in — so for
+ * a moving animal the target's 3D is pulled toward where it was, and the saved,
+ * exported and drawn pose disagreed with the reprojection error the draw path
+ * shows (solved from the members). That stays for matching, which the cost
+ * weights were tuned against; the group gets `membersPoints3d(target, frameIdx)`,
+ * the same DLT over its members alone (or `target.points3d` itself when there
+ * is no stale view, so the common case is bit-identical). Measured on the six
+ * proofread SLAP sessions: 30% of committed groups held a stale view, and their
+ * nodes moved by a median 1.0 mm, p99 135 mm. Identities do not change — the
+ * tracker never reads a group's 3D back.
  */
 
 // From the core, not ./triangulation.js (which re-exports them): that module pulls in
@@ -170,8 +188,8 @@ import {
     hungarianAlgorithm,
     computeFundamentalMatrix,
     epipolarErrorMatrix,
-} from './triangulation-core.js?v=17e9b3860106';
-import { points3dNodeCount, readPoint3d } from './pose-data.js?v=17e9b3860106';
+} from './triangulation-core.js?v=2ab40f313884';
+import { points3dNodeCount, readPoint3d } from './pose-data.js?v=2ab40f313884';
 
 // ---------------------------------------------------------------------------
 // Normalized-coordinate helpers
@@ -279,8 +297,8 @@ Target.prototype._deferDetection = function (det) {
 
 // `matchReproj` (px, 0 = off) is the tracker's: with it, `match3d` — what the
 // next frame is matched against — is solved again with the reprojection check
-// (`checkedPoints3d`). `points3d`, what Track All writes to the group, is the
-// plain DLT either way.
+// (`checkedPoints3d`). `points3d` is the plain DLT either way, and what Track
+// All writes to the group is the plain DLT of its members (`membersPoints3d`).
 Target.prototype._retriangulate = function (matchReproj) {
     var dets = Array.from(this.detsByCam.values());
     if (dets.length < 2) {
@@ -290,17 +308,50 @@ Target.prototype._retriangulate = function (matchReproj) {
         if (dets.length === 1 && this.points3d == null) this.points3d = null;
         return;
     }
+    var o = detectionObservations(dets);
+    this.points3d = triangulatePoints(o.allObs, o.exts);   // DLT, world coords
+    this.match3d = matchReproj > 0
+        ? checkedPoints3d(this.points3d, o.allObs, o.exts, dets, matchReproj)
+        : null;
+};
+
+// The DLT inputs for `dets`, in the tracker's convention: per node, each
+// Detection's normalized point, against its camera's bare extrinsic [R|t].
+function detectionObservations(dets) {
     var exts = dets.map(function (d) { return d.cam.extrinsicMatrix; });
     var nNodes = dets[0].pointsNorm.length;
     var allObs = [];
     for (var k = 0; k < nNodes; k++) {
         allObs.push(dets.map(function (d) { return d.pointsNorm[k]; }));
     }
-    this.points3d = triangulatePoints(allObs, exts);   // DLT, world coords
-    this.match3d = matchReproj > 0
-        ? checkedPoints3d(this.points3d, allObs, exts, dets, matchReproj)
-        : null;
-};
+    return { allObs: allObs, exts: exts };
+}
+
+/**
+ * The 3D a group committed from `target` at `frameIdx` carries: solved from
+ * that frame's detections only, the ones `commitTrackedFrame` makes the group's
+ * members (`det.frameIdx === frameIdx`). See "WHAT GETS COMMITTED" in the header
+ * for why `target.points3d` is not that when the target holds a stale view.
+ *
+ * No stale view: returns `target.points3d` itself, so the common case stays bit
+ * for bit what it was. Otherwise: the plain DLT of the members alone, in
+ * `_retriangulate`'s convention, so the frame rule holds. Fewer than two
+ * members ⇒ null. `match3d` (the reprojection-checked solve) is for matching
+ * only and never reaches a group, as before.
+ *
+ * A function rather than a `Target` method so plain-object targets work (tests
+ * drive `commitTrackedFrame` with them).
+ */
+export function membersPoints3d(target, frameIdx) {
+    var members = [], stale = false;
+    target.detsByCam.forEach(function (d) {
+        if (d.frameIdx === frameIdx) members.push(d); else stale = true;
+    });
+    if (!stale) return target.points3d;
+    if (members.length < 2) return null;
+    var o = detectionObservations(members);
+    return triangulatePoints(o.allObs, o.exts);
+}
 
 // The target's 3D the cost terms read: the checked solve when there is one.
 function matchPoints3d(target) {

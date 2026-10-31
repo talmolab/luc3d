@@ -10,7 +10,7 @@
  *     fps and real-time multiplier), what the 2D pose check flagged, a row per
  *     identity, the body-size check "No close encounters to check" with its own
  *     time, the image check "Not run" (no time), and a Next step that says size cannot separate similar animals —
- *     with Triangulate All as the focused primary button and "Check by images…"
+ *     with Triangulation Wizard… as the focused primary button and "Check by images…"
  *     beside it.
  *  2. While it is open the app's shortcuts do not act under it (`p` leaves
  *     Predicted alone); Esc closes it, and the shortcut works again after.
@@ -25,7 +25,12 @@
  *     "Check by images…" cancelled with Esc reopens it reading "Cancelled" and
  *     still offering the check; run again, it reopens with the image row filled
  *     in and "Neither check flagged an ID switch." The tab is never opened.
- *  3. Enter presses the focused primary: the box closes and Triangulate All runs.
+ *  3. Enter presses the focused primary: the box closes, Settings opens on Default
+ *     Triangulation, and nothing is triangulated. The panel's Triangulate All is
+ *     on that panel only; with an edit pending it reads "Apply & Triangulate All"
+ *     and stores the edit before running; it closes Settings and runs Triangulate All.
+ *     A re-run keeps existing 3D only while the threshold and cameras it was solved
+ *     under still stand.
  *  4. A second Track All replaces the box rather than stacking another.
  *  5. Track Frame Range does not open it.
  * Fixture B (one camera sees nothing): nothing is matched across views.
@@ -64,7 +69,7 @@ try {
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
     await answerTrackSetup(page, 2);   // Track All asks for the animal count the first time
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     await page.evaluate(() => {
         // Fixture A, or B with `blindCam` (that camera sees no animal, so nothing is matched).
@@ -175,8 +180,8 @@ try {
     check(image && image.text === 'Not run' && image.time === '', `image check row, with no time: "${image && image.text}"`);
     check(s.headline === 'No ID switches were flagged.', `next-step headline: "${s.headline}"`);
     check(/similar size/.test(s.caveat), `says body size cannot separate similar animals: "${s.caveat}"`);
-    check(s.steps.some(t => /Triangulate All/.test(t)), `next steps list Triangulate All: ${JSON.stringify(s.steps)}`);
-    check(JSON.stringify(s.buttons) === JSON.stringify(['Check by images…', 'Close', 'Triangulate All']),
+    check(s.steps.some(t => /Triangulation Wizard/.test(t) && /Triangulate All/.test(t)), `next steps say to choose, then triangulate: ${JSON.stringify(s.steps)}`);
+    check(JSON.stringify(s.buttons) === JSON.stringify(['Check by images…', 'Close', 'Triangulation Wizard…']),
         `buttons: ${JSON.stringify(s.buttons)}`);
     check(s.focused === 'trackSummaryPrimary', `the recommended step is focused (${s.focused})`);
     check(/^Assigned 2 identities/.test(await statusText()), 'the status line still carries the pass\'s message');
@@ -242,7 +247,7 @@ try {
     check(s.checks.every(c => c.text === 'Not run'), `after Clear, both checks read "Not run": ${JSON.stringify(s.checks.map(c => c.text))}`);
 
     // ---- 2c. a check run from the box comes back to the box ------------------------------------
-    check(JSON.stringify(s.buttons) === JSON.stringify(['Check by body size', 'Check by images…', 'Close', 'Triangulate All']),
+    check(JSON.stringify(s.buttons) === JSON.stringify(['Check by body size', 'Check by images…', 'Close', 'Triangulation Wizard…']),
         `precondition: the reopened box offers both checks (${JSON.stringify(s.buttons)})`);
     const onTab = () => page.evaluate(() => !!document.querySelector('#tabIdSwitches.active'));
     const leaveTab = () => page.evaluate(() => document.querySelector('.panel-tab:not([data-tab="tabIdSwitches"])').click());
@@ -259,7 +264,7 @@ try {
     let szc = s.checks.find(c => c.cue === 'size'), imc = s.checks.find(c => c.cue === 'image');
     check(s.count === 1 && szc.text === 'No close encounters to check' && /is-clear/.test(szc.cls) && /^(<0\.1|\d+(\.\d)?) s$/.test(szc.time),
         `"Check by body size" ends back in the box, its row filled in with its time: "${szc.text}" (${szc.time})`);
-    check(imc.text === 'Not run' && JSON.stringify(s.buttons) === JSON.stringify(['Check by images…', 'Close', 'Triangulate All']),
+    check(imc.text === 'Not run' && JSON.stringify(s.buttons) === JSON.stringify(['Check by images…', 'Close', 'Triangulation Wizard…']),
         `…the image check still not run and still offered (${JSON.stringify(s.buttons)})`);
     check(JSON.stringify(s.ids) === JSON.stringify(first.ids) && s.stats[1] === first.stats[1] && s.stats[3] === first.stats[3],
         '…with the counts and tracking time re-shown');
@@ -286,7 +291,7 @@ try {
     imc = s.checks.find(c => c.cue === 'image');
     check(s.count === 1 && imc.text === 'No close encounters to check' && /is-clear/.test(imc.cls) && /s$/.test(imc.time),
         `"Check by images…" ends back in the box, its row filled in: "${imc.text}" (${imc.time})`);
-    check(s.headline === 'Neither check flagged an ID switch.' && JSON.stringify(s.buttons) === JSON.stringify(['Close', 'Triangulate All']),
+    check(s.headline === 'Neither check flagged an ID switch.' && JSON.stringify(s.buttons) === JSON.stringify(['Close', 'Triangulation Wizard…']),
         `…the next step follows from it ("${s.headline}", ${JSON.stringify(s.buttons)})`);
     check(s.focused === 'trackSummaryPrimary' && !(await onTab()), '…its primary focused, and the tab not opened');
     check(/^Check ID Switches \(images\): nothing flagged/.test(await statusText()), 'the status line still reports the check');
@@ -304,17 +309,95 @@ try {
         (await import('/ui/id-switch-modal.js')).refreshIdSwitchPanel(); });
     check(!(await tab()).button, 'a session without a Track All has no button');
 
-    // ---- 3. Enter presses the primary: Triangulate All runs ----------------------------------
+    // ---- 3. Enter presses the primary: Triangulation Wizard opens, nothing runs -------------
     await page.evaluate(async () => { await window.__buildTrackable('A2'); await (await import('/pose/tracker.js')).trackAll(); });
     check((await summary()).focused === 'trackSummaryPrimary', 'precondition: summary open with its primary focused');
+    const st3Before = await statusText();
     await page.keyboard.press('Enter');
-    // After Track All, Triangulate All groups by identity first ("Grouped …, triangulated …").
+    const shown3 = await page.evaluate(() => {
+        const o = document.querySelector('.settings-overlay');
+        const panel = o && [...o.querySelectorAll('[data-panel]')].find(p => p.classList.contains('settings-panel') && p.offsetParent !== null);
+        return { open: !!o, panel: panel && panel.dataset.panel, triBlue: document.getElementById('tbTriangulateAll').classList.contains('active') };
+    });
+    check((await summary()).count === 0, 'Enter closed the summary');
+    check(shown3.open && shown3.panel === 'triangulation', `…and opened Settings on Triangulation Wizard (${JSON.stringify(shown3)})`);
+    check(!shown3.triBlue && (await statusText()) === st3Before, '…without triangulating');
+    const triBtn = '.settings-btn-triangulate';
+    const triBtnInfo = () => page.evaluate(sel => {
+        const b = document.querySelector(sel);
+        return b && { text: b.textContent, shown: b.offsetParent !== null, disabled: b.disabled };
+    }, triBtn);
+    let tb = await triBtnInfo();
+    check(tb.shown && !tb.disabled && tb.text === 'Triangulate All', `the panel offers Triangulate All (${JSON.stringify(tb)})`);
+    await page.click('.settings-nav-item:has-text("Temporal Smoothing")');
+    check(!(await triBtnInfo()).shown, '…on that panel only');
+    await page.click('.settings-nav-item[data-panel="triangulation"]');
+    // An edit pending: it says so, and is stored by the time the toolbar button runs.
+    const stored3 = () => page.evaluate(async () => (await import('/ui/settings.js')).getDefaultTriangulationMethod());
+    const before3 = await stored3();
+    const other3 = before3 === 'ba' ? 'dlt' : 'ba';
+    await page.click(`.tri-method-choice[data-method="${other3}"]`);
+    check((await triBtnInfo()).text === 'Apply & Triangulate All', 'with an edit pending it reads "Apply & Triangulate All"');
+    // Stopped at the toolbar button, so the other method does not run here.
+    await page.evaluate(() => {
+        window.__clicked3 = false;
+        window.__stop3 = (e) => { window.__clicked3 = true; e.stopImmediatePropagation(); };
+        document.getElementById('tbTriangulateAll').addEventListener('click', window.__stop3, true);
+    });
+    await page.click(triBtn);
+    const clicked3 = await page.evaluate(() => {
+        document.getElementById('tbTriangulateAll').removeEventListener('click', window.__stop3, true);
+        return window.__clicked3;
+    });
+    check(clicked3 && await stored3() === other3 && !(await page.$('.settings-overlay')),
+        '…it stores the edit, closes Settings and clicks the toolbar button');
+    await page.evaluate(async m => (await import('/ui/settings.js')).setDefaultTriangulationMethod(m), before3);
+    // Nothing pending: it runs Triangulate All. It groups by identity first ("Grouped …, triangulated …").
+    await page.evaluate(async () => (await import('/ui/settings-modal.js')).showSettingsModal('triangulation'));
+    await page.click(triBtn);
     const TRI = /triangulated \d+/i;
     await page.waitForFunction(re => new RegExp(re, 'i').test(document.getElementById('statusText').textContent), TRI.source, { timeout: 60000 })
         .catch(() => {});
     const st3 = await statusText();
-    check((await summary()).count === 0, 'Enter closed the summary');
-    check(TRI.test(st3), `…and ran Triangulate All ("${st3.slice(0, 80)}")`);
+    check(TRI.test(st3) && !(await page.$('.settings-overlay')), `…and ran Triangulate All, Settings closed ("${st3.slice(0, 80)}")`);
+
+    // A re-run keeps 3D only while the settings it was solved under still stand.
+    const provenance3 = async () => {
+        await page.waitForFunction(() => /kept existing 3D/.test(document.getElementById('statusText').textContent), null, { timeout: 60000 });
+        const m = /([\d,]+) kept existing 3D, [\d,]+ solved via Refined, ([\d,]+) via DLT/.exec(await statusText());
+        return m && { kept: +m[1].replace(/,/g, ''), solved: +m[2].replace(/,/g, '') };
+    };
+    const clearStatus3 = () => page.evaluate(() => { document.getElementById('statusText').textContent = ''; });
+    const rerun3 = async () => {
+        await clearStatus3();
+        await page.evaluate(() => document.getElementById('tbTriangulateAll').click());
+        return provenance3();
+    };
+    const first3 = await rerun3();
+    check(first3 && first3.kept > 0 && first3.solved === 0, `nothing changed: the re-run keeps every group (${JSON.stringify(first3)})`);
+    const N3 = first3.kept;
+    await page.evaluate(async () => (await import('/ui/settings-modal.js')).showSettingsModal('triangulation'));
+    await page.fill('.tri-thr [data-try="threshold"] .fig-num', '25');
+    await page.locator('.tri-thr button', { hasText: /^Use/ }).first().click();
+    check((await triBtnInfo()).text === 'Apply & Triangulate All', 'a new threshold is an edit pending');
+    await clearStatus3();
+    await page.click(triBtn);
+    const thr3 = await provenance3();
+    check(thr3 && thr3.kept === 0 && thr3.solved === N3, `a changed threshold re-solves every group through the panel's button (${JSON.stringify(thr3)})`);
+    const same3 = await rerun3();
+    check(same3 && same3.kept === N3 && same3.solved === 0, `…and the next run with that threshold keeps them (${JSON.stringify(same3)})`);
+    await page.evaluate(async () => (await import('/ui/settings.js')).setCameraWeights({ c2: 0 }));
+    const cam3 = await rerun3();
+    check(cam3 && cam3.kept === 0, `leaving a camera out re-solves too (${JSON.stringify(cam3)})`);
+    await page.evaluate(async () => (await import('/ui/settings.js')).setCameraWeights({}));
+    await rerun3();
+    // What a group read from a file looks like: the settings it was solved under are not saved.
+    await page.evaluate(() => {
+        for (const list of window.__lucid.state.session.instanceGroups.values()) for (const g of list) g.solveSettings = undefined;
+    });
+    const file3 = await rerun3();
+    check(file3 && file3.kept === 0 && file3.solved === N3, `3D with no record of its settings is re-solved (${JSON.stringify(file3)})`);
+    await page.evaluate(async () => (await import('/ui/settings.js')).setTrackingThresholds({ reprojErrorThreshold: 0 }));
 
     // ---- 4. a second Track All replaces the box ---------------------------------------------
     await page.evaluate(async () => {

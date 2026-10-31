@@ -71,7 +71,7 @@ try {
     });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     const out = await page.evaluate(async ({ LOCKED, LOCKED_DROPDOWNS, FREE_BUTTONS, FREE_CHECKBOXES }) => {
         const P = await import('/ui/plane-definition.js');
@@ -259,6 +259,8 @@ try {
         if (btn === 'tbTriangulateAll') {
             inMenu.radio = await page.evaluate(() => !document.querySelector('#triangulateDropdown input[value="ba"]').disabled);
             inMenu.radioVisible = await page.locator('#triangulateDropdown input[value="ba"]').isVisible();
+            inMenu.reproj = await page.evaluate(() => !document.getElementById('tbReprojThreshold').disabled);
+            inMenu.reprojVisible = await page.locator('#tbReprojThreshold').isVisible();
         }
     }
     await page.evaluate(async () => (await import('/ui/plane-definition.js')).exitPlaneMode());
@@ -266,6 +268,7 @@ try {
         `hovering Track / Triangulate / Smooth still opens each menu (${JSON.stringify(inMenu)})`);
     check(inMenu.animals.enabled && inMenu.animalsVisible, 'Track\'s Animals field is shown and live in the mode');
     check(inMenu.radio && inMenu.radioVisible, 'Triangulate\'s Method radios are shown and live in the mode');
+    check(inMenu.reproj && inMenu.reprojVisible, 'Triangulate\'s Reprojection error field is shown and live in the mode');
 
     console.log('\n-- 5. leaving restores the toolbar --');
     check(allFalse(out.afterExit),

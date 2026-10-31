@@ -28,22 +28,22 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js?v=17e9b3860106';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=17e9b3860106';
-import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=17e9b3860106';
+} from './app-state.js?v=2ab40f313884';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=2ab40f313884';
+import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=2ab40f313884';
 import {
     triangulateAndReproject, getInstanceGroupsForFrame,
-    sessionHasCalibration, resolveTriangulationMethod,
-} from '../pose/triangulation.js?v=17e9b3860106';
+    sessionHasCalibration, resolveTriangulationMethod, triangulationSettingsKey,
+} from '../pose/triangulation.js?v=2ab40f313884';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js?v=17e9b3860106';
-import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js?v=17e9b3860106';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=17e9b3860106';
+} from '../loading/session-loader.js?v=2ab40f313884';
+import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js?v=2ab40f313884';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=2ab40f313884';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -51,23 +51,23 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js?v=17e9b3860106';
+} from './video-filters.js?v=2ab40f313884';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=17e9b3860106';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=2ab40f313884';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js?v=17e9b3860106';
-import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=17e9b3860106';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=17e9b3860106';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=17e9b3860106';
+import { setSoloView } from './ui-wiring.js?v=2ab40f313884';
+import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=2ab40f313884';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=2ab40f313884';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=2ab40f313884';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=17e9b3860106';
-import { getLoadingProgressModal } from './loading-progress-modal.js?v=17e9b3860106';
+import { setup3DViewport } from '../pose/initialization.js?v=2ab40f313884';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=2ab40f313884';
 
 // ============================================
 // Dockview Pane Manager
@@ -1577,6 +1577,7 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
                             if (valid) {
                                 group.points3d = pooledPoints3d(result.points3d);
                                 group.triangulationMethod = result.method;
+                                group.solveSettings = triangulationSettingsKey(fromSession.cameras);
                             }
                             group.markClean();
                             totalRetriangulated++;

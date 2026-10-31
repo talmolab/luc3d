@@ -50,7 +50,7 @@ try {
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 30000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     /** Build a two-camera project at the given video size, one isolated node. */
     const build = (VW, VH) => page.evaluate(async ([VW, VH]) => {

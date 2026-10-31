@@ -10,27 +10,27 @@
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
          setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d,
-         isPoints3dSmoothed } from './pose-data.js?v=17e9b3860106';
+         isPoints3dSmoothed } from './pose-data.js?v=2ab40f313884';
 // The Jacobi eigensolver and the least-squares plane fit live in
 // `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
 // importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
 // re-exported unchanged, because every existing caller and test reads it here.
-import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=17e9b3860106';
+import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=2ab40f313884';
 export { fitPlaneToPoints3d };
-import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=17e9b3860106';
+import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=2ab40f313884';
 // Pass 3i-2: triangulation orchestration moved out of app.js
-import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=17e9b3860106';
-import { updateTriangulationBadge } from '../ui/info-panel.js?v=17e9b3860106';
-import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=17e9b3860106';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=17e9b3860106';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=17e9b3860106';
-import { createGroupSolver } from './triangulation-pool.js?v=17e9b3860106';
-import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=17e9b3860106';
+import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=2ab40f313884';
+import { updateTriangulationBadge } from '../ui/info-panel.js?v=2ab40f313884';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=2ab40f313884';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=2ab40f313884';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=2ab40f313884';
+import { createGroupSolver } from './triangulation-pool.js?v=2ab40f313884';
+import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=2ab40f313884';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
-         dropDerivedReprojections, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=17e9b3860106';
+         dropDerivedReprojections, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=2ab40f313884';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from './initialization.js?v=17e9b3860106';
-import { noteTriangulateRun, carryTriangulateMark } from './run-state.js?v=17e9b3860106';
+import { update3DViewport } from './initialization.js?v=2ab40f313884';
+import { noteTriangulateRun, carryTriangulateMark } from './run-state.js?v=2ab40f313884';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -50,7 +50,7 @@ import {
     hungarianAlgorithm, cameraCenter, backProjectToRay, backProjectToRays,
     pointToRayDistance, pointsToRayDistances,
     computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
-} from './triangulation-core.js?v=17e9b3860106';
+} from './triangulation-core.js?v=2ab40f313884';
 export {
     triangulatePointDLT, triangulatePoints, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,
@@ -1965,7 +1965,7 @@ export function updateTimelineForFrame(frameIdx) {
  * `onProgress(completed, total)` is invoked per frame; pass it to drive a
  * progress bar. `method` (`'ba'|'dlt'`) governs every solve; omitted is DLT, so
  * callers name it (`tests/test-triangulation-method-propagation.mjs`) — the
- * modal passes Settings ▸ Default Triangulation.
+ * modal passes Settings ▸ Triangulation Wizard.
  *
  * Keeps only the 3D (`points3d`, `usedCameras`, `triangulationMethod`) and
  * the error stats, as both Triangulate All paths do (see
@@ -2074,6 +2074,26 @@ export function resolveTriangulationMethod(group) {
     return getDefaultTriangulationMethod() === 'ba' ? 'ba' : 'dlt';
 }
 
+// One shared string per distinct key: a project stores one reference per group.
+const _settingsKeys = new Map();
+
+/**
+ * Names the settings a solve reads besides its method and 2D input: the
+ * reprojection error threshold and the cameras included in tracking. Stored on a
+ * group when it is solved (`solveSettings`) and compared by `adoptPrior3d`.
+ *
+ * @param {Array<{name: string}>} cameras - the session's cameras
+ * @returns {string}
+ */
+export function triangulationSettingsKey(cameras) {
+    var key = (getTrackingThreshold('reprojErrorThreshold') || 0) + '|' +
+        JSON.stringify(cameras.filter(function (c) { return isCameraTracked(c.name); }).map(function (c) { return c.name; }));
+    var shared = _settingsKeys.get(key);
+    if (shared) return shared;
+    _settingsKeys.set(key, key);
+    return key;
+}
+
 /**
  * Find the group in `priorGroups` that is the SAME group as `group` — i.e. its
  * membership is identical, camera for camera, by Instance object identity.
@@ -2150,12 +2170,18 @@ export function findEquivalentPriorGroup(priorGroups, group) {
  * originally: a reopened project had 3D with an undefined method, so nothing could
  * ever be adopted and `ui/rendering.js`'s fill reported DLT's error for BA points.
  *
+ * The settings that feed the solve must also still be the ones it ran under
+ * (`settingsKey`, see `triangulationSettingsKey`), or a changed reprojection error
+ * threshold or camera choice would do nothing on a re-run. They are not saved, so
+ * 3D read from a file never matches and is re-solved.
+ *
  * @param {InstanceGroup} group
  * @param {InstanceGroup|null} prior
  * @param {'ba'|'dlt'} method - the method this operation is required to produce
+ * @param {string} settingsKey - `triangulationSettingsKey` for this run
  * @returns {boolean} true if 3D was adopted and `group` needs no triangulation
  */
-export function adoptPrior3d(group, prior, method) {
+export function adoptPrior3d(group, prior, method, settingsKey) {
     if (!group || !prior) return false;
     if (!someValidPoint3d(prior.points3d)) return false;
     // Only adopt a solution produced by the method being asked for. An undefined
@@ -2166,8 +2192,10 @@ export function adoptPrior3d(group, prior, method) {
     // Smoothed 3D (pose/temporal-smoothing.js) is not what the solve produces
     // either: re-triangulating is how a user undoes the pass.
     if (isPoints3dSmoothed(prior.points3d)) return false;
+    if (prior.solveSettings !== settingsKey) return false;
     group.points3d = prior.points3d;
     group.triangulationMethod = want;
+    group.solveSettings = settingsKey;
     if (prior.usedCameras && prior.usedCameras.size) group.usedCameras = prior.usedCameras;
     return true;
 }
@@ -2179,6 +2207,11 @@ export function adoptPrior3d(group, prior, method) {
 export function reTriangulateGroup(instanceGroup) {
     if (!instanceGroup) return;
     if (!state.session || state.session.cameras.length < 2) return;
+    // Placeholder cameras only (no calibration loaded: all at the origin,
+    // `pose/placeholder-cameras.js`) — a "triangulation" from them is
+    // meaningless 3D that would be saved and exported as predictions. The
+    // explicit Triangulate paths refuse the same way (triangulateCurrentFrame).
+    if (!sessionHasCalibration()) return;
 
     var cameras = state.session.cameras;
     var groupCamNames = instanceGroup.cameraNames;
@@ -2197,6 +2230,7 @@ export function reTriangulateGroup(instanceGroup) {
     var method = resolveTriangulationMethod(instanceGroup);
     var result = triangulateAndReproject(instanceGroup, groupCameras, { method: method });
     instanceGroup.triangulationMethod = result.method;
+    instanceGroup.solveSettings = triangulationSettingsKey(cameras);
 
     // Only update if we got valid results
     var validPts = someValidPoint3d(result.points3d);
@@ -2423,6 +2457,7 @@ export function triangulateCurrentFrame(method) {
 
             const result = triangulateAndReproject(group, groupCameras, { method: method });
             group.triangulationMethod = result.method;
+            group.solveSettings = triangulationSettingsKey(cameras);
 
             // Watch for a NaN-poisoned solve. An all-NaN triple is now just the
             // "missing" sentinel, so it can no longer stand in for corruption —
@@ -2608,7 +2643,7 @@ function _triangulateGroupStep(group, cameras, method) {
  * not on the solve — so a parallel solve (`pose/triangulation-pool.js`) can
  * apply its result after a lazy window has been released.
  *
- * @returns {{groupCameras: Array, usedCameras: Set<string>}|null}
+ * @returns {{groupCameras: Array, usedCameras: Set<string>, settingsKey: string}|null}
  */
 function _prepareGroupStep(group, cameras) {
     // Resolve camera name mismatches
@@ -2645,12 +2680,13 @@ function _prepareGroupStep(group, cameras) {
         var camInst = group.getInstance(groupCameras[ck].name);
         if (camInst && camInst.hasAnyPoint()) usedCameras.add(groupCameras[ck].name);
     }
-    return { groupCameras: groupCameras, usedCameras: usedCameras };
+    return { groupCameras: groupCameras, usedCameras: usedCameras, settingsKey: triangulationSettingsKey(cameras) };
 }
 
 /** Store a solve's result on the group (the tail of `_triangulateGroupStep`). */
 function _applyGroupStep(group, prep, result) {
     group.triangulationMethod = result.method;
+    group.solveSettings = prep.settingsKey;
     group.points3d = pooledPoints3d(result.points3d);   // one slab, not one ArrayBuffer per group
     group.usedCameras = prep.usedCameras;
 }

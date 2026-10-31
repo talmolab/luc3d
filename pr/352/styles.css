@@ -4775,14 +4775,14 @@ kbd {
   border: 1px solid var(--border-color);
   border-radius: 8px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-  /* Opening size only. `ui/modal-geometry.js` measures this on first open,
-     centres the card, and thereafter restores whatever size the user left it
-     at as inline width/height. It also owns the viewport fit (clamping to a
+  /* Before `ui/modal-geometry.js` takes over. Until the user chooses a size it fills
+     the viewport's height and, up to 1700px, its width (`fillHeight`, `fillWidth`),
+     and thereafter restores whatever size they left it at as inline width/height. It also owns the viewport fit (clamping to a
      24px gutter), so there is deliberately NO max-width/max-height here — a
      second cap would silently shrink a rect the clamp thought it had granted
      and leave the card flush against one edge. */
-  width: 1040px;
-  height: 620px;
+  width: min(1700px, calc(100vw - 48px));
+  height: calc(100vh - 48px);
   display: flex;
   flex-direction: column;
   /* `resize` needs a non-visible overflow, which this already had. The grip is
@@ -4826,18 +4826,24 @@ kbd {
 }
 
 .settings-modal-close {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  font-size: 18px;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0 0 2px;
+  background: var(--bg-button);
+  border: 1px solid var(--border-light);
+  border-radius: 5px;
+  color: var(--text-primary);
+  font-size: 24px;
   line-height: 1;
   cursor: pointer;
-  padding: 0;
-  transition: color var(--transition-fast);
+  transition: background var(--transition-fast), border-color var(--transition-fast);
 }
 
 .settings-modal-close:hover {
-  color: var(--text-primary);
+  background: var(--error-color);
+  border-color: var(--error-color);
+  color: #fff;
 }
 
 .settings-modal-body {
@@ -5278,7 +5284,7 @@ kbd {
   font-size: 13px;
 }
 
-/* Settings ▸ Default Triangulation: the DLT-vs-Refined diagram
+/* Settings ▸ Triangulation Wizard: the DLT-vs-Refined diagram
    (ui/triangulation-methods-figure.js). */
 .tri-methods {
   margin: 16px 0 0;
@@ -5306,7 +5312,7 @@ kbd {
   background: var(--bg-primary);
 }
 
-/* Each card is the choice (Settings ▸ Default Triangulation). */
+/* Each card is the choice (Settings ▸ Triangulation Wizard). */
 .tri-method-choice {
   cursor: pointer;
   transition: background var(--transition-fast),
@@ -5320,6 +5326,33 @@ kbd {
 .tri-method-choice:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* A sketch and its legend: the legend sits at the card's left edge, clear of the
+   scene, which is centred in a wide card. */
+.tm-sketch {
+  position: relative;
+  display: flow-root;
+}
+
+.tri-methods-col svg.tm-totals {
+  position: absolute;
+  right: 0;
+  bottom: 8px;
+  width: 38%;
+  max-height: none;
+  margin: 0;
+  pointer-events: none;
+}
+
+.tri-methods-col svg.tm-legend {
+  position: absolute;
+  left: 0;
+  bottom: 8px;
+  width: max(120px, 35%);
+  max-height: none;
+  margin: 0;
+  pointer-events: none;
 }
 
 /* Selected = the checkbox and a blue outline; the card keeps its background. */
@@ -5349,8 +5382,8 @@ kbd {
   display: block;
   width: 100%;
   height: auto;
-  /* A wide card would otherwise push the captions below the fold. */
-  max-height: 190px;
+  /* Grows with a wider Settings window, up to where the captions would be pushed far down. */
+  max-height: 600px;
   margin: 6px 0 8px;
   overflow: hidden;
 }
@@ -5388,26 +5421,635 @@ kbd {
   border-radius: 50%;
 }
 
-.tri-methods .tm-key-det { background: var(--warning-color); }
-.tri-methods .tm-key-point { background: var(--accent); }
-.tri-methods .tm-key-proj { border: 1.5px solid var(--accent); width: 7px; height: 7px; }
-.tri-methods .tm-key-gap { background: var(--error-color); width: 12px; height: 3px; border-radius: 2px; }
+.tri-methods .tm-key-sight { width: 14px; height: 0; border-radius: 0; border-top: 1.5px dashed var(--text-muted); }
+.tri-methods .tm-key-sight-stray { border-top-color: var(--warning-color); margin-left: -2px; }
+.tri-methods .tm-key-back { width: 14px; height: 2px; border-radius: 1px; background: var(--accent); opacity: 0.5; }
 
 .tri-methods .tm-ray { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; }
 .tri-methods .tm-ray-stray { stroke: var(--warning-color); opacity: 0.7; }
+.tri-methods .tm-ray-head { fill: var(--text-muted); stroke: none; }
+.tri-methods .tm-ray-head.tm-ray-stray { fill: var(--warning-color); stroke: none; }
 .tri-methods .tm-back { stroke: var(--accent); stroke-width: 1; opacity: 0.35; }
 .tri-methods .tm-plane { stroke: var(--text-secondary); stroke-width: 2; stroke-linecap: round; }
 .tri-methods .tm-cam { fill: var(--bg-button); stroke: var(--text-secondary); stroke-width: 1; }
 .tri-methods .tm-gap { stroke: var(--error-color); stroke-width: 2.5; stroke-linecap: round; }
-.tri-methods .tm-det { fill: var(--warning-color); }
+.tri-methods .tm-det { fill: #fff; }
+.tri-methods .tm-det-out { fill: var(--warning-color); }
 .tri-methods .tm-proj { fill: none; stroke: var(--accent); stroke-width: 1.6; }
-.tri-methods .tm-point { fill: var(--accent); stroke: var(--text-primary); stroke-width: 1.2; }
+/* Translucent, so the true-position cross shows through when the answer lands on it. */
+.tri-methods .tm-point { fill: var(--accent); fill-opacity: 0.45; stroke: #fff; stroke-width: 1.2; }
 .tri-methods .tm-start { fill: none; stroke: var(--text-muted); stroke-width: 1.2; stroke-dasharray: 2 2; }
 .tri-methods .tm-move { stroke: var(--text-secondary); stroke-width: 1.2; }
 .tri-methods .tm-arrowhead { fill: var(--text-secondary); }
-.tri-methods .tm-leader { stroke: var(--text-muted); stroke-width: 0.8; }
+
+/* The controls of the Settings figures (ui/figure-try-controls.js). The value a
+   card's sketch shows is larger than its title. */
+.fig-big {
+  display: block;
+  margin-top: 2px;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+/* The "try it" strip: dashed, because nothing in it changes a setting. */
+.fig-try {
+  margin-top: 10px;
+  padding: 8px 10px 10px;
+  border: 1px dashed var(--border-light);
+  border-radius: 6px;
+}
+
+.fig-try-title {
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.fig-try-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 24px;
+}
+
+.fig-ctl {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.fig-ctl-name { flex: none; min-width: 52px; white-space: nowrap; }
+.fig-ctl-unit { flex: none; min-width: 38px; white-space: nowrap; }
+.fig-slider { position: relative; display: block; flex: 1; min-width: 80px; padding: 18px 0 18px; --thumb: 16px; }
+.fig-slider input[type="range"] { position: relative; display: block; width: 100%; margin: 0; }
+.fig-zone,
+.fig-zone-label,
+.fig-tick { position: absolute; pointer-events: none; }
+/* Native thumbs stop half a thumb short of each end, so positions start there. */
+.fig-zone {
+  top: 50%;
+  margin-top: -6px;
+  left: calc(var(--thumb) / 2 + var(--a) * (100% - var(--thumb)));
+  width: calc((var(--b) - var(--a)) * (100% - var(--thumb)));
+  height: 12px;
+  border-radius: 3px;
+  background: var(--success-color);
+  opacity: 0.35;
+}
+.fig-zone-label,
+.fig-tick {
+  left: calc(var(--thumb) / 2 + var(--a) * (100% - var(--thumb)));
+  transform: translateX(-50%);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.fig-zone-label { top: 1px; color: var(--success-color); }
+.fig-tick { bottom: 1px; color: var(--text-muted); }
+
+.fig-ctl input[type="range"] {
+  flex: 1;
+  min-width: 40px;
+  accent-color: var(--text-secondary);
+}
+
+.fig-num {
+  flex: none;
+  width: 58px;
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fig-num:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* The one place in a card that changes a setting. */
+.fig-setting {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin: 8px 0;
+  padding: 7px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.fig-setting-now strong {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.fig-unsaved {
+  font-size: 12px;
+  color: var(--warning-color);
+}
+
+.fig-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.fig-btn {
+  min-width: 84px;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-button);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.fig-btn.fig-use {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.fig-btn:hover:not(:disabled) { border-color: var(--border-light); }
+.fig-btn.fig-use:hover:not(:disabled) { background: var(--accent-hover); }
+.is-unavailable { visibility: hidden; }
+
+/* The reprojection error threshold card: more sketches of the same scene, one
+   per solve. A step keeps its place when the rule does not reach it and the
+   text under each sketch has a fixed height, so the card does not change size
+   as the threshold moves. */
+.tri-thr {
+  margin-top: 10px;
+}
+
+/* One section, full width: text, the sketches, the controls, this session's examples.
+   The controls sit between the two things they drive. */
+.tri-thr-intro { min-width: 0; }
+.tri-thr-controls { margin-top: 12px; }
+
+.thr-ex {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
+  outline: none;
+}
+
+.thr-ex:focus-visible { border-top-color: var(--accent); }
+/* Its parts set `display`, which would otherwise beat the `hidden` attribute. */
+.thr-ex [hidden] { display: none; }
+.thr-ex-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.thr-ex-titles { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; min-width: 0; }
+.thr-ex-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.thr-ex-nav { display: flex; align-items: center; gap: 8px; }
+.thr-ex-pos { min-width: 92px; text-align: center; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+.thr-ex-arrow {
+  width: 36px;
+  height: 30px;
+  padding: 0 0 3px;
+  background: var(--bg-button);
+  border: 1px solid var(--border-light);
+  border-radius: 5px;
+  color: var(--text-primary);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.thr-ex-arrow:hover:not(:disabled) { background: var(--bg-button-hover); }
+.thr-ex-arrow:disabled { color: var(--text-muted); opacity: 0.5; cursor: default; }
+.thr-ex-where { font-size: 12px; color: var(--text-secondary); }
+.tri-methods-col p.thr-ex-message { margin: auto 0; padding: 24px 0; text-align: center; color: var(--text-muted); }
+/* The large crop and the 3D view are square and exactly as tall as the small tiles'
+   block, from the top of the upper crops to the bottom of the lower ones: side =
+   2 tiles + 6px row gap + 30px of labels. With t a tile's side, the three columns are
+   2t + 6, 2t + 36, 2t + 36 and two 16px gaps, so 2t = (100% - 110px) / 3. */
+.thr-ex-body {
+  display: grid;
+  grid-template-columns: calc((100% - 110px) / 3 + 6px) repeat(2, calc((100% - 110px) / 3 + 36px));
+  gap: 16px;
+  align-items: start;
+}
+
+/* Too narrow for three columns: small tiles, then the large crop, then the 3D view. */
+@media (max-width: 1000px) {
+  .thr-ex-body { grid-template-columns: minmax(0, 1fr); }
+}
+
+.thr-ex-grid { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.thr-ex-large, .thr-ex-3d { min-width: 0; margin: 0; }
+
+.thr-ex-tile {
+  display: block;
+  min-width: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.thr-ex-3d-host {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #1a1a1a;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.thr-ex-3d-host:active { cursor: grabbing; }
+.thr-ex-3d-host canvas { display: block; }
+
+.thr-ex-tile canvas,
+.thr-ex-large canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+
+.thr-ex-tile:hover canvas { border-color: var(--text-muted); }
+.thr-ex-tile[aria-pressed="true"] canvas { outline: 2px solid var(--accent); outline-offset: -2px; }
+.thr-ex-tile[data-state="drop"] canvas { border-color: var(--warning-color); opacity: 0.6; }
+.thr-ex-tile[data-state="over"] canvas { border-color: var(--warning-color); }
+.thr-ex-tile[data-state="out"] canvas { opacity: 0.35; }
+.thr-ex-large[data-state="drop"] canvas { border-color: var(--warning-color); }
+.thr-ex-large[data-state="over"] canvas { border-color: var(--warning-color); }
+.thr-ex-cam, .thr-ex-err { display: block; overflow: hidden; font-size: 11px; line-height: 15px; white-space: nowrap; text-overflow: ellipsis; }
+.thr-ex-large-caption { display: flex; justify-content: space-between; gap: 10px; margin-top: 2px; }
+.thr-ex-large .thr-ex-cam, .thr-ex-large .thr-ex-err, .thr-ex-3d .thr-ex-cam, .thr-ex-3d .thr-ex-err { font-size: 12px; }
+.thr-ex-cam { color: var(--text-secondary); }
+.thr-ex-err { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+[data-state="in"] > .thr-ex-err, [data-state="in"] .thr-ex-large-caption .thr-ex-err { color: var(--success-color); }
+[data-state="over"] > .thr-ex-err, [data-state="over"] .thr-ex-large-caption .thr-ex-err { color: var(--warning-color); }
+[data-state="drop"] > .thr-ex-err, [data-state="drop"] .thr-ex-large-caption .thr-ex-err { color: var(--warning-color); }
+.tri-methods-col p.thr-ex-others { margin: 0; min-height: 16px; overflow: hidden; font-size: 11px; line-height: 16px; white-space: nowrap; text-overflow: ellipsis; color: var(--text-muted); }
+.tri-methods-col p.thr-ex-result { margin: 2px 0 0; min-height: 3em; font-size: 12px; line-height: 1.5; color: var(--text-primary); }
+.tri-methods-col p.thr-ex-summary { margin: 0; min-height: 3em; font-size: 11px; line-height: 1.5; color: var(--text-muted); }
+.thr-ex-legend { display: flex; flex-wrap: wrap; gap: 3px 12px; font-size: 11px; color: var(--text-muted); }
+.thr-ex-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.thr-ex-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; box-sizing: border-box; }
+.thr-key-pred { background: #fff; }
+.thr-key-pred-out { background: #f39c12; }
+.thr-key-rep { border: 2px solid #7c93ff; }
+.thr-key-first { border: 2px solid #b5b5b5; }
+.thr-ex-legend .thr-key-err { width: 14px; height: 0; border-top: 2px solid var(--error-color); border-radius: 0; }
+.thr-key-ring { border: 2px dashed var(--success-color); }
+.thr-key-proj { background: rgba(102, 126, 234, 0.45); border: 2px solid #fff; }
+.thr-ex-legend .thr-key-sight { width: 14px; height: 0; border-top: 2px dashed #c8c8c8; border-radius: 0; }
+.thr-ex-legend .thr-key-sight-drop { margin-left: -3px; border-top-color: #f39c12; }
+
+.tri-thr .fig-try-row > .fig-ctl { flex: 1 1 420px; max-width: none; }
+
+.tri-thr-demo-method {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.tri-thr-demo-method span { margin-right: 4px; }
+
+.tri-thr-demo-method button {
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-button);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.tri-thr-demo-method button[aria-pressed="true"] {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+.tri-thr-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px 16px;
+  margin-top: 10px;
+}
+
+.tri-thr-step-name {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.tri-thr-step.is-idle .tri-thr-step-name { color: var(--text-muted); }
+
+/* Every wording of a changing line in one grid cell, only the current one
+   shown, so the line keeps the height of its longest wording. */
+.tri-thr-stack { display: grid; }
+.tri-thr-stack > span { grid-area: 1 / 1; visibility: hidden; }
+.tri-thr-stack > span.on { visibility: visible; }
+
+.tri-thr-verdict-box { position: relative; }
+
+.tri-thr-verdicts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The rows stay for their height; their shown wording must hide too
+   (a child's `visibility: visible` would override the list's). */
+.tri-thr-step.is-idle .tri-thr-verdicts,
+.tri-thr-step.is-idle .tri-thr-verdicts .tri-thr-stack > span.on { visibility: hidden; }
+
+.tri-methods-col p.tri-thr-idle-note {
+  display: none;
+  position: absolute;
+  inset: 0 0 auto 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.tri-thr-step.is-idle p.tri-thr-idle-note { display: block; }
+
+.tri-thr-verdicts li {
+  display: grid;
+  grid-template-columns: 5.2em minmax(0, 1fr);
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.tri-thr-verdicts li > span:first-child { color: var(--text-secondary); }
+.tri-thr-verdicts li.is-in > span:last-child { color: var(--success-color); }
+/* Orange means one thing here: a stray or dropped camera. Over the threshold but not
+   dropped yet stays neutral, and red is kept for errors and a node with no 3D. */
+.tri-thr-verdicts li.is-over > span:last-child { color: var(--text-primary); }
+.tri-thr-verdicts li.is-drop > span:last-child { color: var(--warning-color); }
+.tri-thr-verdicts li.is-out > span:last-child { color: var(--text-muted); }
+.tri-thr-verdicts li.is-off > span:last-child { color: var(--text-secondary); }
+
+.tri-methods-col p.tri-thr-result {
+  margin-top: 12px;
+  color: var(--text-primary);
+}
+
+.tri-methods-col p.tri-thr-result.tri-thr-lost { color: var(--error-color); }
+
+.tri-methods .tm-band { stroke-width: 7; stroke-linecap: butt; opacity: 0.4; }
+.tri-methods .tm-band-end { stroke-width: 1.5; stroke-linecap: round; }
+.tri-methods .is-in.tm-band, .tri-methods .is-in.tm-band-end { stroke: var(--success-color); }
+.tri-methods .is-over.tm-band, .tri-methods .is-over.tm-band-end { stroke: var(--text-secondary); }
+.tri-methods .is-drop.tm-band, .tri-methods .is-drop.tm-band-end { stroke: var(--warning-color); }
+.tri-methods .tm-idle { opacity: 0.3; }
+/* A camera a re-solve no longer counts: out of the math. */
+.tri-methods .tm-dropped { opacity: 0.35; }
+.tri-methods .tm-key-band { width: 14px; height: 6px; border-radius: 1px; background: var(--success-color); opacity: 0.6; }
+.tri-methods .tm-true { stroke: var(--success-color); stroke-width: 1.6; stroke-linecap: round; }
+
+/* Settings ▸ Temporal Smoothing: what the Median and Gaussian windows do
+   (ui/smoothing-windows-figure.js). */
+.smooth-fig {
+  margin: 0 0 12px;
+}
+
+.smooth-fig-lead,
+.smooth-fig-col p {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.smooth-fig-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.smooth-fig-col {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px 12px 12px;
+  background: var(--bg-primary);
+}
+
+.smooth-fig-name {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.smooth-fig-name small {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.smooth-fig-col svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* High enough that the chart fills a wide card (300:140 viewBox). */
+  max-height: 320px;
+  margin: 6px 0 8px;
+  overflow: hidden;
+}
+
+.smooth-fig-col p.smooth-fig-warn {
+  margin-top: 8px;
+  color: var(--warning-color);
+}
+
+.smooth-fig-legend,
+.smooth-fig-legend .sf-legend-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.smooth-fig-legend { margin-bottom: 8px; }
+
+.smooth-fig-legend > span:not(.sf-legend-items),
+.smooth-fig-legend .sf-legend-items > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.smooth-fig-legend > span[hidden] { display: none; }
+.smooth-fig-legend span.sf-key-absent { visibility: hidden; }
+
+/* The top cards' legends stand in the card's top right corner, over the space
+   above the trace's low end, while the card is wide enough; a narrow card keeps
+   them in a row under its title. */
+.smooth-fig-col > .smooth-fig-name:has(.smooth-fig-legend) { position: relative; container-type: inline-size; }
+.smooth-fig-name .smooth-fig-legend { margin: 6px 0 0; font-weight: 400; }
+@container (min-width: 400px) {
+  .smooth-fig-name .smooth-fig-legend {
+    position: absolute;
+    top: 0;
+    right: 0;
+    /* As wide as its widest possible row, so it stays put as rows change. */
+    width: 14.5em;
+    margin: 0;
+    white-space: nowrap;
+  }
+  .smooth-fig-name .smooth-fig-legend,
+  .smooth-fig-name .smooth-fig-legend .sf-legend-items {
+    flex-direction: column;
+    flex-wrap: nowrap;
+    gap: 1px;
+    font-size: 11px;
+  }
+  /* A swatch column, so every label starts at the same place. */
+  .smooth-fig-name .smooth-fig-legend > span:not(.sf-legend-items),
+  .smooth-fig-name .smooth-fig-legend .sf-legend-items > span {
+    display: grid;
+    grid-template-columns: 18px auto;
+    align-items: center;
+    column-gap: 5px;
+  }
+  .smooth-fig-name .smooth-fig-legend > span[hidden] { display: none; }
+  .smooth-fig-name .smooth-fig-legend i { justify-self: center; }
+}
+
+.smooth-fig-legend i {
+  display: inline-block;
+}
+
+/* Each swatch looks like what the chart draws: a line, its dot on top (::after). */
+.smooth-fig .sf-key-true,
+.smooth-fig .sf-key-raw,
+.smooth-fig .sf-key-med,
+.smooth-fig .sf-key-out { position: relative; width: 16px; height: 2px; border-radius: 1px; }
+.smooth-fig .sf-key-raw::after,
+.smooth-fig .sf-key-med::after,
+.smooth-fig .sf-key-out::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  box-sizing: border-box;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+}
+.smooth-fig .sf-key-true { height: 1.5px; background: #fff; }
+.smooth-fig .sf-key-raw { height: 1px; background: var(--text-secondary); }
+.smooth-fig .sf-key-raw::after { width: 7px; height: 7px; border: 1.1px solid var(--text-secondary); background: var(--bg-secondary); }
+.smooth-fig .sf-key-med { background: var(--success-color); }
+.smooth-fig .sf-key-med::after { width: 5px; height: 5px; background: var(--success-color); }
+.smooth-fig .sf-key-out { background: var(--accent); }
+.smooth-fig .sf-key-out::after { width: 5px; height: 5px; border: 1.1px solid #000; }
+.smooth-fig .sf-key-spike { width: 6px; height: 6px; border-radius: 50%; background: var(--error-color); }
+.smooth-fig .sf-key-band { width: 12px; height: 10px; background: var(--accent); opacity: 0.18; }
+.smooth-fig .sf-key-rank,
+.smooth-fig .sf-key-rank-mid,
+.smooth-fig .sf-key-weight { width: 2px; height: 10px; }
+.smooth-fig .sf-key-rank { background: var(--text-muted); }
+.smooth-fig .sf-key-rank-mid { background: var(--success-color); }
+.smooth-fig .sf-key-weight { background: var(--accent); opacity: 0.7; }
+.smooth-fig .sf-key-current { width: 9px; height: 9px; box-sizing: border-box; border-radius: 50%; border: 1.4px solid var(--text-primary); }
+
+.smooth-fig .sf-axis { stroke: var(--border-color); stroke-width: 1; }
+.smooth-fig .sf-band { fill: var(--accent); opacity: 0.16; }
+.smooth-fig .sf-weight { stroke: var(--accent); stroke-width: 1.5; opacity: 0.55; }
+.smooth-fig .sf-rank { stroke: var(--text-muted); stroke-width: 1.5; opacity: 0.7; }
+.smooth-fig .sf-rank-mid { stroke: var(--success-color); stroke-width: 2.5; opacity: 1; }
+.smooth-fig .sf-rank-spike { stroke: var(--error-color); opacity: 0.85; }
+.smooth-fig .sf-true { fill: none; stroke: #fff; stroke-width: 1.2; }
+.smooth-fig .sf-raw-line { fill: none; stroke: var(--text-secondary); stroke-width: 0.9; stroke-linejoin: round; }
+.smooth-fig .sf-in-median { fill: none; stroke: var(--success-color); stroke-width: 1.2; stroke-linejoin: round; }
+.smooth-fig .sf-raw { fill: none; stroke: var(--text-secondary); stroke-width: 1.1; }
+.smooth-fig .sf-spike { fill: var(--error-color); stroke: var(--bg-primary); stroke-width: 0.8; }
+.smooth-fig .sf-out { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.smooth-fig .sf-out-node { fill: none; stroke: #000; stroke-width: 1.2; }
+.smooth-fig .sf-ahead { opacity: 0.22; }
+.smooth-fig .sf-out.sf-left { stroke: var(--text-muted); }
+.smooth-fig .sf-absent { fill: var(--text-muted); opacity: 0.08; }
+.smooth-fig .sf-absent.sf-absent-split { fill: var(--warning-color); opacity: 0.14; }
+.smooth-fig .sf-note.sf-note-split { fill: var(--warning-color); }
+.smooth-fig .sf-seg { fill: var(--accent); }
+.smooth-fig .sf-seg.sf-seg-short { fill: var(--text-muted); }
+.smooth-fig .sf-key-hole { width: 12px; height: 10px; background: var(--text-muted); opacity: 0.3; }
+.smooth-fig .sf-key-split { width: 12px; height: 10px; background: var(--warning-color); opacity: 0.35; }
+.smooth-fig .sf-key-seg,
+.smooth-fig .sf-key-seg-short { width: 14px; height: 5px; border-radius: 2px; background: var(--accent); }
+.smooth-fig .sf-key-seg-short { background: var(--text-muted); }
+.smooth-fig .sf-key-out-line { width: 16px; height: 2px; border-radius: 1px; background: var(--accent); }
+.smooth-fig .sf-key-left { width: 14px; height: 2px; border-radius: 1px; background: var(--text-muted); }
+
+/* Card 3 (gaps and segments) spans both columns, with a wider, shorter chart. */
+.smooth-fig [data-try="pos"]:has(input:disabled) { opacity: 0.45; }
+.smooth-fig-wide { margin-top: 10px; }
+.smooth-fig-wide svg { max-height: 300px; }
+.smooth-fig-wide .fig-ctl-name { min-width: 76px; }
+.smooth-fig .sf-current { fill: none; stroke: var(--text-primary); stroke-width: 1.4; }
+
+.smooth-fig .sf-play {
+  flex: none;
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-primary);
+  background: var(--bg-button);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.smooth-fig .sf-play:hover { border-color: var(--border-light); }
+.smooth-fig .sf-out-median { stroke: var(--success-color); }
+.smooth-fig .sf-med { fill: var(--success-color); stroke: var(--bg-primary); stroke-width: 0.8; }
+.smooth-fig .sf-move { stroke: var(--text-secondary); stroke-width: 1.2; }
+.smooth-fig .sf-arrowhead { fill: var(--text-secondary); }
+.smooth-fig .sf-note { font-size: 10px; fill: var(--text-muted); }
+.smooth-fig .sf-note-spike { fill: var(--error-color); }
 .tri-methods .tm-note { fill: var(--text-secondary); font-size: 10px; }
 .tri-methods .tm-note-stray { fill: var(--warning-color); }
+.tri-methods .tm-note-drop { fill: var(--warning-color); }
+.tri-methods .tm-legend-text { font-size: 9px; }
+.tri-methods .tm-camera-number { fill: #fff; font-size: 9px; font-weight: 700; }
+.tri-methods .tm-total-bar { fill: var(--error-color); stroke: var(--bg-primary); stroke-width: 0.5; }
+.tri-methods .tm-total-rule { stroke: var(--border-light); stroke-width: 0.8; }
+.tri-methods .tm-total-sum .tm-note { fill: var(--text-primary); font-weight: 600; }
+.tri-methods .tm-total-out .tm-note { fill: var(--text-muted); }
+.tri-methods .tm-truth-gap { stroke: #a81c1c; stroke-width: 2.5; stroke-linecap: round; }
+.tri-methods .tm-truth-bar { fill: #a81c1c; }
 
 .settings-docs-note a {
   color: var(--accent);
@@ -5431,6 +6073,7 @@ kbd {
 
 .settings-modal-footer {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
@@ -5438,10 +6081,60 @@ kbd {
   border-top: 1px solid var(--border-color);
 }
 
+.settings-size-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.settings-size-btns span { margin-right: 4px; }
+
+.settings-size-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-button);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.settings-size-btn:hover { color: var(--text-primary); }
+
+.settings-size-btn[aria-pressed="true"] {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
+/* Settings ▸ Triangulation Wizard: what Triangulate All will use. */
+.settings-tri-readout {
+  margin-right: auto;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-secondary);
+}
+
+.settings-tri-readout strong {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-tri-readout-row.is-changed strong { color: var(--accent); }
+
+.settings-tri-readout-was { color: var(--text-muted); }
+
 .settings-btn {
   padding: 7px 18px;
   border-radius: 5px;
   font-size: 13px;
+  line-height: 16px;
   cursor: pointer;
   border: 1px solid var(--border-color);
   transition: background var(--transition-fast), color var(--transition-fast),
@@ -5449,6 +6142,7 @@ kbd {
 }
 
 .settings-btn-cancel {
+  min-width: 78px;
   background: var(--bg-button);
   color: var(--text-secondary);
 }
@@ -5463,9 +6157,28 @@ kbd {
   border-color: var(--accent);
 }
 
-.settings-btn-apply:hover {
+.settings-btn-apply {
+  min-width: 96px;
+}
+
+.settings-btn-apply:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
+}
+
+/* Nothing to apply. */
+.settings-btn-apply:disabled {
+  background: var(--bg-button);
+  border-color: var(--border-color);
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* Just applied: stays this way until the next edit. */
+.settings-btn-apply.is-applied:disabled {
+  background: transparent;
+  border-color: var(--success-color);
+  color: var(--success-color);
 }
 
 /* --------------------------------------------------------------------------
@@ -7245,6 +7958,7 @@ body.origin-mode-lock .timeline-container {
    saying which sessions loaded which calibration, and nothing else. */
 .origin-rebase-modal,
 .calib-notice-modal,
+.video-codec-notice-modal,
 .skeleton-edit-modal {
   min-width: 440px;
   max-width: 560px;
@@ -7262,6 +7976,7 @@ body.origin-mode-lock .timeline-container {
    keeps this row out of the scrolled flow. */
 .origin-rebase-modal .modal-actions,
 .calib-notice-modal .modal-actions,
+.video-codec-notice-modal .modal-actions,
 .skeleton-edit-modal .modal-actions {
   position: sticky;
   bottom: -20px;
@@ -7810,3 +8525,31 @@ div.track-summary-steps { padding-left: 0; }
 .identity-gallery-map-canvas { display: block; border-radius: 3px; }
 .identity-gallery-map-tip { display: none; position: absolute; pointer-events: none; font-size: 10px; padding: 1px 4px; border-radius: 3px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-color); font-variant-numeric: tabular-nums; }
 @media (max-width: 820px) { .identity-gallery-row { grid-template-columns: 1fr; } }
+
+/* ui/video-codec-notice.js: why the videos won't play and what to change. The
+   steps are a numbered list; the ffmpeg command is selectable code that wraps
+   rather than widening the modal. */
+.video-codec-notice-modal #videoCodecNoticeWhy {
+  margin: 10px 0 14px;
+  line-height: 1.45;
+}
+.video-codec-notice-steps {
+  margin: 6px 0 4px;
+  padding-left: 20px;
+  line-height: 1.45;
+}
+.video-codec-notice-steps li + li {
+  margin-top: 6px;
+}
+.video-codec-notice-command {
+  display: block;
+  margin-top: 4px;
+  padding: 6px 8px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--bg-tertiary, rgba(255, 255, 255, 0.06));
+  border-radius: 4px;
+  user-select: text;
+}

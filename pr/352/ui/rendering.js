@@ -6,38 +6,38 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=17e9b3860106';
-import { points3dNodeCount, isPoints3dFromFile, isPoints3dSmoothed } from '../pose/pose-data.js?v=17e9b3860106';
+import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=2ab40f313884';
+import { points3dNodeCount, isPoints3dFromFile, isPoints3dSmoothed } from '../pose/pose-data.js?v=2ab40f313884';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
     triangulateAndReproject, reprojectStoredPoints3d, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=17e9b3860106';
-import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=17e9b3860106';
-import { drawFrameOverlays } from './overlays.js?v=17e9b3860106';
-import { syncViewLegends } from './view-legend.js?v=17e9b3860106';
-import { isCameraTracked, getTrackingThreshold } from './settings.js?v=17e9b3860106';
-import { poseCheckOf } from '../pose/pose-check-session.js?v=17e9b3860106';
-import { syncSeekbarPoseFlags } from './seekbar-pose-flags.js?v=17e9b3860106';
+} from '../pose/triangulation.js?v=2ab40f313884';
+import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=2ab40f313884';
+import { drawFrameOverlays } from './overlays.js?v=2ab40f313884';
+import { syncViewLegends } from './view-legend.js?v=2ab40f313884';
+import { isCameraTracked, getTrackingThreshold } from './settings.js?v=2ab40f313884';
+import { poseCheckOf } from '../pose/pose-check-session.js?v=2ab40f313884';
+import { syncSeekbarPoseFlags } from './seekbar-pose-flags.js?v=2ab40f313884';
 
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=17e9b3860106';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=2ab40f313884';
 // The toolbar's Animals field shows the ACTIVE session's count. Circular
 // (it reaches pose/tracker.js, which imports this module) — safe for the same
 // reason: the call site is inside drawAllOverlays' body.
-import { syncAnimalCountField } from './animal-count-field.js?v=17e9b3860106';
-import { syncNodeTooltipFrame } from './node-tooltip.js?v=17e9b3860106';
-import { syncSmoothingButton } from './smoothing-button.js?v=17e9b3860106';
-import { syncRunButtons } from './run-buttons.js?v=17e9b3860106';
+import { syncAnimalCountField } from './animal-count-field.js?v=2ab40f313884';
+import { syncNodeTooltipFrame } from './node-tooltip.js?v=2ab40f313884';
+import { syncSmoothingButton } from './smoothing-button.js?v=2ab40f313884';
+import { syncRunButtons } from './run-buttons.js?v=2ab40f313884';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=17e9b3860106';
-import { updateFrameInfo } from './info-panel.js?v=17e9b3860106';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=2ab40f313884';
+import { updateFrameInfo } from './info-panel.js?v=2ab40f313884';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
-} from './frame-counters.js?v=17e9b3860106';
+} from './frame-counters.js?v=2ab40f313884';
 
 // A view's verdict function for drawFrameOverlays' pose-check marks.
 function poseCheckOfView(session, viewName) {
@@ -147,6 +147,8 @@ export function getVisibilitySettings() {
         // The "?" badge on unlinked instances. Defaults TRUE when the control is
         // absent, so the affordance is never lost by accident.
         showUnlinkedBadge: checkVal('visUnlinkedBadge', true),
+        showSymmetryEdges: checkVal('visSymmetryEdges', false),
+        symmetryEdgeWeight: parseInt((document.getElementById('visSymmetryEdgeWeight') || {}).value) || 1,
         userOpts: {
             nodeSize: parseInt(document.getElementById('visUserNodeSize').value) || 4,
             lineWidth: parseInt(document.getElementById('visUserEdgeWeight').value) || 2,
@@ -605,6 +607,8 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             showReprojected: vis.showReprojected,
             reprojNodeColor: vis.reprojNodeColor,
             showErrors: vis.showErrors,
+            showSymmetryEdges: vis.showSymmetryEdges,
+            symmetryEdgeWeight: vis.symmetryEdgeWeight,
             userOpts: vis.userOpts,
             predictedOpts: vis.predictedOpts,
             reprojOpts: vis.reprojOpts,

@@ -9,7 +9,7 @@
  *  2. The Speed popover offers 0.25x and 0.5x presets, they apply, and the
  *     (now wider) popover stays inside the window.
  *  3. The Triangulate / Triangulate All buttons say which method a plain click
- *     runs (in its tooltip; the label stays "Triangulate"), and follow Settings ▸ Default Triangulation
+ *     runs (in its tooltip; the label stays "Triangulate"), and follow Settings ▸ Triangulation Wizard
  *     when it is changed through the real Settings dialog — immediately, and
  *     after a reload (the setting persists in localStorage).
  *
@@ -43,7 +43,7 @@ try {
     });
     const boot = async () => {
         await page.goto(`http://localhost:${PORT}/index.html`);
-        await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+        await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     };
     await boot();
     // Start from the default method regardless of what this browser profile held.
@@ -69,6 +69,16 @@ try {
 
     await page.click('#menuSettings');
     check(await page.isVisible('.settings-btn-cancel'), 'Help ▸ Settings opens the Settings dialog');
+    const activePanel = () => page.evaluate(() => {
+        const a = document.querySelector('.settings-nav-item.active');
+        return a && a.dataset.panel;
+    });
+    check(await activePanel() === 'wizard', 'the first time, it opens on the first panel, Tracking Wizard');
+    await page.click('.settings-nav-item[data-panel="smoothing"]');
+    await page.click('.settings-btn-cancel');
+    await page.click('.menu-item[data-menu="help"]');
+    await page.click('#menuSettings');
+    check(await activePanel() === 'smoothing', 'then it reopens on the panel last shown');
     await page.click('.settings-btn-cancel');
     await page.click('#menuBarSettings');
     check(await page.isVisible('.settings-btn-cancel'), 'the Settings button opens the Settings dialog');
@@ -120,6 +130,7 @@ try {
 
     // Change it the way a user does: Settings dialog -> "Refined" row -> Apply.
     await page.click('#menuBarSettings');
+    await page.click('.settings-nav-item[data-panel="triangulation"]');
     // The method is picked by clicking its diagram card (no separate rows).
     await page.click('.tri-method-choice[data-method="ba"]');
     const picked = await page.evaluate(() => Array.from(document.querySelectorAll('.tri-method-choice'))
@@ -133,16 +144,17 @@ try {
     l = await labels();
     check(/DLT \(fast\)/.test(l.title) && l.radio === 'dlt', 'picking a card without Apply changes nothing yet');
     await page.click('.settings-btn-apply');
+    await page.click('.settings-modal-close');
     l = await labels();
     check(l.text === 'Triangulate' && l.radio === 'ba', `after Apply: "${l.text}", radio ${l.radio}`);
-    check(/Ref \(slow & accurate\)/.test(l.title), 'tooltip follows too');
+    check(/Ref \(slower; helps when one view is clearly wrong\)/.test(l.title), 'tooltip follows too');
     const radioName = await page.evaluate(() =>
         document.querySelector('#triangulateDropdown input[value="ba"]').parentElement.textContent.trim());
     check(radioName === 'Ref', 'the tooltip uses the same name as its Method radio ("Ref")');
 
     await boot();
     l = await labels();
-    check(/Ref \(slow & accurate\)/.test(l.title) && l.radio === 'ba', 'after a reload the button still runs Ref');
+    check(/Ref \(slower; helps when one view is clearly wrong\)/.test(l.title) && l.radio === 'ba', 'after a reload the button still runs Ref');
 
     // Back to DLT through the menu's own radio this time, and leave the profile clean.
     await page.hover('#tbTriangulateAll');
