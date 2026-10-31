@@ -385,6 +385,16 @@ const TRACKING_THRESHOLDS = [
         desc: 'Each animal\'s 3D that the next frame is matched against keeps only the nodes whose views agree within this many pixels: a node over it loses its worst view (down to 2), then is dropped. The 3D written to the groups is unchanged. 20 = the value tried with the cap above. 0 = off. Makes Track All about 60% slower.',
     },
     {
+        id: 'softGate', label: 'Soft gate: refuse matches costing more than', default: 0,
+        min: 0, max: 2000, step: 10,
+        desc: 'The flicker fix (pose/cross-view-tracker.js, 2026-10-19), for when the match gate is off. A tracked target refuses a detection that costs it more than this instead of being forced onto it, so a target whose animal is undetected in a view stops taking a neighbour\'s detection (or a stray one) and handing it back frame after frame. Lost targets still take what is left. 0 = off (the default). On the 22 proofread SLAP sessions, 150 with a hold bonus of 30 cut short identity flips 43% and lasting switches 39%; on the 5-mouse recording it changed which pair swaps. Ignored while the gate is on.',
+    },
+    {
+        id: 'holdBonus', label: 'Hold bonus (keep last frame\'s detection)', default: 0,
+        min: 0, max: 500, step: 5,
+        desc: 'The flicker fix\'s second half (pose/cross-view-tracker.js, 2026-10-19): a target scores this much better on the detection that continues the one it took in the same view on the previous frame, so two near-tied targets stop trading it back and forth. 0 = off (the default). 30 cut short identity flips about 24% on the 22 proofread SLAP sessions, with the gate off or on.',
+    },
+    {
         id: 'autoSwitchCheck', label: 'Check ID switches after tracking (body size)', default: 1,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
         desc: 'After Track All or Track Frame Range, flag contacts after which each animal\'s body size matches the other\'s before better than its own (Tracks ▸ Check ID Switches; pose/id-switch-check.js). Checks every tracked frame in the session (needs at least 60 s of tracking). Results are marked on the seekbar and listed in the ID Switches tab, which opens only when a possible switch is found.',
@@ -439,7 +449,7 @@ TRACKING_THRESHOLDS.forEach(function (t) { _thrById.set(t.id, t); });
 const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore', 'filterMinMeanNodeScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
-    'stale', 'matchGate', 'maxPenalty', 'matchReproj',
+    'stale', 'matchGate', 'maxPenalty', 'matchReproj', 'softGate', 'holdBonus',
     'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz', 'imageCheckMaxViews', 'imageCheckWebNN',
     'reprojErrorThreshold',
 ]);

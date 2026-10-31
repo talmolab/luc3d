@@ -2192,7 +2192,7 @@ opened lazy project). Regression test:
 `tests/e2e/track-all-fresh-lazy-session.mjs`.
 
 **Hyperparameters** come from the
-`corr2dWeight`/`corr3dWeight`/`velocityThreshold`/`distanceThreshold`/`timePenalty`/`stale`/`matchGate`
+`corr2dWeight`/`corr3dWeight`/`velocityThreshold`/`distanceThreshold`/`timePenalty`/`stale`/`matchGate`/`maxPenalty`/`matchReproj`/`softGate`/`holdBonus`
 tracking thresholds (`ui/settings.js`, via `crossViewHyperparams()`; defaults are
 the `G_keeptrack_3d6` champion values, except `distanceThreshold`/`stale` — see
 `pose/cross-view-tracker.js`). Track Frame/Track All pass the user's animal count
@@ -2336,6 +2336,25 @@ on 22 SLAP sessions + 5 mice); what `matchReproj` adds fell 43–49% (maxPenalty
 matchReproj 20: 5.1 → 4.0 s on 145420, 51 → 39 s on 5 mice). Covered by
 `tests/test-crossview-features.mjs` (each option's effect, that 0 reproduces today's
 cost, and `match3d` against a verbatim copy of the original per-trial loop).
+
+**Flicker fix (2026-10-19, `softGate` / `holdBonus` hp; both 0 = off = today's
+tracker exactly).** With the gate off, a target whose animal has no usable detection
+in a view is still forced onto one there; when its cost on a neighbour's (or a stray)
+detection is close to the alternative, a visible animal's label flips every frame or
+two (SLAP 143153: midL 13,232, mid 14,990–14,999). `softGate` runs the match gate's
+two stages with the tracked targets' "no match" at that cost instead of 0
+(`_assign`'s `noMatchCost`; the gate, when on, wins); lost targets still re-acquire
+forced. `holdBonus` is added in `_adjacency` when the detection continues the one the
+target took in the same view on the previous frame (`_continues`: mean per-node
+distance under `holdRadius`, 0.02 normalized image units). Exact offline replay on 22
+proofread SLAP sessions, gate off, softGate 150 + holdBonus 30: identity runs under
+0.5 s 2,385 → 1,351, lasting switches 360 → 220, median accuracy 99.15% → 99.74%,
+mean 88.2% → 93.8% (89–94% at neighbouring values). Gate on + holdBonus 30: short runs
+568 → 433, accuracy unchanged. 5-mouse recording: the soft gate keeps 4 lasting
+relabels but swaps a different pair (17.8% → 22.8% wrong); holdBonus 30 alone 2,
+12.4%. Hence opt-in, both Tracking Wizard settings. Covered by
+`tests/test-cross-view-tracker.mjs` ("Soft gate", "Hold bonus") and
+`tests/e2e/track-all-worker.mjs` (1b: worker == inline with both on).
 
 **Coordinate conventions.** Works entirely in NORMALIZED camera coordinates
 (detections undistorted + K⁻¹-applied on ingest, `normalizePoint`); the
@@ -9293,6 +9312,7 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   `stale`, `matchGate` (0/1 toggle for the CrossViewTracker match gate),
   `maxPenalty` / `matchReproj` — the misplaced-node options, 0 (off) by
   default (the tracker's third, `birthMedian`, is not in the wizard),
+  `softGate` and `holdBonus` (the tracker's flicker fix, 0 = off by default),
   `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
   0/1, the image check likewise, default 0; `imageChangeThreshold` -1;

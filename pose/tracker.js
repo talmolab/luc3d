@@ -946,6 +946,9 @@ function crossViewHyperparams() {
         // Misplaced-node robustness (pose/cross-view-tracker.js, 2026-10-20), off by default.
         maxPenalty: thr('maxPenalty'),
         matchReproj: thr('matchReproj'),
+        // The flicker fix (pose/cross-view-tracker.js, 2026-10-19); 0 = off.
+        softGate: thr('softGate'),
+        holdBonus: thr('holdBonus'),
     };
 }
 

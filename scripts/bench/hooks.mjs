@@ -37,6 +37,8 @@ const THRESHOLD_DEFAULTS = {
     matchGate: 0,
     maxPenalty: 0,
     matchReproj: 0,
+    softGate: 0,
+    holdBonus: 0,
     autoSwitchCheck: 1,
     autoImageSwitchCheck: 0,
     imageChangeThreshold: -0.8,
