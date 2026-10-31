@@ -28,9 +28,9 @@
 // Depends on: ui/track-summary.js, ui/id-switch-modal.js (openIdSwitchPanel,
 // refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary), ui/identity-gallery.js.
 
-import { planTrackSummary, summarizeTrackedIdentities, describeSwitchCheck } from './track-summary.js?v=4f933172d60c';
-import { openIdSwitchPanel, refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary } from './id-switch-modal.js?v=4f933172d60c';
-import { renderIdentityGallery } from './identity-gallery.js?v=4f933172d60c';
+import { planTrackSummary, summarizeTrackedIdentities, describeSwitchCheck } from './track-summary.js?v=da15011ba119';
+import { openIdSwitchPanel, refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary } from './id-switch-modal.js?v=da15011ba119';
+import { renderIdentityGallery } from './identity-gallery.js?v=da15011ba119';
 
 // The viewer's frame navigation, registered once by ui-wiring (as the ID Switches tab's is):
 // the tracker that opens this box cannot import pose/initialization.js.
@@ -53,7 +53,7 @@ var ACTIONS = {
         var next = document.getElementById('idSwitchNext');
         if (next && !next.disabled) next.click();
     },
-    triangulate: function () { clickById('tbTriangulateAll'); },
+    triangulationSettings: function () { clickById('tbTriangulateSettings'); },
     // These two come back here when the check ends, with its result in the box.
     imageCheck: function () { clickCheckFromSummary('menuCheckImageSwitches'); },
     sizeCheck: function () { clickCheckFromSummary('menuCheckSizeSwitches'); },

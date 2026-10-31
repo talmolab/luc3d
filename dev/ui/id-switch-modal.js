@@ -28,21 +28,21 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { noteProgress } from './progress-delta.js?v=4f933172d60c';
-import { state, getActiveSession } from './app-state.js?v=4f933172d60c';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=4f933172d60c';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=4f933172d60c';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=4f933172d60c';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=4f933172d60c';
-import { getTrackingThreshold } from './settings.js?v=4f933172d60c';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=4f933172d60c';
+import { noteProgress } from './progress-delta.js?v=da15011ba119';
+import { state, getActiveSession } from './app-state.js?v=da15011ba119';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=da15011ba119';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=da15011ba119';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=da15011ba119';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=da15011ba119';
+import { getTrackingThreshold } from './settings.js?v=da15011ba119';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=da15011ba119';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=4f933172d60c';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=4f933172d60c';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=4f933172d60c';
+         inputTensorToPixels, INPUT } from './image-embedder.js?v=da15011ba119';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=da15011ba119';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=da15011ba119';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=4f933172d60c';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=da15011ba119';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 

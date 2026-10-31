@@ -10,7 +10,7 @@
 //
 // Imports only `id-switch-review.js`, which is import-free.
 
-import { idSwitchOnsets, idSwitchEncounterCount } from './id-switch-review.js?v=4f933172d60c';
+import { idSwitchOnsets, idSwitchEncounterCount } from './id-switch-review.js?v=da15011ba119';
 
 /** Thousands separators, as everywhere else frame counts are shown. */
 function n(v) {
@@ -199,7 +199,7 @@ export const MAX_IDENTITY_ROWS = 12;
  *   primary: {action:string, label:string},
  *   secondary: Array<{action:string, label:string}>,
  * }}
- *   Actions: 'review' (ID Switches tab), 'triangulate' (Triangulate All),
+ *   Actions: 'review' (ID Switches tab), 'triangulationSettings' (Settings ▸ Default Triangulation),
  *   'imageCheck' / 'sizeCheck' (run that check), 'wizard' (Tracking Wizard).
  */
 export function planTrackSummary(s, checks) {
@@ -263,7 +263,7 @@ export function planTrackSummary(s, checks) {
     };
     var checkRows = nIds > 1 ? [checkRow('Body size', size), checkRow('Images', image)] : [];
 
-    var TRIANGULATE = 'Run Triangulate All for 3D poses in every frame.';
+    var TRIANGULATE = 'Choose how to triangulate in Settings ▸ Default Triangulation, then run Triangulate All for 3D poses in every frame.';
     var PROPAGATE = 'Optional: Tracks ▸ Propagate IDs → Tracks stores the identities as tracks too.';
     var next, primary, secondary = [];
     var canImage = image.state === 'off' || image.state === 'cancelled';
@@ -301,7 +301,7 @@ export function planTrackSummary(s, checks) {
             caveat = 'Spot-check them by playing through moments when animals come close.';
         }
         next = { headline: headline, caveat: caveat, steps: [TRIANGULATE, PROPAGATE] };
-        primary = { action: 'triangulate', label: 'Triangulate All' };
+        primary = { action: 'triangulationSettings', label: 'Default Triangulation…' };
         if (nIds > 1 && size.state === 'off') secondary.push({ action: 'sizeCheck', label: 'Check by body size' });
         if (nIds > 1 && canImage) secondary.push({ action: 'imageCheck', label: 'Check by images…' });
     }

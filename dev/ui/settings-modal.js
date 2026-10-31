@@ -8,7 +8,9 @@
 // state object and the visual DOM only — nothing is committed to settings.js
 // until the user clicks Apply. Apply keeps the modal open and its button reads
 // "Applied ✓" until the next edit. Cancel / × / backdrop / Escape discard what
-// has not been applied; with nothing pending, Cancel reads "Close".
+// has not been applied; with nothing pending, Cancel reads "Close". The Default
+// Triangulation panel's footer also has Triangulate All: it applies what is
+// pending, closes the modal and clicks the toolbar button.
 //
 // Styling lives in a separate CSS file; this module only assigns the agreed
 // class names. Only one modal instance may exist at a time.
@@ -42,16 +44,16 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=4f933172d60c';
-import { getActiveSession, state, timeline } from './app-state.js?v=4f933172d60c';
-import { drawAllOverlays } from './rendering.js?v=4f933172d60c';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=4f933172d60c';
-import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=4f933172d60c';
-import { buildThresholdExamples } from './threshold-examples-panel.js?v=4f933172d60c';
-import { installModalGeometry } from './modal-geometry.js?v=4f933172d60c';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=4f933172d60c';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=4f933172d60c';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=4f933172d60c';
+} from './settings.js?v=da15011ba119';
+import { getActiveSession, state, timeline } from './app-state.js?v=da15011ba119';
+import { drawAllOverlays } from './rendering.js?v=da15011ba119';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=da15011ba119';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=da15011ba119';
+import { buildThresholdExamples } from './threshold-examples-panel.js?v=da15011ba119';
+import { installModalGeometry } from './modal-geometry.js?v=da15011ba119';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=da15011ba119';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=da15011ba119';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=da15011ba119';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -868,6 +870,14 @@ export function showSettingsModal(initialPanel) {
     applyBtn.textContent = 'Apply';
     footer.appendChild(cancelBtn);
     footer.appendChild(applyBtn);
+    // Only on the Default Triangulation panel (`selectPanel`). Same as the toolbar
+    // button, so it is off when that one is, and with no project to triangulate.
+    const toolbarTriangulate = document.getElementById('tbTriangulateAll');
+    const triangulateBtn = document.createElement('button');
+    triangulateBtn.className = 'settings-btn settings-btn-apply settings-btn-triangulate';
+    triangulateBtn.title = 'Close Settings and triangulate all frames with these settings';
+    triangulateBtn.disabled = !activeSession || !toolbarTriangulate || toolbarTriangulate.disabled;
+    footer.appendChild(triangulateBtn);
     card.appendChild(footer);
 
     // The buttons follow `working` against what is stored: an edit undone by hand
@@ -880,6 +890,7 @@ export function showSettingsModal(initialPanel) {
         applyBtn.classList.toggle('is-applied', !pending && appliedOnce);
         applyBtn.textContent = !pending && appliedOnce ? 'Applied ✓' : 'Apply';
         cancelBtn.textContent = pending ? 'Cancel' : 'Close';
+        triangulateBtn.textContent = pending ? 'Apply & Triangulate All' : 'Triangulate All';
     }
     onWorkingEdit = paintFooter;
     paintFooter();
@@ -895,6 +906,7 @@ export function showSettingsModal(initialPanel) {
         if (name === 'wizard') filterPreview.start();
         if (name === 'triangulation') thrExamples.start();
         thrExamples.setActive(name === 'triangulation');
+        triangulateBtn.style.display = name === 'triangulation' ? '' : 'none';
         writeLastPanel(name);
     }
     NAV_ITEMS.forEach(function (item) {
@@ -975,6 +987,11 @@ export function showSettingsModal(initialPanel) {
     closeBtn.addEventListener('click', close);
     cancelBtn.addEventListener('click', close);
     applyBtn.addEventListener('click', commit);
+    triangulateBtn.addEventListener('click', function () {
+        commit();
+        close();
+        toolbarTriangulate.click();
+    });
     overlay.addEventListener('click', function (e) {
         // Only the backdrop itself closes — not clicks inside the card.
         if (e.target === overlay) close();
