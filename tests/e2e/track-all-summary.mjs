@@ -325,7 +325,7 @@ try {
     check(tb.shown && !tb.disabled && tb.text === 'Triangulate All', `the panel offers Triangulate All (${JSON.stringify(tb)})`);
     await page.click('.settings-nav-item:has-text("Temporal Smoothing")');
     check(!(await triBtnInfo()).shown, '…on that panel only');
-    await page.click('.settings-nav-item:has-text("Triangulation Wizard")');
+    await page.click('.settings-nav-item[data-panel="triangulation"]');
     // An edit pending: it says so, and is stored by the time the toolbar button runs.
     const stored3 = () => page.evaluate(async () => (await import('/ui/settings.js')).getDefaultTriangulationMethod());
     const before3 = await stored3();
