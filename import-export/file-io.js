@@ -1109,6 +1109,60 @@ export function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFi
  * @returns {Object} sleap-io.js Labels instance
  */
 /**
+ * Which track each instance of `session` is exported on. With identities assigned
+ * the file's tracks ARE the identities (`Session.identityTrackPlan`, the same
+ * tracks "Propagate IDs → Tracks" makes), because an export has nowhere else to
+ * keep them: without this a proofread identity is lost and `track_0` means a
+ * different animal in each camera. The session is not changed. An instance with no
+ * identity is trackless, as that command makes it. With no identities assigned,
+ * each instance keeps its own track.
+ *
+ * Identity is resolved in the canvas's order (`getGroupColor`): the per-frame
+ * entry for the instance's own track, then its group, then a trackless unlinked
+ * instance's retained identity.
+ *
+ * @returns {{names: string[], fromIdentity: boolean,
+ *            resolve: function(Object, string, number): (number|null)}}
+ */
+function _exportTrackSource(session) {
+    var plan = session.identityTrackPlan();
+    if (plan.names.length === 0) {
+        var names = session.tracks;
+        return {
+            names: names, fromIdentity: false,
+            // inst.trackIdx can be null (trackless UserInstance imported from a
+            // 2D SLP with track=null). `null >= 0` is true in JS so we need the
+            // explicit != null guard before the range check.
+            resolve: function (inst) {
+                return (inst.trackIdx != null && inst.trackIdx >= 0 && inst.trackIdx < names.length)
+                    ? inst.trackIdx : null;
+            },
+        };
+    }
+    return {
+        names: plan.names, fromIdentity: true,
+        resolve: function (inst, camName, frameIdx) {
+            var id = inst.trackIdx != null ? session.getIdentityIdForTrack(camName, inst.trackIdx, frameIdx) : null;
+            if (id == null) {
+                var groups = session.instanceGroups.get(frameIdx) || [];
+                for (var g = 0; g < groups.length; g++) {
+                    var member = groups[g].instances.get(camName);
+                    // A lazy group's member is a separate object until its frame
+                    // is hydrated, so also match by store row.
+                    if (member && (member === inst || (inst._rawInstIndex != null && member._rawInstIndex === inst._rawInstIndex))) {
+                        if (groups[g].identityId != null && groups[g].identityId >= 0) id = groups[g].identityId;
+                        break;
+                    }
+                }
+            }
+            if (id == null && inst.trackIdx == null && inst.identityId != null && inst.identityId >= 0) id = inst.identityId;
+            var ti = id != null ? plan.idToTrackIdx.get(id) : undefined;
+            return ti != null ? ti : null;
+        },
+    };
+}
+
+/**
  * Build ONE camera's `SIO.LabeledFrame` for one frame — the per-frame half of
  * `buildSlpLabels`, extracted so the EAGER exporter (whole project resident, a
  * from-scratch session) and the STREAMING exporter (windowed, a lazily reopened
@@ -1120,13 +1174,14 @@ export function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFi
  * drift, which is how "export works on a new project but not a loaded one" got
  * here in the first place.
  *
- * @param {Object} env { skeleton, tracks, video, numNodes, instanceFilter, reprojAsUser }
+ * @param {Object} env { skeleton, tracks, trackSource, video, numNodes, instanceFilter, reprojAsUser }
  * @returns {Object|null} the LabeledFrame, or null when this camera has nothing
  *   on this frame (the caller skips it, exactly as the eager loop's `continue` did).
  */
 function _buildCameraLabeledFrame(session, cameraName, frameIdx, fg, env) {
     var SIO = window.SleapIO;
     var skeleton = env.skeleton, tracks = env.tracks, video = env.video;
+    var trackSource = env.trackSource;
     var numNodes = env.numNodes, instanceFilter = env.instanceFilter;
     var reprojAsUser = env.reprojAsUser;
     if (!fg) return null;
@@ -1192,11 +1247,12 @@ function _buildCameraLabeledFrame(session, cameraName, frameIdx, fg, env) {
         var instIsPred = inst.type === 'predicted';
         var instScore = inst.score != null ? inst.score : 1.0;
         var pts = _buildSioPoints(inst, numNodes, instIsPred ? instScore : undefined);
-        // inst.trackIdx can be null (trackless UserInstance imported
-        // from a 2D SLP with track=null). `null >= 0` is true in JS
-        // so we need the explicit != null guard before the range check.
-        var track = (inst.trackIdx != null && inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
-        if (track) usedTrackIdx[inst.trackIdx] = true;
+        var trackIdx = trackSource.resolve(inst, cameraName, frameIdx);
+        // Identities can collide in one view (SLEAP forbids two instances on a
+        // track in a frame): the first keeps it.
+        if (trackSource.fromIdentity && trackIdx != null && usedTrackIdx[trackIdx]) trackIdx = null;
+        var track = trackIdx != null ? tracks[trackIdx] : null;
+        if (track) usedTrackIdx[trackIdx] = true;
 
         if (inst.type === 'user') {
             frameInstances.push(new SIO.Instance({
@@ -1223,10 +1279,9 @@ function _buildCameraLabeledFrame(session, cameraName, frameIdx, fg, env) {
         var ugIsPred = ugInst.type === 'predicted';
         var ugScore = ugInst.score != null ? ugInst.score : 1.0;
         var ugPts = _buildSioPoints(ugInst, numNodes, ugIsPred ? ugScore : undefined);
-        var ugTrack = (ugInst.trackIdx != null && ugInst.trackIdx >= 0 &&
-            ugInst.trackIdx < tracks.length && !usedTrackIdx[ugInst.trackIdx])
-            ? tracks[ugInst.trackIdx] : null;
-        if (ugTrack) usedTrackIdx[ugInst.trackIdx] = true;
+        var ugTrackIdx = trackSource.resolve(ugInst, cameraName, frameIdx);
+        var ugTrack = (ugTrackIdx != null && !usedTrackIdx[ugTrackIdx]) ? tracks[ugTrackIdx] : null;
+        if (ugTrack) usedTrackIdx[ugTrackIdx] = true;
 
         if (ugInst.type === 'user') {
             frameInstances.push(new SIO.Instance({
@@ -1311,8 +1366,9 @@ export function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo,
         name: session.skeleton.name || 'skeleton',
     });
 
-    // 2. Build tracks — start with grouped tracks, extend for ungrouped later
-    var tracks = session.tracks.map(function (name) { return new SIO.Track(name); });
+    // 2. Build tracks
+    var trackSource = _exportTrackSource(session);
+    var tracks = trackSource.names.map(function (name) { return new SIO.Track(name); });
 
     var allFrameIndices = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
 
@@ -1344,7 +1400,7 @@ export function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo,
         var fg = session.frameGroups.get(frameIdx);
 
         var _lf = _buildCameraLabeledFrame(session, cameraName, frameIdx, fg, {
-            skeleton: skeleton, tracks: tracks, video: video, numNodes: numNodes,
+            skeleton: skeleton, tracks: tracks, trackSource: trackSource, video: video, numNodes: numNodes,
             instanceFilter: instanceFilter, reprojAsUser: reprojAsUser,
         });
         if (_lf) labeledFrames.push(_lf);
@@ -1353,9 +1409,9 @@ export function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo,
     // 5. Create Labels. Do NOT pass identities — the sleap-io.js
     // serializer bumps format_id to 1.9 when labels.identities is
     // non-empty, and sleap-io Python <=0.6.x cannot read format 1.9.
-    // Identities are a lucid-internal concept; losing the color/name
-    // metadata in the Export output is acceptable (Export is a flat
-    // per-camera dump, not a lucid-project round-trip).
+    // The identities travel as the tracks (`_exportTrackSource`); only their
+    // color is lost (Export is a flat per-camera dump, not a lucid-project
+    // round-trip).
     return new SIO.Labels({
         labeledFrames: labeledFrames,
         videos: [video],
@@ -1452,6 +1508,8 @@ export function _buildSioPoints(inst, numNodes, perPointScore, nodeOrder, nodeSc
 async function lazyCameraExportBytes(SIO, session, cameraName) {
     var loader = session && session.lazyLoader;
     if (!loader || !loader.labelsByCam || typeof loader.labelsByCam.get !== 'function') return null;
+    // With identities assigned, the store is only right if it already holds them.
+    if (!_storeHoldsIdentityTracks(session)) return null;
     // Safety guard: this path re-emits the RAW columnar store verbatim — it
     // has no notion of a live, manually-corrected Instance object sitting in
     // a resident FrameGroup. If any resident frame carries a user-type
@@ -1469,6 +1527,26 @@ async function lazyCameraExportBytes(SIO, session, cameraName) {
     var lazyLabels = loader.labelsByCam.get(cameraName);
     if (!lazyLabels || !lazyLabels.isLazy || typeof SIO.saveSlpToBytes !== 'function') return null;
     return await SIO.saveSlpToBytes(lazyLabels);
+}
+
+/**
+ * True when re-emitting the columnar store writes the tracks `_exportTrackSource`
+ * would: no identities are assigned, or "Propagate IDs → Tracks" already rewrote
+ * the store AND no identity switch has happened since (a switch changes
+ * `frameIdentityMap` only, so an entry then disagrees with its track).
+ */
+function _storeHoldsIdentityTracks(session) {
+    var plan = session.identityTrackPlan();
+    if (plan.names.length === 0) return true;
+    if (plan.names.length !== session.tracks.length) return false;
+    for (var i = 0; i < plan.names.length; i++) {
+        if (plan.names[i] !== session.tracks[i]) return false;
+    }
+    for (var rec of session.frameIdentityEntries()) {
+        if (rec.identityId == null || rec.identityId < 0) continue;
+        if (plan.idToTrackIdx.get(rec.identityId) !== rec.trackIdx) return false;
+    }
+    return true;
 }
 
 /** Copied from pose/tracker.js's identical helper — see that file's doc. */
@@ -1533,7 +1611,8 @@ function _buildCameraExportHeader(session, cameraName, videoFileInfo) {
     var skeleton = new SIO.Skeleton({
         nodes: sioNodes, edges: sioEdges, name: session.skeleton.name || 'skeleton',
     });
-    var tracks = session.tracks.map(function (name) { return new SIO.Track(name); });
+    var trackSource = _exportTrackSource(session);
+    var tracks = trackSource.names.map(function (name) { return new SIO.Track(name); });
     var videoFilename = videoFileInfo.videoPath
         || (videoFileInfo.file ? videoFileInfo.file.name : (cameraName + '.mp4'));
     var vw = videoFileInfo.videoWidth || 0;
@@ -1548,7 +1627,7 @@ function _buildCameraExportHeader(session, cameraName, videoFileInfo) {
         openBackend: false,
     });
     video.shape = [fc, vh, vw, 1];
-    return { skeleton: skeleton, tracks: tracks, video: video,
+    return { skeleton: skeleton, tracks: tracks, trackSource: trackSource, video: video,
              numNodes: session.skeleton.nodes.length };
 }
 
@@ -1585,8 +1664,8 @@ function _buildCameraExportHeader(session, cameraName, videoFileInfo) {
  *
  * Identities are deliberately NOT passed to the writer, matching
  * `buildSlpLabels`: a non-empty `identities` bumps the format to 1.9, which
- * sleap-io Python <= 0.6.x cannot read. This is a flat per-camera dump, not a
- * project round-trip.
+ * sleap-io Python <= 0.6.x cannot read. They travel as the tracks
+ * (`_exportTrackSource`). This is a flat per-camera dump, not a project round-trip.
  *
  * @param {Object} opts `{ sink }` streams straight to a
  *   `FileSystemWritableFileStream` instead of returning bytes; `{ onProgress }`.
@@ -1777,8 +1856,10 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
 
     // 3. Build alphabetical union of track names.
     var trackNameSet = {};
+    var trackSources = [];
     for (var sj = 0; sj < selections.length; sj++) {
-        var st = selections[sj].session.tracks || [];
+        trackSources.push(_exportTrackSource(selections[sj].session));
+        var st = trackSources[sj].names || [];
         for (var tj = 0; tj < st.length; tj++) trackNameSet[st[tj]] = true;
     }
     var unionNames = Object.keys(trackNameSet).sort();
@@ -1794,6 +1875,7 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
     for (var sel = 0; sel < selections.length; sel++) {
         var session = selections[sel].session;
         var cameraName = selections[sel].cameraName;
+        var trackSource = trackSources[sel];
         // See buildSlpLabels's identical normalization: a lazy session before
         // "Load Videos" (or a calibration-only camera) has no attached video
         // file — a real, reachable case, not just a test artifact.
@@ -1885,10 +1967,12 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
                 var instScore = inst.score != null ? inst.score : 1.0;
                 var pts = _buildSioPoints(inst, numNodes, instIsPred ? instScore : undefined, nodeOrder);
                 var instTrack = null;
-                if (inst.trackIdx != null && inst.trackIdx >= 0 && inst.trackIdx < session.tracks.length) {
-                    instTrack = trackByName[session.tracks[inst.trackIdx]] || null;
+                var instTrackIdx = trackSource.resolve(inst, cameraName, frameIdx);
+                if (trackSource.fromIdentity && instTrackIdx != null && usedTrackIdx[instTrackIdx]) instTrackIdx = null;
+                if (instTrackIdx != null) {
+                    instTrack = trackByName[trackSource.names[instTrackIdx]] || null;
                 }
-                if (instTrack) usedTrackIdx[inst.trackIdx] = true;
+                if (instTrack) usedTrackIdx[instTrackIdx] = true;
 
                 if (inst.type === 'user') {
                     frameInstances.push(new SIO.Instance({ points: pts, skeleton: skeleton, track: instTrack }));
@@ -1905,10 +1989,10 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
                 var ugScore = ugInst.score != null ? ugInst.score : 1.0;
                 var ugPts = _buildSioPoints(ugInst, numNodes, ugIsPred ? ugScore : undefined, nodeOrder);
                 var ugTrack = null;
-                if (ugInst.trackIdx != null && ugInst.trackIdx >= 0 &&
-                    ugInst.trackIdx < session.tracks.length && !usedTrackIdx[ugInst.trackIdx]) {
-                    ugTrack = trackByName[session.tracks[ugInst.trackIdx]] || null;
-                    if (ugTrack) usedTrackIdx[ugInst.trackIdx] = true;
+                var ugTrackIdx = trackSource.resolve(ugInst, cameraName, frameIdx);
+                if (ugTrackIdx != null && !usedTrackIdx[ugTrackIdx]) {
+                    ugTrack = trackByName[trackSource.names[ugTrackIdx]] || null;
+                    if (ugTrack) usedTrackIdx[ugTrackIdx] = true;
                 }
 
                 if (ugInst.type === 'user') {

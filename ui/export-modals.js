@@ -1513,7 +1513,8 @@ export function showSlpExportByCamModal() {
         + 'A green ✓ marks a session that has that view (toggle on/off); a red ✗ marks a session '
         + 'where the view does not exist. The footer toggle decides whether a camera is included '
         + 'in <b>Download All</b>, which exports each included camera (across its selected sessions) '
-        + 'as one SLEAP file into a folder you choose.</div>' +
+        + 'as one SLEAP file into a folder you choose. Tracks are written as the identities, '
+        + 'if any are assigned, so a track is the same animal in every camera.</div>' +
         emptyNote +
         '<div class="slp-bycam-body">' +
         '<div class="slp-bycam-scroll slp-bycam-sess-scroll">' + sessHtml + '</div>' +
@@ -1954,7 +1955,8 @@ export function showSlpExportPerSessionModal() {
     modal.innerHTML =
         '<h3>Export SLEAP File Per Session</h3>' +
         '<div class="slp-export-note">Writes one 2D SLEAP file per camera in <b>' + sessName + '</b> '
-        + 'into each camera\'s associated directory inside a folder you choose.</div>' +
+        + 'into each camera\'s associated directory inside a folder you choose. Tracks are written '
+        + 'as the identities, if any are assigned, so a track is the same animal in every camera.</div>' +
         '<div class="slp-export-table-container">' +
         '<table class="data-table slp-export-table">' +
         '<thead><tr><th class="slp-ps-dl-cell">Download</th><th>Camera</th><th>Directory</th><th>Output Filename</th></tr></thead>' +

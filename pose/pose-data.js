@@ -1997,6 +1997,47 @@ export class Session {
     }
 
     /**
+     * The tracks that "Propagate IDs → Tracks" would make: one per identity
+     * assigned anywhere in the project, in identities-array order so the indices
+     * are stable. Reads `frameIdentityMap`, which is whole-project and never
+     * evicted. The SLP exporters use the same plan, so an export writes the same
+     * tracks whether or not the command was run. Changes nothing.
+     *
+     * @returns {{names: string[], idToTrackIdx: Map<number, number>}} `names` is
+     *   empty when no identity is assigned.
+     */
+    identityTrackPlan() {
+        var usedSet = new Set();
+        for (var idVal of this.frameIdentityMap.values()) {
+            if (idVal != null && idVal >= 0) usedSet.add(idVal);
+        }
+        var names = [];
+        var idToTrackIdx = new Map();
+        var nameSeen = {};
+        // Auto-generated identity names look like "id_<identityId>" (the
+        // placeholder `getOrCreateIdentityForTrack` stamps when "Propagate
+        // Tracks → IDs" ran with no custom naming) — using that literally as
+        // a track name breaks the app's normal "track_N" naming convention
+        // (e.g. a Tracks-→-IDs-→-Tracks round trip would otherwise rename
+        // track_0/track_1 to id_0/id_1 instead of restoring track_0/track_1).
+        // A genuinely user-given name (e.g. "Alice") is still preserved as-is.
+        var AUTO_IDENTITY_NAME_RE = /^id_\d+$/;
+        for (var ix = 0; ix < this.identities.length; ix++) {
+            var ident = this.identities[ix];
+            if (!usedSet.has(ident.id)) continue;
+            var trimmedName = ident.name != null ? String(ident.name).trim() : '';
+            var base = (trimmedName !== '' && !AUTO_IDENTITY_NAME_RE.test(trimmedName))
+                ? trimmedName : ('track_' + names.length);
+            var name = base, dup = 2;
+            while (nameSeen[name]) { name = base + '_' + dup; dup++; }  // de-dup
+            nameSeen[name] = true;
+            idToTrackIdx.set(ident.id, names.length);
+            names.push(name);
+        }
+        return { names: names, idToTrackIdx: idToTrackIdx };
+    }
+
+    /**
      * "Propagate IDs → Tracks": overwrite every instance's track with its
      * identity. Identity/grouping is the source of truth here — each instance
      * that belongs to an identity-bearing InstanceGroup gets a trackIdx whose
@@ -2036,36 +2077,10 @@ export class Session {
         // data for every frame outside the resident window.
         var self = this;
 
-        // 1. Which identities are actually assigned anywhere, project-wide.
-        //    Preserves identities-array order for stable, reproducible track
-        //    indices. Build new tracks = identity names (unique + non-empty).
-        var usedSet = new Set();
-        for (var idVal of this.frameIdentityMap.values()) {
-            if (idVal != null && idVal >= 0) usedSet.add(idVal);
-        }
-        var newTracks = [];
-        var idToTrackIdx = new Map();   // identityId → new trackIdx
-        var nameSeen = {};
-        // Auto-generated identity names look like "id_<identityId>" (the
-        // placeholder `getOrCreateIdentityForTrack` stamps when "Propagate
-        // Tracks → IDs" ran with no custom naming) — using that literally as
-        // a track name breaks the app's normal "track_N" naming convention
-        // (e.g. a Tracks-→-IDs-→-Tracks round trip would otherwise rename
-        // track_0/track_1 to id_0/id_1 instead of restoring track_0/track_1).
-        // A genuinely user-given name (e.g. "Alice") is still preserved as-is.
-        var AUTO_IDENTITY_NAME_RE = /^id_\d+$/;
-        for (var ix = 0; ix < this.identities.length; ix++) {
-            var ident = this.identities[ix];
-            if (!usedSet.has(ident.id)) continue;
-            var trimmedName = ident.name != null ? String(ident.name).trim() : '';
-            var base = (trimmedName !== '' && !AUTO_IDENTITY_NAME_RE.test(trimmedName))
-                ? trimmedName : ('track_' + newTracks.length);
-            var name = base, dup = 2;
-            while (nameSeen[name]) { name = base + '_' + dup; dup++; }  // de-dup
-            nameSeen[name] = true;
-            idToTrackIdx.set(ident.id, newTracks.length);
-            newTracks.push(name);
-        }
+        // 1. Which identities are assigned, and the track each one becomes.
+        var plan = this.identityTrackPlan();
+        var newTracks = plan.names;
+        var idToTrackIdx = plan.idToTrackIdx;   // identityId → new trackIdx
 
         // 2. Remap the EXISTING, complete frameIdentityMap onto the new track
         //    indices. No frameGroups walk needed for this — every
