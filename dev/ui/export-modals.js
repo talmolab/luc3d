@@ -8,9 +8,9 @@
 //
 // Extracted from app.js per the consolidated Pass 3 plan, Module 13.
 
-import { noteProgress } from './progress-delta.js?v=5e0b8612229e';
-import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=5e0b8612229e';
-import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=5e0b8612229e';
+import { noteProgress } from './progress-delta.js?v=6f95538c9d3f';
+import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=6f95538c9d3f';
+import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=6f95538c9d3f';
 import {
     triangulateAndReproject,
     frameHasGroupedUserInstances,
@@ -26,34 +26,34 @@ import {
     triangulationSettingsKey,
     triangulationMethodLabel,
     dropAllDerivedTriangulationState,
-} from '../pose/triangulation.js?v=5e0b8612229e';
-import { Viewport3D } from './viewport3d.js?v=5e0b8612229e';
-import { getTrackColor, getGroupColor } from './overlays.js?v=5e0b8612229e';
-import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=5e0b8612229e';
-import { updateInfoPanel } from './info-panel.js?v=5e0b8612229e';
-import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=5e0b8612229e';
-import { showLoadingProgress, yieldToPaint } from './loading-overlay.js?v=5e0b8612229e';
-import { createGroupSolver } from '../pose/triangulation-pool.js?v=5e0b8612229e';
+} from '../pose/triangulation.js?v=6f95538c9d3f';
+import { Viewport3D } from './viewport3d.js?v=6f95538c9d3f';
+import { getTrackColor, getGroupColor } from './overlays.js?v=6f95538c9d3f';
+import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=6f95538c9d3f';
+import { updateInfoPanel } from './info-panel.js?v=6f95538c9d3f';
+import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=6f95538c9d3f';
+import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js?v=6f95538c9d3f';
+import { createGroupSolver } from '../pose/triangulation-pool.js?v=6f95538c9d3f';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
     findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
-} from '../import-export/file-io.js?v=5e0b8612229e';
+} from '../import-export/file-io.js?v=6f95538c9d3f';
 
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from '../pose/initialization.js?v=5e0b8612229e';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=5e0b8612229e';
-import { fileSystemAccessHint } from './browser-hints.js?v=5e0b8612229e';
-import { noteTriangulateRun } from '../pose/run-state.js?v=5e0b8612229e';
+import { update3DViewport } from '../pose/initialization.js?v=6f95538c9d3f';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=6f95538c9d3f';
+import { fileSystemAccessHint } from './browser-hints.js?v=6f95538c9d3f';
+import { noteTriangulateRun } from '../pose/run-state.js?v=6f95538c9d3f';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
 // private copies of all four and had silently drifted apart (a 2x bitrate floor
 // gap at the smallest tier, and two disagreeing level tables).
 import {
     RES_PRESETS, bitrateFor, estimatedBytes, h264CodecFor, shouldStreamToDisk,
-} from './overlay-export-layout.js?v=5e0b8612229e';
+} from './overlay-export-layout.js?v=6f95538c9d3f';
 
 // ============================================
 // Group by Track & Triangulate All
@@ -2793,26 +2793,50 @@ export async function exportLabels() {
 // ============================================
 
 export async function exportPoints3dH5() {
+    var title = 'Export 3D Points';
+    var pacer = createProgressPacer();
     try {
-        setStatus('Building points3d H5...', 'warning');
-        const blob = await buildPoints3dH5(state.session);
+        showLoading('Preparing 3D points…', { title: title });
+        await yieldToPaint();
+        const blob = await buildPoints3dH5(state.session, {
+            onProgress: function (done, total) {
+                if (done < total && !pacer.due()) return null;
+                showLoadingProgress('Writing 3D points', done, total, { title: title });
+                return pacer.yield();
+            },
+        });
+        hideLoading();
         downloadBlob(blob, 'points3d.h5');
-        setStatus('Points3d H5 exported', 'success');
+        setStatus('Points3d H5 exported (' + (blob.size / 1048576).toFixed(1) + ' MB)', 'success');
     } catch (err) {
+        hideLoading();
         console.error('Points3d H5 export failed:', err);
-        setStatus('Points3d H5 error: ' + err.message, 'error');
+        setStatus('Export 3D Points (H5) failed, nothing was saved: ' +
+            (err && err.message ? err.message : String(err)), 'error');
     }
 }
 
 export async function exportReprojH5() {
+    var title = 'Export Reprojections';
+    var pacer = createProgressPacer();
     try {
-        setStatus('Building reprojections H5...', 'warning');
-        const blob = await buildReprojH5(state.session);
+        showLoading('Preparing reprojections…', { title: title });
+        await yieldToPaint();
+        const blob = await buildReprojH5(state.session, {
+            onProgress: function (done, total) {
+                if (done < total && !pacer.due()) return null;
+                showLoadingProgress('Writing reprojections', done, total, { title: title });
+                return pacer.yield();
+            },
+        });
+        hideLoading();
         downloadBlob(blob, 'reprojections.h5');
-        setStatus('Reprojections H5 exported', 'success');
+        setStatus('Reprojections H5 exported (' + (blob.size / 1048576).toFixed(1) + ' MB)', 'success');
     } catch (err) {
+        hideLoading();
         console.error('Reprojections H5 export failed:', err);
-        setStatus('Reprojections H5 error: ' + err.message, 'error');
+        setStatus('Export Reprojections (H5) failed, nothing was saved: ' +
+            (err && err.message ? err.message : String(err)), 'error');
     }
 }
 

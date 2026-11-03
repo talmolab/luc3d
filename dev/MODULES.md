@@ -4591,8 +4591,12 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   Covered by `tests/e2e/triangulate-range-modal.mjs` (also Group by Track's
   3D-only-frame guard).
 - `exportLabels()` — JSON labels export.
-- `exportPoints3dH5()` — points3d H5 export.
-- `exportReprojH5()` — reprojection H5 export.
+- `exportPoints3dH5()` — points3d H5 export, under an "Export 3D Points"
+  progress card that counts frames written; a failure closes the card and says
+  nothing was saved.
+- `exportReprojH5()` — reprojection H5 export, under an "Export Reprojections"
+  progress card that counts frames written (`createProgressPacer`); a failure
+  closes the card and says nothing was saved.
 
 **Imports from project modules.**
 - `./progress-delta.js` — `noteProgress` (the lit stretch on the Choose Frames for
@@ -4623,7 +4627,8 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `../import-export/save-load.js` — `showLoading`, `hideLoading`,
   `setStatus`.
 - `./loading-overlay.js` — `showLoadingProgress`, `yieldToPaint` (the
-  "Grouping & triangulating" bar in both group-and-triangulate-all paths).
+  "Grouping & triangulating" bar in both group-and-triangulate-all paths),
+  `createProgressPacer` (the Export Reprojections and Export 3D Points cards).
 - `../pose/triangulation-pool.js` — `createGroupSolver`
   (`groupByIdentityAndTriangulateAll` solves its non-adopted groups on the
   worker pool; adoption and regrouping stay on the main thread).
@@ -14175,11 +14180,28 @@ session's resident/total) rather than truncate silently. Covered by
   (`labels.provenance`; the raw worker returns it too), for
   `import-export/slp-provenance.js`.
 - H5 build/parse: `buildPoints3dH5`, `buildReprojH5`,
-  `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`. `buildReprojH5`
+  `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`,
+  `reprojTrackAxis`, `reprojChunkFrames`. `buildReprojH5`
   (Save Reprojections) projects a group's stored 3D into each camera when it has
   no `reprojections` — they are derived, kept only for frames that have been
   shown, and Triangulate All stores none; skipping such groups would leave every
-  unshown frame NaN.
+  unshown frame NaN. It writes `reprojections` (frames, tracks, cameras, nodes, 2)
+  float64 in windows of whole chunks into a chunked gzip-1 dataset (dtype `'<d'`:
+  h5wasm reads `'<f8'` as float32), awaiting `opts.onProgress(done, total)` after
+  each window, so a 135,181-frame recording never holds the whole array (it once
+  asked h5wasm for 4.7 GB). The track axis is the identities, by position in
+  `session.identities` (`reprojTrackAxis`; the session's tracks only when there
+  are none); `reprojChunkFrames` sizes a chunk to ~1 MB. The MEMFS file is
+  unlinked once it is in the Blob. Test: `tests/e2e/reproj-h5-long-recording.mjs`
+  (real data: `tests/e2e/_real-reproj-h5.mjs`). `buildPoints3dH5` writes
+  `points_3d` (frames, tracks, nodes, 3) and `reprojection_error` (frames,
+  tracks, nodes; all NaN, no per-node error is kept) the same way (one
+  `createFramesDataset` per dataset, same `reprojTrackAxis`), for the frames
+  with a group that has 3D and a track row; it fills each window straight from
+  the groups' flat `points3d`, never through `buildPoints3dExportData`, which
+  boxes every node and is kept for tests and small sessions with the same
+  frames, axis and values. Test: `tests/e2e/points3d-h5-long-recording.mjs`
+  (real data: `tests/e2e/_real-points3d-h5.mjs`).
 - Misc: `downloadJSON`, `downloadBytes` (the binary sibling, for the STL/GLB
   mesh exports; the Blob is handed the VIEW, never `bytes.buffer`, which on a
   subarray would write the neighbouring bytes too), `instancePointsMatch`,
