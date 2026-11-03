@@ -11,6 +11,9 @@
  *        SAVE=1: keep the automatic body-size ID-switch check on, and save each tracked project with File >
  *          Save As to <folder>/<folder name>_luc3d_tailmarks.slp (SAVE_DIR=<dir> puts them there instead).
  *          Written to a .partial name and renamed when complete; an existing file is never replaced.
+ *        ANIMALS=2: the animal count Track All uses
+ *        MARKS='{"tailBands":{"id_0":"marked","id_1":"plain"}}': run the identity engine
+ *          (pose/identity-cues.js) with these per-identity marks instead of the two-animal pass
  *        FORCE=1: a session refused as having no marks is run anyway, to look at it
  */
 import { chromium } from 'playwright';
@@ -23,6 +26,8 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const PORT = Number(process.env.PORT || 8170), HELDOUT = Number(process.env.HELDOUT || 200);
 const MARKED = process.env.MARKED || 'id_0', OUT = process.env.OUT;
 const MAX_CROPS = Number(process.env.MAX_CROPS || 12);
+const MARKS = process.env.MARKS ? JSON.parse(process.env.MARKS) : null;
+const ANIMALS = Number(process.env.ANIMALS || 2);
 const EXTRA = JSON.parse(process.env.EXTRA || '{}');
 const SAVE = !!process.env.SAVE;
 const savePath = (dir) => path.join(process.env.SAVE_DIR || dir, path.basename(dir) + '_luc3d_tailmarks.slp');
@@ -82,11 +87,11 @@ try {
             });
             await page.waitForFunction(() => { const s = window.__lucid.state.session; return s && s.cameras && s.cameras.length > 1 && window.__lucid.state.views && window.__lucid.state.views.some((v) => v.decoder); }, null, { polling: 1000 });
             await new Promise((r) => setTimeout(r, 3000));
-            const res = await page.evaluate(async ({ marked, heldout, maxCrops, force, extra }) => {
+            const res = await page.evaluate(async ({ marked, heldout, maxCrops, force, extra, marksArg, animals }) => {
                 const s = window.__lucid.state.session;
                 const tr = await import('./pose/tracker.js');
-                tr.setTrackerNumAnimals(2);
-                tr.setTailMarkedIdentity(marked);
+                tr.setTrackerNumAnimals(animals);
+                if (marksArg) tr.setIdentityMarks(marksArg); else tr.setTailMarkedIdentity(marked);
                 const t0 = performance.now();
                 await tr.trackAll();
                 const trackMs = performance.now() - t0;
@@ -101,16 +106,21 @@ try {
                     r = out.result = await tm.resolveTailMarks(s, { markedName: marked, fps: window.__lucid.state.fps || s.fps, reader: rd, minTeachingSamples: 1, minTemplateDifference: 0 });
                 }
                 if (!r || !r.ok) return out;
+                if (r.names) {
+                    // the identity engine: final labels per stretch are its result; body size is the independent check
+                    out.engine = { runs: r.runs, changes: r.changes, swapped: r.swapped, samples: r.samples, rounds: r.rounds, models: r.models };
+                    r = Object.assign({}, r, { runs: [], typical: 1 });
+                }
                 // held out: random frames the pass never read; do the marks sit on the chosen identity?
                 const { createTailMarkReader } = await import('./ui/tail-mark-reader.js');
                 const reader = createTailMarkReader(s, window.__lucid.state.fps || s.fps);
                 const target = s.identities.find((i) => i.name === marked).id, other = s.identities.find((i) => i.name !== marked).id;
                 const frames = [...s.instanceGroups.keys()];
                 const tm0 = await import('./pose/tail-mark.js');
-                const tpl = { marked: Float32Array.from(r.marked), plain: Float32Array.from(r.plain) };
+                const tpl = r.marked ? { marked: Float32Array.from(r.marked), plain: Float32Array.from(r.plain) } : null;
                 let seed = 12345; const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
                 const rows = [];
-                for (let i = 0; i < heldout; i++) {
+                for (let i = 0; i < (tpl ? heldout : 0); i++) {
                     const f = frames[Math.floor(rnd() * frames.length)];
                     const e = await reader.at(f);
                     const vt = (e.scores.get(target) || []).map((x) => tm0.tailVote(x, tpl)), vo = (e.scores.get(other) || []).map((x) => tm0.tailVote(x, tpl));
@@ -235,7 +245,7 @@ try {
                 }
                 out.size = Object.fromEntries([...bins].map(([k, v]) => { v.sort((a, b) => a - b); return [k, v[v.length >> 1]]; }));
                 return out;
-            }, { marked: MARKED, heldout: HELDOUT, maxCrops: MAX_CROPS, force: !!process.env.FORCE, extra: EXTRA[name] || [] });
+            }, { marked: MARKED, heldout: HELDOUT, maxCrops: MAX_CROPS, force: !!process.env.FORCE, extra: EXTRA[name] || [], marksArg: MARKS, animals: ANIMALS });
             if (SAVE && res.result && res.result.ok) {
                 const sv = await page.evaluate(async () => {
                     const s = window.__lucid.state.session;
@@ -270,7 +280,7 @@ try {
             const r = res.result;
             const ho = res.heldout || [];
             const conf = ho.filter((x) => r && Math.abs(x[1] - x[2]) > 1);
-            log(`${name}: ${r && r.ok ? `swapped ${r.swapped}, changes ${r.changes}, samples ${r.samples}+${r.reads}, perView ${r.perView.toFixed(2)}, templates ${r.difference.toFixed(3)} from ${r.teaching}, pass ${(r.elapsedMs / 1000).toFixed(1)} s; held out ${conf.filter((x) => x[1] > x[2]).length}/${conf.length} confident (${ho.length})` : 'NOT RUN: ' + (r && r.reason)}; track+pass ${(res.trackMs / 1000).toFixed(0)} s;${res.save ? (res.save.path ? ` saved ${(res.save.bytes / 1e6).toFixed(0)} MB,` : ` SAVE FAILED ${res.save.err || (res.save.dirty ? 'still dirty' : 'empty')},`) : ''} total ${(res.totalMs / 1000).toFixed(0)} s`);
+            log(`${name}: ${res.engine ? `engine: changes ${res.engine.changes}, relabelled stretches ${res.engine.swapped}, samples ${res.engine.samples}, ${(res.engine.models || []).map((m) => m.text).join(' ')}` : r && r.ok ? `swapped ${r.swapped}, changes ${r.changes}, samples ${r.samples}+${r.reads}, perView ${r.perView != null ? r.perView.toFixed(2) : '-'}, templates ${r.difference != null ? r.difference.toFixed(3) : '-'} from ${r.teaching}, pass ${(r.elapsedMs / 1000).toFixed(1)} s; held out ${conf.filter((x) => x[1] > x[2]).length}/${conf.length} confident (${ho.length})` : 'NOT RUN: ' + (r && r.reason)}; track+pass ${(res.trackMs / 1000).toFixed(0)} s;${res.save ? (res.save.path ? ` saved ${(res.save.bytes / 1e6).toFixed(0)} MB,` : ` SAVE FAILED ${res.save.err || (res.save.dirty ? 'still dirty' : 'empty')},`) : ''} total ${(res.totalMs / 1000).toFixed(0)} s`);
         } catch (e) {
             log(`${name}: FAILED ${String(e).slice(0, 300)}`);
         } finally { await page.close(); }

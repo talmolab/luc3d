@@ -1833,6 +1833,14 @@ export class Session {
          * @type {?string}
          */
         this.tailMarkedIdentity = null;
+        /**
+         * What each identity should show, per identity cue (pose/identity-cues.js):
+         * `{tailBands: {id_0: 0, id_1: 1, ...}}` (cue id -> identity name -> class), or
+         * null for none. Track All then relabels so each identity holds the animal that
+         * shows it. Persisted as `metadata.lucid.identityMarks`.
+         * @type {?Object<string, Object<string, *>>}
+         */
+        this.identityMarks = null;
         /** @type {LazyFrameLoader|null} Set when using lazy H5 loading */
         this.lazyLoader = null;
         /** @type {Map<string,{data:Uint8Array,nTracks:number,nFrames:number}>|null} Per-camera track occupancy for timeline */

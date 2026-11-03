@@ -205,6 +205,8 @@ try {
         s.numAnimals = 3;
         // Which identity Track All gives the tail marks (pose/tail-mark.js): same module.
         s.tailMarkedIdentity = 'mouseB';
+        // ...and per-identity marks (pose/identity-cues.js), same module.
+        s.identityMarks = { tailBands: { mouseA: 0, mouseB: 2 } };
 
         // ---- the ID Switches checklist (shapes as in pose/id-switch-check.js) ----
         const pt = (frame, a, b, score, extra) => Object.assign(

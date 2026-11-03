@@ -44,7 +44,8 @@ import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary
 import { collapseTimeline } from '../ui/timeline-controller.js';
 import { collapseViewport3D } from '../ui/panel-visibility.js';
 import { noteTrackRun } from './run-state.js';
-import { resolveTailMarks } from './tail-mark.js';
+import { resolveTailMarks, createTailBandCue } from './tail-mark.js';
+import { resolveIdentityCues } from './identity-cues.js';
 import { createTailMarkReader } from '../ui/tail-mark-reader.js';
 
 /**
@@ -883,13 +884,17 @@ async function askTrackSetup(session, title, withImageCheck) {
         imageCheck: withImageCheck
             ? getTrackingThresholdDefs().filter(function (d) { return IMAGE_CHECK_IDS.indexOf(d.id) >= 0; })
             : null,
-        tailMarks: answerTailMarks ? { value: session.tailMarkedIdentity || _lastTailMarkedIdentity } : null,
+        tailMarks: answerTailMarks ? { value: session.tailMarkedIdentity || _lastTailMarkedIdentity,
+            bands: session.identityMarks && session.identityMarks.tailBands } : null,
     });
     if (!answer) return false;  // cancelled
     updateNodeWeights(answer.nodeWeights);
     if (answer.thresholds) updateTrackingThresholds(answer.thresholds);
     setTrackerNumAnimals(answer.animals);
-    if (answerTailMarks) setTailMarkedIdentity(answer.tailMarkedIdentity);
+    if (answerTailMarks) {
+        if (answer.identityMarks) setIdentityMarks(answer.identityMarks);
+        else { setIdentityMarks(null); setTailMarkedIdentity(answer.tailMarkedIdentity); }
+    }
     return true;
 }
 
@@ -914,17 +919,46 @@ export function setTailMarkedIdentity(name) {
     if (!session) return;
     var next = name || null;
     _lastTailMarkedIdentity = next;
-    if ((session.tailMarkedIdentity || null) === next) return;
+    if ((session.tailMarkedIdentity || null) === next && !(next && session.identityMarks)) return;
     session.tailMarkedIdentity = next;
+    if (next) session.identityMarks = null;   // one or the other
     markDirty();
     for (var i = 0; i < _tailMarkListeners.length; i++) {
         try { _tailMarkListeners[i](next); } catch (e) { /* ignore */ }
     }
 }
 
-/** @param {(name: ?string) => void} fn  called whenever the choice changes */
+/** @param {(name: ?string) => void} fn  called whenever the choice changes (either kind) */
 export function onTailMarkedIdentityChange(fn) {
     if (typeof fn === 'function') _tailMarkListeners.push(fn);
+}
+
+/**
+ * What each identity of the active session should show, per identity cue
+ * (`{tailBands: {id_0: 0, ...}}`), or null. Project state, like the tail-mark choice.
+ * @returns {?Object}
+ */
+export function getIdentityMarks() {
+    var session = getActiveSession();
+    return (session && session.identityMarks) || null;
+}
+
+/**
+ * Set it (null clears it). Setting it clears the two-animal tail-mark choice: one
+ * session uses one or the other. Marks the project dirty and notifies the listeners.
+ * @param {?Object} marks
+ */
+export function setIdentityMarks(marks) {
+    var session = getActiveSession();
+    if (!session) return;
+    var next = marks && Object.keys(marks).length ? marks : null;
+    if (JSON.stringify(session.identityMarks || null) === JSON.stringify(next) && !(next && session.tailMarkedIdentity)) return;
+    session.identityMarks = next;
+    if (next) session.tailMarkedIdentity = null;
+    markDirty();
+    for (var i = 0; i < _tailMarkListeners.length; i++) {
+        try { _tailMarkListeners[i](session.tailMarkedIdentity || null); } catch (e) { /* ignore */ }
+    }
 }
 
 // Read each animal's tail in every camera and swap labels so the chosen identity has
@@ -940,14 +974,27 @@ async function runTailMarkPass(session) {
             showLoadingProgress('Reading tail marks', 0, 1, { title: 'Track All' });
             await yieldToPaint();
             var pacer = createProgressPacer();
-            res = await resolveTailMarks(session, {
-                markedName: session.tailMarkedIdentity, fps: fps, reader: reader,
-                onProgress: async function (done, total) {
-                    if (!pacer.due()) return;
-                    showLoadingProgress('Reading tail marks', done, total, { title: 'Track All' });
-                    await pacer.yield();
-                },
-            });
+            var onProgress = async function (done, total) {
+                if (!pacer.due()) return;
+                showLoadingProgress('Reading tail marks', done, total, { title: 'Track All' });
+                await pacer.yield();
+            };
+            if (session.identityMarks) {
+                // Any number of animals, each with its own marks (pose/identity-cues.js).
+                var expected = {};
+                Object.keys(session.identityMarks).forEach(function (cueId) {
+                    var m = session.identityMarks[cueId];
+                    Object.keys(m).forEach(function (name) { (expected[name] = expected[name] || {})[cueId] = m[name]; });
+                });
+                res = await resolveIdentityCues(session, {
+                    fps: fps, expected: expected, onProgress: onProgress,
+                    cues: session.identityMarks.tailBands ? [{ cue: createTailBandCue(), reader: reader }] : [],
+                });
+            } else {
+                res = await resolveTailMarks(session, {
+                    markedName: session.tailMarkedIdentity, fps: fps, reader: reader, onProgress: onProgress,
+                });
+            }
         }
     } catch (e) {
         console.error('[TrackAll] tail marks failed:', e);
@@ -1745,7 +1792,7 @@ async function runTrackingPass(range) {
         noteTrackRun(session);   // Track turns blue (ui/run-buttons.js)
         hideLoading();
         // Track All only: a range is a targeted re-run, whose labels stay what the range's tracker gave.
-        var tailMarks = !isRange && session.tailMarkedIdentity ? await runTailMarkPass(session) : null;
+        var tailMarks = !isRange && (session.tailMarkedIdentity || session.identityMarks) ? await runTailMarkPass(session) : null;
         // The run's product is identities, so show them (#242): switch Color
         // from Tracks to ID. Only when it assigned any — otherwise there is
         // nothing new to look at. Recolors 2D + 3D through ui-wiring's handler;
