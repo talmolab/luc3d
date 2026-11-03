@@ -52,11 +52,11 @@
  * spawns ui/image-crop-worker.js and ui/image-model-worker.js.
  */
 
-import { state } from './app-state.js?v=64d208b428b1';
-import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=64d208b428b1';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=64d208b428b1';
-import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js?v=64d208b428b1';
-import { EmbeddingCache, cropKeyHash, hullsReachingCrop } from '../pose/embedding-cache.js?v=64d208b428b1';
+import { state } from './app-state.js?v=f95189bdf587';
+import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=f95189bdf587';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=f95189bdf587';
+import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js?v=f95189bdf587';
+import { EmbeddingCache, cropKeyHash, hullsReachingCrop } from '../pose/embedding-cache.js?v=f95189bdf587';
 
 // The load meter now lives in ui/load-graph.js (shared with the loading overlay); still exported from here.
 export { createLoadMeter };
@@ -252,7 +252,7 @@ export async function createCpuModelPool(count, onStatus, clock) {
                 try { slot.w.terminate(); } catch (e) { /* ignore */ }
                 reject(err);                                     // no-op once started
             };
-            try { slot.w = new Worker(new URL('./image-model-worker.js?v=64d208b428b1', import.meta.url), { type: 'module' }); }
+            try { slot.w = new Worker(new URL('./image-model-worker.js?v=f95189bdf587', import.meta.url), { type: 'module' }); }
             catch (e) { reject(e); return; }
             slot.w.onerror = function (e) {
                 if (e && e.preventDefault) e.preventDefault();
@@ -460,7 +460,7 @@ export function cropGeometry(inst, sk) {
 }
 
 /** identity -> its InstanceGroup at `frame` (an identity seen twice there is ambiguous: left out). */
-function identityGroupsAt(session, frame) {
+export function identityGroupsAt(session, frame) {
     const out = new Map(), dup = new Set();
     for (const g of (session.instanceGroups && session.instanceGroups.get(frame)) || []) {
         if (g.identityId == null) continue;
@@ -773,7 +773,7 @@ export function skippingSamples(skipper, ts, count) {
  * decoder has no mediabunny backend (the HTML5 fallback), so the caller uses
  * `getFrame`.
  */
-function streamingReader(decoder, frames, decode, skipper, count) {
+export function streamingReader(decoder, frames, decode, skipper, count) {
     decode = decode || frames;
     if (!canStream(decoder, decode)) return null;
     const be = decoder._mbBackend;
@@ -803,7 +803,7 @@ function streamingReader(decoder, frames, decode, skipper, count) {
 }
 
 /** Can `streamingReader` stream these frames from this decoder (a mediabunny backend that knows every one's timestamp)? */
-function canStream(decoder, decode) {
+export function canStream(decoder, decode) {
     const be = decoder && decoder._mbBackend;
     if (!be || !be.sink || typeof be.sink.samplesAtTimestamps !== 'function' || !be._frameTimes) return false;
     return decode.every(function (f) { return be._frameTimes[f] != null; });
@@ -1007,7 +1007,7 @@ export function createCropPool(clock) {
     };
     try {
         for (let i = 0; i < n; i++) {
-            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=64d208b428b1', import.meta.url), { type: 'module' }), load: 0 };
+            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=f95189bdf587', import.meta.url), { type: 'module' }), load: 0 };
             w.worker.onmessage = function (e) {
                 if (e.data.want) { wanting.push(w); grantNext(); return; }
                 if (e.data.release) { if (holder === w) holder = null; grantNext(); return; }

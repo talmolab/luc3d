@@ -28,9 +28,9 @@
 // Depends on: ui/track-summary.js, ui/id-switch-modal.js (openIdSwitchPanel,
 // refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary), ui/identity-gallery.js.
 
-import { planTrackSummary, summarizeTrackedIdentities, describeSwitchCheck } from './track-summary.js?v=64d208b428b1';
-import { openIdSwitchPanel, refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary } from './id-switch-modal.js?v=64d208b428b1';
-import { renderIdentityGallery } from './identity-gallery.js?v=64d208b428b1';
+import { planTrackSummary, summarizeTrackedIdentities, describeSwitchCheck } from './track-summary.js?v=f95189bdf587';
+import { openIdSwitchPanel, refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary } from './id-switch-modal.js?v=f95189bdf587';
+import { renderIdentityGallery } from './identity-gallery.js?v=f95189bdf587';
 
 // The viewer's frame navigation, registered once by ui-wiring (as the ID Switches tab's is):
 // the tracker that opens this box cannot import pose/initialization.js.
@@ -142,6 +142,11 @@ export function showTrackSummaryModal(summary, checks, opts) {
     }) : null;
     if (gallery) modal.classList.add('has-gallery');
     plan.notes.forEach(function (t) { modal.appendChild(el('p', 'track-summary-note', t)); });
+    if (summary.tailMarks) {
+        var tailNote = el('p', 'track-summary-note', 'Identities: ' + summary.tailMarks + '.');
+        tailNote.id = 'trackSummaryTailMarks';
+        modal.appendChild(tailNote);
+    }
 
     // ---- the ID-switch checks ----------------------------------------------
     if (plan.checks.length) {
