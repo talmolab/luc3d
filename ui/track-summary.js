@@ -111,6 +111,7 @@ export function summarizeTrackedIdentities(session, opts) {
         animals: animals,
         animalsAuto: !!opts.animalsAuto,
         elapsedMs: opts.elapsedMs,
+        tailMarks: opts.tailMarks || null,
         fps: opts.fps > 0 ? opts.fps : 0,
         identities: ids.map(function (id, i) {
             return { id: id.id, name: id.name, color: id.color, frames: counts[i] };
@@ -144,6 +145,19 @@ export function describeSwitchCheck(enabled, res, identities, whyNotRun) {
     }
     if (typeof res.elapsedMs === 'number') out.elapsedMs = res.elapsedMs;
     return out;
+}
+
+/**
+ * The tail-mark pass's outcome (pose/tail-mark.js) in a few words, for the status
+ * line and the summary box.
+ * @param {{ok: boolean, markedName?: string, swapped?: number, faint?: boolean, reason?: string}} res
+ * @returns {string}
+ */
+export function describeTailMarks(res) {
+    if (!res.ok) return 'tail marks not used: ' + res.reason;
+    return 'tail marks on ' + res.markedName + ' (' +
+        (res.swapped ? plural(res.swapped, 'stretch', 'stretches') + ' relabelled' : 'no labels changed') + ')' +
+        (res.faint ? '; the marks are faint here, so check the identities' : '');
 }
 
 // Check states that spent real time — a skip returns at its preflight, so a
