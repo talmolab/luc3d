@@ -2640,8 +2640,11 @@ marks on the chosen identity. Body size from the 3D, which the pass does not use
 marked (male) mouse larger in 95 of 96 sessions (the 96th: 0.2 mm apart). 43 sessions were
 labelled the other way round from the start and 41 were right; 12 had label changes mid-way
 (18 in all): body size agrees with every relabelled stretch but one, in the faintest
-session, and the two inspected frame by frame were real tracker switches. About 2 min a session on a 48-core Windows workstation with no hardware decoding;
-15-20 s on an M-series Mac.
+session, and the two inspected frame by frame were real tracker switches. The pass took 15-20 s a session on an M-series Mac and about 35 s on a 48-core
+Windows workstation running two sessions at once (2-2.5 min with eight at once). Decoding
+is not what it waits on: it decodes one keyframe per camera per sample (about 2,700
+frames), and Chrome there decodes these H.264 streams at 700-1,700 frames/s, on the GPU
+(NVDEC) or the CPU.
 
 **Key exports.** `resolveTailMarks(session, opts)` (the whole pass),
 `TAIL_MARK_DEFAULTS`, `MAX_SAMPLE_GAP_SECONDS`, `tailMarkNodeIndices`,
