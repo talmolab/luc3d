@@ -3102,7 +3102,9 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   re-triangulating between passes; a node left with <2 views under the threshold
   is nulled. Covered by `tests/test-triangulation-robust.js`.
 - Lazy loading: class `LazyFrameLoader` (analysis `.h5`, worker-backed) +
-  `shouldUseLazyH5(file)`; `shouldUseLazySlp(file)` + `LAZY_SLP_THRESHOLD` route
+  `shouldUseLazyH5(file)`; `shouldUseLazySlp(file)` + `LAZY_SLP_THRESHOLD`, and
+  `shouldUseLazySlpFolder(files)` (any one file, or the cameras' `.slp` files together,
+  over the threshold: Save crashed on five eager 125 MB cameras) route
   large prediction `.slp` to the main-thread `SioLazyLoader`
   (`loading/sio-lazy-loader.js`). Shared consumers: `ensureLazyFrameData`,
   `buildLazyFrameGroupSync`, `batchLoadLazyFrames` (branches on `loader.isSync`
@@ -12443,7 +12445,9 @@ max():
   `tests/e2e/percam-slp-choice-and-failure.mjs`.
 
 **Large `.slp` → lazy loading.** The chosen `.slp` files are routed by
-`shouldUseLazySlp` (`> 150 MB`): large prediction files go to a `SioLazyLoader`
+`shouldUseLazySlpFolder`: when any one is over 150 MB (`shouldUseLazySlp`), or all of
+them together are (five 125 MB cameras loaded eagerly, and File ▸ Save then crashed the
+tab building 1.35 million poses), the whole folder goes to a `SioLazyLoader`
 instead of the eager `parseSlpH5` worker, which OOMs the tab on 100k-frame
 predictions. The lazy loader is chosen when all lazy jobs are `.slp` (analysis
 `.h5` folders still use `LazyFrameLoader`); a lazy-open failure surfaces an error
@@ -12563,7 +12567,7 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
   `./video.js` (`OnDemandVideoDecoder`, `VideoController`, `releaseViewsFrames` —
   called wherever an outgoing session's views are stashed in `_views`: empty
   session, single-SLP folder, per-camera folder), `../import-export/file-io.js`,
-  `../pose/triangulation.js` (`shouldUseLazyH5`, `shouldUseLazySlp`, `LazyFrameLoader`),
+  `../pose/triangulation.js` (`shouldUseLazyH5`, `shouldUseLazySlpFolder`, `LazyFrameLoader`),
   `./sio-lazy-loader.js` (`SioLazyLoader`),
   `./track-union.js` (`unionTrackNames`, `remapTrackIdx`),
   `../import-export/save-load.js`,

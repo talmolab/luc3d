@@ -58,7 +58,7 @@ import {
 } from './video-file-pick.js';
 
 import {
-    LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,
+    LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlpFolder, getInstanceGroupsForFrame,
     ensureLazyFrameData,
 } from '../pose/triangulation.js';
 import { SioLazyLoader } from './sio-lazy-loader.js';
@@ -2718,7 +2718,9 @@ export async function attachVideosForLazyReopen(session, loader, pickedFilesOver
         interactionManager.attach(state.views);
     }
     recomputeUploadedCameras(session, state);
-    if (timeline) timeline.refreshTracks(session);
+    // Capped, as after Track All: uncapped, a project with many tracks grew the
+    // timeline past the window and squeezed the videos it had just attached into a strip.
+    if (timeline) timeline.refreshTracks(session, { cap: true });
 
     // Render the images (the current frame's 2D is already hydrated).
     if (videoController) await videoController.seekToFrame(state.currentFrame);
@@ -3453,9 +3455,9 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         // the lazy path just hydrates on scrub. `pose/triangulation.js`'s
         // `ensureLazyFrameData` also handles a partially-hydrated frame now, so
         // a mix that arrives some other way degrades instead of losing views.
-        var anyLazy = slpChoices.some(function (c) {
-            return shouldUseLazyH5(c.file) || shouldUseLazySlp(c.file);
-        });
+        // The folder's TOTAL counts too (`shouldUseLazySlpFolder`): it all becomes one
+        // session, and five cameras each under the limit crashed File ▸ Save.
+        var anyLazy = shouldUseLazySlpFolder(slpChoices.map(function (c) { return c.file; }));
         for (var sci = 0; sci < slpChoices.length; sci++) {
             var choice = slpChoices[sci];
             if (anyLazy) {

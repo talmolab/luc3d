@@ -8,6 +8,9 @@
  *   env: HELDOUT=200  PORT=8170  LIMIT=<n>  SKIP=<n>  BROWSER_HEADLESS=0
  *        PAUSE_FILE=<path>: start no new session while this file exists
  *        EXTRA='{"<name>":[frames]}': also cut crops of these frames, with what each tail read
+ *        SAVE=1: keep the automatic body-size ID-switch check on, and save each tracked project with File >
+ *          Save As to <folder>/<folder name>_luc3d_tailmarks.slp (SAVE_DIR=<dir> puts them there instead).
+ *          Written to a .partial name and renamed when complete; an existing file is never replaced.
  *        FORCE=1: a session refused as having no marks is run anyway, to look at it
  */
 import { chromium } from 'playwright';
@@ -21,6 +24,8 @@ const PORT = Number(process.env.PORT || 8170), HELDOUT = Number(process.env.HELD
 const MARKED = process.env.MARKED || 'id_0', OUT = process.env.OUT;
 const MAX_CROPS = Number(process.env.MAX_CROPS || 12);
 const EXTRA = JSON.parse(process.env.EXTRA || '{}');
+const SAVE = !!process.env.SAVE;
+const savePath = (dir) => path.join(process.env.SAVE_DIR || dir, path.basename(dir) + '_luc3d_tailmarks.slp');
 const dirs = fs.readFileSync(process.env.DIRS, 'utf8').split('\n').map((s) => s.trim()).filter(Boolean)
     .slice(Number(process.env.SKIP || 0), process.env.LIMIT ? Number(process.env.SKIP || 0) + Number(process.env.LIMIT) : undefined);
 fs.mkdirSync(OUT, { recursive: true });
@@ -43,21 +48,32 @@ try {
     for (const dir of dirs) {
         const name = path.basename(dir), dest = path.join(OUT, name + '.json');
         if (fs.existsSync(dest)) continue;
+        if (SAVE && fs.existsSync(savePath(dir))) { log(`${name}: SKIPPED, ${savePath(dir)} already exists`); continue; }
         while (process.env.PAUSE_FILE && fs.existsSync(process.env.PAUSE_FILE)) await new Promise((r) => setTimeout(r, 15000));
         const page = await browser.newPage();
         page.setDefaultTimeout(0);
         page.on('pageerror', (e) => log('  pageerror ' + String(e).slice(0, 200)));
+        // File > Save As streams here: a .partial file, renamed once the save completes
+        let saveFd = null, saveBytes = 0;
+        const partial = savePath(dir) + '.partial';
+        if (SAVE) {
+            await page.exposeFunction('__appendChunkBase64', (b64) => {
+                if (saveFd === null) saveFd = fs.openSync(partial, 'w');
+                const buf = Buffer.from(b64, 'base64');
+                fs.writeSync(saveFd, buf); saveBytes += buf.length;
+            });
+        }
         try {
             await page.goto(`http://localhost:${PORT}/index.html`);
             await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 120000 });
-            await page.evaluate(async () => {
+            await page.evaluate(async (save) => {
                 const st = await import('./ui/settings.js');
-                st.setTrackingThresholds({ autoSwitchCheck: 0, autoImageSwitchCheck: 0 });
+                st.setTrackingThresholds({ autoSwitchCheck: save ? 1 : 0, autoImageSwitchCheck: 0 });
                 const inp = document.createElement('input');
                 inp.type = 'file'; inp.multiple = true; inp.webkitdirectory = true; inp.id = '__dir';
                 inp.style.cssText = 'position:fixed;left:-9999px'; document.body.appendChild(inp);
                 setInterval(() => { for (const b of document.querySelectorAll('button')) { const t = b.textContent.trim(); if ((t === 'Continue' || t === 'OK') && b.offsetParent !== null) b.click(); } }, 300);
-            });
+            }, SAVE);
             await page.setInputFiles('#__dir', dir);
             const t0 = Date.now();
             await page.evaluate(async () => {
@@ -220,6 +236,30 @@ try {
                 out.size = Object.fromEntries([...bins].map(([k, v]) => { v.sort((a, b) => a - b); return [k, v[v.length >> 1]]; }));
                 return out;
             }, { marked: MARKED, heldout: HELDOUT, maxCrops: MAX_CROPS, force: !!process.env.FORCE, extra: EXTRA[name] || [] });
+            if (SAVE && res.result && res.result.ok) {
+                const sv = await page.evaluate(async () => {
+                    const s = window.__lucid.state.session;
+                    // what the ID Switches tab will list when the project is opened
+                    const { idSwitchMarkers } = await import('./ui/id-switch-review.js');
+                    const r2 = s._idSwitch && s._idSwitch.results && s._idSwitch.results.size;
+                    const sizeFlags = r2 && r2.ok ? idSwitchMarkers(r2).map((m) => [m.frame, m.kind || '']) : null;
+                    const saveLoad = await import('./import-export/save-load.js');
+                    const toB64 = (bytes) => { let t = ''; for (let o = 0; o < bytes.length; o += 0x8000) t += String.fromCharCode.apply(null, bytes.subarray(o, o + 0x8000)); return btoa(t); };
+                    window.showSaveFilePicker = async () => ({
+                        createWritable: async () => ({
+                            write: async (chunk) => { await window.__appendChunkBase64(toB64(chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk.buffer || chunk))); },
+                            close: async () => {},
+                        }),
+                    });
+                    let err = null;
+                    try { await saveLoad.saveAs({ skipSizeWarning: true }); } catch (e) { err = String(e && e.stack || e).slice(0, 400); }
+                    return { err, dirty: window.__lucid.state.isDirty, sizeFlags, sizeCheck: r2 ? (r2.ok ? 'ok' : r2.reason) : 'not run' };
+                });
+                if (saveFd !== null) { fs.closeSync(saveFd); saveFd = null; }
+                res.save = Object.assign(sv, { bytes: saveBytes });
+                if (!sv.err && !sv.dirty && saveBytes > 1e6) { fs.renameSync(partial, savePath(dir)); res.save.path = savePath(dir); }
+                else { try { fs.unlinkSync(partial); } catch (e) { /* none written */ } res.save.failed = true; }
+            }
             res.dir = dir; res.totalMs = Date.now() - t0;
             (res.crops || []).forEach((c) => {
                 fs.mkdirSync(path.join(OUT, 'crops'), { recursive: true });
@@ -230,7 +270,7 @@ try {
             const r = res.result;
             const ho = res.heldout || [];
             const conf = ho.filter((x) => r && Math.abs(x[1] - x[2]) > 1);
-            log(`${name}: ${r && r.ok ? `swapped ${r.swapped}, changes ${r.changes}, samples ${r.samples}+${r.reads}, perView ${r.perView.toFixed(2)}, templates ${r.difference.toFixed(3)} from ${r.teaching}, pass ${(r.elapsedMs / 1000).toFixed(1)} s; held out ${conf.filter((x) => x[1] > x[2]).length}/${conf.length} confident (${ho.length})` : 'NOT RUN: ' + (r && r.reason)}; track+pass ${(res.trackMs / 1000).toFixed(0)} s; total ${(res.totalMs / 1000).toFixed(0)} s`);
+            log(`${name}: ${r && r.ok ? `swapped ${r.swapped}, changes ${r.changes}, samples ${r.samples}+${r.reads}, perView ${r.perView.toFixed(2)}, templates ${r.difference.toFixed(3)} from ${r.teaching}, pass ${(r.elapsedMs / 1000).toFixed(1)} s; held out ${conf.filter((x) => x[1] > x[2]).length}/${conf.length} confident (${ho.length})` : 'NOT RUN: ' + (r && r.reason)}; track+pass ${(res.trackMs / 1000).toFixed(0)} s;${res.save ? (res.save.path ? ` saved ${(res.save.bytes / 1e6).toFixed(0)} MB,` : ` SAVE FAILED ${res.save.err || (res.save.dirty ? 'still dirty' : 'empty')},`) : ''} total ${(res.totalMs / 1000).toFixed(0)} s`);
         } catch (e) {
             log(`${name}: FAILED ${String(e).slice(0, 300)}`);
         } finally { await page.close(); }
