@@ -212,7 +212,7 @@
             <div class="menu-item menu-bar-button" id="menuBarDocs" style="margin-left:auto;"
                 title="Open the LUCID documentation in a new tab">Docs</div>
             <div class="menu-item menu-bar-button" id="menuBarSettings"
-                title="Settings: default triangulation, keyboard shortcuts, Tracking Wizard">Settings</div>
+                title="Settings: Tracking Wizard, Triangulation Wizard, Temporal Smoothing, keyboard shortcuts">Settings</div>
             <!-- The deployed release (v1.0.5 on the live page), from the <meta> tags
                  above. Hidden in a working tree, where nothing was stamped. -->
             <div class="menu-bar-version" id="menuBarVersion" hidden></div>
@@ -276,6 +276,16 @@
                             <input type="number" id="tbNumAnimals" min="1" step="1" inputmode="numeric"
                                 placeholder="auto" autocomplete="off" aria-label="Number of animals">
                         </label>
+                        <!-- Which identity Track All gives the tail marks (pose/tail-mark.js).
+                             Wired in ui/tail-mark-field.js. -->
+                        <label class="tri-dropdown-setting" title="For two animals, one with dark marks on its tail: after Track All, read the marks in every camera and keep the marked animal on this identity from start to end. Saved with the project.">
+                            <span class="tri-dropdown-setting-label">Tail marks</span>
+                            <select id="tbTailMarks" aria-label="Which identity has the tail marks">
+                                <option value="">Off</option>
+                                <option value="id_0">id_0</option>
+                                <option value="id_1">id_1</option>
+                            </select>
+                        </label>
                         <button class="tri-dropdown-item" data-scope="settings" role="menuitem"
                             title="Settings ▸ Tracking Wizard">Settings…</button>
                     </div>
@@ -305,7 +315,7 @@
                                 placeholder="off" autocomplete="off" aria-label="Reprojection error threshold (px)">
                         </label>
                         <button class="tri-dropdown-item" id="tbTriangulateSettings" data-scope="settings" role="menuitem"
-                            title="Settings ▸ Default Triangulation">Settings…</button>
+                            title="Settings ▸ Triangulation Wizard">Settings…</button>
                     </div>
                 </div>
                 <!-- Smooth = Temporal Smoothing (luc3d #134), shortened to save

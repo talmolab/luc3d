@@ -1,5 +1,5 @@
 // ui/triangulation-methods-figure.js
-// The Settings ▸ Default Triangulation choice: two cards, DLT and Refined, each
+// The Settings ▸ Triangulation Wizard choice: two cards, DLT and Refined, each
 // a diagram of how that method works, and a third card on the reprojection error
 // threshold. Clicking a method card picks the method; the caller
 // (`ui/settings-modal.js`) wires that up through each card's `data-method`
@@ -495,7 +495,7 @@ export function buildTriangulationMethodsFigure(opts) {
         + 'is lower than DLT\'s, even though its error in the stray camera is larger. The dark red line is the ground '
         + 'truth error, how far the projection is from the target, which shrinks from DLT to Refined. A sketch can show '
         + 'it because it knows the target; on a real recording only the reprojection error can be measured.</p>'
-        + '<div class="tri-methods-cols" role="radiogroup" aria-label="Default triangulation method">'
+        + '<div class="tri-methods-cols" role="radiogroup" aria-label="Triangulation method">'
         + card('dlt', 'Direct Linear Transformation (DLT), per node', 'one direct solve · fast', DLT_SKETCH,
             'Solves one set of linear equations (algebraic least squares) for the point that fits every '
             + 'line at once, treating every camera alike. Fast, but an outlier pulls the projection, so every '
@@ -540,8 +540,8 @@ export function buildTriangulationMethodsFigure(opts) {
         // Between the sketches and the session's examples, since it drives both.
         + '<div class="tri-thr-controls">'
         + tryStrip(tryControl('threshold', THRESHOLD_CONTROL)
-            + '<div class="tri-thr-demo-method" role="group" aria-label="First solve to try in the sketch">'
-            + '<span>First solve</span>'
+            + '<div class="tri-thr-demo-method" role="group" aria-label="Method to try in the sketch">'
+            + '<span>Method</span>'
             + '<button type="button" data-demo-method="dlt">DLT</button>'
             + '<button type="button" data-demo-method="ba">Refined</button></div>')
         + settingRow('threshold')

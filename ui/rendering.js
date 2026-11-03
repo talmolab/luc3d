@@ -27,6 +27,7 @@ import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition
 // (it reaches pose/tracker.js, which imports this module) — safe for the same
 // reason: the call site is inside drawAllOverlays' body.
 import { syncAnimalCountField } from './animal-count-field.js';
+import { syncTailMarkField } from './tail-mark-field.js';
 import { syncNodeTooltipFrame } from './node-tooltip.js';
 import { syncSmoothingButton } from './smoothing-button.js';
 import { syncRunButtons } from './run-buttons.js';
@@ -446,6 +447,7 @@ export function drawAllOverlays(frameIdx, viewFrames) {
     // a draw — so the per-session Animals field catches up here. O(1) when the
     // session and its count are the ones already shown.
     syncAnimalCountField();
+    syncTailMarkField();
 
     var editGroupTarget = interactionManager ? interactionManager.editGroupTarget : null;
 

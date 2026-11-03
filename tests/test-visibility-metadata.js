@@ -392,6 +392,25 @@
             assertNull(dst.numAnimals, 'absent reads back as null, so the next Track asks');
         });
 
+        // Which identity Track All gives the tail marks (pose/tail-mark.js).
+        it('round-trips the tail-mark choice; off writes nothing and clears a stale value', function () {
+            var m = M();
+            var src = fakeSession('src');
+            src.tailMarkedIdentity = 'id_1';
+            var lucid = m.writeVisibilityMetadata(fakeLucid(), src);
+            assertEqual(lucid.tailMarkedIdentity, 'id_1', 'written');
+            var dst = fakeSession('dst');
+            m.readVisibilityMetadata(dst, lucid);
+            assertEqual(dst.tailMarkedIdentity, 'id_1', 'reads back');
+            src.tailMarkedIdentity = null;
+            var off = m.writeVisibilityMetadata(fakeLucid(), src);
+            assertFalse('tailMarkedIdentity' in off, 'off is the default and is not written');
+            m.readVisibilityMetadata(dst, off);
+            assertNull(dst.tailMarkedIdentity, 'absent reads back as off');
+            m.readVisibilityMetadata(dst, { tailMarkedIdentity: 7 });
+            assertNull(dst.tailMarkedIdentity, 'garbage reads back as off');
+        });
+
         it('a bad animal count is neither written nor read', function () {
             var m = M();
             [0, -2, 2.5, '3', 'AUTO', true, NaN, {}].forEach(function (v) {

@@ -1,6 +1,6 @@
 /**
  * test-triangulation-threshold-figure.mjs — the reprojection error threshold
- * card in Settings ▸ Default Triangulation (`ui/triangulation-methods-figure.js`)
+ * card in Settings ▸ Triangulation Wizard (`ui/triangulation-methods-figure.js`)
  * decides which camera is dropped, and whether the node keeps a 3D point, with
  * `thresholdPasses`. This pins that rule to the real one in
  * `triangulateAndReproject` (`pose/triangulation-core.js`), so the figure cannot

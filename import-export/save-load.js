@@ -26,7 +26,7 @@ import {
 } from '../ui/app-state.js';
 import {
     autoAssignVideosToCameras, forceVideoSelection, showParentDirMatchSummary,
-    forceVideoSelectionWithFolder, createViewForVideoFile, updateTotalFrames,
+    forceVideoSelectionWithFolder, folderPickerStartFor, createViewForVideoFile, updateTotalFrames,
     adoptLabeledFrameCount, rebuildVideoController, fitCanvasesToCells,
 } from '../loading/session-loader.js';
 import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
@@ -1642,7 +1642,8 @@ export async function handleLoadProject(prePickedFile) {
                     // Parent dir was picked but this session wasn't matched — prompt individually
                     folderFiles = await forceVideoSelectionWithFolder(
                         'Cameras: ' + sessCameras.join(', '),
-                        sessName
+                        sessName,
+                        { startIn: folderPickerStartFor(file) }
                     );
                     if (folderFiles && folderFiles.parentResult) folderFiles = []; // shouldn't happen here
                 } else {
@@ -1650,7 +1651,7 @@ export async function handleLoadProject(prePickedFile) {
                     var promptResult = await forceVideoSelectionWithFolder(
                         'Cameras: ' + sessCameras.join(', '),
                         sessName,
-                        { allSessionNames: v3AllSessionNames }
+                        { allSessionNames: v3AllSessionNames, startIn: folderPickerStartFor(file) }
                     );
 
                     if (promptResult && promptResult.parentResult) {

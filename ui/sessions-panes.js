@@ -33,7 +33,7 @@ import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d 
 import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js';
 import {
     triangulateAndReproject, getInstanceGroupsForFrame,
-    sessionHasCalibration, resolveTriangulationMethod,
+    sessionHasCalibration, resolveTriangulationMethod, triangulationSettingsKey,
 } from '../pose/triangulation.js';
 import {
     cellResizeObserver,
@@ -1577,6 +1577,7 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
                             if (valid) {
                                 group.points3d = pooledPoints3d(result.points3d);
                                 group.triangulationMethod = result.method;
+                                group.solveSettings = triangulationSettingsKey(fromSession.cameras);
                             }
                             group.markClean();
                             totalRetriangulated++;

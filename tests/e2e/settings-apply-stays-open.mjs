@@ -12,6 +12,9 @@
  *     "Applied ✓" again. A rebound key counts as an edit.
  *  5. × is a real, visible button of at least 28 px, and discards what is pending,
  *     as do Esc and the backdrop; what was applied stays.
+ *  6. The Triangulation Wizard's footer always says the method and threshold, on
+ *     that panel only; a value not yet applied is lit, with what it was; it stays
+ *     on one row of buttons in a narrow window, while the panel scrolls.
  *
  * Run: node tests/e2e/settings-apply-stays-open.mjs   (PORT=… to move the server)
  */
@@ -117,6 +120,43 @@ try {
     await type(55);
     await page.mouse.click(4, 4);
     check(!(await isOpen()) && await stored() === 30, 'the backdrop too');
+
+    console.log('6. the Triangulation Wizard says what it will use');
+    const readout = () => page.evaluate(() => {
+        const el = document.querySelector('.settings-tri-readout');
+        return {
+            shown: !!el && el.offsetParent !== null,
+            text: el ? el.innerText.replace(/\s+/g, ' ').trim() : '',
+            changed: el ? el.querySelectorAll('.is-changed').length : 0,
+        };
+    });
+    await page.setViewportSize({ width: 1000, height: 700 });
+    await open('wizard');
+    check(!(await readout()).shown, 'not on the Tracking Wizard');
+    await page.click('.settings-nav-item[data-panel="triangulation"]');
+    check(await page.textContent('.settings-panel[data-panel="triangulation"] .settings-panel-title') === 'Triangulation Wizard', 'the panel is called Triangulation Wizard');
+    let r = await readout();
+    check(r.shown && r.text === 'Method: DLT Reprojection error threshold: 30 px' && r.changed === 0, `it says the stored settings (${r.text})`);
+    await page.click('.tri-method-choice[data-method="ba"]');
+    r = await readout();
+    check(r.text === 'Method: Refined (was DLT) Reprojection error threshold: 30 px' && r.changed === 1, `a new method is lit, with what it was (${r.text})`);
+    await page.click('.settings-nav-item[data-panel="wizard"]');
+    await type(0);
+    await page.click('.settings-nav-item[data-panel="triangulation"]');
+    r = await readout();
+    check(r.text === 'Method: Refined (was DLT) Reprojection error threshold: off (was 30 px)' && r.changed === 2, `a threshold changed on the Tracking Wizard too (${r.text})`);
+    await page.click('.settings-size-btn[data-size="narrow"]');
+    await page.evaluate(() => { document.querySelector('.settings-panel-container').scrollTop = 1e6; });
+    const box = await page.evaluate(() => {
+        const rect = (q) => document.querySelector(q).getBoundingClientRect();
+        const ro = rect('.settings-tri-readout'), size = rect('.settings-size-btns'), cancel = rect('.settings-btn-cancel'), go = rect('.settings-btn-triangulate');
+        return { clear: size.right <= ro.left && ro.right <= cancel.left, oneRow: Math.abs(cancel.top - go.top) < 2, onScreen: ro.bottom <= innerHeight && ro.top >= 0, sw: ro.width };
+    });
+    check(box.clear && box.oneRow && box.onScreen, `in a 1000 px window it sits between the Window and Close buttons, scrolled to the end (${JSON.stringify(box)})`);
+    await page.click('.settings-btn-apply:not(.settings-btn-triangulate)');
+    r = await readout();
+    check(r.text === 'Method: Refined Reprojection error threshold: off' && r.changed === 0, `Apply: nothing is lit (${r.text})`);
+    await page.keyboard.press('Escape');
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

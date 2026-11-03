@@ -71,6 +71,7 @@ export const VISIBILITY_METADATA_KEYS = [
     'hiddenIdentities',
     'idSwitchReview',
     'numAnimals',
+    'tailMarkedIdentity',
 ];
 
 // `Session.numAnimals` <-> `metadata.lucid.numAnimals`: a positive integer, or
@@ -128,6 +129,11 @@ export function writeVisibilityMetadata(lucid, session) {
     var numAnimals = serializeNumAnimals(session);
     if (numAnimals != null) lucid.numAnimals = numAnimals;
 
+    // Which identity has the tail marks: absent while the tail-mark pass is off.
+    if (typeof session.tailMarkedIdentity === 'string' && session.tailMarkedIdentity) {
+        lucid.tailMarkedIdentity = session.tailMarkedIdentity;
+    }
+
     return lucid;
 }
 
@@ -149,5 +155,6 @@ export function readVisibilityMetadata(session, lucid) {
     ingestHiddenSets(session, src);
     ingestIdSwitchReview(session, src.idSwitchReview);
     ingestNumAnimals(session, src.numAnimals);
+    session.tailMarkedIdentity = (typeof src.tailMarkedIdentity === 'string' && src.tailMarkedIdentity) ? src.tailMarkedIdentity : null;
     return session;
 }
