@@ -23,7 +23,7 @@
  * everywhere.)
  */
 
-import { cutCrop, writeInputTensor, CROP, INPUT } from './image-embedder.js?v=0c297e6371f5';
+import { cutCrop, writeInputTensor, CROP, INPUT } from './image-embedder.js?v=ce8eead205a3';
 
 let canvas = null;
 const jobs = [];

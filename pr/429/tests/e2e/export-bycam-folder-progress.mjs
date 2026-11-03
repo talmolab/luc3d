@@ -16,8 +16,15 @@
  *  3. End state: the card is hidden, the modal closed, the files written, and
  *     the status names the folder. Esc mid-camera cancels: the card goes, the
  *     modal comes back, nothing is written for that camera.
+ *  4. In the picked folder, a camera's file goes into the camera's own folder
+ *     (the folder load's `cameraDirMap`, else the folder its video sits in), next
+ *     to the `.slp` its 2D came from, as `<source stem>_proofread.slp` — an
+ *     earlier `_proofread` file is replaced and never taken for the source; the
+ *     recorded source wins over a higher `_vN`. A camera with no folder there is
+ *     written as `<camera>.slp` in the picked folder, as before.
  *
- * Playwright cannot drive the native dialog, so `showDirectoryPicker` is a stub.
+ * Playwright cannot drive the native dialog, so `showDirectoryPicker` is a stub
+ * over an in-memory folder tree.
  *
  * Run: PORT=9351 node tests/e2e/export-bycam-folder-progress.mjs
  */
@@ -54,17 +61,36 @@ try {
     await page.evaluate(() => {
         window.__picks = [];
         window.__written = {};
+        // An in-memory folder tree: { dirs: {name: node}, files: {name: {size, lastModified}} }.
+        window.__tree = { dirs: {}, files: {} };
+        const mkDir = (name, node, prefix) => ({
+            kind: 'directory', name,
+            getDirectoryHandle: async (n, o) => {
+                if (!node.dirs[n]) {
+                    if (!(o && o.create)) throw new DOMException(n + ' not found', 'NotFoundError');
+                    node.dirs[n] = { dirs: {}, files: {} };
+                }
+                return mkDir(n, node.dirs[n], prefix + n + '/');
+            },
+            getFileHandle: async (fname) => ({
+                kind: 'file', name: fname,
+                createWritable: async () => ({
+                    write: async (blob) => {
+                        node.files[fname] = { size: blob.size, lastModified: Date.now() };
+                        window.__written[prefix + fname] = blob.size;
+                    },
+                    close: async () => {},
+                }),
+            }),
+            values: async function* () {
+                for (const n of Object.keys(node.dirs)) yield mkDir(n, node.dirs[n], prefix + n + '/');
+                for (const n of Object.keys(node.files))
+                    yield { kind: 'file', name: n, getFile: async () => ({ lastModified: node.files[n].lastModified }) };
+            },
+        });
         window.showDirectoryPicker = async (opts) => {
             window.__picks.push(opts);
-            return {
-                kind: 'directory', name: 'exports',
-                getFileHandle: async (fname) => ({
-                    createWritable: async () => ({
-                        write: async (blob) => { window.__written[fname] = blob.size; },
-                        close: async () => {},
-                    }),
-                }),
-            };
+            return mkDir('exports', window.__tree, '');
         };
         window.__card = [];
         const snap = () => {
@@ -188,6 +214,65 @@ try {
     check(/Exported 2 SLP files to exports/.test(r.status), 'status names the folder', r.status);
     check(!(await page.evaluate(() => document.getElementById('slpByCamDownloadAll'))), 'no "Downloading… (k/n)" button left');
     await closePopup();
+
+    // =================================================================
+    // 4. Each camera's file goes next to its source .slp, as <stem>_proofread.slp.
+    // =================================================================
+    console.log('4. Next to each camera\'s source .slp');
+    await page.evaluate(() => {
+        const st = window.__lucid.state;
+        // camA: found by the folder its video sits in; its folder holds the source
+        //   and a NEWER proofread file from an earlier export (never the source).
+        // camB: found by the folder load's cameraDirMap; the recorded source wins
+        //   over a higher _vN.
+        st.videoFiles[0].videoPath = 'sess/21241563/21241563-20260921105806.mp4';
+        st.videoFiles[1].videoPath = 'sess/camB/0.mp4';
+        st.videoFiles[1].slpFilename = 'b_loaded.slp';
+        st.cameraDirMap = { camB: 'Camera_B_dir' };
+        window.__written = {};
+        window.__tree = { files: { 'project.slp': { size: 1, lastModified: 1 } }, dirs: {
+            '21241563': { dirs: {}, files: {
+                '21241563-20260921105806.mp4': { size: 5, lastModified: 1 },
+                '21241563-20260921105806_nn.slp': { size: 7, lastModified: 100 },
+                '21241563-20260921105806_nn_proofread.slp': { size: 3, lastModified: 999 },
+            } },
+            'Camera_B_dir': { dirs: {}, files: {
+                'b_loaded.slp': { size: 7, lastModified: 100 },
+                'b_v3.slp': { size: 7, lastModified: 200 },
+            } },
+        } };
+    });
+    r = await runExport();
+    check(Object.keys(r.written).sort().join(',') ===
+        '21241563/21241563-20260921105806_nn_proofread.slp,Camera_B_dir/b_loaded_proofread.slp',
+        'files written next to their sources, named <source>_proofread.slp (the earlier one replaced)', r.written);
+    const src = await page.evaluate(() => {
+        const t = window.__tree;
+        return [t.dirs['21241563'].files['21241563-20260921105806_nn.slp'].size,
+                t.dirs.Camera_B_dir.files['b_loaded.slp'].size, Object.keys(t.files).join(',')];
+    });
+    check(src[0] === 7 && src[1] === 7 && src[2] === 'project.slp', 'sources untouched; nothing written in the folder itself', src);
+    check(r.card.some(s => s.visible && s.status === 'Writing 21241563/21241563-20260921105806_nn_proofread.slp…'),
+        'the card names the camera folder and file');
+    check(/Exported 2 SLP files to exports: 2 in camera folders as <source>_proofread\.slp$/.test(r.status), 'status says where', r.status);
+    await closePopup();
+
+    // Only camA's folder is there: camB falls back to camB.slp in the folder itself.
+    await page.evaluate(() => {
+        window.__written = {};
+        delete window.__tree.dirs.Camera_B_dir;
+    });
+    r = await runExport();
+    check(Object.keys(r.written).sort().join(',') === '21241563/21241563-20260921105806_nn_proofread.slp,camB.slp',
+        'a camera without a folder in the picked folder: <camera>.slp there, as before', r.written);
+    check(/: 1 in camera folders as <source>_proofread\.slp; 1 as <camera>\.slp \(no camera folder found\)$/.test(r.status),
+        'status counts both', r.status);
+    await closePopup();
+    await page.evaluate(() => {
+        const st = window.__lucid.state;
+        st.cameraDirMap = {};
+        window.__tree = { dirs: {}, files: {} };
+    });
 
     // =================================================================
     // A lazily opened project: each camera streams, its frames fill the bar.

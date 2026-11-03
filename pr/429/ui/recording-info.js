@@ -19,12 +19,12 @@
  */
 import {
     describeCampyStatus, calibrationMismatchText,
-} from '../loading/campy-session.js?v=0c297e6371f5';
-import { persistSectionState } from './section-state.js?v=0c297e6371f5';
-import { setInfoTip } from './info-tip.js?v=0c297e6371f5';
+} from '../loading/campy-session.js?v=ce8eead205a3';
+import { persistSectionState } from './section-state.js?v=ce8eead205a3';
+import { setInfoTip } from './info-tip.js?v=ce8eead205a3';
 // Only read inside a function body, so the import cycle through the info
 // panel is hoist-safe.
-import { ICON_INFO } from './plane-definition.js?v=0c297e6371f5';
+import { ICON_INFO } from './plane-definition.js?v=ce8eead205a3';
 
 export const RECORDING_SECTION_ID = 'recordingInfoSection';
 const RECORDING_SECTIONS_KEY = 'recordingSectionOpen';
