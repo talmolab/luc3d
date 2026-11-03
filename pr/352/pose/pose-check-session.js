@@ -37,7 +37,7 @@
 import {
     createPoseSample, fitPoseModel, poseScore, poseClassOf, poseSampleStride, trimPosePatterns,
     POSE_UNCOMMON, POSE_OUTLIER, POSE_COMMON,
-} from './pose-check.js?v=2ab40f313884';
+} from './pose-check.js?v=09728c65dcc2';
 
 // A windowed lazy loader — `session.frameGroups` is then only the resident window.
 function isWindowedLoader(loader) {

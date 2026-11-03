@@ -1145,6 +1145,18 @@ body {
   cursor: pointer;
 }
 
+.tri-dropdown-setting select {
+  width: 60px;
+  height: 22px;
+  padding: 0 2px;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
 .tri-dropdown-setting input[type="number"] {
   width: 44px;
   height: 22px;
@@ -1685,6 +1697,15 @@ button.tri-dropdown-item:disabled {
   gap: 10px;
   font-size: 13px;
   color: var(--text-primary);
+}
+
+.track-setup-animals select {
+  padding: 6px 8px;
+  font-size: 13px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
 }
 
 .track-setup-animals input {

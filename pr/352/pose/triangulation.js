@@ -10,27 +10,27 @@
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
          setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d,
-         isPoints3dSmoothed } from './pose-data.js?v=2ab40f313884';
+         isPoints3dSmoothed } from './pose-data.js?v=09728c65dcc2';
 // The Jacobi eigensolver and the least-squares plane fit live in
 // `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
 // importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
 // re-exported unchanged, because every existing caller and test reads it here.
-import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=2ab40f313884';
+import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=09728c65dcc2';
 export { fitPlaneToPoints3d };
-import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=2ab40f313884';
+import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=09728c65dcc2';
 // Pass 3i-2: triangulation orchestration moved out of app.js
-import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=2ab40f313884';
-import { updateTriangulationBadge } from '../ui/info-panel.js?v=2ab40f313884';
-import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=2ab40f313884';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=2ab40f313884';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=2ab40f313884';
-import { createGroupSolver } from './triangulation-pool.js?v=2ab40f313884';
-import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=2ab40f313884';
+import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=09728c65dcc2';
+import { updateTriangulationBadge } from '../ui/info-panel.js?v=09728c65dcc2';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=09728c65dcc2';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=09728c65dcc2';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=09728c65dcc2';
+import { createGroupSolver } from './triangulation-pool.js?v=09728c65dcc2';
+import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=09728c65dcc2';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
-         dropDerivedReprojections, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=2ab40f313884';
+         dropDerivedReprojections, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=09728c65dcc2';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from './initialization.js?v=2ab40f313884';
-import { noteTriangulateRun, carryTriangulateMark } from './run-state.js?v=2ab40f313884';
+import { update3DViewport } from './initialization.js?v=09728c65dcc2';
+import { noteTriangulateRun, carryTriangulateMark } from './run-state.js?v=09728c65dcc2';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -50,7 +50,7 @@ import {
     hungarianAlgorithm, cameraCenter, backProjectToRay, backProjectToRays,
     pointToRayDistance, pointsToRayDistances,
     computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
-} from './triangulation-core.js?v=2ab40f313884';
+} from './triangulation-core.js?v=09728c65dcc2';
 export {
     triangulatePointDLT, triangulatePoints, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,
@@ -1426,6 +1426,25 @@ export var LAZY_SLP_THRESHOLD = 150 * 1024 * 1024;
 export function shouldUseLazySlp(file) {
     var name = file.name.toLowerCase();
     return name.endsWith('.slp') && file.size > LAZY_SLP_THRESHOLD;
+}
+
+/**
+ * Should a per-camera folder load lazily? When any one camera's file needs it, or
+ * when the cameras' `.slp` files TOGETHER are over the same size: the whole folder
+ * becomes one session, so it is the total that the eager object graph (and an eager
+ * File ▸ Save, which builds it all at once) has to hold. Five 125 MB cameras of a
+ * 15-minute, 150 fps recording each sat under the per-file limit, loaded eagerly,
+ * and Save then crashed the tab building 1.35 million poses.
+ * @param {Array<File|{name: string, size: number}>} files  the chosen file of each camera
+ * @returns {boolean}
+ */
+export function shouldUseLazySlpFolder(files) {
+    var total = 0;
+    for (var i = 0; i < files.length; i++) {
+        if (shouldUseLazyH5(files[i]) || shouldUseLazySlp(files[i])) return true;
+        if (files[i].name.toLowerCase().endsWith('.slp')) total += files[i].size;
+    }
+    return total > LAZY_SLP_THRESHOLD;
 }
 
 export function getInstanceGroupsForFrame(frameIdx) {
