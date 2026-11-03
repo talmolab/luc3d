@@ -2793,14 +2793,26 @@ export async function exportLabels() {
 // ============================================
 
 export async function exportPoints3dH5() {
+    var title = 'Export 3D Points';
+    var pacer = createProgressPacer();
     try {
-        setStatus('Building points3d H5...', 'warning');
-        const blob = await buildPoints3dH5(state.session);
+        showLoading('Preparing 3D points…', { title: title });
+        await yieldToPaint();
+        const blob = await buildPoints3dH5(state.session, {
+            onProgress: function (done, total) {
+                if (done < total && !pacer.due()) return null;
+                showLoadingProgress('Writing 3D points', done, total, { title: title });
+                return pacer.yield();
+            },
+        });
+        hideLoading();
         downloadBlob(blob, 'points3d.h5');
-        setStatus('Points3d H5 exported', 'success');
+        setStatus('Points3d H5 exported (' + (blob.size / 1048576).toFixed(1) + ' MB)', 'success');
     } catch (err) {
+        hideLoading();
         console.error('Points3d H5 export failed:', err);
-        setStatus('Points3d H5 error: ' + err.message, 'error');
+        setStatus('Export 3D Points (H5) failed, nothing was saved: ' +
+            (err && err.message ? err.message : String(err)), 'error');
     }
 }
 

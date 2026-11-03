@@ -4591,7 +4591,9 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   Covered by `tests/e2e/triangulate-range-modal.mjs` (also Group by Track's
   3D-only-frame guard).
 - `exportLabels()` — JSON labels export.
-- `exportPoints3dH5()` — points3d H5 export.
+- `exportPoints3dH5()` — points3d H5 export, under an "Export 3D Points"
+  progress card that counts frames written; a failure closes the card and says
+  nothing was saved.
 - `exportReprojH5()` — reprojection H5 export, under an "Export Reprojections"
   progress card that counts frames written (`createProgressPacer`); a failure
   closes the card and says nothing was saved.
@@ -4626,7 +4628,7 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   `setStatus`.
 - `./loading-overlay.js` — `showLoadingProgress`, `yieldToPaint` (the
   "Grouping & triangulating" bar in both group-and-triangulate-all paths),
-  `createProgressPacer` (Export Reprojections' card).
+  `createProgressPacer` (the Export Reprojections and Export 3D Points cards).
 - `../pose/triangulation-pool.js` — `createGroupSolver`
   (`groupByIdentityAndTriangulateAll` solves its non-adopted groups on the
   worker pool; adoption and regrouping stay on the main thread).
@@ -14147,7 +14149,15 @@ session's resident/total) rather than truncate silently. Covered by
   `session.identities` (`reprojTrackAxis`; the session's tracks only when there
   are none); `reprojChunkFrames` sizes a chunk to ~1 MB. The MEMFS file is
   unlinked once it is in the Blob. Test: `tests/e2e/reproj-h5-long-recording.mjs`
-  (real data: `tests/e2e/_real-reproj-h5.mjs`).
+  (real data: `tests/e2e/_real-reproj-h5.mjs`). `buildPoints3dH5` writes
+  `points_3d` (frames, tracks, nodes, 3) and `reprojection_error` (frames,
+  tracks, nodes; all NaN, no per-node error is kept) the same way (one
+  `createFramesDataset` per dataset, same `reprojTrackAxis`), for the frames
+  with a group that has 3D and a track row; it fills each window straight from
+  the groups' flat `points3d`, never through `buildPoints3dExportData`, which
+  boxes every node and is kept for tests and small sessions with the same
+  frames, axis and values. Test: `tests/e2e/points3d-h5-long-recording.mjs`
+  (real data: `tests/e2e/_real-points3d-h5.mjs`).
 - Misc: `downloadJSON`, `downloadBytes` (the binary sibling, for the STL/GLB
   mesh exports; the Blob is handed the VIEW, never `bytes.buffer`, which on a
   subarray would write the neighbouring bytes too), `instancePointsMatch`,
