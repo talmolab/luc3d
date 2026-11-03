@@ -12275,7 +12275,12 @@ filesystem enumeration, decoder rebuild.
   per-camera load's Instance builder from the SLP worker's columnar result;
   exported for `tests/e2e/slp-import-fast-compound.mjs`).
   `handleLoadSessionFolderSingleSlp()` loads a folder holding a project `.slp`
-  plus `videos/` + calibration. It reads the SLP with the **typed** reader
+  plus `videos/` + calibration. A LARGE root `.slp` (`shouldUseLazySlp`, not a campy
+  recording) goes to `handleLoadProjectSlpLazy(slpFile, {folderFiles})` instead,
+  whose videos are matched from the same folder pick, wherever they sit in it (one
+  folder per camera too): one pick opens a saved project with its videos, where
+  Load Project asks for the folder a second time (a page given one file cannot
+  see the folder around it). Otherwise it reads the SLP with the **typed** reader
   (`parseSlpViaSleapIO`, raw `parseSlpH5` only as fallback) and restores
   grouping, `nulledNodes`/occlusion, identities and 3D via the shared
   `restoreGroupingAndUnlink` (`import-export/slp-import.js`), then the rest of
@@ -12486,7 +12491,10 @@ attach step lists the reason per file too.
 
 **Lazy project reopen (`handleLoadProjectSlpLazy`).** The memory-bounded "Load
 Project" path for a large saved project `.slp` (routed by `handleLoadProject` in
-`import-export/save-load.js` via `shouldUseLazySlp`). **It shows the progress
+`import-export/save-load.js` via `shouldUseLazySlp`, and by
+`handleLoadSessionFolderSingleSlp` for a large root `.slp`, which passes
+`{folderFiles}` so `attachVideosForLazyReopen` takes the videos from that pick
+instead of prompting). **It shows the progress
 card, titled "Open project"** (`createOpenProgress(fileName)`, exported for the
 test), one step per stage, the file name on the detail line: 1. Reading the
 project file — counted in MB, from `openProjectSlp`'s `onReadBytes` (one decimal

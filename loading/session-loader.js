@@ -58,7 +58,7 @@ import {
 } from './video-file-pick.js';
 
 import {
-    LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlpFolder, getInstanceGroupsForFrame,
+    LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, shouldUseLazySlpFolder, getInstanceGroupsForFrame,
     ensureLazyFrameData,
 } from '../pose/triangulation.js';
 import { SioLazyLoader } from './sio-lazy-loader.js';
@@ -1868,7 +1868,7 @@ export function showSessionModeModal(showAllOptions) {
 
         leftOptions.appendChild(makeOption(
             'Single SLP',
-            'One SLP in root. Videos in videos/ folder.',
+            'One SLP in root. Videos in videos/ folder, or one folder per camera.',
             '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C4} skeleton.json\n\u251C\u2500\u2500 \u{1F4C4} labels.slp\n\u2514\u2500\u2500 \u{1F4C1} videos/\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s1.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s2.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam2_s1.mp4\n    \u2514\u2500\u2500 \u{1F3AC} cam2_s2.mp4',
             'single-slp'
         ));
@@ -2124,6 +2124,15 @@ export async function handleLoadSessionFolderSingleSlp() {
         if (campyRec && /\.h5$/i.test(slpFile.name)) {
             var campySlp = rootPoseFiles.filter(function (f) { return /\.slp$/i.test(f.name); });
             if (campySlp.length) slpFile = campySlp[campySlp.length - 1];
+        }
+        // A large project .slp (one saved by LUCID from a long recording) must not be
+        // read eagerly: its whole object graph does not fit the tab. Open it as Load
+        // Project does, and take its videos from THIS folder pick — wherever they sit
+        // in it, e.g. one folder per camera — so nobody picks the same folder twice.
+        if (!campyRec && shouldUseLazySlp(slpFile)) {
+            hideLoading();
+            await handleLoadProjectSlpLazy(slpFile, { folderFiles: allFiles });
+            return;
         }
         var campyVideoCam = new Map();
         if (campyRec && videoFiles.length === 0) {
@@ -2814,7 +2823,13 @@ export function createOpenProgress(fileName) {
     return progress;
 }
 
-export async function handleLoadProjectSlpLazy(slpFile) {
+/**
+ * @param {File} slpFile
+ * @param {{folderFiles?: File[]}} [opts]  `folderFiles`: the files of a folder the user
+ *   already picked (the session-folder loader); the videos are matched from them instead
+ *   of asking for a folder again.
+ */
+export async function handleLoadProjectSlpLazy(slpFile, opts) {
     try {
         if (!(await ensureNo3dImportBlockingLoad())) { setStatus('Load cancelled', 'warning'); return; }
         var openProgress = createOpenProgress(slpFile.name);
@@ -3013,7 +3028,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         // Attach the project's videos (prompt; Esc/Skip keeps them deferred).
         var videosAttached = false;
         try {
-            videosAttached = await attachVideosForLazyReopen(session, loader);
+            videosAttached = await attachVideosForLazyReopen(session, loader, opts && opts.folderFiles);
         } catch (vErr) {
             console.error('[load-project-lazy] Video attach failed:', vErr);
             hideLoading();
