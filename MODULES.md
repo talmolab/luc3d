@@ -3773,6 +3773,35 @@ crops. Margins tighten: two real swaps sit at -1.09 (181300 0:37) and -1.11
 (183527 8:28) instead of -1.74 / -1.49, and the closest clean contact at -0.96
 (05mice 26:53) — so -1.2 would lose those two swaps.
 
+**Model switched to DINOv3 ViT-S/16 (2026-11-03; was DINOv2-small at 168 px).**
+`IMAGE_MODEL_ID` is a conversion of onnx-community/dinov3-vits16-pretrain-lvd1689m-ONNX
+(DINOv3 License): fp16 with layer 0's attention kept fp32 (its logits reach ~2.5e6,
+past fp16's range; a plain fp16 copy gave unrelated vectors on WebGPU, median cosine
+0.16, while matching on the CPU, which runs those ops in fp32), the export's 24
+SplitToSequence/SequenceAt pairs rewritten as Split (no WebGPU kernel: model time
+10.5 -> 6.0 ms/crop in fp32, 8.6 -> 4.2 in fp16, vs 3.2 for DINOv2-small), and
+pooler_output removed. `INPUT` 192 (12 x 12 of its 16-px patches), threshold -1.2.
+Same tracking, sampling and views; caught / rows / false of 65 change points:
+
+| all 24 (bg = as shipped) | -0.8 | -1 | -1.2 | -1.4 | -1.6 |
+|---|---|---|---|---|---|
+| DINOv2-small, 168 | 24 / 25 / 4 | 22 / 21 / 1 | 20 / 18 / 0 | 20 / 18 / 0 | 16 / 14 / 0 |
+| DINOv2-base, 168 | 22 / 22 / 2 | 22 / 21 / 1 | 20 / 19 / 1 | 16 / 15 / 1 | 14 / 12 / 0 |
+| **DINOv3 ViT-S/16, 192** | 22 / 23 / 3 | 22 / 22 / 2 | **22 / 20 / 0** | 21 / 19 / 0 | 19 / 17 / 0 |
+
+(Track All has changed since the 168-px calibration, hence 22, not 25, catches
+for DINOv2-small at -1.) DINOv3's real swaps sit further below the threshold
+(183527 8:28 -1.06 -> -1.66, five white mice 20:42 -1.16 -> -1.34). Separation of
+10 s means: all 0.959 -> 0.967, same coat 0.884 -> 0.903, five white mice ~0.74 ->
+~0.77. Held out: Mae's 193 single-camera sham_gdx recordings (light coats, 240
+truth changes, CPU fp32): at -1.2 DINOv3 catches 31 with 0 false (most with 0
+false: 33 at -1, vs 30 for DINOv2-small and 21 for DINOv2-base); single-crop
+separation 0.905 -> 0.947. The fp16 file through the app vs DINOv3 fp32 on 233,206
+crops: median CLS cosine 0.99962 (DINOv2-small fp16 vs its fp32: 0.99910), rows
+identical at every threshold from -0.8 to -1.6. Cost on an M2 Pro: whole check
++13-19% over DINOv2-small (145420 80 vs 68 s), 43 MB; CPU workers the same speed
+(19.4 vs 19.9 crops/s). DINOv2-base was worse on the held-out set (5 false at -1).
+
 **Imports from project modules.** `pose/pose-data.js` (`readPoint3d`).
 
 **Imported by.** `ui/id-switch-modal.js`, `ui/image-embedder.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`).
@@ -8996,7 +9025,7 @@ with a row selected).
 frame and the identities present, decode that frame in every camera
 (streamed, and moved to the nearest keyframe when keyframes are dense: see
 below), cut a masked, pose-aligned crop of each identity from
-its own 2D keypoints, and embed the crops with DINOv2-small — on the GPU, or
+its own 2D keypoints, and embed the crops with DINOv3 ViT-S/16 — on the GPU, or
 without one on the CPU.
 
 **Where the model runs** (`pickImageDevice`, at `createImageEmbedder`): a HARDWARE
@@ -9257,10 +9286,10 @@ reads (the sampled frame and any keyframe-snapped `atFrames`) with
 `releaseFrameMembers2d` — so the check costs no residency.
 
 **Dependencies.** transformers.js **pinned to 4.3.0** (`/+esm` from jsdelivr —
-pinned for the reason dockview is) and `onnx-community/dinov2-small` from the
-Hugging Face CDN, both fetched on FIRST USE and cached by the browser; nothing
-about the user's data is sent. fp16 (~44 MB) when the GPU has `shader-f16`, else
-fp32 (~88 MB). Without a hardware GPU the fp32 model runs on the CPU in workers
+pinned for the reason dockview is) and `IMAGE_MODEL_ID` (DINOv3 ViT-S/16, converted
+for this check: see `pose/id-switch-check.js`) from the Hugging Face CDN, both
+fetched on FIRST USE and cached by the browser; nothing about the user's data is
+sent. fp16 (~43 MB) when the GPU has `shader-f16`, else fp32 (~86 MB). Without a hardware GPU the fp32 model runs on the CPU in workers
 — never the CPU runtime's default int8 model, which drifts (cosine 0.953 vs the
 calibrated model). Re-check the CLS extraction (`last_hidden_state` token 0) on
 any version bump.
@@ -9340,7 +9369,7 @@ vs anti-aliased edge), and for a software-made VideoFrame every pixel can differ
 ### ui/image-model-worker.js
 
 **Purpose.** Module worker that runs the image ID-switch check's model on the CPU
-when there is no hardware GPU: DINOv2-small at **fp32** on WebAssembly (the
+when there is no hardware GPU: the image model at **fp32** on WebAssembly (the
 default int8 is what drifts from the calibration; fp32 matches the WebGPU fp32
 model). Off the main thread because there a run blocks the page for seconds;
 several run side by side because WebAssembly gets one thread without

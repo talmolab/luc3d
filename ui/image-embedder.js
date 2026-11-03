@@ -4,8 +4,8 @@
  *
  * For a sampled frame and the identities present, this decodes that frame in
  * every camera (`view.decoder.getFrame`), cuts a MASKED, POSE-ALIGNED crop of
- * each identity from its own 2D keypoints, and embeds the crops with DINOv2-small
- * (the CLS token, 384 values) on the GPU.
+ * each identity from its own 2D keypoints, and embeds the crops with DINOv3
+ * ViT-S/16 (the CLS token, 384 values) on the GPU.
  *
  * The crop reproduces the offline pipeline the check was calibrated with
  * (2026-10-03; cosine 0.991 between this model's fp16 WebGPU output and the
@@ -14,14 +14,14 @@
  * (Nose–TTI), 160 × 160, greyscale; everything outside the animal's convex hull
  * dilated by a quarter body length is black, and so are the other animals' hulls
  * in that view (so an overlapping neighbour is not learned as this animal); then
- * resized to the model input, 168 × 168 (bilinear), and normalised with the
- * ImageNet mean/SD. The input was 224 until 2026-10-22: 168 is 12 × 12 of the
- * model's 14-px patches instead of 16 × 16, so the model runs 1.85x as fast
- * (243 vs 132 crops/s on an M2 Pro) and the CPU workers 1.76x; the threshold was
- * recalibrated for it (see MODULES.md `pose/id-switch-check.js`).
+ * resized to the model input, 192 × 192 (bilinear), and normalised with the
+ * ImageNet mean/SD: 12 × 12 of DINOv3's 16-px patches, the token count
+ * DINOv2-small had at its 168-px input (it was the model until 2026-11-03; 224 px
+ * until 2026-10-22). DINOv3 separates look-alike animals better (MODULES.md
+ * `pose/id-switch-check.js` has the recalibration).
  *
- * The model and runtime (transformers.js, pinned to 4.3.0, + onnx-community/
- * dinov2-small: fp16 ~44 MB, or fp32 ~88 MB on GPUs without 'shader-f16') are
+ * The model and runtime (transformers.js, pinned to 4.3.0, + IMAGE_MODEL_ID:
+ * fp16 ~43 MB, or fp32 ~86 MB on GPUs without 'shader-f16' and on the CPU) are
  * fetched from the CDN on FIRST USE and cached by
  * the browser; nothing about the user's data is sent anywhere. It runs on a
  * hardware GPU through WebGPU when there is one (`pickImageDevice`); otherwise on
@@ -62,16 +62,23 @@ import { EmbeddingCache, cropKeyHash, hullsReachingCrop } from '../pose/embeddin
 export { createLoadMeter };
 
 export const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/+esm';
-export const IMAGE_MODEL_ID = 'onnx-community/dinov2-small';
-export const IMAGE_MODEL_MB = 44;
+/**
+ * DINOv3 ViT-S/16 (Meta, DINOv3 License), converted from onnx-community/dinov3-vits16-pretrain-lvd1689m-ONNX
+ * for this check: model_fp16.onnx keeps layer 0's attention in fp32 (its logits reach ~2.5e6, past fp16's
+ * range, so a plain fp16 copy returns garbage on WebGPU), the export's SplitToSequence ops are plain Split
+ * (no WebGPU kernel: each went through the CPU) and only last_hidden_state is output. model.onnx is the fp32
+ * model with the same graph changes. The conversion script and its checks are in the model repo.
+ */
+export const IMAGE_MODEL_ID = 'olinesn/dinov3-vits16-lucid';
+export const IMAGE_MODEL_MB = 43;
 
 /**
  * Crop side (px) and model input side (px). The check is calibrated to THESE sizes:
  * changing either changes the embeddings and needs a recalibration of
  * `imageChangeThreshold` (MODULES.md). INPUT must be a multiple of the model's
- * 14-px patch.
+ * 16-px patch.
  */
-export const CROP = 160, INPUT = 168;
+export const CROP = 160, INPUT = 192;
 const MEAN = [0.485, 0.456, 0.406], STD = [0.229, 0.224, 0.225];
 const NOSE = 'Nose', TTI = 'TTI';
 
@@ -138,8 +145,9 @@ export function loadImageModel(onStatus) {
         const T = await importTransformers();
         const model = await T.AutoModel.from_pretrained(IMAGE_MODEL_ID, {
             device: 'webgpu', dtype: dtype,
-            // Keep the output ON THE GPU: the model's only output is last_hidden_state [n, 1 + (INPUT/14)², 384]
-            // ([n, 145, 384] at 168: 3.3 MB for 15 crops in fp32) and the check uses 1 of those tokens — clsFromGpu copies just it.
+            // Keep the output ON THE GPU: the model's only output is last_hidden_state [n, 1 + 4 + (INPUT/16)², 384]
+            // (CLS, 4 register tokens, the patches: [n, 149, 384] at 192, 3.4 MB for 15 crops in fp32) and the check
+            // uses 1 of those tokens — clsFromGpu copies just it.
             session_options: { preferredOutputLocation: 'gpu-buffer' },
             progress_callback: function (p) {
                 if (onStatus && p && p.status === 'progress' && p.total) {
@@ -1079,7 +1087,7 @@ export function embeddingCacheScope(session, views) {
 // kept beside the vectors, under the same key, and shown when that frame comes from the cache again.
 /** Frames per run whose sample crop's pixels are kept for a later cached run's dialog. */
 export const SAMPLE_FRAMES_PER_RUN = 200;
-/** Most sample crops kept, all sessions together (INPUT x INPUT grey bytes each: 28 KB at 168, so 7.2 MB). */
+/** Most sample crops kept, all sessions together (INPUT x INPUT grey bytes each: 37 KB at 192, so 9.4 MB). */
 export const SAMPLE_PIXELS_MAX = 256;
 const _samplePixels = new Map();               // full cache key -> Uint8Array(INPUT * INPUT), least recently used first
 
