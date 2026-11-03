@@ -43,7 +43,7 @@ import { togglePlaneMode, syncPlanes3D } from './plane-definition.js';
 // The Visibility panel's `Planes` section — the four ids, named from the one
 // module that reads them so this file cannot drift from it.
 import { PLANE_VIS_IDS } from './plane-visibility.js';
-import { newProject, markDirty, clearDirty, quickSave, saveAs, saveProjectSlp, saveProject,
+import { newProject, markDirty, clearDirty, quickSave, saveAs, saveCompactCopy, saveProjectSlp, saveProject,
          handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
 import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js';
 import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js';
@@ -1524,6 +1524,11 @@ export function setupMenus() {
     document.getElementById('menuSaveAs').addEventListener('click', function () {
         closeMenus();
         saveAs();
+    });
+
+    document.getElementById('menuSaveCompact').addEventListener('click', function () {
+        closeMenus();
+        saveCompactCopy();
     });
 
     document.getElementById('menuLoadProject').addEventListener('click', async function () {

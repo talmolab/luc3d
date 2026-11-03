@@ -1666,6 +1666,30 @@ button.tri-dropdown-item:disabled {
   min-height: 14px;
 }
 
+/* File > Save Compact Copy's warning (ui/compact-save-modal.js). */
+.multi-frame-modal.compact-save-modal {
+  max-width: 560px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+.compact-save-text {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  margin: 0 0 10px;
+}
+.compact-save-list {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+.multi-frame-modal.compact-save-modal .compact-save-warning {
+  color: var(--warning-color, #f0b429);
+}
+
 /* Track All / Track Frame's first-use dialog (ui/track-setup-modal.js), and
    Track Frame Range (ui/track-range-modal.js), which shows the same weight grid:
    the animal count, then the node weights in the Tracking Wizard's own rows,
