@@ -1967,9 +1967,13 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
  * @param {Array<{session, cameraName, videoFileInfo}>} selections
  * @param {boolean|null} reprojAsUser
  * @param {object} [instanceFilter]
+ * @param {object} [opts]
+ * @param {function(number, number): (Promise|void)} [opts.onProgress]  frames swept
+ *   of total, only on the streaming path (a lazy project that would truncate); the
+ *   other paths are one step each and never call it. Throwing from it aborts.
  * @returns {Promise<Blob>}
  */
-export async function exportSlpMultiSession(selections, reprojAsUser, instanceFilter) {
+export async function exportSlpMultiSession(selections, reprojAsUser, instanceFilter, opts) {
     var SIO = window.SleapIO;
     if (!SIO) throw new Error('sleap-io.js not loaded');
 
@@ -1988,7 +1992,8 @@ export async function exportSlpMultiSession(selections, reprojAsUser, instanceFi
     if (selections.length === 1 && _exportWouldTruncate(selections[0].session)) {
         var oneBytes = await exportCameraSlpStreaming(
             selections[0].session, selections[0].cameraName, reprojAsUser,
-            selections[0].videoFileInfo, instanceFilter);
+            selections[0].videoFileInfo, instanceFilter,
+            { onProgress: opts && opts.onProgress });
         return new Blob([oneBytes], { type: 'application/x-hdf5' });
     }
     // Multi-selection (several sessions/cameras into ONE file) still has no

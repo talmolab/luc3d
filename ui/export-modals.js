@@ -46,6 +46,7 @@ import {
 import { update3DViewport } from '../pose/initialization.js';
 import { createMp4Writer, videoEncodingAvailable } from './video-encode.js';
 import { fileSystemAccessHint } from './browser-hints.js';
+import { pickExportFolder } from '../loading/folder-picker-start.js';
 import { noteTriangulateRun } from '../pose/run-state.js';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
@@ -1400,6 +1401,11 @@ function _buildByCamMatrix() {
     return { camNames: camNames, info: info, cellLookup: cellLookup };
 }
 
+/** Thrown from the by-camera export's progress callback when Esc cancels mid-camera. */
+class ExportCancelled extends Error {
+    constructor() { super('Export cancelled'); this.name = 'ExportCancelled'; }
+}
+
 export function showSlpExportByCamModal() {
     if (!state.sessions || state.sessions.length === 0) {
         setStatus('No sessions to export', 'warning');
@@ -1773,13 +1779,14 @@ export function showSlpExportByCamModal() {
 
         // Always prompt for a destination folder so the user picks where this
         // download lands (don't silently reuse a handle cached by an earlier
-        // export). Fall back to per-file browser downloads when the File System
-        // Access API is unavailable.
+        // export). It opens in the project's folder (`pickExportFolder`). Fall
+        // back to per-file browser downloads when the File System Access API is
+        // unavailable.
         var dirHandle = null;
         var useDirectory = !!window.showDirectoryPicker;
         if (useDirectory) {
             try {
-                dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                dirHandle = await pickExportFolder();
                 state.exportDirHandle = dirHandle;
             } catch (pickErr) {
                 if (pickErr && pickErr.name === 'AbortError') return; // user cancelled
@@ -1789,9 +1796,20 @@ export function showSlpExportByCamModal() {
             }
         }
 
+        // Progress: the app's card (ui/loading-overlay.js), one step per camera.
+        // A camera the streaming writer sweeps counts its frames on the bar; a
+        // camera written in one go (the store re-emitted, or a fully loaded
+        // project) shows the spinner. The modal sits above the card's layer, so
+        // it steps aside for the run and comes back on cancel or failure.
+        var title = 'Export SLEAP by Camera';
+        var steps = cols.length;
+        function cardOpts(step, extra) {
+            return Object.assign({ title: title, step: step, steps: steps, detail: 'Esc cancels' }, extra || {});
+        }
         exporting = true;
         cancelled = false;
         dlAllBtn.disabled = true;
+        overlay.style.display = 'none';
         var exported = 0;
         var succeeded = false;
         var failure = null;
@@ -1799,12 +1817,22 @@ export function showSlpExportByCamModal() {
             for (var i = 0; i < cols.length; i++) {
                 if (cancelled) break;
                 var camName = cols[i];
-                dlAllBtn.textContent = 'Downloading... (' + (i + 1) + '/' + cols.length + ')';
-                var selections = buildColumnSelections(camName);
                 var outName = sanitizeFilename(camName);
-                var blob = await exportSlpMultiSession(selections, reprojAsUser, instanceFilter);
+                showLoading('Writing ' + outName + '…', cardOpts(i + 1));
+                await yieldToPaint();   // paint before a one-step camera holds the thread
+                if (cancelled) break;
+                var selections = buildColumnSelections(camName);
+                var blob = await exportSlpMultiSession(selections, reprojAsUser, instanceFilter, {
+                    onProgress: (function (step, label) {
+                        return function (done, total) {
+                            if (cancelled) throw new ExportCancelled();
+                            showLoadingProgress(label, done, total, cardOpts(step));
+                        };
+                    })(i + 1, camName),
+                });
                 if (cancelled) break;
                 if (useDirectory) {
+                    showLoading('Saving ' + outName + ' to ' + dirHandle.name + '…', cardOpts(i + 1));
                     var fh = await dirHandle.getFileHandle(outName, { create: true });
                     var writable = await fh.createWritable();
                     await writable.write(blob);
@@ -1818,16 +1846,21 @@ export function showSlpExportByCamModal() {
                 setStatus('Download All cancelled (' + exported + ' of ' + cols.length + ' written)', 'warning');
             } else {
                 setStatus('Exported ' + exported + ' SLP file'
-                    + (exported === 1 ? '' : 's'), 'success');
+                    + (exported === 1 ? '' : 's') + (dirHandle ? ' to ' + dirHandle.name : ''), 'success');
                 succeeded = true;
             }
         } catch (err) {
-            console.error('[slp-export-bycam]', err);
-            showError(err.message || String(err));
-            failure = err;
+            if (err instanceof ExportCancelled) {
+                setStatus('Download All cancelled (' + exported + ' of ' + cols.length + ' written)', 'warning');
+            } else {
+                console.error('[slp-export-bycam]', err);
+                showError(err.message || String(err));
+                failure = err;
+            }
         } finally {
             exporting = false;
-            dlAllBtn.textContent = 'Download All';
+            hideLoading();
+            overlay.style.display = '';
             updateDownloadStates();
         }
         // On full success, close the modal and show a quick confirmation; on

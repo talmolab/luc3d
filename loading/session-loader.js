@@ -71,6 +71,7 @@ import {
     withCampyWarnings, findCampyManifestFiles,
 } from './campy-session.js';
 import { readBlobArrayBuffer } from './cold-read-guard.js';
+import { projectFolderStart } from './folder-picker-start.js';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
@@ -796,9 +797,8 @@ export function showParentDirMatchSummary(matched, unmatched) {
  * @returns {?FileSystemFileHandle}
  */
 export function folderPickerStartFor(file) {
-    var h = state.slpFileHandle;
-    if (!h || !file || h.name !== file.name || typeof window === 'undefined' ||
-        typeof window.showDirectoryPicker !== 'function') return null;
+    var h = projectFolderStart();
+    if (!h || !file || h.name !== file.name) return null;
     return h;
 }
 
