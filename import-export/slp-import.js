@@ -4,6 +4,7 @@
 // - handleAddSlp: additive merge of an SLP into the current session
 // - handleLoadPoints3dH5: overlay reprojected 3D points from an H5 file
 
+import { withCompactNote, compactRoundingOf } from './compact-save.js';
 import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
@@ -1697,8 +1698,11 @@ export async function handleLoadSlpFile(slpFile) {
                 campyWarn.push(state.sessions.length > 1 ? cs.name + ': ' + w : w);
             });
         });
-        setStatus('SLP loaded (' + statusParts.join(', ') + ')'
-            + (campyWarn.length ? ' — ' + campyWarn.join('; ') : ''), campyWarn.length ? 'warning' : 'success');
+        // A compact copy (import-export/compact-save.js) says it holds rounded values.
+        var loadedStatus = withCompactNote('SLP loaded (' + statusParts.join(', ') + ')'
+            + (campyWarn.length ? ' — ' + campyWarn.join('; ') : ''), campyWarn.length ? 'warning' : 'success',
+            state.sessions.find(function (cs) { return compactRoundingOf(cs.fileProvenance); }) || null);
+        setStatus(loadedStatus.message, loadedStatus.kind);
 
         // One skeleton per project: a multi-session .slp otherwise carries a
         // per-session skeleton each. Prompt for a single unifying skeleton file,

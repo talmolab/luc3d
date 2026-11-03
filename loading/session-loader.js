@@ -18,6 +18,7 @@
  * can then be retargeted.
  */
 
+import { withCompactNote } from '../import-export/compact-save.js';
 import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, VIEW_NAMES, buildRememberedSkeleton, setProjectSkeleton,
@@ -2609,6 +2610,7 @@ export async function handleLoadSessionFolderSingleSlp() {
             finalKind = 'success';
         }
         var campyFinal = withCampyWarnings(finalMsg, finalKind, session.campyRecording);
+        campyFinal = withCompactNote(campyFinal.message, campyFinal.kind, session);
         setStatus(campyFinal.message, campyFinal.kind);
         noteUnplayableVideos(codecFailures, videoFiles.length);
     } catch (err) {
@@ -3106,10 +3108,12 @@ export async function handleLoadProjectSlpLazy(slpFile, opts) {
             var lazyStatus = withCampyWarnings('Reopened ' + slpFile.name + ' — '
                 + session.instanceGroups.size.toLocaleString('en-US')
                 + ' grouped frames, ' + state.views.length + ' videos', 'success', session.campyRecording);
+            lazyStatus = withCompactNote(lazyStatus.message, lazyStatus.kind, session);
             setStatus(lazyStatus.message, lazyStatus.kind);
         } else {
-            setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size.toLocaleString('en-US')
-                + ' grouped frames, ' + loader.nFrames.toLocaleString('en-US') + ' frames. File → Load Videos to show images.', 'success');
+            var noVideoStatus = withCompactNote('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size.toLocaleString('en-US')
+                + ' grouped frames, ' + loader.nFrames.toLocaleString('en-US') + ' frames. File → Load Videos to show images.', 'success', session);
+            setStatus(noVideoStatus.message, noVideoStatus.kind);
         }
     } catch (err) {
         console.error('[load-project-lazy] Error:', err);
