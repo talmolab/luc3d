@@ -2558,72 +2558,103 @@ export async function buildPoints3dH5(session) {
 // ============================================
 
 /**
+ * Frames per HDF5 chunk of `reprojections`: as many as fit in ~1 MB of float64
+ * (436 for 2 animals × 5 cameras × 15 nodes), at least one.
+ */
+export function reprojChunkFrames(perFrame) {
+    return Math.max(1, Math.floor(131072 / Math.max(1, perFrame)));
+}
+
+/**
+ * The `reprojections` track axis: one entry per identity (a group is placed by
+ * its identity), in `session.identities` order; without identities, the
+ * session's tracks as before. `index` maps an identity id to its position.
+ */
+export function reprojTrackAxis(session) {
+    var ids = session.identities || [];
+    if (ids.length > 0) {
+        var index = new Map();
+        ids.forEach(function (id, i) { index.set(id.id, i); });
+        return { names: ids.map(function (id) { return id.name; }), index: index };
+    }
+    var names = session.tracks.slice();
+    return { names: names, index: null };
+}
+
+/**
  * Build a reprojections.h5 HDF5 file as a Blob.
  * Contains 2D reprojected points per camera.
- * Shape: (n_frames, n_tracks, n_cameras, n_nodes, 2)
+ * Shape: (n_frames, n_tracks, n_cameras, n_nodes, 2), float64, NaN = none;
+ * n_tracks = the identities (`reprojTrackAxis`).
+ *
+ * Written in windows of frames into a chunked, gzip-1 dataset, so neither the
+ * JS heap nor h5wasm's 2 GB heap ever holds the whole array: a 135,181-frame,
+ * 5-camera recording built it as one 4.7 GB Float64Array (sized by every
+ * tracklet instead of the identities) and failed. Values, shape and dtype are
+ * what any HDF5 reader expects; only the storage is chunked.
  *
  * @param {Session} session
+ * @param {Object} [opts]
+ * @param {function(number, number): (Promise|void)} [opts.onProgress]
+ *        (framesDone, nFrames), awaited after each window (paint the card here)
  * @returns {Promise<Blob>} The .h5 file as a Blob
  */
-export async function buildReprojH5(session) {
+export async function buildReprojH5(session, opts) {
+    opts = opts || {};
     const mod = await initH5wasm();
     const fname = 'export_reprojections.h5';
 
     const cameras = session.cameras;
     const nodeNames = session.skeleton.nodes;
-    const trackNames = (session.identities && session.identities.length > 0)
-        ? session.identities.map(function (id) { return id.name; })
-        : session.tracks.slice();
+    const axis = reprojTrackAxis(session);
+    const trackNames = axis.names;
     const nCameras = cameras.length;
     const nNodes = nodeNames.length;
-    const nTracks = Math.max(
-        (session.identities ? session.identities.length : 0),
-        session.tracks.length
-    );
+    const nTracks = trackNames.length;
     const cameraNames = cameras.map(function (c) { return c.name; });
 
     // Collect frames sorted
     const sortedFrameIndices = Array.from(session.instanceGroups.keys()).sort(function (a, b) { return a - b; });
     const nFrames = sortedFrameIndices.length;
-
-    // Build 5D flat array: (n_frames, n_tracks, n_cameras, n_nodes, 2)
-    const reproj = new Float64Array(nFrames * nTracks * nCameras * nNodes * 2);
-    reproj.fill(NaN);
-
-    for (var fi = 0; fi < nFrames; fi++) {
-        var frameIdx = sortedFrameIndices[fi];
-        var groups = session.instanceGroups.get(frameIdx);
-        if (!groups) continue;
-
-        for (var group of groups) {
-            var idIdx = group.identityId;
-            if (idIdx < 0 || idIdx >= nTracks) continue;
-            // A group's reprojections are derived and kept only for frames
-            // that have been shown (Triangulate All stores none — see
-            // `sweepTriangulateAllFrames` in pose/triangulation.js), so
-            // project its stored 3D for the rest rather than skipping them.
-            var stored = group.reprojections;
-            if (!stored && points3dNodeCount(group.points3d) === 0) continue;
-            for (var ci = 0; ci < nCameras; ci++) {
-                var camName = cameraNames[ci];
-                var reprojPts = stored ? stored[camName]
-                    : (cameras[ci].projectionMatrix ? reprojectPointsCamera(group.points3d, cameras[ci]) : null);
-                if (!reprojPts) continue;
-                for (var ni = 0; ni < Math.min(nNodes, reprojPts.length); ni++) {
-                    var rpt = reprojPts[ni];
-                    if (rpt) {
-                        var rbase = (((fi * nTracks + idIdx) * nCameras + ci) * nNodes + ni) * 2;
-                        reproj[rbase] = rpt[0];
-                        reproj[rbase + 1] = rpt[1];
-                    }
-                }
-            }
-        }
-    }
+    const perFrame = nTracks * nCameras * nNodes * 2;
+    const tail = [nTracks, nCameras, nNodes, 2];
 
     const f = new mod.File(fname, 'w');
     try {
-        f.create_dataset({name: 'reprojections', data: reproj, shape: [nFrames, nTracks, nCameras, nNodes, 2]});
+        if (perFrame === 0 || nFrames === 0) {
+            // Nothing to chunk (HDF5 chunks cannot have a zero dimension).
+            f.create_dataset({name: 'reprojections', data: new Float64Array(0), shape: [nFrames].concat(tail)});
+        } else {
+            const chunkFrames = Math.min(nFrames, reprojChunkFrames(perFrame));
+            // A window is whole chunks, so no chunk is compressed twice.
+            const winFrames = chunkFrames * Math.max(1, Math.floor(4194304 / (chunkFrames * perFrame)));
+            f.create_dataset({
+                name: 'reprojections',
+                data: new Float64Array(0),
+                shape: [0].concat(tail),
+                maxshape: [null].concat(tail),
+                chunks: [chunkFrames].concat(tail),
+                dtype: '<d',   // not '<f8': h5wasm reads that as float32
+                compression: 'gzip',
+                compression_opts: 1,
+            });
+            const ds = f.get('reprojections');
+            ds.resize([nFrames].concat(tail));
+            const win = new Float64Array(winFrames * perFrame);
+            const sel = [[0, 0], [0, nTracks], [0, nCameras], [0, nNodes], [0, 2]];
+            for (var w0 = 0; w0 < nFrames; w0 += winFrames) {
+                var w1 = Math.min(nFrames, w0 + winFrames);
+                var buf = win.subarray(0, (w1 - w0) * perFrame);
+                buf.fill(NaN);
+                for (var fi = w0; fi < w1; fi++) {
+                    fillReprojFrame(buf, (fi - w0) * perFrame, session.instanceGroups.get(sortedFrameIndices[fi]),
+                        axis.index, nTracks, cameras, cameraNames, nNodes);
+                }
+                sel[0] = [w0, w1];
+                ds.write_slice(sel, buf);
+                if (opts.onProgress) await opts.onProgress(w1, nFrames);
+            }
+        }
         f.create_dataset({name: 'frame_indices', data: new Float64Array(sortedFrameIndices)});
         f.create_dataset({name: 'track_names', data: trackNames});
         f.create_dataset({name: 'node_names', data: nodeNames.slice()});
@@ -2632,8 +2663,40 @@ export async function buildReprojH5(session) {
         f.close();
         return h5FileToBlob(fname);
     } catch (err) {
-        f.close();
+        try { f.close(); } catch (e) { /* already closed */ }
         throw err;
+    } finally {
+        // The finished file is in the Blob; don't keep a copy in h5wasm's MEMFS.
+        try { mod.FS.unlink(fname); } catch (e) { /* not there */ }
+    }
+}
+
+/** One frame's groups into `buf` at `base` (layout: track, camera, node, xy). */
+function fillReprojFrame(buf, base, groups, idIndex, nTracks, cameras, cameraNames, nNodes) {
+    if (!groups) return;
+    const nCameras = cameras.length;
+    for (var group of groups) {
+        var idIdx = idIndex ? idIndex.get(group.identityId) : group.identityId;
+        if (idIdx == null || idIdx < 0 || idIdx >= nTracks) continue;
+        // A group's reprojections are derived and kept only for frames
+        // that have been shown (Triangulate All stores none — see
+        // `sweepTriangulateAllFrames` in pose/triangulation.js), so
+        // project its stored 3D for the rest rather than skipping them.
+        var stored = group.reprojections;
+        if (!stored && points3dNodeCount(group.points3d) === 0) continue;
+        for (var ci = 0; ci < nCameras; ci++) {
+            var reprojPts = stored ? stored[cameraNames[ci]]
+                : (cameras[ci].projectionMatrix ? reprojectPointsCamera(group.points3d, cameras[ci]) : null);
+            if (!reprojPts) continue;
+            var cbase = base + ((idIdx * nCameras + ci) * nNodes) * 2;
+            for (var ni = 0; ni < Math.min(nNodes, reprojPts.length); ni++) {
+                var rpt = reprojPts[ni];
+                if (rpt) {
+                    buf[cbase + ni * 2] = rpt[0];
+                    buf[cbase + ni * 2 + 1] = rpt[1];
+                }
+            }
+        }
     }
 }
 

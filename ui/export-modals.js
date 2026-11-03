@@ -32,7 +32,7 @@ import { getTrackColor, getGroupColor } from './overlays.js';
 import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js';
 import { updateInfoPanel } from './info-panel.js';
 import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
-import { showLoadingProgress, yieldToPaint } from './loading-overlay.js';
+import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js';
 import { createGroupSolver } from '../pose/triangulation-pool.js';
 import {
     exportSlpClientSide,
@@ -2805,14 +2805,26 @@ export async function exportPoints3dH5() {
 }
 
 export async function exportReprojH5() {
+    var title = 'Export Reprojections';
+    var pacer = createProgressPacer();
     try {
-        setStatus('Building reprojections H5...', 'warning');
-        const blob = await buildReprojH5(state.session);
+        showLoading('Preparing reprojections…', { title: title });
+        await yieldToPaint();
+        const blob = await buildReprojH5(state.session, {
+            onProgress: function (done, total) {
+                if (done < total && !pacer.due()) return null;
+                showLoadingProgress('Writing reprojections', done, total, { title: title });
+                return pacer.yield();
+            },
+        });
+        hideLoading();
         downloadBlob(blob, 'reprojections.h5');
-        setStatus('Reprojections H5 exported', 'success');
+        setStatus('Reprojections H5 exported (' + (blob.size / 1048576).toFixed(1) + ' MB)', 'success');
     } catch (err) {
+        hideLoading();
         console.error('Reprojections H5 export failed:', err);
-        setStatus('Reprojections H5 error: ' + err.message, 'error');
+        setStatus('Export Reprojections (H5) failed, nothing was saved: ' +
+            (err && err.message ? err.message : String(err)), 'error');
     }
 }
 
