@@ -784,9 +784,55 @@ export function showParentDirMatchSummary(matched, unmatched) {
  * @param {string[]} [options.allSessionNames] - All session names (enables parent dir option)
  * @returns {Promise<File[]|{parentResult: {matched: Map, unmatched: string[]}}>}
  */
+/**
+ * Where the videos prompt's folder picker should open: the folder of the `.slp` being
+ * opened, when it was picked with the File System Access picker (Load Project, Load SLP
+ * keep its handle in `state.slpFileHandle`) and the browser has `showDirectoryPicker`.
+ * A page given one file cannot read the folder around it, but it can open the folder
+ * picker there, so the user confirms the folder instead of finding it again. The
+ * handle must be this file's: one left from an earlier project would open its folder.
+ * @param {?File} file  the `.slp` being opened
+ * @returns {?FileSystemFileHandle}
+ */
+export function folderPickerStartFor(file) {
+    var h = state.slpFileHandle;
+    if (!h || !file || h.name !== file.name || typeof window === 'undefined' ||
+        typeof window.showDirectoryPicker !== 'function') return null;
+    return h;
+}
+
+/**
+ * Pick a folder with `showDirectoryPicker`, opening in the folder holding `startIn`,
+ * and list its files as `pickFolder` does (each with `webkitRelativePath`, e.g.
+ * "session/cam1/cam1.mp4"), down to `maxDepth` levels.
+ * @param {FileSystemHandle} startIn
+ * @param {number} [maxDepth]  3: the folder, camera folders, their files
+ * @returns {Promise<File[]>}  rejects with AbortError on cancel
+ */
+export async function pickFolderNear(startIn, maxDepth) {
+    maxDepth = maxDepth || 3;
+    var dir = await window.showDirectoryPicker({ id: 'lucid-session-folder', startIn: startIn, mode: 'read' });
+    var out = [];
+    async function walk(handle, prefix, depth) {
+        for await (var entry of handle.values()) {
+            var rel = prefix + '/' + entry.name;
+            if (entry.kind === 'file') {
+                var f = await entry.getFile();
+                Object.defineProperty(f, 'webkitRelativePath', { value: rel });
+                out.push(f);
+            } else if (depth < maxDepth) {
+                await walk(entry, rel, depth + 1);
+            }
+        }
+    }
+    await walk(dir, dir.name, 1);
+    return out;
+}
+
 export function forceVideoSelectionWithFolder(refInfo, sessionName, options) {
     var allSessionNames = options && options.allSessionNames;
     var allowSkip = options && options.allowSkip;
+    var startIn = options && options.startIn;
     return new Promise(function (resolve) {
         var overlay = document.createElement('div');
         overlay.id = 'videoSelectOverlay';
@@ -852,8 +898,19 @@ export function forceVideoSelectionWithFolder(refInfo, sessionName, options) {
         // Folder button — scan for videos in camera subdirs
         btnFolder.addEventListener('click', async function () {
             var allFiles;
-            if (!(await confirmFolderPick())) return;
-            try { allFiles = await pickFolder(); } catch (e) { return; }
+            if (startIn) {
+                // Opens in the project's own folder (folderPickerStartFor): confirm it, no navigating.
+                try { allFiles = await pickFolderNear(startIn); } catch (e) {
+                    if (!e || e.name !== 'AbortError') {
+                        console.warn('[videos] folder picker failed:', e);
+                        setStatus('Could not open that folder (' + ((e && e.message) || e) + ') — try Select Video Files', 'warning');
+                    }
+                    return;
+                }
+            } else {
+                if (!(await confirmFolderPick())) return;
+                try { allFiles = await pickFolder(); } catch (e) { return; }
+            }
             if (!allFiles || allFiles.length === 0) return;
 
             var videoExtensions = ['.mp4', '.avi', '.webm', '.mov', '.mkv'];
@@ -2125,6 +2182,16 @@ export async function handleLoadSessionFolderSingleSlp() {
             var campySlp = rootPoseFiles.filter(function (f) { return /\.slp$/i.test(f.name); });
             if (campySlp.length) slpFile = campySlp[campySlp.length - 1];
         }
+        // Two project files at the root (one saved, then Saved As beside it): picking by
+        // folder cannot say which, and a guess opens the wrong one silently. Ask for the file.
+        var rootSlps = rootPoseFiles.filter(function (f) { return /\.slp$/i.test(f.name); });
+        if (!campyRec && rootSlps.length > 1) {
+            hideLoading();
+            setStatus('This folder has ' + rootSlps.length + ' project files (' +
+                rootSlps.map(function (f) { return f.name; }).join(', ') +
+                ') — open the one you want with File ▸ Load Project', 'warning');
+            return;
+        }
         // A large project .slp (one saved by LUCID from a long recording) must not be
         // read eagerly: its whole object graph does not fit the tab. Open it as Load
         // Project does, and take its videos from THIS folder pick — wherever they sit
@@ -2568,7 +2635,7 @@ export async function handleLoadSessionFolderSingleSlp() {
  *
  * @returns {Promise<boolean>} true if at least one video view was attached.
  */
-export async function attachVideosForLazyReopen(session, loader, pickedFilesOverride) {
+export async function attachVideosForLazyReopen(session, loader, pickedFilesOverride, opts) {
     var cameras = session.cameras || [];
     var camNames = cameras.map(function (c) { return c.name; });
 
@@ -2588,7 +2655,7 @@ export async function attachVideosForLazyReopen(session, loader, pickedFilesOver
     }
 
     var picked = pickedFilesOverride
-        || await forceVideoSelectionWithFolder(refInfo, session.name || 'Session', { allowSkip: true });
+        || await forceVideoSelectionWithFolder(refInfo, session.name || 'Session', { allowSkip: true, startIn: opts && opts.startIn });
     if (!picked || picked.parentResult || picked.length === 0) return false;
 
     // A campy recording folder: its session.json (frame rate, camera order,
@@ -3028,7 +3095,8 @@ export async function handleLoadProjectSlpLazy(slpFile, opts) {
         // Attach the project's videos (prompt; Esc/Skip keeps them deferred).
         var videosAttached = false;
         try {
-            videosAttached = await attachVideosForLazyReopen(session, loader, opts && opts.folderFiles);
+            videosAttached = await attachVideosForLazyReopen(session, loader, opts && opts.folderFiles,
+                { startIn: folderPickerStartFor(slpFile) });
         } catch (vErr) {
             console.error('[load-project-lazy] Video attach failed:', vErr);
             hideLoading();

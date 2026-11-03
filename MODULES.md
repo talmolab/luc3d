@@ -12275,7 +12275,9 @@ filesystem enumeration, decoder rebuild.
   per-camera load's Instance builder from the SLP worker's columnar result;
   exported for `tests/e2e/slp-import-fast-compound.mjs`).
   `handleLoadSessionFolderSingleSlp()` loads a folder holding a project `.slp`
-  plus `videos/` + calibration. A LARGE root `.slp` (`shouldUseLazySlp`, not a campy
+  plus `videos/` + calibration. More than one root `.slp` (a project and a Save As
+  beside it) is refused with a status naming them and pointing at Load Project:
+  picking by folder cannot say which is meant. A LARGE root `.slp` (`shouldUseLazySlp`, not a campy
   recording) goes to `handleLoadProjectSlpLazy(slpFile, {folderFiles})` instead,
   whose videos are matched from the same folder pick, wherever they sit in it (one
   folder per camera too): one pick opens a saved project with its videos, where
@@ -12306,7 +12308,14 @@ filesystem enumeration, decoder rebuild.
   `forceVideoSelectionWithFolder(refInfo, sessionName, options)` accepts
   `options.allowSkip` (a "Skip — Load Videos Later" button; used by the lazy
   reopen) and closes on `Esc`; both resolve `null`, which every caller treats as
-  "no videos picked".
+  "no videos picked". `options.startIn` (from `folderPickerStartFor(file)`: the
+  `.slp` being opened's `state.slpFileHandle`, only when the handle is THAT file's
+  and the browser has `showDirectoryPicker`) makes Select Session Folder open
+  `pickFolderNear(startIn)`: the folder picker starts in the project's own folder
+  and the files are listed as `pickFolder` lists them. A page given one file cannot
+  read the folder around it, but can start the picker there, so the user confirms
+  the folder instead of finding it again. Load Project, Load SLP and both project
+  reopens pass it; without the API (Brave by default) it is the old upload picker.
   `forceVideoSelection(refInfo, options)` (Load Project on a V2/legacy `.json`,
   Add SLP with no embedded video) is NOT blocking: a **Continue Without Video**
   button and `Esc` both resolve `[]`, which both callers treat as "no videos"

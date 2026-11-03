@@ -28,7 +28,7 @@ import {
     setVideoController,
 } from '../ui/app-state.js';
 import {
-    autoAssignVideosToCameras, forceVideoSelection, forceVideoSelectionWithFolder,
+    autoAssignVideosToCameras, forceVideoSelection, forceVideoSelectionWithFolder, folderPickerStartFor,
     showParentDirMatchSummary, createViewForVideoFile, updateTotalFrames,
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
@@ -1355,13 +1355,13 @@ export async function handleLoadSlpFile(slpFile) {
                 videoFiles = slpParentFilesMap.get(currentSessName);
             } else if (slpParentFilesMap) {
                 // Parent dir was picked but this session wasn't matched — prompt individually
-                videoFiles = await forceVideoSelectionWithFolder(refInfo, currentSessName);
+                videoFiles = await forceVideoSelectionWithFolder(refInfo, currentSessName, { startIn: folderPickerStartFor(slpFile) });
                 if (videoFiles && videoFiles.parentResult) videoFiles = [];
             } else {
                 // Offer parent directory option on first prompt
                 var slpPromptResult = await forceVideoSelectionWithFolder(
                     refInfo, currentSessName,
-                    numSlpSessions > 1 ? { allSessionNames: slpAllSessionNames } : null
+                    { allSessionNames: numSlpSessions > 1 ? slpAllSessionNames : null, startIn: folderPickerStartFor(slpFile) }
                 );
 
                 if (slpPromptResult && slpPromptResult.parentResult) {
