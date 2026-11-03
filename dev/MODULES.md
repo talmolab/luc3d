@@ -10106,6 +10106,21 @@ Cancel. On success the viewer is parked on the **last frame tracked**.
 
 ---
 
+### ui/compact-save-modal.js
+
+**Purpose.** The warning File ▸ Save Compact Copy shows before anything is written:
+what is rounded and by how much (from `COMPACT_STEPS`), what is lost (the model's
+exact numbers; exact-equality matching such as merging fresh predictions), what is
+kept (user keypoints, identities, groups, settings), and that the open project stays
+as it is. Cancel has the focus; Esc and a backdrop click cancel. Its "Choose where to
+save…" button opens the save picker inside its own click (the browser needs that
+user activation) and resolves with the handle; a closed picker leaves the dialog up.
+A leaf: imports only `import-export/compact-save.js`.
+
+**Key exports.** `showCompactSaveModal({suggestedName, pickFile?})` -> handle or null.
+
+**Imported by.** `import-export/save-load.js`. Styles: `.compact-save-modal` in `styles.css`.
+
 ### ui/track-setup-modal.js
 
 **Purpose.** What Track All and Track Frame ask the first time they run on a
@@ -12265,6 +12280,8 @@ session, per-camera SLPs, single-SLP, multi-session, video-only,
 calibration-only. Owns view/grid layout, video selection prompts,
 filesystem enumeration, decoder rebuild.
 
+**Compact copies.** The single-SLP folder loader and the lazy project reopen end on `withCompactNote` (`import-export/compact-save.js`): a file saved as a compact copy opens with a warning status saying its keypoints and 3D were rounded.
+
 **Key exports.**
 - Loaders: `handleLoadCalibration`, `handleLoadVideos`,
   `handleLoadMultiSession`, `loadSingleSessionFromCache`,
@@ -13904,6 +13921,30 @@ incl. `planeMetadataConflict`).
 
 ---
 
+### import-export/compact-save.js
+
+**Purpose.** File ▸ Save Compact Copy: the rounding steps, the switch a compact save
+turns on for its duration, the marker a compact file carries, and the note shown when
+one is opened. Predicted 2D x/y are rounded to 1/64 px, prediction scores to 1/1024,
+3D to 1/1024 of the calibration unit (binary fractions: exact in float32/float64, so
+gzip compresses them); user keypoints never. The rounding itself is the vendored
+writer's (`lib/sleap-io`, LUCID local patch "compact save"), which reads
+`globalThis.__lucidCompactSave` only while `withCompactSave` runs. LOSSY: never the
+default, asked for through `ui/compact-save-modal.js`. The marker (`lucid_compact` in
+the file's provenance, via `slp-provenance.js`) is kept by every later save, since the
+data stay rounded. DOM-free and import-free.
+
+**Key exports.** `COMPACT_STEPS`, `COMPACT_PROVENANCE_KEY`, `withCompactSave(save)`
+(refuses a second one while one runs; switches off however the save ends),
+`compactSaveActive()`, `compactMarker(steps)`, `compactProvenanceExtra()`,
+`compactRoundingOf(provenance)`, `withCompactNote(message, kind, session)` (the
+end-of-load status, warning when the file is a compact copy).
+
+**Imported by.** `import-export/slp-provenance.js`, `import-export/save-load.js`,
+`import-export/slp-import.js`, `loading/session-loader.js`, `ui/compact-save-modal.js`.
+
+**Tests.** `tests/test-compact-save.mjs`, `tests/e2e/compact-save-copy.mjs`.
+
 ### import-export/slp-provenance.js
 
 **Purpose.** Keeps a loaded `.slp`'s `provenance` dict through LUC3D's project
@@ -13922,6 +13963,9 @@ is kept whole under `lucid_sessions` by session name (`{}` = none; a repeated
 name is `name #2`, …), and goes back to that session on reopen. No provenance
 anywhere → exactly `{ source, exported_at }`. The 2D exports (one camera,
 multi-session export) do not use it: they keep `{ source, exported_at }`.
+While a compact save runs, `buildSaveProvenance` adds `lucid_compact`
+(`compactProvenanceExtra`, `import-export/compact-save.js`); like any key the file
+had, it is then kept by later saves.
 
 **Key exports.** `buildSaveProvenance(sessions, exportedAt?)` (reads each
 session's `name` + `fileProvenance`); `fileSessionProvenance(fileProv, names,
@@ -14338,11 +14382,17 @@ same reason).
 ### import-export/save-load.js
 
 **Purpose.** Project lifecycle — newProject, save paths (quickSave,
-saveAs, saveProjectSlp, saveProject), load dispatcher
+saveAs, saveCompactCopy, saveProjectSlp, saveProject), load dispatcher
 (`handleLoadProject`), session-frame serialization helpers, the
 loading-overlay/status-text UI helpers.
 
 **Key exports.**
+- **Save Compact Copy.** `saveCompactCopy({pickFile?})` (File menu): the warning
+  dialog (`ui/compact-save-modal.js`, which opens the save picker inside its own
+  click), then the shared write (`writeProjectToHandle`, also Save's) inside
+  `withCompactSave` (`import-export/compact-save.js`). A COPY: `state.slpFileHandle`
+  and the dirty state are left alone, since nothing in memory is rounded. Without
+  `showSaveFilePicker` (Brave's default) it says which browser setting it needs.
 - **The Save progress card.** `quickSave`/`saveAs` and `saveProjectSlp` (the
   download path, which is what Save is in Brave — its save dialog cannot open
   until the whole file is built) show the shared loading overlay
@@ -14550,6 +14600,8 @@ the status bar at the bottom.
 **Purpose.** SLP/H5 project import + 3D-points-overlay import. Three
 workflows: load fresh SLP (replaces state), additive merge SLP into
 current session, overlay reprojected points3d from H5.
+
+**Compact copies.** `handleLoadSlpFile`'s end-of-load status goes through `withCompactNote` (`import-export/compact-save.js`): a compact copy opens with a warning saying what was rounded.
 
 **campy recordings.** When the video prompt's folder is a campy recording
 (session.json), `handleLoadSlpFile` puts it on the session
