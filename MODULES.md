@@ -4561,16 +4561,23 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   tables (`#slpByCamSkelWarning`). The shared **Include** group's two options
   become the `instanceFilter` (`{user:true, predicted, reprojected}`) passed to
   `exportSlpMultiSession`. The Reprojections row is **disabled as a unit**
-  (`.slp-inc-row-disabled`) unless at least one session has reprojections. Download All's
-  progress is the app's card (`loading-overlay.js`, titled "Export SLEAP by
-  Camera"), one step per camera ("Step k of n"): a camera the streaming writer
-  sweeps (a lazy project that would truncate) fills the bar with its frames
-  (`exportSlpMultiSession`'s `onProgress`); a camera written in one go shows the
-  spinner "Writing <cam>.slp…", painted before it holds the thread. The modal is
+  (`.slp-inc-row-disabled`) unless at least one session has reprojections. Cameras
+  the streaming writer would sweep (`cameraExportUsesSweep`: a lazy project that would
+  truncate, e.g. a reopened project or any proofread one) are built first, in ONE
+  `exportCamerasSlpStreaming` sweep per session. Download All's progress is the app's
+  card (`loading-overlay.js`, titled "Export SLEAP by Camera"): that sweep is a step of
+  its own ("Reading N cameras", frames on the bar), then one step per camera ("Step k
+  of n"); a camera built in one go shows the spinner "Writing <cam>.slp…", painted
+  before it holds the thread. Files save in the background, up to `SAVES_IN_FLIGHT`
+  (4) at once: over an SMB share Chrome's `close()` reads each file back at ~10 MB/s
+  (measured on the lab VM, 2026-11-03), so one file's wait does not hold up the next. The modal is
   hidden while the card shows (it sits above the card's layer) and comes back on
   cancel or failure. **Esc closes the modal**, or cancels an in-progress export:
   between cameras, or mid-sweep (the progress callback throws `ExportCancelled`;
-  nothing is written for that camera). Test: `tests/e2e/export-bycam-folder-progress.mjs`.
+  nothing is written for that camera; files already handed over finish). Tests:
+  `tests/e2e/export-bycam-folder-progress.mjs`, `tests/e2e/lazy-reemit-compressed.mjs`;
+  timing on real data: `tests/e2e/_diag-export-bycam-timing.js` (load it from jsDelivr at
+  a commit: the deployed site drops `_` files).
   Columns ordered by session frequency, then within-session name order, then
   session recency for session-unique views.
 - `showSlpExportAllModal()` — multi-session SLP export. **Deprecated**: not
@@ -4654,7 +4661,8 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   (`groupByIdentityAndTriangulateAll` solves its non-adopted groups on the
   worker pool; adoption and regrouping stay on the main thread).
 - `../import-export/file-io.js` — `exportSlpClientSide`,
-  `exportSlpMultiSession` (By-Cam passes `{onProgress}`), `findSkeletonMismatch`, `buildPoints3dH5`,
+  `exportSlpMultiSession` (By-Cam passes `{onProgress}`), `exportCamerasSlpStreaming`,
+  `cameraExportUsesSweep` (By-Cam's one sweep), `findSkeletonMismatch`, `buildPoints3dH5`,
   `buildReprojH5`.
 - `../pose/initialization.js` — `update3DViewport`.
 - `./video-encode.js` — `createMp4Writer`, `videoEncodingAvailable` (Export 3D
@@ -14171,7 +14179,17 @@ session's resident/total) rather than truncate silently. Covered by
 - SLP export (client-side): `exportSlpClientSide`,
   `exportSlpMultiSession(selections, reprojAsUser, instanceFilter, opts)`, `exportCameraSlpStreaming` (above).
   `opts.onProgress(done, total)` reaches only the streaming path (frames swept;
-  throwing from it aborts); the fast and eager paths are one step and never call it. For a **lazy session** these route a plain
+  throwing from it aborts); the fast and eager paths are one step and never call it.
+  `exportCamerasSlpStreaming(session, cameras, reprojAsUser, instanceFilter, opts)`
+  builds several cameras of one session in ONE sweep (one writer each; hydrating is
+  nearly all of a camera's cost, so N cameras cost about one sweep);
+  `exportCameraSlpStreaming` is its one-camera case. `cameraExportUsesSweep(selection,
+  …)` says whether `exportSlpMultiSession` would route a camera there (By Cam groups
+  those cameras per session). The store fast path (`lazyCameraFastPathUsable`) is
+  refused on a reopened project `.slp` (`SioLazyLoader._sharedStore`): every
+  `labelsByCam` entry is then the WHOLE project, and re-emitting it wrote every camera
+  (and the 3D session) into each camera's file, or ran the renderer out of memory on a
+  large project. Its output is compressed by the `(lazy re-emit)` bundle patch. For a **lazy session** these route a plain
   per-camera export through `lazyCameraExportBytes` → `saveSlpToBytes` on the
   camera's already-lazy `Labels` (all frames, memory-bounded) instead of the
   eager `buildSlpLabels*`. The multi-view project save uses the streaming
