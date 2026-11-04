@@ -4129,7 +4129,8 @@ Brave ships the File System Access API (`showSaveFilePicker`,
 `showDirectoryPicker`, `showOpenFilePicker`) DISABLED by default while
 identifying as Chrome, so in Brave saves fall back to an in-memory download
 (risky for a large project, never saved in place), large exports must be
-buffered in memory, and multi-session loading refuses. It is enabled at
+buffered in memory, and multi-session loading refuses (it does not fall back
+to `webkitdirectory` in a Chromium browser: that drops files on big trees). It is enabled at
 `brave://flags/#file-system-access-api`. Safari and Firefox can't enable the
 API, so they get no hint (existing messages stand).
 
@@ -4148,6 +4149,14 @@ land on the true count and the noise is still there.
 **Key exports.**
 - `isBrave()` — `navigator.brave.isBrave` present.
 - `hasFileSystemAccess()` — save + directory pickers available.
+- `canReadDirectoryHandles(win?)` — whether a `showDirectoryPicker` folder can be
+  READ through its handle: the picker is a function AND not
+  `window.lucidDesktop.fsaWriteOnly` (the desktop app's WebKit webviews, whose
+  shim installs a write-only picker). Every folder READ site asks this instead
+  of testing for the picker and, when false, uses `<input webkitdirectory>`:
+  `handleLoadMultiSession`, `pickParentDirectoryForSessions`,
+  `folderPickerStartFor` / `pickFolderNear` (`loading/session-loader.js`).
+  Without `lucidDesktop` it is exactly the old `typeof` test. `win` is for tests.
 - `fileSystemAccessHint()` — how to enable the API (paste
   `brave://flags/#file-system-access-api`, set Enabled, relaunch — or use
   Chrome/Edge); `''` unless Brave with the API off, so callers can append it.
@@ -4169,7 +4178,8 @@ land on the true count and the noise is still there.
 **Imports from project modules.** None. No DOM at load (the canvas probe runs
 on first use, on the main thread), so it is safe to import anywhere.
 
-**Imported by.** `loading/session-loader.js` (multi-session load message),
+**Imported by.** `loading/session-loader.js` (multi-session load message;
+`canReadDirectoryHandles` at the folder read sites),
 `import-export/save-load.js` (`saveProjectSlp` download fallback status),
 `ui/export-modals.js` (3D video + JSON export in-memory confirms),
 `ui/overlay-export-modal.js` (overlay video in-memory confirm),
@@ -4177,10 +4187,55 @@ on first use, on the main thread), so it is safe to import anywhere.
 line, `#loadingBraveHint`), `ui/id-switch-modal.js` (the image check's dialog,
 under its CPU and GPU lines).
 
-**Tests.** `tests/test-browser-hints.js`; `tests/e2e/brave-fingerprinting-hint.mjs`
+**Tests.** `tests/test-browser-hints.js`; `tests/test-file-list-directory.mjs` §7
+(`canReadDirectoryHandles`); `tests/e2e/brave-fingerprinting-hint.mjs`
 drives REAL Brave (skips when Brave is not installed, `BRAVE=` overrides the
 path): the note with default Shields, none with the per-site exception, none
 in Chromium.
+
+### ui/ask.js
+
+**Purpose.** The ONE place LUCID asks the user a yes/no or text question. The
+macOS desktop app runs in WKWebView, where wry implements none of the JavaScript
+dialog panels: `window.confirm()` returns false and `window.prompt()` null AT
+ONCE, showing nothing (and `alert()` shows nothing), so a direct call silently
+cancels the action. Every app question goes through these Promise-returning
+helpers instead; `tests/test-no-sync-dialogs.mjs` fails on a direct
+`confirm(` / `prompt(` / `alert(` anywhere else in app source.
+In a browser (no `window.lucidDesktop`) each is exactly the old native dialog,
+same text, wrapped in `Promise.resolve`: the dialog still runs synchronously in
+the caller's handler and the await adds only a microtask, so user activation is
+unaffected (every current confirm sits AFTER its picker anyway).
+
+**Key exports.**
+- `askConfirm(message, {title, okLabel, cancelLabel}?)` → `Promise<boolean>`.
+  Browser: `window.confirm(message)` (opts unused). Desktop:
+  `lucidDesktop.confirm(message, opts)` (the shim's native dialog); a shim
+  without it, or a rejected call, falls back to the in-app modal.
+- `askText(message, defaultValue, opts?)` → `Promise<string|null>`. Browser:
+  `window.prompt(message, defaultValue)`. Desktop: the in-app modal with a text
+  field, the default pre-selected; Enter submits, Esc / Cancel → null.
+- `askAlert(message, opts?)` → `Promise<void>`. Browser: `window.alert`.
+  Desktop: the in-app modal with one OK button. (No app call site yet.)
+- `isDesktopShell()` — `window.lucidDesktop` present.
+
+**The in-app modal** (`showAskModal`, internal) is the shared
+`.multi-frame-modal` card plus `.ask-modal` (styles.css: the card is the one
+scroller, `max-height: 90vh`; `.ask-modal-message` keeps line breaks). Its
+keydown listener is capture-phase on `document`, stops Enter/Esc so nothing
+underneath also acts, and is removed on close.
+
+**Imports from project modules.** None.
+
+**Imported by.** `import-export/save-load.js` (New Project, very large save,
+JSON project over 50 MB), `ui/sessions-panes.js` (`removeSession`),
+`ui/ui-wiring.js` (Track ▸ Swap Tracks), `ui/export-modals.js` (JSON labels and
+3D video in-memory confirms), `ui/overlay-export-modal.js` (in-memory confirm).
+
+**Tests.** `tests/test-no-sync-dialogs.mjs` (the guard);
+`tests/e2e/desktop-dialogs.mjs` (desktop: New Project / Delete session through
+`lucidDesktop.confirm`, Swap Tracks through the in-app modal, fallbacks;
+browser: the same native texts, accept / dismiss).
 
 ### ui/folder-confirm-tip.js
 
@@ -4667,6 +4722,8 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `./app-state.js` — `state`, `viewport3d`, `timeline`, `getActiveSession`.
 - `./browser-hints.js` — `fileSystemAccessHint` (appended to the 3D-video and
   JSON-export "must be built in memory" confirms in Brave).
+- `./ask.js` — `askConfirm` (those two confirms, awaited; each comes after its
+  save-file picker, so no user activation is spent on it).
 - `../pose/pose-data.js` — `InstanceGroup`, `UnlinkedInstance`, `pooledPoints3d`
   (Group by Identity / Track & Triangulate All store each solve in the slab pool).
 - `../pose/triangulation.js` — `triangulateAndReproject`,
@@ -5964,8 +6021,8 @@ or a folder (individual; the folder handle is deliberately NOT cached to
 `state.exportDirHandle`, which `showSlpExportAllModal` reuses without
 prompting) and streams; below, it buffers and downloads. Declining the picker
 for a large export **cancels** it rather than falling back to the memory buffer;
-with no File System Access API the user gets `exportLabels()`'s `confirm()`
-warning. Cancelling a streamed export leaves a partial `.mp4` on disk, which the
+with no File System Access API the user gets `exportLabels()`'s confirm
+(`askConfirm`, ui/ask.js, after the picker). Cancelling a streamed export leaves a partial `.mp4` on disk, which the
 status message says.
 
 **Settings persistence.** Seeded from the Visibility panel
@@ -6068,6 +6125,7 @@ exported but the amber `?` editing prompt is not.
 - `./app-state.js` — `state`, `videoController`, `getActiveSession`.
 - `./browser-hints.js` — `fileSystemAccessHint` (appended to the in-memory
   export confirm in Brave).
+- `./ask.js` — `askConfirm` (that confirm).
 - `./viewport3d.js` — `Viewport3D`.
 - `./overlays.js` — `drawFrameOverlays`, `drawLegend`, `drawViewNameLabel`,
   `getTrackColor`, `getGroupColor`, `TRAIL_SHADES`, `DEFAULT_TRAIL_SHADE`,
@@ -8535,7 +8593,9 @@ multi-video docking layout.
   non-CSS counterpart of `applyVideoFilters` (see below).
 - `populateViewStrip`, `populateSessionsPanel`, `populateSessionStrip`.
 - `showMoveVideoModal`.
-- `removeSession`, `switchSession` (async).
+- `removeSession`, `switchSession` (async). `removeSession(idx)` asks through
+  `askConfirm` (ui/ask.js) and, once answered, re-finds the session by identity
+  (the list may have changed meanwhile); resolves false when cancelled.
 
 **Imports from project modules.**
 - `./id-switch-modal.js` — `refreshIdSwitchPanel`: `switchSession` shows the new
@@ -8579,6 +8639,7 @@ multi-video docking layout.
   module), hoist-safe because the only read is inside the view strip's click
   handler, which cannot run during module evaluation.
 - `./info-panel.js` — `updateInfoPanel`, `populateTimelineVisibility`.
+- `./ask.js` — `askConfirm` (`removeSession`).
 - `./loading-progress-modal.js` — `getLoadingProgressModal` (`switchSession`'s
   "Loading videos" progress).
 - `./frame-readout.js` — `clearReadout` (session removed),
@@ -10874,6 +10935,12 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `setIdSwitchRefresher` (the repaint after the tab fixes a switch) are called
   once at setup, as is `setTrackSummaryNavigator` (`ui/track-summary-modal.js`:
   the Track All summary's Identities samples and maps go to a frame).
+  Labels and ticks computed when a menu opens are refreshed on `mouseenter`
+  of the top-level `.menu-item` (View ▸ Native Resolution's ✓, also on click)
+  or of the `.has-submenu` parent (Tracks ▸ Node Trails, which reads
+  `state.fps`): that is the cue the macOS desktop app's native menu bar gives
+  before it reads the menus (`src-tauri/js/lucid-desktop.js`, which mirrors
+  `#menuBar` natively and clicks the same elements).
 - Color-by toggle: the Tracks / Identity control is in the top toolbar
   (`colorByTracks` / `colorById`; group `aria-label="Color by"`).
   `updateColorByToggle()` reflects `state.colorByIdentity`. Every change goes
@@ -10943,6 +11010,10 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `showOverlayExportModal()` (overlay-export-modal.js); it sits directly above
   File ▸ "Export 3D Video" (`menuExportVideo3d`), which is wired to
   `showExport3DVideoModal()` (export-modals.js).
+- Track ▸ **Swap Tracks** (`menuSwapTracks`): an async handler asking four
+  questions through `askText` (ui/ask.js; native `prompt()` in a browser, an
+  in-app text modal in the desktop app), returning if the active session
+  changed while one was open.
 - Session strip: the **"+"** button (`btnAddSession`) calls
   `handleEmptySession()` to create a fresh empty session directly (inheriting the
   shared project skeleton — the user then adds video via File ▸ Load Videos);
@@ -11124,7 +11195,7 @@ would sit low in grid mode.
 header for the full list. Notable ones: `app-state.js`,
 `timeline-controller.js`, `pose-data.js`, `triangulation.js`
 (incl. `evictLazyFrames`), `lazy-residency.js` (`LAZY_PLAYBACK_AHEAD`),
-`rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`,
+`rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`, `ask.js`,
 `file-io.js`, `session-loader.js`, `video.js`, `tracker.js`,
 `initialization.js`, `identity-assignment.js` (the track/identity helpers,
 Edit Group, `startManualAssignment`, `purgeTriangulationDataForGroup`,
@@ -12454,12 +12525,57 @@ and left other cameras with out-of-range or misnamed track indices.
 (`LazyFrameLoader`, all six metadata orders), `tests/e2e/percam-track-union.mjs`
 (the real folder loader, lazy in all six open orders plus eager).
 
+### loading/file-list-directory.js
+
+**Purpose.** A read-only stand-in for a File System Access directory handle,
+built from the files an `<input webkitdirectory>` returns, so the handle-based
+folder readers (`handleLoadMultiSession`'s walk, `enumerateDirectoryHandle`) run
+unchanged where no READ handle exists: Safari, Firefox, and the desktop app's
+WebKit webviews (`window.lucidDesktop.fsaWriteOnly`: a write-only picker
+polyfill). `getFile()` returns the ORIGINAL disk-backed `File` from the input, so
+WORKERFS / FileReaderSync / blob-URL readers stream it without a copy.
+
+**Key exports.**
+- `directoryHandleFromFileList(files)` → `FileListDirectoryHandle`. Places each
+  file by `webkitRelativePath` (else `name`). When every file shares one top
+  folder (what a `webkitdirectory` pick gives) that folder is returned, named as
+  the picked folder; otherwise a nameless root (`''`). A file/folder clash or a
+  duplicate path keeps the first (a real file system cannot produce one).
+- `FileListDirectoryHandle` — `kind: 'directory'`, `name`, `entries()`, `keys()`,
+  `values()`, `[Symbol.asyncIterator]` (= entries), **sorted by name** (code-unit
+  order, so a walk does not depend on the OS's file order),
+  `getDirectoryHandle(name)` / `getFileHandle(name)` (NotFoundError when absent,
+  TypeMismatchError on the wrong kind, NotAllowedError with `{create: true}`),
+  `resolve(handle)`, `isSameEntry`, `queryPermission` / `requestPermission`
+  ('granted' for read, 'denied' for readwrite), `removeEntry` (NotAllowedError).
+- `FileListFileHandle` — `kind: 'file'`, `name`, `getFile()` (the original File),
+  `createWritable` / `createSyncAccessHandle` (NotAllowedError).
+Errors are `DOMException`s (an `Error` with that `name` where there is none).
+`webkitdirectory` lists files only, so an EMPTY folder is absent from the tree.
+
+**Imports from project modules.** None (DOM-free; Node tests load it directly).
+
+**Imported by.** `loading/session-loader.js` (`handleLoadMultiSession`).
+
+**Tests.** `tests/test-file-list-directory.mjs` (nesting, order, errors, root
+naming, the walk Load Multiple Sessions does, `canReadDirectoryHandles`);
+`tests/e2e/desktop-read-fallback.mjs` (Load Multiple Sessions, the videos
+prompt's folder buttons and a plain-Chromium control, with the desktop flags set).
+
 ### loading/session-loader.js
 
 **Purpose.** Orchestrator for every session-loading workflow — empty
 session, per-camera SLPs, single-SLP, multi-session, video-only,
 calibration-only. Owns view/grid layout, video selection prompts,
 filesystem enumeration, decoder rebuild.
+
+**hev1 videos played as hvc1.** Where the engine needed `loading/hev1-retag.js`
+(Safari, the macOS app), the final success status of `handleLoadVideos`, the
+single-SLP folder loader, the lazy project reopen and the per-camera folder
+loader ends with "— played N HEVC video(s) tagged hev1 as hvc1 (files
+unchanged)" (`withHev1RetagNote`, counted over the videos that LOADED; last, so
+it never pushes a failure off the line). Other paths (multi-session switches,
+project open in `save-load.js`, relink) log it to the console only.
 
 **Compact copies.** The single-SLP folder loader and the lazy project reopen end on `withCompactNote` (`import-export/compact-save.js`): a file saved as a compact copy opens with a warning status saying its keypoints and 3D were rounded.
 
@@ -12508,12 +12624,15 @@ filesystem enumeration, decoder rebuild.
   reopen) and closes on `Esc`; both resolve `null`, which every caller treats as
   "no videos picked". `options.startIn` (from `folderPickerStartFor(file)`: the
   `.slp` being opened's `state.slpFileHandle`, only when the handle is THAT file's
-  and the browser has `showDirectoryPicker`) makes Select Session Folder open
+  and `canReadDirectoryHandles()`) makes Select Session Folder open
   `pickFolderNear(startIn)`: the folder picker starts in the project's own folder
   and the files are listed as `pickFolder` lists them. A page given one file cannot
   read the folder around it, but can start the picker there, so the user confirms
   the folder instead of finding it again. Load Project, Load SLP and both project
-  reopens pass it; without the API (Brave by default) it is the old upload picker.
+  reopens pass it; without the API (Brave by default), or in the desktop app's
+  WebKit webviews (write-only picker), it is the old upload picker — and
+  `pickFolderNear` itself falls back to `pickFolder` there (resolving `[]` on
+  cancel) should a start handle get through.
   `forceVideoSelection(refInfo, options)` (Load Project on a V2/legacy `.json`,
   Add SLP with no embedded video) is NOT blocking: a **Continue Without Video**
   button and `Esc` both resolve `[]`, which both callers treat as "no videos"
@@ -12565,6 +12684,21 @@ filesystem enumeration, decoder rebuild.
   dock (`updateVideoGridDisplay`). Covered by `tests/e2e/videos-panel-buttons.mjs`.
 - Session-mode UI: `showSessionModeModal`, `showMissingFilesPopup`.
 - Filesystem: `enumerateDirectoryHandle`.
+- **Folder READS never use a handle that cannot be read.** Every read site asks
+  `canReadDirectoryHandles()` (`ui/browser-hints.js`), not `typeof
+  showDirectoryPicker`: the desktop app's WebKit webviews have a WRITE-only
+  `showDirectoryPicker` polyfill (`window.lucidDesktop.fsaWriteOnly`) whose
+  handles give no disk-backed Files. In plain Chrome/Edge nothing changes (same
+  pickers, ids, `startIn`, messages). `pickParentDirectoryForSessions` uses its
+  webkitdirectory branch; `folderPickerStartFor` returns null (so the videos
+  prompt uses `pickFolder`). **`handleLoadMultiSession`** keeps the handle walk
+  where handles are readable (Chromium: webkitdirectory drops files on big
+  trees); otherwise it picks with `pickFolder` and walks
+  `directoryHandleFromFileList(files)` (`./file-list-directory.js`), the same
+  code over the original Files. Only Brave with the API off still refuses (with
+  `fileSystemAccessHint`), being Chromium. Side effect: Load Multiple Sessions
+  now works in Safari and Firefox, which used to be told to use Chrome or Edge.
+  Test: `tests/e2e/desktop-read-fallback.mjs`.
 - **campy recordings** (`loading/campy-session.js`):
   `adoptCampyRecording(session, files, {record, calibFile, calibrationNames})`
   reads a picked folder's session.json (+ campy-live's manifests) onto
@@ -12773,10 +12907,12 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
 - `./calibration-pick.js` (`REBASED_CALIBRATION_NAME`, `pickCalibrationFile`),
   `./percam-slp-choice.js` (`chooseCameraSlp`), `./video-file-pick.js`,
   `./video-codec-diagnosis.js` (`videoLoadFailureText`),
+  `./hev1-retag.js` (`withHev1RetagNote`),
   `../ui/video-codec-notice.js` (`noteUnplayableVideos`),
   `../ui/app-state.js` (incl. `buildRememberedSkeleton`, and `isViewDocked` as the
   rebuilt video controller's `isViewShown`), `../pose/pose-data.js`,
-  `../ui/browser-hints.js` (`fileSystemAccessHint`),
+  `../ui/browser-hints.js` (`fileSystemAccessHint`, `canReadDirectoryHandles`),
+  `./file-list-directory.js` (`directoryHandleFromFileList`),
   `../ui/folder-confirm-tip.js` (`confirmFolderPick` — awaited before every
   folder picker; a cancel ends the load with "No folder selected"),
   `./video.js` (`OnDemandVideoDecoder`, `VideoController`, `releaseViewsFrames` —
@@ -13166,7 +13302,8 @@ console warning and are counted in `coldReadStats`.
 
 **Imported by.** `loading/video.js` (mediabunny via `guardedRangeSource`;
 mp4box's scan via `readChunk`), `loading/video-codec-diagnosis.js`
-(`readRange`), `import-export/slp-import.js` (`handleLoadPoints3dH5`).
+(`readRange`), `loading/hev1-retag.js` (the sample-entry probe),
+`import-export/slp-import.js` (`handleLoadPoints3dH5`).
 
 **Not covered.** The `<video>` element reads its blob URL natively, where no
 page code can reach (playback, and stepping only when there is no
@@ -13180,6 +13317,75 @@ through the guard vs the unguarded read) and `tests/e2e/video-cold-read.mjs`
 (the real OnDemandVideoDecoder with faults injected under it; unguarded, a
 failed read leaves mp4box's scan at the `<video>` estimate and a zeroed first
 page freezes the page).
+
+### loading/hev1-retag.js
+
+**Purpose.** Play HEVC tagged `hev1` on engines that play HEVC only when tagged
+`hvc1` — Safari and the macOS desktop app's WKWebView (canPlayType: hev1 "",
+hvc1 "probably") — losslessly and without touching the file on disk. ffmpeg tags
+HEVC `hev1` by default, and on the desktop app an 8-camera session folder of
+such recordings loaded with no video at all. `ffmpeg -c copy -tag:v hvc1`
+rewrites the sample entry's 4-byte fourcc and nothing else (the fixtures' twins
+differ from their sources in exactly those bytes); that is valid when the
+entry's `hvcC` carries the parameter sets, as ffmpeg-written files' do. This
+module does the same in memory.
+
+**How.** `planHev1Retag(file)` walks `moov/trak/mdia/minf/stbl/stsd` with
+guarded reads (`readBlobRange`, served from 64 KiB windows: ~2 Blob reads per
+file; 15 ms on a 3 GB file with moov at the end), wherever `moov` sits (before
+or after `mdat`, fragmented too), never reading `mdat`. It finds every `hev1`
+sample entry and checks its `hvcC` (`hvccParameterSets`: at least one VPS, SPS
+and PPS NAL, each NAL header naming its array's type, the record parsed to its
+end). Any entry without them → no patch, and the diagnosis's `hevc-hev1-tag`
+message stays. Never throws. `retaggedFile(file, offsets)` builds `new
+File([file.slice(0, off), "hvc1", file.slice(off + 4), …], name, {type,
+lastModified})`, copying own properties (`webkitRelativePath`) and adding
+`lucidHev1Retag = {original, offsets}`; the original is never changed.
+**Disk-backed:** slices of a picked File stay file references. Chromium's
+`chrome://blob-internals` shows a patched 3 GB file as file item + 4-byte data
+item + file item, and Playwright WebKit's processes' RSS did not grow, so
+nothing is copied whatever the size.
+
+**Gate.** `hev1RetagNeeded()`: `<video>` can play `hvc1` but not `hev1`
+(`codecPlayable`, the diagnosis's own test); `globalThis.__lucidHev1RetagGate`
+= true/false forces it (tests). Chrome and Firefox play `hev1` (or no HEVC at
+all), so they never probe and keep the original File by identity.
+
+**Key exports.**
+- `playbackSourceFor(source, env?)` — the File the video consumers should read:
+  `source` itself, SYNCHRONOUSLY, when it is not a File, is already patched, or
+  the gate is off; else a never-rejecting Promise of the patched File (or of
+  `source` when there is nothing to patch). One plan per original File
+  (WeakMap), so the same original always yields the same patched object
+  (`ui/image-embedder.js` keys its cache on `decoder.file`). Logs one
+  `[hev1-retag]` console line per re-tagged file.
+- `videoFileForPlayback(source, env?)` — the same, always a Promise.
+- `planHev1Retag(blob)` → `{offsets, entries, reason}` (`ok`, `no-hev1`,
+  `incomplete-hvcc`, `no-moov`, `not-mp4`, `error`).
+- `hev1EntriesInStsd(stsdBytes, stsdOffset)`, `hvccParameterSets(record)` — pure.
+- `retaggedFile(file, offsets, tag?)`, `hev1RetagNeeded(env?)`,
+  `isPlayedRetagged(fileOr{file})`, `hev1RetagNote(files)`,
+  `withHev1RetagNote(message, files)` (the loaders' "— played N HEVC video(s)
+  tagged hev1 as hvc1 (files unchanged)").
+
+**Imports from project modules.** `./cold-read-guard.js` (`readBlobRange`),
+`./video-codec-diagnosis.js` (`parseBoxHeader`, `codecPlayable`).
+
+**Imported by.** `loading/video.js` (`OnDemandVideoDecoder.init` /
+`switchSource`, the choke point), `loading/session-loader.js`
+(`withHev1RetagNote`).
+
+**Not changed by it.** `state.videoFiles[i].file` keeps the original (names,
+`videoPath`, `videos_json`), so saves are byte-identical; the streaming save's
+`sourceFiles` are `.slp` files. Fixtures:
+`tests/fixtures/hev1-retag/make_fixture.sh`.
+
+**Tests.** `tests/test-hev1-retag.mjs` (box walking with moov at the end, moov
+first, fragmented, two tracks; patched bytes equal ffmpeg's `-tag:v hvc1` twins
+byte for byte; incomplete hvcC; no patch and no throw on avc1, hvc1, truncated,
+garbage; the probe reads 68 KiB of a 20 MB file; gate, identity, cache, note),
+`tests/e2e/hev1-retag.mjs` (Chromium; `BROWSER=webkit` plays the patched file
+end to end), `tests/test-video-codec-diagnosis.js` (desktop message).
 
 ### loading/video-codec-diagnosis.js
 
@@ -13203,13 +13409,24 @@ browser claims support — the original error then stands.
 
 **Key exports.**
 - `sniffMp4VideoCodec(source)` → `{fourcc, codecName}|null` (File/Blob/URL).
+- `parseBoxHeader(bytes, at?)` → `{size, type, header}|null` — one MP4 box
+  header (64-bit `largesize` read; size 0 left for the caller). Pure; shared
+  with `loading/hev1-retag.js`.
+- `codecPlayable(fourcc, canPlayType?)` — canPlayType with the representative
+  codecs= string for that fourcc (`PROBE_CODECS`); the `supported()` test of
+  `explainUnplayableCodec` and hev1-retag's gate.
 - `videoFourccFromMoov(moovBytes)` — first video sample-entry fourcc in a `moov`.
 - `explainUnplayableCodec(fourcc, fileName, env?)` → `{fourcc, codecName, kind,
   message, title?, why?, steps?, command?}|null`; pure (`env.canPlayType`,
-  `env.isSafari`, `env.isChromium`, `env.renderer` injectable). Kinds:
+  `env.isSafari`, `env.isChromium`, `env.renderer`, `env.desktop` injectable). Kinds:
   `hevc-hev1-tag`, `av1-unsupported`, `hevc-no-gpu`, `hevc-gpu-no-decode`,
   `hevc-unsupported`, `unsupported`, `encrypted`. The three HEVC-unsupported
   kinds carry `title`/`why`/`steps` for `ui/video-codec-notice.js`.
+  `hevc-hev1-tag` now reaches the user only when `loading/hev1-retag.js` could
+  not play the file as `hvc1` (its hvcC lacks VPS/SPS/PPS); its message keeps
+  the ffmpeg re-tag and drops "or open the project in Chrome or Firefox" inside
+  the desktop app (`window.lucidDesktop`, or `env.desktop`), whose engine is
+  the one that refused it.
 - `graphicsRenderer()` — WebGL's unmasked renderer string, cached ('' unknown).
 - `rendererHasGpu(renderer)` → true / false (software or virtual adapter) / null.
 - `diagnoseUnplayableVideo(source, fileName?, env?)` — sniff + explain.
@@ -13220,7 +13437,8 @@ browser claims support — the original error then stands.
 (`readBlobRange`: a cloud file still downloading).
 
 **Imported by.** `loading/video.js` (`OnDemandVideoDecoder._awaitPlayable`),
-`loading/session-loader.js` (`videoLoadFailureText`).
+`loading/session-loader.js` (`videoLoadFailureText`), `loading/hev1-retag.js`
+(`parseBoxHeader`, `codecPlayable`).
 
 **Tests.** `tests/test-video-codec-diagnosis.js` (synthetic MP4s, every message
 kind, renderer classes, decoder integration); real browsers via the
@@ -13768,11 +13986,30 @@ the cursor, so only this `e.altKey` early return keeps an Option+scroll there
 from zooming the view mid-rotation. Pinned by the margin check in
 `tests/e2e/alt-wheel-rotate-instance.mjs`.
 
+**`init()` / `switchSource()` are the one choke point for HEVC tagged `hev1`
+(`loading/hev1-retag.js`).** Both first replace a File source with
+`playbackSourceFor(source)`: on an engine whose `<video>` plays `hvc1` but not
+`hev1` (Safari, the macOS app's WKWebView) a disk-backed re-tagged view of the
+File, before the first play attempt; elsewhere the File itself, synchronously
+(no await, so Chrome and Firefox run exactly as before). Everything after reads
+`this.file` / `this._source` / the local `source`: the `<video>` blob URL,
+`_peekHTML5`, mp4box's `readChunk`, `_initMediabunny`'s `guardedRangeSource`,
+`_awaitPlayable`'s codec diagnosis, and outside the class
+`ui/image-embedder.js` (`d.file`) and `ui/seekbar-preview.js` (`d._source`).
+Every loader reaches video through these two methods (session folders per camera
+and single-SLP, multi-session switches, campy folders, the Videos prompt and
+camera prompt cells, lazy project reopen, project open in `save-load.js`,
+relink / add-matching-videos in `slp-import.js`, the demo). Callers keep the
+ORIGINAL File in `state.videoFiles[i].file` (names, `videoPath`, what a save
+writes); a later `switchSource(original)` gets the same patched object back.
+Test: `tests/e2e/hev1-retag.mjs`.
+
 **Imports from project modules.** `ui/keyboard-target.js` — the
 `shouldIgnoreShortcut` guard its `setupKeyboardHandlers` keydown listener
 applies; that module imports nothing itself — and
 `loading/video-codec-diagnosis.js` (`diagnoseUnplayableVideo`, for
-`_awaitPlayable`) — and `loading/cold-read-guard.js`: `_initMediabunny` builds
+`_awaitPlayable`) — and `loading/hev1-retag.js` (`playbackSourceFor`, in
+`init` and `switchSource`) — and `loading/cold-read-guard.js`: `_initMediabunny` builds
 the frame-accurate backend with `MediaBunnyVideoBackend.fromRangeSource` over
 `guardedRangeSource(file)` (falling back to `fromBlob` when a bundle lacks it),
 and `readChunk` (mp4box's index scan) reads through `readBlobRange`, so both
@@ -14595,7 +14832,9 @@ loading-overlay/status-text UI helpers.
   click), then the shared write (`writeProjectToHandle`, also Save's) inside
   `withCompactSave` (`import-export/compact-save.js`). A COPY: `state.slpFileHandle`
   and the dirty state are left alone, since nothing in memory is rounded. Without
-  `showSaveFilePicker` (Brave's default) it says which browser setting it needs.
+  `showSaveFilePicker` (Brave's default) it says which browser setting it needs;
+  in the desktop app (`window.lucidDesktop`, whose shim provides the picker, so
+  this is not expected) the message gives no browser advice.
 - **The Save progress card.** `quickSave`/`saveAs` and `saveProjectSlp` (the
   download path, which is what Save is in Brave — its save dialog cannot open
   until the whole file is built) show the shared loading overlay
@@ -14618,8 +14857,11 @@ loading-overlay/status-text UI helpers.
   `state.isSaving` and refuses a second save while one runs (two builds would
   hold two copies of the file in memory), and `quickSave` awaits it. Covered by
   `tests/e2e/save-progress-card.mjs`.
-- Project: `newProject(force)` (`force` skips the unsaved-changes confirm and
-  is used by the 3D-import reset), `markDirty`, `clearDirty`, `quickSave`,
+- Project: `newProject(force)` → `Promise<boolean>` (reset or not). `force`
+  skips the unsaved-changes confirm and is used by the 3D-import reset; with
+  `force`, or nothing open, the reset (`resetProject`, internal) runs
+  SYNCHRONOUSLY before it returns. Otherwise it asks through `askConfirm`
+  (ui/ask.js) and resets once answered yes. `markDirty`, `clearDirty`, `quickSave`,
   `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject` (routes a
   large `.slp` — over 200 MB, `LARGE_SLP_BYTES` — to the memory-bounded
   `handleLoadProjectSlpLazy` in `loading/session-loader.js` instead of the
@@ -14657,7 +14899,7 @@ loading-overlay/status-text UI helpers.
   `CAGE_WARN_FRACTION` (0.85) of `getCageLimitBytes()` (exported;
   `performance.memory.jsHeapSizeLimit`, else 4 GB) — set above a real project
   known to save at 77% —
-  `window.confirm(...)` warns the user and offers to cancel in favor of
+  `askConfirm(...)` (ui/ask.js) warns the user and offers to cancel in favor of
   per-camera export ("Export SLEAP File Per Session"/"By Cam"). Declining throws
   `SaveCancelledError`, which `quickSave`/`saveProjectSlp` report as "Save
   cancelled" (not "Save failed") — `quickSave` additionally calls
@@ -14756,7 +14998,8 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   `../pose/placeholder-cameras.js` (`ensurePlaceholderCameras`),
   `../ui/browser-hints.js` (`fileSystemAccessHint` — `saveProjectSlp`, the
   download fallback when there is no save-file picker, says why and how to
-  enable it in Brave), `../loading/video.js`, `../demo-data.js`, `./file-io.js`,
+  enable it in Brave), `../ui/ask.js` (`askConfirm` — New Project, the very
+  large save warning, a JSON project over 50 MB), `../loading/video.js`, `../demo-data.js`, `./file-io.js`,
   `../ui/app-state.js`, `../loading/session-loader.js`,
   `../loading/sio-lazy-loader.js` (`SioLazyLoader`, for
   `reopenSessionLazyLoader`), `./slp-streaming-write.js`,

@@ -1,0 +1,816 @@
+name: Desktop app
+
+# Builds the luc3d desktop app (src-tauri/, Tauri 2) for Linux, macOS (one
+# universal binary) and Windows, and publishes installers + in-app updates.
+#
+# Two tiers, so an app-code PR is checked without building three installers:
+#
+#   stage    EVERY pull_request and push (ubuntu, no Rust, ~1 min):
+#            scripts/desktop/stage_frontend.py into a temp dir, with its
+#            self-check, plus tests/test-desktop-stage.mjs and the updater
+#            scripts' test. The desktop frontend is a staged copy of the app,
+#            so an app PR can break it -- a new top-level runtime file missing
+#            from the include list, an unmapped CDN URL, a computed import, a
+#            dangling worker path -- and no other workflow runs tests.
+#
+#   rust-checks, build (3 OS), then release / publish-dev
+#            when `plan` says so: workflow_dispatch and release: published
+#            always; a push to a DESKTOP_DEV_BRANCHES branch always (it feeds
+#            the dev update channel); a pull_request only when it touches a
+#            desktop path.
+#
+# Channels the in-app updater reads (src-tauri/src/updates.rs):
+#
+#   stable / latest  `release: published` of a vX.Y.Z / vX.Y.Z-N tag. Releases
+#                    are cut BY HAND (`gh release create vX.Y.Z
+#                    --generate-notes`, see deploy.yml); the same event also
+#                    runs deploy.yml. The version is the tag minus "v". The
+#                    `release` job attaches installers, updater payloads and
+#                    latest.json to THAT release.
+#   dev              a push to a DESKTOP_DEV_BRANCHES branch. Version
+#                    <X.Y.Z of the highest vX.Y.Z[-N] release>-dev.<run_number>.
+#                    `publish-dev` deletes and recreates the rolling prerelease
+#                    `desktop-dev` with the installers, payloads and latest.json.
+#
+# Updater signing: TAURI_SIGNING_PRIVATE_KEY (+ _PASSWORD) repo secrets. Without
+# them -- not set yet, or a fork PR, which never sees secrets -- every build
+# still succeeds: it passes a --config turning createUpdaterArtifacts off,
+# nothing is signed, no latest.json is written and the dev channel is not
+# published (`plan` says so in a warning). With them, each leg checks that
+# every .sig was made by tauri.conf.json's plugins.updater.pubkey
+# (scripts/desktop/check_update_signatures.py) -- a wrong key is only a
+# bundler warning, and every installed app would reject the update.
+#
+# This workflow never touches gh-pages, has its own concurrency groups, and
+# writes nothing but releases, so it cannot interfere with deploy.yml (group
+# deploy-pages) or pr-preview.yml (group pr-preview-<n>).
+#
+# The frontend is not built here: tauri.conf.json's beforeBuildCommand runs
+# scripts/desktop/stage_frontend.py, which copies the app into dist-desktop/
+# with its CDN dependencies vendored into ./lib/ (offline-deps.json), stamps
+# ?v=<commit> + the menu bar's version label, and fails the build if any module
+# reference in the copy is dangling. It needs python3 and node on PATH.
+#
+# Version: tauri.conf.json's `version` names every installer and is what the
+# updater compares. It is stamped in the runner's checkout only, never
+# committed; PR and plain dispatch builds keep the committed version. The WiX
+# (MSI) bundler maps X.Y.Z-N onto the four-part Windows version and rejects a
+# NON-numeric pre-release, so release tags must be vX.Y.Z[-N] (`stage` refuses
+# others in seconds) and dev builds (-dev.N) bundle NSIS only on Windows.
+#
+# Not a tauri-apps/tauri-action build: there is no npm project here for it to
+# install from, publishing is a few `gh release` calls, and the bundle paths are
+# collected explicitly below either way. `npx` runs the Tauri CLI directly
+# (TAURI_CLI_VERSION), so the build is the same command a developer runs.
+
+on:
+  pull_request:
+  push:
+    # Keep in sync with DESKTOP_DEV_BRANCHES below (`on:` cannot read env).
+    branches: [main, luc3d-app]
+  workflow_dispatch:
+  release:
+    types: [published]
+
+# Per ref. Only PR and dispatch runs cancel an older run of the same ref: a
+# push run may be inside publish-dev (between deleting desktop-dev and
+# recreating it), and a release run is attaching assets, so those queue instead
+# (GitHub keeps only the newest pending run per group).
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+  # The Tauri CLI major the crates in src-tauri/Cargo.toml (tauri 2.x) need.
+  TAURI_CLI_VERSION: '2'
+  # A push to one of these builds all three platforms and publishes the dev
+  # update channel (the rolling `desktop-dev` prerelease). Space-separated; keep
+  # in sync with on.push.branches. Drop luc3d-app once PR #430 merges: while
+  # that PR is open, its branch is where the desktop app's dev updates come from.
+  DESKTOP_DEV_BRANCHES: 'main luc3d-app'
+
+jobs:
+  # The cheap tier: every event. Fails in seconds rather than after three cold
+  # Rust builds, and is the only desktop check an app-code PR gets.
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check the release tag is a bundler-safe version
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$'; then
+            echo "::error::tag '$RELEASE_TAG' is not vX.Y.Z or vX.Y.Z-N (numeric N): the MSI"\
+                 "bundler rejects it, and deploy.yml would refuse it too."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      # The exact command tauri.conf.json's beforeBuildCommand runs (into a temp
+      # dir here): offline install, copy + CDN rewrite, stamp, self-check.
+      - name: Stage the desktop frontend
+        run: python3 scripts/desktop/stage_frontend.py --out "$RUNNER_TEMP/dist-desktop"
+
+      # Independent checks of the staged copy (what ships, CDN URLs, every module
+      # reference, version stamp) plus --out safety and the self-check's own
+      # negative controls.
+      - name: tests/test-desktop-stage.mjs
+        run: node tests/test-desktop-stage.mjs
+
+      # latest.json generation and the updater key-id check, on fixtures (real
+      # Tauri signer output, public data only).
+      - name: tests/test-desktop-update-manifest.mjs
+        run: node tests/test-desktop-update-manifest.mjs
+
+  # What this run builds and publishes. Every later job reads these outputs, so
+  # the legs and the publish jobs cannot disagree on a version or a channel.
+  #   desktop  build the matrix + rust-checks?
+  #   channel  release | dev | '' (build only)
+  #   version  stamped into tauri.conf.json; '' keeps the committed one
+  #   label    the menu bar's build label (stage_frontend.py LUCID_DESKTOP_LABEL)
+  #   signed   the updater signing key is available to this run
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      desktop: ${{ steps.decide.outputs.desktop }}
+      channel: ${{ steps.decide.outputs.channel }}
+      version: ${{ steps.decide.outputs.version }}
+      label: ${{ steps.decide.outputs.label }}
+      signed: ${{ steps.decide.outputs.signed }}
+    steps:
+      # Only for the committed version, the dev version's fallback when no
+      # vX.Y.Z release exists yet.
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: src-tauri/tauri.conf.json
+          sparse-checkout-cone-mode: false
+
+      - name: Decide
+        id: decide
+        # Event fields go through the environment, never into the script body:
+        # a tag or branch name is attacker-influencable text.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+          # 'true' / 'false' only; the key itself never reaches this job.
+          HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        run: |
+          set -euo pipefail
+          TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$'
+          is_desktop_path() {
+            case "$1" in
+              src-tauri/* | scripts/desktop/* | scripts/offline_deps.py | \
+              scripts/stamp-version.mjs | scripts/preload-modules.mjs | \
+              offline-deps.json | tests/test-desktop-stage.mjs | \
+              tests/test-desktop-update*.mjs | .github/workflows/desktop.yml) return 0 ;;
+            esac
+            return 1
+          }
+          is_dev_branch() {
+            for b in $DESKTOP_DEV_BRANCHES; do [ "$1" = "$b" ] && return 0; done
+            return 1
+          }
+          desktop=false channel='' version='' label=''
+          case "$EVENT_NAME" in
+            release)
+              desktop=true channel=release version="${RELEASE_TAG#v}" label="$RELEASE_TAG" ;;
+            workflow_dispatch)
+              desktop=true label='desktop dev'
+              # A dispatch with a release tag picked in "Use workflow from"
+              # builds that version, but publishes nothing.
+              if printf '%s' "$REF_NAME" | grep -Eq "$TAG_RE"; then
+                version="${REF_NAME#v}" label="$REF_NAME"
+              fi ;;
+            push)
+              if is_dev_branch "$REF_NAME"; then
+                desktop=true channel=dev
+                # Same ordering as deploy.yml's highest(): drafts excluded, a
+                # full release above a -N pre-release of the same X.Y.Z, and any
+                # tag that is not vX.Y.Z[-N] (desktop-dev included) ignored.
+                base_tag="$(gh api "repos/$REPO/releases?per_page=100" --paginate --jq '.[]' | jq -rs '
+                  [ .[] | select(.draft == false) | .tag_name as $t
+                    | ($t | capture("^v(?<major>[0-9]+)\\.(?<minor>[0-9]+)\\.(?<patch>[0-9]+)(-(?<pre>[0-9]+))?$"))?
+                    | select(. != null)
+                    | { sortkey: [ (.major|tonumber), (.minor|tonumber), (.patch|tonumber),
+                                   (if .pre == null then 1 else 0 end), (.pre // "0" | tonumber) ],
+                        tag: $t } ]
+                  | max_by(.sortkey) | if . == null then "" else .tag end')"
+                if [ -n "$base_tag" ]; then
+                  base="${base_tag#v}"
+                else
+                  base="$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')"
+                  echo "No vX.Y.Z release yet; dev version based on tauri.conf.json's $base"
+                fi
+                base="${base%%-*}"
+                # run_number is per workflow file and only grows, so it orders
+                # dev builds from every dev branch; "dev" sorts above a numeric
+                # pre-release of the same X.Y.Z (1.2.0-1 < 1.2.0-dev.N < 1.2.0).
+                version="${base}-dev.${RUN_NUMBER}" label="v$version"
+              fi ;;
+            pull_request)
+              label="desktop PR #$PR_NUMBER"
+              if files="$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+                            --jq '.[] | .filename, (.previous_filename // empty)')"; then
+                while IFS= read -r f; do
+                  if is_desktop_path "$f"; then
+                    echo "desktop path changed: $f"
+                    desktop=true
+                    break
+                  fi
+                done <<< "$files"
+              else
+                echo "::warning::could not list the PR's files; running the desktop build to be safe"
+                desktop=true
+              fi ;;
+          esac
+          signed="$HAS_UPDATER_KEY"
+          if [ "$desktop" = true ] && [ "$signed" != true ]; then
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not available to this run (not set, or a"\
+                 "fork PR): installers are built WITHOUT updater signatures, no latest.json is"\
+                 "written${channel:+, and the $channel update channel is not published}."
+          fi
+          {
+            echo "desktop=$desktop"
+            echo "channel=$channel"
+            echo "version=$version"
+            echo "label=$label"
+            echo "signed=$signed"
+          } | tee -a "$GITHUB_OUTPUT"
+
+  # cargo test + clippy, beside the bundles rather than before the Linux one: a
+  # lint failure must never throw away an installer that already built (it
+  # compiles the debug profile anyway, so there is nothing to share).
+  rust-checks:
+    needs: [stage, plan]
+    if: needs.plan.outputs.desktop == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install system dependencies
+        timeout-minutes: 32
+        run: bash scripts/desktop/linux-deps.sh
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      # tauri::generate_context!() requires frontendDist to exist at compile time.
+      - name: Stage the frontend
+        run: python3 scripts/desktop/stage_frontend.py --out dist-desktop
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test --locked
+
+      - name: cargo clippy (default features)
+        working-directory: src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      # The sleap-nn seam is OFF in every shipped build, so nothing else would
+      # notice it stop compiling.
+      - name: cargo clippy (--features sleap-nn)
+        working-directory: src-tauri
+        run: cargo clippy --locked --all-targets --features sleap-nn -- -D warnings
+
+  build:
+    needs: [stage, plan]
+    if: needs.plan.outputs.desktop == 'true'
+    strategy:
+      # One flaky platform must not stop the others: the release job ships
+      # whatever did build, and says loudly what is missing. (publish-dev, which
+      # REPLACES the dev channel, needs all three.)
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            os-tag: linux
+            arch: x86_64
+            rust-targets: x86_64-unknown-linux-gnu
+            target: ''
+            bundles: deb,appimage
+            updater-suffix: .AppImage
+            bundle-dir: src-tauri/target/release/bundle
+            job-timeout: 60
+          # One universal binary: a single .dmg for Apple Silicon and Intel.
+          # macos-latest is arm64, and Rosetta does not run arm64 on Intel.
+          # --target moves the bundle out of target/release/.
+          - platform: macos-latest
+            os-tag: macos
+            arch: universal
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+            target: universal-apple-darwin
+            bundles: app,dmg
+            updater-suffix: .app.tar.gz
+            bundle-dir: src-tauri/target/universal-apple-darwin/release/bundle
+            # Tauri notarizes inside its build step with no progress output; a
+            # team's first submission can take > 45 min (sleap-app's did).
+            job-timeout: 120
+          - platform: windows-latest
+            os-tag: windows
+            arch: x86_64
+            rust-targets: x86_64-pc-windows-msvc
+            target: ''
+            # nsis only on the dev channel (see the Build step).
+            bundles: nsis,msi
+            updater-suffix: -setup.exe
+            bundle-dir: src-tauri/target/release/bundle
+            job-timeout: 60
+
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: ${{ matrix.job-timeout }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install system dependencies (Linux)
+        if: matrix.os-tag == 'linux'
+        timeout-minutes: 32
+        run: bash scripts/desktop/linux-deps.sh
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # beforeBuildCommand says `python3`, which setup-python does not provide on
+      # Windows (and the bare name there can hit the Microsoft Store stub).
+      - name: Provide python3 on Windows
+        if: matrix.os-tag == 'windows'
+        shell: pwsh
+        run: |
+          $py3 = Join-Path $env:pythonLocation 'python3.exe'
+          if (-not (Test-Path $py3)) { Copy-Item (Join-Path $env:pythonLocation 'python.exe') $py3 }
+          python3 --version
+
+      - name: Set the version and the menu bar label
+        shell: bash
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          LABEL: ${{ needs.plan.outputs.label }}
+        run: |
+          set -euo pipefail
+          if [ -n "$VERSION" ]; then
+            # The runner's checkout only; never committed.
+            python3 - <<'PY'
+          import json, os
+          p = "src-tauri/tauri.conf.json"
+          conf = json.load(open(p, encoding="utf-8"))
+          conf["version"] = os.environ["VERSION"]
+          open(p, "w", encoding="utf-8").write(json.dumps(conf, indent=2) + "\n")
+          PY
+          fi
+          # Read by scripts/desktop/stage_frontend.py (the beforeBuildCommand).
+          echo "LUCID_DESKTOP_LABEL=$LABEL" >> "$GITHUB_ENV"
+          echo "version $(python3 -c 'import json;print(json.load(open("src-tauri/tauri.conf.json"))["version"])'), label '$LABEL'"
+
+      # Opt-in Developer ID signing, as in sleap-app. GitHub renders an unset
+      # secret as an EMPTY string, and an empty APPLE_SIGNING_IDENTITY makes Tauri
+      # run `codesign -s ""`, which fails the build -- so the variables are
+      # exported only once known non-empty. Without the secrets the bundle is
+      # signed AD-HOC ("-"): a universal .app with only the linker's per-binary
+      # signature has no sealed resources, and macOS calls that "damaged" with no
+      # "Open Anyway". Ad-hoc is set here rather than relying on tauri.conf.json.
+      - name: Configure macOS code signing
+        if: matrix.os-tag == 'macos'
+        shell: bash
+        env:
+          CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          NOTARY_APPLE_ID: ${{ secrets.APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          NOTARY_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CERT" ] || [ -z "$IDENTITY" ]; then
+            {
+              echo "LUCID_SIGNING_MODE=adhoc"
+              echo "APPLE_SIGNING_IDENTITY=-"
+            } >> "$GITHUB_ENV"
+            echo "::notice::No Apple Developer ID secrets -- signing ad-hoc. A downloaded"\
+                 ".dmg is gated by Gatekeeper (right-click > Open, or clear the quarantine flag)."
+            exit 0
+          fi
+          # Heredoc form: a base64 certificate may wrap.
+          {
+            echo "APPLE_CERTIFICATE<<__LUCID_EOF__"
+            printf '%s\n' "$CERT"
+            echo "__LUCID_EOF__"
+            echo "APPLE_CERTIFICATE_PASSWORD=$CERT_PASSWORD"
+            echo "APPLE_SIGNING_IDENTITY=$IDENTITY"
+          } >> "$GITHUB_ENV"
+          if [ -n "$NOTARY_APPLE_ID" ] && [ -n "$NOTARY_PASSWORD" ] && [ -n "$NOTARY_TEAM_ID" ]; then
+            {
+              echo "APPLE_ID=$NOTARY_APPLE_ID"
+              echo "APPLE_PASSWORD=$NOTARY_PASSWORD"
+              echo "APPLE_TEAM_ID=$NOTARY_TEAM_ID"
+              echo "LUCID_SIGNING_MODE=developer-id-notarized"
+            } >> "$GITHUB_ENV"
+            echo "Developer ID signing + notarization enabled."
+          else
+            echo "LUCID_SIGNING_MODE=developer-id" >> "$GITHUB_ENV"
+            echo "::warning::Signing with a Developer ID but NOT notarizing -- APPLE_ID,"\
+                 "APPLE_PASSWORD and APPLE_TEAM_ID must all three be set."
+          fi
+
+
+      - name: Build
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          BUNDLES: ${{ matrix.bundles }}
+          OS_TAG: ${{ matrix.os-tag }}
+          B: ${{ matrix.bundle-dir }}
+          CHANNEL: ${{ needs.plan.outputs.channel }}
+          SIGNED: ${{ needs.plan.outputs.signed }}
+          UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          UPDATER_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          python3 --version && node --version
+          # rust-cache restores target/, bundle outputs included: a stale .app or
+          # installer from an earlier build (e.g. before a rename) would then be
+          # verified and uploaded as this one. Bundles are cheap to remake.
+          rm -rf "$B"
+          # The dev version (X.Y.Z-dev.N) has a non-numeric pre-release, which
+          # the MSI bundler rejects; the NSIS installer is also the updater's.
+          if [ "$CHANNEL" = dev ] && [ "$OS_TAG" = windows ]; then BUNDLES=nsis; fi
+          args=(build --bundles "$BUNDLES")
+          if [ -n "$TARGET" ]; then args+=(--target "$TARGET"); fi
+          if [ "$SIGNED" = true ]; then
+            # Only now, and only in this step's process: the bundler signs the
+            # updater payloads with it (createUpdaterArtifacts in tauri.conf.json).
+            export TAURI_SIGNING_PRIVATE_KEY="$UPDATER_KEY"
+            export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$UPDATER_KEY_PASSWORD"
+          else
+            # Without the key, createUpdaterArtifacts would fail the build. A
+            # config FILE rather than inline JSON: no quoting through npx's
+            # Windows shim.
+            printf '%s\n' '{"bundle":{"createUpdaterArtifacts":false}}' > "$RUNNER_TEMP/no-updater.json"
+            args+=(--config "$RUNNER_TEMP/no-updater.json")
+          fi
+          echo "tauri ${args[*]}"
+          npx --yes "@tauri-apps/cli@${TAURI_CLI_VERSION}" "${args[@]}"
+
+      # Tauri staples the .app, then wraps it in a .dmg that is itself not
+      # notarized; Gatekeeper assesses the image too when a downloaded one opens.
+      - name: Notarize and staple the .dmg
+        if: matrix.os-tag == 'macos' && env.LUCID_SIGNING_MODE == 'developer-id-notarized'
+        shell: bash
+        env:
+          B: ${{ matrix.bundle-dir }}
+        run: |
+          set -euo pipefail
+          DMG="$(find "$B/dmg" -maxdepth 1 -type f -name '*.dmg' ! -name 'rw.*' | head -1)"
+          [ -n "$DMG" ] || { echo "::error::no .dmg under $B/dmg"; exit 1; }
+          xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --wait --timeout 30m
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+
+      # Prove the .app carries a sealed bundle signature of the configured kind,
+      # with both architecture slices, before anything is uploaded.
+      - name: Verify the macOS signature
+        if: matrix.os-tag == 'macos'
+        shell: bash
+        env:
+          B: ${{ matrix.bundle-dir }}
+        run: |
+          set -euo pipefail
+          APPS="$(find "$B/macos" -maxdepth 1 -type d -name '*.app')"
+          [ -n "$APPS" ] || { echo "::error::no .app under $B/macos"; exit 1; }
+          [ "$(printf '%s\n' "$APPS" | wc -l | tr -d '[:space:]')" = 1 ] || {
+            echo "::error::more than one .app under $B/macos (stale bundle?): $APPS"; exit 1; }
+          APP="$APPS"
+          # Captured once: `codesign -dv | grep -q` can SIGPIPE codesign under pipefail.
+          DESC="$(codesign -dv --verbose=2 "$APP" 2>&1 || true)"
+          printf '%s\n' "$DESC"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign --verify --deep --strict --arch x86_64 "$APP"
+          codesign --verify --deep --strict --arch arm64 "$APP"
+          case "$DESC" in *"Sealed Resources version="*) ;; *)
+            echo "::error::$APP has no sealed resources -- macOS would call it damaged"; exit 1 ;; esac
+          if [ "${LUCID_SIGNING_MODE:-adhoc}" = adhoc ]; then
+            case "$DESC" in *flags=*adhoc*) ;; *) echo "::error::not ad-hoc signed as configured"; exit 1 ;; esac
+          else
+            case "$DESC" in *flags=*adhoc*)
+              echo "::error::ad-hoc signed although Developer ID secrets are set"; exit 1 ;; esac
+            case "$DESC" in *"Authority=Developer ID Application:"*) ;; *)
+              echo "::error::no Developer ID Application authority"; exit 1 ;; esac
+            case "$DESC" in *flags=*runtime*) ;; *)
+              echo "::error::signed without the hardened runtime"; exit 1 ;; esac
+          fi
+          EXE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")"
+          ARCHS="$(lipo -archs "$APP/Contents/MacOS/$EXE")"
+          echo "slices: $ARCHS"
+          case "$ARCHS" in *x86_64*) ;; *) echo "::error::no x86_64 slice"; exit 1 ;; esac
+          case "$ARCHS" in *arm64*) ;; *) echo "::error::no arm64 slice"; exit 1 ;; esac
+          if [ "${LUCID_SIGNING_MODE:-adhoc}" = developer-id-notarized ]; then
+            spctl -a -vvv -t exec "$APP"
+            xcrun stapler validate "$APP"
+          fi
+
+
+      # A TAURI_SIGNING_PRIVATE_KEY that does not match plugins.updater.pubkey is
+      # only a bundler WARNING; every installed app would then reject the update.
+      - name: Check the updater signatures
+        if: needs.plan.outputs.signed == 'true'
+        shell: bash
+        env:
+          B: ${{ matrix.bundle-dir }}
+          SUFFIX: ${{ matrix.updater-suffix }}
+        run: python3 scripts/desktop/check_update_signatures.py --conf src-tauri/tauri.conf.json "--require=$SUFFIX" "$B"
+
+      # Two sets, as in sleap-app: the installers a person downloads, and (when
+      # signed) the updater's extras -- every .sig plus the macOS .app.tar.gz.
+      # The AppImage and the NSIS -setup.exe are both: the installer IS the
+      # payload, and its .sig sits in the updater set. The OS goes after the
+      # product name so a release page reads at a glance
+      # (luc3d_1.2.0_x64-setup.exe -> luc3d_windows_1.2.0_x64-setup.exe,
+      # luc3d.app.tar.gz -> luc3d_macos.app.tar.gz); a .sig is renamed with its
+      # payload, and the suffixes make_update_manifest.py keys on survive.
+      - name: Collect installers and updater payloads
+        shell: bash
+        env:
+          B: ${{ matrix.bundle-dir }}
+          OS_TAG: ${{ matrix.os-tag }}
+          SIGNED: ${{ needs.plan.outputs.signed }}
+        run: |
+          set -euo pipefail
+          # rm first: stale files must never be re-uploaded as this build.
+          rm -rf artifacts updater
+          mkdir -p artifacts updater
+          [ -d "$B" ] || { echo "::error::bundle dir $B does not exist -- did the output path change?"; exit 1; }
+          # `! -name 'rw.*'` skips create-dmg's read-write intermediate.
+          find "$B" -maxdepth 2 -type f ! -name 'rw.*' \( \
+            -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \
+            -o -name '*.msi' -o -name '*-setup.exe' \) -exec cp {} artifacts/ \;
+          if [ "$SIGNED" = true ]; then
+            find "$B" -maxdepth 2 -type f \( -name '*.app.tar.gz' -o -name '*.sig' \) -exec cp {} updater/ \;
+          fi
+          add_os() {
+            for f in "$1"/*; do
+              [ -f "$f" ] || continue
+              name="${f##*/}"
+              case "$name" in
+                *_"$OS_TAG"_* | *_"$OS_TAG".*) continue ;;           # already prefixed (re-run)
+                *_*) new="${name%%_*}_${OS_TAG}_${name#*_}" ;;      # luc3d_<ver>_... -> luc3d_<os>_<ver>_...
+                *.*) new="${name%%.*}_${OS_TAG}.${name#*.}" ;;      # luc3d.app.tar.gz -> luc3d_<os>.app.tar.gz
+                *) echo "::warning::unexpected file name '$name' -- left as is"; continue ;;
+              esac
+              mv -- "$f" "$1/$new"
+              echo "$name -> $new"
+            done
+          }
+          add_os artifacts
+          add_os updater
+          ls -lh artifacts updater
+          count="$(find artifacts -type f | wc -l | tr -d '[:space:]')"
+          [ "$count" -gt 0 ] || { echo "::error::no installers found under $B"; exit 1; }
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: luc3d_${{ matrix.os-tag }}_${{ matrix.arch }}
+          path: artifacts/*
+          retention-days: 7
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: luc3d-updater_${{ matrix.os-tag }}_${{ matrix.arch }}
+          path: updater/*
+          retention-days: 7
+          if-no-files-found: ${{ needs.plan.outputs.signed == 'true' && 'error' || 'ignore' }}
+
+  # stable / latest channels: attach everything to the release that triggered
+  # this run.
+  release:
+    needs: [plan, build]
+    # `!cancelled()`, not a bare `needs`: one failed leg must not leave the
+    # release with zero assets (sleap-app v0.1.1). Not `always()`: a run
+    # cancelled by hand publishes nothing. Re-running a failed leg re-runs this
+    # job, which re-uploads (--clobber) and regenerates latest.json.
+    if: ${{ !cancelled() && needs.plan.outputs.channel == 'release' && needs.build.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAG: ${{ github.event.release.tag_name }}
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/desktop
+
+      - uses: actions/download-artifact@v7
+        continue-on-error: true
+        with:
+          path: artifacts
+          pattern: luc3d*
+          merge-multiple: true
+
+      # Binaries first: a failure in the manifest step below must never leave a
+      # release with no installers (sleap-app shipped one that way).
+      - name: Upload installers and updater payloads to the release
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          ls -lh artifacts
+          count="$(find artifacts -maxdepth 1 -type f | wc -l | tr -d '[:space:]')"
+          [ "$count" -gt 0 ] || { echo "::error::every platform build failed; nothing to attach"; exit 1; }
+          # --clobber: re-running a failed leg replaces that platform's files.
+          gh release upload "$TAG" artifacts/* --repo "$REPO" --clobber
+          {
+            echo "### Desktop installers on $TAG"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          missing=0
+          for pattern in 'luc3d_linux_*.deb' 'luc3d_linux_*.AppImage' 'luc3d_macos_*_universal.dmg' \
+                         'luc3d_windows_*-setup.exe' 'luc3d_windows_*.msi'; do
+            if find artifacts -maxdepth 1 -name "$pattern" -type f | grep -q .; then
+              echo "- ok \`$pattern\`" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- **MISSING** \`$pattern\`" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::this release has no $pattern (that platform's build failed; re-run it)"
+              missing=1
+            fi
+          done
+          echo "MISSING_PLATFORM=$missing" >> "$GITHUB_ENV"
+
+      - name: Publish the update manifest (latest.json)
+        if: needs.plan.outputs.signed == 'true'
+        env:
+          NOTES: ${{ github.event.release.body }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
+          mkdir -p "$RUNNER_TEMP/manifest"
+          python3 scripts/desktop/make_update_manifest.py \
+            --version "$VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --pub-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --base-url "https://github.com/$REPO/releases/download/$TAG" \
+            --assets-dir artifacts \
+            --output "$RUNNER_TEMP/manifest/latest.json"
+          gh release upload "$TAG" "$RUNNER_TEMP/manifest/latest.json" --repo "$REPO" --clobber
+
+      - name: Note the unsigned release
+        if: needs.plan.outputs.signed != 'true'
+        run: |
+          echo "::warning::no updater signing key: $TAG has installers but no latest.json, so"\
+               "installed apps are not offered it as an update."
+
+      - name: Fail loudly if this release is incomplete
+        if: env.MISSING_PLATFORM == '1'
+        run: |
+          echo "::error::this release is missing at least one platform's installer (see above);"\
+               "the assets that did build are attached."
+          exit 1
+
+  # dev channel: replace the rolling `desktop-dev` prerelease with this build.
+  #
+  # Releases created here with GITHUB_TOKEN fire NO workflows: neither
+  # deploy.yml nor this file's own `release: published` runs for desktop-dev.
+  # deploy.yml's highest() also ignores the tag (it only orders vX.Y.Z[-N];
+  # checked with its jq over a releases list containing desktop-dev), and so
+  # does `plan` above when it picks the dev version's base.
+  publish-dev:
+    needs: [plan, build]
+    # ALL three legs green, not merely "not skipped": this replaces the channel,
+    # so a partial build would take a platform's updates away. Unsigned runs
+    # never publish (an unsigned dev release could not update anything).
+    if: ${{ !cancelled() && needs.plan.outputs.channel == 'dev' && needs.plan.outputs.signed == 'true' && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Serialized across branches and runs, never cancelled midway: between the
+    # delete and the create there is no dev channel at all.
+    concurrency:
+      group: desktop-dev-publish
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      RUN_NUMBER: ${{ github.run_number }}
+      SHA: ${{ github.sha }}
+      BRANCH: ${{ github.ref_name }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      COMMIT_MSG: ${{ github.event.head_commit.message }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/desktop
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+          pattern: luc3d*
+          merge-multiple: true
+
+      # Everything is built and checked BEFORE the old release is deleted, so a
+      # failure here leaves the previous dev build in place.
+      - name: Check the build and write latest.json
+        run: |
+          set -euo pipefail
+          ls -lh artifacts
+          for pattern in 'luc3d_linux_*.deb' 'luc3d_linux_*.AppImage' 'luc3d_macos_*_universal.dmg' \
+                         'luc3d_macos.app.tar.gz' 'luc3d_windows_*-setup.exe'; do
+            find artifacts -maxdepth 1 -name "$pattern" -type f | grep -q . ||
+              { echo "::error::this dev build has no $pattern; not replacing desktop-dev"; exit 1; }
+          done
+          {
+            echo "Rolling development build of the luc3d desktop app -- not a release."
+            echo
+            echo "Version: $VERSION"
+            echo "Branch: $BRANCH"
+            echo "Commit: $SHA"
+            echo "Run: $RUN_URL"
+            echo
+            printf '%s\n' "$COMMIT_MSG"
+          } > "$RUNNER_TEMP/notes.md"
+          mkdir -p "$RUNNER_TEMP/manifest"
+          python3 scripts/desktop/make_update_manifest.py \
+            --version "$VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --pub-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --base-url "https://github.com/$REPO/releases/download/desktop-dev" \
+            --assets-dir artifacts \
+            --output "$RUNNER_TEMP/manifest/latest.json"
+
+      # Two dev branches publish to one channel, and their runs are in different
+      # concurrency groups, so an older run can reach this job after a newer one.
+      # run_number orders them (it only grows): never replace a newer dev build.
+      - name: Skip if desktop-dev already holds a newer build
+        id: newer
+        run: |
+          set -euo pipefail
+          current="$(gh release view desktop-dev --repo "$REPO" --json name --jq .name 2>/dev/null || true)"
+          current_run="$(printf '%s' "$current" | sed -nE 's/.*-dev\.([0-9]+)$/\1/p')"
+          if [ -n "$current_run" ] && [ "$current_run" -gt "$RUN_NUMBER" ]; then
+            echo "::notice::desktop-dev holds '$current' (run $current_run), newer than run $RUN_NUMBER; leaving it."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Delete-then-recreate keeps the channel from accumulating stale assets;
+      # --target pins the tag to the commit this run built.
+      - name: Replace the desktop-dev prerelease
+        if: steps.newer.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          gh release delete desktop-dev --repo "$REPO" --cleanup-tag -y || true
+          gh release create desktop-dev --repo "$REPO" --prerelease --target "$SHA" \
+            --title "luc3d desktop — dev build $VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md"
+          gh release upload desktop-dev artifacts/* "$RUNNER_TEMP/manifest/latest.json" --repo "$REPO" --clobber
+          echo "Published desktop-dev $VERSION ($SHA)" >> "$GITHUB_STEP_SUMMARY"

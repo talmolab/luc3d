@@ -34,7 +34,9 @@ import {
 
 import { OnDemandVideoDecoder, VideoController, releaseViewsFrames } from './video.js';
 import { videoLoadFailureText } from './video-codec-diagnosis.js';
-import { fileSystemAccessHint } from '../ui/browser-hints.js';
+import { withHev1RetagNote } from './hev1-retag.js';
+import { fileSystemAccessHint, canReadDirectoryHandles } from '../ui/browser-hints.js';
+import { directoryHandleFromFileList } from './file-list-directory.js';
 import { confirmFolderPick } from '../ui/folder-confirm-tip.js';
 
 import {
@@ -440,7 +442,9 @@ export async function handleLoadVideos() {
         } else if (failedVideos.length > 0) {
             setStatus('Loaded ' + state.views.length + ' view(s), ' + failedVideos.length + ' failed: ' + failedVideos.join('; '), 'warning');
         } else {
-            setStatus('Loaded ' + files.length + ' video(s), ' + state.views.length + ' views active', 'success');
+            // + "played N HEVC video(s) tagged hev1 as hvc1" where the engine
+            // needed it (loading/hev1-retag.js)
+            setStatus(withHev1RetagNote('Loaded ' + files.length + ' video(s), ' + state.views.length + ' views active', newVideoFiles), 'success');
         }
         noteUnplayableVideos(codecFailures, files.length);
     } catch (err) {
@@ -599,7 +603,9 @@ export function matchSessionFolder(folderName, sessionName) {
 /**
  * Pick a parent directory and match subdirectories to session names.
  * Uses File System Access API (showDirectoryPicker) to scan subdirs,
- * then matches each subdir to a session name.
+ * then matches each subdir to a session name. Where its handles cannot be
+ * read (`canReadDirectoryHandles`: no API, or the desktop app's write-only
+ * polyfill) it picks with webkitdirectory and groups the files by subfolder.
  *
  * @param {string[]} sessionNames - Names of sessions to match
  * @returns {Promise<{matched: Map<string, File[]>, unmatched: string[]}>}
@@ -608,7 +614,7 @@ export function matchSessionFolder(folderName, sessionName) {
  */
 export async function pickParentDirectoryForSessions(sessionNames) {
     if (!(await confirmFolderPick())) return null;
-    if (!window.showDirectoryPicker) {
+    if (!canReadDirectoryHandles()) {
         // Fall back to pickFolder (webkitdirectory) — can't enumerate subdirs individually
         var allFiles = await pickFolder();
         if (!allFiles || allFiles.length === 0) return null;
@@ -788,7 +794,8 @@ export function showParentDirMatchSummary(matched, unmatched) {
 /**
  * Where the videos prompt's folder picker should open: the folder of the `.slp` being
  * opened, when it was picked with the File System Access picker (Load Project, Load SLP
- * keep its handle in `state.slpFileHandle`) and the browser has `showDirectoryPicker`.
+ * keep its handle in `state.slpFileHandle`) and the browser's `showDirectoryPicker` can
+ * READ a folder (`canReadDirectoryHandles`: not the desktop app's write-only polyfill).
  * A page given one file cannot read the folder around it, but it can open the folder
  * picker there, so the user confirms the folder instead of finding it again. The
  * handle must be this file's: one left from an earlier project would open its folder.
@@ -798,7 +805,7 @@ export function showParentDirMatchSummary(matched, unmatched) {
 export function folderPickerStartFor(file) {
     var h = state.slpFileHandle;
     if (!h || !file || h.name !== file.name || typeof window === 'undefined' ||
-        typeof window.showDirectoryPicker !== 'function') return null;
+        !canReadDirectoryHandles()) return null;
     return h;
 }
 
@@ -806,11 +813,15 @@ export function folderPickerStartFor(file) {
  * Pick a folder with `showDirectoryPicker`, opening in the folder holding `startIn`,
  * and list its files as `pickFolder` does (each with `webkitRelativePath`, e.g.
  * "session/cam1/cam1.mp4"), down to `maxDepth` levels.
+ * Where handles cannot be read (`canReadDirectoryHandles`; `folderPickerStartFor`
+ * then gives no `startIn`, so this is a guard) it is `pickFolder` instead, which
+ * resolves `[]` on cancel.
  * @param {FileSystemHandle} startIn
  * @param {number} [maxDepth]  3: the folder, camera folders, their files
  * @returns {Promise<File[]>}  rejects with AbortError on cancel
  */
 export async function pickFolderNear(startIn, maxDepth) {
+    if (!canReadDirectoryHandles()) return pickFolder();
     maxDepth = maxDepth || 3;
     var dir = await window.showDirectoryPicker({ id: 'lucid-session-folder', startIn: startIn, mode: 'read' });
     var out = [];
@@ -1582,8 +1593,13 @@ export async function handleLoadMultiSession() {
         // Use File System Access API to get directory handle
         // This lets us enumerate each session individually, avoiding
         // the browser dropping files when webkitdirectory returns too many
+        // (seen in Chromium). Where handles cannot be read — Safari, Firefox,
+        // and the desktop app's WebKit webviews, whose showDirectoryPicker is a
+        // write-only polyfill (`canReadDirectoryHandles`) — the folder is picked
+        // with webkitdirectory and `directoryHandleFromFileList` rebuilds the
+        // tree, so the walk below runs unchanged over the original Files.
         var parentHandle;
-        if (window.showDirectoryPicker) {
+        if (canReadDirectoryHandles()) {
             if (!(await confirmFolderPick())) {
                 setStatus('No folder selected', 'warning');
                 return;
@@ -1598,13 +1614,24 @@ export async function handleLoadMultiSession() {
                 throw e;
             }
         } else {
-            // Fallback for browsers without File System Access API. Brave
-            // has it but OFF by default — say how to turn it on.
+            // Brave has the API but OFF by default, and is Chromium, where
+            // webkitdirectory drops files on big trees — so it still refuses
+            // and says how to turn the API on.
             var fsaHint = fileSystemAccessHint();
-            setStatus(fsaHint
-                ? 'Loading several sessions needs a folder picker. ' + fsaHint
-                : 'This browser does not support showDirectoryPicker. Use Chrome or Edge.', 'error');
-            return;
+            if (fsaHint) {
+                setStatus('Loading several sessions needs a folder picker. ' + fsaHint, 'error');
+                return;
+            }
+            if (!(await confirmFolderPick())) {
+                setStatus('No folder selected', 'warning');
+                return;
+            }
+            var pickedFiles = await pickFolder();
+            if (!pickedFiles || pickedFiles.length === 0) {
+                setStatus('No folder selected', 'warning');
+                return;
+            }
+            parentHandle = directoryHandleFromFileList(pickedFiles);
         }
 
         showLoading('Scanning for sessions...');
@@ -2606,7 +2633,7 @@ export async function handleLoadSessionFolderSingleSlp() {
             finalMsg = 'Loaded session from ' + slpFile.name + ' — its planes were not added: ' + planeConflict;
             finalKind = 'warning';
         } else {
-            finalMsg = 'Loaded session from ' + slpFile.name + ' (' + videoFiles.length + ' videos)';
+            finalMsg = withHev1RetagNote('Loaded session from ' + slpFile.name + ' (' + videoFiles.length + ' videos)', videoFiles);
             finalKind = 'success';
         }
         var campyFinal = withCampyWarnings(finalMsg, finalKind, session.campyRecording);
@@ -3105,9 +3132,9 @@ export async function handleLoadProjectSlpLazy(slpFile, opts) {
         }
         updateInfoPanel();
         if (videosAttached) {
-            var lazyStatus = withCampyWarnings('Reopened ' + slpFile.name + ' — '
+            var lazyStatus = withCampyWarnings(withHev1RetagNote('Reopened ' + slpFile.name + ' — '
                 + session.instanceGroups.size.toLocaleString('en-US')
-                + ' grouped frames, ' + state.views.length + ' videos', 'success', session.campyRecording);
+                + ' grouped frames, ' + state.views.length + ' videos', state.videoFiles), 'success', session.campyRecording);
             lazyStatus = withCompactNote(lazyStatus.message, lazyStatus.kind, session);
             setStatus(lazyStatus.message, lazyStatus.kind);
         } else {
@@ -4132,6 +4159,11 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             statusMsg += ' — newer .slp present but not loaded: ' + staleWarnings.join('; ');
             statusKind = 'warning';
         }
+        // Videos played through a hev1 -> hvc1 re-tagged view (hev1-retag.js):
+        // one short clause, last, so it never pushes a failure off the line.
+        // Counted over the videos that LOADED (a failed one played nothing).
+        statusMsg = withHev1RetagNote(statusMsg, (state.session && state.session.videoFileIndices || [])
+            .map(function (i) { return state.videoFiles[i]; }));
         var campyStatus = withCampyWarnings(statusMsg, statusKind, state.session && state.session.campyRecording);
         setStatus(campyStatus.message, campyStatus.kind);
         noteUnplayableVideos(videoFailures, nVideosToLoad);

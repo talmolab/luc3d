@@ -74,10 +74,36 @@ The menu bar says which one you are on, right of **Settings**: the release
 (e.g. `v1.0.5`) on the live site and `/latest/`, `dev · <commit>` on `/dev/`.
 
 
+## Desktop app (preview)
+
+LUCID also builds as a desktop app for macOS (universal), Windows and Linux with
+[Tauri 2](https://v2.tauri.app), the same approach as
+[sleap-app](https://github.com/talmolab/sleap-app). It is the same code as the web
+app, served from inside the app with every library bundled, so it works offline
+and does not need Chrome: Save, Save As and the folder exports write straight to
+disk on every OS.
+
+Installers are built by `.github/workflows/desktop.yml` (on pull requests that
+touch the desktop files, by hand, and attached to each release). To build one
+locally you need Rust, Node and Python 3, plus the
+[Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS
+(on Linux: `scripts/desktop/linux-deps.sh`):
+
+```bash
+python3 scripts/offline_deps.py install          # once
+npx --yes @tauri-apps/cli@2 dev                  # runs server.py --offline on :8080 in a window
+npx --yes @tauri-apps/cli@2 build                # installers in src-tauri/target/release/bundle/
+```
+
+Not in this first version: training and inference with sleap-nn (the native
+side is ready for it behind the `sleap-nn` cargo feature), auto-update, and
+opening a project by double-clicking it.
+
 ## Requirements
 
 Chrome or Edge — the app uses the File System Access and WebCodecs APIs, which
-Firefox and Safari do not support.
+Firefox and Safari do not support. The [desktop app](#desktop-app-preview) needs
+no browser.
 
 Nothing to install; all libraries load automatically (~11 MB on first visit,
 cached afterwards). Most of them are served from this site, but four still come

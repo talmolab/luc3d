@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "LUCID main window: only what the desktop shim calls (its own plugin commands and event listen/unlisten). Kept minimal because every page-realm script, CDN modules included, can use what is granted here. Mirrored at runtime for the http://localhost origin (localhost.rs capability).",
+  "windows": ["main*"],
+  "permissions": [
+    "core:event:default",
+    "lucid:default"
+  ]
+}

@@ -18,6 +18,13 @@ __pycache__/
 # Tiny (48 KB) fragmented 60 fps barcode clip for tests/e2e/fragmented-mp4-load.mjs —
 # regenerate with tests/fixtures/fragmented-60/make_fixture.sh.
 !tests/fixtures/fragmented-60/fragmented-60.mp4
+# Tiny (12 KB each) HEVC hev1 clips and their -tag:v hvc1 twins for
+# tests/test-hev1-retag.mjs and tests/e2e/hev1-retag.mjs —
+# regenerate with tests/fixtures/hev1-retag/make_fixture.sh.
+!tests/fixtures/hev1-retag/hev1.mp4
+!tests/fixtures/hev1-retag/hvc1.mp4
+!tests/fixtures/hev1-retag/hev1-frag.mp4
+!tests/fixtures/hev1-retag/hvc1-frag.mp4
 # The demo session (File > Load Demo Session, 1.2 MB) — also read by four e2e tests.
 !sample_session/*.mp4
 *.avi
@@ -64,6 +71,16 @@ lib/mp4box/*
 
 # Offline bundles built by `offline_deps.py bundle`
 luc3d-offline-*.zip
+
+# Desktop app (src-tauri/). dist-desktop/ is the staged frontend tauri.conf.json
+# embeds, rebuilt by scripts/desktop/stage_frontend.py on every `tauri build`.
+# No trailing slash on target: also ignores a stray `target` symlink/file
+# (sleap-app once committed a self-referential one). gen/schemas is regenerated
+# by every Tauri build. artifacts/ is where desktop.yml collects installers.
+/dist-desktop/
+src-tauri/target
+src-tauri/gen/schemas
+/artifacts/
 
 # Bench driver node deps (not part of the served app)
 scripts/bench/node_modules/
