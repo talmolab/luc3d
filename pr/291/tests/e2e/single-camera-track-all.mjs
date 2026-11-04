@@ -347,6 +347,8 @@ try {
     await page.locator('.settings-overlay [aria-label="Single camera: remove duplicate detections"]').locator('xpath=..').click();   // the switch's label
     await page.click('.settings-overlay .settings-btn-apply');
     check(await page.evaluate(async () => (await import('/ui/settings.js')).getTrackingThreshold('scRemoveDuplicates')) === 1, 'switched on with Apply');
+    await page.click('.settings-overlay .settings-btn-cancel');   // Apply keeps Settings open (#417): Close
+    await page.waitForSelector('.settings-overlay', { state: 'detached' });
     const dup = await page.evaluate(async () => {
         const pd = await import('/pose/pose-data.js'), S = window.__lucid.state.session;
         // SLEAP's second, partial instance on animal 0 at frame 300, a little weaker
@@ -384,6 +386,8 @@ try {
     check(/\(1\)$/.test(readout), 'the Wizard counts the one detection the filter removes on this camera: ' + readout);
     await page.click('.settings-overlay .settings-btn-apply');
     check(await page.evaluate(async () => (await import('/ui/settings.js')).getTrackingThreshold('filterMinVisibleNodes')) === 12, 'set with Apply');
+    await page.click('.settings-overlay .settings-btn-cancel');   // Apply keeps Settings open (#417): Close
+    await page.waitForSelector('.settings-overlay', { state: 'detached' });
     await page.evaluate(() => { document.getElementById('statusText').textContent = ''; document.getElementById('tbTrackAll').click(); });
     await page.waitForFunction(() => /Tracked \d+ animal|Track All error/.test(document.getElementById('statusText').textContent), { timeout: 60000 });
     const st7b = await status(), after7b = await page.evaluate(() => ({ copy: window.__copy.trackIdx, tr: window.__tracks() }));

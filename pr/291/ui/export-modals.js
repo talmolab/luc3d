@@ -8,9 +8,9 @@
 //
 // Extracted from app.js per the consolidated Pass 3 plan, Module 13.
 
-import { noteProgress } from './progress-delta.js?v=08a966c2ccee';
-import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=08a966c2ccee';
-import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=08a966c2ccee';
+import { noteProgress } from './progress-delta.js?v=864809506443';
+import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=864809506443';
+import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=864809506443';
 import {
     triangulateAndReproject,
     frameHasGroupedUserInstances,
@@ -23,36 +23,37 @@ import {
     resolveTriangulationMethod,
     findEquivalentPriorGroup,
     adoptPrior3d,
+    triangulationSettingsKey,
     triangulationMethodLabel,
     dropAllDerivedTriangulationState,
-} from '../pose/triangulation.js?v=08a966c2ccee';
-import { Viewport3D } from './viewport3d.js?v=08a966c2ccee';
-import { getTrackColor, getGroupColor } from './overlays.js?v=08a966c2ccee';
-import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=08a966c2ccee';
-import { updateInfoPanel } from './info-panel.js?v=08a966c2ccee';
-import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=08a966c2ccee';
-import { showLoadingProgress, yieldToPaint } from './loading-overlay.js?v=08a966c2ccee';
-import { createGroupSolver } from '../pose/triangulation-pool.js?v=08a966c2ccee';
+} from '../pose/triangulation.js?v=864809506443';
+import { Viewport3D } from './viewport3d.js?v=864809506443';
+import { getTrackColor, getGroupColor } from './overlays.js?v=864809506443';
+import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=864809506443';
+import { updateInfoPanel } from './info-panel.js?v=864809506443';
+import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=864809506443';
+import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js?v=864809506443';
+import { createGroupSolver } from '../pose/triangulation-pool.js?v=864809506443';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
     findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
-} from '../import-export/file-io.js?v=08a966c2ccee';
+} from '../import-export/file-io.js?v=864809506443';
 
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from '../pose/initialization.js?v=08a966c2ccee';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=08a966c2ccee';
-import { fileSystemAccessHint } from './browser-hints.js?v=08a966c2ccee';
-import { noteTriangulateRun } from '../pose/run-state.js?v=08a966c2ccee';
+import { update3DViewport } from '../pose/initialization.js?v=864809506443';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=864809506443';
+import { fileSystemAccessHint } from './browser-hints.js?v=864809506443';
+import { noteTriangulateRun } from '../pose/run-state.js?v=864809506443';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
 // private copies of all four and had silently drifted apart (a 2x bitrate floor
 // gap at the smallest tier, and two disagreeing level tables).
 import {
     RES_PRESETS, bitrateFor, estimatedBytes, h264CodecFor, shouldStreamToDisk,
-} from './overlay-export-layout.js?v=08a966c2ccee';
+} from './overlay-export-layout.js?v=864809506443';
 
 // ============================================
 // Group by Track & Triangulate All
@@ -287,7 +288,7 @@ async function sweepTriangulationFrames(session, onFrame, opts) {
  * @param {'ba'|'dlt'} [explicitMethod] - the method the user explicitly asked
  *   for, when they did. "Triangulate All ▸ DLT" routes here and passes `'dlt'`,
  *   so an explicit pick stays honest. Omitted (Tracks ▸ Group by Identity) means
- *   "use my configured default" — Settings ▸ Default Triangulation. Either way the
+ *   "use my configured default" — Settings ▸ Triangulation Wizard. Either way the
  *   resulting method GOVERNS the whole sweep: with Bundle Adjustment selected,
  *   every group ends up with BA 3D, including groups that already held valid DLT
  *   3D with unchanged membership (see `adoptPrior3d`).
@@ -319,7 +320,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
     }
 
     // THE governing method for this whole sweep: an explicit user pick if there
-    // was one, else Settings ▸ Default Triangulation. Named in the progress text
+    // was one, else Settings ▸ Triangulation Wizard. Named in the progress text
     // and the final status line so the method (and therefore its cost — BA runs
     // ~3x-6x DLT per group) is visible rather than a surprise.
     var prefMethod = explicitMethod
@@ -348,9 +349,11 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
     // itself stays on the main thread. Results land in submission order.
     var gSolver = createGroupSolver(cameras,
         { method: prefMethod, triangulateOnly: true, expectedGroups: totalFrames });
+    var gSettingsKey = triangulationSettingsKey(cameras);
     function applyIdentitySolve(group, triResult) {
         group.points3d = pooledPoints3d(triResult.points3d);   // slab-pooled (pose-data.js)
         group.triangulationMethod = triResult.method;
+        group.solveSettings = gSettingsKey;
         if (triResult.method === 'ba') solvedBa++; else solvedDlt++;
     }
 
@@ -508,7 +511,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
             // read `group.points3d`, so the exported file stopped matching what
             // the user had computed and was looking at.
             var prior = findEquivalentPriorGroup(_existing, group);
-            if (adoptPrior3d(group, prior, prefMethod)) {
+            if (adoptPrior3d(group, prior, prefMethod, gSettingsKey)) {
                 reused3d++;
             } else {
                 // Still `triangulateOnly` (reprojections are recomputed on demand
@@ -601,6 +604,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
     // therefore its cost, BA running ~3x-6x DLT per group — is visible rather
     // than a surprise.
     var prefMethodT = resolveTriangulationMethod(null);
+    var tSettingsKey = triangulationSettingsKey(allCameras);
 
     showLoadingProgress('Grouping & triangulating', 0, totalFrames,
         { detail: triangulationMethodLabel(prefMethodT) });
@@ -751,7 +755,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
             // read `group.points3d`, so the exported file no longer matched what
             // the user had computed and was looking at.
             var priorT = findEquivalentPriorGroup(priorGroups, group);
-            if (adoptPrior3d(group, priorT, prefMethodT)) {
+            if (adoptPrior3d(group, priorT, prefMethodT, tSettingsKey)) {
                 reused3dT++;
                 group.markClean();
                 // No error stats: the errors belong to the adopted solve, which
@@ -764,6 +768,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
             var result = triangulateAndReproject(group, groupCameras,
                 { method: prefMethodT });
             group.triangulationMethod = result.method;
+            group.solveSettings = tSettingsKey;
             if (result.method === 'ba') solvedBaT++; else solvedDltT++;
 
             // Only the 3D is stored (see `dropAllDerivedTriangulationState`
@@ -2582,7 +2587,7 @@ async function runMultiFrameTriangulation(startFrame, endFrame, overlayEl) {
     var progressLabel = document.getElementById('tfProgressLabel');
     var progressFill = document.getElementById('tfProgressFill');
 
-    // THE method for the whole range: Settings ▸ Default Triangulation, as for
+    // THE method for the whole range: Settings ▸ Triangulation Wizard, as for
     // Group by Track. This modal has no method picker, so the configured default
     // is the user's instruction; it used to pass none, which solved with DLT
     // whatever the setting said. Named in the progress, summary and status text
@@ -2788,26 +2793,50 @@ export async function exportLabels() {
 // ============================================
 
 export async function exportPoints3dH5() {
+    var title = 'Export 3D Points';
+    var pacer = createProgressPacer();
     try {
-        setStatus('Building points3d H5...', 'warning');
-        const blob = await buildPoints3dH5(state.session);
+        showLoading('Preparing 3D points…', { title: title });
+        await yieldToPaint();
+        const blob = await buildPoints3dH5(state.session, {
+            onProgress: function (done, total) {
+                if (done < total && !pacer.due()) return null;
+                showLoadingProgress('Writing 3D points', done, total, { title: title });
+                return pacer.yield();
+            },
+        });
+        hideLoading();
         downloadBlob(blob, 'points3d.h5');
-        setStatus('Points3d H5 exported', 'success');
+        setStatus('Points3d H5 exported (' + (blob.size / 1048576).toFixed(1) + ' MB)', 'success');
     } catch (err) {
+        hideLoading();
         console.error('Points3d H5 export failed:', err);
-        setStatus('Points3d H5 error: ' + err.message, 'error');
+        setStatus('Export 3D Points (H5) failed, nothing was saved: ' +
+            (err && err.message ? err.message : String(err)), 'error');
     }
 }
 
 export async function exportReprojH5() {
+    var title = 'Export Reprojections';
+    var pacer = createProgressPacer();
     try {
-        setStatus('Building reprojections H5...', 'warning');
-        const blob = await buildReprojH5(state.session);
+        showLoading('Preparing reprojections…', { title: title });
+        await yieldToPaint();
+        const blob = await buildReprojH5(state.session, {
+            onProgress: function (done, total) {
+                if (done < total && !pacer.due()) return null;
+                showLoadingProgress('Writing reprojections', done, total, { title: title });
+                return pacer.yield();
+            },
+        });
+        hideLoading();
         downloadBlob(blob, 'reprojections.h5');
-        setStatus('Reprojections H5 exported', 'success');
+        setStatus('Reprojections H5 exported (' + (blob.size / 1048576).toFixed(1) + ' MB)', 'success');
     } catch (err) {
+        hideLoading();
         console.error('Reprojections H5 export failed:', err);
-        setStatus('Reprojections H5 error: ' + err.message, 'error');
+        setStatus('Export Reprojections (H5) failed, nothing was saved: ' +
+            (err && err.message ? err.message : String(err)), 'error');
     }
 }
 

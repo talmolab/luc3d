@@ -10,40 +10,40 @@
 
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline,
-         hasRealVideo, isViewDocked, VIEW_NAMES } from '../ui/app-state.js?v=08a966c2ccee';
-import { Instance, UnlinkedInstance, points3dNodeCount, getPoint3d, groupDisplayName } from './pose-data.js?v=08a966c2ccee';
+         hasRealVideo, isViewDocked, VIEW_NAMES } from '../ui/app-state.js?v=864809506443';
+import { Instance, UnlinkedInstance, points3dNodeCount, getPoint3d, groupDisplayName } from './pose-data.js?v=864809506443';
 import {
     getInstanceGroupsForFrame, updateTimelineForFrame,
     reTriangulateGroup, sessionHasCalibration, getOrComputeReprojectedInstance,
-} from './triangulation.js?v=08a966c2ccee';
-import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=08a966c2ccee';
-import { rebuildVideoController } from '../loading/session-loader.js?v=08a966c2ccee';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=08a966c2ccee';
-import { resetPlaneState } from '../import-export/plane-metadata.js?v=08a966c2ccee';
-import { createDemoSession } from '../demo-data.js?v=08a966c2ccee';
-import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData } from '../ui/ui-wiring.js?v=08a966c2ccee';
-import { installInfoTips } from '../ui/info-tip.js?v=08a966c2ccee';
-import { installNodeTooltip } from '../ui/node-tooltip.js?v=08a966c2ccee';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=08a966c2ccee';
-import { installTimelineShortcuts } from '../ui/timeline-controller.js?v=08a966c2ccee';
-import { setupPanelTabs, setupSkeletonEditing, setupVideosTab, updateInfoPanel } from '../ui/info-panel.js?v=08a966c2ccee';
-import { setupRecordingInfo } from '../ui/recording-info.js?v=08a966c2ccee';
+} from './triangulation.js?v=864809506443';
+import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=864809506443';
+import { rebuildVideoController } from '../loading/session-loader.js?v=864809506443';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=864809506443';
+import { resetPlaneState } from '../import-export/plane-metadata.js?v=864809506443';
+import { createDemoSession } from '../demo-data.js?v=864809506443';
+import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData } from '../ui/ui-wiring.js?v=864809506443';
+import { installInfoTips } from '../ui/info-tip.js?v=864809506443';
+import { installNodeTooltip } from '../ui/node-tooltip.js?v=864809506443';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=864809506443';
+import { installTimelineShortcuts } from '../ui/timeline-controller.js?v=864809506443';
+import { setupPanelTabs, setupSkeletonEditing, setupVideosTab, updateInfoPanel } from '../ui/info-panel.js?v=864809506443';
+import { setupRecordingInfo } from '../ui/recording-info.js?v=864809506443';
 import {
     setupPlaneDefinition, planeInteractionCallbacks, syncPlanes3D, refreshPlanePanel,
-} from '../ui/plane-definition.js?v=08a966c2ccee';
-import { setupSplitHandles } from '../ui/layout-controls.js?v=08a966c2ccee';
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=08a966c2ccee';
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=08a966c2ccee';
+} from '../ui/plane-definition.js?v=864809506443';
+import { setupSplitHandles } from '../ui/layout-controls.js?v=864809506443';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=864809506443';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=864809506443';
 import {
     manualAssignState, getTotalUnlinkedCount, cleanupManualAssignment, startManualAssignment,
     editGroupState, cancelEditGroup, finishEditGroup, updateEditGroupToast,
     purgeTriangulationDataForGroup,
-} from '../ui/identity-assignment.js?v=08a966c2ccee';
-import { getTrackColor, getGroupColor } from '../ui/overlays.js?v=08a966c2ccee';
-import { Viewport3D } from '../ui/viewport3d.js?v=08a966c2ccee';
-import { isViewport3DVisible, markViewport3DSkipped } from '../ui/panel-visibility.js?v=08a966c2ccee';
-import { Timeline } from '../ui/timeline.js?v=08a966c2ccee';
-import { InteractionManager } from '../ui/interaction.js?v=08a966c2ccee';
+} from '../ui/identity-assignment.js?v=864809506443';
+import { getTrackColor, getGroupColor } from '../ui/overlays.js?v=864809506443';
+import { Viewport3D } from '../ui/viewport3d.js?v=864809506443';
+import { isViewport3DVisible, markViewport3DSkipped } from '../ui/panel-visibility.js?v=864809506443';
+import { Timeline } from '../ui/timeline.js?v=864809506443';
+import { InteractionManager } from '../ui/interaction.js?v=864809506443';
 
 // ============================================
 // Logging

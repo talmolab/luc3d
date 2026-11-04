@@ -35,10 +35,10 @@
 // refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary), ui/identity-gallery.js,
 // pose/single-camera-tracking.js (singleCameraName, singleCameraCheckSession).
 
-import { planTrackSummary, summarizeTrackedIdentities, describeSwitchCheck } from './track-summary.js?v=08a966c2ccee';
-import { openIdSwitchPanel, refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary } from './id-switch-modal.js?v=08a966c2ccee';
-import { renderIdentityGallery } from './identity-gallery.js?v=08a966c2ccee';
-import { singleCameraName, singleCameraCheckSession } from '../pose/single-camera-tracking.js?v=08a966c2ccee';
+import { planTrackSummary, summarizeTrackedIdentities, describeSwitchCheck } from './track-summary.js?v=864809506443';
+import { openIdSwitchPanel, refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary } from './id-switch-modal.js?v=864809506443';
+import { renderIdentityGallery } from './identity-gallery.js?v=864809506443';
+import { singleCameraName, singleCameraCheckSession } from '../pose/single-camera-tracking.js?v=864809506443';
 
 /**
  * The session the summary counts and draws from: the session itself, or for a
@@ -72,7 +72,7 @@ var ACTIONS = {
         var next = document.getElementById('idSwitchNext');
         if (next && !next.disabled) next.click();
     },
-    triangulate: function () { clickById('tbTriangulateAll'); },
+    triangulationSettings: function () { clickById('tbTriangulateSettings'); },
     // The checks come back here when they end, with their result in the box.
     imageCheck: function () { clickCheckFromSummary('menuCheckImageSwitches'); },
     sizeCheck: function () { clickCheckFromSummary('menuCheckSizeSwitches'); },
@@ -163,6 +163,11 @@ export function showTrackSummaryModal(summary, checks, opts) {
     }) : null;
     if (gallery) modal.classList.add('has-gallery');
     plan.notes.forEach(function (t) { modal.appendChild(el('p', 'track-summary-note', t)); });
+    if (summary.tailMarks) {
+        var tailNote = el('p', 'track-summary-note', 'Identities: ' + summary.tailMarks + '.');
+        tailNote.id = 'trackSummaryTailMarks';
+        modal.appendChild(tailNote);
+    }
 
     // ---- the ID-switch checks ----------------------------------------------
     if (plan.checks.length) {

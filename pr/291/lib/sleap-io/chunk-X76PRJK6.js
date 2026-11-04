@@ -36,7 +36,7 @@ import {
   resolveIdentity,
   resolveVideoFilename,
   sessionsReadError
-} from "./chunk-H7G4PJNA.js?v=08a966c2ccee";
+} from "./chunk-H7G4PJNA.js?v=864809506443";
 import {
   RemoteIOError,
   fetchRetrying,
@@ -48,7 +48,7 @@ import {
   redactedCauseSummary,
   resolveUrl,
   statusToMessage
-} from "./chunk-YS7Q6CO6.js?v=08a966c2ccee";
+} from "./chunk-YS7Q6CO6.js?v=864809506443";
 
 // src/model/centroid.ts
 var _centroidSkeleton = null;
@@ -13536,6 +13536,47 @@ function writeSlpToFileLazy(file, labels) {
 }
 var DEFAULT_WRITE_WINDOW_FRAMES = 5e3;
 var WRITE_CHUNK_ROWS = 8192;
+// LUCID local patch (column chunks): a big table is stored column by column, in
+// chunks of LUCID_COLUMN_CHUNK_ROWS rows of ONE column, instead of chunks of
+// 8,192 whole rows. A column (all x, all scores, all frame ids) holds similar
+// numbers next to each other, which gzip finds; interleaved rows hide that. On a
+// real 15-minute, 5-camera project the file went 380 -> 344 MB, every value,
+// shape and dtype unchanged (any HDF5 reader reads it as before; sleap-io and
+// LUC3D's reader checked value for value). Rows are handed to HDF5 a whole
+// chunk at a time (the carry below, and LucidAppendTable's buffer), so each
+// chunk is compressed once: a partly filled chunk would be compressed, read
+// back and rewritten on every append, and HDF5 does not reuse the space the
+// old copy leaves. 65,536 rows: 8,192-row column chunks opened 5 s slower in
+// LUC3D (many small chunks); 262,144-row ones too (each row-slice read inflates
+// a whole chunk again).
+var LUCID_COLUMN_CHUNK_ROWS = 65536;
+// LUCID local patch (compact save): when LUC3D saves a compact copy it sets
+// `globalThis.__lucidCompactSave` for the save's duration to the steps below;
+// otherwise it is unset and nothing is rounded. Predicted 2D x/y and every 3D
+// coordinate are rounded to a binary fraction (exact in float32/float64, so the
+// rounded values compress), prediction scores too. User-placed 2D points are
+// never rounded. Rounding loses precision for good: LUC3D asks first and marks
+// the file (`lucid_compact` in its provenance).
+var LUCID_COMPACT_COLUMNS = {
+  "pred_points": [["xy", 0], ["xy", 1], ["score", 4]],
+  "session_data/points_3d": [["p3d", 0], ["p3d", 1], ["p3d", 2]],
+  "session_data/pred_points_3d": [["p3d", 0], ["p3d", 1], ["p3d", 2], ["score", 3]],
+  "session_data/unsmoothed_points_3d": [["p3d", 0], ["p3d", 1], ["p3d", 2]]
+};
+function lucidCompactRound(name, data, rows, ncols) {
+  const steps = globalThis.__lucidCompactSave;
+  const cols = steps && LUCID_COMPACT_COLUMNS[name];
+  if (!cols) return;
+  for (const [kind, c] of cols) {
+    const step = steps[kind];
+    if (!(step > 0) || c >= ncols) continue;
+    const inv = 1 / step;
+    for (let r = 0; r < rows; r++) {
+      const i = r * ncols + c;
+      data[i] = Math.round(data[i] * inv) * step;
+    }
+  }
+}
 var EMBED_WRITE_WINDOW_BYTES = 32 * 1024 * 1024;
 var EMBED_VIDEO_CHUNK_BYTES = 1 << 20;
 var FRAMES_FIELDS = [
@@ -13577,24 +13618,52 @@ function createAppendableMatrixDataset(file, name, fieldNames, dtype) {
     data: new Float64Array(0),
     shape: [0, colCount],
     maxshape: [null, colCount],
-    chunks: [WRITE_CHUNK_ROWS, colCount],
+    chunks: [LUCID_COLUMN_CHUNK_ROWS, 1],
     dtype,
     compression: "gzip",
     compression_opts: 1
   });
   setStringAttr(file.get(name), "field_names", JSON.stringify(fieldNames));
 }
+// LUCID local patch (column chunks): rows are carried until they fill a whole
+// column chunk, then written; `lucidFlushCarries` writes the rest when the file
+// is finalized. `currentRows` (rows appended so far, carried ones included) is
+// kept for the callers but no longer needed.
+var lucidCarries = /* @__PURE__ */ new WeakMap();
+function lucidCarryFor(file, name, colCount) {
+  let byName = lucidCarries.get(file);
+  if (!byName) lucidCarries.set(file, byName = /* @__PURE__ */ new Map());
+  let st = byName.get(name);
+  if (!st) byName.set(name, st = { buf: new Float64Array(LUCID_COLUMN_CHUNK_ROWS * colCount), rows: 0, written: 0, colCount });
+  return st;
+}
+function lucidWriteCarry(file, name, st) {
+  if (st.rows === 0) return;
+  const cols = st.colCount, data = st.buf.subarray(0, st.rows * cols);
+  lucidCompactRound(name, data, st.rows, cols);
+  const ds = file.get(name);
+  ds.resize([st.written + st.rows, cols]);
+  ds.write_slice([[st.written, st.written + st.rows], [0, cols]], data);
+  st.written += st.rows;
+  st.rows = 0;
+}
+function lucidFlushCarries(file) {
+  const byName = lucidCarries.get(file);
+  if (!byName) return;
+  for (const [name, st] of byName) lucidWriteCarry(file, name, st);
+  lucidCarries.delete(file);
+}
 function appendMatrixRows(file, name, flat, rowCount, colCount, currentRows) {
   if (rowCount === 0) return;
-  const ds = file.get(name);
-  ds.resize([currentRows + rowCount, colCount]);
-  ds.write_slice(
-    [
-      [currentRows, currentRows + rowCount],
-      [0, colCount]
-    ],
-    flat
-  );
+  const st = lucidCarryFor(file, name, colCount);
+  let src = 0;
+  while (src < rowCount) {
+    const take = Math.min(rowCount - src, LUCID_COLUMN_CHUNK_ROWS - st.rows);
+    st.buf.set(flat.subarray(src * colCount, (src + take) * colCount), st.rows * colCount);
+    st.rows += take;
+    src += take;
+    if (st.rows === LUCID_COLUMN_CHUNK_ROWS) lucidWriteCarry(file, name, st);
+  }
 }
 function newAnnBucket() {
   return { anns: [], ctx: [], inst: [] };
@@ -14135,6 +14204,7 @@ var SlpStreamWriter = class {
   }
   /** Write pending `negative_frames` and close the HDF5 file (shared finalize). */
   finalizeFile() {
+    lucidFlushCarries(this.file); // LUCID local patch (column chunks)
     this.writePendingAnnotations();
     if (this.negativeFrames.size > 0) {
       const rows = [];
@@ -15081,7 +15151,10 @@ function LucidAppendTable(file, name, ncols, dtype, fieldNames, gzip, onCreate) 
   // recorded in instance_groups are relative to.
   this.total = 0;
   this.rows = 0;
-  this.buf = new Float64Array(ncols * SESSION_FLUSH_ROWS);
+  // LUCID local patch (column chunks): room for a whole column chunk, written in one
+  // go once full; a table of at most SESSION_FLUSH_ROWS rows is still written
+  // one-shot and contiguous by `finish`.
+  this.buf = new Float64Array(ncols * LUCID_COLUMN_CHUNK_ROWS);
   this.created = false;
 }
 LucidAppendTable.prototype._create = function () {
@@ -15091,7 +15164,7 @@ LucidAppendTable.prototype._create = function () {
     data: new Float64Array(0),
     shape: [0, this.ncols],
     maxshape: [null, this.ncols],
-    chunks: [SESSION_FLUSH_ROWS, this.ncols],
+    chunks: [LUCID_COLUMN_CHUNK_ROWS, 1],
     dtype: this.dtype
   };
   if (this.gzip) {
@@ -15113,11 +15186,10 @@ LucidAppendTable.prototype.flush = function () {
   if (!this.created) this._create();
   const base = this.total - this.rows;
   const ds = this.file.get(this.name);
+  const data = this.buf.subarray(0, this.rows * this.ncols);
+  lucidCompactRound(this.name, data, this.rows, this.ncols);
   ds.resize([this.total, this.ncols]);
-  ds.write_slice(
-    [[base, this.total], [0, this.ncols]],
-    this.buf.subarray(0, this.rows * this.ncols)
-  );
+  ds.write_slice([[base, this.total], [0, this.ncols]], data);
   this.rows = 0;
 };
 /**
@@ -15138,7 +15210,9 @@ LucidAppendTable.prototype.flush = function () {
  * those were guarded on their own row counts and must stay ABSENT when empty.
  */
 LucidAppendTable.prototype.finish = function (force) {
-  if (this.created) {
+  // LUCID local patch (column chunks): a table past SESSION_FLUSH_ROWS rows is
+  // chunked, whether or not it ever filled the buffer.
+  if (this.created || this.rows > SESSION_FLUSH_ROWS) {
     this.flush();
     return;
   }
@@ -15147,6 +15221,7 @@ LucidAppendTable.prototype.finish = function (force) {
   const n = this.rows;
   const needed = n * this.ncols;
   const data = this.buf.length === needed ? this.buf : this.buf.subarray(0, needed);
+  lucidCompactRound(this.name, data, n, this.ncols);
   const spec = { name: this.name, data, shape: [n, this.ncols], dtype: this.dtype };
   if (this.gzip === true) {
     spec.chunks = [Math.min(WRITE_CHUNK_ROWS, Math.max(1, n)), this.ncols];
@@ -15167,7 +15242,7 @@ LucidAppendTable.prototype.finish = function (force) {
 // Reserve the next row, flushing first when the staging buffer is full. Returns
 // the row's offset into `buf`.
 LucidAppendTable.prototype._slot = function () {
-  if (this.rows === SESSION_FLUSH_ROWS) this.flush();
+  if (this.rows === LUCID_COLUMN_CHUNK_ROWS) this.flush();
   const off = this.rows * this.ncols;
   this.rows++;
   this.total++;
