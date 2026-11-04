@@ -4599,9 +4599,18 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `showSlpExportByCamModal()` — "Export SLEAP File By Cam": camera×session grid.
   Each camera column exports across all its selected sessions into one SLEAP
   file; **Download All** bulk-exports every included column, **always
-  prompting** for a destination folder (no cached `state.exportDirHandle`), and
-  writes each included camera as a flat `<CamName>.slp` into it (falling back to
-  per-file `downloadBlob` downloads without the File System Access API). A cell
+  prompting** for a destination folder (no cached `state.exportDirHandle`) —
+  `pickExportFolder` (`loading/folder-picker-start.js`) opens it in the project
+  `.slp`'s folder, else where the last export went. In that folder a camera
+  exported from ONE session whose own folder is there (`state.cameraDirMap`, else
+  the folder its video sits in, else the camera's name — `cameraTarget`) gets
+  `<source stem>_proofread.slp` next to the `.slp` its 2D came from
+  (`chooseProofreadSource`, `loading/percam-slp-choice.js`; the video's name when
+  the folder has none), replacing an earlier one. Any other camera (several
+  sessions in one file, or no camera folder there) is written as a flat
+  `<CamName>.slp` in the picked folder; the status line counts both. Without the
+  File System Access API it falls back to per-file `downloadBlob` downloads,
+  named `<source>_proofread.slp` when the load recorded the source. A cell
   is a green ✓ (toggle on/off) only where the camera VIEW exists in that
   session — derived from `state.videoFiles` (real loaded views), plus cameras
   with labeled data for SLP-only projects; NOT from `session.cameras`, which is
@@ -4615,8 +4624,23 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   tables (`#slpByCamSkelWarning`). The shared **Include** group's two options
   become the `instanceFilter` (`{user:true, predicted, reprojected}`) passed to
   `exportSlpMultiSession`. The Reprojections row is **disabled as a unit**
-  (`.slp-inc-row-disabled`) unless at least one session has reprojections. Download All shows per-file
-  progress; **Esc closes the modal**, or cancels an in-progress export mid-run.
+  (`.slp-inc-row-disabled`) unless at least one session has reprojections. Cameras
+  the streaming writer would sweep (`cameraExportUsesSweep`: a lazy project that would
+  truncate, e.g. a reopened project or any proofread one) are built first, in ONE
+  `exportCamerasSlpStreaming` sweep per session. Download All's progress is the app's
+  card (`loading-overlay.js`, titled "Export SLEAP by Camera"): that sweep is a step of
+  its own ("Reading N cameras", frames on the bar), then one step per camera ("Step k
+  of n"); a camera built in one go shows the spinner "Writing <cam>.slp…", painted
+  before it holds the thread. Files save in the background, up to `SAVES_IN_FLIGHT`
+  (4) at once: over an SMB share Chrome's `close()` reads each file back at ~10 MB/s
+  (measured on the lab VM, 2026-11-03), so one file's wait does not hold up the next. The modal is
+  hidden while the card shows (it sits above the card's layer) and comes back on
+  cancel or failure. **Esc closes the modal**, or cancels an in-progress export:
+  between cameras, or mid-sweep (the progress callback throws `ExportCancelled`;
+  nothing is written for that camera; files already handed over finish). Tests:
+  `tests/e2e/export-bycam-folder-progress.mjs`, `tests/e2e/lazy-reemit-compressed.mjs`;
+  timing on real data: `tests/e2e/_diag-export-bycam-timing.js` (load it from jsDelivr at
+  a commit: the deployed site drops `_` files).
   Columns ordered by session frequency, then within-session name order, then
   session recency for session-unique views.
 - `showSlpExportAllModal()` — multi-session SLP export. **Deprecated**: not
@@ -4690,13 +4714,18 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `../import-export/save-load.js` — `showLoading`, `hideLoading`,
   `setStatus`.
 - `./loading-overlay.js` — `showLoadingProgress`, `yieldToPaint` (the
-  "Grouping & triangulating" bar in both group-and-triangulate-all paths),
+  "Grouping & triangulating" bar in both group-and-triangulate-all paths, and
+  the By-Cam Download All card),
   `createProgressPacer` (the Export Reprojections and Export 3D Points cards).
+- `../loading/folder-picker-start.js` — `pickExportFolder` (By-Cam Download All).
+- `../loading/percam-slp-choice.js` — `chooseProofreadSource`, `proofreadSlpName`
+  (By-Cam Download All's file names).
 - `../pose/triangulation-pool.js` — `createGroupSolver`
   (`groupByIdentityAndTriangulateAll` solves its non-adopted groups on the
   worker pool; adoption and regrouping stay on the main thread).
 - `../import-export/file-io.js` — `exportSlpClientSide`,
-  `exportSlpMultiSession`, `findSkeletonMismatch`, `buildPoints3dH5`,
+  `exportSlpMultiSession` (By-Cam passes `{onProgress}`), `exportCamerasSlpStreaming`,
+  `cameraExportUsesSweep` (By-Cam's one sweep), `findSkeletonMismatch`, `buildPoints3dH5`,
   `buildReprojH5`.
 - `../pose/initialization.js` — `update3DViewport`.
 - `./video-encode.js` — `createMp4Writer`, `videoEncodingAvailable` (Export 3D
@@ -12266,15 +12295,50 @@ deliberately NOT authoritative. `newer` is the most-recently-modified candidate
 when that is not the chosen file, else `null` — the signal that a leftover
 `_vN` is outranking a file the user just wrote.
 
+**Proofread export names** (File ▸ Export SLEAP File By Cam, `ui/export-modals.js`):
+`proofreadSlpName(source)` → `<stem>_proofread.slp` (`PROOFREAD_SUFFIX`);
+`isProofreadSlp(name)`; `chooseProofreadSource(slps, loadedName)` — the `.slp` in a
+camera folder the project's 2D came from: never a `_proofread` output, the
+recorded `loadedName` (`videoFiles[].slpFilename`) while it is there, else
+`chooseCameraSlp`. The loaders do NOT skip `_proofread` files: a camera folder
+holding one is loaded from the newer of the two (same version 0, `lastModified`
+breaks the tie). Test: `tests/test-proofread-export-name.mjs`.
+
 **Imports from project modules.** None (deliberately).
 
 **Imported by.** `loading/session-loader.js`, which re-exports it so its own
-import site is unchanged; bridged into the test runner as
-`window.__PerCamSlpChoice`.
+import site is unchanged; `ui/export-modals.js` (the proofread export names);
+bridged into the test runner as `window.__PerCamSlpChoice`.
 
-**Tests.** `tests/test-percam-slp-choice.js`.
+**Tests.** `tests/test-percam-slp-choice.js`, `tests/test-proofread-export-name.mjs`.
 
 ---
+
+### loading/folder-picker-start.js
+
+**Purpose.** Where a `showDirectoryPicker` opens. `startIn` = a file handle opens
+in that file's folder; the project's `.slp` handle is `state.slpFileHandle` (Load
+Project, Load SLP and Save As keep it; it is what File ▸ Save writes). Without
+`startIn` or `id`, Chromium opens wherever ANY picker of the origin last picked
+(Load Project, Save As, an export…), else Documents — so a picker with neither
+lands somewhere that depends on the browser's history, not the project. An `id`
+gives a picker its own memory; a `startIn` handle wins over it.
+
+**Key exports.**
+- `projectFolderStart()` — `state.slpFileHandle` when set and the browser has
+  `showDirectoryPicker`, else null.
+- `pickExportFolder()` — `showDirectoryPicker({ id: EXPORT_FOLDER_PICKER_ID,
+  mode: 'readwrite', startIn? })`: the project's folder, else where the last
+  export went. Rejects with AbortError on cancel.
+- `EXPORT_FOLDER_PICKER_ID` — `'lucid-export-folder'`.
+
+**Imports from project modules.** `../ui/app-state.js` — `state`. Import-light on
+purpose, so `ui/export-modals.js` can use it without a cycle through
+`loading/session-loader.js`.
+
+**Imported by.** `loading/session-loader.js` (`folderPickerStartFor`),
+`ui/export-modals.js` (By-Cam Download All). Test:
+`tests/e2e/export-bycam-folder-progress.mjs`.
 
 ### loading/calibration-pick.js
 
@@ -12509,8 +12573,8 @@ filesystem enumeration, decoder rebuild.
   `options.allowSkip` (a "Skip — Load Videos Later" button; used by the lazy
   reopen) and closes on `Esc`; both resolve `null`, which every caller treats as
   "no videos picked". `options.startIn` (from `folderPickerStartFor(file)`: the
-  `.slp` being opened's `state.slpFileHandle`, only when the handle is THAT file's
-  and the browser has `showDirectoryPicker`) makes Select Session Folder open
+  `.slp` being opened's `state.slpFileHandle` — `projectFolderStart()`,
+  `loading/folder-picker-start.js` — only when the handle is THAT file's) makes Select Session Folder open
   `pickFolderNear(startIn)`: the folder picker starts in the project's own folder
   and the files are listed as `pickFolder` lists them. A page given one file cannot
   read the folder around it, but can start the picker there, so the user confirms
@@ -12773,6 +12837,7 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
 - `../pose/placeholder-cameras.js` (`makePlaceholderCamera`,
   `hasRealCalibration`, `ensurePlaceholderCameras`),
 - `./calibration-pick.js` (`REBASED_CALIBRATION_NAME`, `pickCalibrationFile`),
+  `./folder-picker-start.js` (`projectFolderStart`),
   `./percam-slp-choice.js` (`chooseCameraSlp`), `./video-file-pick.js`,
   `./video-codec-diagnosis.js` (`videoLoadFailureText`),
   `../ui/video-codec-notice.js` (`noteUnplayableVideos`),
@@ -14295,7 +14360,23 @@ session's resident/total) rather than truncate silently. Covered by
   `cameraName + '.mp4'` / zero-dimension fallback, like
   `slp-streaming-write.js`'s `resolveVideoPath`.
 - SLP export (client-side): `exportSlpClientSide`,
-  `exportSlpMultiSession`, `exportCameraSlpStreaming` (above). For a **lazy session** these route a plain
+  `exportSlpMultiSession(selections, reprojAsUser, instanceFilter, opts)`, `exportCameraSlpStreaming` (above).
+  `opts.onProgress(done, total)` reaches only the streaming path (frames swept;
+  throwing from it aborts); the fast and eager paths are one step and never call it.
+  `exportCamerasSlpStreaming(session, cameras, reprojAsUser, instanceFilter, opts)`
+  builds several cameras of one session in ONE sweep (one writer each; hydrating is
+  nearly all of a camera's cost, so N cameras cost about one sweep);
+  `exportCameraSlpStreaming` is its one-camera case. `cameraExportUsesSweep(selection,
+  …)` says whether `exportSlpMultiSession` would route a camera there (By Cam groups
+  those cameras per session). The store fast path (`lazyCameraFastPathUsable`) is
+  refused on a reopened project `.slp` (`SioLazyLoader._sharedStore`): every
+  `labelsByCam` entry is then the WHOLE project, and re-emitting it wrote every camera
+  (and the 3D session) into each camera's file, or ran the renderer out of memory on a
+  large project. Its output is compressed by the `(lazy re-emit)` bundle patch.
+  `_buildCameraLabeledFrame` (both streaming exporters and `buildSlpLabels`) writes
+  each predicted node's OWN score through `Session.predictedNodeScore`; asking only the
+  instance wrote the instance score onto every node of a lazily loaded prediction
+  (found comparing a real 8-camera export from both routes, 2026-11-03). For a **lazy session** these route a plain
   per-camera export through `lazyCameraExportBytes` → `saveSlpToBytes` on the
   camera's already-lazy `Labels` (all frames, memory-bounded) instead of the
   eager `buildSlpLabels*`. The multi-view project save uses the streaming
