@@ -8,6 +8,7 @@
 use crate::files::GrantState;
 use serde::Deserialize;
 use std::path::Path;
+use std::sync::Arc;
 use tauri::{AppHandle, Manager, Runtime, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
@@ -33,12 +34,12 @@ fn clean_extensions(exts: &[String]) -> Vec<String> {
 }
 
 fn grant<R: Runtime>(app: &AppHandle<R>, path: &Path, dir: bool) -> Result<(), String> {
-    let state = app.state::<GrantState>();
+    let state = app.state::<Arc<GrantState>>();
     let mut g = state.0.lock().map_err(|e| e.to_string())?;
     if dir {
-        g.grant_dir(path.to_path_buf());
+        g.grant_dir(path);
     } else {
-        g.grant_file(path.to_path_buf());
+        g.grant_file(path);
     }
     Ok(())
 }
@@ -120,6 +121,38 @@ pub async fn ask_dialog<R: Runtime>(
         .map_err(|e| format!("ask_dialog: {e}"))
 }
 
+/// Severity of a `message_dialog` (the JS names).
+pub fn message_kind(kind: &str) -> MessageDialogKind {
+    match kind {
+        "warning" => MessageDialogKind::Warning,
+        "error" => MessageDialogKind::Error,
+        _ => MessageDialogKind::Info,
+    }
+}
+
+/// One-button notice (e.g. a download that failed). Resolves once dismissed.
+#[tauri::command]
+pub async fn message_dialog<R: Runtime>(
+    app: AppHandle<R>,
+    window: WebviewWindow<R>,
+    title: String,
+    message: String,
+    kind: Option<String>,
+) -> Result<(), String> {
+    let dialog = app
+        .dialog()
+        .message(message)
+        .title(title)
+        .kind(message_kind(kind.as_deref().unwrap_or("info")))
+        .parent(&window)
+        .buttons(MessageDialogButtons::Ok);
+    tauri::async_runtime::spawn_blocking(move || {
+        dialog.blocking_show();
+    })
+    .await
+    .map_err(|e| format!("message_dialog: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +174,17 @@ mod tests {
         assert_eq!(sanitize_suggested_name("dir/"), None);
         assert_eq!(sanitize_suggested_name(".."), None);
         assert_eq!(sanitize_suggested_name("  "), None);
+    }
+
+    #[test]
+    fn message_kinds_map_and_default_to_info() {
+        assert!(matches!(message_kind("error"), MessageDialogKind::Error));
+        assert!(matches!(
+            message_kind("warning"),
+            MessageDialogKind::Warning
+        ));
+        assert!(matches!(message_kind("info"), MessageDialogKind::Info));
+        assert!(matches!(message_kind("bogus"), MessageDialogKind::Info));
     }
 
     #[test]

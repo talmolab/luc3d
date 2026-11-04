@@ -72,6 +72,12 @@ pub fn sleap_nn_status() -> SleapNnStatus {
 
 /// Spawn `program args...`, streaming each stdout/stderr line and a final
 /// `finished` event through `on_event`. Resolves to whether it exited 0.
+///
+/// `program` is NOT a free path: it must name one of `ALLOWED_PROGRAMS`
+/// ("uv", "sleap-nn", "sleap-nn-python") or equal the path Rust resolves for
+/// one of them (what `detect_uv` reported), and Rust spawns its own
+/// resolution. Any page-realm script can reach this command, so it must not
+/// be a generic "run this executable" primitive.
 #[tauri::command]
 pub async fn run_python_command<R: Runtime>(
     app: AppHandle<R>,
@@ -82,6 +88,7 @@ pub async fn run_python_command<R: Runtime>(
     #[cfg(feature = "sleap-nn")]
     {
         tauri::async_runtime::spawn_blocking(move || {
+            let program = imp::resolve_program(&program)?;
             imp::run(&app.state::<RunningProcess>(), &program, &args, &on_event)
         })
         .await
@@ -155,11 +162,6 @@ mod imp {
     // uv-tool shims (`sleap-nn`). Under `tauri dev` the terminal's PATH hides
     // this. Hence: resolve uv to an absolute path, and prepend the well-known
     // tool dirs to every child's PATH.
-
-    #[cfg(windows)]
-    const UV_EXE: &str = "uv.exe";
-    #[cfg(not(windows))]
-    const UV_EXE: &str = "uv";
 
     /// Directories that hold `uv` / uv-tool shims, in preference order.
     pub fn tool_bin_dirs() -> Vec<PathBuf> {
@@ -263,10 +265,10 @@ mod imp {
     }
 
     /// which/where with the user's OWN PATH first; then the known dirs; then
-    /// bare "uv" (errors later exactly as before if uv is absent).
-    fn resolve_uv() -> String {
+    /// the bare name (spawned with the augmented PATH; errors later if absent).
+    fn resolve_tool(name: &str) -> String {
         let which = if cfg!(windows) { "where" } else { "which" };
-        if let Some(out) = output_with_timeout(command(which, &["uv"], true), PROBE_TIMEOUT)
+        if let Some(out) = output_with_timeout(command(which, &[name], true), PROBE_TIMEOUT)
             .and_then(trimmed_stdout)
         {
             if let Some(line) = out.lines().next() {
@@ -276,13 +278,70 @@ mod imp {
                 }
             }
         }
+        let exe = if cfg!(windows) {
+            format!("{name}.exe")
+        } else {
+            name.to_string()
+        };
         for dir in tool_bin_dirs() {
-            let candidate = dir.join(UV_EXE);
+            let candidate = dir.join(&exe);
             if candidate.is_file() {
                 return candidate.to_string_lossy().into_owned();
             }
         }
-        "uv".to_string()
+        name.to_string()
+    }
+
+    fn resolve_uv() -> String {
+        resolve_tool("uv")
+    }
+
+    /// The interpreter inside sleap-nn's uv-tool venv
+    /// (`<uv tool dir>/sleap-nn/bin/python3`, `Scripts\python.exe` on Windows).
+    fn sleap_nn_python() -> Option<String> {
+        let tool_dir = shell_output(&resolve_uv(), &["tool", "dir"])?;
+        let base = PathBuf::from(tool_dir.trim()).join("sleap-nn");
+        let python = if cfg!(windows) {
+            base.join("Scripts").join("python.exe")
+        } else {
+            base.join("bin").join("python3")
+        };
+        python
+            .is_file()
+            .then(|| python.to_string_lossy().into_owned())
+    }
+
+    /// Program names `run_python_command` accepts.
+    pub const ALLOWED_PROGRAMS: &[&str] = &["uv", "sleap-nn", "sleap-nn-python"];
+
+    /// Pure allowlist match: `requested` is an allowed name, or exactly the
+    /// path Rust resolved for one. Returns what to spawn.
+    pub fn match_program(
+        requested: &str,
+        candidates: &[(&str, Option<String>)],
+    ) -> Result<String, String> {
+        for (name, resolved) in candidates {
+            if requested == *name || resolved.as_deref() == Some(requested) {
+                return resolved
+                    .clone()
+                    .ok_or_else(|| format!("PROGRAM_NOT_FOUND: {name}"));
+            }
+        }
+        Err(format!("PROGRAM_NOT_ALLOWED: {requested}"))
+    }
+
+    pub fn resolve_program(requested: &str) -> Result<String, String> {
+        // Refuse anything that could not match before probing the system.
+        let path_like = std::path::Path::new(requested).is_absolute();
+        if !path_like && !ALLOWED_PROGRAMS.contains(&requested) {
+            return Err(format!("PROGRAM_NOT_ALLOWED: {requested}"));
+        }
+        let candidates = [
+            ("uv", Some(resolve_uv())),
+            ("sleap-nn", Some(resolve_tool("sleap-nn"))),
+            ("sleap-nn-python", sleap_nn_python()),
+        ];
+        match_program(requested, &candidates)
     }
 
     /// `uv self update --dry-run` (network; bounded so it cannot stall).
@@ -474,6 +533,48 @@ mod imp {
             assert_eq!(paths.len(), 1, "exactly one PATH");
             let first = std::env::split_paths(&paths[0].1).next().unwrap();
             assert_eq!(first, tool_bin_dirs()[0]);
+        }
+
+        #[test]
+        fn program_allowlist() {
+            let c = [
+                ("uv", Some("/home/u/.local/bin/uv".to_string())),
+                ("sleap-nn", Some("/home/u/.local/bin/sleap-nn".to_string())),
+                ("sleap-nn-python", None),
+            ];
+            assert_eq!(match_program("uv", &c).unwrap(), "/home/u/.local/bin/uv");
+            assert_eq!(
+                match_program("/home/u/.local/bin/uv", &c).unwrap(),
+                "/home/u/.local/bin/uv"
+            );
+            assert_eq!(
+                match_program("sleap-nn", &c).unwrap(),
+                "/home/u/.local/bin/sleap-nn"
+            );
+            assert!(match_program("sleap-nn-python", &c)
+                .unwrap_err()
+                .starts_with("PROGRAM_NOT_FOUND"));
+            for bad in [
+                "/bin/sh",
+                "sh",
+                "python3",
+                "/home/u/.local/bin/other",
+                "",
+                "uv ",
+            ] {
+                assert!(
+                    match_program(bad, &c)
+                        .unwrap_err()
+                        .starts_with("PROGRAM_NOT_ALLOWED"),
+                    "{bad:?}"
+                );
+            }
+            // The real resolver refuses arbitrary programs without probing.
+            for bad in ["/bin/sh", "bash", "cmd.exe", "../uv"] {
+                assert!(resolve_program(bad)
+                    .unwrap_err()
+                    .starts_with("PROGRAM_NOT_ALLOWED"));
+            }
         }
 
         #[test]

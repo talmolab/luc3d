@@ -28,10 +28,6 @@ use std::time::UNIX_EPOCH;
 // ---------------------------------------------------------------------------
 
 /// Parse a path coming from JS: it must be absolute and contain no `..`.
-///
-/// `..` is rejected outright (not normalized away) because the grant check is
-/// a lexical prefix test: `<granted>/../elsewhere` starts with `<granted>`
-/// component-wise but names a file outside it.
 pub fn validate_path(raw: &str) -> Result<PathBuf, String> {
     if raw.is_empty() {
         return Err("INVALID_PATH: empty path".into());
@@ -49,7 +45,53 @@ pub fn validate_path(raw: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-/// Paths the user handed to the app through a native picker during this run.
+/// The real location `path` names: symlinks resolved in its longest EXISTING
+/// ancestor, with the not-yet-existing remainder appended (so a save target
+/// or a folder still to be made resolves too).
+///
+/// A dangling symlink anywhere on the way is refused: creating a file through
+/// one would land wherever it points, which no grant check could see.
+pub fn resolve_path(path: &Path) -> std::io::Result<PathBuf> {
+    let mut existing = path;
+    let mut rest: Vec<&std::ffi::OsStr> = Vec::new();
+    loop {
+        match std::fs::canonicalize(existing) {
+            Ok(mut real) => {
+                for name in rest.iter().rev() {
+                    real.push(name);
+                }
+                return Ok(real);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if std::fs::symlink_metadata(existing).is_ok() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("dangling symlink: {}", existing.display()),
+                    ));
+                }
+                match (existing.parent(), existing.file_name()) {
+                    (Some(parent), Some(name)) => {
+                        rest.push(name);
+                        existing = parent;
+                    }
+                    _ => return Err(e),
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// Validate a path from JS and resolve it to where it really points.
+pub fn resolve_request(raw: &str) -> Result<PathBuf, String> {
+    let path = validate_path(raw)?;
+    resolve_path(&path).map_err(|e| format!("INVALID_PATH: {raw}: {e}"))
+}
+
+/// Paths the user handed to the app through a native picker during this run,
+/// stored RESOLVED (see `resolve_path`). Requests are resolved the same way
+/// before the prefix test, so a symlink inside a granted folder that points
+/// outside it is refused, while one pointing elsewhere inside is fine.
 #[derive(Default, Debug)]
 pub struct Grants {
     files: HashSet<PathBuf>,
@@ -57,33 +99,33 @@ pub struct Grants {
 }
 
 impl Grants {
-    pub fn grant_file(&mut self, path: PathBuf) {
-        self.files.insert(path);
+    pub fn grant_file(&mut self, path: &Path) {
+        self.files
+            .insert(resolve_path(path).unwrap_or_else(|_| path.to_path_buf()));
     }
 
-    pub fn grant_dir(&mut self, path: PathBuf) {
-        self.dirs.insert(path);
+    pub fn grant_dir(&mut self, path: &Path) {
+        self.dirs
+            .insert(resolve_path(path).unwrap_or_else(|_| path.to_path_buf()));
     }
 
-    /// True for a granted file, a granted directory, or anything under one.
-    /// `Path::starts_with` compares whole components, so `/a/bc` is not
-    /// under a granted `/a/b`.
-    pub fn is_granted(&self, path: &Path) -> bool {
-        self.files.contains(path) || self.dirs.iter().any(|d| path.starts_with(d))
+    /// `resolved` must come from `resolve_path`. `Path::starts_with` compares
+    /// whole components, so `/a/bc` is not under a granted `/a/b`.
+    pub fn is_granted(&self, resolved: &Path) -> bool {
+        self.files.contains(resolved) || self.dirs.iter().any(|d| resolved.starts_with(d))
     }
 
-    /// Validate `raw` and require a grant; the error strings are the contract
-    /// the JS shim matches on.
+    /// `GrantState::check` without the lock (tests).
+    #[cfg(test)]
     pub fn check(&self, raw: &str) -> Result<PathBuf, String> {
-        let path = validate_path(raw)?;
-        if self.is_granted(&path) {
-            Ok(path)
+        let resolved = resolve_request(raw)?;
+        if self.is_granted(&resolved) {
+            Ok(resolved)
         } else {
             Err(format!("NOT_GRANTED: {raw}"))
         }
     }
 
-    /// Abort-safe teardown helper for tests and app exit.
     #[cfg(test)]
     pub fn clear(&mut self) {
         self.files.clear();
@@ -91,13 +133,24 @@ impl Grants {
     }
 }
 
-/// Tauri-managed grant set.
+/// Tauri-managed grant set (behind an Arc so checks can run on the blocking
+/// pool: resolving a path is filesystem I/O).
 #[derive(Default)]
 pub struct GrantState(pub Mutex<Grants>);
 
 impl GrantState {
+    /// Validate, resolve and require a grant. Returns the RESOLVED path, which
+    /// is what every caller must then operate on. The error prefixes are the
+    /// contract the JS shim matches on.
     pub fn check(&self, raw: &str) -> Result<PathBuf, String> {
-        self.0.lock().map_err(|e| e.to_string())?.check(raw)
+        // Resolve outside the lock: it can be slow on a network share.
+        let resolved = resolve_request(raw)?;
+        let grants = self.0.lock().map_err(|e| e.to_string())?;
+        if grants.is_granted(&resolved) {
+            Ok(resolved)
+        } else {
+            Err(format!("NOT_GRANTED: {raw}"))
+        }
     }
 }
 
@@ -257,7 +310,7 @@ fn write_all_at(file: &File, mut data: &[u8], mut offset: u64) -> std::io::Resul
 
 /// A random-enough suffix for temp names without pulling in a RNG crate:
 /// std's per-process random SipHash keys, mixed with a counter and the time.
-fn random_suffix() -> String {
+pub(crate) fn random_suffix() -> String {
     use std::hash::{BuildHasher, Hasher};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let mut h = std::collections::hash_map::RandomState::new().build_hasher();
@@ -351,6 +404,12 @@ impl WriteSessions {
         }
         if target.is_dir() {
             return Err(format!("IS_A_DIRECTORY: {}", target.display()));
+        }
+        // Refuse up front rather than at the final rename: on Windows the
+        // rename over a read-only file fails, and copying its attributes
+        // would make the temp read-only too.
+        if std::fs::metadata(target).is_ok_and(|m| m.permissions().readonly()) {
+            return Err(format!("READ_ONLY: {}", target.display()));
         }
 
         // create_new reserves the name; retry on the (unlikely) collision.
@@ -597,55 +656,67 @@ async fn blocking<T: Send + 'static>(
         .map_err(|e| format!("task: {e}"))?
 }
 
+/// The managed grant set is an Arc so a check (filesystem I/O) can move onto
+/// the blocking pool together with the operation it guards.
+fn grants_of(state: &tauri::State<'_, Arc<GrantState>>) -> Arc<GrantState> {
+    Arc::clone(state)
+}
+
 #[tauri::command]
 pub async fn path_stat(
-    grants: tauri::State<'_, GrantState>,
+    grants: tauri::State<'_, Arc<GrantState>>,
     path: String,
 ) -> Result<PathStat, String> {
-    let p = grants.check(&path)?;
-    blocking(move || path_stat_impl(&p)).await
+    let grants = grants_of(&grants);
+    blocking(move || path_stat_impl(&grants.check(&path)?)).await
 }
 
 #[tauri::command]
 pub async fn read_range(
-    grants: tauri::State<'_, GrantState>,
+    grants: tauri::State<'_, Arc<GrantState>>,
     path: String,
     offset: u64,
     length: u32,
 ) -> Result<tauri::ipc::Response, String> {
-    let p = grants.check(&path)?;
-    let bytes = blocking(move || read_range_impl(&p, offset, length)).await?;
+    let grants = grants_of(&grants);
+    let bytes = blocking(move || read_range_impl(&grants.check(&path)?, offset, length)).await?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
 #[tauri::command]
 pub async fn list_dir(
-    grants: tauri::State<'_, GrantState>,
+    grants: tauri::State<'_, Arc<GrantState>>,
     path: String,
 ) -> Result<Vec<DirEntry>, String> {
-    let p = grants.check(&path)?;
-    blocking(move || list_dir_impl(&p)).await
+    let grants = grants_of(&grants);
+    blocking(move || list_dir_impl(&grants.check(&path)?)).await
 }
 
 #[tauri::command]
-pub async fn make_dir(grants: tauri::State<'_, GrantState>, path: String) -> Result<(), String> {
-    let p = grants.check(&path)?;
+pub async fn make_dir(
+    grants: tauri::State<'_, Arc<GrantState>>,
+    path: String,
+) -> Result<(), String> {
+    let grants = grants_of(&grants);
     blocking(move || {
+        let p = grants.check(&path)?;
         std::fs::create_dir_all(&p).map_err(|e| format!("make_dir({}): {e}", p.display()))
     })
     .await
 }
 
+/// The session writes to the RESOLVED target: its temp is made in the real
+/// parent directory and a symlinked target is written through, not replaced.
 #[tauri::command]
 pub async fn write_open(
-    grants: tauri::State<'_, GrantState>,
+    grants: tauri::State<'_, Arc<GrantState>>,
     sessions: tauri::State<'_, Arc<WriteSessions>>,
     path: String,
     keep_existing_data: bool,
 ) -> Result<WriteOpened, String> {
-    let p = grants.check(&path)?;
+    let grants = grants_of(&grants);
     let sessions = Arc::clone(&sessions);
-    blocking(move || sessions.open(&p, keep_existing_data)).await
+    blocking(move || sessions.open(&grants.check(&path)?, keep_existing_data)).await
 }
 
 fn header<'a>(request: &'a tauri::ipc::Request<'_>, name: &str) -> Result<&'a str, String> {
@@ -712,12 +783,21 @@ pub async fn write_abort(
     blocking(move || sessions.abort(id)).await
 }
 
-/// Not grant-checked: revealing a path shows the user where something is but
-/// exposes nothing to the page.
+/// Grant-checked like the file commands: even "show in folder" must not
+/// let the page probe for or open arbitrary locations.
 #[tauri::command]
-pub fn reveal_path(path: String) -> Result<(), String> {
-    let p = validate_path(&path)?;
-    reveal(&p)
+pub async fn reveal_path(
+    grants: tauri::State<'_, Arc<GrantState>>,
+    path: String,
+) -> Result<(), String> {
+    let grants = grants_of(&grants);
+    blocking(move || {
+        grants.check(&path)?;
+        // Reveal the path as the user knows it (on Windows the resolved form
+        // is a `\\?\` verbatim path, which Explorer does not accept).
+        reveal(&validate_path(&path)?)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -771,7 +851,7 @@ mod tests {
     fn granted_file_is_allowed_and_siblings_are_not() {
         let d = Scratch::new("grant-file");
         let mut g = Grants::default();
-        g.grant_file(d.path("a.slp"));
+        g.grant_file(&d.path("a.slp"));
         assert_eq!(g.check(&s(&d.path("a.slp"))).unwrap(), d.path("a.slp"));
         let err = g.check(&s(&d.path("b.slp"))).unwrap_err();
         assert!(err.starts_with("NOT_GRANTED: "), "{err}");
@@ -783,7 +863,7 @@ mod tests {
     fn granted_dir_covers_descendants_only() {
         let d = Scratch::new("grant-dir");
         let mut g = Grants::default();
-        g.grant_dir(d.path("proj"));
+        g.grant_dir(&d.path("proj"));
         assert!(g.check(&s(&d.path("proj"))).is_ok());
         assert!(g
             .check(&s(&d.path("proj").join("cam1").join("0.mp4")))
@@ -802,7 +882,7 @@ mod tests {
     fn dot_dot_is_rejected_even_inside_a_grant() {
         let d = Scratch::new("grant-dotdot");
         let mut g = Grants::default();
-        g.grant_dir(d.path("proj"));
+        g.grant_dir(&d.path("proj"));
         let escape = format!("{}/../secret.txt", s(&d.path("proj")));
         let err = g.check(&escape).unwrap_err();
         assert!(err.starts_with("INVALID_PATH"), "{err}");
@@ -813,12 +893,128 @@ mod tests {
     #[test]
     fn relative_and_empty_paths_are_rejected() {
         let mut g = Grants::default();
-        g.grant_dir(std::env::current_dir().unwrap());
+        g.grant_dir(&std::env::current_dir().unwrap());
         for p in ["a.slp", "./a.slp", "proj/a.slp", ""] {
             let err = g.check(p).unwrap_err();
             assert!(err.starts_with("INVALID_PATH"), "{p}: {err}");
         }
         assert!(validate_path("/tmp/a\0b").is_err());
+    }
+
+    #[test]
+    fn not_yet_existing_paths_in_a_granted_dir_resolve() {
+        let d = Scratch::new("grant-new");
+        std::fs::create_dir(d.path("proj")).unwrap();
+        let mut g = Grants::default();
+        g.grant_dir(&d.path("proj"));
+        let deep = d.path("proj").join("new-dir").join("sub").join("out.slp");
+        assert_eq!(g.check(&s(&deep)).unwrap(), deep);
+        // A save-dialog grant for a file that does not exist yet.
+        let mut g = Grants::default();
+        g.grant_file(&d.path("new.slp"));
+        assert_eq!(g.check(&s(&d.path("new.slp"))).unwrap(), d.path("new.slp"));
+    }
+
+    #[cfg(unix)]
+    mod symlinks {
+        use super::*;
+        use std::os::unix::fs::symlink;
+
+        /// `<scratch>/proj` granted, `<scratch>/outside` not.
+        fn setup(tag: &str) -> (Scratch, Grants) {
+            let d = Scratch::new(tag);
+            std::fs::create_dir(d.path("proj")).unwrap();
+            std::fs::create_dir(d.path("outside")).unwrap();
+            std::fs::write(d.path("outside").join("secret.txt"), b"secret").unwrap();
+            let mut g = Grants::default();
+            g.grant_dir(&d.path("proj"));
+            (d, g)
+        }
+
+        #[test]
+        fn symlinked_dir_pointing_outside_is_refused() {
+            let (d, g) = setup("ln-dir");
+            symlink(d.path("outside"), d.path("proj").join("link")).unwrap();
+            for p in ["link", "link/secret.txt", "link/new.txt", "link/newdir/x"] {
+                let err = g.check(&s(&d.path("proj").join(p))).unwrap_err();
+                assert!(err.starts_with("NOT_GRANTED"), "{p}: {err}");
+            }
+        }
+
+        #[test]
+        fn symlinked_file_pointing_outside_is_refused() {
+            let (d, g) = setup("ln-file");
+            symlink(
+                d.path("outside").join("secret.txt"),
+                d.path("proj").join("f.txt"),
+            )
+            .unwrap();
+            let err = g.check(&s(&d.path("proj").join("f.txt"))).unwrap_err();
+            assert!(err.starts_with("NOT_GRANTED"), "{err}");
+        }
+
+        #[test]
+        fn dangling_symlink_is_refused() {
+            let (d, g) = setup("ln-dangling");
+            symlink(d.path("outside").join("nope"), d.path("proj").join("dl")).unwrap();
+            for p in ["dl", "dl/x.txt"] {
+                let err = g.check(&s(&d.path("proj").join(p))).unwrap_err();
+                assert!(err.starts_with("INVALID_PATH"), "{p}: {err}");
+            }
+        }
+
+        #[test]
+        fn symlink_pointing_inside_the_grant_is_allowed_and_resolved() {
+            let (d, g) = setup("ln-inside");
+            std::fs::create_dir(d.path("proj").join("real")).unwrap();
+            std::fs::write(d.path("proj").join("real").join("a.txt"), b"a").unwrap();
+            symlink(d.path("proj").join("real"), d.path("proj").join("alias")).unwrap();
+            let got = g
+                .check(&s(&d.path("proj").join("alias").join("a.txt")))
+                .unwrap();
+            assert_eq!(got, d.path("proj").join("real").join("a.txt"));
+        }
+
+        #[test]
+        fn granted_dir_reached_through_a_symlink_still_matches() {
+            let d = Scratch::new("ln-grant");
+            std::fs::create_dir(d.path("real")).unwrap();
+            symlink(d.path("real"), d.path("via")).unwrap();
+            let mut g = Grants::default();
+            g.grant_dir(&d.path("via")); // the picker returned the link
+            assert!(g.check(&s(&d.path("via").join("x.slp"))).is_ok());
+            assert!(g.check(&s(&d.path("real").join("x.slp"))).is_ok());
+        }
+
+        #[test]
+        fn commit_writes_through_a_symlinked_target() {
+            let (d, g) = setup("ln-commit");
+            std::fs::write(d.path("proj").join("real.slp"), b"old").unwrap();
+            symlink(
+                d.path("proj").join("real.slp"),
+                d.path("proj").join("link.slp"),
+            )
+            .unwrap();
+            let target = g.check(&s(&d.path("proj").join("link.slp"))).unwrap();
+            assert_eq!(target, d.path("proj").join("real.slp"));
+            let ws = WriteSessions::default();
+            let id = ws.open(&target, true).unwrap().id;
+            ws.write(id, 0, b"NEW").unwrap();
+            ws.commit(id).unwrap();
+            assert_eq!(
+                std::fs::read(d.path("proj").join("real.slp")).unwrap(),
+                b"NEW"
+            );
+            let link_meta = std::fs::symlink_metadata(d.path("proj").join("link.slp")).unwrap();
+            assert!(
+                link_meta.file_type().is_symlink(),
+                "the link itself is kept"
+            );
+            assert_eq!(
+                std::fs::read(d.path("proj").join("link.slp")).unwrap(),
+                b"NEW"
+            );
+        }
     }
 
     // --- stat / list / read -------------------------------------------------
@@ -974,6 +1170,39 @@ mod tests {
         assert_eq!(std::fs::read(&target).unwrap(), b"original");
         assert_eq!(d.entries(), vec!["keep.slp".to_string()]);
         assert!(ws.abort(id).unwrap_err().starts_with("NO_SUCH_WRITE"));
+    }
+
+    #[test]
+    fn read_only_target_is_refused_before_any_temp_exists() {
+        let d = Scratch::new("readonly");
+        let target = d.path("ro.slp");
+        std::fs::write(&target, b"keep").unwrap();
+        let mut perms = std::fs::metadata(&target).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&target, perms.clone()).unwrap();
+        let ws = WriteSessions::default();
+        let err = ws.open(&target, true).unwrap_err();
+        assert!(err.starts_with("READ_ONLY"), "{err}");
+        assert_eq!(d.entries(), vec!["ro.slp".to_string()], "no temp created");
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(&target, perms).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_rename_removes_the_temp() {
+        let d = Scratch::new("renamefail");
+        let target = d.path("t.slp");
+        let ws = WriteSessions::default();
+        let id = ws.open(&target, false).unwrap().id;
+        ws.write(id, 0, b"x").unwrap();
+        // A directory now sits where the file should go: rename must fail.
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("child"), b"c").unwrap();
+        let err = ws.commit(id).unwrap_err();
+        assert!(err.contains("rename"), "{err}");
+        assert_eq!(d.entries(), vec!["t.slp".to_string()], "temp removed");
     }
 
     #[test]

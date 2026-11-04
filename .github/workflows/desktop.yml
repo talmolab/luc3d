@@ -3,9 +3,25 @@ name: Desktop app
 # Builds the LUCID desktop app (src-tauri/, Tauri 2) for Linux, macOS (one
 # universal binary) and Windows, and attaches the installers to a release.
 #
-#   pull_request         -- build all three as a check; installers are workflow
-#                           artifacts (7 days), nothing is published
-#   workflow_dispatch    -- the same, on demand, for any branch or tag
+# Two tiers, so an app-code PR is checked without building three installers:
+#
+#   stage    EVERY pull_request and push to main (ubuntu, no Rust, ~1 min):
+#            scripts/desktop/stage_frontend.py into a temp dir, with its
+#            self-check, plus tests/test-desktop-stage.mjs. The desktop
+#            frontend is a staged copy of the app, so an app PR can break it --
+#            a new top-level runtime file missing from the include list, an
+#            unmapped CDN URL, a computed import, a dangling worker path -- and
+#            no other workflow runs tests. Without this, the first to notice
+#            would be `release: published`, which would then ship no installers.
+#
+#   rust-checks, build (3 OS), release
+#            workflow_dispatch and release: published always; a pull_request
+#            only when it touches a desktop path (DESKTOP_PATHS in `changes`).
+#            Never on push to main: the PR that merged it already built them.
+#
+#   pull_request         -- installers are workflow artifacts (7 days), nothing
+#                           is published
+#   workflow_dispatch    -- the full build, on demand, for any branch or tag
 #   release: published   -- build, then `gh release upload` every installer to
 #                           THAT release. Releases are cut BY HAND
 #                           (`gh release create vX.Y.Z --generate-notes`, see
@@ -26,7 +42,7 @@ name: Desktop app
 # it from the tag (vX.Y.Z or vX.Y.Z-N -> X.Y.Z[-N]) in the runner's checkout
 # only -- never committed. PR and dispatch builds keep the committed version.
 # The WiX (MSI) bundler maps X.Y.Z-N onto the four-part Windows version and
-# rejects a NON-numeric pre-release (v1.2.0-rc1), so `validate` refuses such a
+# rejects a NON-numeric pre-release (v1.2.0-rc1), so `stage` refuses such a
 # tag in seconds instead of failing the Windows leg late.
 #
 # Not a tauri-apps/tauri-action build: there is no npm project here for it to
@@ -37,15 +53,8 @@ name: Desktop app
 
 on:
   pull_request:
-    paths:
-      - 'src-tauri/**'
-      - 'scripts/desktop/**'
-      - 'scripts/offline_deps.py'
-      - 'scripts/stamp-version.mjs'
-      - 'scripts/preload-modules.mjs'
-      - 'offline-deps.json'
-      - 'tests/test-desktop-stage.mjs'
-      - '.github/workflows/desktop.yml'
+  push:
+    branches: [main]
   workflow_dispatch:
   release:
     types: [published]
@@ -67,8 +76,9 @@ env:
   TAURI_CLI_VERSION: '2'
 
 jobs:
-  # Fails in seconds rather than after three cold Rust builds.
-  validate:
+  # The cheap tier: every event. Fails in seconds rather than after three cold
+  # Rust builds, and is the only desktop check an app-code PR gets.
+  stage:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -90,16 +100,74 @@ jobs:
         with:
           node-version: 22
 
-      # Stages the frontend into a temp dir and checks it (what ships, CDN URLs
-      # rewritten, every module reference resolves, version stamped).
-      - name: Stage the desktop frontend (tests/test-desktop-stage.mjs)
+      # The exact command tauri.conf.json's beforeBuildCommand runs (into a temp
+      # dir here): offline install, copy + CDN rewrite, stamp, self-check.
+      - name: Stage the desktop frontend
+        run: python3 scripts/desktop/stage_frontend.py --out "$RUNNER_TEMP/dist-desktop"
+
+      # Independent checks of the staged copy (what ships, CDN URLs, every module
+      # reference, version stamp) plus --out safety and the self-check's own
+      # negative controls.
+      - name: tests/test-desktop-stage.mjs
         run: node tests/test-desktop-stage.mjs
+
+  # Decides whether the expensive tier runs. dispatch and release: always.
+  # push: never. pull_request: when any changed file (either side of a rename)
+  # is under DESKTOP_PATHS -- listed from the API, so no deep checkout. If the
+  # listing fails, build: a missed desktop check costs more than a spare build.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      desktop: ${{ steps.decide.outputs.desktop }}
+    steps:
+      - name: Decide
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          is_desktop_path() {
+            case "$1" in
+              src-tauri/* | scripts/desktop/* | scripts/offline_deps.py | \
+              scripts/stamp-version.mjs | scripts/preload-modules.mjs | \
+              offline-deps.json | tests/test-desktop-stage.mjs | \
+              .github/workflows/desktop.yml) return 0 ;;
+            esac
+            return 1
+          }
+          desktop=false
+          case "$EVENT_NAME" in
+            workflow_dispatch | release) desktop=true ;;
+            pull_request)
+              if files="$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+                            --jq '.[] | .filename, (.previous_filename // empty)')"; then
+                while IFS= read -r f; do
+                  if is_desktop_path "$f"; then
+                    echo "desktop path changed: $f"
+                    desktop=true
+                    break
+                  fi
+                done <<< "$files"
+              else
+                echo "::warning::could not list the PR's files; running the desktop build to be safe"
+                desktop=true
+              fi
+              ;;
+          esac
+          echo "desktop=$desktop" | tee -a "$GITHUB_OUTPUT"
 
   # cargo test + clippy, beside the bundles rather than before the Linux one: a
   # lint failure must never throw away an installer that already built (it
   # compiles the debug profile anyway, so there is nothing to share).
   rust-checks:
-    needs: validate
+    needs: [stage, changes]
+    if: needs.changes.outputs.desktop == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
@@ -140,7 +208,8 @@ jobs:
         run: cargo clippy --locked --all-targets --features sleap-nn -- -D warnings
 
   build:
-    needs: validate
+    needs: [stage, changes]
+    if: needs.changes.outputs.desktop == 'true'
     strategy:
       # One flaky platform must not stop the others: the release job ships
       # whatever did build, and says loudly what is missing.

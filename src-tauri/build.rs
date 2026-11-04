@@ -25,6 +25,7 @@ const COMMANDS: &[&str] = &[
     "reveal_path",
     "open_external_url",
     "ask_dialog",
+    "message_dialog",
     "set_close_guard",
     "confirm_close",
     "system_info",

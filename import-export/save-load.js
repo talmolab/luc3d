@@ -55,6 +55,7 @@ import { buildSaveProvenance } from './slp-provenance.js';
 import { withCompactSave } from './compact-save.js';
 import { showCompactSaveModal } from '../ui/compact-save-modal.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
+import { askConfirm } from '../ui/ask.js';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -122,11 +123,30 @@ export async function ensureNo3dImportBlockingLoad() {
     return true;
 }
 
+/**
+ * File ▸ New Project. With a session or views open (and no `force`) it asks
+ * first, through `askConfirm` (ui/ask.js: native confirm in a browser, the
+ * desktop shell's dialog in the app, where `window.confirm` returns false at
+ * once). Returns a Promise of whether the project was reset. With `force`, or
+ * with nothing open, the reset runs SYNCHRONOUSLY before this returns —
+ * `ensureNo3dImportBlockingLoad` and tests rely on that.
+ */
 export function newProject(force) {
     if (!force && (state.session || state.views.length > 0)) {
-        if (!confirm('Unsaved changes will be lost. Start a new project?')) return;
+        return askConfirm('Unsaved changes will be lost. Start a new project?',
+            { title: 'New Project', okLabel: 'Start New Project' })
+            .then(function (ok) {
+                if (!ok) return false;
+                resetProject();
+                return true;
+            });
     }
+    resetProject();
+    return Promise.resolve(true);
+}
 
+/** The reset half of `newProject`, with no question asked. */
+function resetProject() {
     // Drop the "imported 3D points without a session" marker — a full reset
     // erases any such overlay (including the skeleton) by design.
     state.has3dImportWithoutSession = false;
@@ -710,14 +730,15 @@ async function buildSlpBytes(opts) {
             if (estBytes > capBytes * CAGE_WARN_FRACTION) {
                 var estGB = (estBytes / 1e9).toFixed(1);
                 var capGB = (capBytes / 1e9).toFixed(1);
-                var proceed = window.confirm(
+                var proceed = await askConfirm(
                     'This project is very large. Its triangulated grouping is estimated to ' +
                     'occupy ~' + estGB + ' GB of this tab\'s ~' + capGB + ' GB JavaScript memory ' +
                     'limit, leaving little headroom for a merged save, which could crash the ' +
                     'tab before finishing.\n\n' +
                     'Click OK to attempt the save anyway, or Cancel and use ' +
                     '"Export SLEAP File Per Session" / "By Cam" instead — those write one ' +
-                    'smaller file per camera and are far less likely to crash.'
+                    'smaller file per camera and are far less likely to crash.',
+                    { title: 'Very large save', okLabel: 'Save Anyway' }
                 );
                 if (!proceed) throw new SaveCancelledError();
             }
@@ -1572,7 +1593,8 @@ export async function handleLoadProject(prePickedFile) {
 
         var fileSize = file.size;
         if (fileSize > 50 * 1024 * 1024) {
-            if (!confirm('Project file is ' + (fileSize / 1024 / 1024).toFixed(0) + 'MB — this may be slow. Continue?')) {
+            if (!(await askConfirm('Project file is ' + (fileSize / 1024 / 1024).toFixed(0) + 'MB — this may be slow. Continue?',
+                    { title: 'Large project file', okLabel: 'Continue' }))) {
                 setStatus('Load cancelled', 'warning');
                 return;
             }
