@@ -301,7 +301,7 @@ eq(p.identities[0].share + '|' + p.identities[0].frac, '50.0%|0.5', 'identity sh
     ok(!planTrackSummary(summarizeTrackedIdentities({ identities: [{ id: 0, name: 'id_0' }, { id: 1, name: 'id_1' }], instanceGroups: new Map() },
         { frames: 10, animals: 2, singleCamera: 'Camera0' }), { brightness: C('off'), image: C('off'), size: off }).stats.some(x => x.label === 'To review'),
         'no review list: no line for it');
-    eq(plan(two, C('clear', { switches: 0, encounters: 40 }), C('off')).primary.action, 'triangulate', 'several cameras: unchanged, Triangulate All');
+    eq(plan(two, C('clear', { switches: 0, encounters: 40 }), C('off')).primary.action, 'triangulationSettings', 'several cameras: unchanged, Default Triangulation');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
