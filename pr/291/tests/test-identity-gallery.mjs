@@ -102,6 +102,17 @@ console.log('3. pickSampleFrames');
     const allStray = session([[10, [stray(10)]], [20, [stray(20)]], [30, [stray(30)]], [40, [stray(40)]], [50, [stray(50)]], [60, [stray(60)]]]);
     eq(G.pickSampleFrames(allStray, G.identityTracks(allStray).get(0), 0, 5).length, 5, 'with nothing usable at all, still five samples');
     eq(G.pickSampleFrames(alone, { frames: new Int32Array([3, 9]), xyz: new Float64Array(6) }, 0, 5), [3, 9], 'fewer frames than samples: all of them');
+    // a long gap: tracked only at the start and the end of the recording, or with one stretch far from the rest
+    const stretches = (...rs) => { const f = []; rs.forEach(([a, b]) => { for (let i = a; i < b; i++) f.push(i); }); return { frames: Int32Array.from(f), xyz: new Float64Array(3 * f.length) }; };
+    const two = G.pickSampleFrames(alone, stretches([0, 100], [17900, 18000]), 0, 5);
+    eq(two.length, 5, `two stretches far apart still give five samples: ${two}`);
+    ok(two.some(f => f < 100) && two.some(f => f >= 17900), 'and both stretches are shown');
+    eq(new Set(two).size, 5, 'all different');
+    eq(G.pickSampleFrames(alone, stretches([0, 9000], [17990, 18000]), 0, 5).length, 5, 'most frames early, a few late: five');
+    const three = G.pickSampleFrames(alone, stretches([0, 50], [9000, 9050], [17950, 18000]), 0, 5);
+    eq(three.length, 5, `three stretches: five: ${three}`);
+    ok(three.some(f => f < 50) && three.some(f => f >= 9000 && f < 9050) && three.some(f => f >= 17950), 'and all three are shown');
+    eq(G.pickSampleFrames(alone, stretches([100, 106]), 0, 5).length, 5, 'one more frame than samples: five');
     eq(G.pickSampleFrames(alone, { frames: new Int32Array(0), xyz: new Float64Array(0) }, 0, 5), [], 'no frames: none');
 }
 
