@@ -708,7 +708,7 @@ group('Crop geometry (ui/image-embedder.js)');
             `geometry: body length 85, nose angle 0, scale CROP/(1.3 L) (${g && g.L}, ${g && g.angle}, ${g && g.scale.toFixed(4)})`);
         ok(E.cropGeometry({ getPoint: i => i === 0 ? null : pts[i] }, sk) === null, 'no nose → no crop');
         const S = E.CROP, I = E.INPUT;
-        ok(S === 160 && I === 168, `crop 160 px, model input 168 px — the calibrated sizes (${S}, ${I})`);
+        ok(S === 160 && I === 192, `crop 160 px, model input 192 px — the calibrated sizes (${S}, ${I})`);
         const crop = new Uint8Array(S * S).fill(255), data = new Float32Array(3 * I * I);
         E.writeInputTensor(crop, data, 0);
         ok(Math.abs(data[0] - (1 - 0.485) / 0.229) < 1e-5 && Math.abs(data[2 * I * I] - (1 - 0.406) / 0.225) < 1e-5,
