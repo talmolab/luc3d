@@ -10759,6 +10759,12 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `setIdSwitchRefresher` (the repaint after the tab fixes a switch) are called
   once at setup, as is `setTrackSummaryNavigator` (`ui/track-summary-modal.js`:
   the Track All summary's Identities samples and maps go to a frame).
+  Labels and ticks computed when a menu opens are refreshed on `mouseenter`
+  of the top-level `.menu-item` (View ▸ Native Resolution's ✓, also on click)
+  or of the `.has-submenu` parent (Tracks ▸ Node Trails, which reads
+  `state.fps`): that is the cue the macOS desktop app's native menu bar gives
+  before it reads the menus (`src-tauri/js/lucid-desktop.js`, which mirrors
+  `#menuBar` natively and clicks the same elements).
 - Color-by toggle: the Tracks / Identity control is in the top toolbar
   (`colorByTracks` / `colorById`; group `aria-label="Color by"`).
   `updateColorByToggle()` reflects `state.colorByIdentity`. Every change goes
@@ -12387,6 +12393,14 @@ session, per-camera SLPs, single-SLP, multi-session, video-only,
 calibration-only. Owns view/grid layout, video selection prompts,
 filesystem enumeration, decoder rebuild.
 
+**hev1 videos played as hvc1.** Where the engine needed `loading/hev1-retag.js`
+(Safari, the macOS app), the final success status of `handleLoadVideos`, the
+single-SLP folder loader, the lazy project reopen and the per-camera folder
+loader ends with "— played N HEVC video(s) tagged hev1 as hvc1 (files
+unchanged)" (`withHev1RetagNote`, counted over the videos that LOADED; last, so
+it never pushes a failure off the line). Other paths (multi-session switches,
+project open in `save-load.js`, relink) log it to the console only.
+
 **Compact copies.** The single-SLP folder loader and the lazy project reopen end on `withCompactNote` (`import-export/compact-save.js`): a file saved as a compact copy opens with a warning status saying its keypoints and 3D were rounded.
 
 **Key exports.**
@@ -12717,6 +12731,7 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
 - `./calibration-pick.js` (`REBASED_CALIBRATION_NAME`, `pickCalibrationFile`),
   `./percam-slp-choice.js` (`chooseCameraSlp`), `./video-file-pick.js`,
   `./video-codec-diagnosis.js` (`videoLoadFailureText`),
+  `./hev1-retag.js` (`withHev1RetagNote`),
   `../ui/video-codec-notice.js` (`noteUnplayableVideos`),
   `../ui/app-state.js` (incl. `buildRememberedSkeleton`, and `isViewDocked` as the
   rebuilt video controller's `isViewShown`), `../pose/pose-data.js`,
@@ -13111,7 +13126,8 @@ console warning and are counted in `coldReadStats`.
 
 **Imported by.** `loading/video.js` (mediabunny via `guardedRangeSource`;
 mp4box's scan via `readChunk`), `loading/video-codec-diagnosis.js`
-(`readRange`), `import-export/slp-import.js` (`handleLoadPoints3dH5`).
+(`readRange`), `loading/hev1-retag.js` (the sample-entry probe),
+`import-export/slp-import.js` (`handleLoadPoints3dH5`).
 
 **Not covered.** The `<video>` element reads its blob URL natively, where no
 page code can reach (playback, and stepping only when there is no
@@ -13125,6 +13141,75 @@ through the guard vs the unguarded read) and `tests/e2e/video-cold-read.mjs`
 (the real OnDemandVideoDecoder with faults injected under it; unguarded, a
 failed read leaves mp4box's scan at the `<video>` estimate and a zeroed first
 page freezes the page).
+
+### loading/hev1-retag.js
+
+**Purpose.** Play HEVC tagged `hev1` on engines that play HEVC only when tagged
+`hvc1` — Safari and the macOS desktop app's WKWebView (canPlayType: hev1 "",
+hvc1 "probably") — losslessly and without touching the file on disk. ffmpeg tags
+HEVC `hev1` by default, and on the desktop app an 8-camera session folder of
+such recordings loaded with no video at all. `ffmpeg -c copy -tag:v hvc1`
+rewrites the sample entry's 4-byte fourcc and nothing else (the fixtures' twins
+differ from their sources in exactly those bytes); that is valid when the
+entry's `hvcC` carries the parameter sets, as ffmpeg-written files' do. This
+module does the same in memory.
+
+**How.** `planHev1Retag(file)` walks `moov/trak/mdia/minf/stbl/stsd` with
+guarded reads (`readBlobRange`, served from 64 KiB windows: ~2 Blob reads per
+file; 15 ms on a 3 GB file with moov at the end), wherever `moov` sits (before
+or after `mdat`, fragmented too), never reading `mdat`. It finds every `hev1`
+sample entry and checks its `hvcC` (`hvccParameterSets`: at least one VPS, SPS
+and PPS NAL, each NAL header naming its array's type, the record parsed to its
+end). Any entry without them → no patch, and the diagnosis's `hevc-hev1-tag`
+message stays. Never throws. `retaggedFile(file, offsets)` builds `new
+File([file.slice(0, off), "hvc1", file.slice(off + 4), …], name, {type,
+lastModified})`, copying own properties (`webkitRelativePath`) and adding
+`lucidHev1Retag = {original, offsets}`; the original is never changed.
+**Disk-backed:** slices of a picked File stay file references. Chromium's
+`chrome://blob-internals` shows a patched 3 GB file as file item + 4-byte data
+item + file item, and Playwright WebKit's processes' RSS did not grow, so
+nothing is copied whatever the size.
+
+**Gate.** `hev1RetagNeeded()`: `<video>` can play `hvc1` but not `hev1`
+(`codecPlayable`, the diagnosis's own test); `globalThis.__lucidHev1RetagGate`
+= true/false forces it (tests). Chrome and Firefox play `hev1` (or no HEVC at
+all), so they never probe and keep the original File by identity.
+
+**Key exports.**
+- `playbackSourceFor(source, env?)` — the File the video consumers should read:
+  `source` itself, SYNCHRONOUSLY, when it is not a File, is already patched, or
+  the gate is off; else a never-rejecting Promise of the patched File (or of
+  `source` when there is nothing to patch). One plan per original File
+  (WeakMap), so the same original always yields the same patched object
+  (`ui/image-embedder.js` keys its cache on `decoder.file`). Logs one
+  `[hev1-retag]` console line per re-tagged file.
+- `videoFileForPlayback(source, env?)` — the same, always a Promise.
+- `planHev1Retag(blob)` → `{offsets, entries, reason}` (`ok`, `no-hev1`,
+  `incomplete-hvcc`, `no-moov`, `not-mp4`, `error`).
+- `hev1EntriesInStsd(stsdBytes, stsdOffset)`, `hvccParameterSets(record)` — pure.
+- `retaggedFile(file, offsets, tag?)`, `hev1RetagNeeded(env?)`,
+  `isPlayedRetagged(fileOr{file})`, `hev1RetagNote(files)`,
+  `withHev1RetagNote(message, files)` (the loaders' "— played N HEVC video(s)
+  tagged hev1 as hvc1 (files unchanged)").
+
+**Imports from project modules.** `./cold-read-guard.js` (`readBlobRange`),
+`./video-codec-diagnosis.js` (`parseBoxHeader`, `codecPlayable`).
+
+**Imported by.** `loading/video.js` (`OnDemandVideoDecoder.init` /
+`switchSource`, the choke point), `loading/session-loader.js`
+(`withHev1RetagNote`).
+
+**Not changed by it.** `state.videoFiles[i].file` keeps the original (names,
+`videoPath`, `videos_json`), so saves are byte-identical; the streaming save's
+`sourceFiles` are `.slp` files. Fixtures:
+`tests/fixtures/hev1-retag/make_fixture.sh`.
+
+**Tests.** `tests/test-hev1-retag.mjs` (box walking with moov at the end, moov
+first, fragmented, two tracks; patched bytes equal ffmpeg's `-tag:v hvc1` twins
+byte for byte; incomplete hvcC; no patch and no throw on avc1, hvc1, truncated,
+garbage; the probe reads 68 KiB of a 20 MB file; gate, identity, cache, note),
+`tests/e2e/hev1-retag.mjs` (Chromium; `BROWSER=webkit` plays the patched file
+end to end), `tests/test-video-codec-diagnosis.js` (desktop message).
 
 ### loading/video-codec-diagnosis.js
 
@@ -13148,13 +13233,24 @@ browser claims support — the original error then stands.
 
 **Key exports.**
 - `sniffMp4VideoCodec(source)` → `{fourcc, codecName}|null` (File/Blob/URL).
+- `parseBoxHeader(bytes, at?)` → `{size, type, header}|null` — one MP4 box
+  header (64-bit `largesize` read; size 0 left for the caller). Pure; shared
+  with `loading/hev1-retag.js`.
+- `codecPlayable(fourcc, canPlayType?)` — canPlayType with the representative
+  codecs= string for that fourcc (`PROBE_CODECS`); the `supported()` test of
+  `explainUnplayableCodec` and hev1-retag's gate.
 - `videoFourccFromMoov(moovBytes)` — first video sample-entry fourcc in a `moov`.
 - `explainUnplayableCodec(fourcc, fileName, env?)` → `{fourcc, codecName, kind,
   message, title?, why?, steps?, command?}|null`; pure (`env.canPlayType`,
-  `env.isSafari`, `env.isChromium`, `env.renderer` injectable). Kinds:
+  `env.isSafari`, `env.isChromium`, `env.renderer`, `env.desktop` injectable). Kinds:
   `hevc-hev1-tag`, `av1-unsupported`, `hevc-no-gpu`, `hevc-gpu-no-decode`,
   `hevc-unsupported`, `unsupported`, `encrypted`. The three HEVC-unsupported
   kinds carry `title`/`why`/`steps` for `ui/video-codec-notice.js`.
+  `hevc-hev1-tag` now reaches the user only when `loading/hev1-retag.js` could
+  not play the file as `hvc1` (its hvcC lacks VPS/SPS/PPS); its message keeps
+  the ffmpeg re-tag and drops "or open the project in Chrome or Firefox" inside
+  the desktop app (`window.lucidDesktop`, or `env.desktop`), whose engine is
+  the one that refused it.
 - `graphicsRenderer()` — WebGL's unmasked renderer string, cached ('' unknown).
 - `rendererHasGpu(renderer)` → true / false (software or virtual adapter) / null.
 - `diagnoseUnplayableVideo(source, fileName?, env?)` — sniff + explain.
@@ -13165,7 +13261,8 @@ browser claims support — the original error then stands.
 (`readBlobRange`: a cloud file still downloading).
 
 **Imported by.** `loading/video.js` (`OnDemandVideoDecoder._awaitPlayable`),
-`loading/session-loader.js` (`videoLoadFailureText`).
+`loading/session-loader.js` (`videoLoadFailureText`), `loading/hev1-retag.js`
+(`parseBoxHeader`, `codecPlayable`).
 
 **Tests.** `tests/test-video-codec-diagnosis.js` (synthetic MP4s, every message
 kind, renderer classes, decoder integration); real browsers via the
@@ -13713,11 +13810,30 @@ the cursor, so only this `e.altKey` early return keeps an Option+scroll there
 from zooming the view mid-rotation. Pinned by the margin check in
 `tests/e2e/alt-wheel-rotate-instance.mjs`.
 
+**`init()` / `switchSource()` are the one choke point for HEVC tagged `hev1`
+(`loading/hev1-retag.js`).** Both first replace a File source with
+`playbackSourceFor(source)`: on an engine whose `<video>` plays `hvc1` but not
+`hev1` (Safari, the macOS app's WKWebView) a disk-backed re-tagged view of the
+File, before the first play attempt; elsewhere the File itself, synchronously
+(no await, so Chrome and Firefox run exactly as before). Everything after reads
+`this.file` / `this._source` / the local `source`: the `<video>` blob URL,
+`_peekHTML5`, mp4box's `readChunk`, `_initMediabunny`'s `guardedRangeSource`,
+`_awaitPlayable`'s codec diagnosis, and outside the class
+`ui/image-embedder.js` (`d.file`) and `ui/seekbar-preview.js` (`d._source`).
+Every loader reaches video through these two methods (session folders per camera
+and single-SLP, multi-session switches, campy folders, the Videos prompt and
+camera prompt cells, lazy project reopen, project open in `save-load.js`,
+relink / add-matching-videos in `slp-import.js`, the demo). Callers keep the
+ORIGINAL File in `state.videoFiles[i].file` (names, `videoPath`, what a save
+writes); a later `switchSource(original)` gets the same patched object back.
+Test: `tests/e2e/hev1-retag.mjs`.
+
 **Imports from project modules.** `ui/keyboard-target.js` — the
 `shouldIgnoreShortcut` guard its `setupKeyboardHandlers` keydown listener
 applies; that module imports nothing itself — and
 `loading/video-codec-diagnosis.js` (`diagnoseUnplayableVideo`, for
-`_awaitPlayable`) — and `loading/cold-read-guard.js`: `_initMediabunny` builds
+`_awaitPlayable`) — and `loading/hev1-retag.js` (`playbackSourceFor`, in
+`init` and `switchSource`) — and `loading/cold-read-guard.js`: `_initMediabunny` builds
 the frame-accurate backend with `MediaBunnyVideoBackend.fromRangeSource` over
 `guardedRangeSource(file)` (falling back to `fromBlob` when a bundle lacks it),
 and `readChunk` (mp4box's index scan) reads through `readBlobRange`, so both

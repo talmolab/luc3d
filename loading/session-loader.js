@@ -34,6 +34,7 @@ import {
 
 import { OnDemandVideoDecoder, VideoController, releaseViewsFrames } from './video.js';
 import { videoLoadFailureText } from './video-codec-diagnosis.js';
+import { withHev1RetagNote } from './hev1-retag.js';
 import { fileSystemAccessHint, canReadDirectoryHandles } from '../ui/browser-hints.js';
 import { directoryHandleFromFileList } from './file-list-directory.js';
 import { confirmFolderPick } from '../ui/folder-confirm-tip.js';
@@ -441,7 +442,9 @@ export async function handleLoadVideos() {
         } else if (failedVideos.length > 0) {
             setStatus('Loaded ' + state.views.length + ' view(s), ' + failedVideos.length + ' failed: ' + failedVideos.join('; '), 'warning');
         } else {
-            setStatus('Loaded ' + files.length + ' video(s), ' + state.views.length + ' views active', 'success');
+            // + "played N HEVC video(s) tagged hev1 as hvc1" where the engine
+            // needed it (loading/hev1-retag.js)
+            setStatus(withHev1RetagNote('Loaded ' + files.length + ' video(s), ' + state.views.length + ' views active', newVideoFiles), 'success');
         }
         noteUnplayableVideos(codecFailures, files.length);
     } catch (err) {
@@ -2630,7 +2633,7 @@ export async function handleLoadSessionFolderSingleSlp() {
             finalMsg = 'Loaded session from ' + slpFile.name + ' — its planes were not added: ' + planeConflict;
             finalKind = 'warning';
         } else {
-            finalMsg = 'Loaded session from ' + slpFile.name + ' (' + videoFiles.length + ' videos)';
+            finalMsg = withHev1RetagNote('Loaded session from ' + slpFile.name + ' (' + videoFiles.length + ' videos)', videoFiles);
             finalKind = 'success';
         }
         var campyFinal = withCampyWarnings(finalMsg, finalKind, session.campyRecording);
@@ -3129,9 +3132,9 @@ export async function handleLoadProjectSlpLazy(slpFile, opts) {
         }
         updateInfoPanel();
         if (videosAttached) {
-            var lazyStatus = withCampyWarnings('Reopened ' + slpFile.name + ' — '
+            var lazyStatus = withCampyWarnings(withHev1RetagNote('Reopened ' + slpFile.name + ' — '
                 + session.instanceGroups.size.toLocaleString('en-US')
-                + ' grouped frames, ' + state.views.length + ' videos', 'success', session.campyRecording);
+                + ' grouped frames, ' + state.views.length + ' videos', state.videoFiles), 'success', session.campyRecording);
             lazyStatus = withCompactNote(lazyStatus.message, lazyStatus.kind, session);
             setStatus(lazyStatus.message, lazyStatus.kind);
         } else {
@@ -4156,6 +4159,11 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             statusMsg += ' — newer .slp present but not loaded: ' + staleWarnings.join('; ');
             statusKind = 'warning';
         }
+        // Videos played through a hev1 -> hvc1 re-tagged view (hev1-retag.js):
+        // one short clause, last, so it never pushes a failure off the line.
+        // Counted over the videos that LOADED (a failed one played nothing).
+        statusMsg = withHev1RetagNote(statusMsg, (state.session && state.session.videoFileIndices || [])
+            .map(function (i) { return state.videoFiles[i]; }));
         var campyStatus = withCampyWarnings(statusMsg, statusKind, state.session && state.session.campyRecording);
         setStatus(campyStatus.message, campyStatus.kind);
         noteUnplayableVideos(videoFailures, nVideosToLoad);
