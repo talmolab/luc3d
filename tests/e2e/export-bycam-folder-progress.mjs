@@ -16,8 +16,9 @@
  *  3. End state: the card is hidden, the modal closed, the files written, and
  *     the status names the folder. Esc mid-camera cancels: the card goes, the
  *     modal comes back, nothing is written for that camera.
- *  5. A reopened (lazy) project builds every camera in ONE sweep ("Reading N
- *     cameras", its frames on the bar), and each camera's file holds that camera
+ *  5. A reopened (lazy) project builds every camera in ONE pass ("Reading N
+ *     cameras", its frames on the bar; the rows are copied from the project's
+ *     store, export-bycam-store-copy.mjs), and each camera's file holds that camera
  *     only — the store's fast path used to re-emit the whole shared project into
  *     every camera's file — with each node's own prediction score (the sweep
  *     used to write the instance score on every node). Files save side by side (both writables open at
@@ -408,6 +409,9 @@ try {
     await closePopup();
 
     console.log('3. Esc mid-camera cancels');
+    // The reopened project's cameras are copied from its store, which is over
+    // in well under a second at 4x: throttle harder so Esc lands mid-copy.
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 20 });
     const cancel = await page.evaluate(async () => {
         window.__card.length = 0; window.__written = {};
         (await import('/ui/export-modals.js')).showSlpExportByCamModal();
