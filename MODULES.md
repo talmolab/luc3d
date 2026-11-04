@@ -14189,7 +14189,11 @@ session's resident/total) rather than truncate silently. Covered by
   refused on a reopened project `.slp` (`SioLazyLoader._sharedStore`): every
   `labelsByCam` entry is then the WHOLE project, and re-emitting it wrote every camera
   (and the 3D session) into each camera's file, or ran the renderer out of memory on a
-  large project. Its output is compressed by the `(lazy re-emit)` bundle patch. For a **lazy session** these route a plain
+  large project. Its output is compressed by the `(lazy re-emit)` bundle patch.
+  `_buildCameraLabeledFrame` (both streaming exporters and `buildSlpLabels`) writes
+  each predicted node's OWN score through `Session.predictedNodeScore`; asking only the
+  instance wrote the instance score onto every node of a lazily loaded prediction
+  (found comparing a real 8-camera export from both routes, 2026-11-03). For a **lazy session** these route a plain
   per-camera export through `lazyCameraExportBytes` → `saveSlpToBytes` on the
   camera's already-lazy `Labels` (all frames, memory-bounded) instead of the
   eager `buildSlpLabels*`. The multi-view project save uses the streaming

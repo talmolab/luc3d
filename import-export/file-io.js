@@ -1196,13 +1196,20 @@ function _buildCameraLabeledFrame(session, cameraName, frameIdx, fg, env) {
     // duplicates a track a grouped instance holds (SLEAP forbids two
     // instances sharing a (frame, track) pair).
     var usedTrackIdx = {};
+    // Each node's OWN score (CLAUDE.md "Per-node prediction scores"): a lazy
+    // instance holds none, the store is the only copy, so ask the session, as
+    // the project save does. Asking only the instance wrote the instance score
+    // onto every node of every lazily loaded prediction.
+    var nodeScoreOf = function (sinst) {
+        return function (k) { return session.predictedNodeScore(cameraName, frameIdx, sinst, k); };
+    };
 
     // 1. Grouped UserInstances first (retain their track)
     for (var ii = 0; ii < groupedInstances.length; ii++) {
         var inst = groupedInstances[ii];
         var instIsPred = inst.type === 'predicted';
         var instScore = inst.score != null ? inst.score : 1.0;
-        var pts = _buildSioPoints(inst, numNodes, instIsPred ? instScore : undefined);
+        var pts = _buildSioPoints(inst, numNodes, instIsPred ? instScore : undefined, null, nodeScoreOf(inst));
         // inst.trackIdx can be null (trackless UserInstance imported
         // from a 2D SLP with track=null). `null >= 0` is true in JS
         // so we need the explicit != null guard before the range check.
@@ -1233,7 +1240,7 @@ function _buildCameraLabeledFrame(session, cameraName, frameIdx, fg, env) {
         var ugInst = ungroupedInstances[ugi];
         var ugIsPred = ugInst.type === 'predicted';
         var ugScore = ugInst.score != null ? ugInst.score : 1.0;
-        var ugPts = _buildSioPoints(ugInst, numNodes, ugIsPred ? ugScore : undefined);
+        var ugPts = _buildSioPoints(ugInst, numNodes, ugIsPred ? ugScore : undefined, null, nodeScoreOf(ugInst));
         var ugTrack = (ugInst.trackIdx != null && ugInst.trackIdx >= 0 &&
             ugInst.trackIdx < tracks.length && !usedTrackIdx[ugInst.trackIdx])
             ? tracks[ugInst.trackIdx] : null;
