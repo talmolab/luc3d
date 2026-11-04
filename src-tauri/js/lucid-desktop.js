@@ -129,6 +129,21 @@
             return systemInfoPromise;
         },
         revealPath: function (path) { return call('reveal_path', { path: String(path) }); },
+        /**
+         * Native OK/Cancel dialog → Promise<boolean>. WKWebView implements no JS
+         * dialogs (`window.confirm()` returns false at once there), so LUCID's
+         * async confirm helpers call this when it exists. `window.confirm` itself
+         * is NOT replaced: it is synchronous and a native dialog cannot be.
+         */
+        confirm: function (message, opts) {
+            opts = opts || {};
+            return call('ask_dialog', {
+                title: opts.title != null ? String(opts.title) : 'LUCID',
+                message: String(message == null ? '' : message),
+                okLabel: opts.okLabel != null ? String(opts.okLabel) : 'OK',
+                cancelLabel: opts.cancelLabel != null ? String(opts.cancelLabel) : 'Cancel',
+            }).then(function (ok) { return ok === true; });
+        },
         openExternal: function (url) { return call('open_external_url', { url: String(url) }); },
         sleapNn: {
             status: function () { return call('sleap_nn_status', {}); },
@@ -156,6 +171,11 @@
             detectGpu: function () { return call('detect_gpu', {}); },
         },
     };
+
+    // Debug/test aid (non-enumerable): how many Blobs the download router holds.
+    Object.defineProperty(lucidDesktop, '_retainedBlobCount', {
+        value: function () { return blobsByUrl.size; }, enumerable: false,
+    });
 
     Object.defineProperty(window, 'lucidDesktop', {
         value: lucidDesktop, writable: false, configurable: false, enumerable: true,
@@ -372,9 +392,16 @@
                     });
                     if (leakRegistry) leakRegistry.register(this, session.id, session);
                 }
-                async write(data) {
-                    var w = this.getWriter();
-                    try { await w.write(data); } finally { w.releaseLock(); }
+                // Like FileSystemWritableFileStream: take the writer, QUEUE the chunk,
+                // release the lock at once, return the write's promise. Overlapping
+                // un-awaited write()/seek()/truncate()/close() calls then queue in
+                // call order instead of throwing "locked".
+                write(data) {
+                    var w;
+                    try { w = this.getWriter(); } catch (e) { return Promise.reject(e); }
+                    var p = w.write(data);
+                    w.releaseLock();
+                    return p;
                 }
                 seek(position) { return this.write({ type: 'seek', position: position }); }
                 truncate(size) { return this.write({ type: 'truncate', size: size }); }
@@ -562,7 +589,7 @@
         URL.createObjectURL = function (obj) {
             var url = origCreateObjectURL.apply(URL, arguments);
             if (typeof Blob !== 'undefined' && obj instanceof Blob) {
-                blobsByUrl.set(url, { blob: obj, revoked: false, timer: null });
+                blobsByUrl.set(url, { blob: obj, revoked: false, consumed: false, timer: null });
             }
             return url;
         };
@@ -570,9 +597,11 @@
     if (typeof origRevokeObjectURL === 'function') {
         URL.revokeObjectURL = function (url) {
             var entry = blobsByUrl.get(url);
-            if (entry && !entry.revoked) {
-                // LUCID revokes synchronously right after a.click(): keep the Blob a while
-                // in case a download of it has not grabbed it yet.
+            if (entry && entry.consumed) {
+                blobsByUrl.delete(url);   // a download already holds it: nothing to keep
+            } else if (entry && !entry.revoked) {
+                // Not grabbed by a download yet: keep the Blob a while in case one
+                // still comes for this URL.
                 entry.revoked = true;
                 entry.timer = setTimeout(function () { blobsByUrl.delete(url); }, REVOKE_GRACE_MS);
             }
@@ -583,9 +612,11 @@
     function takeBlob(url) {
         var entry = blobsByUrl.get(url);
         if (!entry) return null;
-        if (entry.revoked) {   // consumed: release it now rather than at the grace timeout
+        if (entry.revoked) {   // consumed AND revoked: release it now, not at the grace timeout
             clearTimeout(entry.timer);
             blobsByUrl.delete(url);
+        } else {
+            entry.consumed = true;   // dropped as soon as the page revokes the URL
         }
         return entry.blob;
     }
@@ -680,18 +711,33 @@
         return session.commit();
     }
 
+    function errorText(err) {
+        var m = err && typeof err.message === 'string' && err.message ? err.message : String(err);
+        return m.replace(/^NOT_GRANTED:\s*/, 'LUCID was not given access to ');
+    }
+
     function routeDownload(a) {
         var suggested = a.getAttribute('download') || nameFromUrl(a.href || a.getAttribute('href') || '');
         var source = downloadSource(a);
+        var path = null;
         (async function () {
-            var path = await call('pick_save_path', { suggestedName: suggested, filters: filtersForName(suggested) });
+            path = await call('pick_save_path', { suggestedName: suggested, filters: filtersForName(suggested) });
             if (!path) return;   // cancelled: nothing to do
             var blob = await materialize(source);
             source = null;
             await writeBlobToPath(String(path), blob);
             console.info(LOG + ' saved ' + suggested + ' (' + blob.size + ' bytes) to ' + path);
         })().catch(function (err) {
+            // The page has already reported success (it only clicked a link): say
+            // natively that the file was NOT saved, which file, and why.
             console.error(LOG + ' saving ' + suggested + ' failed:', err);
+            var name = path ? baseName(String(path)) : suggested;
+            call('message_dialog', {
+                title: 'Could not save ' + name,
+                message: 'LUCID could not save "' + name + '"' + (path ? ' to ' + path : '') +
+                    '. The file was not saved.\n\n' + errorText(err),
+                kind: 'error',
+            }).catch(function (e2) { console.error(LOG + ' could not show the error dialog:', e2); });
         });
     }
 

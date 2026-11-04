@@ -4296,6 +4296,50 @@ drives REAL Brave (skips when Brave is not installed, `BRAVE=` overrides the
 path): the note with default Shields, none with the per-site exception, none
 in Chromium.
 
+### ui/ask.js
+
+**Purpose.** The ONE place LUCID asks the user a yes/no or text question. The
+macOS desktop app runs in WKWebView, where wry implements none of the JavaScript
+dialog panels: `window.confirm()` returns false and `window.prompt()` null AT
+ONCE, showing nothing (and `alert()` shows nothing), so a direct call silently
+cancels the action. Every app question goes through these Promise-returning
+helpers instead; `tests/test-no-sync-dialogs.mjs` fails on a direct
+`confirm(` / `prompt(` / `alert(` anywhere else in app source.
+In a browser (no `window.lucidDesktop`) each is exactly the old native dialog,
+same text, wrapped in `Promise.resolve`: the dialog still runs synchronously in
+the caller's handler and the await adds only a microtask, so user activation is
+unaffected (every current confirm sits AFTER its picker anyway).
+
+**Key exports.**
+- `askConfirm(message, {title, okLabel, cancelLabel}?)` → `Promise<boolean>`.
+  Browser: `window.confirm(message)` (opts unused). Desktop:
+  `lucidDesktop.confirm(message, opts)` (the shim's native dialog); a shim
+  without it, or a rejected call, falls back to the in-app modal.
+- `askText(message, defaultValue, opts?)` → `Promise<string|null>`. Browser:
+  `window.prompt(message, defaultValue)`. Desktop: the in-app modal with a text
+  field, the default pre-selected; Enter submits, Esc / Cancel → null.
+- `askAlert(message, opts?)` → `Promise<void>`. Browser: `window.alert`.
+  Desktop: the in-app modal with one OK button. (No app call site yet.)
+- `isDesktopShell()` — `window.lucidDesktop` present.
+
+**The in-app modal** (`showAskModal`, internal) is the shared
+`.multi-frame-modal` card plus `.ask-modal` (styles.css: the card is the one
+scroller, `max-height: 90vh`; `.ask-modal-message` keeps line breaks). Its
+keydown listener is capture-phase on `document`, stops Enter/Esc so nothing
+underneath also acts, and is removed on close.
+
+**Imports from project modules.** None.
+
+**Imported by.** `import-export/save-load.js` (New Project, very large save,
+JSON project over 50 MB), `ui/sessions-panes.js` (`removeSession`),
+`ui/ui-wiring.js` (Track ▸ Swap Tracks), `ui/export-modals.js` (JSON labels and
+3D video in-memory confirms), `ui/overlay-export-modal.js` (in-memory confirm).
+
+**Tests.** `tests/test-no-sync-dialogs.mjs` (the guard);
+`tests/e2e/desktop-dialogs.mjs` (desktop: New Project / Delete session through
+`lucidDesktop.confirm`, Swap Tracks through the in-app modal, fallbacks;
+browser: the same native texts, accept / dismiss).
+
 ### ui/folder-confirm-tip.js
 
 **Purpose.** On a Mac, say how to confirm the browser's folder prompt from the
@@ -4819,6 +4863,8 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `./app-state.js` — `state`, `viewport3d`, `timeline`, `getActiveSession`.
 - `./browser-hints.js` — `fileSystemAccessHint` (appended to the 3D-video and
   JSON-export "must be built in memory" confirms in Brave).
+- `./ask.js` — `askConfirm` (those two confirms, awaited; each comes after its
+  save-file picker, so no user activation is spent on it).
 - `../pose/pose-data.js` — `InstanceGroup`, `UnlinkedInstance`, `pooledPoints3d`
   (Group by Identity / Track & Triangulate All store each solve in the slab pool).
 - `../pose/triangulation.js` — `triangulateAndReproject`,
@@ -6127,8 +6173,8 @@ or a folder (individual; the folder handle is deliberately NOT cached to
 `state.exportDirHandle`, which `showSlpExportAllModal` reuses without
 prompting) and streams; below, it buffers and downloads. Declining the picker
 for a large export **cancels** it rather than falling back to the memory buffer;
-with no File System Access API the user gets `exportLabels()`'s `confirm()`
-warning. Cancelling a streamed export leaves a partial `.mp4` on disk, which the
+with no File System Access API the user gets `exportLabels()`'s confirm
+(`askConfirm`, ui/ask.js, after the picker). Cancelling a streamed export leaves a partial `.mp4` on disk, which the
 status message says.
 
 **Settings persistence.** Seeded from the Visibility panel
@@ -6231,6 +6277,7 @@ exported but the amber `?` editing prompt is not.
 - `./app-state.js` — `state`, `videoController`, `getActiveSession`.
 - `./browser-hints.js` — `fileSystemAccessHint` (appended to the in-memory
   export confirm in Brave).
+- `./ask.js` — `askConfirm` (that confirm).
 - `./viewport3d.js` — `Viewport3D`.
 - `./overlays.js` — `drawFrameOverlays`, `drawLegend`, `drawViewNameLabel`,
   `getTrackColor`, `getGroupColor`, `TRAIL_SHADES`, `DEFAULT_TRAIL_SHADE`,
@@ -8773,7 +8820,9 @@ multi-video docking layout.
   non-CSS counterpart of `applyVideoFilters` (see below).
 - `populateViewStrip`, `populateSessionsPanel`, `populateSessionStrip`.
 - `showMoveVideoModal`.
-- `removeSession`, `switchSession` (async).
+- `removeSession`, `switchSession` (async). `removeSession(idx)` asks through
+  `askConfirm` (ui/ask.js) and, once answered, re-finds the session by identity
+  (the list may have changed meanwhile); resolves false when cancelled.
 
 **Imports from project modules.**
 - `./id-switch-modal.js` — `refreshIdSwitchPanel`: `switchSession` shows the new
@@ -8817,6 +8866,7 @@ multi-video docking layout.
   module), hoist-safe because the only read is inside the view strip's click
   handler, which cannot run during module evaluation.
 - `./info-panel.js` — `updateInfoPanel`, `populateTimelineVisibility`.
+- `./ask.js` — `askConfirm` (`removeSession`).
 - `./loading-progress-modal.js` — `getLoadingProgressModal` (`switchSession`'s
   "Loading videos" progress).
 - `./frame-readout.js` — `clearReadout` (session removed),
@@ -11206,6 +11256,10 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `showOverlayExportModal()` (overlay-export-modal.js); it sits directly above
   File ▸ "Export 3D Video" (`menuExportVideo3d`), which is wired to
   `showExport3DVideoModal()` (export-modals.js).
+- Track ▸ **Swap Tracks** (`menuSwapTracks`): an async handler asking four
+  questions through `askText` (ui/ask.js; native `prompt()` in a browser, an
+  in-app text modal in the desktop app), returning if the active session
+  changed while one was open.
 - Session strip: the **"+"** button (`btnAddSession`) calls
   `handleEmptySession()` to create a fresh empty session directly (inheriting the
   shared project skeleton — the user then adds video via File ▸ Load Videos);
@@ -11387,7 +11441,7 @@ would sit low in grid mode.
 header for the full list. Notable ones: `app-state.js`,
 `timeline-controller.js`, `pose-data.js`, `triangulation.js`
 (incl. `evictLazyFrames`), `lazy-residency.js` (`LAZY_PLAYBACK_AHEAD`),
-`rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`,
+`rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`, `ask.js`,
 `file-io.js`, `session-loader.js`, `video.js`, `tracker.js`,
 `initialization.js`, `identity-assignment.js` (the track/identity helpers,
 Edit Group, `startManualAssignment`, `purgeTriangulationDataForGroup`,
@@ -15184,8 +15238,11 @@ loading-overlay/status-text UI helpers.
   suggested name is the session's name when there is one session. Save Compact
   Copy's picker gets the same `startIn` (else the project file's folder). Covered by
   `tests/e2e/save-opens-in-recording-folder.mjs`.
-- Project: `newProject(force)` (`force` skips the unsaved-changes confirm and
-  is used by the 3D-import reset), `markDirty`, `clearDirty`, `quickSave`,
+- Project: `newProject(force)` → `Promise<boolean>` (reset or not). `force`
+  skips the unsaved-changes confirm and is used by the 3D-import reset; with
+  `force`, or nothing open, the reset (`resetProject`, internal) runs
+  SYNCHRONOUSLY before it returns. Otherwise it asks through `askConfirm`
+  (ui/ask.js) and resets once answered yes. `markDirty`, `clearDirty`, `quickSave`,
   `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject` (routes a
   large `.slp` — over 200 MB, `LARGE_SLP_BYTES` — to the memory-bounded
   `handleLoadProjectSlpLazy` in `loading/session-loader.js` instead of the
@@ -15223,7 +15280,7 @@ loading-overlay/status-text UI helpers.
   `CAGE_WARN_FRACTION` (0.85) of `getCageLimitBytes()` (exported;
   `performance.memory.jsHeapSizeLimit`, else 4 GB) — set above a real project
   known to save at 77% —
-  `window.confirm(...)` warns the user and offers to cancel in favor of
+  `askConfirm(...)` (ui/ask.js) warns the user and offers to cancel in favor of
   per-camera export ("Export SLEAP File Per Session"/"By Cam"). Declining throws
   `SaveCancelledError`, which `quickSave`/`saveProjectSlp` report as "Save
   cancelled" (not "Save failed") — `quickSave` additionally calls
@@ -15322,7 +15379,8 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   `../pose/placeholder-cameras.js` (`ensurePlaceholderCameras`),
   `../ui/browser-hints.js` (`fileSystemAccessHint` — `saveProjectSlp`, the
   download fallback when there is no save-file picker, says why and how to
-  enable it in Brave), `../loading/video.js`, `../demo-data.js`, `./file-io.js`,
+  enable it in Brave), `../ui/ask.js` (`askConfirm` — New Project, the very
+  large save warning, a JSON project over 50 MB), `../loading/video.js`, `../demo-data.js`, `./file-io.js`,
   `../ui/app-state.js`, `../loading/session-loader.js`,
   `../loading/sio-lazy-loader.js` (`SioLazyLoader`, for
   `reopenSessionLazyLoader`), `./slp-streaming-write.js`,

@@ -9,13 +9,14 @@
 mod close_guard;
 mod dialogs;
 mod files;
+mod localhost;
 mod sleap_nn;
 mod system;
 
 use std::borrow::Cow;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::Manager;
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 /// Serve the app cross-origin isolated (COOP + COEP) so SharedArrayBuffer is
 /// available. OFF: LUCID does not need it yet, and COEP `require-corp` would
@@ -30,74 +31,10 @@ fn cross_origin_isolated() -> bool {
     CROSS_ORIGIN_ISOLATED || std::env::var("LUCID_CROSS_ORIGIN_ISOLATED").is_ok_and(|v| v == "1")
 }
 
-/// Print every request the localhost server answers (smoke tests, debugging).
-fn log_requests() -> bool {
-    std::env::var("LUCID_LOG_REQUESTS").is_ok_and(|v| v == "1")
-}
-
-// ---------------------------------------------------------------------------
-// Localhost origin
-// ---------------------------------------------------------------------------
-
-fn port_is_free(port: u16) -> bool {
-    port != 0 && std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
-}
-
-fn pick_free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .and_then(|l| l.local_addr())
-        .map(|a| a.port())
-        .unwrap_or(1430)
-}
-
-/// Resolve the localhost port, preferring the one saved by the last launch.
-///
-/// WKWebView, WebKitGTK and WebView2 key localStorage/IndexedDB by origin
-/// INCLUDING the port, so a new port each launch would silently reset every
-/// browser-local LUCID preference. The port is saved in
-/// `<app config dir>/localhost-port` and reused while free; only when it is
-/// taken (second instance, another program) is a new one picked and saved.
-/// The file I/O is best-effort.
-fn resolve_localhost_port(port_file: Option<PathBuf>) -> u16 {
-    if let Some(saved) = port_file
-        .as_ref()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| s.trim().parse::<u16>().ok())
-        .filter(|&p| port_is_free(p))
-    {
-        return saved;
-    }
-    let port = pick_free_port();
-    if let Some(path) = port_file {
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::write(&path, port.to_string());
-    }
-    port
-}
-
-/// The static capability (capabilities/default.json) re-issued for the
-/// http://localhost:<port> origin. A page on that origin is REMOTE to Tauri,
-/// so the build-time local capability does not cover it, and the port is only
-/// known at launch. Derived from the same file so the two can never drift.
-fn localhost_capability(port: u16) -> String {
-    let mut cap: serde_json::Value =
-        serde_json::from_str(include_str!("../capabilities/default.json"))
-            .expect("capabilities/default.json is valid JSON");
-    let obj = cap.as_object_mut().expect("capability is a JSON object");
-    obj.remove("$schema");
-    obj.insert("identifier".into(), "localhost-dynamic".into());
-    obj.insert(
-        "description".into(),
-        "Runtime grant for the http://localhost origin (tauri-plugin-localhost).".into(),
-    );
-    obj.insert("local".into(), false.into());
-    obj.insert(
-        "remote".into(),
-        serde_json::json!({ "urls": [format!("http://localhost:{port}")] }),
-    );
-    cap.to_string()
+/// `LUCID_LOG=1`: print each request the localhost server answers and each
+/// close-guard change (smoke tests, debugging).
+pub(crate) fn verbose_log() -> bool {
+    std::env::var("LUCID_LOG").is_ok_and(|v| v == "1")
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +75,7 @@ fn lucid_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
             files::reveal_path,
             files::open_external_url,
             dialogs::ask_dialog,
+            dialogs::message_dialog,
             close_guard::set_close_guard,
             close_guard::confirm_close,
             system::system_info,
@@ -150,9 +88,11 @@ fn lucid_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
         .build()
 }
 
+const QUIT_MENU_ID: &str = "lucid-quit";
+
 #[cfg(target_os = "macos")]
 fn set_macos_menu<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
-    use tauri::menu::{MenuBuilder, SubmenuBuilder};
+    use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
     let app_menu = SubmenuBuilder::new(app, "LUCID")
         .about(None)
         .separator()
@@ -160,7 +100,14 @@ fn set_macos_menu<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
         .hide_others()
         .show_all()
         .separator()
-        .quit()
+        // Not the predefined Quit: that calls NSApp terminate:, which never
+        // emits CloseRequested, so unsaved work would be lost without the
+        // page's check. Ours closes each window through its guard.
+        .item(
+            &MenuItemBuilder::with_id(QUIT_MENU_ID, "Quit LUCID")
+                .accelerator("CmdOrCtrl+Q")
+                .build(app)?,
+        )
         .build()?;
     // NO Undo/Redo: their native Cmd+Z / Cmd+Shift+Z accelerators would eat
     // the keystroke before LUCID's own undo handler sees it.
@@ -211,22 +158,37 @@ pub fn run() {
     let localhost_port = if use_localhost {
         let port_file =
             dirs::config_dir().map(|d| d.join(&context.config().identifier).join("localhost-port"));
-        resolve_localhost_port(port_file)
+        let choice = localhost::resolve_port(port_file.as_deref());
+        if let localhost::PortChoice::Temporary { port, saved } = choice {
+            println!(
+                "[lucid] saved port {saved} is busy (is LUCID already running?); using {port} for this run only, so browser-local settings start empty"
+            );
+        }
+        choice.port()
     } else {
         0
     };
+    // Per-run token the server adds to every response; the self-check in
+    // setup() looks for it.
+    let marker = files::random_suffix();
 
     let mut builder = tauri::Builder::default()
-        .manage(files::GrantState::default())
+        .manage(Arc::new(files::GrantState::default()))
         .manage(Arc::new(files::WriteSessions::default()))
         .manage(close_guard::CloseGuardState::default())
         .manage(sleap_nn::RunningProcess::default())
         .on_window_event(close_guard::handle_window_event)
+        .on_menu_event(|app, event| {
+            if event.id() == QUIT_MENU_ID {
+                close_guard::request_close_all(app);
+            }
+        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(lucid_plugin());
 
     if use_localhost {
-        let log = log_requests();
+        let log = verbose_log();
+        let marker = marker.clone();
         builder = builder.plugin(
             tauri_plugin_localhost::Builder::new(localhost_port)
                 .host("localhost")
@@ -234,6 +196,7 @@ pub fn run() {
                     if log {
                         println!("[lucid] localhost served {}", req.url());
                     }
+                    resp.add_header(localhost::MARKER_HEADER, marker.as_str());
                     if isolated {
                         resp.add_header("Cross-Origin-Opener-Policy", "same-origin");
                         resp.add_header("Cross-Origin-Embedder-Policy", "require-corp");
@@ -248,10 +211,25 @@ pub fn run() {
         set_macos_menu(app)?;
 
         let url = if use_localhost {
+            // Never open the window on someone else's server: the plugin's
+            // server thread panics quietly if it cannot bind, and a program
+            // holding the port would then get our IPC-capable window.
+            if let Err(e) =
+                localhost::self_check(localhost_port, &marker, std::time::Duration::from_secs(5))
+            {
+                eprintln!("[lucid] startup self-check failed: {e}");
+                let handle = app.handle().clone();
+                app.dialog()
+                    .message(format!("LUCID could not start its local server.\n\n{e}"))
+                    .title("LUCID")
+                    .kind(MessageDialogKind::Error)
+                    .show(move |_| handle.exit(1));
+                return Ok(());
+            }
             // Must be granted before the webview loads.
-            app.add_capability(localhost_capability(localhost_port))?;
+            app.add_capability(localhost::capability(localhost_port))?;
             println!(
-                "[lucid] serving frontend at http://localhost:{localhost_port} (cross-origin isolated: {isolated})"
+                "[lucid] self-check ok: serving frontend at http://localhost:{localhost_port} (cross-origin isolated: {isolated})"
             );
             tauri::WebviewUrl::External(
                 format!("http://localhost:{localhost_port}")
@@ -279,55 +257,23 @@ pub fn run() {
         .build(context)
         .expect("error while building tauri application");
 
-    app.run(|app_handle, event| {
-        // Every quit path (incl. macOS Cmd+Q) passes here: delete the temp
-        // files of saves that never committed.
-        if let tauri::RunEvent::Exit = event {
+    app.run(|app_handle, event| match event {
+        tauri::RunEvent::ExitRequested { code, api, .. } => {
+            close_guard::on_exit_requested(app_handle, code, &api);
+        }
+        // Every quit path passes here, including the macOS ones the guard
+        // cannot stop (see close_guard.rs): delete the temp files of saves
+        // that never committed.
+        tauri::RunEvent::Exit => {
             app_handle.state::<Arc<files::WriteSessions>>().abort_all();
         }
+        _ => {}
     });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn localhost_capability_mirrors_default_json() {
-        let local: serde_json::Value =
-            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
-        let remote: serde_json::Value = serde_json::from_str(&localhost_capability(4321)).unwrap();
-        assert_eq!(remote["permissions"], local["permissions"]);
-        assert_eq!(remote["windows"], local["windows"]);
-        assert_eq!(remote["local"], false);
-        assert_eq!(remote["remote"]["urls"][0], "http://localhost:4321");
-        assert_ne!(remote["identifier"], local["identifier"]);
-        assert!(remote.get("$schema").is_none());
-        let perms: Vec<&str> = remote["permissions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|p| p.as_str())
-            .collect();
-        assert!(perms.contains(&"lucid:default"));
-    }
-
-    #[test]
-    fn persisted_port_is_reused_while_free() {
-        let dir = std::env::temp_dir().join(format!("lucid-port-{}", std::process::id()));
-        let file = dir.join("sub").join("localhost-port");
-        let _ = std::fs::remove_dir_all(&dir);
-        let first = resolve_localhost_port(Some(file.clone()));
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), first.to_string());
-        assert_eq!(resolve_localhost_port(Some(file.clone())), first);
-
-        // Saved port busy -> a different port, and the file is rewritten.
-        let _hold = std::net::TcpListener::bind(("127.0.0.1", first)).unwrap();
-        let second = resolve_localhost_port(Some(file.clone()));
-        assert_ne!(second, first);
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), second.to_string());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 
     /// build.rs (ACL permissions) and generate_handler! (dispatch) must list
     /// the same commands, or a command is either unreachable or unpermitted.
@@ -348,7 +294,7 @@ mod tests {
             .map(|s| s.rsplit("::").next().unwrap())
             .collect();
 
-        assert_eq!(from_build.len(), 22);
+        assert_eq!(from_build.len(), 23);
         from_build.sort_unstable();
         from_lib.sort_unstable();
         assert_eq!(from_build, from_lib);

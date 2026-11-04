@@ -53,6 +53,7 @@ import {
 } from './overlay-export-layout.js';
 import { createMp4Writer, videoEncodingAvailable } from './video-encode.js';
 import { fileSystemAccessHint } from './browser-hints.js';
+import { askConfirm } from './ask.js';
 // The main window's per-camera display settings. `ui/video-filters.js` imports NO
 // project modules, so this adds no cycle — and going through the SAME
 // `buildVideoFilter` the live canvases use is what stops the export drifting from
@@ -1928,9 +1929,10 @@ export function showOverlayExportModal() {
                 // to be built in memory. Mirror the JSON exporter and let the
                 // user decide instead of risking the tab silently.
                 var fsaHint = fileSystemAccessHint();
-                if (!window.confirm('This export is about ' + fmtBytes(estTotal) + '. Without a ' +
+                if (!(await askConfirm('This export is about ' + fmtBytes(estTotal) + '. Without a ' +
                     'save-file picker it must be built entirely in memory, which may crash the ' +
-                    'tab.' + (fsaHint ? '\n\n' + fsaHint : '') + '\n\nExport anyway?')) {
+                    'tab.' + (fsaHint ? '\n\n' + fsaHint : '') + '\n\nExport anyway?',
+                    { title: 'Export Overlay Video', okLabel: 'Export Anyway' }))) {
                     abortExport('Overlay video export cancelled');
                     return;
                 }

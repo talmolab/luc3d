@@ -119,7 +119,8 @@ function installMock(cfg) {
         if (bytes) writeAt(f, 0, bytes);
         return f;
     };
-    const queues = { savePaths: [], dirPaths: [], askAnswers: [] };
+    // failWrites: final paths whose write_chunk fails (a full disk, a vanished volume).
+    const queues = { savePaths: [], dirPaths: [], askAnswers: [], failWrites: new Set() };
     const sleep0 = () => new Promise(r => setTimeout(r, 0));
 
     const handlers = {
@@ -180,6 +181,7 @@ function installMock(cfg) {
             const w = writes.get(id);
             if (!w) fail('no write session ' + id);
             if (!Number.isFinite(off) || off < 0) fail('bad offset');
+            if (queues.failWrites.has(w.final)) fail('No space left on device (os error 28)');
             const bytes = body instanceof Uint8Array ? body : new Uint8Array(body);
             chunks.push({ id, offset: off, len: bytes.length, wholeBuffer: bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength });
             writeAt(fileOf(w.temp), off, bytes);
@@ -209,6 +211,10 @@ function installMock(cfg) {
             return null;
         },
         reveal_path() { return null; },
+        message_dialog({ title, message, kind }) {
+            if (typeof title !== 'string' || typeof message !== 'string' || !['info', 'warning', 'error'].includes(kind)) fail('bad message_dialog args');
+            return null;
+        },
         open_external_url({ url }) { if (!/^(https?|mailto):/.test(url)) fail('scheme'); return null; },
         ask_dialog() { return queues.askAnswers.length ? queues.askAnswers.shift() : false; },
         set_close_guard() { return null; },
@@ -284,9 +290,10 @@ async function newShimPage(cfg, { twice = false } = {}) {
     const page = await browser.newPage();
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 400)); fails++; });
     page.on('console', m => {
-        // §c fetches a revoked blob: URL on purpose (ERR_FILE_NOT_FOUND).
+        // §c fetches a revoked blob: URL on purpose (ERR_FILE_NOT_FOUND); §f fails a download on purpose.
         const loc = (m.location && m.location().url) || '';
-        if (m.type() === 'error' && !/ERR_FILE_NOT_FOUND/.test(m.text()) && !loc.startsWith('blob:')) console.log('  [console.error]', m.text().slice(0, 300));
+        if (m.type() === 'error' && !/ERR_FILE_NOT_FOUND/.test(m.text()) && !loc.startsWith('blob:') &&
+            !/saving fail\.csv failed/.test(m.text())) console.log('  [console.error]', m.text().slice(0, 300));
     });
     await page.route('**/__desktop_shim_blank.html', route => route.fulfill({
         status: 200, contentType: 'text/html', body: '<!doctype html><html><head><title>blank</title></head><body><p>blank</p></body></html>',
@@ -363,6 +370,16 @@ try {
             writer.write({ type: 'write', data: Uint8Array.of(5), position: 6 });
             await writer.close();
             out.c = arr('/out/c.bin');
+
+            // the helper methods release the writer lock once the chunk is queued:
+            // overlapping un-awaited write()/seek()/close() must queue, not throw "locked"
+            M.queues.savePaths.push('/out/d.txt');
+            const hd = await showSaveFilePicker({});
+            const wd = await hd.createWritable();
+            const settled = await Promise.allSettled([
+                wd.write('hello '), wd.write(new Blob(['world'])), wd.seek(0), wd.write('J'), wd.close(),
+            ]);
+            out.overlap = { states: settled.map(x => x.status + (x.reason ? ':' + x.reason.name : '')), text: M.text('/out/d.txt'), locked: wd.locked };
 
             // overwrite: nothing visible until close; then exactly the new bytes
             const wo = await h.createWritable();
@@ -466,6 +483,8 @@ try {
         check(JSON.stringify(r.b) === JSON.stringify([97, 98, 99, 90, 0, 0, 0, 0, ...r.bExpectTail]),
             'truncate clamps the cursor; an offset view writes only its own bytes; a write past EOF pads with zeros', r.b);
         check(JSON.stringify(r.c) === JSON.stringify([1, 1, 1, 1, 4, 4, 5]), 'getWriter() with un-awaited {type:"write",position} chunks (StreamTarget) lands in order', r.c);
+        check(r.overlap.states.every(x => x === 'fulfilled') && r.overlap.text === 'Jello world' && r.overlap.locked === false,
+            'two un-awaited write()s + seek + write + close(): no "locked" error, bytes in call order', r.overlap);
         check(r.duringOverwrite === 12 && r.afterOverwrite === 'new', 'Save over an existing file: old bytes intact until close, then exactly the new bytes', r);
         check(r.afterAbort === 'new' && r.tempsAfterAbort === 0, 'abort() leaves the target untouched and deletes the temp', r);
         check(r.keep === 'XYcdef', 'keepExistingData copies the file and the cursor starts at 0', r.keep);
@@ -907,6 +926,53 @@ try {
             await window.lucidDesktop.revealPath('/dl/report.csv');
             out.reveal = M.callsOf('reveal_path').map(c => c.args);
             out.platform = window.lucidDesktop.platform;
+
+            // a routed download that fails: native error naming the file and the reason
+            M.queues.savePaths.push('/dl/fail.csv');
+            M.queues.failWrites.add('/dl/fail.csv');
+            const nMsg = M.callsOf('message_dialog').length;
+            const fa = document.createElement('a');
+            fa.href = URL.createObjectURL(new Blob(['x,y\n']));
+            fa.download = 'fail.csv';
+            fa.click();
+            URL.revokeObjectURL(fa.href);
+            while (M.callsOf('message_dialog').length === nMsg) await new Promise(r => setTimeout(r, 20));
+            out.failDialog = M.callsOf('message_dialog').at(-1).args;
+            out.failFile = M.read('/dl/fail.csv');
+            out.failTemps = M.temps().length;
+            // a cancelled routed download shows nothing
+            const nMsg2 = M.callsOf('message_dialog').length;
+            const ca = document.createElement('a');
+            ca.href = 'data:text/plain,x'; ca.download = 'cancel.txt';
+            ca.click();
+            await new Promise(r => setTimeout(r, 150));
+            out.cancelDialogs = M.callsOf('message_dialog').length - nMsg2;
+
+            // Blob retention: consumed then revoked → dropped at once; revoked unconsumed → kept (grace)
+            const ld = window.lucidDesktop;
+            const base = ld._retainedBlobCount();
+            M.queues.savePaths.push('/dl/r1.txt');
+            const ra = document.createElement('a');
+            ra.href = URL.createObjectURL(new Blob(['r1']));
+            ra.download = 'r1.txt';
+            ra.click();                                 // consumed before the revoke
+            out.retainAfterClick = ld._retainedBlobCount() - base;
+            URL.revokeObjectURL(ra.href);
+            out.retainAfterRevoke = ld._retainedBlobCount() - base;
+            const lone = URL.createObjectURL(new Blob(['never clicked']));
+            URL.revokeObjectURL(lone);
+            out.retainUnconsumedRevoked = ld._retainedBlobCount() - base;
+            while (!M.read('/dl/r1.txt')) await new Promise(r => setTimeout(r, 20));
+            out.r1 = M.text('/dl/r1.txt');
+
+            // lucidDesktop.confirm → ask_dialog; window.confirm untouched
+            M.queues.askAnswers.push(true, false);
+            const nAsk = M.callsOf('ask_dialog').length;
+            out.confirm1 = await ld.confirm('Delete 3 planes?');
+            out.confirm2 = await ld.confirm('Overwrite?', { title: 'Export', okLabel: 'Overwrite', cancelLabel: 'Keep' });
+            out.confirmArgs = M.callsOf('ask_dialog').slice(nAsk).map(c => c.args);
+            out.confirmIsPromise = ld.confirm('x') instanceof Promise;
+            out.nativeConfirm = /\[native code\]/.test(String(window.confirm)) && /\[native code\]/.test(String(window.prompt));
             return out;
         });
         if (IS_CHROMIUM) check(r.fsaWriteOnly === false && r.sspNative && r.sdpNative, 'WebView2 (native API present): no picker polyfills, fsaWriteOnly false', r);
@@ -922,6 +988,18 @@ try {
             'same-origin target=_blank and plain links are left to the default', r.seen);
         check(r.run === true && r.events.length === 3 && r.events[0].data.line === 'uv run x' && r.events[2].event === 'finished',
             'sleapNn.runPythonCommand streams ProcessEvents through a Channel', r.events);
+        check(r.failDialog.kind === 'error' && /fail\.csv/.test(r.failDialog.title) && /\/dl\/fail\.csv/.test(r.failDialog.message) &&
+            /No space left on device/.test(r.failDialog.message) && r.failFile === null && r.failTemps === 0,
+            'a failed routed download → native error dialog naming the file, its path and the reason; nothing left on disk', r.failDialog);
+        check(r.cancelDialogs === 0, 'a cancelled routed download shows no dialog');
+        check(r.retainAfterClick === 1 && r.retainAfterRevoke === 0 && r.retainUnconsumedRevoked === 1 && r.r1 === 'r1',
+            'a Blob consumed by a download is dropped as soon as it is revoked; an unconsumed revoked one is kept for the grace period', r);
+        check(r.confirm1 === true && r.confirm2 === false && r.confirmIsPromise &&
+            JSON.stringify(r.confirmArgs) === JSON.stringify([
+                { title: 'LUCID', message: 'Delete 3 planes?', okLabel: 'OK', cancelLabel: 'Cancel' },
+                { title: 'Export', message: 'Overwrite?', okLabel: 'Overwrite', cancelLabel: 'Keep' }]),
+            'lucidDesktop.confirm(message, opts) → ask_dialog with defaults LUCID / OK / Cancel, resolves to a boolean', r.confirmArgs);
+        check(r.nativeConfirm, 'window.confirm / window.prompt are not overridden');
         check(r.status.available === false && r.gpu === 'cpu' && r.sys === true && JSON.stringify(r.reveal) === '[{"path":"/dl/report.csv"}]' && (IS_CHROMIUM ? r.platform === 'linux' : ['macos', 'linux'].includes(r.platform)),
             'sleapNn.status/detectGpu, systemInfo, revealPath, platform', r);
         await page.close();

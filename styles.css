@@ -1524,6 +1524,21 @@ button.tri-dropdown-item:disabled {
   border-radius: 4px;
 }
 
+/* ui/ask.js in-app question (desktop app: WKWebView shows no confirm/prompt).
+   The card is the one scroller; the message keeps its line breaks. */
+.multi-frame-modal.ask-modal {
+  max-height: 90vh;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.multi-frame-modal p.ask-modal-message {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+}
+
 /* Read-only (reference) list, e.g. current tracks in the New modal */
 .rename-list.readonly .rename-list-item {
   cursor: default;

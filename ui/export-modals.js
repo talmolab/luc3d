@@ -53,6 +53,7 @@ import { createMp4Writer, videoEncodingAvailable } from './video-encode.js';
 import { fileSystemAccessHint } from './browser-hints.js';
 import { pickExportFolder } from '../loading/folder-picker-start.js';
 import { chooseProofreadSource, proofreadSlpName } from '../loading/percam-slp-choice.js';
+import { askConfirm } from './ask.js';
 import { noteTriangulateRun } from '../pose/run-state.js';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
@@ -2916,10 +2917,11 @@ export async function exportLabels() {
         // No streaming target: the whole document has to be held in memory.
         var BIG = 20000;
         var fsaHintJson = fileSystemAccessHint();
-        if (totalFrames > BIG && !window.confirm(
+        if (totalFrames > BIG && !(await askConfirm(
             'This project has ' + totalFrames.toLocaleString() + ' frames. Without a ' +
             'save-file picker the whole JSON export must be built in memory, which ' +
-            'may crash the tab.' + (fsaHintJson ? '\n\n' + fsaHintJson : '') + '\n\nExport anyway?')) {
+            'may crash the tab.' + (fsaHintJson ? '\n\n' + fsaHintJson : '') + '\n\nExport anyway?',
+            { title: 'Export Labels', okLabel: 'Export Anyway' }))) {
             setStatus('Export cancelled', 'warning');
             return;
         }
@@ -3536,9 +3538,10 @@ export function showExport3DVideoModal() {
                 }
             }
             var fsaHint3d = fileSystemAccessHint();
-            if (!fileHandle && !window.confirm('This clip is about ' + _fmtBytes(estBytes) +
+            if (!fileHandle && !(await askConfirm('This clip is about ' + _fmtBytes(estBytes) +
                 '. Without a save-file picker it must be built entirely in memory, which may ' +
-                'crash the tab.' + (fsaHint3d ? '\n\n' + fsaHint3d : '') + '\n\nExport anyway?')) {
+                'crash the tab.' + (fsaHint3d ? '\n\n' + fsaHint3d : '') + '\n\nExport anyway?',
+                { title: 'Export 3D Video', okLabel: 'Export Anyway' }))) {
                 setStatus('3D video export cancelled', 'warning');
                 exporting = false;
                 cleanup();
