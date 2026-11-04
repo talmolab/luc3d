@@ -53,12 +53,12 @@
  * streams from the columnar store untouched.
  */
 
-import { _buildSioPoints } from './file-io.js?v=5218bd70632b';
-import { points3dNodeCount } from '../pose/pose-data.js?v=5218bd70632b';
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=5218bd70632b';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=5218bd70632b';
-import { writePlaneMetadata } from './plane-metadata.js?v=5218bd70632b';
-import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=5218bd70632b';
+import { _buildSioPoints } from './file-io.js?v=105c3548acce';
+import { points3dNodeCount } from '../pose/pose-data.js?v=105c3548acce';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=105c3548acce';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=105c3548acce';
+import { writePlaneMetadata } from './plane-metadata.js?v=105c3548acce';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=105c3548acce';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;

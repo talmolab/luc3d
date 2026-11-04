@@ -8,9 +8,9 @@
 //
 // Extracted from app.js per the consolidated Pass 3 plan, Module 13.
 
-import { noteProgress } from './progress-delta.js?v=5218bd70632b';
-import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=5218bd70632b';
-import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=5218bd70632b';
+import { noteProgress } from './progress-delta.js?v=105c3548acce';
+import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=105c3548acce';
+import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=105c3548acce';
 import {
     triangulateAndReproject,
     frameHasGroupedUserInstances,
@@ -26,36 +26,38 @@ import {
     triangulationSettingsKey,
     triangulationMethodLabel,
     dropAllDerivedTriangulationState,
-} from '../pose/triangulation.js?v=5218bd70632b';
-import { Viewport3D } from './viewport3d.js?v=5218bd70632b';
-import { getTrackColor, getGroupColor } from './overlays.js?v=5218bd70632b';
-import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=5218bd70632b';
-import { updateInfoPanel } from './info-panel.js?v=5218bd70632b';
-import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=5218bd70632b';
-import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js?v=5218bd70632b';
-import { createGroupSolver } from '../pose/triangulation-pool.js?v=5218bd70632b';
+} from '../pose/triangulation.js?v=105c3548acce';
+import { Viewport3D } from './viewport3d.js?v=105c3548acce';
+import { getTrackColor, getGroupColor } from './overlays.js?v=105c3548acce';
+import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=105c3548acce';
+import { updateInfoPanel } from './info-panel.js?v=105c3548acce';
+import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=105c3548acce';
+import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js?v=105c3548acce';
+import { createGroupSolver } from '../pose/triangulation-pool.js?v=105c3548acce';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
+    exportCamerasSlpStreaming,
+    cameraExportUsesSweep,
     findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
-} from '../import-export/file-io.js?v=5218bd70632b';
+} from '../import-export/file-io.js?v=105c3548acce';
 
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from '../pose/initialization.js?v=5218bd70632b';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=5218bd70632b';
-import { fileSystemAccessHint } from './browser-hints.js?v=5218bd70632b';
-import { pickExportFolder } from '../loading/folder-picker-start.js?v=5218bd70632b';
-import { chooseProofreadSource, proofreadSlpName } from '../loading/percam-slp-choice.js?v=5218bd70632b';
-import { noteTriangulateRun } from '../pose/run-state.js?v=5218bd70632b';
+import { update3DViewport } from '../pose/initialization.js?v=105c3548acce';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=105c3548acce';
+import { fileSystemAccessHint } from './browser-hints.js?v=105c3548acce';
+import { pickExportFolder } from '../loading/folder-picker-start.js?v=105c3548acce';
+import { chooseProofreadSource, proofreadSlpName } from '../loading/percam-slp-choice.js?v=105c3548acce';
+import { noteTriangulateRun } from '../pose/run-state.js?v=105c3548acce';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
 // private copies of all four and had silently drifted apart (a 2x bitrate floor
 // gap at the smallest tier, and two disagreeing level tables).
 import {
     RES_PRESETS, bitrateFor, estimatedBytes, h264CodecFor, shouldStreamToDisk,
-} from './overlay-export-layout.js?v=5218bd70632b';
+} from './overlay-export-layout.js?v=105c3548acce';
 
 // ============================================
 // Group by Track & Triangulate All
@@ -1848,30 +1850,75 @@ export function showSlpExportByCamModal() {
             }
         }
 
-        // Progress: the app's card (ui/loading-overlay.js), one step per camera.
-        // A camera the streaming writer sweeps counts its frames on the bar; a
-        // camera written in one go (the store re-emitted, or a fully loaded
-        // project) shows the spinner. The modal sits above the card's layer, so
-        // it steps aside for the run and comes back on cancel or failure.
+        // Cameras the streaming writer would sweep one by one (a lazy project
+        // that would truncate) are built in ONE sweep per session: hydrating the
+        // frames is nearly all of a sweep's cost, so 8 cameras cost about one.
+        var sweepGroups = [];   // [{ session, cams: [camName], sels: [selection] }]
+        var prebuilt = {};      // camName -> bytes from the shared sweep
+        cols.forEach(function (cn) {
+            var sels = buildColumnSelections(cn);
+            if (sels.length !== 1 || !cameraExportUsesSweep(sels[0], reprojAsUser, instanceFilter)) return;
+            var g = sweepGroups.find(function (x) { return x.session === sels[0].session; });
+            if (!g) sweepGroups.push(g = { session: sels[0].session, cams: [], sels: [] });
+            g.cams.push(cn);
+            g.sels.push(sels[0]);
+        });
+
+        // Progress: the app's card (ui/loading-overlay.js). The shared sweep is
+        // a step of its own, its frames on the bar; then one step per camera: a
+        // camera built here in one go (the store re-emitted, or a fully loaded
+        // project) shows the spinner while it builds. Files save in the
+        // background, up to SAVES_IN_FLIGHT at once: over an SMB share Chrome's
+        // close() reads each file back slowly, so one file's wait need not hold
+        // up the next. The modal sits above the card's layer, so it steps aside
+        // for the run and comes back on cancel or failure.
+        var SAVES_IN_FLIGHT = 4;
         var title = 'Export SLEAP by Camera';
-        var steps = cols.length;
+        var sweepSteps = sweepGroups.length;
+        var steps = sweepSteps + cols.length;
         function cardOpts(step, extra) {
             return Object.assign({ title: title, step: step, steps: steps, detail: 'Esc cancels' }, extra || {});
+        }
+        function onSweepProgress(step, label) {
+            return function (done, total) {
+                if (cancelled) throw new ExportCancelled();
+                showLoadingProgress(label, done, total, cardOpts(step));
+            };
         }
         exporting = true;
         cancelled = false;
         dlAllBtn.disabled = true;
         overlay.style.display = 'none';
         var exported = 0, inCameraFolders = 0;
+        var saving = [];   // saves in flight, oldest first
         var succeeded = false;
         var failure = null;
+        async function saveFile(target, blob) {
+            var fh = await target.dir.getFileHandle(target.name, { create: true });
+            var writable = await fh.createWritable();
+            await writable.write(blob);
+            await writable.close();
+            exported++;
+            if (target.inCameraFolder) inCameraFolders++;
+        }
         try {
+            for (var g = 0; g < sweepGroups.length && !cancelled; g++) {
+                var grp = sweepGroups[g];
+                var label = 'Reading ' + grp.cams.length + ' camera' + (grp.cams.length === 1 ? '' : 's');
+                showLoading(label + '…', cardOpts(g + 1));
+                await yieldToPaint();
+                var sweptBytes = await exportCamerasSlpStreaming(grp.session,
+                    grp.sels.map(function (sel) { return { cameraName: sel.cameraName, videoFileInfo: sel.videoFileInfo }; }),
+                    reprojAsUser, instanceFilter, { onProgress: onSweepProgress(g + 1, label) });
+                grp.cams.forEach(function (cn, k) { prebuilt[cn] = sweptBytes[k]; });
+            }
             for (var i = 0; i < cols.length; i++) {
                 if (cancelled) break;
                 var camName = cols[i];
+                var step = sweepSteps + i + 1;
                 var target;
                 if (useDirectory) {
-                    showLoading('Finding ' + camName + '\'s folder…', cardOpts(i + 1));
+                    showLoading('Finding ' + camName + '\'s folder…', cardOpts(step));
                     target = await cameraTarget(dirHandle, camName);
                 } else {
                     // Downloads land flat; still named after the source when the load recorded it.
@@ -1880,31 +1927,36 @@ export function showSlpExportByCamModal() {
                     var dlName = dlSrc ? proofreadSlpName(dlSrc) : sanitizeFilename(camName);
                     target = { dir: null, name: dlName, path: dlName, inCameraFolder: false };
                 }
-                var outName = target.name;
-                showLoading('Writing ' + target.path + '…', cardOpts(i + 1));
-                await yieldToPaint();   // paint before a one-step camera holds the thread
-                if (cancelled) break;
-                var selections = buildColumnSelections(camName);
-                var blob = await exportSlpMultiSession(selections, reprojAsUser, instanceFilter, {
-                    onProgress: (function (step, label) {
-                        return function (done, total) {
-                            if (cancelled) throw new ExportCancelled();
-                            showLoadingProgress(label, done, total, cardOpts(step));
-                        };
-                    })(i + 1, camName),
-                });
-                if (cancelled) break;
-                if (useDirectory) {
-                    showLoading('Saving ' + target.path + ' in ' + dirHandle.name + '…', cardOpts(i + 1));
-                    var fh = await target.dir.getFileHandle(outName, { create: true });
-                    var writable = await fh.createWritable();
-                    await writable.write(blob);
-                    await writable.close();
+                var blob;
+                if (prebuilt[camName]) {
+                    blob = new Blob([prebuilt[camName]], { type: 'application/x-hdf5' });
+                    prebuilt[camName] = null;
                 } else {
-                    downloadBlob(blob, outName);
+                    showLoading('Writing ' + target.path + '…', cardOpts(step));
+                    await yieldToPaint();   // paint before a one-step camera holds the thread
+                    if (cancelled) break;
+                    blob = await exportSlpMultiSession(buildColumnSelections(camName), reprojAsUser, instanceFilter,
+                        { onProgress: onSweepProgress(step, camName) });
                 }
-                exported++;
-                if (target.inCameraFolder) inCameraFolders++;
+                if (cancelled) break;
+                if (!useDirectory) {
+                    downloadBlob(blob, target.name);
+                    exported++;
+                    continue;
+                }
+                if (saving.length >= SAVES_IN_FLIGHT) {
+                    showLoading('Saving files in ' + dirHandle.name + '…', cardOpts(step));
+                    await saving.shift();
+                }
+                showLoading('Saving ' + target.path + ' in ' + dirHandle.name + '…', cardOpts(step));
+                var pending = saveFile(target, blob);
+                pending.catch(function () { /* awaited below; this only keeps it from being "unhandled" */ });
+                saving.push(pending);
+            }
+            if (saving.length) {
+                showLoading('Saving ' + saving.length + ' file' + (saving.length === 1 ? '' : 's') + ' in ' + dirHandle.name + '…',
+                    cardOpts(steps));
+                while (saving.length) await saving.shift();
             }
             if (cancelled) {
                 setStatus('Download All cancelled (' + exported + ' of ' + cols.length + ' written)', 'warning');
@@ -1922,6 +1974,9 @@ export function showSlpExportByCamModal() {
                 succeeded = true;
             }
         } catch (err) {
+            // Let the files already handed over finish (or fail) before reporting.
+            await Promise.allSettled(saving);
+            saving = [];
             if (err instanceof ExportCancelled) {
                 setStatus('Download All cancelled (' + exported + ' of ' + cols.length + ' written)', 'warning');
             } else {

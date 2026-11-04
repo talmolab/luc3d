@@ -10,12 +10,17 @@
  *     prompt) still returns the handle only for the file being opened.
  *  2. Progress is the app's card (ui/loading-overlay.js), not the button text:
  *     one step per camera ("Step k of n"). A fully loaded project writes each
- *     camera in one go (spinner + "Writing <cam>.slp…"); a lazily opened project
- *     streams each camera and its frames fill the bar, rising within a camera,
- *     ending at total/total. The modal steps aside while the card shows.
+ *     camera in one go (spinner + "Writing <cam>.slp…"); on a lazily opened
+ *     project the sweep's frames fill the bar (5). The modal steps aside while
+ *     the card shows.
  *  3. End state: the card is hidden, the modal closed, the files written, and
  *     the status names the folder. Esc mid-camera cancels: the card goes, the
  *     modal comes back, nothing is written for that camera.
+ *  5. A reopened (lazy) project builds every camera in ONE sweep ("Reading N
+ *     cameras", its frames on the bar), and each camera's file holds that camera
+ *     only — the store's fast path used to re-emit the whole shared project into
+ *     every camera's file. Files save side by side (both writables open at
+ *     once), so a share's slow close() does not hold up the next file.
  *  4. In the picked folder, a camera's file goes into the camera's own folder
  *     (the folder load's `cameraDirMap`, else the folder its video sits in), next
  *     to the `.slp` its 2D came from, as `<source stem>_proofread.slp` — an
@@ -63,6 +68,7 @@ try {
         window.__written = {};
         // An in-memory folder tree: { dirs: {name: node}, files: {name: {size, lastModified}} }.
         window.__tree = { dirs: {}, files: {} };
+        window.__blobs = {}; window.__inflight = 0; window.__maxInflight = 0; window.__closeDelay = 0;
         const mkDir = (name, node, prefix) => ({
             kind: 'directory', name,
             getDirectoryHandle: async (n, o) => {
@@ -72,15 +78,24 @@ try {
                 }
                 return mkDir(n, node.dirs[n], prefix + n + '/');
             },
+            // A writable counts as in flight from createWritable until its close()
+            // returns; `__closeDelay` ms stands in for a share's slow close().
             getFileHandle: async (fname) => ({
                 kind: 'file', name: fname,
-                createWritable: async () => ({
-                    write: async (blob) => {
-                        node.files[fname] = { size: blob.size, lastModified: Date.now() };
-                        window.__written[prefix + fname] = blob.size;
-                    },
-                    close: async () => {},
-                }),
+                createWritable: async () => {
+                    window.__maxInflight = Math.max(window.__maxInflight, ++window.__inflight);
+                    return {
+                        write: async (blob) => {
+                            node.files[fname] = { size: blob.size, lastModified: Date.now() };
+                            window.__written[prefix + fname] = blob.size;
+                            window.__blobs[prefix + fname] = blob;
+                        },
+                        close: async () => {
+                            await new Promise(r => setTimeout(r, window.__closeDelay));
+                            window.__inflight--;
+                        },
+                    };
+                },
             }),
             values: async function* () {
                 for (const n of Object.keys(node.dirs)) yield mkDir(n, node.dirs[n], prefix + n + '/');
@@ -275,9 +290,12 @@ try {
     });
 
     // =================================================================
-    // A lazily opened project: each camera streams, its frames fill the bar.
+    // A reopened (lazy) project: every camera is built in ONE sweep, whose
+    // frames fill the bar; each camera's file holds that camera only (the
+    // store's fast path used to re-emit the whole shared project per camera);
+    // the files save side by side.
     // =================================================================
-    console.log('2/3. Progress card — lazy project (frames within a camera)');
+    console.log('2/3/5. Reopened lazy project: one sweep, one camera per file, saves overlap');
     const loadErr = await page.evaluate(async (FRAMES) => {
         const [pd, fileio] = await Promise.all([import('/pose/pose-data.js'), import('/import-export/file-io.js')]);
         const { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, Session } = pd;
@@ -320,35 +338,48 @@ try {
     }, LAZY_FRAMES);
     check(!loadErr, 'lazy project opened', loadErr || undefined);
 
-    // Predicted OFF keeps the export off the store fast path, so each camera streams.
     const cdp = await page.context().newCDPSession(page);
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });   // so the bar has time to move
 
     const lazy = await page.evaluate(async () => {
-        window.__card.length = 0; window.__written = {};
+        window.__card.length = 0; window.__written = {}; window.__blobs = {};
+        window.__maxInflight = 0; window.__closeDelay = 300;
         (await import('/ui/export-modals.js')).showSlpExportByCamModal();
-        const c = document.getElementById('slpByCamIncPred'); if (c.checked) c.click();
         document.getElementById('slpByCamDownloadAll').click();
         for (let i = 0; i < 2400; i++) {
             await new Promise(r => setTimeout(r, 50));
             if (document.getElementById('loadingOverlay').classList.contains('hidden') && window.__card.length
                 && !document.querySelector('.slp-bycam-modal')) break;
         }
-        return { card: window.__card.slice(), written: Object.assign({}, window.__written),
-                 cardHidden: document.getElementById('loadingOverlay').classList.contains('hidden'),
-                 popup: (document.querySelector('.export-result-overlay') || {}).textContent || null };
+        window.__closeDelay = 0;
+        // Read before the files are read back: the popup dismisses itself.
+        const popup = (document.querySelector('.export-result-overlay') || {}).textContent || null;
+        const cardHidden = document.getElementById('loadingOverlay').classList.contains('hidden');
+        const h5url = new URL('lib/h5wasm/h5wasm.iife.js', document.baseURI).href;
+        const content = {};
+        for (const [path, blob] of Object.entries(window.__blobs)) {
+            const back = await window.SleapIO.readSlpStreaming(new File([blob], path), { openVideos: false, h5wasmUrl: h5url });
+            content[path] = { videos: back.videos.map(v => v.filename), frames: back.labeledFrames.length };
+        }
+        return { card: window.__card.slice(), written: Object.assign({}, window.__written), content,
+                 maxInflight: window.__maxInflight, cardHidden, popup };
     });
     const total = LAZY_FRAMES.toLocaleString('en-US');
-    for (const [k, cam] of [[1, 'cam0'], [2, 'cam1']]) {
-        const bars = lazy.card.filter(s => s.visible && s.bar && s.status.startsWith(cam + ':') && s.sub.startsWith('Step ' + k + ' of 2'));
-        const fr = bars.map(s => s.frac);
-        check(bars.length > 0, `step ${k} of 2: "${cam}: n/${total} frames…" on the bar`, bars.slice(-1)[0]);
-        check(fr.every((f, i) => i === 0 || f >= fr[i - 1]), `${cam}: the bar only rises`, fr);
-        check(fr.some(f => f > 0 && f < 1), `${cam}: the bar moved within the camera`, fr);
-        check(bars.some(s => s.status === `${cam}: ${total}/${total} frames…` && s.frac === 1), `${cam}: ends at ${total}/${total}`);
-    }
+    const bars = lazy.card.filter(s => s.visible && s.bar && s.status.startsWith('Reading 2 cameras:') && s.sub.startsWith('Step 1 of 3'));
+    const fr = bars.map(s => s.frac);
+    check(bars.length > 0, `step 1 of 3: one sweep for both cameras, "Reading 2 cameras: n/${total} frames…"`, bars.slice(-1)[0]);
+    check(fr.every((f, i) => i === 0 || f >= fr[i - 1]), 'the sweep\'s bar only rises', fr);
+    check(fr.some(f => f > 0 && f < 1), 'the bar moved during the sweep', fr);
+    check(bars.some(s => s.status === `Reading 2 cameras: ${total}/${total} frames…` && s.frac === 1), `the sweep ends at ${total}/${total}`);
+    check(!lazy.card.some(s => s.visible && /^Writing /.test(s.status)), 'no camera is built again after the sweep');
     check(lazy.cardHidden && /Download Successful/.test(lazy.popup || ''), 'lazy end: card hidden, "Download Successful"', lazy.popup);
     check(lazy.written['cam0.slp'] > 0 && lazy.written['cam1.slp'] > 0, 'lazy: both files written', lazy.written);
+    for (const cam of ['cam0', 'cam1']) {
+        const c = lazy.content[cam + '.slp'] || {};
+        check(JSON.stringify(c.videos) === JSON.stringify([cam + '.mp4']) && c.frames === LAZY_FRAMES,
+            `${cam}.slp holds ${cam} only (1 video, ${total} frames), not the whole project`, c);
+    }
+    check(lazy.maxInflight === 2, 'the two files saved side by side (both writables open at once)', lazy.maxInflight);
     const style = await page.evaluate(async () => {
         const { progressCardStyle } = await import('/tests/e2e/fixtures/progress-card.js');
         const ov = document.getElementById('loadingOverlay');
@@ -364,12 +395,11 @@ try {
     const cancel = await page.evaluate(async () => {
         window.__card.length = 0; window.__written = {};
         (await import('/ui/export-modals.js')).showSlpExportByCamModal();
-        const c = document.getElementById('slpByCamIncPred'); if (c.checked) c.click();
         document.getElementById('slpByCamDownloadAll').click();
         let sent = false;
         for (let i = 0; i < 2400; i++) {
             await new Promise(r => setTimeout(r, 20));
-            if (!sent && window.__card.some(s => s.bar && /^cam0: /.test(s.status) && s.frac < 1)) {
+            if (!sent && window.__card.some(s => s.bar && /^Reading 2 cameras: /.test(s.status) && s.frac < 1)) {
                 document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
                 sent = true;
             }
@@ -385,7 +415,7 @@ try {
             status: document.getElementById('statusText').textContent,
         };
     });
-    check(cancel.sent, 'Esc sent while cam0\'s bar was moving');
+    check(cancel.sent, 'Esc sent while the sweep\'s bar was moving');
     check(cancel.cardHidden && cancel.modalShown, 'cancel: card hidden, modal back', cancel);
     check(Object.keys(cancel.written).length === 0, 'cancel: nothing written', cancel.written);
     check(!cancel.popup, 'cancel: no success/failure popup');

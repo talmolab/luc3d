@@ -3,7 +3,11 @@
  * its time, measured in a REAL page on real data (investigation tool, not an
  * assertion). Load it into a running LUC3D page (deployed or local):
  *
- *     await import('./tests/e2e/_diag-export-bycam-timing.js')   // sets window.__exportBench
+ *     await import('./tests/e2e/_diag-export-bycam-timing.js')   // local server; sets window.__exportBench
+ *
+ * The deployed site never serves it (gh-pages has no .nojekyll, so Jekyll drops
+ * `_` files): load it from jsDelivr at a commit instead,
+ *     await import('https://cdn.jsdelivr.net/gh/talmolab/luc3d@<full sha>/tests/e2e/_diag-export-bycam-timing.js')
  *
  * Imports nothing relative (tests/e2e/ is not version-stamped); it reaches the
  * app's own module instances through the page's modulepreload URLs, so it never
@@ -81,6 +85,7 @@
     function phaseOf(e) {
         var m = /Step (\d+) of (\d+)/.exec(e.sub || '');
         var step = m ? +m[1] : null;
+        if (/^Reading \d+ cameras?/.test(e.status)) return { step: step, phase: 'sweep (all cameras)' };
         if (/^Finding /.test(e.status)) return { step: step, phase: 'find' };
         if (/^Saving /.test(e.status)) return { step: step, phase: 'save' };
         if (/^Writing /.test(e.status) || /: [\d,]+\/[\d,]+ frames/.test(e.status)) return { step: step, phase: 'build' };
