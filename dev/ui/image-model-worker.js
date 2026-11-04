@@ -9,35 +9,42 @@
  * ("worker not ready"). Several of these run side by side, one model each,
  * because without cross-origin isolation WebAssembly gets ONE thread.
  *
- *   IN  {type: 'load'}  ->  {type: 'loaded'} | {type: 'error', message, cannotRun}
+ *   IN  {type: 'load', model: {id, input, pkg}}  ->  {type: 'loaded'} | {type: 'error', message, cannotRun}
+ *       (`id`: the transformers.js repo id; `pkg`: ui/image-model-package.js `modelPackageTransfer`,
+ *       null for the built-in model)
  *       (`cannotRun`: a failed download, `message` then being image-embedder.js's
  *       MODEL_OFFLINE_REASON — classified here, where the error is still a real one)
  *       (while downloading: {type: 'progress', loaded, total})
- *   IN  {type: 'run', id, data, n}   data: Float32Array(n x 3 x INPUT x INPUT), transferred
+ *   IN  {type: 'run', id, data, n}   data: Float32Array(n x 3 x input x input), transferred
  *   OUT {type: 'result', id, cls: Float32Array(n x dim), dim} (transferred) | {type: 'error', id, message}
  * `cls` is each crop's CLS token, exactly as the main thread's `clsVectors` reads it.
  */
 
-import { importTransformers, asModelDownloadFailure, IMAGE_MODEL_ID, INPUT } from './image-embedder.js?v=6f95538c9d3f';
+import { importTransformers, asModelDownloadFailure, IMAGE_MODEL_ID, BUILTIN_INPUT } from './image-embedder.js?v=b054d5172049';
+import { installModelPackageFetch, serveModelPackage, withTransferCachePolicy } from './image-model-package.js?v=b054d5172049';
 
-let T = null, model = null;
+let T = null, model = null, input = BUILTIN_INPUT;
 
 self.onmessage = async function (e) {
     const m = e.data;
     try {
         if (m.type === 'load') {
             T = await importTransformers();
+            const want = m.model || { id: IMAGE_MODEL_ID, input: BUILTIN_INPUT, pkg: null };
+            input = want.input;
+            installModelPackageFetch(T);
+            if (want.pkg) serveModelPackage(want.pkg.repo, want.pkg.source);
             // fp32: identical to the WebGPU fp32 model (cosine 1.00000), which matched the calibration;
             // the CPU runtime's default int8 model is what drifted from it
-            model = await T.AutoModel.from_pretrained(IMAGE_MODEL_ID, {
+            model = await withTransferCachePolicy(T, want.pkg, function () { return T.AutoModel.from_pretrained(want.id, {
                 device: 'wasm', dtype: 'fp32',
                 progress_callback: function (p) {
                     if (p && p.status === 'progress' && p.total) self.postMessage({ type: 'progress', loaded: p.loaded, total: p.total });
                 },
-            });
+            }); });
             self.postMessage({ type: 'loaded' });
         } else if (m.type === 'run') {
-            const res = await model({ pixel_values: new T.Tensor('float32', m.data, [m.n, 3, INPUT, INPUT]) });
+            const res = await model({ pixel_values: new T.Tensor('float32', m.data, [m.n, 3, input, input]) });
             const hs = res.last_hidden_state, tokens = hs.dims[1], dim = hs.dims[2], cls = new Float32Array(m.n * dim);
             for (let i = 0; i < m.n; i++) cls.set(hs.data.subarray(i * tokens * dim, i * tokens * dim + dim), i * dim);
             self.postMessage({ type: 'result', id: m.id, cls: cls, dim: dim }, [cls.buffer]);

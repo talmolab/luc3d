@@ -51,9 +51,10 @@ import {
     serializeVideoContrast, ingestVideoContrast,
     serializeVideoBrightness, ingestVideoBrightness,
     serializeVideoRotation, ingestVideoRotation,
-} from '../ui/video-filters.js?v=6f95538c9d3f';
-import { serializeHiddenSets, ingestHiddenSets } from '../ui/timeline-visibility.js?v=6f95538c9d3f';
-import { serializeIdSwitchReview, ingestIdSwitchReview } from '../ui/id-switch-review.js?v=6f95538c9d3f';
+} from '../ui/video-filters.js?v=b054d5172049';
+import { serializeHiddenSets, ingestHiddenSets } from '../ui/timeline-visibility.js?v=b054d5172049';
+import { serializeIdSwitchReview, ingestIdSwitchReview } from '../ui/id-switch-review.js?v=b054d5172049';
+import { ingestModelChoice } from '../pose/image-model-manifest.js?v=b054d5172049';
 
 /**
  * Every `metadata.lucid` key this module may write. Exported so tests (and the
@@ -72,6 +73,7 @@ export const VISIBILITY_METADATA_KEYS = [
     'idSwitchReview',
     'numAnimals',
     'tailMarkedIdentity',
+    'imageModel',
 ];
 
 // `Session.numAnimals` <-> `metadata.lucid.numAnimals`: a positive integer, or
@@ -134,6 +136,10 @@ export function writeVisibilityMetadata(lucid, session) {
         lucid.tailMarkedIdentity = session.tailMarkedIdentity;
     }
 
+    // The image check's model (ID Switches tab ▸ Image model): absent while it is the built-in one.
+    var model = ingestModelChoice(session.imageModel);
+    if (model) lucid.imageModel = model;
+
     return lucid;
 }
 
@@ -156,5 +162,6 @@ export function readVisibilityMetadata(session, lucid) {
     ingestIdSwitchReview(session, src.idSwitchReview);
     ingestNumAnimals(session, src.numAnimals);
     session.tailMarkedIdentity = (typeof src.tailMarkedIdentity === 'string' && src.tailMarkedIdentity) ? src.tailMarkedIdentity : null;
+    session.imageModel = ingestModelChoice(src.imageModel);
     return session;
 }
