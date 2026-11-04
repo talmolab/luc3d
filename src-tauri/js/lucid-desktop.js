@@ -35,6 +35,9 @@
  *     that worked (`<html data-lucid-native-menu="1">`).
  *  7. macOS: a file `<input>` clicked without user activation (WebKit would
  *     drop it) asks for one click in the page instead.
+ *  8. Updates: Check for Updates… (macOS luc3d menu / Help menu elsewhere),
+ *     a silent check 10 s after start and every 6 h with a small notice, the
+ *     update channel, and install-then-restart, never over unsaved work.
  *  `lucidDesktop.sleapNn` — thin wrappers for the (feature-gated) sleap-nn
  *     commands; unused by the app in iteration 1.
  */
@@ -1276,9 +1279,260 @@
     }
     installPickerGestureFallback();
 
+    // ------------------------------------------------------------------
+    // 8. Updates
+    // ------------------------------------------------------------------
+
+    /*
+     * Rust (src/updates.rs) picks the manifest for the channel, verifies the
+     * signature and installs; this part owns the conversation:
+     *   - Check for Updates… (macOS: luc3d menu, via __lucidUpdates.menu('check');
+     *     Windows/Linux: added to the page's Help menu): up to date → a note;
+     *     newer → "Install and restart?".
+     *   - Never with unsaved work: pageHasUnsavedWork() before offering, again
+     *     after the question and again right before restarting.
+     *   - Install: a progress card (LUCID's own card classes) with downloaded /
+     *     total, then restart_app.
+     *   - Automatically 10 s after start and every 6 h: silent unless there is
+     *     something new, then a small dismissible notice, once per version per
+     *     run.
+     *   - Update Channel ▸ X (macOS menu): set_update_channel, then a check that
+     *     also offers an OLDER version (allowDowngrade), so leaving dev for
+     *     stable offers stable.
+     */
+    var UPDATE_TIMING = window.__lucidUpdateCheckTiming || {};   // test aid
+    var UPDATE_FIRST_CHECK_MS = UPDATE_TIMING.first != null ? UPDATE_TIMING.first : 10 * 1000;
+    var UPDATE_EVERY_MS = UPDATE_TIMING.every != null ? UPDATE_TIMING.every : 6 * 3600 * 1000;
+    var up = { user: false, silent: null, noticed: new Set(), notice: null };
+
+    function updateMessage(message, kind) {
+        return call('message_dialog', { title: 'luc3d', message: message, kind: kind || 'info' })
+            .catch(function (err) { console.error(LOG + ' could not show a dialog:', err, message); });
+    }
+
+    function blockedByUnsavedWork() {
+        var dirty = false;
+        try { dirty = pageHasUnsavedWork(); } catch (e) { console.error(LOG, 'beforeunload probe failed', e); dirty = true; }
+        if (dirty) updateMessage('Save your project first, then choose Check for Updates again.', 'warning');
+        return dirty;
+    }
+
+    function formatMB(bytes) { return (bytes / MIB).toFixed(1) + ' MB'; }
+
+    /** The install card: LUCID's progress-card look, blocking the page while it shows. */
+    function updateProgressCard(version) {
+        var overlay = document.createElement('div');
+        overlay.className = 'loading-overlay';
+        overlay.id = 'lucidUpdateProgress';
+        overlay.style.zIndex = '10050';
+        var card = document.createElement('div');
+        card.className = 'loading-card';
+        card.setAttribute('role', 'status');
+        var title = document.createElement('h3');
+        title.className = 'loading-title';
+        title.textContent = 'Updating luc3d to ' + version;
+        var line = document.createElement('div');
+        line.className = 'loading-line';
+        line.id = 'lucidUpdateStatus';
+        line.textContent = 'Downloading…';
+        var bar = document.createElement('div');
+        bar.className = 'loading-progress';
+        bar.setAttribute('role', 'progressbar');
+        bar.setAttribute('aria-valuemin', '0');
+        bar.setAttribute('aria-valuemax', '100');
+        var track = document.createElement('div');
+        track.className = 'loading-progress-track';
+        var fill = document.createElement('div');
+        fill.className = 'loading-progress-fill';
+        fill.id = 'lucidUpdateFill';
+        track.appendChild(fill);
+        bar.appendChild(track);
+        card.appendChild(title);
+        card.appendChild(line);
+        card.appendChild(bar);
+        overlay.appendChild(card);
+        (document.body || document.documentElement).appendChild(overlay);
+        return {
+            progress: function (done, total) {
+                var frac = total ? Math.min(1, done / total) : 0;
+                fill.style.transform = 'scaleX(' + frac + ')';
+                bar.setAttribute('aria-valuenow', String(Math.round(frac * 100)));
+                line.textContent = 'Downloading… ' + formatMB(done) + (total ? ' of ' + formatMB(total) : '');
+            },
+            status: function (text) { line.textContent = text; },
+            close: function () { if (overlay.parentNode) overlay.remove(); },
+        };
+    }
+
+    async function installUpdate(found, allowDowngrade) {
+        var Channel = tauriChannelCtor();
+        if (!Channel) throw new Error('window.__TAURI__.core.Channel is unavailable');
+        var card = updateProgressCard(found.version);
+        var channel = new Channel();
+        channel.onmessage = function (msg) {
+            if (!msg) return;
+            if (msg.event === 'progress' && msg.data) card.progress(msg.data.downloaded || 0, msg.data.total || 0);
+            else if (msg.event === 'installed') card.status('Installed. Restarting…');
+        };
+        try {
+            await call('install_update', { expectedVersion: found.version, allowDowngrade: !!allowDowngrade, onEvent: channel });
+        } catch (err) {
+            card.close();
+            await updateMessage('The update could not be installed.\n\n' + errorText(err), 'error');
+            return;
+        }
+        card.status('Installed. Restarting…');
+        var dirty = true;
+        try { dirty = pageHasUnsavedWork(); } catch (e) { /* treat as dirty */ }
+        if (dirty) {
+            card.close();
+            await updateMessage('luc3d ' + found.version + ' is installed. Save your project, then quit and reopen luc3d to use it.', 'warning');
+            return;
+        }
+        await call('restart_app', {});
+    }
+
+    /** "Install and restart?" for a found update (refusing with unsaved work). */
+    async function offerUpdate(found, allowDowngrade) {
+        if (blockedByUnsavedWork()) return;
+        var ok = await lucidDesktop.confirm(
+            'luc3d ' + found.version + ' is available (you have ' + found.currentVersion + ', ' +
+            found.channel + ' channel). Install and restart?',
+            { title: 'Update available', okLabel: 'Install and Restart', cancelLabel: 'Later' });
+        if (!ok || blockedByUnsavedWork()) return;
+        hideUpdateNotice();
+        await installUpdate(found, allowDowngrade);
+    }
+
+    function hideUpdateNotice() {
+        if (up.notice && up.notice.parentNode) up.notice.remove();
+        up.notice = null;
+    }
+
+    function showUpdateNotice(found) {
+        if (up.noticed.has(found.version)) return;
+        up.noticed.add(found.version);
+        hideUpdateNotice();
+        var box = document.createElement('div');
+        box.id = 'lucidUpdateNotice';
+        box.setAttribute('role', 'status');
+        box.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:10040;display:flex;align-items:center;' +
+            'gap:10px;padding:10px 12px;border-radius:8px;font-size:13px;' +
+            'background:var(--bg-secondary,#252526);color:var(--text-primary,#ddd);' +
+            'border:1px solid var(--border-color,#444);box-shadow:0 8px 32px rgba(0,0,0,.5)';
+        var text = document.createElement('span');
+        text.textContent = 'luc3d ' + found.version + ' is available';
+        var install = document.createElement('button');
+        install.id = 'lucidUpdateInstall';
+        install.className = 'primary';
+        install.textContent = 'Install…';
+        var later = document.createElement('button');
+        later.id = 'lucidUpdateLater';
+        later.textContent = 'Later';
+        install.addEventListener('click', function () {
+            hideUpdateNotice();
+            runUpdateFlow(function () { return offerUpdate(found, false); });
+        });
+        later.addEventListener('click', hideUpdateNotice);
+        box.appendChild(text);
+        box.appendChild(install);
+        box.appendChild(later);
+        (document.body || document.documentElement).appendChild(box);
+        up.notice = box;
+    }
+
+    /**
+     * One user-facing update conversation at a time (a second click while one
+     * is open does nothing); it waits for a background check in flight rather
+     * than being dropped. A background check is skipped while anything runs.
+     */
+    function runUpdateFlow(fn, silent) {
+        var log = function (err) {
+            (silent ? console.warn : console.error)(LOG + ' update ' + (silent ? 'check' : '') + ' failed:', err);
+        };
+        if (silent) {
+            if (up.user || up.silent) return Promise.resolve(false);
+            up.silent = Promise.resolve().then(fn).catch(log).then(function () { up.silent = null; return true; });
+            return up.silent;
+        }
+        if (up.user) return Promise.resolve(false);
+        up.user = true;
+        return Promise.resolve(up.silent).then(fn).catch(log).then(function () { up.user = false; return true; });
+    }
+
+    /** opts: {silent, allowDowngrade}. */
+    function checkForUpdates(opts) {
+        opts = opts || {};
+        return runUpdateFlow(async function () {
+            var info = await call('get_update_info', {});
+            if (!info || !info.updaterConfigured) {
+                if (!opts.silent) await updateMessage('This build of luc3d cannot update itself.', 'info');
+                return;
+            }
+            var found;
+            try {
+                found = await call('check_update', { allowDowngrade: !!opts.allowDowngrade });
+            } catch (err) {
+                if (!opts.silent) await updateMessage('Could not check for updates.\n\n' + errorText(err), 'error');
+                return;
+            }
+            if (!found) {
+                if (!opts.silent) {
+                    await updateMessage('luc3d ' + info.currentVersion + ' is up to date (' + info.channel + ' channel).', 'info');
+                }
+                return;
+            }
+            if (opts.silent) { showUpdateNotice(found); return; }
+            await offerUpdate(found, !!opts.allowDowngrade);
+        }, !!opts.silent);
+    }
+
+    async function switchUpdateChannel(channel) {
+        try {
+            await call('set_update_channel', { channel: channel });
+        } catch (err) {
+            await updateMessage('Could not switch the update channel.\n\n' + errorText(err), 'error');
+            return;
+        }
+        await checkForUpdates({ allowDowngrade: true });
+    }
+
+    /** Native menu items (macOS) call this through evaluateJavaScript. */
+    function updatesMenuAction(action) {
+        action = String(action || '');
+        if (action === 'check') { checkForUpdates({}); return true; }
+        if (action.indexOf('channel:') === 0) { switchUpdateChannel(action.slice(8)); return true; }
+        return false;
+    }
+
+    /** Windows/Linux: Help ▸ Check for Updates… in the page's own menu. */
+    function addHelpMenuUpdateItem() {
+        if (platform === 'macos') return;   // in the native luc3d menu there
+        var help = document.getElementById('menuHelp');
+        if (!help || document.getElementById('menuCheckUpdates')) return;
+        var item = document.createElement('div');
+        item.className = 'menu-dropdown-item';
+        item.id = 'menuCheckUpdates';
+        item.textContent = 'Check for Updates…';
+        item.addEventListener('click', function () { checkForUpdates({}); });
+        help.appendChild(item);
+    }
+
+    function startUpdates() {
+        Object.defineProperty(window, '__lucidUpdates', {
+            value: Object.freeze({ menu: updatesMenuAction }),
+            writable: false, configurable: false, enumerable: false,
+        });
+        try { addHelpMenuUpdateItem(); } catch (e) { console.error(LOG + ' Help menu update item:', e); }
+        var auto = function () { checkForUpdates({ silent: true }); };
+        setTimeout(auto, UPDATE_FIRST_CHECK_MS);
+        if (UPDATE_EVERY_MS > 0) setInterval(auto, UPDATE_EVERY_MS);
+    }
+
     function onDocumentReady() {
         startCloseGuard();
         try { startNativeMenu(); } catch (e) { console.error(LOG + ' native menu setup failed; the in-page menus stay:', e); }
+        try { startUpdates(); } catch (e) { console.error(LOG + ' update checks not started:', e); }
     }
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', onDocumentReady, { once: true });

@@ -35,6 +35,19 @@ tauri-plugin-localhost = "2.3"
 # Same crate tauri uses to resolve app_config_dir(); needed before the app
 # exists, to read the persisted localhost port.
 dirs = "6"
+# In-app updates (updates.rs): signed bundles from GitHub Releases. Called only
+# from Rust through the `lucid` plugin, so no updater:* permission is granted.
+tauri-plugin-updater = "2.10"
+# Release-tag versions for the stable/latest channel resolver (updates.rs).
+semver = "1"
+# The GitHub releases API call of that resolver. Already in the graph through
+# tauri-plugin-updater; default features stay OFF (they would add http2/3 and
+# a second TLS backend).
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+# reqwest's rustls needs a process-wide CryptoProvider before the first TLS
+# handshake (lib.rs installs ring's). Only "ring": the default "aws_lc_rs"
+# needs cmake.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 [target.'cfg(unix)'.dependencies]
 # sysctlbyname (macOS total memory).

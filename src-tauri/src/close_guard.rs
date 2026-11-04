@@ -103,6 +103,10 @@ impl CloseGuards {
     pub fn forget(&mut self, label: &str) {
         self.0.remove(label);
     }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
 }
 
 #[derive(Default)]
@@ -161,6 +165,14 @@ pub fn handle_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) 
             }
         }
         _ => {}
+    }
+}
+
+/// Drop every window's guard (restart into an installed update: the page
+/// has already checked for unsaved work).
+pub fn disable_all<R: Runtime>(app: &AppHandle<R>) {
+    if let Ok(mut g) = app.state::<CloseGuardState>().0.lock() {
+        g.clear();
     }
 }
 

@@ -37,7 +37,7 @@
     "shortDescription": "Multi-view pose annotation",
     "longDescription": "luc3d — LUCID (Label Unification and Correspondence in 3D): multi-view pose annotation, cross-view tracking and triangulation.",
     "homepage": "https://luc3d.sleap.ai",
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "macOS": {
       "signingIdentity": null,
       "minimumSystemVersion": "13.3"
@@ -58,6 +58,12 @@
       "appimage": {
         "bundleMediaFramework": true
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY3MURGOEVCRTNERTQwMkEKUldRcVFON2o2L2dkWjBYc0pJMmxwTGd6RW1sRjhSNEJOT0k3aWE2WXA1WStkRW5Ib2VqRjNpNVYK",
+      "endpoints": []
     }
   }
 }
