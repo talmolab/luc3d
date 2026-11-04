@@ -1,7 +1,7 @@
 [package]
-name = "lucid-app"
+name = "luc3d"
 version = "1.0.5"
-description = "LUCID - desktop shell"
+description = "luc3d (LUCID) - desktop shell"
 authors = ["talmolab"]
 repository = "https://github.com/talmolab/luc3d"
 edition = "2021"

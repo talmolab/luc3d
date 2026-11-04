@@ -836,7 +836,7 @@ try {
             out.close4 = M.callsOf('confirm_close').length;
             return out;
         });
-        check(r.ask1.length === 1 && JSON.stringify(r.ask1[0]) === JSON.stringify({ title: 'Unsaved changes', message: 'LUCID has unsaved changes. Close anyway?', okLabel: 'Close', cancelLabel: 'Cancel' }),
+        check(r.ask1.length === 1 && JSON.stringify(r.ask1[0]) === JSON.stringify({ title: 'Unsaved changes', message: 'luc3d has unsaved changes. Close anyway?', okLabel: 'Close', cancelLabel: 'Cancel' }),
             'dirty project: ask_dialog asked once with the contract text', r.ask1);
         check(r.acks === 2, 'each close request is acknowledged with set_close_guard', r.acks);
         check(r.close1 === 0 && r.stillDirty, 'Cancel keeps the window open (no confirm_close)', r);
@@ -996,7 +996,7 @@ try {
             'a Blob consumed by a download is dropped as soon as it is revoked; an unconsumed revoked one is kept for the grace period', r);
         check(r.confirm1 === true && r.confirm2 === false && r.confirmIsPromise &&
             JSON.stringify(r.confirmArgs) === JSON.stringify([
-                { title: 'LUCID', message: 'Delete 3 planes?', okLabel: 'OK', cancelLabel: 'Cancel' },
+                { title: 'luc3d', message: 'Delete 3 planes?', okLabel: 'OK', cancelLabel: 'Cancel' },
                 { title: 'Export', message: 'Overwrite?', okLabel: 'Overwrite', cancelLabel: 'Keep' }]),
             'lucidDesktop.confirm(message, opts) → ask_dialog with defaults LUCID / OK / Cancel, resolves to a boolean', r.confirmArgs);
         check(r.nativeConfirm, 'window.confirm / window.prompt are not overridden');

@@ -93,7 +93,7 @@ const QUIT_MENU_ID: &str = "lucid-quit";
 #[cfg(target_os = "macos")]
 fn set_macos_menu<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
     use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
-    let app_menu = SubmenuBuilder::new(app, "LUCID")
+    let app_menu = SubmenuBuilder::new(app, "luc3d")
         .about(None)
         .separator()
         .hide()
@@ -104,7 +104,7 @@ fn set_macos_menu<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
         // emits CloseRequested, so unsaved work would be lost without the
         // page's check. Ours closes each window through its guard.
         .item(
-            &MenuItemBuilder::with_id(QUIT_MENU_ID, "Quit LUCID")
+            &MenuItemBuilder::with_id(QUIT_MENU_ID, "Quit luc3d")
                 .accelerator("CmdOrCtrl+Q")
                 .build(app)?,
         )
@@ -220,8 +220,8 @@ pub fn run() {
                 eprintln!("[lucid] startup self-check failed: {e}");
                 let handle = app.handle().clone();
                 app.dialog()
-                    .message(format!("LUCID could not start its local server.\n\n{e}"))
-                    .title("LUCID")
+                    .message(format!("luc3d could not start its local server.\n\n{e}"))
+                    .title("luc3d")
                     .kind(MessageDialogKind::Error)
                     .show(move |_| handle.exit(1));
                 return Ok(());
@@ -241,7 +241,7 @@ pub fn run() {
         };
 
         tauri::WebviewWindowBuilder::new(app, "main", url)
-            .title("LUCID")
+            .title("luc3d")
             .inner_size(1440.0, 900.0)
             .min_inner_size(1024.0, 700.0)
             .resizable(true)

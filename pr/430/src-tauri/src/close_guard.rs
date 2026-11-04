@@ -30,7 +30,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 pub const CLOSE_REQUESTED_EVENT: &str = "lucid://close-requested";
 pub const HUNG_AFTER: Duration = Duration::from_secs(5);
 pub const HUNG_MESSAGE: &str =
-    "LUCID is not responding. Close anyway? Unsaved changes will be lost.";
+    "luc3d is not responding. Close anyway? Unsaved changes will be lost.";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum CloseDecision {
@@ -113,7 +113,7 @@ fn show_hung_dialog<R: Runtime>(window: &Window<R>) {
     window
         .dialog()
         .message(HUNG_MESSAGE)
-        .title("LUCID")
+        .title("luc3d")
         .kind(MessageDialogKind::Warning)
         .parent(window)
         .buttons(MessageDialogButtons::OkCancelCustom(
