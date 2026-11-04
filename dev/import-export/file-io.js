@@ -12,15 +12,15 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, hasPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=761adbb0dbc2';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=761adbb0dbc2';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=761adbb0dbc2';
+         toBoxedPoints3d, hasPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=4b5d39f5e9c5';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=4b5d39f5e9c5';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=4b5d39f5e9c5';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=761adbb0dbc2';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=761adbb0dbc2';
-import { writePlaneMetadata } from './plane-metadata.js?v=761adbb0dbc2';
-import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=761adbb0dbc2';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=4b5d39f5e9c5';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=4b5d39f5e9c5';
+import { writePlaneMetadata } from './plane-metadata.js?v=4b5d39f5e9c5';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=4b5d39f5e9c5';
 
 // ============================================
 // Generic file picker
@@ -1196,13 +1196,20 @@ function _buildCameraLabeledFrame(session, cameraName, frameIdx, fg, env) {
     // duplicates a track a grouped instance holds (SLEAP forbids two
     // instances sharing a (frame, track) pair).
     var usedTrackIdx = {};
+    // Each node's OWN score (CLAUDE.md "Per-node prediction scores"): a lazy
+    // instance holds none, the store is the only copy, so ask the session, as
+    // the project save does. Asking only the instance wrote the instance score
+    // onto every node of every lazily loaded prediction.
+    var nodeScoreOf = function (sinst) {
+        return function (k) { return session.predictedNodeScore(cameraName, frameIdx, sinst, k); };
+    };
 
     // 1. Grouped UserInstances first (retain their track)
     for (var ii = 0; ii < groupedInstances.length; ii++) {
         var inst = groupedInstances[ii];
         var instIsPred = inst.type === 'predicted';
         var instScore = inst.score != null ? inst.score : 1.0;
-        var pts = _buildSioPoints(inst, numNodes, instIsPred ? instScore : undefined);
+        var pts = _buildSioPoints(inst, numNodes, instIsPred ? instScore : undefined, null, nodeScoreOf(inst));
         // inst.trackIdx can be null (trackless UserInstance imported
         // from a 2D SLP with track=null). `null >= 0` is true in JS
         // so we need the explicit != null guard before the range check.
@@ -1233,7 +1240,7 @@ function _buildCameraLabeledFrame(session, cameraName, frameIdx, fg, env) {
         var ugInst = ungroupedInstances[ugi];
         var ugIsPred = ugInst.type === 'predicted';
         var ugScore = ugInst.score != null ? ugInst.score : 1.0;
-        var ugPts = _buildSioPoints(ugInst, numNodes, ugIsPred ? ugScore : undefined);
+        var ugPts = _buildSioPoints(ugInst, numNodes, ugIsPred ? ugScore : undefined, null, nodeScoreOf(ugInst));
         var ugTrack = (ugInst.trackIdx != null && ugInst.trackIdx >= 0 &&
             ugInst.trackIdx < tracks.length && !usedTrackIdx[ugInst.trackIdx])
             ? tracks[ugInst.trackIdx] : null;
@@ -1461,8 +1468,19 @@ export function _buildSioPoints(inst, numNodes, perPointScore, nodeOrder, nodeSc
  * session) and would re-materialize the whole store.
  */
 async function lazyCameraExportBytes(SIO, session, cameraName) {
+    if (!lazyCameraFastPathUsable(SIO, session, cameraName)) return null;
+    return await SIO.saveSlpToBytes(session.lazyLoader.labelsByCam.get(cameraName));
+}
+
+/** Whether `lazyCameraExportBytes` can re-emit this camera's store (see its guards). */
+function lazyCameraFastPathUsable(SIO, session, cameraName) {
     var loader = session && session.lazyLoader;
-    if (!loader || !loader.labelsByCam || typeof loader.labelsByCam.get !== 'function') return null;
+    if (!loader || !loader.labelsByCam || typeof loader.labelsByCam.get !== 'function') return false;
+    // A reopened project `.slp` keeps every camera in ONE store, and every
+    // `labelsByCam` entry is that whole project (`SioLazyLoader._sharedStore`):
+    // re-emitting it wrote ALL cameras (and the 3D session) into each camera's
+    // file — and on a large project ran the renderer out of memory first.
+    if (loader._sharedStore) return false;
     // Safety guard: this path re-emits the RAW columnar store verbatim — it
     // has no notion of a live, manually-corrected Instance object sitting in
     // a resident FrameGroup. If any resident frame carries a user-type
@@ -1475,11 +1493,10 @@ async function lazyCameraExportBytes(SIO, session, cameraName) {
     // file is deliberately import-free vanilla JS besides pose-data.js/
     // slp-merge.js).
     for (var fg of session.frameGroups.values()) {
-        if (frameGroupHasUserInstances(fg)) return null;
+        if (frameGroupHasUserInstances(fg)) return false;
     }
     var lazyLabels = loader.labelsByCam.get(cameraName);
-    if (!lazyLabels || !lazyLabels.isLazy || typeof SIO.saveSlpToBytes !== 'function') return null;
-    return await SIO.saveSlpToBytes(lazyLabels);
+    return !!(lazyLabels && lazyLabels.isLazy && SIO && typeof SIO.saveSlpToBytes === 'function');
 }
 
 /** Copied from pose/tracker.js's identical helper — see that file's doc. */
@@ -1604,79 +1621,128 @@ function _buildCameraExportHeader(session, cameraName, videoFileInfo) {
  * @returns {Promise<Uint8Array|null>} bytes, or null when streamed to a sink.
  */
 export async function exportCameraSlpStreaming(session, cameraName, reprojAsUser, videoFileInfo, instanceFilter, opts) {
+    opts = opts || {};
+    var out = await exportCamerasSlpStreaming(session, [{ cameraName: cameraName, videoFileInfo: videoFileInfo }],
+        reprojAsUser, instanceFilter, { onProgress: opts.onProgress, sinks: opts.sink ? [opts.sink] : null, chunkBytes: opts.chunkBytes });
+    return out[0];
+}
+
+/**
+ * `exportCameraSlpStreaming` for several cameras of ONE session in ONE sweep:
+ * one writer per camera, each frame hydrated once and built for every camera.
+ * Hydrating is nearly all of a camera's cost (a sweep that builds nothing takes
+ * as long as a one-camera export), so N cameras cost about one sweep instead of
+ * N (By Cam's Download All on a lazy project).
+ *
+ * @param {Array<{cameraName: string, videoFileInfo: Object}>} cameras
+ * @param {Object} [opts] `{ onProgress(done, total), sinks }` — `sinks[i]`
+ *   streams camera i to a `FileSystemWritableFileStream` (its result is null).
+ *   Throwing from `onProgress` aborts and disposes every writer.
+ * @returns {Promise<Array<Uint8Array|null>>} bytes per camera, in order.
+ */
+export async function exportCamerasSlpStreaming(session, cameras, reprojAsUser, instanceFilter, opts) {
     var SIO = window.SleapIO;
     if (!SIO || typeof SIO.openSlpWriter !== 'function') {
         throw new Error('sleap-io.js streaming writer (openSlpWriter) not available');
     }
     opts = opts || {};
-    var env = _buildCameraExportHeader(session, cameraName, videoFileInfo);
-    env.instanceFilter = instanceFilter;
-    env.reprojAsUser = reprojAsUser;
-
-    var writer = await SIO.openSlpWriter({
-        skeletons: [env.skeleton],
-        videos: [env.video],
-        tracks: env.tracks,
-        identities: [],
-        sessions: [],
-        provenance: { source: 'lucid', exported_at: new Date().toISOString() },
-    });
-
-    // COVERAGE PRECONDITION. `sweepLazyFrameWindows` hydrates through
-    // `batchLoadLazyFrames`, which operates on the ACTIVE `state.session`. For any
-    // other session (a multi-session project's non-active sessions) nothing
-    // hydrates, and this would emit a resident-only file — the very truncation it
-    // exists to prevent, just harder to notice. So count the frames the sweep
-    // actually offered and compare against the frames this camera HAS in the
-    // store; short means hydration did not happen and the export must fail loudly
-    // rather than write a plausible partial file.
-    var rowMap = session.lazyLoader && session.lazyLoader.frameRowByCam
-        ? session.lazyLoader.frameRowByCam.get(cameraName) : null;
-    var expectedFrames = rowMap ? rowMap.size : 0;
-
-    var BATCH = 256;
-    var batch = [];
-    var nFrames = 0;
-    var nVisited = 0;
+    var cams = [];
     try {
+        for (var c = 0; c < cameras.length; c++) {
+            var env = _buildCameraExportHeader(session, cameras[c].cameraName, cameras[c].videoFileInfo);
+            env.instanceFilter = instanceFilter;
+            env.reprojAsUser = reprojAsUser;
+            var writer = await SIO.openSlpWriter({
+                skeletons: [env.skeleton],
+                videos: [env.video],
+                tracks: env.tracks,
+                identities: [],
+                sessions: [],
+                provenance: { source: 'lucid', exported_at: new Date().toISOString() },
+            });
+            // COVERAGE PRECONDITION. `sweepLazyFrameWindows` hydrates through
+            // `batchLoadLazyFrames`, which operates on the ACTIVE `state.session`. For any
+            // other session (a multi-session project's non-active sessions) nothing
+            // hydrates, and this would emit a resident-only file — the very truncation it
+            // exists to prevent, just harder to notice. So count the frames the sweep
+            // actually offered and compare against the frames this camera HAS in the
+            // store; short means hydration did not happen and the export must fail loudly
+            // rather than write a plausible partial file.
+            var rowMap = session.lazyLoader && session.lazyLoader.frameRowByCam
+                ? session.lazyLoader.frameRowByCam.get(cameras[c].cameraName) : null;
+            cams.push({ name: cameras[c].cameraName, env: env, writer: writer, batch: [], nFrames: 0,
+                        expectedFrames: rowMap ? rowMap.size : 0 });
+        }
+
+        var BATCH = 256;
+        var nVisited = 0;
         await sweepLazyFrameWindows(session, function (frameIdx, fg) {
             // `fg` is undefined for a frame with 3D grouping but no resident 2D
             // (the sweep's contract) — nothing to emit for a 2D export.
             if (!fg) return;
             nVisited++;
-            var lf = _buildCameraLabeledFrame(session, cameraName, frameIdx, fg, env);
-            // A frame with no instances for THIS camera (or none surviving
-            // `instanceFilter`) yields null — legitimately fewer written than
-            // visited, which is why the coverage check below uses `nVisited`.
-            if (!lf) return;
-            batch.push(lf);
-            nFrames++;
-            if (batch.length >= BATCH) {
-                writer.appendFrames(batch);
-                batch = [];
+            for (var k = 0; k < cams.length; k++) {
+                var cam = cams[k];
+                var lf = _buildCameraLabeledFrame(session, cam.name, frameIdx, fg, cam.env);
+                // A frame with no instances for THIS camera (or none surviving
+                // `instanceFilter`) yields null — legitimately fewer written than
+                // visited, which is why the coverage check below uses `nVisited`.
+                if (!lf) continue;
+                cam.batch.push(lf);
+                cam.nFrames++;
+                if (cam.batch.length >= BATCH) {
+                    cam.writer.appendFrames(cam.batch);
+                    cam.batch = [];
+                }
             }
         }, {
             onProgress: opts.onProgress,
         });
-        if (batch.length > 0) writer.appendFrames(batch);
-        console.log('[export-slp-streaming] camera', cameraName + ':', nFrames.toLocaleString(),
-            'labeled frames written,', nVisited.toLocaleString(), 'of', expectedFrames.toLocaleString(),
-            'store frames visited');
-        if (expectedFrames > 0 && nVisited < expectedFrames) {
-            throw new Error('Export aborted: only ' + nVisited.toLocaleString() + ' of ' +
-                expectedFrames.toLocaleString() + ' frames could be read for camera "' + cameraName +
-                '", so the file would be incomplete. This happens when exporting a session that is ' +
-                'not the one currently open — switch to that session and export again.');
+        var out = [];
+        for (var j = 0; j < cams.length; j++) {
+            var cj = cams[j];
+            if (cj.batch.length > 0) { cj.writer.appendFrames(cj.batch); cj.batch = []; }
+            console.log('[export-slp-streaming] camera', cj.name + ':', cj.nFrames.toLocaleString(),
+                'labeled frames written,', nVisited.toLocaleString(), 'of', cj.expectedFrames.toLocaleString(),
+                'store frames visited');
+            if (cj.expectedFrames > 0 && nVisited < cj.expectedFrames) {
+                throw new Error('Export aborted: only ' + nVisited.toLocaleString() + ' of ' +
+                    cj.expectedFrames.toLocaleString() + ' frames could be read for camera "' + cj.name +
+                    '", so the file would be incomplete. This happens when exporting a session that is ' +
+                    'not the one currently open — switch to that session and export again.');
+            }
         }
-        if (opts.sink) {
-            await writer.writeToSink(opts.sink, { chunkBytes: opts.chunkBytes });
-            return null;
+        for (var w = 0; w < cams.length; w++) {
+            var sink = opts.sinks && opts.sinks[w];
+            if (sink) {
+                await cams[w].writer.writeToSink(sink, { chunkBytes: opts.chunkBytes });
+                out.push(null);
+            } else {
+                out.push(cams[w].writer.close());
+            }
+            cams[w].writer = null;   // closed: nothing left to dispose
         }
-        return writer.close();
+        return out;
     } catch (err) {
-        try { if (typeof writer.dispose === 'function') writer.dispose(); } catch (e) { /* ignore */ }
+        for (var d = 0; d < cams.length; d++) {
+            var wr = cams[d].writer;
+            try { if (wr && typeof wr.dispose === 'function') wr.dispose(); } catch (e) { /* ignore */ }
+        }
         throw err;
     }
+}
+
+/**
+ * Whether By Cam's camera `selection` (one session, one camera) would be written
+ * by the streaming sweep — the same routing as `exportSlpMultiSession` — so the
+ * caller can put every such camera of a session into ONE `exportCamerasSlpStreaming`.
+ */
+export function cameraExportUsesSweep(selection, reprojAsUser, instanceFilter) {
+    var session = selection && selection.session;
+    if (!_exportWouldTruncate(session)) return false;
+    if (!reprojAsUser && instanceFilterAllowsLazyFastPath(instanceFilter) &&
+        lazyCameraFastPathUsable(window.SleapIO, session, selection.cameraName)) return false;
+    return true;
 }
 
 export async function exportSlpClientSide(session, cameraName, reprojAsUser, videoFileInfo, outputFilename, instanceFilter) {
@@ -1967,9 +2033,13 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
  * @param {Array<{session, cameraName, videoFileInfo}>} selections
  * @param {boolean|null} reprojAsUser
  * @param {object} [instanceFilter]
+ * @param {object} [opts]
+ * @param {function(number, number): (Promise|void)} [opts.onProgress]  frames swept
+ *   of total, only on the streaming path (a lazy project that would truncate); the
+ *   other paths are one step each and never call it. Throwing from it aborts.
  * @returns {Promise<Blob>}
  */
-export async function exportSlpMultiSession(selections, reprojAsUser, instanceFilter) {
+export async function exportSlpMultiSession(selections, reprojAsUser, instanceFilter, opts) {
     var SIO = window.SleapIO;
     if (!SIO) throw new Error('sleap-io.js not loaded');
 
@@ -1988,7 +2058,8 @@ export async function exportSlpMultiSession(selections, reprojAsUser, instanceFi
     if (selections.length === 1 && _exportWouldTruncate(selections[0].session)) {
         var oneBytes = await exportCameraSlpStreaming(
             selections[0].session, selections[0].cameraName, reprojAsUser,
-            selections[0].videoFileInfo, instanceFilter);
+            selections[0].videoFileInfo, instanceFilter,
+            { onProgress: opts && opts.onProgress });
         return new Blob([oneBytes], { type: 'application/x-hdf5' });
     }
     // Multi-selection (several sessions/cameras into ONE file) still has no
@@ -2926,7 +2997,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=761adbb0dbc2', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=4b5d39f5e9c5', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },

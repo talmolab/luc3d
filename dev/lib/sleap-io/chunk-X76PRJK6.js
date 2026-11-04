@@ -36,7 +36,7 @@ import {
   resolveIdentity,
   resolveVideoFilename,
   sessionsReadError
-} from "./chunk-H7G4PJNA.js?v=761adbb0dbc2";
+} from "./chunk-H7G4PJNA.js?v=4b5d39f5e9c5";
 import {
   RemoteIOError,
   fetchRetrying,
@@ -48,7 +48,7 @@ import {
   redactedCauseSummary,
   resolveUrl,
   statusToMessage
-} from "./chunk-YS7Q6CO6.js?v=761adbb0dbc2";
+} from "./chunk-YS7Q6CO6.js?v=4b5d39f5e9c5";
 
 // src/model/centroid.ts
 var _centroidSkeleton = null;
@@ -13376,20 +13376,41 @@ function makeLazySourceLabels(labels) {
   out._lazyDataStore = labels._lazyDataStore;
   return out;
 }
+// LUCID local patch (lazy re-emit): the lazy fast path (`writeSlpToFileLazy`,
+// LUC3D's per-camera export of a camera's own store) built one boxed JS array
+// per row (~5M per camera on a 108,000-frame, 5-mouse recording) and wrote the
+// tables uncompressed: ~200 MB per camera. The values now go straight into one
+// typed array (the same numbers createMatrixDataset wrote), and a table past
+// SESSION_FLUSH_ROWS is stored gzip level 1 in LUCID_COLUMN_CHUNK_ROWS x 1
+// column chunks, as the streaming writer stores its big tables (~3x smaller;
+// over an SMB share Chrome's File System Access close() reads a file back at
+// ~10 MB/s, so size is time). A table of at most SESSION_FLUSH_ROWS rows is
+// written exactly as before (contiguous), so small files are byte-identical.
 function writeLazyMatrixDataset(file, name, columns, fieldNames, dtype) {
   const rowCount = (columns[fieldNames[0]] ?? []).length;
   const colCount = fieldNames.length;
-  const rows = [];
-  for (let i = 0; i < rowCount; i++) {
-    const row = new Array(colCount);
-    for (let j = 0; j < colCount; j++) {
-      const col = columns[fieldNames[j]] ?? [];
+  const data = dtype.includes("i") && dtype.includes("4") ? new Int32Array(rowCount * colCount) : new Float64Array(rowCount * colCount);
+  for (let j = 0; j < colCount; j++) {
+    const col = columns[fieldNames[j]] ?? [];
+    for (let i = 0; i < rowCount; i++) {
       const v = col[i];
-      row[j] = v === void 0 || v === null ? 0 : Number(v);
+      data[i * colCount + j] = v === void 0 || v === null ? 0 : Number(v);
     }
-    rows.push(row);
   }
-  createMatrixDataset(file, name, rows, fieldNames, dtype);
+  if (rowCount > SESSION_FLUSH_ROWS) {
+    file.create_dataset({
+      name,
+      data,
+      shape: [rowCount, colCount],
+      dtype,
+      chunks: [Math.min(LUCID_COLUMN_CHUNK_ROWS, rowCount), 1],
+      compression: "gzip",
+      compression_opts: 1
+    });
+  } else {
+    file.create_dataset({ name, data, shape: [rowCount, colCount], dtype });
+  }
+  setStringAttr(file.get(name), "field_names", JSON.stringify(fieldNames));
 }
 function writeLazyFramesAndInstances(file, store) {
   writeLazyMatrixDataset(
