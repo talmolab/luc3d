@@ -14366,7 +14366,28 @@ session's resident/total) rather than truncate silently. Covered by
   `exportCamerasSlpStreaming(session, cameras, reprojAsUser, instanceFilter, opts)`
   builds several cameras of one session in ONE sweep (one writer each; hydrating is
   nearly all of a camera's cost, so N cameras cost about one sweep);
-  `exportCameraSlpStreaming` is its one-camera case. `cameraExportUsesSweep(selection,
+  `exportCameraSlpStreaming` is its one-camera case. **On a project reopened from one
+  file** (`SioLazyLoader._sharedStore`) with Reprojections off it does not hydrate
+  every frame: `exportCamerasFromSharedStore(session, cameras, ctx, instanceFilter,
+  opts)` copies each camera's rows out of the shared store into that camera's writer
+  (`SlpStreamWriter.appendRawRows`, bundle patch `(raw rows)`), in frame order, and
+  builds with `_buildCameraLabeledFrame` only the frames the store cannot speak for:
+  resident frames (edits, deletions, additions) and the frames `storeCopyDriftFrames`
+  finds (a group member whose track, type, score, own per-node scores or held 2D
+  differ from its row; two kept rows on one track; a resident frame missing the
+  camera), hydrated by `sweepLazyFrameWindows` over their runs. The copy writes the
+  pass's values and order (members first, then the rest, each by row; instance score
+  `score || 0`; each node's own score else the instance score; `complete` 1 for a
+  placed node; no tracking score or `from_predicted`), except that a node the file
+  holds placed but invisible keeps `visible` 0 (lazy hydration drops that flag, so the
+  pass wrote 1). `sharedStoreCopyContext(session, reprojAsUser, instanceFilter)` gives
+  the store's columns or a `blocker` (Reprojections on, a skeleton or track list that
+  differs from the file's, several stores, format < 1.1); then, or when more than
+  max(2,000, 5%) frames would need hydrating, the per-frame sweep runs. `opts.route`
+  ('store' / 'sweep') forces one (tests). Progress counts video frames over the
+  cameras' copies, every 4,096 frames. Synthetic 8 cameras x 20,000 frames x 5
+  animals: 6.4 s → 1.3 s. Test: `tests/e2e/export-bycam-store-copy.mjs` (both routes
+  value for value, with negative controls). `cameraExportUsesSweep(selection,
   …)` says whether `exportSlpMultiSession` would route a camera there (By Cam groups
   those cameras per session). The store fast path (`lazyCameraFastPathUsable`) is
   refused on a reopened project `.slp` (`SioLazyLoader._sharedStore`): every
