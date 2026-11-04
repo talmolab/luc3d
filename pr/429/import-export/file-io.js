@@ -12,15 +12,15 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, hasPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=105c3548acce';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=105c3548acce';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=105c3548acce';
+         toBoxedPoints3d, hasPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=5ace279db581';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=5ace279db581';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=5ace279db581';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=105c3548acce';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=105c3548acce';
-import { writePlaneMetadata } from './plane-metadata.js?v=105c3548acce';
-import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=105c3548acce';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=5ace279db581';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=5ace279db581';
+import { writePlaneMetadata } from './plane-metadata.js?v=5ace279db581';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=5ace279db581';
 
 // ============================================
 // Generic file picker
@@ -1196,13 +1196,20 @@ function _buildCameraLabeledFrame(session, cameraName, frameIdx, fg, env) {
     // duplicates a track a grouped instance holds (SLEAP forbids two
     // instances sharing a (frame, track) pair).
     var usedTrackIdx = {};
+    // Each node's OWN score (CLAUDE.md "Per-node prediction scores"): a lazy
+    // instance holds none, the store is the only copy, so ask the session, as
+    // the project save does. Asking only the instance wrote the instance score
+    // onto every node of every lazily loaded prediction.
+    var nodeScoreOf = function (sinst) {
+        return function (k) { return session.predictedNodeScore(cameraName, frameIdx, sinst, k); };
+    };
 
     // 1. Grouped UserInstances first (retain their track)
     for (var ii = 0; ii < groupedInstances.length; ii++) {
         var inst = groupedInstances[ii];
         var instIsPred = inst.type === 'predicted';
         var instScore = inst.score != null ? inst.score : 1.0;
-        var pts = _buildSioPoints(inst, numNodes, instIsPred ? instScore : undefined);
+        var pts = _buildSioPoints(inst, numNodes, instIsPred ? instScore : undefined, null, nodeScoreOf(inst));
         // inst.trackIdx can be null (trackless UserInstance imported
         // from a 2D SLP with track=null). `null >= 0` is true in JS
         // so we need the explicit != null guard before the range check.
@@ -1233,7 +1240,7 @@ function _buildCameraLabeledFrame(session, cameraName, frameIdx, fg, env) {
         var ugInst = ungroupedInstances[ugi];
         var ugIsPred = ugInst.type === 'predicted';
         var ugScore = ugInst.score != null ? ugInst.score : 1.0;
-        var ugPts = _buildSioPoints(ugInst, numNodes, ugIsPred ? ugScore : undefined);
+        var ugPts = _buildSioPoints(ugInst, numNodes, ugIsPred ? ugScore : undefined, null, nodeScoreOf(ugInst));
         var ugTrack = (ugInst.trackIdx != null && ugInst.trackIdx >= 0 &&
             ugInst.trackIdx < tracks.length && !usedTrackIdx[ugInst.trackIdx])
             ? tracks[ugInst.trackIdx] : null;
@@ -2990,7 +2997,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=105c3548acce', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=5ace279db581', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },

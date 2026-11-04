@@ -19,7 +19,8 @@
  *  5. A reopened (lazy) project builds every camera in ONE sweep ("Reading N
  *     cameras", its frames on the bar), and each camera's file holds that camera
  *     only — the store's fast path used to re-emit the whole shared project into
- *     every camera's file. Files save side by side (both writables open at
+ *     every camera's file — with each node's own prediction score (the sweep
+ *     used to write the instance score on every node). Files save side by side (both writables open at
  *     once), so a share's slow close() does not hold up the next file.
  *  4. In the picked folder, a camera's file goes into the camera's own folder
  *     (the folder load's `cameraDirMap`, else the folder its video sits in), next
@@ -309,6 +310,7 @@ try {
             const g = new InstanceGroup(f + 1, 0);
             cams.forEach((cn, ci) => {
                 const inst = new Instance([[50 + ci, 60], [60, 68], [70, 76]], 0, 'predicted', 1);
+                inst.setPointScores([0.25 + ci / 8, 0.5, 0.75]);   // each node its own score
                 inst._rawInstIndex = 0;
                 fg.addInstance(cn, inst);
                 g.addInstance(cn, inst);
@@ -357,9 +359,20 @@ try {
         const cardHidden = document.getElementById('loadingOverlay').classList.contains('hidden');
         const h5url = new URL('lib/h5wasm/h5wasm.iife.js', document.baseURI).href;
         const content = {};
+        const h5 = await import('h5wasm');
+        await h5.ready;
         for (const [path, blob] of Object.entries(window.__blobs)) {
             const back = await window.SleapIO.readSlpStreaming(new File([blob], path), { openVideos: false, h5wasmUrl: h5url });
-            content[path] = { videos: back.videos.map(v => v.filename), frames: back.labeledFrames.length };
+            // The per-node scores, straight from the file's pred_points.score column.
+            const p = '/__bycam_' + path.replace(/\W/g, '_');
+            h5.FS.writeFile(p, new Uint8Array(await blob.arrayBuffer()));
+            const f = new h5.File(p, 'r');
+            const pp = f.get('pred_points'), cols = JSON.parse(pp.attrs.field_names.value), v = pp.value, nc = cols.length;
+            const scores = new Set();
+            for (let r = 0; r < pp.shape[0]; r++) scores.add(Number(v[r * nc + cols.indexOf('score')]).toFixed(3));
+            f.close();
+            h5.FS.unlink(p);
+            content[path] = { videos: back.videos.map(v => v.filename), frames: back.labeledFrames.length, scores: [...scores].sort() };
         }
         return { card: window.__card.slice(), written: Object.assign({}, window.__written), content,
                  maxInflight: window.__maxInflight, cardHidden, popup };
@@ -378,6 +391,9 @@ try {
         const c = lazy.content[cam + '.slp'] || {};
         check(JSON.stringify(c.videos) === JSON.stringify([cam + '.mp4']) && c.frames === LAZY_FRAMES,
             `${cam}.slp holds ${cam} only (1 video, ${total} frames), not the whole project`, c);
+        const want = [(0.25 + Number(cam.slice(3)) / 8).toFixed(3), '0.500', '0.750'].sort();
+        check(JSON.stringify(c.scores) === JSON.stringify(want),
+            `${cam}.slp keeps each node's own score (${want.join(', ')}), not the instance score on every node`, c.scores);
     }
     check(lazy.maxInflight === 2, 'the two files saved side by side (both writables open at once)', lazy.maxInflight);
     const style = await page.evaluate(async () => {
