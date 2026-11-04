@@ -4,8 +4,8 @@
  *
  * For a sampled frame and the identities present, this decodes that frame in
  * every camera (`view.decoder.getFrame`), cuts a MASKED, POSE-ALIGNED crop of
- * each identity from its own 2D keypoints, and embeds the crops with DINOv2-small
- * (the CLS token, 384 values) on the GPU.
+ * each identity from its own 2D keypoints, and embeds the crops with DINOv3
+ * ViT-S/16 (the CLS token, 384 values) on the GPU.
  *
  * The crop reproduces the offline pipeline the check was calibrated with
  * (2026-10-03; cosine 0.991 between this model's fp16 WebGPU output and the
@@ -14,14 +14,14 @@
  * (Nose–TTI), 160 × 160, greyscale; everything outside the animal's convex hull
  * dilated by a quarter body length is black, and so are the other animals' hulls
  * in that view (so an overlapping neighbour is not learned as this animal); then
- * resized to the model input, 168 × 168 (bilinear), and normalised with the
- * ImageNet mean/SD. The input was 224 until 2026-10-22: 168 is 12 × 12 of the
- * model's 14-px patches instead of 16 × 16, so the model runs 1.85x as fast
- * (243 vs 132 crops/s on an M2 Pro) and the CPU workers 1.76x; the threshold was
- * recalibrated for it (see MODULES.md `pose/id-switch-check.js`).
+ * resized to the model input, 192 × 192 (bilinear), and normalised with the
+ * ImageNet mean/SD: 12 × 12 of DINOv3's 16-px patches, the token count
+ * DINOv2-small had at its 168-px input (it was the model until 2026-11-03; 224 px
+ * until 2026-10-22). DINOv3 separates look-alike animals better (MODULES.md
+ * `pose/id-switch-check.js` has the recalibration).
  *
- * The model and runtime (transformers.js, pinned to 4.3.0, + onnx-community/
- * dinov2-small: fp16 ~44 MB, or fp32 ~88 MB on GPUs without 'shader-f16') are
+ * The model and runtime (transformers.js, pinned to 4.3.0, + IMAGE_MODEL_ID:
+ * fp16 ~43 MB, or fp32 ~86 MB on GPUs without 'shader-f16' and on the CPU) are
  * fetched from the CDN on FIRST USE and cached by
  * the browser; nothing about the user's data is sent anywhere. It runs on a
  * hardware GPU through WebGPU when there is one (`pickImageDevice`); otherwise on
@@ -52,26 +52,76 @@
  * spawns ui/image-crop-worker.js and ui/image-model-worker.js.
  */
 
-import { state } from './app-state.js?v=864809506443';
-import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE, findNode, isTailNode } from '../pose/id-switch-check.js?v=864809506443';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=864809506443';
-import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js?v=864809506443';
-import { EmbeddingCache, cropKeyHash, hullsReachingCrop } from '../pose/embedding-cache.js?v=864809506443';
+import { state } from './app-state.js?v=193dbfc8af83';
+import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE, findNode, isTailNode } from '../pose/id-switch-check.js?v=193dbfc8af83';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=193dbfc8af83';
+import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js?v=193dbfc8af83';
+import { EmbeddingCache, cropKeyHash, hullsReachingCrop } from '../pose/embedding-cache.js?v=193dbfc8af83';
+import { installModelPackageFetch, withPackageCachePolicy, modelPackageTransfer } from './image-model-package.js?v=193dbfc8af83';
 
 // The load meter now lives in ui/load-graph.js (shared with the loading overlay); still exported from here.
 export { createLoadMeter };
 
 export const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/+esm';
-export const IMAGE_MODEL_ID = 'onnx-community/dinov2-small';
-export const IMAGE_MODEL_MB = 44;
+/**
+ * DINOv3 ViT-S/16 (Meta, DINOv3 License), converted from onnx-community/dinov3-vits16-pretrain-lvd1689m-ONNX
+ * for this check: model_fp16.onnx keeps layer 0's attention in fp32 (its logits reach ~2.5e6, past fp16's
+ * range, so a plain fp16 copy returns garbage on WebGPU), the export's SplitToSequence ops are plain Split
+ * (no WebGPU kernel: each went through the CPU) and only last_hidden_state is output. model.onnx is the fp32
+ * model with the same graph changes. The conversion script and its checks are in the model repo.
+ */
+export const IMAGE_MODEL_ID = 'olinesn/dinov3-vits16-lucid';
+export const IMAGE_MODEL_MB = 43;
 
 /**
  * Crop side (px) and model input side (px). The check is calibrated to THESE sizes:
  * changing either changes the embeddings and needs a recalibration of
  * `imageChangeThreshold` (MODULES.md). INPUT must be a multiple of the model's
- * 14-px patch.
+ * 16-px patch.
  */
-export const CROP = 160, INPUT = 168;
+export const CROP = 160;
+/** The built-in model's input side (px). */
+export const BUILTIN_INPUT = 192;
+
+/**
+ * The model the app ships: `key` 'builtin'. A package (ui/image-model-package.js) has the same fields, with
+ * its own key, repo id, input side, recommended threshold and fp16 flag; `threshold: null` here means the
+ * Tracking Wizard's `imageChangeThreshold`, which is calibrated for this model.
+ */
+export const BUILTIN_IMAGE_MODEL = Object.freeze({
+    key: 'builtin', id: IMAGE_MODEL_ID, builtin: true, name: 'DINOv3 ViT-S/16 (built-in)', base: 'facebook/dinov3-vits16-pretrain-lvd1689m',
+    license: 'DINOv3 License', input: BUILTIN_INPUT, threshold: null, fp16: true, mb: Object.freeze({ fp16: IMAGE_MODEL_MB, fp32: 2 * IMAGE_MODEL_MB }),
+});
+
+let _active = BUILTIN_IMAGE_MODEL;
+/**
+ * The model input side (px) of the ACTIVE model (`setActiveImageModel`): a live binding, so every importer
+ * reads the current value. Workers are separate module instances: the crop pool and the CPU model pool pass
+ * the side with each job instead.
+ */
+export let INPUT = BUILTIN_INPUT;
+
+/** The model the next check embeds with: BUILTIN_IMAGE_MODEL or a package. */
+export function activeImageModel() { return _active; }
+
+/**
+ * Make `pkg` (a package, or null for the built-in model) the model the check loads and embeds with. Takes
+ * effect for the next `createImageEmbedder`; a loaded model of another key is dropped (it is reloaded,
+ * from the browser cache, when switched back).
+ */
+export function setActiveImageModel(pkg) {
+    const next = pkg || BUILTIN_IMAGE_MODEL;
+    if (next.key === _active.key) { _active = next; return; }
+    _active = next;
+    INPUT = next.input;
+    _modelPromise = null;
+}
+
+/** The download size (MB) of the active model in `dtype`, for status lines ('' when unknown). */
+function activeModelMb(dtype) {
+    const mb = _active.mb && (dtype === 'fp16' ? _active.mb.fp16 : _active.mb.fp32);
+    return mb ? mb + ' MB' : 'its weights';
+}
 const MEAN = [0.485, 0.456, 0.406], STD = [0.229, 0.224, 0.225];
 const NOSE = 'Nose', TTI = 'TTI';
 
@@ -122,6 +172,7 @@ export function importTransformers() {
  * calibrated embeddings: cosine 0.992 vs 0.991).
  */
 async function gpuDtype() {
+    if (!_active.fp16) return 'fp32';
     try {
         const a = navigator.gpu && await navigator.gpu.requestAdapter();
         return a && a.features && a.features.has('shader-f16') ? 'fp16' : 'fp32';
@@ -129,31 +180,35 @@ async function gpuDtype() {
 }
 
 let _modelPromise = null;
-/** Load (once) the runtime + model. `onStatus(text)` reports the download. */
+/** Load (once per active model) the runtime + the active model. `onStatus(text)` reports the download. */
 export function loadImageModel(onStatus) {
     if (_modelPromise) return _modelPromise;
-    _modelPromise = (async function () {
+    const pkg = _active;
+    const p = _modelPromise = (async function () {
         const dtype = await gpuDtype();
-        if (onStatus) onStatus('Loading the image model (' + (dtype === 'fp16' ? IMAGE_MODEL_MB : 2 * IMAGE_MODEL_MB) + ' MB on first use, cached afterwards)…');
+        if (onStatus) onStatus(pkg.builtin ? 'Loading the image model (' + activeModelMb(dtype) + ' on first use, cached afterwards)…'
+            : 'Loading the image model "' + pkg.name + '" (' + activeModelMb(dtype) + ')…');
         const T = await importTransformers();
-        const model = await T.AutoModel.from_pretrained(IMAGE_MODEL_ID, {
+        installModelPackageFetch(T);
+        const model = await withPackageCachePolicy(T, pkg, function () { return T.AutoModel.from_pretrained(pkg.id, {
             device: 'webgpu', dtype: dtype,
-            // Keep the output ON THE GPU: the model's only output is last_hidden_state [n, 1 + (INPUT/14)², 384]
-            // ([n, 145, 384] at 168: 3.3 MB for 15 crops in fp32) and the check uses 1 of those tokens — clsFromGpu copies just it.
+            // Keep the output ON THE GPU: the model's only output is last_hidden_state [n, 1 + 4 + (INPUT/16)², 384]
+            // (CLS, 4 register tokens, the patches: [n, 149, 384] at 192, 3.4 MB for 15 crops in fp32) and the check
+            // uses 1 of those tokens — clsFromGpu copies just it.
             session_options: { preferredOutputLocation: 'gpu-buffer' },
             progress_callback: function (p) {
                 if (onStatus && p && p.status === 'progress' && p.total) {
                     onStatus('Downloading the image model: ' + Math.round(100 * p.loaded / p.total) + '% (first use only)');
                 }
             },
-        });
+        }); });
         let device = null, ortAdapter = null;
         try { device = await T.env.backends.onnx.webgpu.device; } catch (e) { /* clsFromGpu falls back to a full read */ }
         try { ortAdapter = await T.env.backends.onnx.webgpu.adapter; } catch (e) { /* gpuAdapterInfo asks for one */ }
         return { T: T, model: model, dtype: dtype, device: device, adapter: await gpuAdapterInfo(device, ortAdapter) };
     })().catch(function (e) { throw asModelDownloadFailure(e); });
-    _modelPromise.catch(function () { _modelPromise = null; });   // allow a retry after a failure
-    return _modelPromise;
+    p.catch(function () { if (_modelPromise === p) _modelPromise = null; });   // allow a retry after a failure
+    return p;
 }
 
 const GPU_VENDORS = { nvidia: 'NVIDIA', amd: 'AMD', ati: 'AMD', intel: 'Intel', apple: 'Apple', qualcomm: 'Qualcomm', arm: 'Arm', google: 'Google', microsoft: 'Microsoft' };
@@ -240,6 +295,7 @@ export function cpuModelWorkerCount(cores, memoryGB) {
  */
 export async function createCpuModelPool(count, onStatus, clock) {
     const SZ = 3 * INPUT * INPUT, slots = [];
+    const model = { id: _active.id, input: INPUT, pkg: modelPackageTransfer(_active) };
     let nextId = 0;
     const start = function (reportProgress) {
         return new Promise(function (resolve, reject) {
@@ -252,7 +308,7 @@ export async function createCpuModelPool(count, onStatus, clock) {
                 try { slot.w.terminate(); } catch (e) { /* ignore */ }
                 reject(err);                                     // no-op once started
             };
-            try { slot.w = new Worker(new URL('./image-model-worker.js?v=864809506443', import.meta.url), { type: 'module' }); }
+            try { slot.w = new Worker(new URL('./image-model-worker.js?v=193dbfc8af83', import.meta.url), { type: 'module' }); }
             catch (e) { reject(e); return; }
             slot.w.onerror = function (e) {
                 if (e && e.preventDefault) e.preventDefault();
@@ -272,7 +328,7 @@ export async function createCpuModelPool(count, onStatus, clock) {
                     if (m.type === 'result') p.resolve(m); else p.reject(new Error(m.message));
                 }
             };
-            slot.w.postMessage({ type: 'load' });
+            slot.w.postMessage({ type: 'load', model: model });
         });
     };
     slots.push(await start(true));
@@ -330,12 +386,15 @@ export const WEBNN_TRIAL_FRAMES = 6;
  * can use NVIDIA tensor cores; on macOS (Chrome 154) it measured CPU-only.
  */
 export async function loadWebNNModel(onStatus) {
+    if (!_active.fp16) throw new Error('this model has no fp16 build, which WebNN needs');
     if (onStatus) onStatus('Compiling the image model for WebNN (experimental)…');
     const T = await importTransformers();
-    const model = await T.AutoModel.from_pretrained(IMAGE_MODEL_ID, {
+    installModelPackageFetch(T);
+    const pkg = _active;
+    const model = await withPackageCachePolicy(T, pkg, function () { return T.AutoModel.from_pretrained(pkg.id, {
         device: 'webnn-gpu', dtype: 'fp16',
         session_options: { freeDimensionOverrides: { batch_size: WEBNN_BATCH, num_channels: 3, height: INPUT, width: INPUT } },
-    });
+    }); });
     await model({ pixel_values: new T.Tensor('float32', new Float32Array(WEBNN_BATCH * 3 * INPUT * INPUT), [WEBNN_BATCH, 3, INPUT, INPUT]) });
     return model;
 }
@@ -557,16 +616,18 @@ export function cutCrop(image, g, others, canvas) {
     return out;
 }
 
-// Bilinear CROP -> INPUT sample positions, fixed, so computed once (same arithmetic as per pixel).
-let _resizeLUT = null;
-function resizeLUT() {
-    if (_resizeLUT) return _resizeLUT;
-    const S = CROP, D = INPUT, i0 = new Int32Array(D), i1 = new Int32Array(D), f = new Float64Array(D);
+// Bilinear CROP -> D sample positions, fixed per D, so computed once per input side (same arithmetic as per pixel).
+const _resizeLUTs = new Map();
+function resizeLUT(D) {
+    if (_resizeLUTs.has(D)) return _resizeLUTs.get(D);
+    const S = CROP, i0 = new Int32Array(D), i1 = new Int32Array(D), f = new Float64Array(D);
     for (let k = 0; k < D; k++) {
         const sk = Math.min(Math.max((k + 0.5) * S / D - 0.5, 0), S - 1);
         i0[k] = Math.floor(sk); i1[k] = Math.min(i0[k] + 1, S - 1); f[k] = sk - i0[k];
     }
-    return (_resizeLUT = { i0: i0, i1: i1, f: f });
+    const lut = { i0: i0, i1: i1, f: f };
+    _resizeLUTs.set(D, lut);
+    return lut;
 }
 
 /**
@@ -604,9 +665,12 @@ export function cropPointsToInput(g) {
     return out;
 }
 
-/** Bilinear CROP -> INPUT resize (align_corners=false, like torch interpolate) + ImageNet normalisation, into `data` at `offset`. */
-export function writeInputTensor(crop, data, offset) {
-    const S = CROP, D = INPUT, plane = D * D, L = resizeLUT();
+/**
+ * Bilinear CROP -> `size` resize (align_corners=false, like torch interpolate) + ImageNet normalisation, into
+ * `data` at `offset`. `size` defaults to INPUT (the active model's); a worker passes the side it was sent.
+ */
+export function writeInputTensor(crop, data, offset, size) {
+    const S = CROP, D = size || INPUT, plane = D * D, L = resizeLUT(D);
     const m0 = MEAN[0], m1 = MEAN[1], m2 = MEAN[2], s0 = STD[0], s1 = STD[1], s2 = STD[2];
     for (let y = 0; y < D; y++) {
         const r0 = L.i0[y] * S, r1 = L.i1[y] * S, fy = L.f[y], o = offset + y * D;
@@ -1001,7 +1065,7 @@ export function createCropPool(clock) {
             if (clock) clock.begin(w);
             return new Promise(function (resolve, reject) {
                 pending.set(id, { resolve: resolve, reject: reject, w: w });
-                w.worker.postMessage({ id: id, image: image, crops: crops }, [image]);
+                w.worker.postMessage({ id: id, image: image, crops: crops, input: INPUT }, [image]);
             });
         },
         terminate: function () {
@@ -1019,7 +1083,7 @@ export function createCropPool(clock) {
     };
     try {
         for (let i = 0; i < n; i++) {
-            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=864809506443', import.meta.url), { type: 'module' }), load: 0 };
+            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=193dbfc8af83', import.meta.url), { type: 'module' }), load: 0 };
             w.worker.onmessage = function (e) {
                 if (e.data.want) { wanting.push(w); grantNext(); return; }
                 if (e.data.release) { if (holder === w) holder = null; grantNext(); return; }
@@ -1091,7 +1155,7 @@ export function embeddingCacheScope(session, views) {
 // kept beside the vectors, under the same key, and shown when that frame comes from the cache again.
 /** Frames per run whose sample crop's pixels are kept for a later cached run's dialog. */
 export const SAMPLE_FRAMES_PER_RUN = 200;
-/** Most sample crops kept, all sessions together (INPUT x INPUT grey bytes each: 28 KB at 168, so 7.2 MB). */
+/** Most sample crops kept, all sessions together (INPUT x INPUT grey bytes each: 37 KB at 192, so 9.4 MB). */
 export const SAMPLE_PIXELS_MAX = 256;
 const _samplePixels = new Map();               // full cache key -> Uint8Array(INPUT * INPUT), least recently used first
 
@@ -1164,6 +1228,10 @@ function assembleItems(nItems, entries, cams) {
  */
 export async function createImageEmbedder(session, opts) {
     opts = opts || {};
+    if (opts.imageModel !== undefined) setActiveImageModel(opts.imageModel);
+    const modelInfo = { key: _active.key, name: _active.name, input: INPUT, builtin: !!_active.builtin };
+    // every cache tag starts with the model's key, so a vector is never served for another model
+    const modelKey = modelInfo.builtin ? 'builtin' : modelInfo.key.slice(0, 16);
     const views = (state.views || []).filter(function (v) { return v && v.decoder && typeof v.decoder.getFrame === 'function'; });
     if (!views.length) throw cannotRun('needs the session\'s videos to be loaded');
     const sk = skeletonIndex((session.skeleton && session.skeleton.nodes) || []);
@@ -1179,7 +1247,7 @@ export async function createImageEmbedder(session, opts) {
     if (where.kind === 'webgpu') ({ T, model, device, dtype, adapter } = await loadImageModel(opts.onStatus));
     else if (testModel) dtype = null;
     else {
-        if (opts.onStatus) opts.onStatus('No GPU (' + where.why + ') — loading the image model to run on the CPU (' + 2 * IMAGE_MODEL_MB + ' MB on first use, cached afterwards)…');
+        if (opts.onStatus) opts.onStatus('No GPU (' + where.why + ') — loading the image model to run on the CPU (' + activeModelMb('fp32') + (_active.builtin ? ' on first use, cached afterwards' : '') + ')…');
         const nav = typeof navigator !== 'undefined' ? navigator : {};
         cpu = await createCpuModelPool(opts.cpuWorkers > 0 ? Math.floor(opts.cpuWorkers) : cpuModelWorkerCount(nav.hardwareConcurrency, nav.deviceMemory), opts.onStatus, cpuClock);
         cpuWorkers = cpu.size;
@@ -1203,7 +1271,7 @@ export async function createImageEmbedder(session, opts) {
     const tm = { frames: 0, crops: 0, batches: 0, t0: 0, t1: 0, decodeMs: 0, cropMs: 0, queueMs: 0, runMs: 0, readMs: 0, maxBatch: 0, busySince: 0,
                  cachedCrops: 0, cachedFrames: 0, cacheLookupMs: 0, skipped: 0 };
     // which model produced a batch of vectors: the cache keeps each vector under its producer
-    const tagged = function (vecs, tag) { vecs.tag = tag; return vecs; };
+    const tagged = function (vecs, tag) { vecs.tag = modelKey + ':' + tag; return vecs; };
     // busySince: when the model run in flight started (0: none) — busyMs() counts it while it runs
     const runWebGPU = async function (data, n) {
         const a = tm.busySince = performance.now();
@@ -1291,7 +1359,7 @@ export async function createImageEmbedder(session, opts) {
     const cachePrefix = cacheOn ? embeddingCacheScope(session, views) : null;
     // the tag of the model that answers from now on; null while the WebNN trial may still switch it
     const modelTag = function () {
-        return trial ? null : backend === 'webnn' ? 'webnn/fp16' : backend === 'cpu' ? 'cpu/fp32' : backend === 'test' ? 'test' : 'webgpu/' + dtype;
+        return trial ? null : modelKey + ':' + (backend === 'webnn' ? 'webnn/fp16' : backend === 'cpu' ? 'cpu/fp32' : backend === 'test' ? 'test' : 'webgpu/' + dtype);
     };
     let cachedFrames = null, cachedCrops = null;   // frame -> its finished answer; key body -> vector (partly cached frames)
     // frame -> the crops prepareFrames planned there (planFrameCrops), so getEmbeddings cuts exactly the crops whose
@@ -1340,7 +1408,7 @@ export async function createImageEmbedder(session, opts) {
         tm.batches++; tm.maxBatch = Math.max(tm.maxBatch, n);
         embed(data, n).then(function (vecs) {
             let k = 0;
-            take.forEach(function (q) { q.resolve(tagged(vecs.slice(k, k + q.tensors.length), vecs.tag)); k += q.tensors.length; });
+            take.forEach(function (q) { const part = vecs.slice(k, k + q.tensors.length); part.tag = vecs.tag; q.resolve(part); k += q.tensors.length; });
         }, function (err) {
             take.forEach(function (q) { q.reject(err); });
         }).then(function () { running = false; pump(); });
@@ -1605,6 +1673,8 @@ export async function createImageEmbedder(session, opts) {
         },
         /** Which model backend embedded the crops, and why (for the dialog). */
         backend: function () { return { name: backend, note: note }; },
+        /** The model this embedder runs: `{key, name, input, builtin}`. */
+        imageModel: function () { return modelInfo; },
         /** What is running the model right now, for the progress dialog's device line (formatEmbedDevice). */
         device: function () {
             return { backend: backend, comparing: !!trial, dtype: backend === 'webnn' ? 'fp16' : dtype,
