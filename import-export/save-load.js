@@ -1233,7 +1233,11 @@ export async function saveCompactCopy(opts) {
     if (!state.session) { setStatus('No session to save', 'error'); return; }
     if (state.isSaving) { setStatus('Save already in progress...', 'warning'); return; }
     if (!opts.pickFile && !window.showSaveFilePicker) {
-        setStatus('A compact copy needs a browser that can save to a chosen file (Chrome or Edge; in Brave, ' +
+        // The desktop app's shim provides showSaveFilePicker, so this branch is
+        // not expected there; if it ever is, browser advice would be wrong.
+        setStatus((typeof window !== 'undefined' && window.lucidDesktop)
+            ? 'A compact copy needs a save dialog to choose the file, which is not available here'
+            : 'A compact copy needs a browser that can save to a chosen file (Chrome or Edge; in Brave, ' +
             'turn on brave://flags/#file-system-access-api)', 'warning');
         return;
     }
