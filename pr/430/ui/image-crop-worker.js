@@ -3,9 +3,9 @@
  * thread (module worker, spawned by ui/image-embedder.js's crop pool).
  *
  * One message = one camera view of one sampled frame:
- *   IN  {id, image: VideoFrame|ImageBitmap (transferred), crops: [{g, others}]}
+ *   IN  {id, image: VideoFrame|ImageBitmap (transferred), crops: [{g, others}], input}
  *       where g = cropGeometry(...) and others = the other animals' hulls there
- *   OUT {id, tensors: [Float32Array(3 x INPUT x INPUT)] (transferred)} — one model
+ *   OUT {id, tensors: [Float32Array(3 x input x input)] (transferred)} — one model
  *       input per crop, in order — or {id, error}
  * The worker owns and closes the image. It runs the very same `cutCrop` /
  * `writeInputTensor` the main thread would, so its output is identical.
@@ -23,7 +23,7 @@
  * everywhere.)
  */
 
-import { cutCrop, writeInputTensor, CROP, INPUT } from './image-embedder.js?v=3edc226deee6';
+import { cutCrop, writeInputTensor, CROP, BUILTIN_INPUT } from './image-embedder.js?v=b4b6796a9f11';
 
 let canvas = null;
 const jobs = [];
@@ -48,14 +48,15 @@ async function cutAll(id, image, crops) {
 async function run() {
     busy = true;
     while (jobs.length) {
-        const { id, image, crops } = jobs.shift();
+        const { id, image, crops, input } = jobs.shift();
+        const side = input || BUILTIN_INPUT;              // the active model's input side, sent with each job
         try {
             canvas = canvas || new OffscreenCanvas(CROP, CROP);
             let grey;
             try { grey = await cutAll(id, image, crops); } finally { try { if (image && image.close) image.close(); } catch (err) { /* ignore */ } }
             const tensors = grey.map(function (px) {
-                const t = new Float32Array(3 * INPUT * INPUT);
-                writeInputTensor(px, t, 0);
+                const t = new Float32Array(3 * side * side);
+                writeInputTensor(px, t, 0, side);
                 return t;
             });
             self.postMessage({ id: id, tensors: tensors }, tensors.map(function (t) { return t.buffer; }));

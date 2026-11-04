@@ -120,7 +120,7 @@ import {
     isPoints3dSmoothed,
     unsmoothedPoints3d,
     clearPoints3dSmoothed,
-} from './pose-data.js?v=3edc226deee6';
+} from './pose-data.js?v=b4b6796a9f11';
 
 // Identity id meaning "no identity" (matches `InstanceGroup`'s default).
 const NO_IDENTITY = -1;

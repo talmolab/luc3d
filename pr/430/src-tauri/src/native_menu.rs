@@ -51,6 +51,13 @@ pub const PAGE_ITEM_PREFIX: &str = "lucid-page:";
 pub const QUIT_MENU_ID: &str = "lucid-quit";
 /// The page function a click calls (defined, non-writable, by the shim).
 pub const PAGE_ACTION_FN: &str = "__lucidNativeMenuAction";
+/// luc3d ▸ Check for Updates… and the Update Channel items (updates.rs); a
+/// click calls the shim's `window.__lucidUpdates.menu(<action>)`.
+pub const UPDATE_ITEM_PREFIX: &str = "lucid-update:";
+const UPDATE_CHECK_ID: &str = "lucid-update:check";
+const UPDATE_CHANNELS_ID: &str = "lucid-update:channels";
+const UPDATE_CHANNEL_PREFIX: &str = "lucid-update:channel:";
+pub const UPDATES_FN: &str = "__lucidUpdates";
 const APP_NAME: &str = "luc3d";
 /// Deeper page submenus are cut off (a sane page has two levels).
 const MAX_DEPTH: usize = 6;
@@ -276,6 +283,26 @@ fn app_menu(about: Option<AboutInfo>) -> TopMenu {
         role: Role::App,
         children: vec![
             Node::Native(About(about)),
+            Node::Item {
+                id: UPDATE_CHECK_ID.into(),
+                text: "Check for Updates…".into(),
+                enabled: true,
+            },
+            Node::Submenu {
+                id: UPDATE_CHANNELS_ID.into(),
+                text: "Update Channel".into(),
+                enabled: true,
+                // Ticked by with_update_channel.
+                children: [("stable", "Stable"), ("latest", "Latest"), ("dev", "Dev")]
+                    .iter()
+                    .map(|(c, t)| Node::Check {
+                        id: format!("{UPDATE_CHANNEL_PREFIX}{c}"),
+                        text: (*t).into(),
+                        enabled: true,
+                        checked: false,
+                    })
+                    .collect(),
+            },
             Node::Separator,
             Node::Native(Services),
             Node::Separator,
@@ -404,6 +431,41 @@ pub fn build_model(menus: &[PageMenu], about: Option<AboutInfo>) -> Vec<TopMenu>
         out.push(h);
     }
     out
+}
+
+/// Tick `channel` (and only it) under luc3d ▸ Update Channel.
+pub fn with_update_channel(mut model: Vec<TopMenu>, channel: &str) -> Vec<TopMenu> {
+    let want = format!("{UPDATE_CHANNEL_PREFIX}{channel}");
+    for top in model.iter_mut().filter(|t| t.role == Role::App) {
+        for node in top.children.iter_mut() {
+            if let Node::Submenu { id, children, .. } = node {
+                if id == UPDATE_CHANNELS_ID {
+                    for c in children.iter_mut() {
+                        if let Node::Check { id, checked, .. } = c {
+                            *checked = *id == want;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    model
+}
+
+/// The shim action for an update item id: "check" or "channel:<name>".
+pub fn update_action(id: &str) -> Option<String> {
+    if id == UPDATE_CHECK_ID {
+        return Some("check".into());
+    }
+    id.strip_prefix(UPDATE_CHANNEL_PREFIX)
+        .filter(|c| crate::updates::is_channel(c))
+        .map(|c| format!("channel:{c}"))
+}
+
+/// The script an update item evaluates in the page.
+pub fn update_script(action: &str) -> String {
+    let arg = serde_json::to_string(action).unwrap_or_else(|_| "\"\"".into());
+    format!("window.{UPDATES_FN} && window.{UPDATES_FN}.menu({arg});")
 }
 
 // ---------------------------------------------------------------------------
@@ -747,7 +809,10 @@ pub fn install_initial<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     show(
         app,
         &app.state::<NativeMenuState<R>>(),
-        build_model(&[], None),
+        with_update_channel(
+            build_model(&[], None),
+            &crate::updates::current_channel(app),
+        ),
     )
 }
 
@@ -768,15 +833,17 @@ pub fn set_app_menu<R: Runtime>(
         .try_state::<NativeMenuState<R>>()
         .ok_or_else(|| "native menu state missing".to_string())?;
     let about = about.filter(|a| !a.text.trim().is_empty());
-    show(&app, &state, build_model(&menus, about)).map_err(|e| format!("set_app_menu: {e}"))?;
+    let model = with_update_channel(
+        build_model(&menus, about),
+        &crate::updates::current_channel(&app),
+    );
+    show(&app, &state, model).map_err(|e| format!("set_app_menu: {e}"))?;
     Ok(true)
 }
 
-/// A click on a page item: put a check item back to what the page last said
-/// (AppKit toggled it; the page resends if its state really changed), then
-/// have the page click its own element, in the focused window.
-pub fn on_page_item<R: Runtime>(app: &AppHandle<R>, id: &str) {
-    let Some(key) = page_key(id) else { return };
+/// AppKit toggles a check item on click; put it back to what the model says
+/// (the page decides, and the next spec or channel refresh sets it right).
+fn restore_check<R: Runtime>(app: &AppHandle<R>, id: &str) {
     if let Some(state) = app.try_state::<NativeMenuState<R>>() {
         // try_lock: this runs on the main thread, and a set_app_menu holding
         // the lock may be waiting for the main thread. Busy → skip; the
@@ -789,6 +856,10 @@ pub fn on_page_item<R: Runtime>(app: &AppHandle<R>, id: &str) {
             }
         }
     }
+}
+
+/// Evaluate `script` in the focused window (else main, else any).
+fn eval_in_focused<R: Runtime>(app: &AppHandle<R>, script: String, what: &str) {
     let windows = app.webview_windows();
     let target = windows
         .values()
@@ -796,9 +867,45 @@ pub fn on_page_item<R: Runtime>(app: &AppHandle<R>, id: &str) {
         .or_else(|| windows.get("main"))
         .or_else(|| windows.values().next());
     if let Some(w) = target {
-        if let Err(e) = w.eval(activation_script(key)) {
-            eprintln!("[lucid] menu item {key}: {e}");
+        if let Err(e) = w.eval(script) {
+            eprintln!("[lucid] menu item {what}: {e}");
         }
+    }
+}
+
+/// A click on a page item: have the page click its own element.
+pub fn on_page_item<R: Runtime>(app: &AppHandle<R>, id: &str) {
+    let Some(key) = page_key(id) else { return };
+    restore_check(app, id);
+    eval_in_focused(app, activation_script(key), key);
+}
+
+/// A click on luc3d ▸ Check for Updates… or an Update Channel item. The page
+/// runs the flow (it owns the unsaved-work check and the dialogs) and, for a
+/// channel, calls set_update_channel, which re-ticks the menu.
+pub fn on_update_item<R: Runtime>(app: &AppHandle<R>, id: &str) {
+    let Some(action) = update_action(id) else {
+        return;
+    };
+    restore_check(app, id);
+    eval_in_focused(app, update_script(&action), &action);
+}
+
+/// Re-tick Update Channel after set_update_channel (macOS; a no-op where no
+/// native bar is installed).
+pub fn refresh_update_channel<R: Runtime>(app: &AppHandle<R>, channel: &str) {
+    let Some(state) = app.try_state::<NativeMenuState<R>>() else {
+        return;
+    };
+    let model = match state.0.lock() {
+        Ok(g) => match g.as_ref() {
+            Some(inst) => inst.model.clone(),
+            None => return,
+        },
+        Err(_) => return,
+    };
+    if let Err(e) = show(app, &state, with_update_channel(model, channel)) {
+        eprintln!("[lucid] update channel menu: {e}");
     }
 }
 
@@ -901,10 +1008,31 @@ mod tests {
     #[test]
     fn app_menu_has_about_services_hide_and_our_quit() {
         let m = build_model(&[], None);
+        let channel = |c: &str, t: &str| Node::Check {
+            id: format!("lucid-update:channel:{c}"),
+            text: t.into(),
+            enabled: true,
+            checked: false,
+        };
         assert_eq!(
             m[0].children,
             vec![
                 Node::Native(Native::About(None)),
+                Node::Item {
+                    id: "lucid-update:check".into(),
+                    text: "Check for Updates…".into(),
+                    enabled: true
+                },
+                Node::Submenu {
+                    id: "lucid-update:channels".into(),
+                    text: "Update Channel".into(),
+                    enabled: true,
+                    children: vec![
+                        channel("stable", "Stable"),
+                        channel("latest", "Latest"),
+                        channel("dev", "Dev")
+                    ],
+                },
                 Node::Separator,
                 Node::Native(Native::Services),
                 Node::Separator,
@@ -921,6 +1049,68 @@ mod tests {
         };
         let m = build_model(&[], Some(about.clone()));
         assert_eq!(m[0].children[0], Node::Native(Native::About(Some(about))));
+    }
+
+    /// The ticks under Update Channel, in order (stable, latest, dev).
+    fn channel_ticks(m: &[TopMenu]) -> Vec<bool> {
+        let app = m.iter().find(|t| t.role == Role::App).unwrap();
+        app.children
+            .iter()
+            .find_map(|n| match n {
+                Node::Submenu { id, children, .. } if id == "lucid-update:channels" => Some(
+                    children
+                        .iter()
+                        .map(|c| matches!(c, Node::Check { checked: true, .. }))
+                        .collect(),
+                ),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn update_channel_has_exactly_one_tick_and_moves_in_place() {
+        let base = with_update_channel(build_model(&lucid_menus(), None), "stable");
+        assert_eq!(channel_ticks(&base), vec![true, false, false]);
+        let dev = with_update_channel(base.clone(), "dev");
+        assert_eq!(channel_ticks(&dev), vec![false, false, true]);
+        assert_eq!(
+            channel_ticks(&with_update_channel(dev.clone(), "latest")),
+            vec![false, true, false]
+        );
+        // An unknown channel ticks nothing rather than a wrong one.
+        assert_eq!(
+            channel_ticks(&with_update_channel(dev.clone(), "nightly")),
+            vec![false; 3]
+        );
+        // Switching is an in-place update of the two ticks, never a rebuild.
+        let plan = plan_updates(&base, &dev).expect("same structure");
+        let ids: Vec<&str> = plan.iter().map(|u| u.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["lucid-update:channel:stable", "lucid-update:channel:dev"]
+        );
+        // The page's menus never reach these items' ids, and vice versa.
+        assert!(page_key("lucid-update:check").is_none());
+    }
+
+    #[test]
+    fn update_items_map_to_shim_actions() {
+        assert_eq!(
+            update_action("lucid-update:check").as_deref(),
+            Some("check")
+        );
+        assert_eq!(
+            update_action("lucid-update:channel:latest").as_deref(),
+            Some("channel:latest")
+        );
+        assert_eq!(update_action("lucid-update:channel:nightly"), None);
+        assert_eq!(update_action("lucid-update:channels"), None);
+        assert_eq!(update_action("lucid-page:menuOpen"), None);
+        assert_eq!(
+            update_script("channel:dev"),
+            "window.__lucidUpdates && window.__lucidUpdates.menu(\"channel:dev\");"
+        );
     }
 
     #[test]

@@ -411,6 +411,24 @@
             assertNull(dst.tailMarkedIdentity, 'garbage reads back as off');
         });
 
+        it('the image check\'s model choice round-trips, and the built-in model writes nothing', function () {
+            var m = M();
+            var choice = { key: 'a'.repeat(64), name: 'SLAP fine-tune', input: 168, threshold: -1, url: 'olinesn/slap-model' };
+            var src = fakeSession();
+            src.imageModel = choice;
+            var lucid = m.writeVisibilityMetadata(fakeLucid(), src);
+            assertDeepEqual(lucid.imageModel, choice, 'written');
+            var dst = fakeSession();
+            m.readVisibilityMetadata(dst, lucid);
+            assertDeepEqual(dst.imageModel, choice, 'reads back');
+            src.imageModel = null;
+            assertFalse('imageModel' in m.writeVisibilityMetadata(fakeLucid(), src), 'the built-in model is the default and is not written');
+            m.readVisibilityMetadata(dst, fakeLucid());
+            assertNull(dst.imageModel, 'absent reads back as the built-in model');
+            m.readVisibilityMetadata(dst, { imageModel: { key: 'nothex', input: 168, threshold: -1 } });
+            assertNull(dst.imageModel, 'garbage reads back as the built-in model');
+        });
+
         it('a bad animal count is neither written nor read', function () {
             var m = M();
             [0, -2, 2.5, '3', 'AUTO', true, NaN, {}].forEach(function (v) {
