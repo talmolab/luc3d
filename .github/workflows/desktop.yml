@@ -372,9 +372,14 @@ jobs:
         shell: bash
         env:
           TAURI_ARGS: ${{ matrix.tauri-args }}
+          B: ${{ matrix.bundle-dir }}
         run: |
           set -euo pipefail
           python3 --version && node --version
+          # rust-cache restores target/, bundle outputs included: a stale .app or
+          # installer from an earlier build (e.g. before a rename) would then be
+          # verified and uploaded as this one. Bundles are cheap to remake.
+          rm -rf "$B"
           # TAURI_ARGS is a fixed matrix value; word-splitting it is intended.
           # shellcheck disable=SC2086
           npx --yes "@tauri-apps/cli@${TAURI_CLI_VERSION}" build $TAURI_ARGS
@@ -404,8 +409,11 @@ jobs:
           B: ${{ matrix.bundle-dir }}
         run: |
           set -euo pipefail
-          APP="$(find "$B/macos" -maxdepth 1 -type d -name '*.app' | head -1)"
-          [ -n "$APP" ] || { echo "::error::no .app under $B/macos"; exit 1; }
+          APPS="$(find "$B/macos" -maxdepth 1 -type d -name '*.app')"
+          [ -n "$APPS" ] || { echo "::error::no .app under $B/macos"; exit 1; }
+          [ "$(printf '%s\n' "$APPS" | wc -l | tr -d '[:space:]')" = 1 ] || {
+            echo "::error::more than one .app under $B/macos (stale bundle?): $APPS"; exit 1; }
+          APP="$APPS"
           # Captured once: `codesign -dv | grep -q` can SIGPIPE codesign under pipefail.
           DESC="$(codesign -dv --verbose=2 "$APP" 2>&1 || true)"
           printf '%s\n' "$DESC"
