@@ -325,9 +325,10 @@ try {
         const res = S._idSwitch.results.image;
         return { ok: !!(res && res.ok), threshold: res && res.threshold, continueBelow: res && res.continueBelow, skipEmpty: res && res.skipEmpty,
                  lead: ['size', 'image', 'brightness'].map(c => S._idSwitch.results[c] && S._idSwitch.results[c].clearestEndLeads),
-                 sizeSkip: S._idSwitch.results.size && S._idSwitch.results.size.skipEmpty, brSkip: S._idSwitch.results.brightness && S._idSwitch.results.brightness.skipEmpty };
+                 sizeSkip: S._idSwitch.results.size && S._idSwitch.results.size.skipEmpty, brSkip: S._idSwitch.results.brightness && S._idSwitch.results.brightness.skipEmpty,
+                 own: (await import('/pose/id-switch-check.js')).IMAGE_CHECK_DEFAULTS.threshold };
     });
-    check(img.ok && img.threshold === -1 && img.continueBelow === undefined && !img.skipEmpty,
+    check(img.ok && img.threshold === img.own && img.continueBelow === undefined && !img.skipEmpty,
         `the image check ran label-free at its own threshold (${img.threshold}), with no single-camera options (continueBelow ${img.continueBelow}, skipEmpty ${img.skipEmpty})`);
     check(img.brSkip === true && img.sizeSkip === undefined,
         `coat brightness on one camera skips encounters with no samples; the label-free size check has no such rule (size ${img.sizeSkip}, brightness ${img.brSkip})`);
