@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "LUCID",
+  "productName": "luc3d",
   "version": "1.0.5",
   "identifier": "org.sleap.luc3d",
   "build": {
@@ -35,7 +35,7 @@
     ],
     "category": "Productivity",
     "shortDescription": "Multi-view pose annotation",
-    "longDescription": "LUCID (Label Unification and Correspondence in 3D): multi-view pose annotation, cross-view tracking and triangulation.",
+    "longDescription": "luc3d — LUCID (Label Unification and Correspondence in 3D): multi-view pose annotation, cross-view tracking and triangulation.",
     "homepage": "https://luc3d.sleap.ai",
     "createUpdaterArtifacts": false,
     "macOS": {

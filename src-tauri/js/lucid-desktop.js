@@ -138,7 +138,7 @@
         confirm: function (message, opts) {
             opts = opts || {};
             return call('ask_dialog', {
-                title: opts.title != null ? String(opts.title) : 'LUCID',
+                title: opts.title != null ? String(opts.title) : 'luc3d',
                 message: String(message == null ? '' : message),
                 okLabel: opts.okLabel != null ? String(opts.okLabel) : 'OK',
                 cancelLabel: opts.cancelLabel != null ? String(opts.cancelLabel) : 'Cancel',
@@ -441,9 +441,9 @@
         if (!st.isFile) throw new DOMException(name + ' is not a file', 'TypeMismatchError');
         var size = Number(st.size) || 0;
         if (size > GETFILE_MAX) {
-            throw new DOMException('LUCID desktop: ' + name + ' is ' + Math.round(size / MIB) +
+            throw new DOMException('luc3d: ' + name + ' is ' + Math.round(size / MIB) +
                 ' MiB; reading a file over ' + (GETFILE_MAX / MIB) + ' MiB through a save handle is not ' +
-                'supported. Open it with LUCID\'s Open/Load commands instead.', 'NotSupportedError');
+                'supported. Open it with luc3d\'s Open/Load commands instead.', 'NotSupportedError');
         }
         var parts = [];
         var off = 0;
@@ -495,7 +495,7 @@
         return new NativeDirectoryHandle(child);
     };
     NativeDirectoryHandle.prototype.removeEntry = function () {
-        return Promise.reject(new DOMException('LUCID desktop cannot delete files', 'NotSupportedError'));
+        return Promise.reject(new DOMException('luc3d cannot delete files', 'NotSupportedError'));
     };
     NativeDirectoryHandle.prototype.entries = async function* () {
         var list = await call('list_dir', { path: this.path });
@@ -713,7 +713,7 @@
 
     function errorText(err) {
         var m = err && typeof err.message === 'string' && err.message ? err.message : String(err);
-        return m.replace(/^NOT_GRANTED:\s*/, 'LUCID was not given access to ');
+        return m.replace(/^NOT_GRANTED:\s*/, 'luc3d was not given access to ');
     }
 
     function routeDownload(a) {
@@ -734,7 +734,7 @@
             var name = path ? baseName(String(path)) : suggested;
             call('message_dialog', {
                 title: 'Could not save ' + name,
-                message: 'LUCID could not save "' + name + '"' + (path ? ' to ' + path : '') +
+                message: 'luc3d could not save "' + name + '"' + (path ? ' to ' + path : '') +
                     '. The file was not saved.\n\n' + errorText(err),
                 kind: 'error',
             }).catch(function (e2) { console.error(LOG + ' could not show the error dialog:', e2); });
@@ -854,7 +854,7 @@
             if (dirty) {
                 var ok = await call('ask_dialog', {
                     title: 'Unsaved changes',
-                    message: 'LUCID has unsaved changes. Close anyway?',
+                    message: 'luc3d has unsaved changes. Close anyway?',
                     okLabel: 'Close',
                     cancelLabel: 'Cancel',
                 });

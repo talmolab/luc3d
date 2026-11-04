@@ -436,7 +436,7 @@ jobs:
 
       # Installers only (no .app directory, no updater payloads -- there is no
       # updater), with the OS inserted after the product name so a release page
-      # reads at a glance: LUCID_1.2.0_x64-setup.exe -> LUCID_windows_1.2.0_x64-setup.exe.
+      # reads at a glance: luc3d_1.2.0_x64-setup.exe -> luc3d_windows_1.2.0_x64-setup.exe.
       - name: Collect installers
         shell: bash
         env:
@@ -457,7 +457,7 @@ jobs:
             [ -f "$f" ] || continue
             case "$f" in
               *_"$OS_TAG"_*) continue ;;               # already prefixed (re-run)
-              *_*) new="${f%%_*}_${OS_TAG}_${f#*_}" ;;  # LUCID_<ver>_... -> LUCID_<os>_<ver>_...
+              *_*) new="${f%%_*}_${OS_TAG}_${f#*_}" ;;  # luc3d_<ver>_... -> luc3d_<os>_<ver>_...
               *) echo "::warning::unexpected installer name '$f' -- left as is"; continue ;;
             esac
             mv -- "$f" "$new"
@@ -469,7 +469,7 @@ jobs:
 
       - uses: actions/upload-artifact@v6
         with:
-          name: LUCID_${{ matrix.os-tag }}_${{ matrix.arch }}
+          name: luc3d_${{ matrix.os-tag }}_${{ matrix.arch }}
           path: artifacts/*
           retention-days: 7
           if-no-files-found: error
@@ -489,7 +489,7 @@ jobs:
         continue-on-error: true
         with:
           path: artifacts
-          pattern: LUCID_*
+          pattern: luc3d_*
           merge-multiple: true
 
       - name: Upload installers to the release
@@ -510,8 +510,8 @@ jobs:
             echo
           } >> "$GITHUB_STEP_SUMMARY"
           missing=0
-          for pattern in 'LUCID_linux_*.deb' 'LUCID_linux_*.AppImage' 'LUCID_macos_*_universal.dmg' \
-                         'LUCID_windows_*-setup.exe' 'LUCID_windows_*.msi'; do
+          for pattern in 'luc3d_linux_*.deb' 'luc3d_linux_*.AppImage' 'luc3d_macos_*_universal.dmg' \
+                         'luc3d_windows_*-setup.exe' 'luc3d_windows_*.msi'; do
             if find artifacts -maxdepth 1 -name "$pattern" -type f | grep -q .; then
               echo "- ok \`$pattern\`" >> "$GITHUB_STEP_SUMMARY"
             else
