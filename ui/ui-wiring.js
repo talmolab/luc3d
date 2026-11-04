@@ -1493,12 +1493,19 @@ export function setupMenus() {
         closeMenus();
         if (videoController) videoController.toggleNativeResolution();
     });
+    // Also on mouseenter, like the Node Trails submenu: that is the "about to
+    // open" cue the desktop app's native menu bar gives before it reads the
+    // menus (src-tauri/js/lucid-desktop.js), since a native menu opening is
+    // invisible to the page.
     var viewMenuEl = document.querySelector('.menu-item[data-menu="view"]');
     if (viewMenuEl) {
-        viewMenuEl.addEventListener('click', function () {
+        var refreshNativeResolutionCheck = function () {
             var check = document.querySelector('#menuNativeResolution .trail-check');
-            if (check) check.textContent = (videoController && videoController.nativeResolutionActive()) ? '✓' : '';
-        });
+            var on = (videoController && videoController.nativeResolutionActive()) ? '✓' : '';
+            if (check && check.textContent !== on) check.textContent = on;
+        };
+        viewMenuEl.addEventListener('click', refreshNativeResolutionCheck);
+        viewMenuEl.addEventListener('mouseenter', refreshNativeResolutionCheck);
     }
 
     document.getElementById('menuResetView').addEventListener('click', function () {

@@ -29,7 +29,13 @@
  *     system browser.
  *  5. Close guard: the window's close button asks LUCID (through a synthetic
  *     `beforeunload`) whether there is unsaved work, and asks the user.
- *  6. `lucidDesktop.sleapNn` — thin wrappers for the (feature-gated) sleap-nn
+ *  6. macOS: LUCID's in-page menus (File, Edit, Calibrate, …) mirrored into the
+ *     native menu bar (`set_app_menu`; clicks come back as
+ *     `window.__lucidNativeMenuAction(key)`), and the in-page ones hidden once
+ *     that worked (`<html data-lucid-native-menu="1">`).
+ *  7. macOS: a file `<input>` clicked without user activation (WebKit would
+ *     drop it) asks for one click in the page instead.
+ *  `lucidDesktop.sleapNn` — thin wrappers for the (feature-gated) sleap-nn
  *     commands; unused by the app in iteration 1.
  */
 (function () {
@@ -887,9 +893,396 @@
                 .catch(function (err) { console.error(LOG + ' close guard setup failed:', err); });
         });
     }
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', startCloseGuard, { once: true });
-    } else {
+    // ------------------------------------------------------------------
+    // 6. macOS: LUCID's menus in the native menu bar
+    // ------------------------------------------------------------------
+
+    /*
+     * The in-page menu bar (#menuBar) is read into a spec
+     *   [{label, items: [{key, label, enabled, checked?, submenu?} | {separator: true}]}]
+     * and sent with `set_app_menu`; Rust builds
+     *   luc3d | File | Edit | Calibrate | Tracks | View | Hot Keys | Window | Help.
+     * A native click calls window.__lucidNativeMenuAction(key) through WKWebView's
+     * evaluateJavaScript (a forced user gesture), which clicks the same element
+     * a user would have: same handlers, so a new in-page item works natively
+     * with no extra wiring. Once Rust has installed the bar, `<html
+     * data-lucid-native-menu="1">` hides the in-page menus; never before, so a
+     * failure leaves the page its own menus. The bar itself stays while it holds
+     * anything else (Edit Group / assignment toasts); the build label moves to
+     * About luc3d.
+     *
+     * Reading the DOM: a top-level `.menu-item` with a `.menu-dropdown` is a
+     * menu; one without (Hot Keys) acts on click, so it becomes a menu with one
+     * item; `.menu-bar-button`s (Docs, Settings) repeat Help items and are left
+     * out. In a dropdown: `.menu-separator`; `.menu-dropdown-item` (its own
+     * `.menu-dropdown` is a submenu; a `.trail-check` tick or aria-checked makes
+     * it a check item; `.disabled`, aria-disabled or pointer-events:none
+     * disables it, as body.origin-mode-lock does to the whole bar); a wrapper
+     * holding items is walked through; any other element with text is a
+     * heading (shown, inert). Hidden items are left out. Shortcut hints are
+     * not part of a label, and items get no native accelerators: LUCID's own
+     * key handler has them.
+     *
+     * Kept current: a debounced resend on any change under #menuBar or of
+     * <body>'s class, after input, and on a slow poll (some state behind a
+     * label or tick, such as the frame rate or the zoom, changes no menu DOM).
+     * LUCID refreshes such labels when a menu OPENS, on `mouseenter` of the
+     * top-level `.menu-item` or of a `.has-submenu` parent; native menus have
+     * no open event the page could see, so that cue is given before every
+     * read. Only a changed spec is sent.
+     */
+    var NATIVE_MENU_ACTION = '__lucidNativeMenuAction';
+    var MENU_SYNC_DEBOUNCE_MS = 50;
+    var MENU_INPUT_DEBOUNCE_MS = 150;
+    var MENU_POLL_MS = 750;
+    var SKIP_IN_LABEL = '.shortcut-hint, .shortcut, .submenu-arrow, .trail-check, .trail-shade-swatch, .menu-dropdown';
+    var nm = {
+        keys: new Map(), observer: null, timer: null, sending: false, again: false,
+        lastSent: null, lastFailed: null, installed: false, stopped: false,
+    };
+
+    function styleOf(el) {
+        try { return window.getComputedStyle(el); } catch (e) { return null; }
+    }
+
+    /** An element's visible text, without shortcut hints, ticks, arrows or nested menus. */
+    function menuLabel(el) {
+        var text = '';
+        (function walk(node) {
+            for (var c = node.firstChild; c; c = c.nextSibling) {
+                if (c.nodeType === 3) { text += c.data; continue; }
+                if (c.nodeType !== 1 || c.hidden || c.matches(SKIP_IN_LABEL)) continue;
+                // A right-floated span is a shortcut hint too (File ▸ Save's "Ctrl+S").
+                // Read inline: WebKit computes float as none on a flex item.
+                if (c.style && (c.style.cssFloat || c.style.float) === 'right') continue;
+                var st = styleOf(c);
+                if (st && st.display === 'none') continue;
+                text += ' ';
+                walk(c);
+                text += ' ';
+            }
+        })(el);
+        return text.replace(/\s+/g, ' ').trim().replace(/\.\.\.$/, '…');
+    }
+
+    function menuEntryHidden(el) {
+        if (el.hidden) return true;
+        var st = styleOf(el);
+        return !!st && st.display === 'none';
+    }
+
+    function menuEntryEnabled(el) {
+        if (el.classList.contains('disabled') || el.getAttribute('aria-disabled') === 'true' ||
+            el.hasAttribute('disabled')) return false;
+        // pointer-events:none on the entry or any ancestor (body.origin-mode-lock
+        // sets it on the whole bar). Each ancestor is asked: inside a
+        // display:none subtree WebKit can report a stale inherited value.
+        for (var n = el; n && n.nodeType === 1; n = n.parentElement) {
+            var st = styleOf(n);
+            if (st && st.pointerEvents === 'none') return false;
+        }
+        return true;
+    }
+
+    /** true/false for a check item, undefined for a plain one. */
+    function menuEntryChecked(el) {
+        var aria = el.getAttribute('aria-checked');
+        if (aria === 'true' || aria === 'false') return aria === 'true';
+        var tick = el.querySelector(':scope > .trail-check, :scope > span > .trail-check');
+        if (tick) return tick.textContent.trim() !== '';
+        return undefined;
+    }
+
+    function menuKey(el, path) {
+        var key = (el.id && document.getElementById(el.id) === el) ? el.id : 'path:' + path;
+        if (nm.keys.has(key)) key = 'path:' + path;
+        nm.keys.set(key, el);
+        return key;
+    }
+
+    function menuEntries(container, path) {
+        var out = [];
+        var kids = container.children;
+        for (var i = 0; i < kids.length; i++) {
+            var c = kids[i];
+            if (menuEntryHidden(c)) continue;
+            var p = path + '.' + i;
+            if (c.classList.contains('menu-separator')) { out.push({ separator: true }); continue; }
+            if (c.classList.contains('menu-dropdown-item')) {
+                var spec = { key: menuKey(c, p), label: menuLabel(c), enabled: menuEntryEnabled(c) };
+                var sub = c.querySelector(':scope > .menu-dropdown');
+                if (sub) {
+                    spec.submenu = menuEntries(sub, p);
+                } else {
+                    var checked = menuEntryChecked(c);
+                    if (checked !== undefined) spec.checked = checked;
+                }
+                out.push(spec);
+                continue;
+            }
+            if (c.querySelector('.menu-dropdown-item, .menu-separator')) {
+                Array.prototype.push.apply(out, menuEntries(c, p));   // a role=group wrapper
+                continue;
+            }
+            var heading = menuLabel(c);
+            if (heading) out.push({ label: heading, enabled: false });
+        }
+        return out;
+    }
+
+    function collectLabels(items, into) {
+        items.forEach(function (it) {
+            if (it.label) into.add(it.label);
+            if (it.submenu) collectLabels(it.submenu, into);
+        });
+        return into;
+    }
+
+    /** {menus, about} for set_app_menu, rebuilding the key → element map. */
+    function buildMenuSpec(bar) {
+        nm.keys = new Map();
+        var entries = [];
+        var kids = bar.children;
+        for (var i = 0; i < kids.length; i++) {
+            var el = kids[i];
+            // Not menuEntryHidden: our own CSS hides these once the native bar is up.
+            if (!el.classList.contains('menu-item') || el.hidden || el.style.display === 'none') continue;
+            var label = menuLabel(el);
+            if (!label) continue;
+            var dropdown = el.querySelector(':scope > .menu-dropdown');
+            if (dropdown) {
+                entries.push({ label: label, items: menuEntries(dropdown, 'm' + i) });
+            } else {
+                entries.push({
+                    label: label,
+                    button: el.classList.contains('menu-bar-button'),
+                    items: [{ key: menuKey(el, 'm' + i), label: 'Show ' + label, enabled: menuEntryEnabled(el) }],
+                });
+            }
+        }
+        var inMenus = new Set();
+        entries.forEach(function (e) { if (!e.button) collectLabels(e.items, inMenus); });
+        var menus = entries
+            .filter(function (e) { return !(e.button && inMenus.has(e.label)); })
+            .map(function (e) { return { label: e.label, items: e.items }; });
+        var v = document.getElementById('menuBarVersion');
+        var vText = v && !v.hidden ? (v.textContent || '').trim() : '';
+        return { menus: menus, about: vText ? { text: vText, title: v.title || '' } : null };
+    }
+
+    /** What a pointer opening each menu would make LUCID refresh (see above). */
+    function cueMenuOpen(bar) {
+        var els = bar.querySelectorAll(':scope > .menu-item, .has-submenu');
+        for (var i = 0; i < els.length; i++) {
+            try {
+                els[i].dispatchEvent(new MouseEvent('mouseenter', { bubbles: false, cancelable: false }));
+            } catch (e) { console.error(LOG + ' menu refresh threw', e); }
+        }
+    }
+
+    /** `data-lucid-menus-only` on the bar while it holds nothing but menus and the build label. */
+    function markMenusOnly(bar) {
+        var only = true;
+        for (var i = 0; i < bar.children.length; i++) {
+            var cl = bar.children[i].classList;
+            if (!cl.contains('menu-item') && !cl.contains('menu-bar-version')) { only = false; break; }
+        }
+        if (only !== bar.hasAttribute('data-lucid-menus-only')) {
+            if (only) bar.setAttribute('data-lucid-menus-only', '');
+            else bar.removeAttribute('data-lucid-menus-only');
+        }
+    }
+
+    function setNativeMenuInstalled(on) {
+        nm.installed = on;
+        var root = document.documentElement;
+        if (on) root.dataset.lucidNativeMenu = '1';
+        else delete root.dataset.lucidNativeMenu;
+    }
+
+    function scheduleMenuSync(delay) {
+        if (nm.stopped || nm.timer) return;
+        nm.timer = setTimeout(function () {
+            nm.timer = null;
+            syncNativeMenu();
+        }, delay == null ? MENU_SYNC_DEBOUNCE_MS : delay);
+    }
+
+    function syncNativeMenu() {
+        if (nm.stopped) return;
+        if (nm.sending) { nm.again = true; return; }
+        var bar = document.getElementById('menuBar');
+        if (!bar) return;
+        cueMenuOpen(bar);
+        if (nm.observer) nm.observer.takeRecords();   // the cue's own rewrites
+        var payload = buildMenuSpec(bar);
+        var json = JSON.stringify(payload);
+        if ((nm.installed && json === nm.lastSent) || json === nm.lastFailed) return;
+        nm.sending = true;
+        call('set_app_menu', payload).then(function (ok) {
+            if (ok !== true) {
+                // Not macOS after all: the page keeps its own menus, for good.
+                nm.stopped = true;
+                setNativeMenuInstalled(false);
+                return;
+            }
+            nm.lastSent = json;
+            nm.lastFailed = null;
+            setNativeMenuInstalled(true);
+        }, function (err) {
+            console.error(LOG + ' the native menu bar was not updated; showing the in-page menus:', err);
+            nm.lastFailed = json;
+            nm.lastSent = null;
+            setNativeMenuInstalled(false);
+        }).then(function () {
+            nm.sending = false;
+            if (nm.again) { nm.again = false; scheduleMenuSync(); }
+        });
+    }
+
+    /** A native menu click (called by Rust inside evaluateJavaScript). */
+    function nativeMenuAction(key) {
+        var el = nm.keys.get(String(key));
+        if (!el || !el.isConnected || !menuEntryEnabled(el)) {
+            scheduleMenuSync(0);   // the native copy is stale
+            return false;
+        }
+        // Synchronously, inside the evaluateJavaScript call: its forced user
+        // gesture is what lets a file picker opened by the handler appear.
+        el.click();
+        scheduleMenuSync();
+        return true;
+    }
+
+    function startNativeMenu() {
+        if (platform !== 'macos' || typeof document.getElementById !== 'function' ||
+            typeof MutationObserver !== 'function') return;
+        var bar = document.getElementById('menuBar');
+        if (!bar) return;   // not LUCID
+        Object.defineProperty(window, NATIVE_MENU_ACTION, {
+            value: nativeMenuAction, writable: false, configurable: false, enumerable: false,
+        });
+        var style = document.createElement('style');
+        style.id = 'lucid-native-menu-style';
+        // The menus hide; so does the build label (it is in About luc3d now).
+        // The bar itself hides unless it holds something else: Edit Group and
+        // manual assignment put their toast (with its buttons) in it.
+        // (data-lucid-menus-only rather than :has(), which older WKWebViews lack.)
+        style.textContent =
+            'html[data-lucid-native-menu="1"] #menuBar > .menu-item,' +
+            'html[data-lucid-native-menu="1"] #menuBar > .menu-bar-version,' +
+            'html[data-lucid-native-menu="1"] #menuBar[data-lucid-menus-only] { display: none !important; }\n';
+        (document.head || document.documentElement).appendChild(style);
+        markMenusOnly(bar);
+        nm.observer = new MutationObserver(function () {
+            markMenusOnly(bar);   // synchronously: a toast shows before the next paint
+            scheduleMenuSync();
+        });
+        nm.observer.observe(bar, { subtree: true, childList: true, attributes: true, characterData: true });
+        if (document.body) nm.observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+        ['pointerup', 'keyup', 'wheel'].forEach(function (type) {
+            window.addEventListener(type, function () { scheduleMenuSync(MENU_INPUT_DEBOUNCE_MS); },
+                { capture: true, passive: true });
+        });
+        setInterval(function () {
+            if (document.visibilityState !== 'hidden') scheduleMenuSync(0);
+        }, MENU_POLL_MS);
+        scheduleMenuSync(0);
+    }
+
+    // ------------------------------------------------------------------
+    // 7. macOS: file pickers that lost their user activation
+    // ------------------------------------------------------------------
+
+    /**
+     * WebKit opens an `<input type=file>` panel only with transient user
+     * activation (FileInputType::handleDOMActivateEvent consumes it); without
+     * it the click is dropped silently and LUCID would wait forever. A native
+     * menu click has activation only while the shim's synchronous `el.click()`
+     * runs (WKWebView's evaluateJavaScript forces a user gesture, and apps
+     * built against the macOS 14+ SDK lose it when the script returns), so a
+     * handler that awaits before picking would be dropped. Here such a click
+     * becomes a one-button prompt in the page whose Choose click is the
+     * gesture. A click that has activation opens the panel directly, as before.
+     */
+    var pickerPrompt = null;   // {input, close}
+
+    function needsPickerGesture() {
+        var ua = window.navigator && window.navigator.userActivation;
+        return !!ua && ua.isActive === false;
+    }
+
+    function askForPickerGesture(input, origClick) {
+        if (pickerPrompt) pickerPrompt.close(false);
+        var folder = !!input.webkitdirectory;
+        var overlay = document.createElement('div');
+        overlay.className = 'multi-frame-modal-overlay';
+        overlay.id = 'lucidPickerGesture';
+        var modal = document.createElement('div');
+        modal.className = 'multi-frame-modal';
+        modal.style.maxWidth = '420px';
+        var h = document.createElement('h3');
+        h.textContent = folder ? 'Choose a folder' : (input.multiple ? 'Choose files' : 'Choose a file');
+        var p = document.createElement('p');
+        p.textContent = 'Click Choose to open the ' + (folder ? 'folder' : 'file') + ' chooser.';
+        var actions = document.createElement('div');
+        actions.className = 'modal-actions';
+        var cancel = document.createElement('button');
+        cancel.id = 'lucidPickerCancel';
+        cancel.textContent = 'Cancel';
+        var choose = document.createElement('button');
+        choose.id = 'lucidPickerChoose';
+        choose.className = 'primary';
+        choose.textContent = folder ? 'Choose Folder…' : 'Choose…';
+        actions.appendChild(cancel);
+        actions.appendChild(choose);
+        modal.appendChild(h);
+        modal.appendChild(p);
+        modal.appendChild(actions);
+        overlay.appendChild(modal);
+
+        function close(open) {
+            document.removeEventListener('keydown', onKey, true);
+            if (overlay.parentNode) overlay.remove();
+            if (pickerPrompt && pickerPrompt.input === input) pickerPrompt = null;
+            // Inside the click (or Return) handler: this call has activation.
+            if (open) origClick.call(input);
+            else input.dispatchEvent(new Event('cancel'));   // pickFiles/pickFolder resolve empty
+        }
+        function onKey(e) {
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(false); }
+            else if (e.key === 'Enter' && e.target !== cancel) { e.preventDefault(); e.stopPropagation(); close(true); }
+        }
+        cancel.addEventListener('click', function () { close(false); });
+        choose.addEventListener('click', function () { close(true); });
+        overlay.addEventListener('click', function (e) { if (e.target === overlay) close(false); });
+        document.addEventListener('keydown', onKey, true);
+        (document.body || document.documentElement).appendChild(overlay);
+        try { choose.focus(); } catch (e) { /* not focusable yet */ }
+        pickerPrompt = { input: input, close: close };
+    }
+
+    function installPickerGestureFallback() {
+        if (platform !== 'macos' || typeof HTMLInputElement !== 'function') return;
+        var proto = HTMLInputElement.prototype;
+        var origClick = proto.click;
+        proto.click = function () {
+            if (this.type === 'file' && !this.disabled && needsPickerGesture()) {
+                askForPickerGesture(this, origClick);
+                return;
+            }
+            return origClick.apply(this, arguments);
+        };
+    }
+    installPickerGestureFallback();
+
+    function onDocumentReady() {
         startCloseGuard();
+        try { startNativeMenu(); } catch (e) { console.error(LOG + ' native menu setup failed; the in-page menus stay:', e); }
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', onDocumentReady, { once: true });
+    } else {
+        onDocumentReady();
     }
 })();
