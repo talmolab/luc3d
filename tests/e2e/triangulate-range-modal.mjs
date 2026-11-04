@@ -179,6 +179,7 @@ try {
     await page.locator('.settings-overlay').getByText('Default Triangulation', { exact: true }).first().click();
     await page.click(`.tri-method-choice[data-method="${method}"]`);
     await page.click('.settings-btn-apply');
+    await page.click('.settings-modal-close');
     return page.evaluate(async () => (await import('/ui/settings.js')).getDefaultTriangulationMethod());
   }
   const now = await setDefaultMethod('ba');
