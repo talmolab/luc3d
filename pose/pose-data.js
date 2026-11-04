@@ -1573,6 +1573,14 @@ export class InstanceGroup {
          */
         this.triangulationMethod = undefined;
         /**
+         * The solve settings `points3d` was produced under
+         * (`triangulationSettingsKey`, pose/triangulation.js): `adoptPrior3d` only
+         * reuses 3D solved under the settings in force now. In memory only, so 3D
+         * read from a file has none and is re-solved rather than trusted.
+         * @type {string|undefined}
+         */
+        this.solveSettings = undefined;
+        /**
          * @type {Map<string, Instance>} camera name -> reprojected instance.
          * Starts as the shared read-only `NO_REPROJECTED_INSTANCES`; write
          * through `addReprojectedInstance`.
@@ -1826,6 +1834,13 @@ export class Session {
          * `setTrackerNumAnimals`), which also marks the project dirty.
          */
         this.numAnimals = null;
+        /**
+         * Which identity has the tail marks ("id_0"), for Track All's tail-mark
+         * pass (pose/tail-mark.js), or null for off. Persisted as
+         * `metadata.lucid.tailMarkedIdentity`.
+         * @type {?string}
+         */
+        this.tailMarkedIdentity = null;
         /** @type {LazyFrameLoader|null} Set when using lazy H5 loading */
         this.lazyLoader = null;
         /** @type {Map<string,{data:Uint8Array,nTracks:number,nFrames:number}>|null} Per-camera track occupancy for timeline */

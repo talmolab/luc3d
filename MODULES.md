@@ -1508,6 +1508,7 @@ session graph that holds them.
   re-runs that test.
 - `InstanceGroup` — cross-view grouped instances + triangulated `points3d`
   + cached `reprojectedInstances`. `markDirty`/`markClean`. Also
+  `solveSettings` (`triangulationSettingsKey`, in memory only) and
   `triangulationMethod` (`'ba'`|`'dlt'`|undefined), recording WHICH SOLVER
   produced `points3d`. Read by `resolveTriangulationMethod`,
   `ui/rendering.js`'s lazy reprojection fill, `adoptPrior3d` and the Info Panel's
@@ -1791,13 +1792,16 @@ worker run 10% SLOWER than inline.
   — per frame, what `commitTrackedFrame` reads, in tracker order: `nT[i]`
   targets holding a detection from >= 2 cameras THIS frame, each with its
   `trackId`, `nMem` (camera index, slot) pairs in `mem` in its `detsByCam` order,
-  and a copy of its 3D as the next `p3len` values of `p3` (-1: none); `live[i]`
+  and a copy of its MEMBERS' 3D (`membersPoints3d` — not `target.points3d`,
+  which also fuses stale views the main thread never sees) as the next `p3len`
+  values of `p3` (-1: none); `live[i]`
   = the tracker's target count after the frame (the run's `numTargets`). All
   transferred.
 - Any throw → `{type: 'error', id, message}`.
 
 **Imports from project modules.** `./pose-data.js` (`Camera`, `Instance`),
-`./cross-view-tracker.js` (`CrossViewTracker`, `Detection`) — both worker-safe.
+`./cross-view-tracker.js` (`CrossViewTracker`, `Detection`, `membersPoints3d`) —
+both worker-safe.
 
 **Imported by.** Spawned by `pose/tracker-pool.js` via
 `new Worker(new URL('pose/tracker-worker.js', document.baseURI), {type: 'module'})`.
@@ -2085,14 +2089,26 @@ drifts upward.
   dialog. With no session it is a no-op. Loading never goes through it — the
   readers set `numAnimals` directly, so a reopened project is not dirty.
 
+**Tail marks.** `getTailMarkedIdentity` / `setTailMarkedIdentity` /
+`onTailMarkedIdentityChange`: which identity has the tail marks in the active session
+(`Session.tailMarkedIdentity`, saved with the project; null = off). Asked in Track
+All's first-use dialog (pre-filled with the last answer this page saw) and in the Track
+menu (`ui/tail-mark-field.js`). When set, `runTrackingPass` runs `runTailMarkPass` right
+after a full Track All (never a range or Track Frame), before the ID-switch checks, so
+they judge the corrected labels. A pass that refuses or fails leaves the labels as
+tracked and never fails the run; the status line and summary box say what it did
+(`describeTailMarks`). The result stays on `session._tailMarkResult`, in memory only.
+
 **Imports from project modules.**
 - `./single-camera-tracking.js` — `singleCameraName`, `singleCameraTrackerConfig`,
   `trackSingleCamera`, `SINGLE_CAMERA_LAZY_REASON` (the one-camera Track All).
+- `./tail-mark.js` — `resolveTailMarks`; `../ui/tail-mark-reader.js` —
+  `createTailMarkReader` (see "Tail marks").
 - `./detection-filter-stats.js` — `passesDetectionFilter` (the detection-pool
   filter; see above).
 - `./pose-data.js` — `InstanceGroup`, `points3dNodeCount`, `hasPoint3d`,
   `readPoint3d`, `pooledPoints3d` (`commitTrackedFrame` stores a COPY of the
-  target's 3D in the slab pool, so the group does not share the target's live
+  members' 3D in the slab pool, so the group does not share the target's live
   array).
 - `./triangulation.js` — `computeFundamentalMatrix`, `triangulatePointDLT`,
   `triangulatePoints`, `reprojectPoint`, `reprojectPoints`,
@@ -2104,7 +2120,7 @@ drifts upward.
   Required popup when every camera is a placeholder (a folder loaded with no
   calibration), as Triangulate does — cross-view tracking on cameras that all
   sit at the origin would build groups from 3D with no baseline.
-- `./cross-view-tracker.js` — `CrossViewTracker`, `Detection`.
+- `./cross-view-tracker.js` — `CrossViewTracker`, `Detection`, `membersPoints3d`.
 - `./run-state.js` — `noteTrackRun` (after `trackCurrentFrame`'s and
   `runTrackingPass`'s run): the blue Track button.
 - `../ui/app-state.js` — `state`, `interactionManager`, `timeline`,
@@ -2214,6 +2230,24 @@ the windowed path hands `onProgress` to `sweepLazyFrameWindows`.
 `Identity`, writes `setFrameIdentity`, and promotes unlinked members into the
 linked pool.
 
+**The group's 3D comes from its members only** (`membersPoints3d`,
+`pose/cross-view-tracker.js`). The members are the target's detections from THIS
+frame, while `target.points3d` also fuses any stale view a camera that missed the
+animal left behind (kept up to `stale` frames, for association). Storing the
+target's 3D put a pose up to 20 frames old into 26.7% of committed groups on the
+22 proofread SLAP sessions (node shift median 1.2 mm, p99 147 mm), and the draw
+path's members-only reprojection error did not describe it. A target with no
+stale view still commits its `points3d` bit for bit, and identities are
+unchanged (bit-identical on all 22) since the tracker never reads a group's 3D
+back. On a worker run the worker sends `membersPoints3d` (see
+`pose/tracker-worker.js`). **`triangulationMethod` is deliberately left unset:**
+this is the tracker's normalized-coordinate DLT, not the app's pixel-space
+`'dlt'` (median 0.39 mm apart), and Triangulate All ▸ DLT's `adoptPrior3d` keeps
+any identical-membership group tagged `'dlt'`, so tagging these would make
+Triangulate All after Track All solve nothing. Covered by
+`tests/test-tracker-members-3d.mjs` (a moving animal one camera misses; fails on
+the pre-fix build) and, for the worker, `tests/e2e/track-all-worker.mjs`.
+
 **Raw-trackIdx collision guard.** Per-camera prediction files number tracks
 independently, and a camera's raw tracker can briefly give the SAME trackIdx to
 two animals in one camera on one frame; both `setFrameIdentity` calls would hit
@@ -2253,8 +2287,8 @@ the `G_keeptrack_3d6` champion values, except `distanceThreshold`/`stale` — se
 `pose/cross-view-tracker.js`). Track Frame/Track All pass the user's animal count
 as `maxTargets` (a LUCID divergence; `null` = uncapped). Covered by
 `tests/test-crossview-populate.mjs` (data-structure population),
-`tests/test-cross-view-tracker.mjs` (algorithm), and
-`tests/test-tracker-collision-guard.mjs`.
+`tests/test-cross-view-tracker.mjs` (algorithm),
+`tests/test-tracker-collision-guard.mjs`, and `tests/test-tracker-members-3d.mjs`.
 
 **Track Frame Range.** `trackFrameRange(startFrame, endFrame)` tracks a
 contiguous span, so a user can re-run tracking around a known ID switch while
@@ -2371,7 +2405,8 @@ the per-node 3D term at `-maxPenalty × corr3d` (4 = flat beyond 5 × distanceTh
 re-solved by `checkedPoints3d` (campy's `TriangulateChecked`: a node whose worst view
 is over the threshold loses the view WITHOUT which its other views fit best, down to
 2 views, then is dropped) — and `matchPoints3d(target)` is what `_adjacency3d` and
-`targetProjection` read. `points3d` (written to the groups) stays the plain DLT.
+`targetProjection` read. `points3d` stays the plain DLT, and the groups get the
+plain DLT of their members (`membersPoints3d`, below); `match3d` never reaches one.
 `birthMedian` pairs births by the median epipolar distance over nodes
 (`epipolarMedianMatrix`) instead of `epipolarErrorMatrix`'s mean. Measured with an
 exact offline replay of Track All on 22 proofread SLAP sessions (8 cameras):
@@ -2410,15 +2445,38 @@ place), and `Camera.setExtrinsics` replaces `extrinsicMatrix`. Keep both true.
 The per-view projection is reusable only because of the frame-synchronous rule
 above. Pinned by `tests/test-cross-view-tracker.mjs` "Score caches".
 
+**What a committed group carries: `membersPoints3d(target, frameIdx)`.** A
+target's `points3d` is fused from every view in `detsByCam`, including a camera's
+detection from up to `stale` frames ago — right for association (the reference
+behavior plus the stale-anchor fix; the cost weights were tuned against it), but
+not the 3D of the group `commitTrackedFrame` makes, whose members are only the
+detections from the frame being committed. `membersPoints3d` returns
+`target.points3d` itself when the target holds no stale view (so the common case
+is bit-identical) and otherwise re-solves the members alone with the same DLT,
+in the same convention (`pointsNorm` + `extrinsicMatrix`, so the frame rule
+holds); fewer than two members ⇒ null. It shares `detectionObservations` with
+`_retriangulate`, and takes the target as an argument rather than being a
+`Target` method so plain-object targets in tests work. On the six proofread SLAP
+sessions 30.0% of committed groups held a stale view (median 1, age median 5
+frames); the stored 3D moved per node by a median 1.0 mm, p90 27 mm, p99 135 mm,
+and 2.8% of those nodes had 3D only thanks to the stale view (NaN now, as
+Triangulate All gives). See `pose/tracker.js`. On a worker run
+(`pose/tracker-worker.js`) the worker calls it and sends THAT 3D back: the main
+thread rebuilds each target from its this-frame members only, so a stale view
+is no longer visible by the time `commitTrackedFrame` runs. That half is pinned
+by `tests/e2e/track-all-worker.mjs` (worker == inline, bit for bit): with the
+worker sending `target.points3d` instead, 3 of its checks fail.
+
 **Exports.** `CrossViewTracker` (class: `trackFrame(detsByCam, camsOrder)`,
 maintains `.targets`), `Detection` (2D observation: `pointsNorm`/`pointsPixel` +
-`cam`/`frameIdx`/`slot`), `normalizePoint`.
+`cam`/`frameIdx`/`slot`), `normalizePoint`, `membersPoints3d` (above).
 
 **Faithful-port quirks still preserved (do NOT "fix" without new measurement).**
 `velocity`/`distance` thresholds are SOFT (drive the cost negative, not hard
 gates) and, with the gate off, negative matches are not filtered; the 3D term
 ignores the time gap; 3D velocity is zero; re-triangulation is plain DLT over all
-(freshness-filtered) stored per-view detections. Adds a defensive `nansum`-style
+(freshness-filtered) stored per-view detections — for matching only; a committed
+group's 3D is its members' (above). Adds a defensive `nansum`-style
 skip of non-finite cost terms (robust to a degenerate `[I|0]` camera).
 
 **LUCID divergence — `maxTargets` (opt-in target cap).** The reference has NO
@@ -2987,6 +3045,78 @@ and filling gaps each fail with the specific artifact they represent.
 
 ---
 
+### pose/tail-mark.js
+
+**Purpose.** Which of two tracked identities is the animal with dark marks on its
+tail, at every moment of a session; Track All's tail-mark pass. DOM-free: the pixels
+come from a reader (`ui/tail-mark-reader.js`). Two white mice look alike to the
+tracker, which keeps their labels only by following them, so the pass runs after
+tracking and swaps the identities (`Session.swapIdentitiesInRange`) over each stretch
+where the wrong one holds the marks. The tracker is untouched.
+
+**The measure.** `readTailProfile` walks the tail nodes from `tailMarkNodeIndices` (TTI,
+Tail_0, Tail_1: the marks end near Tail_1), reading a bright percentile of a line across
+the tail at each pixel, so keypoints a few pixels off it do not matter;
+`normalizeTailProfile` scales it to the tail's own brightness.
+
+**Why templates.** Marks differ between animals (several narrow bands, or one wide one on
+the test recordings), and a plain tail in shade by a wall dims along a third of its length
+in every camera for as long as it lies there, so neither a total of what is missing nor a
+limit on gap width separates them: the first swapped the animals during the shade, the
+second missed the wide bands. What holds is that marks stay at one place along that tail.
+So `learnTailTemplates` learns the session's marked and plain profiles, with no labels, from
+samples where one tail is far more banded than the other (`tailBandScore`, which only picks
+those samples). Each view of each tail then votes (`tailVote`, sliding up to `maxShift`
+positions): marked, plain, or 0 when it fits neither (`fitTolerance`).
+
+**The decision.** Evidence per sample (`evidenceOf`) is each identity's votes summed; only
+the difference between the animals counts, so a camera where the marks are hidden adds
+nothing, and a plain vote counts against an animal even when the other was not detected.
+`decodeMarkedStates` is a two-state Viterbi: a sample costs what it contradicts, a change
+costs little across a contact (`contactGaps`, from the shared grid in
+`pose/id-switch-check.js`) and more elsewhere. `refineChange` then bisects each change to
+within `refineSeconds`.
+
+**Samples.** `planTailMarkSamples`: every keyframe (cheap to decode; every 250 frames
+= 1.7 s on the test recordings), or one per second when keyframes are sparser than
+`MAX_SAMPLE_GAP_SECONDS` or unknown.
+
+**Refuses, changing nothing:** not exactly two identities, the named identity missing,
+no frame rate, no readable tail, or too few samples teaching or templates too alike
+(`minTeachingShare`, `minTeachingSamples`, `minTemplateDifference`: "found no tail
+marks"). The share is the gate that matters: 0.50-0.98 on the 96 test recordings, 0.23 on
+an unmarked pair, which without it would have been relabelled 30 times from noise. Under
+`faintTeachingShare` (0.75) the result is `faint` and the status line and summary say to
+check the identities: the three test sessions under it were the ones whose marks could not
+be confirmed by eye.
+
+**Validation** (96 two-mouse recordings, 5 cameras, 15 min each; one mouse marked):
+`tests/e2e/_real-tail-marks.mjs` on each, plus 80 random frames per session the pass never
+read. Of held-out frames where the two tails voted clearly apart, 7,474 of 7,492 put the
+marks on the chosen identity. Body size from the 3D, which the pass does not use, has the
+marked (male) mouse larger in 95 of 96 sessions (the 96th: 0.2 mm apart). 43 sessions were
+labelled the other way round from the start and 41 were right; 12 had label changes mid-way
+(18 in all): body size agrees with every relabelled stretch but one, in the faintest
+session, and the two inspected frame by frame were real tracker switches. The pass took 15-20 s a session on an M-series Mac and about 35 s on a 48-core
+Windows workstation running two sessions at once (2-2.5 min with eight at once). Decoding
+is not what it waits on: it decodes one keyframe per camera per sample (about 2,700
+frames), and Chrome there decodes these H.264 streams at 700-1,700 frames/s, on the GPU
+(NVDEC) or the CPU.
+
+**Key exports.** `resolveTailMarks(session, opts)` (the whole pass),
+`TAIL_MARK_DEFAULTS`, `MAX_SAMPLE_GAP_SECONDS`, `tailMarkNodeIndices`,
+`readTailProfile`, `normalizeTailProfile`, `tailBandScore`, `learnTailTemplates`,
+`tailVote`, `planTailMarkSamples`, `contactGaps`, `evidenceScale`, `evidenceOf`,
+`decodeMarkedStates`, `refineChange`, `stretchesToSwap`.
+
+**Imports.** `./id-switch-check.js` (`buildGrid`, `contactEpisodes`,
+`SIZE_CHECK_DEFAULTS`).
+
+**Imported by.** `pose/tracker.js`, `ui/tail-mark-reader.js`.
+
+**Tests.** `tests/test-tail-mark.mjs`, `tests/e2e/tail-mark-track-all.mjs`. Real data:
+`tests/e2e/_real-tail-marks.mjs`.
+
 ### pose/run-state.js
 
 **Purpose.** Has Track or Triangulate been run on a session, and does its result
@@ -3234,12 +3364,18 @@ a Refined solve with a DLT one behind the user's back. Three helpers:
   `triangulationMethod` exactly.
 - `findEquivalentPriorGroup(priorGroups, group)` → the prior group with identical
   membership (camera for camera, by `Instance` object identity), or null.
-- `adoptPrior3d(group, prior, method)` → copies `points3d`,
-  `triangulationMethod` and `usedCameras`; returns true when `group` therefore
-  needs no solve. Requires identical membership **AND**
-  `prior.triangulationMethod === method`, so it only fires when re-solving would
-  be a provable no-op (an *unknown* prior method never matches; smoothed 3D,
-  `isPoints3dSmoothed`, never matches either). Does **not**
+- `triangulationSettingsKey(cameras)` → a string naming the settings a solve reads
+  besides its method and 2D input: the reprojection error threshold and the
+  cameras included in tracking. Every solve stores it on the group
+  (`solveSettings`, in memory only).
+- `adoptPrior3d(group, prior, method, settingsKey)` → copies `points3d`,
+  `triangulationMethod`, `solveSettings` and `usedCameras`; returns true when
+  `group` therefore needs no solve. Requires identical membership **AND**
+  `prior.triangulationMethod === method` **AND** `prior.solveSettings ===
+  settingsKey`, so it only fires when re-solving would be a provable no-op (an
+  *unknown* prior method never matches; smoothed 3D, `isPoints3dSmoothed`, never
+  matches; 3D read from a file has no `solveSettings`, so it never matches and is
+  re-solved). Does **not**
   copy `reprojections` — leaving them empty is what lets `ui/rendering.js`'s fill
   regenerate them (and `state.triangulationResults`) with the adopted method.
 
@@ -3423,7 +3559,9 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   re-triangulating between passes; a node left with <2 views under the threshold
   is nulled. Covered by `tests/test-triangulation-robust.js`.
 - Lazy loading: class `LazyFrameLoader` (analysis `.h5`, worker-backed) +
-  `shouldUseLazyH5(file)`; `shouldUseLazySlp(file)` + `LAZY_SLP_THRESHOLD` route
+  `shouldUseLazyH5(file)`; `shouldUseLazySlp(file)` + `LAZY_SLP_THRESHOLD`, and
+  `shouldUseLazySlpFolder(files)` (any one file, or the cameras' `.slp` files together,
+  over the threshold: Save crashed on five eager 125 MB cameras) route
   large prediction `.slp` to the main-thread `SioLazyLoader`
   (`loading/sio-lazy-loader.js`). Shared consumers: `ensureLazyFrameData`,
   `buildLazyFrameGroupSync`, `batchLoadLazyFrames` (branches on `loader.isSync`
@@ -3517,8 +3655,9 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   `frameHasGroupedUserInstances`, `updateTimelineForFrame`.
 - Method preservation ("exported 3D == displayed 3D", see above):
   `resolveTriangulationMethod(group)`, `findEquivalentPriorGroup(priorGroups,
-  group)`, `adoptPrior3d(group, prior, method)` (not `reprojections`,
-  deliberately). The latter two exist for the regrouping sweeps, which rebuild
+  group)`, `triangulationSettingsKey(cameras)`,
+  `adoptPrior3d(group, prior, method, settingsKey)` (not `reprojections`,
+  deliberately). The latter three exist for the regrouping sweeps, which rebuild
   `InstanceGroup` objects around unchanged `Instance`s.
 - Orchestration: `triangulateMultiFrameInstances(start, end, onProgress, method)`
   -> `{ triangulated, totalGroups, errSum, errN, frames }` (keeps only the 3D;
@@ -4839,7 +4978,7 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   (`dropAllDerivedTriangulationState`) and stores no reprojections or
   `state.triangulationResults`; its timeline pass walks the frames it
   regrouped (see "Nor does any other bulk path" under
-  `pose/triangulation.js`). Solves with Settings ▸ Default Triangulation
+  `pose/triangulation.js`). Solves with Settings ▸ Triangulation Wizard
   (`resolveTriangulationMethod(null)`). A frame the sweep visits with no
   FrameGroup (3D grouping, no 2D — `sweepLazyFrameWindows`' contract) is
   skipped and its groups left as they are, as in Group by Identity; without
@@ -4847,7 +4986,7 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `groupByIdentityAndTriangulateAll(explicitMethod)` — bulk-group then
   triangulate. `explicitMethod` (`'ba'|'dlt'`) is the user's explicit pick when
   there was one — "Triangulate All ▸ DLT" routes here and passes `'dlt'`; omitting
-  it (Tracks ▸ Group by Identity) means "use Settings ▸ Default Triangulation".
+  it (Tracks ▸ Group by Identity) means "use Settings ▸ Triangulation Wizard".
   Either way the resolved method **governs the whole sweep**. Ends by
   calling `update3DViewport(state.currentFrame)` so the 3D viewer populates for
   the current frame (this is the path "Triangulate All" takes when identities
@@ -4865,10 +5004,11 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   project's 3D to DLT — and save/export read `group.points3d`.
 
   Each sweep resolves ONE governing method up front (the explicit pick, else
-  Settings ▸ Default Triangulation) and every group ends up with 3D from that
+  Settings ▸ Triangulation Wizard) and every group ends up with 3D from that
   method. A group is ADOPTED — `findEquivalentPriorGroup` + `adoptPrior3d`, no
   solve — only when its membership is unchanged AND its existing 3D already
-  came from that same method, i.e. only when re-solving is a provable no-op.
+  came from that same method under the same threshold and cameras
+  (`triangulationSettingsKey`), i.e. only when re-solving is a provable no-op.
   Switching the default to BA re-solves the project (~3-6x the DLT cost); that
   is the user's explicit choice, so both sweeps name the method and report 3D
   provenance ("N kept existing 3D, N solved via Bundle Adjustment, N via DLT")
@@ -4983,8 +5123,12 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   Covered by `tests/e2e/triangulate-range-modal.mjs` (also Group by Track's
   3D-only-frame guard).
 - `exportLabels()` — JSON labels export.
-- `exportPoints3dH5()` — points3d H5 export.
-- `exportReprojH5()` — reprojection H5 export.
+- `exportPoints3dH5()` — points3d H5 export, under an "Export 3D Points"
+  progress card that counts frames written; a failure closes the card and says
+  nothing was saved.
+- `exportReprojH5()` — reprojection H5 export, under an "Export Reprojections"
+  progress card that counts frames written (`createProgressPacer`); a failure
+  closes the card and says nothing was saved.
 
 **Imports from project modules.**
 - `./progress-delta.js` — `noteProgress` (the lit stretch on the Choose Frames for
@@ -5000,7 +5144,8 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   `sessionHasCalibration`, `showCalibrationRequiredPopup`,
   `getInstanceGroupsForFrame`, `sweepLazyFrameWindows`,
   `resolveTriangulationMethod`, `findEquivalentPriorGroup`, `adoptPrior3d`,
-  `triangulationMethodLabel` (the last four for the adopt-don't-downgrade rule),
+  `triangulationSettingsKey`, `triangulationMethodLabel` (the last five for the
+  adopt-don't-downgrade rule),
   `dropAllDerivedTriangulationState` (Group by Track keeps only the 3D).
 - `./viewport3d.js` — `Viewport3D` (Export 3D Video modal).
 - `./overlays.js` — `getTrackColor`, `getGroupColor` (Export 3D Video modal).
@@ -5014,7 +5159,8 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `../import-export/save-load.js` — `showLoading`, `hideLoading`,
   `setStatus`.
 - `./loading-overlay.js` — `showLoadingProgress`, `yieldToPaint` (the
-  "Grouping & triangulating" bar in both group-and-triangulate-all paths).
+  "Grouping & triangulating" bar in both group-and-triangulate-all paths),
+  `createProgressPacer` (the Export Reprojections and Export 3D Points cards).
 - `../pose/triangulation-pool.js` — `createGroupSolver`
   (`groupByIdentityAndTriangulateAll` solves its non-adopted groups on the
   worker pool; adoption and regrouping stay on the main thread).
@@ -10078,13 +10224,17 @@ commas. One scroller: the block grows to its full height.
 
 ### ui/settings-modal.js
 
-The Default Triangulation panel's footer adds **Triangulate All** ("Apply & Triangulate All" with
+The Triangulation Wizard panel's footer adds **Triangulate All** ("Apply & Triangulate All" with
 edits pending): it applies them, closes Settings and clicks `#tbTriangulateAll`, so it runs what the
 toolbar runs. It is disabled when that button is, or with no session.
 
+The same panel's footer also says what will be used (`.settings-tri-readout`): the method and the
+reprojection error threshold, from `working`, so it holds wherever the panel is scrolled and follows
+an edit made on the Tracking Wizard. A value not yet applied is lit, with what it was (`paintFooter`).
+
 **The threshold card's examples.** It builds `buildThresholdExamples`
 (`ui/threshold-examples-panel.js`), hands it to the figure as `opts.examples`, starts it
-when the Default Triangulation panel is first shown, re-solves it when a Camera Views
+when the Triangulation Wizard panel is first shown, re-solves it when a Camera Views
 switch changes, and routes ← → to it while focus is inside it.
 
 **Apply keeps the window open.** Every write to `working` (a `Proxy`) repaints the
@@ -10125,8 +10275,8 @@ right panel area (`settings-panel-container`), with a Cancel / Apply footer.
   Single-instance.
 
 **Behavior.** Four panels, listed in the nav in the order they are used (Tracking
-Wizard, Default Triangulation, Temporal Smoothing, then Keyboard Shortcuts):
-**Default Triangulation** (the method is picked by
+Wizard, Triangulation Wizard, Temporal Smoothing, then Keyboard Shortcuts):
+**Triangulation Wizard** (the method is picked by
 clicking one of two diagram cards from `ui/triangulation-methods-figure.js`,
 DLT or "Refined (Bundle adjustment)" — no separate rows; Enter/Space on a
 focused card is handled in `onDocKeyDown`, which stops every keydown in the
@@ -10639,6 +10789,21 @@ Cancel. On success the viewer is parked on the **last frame tracked**.
 
 ---
 
+### ui/compact-save-modal.js
+
+**Purpose.** The warning File ▸ Save Compact Copy shows before anything is written:
+what is rounded and by how much (from `COMPACT_STEPS`), what is lost (the model's
+exact numbers; exact-equality matching such as merging fresh predictions), what is
+kept (user keypoints, identities, groups, settings), and that the open project stays
+as it is. Cancel has the focus; Esc and a backdrop click cancel. Its "Choose where to
+save…" button opens the save picker inside its own click (the browser needs that
+user activation) and resolves with the handle; a closed picker leaves the dialog up.
+A leaf: imports only `import-export/compact-save.js`.
+
+**Key exports.** `showCompactSaveModal({suggestedName, pickFile?})` -> handle or null.
+
+**Imported by.** `import-export/save-load.js`. Styles: `.compact-save-modal` in `styles.css`.
+
 ### ui/track-setup-modal.js
 
 **Purpose.** What Track All and Track Frame ask the first time they run on a
@@ -10652,7 +10817,9 @@ tracking a session.
 Track All's copy also carries the **image ID-switch check**: its switch
 (`autoImageSwitchCheck`, off by default) and, while on, its four options — the
 Tracking Wizard's own settings. Track Frame's copy leaves it out (a single
-frame is never checked); Track Frame Range shows the same section.
+frame is never checked); Track Frame Range shows the same section. It also asks
+which identity has the **tail marks** (`opts.tailMarks`, answered as
+`tailMarkedIdentity`; `pose/tail-mark.js`).
 
 **Key exports.**
 - `NODE_WEIGHT_TIP` — the advice shown under the node weights here, in Track
@@ -10839,6 +11006,37 @@ unit-tested in Node (`tests/test-track-summary.mjs`). It gives every outcome
 `idSwitchEncounterCount`), itself import-free.
 
 **Imported by.** `pose/tracker.js`, `ui/track-summary-modal.js`.
+
+### ui/tail-mark-reader.js
+
+**Purpose.** The video side of the tail-mark pass (`pose/tail-mark.js`): decode a
+sampled frame in every camera and read each identity's tail profile there. Keyframes go
+through `streamingReader`, a change's exact frame through `decoder.getFrame`. On a
+lazy project each read is bracketed by `hydrateFrameMembers2d` /
+`releaseFrameMembers2d`. Pixels come through one OffscreenCanvas, only each tail's
+bounding box read back.
+
+**Key exports.** `createTailMarkReader(session, fps)` -> the reader
+`resolveTailMarks` takes, or `{failed: reason}` (no videos, no tail nodes).
+
+**Imports.** `./app-state.js`, `./image-embedder.js` (`keyframeIndices`,
+`streamingReader`, `canStream`, `identityGroupsAt`), `../pose/lazy-residency.js`,
+`../pose/tail-mark.js`.
+
+**Imported by.** `pose/tracker.js`.
+
+### ui/tail-mark-field.js
+
+**Purpose.** The Track menu's Tail marks choice (`#tbTailMarks`): which identity Track
+All gives the tail marks in the active session. Follows the session as the Animals
+field does (`ui/animal-count-field.js`).
+
+**Key exports.** `wireTailMarkField()` (from `setupUI`), `syncTailMarkField()` (from
+`drawAllOverlays`, O(1)).
+
+**Imports.** `./app-state.js`, `../import-export/save-load.js`, `../pose/tracker.js`.
+
+**Imported by.** `ui/ui-wiring.js`, `ui/rendering.js`.
 
 ### ui/track-summary-modal.js
 
@@ -12236,7 +12434,7 @@ the angle holds between examples, and the wheel is left to the panel's scroller.
 
 ### ui/triangulation-methods-figure.js
 
-**Purpose.** The Settings ▸ Default Triangulation choice: two cards that each
+**Purpose.** The Settings ▸ Triangulation Wizard choice: two cards that each
 explain one method (DLT, Refined = bundle adjustment) and are clicked to pick
 it (`role="radio"`, `data-method` `'dlt'`/`'ba'`; `ui/settings-modal.js` wires
 the selection). Two top-down sketches of the
@@ -12813,6 +13011,8 @@ session, per-camera SLPs, single-SLP, multi-session, video-only,
 calibration-only. Owns view/grid layout, video selection prompts,
 filesystem enumeration, decoder rebuild.
 
+**Compact copies.** The single-SLP folder loader and the lazy project reopen end on `withCompactNote` (`import-export/compact-save.js`): a file saved as a compact copy opens with a warning status saying its keypoints and 3D were rounded.
+
 **Key exports.**
 - Loaders: `handleLoadCalibration`, `handleLoadVideos`,
   `handleLoadMultiSession`, `loadSingleSessionFromCache`,
@@ -12823,7 +13023,14 @@ filesystem enumeration, decoder rebuild.
   per-camera load's Instance builder from the SLP worker's columnar result;
   exported for `tests/e2e/slp-import-fast-compound.mjs`).
   `handleLoadSessionFolderSingleSlp()` loads a folder holding a project `.slp`
-  plus `videos/` + calibration. It reads the SLP with the **typed** reader
+  plus `videos/` + calibration. More than one root `.slp` (a project and a Save As
+  beside it) is refused with a status naming them and pointing at Load Project:
+  picking by folder cannot say which is meant. A LARGE root `.slp` (`shouldUseLazySlp`, not a campy
+  recording) goes to `handleLoadProjectSlpLazy(slpFile, {folderFiles})` instead,
+  whose videos are matched from the same folder pick, wherever they sit in it (one
+  folder per camera too): one pick opens a saved project with its videos, where
+  Load Project asks for the folder a second time (a page given one file cannot
+  see the folder around it). Otherwise it reads the SLP with the **typed** reader
   (`parseSlpViaSleapIO`, raw `parseSlpH5` only as fallback) and restores
   grouping, `nulledNodes`/occlusion, identities and 3D via the shared
   `restoreGroupingAndUnlink` (`import-export/slp-import.js`), then the rest of
@@ -12849,7 +13056,14 @@ filesystem enumeration, decoder rebuild.
   `forceVideoSelectionWithFolder(refInfo, sessionName, options)` accepts
   `options.allowSkip` (a "Skip — Load Videos Later" button; used by the lazy
   reopen) and closes on `Esc`; both resolve `null`, which every caller treats as
-  "no videos picked".
+  "no videos picked". `options.startIn` (from `folderPickerStartFor(file)`: the
+  `.slp` being opened's `state.slpFileHandle`, only when the handle is THAT file's
+  and the browser has `showDirectoryPicker`) makes Select Session Folder open
+  `pickFolderNear(startIn)`: the folder picker starts in the project's own folder
+  and the files are listed as `pickFolder` lists them. A page given one file cannot
+  read the folder around it, but can start the picker there, so the user confirms
+  the folder instead of finding it again. Load Project, Load SLP and both project
+  reopens pass it; without the API (Brave by default) it is the old upload picker.
   `forceVideoSelection(refInfo, options)` (Load Project on a V2/legacy `.json`,
   Add SLP with no embedded video) is NOT blocking: a **Continue Without Video**
   button and `Esc` both resolve `[]`, which both callers treat as "no videos"
@@ -13014,7 +13228,9 @@ max():
   `tests/e2e/percam-slp-choice-and-failure.mjs`.
 
 **Large `.slp` → lazy loading.** The chosen `.slp` files are routed by
-`shouldUseLazySlp` (`> 150 MB`): large prediction files go to a `SioLazyLoader`
+`shouldUseLazySlpFolder`: when any one is over 150 MB (`shouldUseLazySlp`), or all of
+them together are (five 125 MB cameras loaded eagerly, and File ▸ Save then crashed the
+tab building 1.35 million poses), the whole folder goes to a `SioLazyLoader`
 instead of the eager `parseSlpH5` worker, which OOMs the tab on 100k-frame
 predictions. The lazy loader is chosen when all lazy jobs are `.slp` (analysis
 `.h5` folders still use `LazyFrameLoader`); a lazy-open failure surfaces an error
@@ -13053,7 +13269,10 @@ attach step lists the reason per file too.
 
 **Lazy project reopen (`handleLoadProjectSlpLazy`).** The memory-bounded "Load
 Project" path for a large saved project `.slp` (routed by `handleLoadProject` in
-`import-export/save-load.js` via `shouldUseLazySlp`). **It shows the progress
+`import-export/save-load.js` via `shouldUseLazySlp`, and by
+`handleLoadSessionFolderSingleSlp` for a large root `.slp`, which passes
+`{folderFiles}` so `attachVideosForLazyReopen` takes the videos from that pick
+instead of prompting). **It shows the progress
 card, titled "Open project"** (`createOpenProgress(fileName)`, exported for the
 test), one step per stage, the file name on the detail line: 1. Reading the
 project file — counted in MB, from `openProjectSlp`'s `onReadBytes` (one decimal
@@ -13134,7 +13353,7 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
   `./video.js` (`OnDemandVideoDecoder`, `VideoController`, `releaseViewsFrames` —
   called wherever an outgoing session's views are stashed in `_views`: empty
   session, single-SLP folder, per-camera folder), `../import-export/file-io.js`,
-  `../pose/triangulation.js` (`shouldUseLazyH5`, `shouldUseLazySlp`, `LazyFrameLoader`),
+  `../pose/triangulation.js` (`shouldUseLazyH5`, `shouldUseLazySlpFolder`, `LazyFrameLoader`),
   `./sio-lazy-loader.js` (`SioLazyLoader`),
   `./track-union.js` (`unionTrackNames`, `remapTrackIdx`),
   `../import-export/save-load.js`,
@@ -14155,6 +14374,9 @@ the project file: the ID Switches tab's review checklist (`idSwitchReview`,
 owns the key list so a writer and a reader cannot drift: adding a setting means
 touching this file and nothing else.
 
+**`tailMarkedIdentity`.** The identity Track All gives the tail marks
+(`Session.tailMarkedIdentity`, `pose/tail-mark.js`). Off is null and writes nothing.
+
 **`numAnimals`.** A positive integer or `"auto"`. A never-asked session
 (`null`) writes nothing, so it is asked again after a reopen exactly as a new
 session is, and anything else read back (0, 2.5, `"3"`, `"AUTO"`) is treated
@@ -14451,6 +14673,30 @@ incl. `planeMetadataConflict`).
 
 ---
 
+### import-export/compact-save.js
+
+**Purpose.** File ▸ Save Compact Copy: the rounding steps, the switch a compact save
+turns on for its duration, the marker a compact file carries, and the note shown when
+one is opened. Predicted 2D x/y are rounded to 1/64 px, prediction scores to 1/1024,
+3D to 1/1024 of the calibration unit (binary fractions: exact in float32/float64, so
+gzip compresses them); user keypoints never. The rounding itself is the vendored
+writer's (`lib/sleap-io`, LUCID local patch "compact save"), which reads
+`globalThis.__lucidCompactSave` only while `withCompactSave` runs. LOSSY: never the
+default, asked for through `ui/compact-save-modal.js`. The marker (`lucid_compact` in
+the file's provenance, via `slp-provenance.js`) is kept by every later save, since the
+data stay rounded. DOM-free and import-free.
+
+**Key exports.** `COMPACT_STEPS`, `COMPACT_PROVENANCE_KEY`, `withCompactSave(save)`
+(refuses a second one while one runs; switches off however the save ends),
+`compactSaveActive()`, `compactMarker(steps)`, `compactProvenanceExtra()`,
+`compactRoundingOf(provenance)`, `withCompactNote(message, kind, session)` (the
+end-of-load status, warning when the file is a compact copy).
+
+**Imported by.** `import-export/slp-provenance.js`, `import-export/save-load.js`,
+`import-export/slp-import.js`, `loading/session-loader.js`, `ui/compact-save-modal.js`.
+
+**Tests.** `tests/test-compact-save.mjs`, `tests/e2e/compact-save-copy.mjs`.
+
 ### import-export/slp-provenance.js
 
 **Purpose.** Keeps a loaded `.slp`'s `provenance` dict through LUC3D's project
@@ -14469,6 +14715,9 @@ is kept whole under `lucid_sessions` by session name (`{}` = none; a repeated
 name is `name #2`, …), and goes back to that session on reopen. No provenance
 anywhere → exactly `{ source, exported_at }`. The 2D exports (one camera,
 multi-session export) do not use it: they keep `{ source, exported_at }`.
+While a compact save runs, `buildSaveProvenance` adds `lucid_compact`
+(`compactProvenanceExtra`, `import-export/compact-save.js`); like any key the file
+had, it is then kept by later saves.
 
 **Key exports.** `buildSaveProvenance(sessions, exportedAt?)` (reads each
 session's `name` + `fileProvenance`); `fileSessionProvenance(fileProv, names,
@@ -14678,11 +14927,28 @@ session's resident/total) rather than truncate silently. Covered by
   (`labels.provenance`; the raw worker returns it too), for
   `import-export/slp-provenance.js`.
 - H5 build/parse: `buildPoints3dH5`, `buildReprojH5`,
-  `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`. `buildReprojH5`
+  `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`,
+  `reprojTrackAxis`, `reprojChunkFrames`. `buildReprojH5`
   (Save Reprojections) projects a group's stored 3D into each camera when it has
   no `reprojections` — they are derived, kept only for frames that have been
   shown, and Triangulate All stores none; skipping such groups would leave every
-  unshown frame NaN.
+  unshown frame NaN. It writes `reprojections` (frames, tracks, cameras, nodes, 2)
+  float64 in windows of whole chunks into a chunked gzip-1 dataset (dtype `'<d'`:
+  h5wasm reads `'<f8'` as float32), awaiting `opts.onProgress(done, total)` after
+  each window, so a 135,181-frame recording never holds the whole array (it once
+  asked h5wasm for 4.7 GB). The track axis is the identities, by position in
+  `session.identities` (`reprojTrackAxis`; the session's tracks only when there
+  are none); `reprojChunkFrames` sizes a chunk to ~1 MB. The MEMFS file is
+  unlinked once it is in the Blob. Test: `tests/e2e/reproj-h5-long-recording.mjs`
+  (real data: `tests/e2e/_real-reproj-h5.mjs`). `buildPoints3dH5` writes
+  `points_3d` (frames, tracks, nodes, 3) and `reprojection_error` (frames,
+  tracks, nodes; all NaN, no per-node error is kept) the same way (one
+  `createFramesDataset` per dataset, same `reprojTrackAxis`), for the frames
+  with a group that has 3D and a track row; it fills each window straight from
+  the groups' flat `points3d`, never through `buildPoints3dExportData`, which
+  boxes every node and is kept for tests and small sessions with the same
+  frames, axis and values. Test: `tests/e2e/points3d-h5-long-recording.mjs`
+  (real data: `tests/e2e/_real-points3d-h5.mjs`).
 - Misc: `downloadJSON`, `downloadBytes` (the binary sibling, for the STL/GLB
   mesh exports; the Blob is handed the VIEW, never `bytes.buffer`, which on a
   subarray would write the neighbouring bytes too), `instancePointsMatch`,
@@ -14885,11 +15151,17 @@ same reason).
 ### import-export/save-load.js
 
 **Purpose.** Project lifecycle — newProject, save paths (quickSave,
-saveAs, saveProjectSlp, saveProject), load dispatcher
+saveAs, saveCompactCopy, saveProjectSlp, saveProject), load dispatcher
 (`handleLoadProject`), session-frame serialization helpers, the
 loading-overlay/status-text UI helpers.
 
 **Key exports.**
+- **Save Compact Copy.** `saveCompactCopy({pickFile?})` (File menu): the warning
+  dialog (`ui/compact-save-modal.js`, which opens the save picker inside its own
+  click), then the shared write (`writeProjectToHandle`, also Save's) inside
+  `withCompactSave` (`import-export/compact-save.js`). A COPY: `state.slpFileHandle`
+  and the dirty state are left alone, since nothing in memory is rounded. Without
+  `showSaveFilePicker` (Brave's default) it says which browser setting it needs.
 - **The Save progress card.** `quickSave`/`saveAs` and `saveProjectSlp` (the
   download path, which is what Save is in Brave — its save dialog cannot open
   until the whole file is built) show the shared loading overlay
@@ -15097,6 +15369,8 @@ the status bar at the bottom.
 **Purpose.** SLP/H5 project import + 3D-points-overlay import. Three
 workflows: load fresh SLP (replaces state), additive merge SLP into
 current session, overlay reprojected points3d from H5.
+
+**Compact copies.** `handleLoadSlpFile`'s end-of-load status goes through `withCompactNote` (`import-export/compact-save.js`): a compact copy opens with a warning saying what was rounded.
 
 **campy recordings.** When the video prompt's folder is a campy recording
 (session.json), `handleLoadSlpFile` puts it on the session

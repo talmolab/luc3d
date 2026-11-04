@@ -1,6 +1,6 @@
 /**
  * threshold-session-examples.mjs — the threshold card's "In this session" panel
- * (ui/threshold-examples-panel.js) in Settings ▸ Default Triangulation.
+ * (ui/threshold-examples-panel.js) in Settings ▸ Triangulation Wizard.
  *
  * Asserted, on a synthetic 3-camera project with one badly wrong prediction and a
  * stand-in video decoder:

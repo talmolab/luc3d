@@ -1145,6 +1145,18 @@ body {
   cursor: pointer;
 }
 
+.tri-dropdown-setting select {
+  width: 60px;
+  height: 22px;
+  padding: 0 2px;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
 .tri-dropdown-setting input[type="number"] {
   width: 44px;
   height: 22px;
@@ -1654,6 +1666,30 @@ button.tri-dropdown-item:disabled {
   min-height: 14px;
 }
 
+/* File > Save Compact Copy's warning (ui/compact-save-modal.js). */
+.multi-frame-modal.compact-save-modal {
+  max-width: 560px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+.compact-save-text {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  margin: 0 0 10px;
+}
+.compact-save-list {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+.multi-frame-modal.compact-save-modal .compact-save-warning {
+  color: var(--warning-color, #f0b429);
+}
+
 /* Track All / Track Frame's first-use dialog (ui/track-setup-modal.js), and
    Track Frame Range (ui/track-range-modal.js), which shows the same weight grid:
    the animal count, then the node weights in the Tracking Wizard's own rows,
@@ -1685,6 +1721,15 @@ button.tri-dropdown-item:disabled {
   gap: 10px;
   font-size: 13px;
   color: var(--text-primary);
+}
+
+.track-setup-animals select {
+  padding: 6px 8px;
+  font-size: 13px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
 }
 
 .track-setup-animals input {
@@ -5301,7 +5346,7 @@ kbd {
   font-size: 13px;
 }
 
-/* Settings ▸ Default Triangulation: the DLT-vs-Refined diagram
+/* Settings ▸ Triangulation Wizard: the DLT-vs-Refined diagram
    (ui/triangulation-methods-figure.js). */
 .tri-methods {
   margin: 16px 0 0;
@@ -5329,7 +5374,7 @@ kbd {
   background: var(--bg-primary);
 }
 
-/* Each card is the choice (Settings ▸ Default Triangulation). */
+/* Each card is the choice (Settings ▸ Triangulation Wizard). */
 .tri-method-choice {
   cursor: pointer;
   transition: background var(--transition-fast),
@@ -6090,6 +6135,7 @@ kbd {
 
 .settings-modal-footer {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
@@ -6127,6 +6173,24 @@ kbd {
   border-color: var(--text-secondary);
   color: var(--text-primary);
 }
+
+/* Settings ▸ Triangulation Wizard: what Triangulate All will use. */
+.settings-tri-readout {
+  margin-right: auto;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-secondary);
+}
+
+.settings-tri-readout strong {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-tri-readout-row.is-changed strong { color: var(--accent); }
+
+.settings-tri-readout-was { color: var(--text-muted); }
 
 .settings-btn {
   padding: 7px 18px;

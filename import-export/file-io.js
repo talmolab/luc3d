@@ -12,7 +12,7 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js';
+         toBoxedPoints3d, hasPoint3d, points3dNodeCount } from '../pose/pose-data.js';
 import { validateSkeletonCompatibility } from './slp-merge.js';
 import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
@@ -739,78 +739,89 @@ export function buildSlpExportData(session, views, videoFiles) {
 
 /**
  * Export 3D triangulated points as a JSON representation of the points3d.h5 structure.
- * Can be converted to HDF5 via a Python script.
+ * Can be converted to HDF5 via a Python script. Same frames, track axis
+ * (`reprojTrackAxis`) and values as `buildPoints3dH5`, but boxed per node: for
+ * tests and small sessions, not for a long recording.
  *
  * @param {Session} session
  * @returns {Object} { points_3d, frame_indices, track_names, node_names, reprojection_errors }
  */
 export function buildPoints3dExportData(session) {
     const nodeNames = session.skeleton.nodes.slice();
-    const trackNames = (session.identities && session.identities.length > 0)
-        ? session.identities.map(function (id) { return id.name; })
-        : session.tracks.slice();
+    const axis = reprojTrackAxis(session);
     const numNodes = nodeNames.length;
-    const numTracks = Math.max(
-        (session.identities ? session.identities.length : 0),
-        session.tracks.length
-    );
-
-    const frameIndices = [];
+    const numTracks = axis.names.length;
+    const frameIndices = points3dExportFrames(session, axis);
     const points3dFrames = [];
     const errorFrames = [];
+    const buf = new Float64Array(numTracks * numNodes * 3);
 
-    // Collect frames that have triangulated data, sorted
-    const sortedFrameIndices = Array.from(session.instanceGroups.keys()).sort(function (a, b) { return a - b; });
-
-    for (let fi = 0; fi < sortedFrameIndices.length; fi++) {
-        const frameIdx = sortedFrameIndices[fi];
-        const groups = session.instanceGroups.get(frameIdx);
-
-        // Build a per-track array for this frame
+    for (let fi = 0; fi < frameIndices.length; fi++) {
+        buf.fill(NaN);
+        fillPoints3dFrame(buf, 0, session.instanceGroups.get(frameIndices[fi]), axis.index, numTracks, numNodes);
         const framePts = new Array(numTracks);
         const frameErr = new Array(numTracks);
-        let hasData = false;
-
         for (let t = 0; t < numTracks; t++) {
             framePts[t] = new Array(numNodes);
             frameErr[t] = new Array(numNodes);
             for (let n = 0; n < numNodes; n++) {
-                framePts[t][n] = [NaN, NaN, NaN];
+                const o = (t * numNodes + n) * 3;
+                framePts[t][n] = [buf[o], buf[o + 1], buf[o + 2]];
                 frameErr[t][n] = NaN;
             }
         }
-
-        if (groups) {
-            for (const group of groups) {
-                const idIdx = group.identityId;
-                if (idIdx < 0 || idIdx >= numTracks) continue;
-                if (group.points3d) {
-                    hasData = true;
-                    const _nPts = Math.min(numNodes, points3dNodeCount(group.points3d));
-                    for (let n = 0; n < _nPts; n++) {
-                        // Missing nodes are all-NaN in the data model; leave the
-                        // [NaN,NaN,NaN] default so they round-trip back to NaN.
-                        var p = getPoint3d(group.points3d, n);
-                        if (p != null) framePts[idIdx][n] = p;
-                    }
-                }
-            }
-        }
-
-        if (hasData) {
-            frameIndices.push(frameIdx);
-            points3dFrames.push(framePts);
-            errorFrames.push(frameErr);
-        }
+        points3dFrames.push(framePts);
+        errorFrames.push(frameErr);
     }
 
     return {
         points_3d: points3dFrames,
         frame_indices: frameIndices,
-        track_names: trackNames,
+        track_names: axis.names,
         node_names: nodeNames,
         reprojection_errors: errorFrames,
     };
+}
+
+/** A group's row on the track axis (`reprojTrackAxis`), or -1 if it has none. */
+function trackAxisRow(group, idIndex, nTracks) {
+    var t = idIndex ? idIndex.get(group.identityId) : group.identityId;
+    return (t == null || t < 0 || t >= nTracks) ? -1 : t;
+}
+
+/**
+ * The frames the 3D export writes, sorted: those with a group that has 3D and
+ * a row on the track axis.
+ */
+function points3dExportFrames(session, axis) {
+    const nTracks = axis.names.length;
+    const out = [];
+    for (const [frameIdx, groups] of session.instanceGroups) {
+        if (!groups) continue;
+        for (const group of groups) {
+            if (group.points3d && trackAxisRow(group, axis.index, nTracks) >= 0) { out.push(frameIdx); break; }
+        }
+    }
+    return out.sort(function (a, b) { return a - b; });
+}
+
+/** One frame's 3D into `buf` at `base` (layout: track, node, xyz); missing nodes stay as they are (NaN). */
+function fillPoints3dFrame(buf, base, groups, idIndex, nTracks, nNodes) {
+    if (!groups) return;
+    for (const group of groups) {
+        const t = trackAxisRow(group, idIndex, nTracks);
+        if (t < 0 || !group.points3d) continue;
+        const pts = group.points3d;
+        const n = Math.min(nNodes, points3dNodeCount(pts));
+        const tbase = base + t * nNodes * 3;
+        for (let k = 0; k < n; k++) {
+            // A partly-NaN triple is a missing node (`hasPoint3d`).
+            if (!hasPoint3d(pts, k)) continue;
+            buf[tbase + k * 3] = pts[k * 3];
+            buf[tbase + k * 3 + 1] = pts[k * 3 + 1];
+            buf[tbase + k * 3 + 2] = pts[k * 3 + 2];
+        }
+    }
 }
 
 /**
@@ -2481,76 +2492,102 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
 /**
  * Build a points3d.h5 HDF5 file as a Blob.
  * Ports json_to_h5.py logic to JavaScript using h5wasm.
+ * `points_3d` (n_frames, n_tracks, n_nodes, 3) and `reprojection_error`
+ * (n_frames, n_tracks, n_nodes), float64, NaN = none; n_frames = the frames
+ * with 3D, n_tracks = the identities (`reprojTrackAxis`).
+ *
+ * Written in windows of frames into chunked, gzip-1 datasets, like
+ * `buildReprojH5`: building both arrays at once (and boxed per node first)
+ * took a lazily opened 135,219-frame project from 2.3 to 3.8 GB of heap.
  *
  * @param {Session} session
+ * @param {Object} [opts]
+ * @param {function(number, number): (Promise|void)} [opts.onProgress]
+ *        (framesDone, nFrames), awaited after each window (paint the card here)
  * @returns {Promise<Blob>} The .h5 file as a Blob
  */
-export async function buildPoints3dH5(session) {
+export async function buildPoints3dH5(session, opts) {
+    opts = opts || {};
     const mod = await initH5wasm();
     const fname = 'export_points3d.h5';
 
-    // Build JSON intermediate
-    const data = buildPoints3dExportData(session);
-
-    const frameIndices = data.frame_indices;
-    const trackNames = data.track_names;
-    const nodeNames = data.node_names;
-    const pts3dRaw = data.points_3d;
-    const reprojRaw = data.reprojection_errors;
-
+    const axis = reprojTrackAxis(session);
+    const trackNames = axis.names;
+    const nodeNames = session.skeleton.nodes.slice();
+    const frameIndices = points3dExportFrames(session, axis);
     const nFrames = frameIndices.length;
     const nTracks = trackNames.length;
     const nNodes = nodeNames.length;
-
-    // Build 4D flat array: (n_frames, n_tracks, n_nodes, 3)
-    const pts3d = new Float64Array(nFrames * nTracks * nNodes * 3);
-    pts3d.fill(NaN);
-    for (var fi = 0; fi < nFrames; fi++) {
-        if (!pts3dRaw[fi]) continue;
-        for (var ti = 0; ti < nTracks; ti++) {
-            if (!pts3dRaw[fi][ti]) continue;
-            for (var ni = 0; ni < nNodes; ni++) {
-                var pt = pts3dRaw[fi][ti][ni];
-                if (pt && pt.length === 3) {
-                    var base = ((fi * nTracks + ti) * nNodes + ni) * 3;
-                    pts3d[base] = pt[0];
-                    pts3d[base + 1] = pt[1];
-                    pts3d[base + 2] = pt[2];
-                }
-            }
-        }
-    }
-
-    // Build 3D flat array: (n_frames, n_tracks, n_nodes)
-    const reprojErr = new Float64Array(nFrames * nTracks * nNodes);
-    reprojErr.fill(NaN);
-    for (var fi2 = 0; fi2 < nFrames; fi2++) {
-        if (!reprojRaw[fi2]) continue;
-        for (var ti2 = 0; ti2 < nTracks; ti2++) {
-            if (!reprojRaw[fi2][ti2]) continue;
-            for (var ni2 = 0; ni2 < nNodes; ni2++) {
-                var val = reprojRaw[fi2][ti2][ni2];
-                if (val != null && !isNaN(val)) {
-                    reprojErr[(fi2 * nTracks + ti2) * nNodes + ni2] = val;
-                }
-            }
-        }
-    }
+    const perFrame = nTracks * nNodes;   // reprojection_error; points_3d is 3×
+    const ptsTail = [nTracks, nNodes, 3];
+    const errTail = [nTracks, nNodes];
 
     const f = new mod.File(fname, 'w');
     try {
-        f.create_dataset({name: 'points_3d', data: pts3d, shape: [nFrames, nTracks, nNodes, 3]});
-        f.create_dataset({name: 'frame_indices', data: new Float64Array(frameIndices)});
-        f.create_dataset({name: 'reprojection_error', data: reprojErr, shape: [nFrames, nTracks, nNodes]});
+        if (perFrame === 0 || nFrames === 0) {
+            // Nothing to chunk (HDF5 chunks cannot have a zero dimension).
+            f.create_dataset({name: 'points_3d', data: new Float64Array(0), shape: [nFrames].concat(ptsTail)});
+            f.create_dataset({name: 'frame_indices', data: new Float64Array(frameIndices)});
+            f.create_dataset({name: 'reprojection_error', data: new Float64Array(0), shape: [nFrames].concat(errTail)});
+        } else {
+            const chunkFrames = Math.min(nFrames, reprojChunkFrames(perFrame * 3));
+            // A window is whole chunks, so no chunk is compressed twice.
+            const winFrames = chunkFrames * Math.max(1, Math.floor(4194304 / (chunkFrames * perFrame * 3)));
+            const ptsDs = createFramesDataset(f, 'points_3d', nFrames, ptsTail, chunkFrames);
+            f.create_dataset({name: 'frame_indices', data: new Float64Array(frameIndices)});
+            const errDs = createFramesDataset(f, 'reprojection_error', nFrames, errTail, chunkFrames);
+            const ptsWin = new Float64Array(winFrames * perFrame * 3);
+            // No per-node error is kept, so the error dataset is all NaN.
+            const errWin = new Float64Array(winFrames * perFrame).fill(NaN);
+            const ptsSel = [[0, 0], [0, nTracks], [0, nNodes], [0, 3]];
+            const errSel = [[0, 0], [0, nTracks], [0, nNodes]];
+            for (var w0 = 0; w0 < nFrames; w0 += winFrames) {
+                var w1 = Math.min(nFrames, w0 + winFrames);
+                var buf = ptsWin.subarray(0, (w1 - w0) * perFrame * 3);
+                buf.fill(NaN);
+                for (var fi = w0; fi < w1; fi++) {
+                    fillPoints3dFrame(buf, (fi - w0) * perFrame * 3, session.instanceGroups.get(frameIndices[fi]),
+                        axis.index, nTracks, nNodes);
+                }
+                ptsSel[0] = [w0, w1];
+                ptsDs.write_slice(ptsSel, buf);
+                errSel[0] = [w0, w1];
+                errDs.write_slice(errSel, errWin.subarray(0, (w1 - w0) * perFrame));
+                if (opts.onProgress) await opts.onProgress(w1, nFrames);
+            }
+        }
         f.create_dataset({name: 'track_names', data: trackNames});
         f.create_dataset({name: 'node_names', data: nodeNames});
 
         f.close();
         return h5FileToBlob(fname);
     } catch (err) {
-        f.close();
+        try { f.close(); } catch (e) { /* already closed */ }
         throw err;
+    } finally {
+        // The finished file is in the Blob; don't keep a copy in h5wasm's MEMFS.
+        try { mod.FS.unlink(fname); } catch (e) { /* not there */ }
     }
+}
+
+/**
+ * A float64 dataset of `nFrames` × `tail`, chunked by `chunkFrames` frames and
+ * gzip-1, for writing in windows of frames with `write_slice`.
+ */
+function createFramesDataset(f, name, nFrames, tail, chunkFrames) {
+    f.create_dataset({
+        name: name,
+        data: new Float64Array(0),
+        shape: [0].concat(tail),
+        maxshape: [null].concat(tail),
+        chunks: [chunkFrames].concat(tail),
+        dtype: '<d',   // not '<f8': h5wasm reads that as float32
+        compression: 'gzip',
+        compression_opts: 1,
+    });
+    const ds = f.get(name);
+    ds.resize([nFrames].concat(tail));
+    return ds;
 }
 
 // ============================================
@@ -2558,72 +2595,92 @@ export async function buildPoints3dH5(session) {
 // ============================================
 
 /**
+ * Frames per HDF5 chunk of `reprojections`: as many as fit in ~1 MB of float64
+ * (436 for 2 animals × 5 cameras × 15 nodes), at least one.
+ */
+export function reprojChunkFrames(perFrame) {
+    return Math.max(1, Math.floor(131072 / Math.max(1, perFrame)));
+}
+
+/**
+ * The `reprojections` track axis: one entry per identity (a group is placed by
+ * its identity), in `session.identities` order; without identities, the
+ * session's tracks as before. `index` maps an identity id to its position.
+ */
+export function reprojTrackAxis(session) {
+    var ids = session.identities || [];
+    if (ids.length > 0) {
+        var index = new Map();
+        ids.forEach(function (id, i) { index.set(id.id, i); });
+        return { names: ids.map(function (id) { return id.name; }), index: index };
+    }
+    var names = session.tracks.slice();
+    return { names: names, index: null };
+}
+
+/**
  * Build a reprojections.h5 HDF5 file as a Blob.
  * Contains 2D reprojected points per camera.
- * Shape: (n_frames, n_tracks, n_cameras, n_nodes, 2)
+ * Shape: (n_frames, n_tracks, n_cameras, n_nodes, 2), float64, NaN = none;
+ * n_tracks = the identities (`reprojTrackAxis`).
+ *
+ * Written in windows of frames into a chunked, gzip-1 dataset, so neither the
+ * JS heap nor h5wasm's 2 GB heap ever holds the whole array: a 135,181-frame,
+ * 5-camera recording built it as one 4.7 GB Float64Array (sized by every
+ * tracklet instead of the identities) and failed. Values, shape and dtype are
+ * what any HDF5 reader expects; only the storage is chunked.
  *
  * @param {Session} session
+ * @param {Object} [opts]
+ * @param {function(number, number): (Promise|void)} [opts.onProgress]
+ *        (framesDone, nFrames), awaited after each window (paint the card here)
  * @returns {Promise<Blob>} The .h5 file as a Blob
  */
-export async function buildReprojH5(session) {
+export async function buildReprojH5(session, opts) {
+    opts = opts || {};
     const mod = await initH5wasm();
     const fname = 'export_reprojections.h5';
 
     const cameras = session.cameras;
     const nodeNames = session.skeleton.nodes;
-    const trackNames = (session.identities && session.identities.length > 0)
-        ? session.identities.map(function (id) { return id.name; })
-        : session.tracks.slice();
+    const axis = reprojTrackAxis(session);
+    const trackNames = axis.names;
     const nCameras = cameras.length;
     const nNodes = nodeNames.length;
-    const nTracks = Math.max(
-        (session.identities ? session.identities.length : 0),
-        session.tracks.length
-    );
+    const nTracks = trackNames.length;
     const cameraNames = cameras.map(function (c) { return c.name; });
 
     // Collect frames sorted
     const sortedFrameIndices = Array.from(session.instanceGroups.keys()).sort(function (a, b) { return a - b; });
     const nFrames = sortedFrameIndices.length;
-
-    // Build 5D flat array: (n_frames, n_tracks, n_cameras, n_nodes, 2)
-    const reproj = new Float64Array(nFrames * nTracks * nCameras * nNodes * 2);
-    reproj.fill(NaN);
-
-    for (var fi = 0; fi < nFrames; fi++) {
-        var frameIdx = sortedFrameIndices[fi];
-        var groups = session.instanceGroups.get(frameIdx);
-        if (!groups) continue;
-
-        for (var group of groups) {
-            var idIdx = group.identityId;
-            if (idIdx < 0 || idIdx >= nTracks) continue;
-            // A group's reprojections are derived and kept only for frames
-            // that have been shown (Triangulate All stores none — see
-            // `sweepTriangulateAllFrames` in pose/triangulation.js), so
-            // project its stored 3D for the rest rather than skipping them.
-            var stored = group.reprojections;
-            if (!stored && points3dNodeCount(group.points3d) === 0) continue;
-            for (var ci = 0; ci < nCameras; ci++) {
-                var camName = cameraNames[ci];
-                var reprojPts = stored ? stored[camName]
-                    : (cameras[ci].projectionMatrix ? reprojectPointsCamera(group.points3d, cameras[ci]) : null);
-                if (!reprojPts) continue;
-                for (var ni = 0; ni < Math.min(nNodes, reprojPts.length); ni++) {
-                    var rpt = reprojPts[ni];
-                    if (rpt) {
-                        var rbase = (((fi * nTracks + idIdx) * nCameras + ci) * nNodes + ni) * 2;
-                        reproj[rbase] = rpt[0];
-                        reproj[rbase + 1] = rpt[1];
-                    }
-                }
-            }
-        }
-    }
+    const perFrame = nTracks * nCameras * nNodes * 2;
+    const tail = [nTracks, nCameras, nNodes, 2];
 
     const f = new mod.File(fname, 'w');
     try {
-        f.create_dataset({name: 'reprojections', data: reproj, shape: [nFrames, nTracks, nCameras, nNodes, 2]});
+        if (perFrame === 0 || nFrames === 0) {
+            // Nothing to chunk (HDF5 chunks cannot have a zero dimension).
+            f.create_dataset({name: 'reprojections', data: new Float64Array(0), shape: [nFrames].concat(tail)});
+        } else {
+            const chunkFrames = Math.min(nFrames, reprojChunkFrames(perFrame));
+            // A window is whole chunks, so no chunk is compressed twice.
+            const winFrames = chunkFrames * Math.max(1, Math.floor(4194304 / (chunkFrames * perFrame)));
+            const ds = createFramesDataset(f, 'reprojections', nFrames, tail, chunkFrames);
+            const win = new Float64Array(winFrames * perFrame);
+            const sel = [[0, 0], [0, nTracks], [0, nCameras], [0, nNodes], [0, 2]];
+            for (var w0 = 0; w0 < nFrames; w0 += winFrames) {
+                var w1 = Math.min(nFrames, w0 + winFrames);
+                var buf = win.subarray(0, (w1 - w0) * perFrame);
+                buf.fill(NaN);
+                for (var fi = w0; fi < w1; fi++) {
+                    fillReprojFrame(buf, (fi - w0) * perFrame, session.instanceGroups.get(sortedFrameIndices[fi]),
+                        axis.index, nTracks, cameras, cameraNames, nNodes);
+                }
+                sel[0] = [w0, w1];
+                ds.write_slice(sel, buf);
+                if (opts.onProgress) await opts.onProgress(w1, nFrames);
+            }
+        }
         f.create_dataset({name: 'frame_indices', data: new Float64Array(sortedFrameIndices)});
         f.create_dataset({name: 'track_names', data: trackNames});
         f.create_dataset({name: 'node_names', data: nodeNames.slice()});
@@ -2632,8 +2689,40 @@ export async function buildReprojH5(session) {
         f.close();
         return h5FileToBlob(fname);
     } catch (err) {
-        f.close();
+        try { f.close(); } catch (e) { /* already closed */ }
         throw err;
+    } finally {
+        // The finished file is in the Blob; don't keep a copy in h5wasm's MEMFS.
+        try { mod.FS.unlink(fname); } catch (e) { /* not there */ }
+    }
+}
+
+/** One frame's groups into `buf` at `base` (layout: track, camera, node, xy). */
+function fillReprojFrame(buf, base, groups, idIndex, nTracks, cameras, cameraNames, nNodes) {
+    if (!groups) return;
+    const nCameras = cameras.length;
+    for (var group of groups) {
+        var idIdx = trackAxisRow(group, idIndex, nTracks);
+        if (idIdx < 0) continue;
+        // A group's reprojections are derived and kept only for frames
+        // that have been shown (Triangulate All stores none — see
+        // `sweepTriangulateAllFrames` in pose/triangulation.js), so
+        // project its stored 3D for the rest rather than skipping them.
+        var stored = group.reprojections;
+        if (!stored && points3dNodeCount(group.points3d) === 0) continue;
+        for (var ci = 0; ci < nCameras; ci++) {
+            var reprojPts = stored ? stored[cameraNames[ci]]
+                : (cameras[ci].projectionMatrix ? reprojectPointsCamera(group.points3d, cameras[ci]) : null);
+            if (!reprojPts) continue;
+            var cbase = base + ((idIdx * nCameras + ci) * nNodes) * 2;
+            for (var ni = 0; ni < Math.min(nNodes, reprojPts.length); ni++) {
+                var rpt = reprojPts[ni];
+                if (rpt) {
+                    buf[cbase + ni * 2] = rpt[0];
+                    buf[cbase + ni * 2 + 1] = rpt[1];
+                }
+            }
+        }
     }
 }
 

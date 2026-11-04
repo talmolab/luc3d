@@ -460,7 +460,7 @@ export function cropGeometry(inst, sk) {
 }
 
 /** identity -> its InstanceGroup at `frame` (an identity seen twice there is ambiguous: left out). */
-function identityGroupsAt(session, frame) {
+export function identityGroupsAt(session, frame) {
     const out = new Map(), dup = new Set();
     for (const g of (session.instanceGroups && session.instanceGroups.get(frame)) || []) {
         if (g.identityId == null) continue;
@@ -815,7 +815,7 @@ export function streamingReader(decoder, frames, decode, skipper, count) {
 }
 
 /** Can `streamingReader` stream these frames from this decoder (a mediabunny backend that knows every one's timestamp)? */
-function canStream(decoder, decode) {
+export function canStream(decoder, decode) {
     const be = decoder && decoder._mbBackend;
     if (!be || !be.sink || typeof be.sink.samplesAtTimestamps !== 'function' || !be._frameTimes) return false;
     return decode.every(function (f) { return be._frameTimes[f] != null; });

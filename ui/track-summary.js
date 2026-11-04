@@ -120,6 +120,7 @@ export function summarizeTrackedIdentities(session, opts) {
         animals: animals,
         animalsAuto: !!opts.animalsAuto,
         elapsedMs: opts.elapsedMs,
+        tailMarks: opts.tailMarks || null,
         fps: opts.fps > 0 ? opts.fps : 0,
         singleCamera: opts.singleCamera || null,
         untracked: opts.untracked || 0,
@@ -160,6 +161,19 @@ export function describeSwitchCheck(enabled, res, identities, whyNotRun) {
     }
     if (typeof res.elapsedMs === 'number') out.elapsedMs = res.elapsedMs;
     return out;
+}
+
+/**
+ * The tail-mark pass's outcome (pose/tail-mark.js) in a few words, for the status
+ * line and the summary box.
+ * @param {{ok: boolean, markedName?: string, swapped?: number, faint?: boolean, reason?: string}} res
+ * @returns {string}
+ */
+export function describeTailMarks(res) {
+    if (!res.ok) return 'tail marks not used: ' + res.reason;
+    return 'tail marks on ' + res.markedName + ' (' +
+        (res.swapped ? plural(res.swapped, 'stretch', 'stretches') + ' relabelled' : 'no labels changed') + ')' +
+        (res.faint ? '; the marks are faint here, so check the identities' : '');
 }
 
 // Check states that spent real time — a skip returns at its preflight, so a
@@ -216,7 +230,7 @@ export const MAX_IDENTITY_ROWS = 12;
  *   primary: {action:string, label:string},
  *   secondary: Array<{action:string, label:string}>,
  * }}
- *   Actions: 'review' (ID Switches tab), 'triangulationSettings' (Settings ▸ Default Triangulation),
+ *   Actions: 'review' (ID Switches tab), 'triangulationSettings' (Settings ▸ Triangulation Wizard),
  *   'imageCheck' / 'sizeCheck' / 'brightnessCheck' (run that check), 'wizard'
  *   (Tracking Wizard), 'save' (File ▸ Save). A single-camera summary
  *   (`s.singleCamera`) is planned by `planSingleCameraSummary`, with a
@@ -284,7 +298,7 @@ export function planTrackSummary(s, checks) {
     };
     var checkRows = nIds > 1 ? [checkRow('Body size', size, 'size'), checkRow('Images', image, 'image')] : [];
 
-    var TRIANGULATE = 'Choose how to triangulate in Settings ▸ Default Triangulation, then run Triangulate All for 3D poses in every frame.';
+    var TRIANGULATE = 'Choose how to triangulate in Settings ▸ Triangulation Wizard, then run Triangulate All for 3D poses in every frame.';
     var PROPAGATE = 'Optional: Tracks ▸ Propagate IDs → Tracks stores the identities as tracks too.';
     var next, primary, secondary = [];
     var canImage = image.state === 'off' || image.state === 'cancelled';
@@ -322,7 +336,7 @@ export function planTrackSummary(s, checks) {
             caveat = 'Spot-check them by playing through moments when animals come close.';
         }
         next = { headline: headline, caveat: caveat, steps: [TRIANGULATE, PROPAGATE] };
-        primary = { action: 'triangulationSettings', label: 'Default Triangulation…' };
+        primary = { action: 'triangulationSettings', label: 'Triangulation Wizard…' };
         if (nIds > 1 && size.state === 'off') secondary.push({ action: 'sizeCheck', label: 'Check by body size' });
         if (nIds > 1 && canImage) secondary.push({ action: 'imageCheck', label: 'Check by images…' });
     }

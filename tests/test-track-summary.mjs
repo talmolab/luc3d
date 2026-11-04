@@ -14,7 +14,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ui = (f) => pathToFileURL(path.join(HERE, '..', 'ui', f)).href;
-const { formatShare, formatDuration, formatTrackingSpeed, summarizeTrackedIdentities, describeSwitchCheck, planTrackSummary, MAX_IDENTITY_ROWS } =
+const { formatShare, formatDuration, formatTrackingSpeed, summarizeTrackedIdentities, describeSwitchCheck, describeTailMarks, planTrackSummary, MAX_IDENTITY_ROWS } =
     await import(ui('track-summary.js'));
 
 let passed = 0, failed = 0; const failures = [];
@@ -23,6 +23,13 @@ function eq(a, e, m) {
     else { failed++; failures.push(`${m} (expected ${JSON.stringify(e)}, got ${JSON.stringify(a)})`); console.error('  ✗ ' + m); }
 }
 function ok(c, m) { eq(!!c, true, m); }
+
+// ---- the tail-mark pass's outcome -------------------------------------------
+eq(describeTailMarks({ ok: true, markedName: 'id_0', swapped: 0 }), 'tail marks on id_0 (no labels changed)', 'nothing to fix');
+eq(describeTailMarks({ ok: true, markedName: 'id_1', swapped: 1 }), 'tail marks on id_1 (1 stretch relabelled)', 'one stretch');
+eq(describeTailMarks({ ok: true, markedName: 'id_0', swapped: 3 }), 'tail marks on id_0 (3 stretches relabelled)', 'several');
+eq(describeTailMarks({ ok: true, markedName: 'id_0', swapped: 1, faint: true }), 'tail marks on id_0 (1 stretch relabelled); the marks are faint here, so check the identities', 'faint: says to check');
+eq(describeTailMarks({ ok: false, reason: 'found no tail marks' }), 'tail marks not used: found no tail marks', 'not used, with why');
 
 // ---- formatShare: never overstates ------------------------------------------
 eq(formatShare(0, 0), '—', 'no denominator');
@@ -126,7 +133,7 @@ const plan = (sum, size, image) => planTrackSummary(sum, { size, image });
 // switches found -> review first
 let p = plan(two, C('found', { switches: 3, encounters: 40 }), C('off'));
 eq(p.primary.action, 'review', 'switches found: the recommended step is reviewing them');
-ok(p.next.steps.some(t => /Default Triangulation/.test(t)), 'switches found: triangulating is still listed, after review');
+ok(p.next.steps.some(t => /Triangulation Wizard/.test(t)), 'switches found: triangulating is still listed, after review');
 eq(p.checks[0].text, '3 possible switches in 40 close encounters', 'check row: found');
 eq(p.checks[1].text, 'Not run', 'check row: image check off');
 eq(p.secondary.length, 0, 'switches found: no alternative checks offered');
@@ -135,7 +142,7 @@ eq(p.primary.action, 'review', 'found by images alone still means review');
 
 // size clear, images not run -> say what "clear" means, offer the image check, recommend triangulating
 p = plan(two, C('clear', { switches: 0, encounters: 40 }), C('off'));
-eq(p.primary.action, 'triangulationSettings', 'nothing flagged: the recommended step is Default Triangulation');
+eq(p.primary.action, 'triangulationSettings', 'nothing flagged: the recommended step is Triangulation Wizard');
 ok(/similar size/.test(p.next.caveat || ''), 'nothing flagged by size alone: says size cannot separate similar animals');
 eq(p.secondary.map(b => b.action).join(','), 'imageCheck', 'nothing flagged by size alone: offers the image check');
 eq(p.checks[0].text, 'Nothing flagged in 40 close encounters', 'check row: clear — "flagged", never "no possible switches"');
@@ -163,7 +170,7 @@ eq(p.secondary.map(b => b.action).join(','), 'imageCheck', 'image check cancelle
 // no check ran at all -> say so; offer the size check when it is off
 p = plan(two, C('off'), C('off'));
 eq(p.next.headline, 'Identities were not checked for switches.', 'neither ran: says so, rather than implying "none found"');
-eq(p.primary.action, 'triangulationSettings', 'neither ran: still recommends Default Triangulation');
+eq(p.primary.action, 'triangulationSettings', 'neither ran: still recommends Triangulation Wizard');
 eq(p.secondary.map(b => b.action).join(','), 'sizeCheck,imageCheck', 'neither ran: offers both checks');
 p = plan(two, C('skipped', { reason: 'needs at least 60 s of tracking' }), C('off'));
 eq(p.next.headline, 'Identities were not checked for switches.', 'size skipped: not checked');
@@ -194,7 +201,7 @@ const one = summarizeTrackedIdentities({ identities: [{ id: 0, name: 'id_0' }], 
     { frames: 1, animals: 1 });
 p = plan(one, C('na'), C('na'));
 eq(p.next.headline, 'One identity, so there is nothing to switch.', 'one identity: headline');
-eq(p.primary.action, 'triangulationSettings', 'one identity: Default Triangulation next');
+eq(p.primary.action, 'triangulationSettings', 'one identity: Triangulation Wizard next');
 eq(p.checks.length, 0, 'one identity: no check rows');
 
 // stats rows
