@@ -10600,7 +10600,9 @@ either ID-switch check is run.
   (its nearest other identity more than 1.5 of its body sizes away), the
   isolated frame nearest the middle winning (maximising isolation pushed picks
   to slot edges). Only the middle 60% of each slot is searched, so neighbouring
-  samples stay 40% of a slot apart even in a crowded cage.
+  samples stay 40% of a slot apart even in a crowded cage. A gap wider than a
+  slot would send several slots to one frame, so the count is made up evenly over
+  the tracked frames: more than five tracked frames always give five samples.
 - `pickCamera` — among the views where the group has a 2D member: the largest
   projection of its 3D (diagonal, with the camera's distortion) inside the image
   is the best, and among the views good enough to use (inside the image, at
