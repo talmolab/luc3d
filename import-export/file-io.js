@@ -1772,9 +1772,8 @@ export async function exportCamerasSlpStreaming(session, cameras, reprojAsUser, 
 // (group members first, then the rest, each by row), with the values the pass
 // would write: instance score `score || 0`, each node's own score or else the
 // instance score, `complete` 1 for a placed node, no tracking score, no
-// `from_predicted`. One deliberate difference: a node the file stores as placed
-// but not visible keeps `visible` 0. Lazy hydration never applies the file's
-// visibility, so the pass wrote such a node as visible.
+// `from_predicted`, and the file's visibility (hydration applies it,
+// `lazyRowInstance` in pose/lazy-residency.js, so the pass writes it too).
 // Reprojections exist only in memory, so with Reprojections on the export keeps
 // the per-frame pass (`sharedStoreCopyContext` says why it cannot copy).
 
@@ -1902,9 +1901,10 @@ function _memberDiffersFromStore(m, ctx, j) {
         if (m.hasPoint(k) !== has) return true;
         if (!has) continue;
         if (m.getX(k) !== x || m.getY(k) !== y) return true;
-        // Occluded in memory but visible in the file: an edit. (The reverse is
-        // what hydration does to every node: it never applies the file's flag.)
-        if (vis && m.isOccluded(k)) return true;
+        // The per-frame pass writes a placed node visible unless it is nulled
+        // or occluded; hydration gives a member the file's occlusion
+        // (`lazyRowInstance`), so any other flag is an edit.
+        if (vis === !!((nulled && nulled.has(k)) || m.isOccluded(k))) return true;
     }
     return false;
 }

@@ -19,11 +19,10 @@
  *
  *  1. Both routes (`opts.route` 'store' and 'sweep') write, per camera, the same
  *     four tables value for value — frames, instances (type, track, score, ids,
- *     ranges), user points and predicted points with their per-node scores — in
- *     the same order. The one allowed difference: a node the file stores as
- *     placed but not visible keeps visible = 0 in the store copy (lazy
- *     hydration drops that flag, so the per-frame pass wrote 1); the test
- *     requires exactly the expected number of them.
+ *     ranges), user points and predicted points with their per-node scores and
+ *     visibility — in the same order. A node the file stores as placed but not
+ *     visible stays not visible in both (hydration applies the file's flag,
+ *     `lazyRowInstance` in pose/lazy-residency.js).
  *  2. Negative controls: the comparison fails for the bare store (resident
  *     edits and drift dropped), for the copy with only the added instance's
  *     frame hidden, without per-node scores (no score column), or without the
@@ -233,21 +232,19 @@ try {
     console.log(`  store copy ${res.tStore} ms, per-frame pass ${res.tSweep} ms`);
 
     const same = (a, b) => a === b || (Number.isNaN(a) && Number.isNaN(b));
-    // Differences between two exports of one camera; visibility 1 -> 0 on a
-    // placed node is counted apart (the one allowed difference, see header).
+    // Differences between two exports of one camera, value for value.
     function diff(A, B) {
-        const out = { other: [], visDrop: 0 };
+        const out = { other: [] };
         for (const name of ['frames', 'instances', 'points', 'pred_points']) {
             const a = A[name], b = B[name];
             if (JSON.stringify(a.shape) !== JSON.stringify(b.shape) || JSON.stringify(a.cols) !== JSON.stringify(b.cols)) {
                 out.other.push(`${name}: shape ${JSON.stringify(a.shape)} vs ${JSON.stringify(b.shape)}`);
                 continue;
             }
-            const nc = a.cols.length, vi = a.cols.indexOf('visible');
+            const nc = a.cols.length;
             for (let i = 0; i < a.v.length; i++) {
                 if (same(a.v[i], b.v[i])) continue;
                 const r = Math.floor(i / nc), c = i % nc;
-                if (vi >= 0 && c === vi && a.v[i] === 1 && b.v[i] === 0 && Number.isFinite(b.v[r * nc])) { out.visDrop++; continue; }
                 if (out.other.length < 5) out.other.push(`${name}[${r}].${a.cols[c]}: ${a.v[i]} vs ${b.v[i]}`);
                 else out.other.length === 5 && out.other.push('…');
             }
@@ -256,13 +253,18 @@ try {
     }
 
     console.log('1. Same tables from both routes');
-    // Nodes the file holds placed-but-invisible, outside the resident frames
-    // (built from memory by both routes): user instances (k = 0) on frames
-    // f % 2000 === 7, node 1 where placed, every camera.
-    const resident = new Set(res.resident);
-    const expectVisDrop = (ci) => {
+    // Nodes the file holds placed-but-invisible: user instances (k = 0) on
+    // frames f % 2000 === 7, node 1 where placed, every camera. Both routes
+    // must write each of them visible 0.
+    const expectInvisible = (ci) => {
         let n = 0;
-        for (let f = 7; f < FRAMES; f += 2000) if (!resident.has(f) && (f + 3 + 5 * ci) % 97 !== 0) n++;
+        for (let f = 7; f < FRAMES; f += 2000) if ((f + 3 + 5 * ci) % 97 !== 0) n++;
+        return n;
+    };
+    const invisibleUserNodes = (T) => {
+        const p = T.points, nc = p.cols.length, xi = p.cols.indexOf('x'), vi = p.cols.indexOf('visible');
+        let n = 0;
+        for (let r = 0; r < p.shape[0]; r++) if (Number.isFinite(p.v[r * nc + xi]) && p.v[r * nc + vi] === 0) n++;
         return n;
     };
     check(res.resident.length > 0 && res.resident.length < 200, 'a few frames resident at export', res.resident.length);
@@ -272,10 +274,12 @@ try {
         check(rows[0] > 8192 && rows[1] > 8192 && rows[3] > 8192 && rows[2] > 0,
             `${cam}: frames/instances/pred_points past 8,192 rows, user points present`, rows);
         const d = diff(S, T);
-        check(d.other.length === 0, `${cam}: store copy = per-frame pass, value for value`, d.other);
-        check(d.visDrop === expectVisDrop(ci), `${cam}: only the ${expectVisDrop(ci)} placed-but-invisible node(s) keep visible 0`, d.visDrop);
+        check(d.other.length === 0, `${cam}: store copy = per-frame pass, value for value (visibility included)`, d.other);
+        const inv = [invisibleUserNodes(S), invisibleUserNodes(T)];
+        check(inv[0] === expectInvisible(ci) && inv[1] === expectInvisible(ci),
+            `${cam}: both routes write the ${expectInvisible(ci)} placed-but-invisible node(s) visible 0`, inv);
         const da = diff(T, res.auto[ci]);
-        check(da.other.length === 0 && da.visDrop === 0, `${cam}: the default route writes the store copy`, da);
+        check(da.other.length === 0, `${cam}: the default route writes the store copy`, da);
     });
     const sc = res.store[0].pred_points, scoreCol = sc.cols.indexOf('score');
     const distinct = new Set();
