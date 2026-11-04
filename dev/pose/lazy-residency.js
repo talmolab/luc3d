@@ -20,12 +20,14 @@
  *     trail (trails draw RESIDENT past frames only).
  *  2. **Re-hydrating it would rebuild exactly what is resident**
  *     (`frameEvictionBlocker`). Re-hydration is `getFrameSync` → one Instance
- *     per store row, tagged `_rawInstIndex` → `finalizeLazyFrameGroup`, which
+ *     per store row (`lazyRowInstance`, carrying the row's occlusion), tagged
+ *     `_rawInstIndex` → `finalizeLazyFrameGroup`, which
  *     re-seats this frame's `instanceGroups` members by `_rawInstIndex` and
  *     sends every other row to the unlinked pool. Group members are never
  *     lost: they live in `session.instanceGroups`, which is never evicted, and
  *     come back as the SAME objects. Unlinked instances are rebuilt from the
- *     store, so each must still equal its row. Anything else — a user instance
+ *     store, so each must still equal its row, occlusion included. Anything
+ *     else — a user instance
  *     (the streaming save reads its edit overlay from resident frames, see
  *     `buildSessionRefGraph`), an edited/backed-up/nulled instance, a deleted or
  *     added row, a track changed only in memory, a trackless instance carrying
@@ -57,12 +59,14 @@
  * with `hydrateFrameMembers2d` / `releaseFrameMembers2d` (the image ID-switch
  * check, `ui/image-embedder.js`).
  *
- * DOM-free (it imports only `pose/pose-data.js`) so `tests/test-lazy-residency.mjs`
+ * DOM-free (it imports only `pose/pose-data.js` and the dependency-free
+ * `import-export/import-track-resolve.js`) so `tests/test-lazy-residency.mjs`
  * can drive it directly; `pose/triangulation.js` `evictLazyFrames` supplies the
  * app state.
  */
 
-import { Instance, lazyPlaceholderXY } from './pose-data.js?v=bfec78025610';
+import { Instance, lazyPlaceholderXY } from './pose-data.js?v=b1724b04e89e';
+import { nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=b1724b04e89e';
 
 /** Frames the playback loader keeps hydrated ahead of the playhead. */
 export const LAZY_PLAYBACK_AHEAD = 600;
@@ -108,6 +112,7 @@ function instanceBlocker(inst, desc, seen, numNodes, refs) {
     if (seen[k]) return 'row';
     seen[k] = 1;
     if (numNodes > 0 && inst.numNodes !== numNodes) return 'skeleton';
+    if (!occlusionMatchesRow(inst, desc, k)) return 'occlusion';
     return null;
 }
 
@@ -122,8 +127,8 @@ function instanceBlocker(inst, desc, seen, numNodes, refs) {
  * @param {Set<Object>} [refs] - objects the UI holds (InstanceGroups,
  *   Instances, UnlinkedInstances); a frame containing one is kept
  * @returns {string|null} a short reason: 'loader', 'camera', 'ui', 'user',
- *   'modified', 'row', 'count', 'skeleton', 'grouping', 'identity', 'track',
- *   'type', 'instance'
+ *   'modified', 'row', 'count', 'skeleton', 'occlusion', 'grouping',
+ *   'identity', 'track', 'type', 'instance'
  */
 export function frameEvictionBlocker(session, frameIdx, fg, refs) {
     var loader = session && session.lazyLoader;
@@ -299,14 +304,68 @@ function occAllClear(occ) {
 }
 
 /**
+ * Does `inst` carry exactly the occlusion re-hydrating store row `k` gives it
+ * (`lazyRowInstance`: the nodes placed but not visible in the file)? A
+ * descriptor without `occludedNodes` (a stand-in loader) is read as a row
+ * with none — what hydration assumed before it read the flag.
+ */
+function occlusionMatchesRow(inst, desc, k) {
+    var rowOcc = typeof desc.occludedNodes === 'function' ? desc.occludedNodes(k) : null;
+    if (!rowOcc) return occAllClear(inst._occ);
+    var j = 0;
+    for (var n = 0, nn = inst.numNodes; n < nn; n++) {
+        var want = j < rowOcc.length && rowOcc[j] === n;
+        if (want) j++;
+        if (inst.isOccluded(n) !== want) return false;
+    }
+    return j === rowOcc.length;
+}
+
+/**
+ * The Instance a lazy store row hydrates to — one shape for every hydration
+ * path (`pose/triangulation.js`: `ensureLazyFrameData`, `hydrateLazyCameras`,
+ * `buildLazyFrameGroupSync`, `batchLoadLazyFrames`; `hydrateFrameMembers2d`
+ * here). `d` is the loader's row dict (`adaptTypedInstance` in
+ * loading/sio-lazy-loader.js, or the worker's `getFrame(s)` reply):
+ * `{ points, trackIdx, type, score, occluded }`.
+ *
+ * The file's visibility comes with it, as the eager loader gives it
+ * (loading/session-loader.js, import-export/slp-import.js): a node placed but
+ * not visible is occluded (`setOccludedFrom`), and a USER row also gets those
+ * nodes as nulled nodes (`nulledNodesFromOcclusion`) — what an unlinked user
+ * label keeps of its occlusion, since only a group's metadata stores nulled
+ * nodes. A group member adopts only the coordinates and occlusion
+ * (`adoptPointsFrom`); its nulled nodes are its group's.
+ *
+ * @param {Object} d - the row dict
+ * @param {?number} trackIdx - the instance's track (already resolved)
+ * @returns {Instance}
+ */
+export function lazyRowInstance(d, trackIdx) {
+    var type = d.type || 'predicted';
+    var inst = new Instance(d.points || [], trackIdx, type, d.score || 0);
+    var occ = d.occluded;
+    if (occ) {
+        for (var k = 0; k < occ.length; k++) {
+            if (!occ[k]) continue;
+            inst.setOccludedFrom(occ);
+            var nulled = nulledNodesFromOcclusion(d.points, occ, type);
+            if (nulled) inst.nulledNodes = nulled;
+            break;
+        }
+    }
+    return inst;
+}
+
+/**
  * Why group member `m` (camera `cam`) must keep its own 2D, or null when
- * re-hydration would give it back exactly. Re-hydration adopts the points of
- * the store row at `m._rawInstIndex` with occlusion all clear (the hydration
- * paths never read the store's visibility), so the member must still BE that
- * row: an untouched prediction — not user, modified, mid-edit or nulled, no
- * occlusion set, no skeleton-node change — whose row exists and is a
- * prediction. Its other fields (track, type, score, identity) are on the
- * member object, which stays; only `_xy` is given back.
+ * re-hydration would give it back exactly. Re-hydration adopts the points and
+ * occlusion of the store row at `m._rawInstIndex` (`lazyRowInstance` +
+ * `adoptPointsFrom`), so the member must still BE that row: an untouched
+ * prediction — not user, modified, mid-edit or nulled, its occlusion the
+ * row's (`desc.occludedNodes`), no skeleton-node change — whose row exists
+ * and is a prediction. Its other fields (track, type, score, identity) are on
+ * the member object, which stays; only `_xy` is given back.
  *
  * @returns {string|null} 'released', 'ui', 'user', 'modified', 'occlusion',
  *   'row', 'skeleton'
@@ -318,11 +377,11 @@ export function member2dReleaseBlocker(m, desc, numNodes, refs) {
     if (m.modified) return 'modified';
     if (typeof m.hasBackup === 'function' && m.hasBackup()) return 'modified';
     if (m.nulledNodes && m.nulledNodes.size > 0) return 'modified';
-    if (!occAllClear(m._occ)) return 'occlusion';
     var k = m._rawInstIndex;
     if (typeof k !== 'number' || !(k >= 0 && k < desc.count) || k !== Math.floor(k)) return 'row';
     if (desc.predicted[k] !== 1) return 'row';
     if (!(numNodes > 0) || m.numNodes !== numNodes) return 'skeleton';
+    if (!occlusionMatchesRow(m, desc, k)) return 'occlusion';
     return null;
 }
 
@@ -368,7 +427,7 @@ export function releaseFrameMembers2d(session, frameIdx, opts) {
  * Give `frameIdx`'s released group members their 2D back WITHOUT making the
  * frame resident — for a reader that needs member 2D of frames it does not
  * hydrate. Builds each member's row exactly as `buildLazyFrameGroupSync` +
- * `finalizeLazyFrameGroup` do (`getFrameSync`, `new Instance(points)`,
+ * `finalizeLazyFrameGroup` do (`getFrameSync`, `lazyRowInstance`,
  * `adoptPointsFrom`). Pair with `releaseFrameMembers2d` once read, or the
  * members stay hydrated.
  *
@@ -387,7 +446,7 @@ export function hydrateFrameMembers2d(session, frameIdx) {
             var rows = data.get(cam);
             var d = rows ? rows[m._rawInstIndex] : null;
             if (!d) continue;
-            m.adoptPointsFrom(new Instance(d.points || [], null, d.type || 'predicted', d.score || 0));
+            m.adoptPointsFrom(lazyRowInstance(d, null));
             m._lazy2d = false;
             n++;
         }

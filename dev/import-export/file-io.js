@@ -12,16 +12,16 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, hasPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=bfec78025610';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=bfec78025610';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=bfec78025610';
-import { createProgressPacer } from '../ui/loading-overlay.js?v=bfec78025610';
+         toBoxedPoints3d, hasPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=b1724b04e89e';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=b1724b04e89e';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=b1724b04e89e';
+import { createProgressPacer } from '../ui/loading-overlay.js?v=b1724b04e89e';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=bfec78025610';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=bfec78025610';
-import { writePlaneMetadata } from './plane-metadata.js?v=bfec78025610';
-import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=bfec78025610';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=b1724b04e89e';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=b1724b04e89e';
+import { writePlaneMetadata } from './plane-metadata.js?v=b1724b04e89e';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=b1724b04e89e';
 
 // ============================================
 // Generic file picker
@@ -1772,9 +1772,8 @@ export async function exportCamerasSlpStreaming(session, cameras, reprojAsUser, 
 // (group members first, then the rest, each by row), with the values the pass
 // would write: instance score `score || 0`, each node's own score or else the
 // instance score, `complete` 1 for a placed node, no tracking score, no
-// `from_predicted`. One deliberate difference: a node the file stores as placed
-// but not visible keeps `visible` 0. Lazy hydration never applies the file's
-// visibility, so the pass wrote such a node as visible.
+// `from_predicted`, and the file's visibility (hydration applies it,
+// `lazyRowInstance` in pose/lazy-residency.js, so the pass writes it too).
 // Reprojections exist only in memory, so with Reprojections on the export keeps
 // the per-frame pass (`sharedStoreCopyContext` says why it cannot copy).
 
@@ -1902,9 +1901,10 @@ function _memberDiffersFromStore(m, ctx, j) {
         if (m.hasPoint(k) !== has) return true;
         if (!has) continue;
         if (m.getX(k) !== x || m.getY(k) !== y) return true;
-        // Occluded in memory but visible in the file: an edit. (The reverse is
-        // what hydration does to every node: it never applies the file's flag.)
-        if (vis && m.isOccluded(k)) return true;
+        // The per-frame pass writes a placed node visible unless it is nulled
+        // or occluded; hydration gives a member the file's occlusion
+        // (`lazyRowInstance`), so any other flag is an edit.
+        if (vis === !!((nulled && nulled.has(k)) || m.isOccluded(k))) return true;
     }
     return false;
 }
@@ -3475,7 +3475,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=bfec78025610', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=b1724b04e89e', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },
