@@ -23,6 +23,7 @@ import {
     resolveTriangulationMethod,
     findEquivalentPriorGroup,
     adoptPrior3d,
+    triangulationSettingsKey,
     triangulationMethodLabel,
     dropAllDerivedTriangulationState,
 } from '../pose/triangulation.js';
@@ -287,7 +288,7 @@ async function sweepTriangulationFrames(session, onFrame, opts) {
  * @param {'ba'|'dlt'} [explicitMethod] - the method the user explicitly asked
  *   for, when they did. "Triangulate All ▸ DLT" routes here and passes `'dlt'`,
  *   so an explicit pick stays honest. Omitted (Tracks ▸ Group by Identity) means
- *   "use my configured default" — Settings ▸ Default Triangulation. Either way the
+ *   "use my configured default" — Settings ▸ Triangulation Wizard. Either way the
  *   resulting method GOVERNS the whole sweep: with Bundle Adjustment selected,
  *   every group ends up with BA 3D, including groups that already held valid DLT
  *   3D with unchanged membership (see `adoptPrior3d`).
@@ -319,7 +320,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
     }
 
     // THE governing method for this whole sweep: an explicit user pick if there
-    // was one, else Settings ▸ Default Triangulation. Named in the progress text
+    // was one, else Settings ▸ Triangulation Wizard. Named in the progress text
     // and the final status line so the method (and therefore its cost — BA runs
     // ~3x-6x DLT per group) is visible rather than a surprise.
     var prefMethod = explicitMethod
@@ -348,9 +349,11 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
     // itself stays on the main thread. Results land in submission order.
     var gSolver = createGroupSolver(cameras,
         { method: prefMethod, triangulateOnly: true, expectedGroups: totalFrames });
+    var gSettingsKey = triangulationSettingsKey(cameras);
     function applyIdentitySolve(group, triResult) {
         group.points3d = pooledPoints3d(triResult.points3d);   // slab-pooled (pose-data.js)
         group.triangulationMethod = triResult.method;
+        group.solveSettings = gSettingsKey;
         if (triResult.method === 'ba') solvedBa++; else solvedDlt++;
     }
 
@@ -508,7 +511,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
             // read `group.points3d`, so the exported file stopped matching what
             // the user had computed and was looking at.
             var prior = findEquivalentPriorGroup(_existing, group);
-            if (adoptPrior3d(group, prior, prefMethod)) {
+            if (adoptPrior3d(group, prior, prefMethod, gSettingsKey)) {
                 reused3d++;
             } else {
                 // Still `triangulateOnly` (reprojections are recomputed on demand
@@ -601,6 +604,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
     // therefore its cost, BA running ~3x-6x DLT per group — is visible rather
     // than a surprise.
     var prefMethodT = resolveTriangulationMethod(null);
+    var tSettingsKey = triangulationSettingsKey(allCameras);
 
     showLoadingProgress('Grouping & triangulating', 0, totalFrames,
         { detail: triangulationMethodLabel(prefMethodT) });
@@ -751,7 +755,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
             // read `group.points3d`, so the exported file no longer matched what
             // the user had computed and was looking at.
             var priorT = findEquivalentPriorGroup(priorGroups, group);
-            if (adoptPrior3d(group, priorT, prefMethodT)) {
+            if (adoptPrior3d(group, priorT, prefMethodT, tSettingsKey)) {
                 reused3dT++;
                 group.markClean();
                 // No error stats: the errors belong to the adopted solve, which
@@ -764,6 +768,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
             var result = triangulateAndReproject(group, groupCameras,
                 { method: prefMethodT });
             group.triangulationMethod = result.method;
+            group.solveSettings = tSettingsKey;
             if (result.method === 'ba') solvedBaT++; else solvedDltT++;
 
             // Only the 3D is stored (see `dropAllDerivedTriangulationState`
@@ -2582,7 +2587,7 @@ async function runMultiFrameTriangulation(startFrame, endFrame, overlayEl) {
     var progressLabel = document.getElementById('tfProgressLabel');
     var progressFill = document.getElementById('tfProgressFill');
 
-    // THE method for the whole range: Settings ▸ Default Triangulation, as for
+    // THE method for the whole range: Settings ▸ Triangulation Wizard, as for
     // Group by Track. This modal has no method picker, so the configured default
     // is the user's instruction; it used to pass none, which solved with DLT
     // whatever the setting said. Named in the progress, summary and status text

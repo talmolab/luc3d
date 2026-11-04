@@ -80,7 +80,7 @@
  *     points get median-filtered as if measured and the output contains no NaN
  *     at all. That is not copied.
  *
- *   - SEGMENT BOUNDARIES (the animal was gone; gap >= `maxGap`). Every sample
+ *   - SEGMENT BOUNDARIES (the animal was gone; gap longer than `maxGap`). Every sample
  *     on one side is absent and no bookkeeping recovers it. A one-sided window
  *     is not a smoother, it is an extrapolation: at the first frame after a
  *     gap a 7-wide window sees only `t..t+3`, whose centroid is `t+1.5`, so at

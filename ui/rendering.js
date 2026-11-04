@@ -24,6 +24,7 @@ import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition
 // (it reaches pose/tracker.js, which imports this module) — safe for the same
 // reason: the call site is inside drawAllOverlays' body.
 import { syncAnimalCountField } from './animal-count-field.js';
+import { syncTailMarkField } from './tail-mark-field.js';
 import { syncNodeTooltipFrame } from './node-tooltip.js';
 import { syncSmoothingButton } from './smoothing-button.js';
 import { syncRunButtons } from './run-buttons.js';
@@ -139,6 +140,8 @@ export function getVisibilitySettings() {
         // The "?" badge on unlinked instances. Defaults TRUE when the control is
         // absent, so the affordance is never lost by accident.
         showUnlinkedBadge: checkVal('visUnlinkedBadge', true),
+        showSymmetryEdges: checkVal('visSymmetryEdges', false),
+        symmetryEdgeWeight: parseInt((document.getElementById('visSymmetryEdgeWeight') || {}).value) || 1,
         userOpts: {
             nodeSize: parseInt(document.getElementById('visUserNodeSize').value) || 4,
             lineWidth: parseInt(document.getElementById('visUserEdgeWeight').value) || 2,
@@ -433,6 +436,7 @@ export function drawAllOverlays(frameIdx, viewFrames) {
     // a draw — so the per-session Animals field catches up here. O(1) when the
     // session and its count are the ones already shown.
     syncAnimalCountField();
+    syncTailMarkField();
 
     var editGroupTarget = interactionManager ? interactionManager.editGroupTarget : null;
 
@@ -594,6 +598,8 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             showReprojected: vis.showReprojected,
             reprojNodeColor: vis.reprojNodeColor,
             showErrors: vis.showErrors,
+            showSymmetryEdges: vis.showSymmetryEdges,
+            symmetryEdgeWeight: vis.symmetryEdgeWeight,
             userOpts: vis.userOpts,
             predictedOpts: vis.predictedOpts,
             reprojOpts: vis.reprojOpts,
