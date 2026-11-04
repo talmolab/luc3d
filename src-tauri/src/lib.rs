@@ -14,6 +14,7 @@ mod localhost;
 mod native_menu;
 mod sleap_nn;
 mod system;
+mod updates;
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -82,6 +83,11 @@ fn lucid_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
             close_guard::confirm_close,
             system::system_info,
             native_menu::set_app_menu,
+            updates::get_update_info,
+            updates::set_update_channel,
+            updates::check_update,
+            updates::install_update,
+            updates::restart_app,
             sleap_nn::sleap_nn_status,
             sleap_nn::run_python_command,
             sleap_nn::cancel_command,
@@ -93,6 +99,11 @@ fn lucid_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // reqwest (updates.rs, tauri-plugin-updater) uses rustls without a
+    // built-in provider choice: install ring's once, before any thread can
+    // race to a first TLS handshake (which panics without one).
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let context = tauri::generate_context!();
 
     // Release builds serve the frontend from http://localhost (secure
@@ -145,9 +156,12 @@ pub fn run() {
                 close_guard::request_close_all(app);
             } else if native_menu::page_key(id).is_some() {
                 native_menu::on_page_item(app, id);
+            } else if id.starts_with(native_menu::UPDATE_ITEM_PREFIX) {
+                native_menu::on_update_item(app, id);
             }
         })
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(lucid_plugin());
 
     if use_localhost {
@@ -171,6 +185,7 @@ pub fn run() {
     }
 
     let builder = builder.setup(move |app| {
+        app.manage(updates::UpdateState::load(app.handle()));
         // luc3d | Edit | Window until the page sends its own menus
         // (set_app_menu); also what stays if it never does.
         #[cfg(target_os = "macos")]
@@ -260,7 +275,7 @@ mod tests {
             .map(|s| s.rsplit("::").next().unwrap())
             .collect();
 
-        assert_eq!(from_build.len(), 24);
+        assert_eq!(from_build.len(), 29);
         from_build.sort_unstable();
         from_lib.sort_unstable();
         assert_eq!(from_build, from_lib);
