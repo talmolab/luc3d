@@ -11323,7 +11323,10 @@ either ID-switch check is run.
   stretches — made an empty "no keypoints" picture (seen on a real sham_gdx
   video). A slot with none in its middle takes the usable frame nearest that
   middle, on either side; only an identity with no usable frame at all falls back
-  to whatever is tracked.
+  to whatever is tracked. A gap wider than a slot would send several slots to one
+  frame, so the count is made up evenly over the tracked frames (each the usable
+  frame nearest its spot, when that one is not taken yet): more than five tracked
+  frames always give five samples.
 - `pickCamera` — among the views where the group has a 2D member: the largest
   projection of its 3D (diagonal, with the camera's distortion) inside the image
   is the best, and among the views good enough to use (inside the image, at
