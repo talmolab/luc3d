@@ -3320,8 +3320,8 @@ for ONE group, leaving the frame's other groups and their results entries alone
   (default `ahead` = `LAZY_PLAYBACK_AHEAD + LAZY_PREFETCH_MARGIN`).
 - No hold is active (the windowed sweeps hold for their whole run).
 - **Re-hydration would rebuild exactly what is resident** (`frameEvictionBlocker`
-  returns null). Re-hydration makes one Instance per store row tagged
-  `_rawInstIndex`, re-seats this frame's `instanceGroups` members by
+  returns null). Re-hydration makes one Instance per store row
+  (`lazyRowInstance`) tagged `_rawInstIndex`, re-seats this frame's `instanceGroups` members by
   `_rawInstIndex` (`finalizeLazyFrameGroup`) and unlinks the rest. So: every
   camera with data must be backed by the loader (`'camera'`); per camera the
   resident instances must be a bijection onto the store rows (`'count'`, `'row'`);
@@ -3331,7 +3331,8 @@ for ONE group, leaving the frame's other groups and their results entries alone
   backed-up mid-edit or nulled (`'modified'`), resized by a skeleton edit
   (`'skeleton'`), or held by the UI (`'ui'`); and each unlinked instance must
   still match its row — track (`'track'`), type (`'type'`), and no #201 identity
-  stamped on the instance (`'identity'`, not persisted). Group members' own fields
+  stamped on the instance (`'identity'`, not persisted). Every resident
+  instance's occlusion must be its row's (`'occlusion'`, `desc.occludedNodes`). Group members' own fields
   are not compared: they survive in `instanceGroups` (never evicted) and come back
   as the SAME objects. Points are not compared — every 2D edit path promotes to
   `user`, sets `modified` or `nulledNodes`. A loader without
@@ -3351,10 +3352,11 @@ the row's 2D the next time the frame is hydrated. Rules:
 - **Only for a NON-resident frame** (its members are what is on screen), never
   for a group or member the UI holds, and only for a member re-hydration would
   give back exactly (`member2dReleaseBlocker`): an untouched prediction — not
-  `'user'`, `'modified'`/mid-edit/nulled, no `'occlusion'` set (hydration brings
-  occlusion back clear), no `'skeleton'` change — whose store `'row'` exists and
-  is a prediction. Its other fields (track, type, score, identity) stay on the
-  member object; only `_xy` is given back.
+  `'user'`, `'modified'`/mid-edit/nulled, its occlusion exactly its row's
+  (`'occlusion'`: re-adoption copies the row's, `adoptPointsFrom`), no
+  `'skeleton'` change — whose store `'row'` exists and is a prediction. Its
+  other fields (track, type, score, identity) stay on the member object; only
+  `_xy` is given back (its `_occ` stays, equal to the row's).
 - **Re-adoption keys on the member's CURRENT `_rawInstIndex`**, never a cached
   row or position — a store compaction (Custom Delete, interactive deletes)
   renumbers released members too, and must keep pointing each at its own row.
@@ -3366,8 +3368,20 @@ the row's 2D the next time the frame is hydrated. Rules:
   each row exactly as `buildLazyFrameGroupSync` + `finalizeLazyFrameGroup` do
   and does NOT make the frame resident.
 
+**Row -> Instance.** `lazyRowInstance(rowDict, trackIdx)` is the one way a lazy
+store row becomes an Instance (`ensureLazyFrameData`, `hydrateLazyCameras`,
+`buildLazyFrameGroupSync`, `batchLoadLazyFrames`, `hydrateFrameMembers2d`). It
+applies the file's visibility as the eager loader does: a node placed but not
+visible is occluded, and on a USER row also nulled (`nulledNodesFromOcclusion`,
+drawn occluded — an unlinked user label has no group metadata to keep nulled
+nodes). A group member adopts only coordinates and occlusion; its nulled nodes
+are its group's. Without it a reopened project showed such a node visible and
+re-saved it visible from any resident frame. Test: e2e `lazy-hydrate-visibility`.
+
 **Imports from project modules.** `./pose-data.js` (`Instance`,
-`lazyPlaceholderXY`) — still DOM-free, so the Node test can drive it.
+`lazyPlaceholderXY`), `../import-export/import-track-resolve.js`
+(`nulledNodesFromOcclusion`, dependency-free) — still DOM-free, so the Node test
+can drive it.
 
 **Imported by.** `pose/triangulation.js` (`evictLazyFrames`,
 `sweepLazyFrameWindows`), `ui/ui-wiring.js` (`LAZY_PLAYBACK_AHEAD`),
@@ -13042,9 +13056,11 @@ resident ones):
 
 **`describeStoreFrame(camName, frameIdx)`** — what re-hydrating one
 camera-frame WOULD build, read straight from the columns: `{ count, trackIdx:
-Int32Array, predicted: Uint8Array }` (entry `k` = the row an `_rawInstIndex` of
-`k` names; trackless and a track id with no `Track` behind it are -1; an absent
-`instance_type` reads as 0, a user row, as `materializeFrame` defaults it),
+Int32Array, predicted: Uint8Array, occludedNodes(k) }` (entry `k` = the row an
+`_rawInstIndex` of `k` names; trackless and a track id with no `Track` behind it
+are -1; an absent `instance_type` reads as 0, a user row, as `materializeFrame`
+defaults it; `occludedNodes(k)` = the row's nodes placed but not visible,
+ascending, or null — read from the point columns only when called),
 `count: 0` for a frame with no row, null for a camera this loader does not back.
 The playback eviction (`pose/lazy-residency.js`) proves a resident frame
 rebuildable against it; `tests/e2e/lazy-playback-eviction.mjs` pins it to the
@@ -14378,9 +14394,9 @@ session's resident/total) rather than truncate silently. Covered by
   camera), hydrated by `sweepLazyFrameWindows` over their runs. The copy writes the
   pass's values and order (members first, then the rest, each by row; instance score
   `score || 0`; each node's own score else the instance score; `complete` 1 for a
-  placed node; no tracking score or `from_predicted`), except that a node the file
-  holds placed but invisible keeps `visible` 0 (lazy hydration drops that flag, so the
-  pass wrote 1). `sharedStoreCopyContext(session, reprojAsUser, instanceFilter)` gives
+  placed node; no tracking score or `from_predicted`), visibility included (a member
+  whose occlusion or nulled nodes write a different `visible` than its row is
+  drift). `sharedStoreCopyContext(session, reprojAsUser, instanceFilter)` gives
   the store's columns or a `blocker` (Reprojections on, a skeleton or track list that
   differs from the file's, several stores, format < 1.1); then, or when more than
   max(2,000, 5%) frames would need hydrating, the per-frame sweep runs. `opts.route`
