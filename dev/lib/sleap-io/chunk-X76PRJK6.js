@@ -36,7 +36,7 @@ import {
   resolveIdentity,
   resolveVideoFilename,
   sessionsReadError
-} from "./chunk-H7G4PJNA.js?v=4b5d39f5e9c5";
+} from "./chunk-H7G4PJNA.js?v=bfec78025610";
 import {
   RemoteIOError,
   fetchRetrying,
@@ -48,7 +48,7 @@ import {
   redactedCauseSummary,
   resolveUrl,
   statusToMessage
-} from "./chunk-YS7Q6CO6.js?v=4b5d39f5e9c5";
+} from "./chunk-YS7Q6CO6.js?v=bfec78025610";
 
 // src/model/centroid.ts
 var _centroidSkeleton = null;
@@ -13941,6 +13941,59 @@ var SlpStreamWriter = class {
         outIdxOf,
         skippedKeys
       );
+    } catch (e) {
+      this.dispose();
+      throw e;
+    }
+  }
+  /**
+   * LUCID local patch (raw rows): append table rows a caller has already built,
+   * in the four tables' own layouts (`FRAMES_FIELDS`, `INSTANCES_FIELDS`,
+   * `POINTS_FIELDS`, `PRED_POINTS_FIELDS`), with every id RELATIVE to this call:
+   * a frame's `frame_id` and instance range count from 0 in `rows.frames`' own
+   * order, an instance's `frame_id` names one of those frames and its point
+   * range counts from 0 in `rows.points` (user, `instance_type` 0) or
+   * `rows.predPoints` (predicted). `from_predicted` >= 0 is an instance of this
+   * call; -1 is none. They are rebased onto the running file here, so calls
+   * interleave freely with `appendFrames`/`appendStore`. LUCID's per-camera
+   * export copies one camera's rows out of a project's shared store this way
+   * (`import-export/file-io.js` `exportCamerasFromSharedStore`). A `(video,
+   * frame_idx)` already written is an error: the caller decides every frame.
+   */
+  appendRawRows(rows) {
+    if (this.closed) throw new Error("SlpStreamWriter is closed");
+    const F = rows.frames, I = rows.instances;
+    const P = rows.points ?? new Float64Array(0), Q = rows.predPoints ?? new Float64Array(0);
+    const nF = F.length / 5, nI = I.length / 10, nP = P.length / 4, nQ = Q.length / 5;
+    if (nF === 0) return;
+    const frameBase = this.frameRows, instBase = this.instRows;
+    const pointBase = this.pointRows, predBase = this.predPointRows;
+    try {
+      for (let i = 0; i < nF; i++) {
+        const key = `${F[i * 5 + 1]}:${F[i * 5 + 2]}`;
+        if (this.writtenFrames.has(key)) throw new Error(`appendRawRows: frame ${key} is already written`);
+        this.writtenFrames.add(key);
+        F[i * 5] += frameBase;
+        F[i * 5 + 3] += instBase;
+        F[i * 5 + 4] += instBase;
+      }
+      for (let j = 0; j < nI; j++) {
+        const o = j * 10;
+        const ptBase = I[o + 1] === 1 ? predBase : pointBase;
+        I[o] += instBase;
+        I[o + 2] += frameBase;
+        if (I[o + 5] >= 0) I[o + 5] += instBase;
+        I[o + 7] += ptBase;
+        I[o + 8] += ptBase;
+      }
+      appendMatrixRows(this.file, "frames", F, nF, 5, this.frameRows);
+      this.frameRows += nF;
+      appendMatrixRows(this.file, "instances", I, nI, 10, this.instRows);
+      this.instRows += nI;
+      appendMatrixRows(this.file, "points", P, nP, 4, this.pointRows);
+      this.pointRows += nP;
+      appendMatrixRows(this.file, "pred_points", Q, nQ, 5, this.predPointRows);
+      this.predPointRows += nQ;
     } catch (e) {
       this.dispose();
       throw e;
