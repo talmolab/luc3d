@@ -8625,3 +8625,20 @@ div.track-summary-steps { padding-left: 0; }
   border-radius: 4px;
   user-select: text;
 }
+
+/* ID Switches tab: the image check's model (ui/image-model-dialog.js) */
+.image-model-line { margin-top: 8px; font-size: 12px; color: var(--text-secondary, #aaa); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.image-model-line b { color: var(--text-primary, #eee); font-weight: 600; }
+.image-model-missing { color: #e0a040; }
+.image-model-modal { max-width: 560px; }
+.image-model-text { font-size: 13px; margin: 0 0 10px; }
+.image-model-list { display: grid; gap: 6px; margin-bottom: 10px; }
+.image-model-option { display: block; font-size: 13px; }
+.image-model-sub { color: var(--text-secondary, #aaa); font-size: 12px; }
+.image-model-load { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
+.image-model-load input[type=text] { flex: 1 1 180px; min-width: 0; }
+.image-model-details { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 12px; margin: 0 0 6px; }
+.image-model-details dt { color: var(--text-secondary, #aaa); }
+.image-model-details dd { margin: 0; overflow-wrap: anywhere; }
+.image-model-modal.is-busy { cursor: progress; }
+.image-model-modal.is-busy button { pointer-events: none; opacity: 0.6; }

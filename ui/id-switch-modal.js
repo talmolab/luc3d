@@ -40,7 +40,8 @@ import { getTrackingThreshold } from './settings.js';
 import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js';
 import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions } from '../pose/single-camera-tracking.js';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT } from './image-embedder.js';
+         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js';
+import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine } from './image-model-dialog.js';
 import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js';
 import { renderBraveFingerprintingHint } from './browser-hints.js';
 import { createBrightnessSampler } from './brightness-sampler.js';
@@ -302,8 +303,9 @@ function openProgressDialog(title) {
             if (ctl.signal.aborted) return;
             cropEl.hidden = !tensor;
             if (!tensor) return;
-            var ctx = cropCanvas.getContext('2d');
-            cropPixels = cropPixels || ctx.createImageData(INPUT, INPUT);
+            var ctx = cropCanvas.getContext('2d'), side = Math.round(Math.sqrt(tensor.length / 3));   // the model's input side
+            if (cropCanvas.width !== side) { cropCanvas.width = cropCanvas.height = side; cropPixels = null; }
+            cropPixels = cropPixels || ctx.createImageData(side, side);
             inputTensorToPixels(tensor, cropPixels.data);
             ctx.putImageData(cropPixels, 0, 0);
             if (skeleton && skeleton.points) drawCropSkeleton(ctx, skeleton.points, skeleton.edges || [], skeleton.color);
@@ -335,11 +337,19 @@ async function runImage(session, rate, inject) {
     var threshold = getTrackingThreshold('imageChangeThreshold');
     var views = (state.views || []).filter(function (v) { return v && v.decoder; });
     if (!views.length && !inject.createEmbedder) return { ok: false, reason: 'needs the session\'s videos to be loaded' };
+    // The session's image model (Session.imageModel; null = the built-in one): a package must be loaded on
+    // this page, or reloadable from its URL. Its own threshold replaces the Wizard's, which is calibrated
+    // for the built-in model.
+    var pkg = null;
+    try { pkg = await resolveSessionImageModel(session); }
+    catch (e) { return { ok: false, reason: (e && e.message) || String(e) }; }
+    setActiveImageModel(pkg);
+    var threshold = pkg ? pkg.threshold : getTrackingThreshold('imageChangeThreshold');
     // No GPU is not a reason to skip: the embedder then runs on the CPU, slowly, and the dialog says so
-    var prog = openProgressDialog('Checking ID switches (images)');
+    var prog = openProgressDialog(pkg ? 'Checking ID switches (images, ' + pkg.name + ')' : 'Checking ID switches (images)');
     var t0 = 0, ticker = null, cropTicker = null, embedder = null;
     try {
-        embedder = await (inject.createEmbedder || createImageEmbedder)(session, { onStatus: function (t) { prog.update(t, 0); },
+        embedder = await (inject.createEmbedder || createImageEmbedder)(session, { onStatus: function (t) { prog.update(t, 0); }, imageModel: pkg,
             maxViewsPerAnimal: getTrackingThreshold('imageCheckMaxViews'),
             webnn: getTrackingThreshold('imageCheckWebNN') > 0 });
         // What runs the model, and — once embedding starts, every second — how busy the check keeps the CPU and
@@ -406,6 +416,8 @@ async function runImage(session, rate, inject) {
         };
         var res = await checkImageSwitches(session, opts);
         if (res && embedder.backend) res.model = embedder.backend();   // after releaseFrames: the final word
+        // which model made these results (named in "About these flags", saved with them)
+        if (res) res.imageModel = pkg ? { key: pkg.key, name: pkg.name, threshold: threshold } : null;
         if (res && embedder.stats) {
             res.timing = embedder.stats();                 // where the time went, on THIS machine
             console.log('[ID switches, images] ' + formatEmbedTiming(res.timing), res.timing);
@@ -668,7 +680,8 @@ function aboutChecksHtml(st, ran) {
         '<p class="id-switch-rate">Analysed ' + r0.sampleHz.toFixed(1) + ' samples/s (every ' +
         (r0.step === 1 ? 'frame' : ordinal(r0.step) + ' frame') + ' at ' + r0.fps.toFixed(2).replace(/\.?0+$/, '') + ' fps' +
         (im && im.ok ? '; images at ' + im.imageHz.toFixed(1) + '/s, ' + im.crops.toLocaleString() + ' crops from ' + im.cameras.length + ' views' +
-            (im.model && im.model.note ? ' (' + escapeHtml(im.model.note) + ')' : '') : '') +
+            (im.model && im.model.note ? ' (' + escapeHtml(im.model.note) + ')' : '') +
+            (im.imageModel ? '; image model <b>' + escapeHtml(im.imageModel.name) + '</b>, flag threshold ' + escapeHtml(String(im.imageModel.threshold).replace('-', '−')) : '') : '') +
         (br && br.ok ? '; coat brightness at ' + br.imageHz.toFixed(1) + '/s, ' + br.crops.toLocaleString() + ' samples from ' +
             br.cameras.length + ' view' + (br.cameras.length === 1 ? '' : 's') : '') +
         (r0.fpsFromVideo ? ', measured from the video)'
@@ -1013,8 +1026,10 @@ export function refreshIdSwitchPanel(session) {
             (hasTrackedIdentities(session) ? 'No ID-switch check has run on this session yet.' : (singleCameraName(session) ? 'Run Track All first: the checks need tracked identities.' : 'Run Track All first: the checks need tracked identities with 3D.')) +
             '</p><div class="id-switch-run"><button class="panel-btn" data-run="menuCheckSizeSwitches">Check by body size</button>' +
             '<button class="panel-btn" data-run="menuCheckImageSwitches">Check by images…</button>' +
-            '<button class="panel-btn" data-run="menuCheckBrightnessSwitches">Check by coat brightness…</button></div></div>';
+            '<button class="panel-btn" data-run="menuCheckBrightnessSwitches">Check by coat brightness…</button></div>' +
+            imageModelLineHtml(session) + '</div>';
         setIdSwitchHighlight(null);
+        wireImageModelLine(host, session, function () { refreshIdSwitchPanel(session); });
         host.querySelectorAll('[data-run]').forEach(function (b) {
             b.addEventListener('click', function () { var m = document.getElementById(b.dataset.run); if (m) m.click(); });
         });
@@ -1038,6 +1053,7 @@ export function refreshIdSwitchPanel(session) {
                 (n ? '<b>' + n + '</b> possible switch' + (n === 1 ? '' : 'es') : 'nothing flagged') + '</div>';
         }).join('') +
         '<details class="id-switch-about"><summary>About these flags</summary>' + aboutHtml(st, ran) + '</details>' +
+        imageModelLineHtml(session) +
         '</div>' +
         '<div class="id-switch-toolbar">' +
         '<span class="id-switch-done"><b>' + done + '</b> of ' + primary.length + ' reviewed</span>' +
@@ -1052,6 +1068,7 @@ export function refreshIdSwitchPanel(session) {
                 : 'No encounter scored below the threshold.') + '</p>') + '</div>';
     _progStale = true;                               // the list was rebuilt: re-find the selected row's bar
     wireTrackSummary(host, session);
+    wireImageModelLine(host, session, function () { refreshIdSwitchPanel(session); });
     highlightRow(rows.filter(function (f) { return rowKey(f) === st.current; })[0] || null);
     var nav = st.navigate || _navigate;
     // A row lands its lead-in (1 s, 2 s on one camera) before the animals come close (data-go), so pressing play
