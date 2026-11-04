@@ -29,6 +29,7 @@ const COMMANDS: &[&str] = &[
     "set_close_guard",
     "confirm_close",
     "system_info",
+    "set_app_menu",
     "sleap_nn_status",
     "run_python_command",
     "cancel_command",

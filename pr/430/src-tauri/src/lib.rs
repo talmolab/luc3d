@@ -4,12 +4,14 @@
 //! This crate adds: a stable http://localhost origin for release builds, one
 //! inlined plugin `lucid` holding every native command (see build.rs), the
 //! window (with the JS shim `js/lucid-desktop.js` as initialization script),
-//! the macOS menu, and cleanup on exit.
+//! the macOS menu bar (which carries the page's own menus: native_menu.rs),
+//! and cleanup on exit.
 
 mod close_guard;
 mod dialogs;
 mod files;
 mod localhost;
+mod native_menu;
 mod sleap_nn;
 mod system;
 
@@ -79,6 +81,7 @@ fn lucid_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
             close_guard::set_close_guard,
             close_guard::confirm_close,
             system::system_info,
+            native_menu::set_app_menu,
             sleap_nn::sleap_nn_status,
             sleap_nn::run_python_command,
             sleap_nn::cancel_command,
@@ -86,49 +89,6 @@ fn lucid_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
             sleap_nn::detect_gpu,
         ])
         .build()
-}
-
-const QUIT_MENU_ID: &str = "lucid-quit";
-
-#[cfg(target_os = "macos")]
-fn set_macos_menu<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
-    use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
-    let app_menu = SubmenuBuilder::new(app, "luc3d")
-        .about(None)
-        .separator()
-        .hide()
-        .hide_others()
-        .show_all()
-        .separator()
-        // Not the predefined Quit: that calls NSApp terminate:, which never
-        // emits CloseRequested, so unsaved work would be lost without the
-        // page's check. Ours closes each window through its guard.
-        .item(
-            &MenuItemBuilder::with_id(QUIT_MENU_ID, "Quit luc3d")
-                .accelerator("CmdOrCtrl+Q")
-                .build(app)?,
-        )
-        .build()?;
-    // NO Undo/Redo: their native Cmd+Z / Cmd+Shift+Z accelerators would eat
-    // the keystroke before LUCID's own undo handler sees it.
-    let edit_menu = SubmenuBuilder::new(app, "Edit")
-        .cut()
-        .copy()
-        .paste()
-        .select_all()
-        .build()?;
-    let window_menu = SubmenuBuilder::new(app, "Window")
-        .minimize()
-        .separator()
-        .close_window()
-        .build()?;
-    let menu = MenuBuilder::new(app)
-        .item(&app_menu)
-        .item(&edit_menu)
-        .item(&window_menu)
-        .build()?;
-    app.set_menu(menu)?;
-    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -177,10 +137,14 @@ pub fn run() {
         .manage(Arc::new(files::WriteSessions::default()))
         .manage(close_guard::CloseGuardState::default())
         .manage(sleap_nn::RunningProcess::default())
+        .manage(native_menu::NativeMenuState::<tauri::Wry>::default())
         .on_window_event(close_guard::handle_window_event)
         .on_menu_event(|app, event| {
-            if event.id() == QUIT_MENU_ID {
+            let id = event.id().as_ref();
+            if id == native_menu::QUIT_MENU_ID {
                 close_guard::request_close_all(app);
+            } else if native_menu::page_key(id).is_some() {
+                native_menu::on_page_item(app, id);
             }
         })
         .plugin(tauri_plugin_dialog::init())
@@ -207,8 +171,10 @@ pub fn run() {
     }
 
     let builder = builder.setup(move |app| {
+        // luc3d | Edit | Window until the page sends its own menus
+        // (set_app_menu); also what stays if it never does.
         #[cfg(target_os = "macos")]
-        set_macos_menu(app)?;
+        native_menu::install_initial(app.handle())?;
 
         let url = if use_localhost {
             // Never open the window on someone else's server: the plugin's
@@ -294,7 +260,7 @@ mod tests {
             .map(|s| s.rsplit("::").next().unwrap())
             .collect();
 
-        assert_eq!(from_build.len(), 23);
+        assert_eq!(from_build.len(), 24);
         from_build.sort_unstable();
         from_lib.sort_unstable();
         assert_eq!(from_build, from_lib);

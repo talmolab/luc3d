@@ -23,7 +23,7 @@ import {
     countDetectionFilters,
     detectionHistograms,
     flagOutlierCameras,
-} from '../pose/detection-filter-stats.js?v=2baf2b0957aa';
+} from '../pose/detection-filter-stats.js?v=3edc226deee6';
 
 const HIST_BINS = 10;
 

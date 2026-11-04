@@ -28,7 +28,7 @@
  * claims to support it — then the original error stands (e.g. a corrupt file).
  */
 
-import { readBlobRange } from './cold-read-guard.js?v=2baf2b0957aa';
+import { readBlobRange } from './cold-read-guard.js?v=3edc226deee6';
 
 // Video sample-entry fourcc -> human name.
 const VIDEO_ENTRIES = {
@@ -95,6 +95,32 @@ export function videoFourccFromMoov(moov) {
 }
 
 /**
+ * Decode an MP4 box header at `at` of `bytes`: `{ size, type, header }`, where
+ * `size` is the box's whole size (a 64-bit `largesize` when the 32-bit size is
+ * 1) and `header` its header length (8 or 16). A size of 0 ("to the end of the
+ * enclosing box or file") comes back as 0 for the caller to resolve. Null when
+ * the bytes are too short. Pure (also used by loading/hev1-retag.js).
+ * @param {Uint8Array} bytes
+ * @param {number} [at]
+ * @returns {{size: number, type: string, header: number}|null}
+ */
+export function parseBoxHeader(bytes, at) {
+    at = at || 0;
+    if (!bytes || bytes.length < at + 8) return null;
+    const h = bytes;
+    let size = ((h[at] << 24) >>> 0) + (h[at + 1] << 16) + (h[at + 2] << 8) + h[at + 3];
+    const type = fourcc(h, at + 4);
+    let header = 8;
+    if (size === 1) {             // 64-bit size
+        if (h.length < at + 16) return null;
+        size = (((h[at + 8] << 24) >>> 0) + (h[at + 9] << 16) + (h[at + 10] << 8) + h[at + 11]) * 4294967296 +
+            (((h[at + 12] << 24) >>> 0) + (h[at + 13] << 16) + (h[at + 14] << 8) + h[at + 15]);
+        header = 16;
+    }
+    return { size, type, header };
+}
+
+/**
  * Read a file's video codec fourcc from its MP4/MOV sample description.
  * @param {Blob|string} source - File/Blob, or a URL (needs HTTP Range support)
  * @returns {Promise<{fourcc: string, codecName: string}|null>}
@@ -105,19 +131,12 @@ export async function sniffMp4VideoCodec(source) {
     let off = 0;
     for (let n = 0; n < 64 && off + 8 <= size; n++) {
         const h = await readRange(source, off, Math.min(off + 16, size));
-        if (!h || h.length < 8) return null;
-        let boxSize = ((h[0] << 24) >>> 0) + (h[1] << 16) + (h[2] << 8) + h[3];
-        const type = fourcc(h, 4);
-        let header = 8;
-        if (boxSize === 1) {             // 64-bit size
-            if (h.length < 16) return null;
-            boxSize = (((h[8] << 24) >>> 0) + (h[9] << 16) + (h[10] << 8) + h[11]) * 4294967296 +
-                (((h[12] << 24) >>> 0) + (h[13] << 16) + (h[14] << 8) + h[15]);
-            header = 16;
-        } else if (boxSize === 0) {      // to end of file
-            boxSize = size - off;
-        }
-        if (boxSize < header) return null;
+        const box = parseBoxHeader(h, 0);
+        if (!box) return null;
+        const type = box.type;
+        let boxSize = box.size;
+        if (boxSize === 0) boxSize = size - off;   // to end of file
+        if (boxSize < box.header) return null;
         if (type === 'moov') {
             if (boxSize > MAX_MOOV_BYTES) return null;
             const moov = await readRange(source, off, off + boxSize);
@@ -131,6 +150,23 @@ export async function sniffMp4VideoCodec(source) {
 
 function defaultCanPlayType(type) {
     try { return document.createElement('video').canPlayType(type) || ''; } catch (e) { return ''; }
+}
+
+/**
+ * Whether the `<video>` element says it can play MP4 video of sample-entry
+ * `fourccCode` (canPlayType with a representative codecs= string; '' = no).
+ * Shared by `explainUnplayableCodec` and loading/hev1-retag.js's gate.
+ * @param {string} fourccCode
+ * @param {function(string): string} [canPlayType] - injected in tests
+ * @returns {boolean}
+ */
+export function codecPlayable(fourccCode, canPlayType) {
+    const canPlay = canPlayType || defaultCanPlayType;
+    return PROBE_CODECS[fourccCode] ? canPlay('video/mp4; codecs="' + PROBE_CODECS[fourccCode] + '"') !== '' : false;
+}
+
+function defaultIsDesktop() {
+    try { return typeof window !== 'undefined' && !!window.lucidDesktop; } catch (e) { return false; }
 }
 
 function defaultIsSafari() {
@@ -205,8 +241,13 @@ function fileStem(name) {
  *
  * @param {string} fourccCode - sample-entry fourcc (e.g. 'hev1', 'av01')
  * @param {string} fileName
+ * The `hevc-hev1-tag` kind is what is left when loading/hev1-retag.js could
+ * not play the file as `hvc1` (its hvcC lacks the parameter sets): its message
+ * keeps the ffmpeg re-tag and, outside the desktop app (`window.lucidDesktop`,
+ * or `env.desktop`), "or open the project in Chrome or Firefox".
+ *
  * @param {{canPlayType?: function(string): string, isSafari?: boolean,
- *   isChromium?: boolean, renderer?: string}} [env]
+ *   isChromium?: boolean, renderer?: string, desktop?: boolean}} [env]
  * @returns {{fourcc: string, codecName: string, kind: string, message: string,
  *   title?: string, why?: string, steps?: string[], command?: string}|null}
  *   null when the browser says it can play this codec (nothing to explain).
@@ -220,7 +261,7 @@ export function explainUnplayableCodec(fourccCode, fileName, env) {
     const stem = fileStem(name);
     const browser = safari ? 'Safari' : 'this browser';
     const codecName = VIDEO_ENTRIES[fourccCode] || (fourccCode === 'encv' ? 'encrypted video' : fourccCode);
-    const supported = (fc) => PROBE_CODECS[fc] ? canPlay('video/mp4; codecs="' + PROBE_CODECS[fc] + '"') !== '' : false;
+    const supported = (fc) => codecPlayable(fc, canPlay);
     const toH264 = 'ffmpeg -i "' + name + '" -c:v libx264 -crf 18 -pix_fmt yuv420p -fps_mode passthrough "' + stem + '_h264.mp4"';
 
     if (fourccCode === 'encv') {
@@ -230,10 +271,13 @@ export function explainUnplayableCodec(fourccCode, fileName, env) {
     if (supported(fourccCode)) return null;
 
     if (fourccCode === 'hev1' && supported('hvc1')) {
+        // The desktop app IS this engine (WKWebView): "another browser" is not
+        // an option there.
+        const desktop = env.desktop != null ? !!env.desktop : defaultIsDesktop();
         return { fourcc: fourccCode, codecName, kind: 'hevc-hev1-tag',
-            message: name + ': HEVC video tagged "hev1", which ' + browser + ' only plays when tagged "hvc1". '
+            message: name + ': HEVC video tagged "hev1", which ' + (desktop ? 'LUCID' : browser) + ' only plays when tagged "hvc1". '
                 + 'Fix it losslessly (no re-encoding, seconds per file): ffmpeg -i "' + name + '" -c copy -tag:v hvc1 "'
-                + stem + '_hvc1.mp4" — or open the project in Chrome or Firefox.' };
+                + stem + '_hvc1.mp4"' + (desktop ? '.' : ' — or open the project in Chrome or Firefox.') };
     }
     if (fourccCode === 'av01') {
         return { fourcc: fourccCode, codecName, kind: 'av1-unsupported',
