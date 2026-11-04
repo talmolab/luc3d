@@ -4232,7 +4232,8 @@ Brave ships the File System Access API (`showSaveFilePicker`,
 `showDirectoryPicker`, `showOpenFilePicker`) DISABLED by default while
 identifying as Chrome, so in Brave saves fall back to an in-memory download
 (risky for a large project, never saved in place), large exports must be
-buffered in memory, and multi-session loading refuses. It is enabled at
+buffered in memory, and multi-session loading refuses (it does not fall back
+to `webkitdirectory` in a Chromium browser: that drops files on big trees). It is enabled at
 `brave://flags/#file-system-access-api`. Safari and Firefox can't enable the
 API, so they get no hint (existing messages stand).
 
@@ -4251,6 +4252,14 @@ land on the true count and the noise is still there.
 **Key exports.**
 - `isBrave()` — `navigator.brave.isBrave` present.
 - `hasFileSystemAccess()` — save + directory pickers available.
+- `canReadDirectoryHandles(win?)` — whether a `showDirectoryPicker` folder can be
+  READ through its handle: the picker is a function AND not
+  `window.lucidDesktop.fsaWriteOnly` (the desktop app's WebKit webviews, whose
+  shim installs a write-only picker). Every folder READ site asks this instead
+  of testing for the picker and, when false, uses `<input webkitdirectory>`:
+  `handleLoadMultiSession`, `pickParentDirectoryForSessions`,
+  `folderPickerStartFor` / `pickFolderNear` (`loading/session-loader.js`).
+  Without `lucidDesktop` it is exactly the old `typeof` test. `win` is for tests.
 - `fileSystemAccessHint()` — how to enable the API (paste
   `brave://flags/#file-system-access-api`, set Enabled, relaunch — or use
   Chrome/Edge); `''` unless Brave with the API off, so callers can append it.
@@ -4272,7 +4281,8 @@ land on the true count and the noise is still there.
 **Imports from project modules.** None. No DOM at load (the canvas probe runs
 on first use, on the main thread), so it is safe to import anywhere.
 
-**Imported by.** `loading/session-loader.js` (multi-session load message),
+**Imported by.** `loading/session-loader.js` (multi-session load message;
+`canReadDirectoryHandles` at the folder read sites),
 `import-export/save-load.js` (`saveProjectSlp` download fallback status),
 `ui/export-modals.js` (3D video + JSON export in-memory confirms),
 `ui/overlay-export-modal.js` (overlay video in-memory confirm),
@@ -4280,7 +4290,8 @@ on first use, on the main thread), so it is safe to import anywhere.
 line, `#loadingBraveHint`), `ui/id-switch-modal.js` (the image check's dialog,
 under its CPU and GPU lines).
 
-**Tests.** `tests/test-browser-hints.js`; `tests/e2e/brave-fingerprinting-hint.mjs`
+**Tests.** `tests/test-browser-hints.js`; `tests/test-file-list-directory.mjs` §7
+(`canReadDirectoryHandles`); `tests/e2e/brave-fingerprinting-hint.mjs`
 drives REAL Brave (skips when Brave is not installed, `BRAVE=` overrides the
 path): the note with default Shields, none with the per-site exception, none
 in Chromium.
@@ -12601,9 +12612,10 @@ opens there. A folder picked with `<input webkitdirectory>` gives File objects
 only, never the folder, so the session folder loaders pick with
 `showDirectoryPicker` when the browser has it and keep the handle on the
 session (`session._recordingFolder`, in memory only, never written to the
-`.slp`). Firefox, Safari, Brave with the File System Access API off and
-Playwright's headless shell have no `showDirectoryPicker`: they pick through the
-input, and Save opens where the browser chooses. A project opened from a `.slp`
+`.slp`). Firefox, Safari, Brave with the File System Access API off,
+Playwright's headless shell and the desktop app's WebKit webviews (a WRITE-only
+`showDirectoryPicker` polyfill) have no READABLE `showDirectoryPicker`
+(`canReadDirectoryHandles()`): they pick through the input, and Save opens where the browser chooses. A project opened from a `.slp`
 has no recording folder: Save writes that file, Save As opens beside it.
 
 **Key exports.**
@@ -12611,7 +12623,7 @@ has no recording folder: Save writes that file, Save As opens beside it.
   picker's own memory, so the next recording's pick opens beside the last one.
 - `pickRecordingFolder(fallbackPick)` → `{files, dirHandle}`: files as
   `pickFolder` gives them (`webkitRelativePath` = `<folder>/…`); a cancel gives
-  no files; without `showDirectoryPicker`, `fallbackPick()`'s files and no handle.
+  no files; without a readable `showDirectoryPicker`, `fallbackPick()`'s files and no handle.
   An automated browser (`navigator.webdriver`) keeps the input while its
   `showDirectoryPicker` is native code (Playwright cannot answer the native
   dialog; the e2e suites fill the input); a stubbed picker takes the picker path.
@@ -12623,9 +12635,9 @@ has no recording folder: Save writes that file, Save As opens beside it.
   handle, else null.
 
 **Imported by.** `loading/session-loader.js`, `import-export/save-load.js`.
-Imports nothing.
+Imports `canReadDirectoryHandles` from `ui/browser-hints.js`.
 
-**Tests.** `tests/e2e/save-opens-in-recording-folder.mjs`.
+**Tests.** `tests/e2e/save-opens-in-recording-folder.mjs`, `tests/e2e/desktop-read-fallback.mjs`.
 
 ### loading/campy-session.js
 
@@ -12774,6 +12786,43 @@ and left other cameras with out-of-range or misnamed track indices.
 (`LazyFrameLoader`, all six metadata orders), `tests/e2e/percam-track-union.mjs`
 (the real folder loader, lazy in all six open orders plus eager).
 
+### loading/file-list-directory.js
+
+**Purpose.** A read-only stand-in for a File System Access directory handle,
+built from the files an `<input webkitdirectory>` returns, so the handle-based
+folder readers (`handleLoadMultiSession`'s walk, `enumerateDirectoryHandle`) run
+unchanged where no READ handle exists: Safari, Firefox, and the desktop app's
+WebKit webviews (`window.lucidDesktop.fsaWriteOnly`: a write-only picker
+polyfill). `getFile()` returns the ORIGINAL disk-backed `File` from the input, so
+WORKERFS / FileReaderSync / blob-URL readers stream it without a copy.
+
+**Key exports.**
+- `directoryHandleFromFileList(files)` → `FileListDirectoryHandle`. Places each
+  file by `webkitRelativePath` (else `name`). When every file shares one top
+  folder (what a `webkitdirectory` pick gives) that folder is returned, named as
+  the picked folder; otherwise a nameless root (`''`). A file/folder clash or a
+  duplicate path keeps the first (a real file system cannot produce one).
+- `FileListDirectoryHandle` — `kind: 'directory'`, `name`, `entries()`, `keys()`,
+  `values()`, `[Symbol.asyncIterator]` (= entries), **sorted by name** (code-unit
+  order, so a walk does not depend on the OS's file order),
+  `getDirectoryHandle(name)` / `getFileHandle(name)` (NotFoundError when absent,
+  TypeMismatchError on the wrong kind, NotAllowedError with `{create: true}`),
+  `resolve(handle)`, `isSameEntry`, `queryPermission` / `requestPermission`
+  ('granted' for read, 'denied' for readwrite), `removeEntry` (NotAllowedError).
+- `FileListFileHandle` — `kind: 'file'`, `name`, `getFile()` (the original File),
+  `createWritable` / `createSyncAccessHandle` (NotAllowedError).
+Errors are `DOMException`s (an `Error` with that `name` where there is none).
+`webkitdirectory` lists files only, so an EMPTY folder is absent from the tree.
+
+**Imports from project modules.** None (DOM-free; Node tests load it directly).
+
+**Imported by.** `loading/session-loader.js` (`handleLoadMultiSession`).
+
+**Tests.** `tests/test-file-list-directory.mjs` (nesting, order, errors, root
+naming, the walk Load Multiple Sessions does, `canReadDirectoryHandles`);
+`tests/e2e/desktop-read-fallback.mjs` (Load Multiple Sessions, the videos
+prompt's folder buttons and a plain-Chromium control, with the desktop flags set).
+
 ### loading/session-loader.js
 
 **Purpose.** Orchestrator for every session-loading workflow — empty
@@ -12828,12 +12877,16 @@ filesystem enumeration, decoder rebuild.
   reopen) and closes on `Esc`; both resolve `null`, which every caller treats as
   "no videos picked". `options.startIn` (from `folderPickerStartFor(file)`: the
   `.slp` being opened's `state.slpFileHandle` — `projectFolderStart()`,
-  `loading/folder-picker-start.js` — only when the handle is THAT file's) makes Select Session Folder open
+  `loading/folder-picker-start.js` — only when the handle is THAT file's
+  and `canReadDirectoryHandles()`) makes Select Session Folder open
   `pickFolderNear(startIn)`: the folder picker starts in the project's own folder
   and the files are listed as `pickFolder` lists them. A page given one file cannot
   read the folder around it, but can start the picker there, so the user confirms
   the folder instead of finding it again. Load Project, Load SLP and both project
-  reopens pass it; without the API (Brave by default) it is the old upload picker.
+  reopens pass it; without the API (Brave by default), or in the desktop app's
+  WebKit webviews (write-only picker), it is the old upload picker — and
+  `pickFolderNear` itself falls back to `pickFolder` there (resolving `[]` on
+  cancel) should a start handle get through.
   `forceVideoSelection(refInfo, options)` (Load Project on a V2/legacy `.json`,
   Add SLP with no embedded video) is NOT blocking: a **Continue Without Video**
   button and `Esc` both resolve `[]`, which both callers treat as "no videos"
@@ -12893,13 +12946,28 @@ filesystem enumeration, decoder rebuild.
 - Filesystem: `enumerateDirectoryHandle` (re-exported from `./recording-folder.js`).
 - **Recording folder for Save.** The per-camera and single-SLP folder loaders
   pick through `pickRecordingFolder` (`./recording-folder.js`):
-  `showDirectoryPicker` when the browser has it, else `<input webkitdirectory>`
-  (`pickFolder`). With a handle, the new session keeps it as
+  `showDirectoryPicker` when it can READ folders (`canReadDirectoryHandles()`),
+  else `<input webkitdirectory>` (`pickFolder`). With a handle, the new session keeps it as
   `session._recordingFolder` (in memory only, never in the `.slp`), and
   File ▸ Save / Save As open there. `handleLoadSessionFolderPerCamera(files,
   deferVideos, folderHandle)` takes the handle as its third argument, which
   `handleLoadMultiSession` passes for each session subfolder. Test:
   `tests/e2e/save-opens-in-recording-folder.mjs`.
+- **Folder READS never use a handle that cannot be read.** Every read site asks
+  `canReadDirectoryHandles()` (`ui/browser-hints.js`), not `typeof
+  showDirectoryPicker`: the desktop app's WebKit webviews have a WRITE-only
+  `showDirectoryPicker` polyfill (`window.lucidDesktop.fsaWriteOnly`) whose
+  handles give no disk-backed Files. In plain Chrome/Edge nothing changes (same
+  pickers, ids, `startIn`, messages). `pickParentDirectoryForSessions` uses its
+  webkitdirectory branch; `folderPickerStartFor` returns null (so the videos
+  prompt uses `pickFolder`). **`handleLoadMultiSession`** keeps the handle walk
+  where handles are readable (Chromium: webkitdirectory drops files on big
+  trees); otherwise it picks with `pickFolder` and walks
+  `directoryHandleFromFileList(files)` (`./file-list-directory.js`), the same
+  code over the original Files. Only Brave with the API off still refuses (with
+  `fileSystemAccessHint`), being Chromium. Side effect: Load Multiple Sessions
+  now works in Safari and Firefox, which used to be told to use Chrome or Edge.
+  Test: `tests/e2e/desktop-read-fallback.mjs`.
 - **campy recordings** (`loading/campy-session.js`):
   `adoptCampyRecording(session, files, {record, calibFile, calibrationNames})`
   reads a picked folder's session.json (+ campy-live's manifests) onto
@@ -13112,7 +13180,8 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
   `../ui/video-codec-notice.js` (`noteUnplayableVideos`),
   `../ui/app-state.js` (incl. `buildRememberedSkeleton`, and `isViewDocked` as the
   rebuilt video controller's `isViewShown`), `../pose/pose-data.js`,
-  `../ui/browser-hints.js` (`fileSystemAccessHint`),
+  `../ui/browser-hints.js` (`fileSystemAccessHint`, `canReadDirectoryHandles`),
+  `./file-list-directory.js` (`directoryHandleFromFileList`),
   `../ui/folder-confirm-tip.js` (`confirmFolderPick` — awaited before every
   folder picker; a cancel ends the load with "No folder selected"),
   `./video.js` (`OnDemandVideoDecoder`, `VideoController`, `releaseViewsFrames` —
@@ -15073,7 +15142,9 @@ loading-overlay/status-text UI helpers.
   click), then the shared write (`writeProjectToHandle`, also Save's) inside
   `withCompactSave` (`import-export/compact-save.js`). A COPY: `state.slpFileHandle`
   and the dirty state are left alone, since nothing in memory is rounded. Without
-  `showSaveFilePicker` (Brave's default) it says which browser setting it needs.
+  `showSaveFilePicker` (Brave's default) it says which browser setting it needs;
+  in the desktop app (`window.lucidDesktop`, whose shim provides the picker, so
+  this is not expected) the message gives no browser advice.
 - **The Save progress card.** `quickSave`/`saveAs` and `saveProjectSlp` (the
   download path, which is what Save is in Brave — its save dialog cannot open
   until the whole file is built) show the shared loading overlay

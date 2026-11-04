@@ -1,0 +1,49 @@
+[package]
+name = "lucid-app"
+version = "1.0.5"
+description = "LUCID - desktop shell"
+authors = ["talmolab"]
+repository = "https://github.com/talmolab/luc3d"
+edition = "2021"
+rust-version = "1.85"
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = []
+# The sleap-nn training/inference seam (spawning a local Python / uv process
+# and streaming its output). OFF in shipped iteration-1 builds: the commands
+# stay registered and answer Err("SLEAP_NN_NOT_IN_THIS_BUILD").
+sleap-nn = []
+
+[build-dependencies]
+tauri-build = { version = "2.6", features = [] }
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# `dynamic-acl` enables Manager::add_capability, used to grant the
+# http://localhost:<port> origin its capability at runtime (the port is only
+# known at launch; see lib.rs).
+tauri = { version = "2.11", features = ["dynamic-acl"] }
+tauri-plugin-dialog = "2.7"
+# Serves the frontend from a real http://localhost origin in release builds
+# (secure context, Cache API, stable origin for localStorage).
+tauri-plugin-localhost = "2.3"
+# Same crate tauri uses to resolve app_config_dir(); needed before the app
+# exists, to read the persisted localhost port.
+dirs = "6"
+
+[target.'cfg(unix)'.dependencies]
+# sysctlbyname (macOS total memory).
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# GlobalMemoryStatusEx (total memory). Already in tauri's dependency graph.
+windows-sys = { version = "0.60", features = ["Win32_System_SystemInformation"] }
+
+[profile.release]
+# Debug symbols are not shipped.
+strip = true

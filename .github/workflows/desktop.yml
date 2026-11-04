@@ -1,0 +1,455 @@
+name: Desktop app
+
+# Builds the LUCID desktop app (src-tauri/, Tauri 2) for Linux, macOS (one
+# universal binary) and Windows, and attaches the installers to a release.
+#
+#   pull_request         -- build all three as a check; installers are workflow
+#                           artifacts (7 days), nothing is published
+#   workflow_dispatch    -- the same, on demand, for any branch or tag
+#   release: published   -- build, then `gh release upload` every installer to
+#                           THAT release. Releases are cut BY HAND
+#                           (`gh release create vX.Y.Z --generate-notes`, see
+#                           deploy.yml), and the same event also runs deploy.yml.
+#
+# This workflow never touches gh-pages, has its own concurrency group, and
+# writes nothing but release assets, so it cannot interfere with deploy.yml
+# (group deploy-pages) or pr-preview.yml (group pr-preview-<n>). A failed
+# desktop build does not hold back the web deploy, and vice versa.
+#
+# The frontend is not built here: tauri.conf.json's beforeBuildCommand runs
+# scripts/desktop/stage_frontend.py, which copies the app into dist-desktop/
+# with its CDN dependencies vendored into ./lib/ (offline-deps.json), stamps
+# ?v=<commit> + the menu bar's version label, and fails the build if any module
+# reference in the copy is dangling. It needs python3 and node on PATH.
+#
+# Version: tauri.conf.json's `version` names every installer. A release stamps
+# it from the tag (vX.Y.Z or vX.Y.Z-N -> X.Y.Z[-N]) in the runner's checkout
+# only -- never committed. PR and dispatch builds keep the committed version.
+# The WiX (MSI) bundler maps X.Y.Z-N onto the four-part Windows version and
+# rejects a NON-numeric pre-release (v1.2.0-rc1), so `validate` refuses such a
+# tag in seconds instead of failing the Windows leg late.
+#
+# Not a tauri-apps/tauri-action build: there is no npm project here for it to
+# install from, release creation/upload is a one-line `gh release upload`, and
+# the bundle paths are collected explicitly below either way. `npx` runs the
+# Tauri CLI directly (TAURI_CLI_VERSION), so the build is the same command a
+# developer runs locally.
+
+on:
+  pull_request:
+    paths:
+      - 'src-tauri/**'
+      - 'scripts/desktop/**'
+      - 'scripts/offline_deps.py'
+      - 'scripts/stamp-version.mjs'
+      - 'scripts/preload-modules.mjs'
+      - 'offline-deps.json'
+      - 'tests/test-desktop-stage.mjs'
+      - '.github/workflows/desktop.yml'
+  workflow_dispatch:
+  release:
+    types: [published]
+
+# Per ref, so a PR build never cancels a release build. On a release the ref is
+# refs/tags/<tag> and nothing is cancelled: two publishes of one tag queue.
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+  # The Tauri CLI major the crates in src-tauri/Cargo.toml (tauri 2.x) need.
+  TAURI_CLI_VERSION: '2'
+
+jobs:
+  # Fails in seconds rather than after three cold Rust builds.
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check the release tag is a bundler-safe version
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$'; then
+            echo "::error::tag '$RELEASE_TAG' is not vX.Y.Z or vX.Y.Z-N (numeric N): the MSI"\
+                 "bundler rejects it, and deploy.yml would refuse it too."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      # Stages the frontend into a temp dir and checks it (what ships, CDN URLs
+      # rewritten, every module reference resolves, version stamped).
+      - name: Stage the desktop frontend (tests/test-desktop-stage.mjs)
+        run: node tests/test-desktop-stage.mjs
+
+  # cargo test + clippy, beside the bundles rather than before the Linux one: a
+  # lint failure must never throw away an installer that already built (it
+  # compiles the debug profile anyway, so there is nothing to share).
+  rust-checks:
+    needs: validate
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install system dependencies
+        timeout-minutes: 32
+        run: bash scripts/desktop/linux-deps.sh
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      # tauri::generate_context!() requires frontendDist to exist at compile time.
+      - name: Stage the frontend
+        run: python3 scripts/desktop/stage_frontend.py --out dist-desktop
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test --locked
+
+      - name: cargo clippy (default features)
+        working-directory: src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      # The sleap-nn seam is OFF in every shipped build, so nothing else would
+      # notice it stop compiling.
+      - name: cargo clippy (--features sleap-nn)
+        working-directory: src-tauri
+        run: cargo clippy --locked --all-targets --features sleap-nn -- -D warnings
+
+  build:
+    needs: validate
+    strategy:
+      # One flaky platform must not stop the others: the release job ships
+      # whatever did build, and says loudly what is missing.
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            os-tag: linux
+            arch: x86_64
+            rust-targets: x86_64-unknown-linux-gnu
+            tauri-args: --bundles deb,appimage
+            bundle-dir: src-tauri/target/release/bundle
+            job-timeout: 60
+          # One universal binary: a single .dmg for Apple Silicon and Intel.
+          # macos-latest is arm64, and Rosetta does not run arm64 on Intel.
+          # --target moves the bundle out of target/release/.
+          - platform: macos-latest
+            os-tag: macos
+            arch: universal
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+            tauri-args: --target universal-apple-darwin --bundles app,dmg
+            bundle-dir: src-tauri/target/universal-apple-darwin/release/bundle
+            # Tauri notarizes inside its build step with no progress output; a
+            # team's first submission can take > 45 min (sleap-app's did).
+            job-timeout: 120
+          - platform: windows-latest
+            os-tag: windows
+            arch: x86_64
+            rust-targets: x86_64-pc-windows-msvc
+            tauri-args: --bundles nsis,msi
+            bundle-dir: src-tauri/target/release/bundle
+            job-timeout: 60
+
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: ${{ matrix.job-timeout }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install system dependencies (Linux)
+        if: matrix.os-tag == 'linux'
+        timeout-minutes: 32
+        run: bash scripts/desktop/linux-deps.sh
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # beforeBuildCommand says `python3`, which setup-python does not provide on
+      # Windows (and the bare name there can hit the Microsoft Store stub).
+      - name: Provide python3 on Windows
+        if: matrix.os-tag == 'windows'
+        shell: pwsh
+        run: |
+          $py3 = Join-Path $env:pythonLocation 'python3.exe'
+          if (-not (Test-Path $py3)) { Copy-Item (Join-Path $env:pythonLocation 'python.exe') $py3 }
+          python3 --version
+
+      - name: Set the version and the menu bar label
+        shell: bash
+        # Event fields go through the environment, never into the script body:
+        # a tag is attacker-influencable text.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$'
+          if [ "$EVENT_NAME" = release ]; then
+            TAG="$RELEASE_TAG"
+          elif [ "$EVENT_NAME" = workflow_dispatch ] && printf '%s' "$REF_NAME" | grep -Eq "$TAG_RE"; then
+            TAG="$REF_NAME"   # a dispatch with a release tag picked in "Use workflow from"
+          else
+            TAG=""
+          fi
+          if [ -n "$TAG" ]; then
+            # The runner's checkout only; never committed.
+            VERSION="${TAG#v}" python3 - <<'PY'
+          import json, os
+          p = "src-tauri/tauri.conf.json"
+          conf = json.load(open(p, encoding="utf-8"))
+          conf["version"] = os.environ["VERSION"]
+          open(p, "w", encoding="utf-8").write(json.dumps(conf, indent=2) + "\n")
+          PY
+            LABEL="$TAG"                       # shown as-is, like the web's release label
+          elif [ "$EVENT_NAME" = pull_request ]; then
+            LABEL="desktop PR #$PR_NUMBER"
+          else
+            LABEL="desktop dev"
+          fi
+          # Read by scripts/desktop/stage_frontend.py (the beforeBuildCommand).
+          echo "LUCID_DESKTOP_LABEL=$LABEL" >> "$GITHUB_ENV"
+          echo "version $(python3 -c 'import json;print(json.load(open("src-tauri/tauri.conf.json"))["version"])'), label '$LABEL'"
+
+      # Opt-in Developer ID signing, as in sleap-app. GitHub renders an unset
+      # secret as an EMPTY string, and an empty APPLE_SIGNING_IDENTITY makes Tauri
+      # run `codesign -s ""`, which fails the build -- so the variables are
+      # exported only once known non-empty. Without the secrets the bundle is
+      # signed AD-HOC ("-"): a universal .app with only the linker's per-binary
+      # signature has no sealed resources, and macOS calls that "damaged" with no
+      # "Open Anyway". Ad-hoc is set here rather than relying on tauri.conf.json.
+      - name: Configure macOS code signing
+        if: matrix.os-tag == 'macos'
+        shell: bash
+        env:
+          CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          NOTARY_APPLE_ID: ${{ secrets.APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          NOTARY_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CERT" ] || [ -z "$IDENTITY" ]; then
+            {
+              echo "LUCID_SIGNING_MODE=adhoc"
+              echo "APPLE_SIGNING_IDENTITY=-"
+            } >> "$GITHUB_ENV"
+            echo "::notice::No Apple Developer ID secrets -- signing ad-hoc. A downloaded"\
+                 ".dmg is gated by Gatekeeper (right-click > Open, or clear the quarantine flag)."
+            exit 0
+          fi
+          # Heredoc form: a base64 certificate may wrap.
+          {
+            echo "APPLE_CERTIFICATE<<__LUCID_EOF__"
+            printf '%s\n' "$CERT"
+            echo "__LUCID_EOF__"
+            echo "APPLE_CERTIFICATE_PASSWORD=$CERT_PASSWORD"
+            echo "APPLE_SIGNING_IDENTITY=$IDENTITY"
+          } >> "$GITHUB_ENV"
+          if [ -n "$NOTARY_APPLE_ID" ] && [ -n "$NOTARY_PASSWORD" ] && [ -n "$NOTARY_TEAM_ID" ]; then
+            {
+              echo "APPLE_ID=$NOTARY_APPLE_ID"
+              echo "APPLE_PASSWORD=$NOTARY_PASSWORD"
+              echo "APPLE_TEAM_ID=$NOTARY_TEAM_ID"
+              echo "LUCID_SIGNING_MODE=developer-id-notarized"
+            } >> "$GITHUB_ENV"
+            echo "Developer ID signing + notarization enabled."
+          else
+            echo "LUCID_SIGNING_MODE=developer-id" >> "$GITHUB_ENV"
+            echo "::warning::Signing with a Developer ID but NOT notarizing -- APPLE_ID,"\
+                 "APPLE_PASSWORD and APPLE_TEAM_ID must all three be set."
+          fi
+
+      - name: Build
+        shell: bash
+        env:
+          TAURI_ARGS: ${{ matrix.tauri-args }}
+        run: |
+          set -euo pipefail
+          python3 --version && node --version
+          # TAURI_ARGS is a fixed matrix value; word-splitting it is intended.
+          # shellcheck disable=SC2086
+          npx --yes "@tauri-apps/cli@${TAURI_CLI_VERSION}" build $TAURI_ARGS
+
+      # Tauri staples the .app, then wraps it in a .dmg that is itself not
+      # notarized; Gatekeeper assesses the image too when a downloaded one opens.
+      - name: Notarize and staple the .dmg
+        if: matrix.os-tag == 'macos' && env.LUCID_SIGNING_MODE == 'developer-id-notarized'
+        shell: bash
+        env:
+          B: ${{ matrix.bundle-dir }}
+        run: |
+          set -euo pipefail
+          DMG="$(find "$B/dmg" -maxdepth 1 -type f -name '*.dmg' ! -name 'rw.*' | head -1)"
+          [ -n "$DMG" ] || { echo "::error::no .dmg under $B/dmg"; exit 1; }
+          xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --wait --timeout 30m
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+
+      # Prove the .app carries a sealed bundle signature of the configured kind,
+      # with both architecture slices, before anything is uploaded.
+      - name: Verify the macOS signature
+        if: matrix.os-tag == 'macos'
+        shell: bash
+        env:
+          B: ${{ matrix.bundle-dir }}
+        run: |
+          set -euo pipefail
+          APP="$(find "$B/macos" -maxdepth 1 -type d -name '*.app' | head -1)"
+          [ -n "$APP" ] || { echo "::error::no .app under $B/macos"; exit 1; }
+          # Captured once: `codesign -dv | grep -q` can SIGPIPE codesign under pipefail.
+          DESC="$(codesign -dv --verbose=2 "$APP" 2>&1 || true)"
+          printf '%s\n' "$DESC"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign --verify --deep --strict --arch x86_64 "$APP"
+          codesign --verify --deep --strict --arch arm64 "$APP"
+          case "$DESC" in *"Sealed Resources version="*) ;; *)
+            echo "::error::$APP has no sealed resources -- macOS would call it damaged"; exit 1 ;; esac
+          if [ "${LUCID_SIGNING_MODE:-adhoc}" = adhoc ]; then
+            case "$DESC" in *flags=*adhoc*) ;; *) echo "::error::not ad-hoc signed as configured"; exit 1 ;; esac
+          else
+            case "$DESC" in *flags=*adhoc*)
+              echo "::error::ad-hoc signed although Developer ID secrets are set"; exit 1 ;; esac
+            case "$DESC" in *"Authority=Developer ID Application:"*) ;; *)
+              echo "::error::no Developer ID Application authority"; exit 1 ;; esac
+            case "$DESC" in *flags=*runtime*) ;; *)
+              echo "::error::signed without the hardened runtime"; exit 1 ;; esac
+          fi
+          EXE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")"
+          ARCHS="$(lipo -archs "$APP/Contents/MacOS/$EXE")"
+          echo "slices: $ARCHS"
+          case "$ARCHS" in *x86_64*) ;; *) echo "::error::no x86_64 slice"; exit 1 ;; esac
+          case "$ARCHS" in *arm64*) ;; *) echo "::error::no arm64 slice"; exit 1 ;; esac
+          if [ "${LUCID_SIGNING_MODE:-adhoc}" = developer-id-notarized ]; then
+            spctl -a -vvv -t exec "$APP"
+            xcrun stapler validate "$APP"
+          fi
+
+      # Installers only (no .app directory, no updater payloads -- there is no
+      # updater), with the OS inserted after the product name so a release page
+      # reads at a glance: LUCID_1.2.0_x64-setup.exe -> LUCID_windows_1.2.0_x64-setup.exe.
+      - name: Collect installers
+        shell: bash
+        env:
+          B: ${{ matrix.bundle-dir }}
+          OS_TAG: ${{ matrix.os-tag }}
+        run: |
+          set -euo pipefail
+          # rm first: a stale artifacts/ must never be re-uploaded as this build.
+          rm -rf artifacts
+          mkdir -p artifacts
+          [ -d "$B" ] || { echo "::error::bundle dir $B does not exist -- did the output path change?"; exit 1; }
+          # `! -name 'rw.*'` skips create-dmg's read-write intermediate.
+          find "$B" -maxdepth 2 -type f ! -name 'rw.*' \( \
+            -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \
+            -o -name '*.msi' -o -name '*-setup.exe' \) -exec cp {} artifacts/ \;
+          cd artifacts
+          for f in *; do
+            [ -f "$f" ] || continue
+            case "$f" in
+              *_"$OS_TAG"_*) continue ;;               # already prefixed (re-run)
+              *_*) new="${f%%_*}_${OS_TAG}_${f#*_}" ;;  # LUCID_<ver>_... -> LUCID_<os>_<ver>_...
+              *) echo "::warning::unexpected installer name '$f' -- left as is"; continue ;;
+            esac
+            mv -- "$f" "$new"
+            echo "$f -> $new"
+          done
+          ls -lh
+          count="$(find . -type f | wc -l | tr -d '[:space:]')"
+          [ "$count" -gt 0 ] || { echo "::error::no installers found under $B"; exit 1; }
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: LUCID_${{ matrix.os-tag }}_${{ matrix.arch }}
+          path: artifacts/*
+          retention-days: 7
+          if-no-files-found: error
+
+  release:
+    needs: build
+    # `!cancelled()`, not a bare `needs`: one failed leg must not leave the
+    # release with zero assets (sleap-app v0.1.1). Not `always()`: a run
+    # cancelled by hand publishes nothing.
+    if: ${{ !cancelled() && github.event_name == 'release' && needs.build.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        continue-on-error: true
+        with:
+          path: artifacts
+          pattern: LUCID_*
+          merge-multiple: true
+
+      - name: Upload installers to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          ls -lh artifacts
+          count="$(find artifacts -maxdepth 1 -type f | wc -l | tr -d '[:space:]')"
+          [ "$count" -gt 0 ] || { echo "::error::every platform build failed; nothing to attach"; exit 1; }
+          # --clobber: re-running a failed leg replaces that platform's files.
+          gh release upload "$TAG" artifacts/* --repo "$REPO" --clobber
+          {
+            echo "### Desktop installers on $TAG"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          missing=0
+          for pattern in 'LUCID_linux_*.deb' 'LUCID_linux_*.AppImage' 'LUCID_macos_*_universal.dmg' \
+                         'LUCID_windows_*-setup.exe' 'LUCID_windows_*.msi'; do
+            if find artifacts -maxdepth 1 -name "$pattern" -type f | grep -q .; then
+              echo "- ok \`$pattern\`" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- **MISSING** \`$pattern\`" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::this release has no $pattern (that platform's build failed; re-run it)"
+              missing=1
+            fi
+          done
+          # Assets that did build are already attached; fail so it is noticed.
+          exit "$missing"

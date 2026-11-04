@@ -65,6 +65,16 @@ lib/mp4box/*
 # Offline bundles built by `offline_deps.py bundle`
 luc3d-offline-*.zip
 
+# Desktop app (src-tauri/). dist-desktop/ is the staged frontend tauri.conf.json
+# embeds, rebuilt by scripts/desktop/stage_frontend.py on every `tauri build`.
+# No trailing slash on target: also ignores a stray `target` symlink/file
+# (sleap-app once committed a self-referential one). gen/schemas is regenerated
+# by every Tauri build. artifacts/ is where desktop.yml collects installers.
+/dist-desktop/
+src-tauri/target
+src-tauri/gen/schemas
+/artifacts/
+
 # Bench driver node deps (not part of the served app)
 scripts/bench/node_modules/
 
