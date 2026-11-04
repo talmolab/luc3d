@@ -22,9 +22,9 @@
  * import-export/smoothing-metadata.js
  */
 
-import { state } from './app-state.js?v=70c7882f53fb';
-import { hasSmoothed3d, hasRemovedSmoothing } from '../pose/temporal-smoothing.js?v=70c7882f53fb';
-import { noteSmoothingRun, smoothingRunOf } from '../import-export/smoothing-metadata.js?v=70c7882f53fb';
+import { state } from './app-state.js?v=761adbb0dbc2';
+import { hasSmoothed3d, hasRemovedSmoothing } from '../pose/temporal-smoothing.js?v=761adbb0dbc2';
+import { noteSmoothingRun, smoothingRunOf } from '../import-export/smoothing-metadata.js?v=761adbb0dbc2';
 
 /** Record the scope and settings a smoothing run just used (`runTemporalSmoothing`). */
 export function noteSmoothingScope(session, scope, config) {

@@ -315,13 +315,21 @@ try {
     const again = await pixels3d();
     const keptShare = await differs(turned, again);
     check(keptShare < turnShare / 5, `and the slider keeps its angle (${(100 * keptShare).toFixed(2)}% change)`);
-    const scrollerTop = () => page.evaluate(() => document.querySelector('.settings-panel-container').scrollTop);
-    await page.evaluate(() => { document.querySelector('.settings-panel-container').scrollTop = 200; });
-    const before = await scrollerTop();
-    await page.mouse.move(b3.x, Math.max(120, Math.min(b3.y, 700)));
-    await page.mouse.wheel(0, 120);
-    await page.waitForTimeout(150);
-    check(await scrollerTop() !== before, 'the wheel over it scrolls the panel');
+    // Upward: the view ends the panel, so scrolling it into view may leave no room below.
+    const over3d = await page.evaluate(() => {
+        const view = document.querySelector('.thr-ex-3d canvas');
+        view.scrollIntoView();
+        document.addEventListener('wheel', (e) => { window.__wheel = { on3d: !!e.target.closest('.thr-ex-3d'), prevented: e.defaultPrevented }; }, { once: true });
+        const r = view.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2, top: document.querySelector('.settings-panel-container').scrollTop };
+    });
+    await page.mouse.move(over3d.x, over3d.y);
+    await page.mouse.wheel(0, -120);
+    // The scroll lands on a later frame, and software WebGL can make those slow.
+    const scrolled = await page.waitForFunction((top) => document.querySelector('.settings-panel-container').scrollTop !== top, over3d.top, { timeout: 10000 }).then(() => true, () => false);
+    const wheel = await page.evaluate(() => window.__wheel);
+    check(wheel && wheel.on3d && !wheel.prevented, `the wheel lands on the 3D view, which leaves it alone (${JSON.stringify(wheel)})`);
+    check(scrolled, 'the wheel over it scrolls the panel');
 
     console.log('8. layout');
     const layout = () => page.evaluate(() => {
