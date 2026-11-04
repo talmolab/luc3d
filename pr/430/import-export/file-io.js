@@ -12,15 +12,15 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, hasPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=c6dc244d027e';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=c6dc244d027e';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=c6dc244d027e';
+         toBoxedPoints3d, hasPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=2baf2b0957aa';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=2baf2b0957aa';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=2baf2b0957aa';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=c6dc244d027e';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=c6dc244d027e';
-import { writePlaneMetadata } from './plane-metadata.js?v=c6dc244d027e';
-import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=c6dc244d027e';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=2baf2b0957aa';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=2baf2b0957aa';
+import { writePlaneMetadata } from './plane-metadata.js?v=2baf2b0957aa';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=2baf2b0957aa';
 
 // ============================================
 // Generic file picker
@@ -2926,7 +2926,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=c6dc244d027e', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=2baf2b0957aa', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },
