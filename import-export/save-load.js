@@ -55,6 +55,7 @@ import { buildSaveProvenance } from './slp-provenance.js';
 import { withCompactSave } from './compact-save.js';
 import { showCompactSaveModal } from '../ui/compact-save-modal.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
+import { saveStartFolder } from '../loading/recording-folder.js';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -1114,7 +1115,7 @@ export async function saveAllSessionsStreaming(sessions, opts) {
     return await finalizeMultiSessionSave(handle, opts);
 }
 
-export async function quickSave() {
+export async function quickSave(previousFile) {
     if (!state.session) {
         setStatus('No session to save', 'error');
         return;
@@ -1136,14 +1137,20 @@ export async function quickSave() {
             if (state.sessions.length === 1 && state.session.name) {
                 filename = state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.slp';
             }
+            var pickOpts = {
+                suggestedName: filename,
+                types: [{
+                    description: 'SLEAP Labels',
+                    accept: { 'application/x-hdf5': ['.slp'] }
+                }]
+            };
+            // Open in the open recording's folder (else beside the file Save As
+            // replaces). Without `startIn` Chromium opens wherever the last
+            // save went: another recording's folder.
+            var start = saveStartFolder(state, previousFile);
+            if (start) pickOpts.startIn = start;
             try {
-                state.slpFileHandle = await window.showSaveFilePicker({
-                    suggestedName: filename,
-                    types: [{
-                        description: 'SLEAP Labels',
-                        accept: { 'application/x-hdf5': ['.slp'] }
-                    }]
-                });
+                state.slpFileHandle = await window.showSaveFilePicker(pickOpts);
             } catch (pickErr) {
                 if (pickErr.name === 'AbortError') {
                     setStatus('Save cancelled', 'warning');
@@ -1239,7 +1246,9 @@ export async function saveCompactCopy(opts) {
     }
     var base = (state.sessions.length === 1 && state.session.name)
         ? state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_') : 'project';
-    var handle = await showCompactSaveModal({ suggestedName: base + '_compact.slp', pickFile: opts.pickFile });
+    // Opens beside the project: its recording folder, else its file.
+    var handle = await showCompactSaveModal({ suggestedName: base + '_compact.slp', pickFile: opts.pickFile,
+        startIn: saveStartFolder(state, state.slpFileHandle) || undefined });
     if (!handle) { setStatus('Compact copy cancelled', 'warning'); return; }
     state.isSaving = true;
     setStatus('Saving a compact copy...', 'warning');
@@ -1259,9 +1268,11 @@ export async function saveCompactCopy(opts) {
 }
 
 export async function saveAs() {
-    // Force a new file picker regardless of existing handle
+    // Force a new file picker regardless of existing handle; it opens beside
+    // the current file when the session has no recording folder.
+    var previous = state.slpFileHandle;
     state.slpFileHandle = null;
-    await quickSave();
+    await quickSave(previous);
 }
 
 export async function saveProjectSlp() {
