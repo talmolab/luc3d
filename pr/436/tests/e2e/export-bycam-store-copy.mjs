@@ -65,7 +65,7 @@ try {
     const errs = [];
     const logs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
-    page.on('console', m => { const t = m.text(); if (/export-slp-store|per-frame pass/.test(t)) logs.push(t); });
+    page.on('console', m => { const t = m.text(); if (/export-slp-store|export-slp-streaming|per-frame pass/.test(t)) logs.push(t); });
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 60000 });
 
@@ -324,6 +324,8 @@ try {
     check(logs.some(l => /from the store: .*\(3 workers\)/.test(l)), 'the default copy ran in 3 workers', logs.filter(l => /from the store/.test(l)));
     check(logs.some(l => /from the store: .*\(this thread\)/.test(l)), 'workers: false copied on this thread');
     check(logs.some(l => /export workers unavailable/.test(l)), 'the fallback said why');
+    check(logs.some(l => /\[export-slp-streaming\] 3 camera\(s\) in one pass: .*\(3 workers\)/.test(l)),
+        'the per-frame pass (route sweep) compressed in 3 workers too', logs.filter(l => /in one pass/.test(l)));
     check(errs.length === 0, 'no page errors', errs);
 } finally {
     if (browser) await browser.close();

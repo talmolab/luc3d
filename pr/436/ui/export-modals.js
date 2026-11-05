@@ -8,9 +8,9 @@
 //
 // Extracted from app.js per the consolidated Pass 3 plan, Module 13.
 
-import { noteProgress } from './progress-delta.js?v=feb579e6cbe3';
-import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=feb579e6cbe3';
-import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=feb579e6cbe3';
+import { noteProgress } from './progress-delta.js?v=32682eec4183';
+import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=32682eec4183';
+import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=32682eec4183';
 import {
     triangulateAndReproject,
     frameHasGroupedUserInstances,
@@ -26,38 +26,40 @@ import {
     triangulationSettingsKey,
     triangulationMethodLabel,
     dropAllDerivedTriangulationState,
-} from '../pose/triangulation.js?v=feb579e6cbe3';
-import { Viewport3D } from './viewport3d.js?v=feb579e6cbe3';
-import { getTrackColor, getGroupColor } from './overlays.js?v=feb579e6cbe3';
-import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=feb579e6cbe3';
-import { updateInfoPanel } from './info-panel.js?v=feb579e6cbe3';
-import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=feb579e6cbe3';
-import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js?v=feb579e6cbe3';
-import { createGroupSolver } from '../pose/triangulation-pool.js?v=feb579e6cbe3';
+} from '../pose/triangulation.js?v=32682eec4183';
+import { Viewport3D } from './viewport3d.js?v=32682eec4183';
+import { getTrackColor, getGroupColor } from './overlays.js?v=32682eec4183';
+import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=32682eec4183';
+import { updateInfoPanel } from './info-panel.js?v=32682eec4183';
+import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=32682eec4183';
+import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js?v=32682eec4183';
+import { createGroupSolver } from '../pose/triangulation-pool.js?v=32682eec4183';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
     exportCamerasSlpStreaming,
+    exportCamerasLazyRewrite,
     cameraExportUsesSweep,
+    cameraExportUsesLazyRewrite,
     findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
-} from '../import-export/file-io.js?v=feb579e6cbe3';
+} from '../import-export/file-io.js?v=32682eec4183';
 
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from '../pose/initialization.js?v=feb579e6cbe3';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=feb579e6cbe3';
-import { fileSystemAccessHint } from './browser-hints.js?v=feb579e6cbe3';
-import { pickExportFolder } from '../loading/folder-picker-start.js?v=feb579e6cbe3';
-import { chooseProofreadSource, proofreadSlpName } from '../loading/percam-slp-choice.js?v=feb579e6cbe3';
-import { noteTriangulateRun } from '../pose/run-state.js?v=feb579e6cbe3';
+import { update3DViewport } from '../pose/initialization.js?v=32682eec4183';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=32682eec4183';
+import { fileSystemAccessHint } from './browser-hints.js?v=32682eec4183';
+import { pickExportFolder } from '../loading/folder-picker-start.js?v=32682eec4183';
+import { chooseProofreadSource, proofreadSlpName } from '../loading/percam-slp-choice.js?v=32682eec4183';
+import { noteTriangulateRun } from '../pose/run-state.js?v=32682eec4183';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
 // private copies of all four and had silently drifted apart (a 2x bitrate floor
 // gap at the smallest tier, and two disagreeing level tables).
 import {
     RES_PRESETS, bitrateFor, estimatedBytes, h264CodecFor, shouldStreamToDisk,
-} from './overlay-export-layout.js?v=feb579e6cbe3';
+} from './overlay-export-layout.js?v=32682eec4183';
 
 // ============================================
 // Group by Track & Triangulate All
@@ -1863,6 +1865,19 @@ export function showSlpExportByCamModal() {
             g.cams.push(cn);
             g.sels.push(sels[0]);
         });
+        // Cameras of a folder-loaded project, each rewritten from its own store:
+        // built one after another here while workers compress them side by
+        // side (`exportCamerasLazyRewrite`), as one step before the per-camera
+        // steps. A single such camera stays in the per-camera loop.
+        var rewrite = { cams: [], sels: [] };
+        cols.forEach(function (cn) {
+            var sels = buildColumnSelections(cn);
+            if (sels.length !== 1 || cameraExportUsesSweep(sels[0], reprojAsUser, instanceFilter) ||
+                !cameraExportUsesLazyRewrite(sels[0], reprojAsUser, instanceFilter)) return;
+            rewrite.cams.push(cn);
+            rewrite.sels.push(sels[0]);
+        });
+        if (rewrite.cams.length < 2) rewrite = { cams: [], sels: [] };
 
         // Progress: the app's card (ui/loading-overlay.js). The shared sweep is
         // a step of its own, its frames on the bar; then one step per camera: a
@@ -1874,7 +1889,7 @@ export function showSlpExportByCamModal() {
         // for the run and comes back on cancel or failure.
         var SAVES_IN_FLIGHT = 4;
         var title = 'Export SLEAP by Camera';
-        var sweepSteps = sweepGroups.length;
+        var sweepSteps = sweepGroups.length + (rewrite.cams.length ? 1 : 0);
         var steps = sweepSteps + cols.length;
         function cardOpts(step, extra) {
             return Object.assign({ title: title, step: step, steps: steps, detail: 'Esc cancels' }, extra || {});
@@ -1923,6 +1938,19 @@ export function showSlpExportByCamModal() {
                     grp.sels.map(function (sel) { return { cameraName: sel.cameraName, videoFileInfo: sel.videoFileInfo }; }),
                     reprojAsUser, instanceFilter, { onProgress: onSweepProgress(g + 1, label) });
                 grp.cams.forEach(function (cn, k) { prebuilt[cn] = sweptBytes[k]; });
+            }
+            if (rewrite.cams.length && !cancelled) {
+                var rwStep = sweepGroups.length + 1;
+                var rwLabel = 'Writing ' + rewrite.cams.length + ' cameras';
+                showLoading(rwLabel + '…', cardOpts(rwStep));
+                await yieldToPaint();
+                var rewritten = await exportCamerasLazyRewrite(rewrite.sels, reprojAsUser, instanceFilter, {
+                    onProgress: function (done, total) {
+                        if (cancelled) throw new ExportCancelled();
+                        showLoadingProgress(rwLabel, done, total, cardOpts(rwStep, { unit: 'cameras' }));
+                    },
+                });
+                rewrite.cams.forEach(function (cn, k) { if (rewritten[k]) prebuilt[cn] = rewritten[k]; });
             }
             for (var i = 0; i < cols.length; i++) {
                 if (cancelled) break;

@@ -36,7 +36,7 @@ import {
   resolveIdentity,
   resolveVideoFilename,
   sessionsReadError
-} from "./chunk-H7G4PJNA.js?v=feb579e6cbe3";
+} from "./chunk-H7G4PJNA.js?v=32682eec4183";
 import {
   RemoteIOError,
   fetchRetrying,
@@ -48,7 +48,7 @@ import {
   redactedCauseSummary,
   resolveUrl,
   statusToMessage
-} from "./chunk-YS7Q6CO6.js?v=feb579e6cbe3";
+} from "./chunk-YS7Q6CO6.js?v=32682eec4183";
 
 // src/model/centroid.ts
 var _centroidSkeleton = null;
@@ -13386,6 +13386,13 @@ function makeLazySourceLabels(labels) {
 // over an SMB share Chrome's File System Access close() reads a file back at
 // ~10 MB/s, so size is time). A table of at most SESSION_FLUSH_ROWS rows is
 // written exactly as before (contiguous), so small files are byte-identical.
+// LUCID local patch (deferred tables): while `saveSlpToBytes(labels,
+// { lucidDeferTables: [] })` runs its lazy fast path, a table past
+// SESSION_FLUSH_ROWS is not written: its `create_dataset` arguments, data and
+// `field_names` attribute go into that array instead, so a worker can add it to
+// the returned file and gzip it there (`import-export/slp-rows-worker.js`
+// 'create'). Smaller tables are written as before.
+var lucidDeferredTables = null;
 function writeLazyMatrixDataset(file, name, columns, fieldNames, dtype) {
   const rowCount = (columns[fieldNames[0]] ?? []).length;
   const colCount = fieldNames.length;
@@ -13398,15 +13405,20 @@ function writeLazyMatrixDataset(file, name, columns, fieldNames, dtype) {
     }
   }
   if (rowCount > SESSION_FLUSH_ROWS) {
-    file.create_dataset({
+    const spec = {
       name,
-      data,
       shape: [rowCount, colCount],
       dtype,
       chunks: [Math.min(LUCID_COLUMN_CHUNK_ROWS, rowCount), 1],
       compression: "gzip",
       compression_opts: 1
-    });
+    };
+    if (lucidDeferredTables) {
+      const fields = JSON.stringify(fieldNames);
+      lucidDeferredTables.push({ spec, data, attrs: [["field_names", fields, `S${textEncoder.encode(fields).length}`]] });
+      return;
+    }
+    file.create_dataset({ ...spec, data });
   } else {
     file.create_dataset({ name, data, shape: [rowCount, colCount], dtype });
   }
@@ -14550,9 +14562,11 @@ async function saveSlpToBytes(labels, options) {
         ensureH5StagingDir(module2);
         const memPath2 = `/tmp/sleap_output_${Date.now()}_${Math.random().toString(16).slice(2)}.slp`;
         const file2 = new module2.File(memPath2, "w");
+        lucidDeferredTables = Array.isArray(options?.lucidDeferTables) ? options.lucidDeferTables : null;
         try {
           writeSlpToFileLazy(file2, lazyWriteLabels);
         } finally {
+          lucidDeferredTables = null;
           file2.close();
         }
         const fs2 = getH5FileSystem(module2);
