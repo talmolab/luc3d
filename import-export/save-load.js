@@ -52,6 +52,8 @@ import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-me
 import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adoptSmoothingSource } from './smoothing-metadata.js';
 import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
 import { buildSaveProvenance } from './slp-provenance.js';
+import { withCompactSave } from './compact-save.js';
+import { showCompactSaveModal } from '../ui/compact-save-modal.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
 
 /**
@@ -1153,38 +1155,7 @@ export async function quickSave() {
 
         state.isSaving = true;
         setStatus('Saving...', 'warning');
-        // The progress card goes up only AFTER the picker: it needs the click's
-        // user activation, which an awaited paint first could lose.
-        await ensureSleapIO();
-        var progress = createSaveProgress(saveSteps(isStreamingSave(sessionsToSave(), window.SleapIO), false));
-        showLoading('Preparing to save…', { title: 'Save' });
-
-        // Stream straight to the file handle when the streaming path is used
-        // (single or multi-session lazy save) — for a multi-GB project,
-        // materializing the whole finished file as one extra in-memory
-        // Uint8Array on top of whatever session state hasn't been reclaimed
-        // yet is itself a meaningful chunk of peak memory. `bytesWritten`
-        // tracks the total since a streamed save resolves `bytes` to `null`
-        // (see `buildSlpBytes`/`finalizeProjectWriter`).
-        var writable = await state.slpFileHandle.createWritable();
-        var bytesWritten = 0;
-        var sink = {
-            write: function (chunk) {
-                bytesWritten += chunk.byteLength;
-                progress.disk(bytesWritten);
-                return writable.write(chunk);
-            },
-            close: function () { return writable.close(); },
-        };
-        var bytes = await buildSlpBytes({ sink: sink, onProgress: progress });
-        if (bytes) {
-            // Eager (non-streaming) path returned bytes directly instead of
-            // using the sink — write them out now.
-            await writable.write(bytes);
-            await writable.close();
-            bytesWritten = bytes.byteLength;
-        }
-
+        var bytesWritten = await writeProjectToHandle(state.slpFileHandle, 'Save');
         state.isSaving = false;
         hideLoading();
         clearDirty();
@@ -1194,18 +1165,96 @@ export async function quickSave() {
         state.isSaving = false;
         hideLoading();
         if (err && err.name === 'SaveCancelledError') {
-            // `writable` (if it got that far) already has an open swap file —
-            // abort() discards it WITHOUT touching the original file at
-            // `state.slpFileHandle`, unlike close(), which would overwrite it
-            // with zero bytes.
-            if (typeof writable !== 'undefined' && writable && typeof writable.abort === 'function') {
-                try { await writable.abort(); } catch (e) { /* best effort */ }
-            }
             setStatus('Save cancelled', 'warning');
             return;
         }
         console.error('Quick save failed:', err);
         setStatus('Save failed: ' + err.message, 'error');
+    }
+}
+
+/**
+ * Build the project file and write it to `handle`; returns the bytes written.
+ * Shared by Save and Save Compact Copy. On a cancelled save the swap file is
+ * discarded (abort), never closed: close() would overwrite the file at `handle`
+ * with a partial or empty one. Rethrows, for the caller's status.
+ */
+async function writeProjectToHandle(handle, title) {
+    // The progress card goes up only AFTER the picker: it needs the click's
+    // user activation, which an awaited paint first could lose.
+    await ensureSleapIO();
+    var progress = createSaveProgress(saveSteps(isStreamingSave(sessionsToSave(), window.SleapIO), false));
+    showLoading('Preparing to save…', { title: title });
+
+    // Stream straight to the file handle when the streaming path is used
+    // (single or multi-session lazy save) — for a multi-GB project,
+    // materializing the whole finished file as one extra in-memory
+    // Uint8Array on top of whatever session state hasn't been reclaimed
+    // yet is itself a meaningful chunk of peak memory. `bytesWritten`
+    // tracks the total since a streamed save resolves `bytes` to `null`
+    // (see `buildSlpBytes`/`finalizeProjectWriter`).
+    var writable = await handle.createWritable();
+    var bytesWritten = 0;
+    var sink = {
+        write: function (chunk) {
+            bytesWritten += chunk.byteLength;
+            progress.disk(bytesWritten);
+            return writable.write(chunk);
+        },
+        close: function () { return writable.close(); },
+    };
+    try {
+        var bytes = await buildSlpBytes({ sink: sink, onProgress: progress });
+        if (bytes) {
+            // Eager (non-streaming) path returned bytes directly instead of
+            // using the sink — write them out now.
+            await writable.write(bytes);
+            await writable.close();
+            bytesWritten = bytes.byteLength;
+        }
+    } catch (err) {
+        if (err && err.name === 'SaveCancelledError' && typeof writable.abort === 'function') {
+            try { await writable.abort(); } catch (e) { /* best effort */ }
+        }
+        throw err;
+    }
+    return bytesWritten;
+}
+
+/**
+ * File ▸ Save Compact Copy: after a warning that says what is rounded and lost
+ * (`ui/compact-save-modal.js`), write a copy with predicted 2D, scores and 3D
+ * rounded (import-export/compact-save.js). A COPY: the open project keeps its
+ * file handle and its unsaved state, since nothing in memory is rounded.
+ * @param {{pickFile?: Function}} [opts]  `pickFile` replaces the save picker (tests)
+ */
+export async function saveCompactCopy(opts) {
+    opts = opts || {};
+    if (!state.session) { setStatus('No session to save', 'error'); return; }
+    if (state.isSaving) { setStatus('Save already in progress...', 'warning'); return; }
+    if (!opts.pickFile && !window.showSaveFilePicker) {
+        setStatus('A compact copy needs a browser that can save to a chosen file (Chrome or Edge; in Brave, ' +
+            'turn on brave://flags/#file-system-access-api)', 'warning');
+        return;
+    }
+    var base = (state.sessions.length === 1 && state.session.name)
+        ? state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_') : 'project';
+    var handle = await showCompactSaveModal({ suggestedName: base + '_compact.slp', pickFile: opts.pickFile });
+    if (!handle) { setStatus('Compact copy cancelled', 'warning'); return; }
+    state.isSaving = true;
+    setStatus('Saving a compact copy...', 'warning');
+    try {
+        var bytesWritten = await withCompactSave(function () { return writeProjectToHandle(handle, 'Save compact copy'); });
+        state.isSaving = false;
+        hideLoading();
+        setStatus('Saved a compact copy, ' + (bytesWritten / 1024 / 1024).toFixed(1) + ' MB, as ' + (handle.name || 'the chosen file') +
+            ' — rounded; the open project is still linked to its own file' + (state.isDirty ? ' and not saved' : ''), 'success');
+    } catch (err) {
+        state.isSaving = false;
+        hideLoading();
+        if (err && err.name === 'SaveCancelledError') { setStatus('Compact copy cancelled', 'warning'); return; }
+        console.error('Compact copy failed:', err);
+        setStatus('Compact copy failed: ' + err.message, 'error');
     }
 }
 
