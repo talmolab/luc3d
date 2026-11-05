@@ -14416,9 +14416,15 @@ session's resident/total) rather than truncate silently. Covered by
   holds that track in the same frame (SLEAP forbids two instances sharing
   a (frame, track) pair). Reprojections still export trackless.
   **Both normalize a null/undefined `videoFileInfo` to `{}`** (a lazy session
-  before "Load Videos", or a calibration-only camera), degrading to the
-  `cameraName + '.mp4'` / zero-dimension fallback, like
-  `slp-streaming-write.js`'s `resolveVideoPath`.
+  before "Load Videos", or a calibration-only camera). **Every per-camera builder
+  takes its video from `cameraExportVideo(session, cameraName, videoFileInfo)`**
+  (exported): the attached video's path and size, else the reopened file's own
+  record (`session.lazyLoader.videos`, as `slp-streaming-write.js`'s
+  `resolveVideoPath` does for the project save), else `cameraName + '.mp4'` with
+  zero dimensions. A reopened project exported before Load Videos used to write
+  `<cam>.mp4` with 0 frames, and SLEAP 1.6.6's GUI failed to open it
+  (ZeroDivisionError in its status bar). Test:
+  `tests/e2e/export-bycam-reopened-video.mjs`.
 - SLP export (client-side): `exportSlpClientSide`,
   `exportSlpMultiSession(selections, reprojAsUser, instanceFilter, opts)`, `exportCameraSlpStreaming` (above).
   `opts.onProgress(done, total)` reaches only the streaming path (frames swept;
