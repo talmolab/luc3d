@@ -27,7 +27,7 @@ import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu }
 import { createGroupSolver } from './triangulation-pool.js';
 import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
-         dropDerivedReprojections, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js';
+         dropDerivedReprojections, lazyRowInstance, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from './initialization.js';
 import { noteTriangulateRun, carryTriangulateMark } from './run-state.js';
@@ -1636,7 +1636,7 @@ async function hydrateLazyCameras(session, frameIdx, camNames) {
         if (haveUl && haveUl.length > 0) continue;
         for (var ii = 0; ii < instances.length; ii++) {
             var d = instances[ii];
-            var inst = new Instance(d.points || [], lazyInstanceTrackIdx(d.trackIdx), d.type || 'predicted', d.score || 0);
+            var inst = lazyRowInstance(d, lazyInstanceTrackIdx(d.trackIdx));
             inst._rawInstIndex = ii;   // see the note in ensureLazyFrameData
             staged.addInstance(camName, inst);
             added++;
@@ -1683,12 +1683,7 @@ export async function ensureLazyFrameData(frameIdx) {
     for (var [camName, instances] of cameraData) {
         for (var ii = 0; ii < instances.length; ii++) {
             var instData = instances[ii];
-            var inst = new Instance(
-                instData.points || [],
-                lazyInstanceTrackIdx(instData.trackIdx),
-                instData.type || 'predicted',
-                instData.score || 0
-            );
+            var inst = lazyRowInstance(instData, lazyInstanceTrackIdx(instData.trackIdx));
             // `ii` is this instance's position in the frame's raw instance list,
             // i.e. its row offset within the lazy store's [start,end) range for
             // this (camera, frame) — see slp-streaming-write.js's `refFor`, which
@@ -1735,12 +1730,7 @@ export function buildLazyFrameGroupSync(frameIdx) {
     for (var [camName, instances] of cached) {
         for (var ii = 0; ii < instances.length; ii++) {
             var instData = instances[ii];
-            var inst = new Instance(
-                instData.points || [],
-                lazyInstanceTrackIdx(instData.trackIdx),
-                instData.type || 'predicted',
-                instData.score || 0
-            );
+            var inst = lazyRowInstance(instData, lazyInstanceTrackIdx(instData.trackIdx));
             // See the identical tag in ensureLazyFrameData above — this is
             // the store row offset `refFor` (slp-streaming-write.js) needs to
             // resolve this instance's exact raw row on save.
@@ -1808,10 +1798,7 @@ export async function batchLoadLazyFrames(startIdx, count, onProgress) {
             if (!camData || !camData.instances) continue;
             for (var ii = 0; ii < camData.instances.length; ii++) {
                 var instData = camData.instances[ii];
-                var inst = new Instance(
-                    instData.points || [], lazyInstanceTrackIdx(instData.trackIdx),
-                    instData.type || 'predicted', instData.score || 0
-                );
+                var inst = lazyRowInstance(instData, lazyInstanceTrackIdx(instData.trackIdx));
                 // See ensureLazyFrameData's identical tag above.
                 inst._rawInstIndex = ii;
                 fg.addInstance(cameraNames[ci], inst);
