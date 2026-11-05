@@ -5198,7 +5198,11 @@ edit-group mode, keyboard shortcuts.
   `canvasToVideo(clientX, clientY, viewName)` maps a pointer to video pixels;
   on a ROTATED view it must use `zoom.scaleY` for the vertical axis (it differs
   a hair from `zoom.scale` at native resolution), or a click lands up to ~0.3%
-  of the frame height off.
+  of the frame height off. It (and `_displayToVideo`) reads the video box off
+  the VIDEO canvas (`view.canvas`, falling back to the overlay canvas): a
+  zoomed-in overlay canvas is a window onto part of the box
+  (`ui/overlay-window.js`), so its rect is not the video's. Events still attach
+  to the overlay canvas, which always covers what the cell shows.
 - `isInteractiveClickTarget(target)` — used by other UI to skip
   click-through on form controls.
 
@@ -6079,9 +6083,9 @@ survive a `drawImage`, so the tile re-applies them: brightness/contrast via
 **`ctx.filter`** with `buildVideoFilter`'s exact string; rotation and zoom via a
 context transform on **video and overlays together** (transforming only the
 pixels would slide every skeleton off the animal). Load-bearing details:
-- clear the overlay canvas under the **identity** transform first —
-  `drawFrameOverlays`'s `clearRect` clears a *rotated* rect otherwise, leaving
-  stale skeleton in the corners;
+- clear the overlay canvas under the **identity** transform first (kept,
+  though `drawFrameOverlays` now clears the whole canvas under identity itself —
+  it used to clear a *rotated* rect, leaving stale skeleton in the corners);
 - draw the legend **outside** the transform — `drawLegend` anchors to
   `ctx.canvas.width`, so inside it drifts by the letterbox offset and flips at 180°;
 - reset `ctx.filter` with `'none'`, never `''` (silently ignored, leaking the
@@ -6446,6 +6450,11 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   - Benchmark: `tests/e2e/_bench-playback.mjs` `SCENARIOS=...,trails<N>,...`.
 - Composite: `drawFrameOverlays(ctx, viewName, frameGroup,
   instanceGroups, session, options)` — the main per-view draw entrypoint.
+  It opens by clearing the WHOLE canvas under an identity transform
+  (`save` / `setTransform(1,0,0,1,0,0)` / `clearRect` / `restore`), whatever
+  transform the caller set: the live view draws a zoomed-in overlay window
+  through one (`ui/overlay-window.js`), under which a plain `clearRect` would
+  miss part of it. Same pixels as before for an identity-transform caller.
   `options.trackingExcluded` (from `isCameraTracked`) washes everything drawn
   for the view grey via `source-atop` (before the legend), marking a
   Tracking-Wizard-excluded view. In identity mode it also labels **predicted**
@@ -6599,9 +6608,47 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `MAX_OVERLAY_DIM` / `MAX_OVERLAY_AREA` then clamp `ss` to Chrome's canvas
   limits (16384 px per side, 2^28 px of area) — a **correctness** guard: past
   them the allocation reports the requested size and every draw silently
-  no-ops, so the overlay goes blank with no error.
-  Covered by `tests/e2e/zoom-overlay-budget.mjs`; `tests/e2e/_diag-zoom-drag-perf.mjs`
-  is the headed fps harness.
+  no-ops, so the overlay goes blank with no error. The clamp applies to the
+  canvas actually ALLOCATED (the window below), inside `planOverlayWindow`.
+
+  **Overlay visible window.** Bounding `ss` still sized a canvas covering the
+  WHOLE zoomed video (`videoW * ss` x `videoH * ss`), which grows as zoom²: a
+  solo 1920x1200 pane at zoom 10 was 13920x8700 (~480 MB), cleared and redrawn
+  on every mouse move of a node drag (1.4 fps against 47 unzoomed; 9 views
+  zoomed with `+`, 518 MB and 1.1 fps). So a zoomed-in view's overlay canvas is
+  a WINDOW: `planOverlayWindow` (`ui/overlay-window.js`) sizes it to the part
+  of the video box the cell shows (`VideoController.visibleBoxRect`) plus
+  `OVERLAY_WINDOW_MARGIN` on each side, and `applyOverlayPlan` places the
+  element there (inline left/top/width/height, whole box CSS px) and stores the
+  plan as `view._overlayPlan`. Drawing stays in FULL-canvas coordinates
+  (`targetW` x `targetH`, passed as `canvasWidth`/`canvasHeight`, never the
+  element's size): the per-view draw runs inside `octx.save()` / `restore()`
+  with `setTransform(plan.ax, 0, 0, plan.ay, plan.ex, plan.ey)`, so the context
+  is identity again for anyone else who clears it (`loading/video.js`). Rules:
+  - **A full plan when the whole box is on screen** — every unzoomed view, and
+    any zoom whose margin still spans the box: the canvas, element and pixels
+    are exactly what they were (no inline left/top; width/height back to the
+    video canvas's when leaving a window).
+  - **Read the video BOX off `view.canvas`, never the overlay canvas**
+    (`videoBoxSize` here; `canvasToVideo` / `_displayToVideo` in
+    `ui/interaction.js`): a windowed overlay's element is only part of it.
+  - **Whole CSS px placement.** Blink paints a canvas into its pixel-snapped
+    rect in its own pre-zoom coordinates; a fractional left/width was snapped
+    there and magnified by the zoom (2-3 screen px off at zoom 10).
+  - **Pan/zoom-out coverage:** `VideoController.applyZoom` ends in
+    `callbacks.onViewTransform(view)` = **`noteOverlayViewTransform(view)`**
+    (exported; wired in both VideoController constructions,
+    `pose/initialization.js` and `loading/session-loader.js`): when the drawn
+    window no longer covers what the cell shows (`overlayPlanCovers`: a pan or
+    zoom out past the margin, a box resize), one `drawAllOverlays` on the next
+    animation frame (coalesced; not during playback, which redraws anyway). A
+    pan inside the margin costs nothing; a zoom IN is only magnified until the
+    existing 200 ms zoom redraw sharpens it, as before. The window's SIZE
+    depends on the visible size only, so a pan never reallocates.
+  Covered by `tests/e2e/zoom-overlay-budget.mjs` (§6-8: window size, pan /
+  zoom-out redraw, on-screen node position rotated and panned) and
+  `tests/test-overlay-window.mjs`; `tests/e2e/_diag-zoom-drag-perf.mjs` is the
+  headed fps harness.
 
   **Lazy reprojection fill — honors the group's triangulation method.** A group
   with `points3d` but no `reprojections`/`reprojectedInstances` is re-solved here
@@ -6752,6 +6799,34 @@ re-triangulate, identity assignment, or visibility-toggle change.
 
 ---
 
+
+### ui/overlay-window.js
+
+**Purpose.** DOM-free plan for a zoomed-in view's overlay canvas: allocate and
+draw only the part of the video box the cell shows, plus a pan margin (see
+`ui/rendering.js` ▸ *Overlay visible window* for why and the rules).
+
+**Key exports.**
+- `OVERLAY_WINDOW_MARGIN` (0.25) — fraction of the visible size added on EACH
+  side, so a pan redraws only once it leaves the margin.
+- `planOverlayWindow({videoW, videoH, boxW, boxH, ss, visible, margin?, maxDim,
+  maxArea})` → `{windowed, ss, fullW, fullH, bw, bh, ax, ay, ex, ey, cssLeft,
+  cssTop, cssW, cssH, boxW, boxH}`. `visible` is box CSS px
+  (`VideoController.visibleBoxRect`); null or one whose margin spans the box →
+  the FULL canvas (identity transform, luc3d #200's clamp). Windowed: the
+  element sits on whole box CSS px, its size depends on the visible size only
+  (a pan never reallocates), the canvas is `bw` x `bh`, and full-canvas point X
+  lands on window px `X * ax + ex`. Chrome's canvas limits clamp `ss` against
+  the canvas allocated, not the full virtual one.
+- `fullToWindow(plan, X, Y)` — that mapping.
+- `overlayPlanCovers(plan, visible, boxW, boxH)` — false when a redraw is due:
+  the box resized, or a windowed plan no longer contains `visible`.
+- `overlayDrawSize(view)` — the full virtual canvas size a view's drawing code
+  works in (`view._overlayPlan`), else its canvas's size. Used by
+  `ui/plane-overlays.js`.
+
+**Imports** nothing. **Imported by** `ui/rendering.js`, `ui/plane-overlays.js`;
+tests `tests/test-overlay-window.mjs`, `tests/e2e/zoom-overlay-budget.mjs`.
 ### ui/plane-dialog.js
 
 **Purpose.** The small blocking-error / confirmation modal the plane and origin
@@ -6894,6 +6969,9 @@ into it.
   make them look lost. Only the SELECTION and HOVER decorations are mode-gated.
   Fills and edges are per PLANE; NODES are drawn once each over the union, since
   a corner two planes share is one node with one 2D point.
+  It maps video px through `overlayDrawSize(view)` (`ui/overlay-window.js`) —
+  the FULL virtual canvas — never the overlay canvas's own size: a zoomed-in
+  overlay is a window drawn through the transform `drawAllOverlays` set.
 
 **What is drawn outside the mode is the user's to choose**, through the
 Visibility panel's `Planes` section: `planeVisibility`
@@ -8748,6 +8826,9 @@ and commits the rounded degree to the session once, on keyup.
 `applyVideoFilters` also writes the filter onto any **duplicate panes** of the
 same view: they receive pixels via `drawImage` (`renderDuplicatePanels`), which
 does not inherit the primary canvas's CSS filter.
+`renderDuplicatePanels` copies a zoomed-in primary overlay, which is a window
+onto part of the video box (`view._overlayPlan`, `ui/overlay-window.js`), into
+the same part of the mirror's overlay.
 
 **Visibility-tab toggle list refresh.** After `timeline.setData(newSession)`,
 `switchSession` calls `populateTimelineVisibility(newSession)` (through the
@@ -13855,7 +13936,13 @@ How it behaves:
   while not laid out), `setNativeResolution(on)`, `toggleNativeResolution()`,
   `nativeResolutionActive()`, `zoomPercent(view)` (% of 1:1, or null),
   `setZoomPercent(view, pct)` (the badge presets), `reapplyZoom`,
-  `resetAllZoom`, `setupZoomHandlers`.
+  `resetAllZoom`, `setupZoomHandlers`, `visibleBoxRect(view)` (the part of the
+  canvas box the cell shows, `{x0, y0, x1, y1}` in box CSS px: `_boxPointAt`
+  of the cell's corners, rotation included; null without zoom state or layout —
+  what `ui/rendering.js` sizes the overlay window to). `applyZoom` ends in the
+  optional `callbacks.onViewTransform(view)` (the app passes
+  `noteOverlayViewTransform`, which redraws once a pan or zoom out leaves the
+  overlay window, `ui/overlay-window.js`).
 
 **Only the views on screen are decoded, played and captured** —
 `_shownViews()`: views with a decoder for which the optional

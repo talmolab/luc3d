@@ -2712,8 +2712,14 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
     var predictedRender = makeRenderOpts(predictedOpts);
     var reprojRender = makeRenderOpts(reprojOpts);
 
-    // 1. Clear overlay
+    // 1. Clear overlay — the whole canvas, whatever transform the caller set:
+    // the live view draws a zoomed-in overlay WINDOW through a translate
+    // (`ui/overlay-window.js`), under which a plain clearRect would miss part
+    // of it. Same pixels as a plain clearRect under an identity transform.
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    ctx.restore();
 
     // 1b. Node trails (issue #102) — behind everything, so live skeletons draw
     // on top. Uses the real `session.frameGroups` to walk loaded history. Each

@@ -83,7 +83,7 @@ import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/lo
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
+import { drawAllOverlays, setReprojErrorVisible, noteOverlayViewTransform } from '../ui/rendering.js';
 import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js';
 import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js';
 import { noteUnplayableVideos } from '../ui/video-codec-notice.js';
@@ -1354,6 +1354,7 @@ export function rebuildVideoController() {
                 drawAllOverlays(state.currentFrame);
             }, 200);
         },
+        onViewTransform: noteOverlayViewTransform,
     }));
 
     // Set up zoom handlers for views that have been docked (have canvases)
