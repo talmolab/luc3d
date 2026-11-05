@@ -8,9 +8,9 @@
 //
 // Extracted from app.js per the consolidated Pass 3 plan, Module 13.
 
-import { noteProgress } from './progress-delta.js?v=fdbe45ead8f9';
-import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=fdbe45ead8f9';
-import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=fdbe45ead8f9';
+import { noteProgress } from './progress-delta.js?v=feb579e6cbe3';
+import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=feb579e6cbe3';
+import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=feb579e6cbe3';
 import {
     triangulateAndReproject,
     frameHasGroupedUserInstances,
@@ -26,14 +26,14 @@ import {
     triangulationSettingsKey,
     triangulationMethodLabel,
     dropAllDerivedTriangulationState,
-} from '../pose/triangulation.js?v=fdbe45ead8f9';
-import { Viewport3D } from './viewport3d.js?v=fdbe45ead8f9';
-import { getTrackColor, getGroupColor } from './overlays.js?v=fdbe45ead8f9';
-import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=fdbe45ead8f9';
-import { updateInfoPanel } from './info-panel.js?v=fdbe45ead8f9';
-import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=fdbe45ead8f9';
-import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js?v=fdbe45ead8f9';
-import { createGroupSolver } from '../pose/triangulation-pool.js?v=fdbe45ead8f9';
+} from '../pose/triangulation.js?v=feb579e6cbe3';
+import { Viewport3D } from './viewport3d.js?v=feb579e6cbe3';
+import { getTrackColor, getGroupColor } from './overlays.js?v=feb579e6cbe3';
+import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=feb579e6cbe3';
+import { updateInfoPanel } from './info-panel.js?v=feb579e6cbe3';
+import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=feb579e6cbe3';
+import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js?v=feb579e6cbe3';
+import { createGroupSolver } from '../pose/triangulation-pool.js?v=feb579e6cbe3';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
@@ -42,22 +42,22 @@ import {
     findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
-} from '../import-export/file-io.js?v=fdbe45ead8f9';
+} from '../import-export/file-io.js?v=feb579e6cbe3';
 
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from '../pose/initialization.js?v=fdbe45ead8f9';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=fdbe45ead8f9';
-import { fileSystemAccessHint } from './browser-hints.js?v=fdbe45ead8f9';
-import { pickExportFolder } from '../loading/folder-picker-start.js?v=fdbe45ead8f9';
-import { chooseProofreadSource, proofreadSlpName } from '../loading/percam-slp-choice.js?v=fdbe45ead8f9';
-import { noteTriangulateRun } from '../pose/run-state.js?v=fdbe45ead8f9';
+import { update3DViewport } from '../pose/initialization.js?v=feb579e6cbe3';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=feb579e6cbe3';
+import { fileSystemAccessHint } from './browser-hints.js?v=feb579e6cbe3';
+import { pickExportFolder } from '../loading/folder-picker-start.js?v=feb579e6cbe3';
+import { chooseProofreadSource, proofreadSlpName } from '../loading/percam-slp-choice.js?v=feb579e6cbe3';
+import { noteTriangulateRun } from '../pose/run-state.js?v=feb579e6cbe3';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
 // private copies of all four and had silently drifted apart (a 2x bitrate floor
 // gap at the smallest tier, and two disagreeing level tables).
 import {
     RES_PRESETS, bitrateFor, estimatedBytes, h264CodecFor, shouldStreamToDisk,
-} from './overlay-export-layout.js?v=fdbe45ead8f9';
+} from './overlay-export-layout.js?v=feb579e6cbe3';
 
 // ============================================
 // Group by Track & Triangulate All
@@ -1893,6 +1893,17 @@ export function showSlpExportByCamModal() {
         var saving = [];   // saves in flight, oldest first
         var succeeded = false;
         var failure = null;
+        // While files save, the card's bar counts the files saved (written AND
+        // closed) out of all the export's files, and moves as each one lands.
+        // Files, not bytes: over a share Chrome's close() reads the whole file
+        // back (most of a save's time) and reports nothing, so a byte count
+        // would race to the end of write() and then stall.
+        var savingStep = 0;   // the step the saving bar shows (0 = something else is on the card)
+        function showSaving(step) {
+            savingStep = step;
+            showLoadingProgress('Saving files in ' + dirHandle.name, exported, cols.length,
+                cardOpts(step, { unit: cols.length === 1 ? 'file' : 'files' }));
+        }
         async function saveFile(target, blob) {
             var fh = await target.dir.getFileHandle(target.name, { create: true });
             var writable = await fh.createWritable();
@@ -1900,6 +1911,7 @@ export function showSlpExportByCamModal() {
             await writable.close();
             exported++;
             if (target.inCameraFolder) inCameraFolders++;
+            if (savingStep && !cancelled) showSaving(savingStep);
         }
         try {
             for (var g = 0; g < sweepGroups.length && !cancelled; g++) {
@@ -1918,7 +1930,8 @@ export function showSlpExportByCamModal() {
                 var step = sweepSteps + i + 1;
                 var target;
                 if (useDirectory) {
-                    showLoading('Finding ' + camName + '\'s folder…', cardOpts(step));
+                    // Saves in flight keep their bar; a quick lookup needs no card of its own.
+                    if (!savingStep) showLoading('Finding ' + camName + '\'s folder…', cardOpts(step));
                     target = await cameraTarget(dirHandle, camName);
                 } else {
                     // Downloads land flat; still named after the source when the load recorded it.
@@ -1932,6 +1945,7 @@ export function showSlpExportByCamModal() {
                     blob = new Blob([prebuilt[camName]], { type: 'application/x-hdf5' });
                     prebuilt[camName] = null;
                 } else {
+                    savingStep = 0;
                     showLoading('Writing ' + target.path + '…', cardOpts(step));
                     await yieldToPaint();   // paint before a one-step camera holds the thread
                     if (cancelled) break;
@@ -1944,20 +1958,17 @@ export function showSlpExportByCamModal() {
                     exported++;
                     continue;
                 }
-                if (saving.length >= SAVES_IN_FLIGHT) {
-                    showLoading('Saving files in ' + dirHandle.name + '…', cardOpts(step));
-                    await saving.shift();
-                }
-                showLoading('Saving ' + target.path + ' in ' + dirHandle.name + '…', cardOpts(step));
+                showSaving(step);
+                if (saving.length >= SAVES_IN_FLIGHT) await saving.shift();
                 var pending = saveFile(target, blob);
                 pending.catch(function () { /* awaited below; this only keeps it from being "unhandled" */ });
                 saving.push(pending);
             }
             if (saving.length) {
-                showLoading('Saving ' + saving.length + ' file' + (saving.length === 1 ? '' : 's') + ' in ' + dirHandle.name + '…',
-                    cardOpts(steps));
+                showSaving(steps);
                 while (saving.length) await saving.shift();
             }
+            savingStep = 0;
             if (cancelled) {
                 setStatus('Download All cancelled (' + exported + ' of ' + cols.length + ' written)', 'warning');
             } else {
@@ -1974,6 +1985,7 @@ export function showSlpExportByCamModal() {
                 succeeded = true;
             }
         } catch (err) {
+            savingStep = 0;   // the files still landing must not repaint the bar over the outcome
             // Let the files already handed over finish (or fail) before reporting.
             await Promise.allSettled(saving);
             saving = [];

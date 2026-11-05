@@ -23,6 +23,9 @@
  *     every camera's file — with each node's own prediction score (the sweep
  *     used to write the instance score on every node). Files save side by side (both writables open at
  *     once), so a share's slow close() does not hold up the next file.
+ *  6. While files save, the card shows a bar of the files saved (written and
+ *     closed) out of all the export's files ("Saving files in <folder>: k/n
+ *     files…"), moving as each one lands; never a bare spinner.
  *  4. In the picked folder, a camera's file goes into the camera's own folder
  *     (the folder load's `cameraDirMap`, else the folder its video sits in), next
  *     to the `.slp` its 2D came from, as `<source stem>_proofread.slp` — an
@@ -397,6 +400,14 @@ try {
             `${cam}.slp keeps each node's own score (${want.join(', ')}), not the instance score on every node`, c.scores);
     }
     check(lazy.maxInflight === 2, 'the two files saved side by side (both writables open at once)', lazy.maxInflight);
+    // 6. While files save, the bar counts files saved (written and closed) of all files.
+    const saves = lazy.card.filter(s => s.visible && /^Saving /.test(s.status));
+    check(saves.length > 0 && saves.every(s => s.bar && /^Saving files in exports: [0-2]\/2 files…$/.test(s.status)),
+        'saving shows a bar: "Saving files in exports: k/2 files…" (never a bare spinner)', [...new Set(saves.map(s => s.status))]);
+    check(saves.some(s => s.status === 'Saving files in exports: 0/2 files…') &&
+        saves.some(s => /: [12]\/2 files…$/.test(s.status) && s.frac > 0), 'the saving bar starts at 0/2 and moves as a file lands',
+        [...new Set(saves.map(s => s.status + ' ' + s.frac))]);
+    check(saves.map(s => s.frac).every((f, i, a) => i === 0 || f >= a[i - 1]), 'the saving bar only rises');
     const style = await page.evaluate(async () => {
         const { progressCardStyle } = await import('/tests/e2e/fixtures/progress-card.js');
         const ov = document.getElementById('loadingOverlay');
