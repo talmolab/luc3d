@@ -6,7 +6,11 @@
  * with reprojections when REPROJ=1), then times per camera:
  *   eager:  buildSlpLabelsMultiSession, SIO.saveSlpToBytes
  *   lazy:   exportSlpMultiSession on the reopened project (the streaming sweep)
+ *   bycam:  every camera of the reopened project in one exportCamerasSlpStreaming
+ *           call, Reprojections off (Download All's default): ROUTES lists the
+ *           routes to time, default "default,sweep" ("store" forces the copy)
  * Run: PORT=9360 FRAMES=20000 node tests/e2e/_bench-export-bycam.mjs
+ *      SKIP_EAGER=1 skips the per-camera eager/lazy timings.
  */
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -20,6 +24,8 @@ const FRAMES = Number(process.env.FRAMES || 20000);
 const CAMS = Number(process.env.CAMS || 4);
 const ANIMALS = Number(process.env.ANIMALS || 5);
 const NODES = Number(process.env.NODES || 10);
+const ROUTES = process.env.ROUTES || '';
+const SKIP_EAGER = !!process.env.SKIP_EAGER;
 
 const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
 await new Promise(r => setTimeout(r, 1500));
@@ -28,9 +34,10 @@ try {
     browser = await chromium.launch();
     const page = await browser.newPage();
     page.setDefaultTimeout(600000);
+    page.on('console', m => { if (/\[export-slp-(store|streaming)\]/.test(m.text()) && !/ camera /.test(m.text())) console.log('  page: ' + m.text()); });
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 60000 });
-    const out = await page.evaluate(async ({ FRAMES, CAMS, ANIMALS, NODES }) => {
+    const out = await page.evaluate(async ({ FRAMES, CAMS, ANIMALS, NODES, ROUTES, SKIP_EAGER }) => {
         const [pd, fileio, AS] = await Promise.all([import('/pose/pose-data.js'), import('/import-export/file-io.js'), import('/ui/app-state.js')]);
         const { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, Session } = pd;
         const cams = Array.from({ length: CAMS }, (_, i) => 'cam' + i);
@@ -61,7 +68,7 @@ try {
         AS.state.videoFiles = vfs;
         const res = { eager: [], lazy: [] };
         const filter = { user: true, predicted: true, reprojected: false };
-        for (let c = 0; c < Math.min(2, CAMS); c++) {
+        for (let c = 0; c < (SKIP_EAGER ? 0 : Math.min(2, CAMS)); c++) {
             const sel = [{ session: s, cameraName: cams[c], videoFileInfo: vfs[c] }];
             let t0 = performance.now();
             const labels = fileio.buildSlpLabelsMultiSession(sel, null, filter);
@@ -91,14 +98,28 @@ try {
         const ls = AS.state.session;
         res.lazyLoader = !!ls.lazyLoader;
         // reprojAsUser=false + reprojected:true is the user's setting (Reprojections on) → streaming sweep.
-        for (let c = 0; c < Math.min(2, CAMS); c++) {
+        for (let c = 0; c < (SKIP_EAGER ? 0 : Math.min(2, CAMS)); c++) {
             const sel = [{ session: ls, cameraName: cams[c], videoFileInfo: { name: cams[c] } }];
             const t0 = performance.now();
             const blob = await fileio.exportSlpMultiSession(sel, true, { user: true, predicted: true, reprojected: true });
             res.lazy.push({ cam: cams[c], ms: Math.round(performance.now() - t0), MB: +(blob.size / 1e6).toFixed(1) });
         }
+        // By Cam's Download All with Reprojections off (the default): every
+        // camera in one `exportCamerasSlpStreaming` call. 'default' is what the
+        // dialog runs; 'sweep' forces the per-frame pass (where the route option
+        // exists; on a build without it the default IS the per-frame pass).
+        res.bycam = [];
+        const all = cams.map(n => ({ cameraName: n, videoFileInfo: { videoPath: n + '.mp4' } }));
+        const offFilter = { user: true, predicted: true, reprojected: false };
+        for (const route of (ROUTES || 'default,sweep').split(',')) {
+            const t0 = performance.now();
+            const out = await fileio.exportCamerasSlpStreaming(ls, all, null, offFilter,
+                route === 'default' ? {} : { route });
+            res.bycam.push({ route, cameras: CAMS, ms: Math.round(performance.now() - t0),
+                MBperCam: +(out.reduce((a, b) => a + b.length, 0) / CAMS / 1e6).toFixed(1) });
+        }
         return res;
-    }, { FRAMES, CAMS, ANIMALS, NODES });
+    }, { FRAMES, CAMS, ANIMALS, NODES, ROUTES, SKIP_EAGER });
     console.log(JSON.stringify({ FRAMES, CAMS, ANIMALS, NODES, ...out }, null, 1));
 } finally {
     if (browser) await browser.close();
