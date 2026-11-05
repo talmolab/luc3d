@@ -16,6 +16,10 @@
  *
  * In:  { type: 'open', shell: ArrayBuffer }           → { type: 'ready' }
  *      { type: 'rows', name, data: Float64Array, rows, cols } → { type: 'ack' }
+ *      { type: 'create', spec, data, attrs }           → { type: 'ack' }
+ *        (a whole table the bundle's `(deferred tables)` patch held back from a
+ *        per-camera rewrite: `create_dataset({...spec, data})`, then each
+ *        `[name, value, dtype]` attribute, exactly as the bundle would have)
  *      { type: 'finish' }                              → { type: 'done', bytes }
  * Any failure → { type: 'error', message } (the file is dropped).
  *
@@ -83,6 +87,12 @@ self.onmessage = async (ev) => {
         } else if (m.type === 'rows') {
             if (!file) throw new Error('rows before open');
             appendRows(m.name, m.data, m.rows, m.cols);
+            self.postMessage({ type: 'ack' });
+        } else if (m.type === 'create') {
+            if (!file) throw new Error('create before open');
+            file.create_dataset(Object.assign({}, m.spec, { data: m.data }));
+            const ds = file.get(m.spec.name);
+            for (const [name, value, dtype] of (m.attrs || [])) ds.create_attribute(name, value, null, dtype);
             self.postMessage({ type: 'ack' });
         } else if (m.type === 'finish') {
             if (!file) throw new Error('finish before open');

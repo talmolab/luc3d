@@ -9,6 +9,7 @@
  * reports: copy total, time in the writer's appendRawRows, time in h5wasm's
  * write_slice (compression + HDF5), and the top self-time functions.
  *   GZIP=0 serves the bundle with the streaming tables' gzip removed.
+ *   ROUTE=sweep times the per-frame pass instead of the store copy.
  *   WORKERS=0 copies on the main thread; WORKERS=N uses N export workers.
  * Run: PORT=9361 FRAMES=40000 CAMS=2 NODES=14 node tests/e2e/_diag-profile-store-copy.mjs
  */
@@ -26,7 +27,8 @@ const ANIMALS = Number(process.env.ANIMALS || 5);
 const NODES = Number(process.env.NODES || 14);
 const GZIP = process.env.GZIP !== '0';
 const TOP = Number(process.env.TOP || 25);
-const WORKERS = process.env.WORKERS;   // unset = default; 0 = this thread; N = that many
+const WORKERS = process.env.WORKERS;
+const ROUTE = process.env.ROUTE || 'store';   // 'sweep' = the per-frame pass   // unset = default; 0 = this thread; N = that many
 
 const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
 await new Promise(r => setTimeout(r, 1500));
@@ -130,15 +132,15 @@ try {
         };
     });
     await cdp.send('Profiler.start');
-    const res = await page.evaluate(async ({ CAMS, WORKERS }) => {
+    const res = await page.evaluate(async ({ CAMS, WORKERS, ROUTE }) => {
         const fileio = await import('/import-export/file-io.js');
         const AS = await import('/ui/app-state.js');
         const ls = AS.state.session;
         const all = Array.from({ length: CAMS }, (_, i) => ({ cameraName: 'cam' + i, videoFileInfo: { videoPath: 'cam' + i + '.mp4' } }));
         const t0 = performance.now();
-        const out = await fileio.exportCamerasSlpStreaming(ls, all, null, { user: true, predicted: true, reprojected: false }, { route: 'store', ...(WORKERS == null ? {} : { workers: Number(WORKERS) === 0 ? false : Number(WORKERS) }) });
+        const out = await fileio.exportCamerasSlpStreaming(ls, all, null, { user: true, predicted: true, reprojected: false }, { route: ROUTE, ...(WORKERS == null ? {} : { workers: Number(WORKERS) === 0 ? false : Number(WORKERS) }) });
         return { ms: Math.round(performance.now() - t0), MBperCam: +(out.reduce((a, b) => a + b.length, 0) / CAMS / 1e6).toFixed(1), prof: window.__prof };
-    }, { CAMS, WORKERS });
+    }, { CAMS, WORKERS, ROUTE });
     const { profile } = await cdp.send('Profiler.stop');
     // Self time per function from the sampled profile.
     const byId = new Map(profile.nodes.map(n => [n.id, n]));

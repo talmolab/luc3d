@@ -38,7 +38,9 @@ import {
     exportSlpClientSide,
     exportSlpMultiSession,
     exportCamerasSlpStreaming,
+    exportCamerasLazyRewrite,
     cameraExportUsesSweep,
+    cameraExportUsesLazyRewrite,
     findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
@@ -1863,6 +1865,19 @@ export function showSlpExportByCamModal() {
             g.cams.push(cn);
             g.sels.push(sels[0]);
         });
+        // Cameras of a folder-loaded project, each rewritten from its own store:
+        // built one after another here while workers compress them side by
+        // side (`exportCamerasLazyRewrite`), as one step before the per-camera
+        // steps. A single such camera stays in the per-camera loop.
+        var rewrite = { cams: [], sels: [] };
+        cols.forEach(function (cn) {
+            var sels = buildColumnSelections(cn);
+            if (sels.length !== 1 || cameraExportUsesSweep(sels[0], reprojAsUser, instanceFilter) ||
+                !cameraExportUsesLazyRewrite(sels[0], reprojAsUser, instanceFilter)) return;
+            rewrite.cams.push(cn);
+            rewrite.sels.push(sels[0]);
+        });
+        if (rewrite.cams.length < 2) rewrite = { cams: [], sels: [] };
 
         // Progress: the app's card (ui/loading-overlay.js). The shared sweep is
         // a step of its own, its frames on the bar; then one step per camera: a
@@ -1874,7 +1889,7 @@ export function showSlpExportByCamModal() {
         // for the run and comes back on cancel or failure.
         var SAVES_IN_FLIGHT = 4;
         var title = 'Export SLEAP by Camera';
-        var sweepSteps = sweepGroups.length;
+        var sweepSteps = sweepGroups.length + (rewrite.cams.length ? 1 : 0);
         var steps = sweepSteps + cols.length;
         function cardOpts(step, extra) {
             return Object.assign({ title: title, step: step, steps: steps, detail: 'Esc cancels' }, extra || {});
@@ -1923,6 +1938,19 @@ export function showSlpExportByCamModal() {
                     grp.sels.map(function (sel) { return { cameraName: sel.cameraName, videoFileInfo: sel.videoFileInfo }; }),
                     reprojAsUser, instanceFilter, { onProgress: onSweepProgress(g + 1, label) });
                 grp.cams.forEach(function (cn, k) { prebuilt[cn] = sweptBytes[k]; });
+            }
+            if (rewrite.cams.length && !cancelled) {
+                var rwStep = sweepGroups.length + 1;
+                var rwLabel = 'Writing ' + rewrite.cams.length + ' cameras';
+                showLoading(rwLabel + '…', cardOpts(rwStep));
+                await yieldToPaint();
+                var rewritten = await exportCamerasLazyRewrite(rewrite.sels, reprojAsUser, instanceFilter, {
+                    onProgress: function (done, total) {
+                        if (cancelled) throw new ExportCancelled();
+                        showLoadingProgress(rwLabel, done, total, cardOpts(rwStep, { unit: 'cameras' }));
+                    },
+                });
+                rewrite.cams.forEach(function (cn, k) { if (rewritten[k]) prebuilt[cn] = rewritten[k]; });
             }
             for (var i = 0; i < cols.length; i++) {
                 if (cancelled) break;

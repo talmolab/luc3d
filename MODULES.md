@@ -4652,7 +4652,9 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   files saved — written AND closed — out of all the export's files ("Saving files in
   <folder>: k/n files…", `showSaving`), repainted as each one lands. Files, not
   bytes: `close()` reports nothing, so a byte count would race to the end of
-  `write()` and stall. A camera built in one go takes the card back
+  `write()` and stall. Two or more folder-loaded cameras
+  (`cameraExportUsesLazyRewrite`) are written in one step before the per-camera
+  steps ("Writing N cameras", cameras on the bar, `exportCamerasLazyRewrite`). A camera built in one go takes the card back
   (`savingStep = 0`) until its file is queued. The modal is
   hidden while the card shows (it sits above the card's layer) and comes back on
   cancel or failure. **Esc closes the modal**, or cancels an in-progress export:
@@ -14470,7 +14472,19 @@ session's resident/total) rather than truncate silently. Covered by
   frames) or the export aborts. `opts.workers` (false = this thread, N = that many)
   or `window.LUCID_EXPORT_WORKERS` overrides one per camera up to
   `hardwareConcurrency` (16 max); no `Worker`, or a worker that fails to start,
-  falls back to this thread with a console warning. Synthetic 8 cameras x 20,000
+  falls back to this thread with a console warning. The per-frame pass
+  (`exportCamerasSlpStreaming`'s sweep, e.g. Reprojections on) attaches the same
+  workers to its writers (up to the worker count; the rest compress here), the
+  sweep's callback waiting while a worker has `ROWS_WORKER_QUEUE` messages
+  unanswered; synthetic 8 x 20,000: 11.9 → 8.4 s (gzip was ~27% of it). A
+  **folder-loaded** project's cameras (each rewritten from its own store,
+  `lazyCameraExportBytes`) go through `exportCamerasLazyRewrite(selections,
+  reprojAsUser, instanceFilter, opts)`: each file is written here without its big
+  tables (`saveSlpToBytes(labels, { lucidDeferTables })`, patch `(deferred
+  tables)`), its worker creates them with the same arguments and gzips them while
+  the next camera is built, at most `LAZY_REWRITE_IN_FLIGHT` (4) at once; returns
+  bytes per selection (null = not this route). `cameraExportUsesLazyRewrite`
+  tells the dialog which cameras it covers. Synthetic 8 cameras x 20,000
   frames, realistic noise and per-node scores: copy 5.1 s → 1.35 s
   (`tests/e2e/_diag-profile-store-copy.mjs`). Test: `tests/e2e/export-bycam-store-copy.mjs` (both routes
   value for value, with negative controls; §4 workers = this thread, and the fallback). `cameraExportUsesSweep(selection,
@@ -14618,8 +14632,11 @@ carries incoming rows into whole column chunks exactly as the bundle's
 `(column chunks)` patch does (chunk height read from the dataset), and returns
 the finished file's bytes.
 **Messages:** in `open {shell}` → `ready`; `rows {name, data, rows, cols}` → `ack`
-(one per message: the main thread's backpressure); `finish` → `done {bytes}`;
-any failure → `error {message}`.
+(one per message: the main thread's backpressure); `create {spec, data, attrs}` →
+`ack` (a whole table the `(deferred tables)` patch held back from a per-camera
+rewrite: `create_dataset({...spec, data})` plus its attributes); `finish` →
+`done {bytes}`; any failure → `error {message}`. Used by the store copy, the
+per-frame pass and `exportCamerasLazyRewrite`.
 **Dependencies:** `lib/h5wasm/hdf5_hl.js` by RELATIVE path (a worker has no
 import map). Rows arrive already rounded (`lucidCompactRound` runs in the divert).
 **Dependents:** `import-export/file-io.js` (`_startRowsWorker`).
