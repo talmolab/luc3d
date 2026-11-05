@@ -9,52 +9,53 @@ import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
     toBoxedPoints3d, someValidPoint3d, pooledPoints3d,
-} from '../pose/pose-data.js?v=b1724b04e89e';
-import { ensurePlaceholderCameras } from '../pose/placeholder-cameras.js?v=b1724b04e89e';
+} from '../pose/pose-data.js?v=02038965f656';
+import { ensurePlaceholderCameras } from '../pose/placeholder-cameras.js?v=02038965f656';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
-} from '../pose/triangulation.js?v=b1724b04e89e';
-import { OnDemandVideoDecoder } from '../loading/video.js?v=b1724b04e89e';
-import { createDemoSkeleton } from '../demo-data.js?v=b1724b04e89e';
+} from '../pose/triangulation.js?v=02038965f656';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=02038965f656';
+import { createDemoSkeleton } from '../demo-data.js?v=02038965f656';
 import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
-} from './file-io.js?v=b1724b04e89e';
+} from './file-io.js?v=02038965f656';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setInteractionManager,
-} from '../ui/app-state.js?v=b1724b04e89e';
+} from '../ui/app-state.js?v=02038965f656';
 import {
     autoAssignVideosToCameras, forceVideoSelection, showParentDirMatchSummary,
     forceVideoSelectionWithFolder, folderPickerStartFor, createViewForVideoFile, updateTotalFrames,
     adoptLabeledFrameCount, rebuildVideoController, fitCanvasesToCells,
-} from '../loading/session-loader.js?v=b1724b04e89e';
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=b1724b04e89e';
-import { updateInfoPanel } from '../ui/info-panel.js?v=b1724b04e89e';
+} from '../loading/session-loader.js?v=02038965f656';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=02038965f656';
+import { updateInfoPanel } from '../ui/info-panel.js?v=02038965f656';
 // Pass 3i-3: setupInteraction / setup3DViewport / hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, hideWelcomeOverlay,
-} from '../pose/initialization.js?v=b1724b04e89e';
+} from '../pose/initialization.js?v=02038965f656';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=b1724b04e89e';
-import { handleLoadSlpFile } from './slp-import.js?v=b1724b04e89e';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=02038965f656';
+import { handleLoadSlpFile } from './slp-import.js?v=02038965f656';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
     openProjectWriter, streamSessionIntoWriter, finalizeProjectWriter,
-} from './slp-streaming-write.js?v=b1724b04e89e';
-import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=b1724b04e89e';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=b1724b04e89e';
+} from './slp-streaming-write.js?v=02038965f656';
+import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=02038965f656';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=02038965f656';
 import {
     showLoading, hideLoading, showLoadingProgress, createProgressPacer, yieldToPaint,
-} from '../ui/loading-overlay.js?v=b1724b04e89e';
-import { clearReadout } from '../ui/frame-readout.js?v=b1724b04e89e';
-import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=b1724b04e89e';
-import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adoptSmoothingSource } from './smoothing-metadata.js?v=b1724b04e89e';
-import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=b1724b04e89e';
-import { buildSaveProvenance } from './slp-provenance.js?v=b1724b04e89e';
-import { withCompactSave } from './compact-save.js?v=b1724b04e89e';
-import { showCompactSaveModal } from '../ui/compact-save-modal.js?v=b1724b04e89e';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=b1724b04e89e';
+} from '../ui/loading-overlay.js?v=02038965f656';
+import { clearReadout } from '../ui/frame-readout.js?v=02038965f656';
+import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=02038965f656';
+import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adoptSmoothingSource } from './smoothing-metadata.js?v=02038965f656';
+import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=02038965f656';
+import { buildSaveProvenance } from './slp-provenance.js?v=02038965f656';
+import { withCompactSave } from './compact-save.js?v=02038965f656';
+import { showCompactSaveModal } from '../ui/compact-save-modal.js?v=02038965f656';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=02038965f656';
+import { saveStartFolder } from '../loading/recording-folder.js?v=02038965f656';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -362,7 +363,7 @@ function serializeSessionFrames(session) {
 async function ensureSleapIO() {
     if (window.SleapIO) return window.SleapIO;
     // Relative to THIS module (import-export/), not the page — hence `../`.
-    var mod = await import('../lib/sleap-io/index.browser.js?v=b1724b04e89e');
+    var mod = await import('../lib/sleap-io/index.browser.js?v=02038965f656');
     window.SleapIO = mod;
     return mod;
 }
@@ -1114,7 +1115,7 @@ export async function saveAllSessionsStreaming(sessions, opts) {
     return await finalizeMultiSessionSave(handle, opts);
 }
 
-export async function quickSave() {
+export async function quickSave(previousFile) {
     if (!state.session) {
         setStatus('No session to save', 'error');
         return;
@@ -1136,14 +1137,20 @@ export async function quickSave() {
             if (state.sessions.length === 1 && state.session.name) {
                 filename = state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.slp';
             }
+            var pickOpts = {
+                suggestedName: filename,
+                types: [{
+                    description: 'SLEAP Labels',
+                    accept: { 'application/x-hdf5': ['.slp'] }
+                }]
+            };
+            // Open in the open recording's folder (else beside the file Save As
+            // replaces). Without `startIn` Chromium opens wherever the last
+            // save went: another recording's folder.
+            var start = saveStartFolder(state, previousFile);
+            if (start) pickOpts.startIn = start;
             try {
-                state.slpFileHandle = await window.showSaveFilePicker({
-                    suggestedName: filename,
-                    types: [{
-                        description: 'SLEAP Labels',
-                        accept: { 'application/x-hdf5': ['.slp'] }
-                    }]
-                });
+                state.slpFileHandle = await window.showSaveFilePicker(pickOpts);
             } catch (pickErr) {
                 if (pickErr.name === 'AbortError') {
                     setStatus('Save cancelled', 'warning');
@@ -1239,7 +1246,9 @@ export async function saveCompactCopy(opts) {
     }
     var base = (state.sessions.length === 1 && state.session.name)
         ? state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_') : 'project';
-    var handle = await showCompactSaveModal({ suggestedName: base + '_compact.slp', pickFile: opts.pickFile });
+    // Opens beside the project: its recording folder, else its file.
+    var handle = await showCompactSaveModal({ suggestedName: base + '_compact.slp', pickFile: opts.pickFile,
+        startIn: saveStartFolder(state, state.slpFileHandle) || undefined });
     if (!handle) { setStatus('Compact copy cancelled', 'warning'); return; }
     state.isSaving = true;
     setStatus('Saving a compact copy...', 'warning');
@@ -1259,9 +1268,11 @@ export async function saveCompactCopy(opts) {
 }
 
 export async function saveAs() {
-    // Force a new file picker regardless of existing handle
+    // Force a new file picker regardless of existing handle; it opens beside
+    // the current file when the session has no recording folder.
+    var previous = state.slpFileHandle;
     state.slpFileHandle = null;
-    await quickSave();
+    await quickSave(previous);
 }
 
 export async function saveProjectSlp() {
@@ -1558,7 +1569,7 @@ export async function handleLoadProject(prePickedFile) {
             var LARGE_SLP_BYTES = 200 * 1024 * 1024;
             if (ext === 'slp' && file.size > LARGE_SLP_BYTES) {
                 // Dynamic import avoids a session-loader ↔ save-load import cycle.
-                var _sl = await import('../loading/session-loader.js?v=b1724b04e89e');
+                var _sl = await import('../loading/session-loader.js?v=02038965f656');
                 if (_sl && typeof _sl.handleLoadProjectSlpLazy === 'function') {
                     return _sl.handleLoadProjectSlpLazy(file);
                 }
