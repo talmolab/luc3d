@@ -20,7 +20,7 @@
 // update and overlay redraw; it redraws only when the session's check, the
 // frame count or the bar's size changed, so it costs a few comparisons.
 
-import { flaggedFrames, flaggedFrameClasses, describeFlagsAt } from '../pose/pose-check-session.js?v=09728c65dcc2';
+import { flaggedFrames, flaggedFrameClasses, describeFlagsAt } from '../pose/pose-check-session.js?v=4b182c33ee75';
 
 export var MIN_TICK_CSS_PX = 2;
 export var POSE_FLAG_SNAP_PX = 3;

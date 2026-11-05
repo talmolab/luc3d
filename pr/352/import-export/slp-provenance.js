@@ -26,6 +26,7 @@
  *
  * DOM-free (tests: `tests/test-slp-provenance.mjs`).
  */
+import { compactProvenanceExtra } from './compact-save.js?v=4b182c33ee75';
 
 export const LUCID_PROVENANCE_SOURCE = 'lucid';
 /** Where LUC3D's pair goes when another program owns `source`/`exported_at`. */
@@ -137,7 +138,9 @@ export function buildSaveProvenance(sessions, exportedAt) {
     var provs = list.map(function (s) { return foreignProvenance(s && s.fileProvenance); });
     var top = null;
     for (var i = 0; i < provs.length && !top; i++) top = provs[i];
-    if (!top) return { source: LUCID_PROVENANCE_SOURCE, exported_at: at };
+    // A compact copy (import-export/compact-save.js) is marked as rounded.
+    var compact = compactProvenanceExtra();
+    if (!top) return Object.assign({ source: LUCID_PROVENANCE_SOURCE, exported_at: at }, compact);
 
     var topJson = JSON.stringify(top);
     var keys = provenanceSessionKeys(list.map(function (s) { return s && s.name; }));
@@ -153,5 +156,6 @@ export function buildSaveProvenance(sessions, exportedAt) {
     if (hasOwn(out, 'source') || hasOwn(out, 'exported_at')) out[LUCID_PROVENANCE_KEY] = pair;
     else { out.source = pair.source; out.exported_at = pair.exported_at; }
     if (per) out[PROVENANCE_SESSIONS_KEY] = per;
+    if (compact) Object.assign(out, compact);
     return out;
 }
