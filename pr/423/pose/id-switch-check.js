@@ -12,7 +12,7 @@
  *     triangulated skeleton. Cheap, no video.
  *   - checkImageSwitches — embeddings of masked, pose-aligned crops of each
  *     identity in every camera (supplied by the caller's `getEmbeddings`; the app
- *     uses DINOv2-small in the browser, ui/image-embedder.js). Slow; catches
+ *     uses DINOv3 ViT-S/16 in the browser, ui/image-embedder.js). Slow; catches
  *     animals of the same size that look different (coat colour, markings).
  *
  * Neither learns from the tracker's identity labels across a contact. Both
@@ -41,7 +41,7 @@
  * Depends on: pose-data.js (readPoint3d). Pure — no DOM, no app state.
  */
 
-import { readPoint3d } from './pose-data.js?v=cfe1967d2e84';
+import { readPoint3d } from './pose-data.js?v=72938713a674';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
@@ -82,7 +82,8 @@ export const IMAGE_CHECK_DEFAULTS = Object.assign({}, SWITCH_CHECK_DEFAULTS, {
     imageHz: 2,             // crops per second per identity (on the contact grid), where the scoring reads them;
     backgroundHz: 0.1,      // elsewhere only this many (planImageSamples), so the metric still sees the whole
                             // session; >= imageHz embeds every image sample
-    threshold: -1,          // a contact whose score is below this is a possible switch (-0.8 at the old 224-px input)
+    threshold: -1.2,        // a contact whose score is below this is a possible switch (DINOv3 ViT-S/16 at 192 px;
+                            // -1 for DINOv2-small at 168, -0.8 at 224)
     maxTrainRows: 20000,    // crops per camera the metric is learned from
     getEmbeddings: null,   // REQUIRED: async (frame, items[{k, group}]) -> per item [{camera, vector}];
                            // STARTED in increasing frame order, at most `inFlight` in flight

@@ -31,7 +31,7 @@
  * (`loading/track-union.js`) — see `_unifyTracks`.
  */
 
-import { unionTrackNames } from './track-union.js?v=cfe1967d2e84';
+import { unionTrackNames } from './track-union.js?v=72938713a674';
 
 /**
  * `deleteInstanceRows` moves surviving rows with one `copyWithin` per run when
@@ -83,6 +83,35 @@ function adaptTypedInstance(inst, typedTracks, numNodes, PredictedInstance) {
         occluded: occluded,
     };
 }
+
+/**
+ * The nodes of store instance row `j` that `adaptTypedInstance` would mark
+ * occluded — coordinates present, `visible` false — read straight from the
+ * point columns, as `materializeFrame` + `slicePoints` would read them: a user
+ * row (instance_type 0, or no type column) from `pointsData`, any other from
+ * `predPointsData`, node `k` at `point_id_start + k` while that is before
+ * `point_id_end`.
+ *
+ * @returns {number[]|null} ascending node indices, null when there are none
+ */
+function storeRowOccludedNodes(store, j, numNodes) {
+    var idn = store.instancesData || {};
+    if (!idn.point_id_start) return null;
+    var rawType = idn.instance_type ? idn.instance_type[j] : undefined;
+    var pts = Number(rawType == null ? 0 : rawType) === 0 ? store.pointsData : store.predPointsData;
+    if (!pts || !pts.x || !pts.y) return null;
+    var p0 = Number(idn.point_id_start[j]) || 0;
+    var p1 = Number(idn.point_id_end ? idn.point_id_end[j] : 0) || 0;
+    var vis = pts.visible || [];
+    var out = null;
+    for (var k = 0; k < numNodes && p0 + k < p1; k++) {
+        var i = p0 + k;
+        if (isFinite(Number(pts.x[i])) && isFinite(Number(pts.y[i])) && !vis[i]) (out || (out = [])).push(k);
+    }
+    return out;
+}
+
+function noOccludedNodes() { return null; }
 
 export class SioLazyLoader {
     constructor() {
@@ -168,7 +197,7 @@ export class SioLazyLoader {
         }
         // Point the reader's internal I/O worker at LUCID's local vendored h5wasm
         // IIFE (document.baseURI keeps this correct on sub-path deployments).
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=cfe1967d2e84', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=72938713a674', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -402,7 +431,7 @@ export class SioLazyLoader {
         if (!SIO || typeof SIO.readSlpStreaming !== 'function') {
             throw new Error('sleap-io.js readSlpStreaming not available on window.SleapIO');
         }
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=cfe1967d2e84', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=72938713a674', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -803,10 +832,15 @@ export class SioLazyLoader {
      *   - `trackIdx[k]`: the session track index, or -1 for trackless. A track
      *     id with no `Track` behind it is trackless there too.
      *   - `predicted[k]`: 1 unless `instance_type` is 0 (a user instance).
+     *   - `occludedNodes(k)`: the nodes hydration marks occluded (placed, not
+     *     visible), ascending, or null for none. A function, read only when a
+     *     caller asks (`pose/lazy-residency.js` compares it with an instance's
+     *     own occlusion), so a descriptor costs no more than before.
      *
      * @param {string} camName
      * @param {number} frameIdx - video frame index
-     * @returns {{count: number, trackIdx: Int32Array, predicted: Uint8Array}|null}
+     * @returns {{count: number, trackIdx: Int32Array, predicted: Uint8Array,
+     *   occludedNodes: function(number): (number[]|null)}|null}
      *   null when this loader does not back `camName` at all (the caller must
      *   then treat that camera's data as NOT rebuildable). A camera with no row
      *   for this frame reports `count: 0`.
@@ -817,7 +851,7 @@ export class SioLazyLoader {
         var store = labels && labels._lazyDataStore;
         if (!store || !rowMap) return null;
         var row = rowMap.get(frameIdx);
-        if (row === undefined) return { count: 0, trackIdx: new Int32Array(0), predicted: new Uint8Array(0) };
+        if (row === undefined) return { count: 0, trackIdx: new Int32Array(0), predicted: new Uint8Array(0), occludedNodes: noOccludedNodes };
         var fd = store.framesData || {};
         var idn = store.instancesData || {};
         var iStart = Number(fd.instance_id_start ? fd.instance_id_start[row] : 0) || 0;
@@ -844,7 +878,12 @@ export class SioLazyLoader {
             var rawType = idn.instance_type ? idn.instance_type[j] : undefined;
             predicted[k] = Number(rawType == null ? 0 : rawType) === 0 ? 0 : 1;
         }
-        return { count: n, trackIdx: trackIdx, predicted: predicted };
+        var numNodes = this.numNodesByCam.get(camName) || (this.skeleton ? this.skeleton.nodes.length : 0);
+        var occludedNodes = function (k) {
+            if (!(k >= 0 && k < n)) return null;
+            return storeRowOccludedNodes(store, iStart + k, numNodes);
+        };
+        return { count: n, trackIdx: trackIdx, predicted: predicted, occludedNodes: occludedNodes };
     }
 
     /**

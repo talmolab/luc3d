@@ -5,6 +5,8 @@
  * A project with a proofreading swap is saved and reopened through the real lazy
  * path, so only a window of frames is resident and the store still holds the raw
  * per-camera tracks. The two cameras number the animals in opposite directions.
+ * Covers each camera alone, By Cam's cameras together, and the copy straight
+ * from the store once Propagate IDs → Tracks has written the identities to it.
  * The eager and hand-built lazy cases are in tests/test-export-identity-tracks.js.
  */
 import { chromium } from 'playwright';
@@ -71,23 +73,37 @@ try {
         clearInterval(skip);
 
         const lazy = window.__lucid.state.session;
-        const out = { lazy: !!lazy.lazyLoader, resident: lazy.frameGroups.size, cams: {} };
-        for (const cam of CAMS) {
-            const blob = await fio.exportSlpMultiSession([{ session: lazy, cameraName: cam, videoFileInfo: null }], null,
-                { user: true, predicted: true, reprojected: false });
-            const rb = await window.SleapIO.readSlpStreaming(new File([new Uint8Array(await blob.arrayBuffer())], cam + '.slp'),
+        const FILTER = { user: true, predicted: true, reprojected: false };
+        const readBack = async (bytes, name) => {
+            const rb = await window.SleapIO.readSlpStreaming(new File([bytes], name),
                 { lazy: false, openVideos: false, h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js', document.baseURI).href });
             const frames = {};
             for (const lf of rb.labeledFrames) {
                 frames[lf.frameIdx] = {};
                 for (const inst of lf.instances) frames[lf.frameIdx][inst.points[0].xy[0]] = inst.track ? inst.track.name : null;
             }
-            out.cams[cam] = { tracks: rb.tracks.map((t) => t.name), nFrames: rb.labeledFrames.length, frames };
+            return { tracks: rb.tracks.map((t) => t.name), nFrames: rb.labeledFrames.length, frames };
+        };
+        const out = { lazy: !!lazy.lazyLoader, resident: lazy.frameGroups.size, cams: {} };
+        for (const cam of CAMS) {
+            const blob = await fio.exportSlpMultiSession([{ session: lazy, cameraName: cam, videoFileInfo: null }], null, FILTER);
+            out.cams['one file: ' + cam] = await readBack(new Uint8Array(await blob.arrayBuffer()), cam + '.slp');
         }
+        // By Cam's Download All exports a reopened project's cameras together.
+        const cams = CAMS.map((n) => ({ cameraName: n, videoFileInfo: null }));
+        out.storeBlocker = fio.sharedStoreCopyContext(lazy, null, FILTER).blocker || null;
+        const together = await fio.exportCamerasSlpStreaming(lazy, cams, null, FILTER);
+        for (let c = 0; c < CAMS.length; c++) out.cams['By Cam: ' + CAMS[c]] = await readBack(together[c], CAMS[c] + '-b.slp');
+        // Once Propagate IDs → Tracks has put the identities in the file, the
+        // fast copy straight from the store is allowed again, and agrees.
+        lazy.propagateIdentitiesToTracks();
+        const copied = await fio.exportCamerasSlpStreaming(lazy, cams, null, FILTER, { route: 'store' });
+        for (let c = 0; c < CAMS.length; c++) out.cams['store copy after propagate: ' + CAMS[c]] = await readBack(copied[c], CAMS[c] + '-c.slp');
         return out;
     }, { FRAMES, SWAP });
 
     check(result.lazy && result.resident < FRAMES, 'the reopened project is lazy, only part of it resident', [result.lazy, result.resident]);
+    check(!!result.storeBlocker, 'the store copy is refused while the file holds raw tracks', result.storeBlocker);
     for (const [cam, r] of Object.entries(result.cams)) {
         check(r.nFrames === FRAMES, `${cam}: every frame exported`, r.nFrames);
         check(JSON.stringify(r.tracks) === '["track_0","track_1"]', `${cam}: tracks are the identities, not the raw list`, r.tracks);

@@ -1826,6 +1826,21 @@ export class Session {
          * `setTrackerNumAnimals`), which also marks the project dirty.
          */
         this.numAnimals = null;
+        /**
+         * Which identity has the tail marks ("id_0"), for Track All's tail-mark
+         * pass (pose/tail-mark.js), or null for off. Persisted as
+         * `metadata.lucid.tailMarkedIdentity`.
+         * @type {?string}
+         */
+        this.tailMarkedIdentity = null;
+        /**
+         * The image ID-switch check's model for this session: null = the
+         * built-in one; else a package choice (`modelChoiceOf`,
+         * pose/image-model-manifest.js: key, name, input, threshold, url or
+         * folder). Persisted as `metadata.lucid.imageModel`.
+         * @type {?Object}
+         */
+        this.imageModel = null;
         /** @type {LazyFrameLoader|null} Set when using lazy H5 loading */
         this.lazyLoader = null;
         /** @type {Map<string,{data:Uint8Array,nTracks:number,nFrames:number}>|null} Per-camera track occupancy for timeline */

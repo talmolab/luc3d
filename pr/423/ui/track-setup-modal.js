@@ -38,14 +38,16 @@
  *
  * @param {{title?: string, animals?: ?number,
  *          nodes?: Array<{name: string, weight: number}>,
- *          imageCheck?: Array<Object>}} opts
+ *          imageCheck?: Array<Object>, tailMarks?: {value: ?string}}} opts
  *   `title` names the run ("Track All" / "Track Frame"); `animals` pre-fills
  *   the count (null/undefined = blank, auto-detect); `nodes` are the session's
  *   skeleton nodes in order, each with its CURRENT effective weight;
  *   `imageCheck`, when given, is the image check's settings as
- *   `getTrackingThresholdDefs()` describes them (`IMAGE_CHECK_IDS`).
+ *   `getTrackingThresholdDefs()` describes them (`IMAGE_CHECK_IDS`); `tailMarks`,
+ *   when given, offers the tail-mark choice, starting at `value`.
  * @returns {Promise<?{animals: ?number, nodeWeights: Object<string, number>,
- *                     thresholds: Object<string, number>}>}
+ *                     thresholds: Object<string, number>,
+ *                     tailMarkedIdentity: ?string}>}
  *   `animals` null = auto-detect; `nodeWeights` maps EVERY node shown to its
  *   weight in [0, 1], edited or not; `thresholds` maps every image-check
  *   setting shown to its value ({} when none were).
@@ -96,9 +98,13 @@ export function showTrackSetupModal(opts) {
         var imageCheck = buildImageCheckFields(opts.imageCheck);
         if (imageCheck.element) modal.appendChild(imageCheck.element);
 
+        // --- Tail marks (Track All only) ---------------------------------------
+        var tailMarks = buildTailMarkField(opts.tailMarks);
+        if (tailMarks) modal.appendChild(tailMarks.element);
+
         var note = document.createElement('p');
         note.className = 'track-setup-note track-setup-later';
-        note.textContent = 'To change these later: the Animals field beside Track Frame, and ' +
+        note.textContent = 'To change these later: the Animals' + (tailMarks ? ' and Tail marks fields' : ' field') + ' in the Track menu, and ' +
             'Tracks ▸ Tracking Wizard. Node weights' + (imageCheck.element ? ' and the image check' : '') +
             ' are saved in this browser, for every project.';
         modal.appendChild(note);
@@ -160,7 +166,8 @@ export function showTrackSetupModal(opts) {
         function proceed() {
             var f = readForm();
             if (f.error) { refresh(); return; }
-            finish({ animals: f.animals, nodeWeights: f.nodeWeights, thresholds: f.thresholds });
+            finish({ animals: f.animals, nodeWeights: f.nodeWeights, thresholds: f.thresholds,
+                tailMarkedIdentity: tailMarks ? tailMarks.read() : null });
         }
 
         // Capture phase, and the keys are consumed: Esc and Enter belong to the
@@ -187,6 +194,44 @@ export function showTrackSetupModal(opts) {
         animalsInput.focus();
         animalsInput.select();
     });
+}
+
+/**
+ * Which identity has the tail marks (pose/tail-mark.js): a menu, Off first. The
+ * dialog returns its value; `pose/tracker.js` writes it. Commits nothing.
+ * @param {?{value: ?string}} opts
+ * @returns {?{element: HTMLElement, read: () => ?string}}  null when not offered
+ */
+function buildTailMarkField(opts) {
+    if (!opts) return null;
+    var element = document.createElement('div');
+    element.className = 'track-tail-mark-block';
+    var title = document.createElement('div');
+    title.className = 'track-setup-section-title';
+    title.textContent = 'Tail marks';
+    element.appendChild(title);
+    var hint = document.createElement('p');
+    hint.className = 'track-setup-note';
+    hint.textContent = 'For two animals, one with dark marks on its tail: Track All reads the marks in every camera ' +
+        'and keeps the marked animal on this identity from start to end. Needs the videos loaded.';
+    element.appendChild(hint);
+    var row = document.createElement('label');
+    row.className = 'track-setup-animals';
+    var label = document.createElement('span');
+    label.textContent = 'The animal with marks is';
+    var select = document.createElement('select');
+    select.id = 'trackSetupTailMarks';
+    [['', 'Off'], ['id_0', 'id_0'], ['id_1', 'id_1']].forEach(function (o) {
+        var opt = document.createElement('option');
+        opt.value = o[0];
+        opt.textContent = o[1];
+        select.appendChild(opt);
+    });
+    select.value = opts.value || '';
+    row.appendChild(label);
+    row.appendChild(select);
+    element.appendChild(row);
+    return { element: element, read: function () { return select.value || null; } };
 }
 
 /**

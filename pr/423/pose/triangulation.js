@@ -10,27 +10,27 @@
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
          setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d,
-         isPoints3dSmoothed } from './pose-data.js?v=cfe1967d2e84';
+         isPoints3dSmoothed } from './pose-data.js?v=72938713a674';
 // The Jacobi eigensolver and the least-squares plane fit live in
 // `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
 // importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
 // re-exported unchanged, because every existing caller and test reads it here.
-import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=cfe1967d2e84';
+import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=72938713a674';
 export { fitPlaneToPoints3d };
-import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=cfe1967d2e84';
+import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=72938713a674';
 // Pass 3i-2: triangulation orchestration moved out of app.js
-import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=cfe1967d2e84';
-import { updateTriangulationBadge } from '../ui/info-panel.js?v=cfe1967d2e84';
-import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=cfe1967d2e84';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=cfe1967d2e84';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=cfe1967d2e84';
-import { createGroupSolver } from './triangulation-pool.js?v=cfe1967d2e84';
-import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=cfe1967d2e84';
+import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=72938713a674';
+import { updateTriangulationBadge } from '../ui/info-panel.js?v=72938713a674';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=72938713a674';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=72938713a674';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=72938713a674';
+import { createGroupSolver } from './triangulation-pool.js?v=72938713a674';
+import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=72938713a674';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
-         dropDerivedReprojections, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=cfe1967d2e84';
+         dropDerivedReprojections, lazyRowInstance, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=72938713a674';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from './initialization.js?v=cfe1967d2e84';
-import { noteTriangulateRun, carryTriangulateMark } from './run-state.js?v=cfe1967d2e84';
+import { update3DViewport } from './initialization.js?v=72938713a674';
+import { noteTriangulateRun, carryTriangulateMark } from './run-state.js?v=72938713a674';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -50,7 +50,7 @@ import {
     hungarianAlgorithm, cameraCenter, backProjectToRay, backProjectToRays,
     pointToRayDistance, pointsToRayDistances,
     computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
-} from './triangulation-core.js?v=cfe1967d2e84';
+} from './triangulation-core.js?v=72938713a674';
 export {
     triangulatePointDLT, triangulatePoints, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,
@@ -1428,6 +1428,25 @@ export function shouldUseLazySlp(file) {
     return name.endsWith('.slp') && file.size > LAZY_SLP_THRESHOLD;
 }
 
+/**
+ * Should a per-camera folder load lazily? When any one camera's file needs it, or
+ * when the cameras' `.slp` files TOGETHER are over the same size: the whole folder
+ * becomes one session, so it is the total that the eager object graph (and an eager
+ * File ▸ Save, which builds it all at once) has to hold. Five 125 MB cameras of a
+ * 15-minute, 150 fps recording each sat under the per-file limit, loaded eagerly,
+ * and Save then crashed the tab building 1.35 million poses.
+ * @param {Array<File|{name: string, size: number}>} files  the chosen file of each camera
+ * @returns {boolean}
+ */
+export function shouldUseLazySlpFolder(files) {
+    var total = 0;
+    for (var i = 0; i < files.length; i++) {
+        if (shouldUseLazyH5(files[i]) || shouldUseLazySlp(files[i])) return true;
+        if (files[i].name.toLowerCase().endsWith('.slp')) total += files[i].size;
+    }
+    return total > LAZY_SLP_THRESHOLD;
+}
+
 export function getInstanceGroupsForFrame(frameIdx) {
     return state.session ? (state.session.instanceGroups.get(frameIdx) || []) : [];
 }
@@ -1617,7 +1636,7 @@ async function hydrateLazyCameras(session, frameIdx, camNames) {
         if (haveUl && haveUl.length > 0) continue;
         for (var ii = 0; ii < instances.length; ii++) {
             var d = instances[ii];
-            var inst = new Instance(d.points || [], lazyInstanceTrackIdx(d.trackIdx), d.type || 'predicted', d.score || 0);
+            var inst = lazyRowInstance(d, lazyInstanceTrackIdx(d.trackIdx));
             inst._rawInstIndex = ii;   // see the note in ensureLazyFrameData
             staged.addInstance(camName, inst);
             added++;
@@ -1664,12 +1683,7 @@ export async function ensureLazyFrameData(frameIdx) {
     for (var [camName, instances] of cameraData) {
         for (var ii = 0; ii < instances.length; ii++) {
             var instData = instances[ii];
-            var inst = new Instance(
-                instData.points || [],
-                lazyInstanceTrackIdx(instData.trackIdx),
-                instData.type || 'predicted',
-                instData.score || 0
-            );
+            var inst = lazyRowInstance(instData, lazyInstanceTrackIdx(instData.trackIdx));
             // `ii` is this instance's position in the frame's raw instance list,
             // i.e. its row offset within the lazy store's [start,end) range for
             // this (camera, frame) — see slp-streaming-write.js's `refFor`, which
@@ -1716,12 +1730,7 @@ export function buildLazyFrameGroupSync(frameIdx) {
     for (var [camName, instances] of cached) {
         for (var ii = 0; ii < instances.length; ii++) {
             var instData = instances[ii];
-            var inst = new Instance(
-                instData.points || [],
-                lazyInstanceTrackIdx(instData.trackIdx),
-                instData.type || 'predicted',
-                instData.score || 0
-            );
+            var inst = lazyRowInstance(instData, lazyInstanceTrackIdx(instData.trackIdx));
             // See the identical tag in ensureLazyFrameData above — this is
             // the store row offset `refFor` (slp-streaming-write.js) needs to
             // resolve this instance's exact raw row on save.
@@ -1789,10 +1798,7 @@ export async function batchLoadLazyFrames(startIdx, count, onProgress) {
             if (!camData || !camData.instances) continue;
             for (var ii = 0; ii < camData.instances.length; ii++) {
                 var instData = camData.instances[ii];
-                var inst = new Instance(
-                    instData.points || [], lazyInstanceTrackIdx(instData.trackIdx),
-                    instData.type || 'predicted', instData.score || 0
-                );
+                var inst = lazyRowInstance(instData, lazyInstanceTrackIdx(instData.trackIdx));
                 // See ensureLazyFrameData's identical tag above.
                 inst._rawInstIndex = ii;
                 fg.addInstance(cameraNames[ci], inst);

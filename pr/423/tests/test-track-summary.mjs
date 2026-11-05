@@ -12,7 +12,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ui = (f) => pathToFileURL(path.join(HERE, '..', 'ui', f)).href;
-const { formatShare, formatDuration, formatTrackingSpeed, summarizeTrackedIdentities, describeSwitchCheck, planTrackSummary, MAX_IDENTITY_ROWS } =
+const { formatShare, formatDuration, formatTrackingSpeed, summarizeTrackedIdentities, describeSwitchCheck, describeTailMarks, planTrackSummary, MAX_IDENTITY_ROWS } =
     await import(ui('track-summary.js'));
 
 let passed = 0, failed = 0; const failures = [];
@@ -21,6 +21,13 @@ function eq(a, e, m) {
     else { failed++; failures.push(`${m} (expected ${JSON.stringify(e)}, got ${JSON.stringify(a)})`); console.error('  ✗ ' + m); }
 }
 function ok(c, m) { eq(!!c, true, m); }
+
+// ---- the tail-mark pass's outcome -------------------------------------------
+eq(describeTailMarks({ ok: true, markedName: 'id_0', swapped: 0 }), 'tail marks on id_0 (no labels changed)', 'nothing to fix');
+eq(describeTailMarks({ ok: true, markedName: 'id_1', swapped: 1 }), 'tail marks on id_1 (1 stretch relabelled)', 'one stretch');
+eq(describeTailMarks({ ok: true, markedName: 'id_0', swapped: 3 }), 'tail marks on id_0 (3 stretches relabelled)', 'several');
+eq(describeTailMarks({ ok: true, markedName: 'id_0', swapped: 1, faint: true }), 'tail marks on id_0 (1 stretch relabelled); the marks are faint here, so check the identities', 'faint: says to check');
+eq(describeTailMarks({ ok: false, reason: 'found no tail marks' }), 'tail marks not used: found no tail marks', 'not used, with why');
 
 // ---- formatShare: never overstates ------------------------------------------
 eq(formatShare(0, 0), '—', 'no denominator');
