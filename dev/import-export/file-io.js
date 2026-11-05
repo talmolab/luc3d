@@ -12,16 +12,16 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, hasPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=02038965f656';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=02038965f656';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=02038965f656';
-import { createProgressPacer } from '../ui/loading-overlay.js?v=02038965f656';
+         toBoxedPoints3d, hasPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=8f71755d277a';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=8f71755d277a';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=8f71755d277a';
+import { createProgressPacer } from '../ui/loading-overlay.js?v=8f71755d277a';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=02038965f656';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=02038965f656';
-import { writePlaneMetadata } from './plane-metadata.js?v=02038965f656';
-import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=02038965f656';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=8f71755d277a';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=8f71755d277a';
+import { writePlaneMetadata } from './plane-metadata.js?v=8f71755d277a';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=8f71755d277a';
 
 // ============================================
 // Generic file picker
@@ -924,6 +924,33 @@ export function h5FileToBlob(filename) {
  * @param {Object} videoFileInfo - Entry from state.videoFiles with videoWidth/videoHeight
  * @returns {Object} SLP export data object
  */
+/**
+ * The video one camera's exported file points at: filename and
+ * [frames, height, width]. Taken from the attached video (`videoFileInfo`) when
+ * there is one; a field it lacks comes from the video record of the project
+ * file the session was reopened from (`session.lazyLoader.videos`), as the
+ * project save does (`resolveVideoPath`, slp-streaming-write.js). Without that
+ * fallback a reopened project exported before File ▸ Load Videos wrote
+ * `<camera>.mp4` with 0 frames, and SLEAP's GUI fails to open a file whose
+ * video it cannot find and has 0 frames (ZeroDivisionError in its status bar).
+ *
+ * @returns {{ filename: string, frames: number, height: number, width: number }}
+ */
+export function cameraExportVideo(session, cameraName, videoFileInfo) {
+    var vfi = videoFileInfo || {};
+    var loader = session && session.lazyLoader;
+    var rec = (loader && loader.videos && typeof loader.videos.get === 'function')
+        ? loader.videos.get(cameraName) : null;
+    var shape = (rec && rec.shape && rec.shape.length >= 3) ? rec.shape : null;
+    return {
+        filename: vfi.videoPath || (vfi.file && vfi.file.name)
+            || (rec && rec.filename) || (cameraName + '.mp4'),
+        frames: vfi.frameCount || (shape && Number(shape[0])) || 0,
+        height: vfi.videoHeight || (shape && Number(shape[1])) || 0,
+        width: vfi.videoWidth || (shape && Number(shape[2])) || 0,
+    };
+}
+
 export function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFileInfo) {
     // Skeleton metadata
     var skelData = serializeSkeleton(session.skeleton);
@@ -935,15 +962,15 @@ export function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFi
     };
 
     // Single video entry for this camera
-    var vw = videoFileInfo.videoWidth || 0;
-    var vh = videoFileInfo.videoHeight || 0;
-    var videoFilename = videoFileInfo.videoPath
-        || (videoFileInfo.file ? videoFileInfo.file.name : (cameraName + '.mp4'));
+    var cv = cameraExportVideo(session, cameraName, videoFileInfo);
+    var vw = cv.width;
+    var vh = cv.height;
+    var videoFilename = cv.filename;
     var videos = [{
         filename: videoFilename,
         backend: {
             type: 'MediaVideo',
-            shape: [videoFileInfo.frameCount || 0, vh, vw, 1],
+            shape: [cv.frames, vh, vw, 1],
             filename: videoFilename,
             grayscale: false,
             bgr: false,
@@ -954,7 +981,7 @@ export function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFi
             filename: videoFilename,
             backend: {
                 type: 'MediaVideo',
-                shape: [videoFileInfo.frameCount || 0, vh, vw, 1],
+                shape: [cv.frames, vh, vw, 1],
                 filename: videoFilename,
                 grayscale: false,
                 bgr: false,
@@ -1336,11 +1363,11 @@ export function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo,
     var allFrameIndices = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
 
     // 3. Build video
-    var videoFilename = videoFileInfo.videoPath
-        || (videoFileInfo.file ? videoFileInfo.file.name : (cameraName + '.mp4'));
-    var vw = videoFileInfo.videoWidth || 0;
-    var vh = videoFileInfo.videoHeight || 0;
-    var fc = videoFileInfo.frameCount || 0;
+    var cv = cameraExportVideo(session, cameraName, videoFileInfo);
+    var videoFilename = cv.filename;
+    var vw = cv.width;
+    var vh = cv.height;
+    var fc = cv.frames;
     var video = new SIO.Video({
         filename: videoFilename,
         backendMetadata: {
@@ -1563,11 +1590,11 @@ function _buildCameraExportHeader(session, cameraName, videoFileInfo) {
         nodes: sioNodes, edges: sioEdges, name: session.skeleton.name || 'skeleton',
     });
     var tracks = session.tracks.map(function (name) { return new SIO.Track(name); });
-    var videoFilename = videoFileInfo.videoPath
-        || (videoFileInfo.file ? videoFileInfo.file.name : (cameraName + '.mp4'));
-    var vw = videoFileInfo.videoWidth || 0;
-    var vh = videoFileInfo.videoHeight || 0;
-    var fc = videoFileInfo.frameCount || 0;
+    var cv = cameraExportVideo(session, cameraName, videoFileInfo);
+    var videoFilename = cv.filename;
+    var vw = cv.width;
+    var vh = cv.height;
+    var fc = cv.frames;
     var video = new SIO.Video({
         filename: videoFilename,
         backendMetadata: {
@@ -2373,11 +2400,11 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
             }
         }
 
-        var videoFilename = videoFileInfo.videoPath
-            || (videoFileInfo.file ? videoFileInfo.file.name : (cameraName + '.mp4'));
-        var vw = videoFileInfo.videoWidth || 0;
-        var vh = videoFileInfo.videoHeight || 0;
-        var fc = videoFileInfo.frameCount || 0;
+        var cv = cameraExportVideo(session, cameraName, videoFileInfo);
+        var videoFilename = cv.filename;
+        var vw = cv.width;
+        var vh = cv.height;
+        var fc = cv.frames;
         var video = new SIO.Video({
             filename: videoFilename,
             backendMetadata: {
@@ -3475,7 +3502,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=02038965f656', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=8f71755d277a', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },
