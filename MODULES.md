@@ -4647,7 +4647,13 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   of n"); a camera built in one go shows the spinner "Writing <cam>.slp…", painted
   before it holds the thread. Files save in the background, up to `SAVES_IN_FLIGHT`
   (4) at once: over an SMB share Chrome's `close()` reads each file back at ~10 MB/s
-  (measured on the lab VM, 2026-11-03), so one file's wait does not hold up the next. The modal is
+  (measured on the lab VM, 2026-11-03), so one file's wait does not hold up the next.
+  While files save (waiting for a slot, or at the end) the card shows a bar of the
+  files saved — written AND closed — out of all the export's files ("Saving files in
+  <folder>: k/n files…", `showSaving`), repainted as each one lands. Files, not
+  bytes: `close()` reports nothing, so a byte count would race to the end of
+  `write()` and stall. A camera built in one go takes the card back
+  (`savingStep = 0`) until its file is queued. The modal is
   hidden while the card shows (it sits above the card's layer) and comes back on
   cancel or failure. **Esc closes the modal**, or cancels an in-progress export:
   between cameras, or mid-sweep (the progress callback throws `ExportCancelled`;
