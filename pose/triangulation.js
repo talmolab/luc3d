@@ -1428,6 +1428,25 @@ export function shouldUseLazySlp(file) {
     return name.endsWith('.slp') && file.size > LAZY_SLP_THRESHOLD;
 }
 
+/**
+ * Should a per-camera folder load lazily? When any one camera's file needs it, or
+ * when the cameras' `.slp` files TOGETHER are over the same size: the whole folder
+ * becomes one session, so it is the total that the eager object graph (and an eager
+ * File ▸ Save, which builds it all at once) has to hold. Five 125 MB cameras of a
+ * 15-minute, 150 fps recording each sat under the per-file limit, loaded eagerly,
+ * and Save then crashed the tab building 1.35 million poses.
+ * @param {Array<File|{name: string, size: number}>} files  the chosen file of each camera
+ * @returns {boolean}
+ */
+export function shouldUseLazySlpFolder(files) {
+    var total = 0;
+    for (var i = 0; i < files.length; i++) {
+        if (shouldUseLazyH5(files[i]) || shouldUseLazySlp(files[i])) return true;
+        if (files[i].name.toLowerCase().endsWith('.slp')) total += files[i].size;
+    }
+    return total > LAZY_SLP_THRESHOLD;
+}
+
 export function getInstanceGroupsForFrame(frameIdx) {
     return state.session ? (state.session.instanceGroups.get(frameIdx) || []) : [];
 }

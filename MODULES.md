@@ -1538,6 +1538,10 @@ session graph that holds them.
     been asked, which is what makes Track Frame / Track All prompt. Saved as
     `metadata.lucid.numAnimals` (`import-export/visibility-metadata.js`), read
     and set through `pose/tracker.js`.
+  - **`imageModel`** — the image ID-switch check's model for the session: null
+    = the built-in one, else a package choice (`modelChoiceOf`,
+    `pose/image-model-manifest.js`). Set by `ui/image-model-dialog.js`, saved as
+    `metadata.lucid.imageModel` only when set.
   - `numFrames` returns `lazyLoader.nFrames` on a lazy session (`frameGroups`
     there holds only the resident window) and `frameGroups.size` otherwise.
   - **Tracks and identities are per-session.** The constructor copies the
@@ -2038,7 +2042,19 @@ drifts upward.
   dialog. With no session it is a no-op. Loading never goes through it — the
   readers set `numAnimals` directly, so a reopened project is not dirty.
 
+**Tail marks.** `getTailMarkedIdentity` / `setTailMarkedIdentity` /
+`onTailMarkedIdentityChange`: which identity has the tail marks in the active session
+(`Session.tailMarkedIdentity`, saved with the project; null = off). Asked in Track
+All's first-use dialog (pre-filled with the last answer this page saw) and in the Track
+menu (`ui/tail-mark-field.js`). When set, `runTrackingPass` runs `runTailMarkPass` right
+after a full Track All (never a range or Track Frame), before the ID-switch checks, so
+they judge the corrected labels. A pass that refuses or fails leaves the labels as
+tracked and never fails the run; the status line and summary box say what it did
+(`describeTailMarks`). The result stays on `session._tailMarkResult`, in memory only.
+
 **Imports from project modules.**
+- `./tail-mark.js` — `resolveTailMarks`; `../ui/tail-mark-reader.js` —
+  `createTailMarkReader` (see "Tail marks").
 - `./detection-filter-stats.js` — `passesDetectionFilter` (the detection-pool
   filter; see above).
 - `./pose-data.js` — `InstanceGroup`, `points3dNodeCount`, `hasPoint3d`,
@@ -2578,6 +2594,78 @@ and filling gaps each fail with the specific artifact they represent.
 
 ---
 
+### pose/tail-mark.js
+
+**Purpose.** Which of two tracked identities is the animal with dark marks on its
+tail, at every moment of a session; Track All's tail-mark pass. DOM-free: the pixels
+come from a reader (`ui/tail-mark-reader.js`). Two white mice look alike to the
+tracker, which keeps their labels only by following them, so the pass runs after
+tracking and swaps the identities (`Session.swapIdentitiesInRange`) over each stretch
+where the wrong one holds the marks. The tracker is untouched.
+
+**The measure.** `readTailProfile` walks the tail nodes from `tailMarkNodeIndices` (TTI,
+Tail_0, Tail_1: the marks end near Tail_1), reading a bright percentile of a line across
+the tail at each pixel, so keypoints a few pixels off it do not matter;
+`normalizeTailProfile` scales it to the tail's own brightness.
+
+**Why templates.** Marks differ between animals (several narrow bands, or one wide one on
+the test recordings), and a plain tail in shade by a wall dims along a third of its length
+in every camera for as long as it lies there, so neither a total of what is missing nor a
+limit on gap width separates them: the first swapped the animals during the shade, the
+second missed the wide bands. What holds is that marks stay at one place along that tail.
+So `learnTailTemplates` learns the session's marked and plain profiles, with no labels, from
+samples where one tail is far more banded than the other (`tailBandScore`, which only picks
+those samples). Each view of each tail then votes (`tailVote`, sliding up to `maxShift`
+positions): marked, plain, or 0 when it fits neither (`fitTolerance`).
+
+**The decision.** Evidence per sample (`evidenceOf`) is each identity's votes summed; only
+the difference between the animals counts, so a camera where the marks are hidden adds
+nothing, and a plain vote counts against an animal even when the other was not detected.
+`decodeMarkedStates` is a two-state Viterbi: a sample costs what it contradicts, a change
+costs little across a contact (`contactGaps`, from the shared grid in
+`pose/id-switch-check.js`) and more elsewhere. `refineChange` then bisects each change to
+within `refineSeconds`.
+
+**Samples.** `planTailMarkSamples`: every keyframe (cheap to decode; every 250 frames
+= 1.7 s on the test recordings), or one per second when keyframes are sparser than
+`MAX_SAMPLE_GAP_SECONDS` or unknown.
+
+**Refuses, changing nothing:** not exactly two identities, the named identity missing,
+no frame rate, no readable tail, or too few samples teaching or templates too alike
+(`minTeachingShare`, `minTeachingSamples`, `minTemplateDifference`: "found no tail
+marks"). The share is the gate that matters: 0.50-0.98 on the 96 test recordings, 0.23 on
+an unmarked pair, which without it would have been relabelled 30 times from noise. Under
+`faintTeachingShare` (0.75) the result is `faint` and the status line and summary say to
+check the identities: the three test sessions under it were the ones whose marks could not
+be confirmed by eye.
+
+**Validation** (96 two-mouse recordings, 5 cameras, 15 min each; one mouse marked):
+`tests/e2e/_real-tail-marks.mjs` on each, plus 80 random frames per session the pass never
+read. Of held-out frames where the two tails voted clearly apart, 7,474 of 7,492 put the
+marks on the chosen identity. Body size from the 3D, which the pass does not use, has the
+marked (male) mouse larger in 95 of 96 sessions (the 96th: 0.2 mm apart). 43 sessions were
+labelled the other way round from the start and 41 were right; 12 had label changes mid-way
+(18 in all): body size agrees with every relabelled stretch but one, in the faintest
+session, and the two inspected frame by frame were real tracker switches. The pass took 15-20 s a session on an M-series Mac and about 35 s on a 48-core
+Windows workstation running two sessions at once (2-2.5 min with eight at once). Decoding
+is not what it waits on: it decodes one keyframe per camera per sample (about 2,700
+frames), and Chrome there decodes these H.264 streams at 700-1,700 frames/s, on the GPU
+(NVDEC) or the CPU.
+
+**Key exports.** `resolveTailMarks(session, opts)` (the whole pass),
+`TAIL_MARK_DEFAULTS`, `MAX_SAMPLE_GAP_SECONDS`, `tailMarkNodeIndices`,
+`readTailProfile`, `normalizeTailProfile`, `tailBandScore`, `learnTailTemplates`,
+`tailVote`, `planTailMarkSamples`, `contactGaps`, `evidenceScale`, `evidenceOf`,
+`decodeMarkedStates`, `refineChange`, `stretchesToSwap`.
+
+**Imports.** `./id-switch-check.js` (`buildGrid`, `contactEpisodes`,
+`SIZE_CHECK_DEFAULTS`).
+
+**Imported by.** `pose/tracker.js`, `ui/tail-mark-reader.js`.
+
+**Tests.** `tests/test-tail-mark.mjs`, `tests/e2e/tail-mark-track-all.mjs`. Real data:
+`tests/e2e/_real-tail-marks.mjs`.
+
 ### pose/run-state.js
 
 **Purpose.** Has Track or Triangulate been run on a session, and does its result
@@ -3020,7 +3108,9 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   re-triangulating between passes; a node left with <2 views under the threshold
   is nulled. Covered by `tests/test-triangulation-robust.js`.
 - Lazy loading: class `LazyFrameLoader` (analysis `.h5`, worker-backed) +
-  `shouldUseLazyH5(file)`; `shouldUseLazySlp(file)` + `LAZY_SLP_THRESHOLD` route
+  `shouldUseLazyH5(file)`; `shouldUseLazySlp(file)` + `LAZY_SLP_THRESHOLD`, and
+  `shouldUseLazySlpFolder(files)` (any one file, or the cameras' `.slp` files together,
+  over the threshold: Save crashed on five eager 125 MB cameras) route
   large prediction `.slp` to the main-thread `SioLazyLoader`
   (`loading/sio-lazy-loader.js`). Shared consumers: `ensureLazyFrameData`,
   `buildLazyFrameGroupSync`, `batchLoadLazyFrames` (branches on `loader.isSync`
@@ -3689,6 +3779,35 @@ crops. Margins tighten: two real swaps sit at -1.09 (181300 0:37) and -1.11
 (183527 8:28) instead of -1.74 / -1.49, and the closest clean contact at -0.96
 (05mice 26:53) — so -1.2 would lose those two swaps.
 
+**Model switched to DINOv3 ViT-S/16 (2026-11-03; was DINOv2-small at 168 px).**
+`IMAGE_MODEL_ID` is a conversion of onnx-community/dinov3-vits16-pretrain-lvd1689m-ONNX
+(DINOv3 License): fp16 with layer 0's attention kept fp32 (its logits reach ~2.5e6,
+past fp16's range; a plain fp16 copy gave unrelated vectors on WebGPU, median cosine
+0.16, while matching on the CPU, which runs those ops in fp32), the export's 24
+SplitToSequence/SequenceAt pairs rewritten as Split (no WebGPU kernel: model time
+10.5 -> 6.0 ms/crop in fp32, 8.6 -> 4.2 in fp16, vs 3.2 for DINOv2-small), and
+pooler_output removed. `INPUT` 192 (12 x 12 of its 16-px patches), threshold -1.2.
+Same tracking, sampling and views; caught / rows / false of 65 change points:
+
+| all 24 (bg = as shipped) | -0.8 | -1 | -1.2 | -1.4 | -1.6 |
+|---|---|---|---|---|---|
+| DINOv2-small, 168 | 24 / 25 / 4 | 22 / 21 / 1 | 20 / 18 / 0 | 20 / 18 / 0 | 16 / 14 / 0 |
+| DINOv2-base, 168 | 22 / 22 / 2 | 22 / 21 / 1 | 20 / 19 / 1 | 16 / 15 / 1 | 14 / 12 / 0 |
+| **DINOv3 ViT-S/16, 192** | 22 / 23 / 3 | 22 / 22 / 2 | **22 / 20 / 0** | 21 / 19 / 0 | 19 / 17 / 0 |
+
+(Track All has changed since the 168-px calibration, hence 22, not 25, catches
+for DINOv2-small at -1.) DINOv3's real swaps sit further below the threshold
+(183527 8:28 -1.06 -> -1.66, five white mice 20:42 -1.16 -> -1.34). Separation of
+10 s means: all 0.959 -> 0.967, same coat 0.884 -> 0.903, five white mice ~0.74 ->
+~0.77. Held out: Mae's 193 single-camera sham_gdx recordings (light coats, 240
+truth changes, CPU fp32): at -1.2 DINOv3 catches 31 with 0 false (most with 0
+false: 33 at -1, vs 30 for DINOv2-small and 21 for DINOv2-base); single-crop
+separation 0.905 -> 0.947. The fp16 file through the app vs DINOv3 fp32 on 233,206
+crops: median CLS cosine 0.99962 (DINOv2-small fp16 vs its fp32: 0.99910), rows
+identical at every threshold from -0.8 to -1.6. Cost on an M2 Pro: whole check
++13-19% over DINOv2-small (145420 80 vs 68 s), 43 MB; CPU workers the same speed
+(19.4 vs 19.9 crops/s). DINOv2-base was worse on the held-out set (5 false at -1).
+
 **Imports from project modules.** `pose/pose-data.js` (`readPoint3d`).
 
 **Imported by.** `ui/id-switch-modal.js`, `ui/image-embedder.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`).
@@ -3748,6 +3867,36 @@ key, overlay points don't, no collisions over 20k near-identical geometries;
 which hulls reach the crop at different rotations; LRU
 order, slot recycling, copies, pooling, freeing); end to end
 `tests/e2e/image-check-cache.mjs`.
+
+---
+
+### pose/image-model-manifest.js
+
+**Purpose.** What an image-model PACKAGE for the image ID-switch check is,
+independent of where its files come from. DOM-free, import-free. Layout:
+`lucid-model.json` (this module's manifest), `config.json`, `onnx/model.onnx` (fp32,
+required, `last_hidden_state` with CLS at token 0), `onnx/model_fp16.onnx`
+(optional), `preprocessor_config.json` (optional).
+
+**Key exports.** `parseModelManifest(raw, crop)` -> `{ok, manifest}` | `{ok: false,
+error}` (a sentence for the user): `format: "lucid-image-model"`, `version: 1`,
+`name`, `input` (112–512 px, a multiple of 14 or 16: `validModelInput`), `crop`
+(must equal the app's `CROP`), `threshold` (−4..0), `fp16`, `sha256` (path -> hex),
+free-form `training` / `validation`. `modelKeyMaterial(manifest, fileHashes)`: the
+text a package's key hashes (input, crop, fp16, weight hashes; not the name).
+`modelChoiceOf(pkg)` / `ingestModelChoice(raw)`: what a session saves
+(`metadata.lucid.imageModel`: key, name, input, threshold, url or folder) and its
+tolerant read (malformed -> null = built-in). `packageBaseUrl(input)`: a Hugging
+Face repo id or an https folder URL (http only on localhost) -> the base URL;
+`hexOf`; the file-name constants.
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/image-model-package.js`, `ui/image-model-dialog.js`,
+`import-export/visibility-metadata.js`.
+
+**Coverage.** `tests/test-image-model-package.mjs`; the saved choice in
+`tests/test-visibility-metadata.js`.
 
 ---
 
@@ -4452,9 +4601,18 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `showSlpExportByCamModal()` — "Export SLEAP File By Cam": camera×session grid.
   Each camera column exports across all its selected sessions into one SLEAP
   file; **Download All** bulk-exports every included column, **always
-  prompting** for a destination folder (no cached `state.exportDirHandle`), and
-  writes each included camera as a flat `<CamName>.slp` into it (falling back to
-  per-file `downloadBlob` downloads without the File System Access API). A cell
+  prompting** for a destination folder (no cached `state.exportDirHandle`) —
+  `pickExportFolder` (`loading/folder-picker-start.js`) opens it in the project
+  `.slp`'s folder, else where the last export went. In that folder a camera
+  exported from ONE session whose own folder is there (`state.cameraDirMap`, else
+  the folder its video sits in, else the camera's name — `cameraTarget`) gets
+  `<source stem>_proofread.slp` next to the `.slp` its 2D came from
+  (`chooseProofreadSource`, `loading/percam-slp-choice.js`; the video's name when
+  the folder has none), replacing an earlier one. Any other camera (several
+  sessions in one file, or no camera folder there) is written as a flat
+  `<CamName>.slp` in the picked folder; the status line counts both. Without the
+  File System Access API it falls back to per-file `downloadBlob` downloads,
+  named `<source>_proofread.slp` when the load recorded the source. A cell
   is a green ✓ (toggle on/off) only where the camera VIEW exists in that
   session — derived from `state.videoFiles` (real loaded views), plus cameras
   with labeled data for SLP-only projects; NOT from `session.cameras`, which is
@@ -4468,8 +4626,23 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   tables (`#slpByCamSkelWarning`). The shared **Include** group's two options
   become the `instanceFilter` (`{user:true, predicted, reprojected}`) passed to
   `exportSlpMultiSession`. The Reprojections row is **disabled as a unit**
-  (`.slp-inc-row-disabled`) unless at least one session has reprojections. Download All shows per-file
-  progress; **Esc closes the modal**, or cancels an in-progress export mid-run.
+  (`.slp-inc-row-disabled`) unless at least one session has reprojections. Cameras
+  the streaming writer would sweep (`cameraExportUsesSweep`: a lazy project that would
+  truncate, e.g. a reopened project or any proofread one) are built first, in ONE
+  `exportCamerasSlpStreaming` sweep per session. Download All's progress is the app's
+  card (`loading-overlay.js`, titled "Export SLEAP by Camera"): that sweep is a step of
+  its own ("Reading N cameras", frames on the bar), then one step per camera ("Step k
+  of n"); a camera built in one go shows the spinner "Writing <cam>.slp…", painted
+  before it holds the thread. Files save in the background, up to `SAVES_IN_FLIGHT`
+  (4) at once: over an SMB share Chrome's `close()` reads each file back at ~10 MB/s
+  (measured on the lab VM, 2026-11-03), so one file's wait does not hold up the next. The modal is
+  hidden while the card shows (it sits above the card's layer) and comes back on
+  cancel or failure. **Esc closes the modal**, or cancels an in-progress export:
+  between cameras, or mid-sweep (the progress callback throws `ExportCancelled`;
+  nothing is written for that camera; files already handed over finish). Tests:
+  `tests/e2e/export-bycam-folder-progress.mjs`, `tests/e2e/lazy-reemit-compressed.mjs`;
+  timing on real data: `tests/e2e/_diag-export-bycam-timing.js` (load it from jsDelivr at
+  a commit: the deployed site drops `_` files).
   Columns ordered by session frequency, then within-session name order, then
   session recency for session-unique views.
 - `showSlpExportAllModal()` — multi-session SLP export. **Deprecated**: not
@@ -4507,8 +4680,12 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   Covered by `tests/e2e/triangulate-range-modal.mjs` (also Group by Track's
   3D-only-frame guard).
 - `exportLabels()` — JSON labels export.
-- `exportPoints3dH5()` — points3d H5 export.
-- `exportReprojH5()` — reprojection H5 export.
+- `exportPoints3dH5()` — points3d H5 export, under an "Export 3D Points"
+  progress card that counts frames written; a failure closes the card and says
+  nothing was saved.
+- `exportReprojH5()` — reprojection H5 export, under an "Export Reprojections"
+  progress card that counts frames written (`createProgressPacer`); a failure
+  closes the card and says nothing was saved.
 
 **Imports from project modules.**
 - `./progress-delta.js` — `noteProgress` (the lit stretch on the Choose Frames for
@@ -4539,12 +4716,18 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `../import-export/save-load.js` — `showLoading`, `hideLoading`,
   `setStatus`.
 - `./loading-overlay.js` — `showLoadingProgress`, `yieldToPaint` (the
-  "Grouping & triangulating" bar in both group-and-triangulate-all paths).
+  "Grouping & triangulating" bar in both group-and-triangulate-all paths, and
+  the By-Cam Download All card),
+  `createProgressPacer` (the Export Reprojections and Export 3D Points cards).
+- `../loading/folder-picker-start.js` — `pickExportFolder` (By-Cam Download All).
+- `../loading/percam-slp-choice.js` — `chooseProofreadSource`, `proofreadSlpName`
+  (By-Cam Download All's file names).
 - `../pose/triangulation-pool.js` — `createGroupSolver`
   (`groupByIdentityAndTriangulateAll` solves its non-adopted groups on the
   worker pool; adoption and regrouping stay on the main thread).
 - `../import-export/file-io.js` — `exportSlpClientSide`,
-  `exportSlpMultiSession`, `findSkeletonMismatch`, `buildPoints3dH5`,
+  `exportSlpMultiSession` (By-Cam passes `{onProgress}`), `exportCamerasSlpStreaming`,
+  `cameraExportUsesSweep` (By-Cam's one sweep), `findSkeletonMismatch`, `buildPoints3dH5`,
   `buildReprojH5`.
 - `../pose/initialization.js` — `update3DViewport`.
 - `./video-encode.js` — `createMp4Writer`, `videoEncodingAvailable` (Export 3D
@@ -8752,7 +8935,14 @@ spinner, not a counter: it is one uninterrupted short block whose counter would
 read a frozen "0/1"),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
 `ui/image-embedder.js` (`createImageEmbedder`, `IMAGE_MODEL_MB`, `formatEmbedTiming`,
-`formatEmbedDevice`, `formatEmbedCpu`, `inputTensorToPixels`, `INPUT`),
+`formatEmbedDevice`, `formatEmbedCpu`, `inputTensorToPixels`, `INPUT`, `setActiveImageModel`),
+`ui/image-model-dialog.js` (`resolveSessionImageModel`, `imageModelLineHtml`,
+`wireImageModelLine`: the image check runs the session's model at that model's
+threshold — a package's own, the Wizard's `imageChangeThreshold` for the built-in
+one — and refuses, with the reason, when the session's model is a folder package not
+loaded on the page; the result carries `imageModel: {key, name, threshold}` (null for
+the built-in model), named in "About these flags"; the tab shows the model with
+Change…; the progress dialog's sample crop resizes to the model's input side),
 `ui/load-graph.js` (`createLoadMeter`, `createLoadGraph`, `setLoadLine`, `cpuCores`),
 `ui/browser-hints.js` (`renderBraveFingerprintingHint`: in Brave with its fingerprinting
 protection on, the note under the CPU and GPU lines — `prog.braveHint(cores)`),
@@ -8818,7 +9008,8 @@ renamed (selecting it must still box the same animals); the fixed pair's own
 rows are not.
 
 **Format.** `{v: 1, checks: {size?|image?: {encounters, sampleHz, step, fps,
-fpsFromVideo, [imageHz, crops, cameras, model: {name, note}], points: [[frame,
+fpsFromVideo, [imageHz, crops, cameras, model: {name, note}, imageModel?: {key, name,
+threshold} (a package model only)], points: [[frame,
 nameA, nameB, score (0.1), kind ('' | 'end'), followOf (frame | -1), continues
 (0 | 1), startFrame (the encounter's first close frame | -1; absent in older
 files — rows then land on the end frame), link (`switchBackAt` / `switchedAt` |
@@ -8907,8 +9098,22 @@ with a row selected).
 frame and the identities present, decode that frame in every camera
 (streamed, and moved to the nearest keyframe when keyframes are dense: see
 below), cut a masked, pose-aligned crop of each identity from
-its own 2D keypoints, and embed the crops with DINOv2-small — on the GPU, or
+its own 2D keypoints, and embed the crops with DINOv3 ViT-S/16 — on the GPU, or
 without one on the CPU.
+
+**Which model** (`activeImageModel` / `setActiveImageModel`, set by
+`createImageEmbedder`'s `opts.imageModel`): `BUILTIN_IMAGE_MODEL` (key `'builtin'`,
+`IMAGE_MODEL_ID`, 192 px, fp16 on `shader-f16` GPUs), or a model PACKAGE
+(`ui/image-model-package.js`, typically fine-tuned on one rig) with its own repo id
+`lucid-pkg/<key16>`, input side, recommended threshold and fp16 flag. `INPUT` is a
+LIVE binding (`export let`) set to the active model's input side; the crop workers
+and CPU model workers are other module instances, so the side (and, for the CPU
+workers, the package's files: `modelPackageTransfer`) travel in their messages.
+The resize table is cached per side. Every embedding-cache tag starts with the
+model's key (`builtin:` or the key's first 16 hex), so a vector is never served for
+another model and switching back finds the old vectors. A package without an fp16
+build runs fp32 and is not tried on WebNN. Switching models drops the loaded model
+(`_modelPromise`); the browser cache keeps the weights.
 
 **Where the model runs** (`pickImageDevice`, at `createImageEmbedder`): a HARDWARE
 WebGPU adapter, else the CPU — no WebGPU, no adapter, or only a software one.
@@ -9168,10 +9373,10 @@ reads (the sampled frame and any keyframe-snapped `atFrames`) with
 `releaseFrameMembers2d` — so the check costs no residency.
 
 **Dependencies.** transformers.js **pinned to 4.3.0** (`/+esm` from jsdelivr —
-pinned for the reason dockview is) and `onnx-community/dinov2-small` from the
-Hugging Face CDN, both fetched on FIRST USE and cached by the browser; nothing
-about the user's data is sent. fp16 (~44 MB) when the GPU has `shader-f16`, else
-fp32 (~88 MB). Without a hardware GPU the fp32 model runs on the CPU in workers
+pinned for the reason dockview is) and `IMAGE_MODEL_ID` (DINOv3 ViT-S/16, converted
+for this check: see `pose/id-switch-check.js`) from the Hugging Face CDN, both
+fetched on FIRST USE and cached by the browser; nothing about the user's data is
+sent. fp16 (~43 MB) when the GPU has `shader-f16`, else fp32 (~86 MB). Without a hardware GPU the fp32 model runs on the CPU in workers
 — never the CPU runtime's default int8 model, which drifts (cosine 0.953 vs the
 calibrated model). Re-check the CLS extraction (`last_hidden_state` token 0) on
 any version bump.
@@ -9179,6 +9384,8 @@ any version bump.
 **Imports from project modules.** `ui/app-state.js` (`state.views`, `state.sessions`),
 `pose/id-switch-check.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`),
 `pose/embedding-cache.js` (`EmbeddingCache`, `cropKeyHash`),
+`ui/image-model-package.js` (`installModelPackageFetch`, `withPackageCachePolicy`,
+`modelPackageTransfer`),
 `pose/lazy-residency.js` (`hydrateFrameMembers2d`, `releaseFrameMembers2d` — DOM-free,
 so the crop worker can load it), `ui/load-graph.js` (`createLoadMeter`,
 `createBusyClock`, `formatCpuLoad`, `LOAD_WINDOW_MS`); `mediabunny`
@@ -9188,7 +9395,7 @@ import would break this module in Node tests and in the crop worker, which has n
 importmap). Spawns `ui/image-crop-worker.js` and `ui/image-model-worker.js`.
 
 **Imported by.** `ui/id-switch-modal.js`, `ui/image-crop-worker.js`,
-`ui/image-model-worker.js`.
+`ui/image-model-worker.js`, `ui/image-model-dialog.js` (`BUILTIN_IMAGE_MODEL`).
 
 **Coverage.** Crop geometry, `selectViews`, `chooseBackend`, the resize table,
 `formatEmbedTiming`'s keyframe line and the dialog's lines in
@@ -9205,7 +9412,9 @@ real embedder over streamed fake videos and a pixel-sensitive stand-in model:
 cache on = off, a warm run decodes and embeds nothing, one moved keypoint re-embeds
 exactly the crops whose key changed, leaving unreachable hulls out of the key is
 lossless, a cached run's sample crops are the crops' own pixels and the real dialog
-shows one); accuracy on real data by
+shows one; §7: another model reuses none of the built-in model's vectors and a
+168-px package's side reaches every crop); a package with the real model in
+`tests/e2e/image-model-package.mjs`; accuracy on real data by
 `tests/e2e/_diag-image-keyframe-snap.mjs`, the cache's speed and equality on real
 data by `tests/e2e/_bench-image-cache.mjs` (both diagnostic, not in the suite).
 
@@ -9219,8 +9428,9 @@ main thread, for `createCropPool` in `ui/image-embedder.js`. It runs the same
 bit-identical (asserted).
 
 **Messages.** IN `{id, image: VideoFrame|ImageBitmap (transferred), crops:
-[{g: cropGeometry, others: [hull]}]}` — one camera view of one frame; OUT `{id,
-tensors: [Float32Array(3 x INPUT x INPUT)]}` (transferred, one per crop, in order) or
+[{g: cropGeometry, others: [hull]}], input}` — one camera view of one frame, `input`
+the active model's input side (default `BUILTIN_INPUT`); OUT `{id,
+tensors: [Float32Array(3 x input x input)]}` (transferred, one per crop, in order) or
 `{id, error}`. The worker owns the image and closes it.
 
 **Read token.** Cutting is serialised across the pool; turning crops into model inputs
@@ -9237,7 +9447,7 @@ outside the token is NOT a substitute: the frame's border is drawn differently (
 vs anti-aliased edge), and for a software-made VideoFrame every pixel can differ.
 
 **Imports from project modules.** `ui/image-embedder.js` (`cutCrop`,
-`writeInputTensor`, `CROP`, `INPUT`; that module's static imports —
+`writeInputTensor`, `CROP`, `BUILTIN_INPUT`; that module's static imports —
 `ui/app-state.js`, `pose/id-switch-check.js`, `pose/lazy-residency.js`,
 `ui/load-graph.js` — must stay worker-safe, which is why it imports
 `mediabunny` lazily).
@@ -9251,33 +9461,119 @@ vs anti-aliased edge), and for a software-made VideoFrame every pixel can differ
 ### ui/image-model-worker.js
 
 **Purpose.** Module worker that runs the image ID-switch check's model on the CPU
-when there is no hardware GPU: DINOv2-small at **fp32** on WebAssembly (the
+when there is no hardware GPU: the image model at **fp32** on WebAssembly (the
 default int8 is what drifts from the calibration; fp32 matches the WebGPU fp32
 model). Off the main thread because there a run blocks the page for seconds;
 several run side by side because WebAssembly gets one thread without
 cross-origin isolation. See
 `ui/image-embedder.js` ("The CPU path") for the measurements.
 
-**Messages.** IN `{type: 'load'}` -> `{type: 'loaded'}` (while downloading:
+**Messages.** IN `{type: 'load', model: {id, input, pkg}}` (`id` the transformers.js
+repo id; `pkg` a package's `modelPackageTransfer` — its files as Blobs or its base URL —
+null for the built-in model) -> `{type: 'loaded'}` (while downloading:
 `{type: 'progress', loaded, total}`) or `{type: 'error', message, cannotRun}`
 (`cannotRun`: a failed download, `message` then being `MODEL_OFFLINE_REASON` —
 classified here by `asModelDownloadFailure`, where the error is still a real
 one); IN `{type:
-'run', id, data: Float32Array(n x 3 x INPUT x INPUT) (transferred), n}` -> `{type:
+'run', id, data: Float32Array(n x 3 x input x input) (transferred), n}` -> `{type:
 'result', id, cls: Float32Array(n x 384) (transferred), dim}` — each crop's CLS
 token, read exactly as the main thread's `clsVectors` does — or `{type: 'error',
 id, message}`.
 
 **Imports from project modules.** `ui/image-embedder.js` (`importTransformers`,
-`asModelDownloadFailure`, `IMAGE_MODEL_ID`, `INPUT` — so the pin stays in one
-place), then the runtime through `importTransformers` (a dynamic cross-origin
+`asModelDownloadFailure`, `IMAGE_MODEL_ID`, `BUILTIN_INPUT` — so the pin stays in one
+place), `ui/image-model-package.js` (`installModelPackageFetch`, `serveModelPackage`,
+`withTransferCachePolicy`: this worker serves a package's files to its own copy of
+the runtime), then the runtime through `importTransformers` (a dynamic cross-origin
 import of `TRANSFORMERS_URL`, which a module worker may do).
 
 **Spawned by.** `ui/image-embedder.js` (`createCpuModelPool`).
 
 **Coverage.** `tests/e2e/image-check-cpu.mjs` (headless Chromium has no GPU;
 vectors bit-identical to the main thread's), `tests/e2e/id-switch-image-check.mjs`
-§4, `tests/e2e/image-check-offline.mjs`.
+§4, `tests/e2e/image-check-offline.mjs`, `tests/e2e/image-model-package.mjs` (a package
+in the worker: the built-in model's vectors bit for bit).
+
+---
+
+### ui/image-model-package.js
+
+**Purpose.** Loads image-model PACKAGES for the image ID-switch check (format:
+`pose/image-model-manifest.js`) and serves their files to transformers.js, on the
+main thread and in the CPU model workers. A package is a folder with
+`lucid-model.json`, `config.json` and `onnx/model.onnx` (optional
+`onnx/model_fp16.onnx`); `scripts/make_image_model_package.py` writes the manifest.
+
+**Sources.** `loadModelPackageFromFiles(files, onStatus)`: a picked folder
+(`webkitRelativePath`s; the manifest at the top or one level down). Every file is
+read once through `readBlobArrayBuffer` (cloud-synced folders), the weights are
+hashed and checked against the manifest's `sha256`, and the bytes are kept in
+memory for the page; weights the app never loads (e.g. a quantized model) are
+skipped; `fp16: true` without its file falls back to fp32.
+`loadModelPackageFromUrl(input)`: a Hugging Face repo id or an https folder URL
+(http only on localhost); only the manifest is fetched up front, the weights on
+first use, cached by the browser like the built-in model.
+
+**Key.** SHA-256 of `modelKeyMaterial` (input, crop, fp16 and every weight file's
+hash). The same weights from a folder or a URL whose manifest lists their hashes get
+the SAME key; a URL manifest without hashes is keyed to its URL and manifest text.
+A name edit keeps the key. Loading the same key again returns the loaded package.
+
+**Serving.** Each package gets the repo id `lucid-pkg/<key16>` (`modelRepoId`).
+transformers.js 4.3 asks for every file through `env.fetch`
+(`https://huggingface.co/<repo>/resolve/main/<path>`, metadata Range requests too);
+`installModelPackageFetch(T)` wraps it once per realm so package URLs are answered
+from the package — its Blobs (a missing file is a 404, never a network request) or
+its base URL — and every other URL goes out unchanged. A worker learns a package
+from `modelPackageTransfer` and calls `serveModelPackage`. `withPackageCachePolicy`
+/ `withTransferCachePolicy` turn transformers.js's browser cache off while a LOCAL
+package loads, or it would copy the in-memory files into Cache Storage under the
+made-up URL.
+
+**Other exports.** `registeredModelPackage(key)`, `registeredModelPackages()`,
+`clearModelPackages()` (tests), `packageFileOf(url)`, `PACKAGE_REPO_PREFIX`,
+`PACKAGE_CROP` (= `CROP`; kept here so this module imports no UI).
+
+**Imports from project modules.** `pose/image-model-manifest.js`,
+`loading/cold-read-guard.js` (`readBlobArrayBuffer`).
+
+**Imported by.** `ui/image-embedder.js`, `ui/image-model-worker.js`,
+`ui/image-model-dialog.js`.
+
+**Coverage.** `tests/test-image-model-package.mjs` (loading, keys, refusals, the
+fetch hook, the cache policy), `tests/e2e/image-model-package.mjs` (the real model
+from a folder and a URL: the built-in model's vectors bit for bit on the main
+thread and in a worker, no request for the package's files, nothing in Cache
+Storage).
+
+---
+
+### ui/image-model-dialog.js
+
+**Purpose.** Which model the image ID-switch check uses for a session
+(`Session.imageModel`): the built-in one or a loaded package. The ID Switches tab
+shows the model with a **Change…** button (`imageModelLineHtml`,
+`wireImageModelLine`); the dialog (`showImageModelDialog(session, {pickFiles?})`)
+lists the built-in model and every package loaded on the page, loads one from a
+folder (`<input webkitdirectory>`) or a URL / Hugging Face repo, shows its details
+(base, license, input, threshold, precision, source, training and validation
+notes), and on **Use this model** sets `session.imageModel = modelChoiceOf(pkg)`
+(null for the built-in one) and marks the project dirty when it changed. Esc,
+Cancel and a backdrop click change nothing.
+
+**`resolveSessionImageModel(session)`** — what `runImage` (`ui/id-switch-modal.js`)
+calls: null for the built-in model; the loaded package with the saved key; a saved
+URL choice not loaded is fetched again and must still have the same key; a saved
+FOLDER choice not loaded throws an Error whose message is the check's skip reason
+(never a silent fall-back to another model).
+
+**Imports from project modules.** `ui/image-embedder.js` (`BUILTIN_IMAGE_MODEL`),
+`ui/image-model-package.js`, `pose/image-model-manifest.js` (`modelChoiceOf`),
+`import-export/save-load.js` (`markDirty`).
+
+**Imported by.** `ui/id-switch-modal.js`.
+
+**Coverage.** `tests/e2e/image-model-package.mjs` §3–4.
 
 ---
 
@@ -10022,6 +10318,21 @@ Cancel. On success the viewer is parked on the **last frame tracked**.
 
 ---
 
+### ui/compact-save-modal.js
+
+**Purpose.** The warning File ▸ Save Compact Copy shows before anything is written:
+what is rounded and by how much (from `COMPACT_STEPS`), what is lost (the model's
+exact numbers; exact-equality matching such as merging fresh predictions), what is
+kept (user keypoints, identities, groups, settings), and that the open project stays
+as it is. Cancel has the focus; Esc and a backdrop click cancel. Its "Choose where to
+save…" button opens the save picker inside its own click (the browser needs that
+user activation) and resolves with the handle; a closed picker leaves the dialog up.
+A leaf: imports only `import-export/compact-save.js`.
+
+**Key exports.** `showCompactSaveModal({suggestedName, pickFile?})` -> handle or null.
+
+**Imported by.** `import-export/save-load.js`. Styles: `.compact-save-modal` in `styles.css`.
+
 ### ui/track-setup-modal.js
 
 **Purpose.** What Track All and Track Frame ask the first time they run on a
@@ -10035,7 +10346,9 @@ tracking a session.
 Track All's copy also carries the **image ID-switch check**: its switch
 (`autoImageSwitchCheck`, off by default) and, while on, its four options — the
 Tracking Wizard's own settings. Track Frame's copy leaves it out (a single
-frame is never checked); Track Frame Range shows the same section.
+frame is never checked); Track Frame Range shows the same section. It also asks
+which identity has the **tail marks** (`opts.tailMarks`, answered as
+`tailMarkedIdentity`; `pose/tail-mark.js`).
 
 **Key exports.**
 - `NODE_WEIGHT_TIP` — the advice shown under the node weights here, in Track
@@ -10198,6 +10511,37 @@ unit-tested in Node (`tests/test-track-summary.mjs`). It gives every outcome
 
 **Imported by.** `pose/tracker.js`, `ui/track-summary-modal.js`.
 
+### ui/tail-mark-reader.js
+
+**Purpose.** The video side of the tail-mark pass (`pose/tail-mark.js`): decode a
+sampled frame in every camera and read each identity's tail profile there. Keyframes go
+through `streamingReader`, a change's exact frame through `decoder.getFrame`. On a
+lazy project each read is bracketed by `hydrateFrameMembers2d` /
+`releaseFrameMembers2d`. Pixels come through one OffscreenCanvas, only each tail's
+bounding box read back.
+
+**Key exports.** `createTailMarkReader(session, fps)` -> the reader
+`resolveTailMarks` takes, or `{failed: reason}` (no videos, no tail nodes).
+
+**Imports.** `./app-state.js`, `./image-embedder.js` (`keyframeIndices`,
+`streamingReader`, `canStream`, `identityGroupsAt`), `../pose/lazy-residency.js`,
+`../pose/tail-mark.js`.
+
+**Imported by.** `pose/tracker.js`.
+
+### ui/tail-mark-field.js
+
+**Purpose.** The Track menu's Tail marks choice (`#tbTailMarks`): which identity Track
+All gives the tail marks in the active session. Follows the session as the Animals
+field does (`ui/animal-count-field.js`).
+
+**Key exports.** `wireTailMarkField()` (from `setupUI`), `syncTailMarkField()` (from
+`drawAllOverlays`, O(1)).
+
+**Imports.** `./app-state.js`, `../import-export/save-load.js`, `../pose/tracker.js`.
+
+**Imported by.** `ui/ui-wiring.js`, `ui/rendering.js`.
+
 ### ui/track-summary-modal.js
 
 **Purpose.** The box that opens when Track All finishes: identities, frames
@@ -10287,7 +10631,9 @@ either ID-switch check is run.
   (its nearest other identity more than 1.5 of its body sizes away), the
   isolated frame nearest the middle winning (maximising isolation pushed picks
   to slot edges). Only the middle 60% of each slot is searched, so neighbouring
-  samples stay 40% of a slot apart even in a crowded cage.
+  samples stay 40% of a slot apart even in a crowded cage. A gap wider than a
+  slot would send several slots to one frame, so the count is made up evenly over
+  the tracked frames: more than five tracked frames always give five samples.
 - `pickCamera` — among the views where the group has a 2D member: the largest
   projection of its 3D (diagonal, with the camera's distortion) inside the image
   is the best, and among the views good enough to use (inside the image, at
@@ -11951,15 +12297,50 @@ deliberately NOT authoritative. `newer` is the most-recently-modified candidate
 when that is not the chosen file, else `null` — the signal that a leftover
 `_vN` is outranking a file the user just wrote.
 
+**Proofread export names** (File ▸ Export SLEAP File By Cam, `ui/export-modals.js`):
+`proofreadSlpName(source)` → `<stem>_proofread.slp` (`PROOFREAD_SUFFIX`);
+`isProofreadSlp(name)`; `chooseProofreadSource(slps, loadedName)` — the `.slp` in a
+camera folder the project's 2D came from: never a `_proofread` output, the
+recorded `loadedName` (`videoFiles[].slpFilename`) while it is there, else
+`chooseCameraSlp`. The loaders do NOT skip `_proofread` files: a camera folder
+holding one is loaded from the newer of the two (same version 0, `lastModified`
+breaks the tie). Test: `tests/test-proofread-export-name.mjs`.
+
 **Imports from project modules.** None (deliberately).
 
 **Imported by.** `loading/session-loader.js`, which re-exports it so its own
-import site is unchanged; bridged into the test runner as
-`window.__PerCamSlpChoice`.
+import site is unchanged; `ui/export-modals.js` (the proofread export names);
+bridged into the test runner as `window.__PerCamSlpChoice`.
 
-**Tests.** `tests/test-percam-slp-choice.js`.
+**Tests.** `tests/test-percam-slp-choice.js`, `tests/test-proofread-export-name.mjs`.
 
 ---
+
+### loading/folder-picker-start.js
+
+**Purpose.** Where a `showDirectoryPicker` opens. `startIn` = a file handle opens
+in that file's folder; the project's `.slp` handle is `state.slpFileHandle` (Load
+Project, Load SLP and Save As keep it; it is what File ▸ Save writes). Without
+`startIn` or `id`, Chromium opens wherever ANY picker of the origin last picked
+(Load Project, Save As, an export…), else Documents — so a picker with neither
+lands somewhere that depends on the browser's history, not the project. An `id`
+gives a picker its own memory; a `startIn` handle wins over it.
+
+**Key exports.**
+- `projectFolderStart()` — `state.slpFileHandle` when set and the browser has
+  `showDirectoryPicker`, else null.
+- `pickExportFolder()` — `showDirectoryPicker({ id: EXPORT_FOLDER_PICKER_ID,
+  mode: 'readwrite', startIn? })`: the project's folder, else where the last
+  export went. Rejects with AbortError on cancel.
+- `EXPORT_FOLDER_PICKER_ID` — `'lucid-export-folder'`.
+
+**Imports from project modules.** `../ui/app-state.js` — `state`. Import-light on
+purpose, so `ui/export-modals.js` can use it without a cycle through
+`loading/session-loader.js`.
+
+**Imported by.** `loading/session-loader.js` (`folderPickerStartFor`),
+`ui/export-modals.js` (By-Cam Download All). Test:
+`tests/e2e/export-bycam-folder-progress.mjs`.
 
 ### loading/calibration-pick.js
 
@@ -12148,6 +12529,8 @@ session, per-camera SLPs, single-SLP, multi-session, video-only,
 calibration-only. Owns view/grid layout, video selection prompts,
 filesystem enumeration, decoder rebuild.
 
+**Compact copies.** The single-SLP folder loader and the lazy project reopen end on `withCompactNote` (`import-export/compact-save.js`): a file saved as a compact copy opens with a warning status saying its keypoints and 3D were rounded.
+
 **Key exports.**
 - Loaders: `handleLoadCalibration`, `handleLoadVideos`,
   `handleLoadMultiSession`, `loadSingleSessionFromCache`,
@@ -12158,7 +12541,14 @@ filesystem enumeration, decoder rebuild.
   per-camera load's Instance builder from the SLP worker's columnar result;
   exported for `tests/e2e/slp-import-fast-compound.mjs`).
   `handleLoadSessionFolderSingleSlp()` loads a folder holding a project `.slp`
-  plus `videos/` + calibration. It reads the SLP with the **typed** reader
+  plus `videos/` + calibration. More than one root `.slp` (a project and a Save As
+  beside it) is refused with a status naming them and pointing at Load Project:
+  picking by folder cannot say which is meant. A LARGE root `.slp` (`shouldUseLazySlp`, not a campy
+  recording) goes to `handleLoadProjectSlpLazy(slpFile, {folderFiles})` instead,
+  whose videos are matched from the same folder pick, wherever they sit in it (one
+  folder per camera too): one pick opens a saved project with its videos, where
+  Load Project asks for the folder a second time (a page given one file cannot
+  see the folder around it). Otherwise it reads the SLP with the **typed** reader
   (`parseSlpViaSleapIO`, raw `parseSlpH5` only as fallback) and restores
   grouping, `nulledNodes`/occlusion, identities and 3D via the shared
   `restoreGroupingAndUnlink` (`import-export/slp-import.js`), then the rest of
@@ -12184,7 +12574,14 @@ filesystem enumeration, decoder rebuild.
   `forceVideoSelectionWithFolder(refInfo, sessionName, options)` accepts
   `options.allowSkip` (a "Skip — Load Videos Later" button; used by the lazy
   reopen) and closes on `Esc`; both resolve `null`, which every caller treats as
-  "no videos picked".
+  "no videos picked". `options.startIn` (from `folderPickerStartFor(file)`: the
+  `.slp` being opened's `state.slpFileHandle` — `projectFolderStart()`,
+  `loading/folder-picker-start.js` — only when the handle is THAT file's) makes Select Session Folder open
+  `pickFolderNear(startIn)`: the folder picker starts in the project's own folder
+  and the files are listed as `pickFolder` lists them. A page given one file cannot
+  read the folder around it, but can start the picker there, so the user confirms
+  the folder instead of finding it again. Load Project, Load SLP and both project
+  reopens pass it; without the API (Brave by default) it is the old upload picker.
   `forceVideoSelection(refInfo, options)` (Load Project on a V2/legacy `.json`,
   Add SLP with no embedded video) is NOT blocking: a **Continue Without Video**
   button and `Esc` both resolve `[]`, which both callers treat as "no videos"
@@ -12328,7 +12725,9 @@ max():
   `tests/e2e/percam-slp-choice-and-failure.mjs`.
 
 **Large `.slp` → lazy loading.** The chosen `.slp` files are routed by
-`shouldUseLazySlp` (`> 150 MB`): large prediction files go to a `SioLazyLoader`
+`shouldUseLazySlpFolder`: when any one is over 150 MB (`shouldUseLazySlp`), or all of
+them together are (five 125 MB cameras loaded eagerly, and File ▸ Save then crashed the
+tab building 1.35 million poses), the whole folder goes to a `SioLazyLoader`
 instead of the eager `parseSlpH5` worker, which OOMs the tab on 100k-frame
 predictions. The lazy loader is chosen when all lazy jobs are `.slp` (analysis
 `.h5` folders still use `LazyFrameLoader`); a lazy-open failure surfaces an error
@@ -12367,7 +12766,10 @@ attach step lists the reason per file too.
 
 **Lazy project reopen (`handleLoadProjectSlpLazy`).** The memory-bounded "Load
 Project" path for a large saved project `.slp` (routed by `handleLoadProject` in
-`import-export/save-load.js` via `shouldUseLazySlp`). **It shows the progress
+`import-export/save-load.js` via `shouldUseLazySlp`, and by
+`handleLoadSessionFolderSingleSlp` for a large root `.slp`, which passes
+`{folderFiles}` so `attachVideosForLazyReopen` takes the videos from that pick
+instead of prompting). **It shows the progress
 card, titled "Open project"** (`createOpenProgress(fileName)`, exported for the
 test), one step per stage, the file name on the detail line: 1. Reading the
 project file — counted in MB, from `openProjectSlp`'s `onReadBytes` (one decimal
@@ -12437,6 +12839,7 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
 - `../pose/placeholder-cameras.js` (`makePlaceholderCamera`,
   `hasRealCalibration`, `ensurePlaceholderCameras`),
 - `./calibration-pick.js` (`REBASED_CALIBRATION_NAME`, `pickCalibrationFile`),
+  `./folder-picker-start.js` (`projectFolderStart`),
   `./percam-slp-choice.js` (`chooseCameraSlp`), `./video-file-pick.js`,
   `./video-codec-diagnosis.js` (`videoLoadFailureText`),
   `../ui/video-codec-notice.js` (`noteUnplayableVideos`),
@@ -12448,7 +12851,7 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
   `./video.js` (`OnDemandVideoDecoder`, `VideoController`, `releaseViewsFrames` —
   called wherever an outgoing session's views are stashed in `_views`: empty
   session, single-SLP folder, per-camera folder), `../import-export/file-io.js`,
-  `../pose/triangulation.js` (`shouldUseLazyH5`, `shouldUseLazySlp`, `LazyFrameLoader`),
+  `../pose/triangulation.js` (`shouldUseLazyH5`, `shouldUseLazySlpFolder`, `LazyFrameLoader`),
   `./sio-lazy-loader.js` (`SioLazyLoader`),
   `./track-union.js` (`unionTrackNames`, `remapTrackIdx`),
   `../import-export/save-load.js`,
@@ -13469,6 +13872,14 @@ the project file: the ID Switches tab's review checklist (`idSwitchReview`,
 owns the key list so a writer and a reader cannot drift: adding a setting means
 touching this file and nothing else.
 
+**`tailMarkedIdentity`.** The identity Track All gives the tail marks
+(`Session.tailMarkedIdentity`, `pose/tail-mark.js`). Off is null and writes nothing.
+
+**`imageModel`.** The image check's model (`Session.imageModel`,
+`ui/image-model-dialog.js`): `{key, name, input, threshold, url? | folder?}`
+(`modelChoiceOf` / `ingestModelChoice`, `pose/image-model-manifest.js`). The built-in
+model is null and writes nothing; a malformed value reads back as null.
+
 **`numAnimals`.** A positive integer or `"auto"`. A never-asked session
 (`null`) writes nothing, so it is asked again after a reopen exactly as a new
 session is, and anything else read back (0, 2.5, `"3"`, `"AUTO"`) is treated
@@ -13765,6 +14176,30 @@ incl. `planeMetadataConflict`).
 
 ---
 
+### import-export/compact-save.js
+
+**Purpose.** File ▸ Save Compact Copy: the rounding steps, the switch a compact save
+turns on for its duration, the marker a compact file carries, and the note shown when
+one is opened. Predicted 2D x/y are rounded to 1/64 px, prediction scores to 1/1024,
+3D to 1/1024 of the calibration unit (binary fractions: exact in float32/float64, so
+gzip compresses them); user keypoints never. The rounding itself is the vendored
+writer's (`lib/sleap-io`, LUCID local patch "compact save"), which reads
+`globalThis.__lucidCompactSave` only while `withCompactSave` runs. LOSSY: never the
+default, asked for through `ui/compact-save-modal.js`. The marker (`lucid_compact` in
+the file's provenance, via `slp-provenance.js`) is kept by every later save, since the
+data stay rounded. DOM-free and import-free.
+
+**Key exports.** `COMPACT_STEPS`, `COMPACT_PROVENANCE_KEY`, `withCompactSave(save)`
+(refuses a second one while one runs; switches off however the save ends),
+`compactSaveActive()`, `compactMarker(steps)`, `compactProvenanceExtra()`,
+`compactRoundingOf(provenance)`, `withCompactNote(message, kind, session)` (the
+end-of-load status, warning when the file is a compact copy).
+
+**Imported by.** `import-export/slp-provenance.js`, `import-export/save-load.js`,
+`import-export/slp-import.js`, `loading/session-loader.js`, `ui/compact-save-modal.js`.
+
+**Tests.** `tests/test-compact-save.mjs`, `tests/e2e/compact-save-copy.mjs`.
+
 ### import-export/slp-provenance.js
 
 **Purpose.** Keeps a loaded `.slp`'s `provenance` dict through LUC3D's project
@@ -13783,6 +14218,9 @@ is kept whole under `lucid_sessions` by session name (`{}` = none; a repeated
 name is `name #2`, …), and goes back to that session on reopen. No provenance
 anywhere → exactly `{ source, exported_at }`. The 2D exports (one camera,
 multi-session export) do not use it: they keep `{ source, exported_at }`.
+While a compact save runs, `buildSaveProvenance` adds `lucid_compact`
+(`compactProvenanceExtra`, `import-export/compact-save.js`); like any key the file
+had, it is then kept by later saves.
 
 **Key exports.** `buildSaveProvenance(sessions, exportedAt?)` (reads each
 session's `name` + `fileProvenance`); `fileSessionProvenance(fileProv, names,
@@ -13931,7 +14369,23 @@ session's resident/total) rather than truncate silently. Covered by
   `cameraName + '.mp4'` / zero-dimension fallback, like
   `slp-streaming-write.js`'s `resolveVideoPath`.
 - SLP export (client-side): `exportSlpClientSide`,
-  `exportSlpMultiSession`, `exportCameraSlpStreaming` (above). For a **lazy session** these route a plain
+  `exportSlpMultiSession(selections, reprojAsUser, instanceFilter, opts)`, `exportCameraSlpStreaming` (above).
+  `opts.onProgress(done, total)` reaches only the streaming path (frames swept;
+  throwing from it aborts); the fast and eager paths are one step and never call it.
+  `exportCamerasSlpStreaming(session, cameras, reprojAsUser, instanceFilter, opts)`
+  builds several cameras of one session in ONE sweep (one writer each; hydrating is
+  nearly all of a camera's cost, so N cameras cost about one sweep);
+  `exportCameraSlpStreaming` is its one-camera case. `cameraExportUsesSweep(selection,
+  …)` says whether `exportSlpMultiSession` would route a camera there (By Cam groups
+  those cameras per session). The store fast path (`lazyCameraFastPathUsable`) is
+  refused on a reopened project `.slp` (`SioLazyLoader._sharedStore`): every
+  `labelsByCam` entry is then the WHOLE project, and re-emitting it wrote every camera
+  (and the 3D session) into each camera's file, or ran the renderer out of memory on a
+  large project. Its output is compressed by the `(lazy re-emit)` bundle patch.
+  `_buildCameraLabeledFrame` (both streaming exporters and `buildSlpLabels`) writes
+  each predicted node's OWN score through `Session.predictedNodeScore`; asking only the
+  instance wrote the instance score onto every node of a lazily loaded prediction
+  (found comparing a real 8-camera export from both routes, 2026-11-03). For a **lazy session** these route a plain
   per-camera export through `lazyCameraExportBytes` → `saveSlpToBytes` on the
   camera's already-lazy `Labels` (all frames, memory-bounded) instead of the
   eager `buildSlpLabels*`. The multi-view project save uses the streaming
@@ -13999,11 +14453,28 @@ session's resident/total) rather than truncate silently. Covered by
   (`labels.provenance`; the raw worker returns it too), for
   `import-export/slp-provenance.js`.
 - H5 build/parse: `buildPoints3dH5`, `buildReprojH5`,
-  `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`. `buildReprojH5`
+  `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`,
+  `reprojTrackAxis`, `reprojChunkFrames`. `buildReprojH5`
   (Save Reprojections) projects a group's stored 3D into each camera when it has
   no `reprojections` — they are derived, kept only for frames that have been
   shown, and Triangulate All stores none; skipping such groups would leave every
-  unshown frame NaN.
+  unshown frame NaN. It writes `reprojections` (frames, tracks, cameras, nodes, 2)
+  float64 in windows of whole chunks into a chunked gzip-1 dataset (dtype `'<d'`:
+  h5wasm reads `'<f8'` as float32), awaiting `opts.onProgress(done, total)` after
+  each window, so a 135,181-frame recording never holds the whole array (it once
+  asked h5wasm for 4.7 GB). The track axis is the identities, by position in
+  `session.identities` (`reprojTrackAxis`; the session's tracks only when there
+  are none); `reprojChunkFrames` sizes a chunk to ~1 MB. The MEMFS file is
+  unlinked once it is in the Blob. Test: `tests/e2e/reproj-h5-long-recording.mjs`
+  (real data: `tests/e2e/_real-reproj-h5.mjs`). `buildPoints3dH5` writes
+  `points_3d` (frames, tracks, nodes, 3) and `reprojection_error` (frames,
+  tracks, nodes; all NaN, no per-node error is kept) the same way (one
+  `createFramesDataset` per dataset, same `reprojTrackAxis`), for the frames
+  with a group that has 3D and a track row; it fills each window straight from
+  the groups' flat `points3d`, never through `buildPoints3dExportData`, which
+  boxes every node and is kept for tests and small sessions with the same
+  frames, axis and values. Test: `tests/e2e/points3d-h5-long-recording.mjs`
+  (real data: `tests/e2e/_real-points3d-h5.mjs`).
 - Misc: `downloadJSON`, `downloadBytes` (the binary sibling, for the STL/GLB
   mesh exports; the Blob is handed the VIEW, never `bytes.buffer`, which on a
   subarray would write the neighbouring bytes too), `instancePointsMatch`,
@@ -14206,11 +14677,17 @@ same reason).
 ### import-export/save-load.js
 
 **Purpose.** Project lifecycle — newProject, save paths (quickSave,
-saveAs, saveProjectSlp, saveProject), load dispatcher
+saveAs, saveCompactCopy, saveProjectSlp, saveProject), load dispatcher
 (`handleLoadProject`), session-frame serialization helpers, the
 loading-overlay/status-text UI helpers.
 
 **Key exports.**
+- **Save Compact Copy.** `saveCompactCopy({pickFile?})` (File menu): the warning
+  dialog (`ui/compact-save-modal.js`, which opens the save picker inside its own
+  click), then the shared write (`writeProjectToHandle`, also Save's) inside
+  `withCompactSave` (`import-export/compact-save.js`). A COPY: `state.slpFileHandle`
+  and the dirty state are left alone, since nothing in memory is rounded. Without
+  `showSaveFilePicker` (Brave's default) it says which browser setting it needs.
 - **The Save progress card.** `quickSave`/`saveAs` and `saveProjectSlp` (the
   download path, which is what Save is in Brave — its save dialog cannot open
   until the whole file is built) show the shared loading overlay
@@ -14418,6 +14895,8 @@ the status bar at the bottom.
 **Purpose.** SLP/H5 project import + 3D-points-overlay import. Three
 workflows: load fresh SLP (replaces state), additive merge SLP into
 current session, overlay reprojected points3d from H5.
+
+**Compact copies.** `handleLoadSlpFile`'s end-of-load status goes through `withCompactNote` (`import-export/compact-save.js`): a compact copy opens with a warning saying what was rounded.
 
 **campy recordings.** When the video prompt's folder is a campy recording
 (session.json), `handleLoadSlpFile` puts it on the session

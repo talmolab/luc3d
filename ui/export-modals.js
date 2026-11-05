@@ -32,11 +32,13 @@ import { getTrackColor, getGroupColor } from './overlays.js';
 import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js';
 import { updateInfoPanel } from './info-panel.js';
 import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
-import { showLoadingProgress, yieldToPaint } from './loading-overlay.js';
+import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js';
 import { createGroupSolver } from '../pose/triangulation-pool.js';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
+    exportCamerasSlpStreaming,
+    cameraExportUsesSweep,
     findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
@@ -46,6 +48,8 @@ import {
 import { update3DViewport } from '../pose/initialization.js';
 import { createMp4Writer, videoEncodingAvailable } from './video-encode.js';
 import { fileSystemAccessHint } from './browser-hints.js';
+import { pickExportFolder } from '../loading/folder-picker-start.js';
+import { chooseProofreadSource, proofreadSlpName } from '../loading/percam-slp-choice.js';
 import { noteTriangulateRun } from '../pose/run-state.js';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
@@ -1400,6 +1404,11 @@ function _buildByCamMatrix() {
     return { camNames: camNames, info: info, cellLookup: cellLookup };
 }
 
+/** Thrown from the by-camera export's progress callback when Esc cancels mid-camera. */
+class ExportCancelled extends Error {
+    constructor() { super('Export cancelled'); this.name = 'ExportCancelled'; }
+}
+
 export function showSlpExportByCamModal() {
     if (!state.sessions || state.sessions.length === 0) {
         setStatus('No sessions to export', 'warning');
@@ -1513,8 +1522,11 @@ export function showSlpExportByCamModal() {
         + 'A green ✓ marks a session that has that view (toggle on/off); a red ✗ marks a session '
         + 'where the view does not exist. The footer toggle decides whether a camera is included '
         + 'in <b>Download All</b>, which exports each included camera (across its selected sessions) '
-        + 'as one SLEAP file into a folder you choose. Tracks are written as the identities, '
-        + 'if any are assigned, so a track is the same animal in every camera.</div>' +
+        + 'as one SLEAP file into a folder you choose (it opens in the project\'s folder). A camera with '
+        + 'its own folder there gets its file in that folder, named after the camera\'s source '
+        + '<code>.slp</code> plus <code>_proofread</code> (an earlier one is replaced); any other camera is '
+        + 'written as <code>&lt;camera&gt;.slp</code> in the folder itself. Tracks are written as the '
+        + 'identities, if any are assigned, so a track is the same animal in every camera.</div>' +
         emptyNote +
         '<div class="slp-bycam-body">' +
         '<div class="slp-bycam-scroll slp-bycam-sess-scroll">' + sessHtml + '</div>' +
@@ -1750,6 +1762,54 @@ export function showSlpExportByCamModal() {
         return (base || 'view') + '.slp';
     }
 
+    /** The last folder of a path ("sess/21241563/21241563-….mp4" → "21241563"), any separator. */
+    function parentDirName(p) {
+        var parts = String(p || '').split(/[\\\/]/).filter(Boolean);
+        return parts.length >= 2 ? parts[parts.length - 2] : null;
+    }
+    function baseName(p) {
+        var parts = String(p || '').split(/[\\\/]/).filter(Boolean);
+        return parts.length ? parts[parts.length - 1] : null;
+    }
+
+    /**
+     * Where Download All writes a camera's file, in the picked folder `root`.
+     * A camera exported from ONE session whose folder is in `root` (the folder
+     * load's `state.cameraDirMap`, else the folder its video sits in, else the
+     * camera's name) gets `<source stem>_proofread.slp` in that folder, the
+     * source being the `.slp` its 2D came from (`chooseProofreadSource`; the
+     * video's name when the folder has no `.slp`). Otherwise — several sessions
+     * in one file, or no such folder — `<camera>.slp` in `root`, as before.
+     * @returns {Promise<{dir, name: string, path: string, inCameraFolder: boolean}>}
+     */
+    async function cameraTarget(root, camName) {
+        var flat = sanitizeFilename(camName);
+        var fallback = { dir: root, name: flat, path: flat, inCameraFolder: false };
+        var sels = buildColumnSelections(camName);
+        if (sels.length !== 1) return fallback;
+        var vf = sels[0].videoFileInfo || {};
+        var videoPath = vf.videoPath || (vf.file && (vf.file.webkitRelativePath || vf.file.name)) || '';
+        var tried = {};
+        var dirNames = [state.cameraDirMap && state.cameraDirMap[camName], parentDirName(videoPath), camName];
+        for (var d = 0; d < dirNames.length; d++) {
+            var dn = dirNames[d];
+            if (!dn || tried[dn]) continue;
+            tried[dn] = true;
+            var sub;
+            try { sub = await root.getDirectoryHandle(dn); } catch (e) { continue; }
+            var slps = [];
+            for await (var h of sub.values()) {
+                if (h.kind !== 'file' || !/\.slp$/i.test(h.name)) continue;
+                var meta = await h.getFile();
+                slps.push({ name: h.name, lastModified: meta.lastModified });
+            }
+            var src = chooseProofreadSource(slps, vf.slpFilename);
+            var name = proofreadSlpName(src ? src.name : (baseName(videoPath) || flat));
+            return { dir: sub, name: name, path: dn + '/' + name, inCameraFolder: true };
+        }
+        return fallback;
+    }
+
     // ---- Download All (folder export) ----
     // `cancelled` lets Esc abort an in-progress export between files.
     var exporting = false;
@@ -1774,13 +1834,14 @@ export function showSlpExportByCamModal() {
 
         // Always prompt for a destination folder so the user picks where this
         // download lands (don't silently reuse a handle cached by an earlier
-        // export). Fall back to per-file browser downloads when the File System
-        // Access API is unavailable.
+        // export). It opens in the project's folder (`pickExportFolder`). Fall
+        // back to per-file browser downloads when the File System Access API is
+        // unavailable.
         var dirHandle = null;
         var useDirectory = !!window.showDirectoryPicker;
         if (useDirectory) {
             try {
-                dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                dirHandle = await pickExportFolder();
                 state.exportDirHandle = dirHandle;
             } catch (pickErr) {
                 if (pickErr && pickErr.name === 'AbortError') return; // user cancelled
@@ -1790,45 +1851,144 @@ export function showSlpExportByCamModal() {
             }
         }
 
+        // Cameras the streaming writer would sweep one by one (a lazy project
+        // that would truncate) are built in ONE sweep per session: hydrating the
+        // frames is nearly all of a sweep's cost, so 8 cameras cost about one.
+        var sweepGroups = [];   // [{ session, cams: [camName], sels: [selection] }]
+        var prebuilt = {};      // camName -> bytes from the shared sweep
+        cols.forEach(function (cn) {
+            var sels = buildColumnSelections(cn);
+            if (sels.length !== 1 || !cameraExportUsesSweep(sels[0], reprojAsUser, instanceFilter)) return;
+            var g = sweepGroups.find(function (x) { return x.session === sels[0].session; });
+            if (!g) sweepGroups.push(g = { session: sels[0].session, cams: [], sels: [] });
+            g.cams.push(cn);
+            g.sels.push(sels[0]);
+        });
+
+        // Progress: the app's card (ui/loading-overlay.js). The shared sweep is
+        // a step of its own, its frames on the bar; then one step per camera: a
+        // camera built here in one go (the store re-emitted, or a fully loaded
+        // project) shows the spinner while it builds. Files save in the
+        // background, up to SAVES_IN_FLIGHT at once: over an SMB share Chrome's
+        // close() reads each file back slowly, so one file's wait need not hold
+        // up the next. The modal sits above the card's layer, so it steps aside
+        // for the run and comes back on cancel or failure.
+        var SAVES_IN_FLIGHT = 4;
+        var title = 'Export SLEAP by Camera';
+        var sweepSteps = sweepGroups.length;
+        var steps = sweepSteps + cols.length;
+        function cardOpts(step, extra) {
+            return Object.assign({ title: title, step: step, steps: steps, detail: 'Esc cancels' }, extra || {});
+        }
+        function onSweepProgress(step, label) {
+            return function (done, total) {
+                if (cancelled) throw new ExportCancelled();
+                showLoadingProgress(label, done, total, cardOpts(step));
+            };
+        }
         exporting = true;
         cancelled = false;
         dlAllBtn.disabled = true;
-        var exported = 0;
+        overlay.style.display = 'none';
+        var exported = 0, inCameraFolders = 0;
+        var saving = [];   // saves in flight, oldest first
         var succeeded = false;
         var failure = null;
+        async function saveFile(target, blob) {
+            var fh = await target.dir.getFileHandle(target.name, { create: true });
+            var writable = await fh.createWritable();
+            await writable.write(blob);
+            await writable.close();
+            exported++;
+            if (target.inCameraFolder) inCameraFolders++;
+        }
         try {
+            for (var g = 0; g < sweepGroups.length && !cancelled; g++) {
+                var grp = sweepGroups[g];
+                var label = 'Reading ' + grp.cams.length + ' camera' + (grp.cams.length === 1 ? '' : 's');
+                showLoading(label + '…', cardOpts(g + 1));
+                await yieldToPaint();
+                var sweptBytes = await exportCamerasSlpStreaming(grp.session,
+                    grp.sels.map(function (sel) { return { cameraName: sel.cameraName, videoFileInfo: sel.videoFileInfo }; }),
+                    reprojAsUser, instanceFilter, { onProgress: onSweepProgress(g + 1, label) });
+                grp.cams.forEach(function (cn, k) { prebuilt[cn] = sweptBytes[k]; });
+            }
             for (var i = 0; i < cols.length; i++) {
                 if (cancelled) break;
                 var camName = cols[i];
-                dlAllBtn.textContent = 'Downloading... (' + (i + 1) + '/' + cols.length + ')';
-                var selections = buildColumnSelections(camName);
-                var outName = sanitizeFilename(camName);
-                var blob = await exportSlpMultiSession(selections, reprojAsUser, instanceFilter);
-                if (cancelled) break;
+                var step = sweepSteps + i + 1;
+                var target;
                 if (useDirectory) {
-                    var fh = await dirHandle.getFileHandle(outName, { create: true });
-                    var writable = await fh.createWritable();
-                    await writable.write(blob);
-                    await writable.close();
+                    showLoading('Finding ' + camName + '\'s folder…', cardOpts(step));
+                    target = await cameraTarget(dirHandle, camName);
                 } else {
-                    downloadBlob(blob, outName);
+                    // Downloads land flat; still named after the source when the load recorded it.
+                    var dlSels = buildColumnSelections(camName);
+                    var dlSrc = dlSels.length === 1 && dlSels[0].videoFileInfo && dlSels[0].videoFileInfo.slpFilename;
+                    var dlName = dlSrc ? proofreadSlpName(dlSrc) : sanitizeFilename(camName);
+                    target = { dir: null, name: dlName, path: dlName, inCameraFolder: false };
                 }
-                exported++;
+                var blob;
+                if (prebuilt[camName]) {
+                    blob = new Blob([prebuilt[camName]], { type: 'application/x-hdf5' });
+                    prebuilt[camName] = null;
+                } else {
+                    showLoading('Writing ' + target.path + '…', cardOpts(step));
+                    await yieldToPaint();   // paint before a one-step camera holds the thread
+                    if (cancelled) break;
+                    blob = await exportSlpMultiSession(buildColumnSelections(camName), reprojAsUser, instanceFilter,
+                        { onProgress: onSweepProgress(step, camName) });
+                }
+                if (cancelled) break;
+                if (!useDirectory) {
+                    downloadBlob(blob, target.name);
+                    exported++;
+                    continue;
+                }
+                if (saving.length >= SAVES_IN_FLIGHT) {
+                    showLoading('Saving files in ' + dirHandle.name + '…', cardOpts(step));
+                    await saving.shift();
+                }
+                showLoading('Saving ' + target.path + ' in ' + dirHandle.name + '…', cardOpts(step));
+                var pending = saveFile(target, blob);
+                pending.catch(function () { /* awaited below; this only keeps it from being "unhandled" */ });
+                saving.push(pending);
+            }
+            if (saving.length) {
+                showLoading('Saving ' + saving.length + ' file' + (saving.length === 1 ? '' : 's') + ' in ' + dirHandle.name + '…',
+                    cardOpts(steps));
+                while (saving.length) await saving.shift();
             }
             if (cancelled) {
                 setStatus('Download All cancelled (' + exported + ' of ' + cols.length + ' written)', 'warning');
             } else {
+                var where = '';
+                if (dirHandle) {
+                    var flatCount = exported - inCameraFolders;
+                    var parts = [];
+                    if (inCameraFolders) parts.push(inCameraFolders + ' in camera folders as <source>_proofread.slp');
+                    if (flatCount) parts.push(flatCount + ' as <camera>.slp' + (inCameraFolders ? ' (no camera folder found)' : ''));
+                    where = ' to ' + dirHandle.name + ': ' + parts.join('; ');
+                }
                 setStatus('Exported ' + exported + ' SLP file'
-                    + (exported === 1 ? '' : 's'), 'success');
+                    + (exported === 1 ? '' : 's') + where, 'success');
                 succeeded = true;
             }
         } catch (err) {
-            console.error('[slp-export-bycam]', err);
-            showError(err.message || String(err));
-            failure = err;
+            // Let the files already handed over finish (or fail) before reporting.
+            await Promise.allSettled(saving);
+            saving = [];
+            if (err instanceof ExportCancelled) {
+                setStatus('Download All cancelled (' + exported + ' of ' + cols.length + ' written)', 'warning');
+            } else {
+                console.error('[slp-export-bycam]', err);
+                showError(err.message || String(err));
+                failure = err;
+            }
         } finally {
             exporting = false;
-            dlAllBtn.textContent = 'Download All';
+            hideLoading();
+            overlay.style.display = '';
             updateDownloadStates();
         }
         // On full success, close the modal and show a quick confirmation; on
@@ -2795,26 +2955,50 @@ export async function exportLabels() {
 // ============================================
 
 export async function exportPoints3dH5() {
+    var title = 'Export 3D Points';
+    var pacer = createProgressPacer();
     try {
-        setStatus('Building points3d H5...', 'warning');
-        const blob = await buildPoints3dH5(state.session);
+        showLoading('Preparing 3D points…', { title: title });
+        await yieldToPaint();
+        const blob = await buildPoints3dH5(state.session, {
+            onProgress: function (done, total) {
+                if (done < total && !pacer.due()) return null;
+                showLoadingProgress('Writing 3D points', done, total, { title: title });
+                return pacer.yield();
+            },
+        });
+        hideLoading();
         downloadBlob(blob, 'points3d.h5');
-        setStatus('Points3d H5 exported', 'success');
+        setStatus('Points3d H5 exported (' + (blob.size / 1048576).toFixed(1) + ' MB)', 'success');
     } catch (err) {
+        hideLoading();
         console.error('Points3d H5 export failed:', err);
-        setStatus('Points3d H5 error: ' + err.message, 'error');
+        setStatus('Export 3D Points (H5) failed, nothing was saved: ' +
+            (err && err.message ? err.message : String(err)), 'error');
     }
 }
 
 export async function exportReprojH5() {
+    var title = 'Export Reprojections';
+    var pacer = createProgressPacer();
     try {
-        setStatus('Building reprojections H5...', 'warning');
-        const blob = await buildReprojH5(state.session);
+        showLoading('Preparing reprojections…', { title: title });
+        await yieldToPaint();
+        const blob = await buildReprojH5(state.session, {
+            onProgress: function (done, total) {
+                if (done < total && !pacer.due()) return null;
+                showLoadingProgress('Writing reprojections', done, total, { title: title });
+                return pacer.yield();
+            },
+        });
+        hideLoading();
         downloadBlob(blob, 'reprojections.h5');
-        setStatus('Reprojections H5 exported', 'success');
+        setStatus('Reprojections H5 exported (' + (blob.size / 1048576).toFixed(1) + ' MB)', 'success');
     } catch (err) {
+        hideLoading();
         console.error('Reprojections H5 export failed:', err);
-        setStatus('Reprojections H5 error: ' + err.message, 'error');
+        setStatus('Export Reprojections (H5) failed, nothing was saved: ' +
+            (err && err.message ? err.message : String(err)), 'error');
     }
 }
 
