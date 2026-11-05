@@ -14452,8 +14452,22 @@ session's resident/total) rather than truncate silently. Covered by
   max(2,000, 5%) frames would need hydrating, the per-frame sweep runs. `opts.route`
   ('store' / 'sweep') forces one (tests). Progress counts video frames over the
   cameras' copies, every 4,096 frames. Synthetic 8 cameras x 20,000 frames x 5
-  animals: 6.4 s → 1.3 s. Test: `tests/e2e/export-bycam-store-copy.mjs` (both routes
-  value for value, with negative controls). `cameraExportUsesSweep(selection,
+  animals: 6.4 s → 1.3 s. **Each camera's rows are written and gzipped in its own
+  worker** (`import-export/slp-rows-worker.js`; gzip was ~74% of the copy on one
+  core, ~18 s of 25 s for 8 cameras x 108,000 frames on the lab VM): an empty writer
+  with the camera's header is closed at once and its bytes (the "shell") open in the
+  worker; the working writer sends every row there (`lucidDivertRows`, bundle patch
+  `(row divert)`), cameras built in turns one block each (`_storeCameraCopier`), at
+  most `ROWS_WORKER_QUEUE` messages unanswered per worker. The worker's file equals
+  the one-thread copy value for value with the same chunks, filters and dtypes; the
+  working writer must end with `lucidOnlyTableRows()` (no annotations or negative
+  frames) or the export aborts. `opts.workers` (false = this thread, N = that many)
+  or `window.LUCID_EXPORT_WORKERS` overrides one per camera up to
+  `hardwareConcurrency` (16 max); no `Worker`, or a worker that fails to start,
+  falls back to this thread with a console warning. Synthetic 8 cameras x 20,000
+  frames, realistic noise and per-node scores: copy 5.1 s → 1.35 s
+  (`tests/e2e/_diag-profile-store-copy.mjs`). Test: `tests/e2e/export-bycam-store-copy.mjs` (both routes
+  value for value, with negative controls; §4 workers = this thread, and the fallback). `cameraExportUsesSweep(selection,
   …)` says whether `exportSlpMultiSession` would route a camera there (By Cam groups
   those cameras per session). The store fast path (`lazyCameraFastPathUsable`) is
   refused on a reopened project `.slp` (`SioLazyLoader._sharedStore`): every
@@ -14588,6 +14602,21 @@ session's resident/total) rather than truncate silently. Covered by
 Videos / Export TOML / Export SLP / Export H5; spawns SLP-parse worker.
 
 ---
+
+### import-export/slp-rows-worker.js
+**Purpose:** Module worker that writes and gzips ONE By Cam export's four big
+tables (`frames`, `instances`, `points`, `pred_points`) for the store copy
+(`exportCamerasFromSharedStore`, `import-export/file-io.js`), so every camera
+compresses at once. Opens the "shell" (an empty sleap-io.js writer's closed file),
+carries incoming rows into whole column chunks exactly as the bundle's
+`(column chunks)` patch does (chunk height read from the dataset), and returns
+the finished file's bytes.
+**Messages:** in `open {shell}` → `ready`; `rows {name, data, rows, cols}` → `ack`
+(one per message: the main thread's backpressure); `finish` → `done {bytes}`;
+any failure → `error {message}`.
+**Dependencies:** `lib/h5wasm/hdf5_hl.js` by RELATIVE path (a worker has no
+import map). Rows arrive already rounded (`lucidCompactRound` runs in the divert).
+**Dependents:** `import-export/file-io.js` (`_startRowsWorker`).
 
 ### import-export/slp-streaming-write.js
 

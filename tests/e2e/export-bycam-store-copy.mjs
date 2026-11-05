@@ -31,6 +31,11 @@
  *     frame to hydration instead.
  *  3. The default route takes the store copy (its console line), and the drift
  *     frames are the two expected ones.
+ *  4. Export workers (`import-export/slp-rows-worker.js`, the default): the
+ *     store copy written and gzipped in one worker per camera equals the copy
+ *     on this thread (`opts.workers: false`) value for value, with the same
+ *     chunking and filters per table; and with `Worker` unavailable the copy
+ *     falls back to this thread and still writes the same tables.
  *
  * Run: PORT=9371 node tests/e2e/export-bycam-store-copy.mjs
  */
@@ -184,7 +189,8 @@ try {
             const out = {};
             for (const name of ['frames', 'instances', 'points', 'pred_points']) {
                 const d = f.get(name);
-                out[name] = { shape: d.shape, cols: JSON.parse(d.attrs.field_names.value), v: Array.from(d.value, Number) };
+                out[name] = { shape: d.shape, cols: JSON.parse(d.attrs.field_names.value), v: Array.from(d.value, Number),
+                    layout: JSON.stringify({ chunks: d.metadata.chunks, filters: d.filters, dtype: d.dtype }) };
             }
             f.close();
             h5.FS.unlink(p);
@@ -198,6 +204,12 @@ try {
         const store = await fileio.exportCamerasSlpStreaming(s, cams, null, filter, { route: 'store' });
         const tStore = performance.now() - t0;
         const auto = await fileio.exportCamerasSlpStreaming(s, cams, null, filter);
+        const mainThread = await fileio.exportCamerasSlpStreaming(s, cams, null, filter, { route: 'store', workers: false });
+        const RealWorker = window.Worker;
+        window.Worker = function () { throw new Error('no workers in this test'); };
+        let fellBack;
+        try { fellBack = await fileio.exportCamerasSlpStreaming(s, cams, null, filter, { route: 'store' }); }
+        finally { window.Worker = RealWorker; }
         // Negative controls: the copy with resident edits, per-node scores or drift frames dropped.
         // (a) The bare store: no resident frames, no group members.
         const bare = Object.create(s);
@@ -225,6 +237,7 @@ try {
         return {
             drift, resident, tStore: Math.round(tStore), tSweep: Math.round(tSweep),
             store: store.map(tables), auto: auto.map(tables), sweep: sweep.map(tables),
+            mainThread: mainThread.map(tables), fellBack: fellBack.map(tables),
             noEdits: noEdits.map(tables), noAdded: noAddedOut.map(tables), noScores: noScores.map(tables), noDrift: noDrift.map(tables),
         };
     });
@@ -297,6 +310,20 @@ try {
     check(res.drift[0].includes(5000) && res.drift[1].includes(6000) &&
         res.drift.flat().every(f => f === 5000 || f === 6000), 'drift frames: 5000 (cam0 track), 6000 (cam1 score)', res.drift);
     check(logs.some(l => /\[export-slp-store\] 3 camera\(s\) from the store/.test(l)), 'the store copy logged its run', logs.slice(-3));
+
+    console.log('4. Export workers');
+    ['cam0', 'cam1', 'cam2'].forEach((cam, ci) => {
+        const W = res.store[ci], M = res.mainThread[ci];
+        check(diff(M, W).other.length === 0, `${cam}: workers = this thread, value for value`, diff(M, W).other);
+        const lay = ['frames', 'instances', 'points', 'pred_points'].filter(n => W[n].layout !== M[n].layout)
+            .map(n => `${n}: ${W[n].layout} vs ${M[n].layout}`);
+        check(lay.length === 0, `${cam}: workers = this thread, same chunks, filters and dtypes`, lay);
+        check(diff(M, res.fellBack[ci]).other.length === 0, `${cam}: without Worker the copy falls back and writes the same`);
+    });
+    check(/gzip|deflate|"1"|id":1/i.test(res.store[0].pred_points.layout), 'pred_points is gzipped in the worker\'s file', res.store[0].pred_points.layout);
+    check(logs.some(l => /from the store: .*\(3 workers\)/.test(l)), 'the default copy ran in 3 workers', logs.filter(l => /from the store/.test(l)));
+    check(logs.some(l => /from the store: .*\(this thread\)/.test(l)), 'workers: false copied on this thread');
+    check(logs.some(l => /export workers unavailable/.test(l)), 'the fallback said why');
     check(errs.length === 0, 'no page errors', errs);
 } finally {
     if (browser) await browser.close();
