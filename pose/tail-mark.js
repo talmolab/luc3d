@@ -67,6 +67,16 @@ export const TAIL_MARK_DEFAULTS = {
     refineMinEvidence: 0.25,
 };
 
+/**
+ * How the band-counting cue reads a tail (`ui/tail-mark-reader.js`). Bands packed near the
+ * base (4 bands with 3 short bright gaps before Tail_0) blur in the two-animal pass's wide,
+ * bright line (`readTailProfile`'s defaults: 0.85 percentile, 1/12 of the length each side),
+ * and the base keypoint often lands past the first band. On a 5-mouse recording with 0-4
+ * bands the default read counted the 4-band tail as 3; this read counts all five right.
+ * The two-animal pass keeps its validated read.
+ */
+export const TAIL_BAND_READ = { baseExtension: 0.2, percentile: 0.5, widthShare: 1 / 30 };
+
 /** The largest number of frames the sampler may leave between samples, in seconds. */
 export const MAX_SAMPLE_GAP_SECONDS = 3;
 
@@ -100,10 +110,13 @@ export function tailMarkNodeIndices(nodes) {
  * @param {number} height
  * @param {number[]} poly  [x0, y0, x1, y1, …] in `gray`'s pixels; non-finite points are left out
  * @param {number} [length]
+ * @param {{percentile?: number, widthShare?: number}} [opts]  the percentile across (default 0.85)
+ *   and the line's half width as a share of the tail's length (default 1/12)
  * @returns {?{profile: Float32Array, background: number}}  null when too short to read
  */
-export function readTailProfile(gray, width, height, poly, length) {
+export function readTailProfile(gray, width, height, poly, length, opts) {
     length = length || TAIL_MARK_DEFAULTS.profileLength;
+    var q = (opts && opts.percentile) || 0.85, share = (opts && opts.widthShare) || 1 / 12;
     var xs = [], ys = [], cum = [0];
     for (var p = 0; p + 1 < poly.length; p += 2) {
         var px = poly[p], py = poly[p + 1];
@@ -117,7 +130,7 @@ export function readTailProfile(gray, width, height, poly, length) {
     }
     var total = cum[cum.length - 1];
     if (xs.length < 2 || total < TAIL_MARK_DEFAULTS.minTailPixels) return null;
-    var half = Math.max(3, Math.round(total / 12));   // about the tail's width and its keypoints' error
+    var half = Math.max(3, Math.round(total * share));   // about the tail's width and its keypoints' error
     var nSteps = Math.floor(total), across = 2 * half + 1;
     var line = new Float32Array(nSteps), all = new Float32Array(nSteps * across), nAll = 0;
     var row = new Float32Array(across), seg = 0;
@@ -133,7 +146,7 @@ export function readTailProfile(gray, width, height, poly, length) {
             var v = gray[iy * width + ix];
             row[n++] = v; all[nAll++] = v;
         }
-        line[s] = n ? percentileOf(row.subarray(0, n), 0.85) : NaN;
+        line[s] = n ? percentileOf(row.subarray(0, n), q) : NaN;
     }
     if (!nAll) return null;
     var profile = new Float32Array(length);
@@ -600,7 +613,10 @@ function bestMatching(cost) {
 
 /**
  * The tail-band cue (see pose/identity-cues.js for the interface). Features are
- * `normalizeTailProfile` profiles, one per camera.
+ * `normalizeTailProfile` profiles, one per camera: either a profile, or `{wide, sharp}`
+ * from `ui/tail-mark-reader.js` given `TAIL_BAND_READ`. The wide read decides who is who
+ * (costs) and the sharp one counts the bands (naming the templates, and the check): the sharp
+ * read resolves bands packed near the base but tells a plain tail from one wide band less well.
  *
  * Learning: on the first pass, each tracked identity's own tail over the whole session
  * (an aligned median) is named by its band count (`countBands`; for 'marked'/'plain',
@@ -632,9 +648,13 @@ export function createTailBandCue(opts) {
                 if (own.some(function (l) { return l.length < o.minTeachingSamples; })) {
                     return { ok: false, reason: 'could not read every animal\'s tail (are the videos loaded?)' };
                 }
-                var templates = own.map(function (l) { return alignedMedian(l, o.maxShift); });
+                var templates = own.map(function (l) { return alignedMedian(l.map(wideOf), o.maxShift); });
                 var marked = classes.every(function (c) { return c === 'marked' || c === 'plain'; });
-                var guess = templates.map(function (t) { return marked ? tailBandScore(t) : countBands(t); });
+                var guess = own.map(function (l, i) {
+                    if (marked) return tailBandScore(templates[i]);
+                    var bt = sharpTemplate(l, o);
+                    return bt ? countBands(bt) : 0;
+                });
                 var cost = ids.map(function (id, i) {
                     return ids.map(function (id2, j) {
                         var c = classOf(j);
@@ -670,7 +690,7 @@ export function createTailBandCue(opts) {
         },
         // Do the learned templates read as the marks the user set, one to one? Else no relabel.
         check: function (model) {
-            var read = model.templates.map(function (t) { return readClass(t, model.classes); });
+            var read = model.templates.map(function (t, k) { return readClass(t, model.bandTemplates[k], model.classes); });
             var want = model.classes.map(String).slice().sort().join(',');
             var got = read.map(String).slice().sort().join(',');
             var match = model.classes.every(function (c, k) { return String(read[k]) === String(c); });
@@ -681,7 +701,8 @@ export function createTailBandCue(opts) {
         costs: function (features, model) {
             var out = new Map(), C = model.classes.length;
             var sums = new Float64Array(C), used = 0;
-            features.forEach(function (x) {
+            features.forEach(function (f) {
+                var x = wideOf(f);
                 var d = model.templates.map(function (t) { return bestShift(x, t, o.maxShift).err; });
                 var lo = Math.min.apply(null, d);
                 if (lo > o.fitTolerance * model.apart) return;   // fits none
@@ -693,15 +714,26 @@ export function createTailBandCue(opts) {
             return out;
         },
         describe: function (model) {
-            return model.classes.map(function (c, k) { return String(c) + ' → reads ' + countBands(model.templates[k]) + ' band(s)'; }).join('; ');
+            return model.classes.map(function (c, k) { return String(c) + ' → reads ' + (model.bandTemplates[k] ? countBands(model.bandTemplates[k]) : '?') + ' band(s)'; }).join('; ');
         },
     };
 }
 
-// What a template reads as, among these classes: its band count, or 'marked' / 'plain'.
-function readClass(t, classes) {
+function wideOf(f) { return f && f.wide ? f.wide : f; }
+
+// A class's band-counting template: the aligned median of its views' sharp reads (or of the
+// profiles themselves, for features that carry one read).
+function sharpTemplate(features, o) {
+    var sharp = [];
+    features.forEach(function (f) { var x = f && f.wide ? f.sharp : f; if (x) sharp.push(x); });
+    return sharp.length ? alignedMedian(sharp, o.maxShift) : null;
+}
+
+// What a template reads as, among these classes: its band count (from the band-counting
+// template), or 'marked' / 'plain' (from the template).
+function readClass(t, bandT, classes) {
     var marked = classes.every(function (c) { return c === 'marked' || c === 'plain'; });
-    if (!marked) return countBands(t);
+    if (!marked) return bandT ? countBands(bandT) : -1;
     return tailBandScore(t) >= TAIL_MARK_DEFAULTS.teachMinScore ? 'marked' : 'plain';
 }
 
@@ -710,23 +742,27 @@ function readClass(t, classes) {
 function renameByReading(model) {
     if (model.classes.every(function (c) { return c === 'marked' || c === 'plain'; })) {
         var sc = model.templates.map(tailBandScore), mk = model.classes.indexOf('marked'), pl = model.classes.indexOf('plain');
-        if (mk >= 0 && pl >= 0 && sc[pl] > sc[mk]) { var t0 = model.templates[mk]; model.templates[mk] = model.templates[pl]; model.templates[pl] = t0; }
+        if (mk >= 0 && pl >= 0 && sc[pl] > sc[mk]) {
+            var t0 = model.templates[mk]; model.templates[mk] = model.templates[pl]; model.templates[pl] = t0;
+            var b0 = model.bandTemplates[mk]; model.bandTemplates[mk] = model.bandTemplates[pl]; model.bandTemplates[pl] = b0;
+        }
         return;
     }
-    var counts = model.templates.map(function (t) { return countBands(t); });
+    var counts = model.bandTemplates.map(function (t) { return t ? countBands(t) : -1; });
     var cost = model.templates.map(function (t, a) {
         return model.classes.map(function (c) { return Math.abs(counts[a] - Number(c)); });
     });
     var match = bestMatching(cost);   // template a -> class match[a]
     var exact = match.every(function (b, a) { return cost[a][b] === 0; });
     if (!exact) return;
-    var next = new Array(model.templates.length);
-    match.forEach(function (b, a) { next[b] = model.templates[a]; });
+    var next = new Array(model.templates.length), nextBands = new Array(model.templates.length);
+    match.forEach(function (b, a) { next[b] = model.templates[a]; nextBands[b] = model.bandTemplates[a]; });
     model.templates = next;
+    model.bandTemplates = nextBands;
 }
 
 function buildModel(byClass, classes, o) {
-    var templates = classes.map(function (c) { return alignedMedian(byClass.get(c), o.maxShift); });
+    var templates = classes.map(function (c) { return alignedMedian(byClass.get(c).map(wideOf), o.maxShift); });
     if (templates.some(function (t) { return !t; })) return { ok: false, reason: 'no tail was read for one of the marks' };
     // how far apart the templates are: the closest pair's squared distance
     var apart = Infinity;
@@ -737,5 +773,6 @@ function buildModel(byClass, classes, o) {
     if (!(Math.sqrt(apart / templates[0].length) >= o.minTemplateDifference)) {
         return { ok: false, reason: 'found no tail marks: two of the tails look the same' };
     }
-    return { classes: classes, templates: templates, apart: apart };
+    var bandTemplates = classes.map(function (c) { return sharpTemplate(byClass.get(c), o); });
+    return { classes: classes, templates: templates, bandTemplates: bandTemplates, apart: apart };
 }

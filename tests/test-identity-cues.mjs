@@ -164,5 +164,30 @@ eq(tails.map((x) => tm.countBands(x)), [0, 1, 2, 3], 'band counts on clean drawn
     ok(!one.ok, 'every identity expected to show the same marks: refused');
 }
 
+{
+    // features carrying two reads: the wide one decides, the sharp one counts. Here the "4 bands"
+    // animal's wide read shows only 3 (as packed bands do), its sharp read 4.
+    const t4 = drawnTail(4);
+    eq(tm.countBands(t4), 4, 'four drawn bands count four');
+    const ids = [20, 21, 22, 23], expect = [0, 1, 2, 4];
+    const wide = [tails[0], tails[1], tails[2], tails[3]], sharp = [tails[0], tails[1], tails[2], t4];
+    const both = [], wideOnly = [];
+    for (let t = 0; t < 30; t++) {
+        both.push(new Map(ids.map((id, i) => [id, [0, 1, 2].map(() => ({ wide: wide[i], sharp: sharp[i] }))])));
+        wideOnly.push(new Map(ids.map((id, i) => [id, [wide[i], wide[i], wide[i]]])));
+    }
+    const cue = tm.createTailBandCue();
+    const a = cue.learn(both, null, (j) => expect[j], ids), b = cue.learn(wideOnly, null, (j) => expect[j], ids);
+    ok(a.ok && b.ok, 'both learn');
+    eq(a.model.match, [0, 1, 2, 3], 'named by the sharp read: the tail reading 4 is the "4 bands" animal');
+    ok(cue.check(a.model).ok, 'the check counts on the sharp read: ' + (cue.check(a.model).reason || 'ok'));
+    ok(!cue.check(b.model).ok, 'with the wide read alone, the "4 bands" tail reads 3 and the check refuses');
+    const ca = cue.costs(both[0].get(23), a.model), cb = cue.costs(wideOnly[0].get(23), b.model);
+    eq([...ca.entries()], [...cb.entries()], 'costs come from the wide read alone');
+    const relearned = cue.learn(both, both.map(() => new Map(ids.map((id, i) => [id, i]))), (j) => expect[j], ids);
+    ok(relearned.ok && cue.check(relearned.model).ok, 'a later round keeps each class with its sharp template');
+    ok(/4 → reads 4 band/.test(cue.describe(relearned.model)), 'described by the sharp read: ' + cue.describe(relearned.model));
+}
+
 console.log(`\ntest-identity-cues: ${passed} passed, ${failed} failed`);
 if (failed) { failures.forEach((f) => console.error(' - ' + f)); process.exit(1); }

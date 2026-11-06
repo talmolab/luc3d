@@ -44,7 +44,7 @@ import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary
 import { collapseTimeline } from '../ui/timeline-controller.js';
 import { collapseViewport3D } from '../ui/panel-visibility.js';
 import { noteTrackRun } from './run-state.js';
-import { resolveTailMarks, createTailBandCue } from './tail-mark.js';
+import { resolveTailMarks, createTailBandCue, TAIL_BAND_READ } from './tail-mark.js';
 import { resolveIdentityCues } from './identity-cues.js';
 import { createTailMarkReader } from '../ui/tail-mark-reader.js';
 
@@ -968,7 +968,9 @@ async function runTailMarkPass(session) {
     var fps = state.fps > 0 ? state.fps : session.fps;
     var res;
     try {
-        var reader = createTailMarkReader(session, fps);
+        // counting bands needs a sharper read than telling marked from plain
+        var reader = createTailMarkReader(session, fps, session.identityMarks
+            ? Object.assign({}, TAIL_BAND_READ, globalThis.__lucidTailBandRead || {}) : undefined);
         if (reader.failed) res = { ok: false, reason: reader.failed };
         else {
             showLoadingProgress('Reading tail marks', 0, 1, { title: 'Track All' });

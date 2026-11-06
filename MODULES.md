@@ -2653,7 +2653,14 @@ where the wrong one holds the marks. The tracker is untouched.
 **The measure.** `readTailProfile` walks the tail nodes from `tailMarkNodeIndices` (TTI,
 Tail_0, Tail_1: the marks end near Tail_1), reading a bright percentile of a line across
 the tail at each pixel, so keypoints a few pixels off it do not matter;
-`normalizeTailProfile` scales it to the tail's own brightness.
+`normalizeTailProfile` scales it to the tail's own brightness. `readTailProfile` takes
+`{percentile, widthShare}` (defaults 0.85 and 1/12 of the length each side).
+`TAIL_BAND_READ` (`baseExtension` 0.2, percentile 0.5, width 1/30) is the band-counting
+cue's second read: on `05mice_flippers` (5 mice, 0-4 bands) the 4-band tail has its bands
+packed before Tail_0, and TTI often lands past the first, so the default read counted it as
+3; started a little before TTI, darker and narrower, it reads 4 (the others too). The
+sharper read tells a plain tail from one wide band less well, so it only counts; the
+default read still decides.
 
 **Why templates.** Marks differ between animals (several narrow bands, or one wide one on
 the test recordings), and a plain tail in shade by a wall dims along a third of its length
@@ -2704,10 +2711,14 @@ frames), and Chrome there decodes these H.264 streams at 700-1,700 frames/s, on 
 `readTailProfile`, `normalizeTailProfile`, `tailBandScore`, `learnTailTemplates`,
 `tailVote`, `planTailMarkSamples`, `contactGaps`, `evidenceScale`, `evidenceOf`,
 `decodeMarkedStates`, `countBands`, `createTailBandCue` (the tail-band cue for
-`pose/identity-cues.js`: classes are band counts, or 'marked'/'plain'; first pass learns
-each identity's own tail and names it by `countBands`; later passes relearn per class
-and re-anchor each class to the template that reads as it; `check` refuses unless the
-learned tails read as the marks set, one to one), `refineChange`, `stretchesToSwap`.
+`pose/identity-cues.js`: classes are band counts, or 'marked'/'plain'; features are
+profiles or the reader's `{wide, sharp}`: costs from the wide read's `templates`, band
+counts from the sharp read's `bandTemplates` (with one read, both are that read). First
+pass learns each identity's own tail and names it by `countBands`; later passes relearn
+per class and re-anchor each class to the template that reads as it; `check` refuses
+unless the learned tails read as the marks set, one to one. On `05mice_flippers` it now
+passes with 4 label changes over 30 min, each stretch agreeing with per-view band counts),
+`TAIL_BAND_READ`, `refineChange`, `stretchesToSwap`.
 
 **Imports.** `./id-switch-check.js` (`buildGrid`, `contactEpisodes`,
 `SIZE_CHECK_DEFAULTS`).
@@ -10542,8 +10553,12 @@ lazy project each read is bracketed by `hydrateFrameMembers2d` /
 `releaseFrameMembers2d`. Pixels come through one OffscreenCanvas, only each tail's
 bounding box read back.
 
-**Key exports.** `createTailMarkReader(session, fps)` -> the reader
-`resolveTailMarks` takes, or `{failed: reason}` (no videos, no tail nodes).
+**Key exports.** `createTailMarkReader(session, fps, read?)` -> the reader
+`resolveTailMarks` takes, or `{failed: reason}` (no videos, no tail nodes). With `read`
+(`TAIL_BAND_READ`, which Track All passes when the identity engine runs) each view's
+feature is `{wide, sharp}`: the default read, unchanged, plus a second read started
+`baseExtension` of the first tail segment before TTI (`extendBase`), with that read's
+percentile and width; both from one read-back of the box around the longer line.
 
 **Imports.** `./app-state.js`, `./image-embedder.js` (`keyframeIndices`,
 `streamingReader`, `canStream`, `identityGroupsAt`), `../pose/lazy-residency.js`,
