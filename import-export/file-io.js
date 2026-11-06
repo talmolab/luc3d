@@ -1541,71 +1541,112 @@ export function cameraExportUsesLazyRewrite(selection, reprojAsUser, instanceFil
         lazyCameraFastPathUsable(window.SleapIO, selection.session, selection.cameraName));
 }
 
+/**
+ * Whether By Cam's camera `selection` (one session, one camera) would be built
+ * by `exportSlpMultiSession`'s eager route (`buildSlpLabelsMultiSession` +
+ * `saveSlpToBytes`): a fully loaded camera — neither the store rewrite nor the
+ * streaming sweep. Such cameras can go to `exportCamerasInWorkers` together.
+ */
+export function cameraExportUsesEagerBuild(selection, reprojAsUser, instanceFilter) {
+    return !!(selection && selection.session && window.SleapIO &&
+        !cameraExportUsesLazyRewrite(selection, reprojAsUser, instanceFilter) &&
+        !_exportWouldTruncate(selection.session));
+}
+
 /** Cameras of the per-camera rewrite in workers at once (each holds its tables until written). */
 var LAZY_REWRITE_IN_FLIGHT = 4;
 
 /**
- * `lazyCameraExportBytes` for several cameras, the compression in workers: each
- * camera's file is written here without its big tables (`saveSlpToBytes`'s
- * `lucidDeferTables`, bundle patch `(deferred tables)`), and its own worker
- * (`import-export/slp-rows-worker.js`) adds them with the same settings and
- * gzips them while the next camera is built — at most LAZY_REWRITE_IN_FLIGHT at
- * once. Same tables, values, chunks and filters as the one-thread rewrite.
+ * By Cam's one-camera files for several cameras, the compression in workers.
+ * Two kinds of camera go here, each written as `exportSlpMultiSession` would:
+ *  - a folder-loaded camera (`cameraExportUsesLazyRewrite`), its own store
+ *    rewritten: the file is written here without its big tables
+ *    (`saveSlpToBytes`'s `lucidDeferTables`, bundle patch `(deferred tables)`),
+ *    and its worker creates them with the same arguments;
+ *  - a fully loaded camera (`cameraExportUsesEagerBuild`): its `Labels` are
+ *    built here and written with the big 2D tables' rows held back
+ *    (`lucidDivertTables`, bundle patch `(eager divert)`: the tables are created
+ *    empty, same chunks and filters), and its worker appends the rows.
+ * Each camera's worker (`import-export/slp-rows-worker.js`) gzips while the next
+ * camera is built — at most LAZY_REWRITE_IN_FLIGHT at once. Same tables,
+ * values, chunks, filters, dtypes and field_names as the one-thread file.
  *
- * @param {Array<{session, cameraName}>} selections
+ * @param {Array<{session, cameraName, videoFileInfo}>} selections
  * @param {Object} [opts] `{ onProgress(done, total) }` counts cameras finished
- *   (throwing aborts), `workers` as `exportCamerasFromSharedStore`'s.
+ *   (throwing aborts), `workers` as `exportCamerasFromSharedStore`'s, `kinds`
+ *   (`['lazy', 'eager']` by default) which kinds to take.
  * @returns {Promise<Array<Uint8Array|null>>} bytes per selection; null for a
  *   camera this route does not write (the caller exports it as before).
  */
-export async function exportCamerasLazyRewrite(selections, reprojAsUser, instanceFilter, opts) {
+export async function exportCamerasInWorkers(selections, reprojAsUser, instanceFilter, opts) {
     var SIO = window.SleapIO;
     opts = opts || {};
+    var kinds = opts.kinds || ['lazy', 'eager'];
     var out = selections.map(function () { return null; });
-    var idx = [];
+    var idx = [], kindOf = [];
     for (var i = 0; i < selections.length; i++) {
-        if (cameraExportUsesLazyRewrite(selections[i], reprojAsUser, instanceFilter)) idx.push(i);
+        var kind = cameraExportUsesLazyRewrite(selections[i], reprojAsUser, instanceFilter) ? 'lazy'
+            : cameraExportUsesEagerBuild(selections[i], reprojAsUser, instanceFilter) ? 'eager' : null;
+        if (kind && kinds.indexOf(kind) >= 0) { idx.push(i); kindOf.push(kind); }
     }
     if (!idx.length) return out;
+    var nLazy = kindOf.filter(function (k) { return k === 'lazy'; }).length;
     var nWorkers = _storeCopyWorkerCount(idx.length, opts);
     var cap = Math.max(1, Math.min(nWorkers, LAZY_REWRITE_IN_FLIGHT));
     var live = [];   // { h, done } in flight
     var finished = 0;
     var t0 = performance.now();
     var report = async function () { if (opts.onProgress) await opts.onProgress(finished, idx.length); };
+    // One camera's file: { bytes } when whole, else { shell, tables, rows } for its worker.
+    var build = async function (k, toWorker) {
+        var sel = selections[idx[k]];
+        if (kindOf[k] === 'lazy') {
+            var lazyLabels = sel.session.lazyLoader.labelsByCam.get(sel.cameraName);
+            if (!toWorker) return { bytes: await SIO.saveSlpToBytes(lazyLabels) };
+            var tables = [];
+            var shell = await SIO.saveSlpToBytes(lazyLabels, { lucidDeferTables: tables });
+            return tables.length ? { shell: shell, tables: tables, rows: [] } : { bytes: shell };
+        }
+        var labels = buildSlpLabelsMultiSession([sel], reprojAsUser, instanceFilter);
+        if (!toWorker) return { bytes: await SIO.saveSlpToBytes(labels) };
+        var rows = [];
+        var eagerShell = await SIO.saveSlpToBytes(labels, {
+            lucidDivertTables: function (name, data, n, cols) { rows.push([name, data, n, cols]); },
+        });
+        return rows.length ? { shell: eagerShell, tables: [], rows: rows } : { bytes: eagerShell };
+    };
     try {
         await report();
         for (var k = 0; k < idx.length; k++) {
-            var sel = selections[idx[k]];
-            var labels = sel.session.lazyLoader.labelsByCam.get(sel.cameraName);
             if (!nWorkers) {
-                out[idx[k]] = await SIO.saveSlpToBytes(labels);
+                out[idx[k]] = (await build(k, false)).bytes;
                 finished++;
                 await report();
                 continue;
             }
             while (live.length >= cap) await Promise.race(live.map(function (x) { return x.done; }));
-            var tables = [];
-            var shell = await SIO.saveSlpToBytes(labels, { lucidDeferTables: tables });
-            if (!tables.length) {   // a small camera: nothing to defer, the file is whole
-                out[idx[k]] = shell;
+            var part = await build(k, true);
+            if (part.bytes) {   // a small camera: nothing held back, the file is whole
+                out[idx[k]] = part.bytes;
                 finished++;
                 await report();
                 continue;
             }
-            var h = _startRowsWorker(shell);
+            var h = null;
             try {
+                h = _startRowsWorker(part.shell);   // a Worker that cannot be made throws here
                 await h.ready;
             } catch (we) {
-                h.terminate();
+                if (h) h.terminate();
                 if (finished > 0 || live.length) throw we;   // they ran for the cameras before
-                console.warn('[export-slp-lazy] export workers unavailable, compressing on this thread:', we);
+                console.warn('[export-slp-cameras] export workers unavailable, compressing on this thread:', we);
                 nWorkers = 0;
                 k--;   // this camera again, on this thread
                 continue;
             }
-            for (var t = 0; t < tables.length; t++) h.create(tables[t].spec, tables[t].data, tables[t].attrs);
-            tables = null;
+            for (var t = 0; t < part.tables.length; t++) h.create(part.tables[t].spec, part.tables[t].data, part.tables[t].attrs);
+            for (var r = 0; r < part.rows.length; r++) h.send(part.rows[r][0], part.rows[r][1], part.rows[r][2], part.rows[r][3]);
+            part = null;
             (function (slot, handle) {
                 var entry = { h: handle, done: null };
                 entry.done = handle.finish().then(function (bytes) {
@@ -1623,9 +1664,20 @@ export async function exportCamerasLazyRewrite(selections, reprojAsUser, instanc
         for (var d = 0; d < live.length; d++) { try { live[d].h.terminate(); } catch (e) { /* ignore */ } }
         throw err;
     }
-    console.log('[export-slp-lazy] ' + idx.length + ' camera(s) rewritten from their own stores in ' +
-        Math.round(performance.now() - t0) + ' ms' + (nWorkers ? ' (up to ' + cap + ' worker' + (cap === 1 ? '' : 's') + ' at once)' : ' (this thread)'));
+    var how = nWorkers ? ' (up to ' + cap + ' worker' + (cap === 1 ? '' : 's') + ' at once)' : ' (this thread)';
+    if (nLazy) console.log('[export-slp-lazy] ' + nLazy + ' camera(s) rewritten from their own stores in ' +
+        Math.round(performance.now() - t0) + ' ms' + how);
+    if (idx.length - nLazy) console.log('[export-slp-eager] ' + (idx.length - nLazy) + ' fully loaded camera(s) written in ' +
+        Math.round(performance.now() - t0) + ' ms' + how);
     return out;
+}
+
+/**
+ * `exportCamerasInWorkers` for folder-loaded cameras only (each rewritten from
+ * its own store); other cameras get null.
+ */
+export function exportCamerasLazyRewrite(selections, reprojAsUser, instanceFilter, opts) {
+    return exportCamerasInWorkers(selections, reprojAsUser, instanceFilter, Object.assign({}, opts || {}, { kinds: ['lazy'] }));
 }
 
 /** Copied from pose/tracker.js's identical helper — see that file's doc. */
