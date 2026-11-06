@@ -3207,6 +3207,39 @@ export class Session {
     }
 
     /**
+     * `predictedNodeScore` for every node of one instance: the function maps a
+     * node index `k` to exactly what `predictedNodeScore(cameraName, frameIdx,
+     * inst, k)` returns, with the instance's store row (lazy) resolved once
+     * instead of per node (By Cam's per-frame pass asks for every node).
+     *
+     * @param {string} cameraName
+     * @param {number} frameIdx
+     * @param {Instance} inst
+     * @returns {(k: number) => number}
+     */
+    predictedNodeScorer(cameraName, frameIdx, inst) {
+        const none = function () { return NaN; };
+        if (!inst || inst.type !== 'predicted') return none;
+        const n = inst.numNodes;
+        const inRange = function (k) { return Number.isInteger(k) && k >= 0 && k < n; };
+        if (inst.hasPointScores()) return function (k) { return inRange(k) ? inst.pointScore(k) : NaN; };
+        const loader = this.lazyLoader;
+        if (!loader || !Number.isInteger(inst._rawInstIndex) || inst._rawInstIndex < 0) return none;
+        if (typeof loader.predictedPointScorer !== 'function') {
+            if (typeof loader.predictedPointScore !== 'function') return none;
+            return (k) => this.predictedNodeScore(cameraName, frameIdx, inst, k);
+        }
+        const scoreOf = loader.predictedPointScorer(cameraName, frameIdx, inst._rawInstIndex);
+        if (!scoreOf) return none;
+        const nodes = this.skeleton && this.skeleton.nodes;
+        return function (k) {
+            if (!inRange(k)) return NaN;
+            const name = nodes ? nodes[k] : undefined;
+            return name == null ? NaN : scoreOf(name);
+        };
+    }
+
+    /**
      * Sorted list of all frame indices.
      * @returns {number[]}
      */

@@ -10,27 +10,27 @@
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
          setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d,
-         isPoints3dSmoothed } from './pose-data.js?v=e5a4248c3bb8';
+         isPoints3dSmoothed } from './pose-data.js?v=78b71d338e46';
 // The Jacobi eigensolver and the least-squares plane fit live in
 // `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
 // importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
 // re-exported unchanged, because every existing caller and test reads it here.
-import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=e5a4248c3bb8';
+import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=78b71d338e46';
 export { fitPlaneToPoints3d };
-import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=e5a4248c3bb8';
+import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=78b71d338e46';
 // Pass 3i-2: triangulation orchestration moved out of app.js
-import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=e5a4248c3bb8';
-import { updateTriangulationBadge } from '../ui/info-panel.js?v=e5a4248c3bb8';
-import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=e5a4248c3bb8';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=e5a4248c3bb8';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=e5a4248c3bb8';
-import { createGroupSolver } from './triangulation-pool.js?v=e5a4248c3bb8';
-import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=e5a4248c3bb8';
+import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=78b71d338e46';
+import { updateTriangulationBadge } from '../ui/info-panel.js?v=78b71d338e46';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=78b71d338e46';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=78b71d338e46';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=78b71d338e46';
+import { createGroupSolver } from './triangulation-pool.js?v=78b71d338e46';
+import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=78b71d338e46';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
-         dropDerivedReprojections, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=e5a4248c3bb8';
+         dropDerivedReprojections, lazyRowInstance, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=78b71d338e46';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from './initialization.js?v=e5a4248c3bb8';
-import { noteTriangulateRun, carryTriangulateMark } from './run-state.js?v=e5a4248c3bb8';
+import { update3DViewport } from './initialization.js?v=78b71d338e46';
+import { noteTriangulateRun, carryTriangulateMark } from './run-state.js?v=78b71d338e46';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -50,7 +50,7 @@ import {
     hungarianAlgorithm, cameraCenter, backProjectToRay, backProjectToRays,
     pointToRayDistance, pointsToRayDistances,
     computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
-} from './triangulation-core.js?v=e5a4248c3bb8';
+} from './triangulation-core.js?v=78b71d338e46';
 export {
     triangulatePointDLT, triangulatePoints, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,
@@ -1636,7 +1636,7 @@ async function hydrateLazyCameras(session, frameIdx, camNames) {
         if (haveUl && haveUl.length > 0) continue;
         for (var ii = 0; ii < instances.length; ii++) {
             var d = instances[ii];
-            var inst = new Instance(d.points || [], lazyInstanceTrackIdx(d.trackIdx), d.type || 'predicted', d.score || 0);
+            var inst = lazyRowInstance(d, lazyInstanceTrackIdx(d.trackIdx));
             inst._rawInstIndex = ii;   // see the note in ensureLazyFrameData
             staged.addInstance(camName, inst);
             added++;
@@ -1683,12 +1683,7 @@ export async function ensureLazyFrameData(frameIdx) {
     for (var [camName, instances] of cameraData) {
         for (var ii = 0; ii < instances.length; ii++) {
             var instData = instances[ii];
-            var inst = new Instance(
-                instData.points || [],
-                lazyInstanceTrackIdx(instData.trackIdx),
-                instData.type || 'predicted',
-                instData.score || 0
-            );
+            var inst = lazyRowInstance(instData, lazyInstanceTrackIdx(instData.trackIdx));
             // `ii` is this instance's position in the frame's raw instance list,
             // i.e. its row offset within the lazy store's [start,end) range for
             // this (camera, frame) — see slp-streaming-write.js's `refFor`, which
@@ -1735,12 +1730,7 @@ export function buildLazyFrameGroupSync(frameIdx) {
     for (var [camName, instances] of cached) {
         for (var ii = 0; ii < instances.length; ii++) {
             var instData = instances[ii];
-            var inst = new Instance(
-                instData.points || [],
-                lazyInstanceTrackIdx(instData.trackIdx),
-                instData.type || 'predicted',
-                instData.score || 0
-            );
+            var inst = lazyRowInstance(instData, lazyInstanceTrackIdx(instData.trackIdx));
             // See the identical tag in ensureLazyFrameData above — this is
             // the store row offset `refFor` (slp-streaming-write.js) needs to
             // resolve this instance's exact raw row on save.
@@ -1808,10 +1798,7 @@ export async function batchLoadLazyFrames(startIdx, count, onProgress) {
             if (!camData || !camData.instances) continue;
             for (var ii = 0; ii < camData.instances.length; ii++) {
                 var instData = camData.instances[ii];
-                var inst = new Instance(
-                    instData.points || [], lazyInstanceTrackIdx(instData.trackIdx),
-                    instData.type || 'predicted', instData.score || 0
-                );
+                var inst = lazyRowInstance(instData, lazyInstanceTrackIdx(instData.trackIdx));
                 // See ensureLazyFrameData's identical tag above.
                 inst._rawInstIndex = ii;
                 fg.addInstance(cameraNames[ci], inst);

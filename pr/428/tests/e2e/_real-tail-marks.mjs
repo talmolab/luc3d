@@ -15,6 +15,8 @@
  *        MARKS='{"tailBands":{"id_0":"marked","id_1":"plain"}}': run the identity engine
  *          (pose/identity-cues.js) with these per-identity marks instead of the two-animal pass
  *        FORCE=1: a session refused as having no marks is run anyway, to look at it
+ *        READ='{"percentile":0.85,"widthShare":0.0833,"baseExtension":0}': override the band cue's tail read
+ *          (TAIL_BAND_READ in pose/tail-mark.js), through globalThis.__lucidTailBandRead
  */
 import { chromium } from 'playwright';
 import http from 'node:http';
@@ -87,9 +89,10 @@ try {
             });
             await page.waitForFunction(() => { const s = window.__lucid.state.session; return s && s.cameras && s.cameras.length > 1 && window.__lucid.state.views && window.__lucid.state.views.some((v) => v.decoder); }, null, { polling: 1000 });
             await new Promise((r) => setTimeout(r, 3000));
-            const res = await page.evaluate(async ({ marked, heldout, maxCrops, force, extra, marksArg, animals }) => {
+            const res = await page.evaluate(async ({ marked, heldout, maxCrops, force, extra, marksArg, animals, readArg }) => {
                 const s = window.__lucid.state.session;
                 const tr = await import('./pose/tracker.js');
+                if (readArg) globalThis.__lucidTailBandRead = readArg;
                 tr.setTrackerNumAnimals(animals);
                 if (marksArg) tr.setIdentityMarks(marksArg); else tr.setTailMarkedIdentity(marked);
                 const t0 = performance.now();
@@ -245,7 +248,7 @@ try {
                 }
                 out.size = Object.fromEntries([...bins].map(([k, v]) => { v.sort((a, b) => a - b); return [k, v[v.length >> 1]]; }));
                 return out;
-            }, { marked: MARKED, heldout: HELDOUT, maxCrops: MAX_CROPS, force: !!process.env.FORCE, extra: EXTRA[name] || [], marksArg: MARKS, animals: ANIMALS });
+            }, { marked: MARKED, heldout: HELDOUT, maxCrops: MAX_CROPS, force: !!process.env.FORCE, extra: EXTRA[name] || [], marksArg: MARKS, animals: ANIMALS, readArg: process.env.READ ? JSON.parse(process.env.READ) : null });
             if (SAVE && res.result && res.result.ok) {
                 const sv = await page.evaluate(async () => {
                     const s = window.__lucid.state.session;
