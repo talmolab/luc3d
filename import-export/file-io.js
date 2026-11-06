@@ -1553,8 +1553,12 @@ export function cameraExportUsesEagerBuild(selection, reprojAsUser, instanceFilt
         !_exportWouldTruncate(selection.session));
 }
 
-/** Cameras of the per-camera rewrite in workers at once (each holds its tables until written). */
-var LAZY_REWRITE_IN_FLIGHT = 4;
+/**
+ * Cameras of the per-camera rewrite in workers at once (each holds its tables until written).
+ * 3, not 4: on the lab VM (8 cameras x 108,000 frames) 4 peaked Chrome at 8.1-9.4 GB for 7.9-8.5 s,
+ * 3 at 7.5-7.8 GB for 10.4-10.6 s (one thread: 6.5 GB, 24.5 s).
+ */
+var LAZY_REWRITE_IN_FLIGHT = 3;
 
 /**
  * By Cam's one-camera files for several cameras, the compression in workers.
