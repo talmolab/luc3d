@@ -36,7 +36,7 @@ import {
   resolveIdentity,
   resolveVideoFilename,
   sessionsReadError
-} from "./chunk-H7G4PJNA.js?v=84854c8f9c75";
+} from "./chunk-H7G4PJNA.js?v=cfec6ab2c021";
 import {
   RemoteIOError,
   fetchRetrying,
@@ -48,7 +48,7 @@ import {
   redactedCauseSummary,
   resolveUrl,
   statusToMessage
-} from "./chunk-YS7Q6CO6.js?v=84854c8f9c75";
+} from "./chunk-YS7Q6CO6.js?v=cfec6ab2c021";
 
 // src/model/centroid.ts
 var _centroidSkeleton = null;
@@ -14615,7 +14615,12 @@ async function saveSlpToBytes(labels, options) {
   const file = new module.File(memPath, "w");
   try {
     try {
-      writeSlpToFile(file, writeLabels2, plan);
+      lucidEagerDivert = typeof options?.lucidDivertTables === "function" ? options.lucidDivertTables : null;
+      try {
+        writeSlpToFile(file, writeLabels2, plan);
+      } finally {
+        lucidEagerDivert = null;
+      }
       if (plan && plan.size > 0) {
         await writeEmbeddedVideoData(file, labels, plan);
       }
@@ -15308,6 +15313,11 @@ LucidAppendTable.prototype.flush = function () {
   const ds = this.file.get(this.name);
   const data = this.buf.subarray(0, this.rows * this.ncols);
   lucidCompactRound(this.name, data, this.rows, this.ncols);
+  if (this.lucidDivert) {
+    this.lucidDivert(this.name, data.slice(), this.rows, this.ncols);
+    this.rows = 0;
+    return;
+  }
   ds.resize([this.total, this.ncols]);
   ds.write_slice([[base, this.total], [0, this.ncols]], data);
   this.rows = 0;
@@ -15827,6 +15837,15 @@ function emitInstancePointsInto(table, instance, predicted) {
 // flushed row cannot be, so the instance ids it needs are found first, by a
 // pre-pass that runs only when some user instance has a `fromPredicted`. It
 // keeps the old map's rule: an instance listed twice resolves to its LAST row.
+// LUCID local patch (eager divert): while `saveSlpToBytes(labels,
+// { lucidDivertTables: fn })` runs its eager path, the four 2D tables still
+// create their datasets here exactly as before (same order, chunks, gzip,
+// field_names), but a table past SESSION_FLUSH_ROWS hands each block of rows to
+// `fn(name, rows: Float64Array (owned), rowCount, colCount)` instead of writing
+// it, so the returned file holds those tables EMPTY and a worker appends and
+// gzips the rows (`import-export/slp-rows-worker.js` 'rows', in the order
+// given). Tables of at most SESSION_FLUSH_ROWS rows are written here as before.
+var lucidEagerDivert = null;
 function writeLabeledFrames(file, labels) {
   const framesTable = new LucidAppendTable(file, "frames", 5, "<i8", FRAMES_FIELDS, "chunked", null);
   const instancesTable = new LucidAppendTable(file, "instances", 10, "<d", INSTANCES_FIELDS, "chunked", null);
@@ -15834,6 +15853,9 @@ function writeLabeledFrames(file, labels) {
   // parsed as float32, corrupting point ids beyond 2^24 point rows.
   const pointsTable = new LucidAppendTable(file, "points", 4, "<f8", POINTS_FIELDS, "chunked", null);
   const predPointsTable = new LucidAppendTable(file, "pred_points", 5, "<f8", PRED_POINTS_FIELDS, "chunked", null);
+  if (lucidEagerDivert) {
+    framesTable.lucidDivert = instancesTable.lucidDivert = pointsTable.lucidDivert = predPointsTable.lucidDivert = lucidEagerDivert;
+  }
   let instanceIndex = null;
   for (const labeledFrame of labels.labeledFrames) {
     for (const instance of labeledFrame.instances) {

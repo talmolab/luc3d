@@ -9,8 +9,9 @@
  *     picker of the site last went). `folderPickerStartFor` (Load Project's video
  *     prompt) still returns the handle only for the file being opened.
  *  2. Progress is the app's card (ui/loading-overlay.js), not the button text:
- *     one step per camera ("Step k of n"). A fully loaded project writes each
- *     camera in one go (spinner + "Writing <cam>.slp…"); on a lazily opened
+ *     one step per camera ("Step k of n"), after a first step that builds every
+ *     camera of a fully loaded project while workers compress them ("Writing 2
+ *     cameras: k/2 cameras…" on the bar, `exportCamerasInWorkers`); on a lazily opened
  *     project the sweep's frames fill the bar (5). The modal steps aside while
  *     the card shows.
  *  3. End state: the card is hidden, the modal closed, the files written, and
@@ -223,10 +224,11 @@ try {
     console.log('2/3. Progress card — fully loaded project');
     check(r.card.length > 0 && r.card.some(s => s.visible), 'the progress card showed');
     check(r.card.every(s => !s.visible || s.title === 'Export SLEAP by Camera'), 'card titled "Export SLEAP by Camera"');
-    for (const [k, cam] of [[1, 'camA'], [2, 'camB']]) {
-        check(r.card.some(s => s.visible && s.spinner && s.status === 'Writing ' + cam + '.slp…' && /^Step \d of 2/.test(s.sub) && s.sub.startsWith('Step ' + k)),
-            `step ${k} of 2: spinner + "Writing ${cam}.slp…"`);
-    }
+    // Both cameras are built in one step while workers compress them (exportCamerasInWorkers).
+    const wBars = r.card.filter(s => s.visible && s.bar && /^Writing 2 cameras: \d\/2 cameras…$/.test(s.status) && s.sub.startsWith('Step 1 of 3'));
+    check(wBars.length > 0 && wBars[wBars.length - 1].status === 'Writing 2 cameras: 2/2 cameras…',
+        'step 1 of 3: one step for both cameras, a bar "Writing 2 cameras: k/2 cameras…" up to 2/2', r.card.filter(s => s.visible).map(s => s.status + ' | ' + s.sub));
+    check(!r.card.some(s => s.visible && /^Writing cam[AB]\.slp…$/.test(s.status)), 'no camera is built again in its own step');
     check(r.card.filter(s => s.visible).every(s => !s.modalShown), 'the modal steps aside while the card shows');
     check(r.cardHidden && !r.modalOpen, 'end: card hidden, modal closed');
     check(/Download Successful/.test(r.popup || ''), 'end: "Download Successful"', r.popup);
@@ -272,8 +274,6 @@ try {
                 t.dirs.Camera_B_dir.files['b_loaded.slp'].size, Object.keys(t.files).join(',')];
     });
     check(src[0] === 7 && src[1] === 7 && src[2] === 'project.slp', 'sources untouched; nothing written in the folder itself', src);
-    check(r.card.some(s => s.visible && s.status === 'Writing 21241563/21241563-20260921105806_nn_proofread.slp…'),
-        'the card names the camera folder and file');
     check(/Exported 2 SLP files to exports: 2 in camera folders as <source>_proofread\.slp$/.test(r.status), 'status says where', r.status);
     await closePopup();
 

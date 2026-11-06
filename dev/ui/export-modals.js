@@ -8,9 +8,9 @@
 //
 // Extracted from app.js per the consolidated Pass 3 plan, Module 13.
 
-import { noteProgress } from './progress-delta.js?v=84854c8f9c75';
-import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=84854c8f9c75';
-import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=84854c8f9c75';
+import { noteProgress } from './progress-delta.js?v=cfec6ab2c021';
+import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=cfec6ab2c021';
+import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=cfec6ab2c021';
 import {
     triangulateAndReproject,
     frameHasGroupedUserInstances,
@@ -26,40 +26,41 @@ import {
     triangulationSettingsKey,
     triangulationMethodLabel,
     dropAllDerivedTriangulationState,
-} from '../pose/triangulation.js?v=84854c8f9c75';
-import { Viewport3D } from './viewport3d.js?v=84854c8f9c75';
-import { getTrackColor, getGroupColor } from './overlays.js?v=84854c8f9c75';
-import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=84854c8f9c75';
-import { updateInfoPanel } from './info-panel.js?v=84854c8f9c75';
-import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=84854c8f9c75';
-import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js?v=84854c8f9c75';
-import { createGroupSolver } from '../pose/triangulation-pool.js?v=84854c8f9c75';
+} from '../pose/triangulation.js?v=cfec6ab2c021';
+import { Viewport3D } from './viewport3d.js?v=cfec6ab2c021';
+import { getTrackColor, getGroupColor } from './overlays.js?v=cfec6ab2c021';
+import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=cfec6ab2c021';
+import { updateInfoPanel } from './info-panel.js?v=cfec6ab2c021';
+import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=cfec6ab2c021';
+import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js?v=cfec6ab2c021';
+import { createGroupSolver } from '../pose/triangulation-pool.js?v=cfec6ab2c021';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
     exportCamerasSlpStreaming,
-    exportCamerasLazyRewrite,
+    exportCamerasInWorkers,
+    cameraExportUsesEagerBuild,
     cameraExportUsesSweep,
     cameraExportUsesLazyRewrite,
     findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
-} from '../import-export/file-io.js?v=84854c8f9c75';
+} from '../import-export/file-io.js?v=cfec6ab2c021';
 
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from '../pose/initialization.js?v=84854c8f9c75';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=84854c8f9c75';
-import { fileSystemAccessHint } from './browser-hints.js?v=84854c8f9c75';
-import { pickExportFolder } from '../loading/folder-picker-start.js?v=84854c8f9c75';
-import { chooseProofreadSource, proofreadSlpName } from '../loading/percam-slp-choice.js?v=84854c8f9c75';
-import { noteTriangulateRun } from '../pose/run-state.js?v=84854c8f9c75';
+import { update3DViewport } from '../pose/initialization.js?v=cfec6ab2c021';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=cfec6ab2c021';
+import { fileSystemAccessHint } from './browser-hints.js?v=cfec6ab2c021';
+import { pickExportFolder } from '../loading/folder-picker-start.js?v=cfec6ab2c021';
+import { chooseProofreadSource, proofreadSlpName } from '../loading/percam-slp-choice.js?v=cfec6ab2c021';
+import { noteTriangulateRun } from '../pose/run-state.js?v=cfec6ab2c021';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
 // private copies of all four and had silently drifted apart (a 2x bitrate floor
 // gap at the smallest tier, and two disagreeing level tables).
 import {
     RES_PRESETS, bitrateFor, estimatedBytes, h264CodecFor, shouldStreamToDisk,
-} from './overlay-export-layout.js?v=84854c8f9c75';
+} from './overlay-export-layout.js?v=cfec6ab2c021';
 
 // ============================================
 // Group by Track & Triangulate All
@@ -1865,15 +1866,17 @@ export function showSlpExportByCamModal() {
             g.cams.push(cn);
             g.sels.push(sels[0]);
         });
-        // Cameras of a folder-loaded project, each rewritten from its own store:
-        // built one after another here while workers compress them side by
-        // side (`exportCamerasLazyRewrite`), as one step before the per-camera
-        // steps. A single such camera stays in the per-camera loop.
+        // Cameras of a folder-loaded project (each rewritten from its own store)
+        // and fully loaded cameras (each built from memory): built one after
+        // another here while workers compress them side by side
+        // (`exportCamerasInWorkers`), as one step before the per-camera steps.
+        // A single such camera stays in the per-camera loop.
         var rewrite = { cams: [], sels: [] };
         cols.forEach(function (cn) {
             var sels = buildColumnSelections(cn);
             if (sels.length !== 1 || cameraExportUsesSweep(sels[0], reprojAsUser, instanceFilter) ||
-                !cameraExportUsesLazyRewrite(sels[0], reprojAsUser, instanceFilter)) return;
+                !(cameraExportUsesLazyRewrite(sels[0], reprojAsUser, instanceFilter) ||
+                  cameraExportUsesEagerBuild(sels[0], reprojAsUser, instanceFilter))) return;
             rewrite.cams.push(cn);
             rewrite.sels.push(sels[0]);
         });
@@ -1944,7 +1947,7 @@ export function showSlpExportByCamModal() {
                 var rwLabel = 'Writing ' + rewrite.cams.length + ' cameras';
                 showLoading(rwLabel + '…', cardOpts(rwStep));
                 await yieldToPaint();
-                var rewritten = await exportCamerasLazyRewrite(rewrite.sels, reprojAsUser, instanceFilter, {
+                var rewritten = await exportCamerasInWorkers(rewrite.sels, reprojAsUser, instanceFilter, {
                     onProgress: function (done, total) {
                         if (cancelled) throw new ExportCancelled();
                         showLoadingProgress(rwLabel, done, total, cardOpts(rwStep, { unit: 'cameras' }));
