@@ -1,0 +1,55 @@
+h5wasm — vendored WebAssembly HDF5 (reads/writes .slp / .h5 in the browser)
+
+Source:  npm `h5wasm@0.10.3`  (https://www.npmjs.com/package/h5wasm)
+Pinned:  0.10.3
+Added:   PR 5.2b (h5wasm consolidation) — replaces the mixed CDN 0.8.8 /
+         CDN 0.10.2 / local ~0.10 setup with a single local 0.10.3.
+
+Files (from the npm tarball's dist/):
+  hdf5_hl.js      <- dist/esm/hdf5_hl.js    ESM entry (imports ./hdf5_util.js).
+                     Used via the index.html importmap (`h5wasm`) by sleap-io.js's
+                     main-thread materialization, and by relative import in the
+                     module workers (loading/slp-import-worker.js, frame-worker.js).
+  hdf5_util.js    <- dist/esm/hdf5_util.js  Emscripten glue + embedded wasm (no
+                     sidecar .wasm to serve).
+  h5wasm.iife.js  <- dist/iife/h5wasm.js    Self-contained IIFE (global `h5wasm`).
+                     Used by the index.html <script> tag (points3d read/write via
+                     initH5wasm) and passed as `h5wasmUrl` to readSlpStreaming's
+                     importScripts worker.
+
+Not vendored: dist/esm/file_handlers.js (not in hdf5_hl.js's import graph),
+dist/node/* (Node build).
+
+Rebuild/bump: `npm pack h5wasm@<version>`, then copy dist/esm/{hdf5_hl,hdf5_util}.js
+and dist/iife/h5wasm.js here; re-verify every reader (points3d R/W, analysis-H5,
+embedded-frame extraction, SLP) since 0.10.x changed some APIs (e.g. removed
+`create_compound_dataset`). Then RE-APPLY the local patch below.
+
+LOCAL PATCH (cold-read), in hdf5_util.js AND h5wasm.iife.js:
+  WORKERFS's `stream_ops.read` reads a File one slice at a time with
+  FileReaderSync. In a folder synced by Google Drive for desktop on macOS (File
+  Provider), a file whose download is still in progress can hand back a slice
+  with one or two 16 KiB pages of ZEROS and every other byte right (measured
+  2026-10-19 on the proofread SLAP sessions; a warm read of the same file is
+  always right). Nothing fails, so HDF5 parsed the zeros as data. The patch
+  adds `lucidColdReadGuard`, called right after the slice is copied: every part
+  of the read that came back all zero (per 4 KiB block, clipped to the read) is
+  read again TOGETHER WITH THE 4 KiB BLOCK ON EACH SIDE OF IT, and re-read bytes
+  are copied in only where the first read gave a zero byte; a re-read that
+  still holds an all-zero part is checked the same way, at most three re-reads
+  deep. A hole comes back as the real bytes; bytes that really are zero cost
+  one small re-read. The neighbouring blocks are there because a run of zeros
+  need not end on a block boundary: on 167 MB .slp files read cold (5-camera
+  BM_JJ arena sessions, 2026-10-19) the first version of this patch, which
+  re-read only the all-zero blocks, still parsed 15 of 15 files wrong, and all
+  93 wrong blocks examined were the partly-zero block right after the run it
+  had re-read. With the neighbours, 15 of 15 cold parses on three more sessions
+  matched the file. Reads that THROW were never seen here (0 in ~645,000 cold
+  reads, ~10 GB), so the patch has no retry for them. Counts are kept on
+  `WORKERFS.lucidColdRead` ({rereads, recovered}); each recovery logs a
+  `[h5wasm WORKERFS] … were read again` console warning.
+  Grep `LUCID local patch (cold-read)`: one BEGIN/END block (the function,
+  byte-identical in both files) plus the one-line call in each WORKERFS read.
+  `tests/test-workerfs-cold-read.mjs` asserts both, exercises both builds, and
+  fails on the unpatched files. Note `git diff` shows hdf5_util.js as binary
+  (embedded wasm); the IIFE carries the same block in readable form.
