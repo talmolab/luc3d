@@ -3048,6 +3048,9 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
     // go grey. Done before the legend so the legend key stays readable.
     if (options.trackingExcluded) {
         ctx.save();
+        // The whole canvas, whatever transform the caller set (a zoomed-in
+        // overlay WINDOW draws through a translate — see the clear in step 1).
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.globalCompositeOperation = 'source-atop';
         ctx.fillStyle = 'rgba(140, 140, 140, 0.85)';
         ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
