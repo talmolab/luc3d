@@ -14,12 +14,12 @@
  * ES module. Exports `InteractionManager` and `isInteractiveClickTarget`.
  */
 
-import { Instance } from '../pose/pose-data.js?v=ef8b8f93fc19';
-import { getOrComputeReprojectedInstance } from '../pose/triangulation.js?v=ef8b8f93fc19';
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=ef8b8f93fc19';
-import { deleteTargetsFromStore, groupMemberTargets, unlinkedTarget } from './custom-delete-ops.js?v=ef8b8f93fc19';
-import { nodeTooltipText, setNodeTooltipTarget, hideNodeTooltip } from './node-tooltip.js?v=ef8b8f93fc19';
-import { getGroupColor, unlinkedDupIndices, unlinkedBaseColor, wedgeHalfWidth } from './overlays.js?v=ef8b8f93fc19';
+import { Instance } from '../pose/pose-data.js?v=2ac8a4006d25';
+import { getOrComputeReprojectedInstance } from '../pose/triangulation.js?v=2ac8a4006d25';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=2ac8a4006d25';
+import { deleteTargetsFromStore, groupMemberTargets, unlinkedTarget } from './custom-delete-ops.js?v=2ac8a4006d25';
+import { nodeTooltipText, setNodeTooltipTarget, hideNodeTooltip } from './node-tooltip.js?v=2ac8a4006d25';
+import { getGroupColor, unlinkedDupIndices, unlinkedBaseColor, wedgeHalfWidth } from './overlays.js?v=2ac8a4006d25';
 
 // ============================================
 // Alt + wheel instance rotation
@@ -314,7 +314,10 @@ export class InteractionManager {
         const view = this._findView(state, viewName);
         if (!view) return [clientX, clientY];
 
-        const canvas = view.overlayCanvas;
+        // The VIDEO canvas's box: the overlay canvas shares it, except on a
+        // zoomed-in view, where it is a window onto part of it
+        // (`ui/overlay-window.js`). Both sit in the same zoomed wrapper.
+        const canvas = view.canvas || view.overlayCanvas;
         if (!canvas) return [clientX, clientY];
 
         // getBoundingClientRect() includes CSS transforms (zoom/pan/rotation),
@@ -418,12 +421,14 @@ export class InteractionManager {
     _displayToVideo(state, viewName) {
         if (!state) return 1;
         const view = this._findView(state, viewName);
-        if (view && view.overlayCanvas) {
-            const cssW = parseFloat(view.overlayCanvas.style.width) || view.overlayCanvas.offsetWidth;
+        // The video box (see `canvasToVideo` for why not the overlay canvas).
+        const boxEl = view ? (view.canvas || view.overlayCanvas) : null;
+        if (boxEl) {
+            const cssW = parseFloat(boxEl.style.width) || boxEl.offsetWidth;
             const zoom = view.zoom ? view.zoom.scale : 1;
             const displayW = cssW * zoom;
             if (displayW > 0) {
-                return (view.videoWidth || view.overlayCanvas.width) / displayW;
+                return (view.videoWidth || boxEl.width) / displayW;
             }
         }
         return 1;

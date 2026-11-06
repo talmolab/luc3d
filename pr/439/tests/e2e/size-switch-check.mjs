@@ -260,8 +260,9 @@ try {
         check(await page.evaluate(() => document.getElementById('idSwitchNext').disabled), '"Next unreviewed" is disabled once all are ticked');
     }
     // leave the tab and come back; re-run; switch sessions away and back — results and ticks persist
-    await page.click('.panel-rail-btn[data-tab="tabInstances"] .panel-rail-icon');
-    await page.click('.panel-rail-btn[data-tab="tabIdSwitches"] .panel-rail-icon');
+    await page.click('.panel-rail-btn[data-tab="tabInstances"]');
+    await page.click('.panel-rail-btn[data-tab="tabIdSwitches"]');
+    await page.mouse.move(300, 300);   // off the rail: widened, it covers the panel's right edge
     let back = await rowsNow();
     check(back.length === ui.rows.length && back[0].reviewed, `reopening the tab shows the same ${back.length} rows, first still ticked`);
     await page.evaluate(() => document.getElementById('menuCheckSizeSwitches').click());
