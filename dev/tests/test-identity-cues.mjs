@@ -130,6 +130,60 @@ const expected = { id_0: { colour: 'red' }, id_1: { colour: 'blue' }, id_2: { co
     eq(JSON.stringify([...s.instanceGroups.get(400)].map((g) => g.identityId)), before, 'and nothing is relabelled');
 }
 
+// ---- sparse samples, then dense reads around the ones that disagree ----------------------
+{
+    const frames = Array.from({ length: 1000 }, (_, i) => i);
+    const d = ic.denseFramesAround([0, 200, 400, 600], [2], frames, 30);
+    eq([d[0], d[d.length - 1], d.length], [230, 590, 13], 'every 30 frames strictly between the suspect\'s neighbours');
+    ok(d.every((f, i) => i === 0 || f - d[i - 1] === 30) && !d.includes(400), 'evenly spaced, never an existing sample');
+    eq(ic.denseFramesAround([0, 25, 50], [1], frames, 30), [], 'neighbours no more than two steps apart: nothing to add');
+    eq(ic.denseFramesAround([0, 200], [0], frames, 30).length, 6, 'a suspect at the start reads up to its one neighbour');
+}
+{
+    // two identities, two animals; row = [id0 as A, id0 as B, id1 as A, id1 as B]
+    const agree = Float64Array.from([0, 1, 1, 0]), against = Float64Array.from([0.6, 0, 0, 0.6]), mild = Float64Array.from([0.1, 0, 0, 0.1]);
+    const decision = { perms: ic.permutationsOf(2), states: Int32Array.from([0, 0, 0]) };
+    eq(ic.suspectSamples([agree, against, mild], decision, 2, { suspectCost: 0.35 }), [1], 'a sample whose best assignment beats the decision by more than suspectCost');
+    eq(ic.suspectSamples([agree, null, against], decision, 2, { suspectCost: 2 }), [], 'none past a high bar; a sample with no reads is never suspect');
+}
+{
+    const c = ic.combineCosts([[Float64Array.from([0, 4, 4, 0]), Float64Array.from([0, 2, 2, 0])]], 2);
+    eq(c.typical, 4, 'typical: the median spread');
+    const g = ic.combineCosts([[Float64Array.from([0, 4, 4, 0])]], 2, 8);
+    eq([g.typical, g.cost[0][1]], [8, 0.5], 'a given scale is used as is');
+    const all = ic.touchingFromRuns(null, [0, 10, 20]);
+    ok(all(0, 0, 1) && all(1, 1, 0), 'no 3D: every pair may swap in every gap');
+    const t = ic.touchingFromRuns({ '0|1': [[12, 15]] }, [0, 10, 20, 30]);
+    eq([t(0, 0, 1), t(1, 0, 1), t(1, 1, 0), t(2, 0, 1), t(1, 0, 2)], [false, true, true, false, false], 'a contact counts in the gap it overlaps, for that pair only');
+}
+{
+    // keyframes 200 frames apart (6.7 s at 30 fps); identities 100 and 101 swap on [330, 470).
+    // Only the sample at 400 falls inside, and only one of its cameras sees the animal: too little
+    // to pay for two swaps. Dense reads around it (one per second) show the swap.
+    const s = fakeSession(3, 1000), colour = ['red', 'blue', 'green'];
+    for (const [f, l] of s.instanceGroups) l.forEach((g) => { const i = g.identityId - 100; g.truth = f >= 330 && f < 470 && i < 2 ? colour[1 - i] : colour[i]; });
+    const reader = {
+        plan: async (frames, maxGap) => { reader.maxGap = maxGap; return frames.filter((f) => f % 200 === 0); },
+        open: async () => {}, close: () => {},
+        next: async (f) => ({ scores: new Map((s.instanceGroups.get(f) || []).map((g) => [g.identityId, f === 400 ? [g.truth] : [g.truth, g.truth, g.truth]])) }),
+    };
+    reader.at = reader.next;
+    const sparse = await ic.resolveIdentityCues(fixtureCopy(s), { fps: 30, expected, denseSeconds: 0, cues: [{ cue: fakeCue, reader }] });
+    eq(sparse.changes, 0, 'sparse samples alone: the swap is not worth two changes');
+    eq(reader.maxGap, ic.IDENTITY_CUE_DEFAULTS.maxSampleGapSeconds, 'the reader is asked for keyframes up to maxSampleGapSeconds apart');
+    const r = await ic.resolveIdentityCues(s, { fps: 30, expected, cues: [{ cue: fakeCue, reader }] });
+    ok(r.ok && r.dense > 0, 'reads densely around the disagreeing sample: ' + r.dense + ' frames');
+    eq(r.changes, 2, 'and finds both changes');
+    let wrong = 0;
+    for (const [, l] of s.instanceGroups) l.forEach((g) => { if (g.truth !== expected[s.identities.find((i) => i.id === g.identityId).name].colour) wrong++; });
+    ok(wrong <= 12, 'every identity holds its animal: ' + wrong + ' wrong group-frames');
+}
+function fixtureCopy(s) {
+    const c = fakeSession(3, 1000);
+    for (const [f, l] of c.instanceGroups) l.forEach((g, k) => { g.truth = s.instanceGroups.get(f)[k].truth; });
+    return c;
+}
+
 // ---- the tail-band cue on drawn tails -------------------------------------------------
 const W = 200, H = 60;
 function floor() { return new Uint8Array(W * H).fill(12); }

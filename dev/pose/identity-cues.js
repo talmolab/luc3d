@@ -36,7 +36,7 @@
  * `apartSwapCost` elsewhere (in units of a typical sample's evidence).
  */
 
-import { buildGrid, contactEpisodes, SIZE_CHECK_DEFAULTS } from './id-switch-check.js?v=f277dd523342';
+import { buildGrid, contactEpisodes, SIZE_CHECK_DEFAULTS } from './id-switch-check.js?v=79508c670a7b';
 
 export const IDENTITY_CUE_DEFAULTS = {
     /** Swaps across a contact, and across a gap with no contact, in typical-sample units. */
@@ -50,6 +50,20 @@ export const IDENTITY_CUE_DEFAULTS = {
     rounds: 3,
     /** Finding a change's frame stops when bracketed this closely (seconds). */
     refineSeconds: 0.1,
+    /**
+     * Around a sample that reads against the decision by more than `suspectCost` (typical-sample
+     * units), read every this many seconds between its neighbours, then decide again (0: never).
+     * On 05mice_flippers (keyframes 4.2 s apart) 0.25-0.5 gave the labels of reading every second
+     * throughout, from a third of the frames; below 0.15 the extra reads in a long contact tipped a
+     * 3 s relabel that the cameras contradict; at 1 a 6 s swap was missed.
+     */
+    denseSeconds: 1,
+    suspectCost: 0.35,
+    /**
+     * Readers sample keyframes up to this far apart (`reader.plan(frames, maxGapSeconds)`):
+     * cheap to decode, where every frame between keyframes costs decoding from the last one.
+     */
+    maxSampleGapSeconds: 10,
 };
 
 /**
@@ -77,6 +91,51 @@ export function permutationsOf(n) {
 }
 
 /**
+ * Where each pair of identities touches, from the 3D: frame spans per pair.
+ * @param {Object} session
+ * @param {number} fps
+ * @param {Array} ids  identity ids, in the order the decision uses
+ * @returns {?Object<string, Array<number[]>>}  "a|b" (indices into ids, a < b) -> [from, to]
+ *   frame spans, increasing; null when the session has no usable 3D
+ */
+export function pairContactRuns(session, fps, ids) {
+    var grid = buildGrid(session, Object.assign({}, SIZE_CHECK_DEFAULTS, { fps: fps, minTrackedSeconds: 0 }), false);
+    if (grid.fail) return null;
+    var kOf = new Map(grid.idents.map(function (id, k) { return [id.id, k]; }));
+    var col = ids.map(function (id) { return kOf.has(id) ? kOf.get(id) : -1; });
+    var out = {};
+    contactEpisodes(grid, 0).pairs.forEach(function (p) {
+        var a = col.indexOf(p.a), b = col.indexOf(p.b);
+        if (a < 0 || b < 0) return;
+        out[Math.min(a, b) + '|' + Math.max(a, b)] = p.eps.map(function (e) { return [grid.frames[e[0]] - grid.step, grid.frames[e[1]] + grid.step]; });
+    });
+    return out;
+}
+
+/**
+ * For each gap between consecutive samples, which identity pairs touch in it.
+ * @param {?Object<string, Array<number[]>>} runs  from `pairContactRuns`; null: every pair, every gap
+ * @param {number[]} samples  frames, increasing
+ * @returns {(gap: number, a: number, b: number) => boolean}  a, b are indices into the ids
+ */
+export function touchingFromRuns(runs, samples) {
+    if (!runs) return function () { return true; };
+    var touch = new Map();   // "a|b" -> Uint8Array per gap
+    Object.keys(runs).forEach(function (key) {
+        var rs = runs[key], gaps = new Uint8Array(Math.max(0, samples.length - 1)), r = 0;
+        for (var i = 0; i < gaps.length; i++) {
+            while (r < rs.length && rs[r][1] < samples[i]) r++;
+            gaps[i] = r < rs.length && rs[r][0] <= samples[i + 1] ? 1 : 0;
+        }
+        touch.set(key, gaps);
+    });
+    return function (gap, a, b) {
+        var g = touch.get(Math.min(a, b) + '|' + Math.max(a, b));
+        return !!(g && g[gap]);
+    };
+}
+
+/**
  * For each gap between consecutive samples, which identity pairs touch in it.
  * Falls back to "every pair, every gap" when the session has no usable 3D.
  * @param {Object} session
@@ -86,27 +145,7 @@ export function permutationsOf(n) {
  * @returns {(gap: number, a: number, b: number) => boolean}  a, b are indices into `ids`
  */
 export function pairContacts(session, samples, fps, ids) {
-    var grid = buildGrid(session, Object.assign({}, SIZE_CHECK_DEFAULTS, { fps: fps, minTrackedSeconds: 0 }), false);
-    if (grid.fail) return function () { return true; };
-    var kOf = new Map(grid.idents.map(function (id, k) { return [id.id, k]; }));
-    var col = ids.map(function (id) { return kOf.has(id) ? kOf.get(id) : -1; });
-    var pairs = contactEpisodes(grid, 0).pairs;
-    var touch = new Map();   // "a|b" (indices into ids) -> Uint8Array per gap
-    pairs.forEach(function (p) {
-        var a = col.indexOf(p.a), b = col.indexOf(p.b);
-        if (a < 0 || b < 0) return;
-        var runs = p.eps.map(function (e) { return [grid.frames[e[0]] - grid.step, grid.frames[e[1]] + grid.step]; });
-        var gaps = new Uint8Array(Math.max(0, samples.length - 1)), r = 0;
-        for (var i = 0; i < gaps.length; i++) {
-            while (r < runs.length && runs[r][1] < samples[i]) r++;
-            gaps[i] = r < runs.length && runs[r][0] <= samples[i + 1] ? 1 : 0;
-        }
-        touch.set(Math.min(a, b) + '|' + Math.max(a, b), gaps);
-    });
-    return function (gap, a, b) {
-        var g = touch.get(Math.min(a, b) + '|' + Math.max(a, b));
-        return !!(g && g[gap]);
-    };
+    return touchingFromRuns(pairContactRuns(session, fps, ids), samples);
 }
 
 /**
@@ -180,10 +219,11 @@ export function swapsFor(perm) {
 }
 
 /**
- * Sum every cue's costs for every identity and animal, scaled to typical-sample units.
+ * Sum every cue's costs for every identity and animal, scaled to typical-sample units: the
+ * median spread of one identity's costs at one sample, or `typicalGiven` when set.
  * @returns {{cost: Array<?Float64Array>, typical: number}}
  */
-export function combineCosts(perCue, K) {
+export function combineCosts(perCue, K, typicalGiven) {
     var T = perCue.length ? perCue[0].length : 0, cost = new Array(T), spread = [];
     for (var t = 0; t < T; t++) {
         var c = null;
@@ -203,7 +243,7 @@ export function combineCosts(perCue, K) {
         }
     }
     spread.sort(function (a, b) { return a - b; });
-    var typical = spread.length ? spread[spread.length >> 1] : 0;
+    var typical = typicalGiven > 0 ? typicalGiven : spread.length ? spread[spread.length >> 1] : 0;
     if (typical > 0) cost.forEach(function (c2) { if (c2) for (var x2 = 0; x2 < c2.length; x2++) c2[x2] /= typical; });
     return { cost: cost, typical: typical };
 }
@@ -269,43 +309,76 @@ export async function resolveIdentityCues(session, opts) {
     if (!frames.length) return { ok: false, reason: 'no tracked frames' };
 
     // Read every cue at the same samples.
-    var samples = await o.cues[0].reader.plan(frames);
+    var samples = await o.cues[0].reader.plan(frames, o.maxSampleGapSeconds);
     if (!samples.length) return { ok: false, reason: 'no frames to read' };
-    var obs = o.cues.map(function () { return new Array(samples.length); });
-    for (var ci = 0; ci < o.cues.length; ci++) await o.cues[ci].reader.open(samples);
-    try {
-        for (var t = 0; t < samples.length; t++) {
-            for (var c2 = 0; c2 < o.cues.length; c2++) {
-                var r = await o.cues[c2].reader.next(samples[t]);
-                obs[c2][t] = r ? r.scores : null;
+    var readAll = async function (list) {
+        var got = o.cues.map(function () { return new Array(list.length); });
+        for (var ci = 0; ci < o.cues.length; ci++) await o.cues[ci].reader.open(list);
+        try {
+            for (var t = 0; t < list.length; t++) {
+                for (var c2 = 0; c2 < o.cues.length; c2++) {
+                    var r = await o.cues[c2].reader.next(list[t]);
+                    got[c2][t] = r ? r.scores : null;
+                }
+                if (o.onProgress) await o.onProgress(t + 1, list.length);
             }
-            if (o.onProgress) await o.onProgress(t + 1, samples.length);
-        }
-    } finally { o.cues.forEach(function (c) { c.reader.close(); }); }
-
-    var touching = pairContacts(session, samples, o.fps, ids);
+        } finally { o.cues.forEach(function (c) { c.reader.close(); }); }
+        return got;
+    };
+    var obs = await readAll(samples);
     var classesOf = o.cues.map(function (c) { return names.map(function (nm) { return o.expected[nm][c.cue.id]; }); });
 
     // Learn, decide, learn again from the decision.
-    var labels = null, models = null, decision = null, rounds = [];
-    for (var round = 0; round < o.rounds; round++) {
-        models = [];
-        for (var c3 = 0; c3 < o.cues.length; c3++) {
-            var cls = classesOf[c3];
-            var learned = o.cues[c3].cue.learn(obs[c3], labels, function (j) { return cls[j]; }, ids);
-            if (!learned.ok) return Object.assign({ ok: false }, learned);
-            models.push(learned.model);
+    var labels, models, decision, rounds, combined, touching;
+    // o.contactRuns: `pairContactRuns`'s result given instead (studies replaying saved reads)
+    var contactRuns = o.contactRuns !== undefined ? o.contactRuns : pairContactRuns(session, o.fps, ids);
+    // typical: the cost scale, given when samples were added around suspects; they bunch where
+    // the cues read poorly, and a scale taken from them makes every cost loom larger against a swap
+    var decide = function (typical) {
+        touching = touchingFromRuns(contactRuns, samples);
+        labels = null; rounds = [];
+        for (var round = 0; round < o.rounds; round++) {
+            models = [];
+            for (var c3 = 0; c3 < o.cues.length; c3++) {
+                var cls = classesOf[c3];
+                var learned = o.cues[c3].cue.learn(obs[c3], labels, function (j) { return cls[j]; }, ids);
+                if (!learned.ok) return Object.assign({ ok: false }, learned);
+                models.push(learned.model);
+            }
+            var perCue = o.cues.map(function (c, k) { return cueCostRows(c.cue, models[k], obs[k], ids, classesOf[k]); });
+            combined = combineCosts(perCue, K, typical);
+            if (!(combined.typical > 0)) return { ok: false, reason: 'the cues could not tell the animals apart' };
+            decision = decodeAssignments(combined.cost, K, touching, o);
+            labels = Array.from(decision.states, function (s) {
+                var p = decision.perms[s], m = new Map();
+                for (var i = 0; i < K; i++) m.set(ids[i], p[i]);
+                return m;
+            });
+            rounds.push({ total: decision.total, changes: countChanges(decision.states) });
         }
-        var perCue = o.cues.map(function (c, k) { return cueCostRows(c.cue, models[k], obs[k], ids, classesOf[k]); });
-        var combined = combineCosts(perCue, K);
-        if (!(combined.typical > 0)) return { ok: false, reason: 'the cues could not tell the animals apart' };
-        decision = decodeAssignments(combined.cost, K, touching, o);
-        labels = Array.from(decision.states, function (s) {
-            var p = decision.perms[s], m = new Map();
-            for (var i = 0; i < K; i++) m.set(ids[i], p[i]);
-            return m;
-        });
-        rounds.push({ total: decision.total, changes: countChanges(decision.states) });
+        return null;
+    };
+    var failed = decide();
+    if (failed) return failed;
+
+    // Sparse samples (keyframes seconds apart) can step over a short stretch: where a sample
+    // reads against the decision, read the frames around it densely and decide again, on the
+    // first pass's cost scale.
+    var extra = [], suspectFrames = [];
+    if (o.denseSeconds > 0) {
+        var suspect = suspectSamples(combined.cost, decision, K, o);
+        suspectFrames = suspect.map(function (t) { return samples[t]; });
+        extra = denseFramesAround(samples, suspect, frames, Math.max(1, Math.round(o.denseSeconds * o.fps)));
+        if (extra.length) {
+            var more = await readAll(extra);
+            var merged = samples.map(function (f, i) { return { f: f, at: [0, i] }; })
+                .concat(extra.map(function (f, i) { return { f: f, at: [1, i] }; }))
+                .sort(function (a, b) { return a.f - b.f; });
+            obs = o.cues.map(function (c, k) { return merged.map(function (m) { return (m.at[0] ? more : obs)[k][m.at[1]]; }); });
+            samples = merged.map(function (m) { return m.f; });
+            failed = decide(combined.typical);
+            if (failed) return failed;
+        }
     }
 
     // A cue that cannot vouch for what it learned relabels nothing.
@@ -360,11 +433,59 @@ export async function resolveIdentityCues(session, opts) {
     });
     return {
         ok: true, swapped: swapped, changes: runs.length - 1, stretches: stretches, runs: runs.map(function (r) { return { frame: r.frame, perm: Array.from(r.perm) }; }),
-        samples: samples.length, reads: reads, rounds: rounds, names: names,
+        samples: samples.length, dense: extra.length, suspects: suspectFrames, reads: reads, rounds: rounds, names: names,
         models: o.cues.map(function (c, k) { return { cue: c.cue.id, text: c.cue.describe ? c.cue.describe(models[k]) : '' }; }),
         // for the study harness
         sampleFrames: samples, states: Array.from(states), obs: o.keepObservations ? obs : undefined,
     };
+}
+
+/**
+ * Samples that read against the decision: the decided assignment costs more than the best
+ * one there by over `suspectCost`.
+ * @returns {number[]} sample indices
+ */
+export function suspectSamples(cost, decision, K, opts) {
+    var o = Object.assign({}, IDENTITY_CUE_DEFAULTS, opts || {}), out = [];
+    var perms = decision.perms;
+    cost.forEach(function (c, t) {
+        if (!c) return;
+        var at = function (p) { var e = 0; for (var i = 0; i < K; i++) e += Math.min(c[i * K + p[i]], o.maxSampleCost); return e; };
+        var best = Infinity;
+        for (var s = 0; s < perms.length; s++) best = Math.min(best, at(perms[s]));
+        if (at(perms[decision.states[t]]) - best > o.suspectCost) out.push(t);
+    });
+    return out;
+}
+
+/**
+ * Tracked frames every `step` frames strictly between each suspect sample's neighbours,
+ * not already samples; none where the samples are already that close.
+ * @param {number[]} samples  increasing
+ * @param {number[]} suspect  indices into samples
+ * @param {number[]} frames  tracked frames, increasing
+ * @param {number} step
+ * @returns {number[]} increasing
+ */
+export function denseFramesAround(samples, suspect, frames, step) {
+    var have = new Set(samples), out = new Set();
+    suspect.forEach(function (t) {
+        var lo = t > 0 ? samples[t - 1] : samples[t], hi = t + 1 < samples.length ? samples[t + 1] : samples[t];
+        if (hi - lo <= 2 * step) return;
+        var next = lo + step;
+        for (var i = lowerBound(frames, lo + 1); i < frames.length && frames[i] < hi; i++) {
+            if (frames[i] < next) continue;
+            if (!have.has(frames[i])) out.add(frames[i]);
+            next = frames[i] + step;
+        }
+    });
+    return Array.from(out).sort(function (a, b) { return a - b; });
+}
+
+function lowerBound(a, x) {
+    var lo = 0, hi = a.length;
+    while (lo < hi) { var m = (lo + hi) >> 1; if (a[m] < x) lo = m + 1; else hi = m; }
+    return lo;
 }
 
 function countChanges(states) {

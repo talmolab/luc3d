@@ -8,10 +8,10 @@
  * each read is bracketed by `hydrateFrameMembers2d` / `releaseFrameMembers2d`.
  */
 
-import { state } from './app-state.js?v=f277dd523342';
-import { keyframeIndices, streamingReader, canStream, identityGroupsAt } from './image-embedder.js?v=f277dd523342';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=f277dd523342';
-import { tailMarkNodeIndices, readTailProfile, normalizeTailProfile, planTailMarkSamples } from '../pose/tail-mark.js?v=f277dd523342';
+import { state } from './app-state.js?v=79508c670a7b';
+import { keyframeIndices, streamingReader, canStream, identityGroupsAt } from './image-embedder.js?v=79508c670a7b';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=79508c670a7b';
+import { tailMarkNodeIndices, readTailProfile, normalizeTailProfile, planTailMarkSamples } from '../pose/tail-mark.js?v=79508c670a7b';
 
 /**
  * @param {Object} session
@@ -104,9 +104,10 @@ export function createTailMarkReader(session, fps, read) {
     function camOf(v) { return v.cameraName || v.name; }
 
     return {
-        plan: async function (frames) {
+        // maxGapSeconds: see planTailMarkSamples
+        plan: async function (frames, maxGapSeconds) {
             var keys = await keyframeIndices(views[0].decoder);
-            return planTailMarkSamples(frames, keys, fps);
+            return planTailMarkSamples(frames, keys, fps, maxGapSeconds);
         },
         open: async function (samples) {
             readers = views.map(function (v) {

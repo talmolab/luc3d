@@ -24,7 +24,7 @@
  * hands when the animals touch.
  */
 
-import { buildGrid, contactEpisodes, SIZE_CHECK_DEFAULTS } from './id-switch-check.js?v=f277dd523342';
+import { buildGrid, contactEpisodes, SIZE_CHECK_DEFAULTS } from './id-switch-check.js?v=79508c670a7b';
 
 export const TAIL_MARK_DEFAULTS = {
     /** The profile's length: positions read along the tail, whatever its length in pixels. */
@@ -289,16 +289,18 @@ export function tailVote(x, templates, opts) {
 }
 
 /**
- * Sample frames: every keyframe (the cheap ones to decode), or `hz` samples per
- * second when the keyframes are too sparse or unknown.
+ * Sample frames: every keyframe (the cheap ones to decode), or one sample per second
+ * when the keyframes are further apart than `maxGapSeconds`, or unknown.
  * @param {number[]} frames  the frames that have tracked groups, increasing
  * @param {?ArrayLike<number>} keyframes  of one camera, increasing
  * @param {number} fps
+ * @param {number} [maxGapSeconds]  default `MAX_SAMPLE_GAP_SECONDS`; the identity engine asks for
+ *   more (`maxSampleGapSeconds`): it reads densely where sparse samples disagree with its decision
  * @returns {number[]}
  */
-export function planTailMarkSamples(frames, keyframes, fps) {
+export function planTailMarkSamples(frames, keyframes, fps, maxGapSeconds) {
     if (!frames.length) return [];
-    var maxGap = Math.max(1, Math.round(MAX_SAMPLE_GAP_SECONDS * fps));
+    var maxGap = Math.max(1, Math.round((maxGapSeconds || MAX_SAMPLE_GAP_SECONDS) * fps));
     var out = [];
     if (keyframes && keyframes.length > 1) {
         var first = frames[0], last = frames[frames.length - 1];

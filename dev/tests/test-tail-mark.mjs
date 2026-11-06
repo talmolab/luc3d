@@ -117,6 +117,7 @@ eq(planTailMarkSamples(framesTo(100), null, 30), [0, 30, 60, 90], 'no keyframes:
 eq(planTailMarkSamples(framesTo(100), [0, 90], 30), [0, 90], 'keyframes at the gap limit (3 s) kept');
 eq(planTailMarkSamples(framesTo(100), [0, 90], 10).length, 10, 'keyframes further than the limit: one per second');
 eq(planTailMarkSamples([], [0, 1], 30), [], 'no tracked frames');
+eq(planTailMarkSamples(framesTo(100), [0, 90], 10, 10), [0, 90], 'a larger limit given (the identity engine): keyframes 9 s apart kept');
 
 // ---- the decision ---------------------------------------------------------------
 const ev = (ds) => ds.map((d) => d == null ? null : ({ a: d > 0 ? d : 0, b: d < 0 ? -d : 0, views: 5 }));
