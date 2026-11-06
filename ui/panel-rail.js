@@ -16,8 +16,8 @@
  *   - closing the last open panel hides the info panel; showing the info
  *     panel with nothing open reopens the default panel.
  *   - every open panel's icon is active (accent colour + bar).
- *   - hovering or focusing the rail widens it over the panel to show each
- *     icon's name (pure CSS, `.panel-rail:hover`).
+ *   - mouse enter or focus entering the rail widens it over the panel to
+ *     show each name (`.expanded`); mouse leave or focus leaving narrows it.
  * Unlike sleap-app, sections do not scroll on their own: the info panel is
  * the one scroller (CLAUDE.md: one scroller per panel), so sections have
  * their natural height and sticky headers. No section-resize splitters
@@ -300,19 +300,20 @@ function readStored() {
 }
 
 /**
- * Drop focus from a rail button after a MOUSE click (`detail > 0`; Enter and
- * Space give 0 and keep focus). Otherwise Chrome makes that focus
- * :focus-visible on the next key press (e.g. `I`), and the rail's
- * `:has(:focus-visible)` rule keeps it widened after the pointer leaves.
+ * sleap-app's rail expansion (AppShell `railExpanded`): widen on mouse enter
+ * and on focus entering the rail; narrow on mouse leave, and when focus
+ * leaves the rail. A click neither narrows the rail nor drops focus, and
+ * leaving with the mouse always narrows it, focus or not (so `I` pressed
+ * after a click, then moving away, narrows it).
  */
-function releasePointerFocus(btn, e) {
-    if (!e || e.detail === 0) return;
-    if (document.activeElement === btn) btn.blur();
-    // Like a menu after a choice, the rail narrows after a mouse click and
-    // stays narrow until the pointer leaves it: the widened rail takes the
-    // pointer, so otherwise it would keep covering the panel controls beside
-    // it (Skeleton's + Node, a section's ✕) that the user is reaching for.
-    if (_rail) _rail.classList.add('rail-settled');
+function wireRailExpansion(inner) {
+    const set = function (on) { _rail.classList.toggle('expanded', on); };
+    inner.addEventListener('mouseenter', function () { set(true); });
+    inner.addEventListener('mouseleave', function () { set(false); });
+    inner.addEventListener('focusin', function () { set(true); });
+    inner.addEventListener('focusout', function (e) {
+        if (!inner.contains(e.relatedTarget)) set(false);
+    });
 }
 
 /**
@@ -329,14 +330,13 @@ export function setupPanelRail(opts) {
     const inner = document.createElement('div');
     inner.className = 'panel-rail-inner';
     _rail.appendChild(inner);
-    _rail.addEventListener('pointerleave', function () { _rail.classList.remove('rail-settled'); });
+    wireRailExpansion(inner);
 
     const collapseBtn = buildButton('panel-rail-collapse', 'panel-right-close', 'Hide panel');
     collapseBtn.setAttribute('aria-controls', WRAPPER_ID);
-    collapseBtn.addEventListener('click', function (e) {
+    collapseBtn.addEventListener('click', function () {
         if (_toggleInfoPanel) _toggleInfoPanel();
         syncPanelRail();
-        releasePointerFocus(collapseBtn, e);
     });
     inner.appendChild(collapseBtn);
 
@@ -345,10 +345,7 @@ export function setupPanelRail(opts) {
         const btn = buildButton('panel-rail-tab', p.icon, p.label);
         btn.setAttribute('data-tab', p.tab);
         btn.setAttribute('aria-controls', p.tab);
-        btn.addEventListener('click', function (e) {
-            clickPanelRailTab(p.tab);
-            releasePointerFocus(btn, e);
-        });
+        btn.addEventListener('click', function () { clickPanelRailTab(p.tab); });
         inner.appendChild(btn);
     });
 

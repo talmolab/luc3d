@@ -123,6 +123,7 @@ try {
     // The Skeleton tab, since the edit controls live in it and Playwright will
     // not type into a hidden input.
     await page.click('.panel-rail-btn[data-tab="tabSkeleton"]');
+    await page.mouse.move(300, 300);   // off the rail: widened, it covers + Node
     await page.waitForTimeout(120);
 
     const modalOpen = () => page.evaluate(() => !!document.getElementById('skeletonEditConfirm'));

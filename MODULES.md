@@ -12406,17 +12406,15 @@ its default multi-panel (accordion) mode.
   which opens + expands that panel, shows the info panel, scrolls the
   section's header to the top of `#infoPanel` (a rail click that opens a
   panel does too), and never hides or folds anything.
-- **Hover / keyboard focus (`:focus-visible`) widens the rail** from 44px to
-  132px (`--panel-rail-expanded-width`, just past "ID Switches") over the panel
-  to show each name (pure CSS). As in sleap-app the icon is LEFT of its name,
-  so the icons slide left as it widens, and the widened rail takes the pointer
-  (each row is its button); it stays wide until the pointer leaves it. So that
-  it never covers the panel controls beside it (Skeleton's + Node, a section's
-  ✕) right after use, a MOUSE click on a rail button (`releasePointerFocus`,
-  `detail > 0`; Enter/Space keep focus) blurs it and adds `.rail-settled`,
-  which holds the rail narrow until the pointer leaves it. The blur matters
-  too: Chrome makes a click-focused button `:focus-visible` on the next key
-  press, so `I` after a click held the rail wide.
+- **The rail widens** from 44px to 132px (`--panel-rail-expanded-width`, just
+  past "ID Switches") over the panel to show each name, with sleap-app's rules
+  (AppShell `railExpanded`, `wireRailExpansion`): `.expanded` is set on mouse
+  enter and on focus entering the rail, and cleared on mouse leave (whatever
+  has focus, so `I` after a click and then moving away narrows it) and on
+  focus leaving the rail. A click neither narrows it nor drops focus. As in
+  sleap-app the icon is LEFT of its name, so the icons slide left as it
+  widens, and the widened rail takes the pointer (each row is its button): it
+  covers the panel's right edge until the pointer leaves it.
 - The rail is a sibling AFTER `#infoPanelWrapper` in `.main-content`, so a
   collapsed wrapper still measures 0 wide and `isInfoPanelVisible` is unchanged.
 - Open / folded sections are display taste:
