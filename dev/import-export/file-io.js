@@ -12,16 +12,16 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, hasPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=db2e641a1609';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=db2e641a1609';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=db2e641a1609';
-import { createProgressPacer } from '../ui/loading-overlay.js?v=db2e641a1609';
+         toBoxedPoints3d, hasPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=84854c8f9c75';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=84854c8f9c75';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=84854c8f9c75';
+import { createProgressPacer } from '../ui/loading-overlay.js?v=84854c8f9c75';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=db2e641a1609';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=db2e641a1609';
-import { writePlaneMetadata } from './plane-metadata.js?v=db2e641a1609';
-import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=db2e641a1609';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=84854c8f9c75';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=84854c8f9c75';
+import { writePlaneMetadata } from './plane-metadata.js?v=84854c8f9c75';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=84854c8f9c75';
 
 // ============================================
 // Generic file picker
@@ -1229,6 +1229,9 @@ function _buildCameraLabeledFrame(session, cameraName, frameIdx, fg, env) {
     // the project save does. Asking only the instance wrote the instance score
     // onto every node of every lazily loaded prediction.
     var nodeScoreOf = function (sinst) {
+        // Resolved once per instance (its store row, on a lazy project), not
+        // per node: same values as `predictedNodeScore`.
+        if (typeof session.predictedNodeScorer === 'function') return session.predictedNodeScorer(cameraName, frameIdx, sinst);
         return function (k) { return session.predictedNodeScore(cameraName, frameIdx, sinst, k); };
     };
 
@@ -2485,7 +2488,7 @@ var ROWS_WORKER_QUEUE = 8;
  * every pending and later call.
  */
 function _startRowsWorker(shell) {
-    var w = new Worker(new URL('import-export/slp-rows-worker.js?v=db2e641a1609', document.baseURI), { type: 'module' });
+    var w = new Worker(new URL('import-export/slp-rows-worker.js?v=84854c8f9c75', document.baseURI), { type: 'module' });
     var h = { failed: null, inFlight: 0, waiters: [] };
     var readyFns, doneFns;
     h.ready = new Promise(function (res, rej) { readyFns = [res, rej]; });
@@ -3847,7 +3850,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=db2e641a1609', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=84854c8f9c75', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },
