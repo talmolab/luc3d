@@ -1834,6 +1834,14 @@ export class Session {
          */
         this.tailMarkedIdentity = null;
         /**
+         * What each identity should show, per identity cue (pose/identity-cues.js):
+         * `{tailBands: {id_0: 0, id_1: 1, ...}}` (cue id -> identity name -> class), or
+         * null for none. Track All then relabels so each identity holds the animal that
+         * shows it. Persisted as `metadata.lucid.identityMarks`.
+         * @type {?Object<string, Object<string, *>>}
+         */
+        this.identityMarks = null;
+        /**
          * The image ID-switch check's model for this session: null = the
          * built-in one; else a package choice (`modelChoiceOf`,
          * pose/image-model-manifest.js: key, name, input, threshold, url or

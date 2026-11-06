@@ -16,10 +16,15 @@ import { tailMarkNodeIndices, readTailProfile, normalizeTailProfile, planTailMar
 /**
  * @param {Object} session
  * @param {number} fps
+ * @param {Object} [read]  a second, sharper read of each tail (`TAIL_BAND_READ`, for counting
+ *   bands): `baseExtension` starts its line this share of the first tail segment before the tail
+ *   base; `percentile` and `widthShare` go to `readTailProfile`. With it, each view's feature is
+ *   `{wide, sharp}` (`wide`: the two-animal pass's read, as without it; `sharp` may be null);
+ *   without it, the wide profile alone.
  * @returns {?Object}  the reader `resolveTailMarks` takes, with `failed` set instead
  *   when it cannot run (no videos, or no tail nodes)
  */
-export function createTailMarkReader(session, fps) {
+export function createTailMarkReader(session, fps, read) {
     var views = (state.views || []).filter(function (v) { return v && v.decoder && typeof v.decoder.getFrame === 'function'; });
     if (!views.length) return { failed: 'needs the session\'s videos to be loaded' };
     var nodes = tailMarkNodeIndices((session.skeleton && session.skeleton.nodes) || []);
@@ -48,28 +53,34 @@ export function createTailMarkReader(session, fps) {
         }
     }
 
-    function profileOf(poly) {
+    // The tail's profile in this view, for each read (`opts` per read: null = the default).
+    function profilesOf(poly, reads) {
+        var lines = reads.map(function (r) { return r && r.baseExtension ? extendBase(poly, r.baseExtension) : poly; });
         var x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, n = 0;
-        for (var i = 0; i + 1 < poly.length; i += 2) {
-            if (!isFinite(poly[i]) || !isFinite(poly[i + 1])) continue;
-            x0 = Math.min(x0, poly[i]); x1 = Math.max(x1, poly[i]);
-            y0 = Math.min(y0, poly[i + 1]); y1 = Math.max(y1, poly[i + 1]);
-            n++;
-        }
-        if (n < 2) return null;
+        lines.forEach(function (line) {
+            for (var i = 0; i + 1 < line.length; i += 2) {
+                if (!isFinite(line[i]) || !isFinite(line[i + 1])) continue;
+                x0 = Math.min(x0, line[i]); x1 = Math.max(x1, line[i]);
+                y0 = Math.min(y0, line[i + 1]); y1 = Math.max(y1, line[i + 1]);
+                n++;
+            }
+        });
+        if (n < 2) return reads.map(function () { return null; });
         var pad = 24, W = canvas.width, H = canvas.height;
         var left = Math.max(0, Math.floor(x0) - pad), top = Math.max(0, Math.floor(y0) - pad);
         var right = Math.min(W, Math.ceil(x1) + pad), bottom = Math.min(H, Math.ceil(y1) + pad);
         var w = right - left, h = bottom - top;
-        if (w <= 0 || h <= 0) return null;
+        if (w <= 0 || h <= 0) return reads.map(function () { return null; });
         var rgba = ctx.getImageData(left, top, w, h).data;
         var gray = new Uint8Array(w * h);
         for (var p = 0; p < gray.length; p++) {
             gray[p] = (77 * rgba[p * 4] + 150 * rgba[p * 4 + 1] + 29 * rgba[p * 4 + 2]) >> 8;
         }
-        var local = poly.map(function (v, i2) { return v - (i2 % 2 ? top : left); });
-        var res = readTailProfile(gray, w, h, local);
-        return res ? normalizeTailProfile(res.profile, res.background) : null;
+        return lines.map(function (line, k) {
+            var local = line.map(function (v, i2) { return v - (i2 % 2 ? top : left); });
+            var res = readTailProfile(gray, w, h, local, undefined, reads[k] || undefined);
+            return res ? normalizeTailProfile(res.profile, res.background) : null;
+        });
     }
 
     function addScores(into, image, cam, frame) {
@@ -80,9 +91,11 @@ export function createTailMarkReader(session, fps) {
             ctx = canvas.getContext('2d', { willReadFrequently: true });
         } else if (canvas.width !== iw || canvas.height !== ih) { canvas.width = iw; canvas.height = ih; }
         ctx.drawImage(image, 0, 0);
+        var reads = read ? [null, read] : [null];
         tailsAt(cam, frame).forEach(function (t) {
-            var s = profileOf(t.poly);
-            if (!s) return;
+            var got = profilesOf(t.poly, reads);
+            if (!got[0]) return;
+            var s = read ? { wide: got[0], sharp: got[1] } : got[0];
             if (!into.has(t.identityId)) into.set(t.identityId, []);
             into.get(t.identityId).push(s);
         });
@@ -126,4 +139,17 @@ export function createTailMarkReader(session, fps) {
             readers = null;
         },
     };
+}
+
+// The line started `share` of the first tail segment before the tail base, away from the
+// tail: where the base keypoint lands varies by a band's width, and a band right at the
+// base is lost when it lands past it. Unchanged without a base and a next point.
+function extendBase(poly, share) {
+    var x0 = poly[0], y0 = poly[1];
+    if (!isFinite(x0) || !isFinite(y0)) return poly;
+    for (var i = 2; i + 1 < poly.length; i += 2) {
+        if (!isFinite(poly[i]) || !isFinite(poly[i + 1])) continue;
+        return [x0 + share * (x0 - poly[i]), y0 + share * (y0 - poly[i + 1])].concat(poly);
+    }
+    return poly;
 }
