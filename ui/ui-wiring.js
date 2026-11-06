@@ -31,7 +31,7 @@ import { LAZY_PLAYBACK_AHEAD } from '../pose/lazy-residency.js';
 import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          populateVideosTable, populateCamerasTable, populateSkeletonTable,
-         setupPanelTabs, setupSkeletonEditing, exportSkeletonJSON,
+         setupSkeletonEditing, exportSkeletonJSON,
          ensureSession, populateSessionAssignTable, populateUnassignedVideos,
          populateTimelineVisibility } from './info-panel.js';
 import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js';

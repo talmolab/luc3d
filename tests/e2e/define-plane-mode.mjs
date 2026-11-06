@@ -200,7 +200,7 @@ try {
         barText: document.querySelector('.plane-mode-label').textContent,
         hasExit: !!document.getElementById('planeModeExit'),
         panelShown: getComputedStyle(document.getElementById('planePanel')).display !== 'none',
-        tabsHidden: getComputedStyle(document.querySelector('.panel-tabs')).display === 'none',
+        railLocked: Array.from(document.querySelectorAll('.panel-rail-btn[data-tab]')).every(b => b.disabled),
         contentsHidden: Array.from(document.querySelectorAll('.panel-tab-content'))
             .every(el => getComputedStyle(el).display === 'none'),
     }));
@@ -208,14 +208,14 @@ try {
     check(m.barText === 'Defining Plane Mode', `banner reads "Defining Plane Mode" (got "${m.barText}")`);
     check(m.hasExit, 'banner has an exit button');
     check(m.panelShown, 'Define Plane panel is shown in the info panel');
-    check(m.tabsHidden, 'info-panel tab bar is hidden while in the mode');
+    check(m.railLocked, "the rail's panel icons are disabled while in the mode");
     check(m.contentsHidden, 'no normal tab content is showing');
 
     await page.click('#planeModeExit');
     m = await page.evaluate(() => ({
         barHidden: getComputedStyle(document.getElementById('planeModeBar')).display === 'none',
         panelHidden: getComputedStyle(document.getElementById('planePanel')).display === 'none',
-        tabsBack: getComputedStyle(document.querySelector('.panel-tabs')).display !== 'none',
+        railBack: Array.from(document.querySelectorAll('.panel-rail-btn[data-tab]')).every(b => !b.disabled),
         // Exactly the previously-active tab is visible again — the swap must be
         // exact, not "show everything".
         visibleContents: Array.from(document.querySelectorAll('.panel-tab-content'))
@@ -223,7 +223,7 @@ try {
     }));
     check(m.barHidden, 'exit hides the banner');
     check(m.panelHidden, 'exit hides the Define Plane panel');
-    check(m.tabsBack, 'exit restores the tab bar');
+    check(m.railBack, "exit re-enables the rail's panel icons");
     check(eq(m.visibleContents, ['tabInstances']), `exit restores exactly the active tab (got ${JSON.stringify(m.visibleContents)})`);
 
     // Re-enter for the rest of the run.

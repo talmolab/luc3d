@@ -63,6 +63,8 @@ input[type="number"]::-webkit-inner-spin-button {
   --warning-color: #f39c12;
   --success-color: #2ecc71;
   --info-panel-width: 300px;
+  --panel-rail-width: 44px;
+  --panel-rail-expanded-width: 184px;
   --controls-bar-height: 56px;
   --status-bar-height: 28px;
   --menu-bar-height: 32px;
@@ -3401,96 +3403,140 @@ button.tri-dropdown-item:disabled {
   outline: 1px solid var(--accent);
 }
 
-/* ---- Panel Tabs ---- */
-/* One horizontal scroller holding EVERY tab, in a fixed order. The JS half
-   (setupPanelTabs) adds trackpad and click-drag scrolling and the two
-   `scroll-*` classes below; see ui/info-panel.js for why this replaced a
-   "More ▾" overflow dropdown. */
-.panel-tabs {
-  display: flex;
-  /* Each tab's offsetParent, so setupPanelTabs can read offsetLeft in the
-     scroller's own coordinate space when it scrolls one into view. */
+/* ---- Panel rail (right edge) ---- */
+/* sleap-app's sidebar rail (ui/panel-rail.js): one icon per info-panel panel
+   on the window's right edge. `.panel-rail` keeps a fixed-width slot in the
+   row; `.panel-rail-inner` is absolute so hovering widens it LEFTWARD over the
+   info panel to show each icon's name without reflowing anything. Keyboard
+   focus widens it too (`:focus-visible`, so a mouse click leaves it narrow
+   once the pointer leaves). */
+.panel-rail {
   position: relative;
-  overflow-x: auto;
-  overflow-y: hidden;
-  /* The bar is the end of the line for a sideways swipe — never hand the
-     overscroll up to the app layout, let alone to the browser's back gesture. */
-  overscroll-behavior-x: contain;
-  /* Let touch pan it natively; setupPanelTabs deliberately skips touch
-     pointers so the gesture is not applied twice. */
-  touch-action: pan-x;
-  /* A surface whose job is to be dragged — the documented exception to the
-     app's "panel text can be selected" rule. Without it a drag smears a
-     selection across the tab names. */
+  width: var(--panel-rail-width);
+  flex: 0 0 var(--panel-rail-width);
+  /* A click surface, like the toolbar — the documented exception to the
+     app's "panel text can be selected" rule. */
   user-select: none;
   -webkit-user-select: none;
-  /* No scrollbar: the strip is ~31px tall and a horizontal bar under it would
-     sit on the active tab's 2px underline. The edge fades below say there is
-     more instead. */
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  border-bottom: 1px solid var(--border-color);
+}
+
+.panel-rail-inner {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: var(--panel-rail-width);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--bg-secondary);
+  border-left: 1px solid var(--border-color);
+  transition: width var(--transition-fast), box-shadow var(--transition-fast);
+  /* Only the 44px icon column takes the pointer (`.panel-rail-icon` below):
+     the widened label strip is display only, so the pointer over it is over
+     the panel underneath — the rail narrows and the panel's own controls
+     there stay clickable. */
+  pointer-events: none;
+}
+
+.panel-rail:hover .panel-rail-inner,
+.panel-rail:has(.panel-rail-btn:focus-visible) .panel-rail-inner {
+  width: var(--panel-rail-expanded-width);
+  box-shadow: -8px 0 20px rgba(0, 0, 0, 0.45);
+}
+
+/* Icon at the window edge, name to its left: the icons stay put while the
+   rail widens. */
+.panel-rail-btn {
+  position: relative;
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: center;
+  flex-shrink: 0;
+  width: 100%;
+  height: var(--panel-rail-width);
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.panel-rail-collapse {
+  height: 36px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.panel-rail-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.panel-rail-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.panel-rail-btn.active,
+.panel-rail-btn.active:hover:not(:disabled) {
+  color: var(--accent);
+  background: rgba(102, 126, 234, 0.08);
+}
+
+/* Active bar on the panel-facing edge, as in sleap-app. */
+.panel-rail-btn.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+}
+
+.panel-rail-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.panel-rail-icon {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--panel-rail-width);
   flex-shrink: 0;
 }
 
-.panel-tabs::-webkit-scrollbar {
-  height: 0;
-  width: 0;
+.panel-rail-icon svg {
+  width: 18px;
+  height: 18px;
 }
 
-/* Fade whichever edge has tabs behind it. A mask is painted in the element's
-   own box rather than with its scrolled content, so this stays pinned to the
-   edges while the tabs move underneath — and it costs no extra element, which
-   a gradient overlay inside a scroller would (it would scroll away). */
-.panel-tabs.scroll-left {
-  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px);
-  mask-image: linear-gradient(to right, transparent 0, #000 18px);
+.panel-rail-collapse .panel-rail-icon svg {
+  width: 16px;
+  height: 16px;
 }
 
-.panel-tabs.scroll-right {
-  -webkit-mask-image: linear-gradient(to left, transparent 0, #000 18px);
-  mask-image: linear-gradient(to left, transparent 0, #000 18px);
-}
-
-.panel-tabs.scroll-left.scroll-right {
-  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
-  mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
-}
-
-.panel-tabs.dragging {
-  cursor: grabbing;
-}
-
-.panel-tab {
-  /* Size to the tab's full name — never squished or truncated. The ones that
-     don't fit are reached by scrolling the bar. */
-  flex: 0 0 auto;
-  padding: 8px 12px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--text-muted);
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  cursor: pointer;
-  transition: color var(--transition-fast), border-color var(--transition-fast);
+.panel-rail-label {
+  flex: 1;
+  min-width: 0;
+  padding-left: 12px;
+  font-size: 13px;
+  text-align: left;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
 }
 
-.panel-tabs.dragging .panel-tab {
-  cursor: grabbing;
-}
-
-.panel-tab:hover {
-  color: var(--text-secondary);
-}
-
-.panel-tab.active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
+.panel-rail:hover .panel-rail-label,
+.panel-rail:has(.panel-rail-btn:focus-visible) .panel-rail-label {
+  opacity: 1;
 }
 
 .panel-tab-content {
@@ -4424,7 +4470,8 @@ kbd {
 @media (max-width: 900px) {
   .info-panel-wrapper {
     position: absolute;
-    right: 0;
+    /* Beside the panel rail, which stays on the window edge. */
+    right: var(--panel-rail-width);
     top: 0;
     bottom: calc(var(--controls-bar-height) + var(--status-bar-height));
     z-index: 50;
@@ -6222,7 +6269,7 @@ kbd {
    Defining Plane Mode (View ▸ Define Planes)
 
    A MODE, not a modal: the banner sits under the toolbar for as long as the
-   mode is active, and the info panel swaps its tab bar for the Define Plane
+   mode is active, and the info panel swaps its panes for the Define Plane
    panel. Both are driven by ui/plane-definition.js.
    -------------------------------------------------------------------------- */
 

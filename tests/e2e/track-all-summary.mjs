@@ -246,7 +246,7 @@ try {
     check(JSON.stringify(s.buttons) === JSON.stringify(['Check by body size', 'Check by images…', 'Close', 'Triangulation Wizard…']),
         `precondition: the reopened box offers both checks (${JSON.stringify(s.buttons)})`);
     const onTab = () => page.evaluate(() => !!document.querySelector('#tabIdSwitches.active'));
-    const leaveTab = () => page.evaluate(() => document.querySelector('.panel-tab:not([data-tab="tabIdSwitches"])').click());
+    const leaveTab = () => page.evaluate(() => document.querySelector('.panel-rail-btn[data-tab]:not([data-tab="tabIdSwitches"])').click());
     // whether the box came back, with `cue`'s row no longer reading `was` (before this, the tab opened instead)
     const backWith = (cue, was) => page.waitForFunction(([c, w]) => {
         const r = document.querySelector('#trackSummaryOverlay .track-summary-check[data-cue="' + c + '"] .track-summary-check-text');
@@ -477,7 +477,7 @@ try {
     check(s.headline === 'Review the possible ID switches.' && s.primary === 'Review switches',
         `primary is Review switches ("${s.headline}" / "${s.primary}")`);
     check(JSON.stringify(s.buttons) === JSON.stringify(['Close', 'Review switches']), `no alternative checks offered: ${JSON.stringify(s.buttons)}`);
-    await page.evaluate(() => document.querySelector('.panel-tab[data-tab="tabInfo"], .panel-tab:not([data-tab="tabIdSwitches"])').click());
+    await page.evaluate(() => document.querySelector('.panel-rail-btn[data-tab]:not([data-tab="tabIdSwitches"])').click());
     await page.click('#trackSummaryPrimary');
     await page.waitForFunction(f => window.__lucid.state.currentFrame === f, fx.firstGo, { timeout: 10000 }).catch(() => {});
     const after = await page.evaluate(() => ({

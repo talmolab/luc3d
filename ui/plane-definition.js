@@ -11,7 +11,7 @@
 //   - `planeState`   — mode flag, THE model (pool + planes + per-view 2D), and
 //                      which plane the editor is editing.
 //   - Mode enter/exit — shows the "Defining Plane Mode" banner and swaps the
-//                      info panel's tab bar for the Define Plane panel.
+//                      info panel's panes for the Define Plane panel (rail icons disabled).
 //   - The Define Plane panel — TWO sibling sections: the global Nodes pool,
 //                      and Planes (the roster, plus the editor for whichever
 //                      plane is selected: its name, its member nodes, its
@@ -204,6 +204,7 @@ import {
 } from './plane-list-panel.js';
 // The EDITOR half of section 2, below the roster in the same <details>.
 import { renderEditor } from './plane-editor-panel.js';
+import { setPanelRailLocked } from './panel-rail.js';
 import { setStatus, markDirty } from '../import-export/save-load.js';
 // The 3D Mesh Objects table lives in its own module and is purely additive —
 // this import and the two calls below are the whole of its coupling to the
@@ -1726,12 +1727,11 @@ export function togglePlaneMode() {
 
 /**
  * Swap the info panel between its normal tabbed content and the Define Plane
- * panel. The tab bar's own layout code (`setupPanelTabs`) is untouched — we
- * only toggle visibility, so restoring is exact.
+ * panel. Only visibility is toggled (and the rail's panel icons disabled), so
+ * leaving restores the panel that was active, and its scroll, exactly.
  */
 function setPanelPlaneMode(on) {
-    var tabBar = document.querySelector('.panel-tabs');
-    if (tabBar) tabBar.style.display = on ? 'none' : '';
+    setPanelRailLocked(on);
     document.querySelectorAll('.panel-tab-content').forEach(function (el) {
         // Only the ACTIVE tab is normally visible; `.active` still governs
         // that, so we just force-hide all of them while the mode is on.
