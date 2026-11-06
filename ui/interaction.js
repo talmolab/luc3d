@@ -91,6 +91,8 @@ export class InteractionManager {
      *   (double-click interaction).
      * @param {Function} callbacks.onNodeSetNull - (viewName, instanceGroup, nodeIdx) => void  (toggle null state)
      *   Called after a right-click toggles a node's visibility.
+     * @param {Function} [callbacks.onUnlinkedNodeSetNull] - (viewName, instance, nodeIdx) => void
+     *   Called after a right-click toggles a node of an unlinked (ungrouped) instance.
      * @param {Function} callbacks.requestRedraw - () => void
      *   Triggers a full overlay redraw across all views.
      * @param {Function} [callbacks.isPlaneEditMode] - () => boolean
@@ -1106,6 +1108,9 @@ export class InteractionManager {
                     ulInst.nulledNodes.add(ulNullNodeIdx);
                 }
                 this._requestRedraw();
+                if (this.callbacks.onUnlinkedNodeSetNull) {
+                    this.callbacks.onUnlinkedNodeSetNull(viewName, ulInst, ulNullNodeIdx);
+                }
             }
             return;
         }

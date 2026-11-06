@@ -54,6 +54,10 @@ helpers used by every load path. Calls `init()` at module-load.
   `markDirty()`, so the delete survives a session switch (which evicts the
   session's lazy store). Pinned by `tests/e2e/sequence-lazy-workflow.mjs`
   cycle 5c.
+  `onNodeSetNull` (right-click / Ctrl+click on a grouped or reprojected node)
+  and `onUnlinkedNodeSetNull` (the same on an ungrouped instance) call
+  `markDirty()` too: a null toggle is saved. Pinned by
+  `tests/e2e/node-null-marks-dirty.mjs`.
 - `setup3DViewport()` — instantiates `Viewport3D` and wires the
   "Show Camera View"/"Show Initial View" buttons. **Respects the `\` toggle**
   (`isViewport3DVisible()`, `ui/panel-visibility.js`): every session load
@@ -5306,6 +5310,10 @@ edit-group mode, keyboard shortcuts.
   zoomed-in overlay canvas is a window onto part of the box
   (`ui/overlay-window.js`), so its rect is not the video's. Events still attach
   to the overlay canvas, which always covers what the cell shows.
+- Right-click null toggles report through callbacks, never by mutating
+  silently: grouped and reprojected nodes → `onNodeSetNull`, unlinked
+  instances → `onUnlinkedNodeSetNull`, plane nodes → `onPlaneChanged`. Each
+  handler marks the project dirty.
 - `isInteractiveClickTarget(target)` — used by other UI to skip
   click-through on form controls.
 
