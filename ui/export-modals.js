@@ -2957,13 +2957,17 @@ export async function exportLabels() {
             nFrames++;
         }, {
             onProgress: function (done, tot) {
-                showLoading('Exporting labels... ' + done.toLocaleString('en-US') + '/' + tot.toLocaleString('en-US') + ' frames');
+                showLoadingProgress('Exporting labels', done, tot, { unit: 'frames' });
             },
         });
 
         await emit('\n  }\n}\n');
 
         if (writer) {
+            // close() gives no progress (Chrome moves its swap file into place,
+            // reading it back on a network share): a spinner, painted first.
+            showLoading('Closing the file…');
+            await yieldToPaint();
             await writer.close();
         } else {
             var blob = new Blob(parts, { type: 'application/json' });
