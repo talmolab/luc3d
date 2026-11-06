@@ -23,6 +23,15 @@
  * direct test of the blank-overlay failure (a canvas over the limit reports its
  * requested size and silently discards every draw).
  *
+ * And §6-8, the visible window (`ui/overlay-window.js`): a zoomed-in overlay
+ * allocates and draws only the part of the video the pane shows (plus a pan
+ * margin) — §1's bound alone still sized it to the whole zoomed video, ~480 MB
+ * for one 1920x1200 camera at zoom 10 in a solo pane — follows a pan or zoom
+ * out past that margin, and is drawn exactly where the full canvas would be.
+ *
+ * And §9-10: a window survives `fitCanvasesToCells` (window resize, panel
+ * toggles) un-stretched, and the Tracking Wizard's grey-out covers it.
+ *
  * Run: node tests/e2e/zoom-overlay-budget.mjs
  */
 import { chromium } from 'playwright';
@@ -89,25 +98,36 @@ try {
         await new Promise(r => requestAnimationFrame(r));
     }, [VW, VH]);
 
-    /** Zoom view 0 and report its backing store + the drawn node's geometry. */
+    /**
+     * Zoom view 0 about its cell centre (the node is at the video centre, so it
+     * stays on screen) and report its backing store + the drawn node's
+     * geometry. A zoomed-in overlay is a WINDOW onto the full virtual canvas
+     * (`ui/overlay-window.js`), so the node is looked up at its full-canvas
+     * position mapped into the window (`fullToWindow`).
+     */
     const measure = (scale) => page.evaluate(async (scale) => {
         const AS = await import('/ui/app-state.js');
         const R = await import('/ui/rendering.js');
         const vc = window.__lucid.videoController;
         const v = AS.state.views[0];
         if (!v.zoom) vc.initZoom(v);
-        v.zoom.scale = scale; v.zoom.offsetX = 0; v.zoom.offsetY = 0;
-        vc.applyZoom(v); vc._constrainOffsets(v.zoom, v); vc.applyZoom(v);
+        vc._clearZoom(v);
+        const cell = v.canvas.closest('.video-cell');
+        vc._zoomAbout(v, scale, scale, cell.clientWidth / 2, cell.clientHeight / 2);
+        vc._constrainOffsets(v.zoom, v); vc.applyZoom(v);
         await new Promise(r => requestAnimationFrame(r));
         R.drawAllOverlays(0);
         await new Promise(r => requestAnimationFrame(r));
 
         const c = v.overlayCanvas;
+        const plan = v._overlayPlan;
         const bw = c.width, bh = c.height;
-        const s = Math.min(bw / v.videoWidth, bh / v.videoHeight);
-        const ox = (bw - v.videoWidth * s) / 2, oy = (bh - v.videoHeight * s) / 2;
-        const cx = Math.round(ox + (v.videoWidth / 2) * s);
-        const cy = Math.round(oy + (v.videoHeight / 2) * s);
+        const fw = plan.fullW, fh = plan.fullH;
+        const s = Math.min(fw / v.videoWidth, fh / v.videoHeight);
+        const ox = (fw - v.videoWidth * s) / 2, oy = (fh - v.videoHeight * s) / 2;
+        const OW = await import('/ui/overlay-window.js');
+        const wpt = OW.fullToWindow(plan, ox + (v.videoWidth / 2) * s, oy + (v.videoHeight / 2) * s);
+        const cx = Math.round(wpt[0]), cy = Math.round(wpt[1]);
 
         // The drawn blob's AREA, not a single ray out from the centre. A ray
         // gives an integer radius in backing pixels, and the fix deliberately
@@ -134,12 +154,15 @@ try {
         }
         const rx = Math.sqrt(n / Math.PI);
 
-        const cssW = c.offsetWidth;
-        const screenPerBacking = cssW > 0 ? (cssW * scale) / bw : 0;
+        // Screen px per backing px from the FULL virtual canvas over the video
+        // box (the window's own element size is a fractional CSS size that
+        // offsetWidth would round).
+        const boxW = parseFloat(v.canvas.style.width) || v.canvas.offsetWidth;
+        const screenPerBacking = boxW > 0 ? (boxW * scale) / fw : 0;
         return {
             zoom: scale,
             videoW: v.videoWidth, videoH: v.videoHeight,
-            bw, bh, cssW,
+            bw, bh, fw, fh, windowed: plan.windowed, cssW: boxW,
             drewAnything: rx > 0,
             nodeRadiusScreenPx: rx * screenPerBacking,
             backingPxPerScreenPx: screenPerBacking > 0 ? 1 / screenPerBacking : 0,
@@ -155,6 +178,7 @@ try {
     for (const z of ZOOMS) rows.push(await measure(z));
     for (const r of rows) {
         console.log(`      zoom ${String(r.zoom).padStart(2)}: backing ${r.bw}x${r.bh}` +
+            (r.windowed ? ` (window onto ${r.fw}x${r.fh})` : '') +
             `, node r ${r.nodeRadiusScreenPx.toFixed(2)} screen px` +
             `, ${r.backingPxPerScreenPx.toFixed(2)} backing px/screen px`);
     }
@@ -212,6 +236,187 @@ try {
     check(2048 * 10 > MAX_DIM,
         `negative control: the old sizing would have asked for ${2048 * 10}px, ` +
         `over Chrome's ${MAX_DIM}px limit`);
+
+    // ---- 6-8. the visible window -----------------------------------------
+    // A solo-sized pane of a 1920x1200 camera at zoom 10. Bounding the
+    // supersample (§1) still sized a canvas over the WHOLE zoomed video —
+    // 13920x8700, ~480 MB — redrawn on every mouse move of a node drag. Only
+    // the visible part (plus the pan margin) is allocated now.
+    console.log('\n§6-8  1920x1200, one view filling the dock, zoom 10');
+    await build(1920, 1200);
+    await page.evaluate(async () => {
+        const uw = await import('/ui/ui-wiring.js');
+        const AS = await import('/ui/app-state.js');
+        uw.enterSingleViewMode(); uw.setSoloView(AS.state.views[0].name);
+    });
+    await page.waitForTimeout(800);
+    const soloFit = await measure(1);
+    const solo = await measure(10);
+    const cellPx = await page.evaluate(async () => {
+        const AS = await import('/ui/app-state.js');
+        const OW = await import('/ui/overlay-window.js');
+        const cell = AS.state.views[0].canvas.closest('.video-cell');
+        return { w: cell.clientWidth, h: cell.clientHeight, margin: OW.OVERLAY_WINDOW_MARGIN,
+                 q: Math.max(2, devicePixelRatio || 1) };
+    });
+    console.log(`      cell ${cellPx.w}x${cellPx.h} CSS px; backing ${solo.bw}x${solo.bh}, ` +
+        `a window onto ${solo.fw}x${solo.fh}`);
+    // §6 — the allocation is about the PANE (times the quality ratio and the
+    // margin), not the zoomed video: what the old sizing would have needed is
+    // the full virtual canvas.
+    // What the cell shows, in box CSS px, grown by the margin on each side and
+    // rounded out to whole CSS px (+2), in full-canvas px per box px.
+    const kx = solo.fw / solo.cssW;
+    const winMax = (n) => (n / 10 * (1 + 2 * cellPx.margin) + 2) * kx;
+    check(solo.windowed, 'a zoomed-in view draws a window, not the whole zoomed video');
+    check(solo.bw <= winMax(cellPx.w) && solo.bh <= winMax(cellPx.h),
+        `backing ${solo.bw}x${solo.bh} is about the pane (${cellPx.w}x${cellPx.h} CSS px, ` +
+        `${(1 + 2 * cellPx.margin).toFixed(2)}x margin, ${kx.toFixed(2)} backing px per box px)`);
+    check(solo.fw * solo.fh > 8 * solo.bw * solo.bh,
+        `negative control: the full canvas (${solo.fw}x${solo.fh}) is many times the window`);
+    check(solo.drewAnything, 'and the node in it is drawn');
+    check(Math.abs(solo.nodeRadiusScreenPx - soloFit.nodeRadiusScreenPx) <= 0.25,
+        `at the same on-screen size as unzoomed (${solo.nodeRadiusScreenPx.toFixed(2)} vs ` +
+        `${soloFit.nodeRadiusScreenPx.toFixed(2)} screen px)`);
+
+    // §7 — panning. Inside the margin nothing is redrawn or reallocated; past
+    // it (or on a zoom out) the window follows on the next frame and covers
+    // what the cell now shows.
+    const pan = await page.evaluate(async () => {
+        const AS = await import('/ui/app-state.js');
+        const OW = await import('/ui/overlay-window.js');
+        const vc = window.__lucid.videoController;
+        const v = AS.state.views[0];
+        const raf = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const box = () => [parseFloat(v.canvas.style.width), parseFloat(v.canvas.style.height)];
+        const covers = () => OW.overlayPlanCovers(v._overlayPlan, vc.visibleBoxRect(v), ...box());
+        const p0 = v._overlayPlan;
+        v.zoom.offsetX -= 20; vc._constrainOffsets(v.zoom, v); vc.applyZoom(v);
+        await raf();
+        const smallSame = v._overlayPlan === p0;
+        const cell = v.canvas.closest('.video-cell');
+        v.zoom.offsetX -= cell.clientWidth * 0.8; vc._constrainOffsets(v.zoom, v); vc.applyZoom(v);
+        const coveredBefore = covers();
+        await raf();
+        const moved = v._overlayPlan !== p0 && v._overlayPlan.cssLeft > p0.cssLeft;
+        const coveredAfter = covers();
+        // a zoom OUT grows what is visible past the window
+        const z = v.zoom.scale;
+        vc._zoomAbout(v, z / 2, z / 2, cell.clientWidth / 2, cell.clientHeight / 2);
+        vc._constrainOffsets(v.zoom, v); vc.applyZoom(v);
+        const outBefore = covers();
+        await raf();
+        return { smallSame, coveredBefore, moved, coveredAfter, outBefore, outAfter: covers() };
+    });
+    check(pan.smallSame, 'a pan inside the margin keeps the drawn window (no redraw)');
+    check(!pan.coveredBefore && pan.moved && pan.coveredAfter,
+        'a pan past the margin moves the window, which then covers the cell');
+    check(!pan.outBefore && pan.outAfter, 'so does a zoom out');
+
+    // §8 — the window is drawn where the full canvas would have been: the
+    // node's centre on SCREEN, read back from a screenshot, lands where the
+    // video box says it is, panned off-centre and rotated.
+    for (const rot of [0, 30]) {
+        const where = await page.evaluate(async (rot) => {
+            const AS = await import('/ui/app-state.js');
+            const R = await import('/ui/rendering.js');
+            const vc = window.__lucid.videoController;
+            const v = AS.state.views[0];
+            v.rotation = rot;
+            vc._clearZoom(v);
+            const cell = v.canvas.closest('.video-cell');
+            vc._zoomAbout(v, 10, 10, cell.clientWidth / 2, cell.clientHeight / 2);
+            v.zoom.offsetX += 37.3; v.zoom.offsetY -= 21.7;
+            vc._constrainOffsets(v.zoom, v); vc.applyZoom(v);
+            await new Promise(r => requestAnimationFrame(r));
+            R.drawAllOverlays(0);
+            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+            // Expected: the video centre through the wrapper's transform.
+            const m = new DOMMatrix(getComputedStyle(v.wrapper).transform);
+            const bw = parseFloat(v.canvas.style.width), bh = parseFloat(v.canvas.style.height);
+            const p = m.transformPoint(new DOMPoint(bw / 2, bh / 2));
+            const cr = cell.getBoundingClientRect();
+            return { x: cr.left + v.wrapper.offsetLeft + p.x, y: cr.top + v.wrapper.offsetTop + p.y,
+                     windowed: v._overlayPlan.windowed };
+        }, rot);
+        const R0 = 14;
+        const png = await page.screenshot({ clip: { x: where.x - R0, y: where.y - R0, width: 2 * R0, height: 2 * R0 } });
+        const c = await page.evaluate(async (b64) => {
+            const img = new Image(); img.src = 'data:image/png;base64,' + b64; await img.decode();
+            const cv = document.createElement('canvas'); cv.width = img.width; cv.height = img.height;
+            const x = cv.getContext('2d'); x.drawImage(img, 0, 0);
+            const d = x.getImageData(0, 0, img.width, img.height).data;
+            let n = 0, sx = 0, sy = 0;
+            for (let y = 0; y < img.height; y++) for (let i = 0; i < img.width; i++) {
+                const k = (y * img.width + i) * 4;
+                if (d[k] > 150 && d[k + 1] < 140) { n++; sx += i + 0.5; sy += y + 0.5; }
+            }
+            return n ? { dx: sx / n - img.width / 2, dy: sy / n - img.height / 2, n } : null;
+        }, png.toString('base64'));
+        check(where.windowed && c && Math.hypot(c.dx, c.dy) <= 1,
+            `rotation ${rot}: the node is drawn at its true screen position ` +
+            (c ? `(off by ${c.dx.toFixed(2)}, ${c.dy.toFixed(2)} px)` : '(not found)'));
+    }
+
+    // §9 — re-fitting the cells leaves a window alone. `fitCanvasesToCells`
+    // runs on every window resize, panel toggle and pane rebuild; it used to
+    // stretch the overlay element to the whole box, which on a window smeared
+    // the skeleton (or pushed it out of view) until something else redrew —
+    // forever when the box size did not change (e.g. a window 10 px narrower
+    // around a height-limited box).
+    // §10 — the Tracking Wizard's grey-out (Camera Views = 0) covers the whole
+    // window: it used to fill [0, window size] in FULL-canvas coordinates
+    // under the window's translate, a patch near the box's top-left that is
+    // off-window once zoomed in.
+    const refit = await page.evaluate(async () => {
+        const AS = await import('/ui/app-state.js');
+        const R = await import('/ui/rendering.js');
+        const L = await import('/loading/session-loader.js');
+        const S = await import('/ui/settings.js');
+        const OW = await import('/ui/overlay-window.js');
+        const vc = window.__lucid.videoController;
+        const v = AS.state.views[0];
+        const raf = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        v.rotation = 0;
+        vc._clearZoom(v);
+        const cell = v.canvas.closest('.video-cell');
+        vc._zoomAbout(v, 10, 10, cell.clientWidth / 2, cell.clientHeight / 2);
+        v.zoom.offsetX += 37.3; v.zoom.offsetY -= 21.7;
+        vc._constrainOffsets(v.zoom, v); vc.applyZoom(v);
+        R.drawAllOverlays(0);
+        await raf();
+        const o = v.overlayCanvas, p0 = v._overlayPlan;
+        const style = () => [o.style.left, o.style.top, o.style.width, o.style.height].join(' ');
+        const s0 = style();
+        L.fitCanvasesToCells();
+        await raf();
+        const r9 = { windowed: p0.windowed, s0, s1: style(), planCss: `${p0.cssLeft}px ${p0.cssTop}px ${p0.cssW}px ${p0.cssH}px` };
+
+        // the node's centre pixel on the window, as drawn
+        const nodePx = () => {
+            const plan = v._overlayPlan;
+            const s = Math.min(plan.fullW / v.videoWidth, plan.fullH / v.videoHeight);
+            const ox = (plan.fullW - v.videoWidth * s) / 2, oy = (plan.fullH - v.videoHeight * s) / 2;
+            const [x, y] = OW.fullToWindow(plan, ox + v.videoWidth / 2 * s, oy + v.videoHeight / 2 * s);
+            return Array.from(o.getContext('2d').getImageData(Math.round(x), Math.round(y), 1, 1).data);
+        };
+        const before = S.getCameraWeights();
+        R.drawAllOverlays(0);
+        const tracked = nodePx();
+        S.setCameraWeights(Object.assign({}, before, { [v.name]: 0 }));
+        R.drawAllOverlays(0);
+        const excluded = nodePx();
+        S.setCameraWeights(before);
+        R.drawAllOverlays(0);
+        return { r9, tracked, excluded, windowed: v._overlayPlan.windowed };
+    });
+    check(refit.r9.windowed && refit.r9.s1 === refit.r9.s0 && refit.r9.s1 === refit.r9.planCss,
+        `fitCanvasesToCells leaves a zoomed-in window as planned (${refit.r9.s1}; plan ${refit.r9.planCss})`);
+    // `source-atop` rgba(140,140,140,0.85) over the node's own colour
+    const greyed = (px, under) => px[3] > 200 && [0, 1, 2].every(i => Math.abs(px[i] - (0.85 * 140 + 0.15 * under[i])) <= 4);
+    check(refit.windowed && !greyed(refit.tracked, refit.tracked) && greyed(refit.excluded, refit.tracked),
+        `a tracking-excluded view's skeleton is greyed inside the window ` +
+        `(tracked rgba ${refit.tracked.join(',')} → excluded ${refit.excluded.join(',')})`);
 
     console.log('');
     check(errs.length === 0, 'no page errors: ' + (errs.join(' | ') || 'none'));
