@@ -2047,7 +2047,11 @@ drifts upward.
 
 **Tail marks.** `getTailMarkedIdentity` / `setTailMarkedIdentity` /
 `onTailMarkedIdentityChange`: which identity has the tail marks in the active session
-(`Session.tailMarkedIdentity`, saved with the project; null = off). Asked in Track
+(`Session.tailMarkedIdentity`, saved with the project; null = off). `getIdentityMarks` /
+`setIdentityMarks`: what each identity shows, per identity cue (`Session.identityMarks`);
+setting one clears the other. With identity marks set, `runTailMarkPass` runs
+`resolveIdentityCues` (`pose/identity-cues.js`) with the tail-band cue; otherwise the
+two-animal `resolveTailMarks`. Asked in Track
 All's first-use dialog (pre-filled with the last answer this page saw) and in the Track
 menu (`ui/tail-mark-field.js`). When set, `runTrackingPass` runs `runTailMarkPass` right
 after a full Track All (never a range or Track Frame), before the ID-switch checks, so
@@ -2597,6 +2601,51 @@ and filling gaps each fail with the specific artifact they represent.
 
 ---
 
+### pose/identity-cues.js
+
+**Purpose.** Which animal each tracked identity is, at every moment, from features
+unique to each animal (identity CUES); DOM-free and cue-agnostic. Built so new cues
+(fur markings, dyed ear tufts, ...) plug in without touching the decision. The user
+sets what each identity shows (`Session.identityMarks`: cue id -> identity name ->
+class); `resolveIdentityCues` reads every cue at sampled frames, learns each class's
+look, finds the most likely assignment of animals to identities at each sample, bisects
+each change to its frame, and relabels with `Session.swapIdentitiesInRange`.
+
+**The decision.** `decodeAssignments`: a Viterbi over every ordering of the animals
+(`permutationsOf`; up to `maxAnimals` = 6, 720 states), a sample costing what its cues
+contradict (each identity capped at `maxSampleCost`), a swap of two identities costing
+`contactSwapCost` across a gap where those two touch (`pairContacts`, from the shared
+grid in `pose/id-switch-check.js`) and `apartSwapCost` elsewhere, in typical-sample
+units (`combineCosts`). Classes may be shared (two red, two blue): swaps between animals
+of one class are invisible to the cue, cost nothing to leave alone, and are left as
+tracked. `swapsFor(perm)` turns an assignment into swaps (each cycle as exchanges with
+its first member).
+
+**A cue** is `{id, learn(obs, labels, classOf, ids), costs(features, model), check?(model),
+describe?(model)}` with a reader (`plan/open/next/at/close`, as `ui/tail-mark-reader.js`).
+`learn` gets `labels` null on the first pass (guess from the tracker's identities), then
+the decision's labels (`rounds`, default 3). A failed `check` after the last round
+relabels nothing: the engine never names animals the cue cannot vouch for.
+
+**Refuses, changing nothing:** no cue; expected marks for a different number of
+identities than tracked, or for a name that does not exist; fewer than 2 or more than
+`maxAnimals`; no frame rate; a cue that cannot learn or fails its check.
+
+**Key exports.** `resolveIdentityCues`, `IDENTITY_CUE_DEFAULTS`, `permutationsOf`,
+`pairContacts`, `decodeAssignments`, `swapsFor`, `combineCosts`, `cueCostRows`.
+
+**Imports.** `./id-switch-check.js`. **Imported by.** `pose/tracker.js`.
+
+**Tests.** `tests/test-identity-cues.mjs` (exact decisions with a fake cue; the tail-band
+cue on drawn tails); `tests/e2e/tail-mark-track-all.mjs` §7-8 (three animals, bands per
+identity, through the real tracker).
+
+**On 05mice_flippers (5 mice, 0-4 bands each, 8 cameras):** the cue learns five
+distinct tails, but the learned templates read as 3, 0, 2, 1, 3 bands for marks 0-4
+(the four-band tail reads three), so the check refuses and nothing is relabelled. A view
+of the tail base big enough to separate four bands, or naming the learned groups by
+hand, is what it would take.
+
 ### pose/tail-mark.js
 
 **Purpose.** Which of two tracked identities is the animal with dark marks on its
@@ -2609,7 +2658,14 @@ where the wrong one holds the marks. The tracker is untouched.
 **The measure.** `readTailProfile` walks the tail nodes from `tailMarkNodeIndices` (TTI,
 Tail_0, Tail_1: the marks end near Tail_1), reading a bright percentile of a line across
 the tail at each pixel, so keypoints a few pixels off it do not matter;
-`normalizeTailProfile` scales it to the tail's own brightness.
+`normalizeTailProfile` scales it to the tail's own brightness. `readTailProfile` takes
+`{percentile, widthShare}` (defaults 0.85 and 1/12 of the length each side).
+`TAIL_BAND_READ` (`baseExtension` 0.2, percentile 0.5, width 1/30) is the band-counting
+cue's second read: on `05mice_flippers` (5 mice, 0-4 bands) the 4-band tail has its bands
+packed before Tail_0, and TTI often lands past the first, so the default read counted it as
+3; started a little before TTI, darker and narrower, it reads 4 (the others too). The
+sharper read tells a plain tail from one wide band less well, so it only counts; the
+default read still decides.
 
 **Why templates.** Marks differ between animals (several narrow bands, or one wide one on
 the test recordings), and a plain tail in shade by a wall dims along a third of its length
@@ -2659,7 +2715,15 @@ frames), and Chrome there decodes these H.264 streams at 700-1,700 frames/s, on 
 `TAIL_MARK_DEFAULTS`, `MAX_SAMPLE_GAP_SECONDS`, `tailMarkNodeIndices`,
 `readTailProfile`, `normalizeTailProfile`, `tailBandScore`, `learnTailTemplates`,
 `tailVote`, `planTailMarkSamples`, `contactGaps`, `evidenceScale`, `evidenceOf`,
-`decodeMarkedStates`, `refineChange`, `stretchesToSwap`.
+`decodeMarkedStates`, `countBands`, `createTailBandCue` (the tail-band cue for
+`pose/identity-cues.js`: classes are band counts, or 'marked'/'plain'; features are
+profiles or the reader's `{wide, sharp}`: costs from the wide read's `templates`, band
+counts from the sharp read's `bandTemplates` (with one read, both are that read). First
+pass learns each identity's own tail and names it by `countBands`; later passes relearn
+per class and re-anchor each class to the template that reads as it; `check` refuses
+unless the learned tails read as the marks set, one to one. On `05mice_flippers` it now
+passes with 4 label changes over 30 min, each stretch agreeing with per-view band counts),
+`TAIL_BAND_READ`, `refineChange`, `stretchesToSwap`.
 
 **Imports.** `./id-switch-check.js` (`buildGrid`, `contactEpisodes`,
 `SIZE_CHECK_DEFAULTS`).
@@ -10555,8 +10619,12 @@ lazy project each read is bracketed by `hydrateFrameMembers2d` /
 `releaseFrameMembers2d`. Pixels come through one OffscreenCanvas, only each tail's
 bounding box read back.
 
-**Key exports.** `createTailMarkReader(session, fps)` -> the reader
-`resolveTailMarks` takes, or `{failed: reason}` (no videos, no tail nodes).
+**Key exports.** `createTailMarkReader(session, fps, read?)` -> the reader
+`resolveTailMarks` takes, or `{failed: reason}` (no videos, no tail nodes). With `read`
+(`TAIL_BAND_READ`, which Track All passes when the identity engine runs) each view's
+feature is `{wide, sharp}`: the default read, unchanged, plus a second read started
+`baseExtension` of the first tail segment before TTI (`extendBase`), with that read's
+percentile and width; both from one read-back of the box around the longer line.
 
 **Imports.** `./app-state.js`, `./image-embedder.js` (`keyframeIndices`,
 `streamingReader`, `canStream`, `identityGroupsAt`), `../pose/lazy-residency.js`,
@@ -10564,10 +10632,23 @@ bounding box read back.
 
 **Imported by.** `pose/tracker.js`.
 
+### ui/identity-marks-modal.js
+
+**Purpose.** What each identity's tail shows: one row per identity with its number of
+bands (0 = plain), for the identity engine (`pose/identity-cues.js`). A leaf: commits
+nothing. `buildBandCountFields(names, counts)` (also used by Track All's first-use
+dialog) refuses non-integers outside 0-9 and all-equal counts;
+`showIdentityMarksModal(names, counts)` resolves `{counts}` or null (Esc, Cancel,
+backdrop). A future cue (dye, fur) would add a column.
+
+**Imported by.** `ui/tail-mark-field.js`, `ui/track-setup-modal.js`.
+
 ### ui/tail-mark-field.js
 
 **Purpose.** The Track menu's Tail marks choice (`#tbTailMarks`): which identity Track
-All gives the tail marks in the active session. Follows the session as the Animals
+All gives the tail marks in the active session, or **Bands per id…**, which opens
+`showIdentityMarksModal` and saves `Session.identityMarks` through `setIdentityMarks`
+(`identityNamesForMarks`: the names already set, else id_0… for the animal count). Follows the session as the Animals
 field does (`ui/animal-count-field.js`).
 
 **Key exports.** `wireTailMarkField()` (from `setupUI`), `syncTailMarkField()` (from
@@ -13962,6 +14043,10 @@ touching this file and nothing else.
 
 **`tailMarkedIdentity`.** The identity Track All gives the tail marks
 (`Session.tailMarkedIdentity`, `pose/tail-mark.js`). Off is null and writes nothing.
+
+**`identityMarks`.** Cue id -> identity name -> class (`Session.identityMarks`,
+`pose/identity-cues.js`), e.g. `{tailBands: {id_0: 0, id_1: 1}}`. None writes nothing;
+anything not a map of numbers or short strings reads as none.
 
 **`imageModel`.** The image check's model (`Session.imageModel`,
 `ui/image-model-dialog.js`): `{key, name, input, threshold, url? | folder?}`
