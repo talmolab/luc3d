@@ -1229,6 +1229,9 @@ function _buildCameraLabeledFrame(session, cameraName, frameIdx, fg, env) {
     // the project save does. Asking only the instance wrote the instance score
     // onto every node of every lazily loaded prediction.
     var nodeScoreOf = function (sinst) {
+        // Resolved once per instance (its store row, on a lazy project), not
+        // per node: same values as `predictedNodeScore`.
+        if (typeof session.predictedNodeScorer === 'function') return session.predictedNodeScorer(cameraName, frameIdx, sinst);
         return function (k) { return session.predictedNodeScore(cameraName, frameIdx, sinst, k); };
     };
 
