@@ -1164,7 +1164,8 @@ export function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFi
  *            resolve: function(Object, string, number): (number|null)}}
  */
 function _exportTrackSource(session) {
-    var plan = session.identityTrackPlan();
+    var plan = typeof session.identityTrackPlan === 'function'
+        ? session.identityTrackPlan() : { names: [], idToTrackIdx: new Map() };   // no identity model, no identities
     if (plan.names.length === 0) {
         var names = session.tracks;
         return {
@@ -1592,6 +1593,7 @@ function lazyCameraFastPathUsable(SIO, session, cameraName) {
  * `frameIdentityMap` only, so an entry then disagrees with its track).
  */
 function _storeHoldsIdentityTracks(session) {
+    if (typeof session.identityTrackPlan !== 'function') return true;   // no identity model, no identities
     var plan = session.identityTrackPlan();
     if (plan.names.length === 0) return true;
     if (plan.names.length !== session.tracks.length) return false;
