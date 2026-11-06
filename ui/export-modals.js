@@ -38,7 +38,8 @@ import {
     exportSlpClientSide,
     exportSlpMultiSession,
     exportCamerasSlpStreaming,
-    exportCamerasLazyRewrite,
+    exportCamerasInWorkers,
+    cameraExportUsesEagerBuild,
     cameraExportUsesSweep,
     cameraExportUsesLazyRewrite,
     findSkeletonMismatch,
@@ -1865,15 +1866,17 @@ export function showSlpExportByCamModal() {
             g.cams.push(cn);
             g.sels.push(sels[0]);
         });
-        // Cameras of a folder-loaded project, each rewritten from its own store:
-        // built one after another here while workers compress them side by
-        // side (`exportCamerasLazyRewrite`), as one step before the per-camera
-        // steps. A single such camera stays in the per-camera loop.
+        // Cameras of a folder-loaded project (each rewritten from its own store)
+        // and fully loaded cameras (each built from memory): built one after
+        // another here while workers compress them side by side
+        // (`exportCamerasInWorkers`), as one step before the per-camera steps.
+        // A single such camera stays in the per-camera loop.
         var rewrite = { cams: [], sels: [] };
         cols.forEach(function (cn) {
             var sels = buildColumnSelections(cn);
             if (sels.length !== 1 || cameraExportUsesSweep(sels[0], reprojAsUser, instanceFilter) ||
-                !cameraExportUsesLazyRewrite(sels[0], reprojAsUser, instanceFilter)) return;
+                !(cameraExportUsesLazyRewrite(sels[0], reprojAsUser, instanceFilter) ||
+                  cameraExportUsesEagerBuild(sels[0], reprojAsUser, instanceFilter))) return;
             rewrite.cams.push(cn);
             rewrite.sels.push(sels[0]);
         });
@@ -1944,7 +1947,7 @@ export function showSlpExportByCamModal() {
                 var rwLabel = 'Writing ' + rewrite.cams.length + ' cameras';
                 showLoading(rwLabel + '…', cardOpts(rwStep));
                 await yieldToPaint();
-                var rewritten = await exportCamerasLazyRewrite(rewrite.sels, reprojAsUser, instanceFilter, {
+                var rewritten = await exportCamerasInWorkers(rewrite.sels, reprojAsUser, instanceFilter, {
                     onProgress: function (done, total) {
                         if (cancelled) throw new ExportCancelled();
                         showLoadingProgress(rwLabel, done, total, cardOpts(rwStep, { unit: 'cameras' }));

@@ -4653,8 +4653,10 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   <folder>: k/n files…", `showSaving`), repainted as each one lands. Files, not
   bytes: `close()` reports nothing, so a byte count would race to the end of
   `write()` and stall. Two or more folder-loaded cameras
-  (`cameraExportUsesLazyRewrite`) are written in one step before the per-camera
-  steps ("Writing N cameras", cameras on the bar, `exportCamerasLazyRewrite`). A camera built in one go takes the card back
+  (`cameraExportUsesLazyRewrite`) or fully loaded cameras (`cameraExportUsesEagerBuild`)
+  are written in one step before the per-camera steps ("Writing N cameras", cameras
+  on the bar, `exportCamerasInWorkers`: built here one after another while workers
+  compress them). A camera built in one go takes the card back
   (`savingStep = 0`) until its file is queued. The modal is
   hidden while the card shows (it sits above the card's layer) and comes back on
   cancel or failure. **Esc closes the modal**, or cancels an in-progress export:
@@ -4747,7 +4749,9 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   worker pool; adoption and regrouping stay on the main thread).
 - `../import-export/file-io.js` — `exportSlpClientSide`,
   `exportSlpMultiSession` (By-Cam passes `{onProgress}`), `exportCamerasSlpStreaming`,
-  `cameraExportUsesSweep` (By-Cam's one sweep), `findSkeletonMismatch`, `buildPoints3dH5`,
+  `cameraExportUsesSweep` (By-Cam's one sweep), `exportCamerasInWorkers`,
+  `cameraExportUsesLazyRewrite`, `cameraExportUsesEagerBuild` (By-Cam's "Writing N
+  cameras" step), `findSkeletonMismatch`, `buildPoints3dH5`,
   `buildReprojH5`.
 - `../pose/initialization.js` — `update3DViewport`.
 - `./video-encode.js` — `createMp4Writer`, `videoEncodingAvailable` (Export 3D
@@ -14486,7 +14490,21 @@ session's resident/total) rather than truncate silently. Covered by
   bytes per selection (null = not this route). `cameraExportUsesLazyRewrite`
   tells the dialog which cameras it covers. Synthetic 8 cameras x 20,000
   frames, realistic noise and per-node scores: copy 5.1 s → 1.35 s
-  (`tests/e2e/_diag-profile-store-copy.mjs`). Test: `tests/e2e/export-bycam-store-copy.mjs` (both routes
+  (`tests/e2e/_diag-profile-store-copy.mjs`). It is now a wrapper
+  (`kinds: ['lazy']`) over `exportCamerasInWorkers(selections, reprojAsUser,
+  instanceFilter, opts)`, which also takes **fully loaded** cameras
+  (`cameraExportUsesEagerBuild`: `exportSlpMultiSession` would build them with
+  `buildSlpLabelsMultiSession` + `saveSlpToBytes`): their `Labels` are built here
+  and written with `saveSlpToBytes(labels, { lucidDivertTables })` (patch `(eager
+  divert)`: the big 2D tables created empty, their rows handed back), and the
+  camera's worker appends and gzips the rows while the next camera is built.
+  Synthetic 8 cameras x 5 animals x 15 nodes: 30,000 frames 7.7 → 4.0 s, 60,000
+  frames 14.6 → 7.3 s (`tests/e2e/_bench-export-bycam-eager.mjs`; per camera
+  the build is ~0.3 s, the write ~0.65 s of which gzip ~0.35 s). A Worker
+  constructor that throws falls back to this thread like one that fails to
+  start. Test: `tests/e2e/export-bycam-eager-workers.mjs` (every dataset and
+  attribute = today's eager export, with workers, `workers: false` and the
+  fallback). Test: `tests/e2e/export-bycam-store-copy.mjs` (both routes
   value for value, with negative controls; §4 workers = this thread, and the fallback). `cameraExportUsesSweep(selection,
   …)` says whether `exportSlpMultiSession` would route a camera there (By Cam groups
   those cameras per session). The store fast path (`lazyCameraFastPathUsable`) is
@@ -14636,7 +14654,8 @@ the finished file's bytes.
 `ack` (a whole table the `(deferred tables)` patch held back from a per-camera
 rewrite: `create_dataset({...spec, data})` plus its attributes); `finish` →
 `done {bytes}`; any failure → `error {message}`. Used by the store copy, the
-per-frame pass and `exportCamerasLazyRewrite`.
+per-frame pass and `exportCamerasInWorkers` (folder-loaded cameras' deferred
+tables via `create`; fully loaded cameras' diverted rows via `rows`).
 **Dependencies:** `lib/h5wasm/hdf5_hl.js` by RELATIVE path (a worker has no
 import map). Rows arrive already rounded (`lucidCompactRound` runs in the divert).
 **Dependents:** `import-export/file-io.js` (`_startRowsWorker`).
