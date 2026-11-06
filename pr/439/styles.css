@@ -3408,11 +3408,10 @@ button.tri-dropdown-item:disabled {
 /* sleap-app's sidebar rail (ui/panel-rail.js): one icon per info-panel panel
    on the window's right edge. `.panel-rail` keeps a fixed-width slot in the
    row; `.panel-rail-inner` is absolute so hovering widens it LEFTWARD over the
-   info panel to show each icon's name without reflowing anything. The
-   widened rail takes the pointer (its whole row is the button, and the icons
-   slide left under it), so it stays wide until the pointer leaves it. Keyboard
-   focus widens it too (`:focus-visible`, so a mouse click leaves it narrow
-   once the pointer leaves). */
+   info panel to show each icon's name without reflowing anything. As in
+   sleap-app, `.expanded` (ui/panel-rail.js) is set on mouse enter and focus
+   entering the rail, and cleared on mouse leave and focus leaving it; the
+   widened rail takes the pointer (each row is its button). */
 .panel-rail {
   position: relative;
   width: var(--panel-rail-width);
@@ -3438,8 +3437,7 @@ button.tri-dropdown-item:disabled {
   transition: width var(--transition-fast), box-shadow var(--transition-fast);
 }
 
-.panel-rail:hover .panel-rail-inner,
-.panel-rail:has(.panel-rail-btn:focus-visible) .panel-rail-inner {
+.panel-rail.expanded .panel-rail-inner {
   width: var(--panel-rail-expanded-width);
   box-shadow: -8px 0 20px rgba(0, 0, 0, 0.45);
 }
@@ -3530,21 +3528,8 @@ button.tri-dropdown-item:disabled {
   transition: opacity var(--transition-fast);
 }
 
-.panel-rail:hover .panel-rail-label,
-.panel-rail:has(.panel-rail-btn:focus-visible) .panel-rail-label {
+.panel-rail.expanded .panel-rail-label {
   opacity: 1;
-}
-
-/* After a mouse click the rail narrows until the pointer leaves it
-   (`rail-settled`, ui/panel-rail.js), so it never covers the panel controls
-   the user reaches for next. */
-#panelRail.rail-settled .panel-rail-inner {
-  width: var(--panel-rail-width);
-  box-shadow: none;
-}
-
-#panelRail.rail-settled .panel-rail-label {
-  opacity: 0;
 }
 
 /* ---- Panel sections (sleap-app's accordion stack, ui/panel-rail.js) ----

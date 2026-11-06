@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=2ac8a4006d25';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=d3b64d14b0b9';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 

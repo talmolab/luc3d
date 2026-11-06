@@ -180,23 +180,23 @@ try {
         Math.round(document.querySelector('#panelRail .panel-rail-inner').getBoundingClientRect().width));
     check(unhover === 44, `leaving the rail narrows it again (${unhover})`);
 
-    // After a mouse click the rail narrows at once (like a menu after a
-    // choice) and stays narrow while the pointer is still on it, so the panel
-    // controls beside it are reachable; leaving and coming back widens it.
-    const vidIcon = '#panelRail .panel-rail-btn[data-tab="tabVideos"]';
-    await page.hover(vidIcon);
-    await page.waitForTimeout(300);
-    await page.click(vidIcon);
-    await page.waitForTimeout(300);
-    const settled = await page.evaluate(() =>
+    // As in sleap-app, a click does NOT narrow the rail: it stays wide while
+    // the pointer is on it (focus on the clicked button), and leaving with
+    // the mouse narrows it even though that button keeps focus.
+    const vidBtn = '#panelRail .panel-rail-btn[data-tab="tabVideos"]';
+    const railW = () => page.evaluate(() =>
         Math.round(document.querySelector('#panelRail .panel-rail-inner').getBoundingClientRect().width));
-    check(settled === 44, `a mouse click narrows the rail at once (${settled})`);
+    await page.hover(vidBtn);
+    await page.waitForTimeout(300);
+    await page.click(vidBtn);
+    await page.waitForTimeout(300);
+    const afterClick = await railW();
+    const focusIn = await page.evaluate(() => !!document.activeElement.closest('#panelRail'));
+    check(afterClick === 132, `a click keeps the rail wide while the pointer is on it (${afterClick})`);
     await moveAway();
-    await page.hover(vidIcon);
     await page.waitForTimeout(300);
-    const rewiden = await page.evaluate(() =>
-        Math.round(document.querySelector('#panelRail .panel-rail-inner').getBoundingClientRect().width));
-    check(rewiden === 132, `leaving and hovering again widens it (${rewiden})`);
+    const leftW = await railW();
+    check(leftW === 44, `leaving with the mouse narrows it${focusIn ? ' though the clicked button keeps focus' : ''} (${leftW})`);
     await close('tabVideos');                       // undo: back to Instances alone, expanded
     await fold('tabInstances');
     await moveAway();
