@@ -173,7 +173,7 @@ try {
     // ---- 4. A real text field still swallows everything ---------------------
     // The per-camera rotation row lives in the Visibility tab, which has to be
     // showing before anything in it can take focus.
-    await page.click('.panel-rail-btn[data-tab="tabVisibility"] .panel-rail-icon');
+    await page.click('.panel-rail-btn[data-tab="tabVisibility"]');
     await reset();
     const typed = await page.evaluate(() => {
         const el = document.querySelector('#visVideoRotationTable input[type=number]');

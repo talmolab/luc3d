@@ -64,7 +64,7 @@ input[type="number"]::-webkit-inner-spin-button {
   --success-color: #2ecc71;
   --info-panel-width: 300px;
   --panel-rail-width: 44px;
-  --panel-rail-expanded-width: 184px;
+  --panel-rail-expanded-width: 132px;
   --panel-section-header-height: 32px;
   --controls-bar-height: 56px;
   --status-bar-height: 28px;
@@ -3408,7 +3408,9 @@ button.tri-dropdown-item:disabled {
 /* sleap-app's sidebar rail (ui/panel-rail.js): one icon per info-panel panel
    on the window's right edge. `.panel-rail` keeps a fixed-width slot in the
    row; `.panel-rail-inner` is absolute so hovering widens it LEFTWARD over the
-   info panel to show each icon's name without reflowing anything. Keyboard
+   info panel to show each icon's name without reflowing anything. The
+   widened rail takes the pointer (its whole row is the button, and the icons
+   slide left under it), so it stays wide until the pointer leaves it. Keyboard
    focus widens it too (`:focus-visible`, so a mouse click leaves it narrow
    once the pointer leaves). */
 .panel-rail {
@@ -3434,11 +3436,6 @@ button.tri-dropdown-item:disabled {
   background: var(--bg-secondary);
   border-left: 1px solid var(--border-color);
   transition: width var(--transition-fast), box-shadow var(--transition-fast);
-  /* Only the 44px icon column takes the pointer (`.panel-rail-icon` below):
-     the widened label strip is display only, so the pointer over it is over
-     the panel underneath — the rail narrows and the panel's own controls
-     there stay clickable. */
-  pointer-events: none;
 }
 
 .panel-rail:hover .panel-rail-inner,
@@ -3447,12 +3444,11 @@ button.tri-dropdown-item:disabled {
   box-shadow: -8px 0 20px rgba(0, 0, 0, 0.45);
 }
 
-/* Icon at the window edge, name to its left: the icons stay put while the
-   rail widens. */
+/* Icon first, name to its right, as in sleap-app: the rail widens leftward,
+   so the icons slide left with its edge. */
 .panel-rail-btn {
   position: relative;
   display: flex;
-  flex-direction: row-reverse;
   align-items: center;
   flex-shrink: 0;
   width: 100%;
@@ -3504,7 +3500,6 @@ button.tri-dropdown-item:disabled {
 }
 
 .panel-rail-icon {
-  pointer-events: auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3525,7 +3520,7 @@ button.tri-dropdown-item:disabled {
 .panel-rail-label {
   flex: 1;
   min-width: 0;
-  padding-left: 12px;
+  padding-right: 12px;
   font-size: 13px;
   text-align: left;
   white-space: nowrap;
@@ -3538,6 +3533,18 @@ button.tri-dropdown-item:disabled {
 .panel-rail:hover .panel-rail-label,
 .panel-rail:has(.panel-rail-btn:focus-visible) .panel-rail-label {
   opacity: 1;
+}
+
+/* After a mouse click the rail narrows until the pointer leaves it
+   (`rail-settled`, ui/panel-rail.js), so it never covers the panel controls
+   the user reaches for next. */
+#panelRail.rail-settled .panel-rail-inner {
+  width: var(--panel-rail-width);
+  box-shadow: none;
+}
+
+#panelRail.rail-settled .panel-rail-label {
+  opacity: 0;
 }
 
 /* ---- Panel sections (sleap-app's accordion stack, ui/panel-rail.js) ----

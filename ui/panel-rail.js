@@ -306,7 +306,13 @@ function readStored() {
  * `:has(:focus-visible)` rule keeps it widened after the pointer leaves.
  */
 function releasePointerFocus(btn, e) {
-    if (e && e.detail > 0 && document.activeElement === btn) btn.blur();
+    if (!e || e.detail === 0) return;
+    if (document.activeElement === btn) btn.blur();
+    // Like a menu after a choice, the rail narrows after a mouse click and
+    // stays narrow until the pointer leaves it: the widened rail takes the
+    // pointer, so otherwise it would keep covering the panel controls beside
+    // it (Skeleton's + Node, a section's ✕) that the user is reaching for.
+    if (_rail) _rail.classList.add('rail-settled');
 }
 
 /**
@@ -323,6 +329,7 @@ export function setupPanelRail(opts) {
     const inner = document.createElement('div');
     inner.className = 'panel-rail-inner';
     _rail.appendChild(inner);
+    _rail.addEventListener('pointerleave', function () { _rail.classList.remove('rail-settled'); });
 
     const collapseBtn = buildButton('panel-rail-collapse', 'panel-right-close', 'Hide panel');
     collapseBtn.setAttribute('aria-controls', WRAPPER_ID);

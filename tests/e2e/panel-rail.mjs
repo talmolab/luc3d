@@ -96,12 +96,14 @@ try {
         };
     });
     const J = JSON.stringify;
-    // Click the ICON, as a user does: once hovered, the rest of the widened
-    // button is a display-only label strip over the panel.
-    const click = (tab) => page.click(`#panelRail .panel-rail-btn[data-tab="${tab}"] .panel-rail-icon`);
-    const fold = (tab) => page.click(`.panel-section[data-tab="${tab}"] .panel-section-toggle`);
-    const close = (tab) => page.click(`.panel-section[data-tab="${tab}"] .panel-section-close`);
+    // Click the rail BUTTON (its whole row): on hover the icon slides left
+    // under the pointer, which is then over that row's name.
+    // The widened rail takes the pointer (as in sleap-app), so leave it before
+    // clicking anything it may cover, as a user's pointer does.
     const moveAway = () => page.mouse.move(300, 300);
+    const click = async (tab) => { await page.click(`#panelRail .panel-rail-btn[data-tab="${tab}"]`); await moveAway(); };
+    const fold = async (tab) => { await moveAway(); await page.click(`.panel-section[data-tab="${tab}"] .panel-section-toggle`); };
+    const close = async (tab) => { await moveAway(); await page.click(`.panel-section[data-tab="${tab}"] .panel-section-close`); };
 
     // ---- §1 inventory, icons, names, hover labels ----
     const inv = await page.evaluate(() => {
@@ -151,24 +153,53 @@ try {
         op: getComputedStyle(document.querySelector('#panelRail .panel-rail-btn[data-tab="tabVideos"] .panel-rail-label')).opacity,
         slot: Math.round(document.getElementById('panelRail').getBoundingClientRect().width),
     }));
-    check(hover.w === 184 && hover.op === '1' && hover.slot === 44,
+    check(hover.w === 132 && hover.op === '1' && hover.slot === 44,
         `hover widens the rail over the panel to show names, without reflow (inner ${hover.w}, label opacity ${hover.op}, slot ${hover.slot})`);
-    // The widened label strip must never cover the panel's own controls: the
-    // pointer over it is over the panel, and the rail narrows again.
-    const stripX = 1440 - 44 - 70, stripY = 120;
+    const lay = await page.evaluate(() => [...document.querySelectorAll('#panelRail .panel-rail-btn')].map(b => {
+        const i = b.querySelector('.panel-rail-icon').getBoundingClientRect();
+        const l = b.querySelector('.panel-rail-label');
+        return { iconLeft: i.right <= l.getBoundingClientRect().left + 0.5, fits: l.scrollWidth <= l.clientWidth };
+    }));
+    check(lay.every(x => x.iconLeft), 'each icon sits LEFT of its name');
+    check(lay.every(x => x.fits), 'every name fits the widened rail without truncation (incl. "ID Switches")');
+    // The widened rail takes the pointer: over a name it stays wide, and a
+    // click there is a click on that panel's button.
+    const nameBox = await page.locator('#panelRail .panel-rail-btn[data-tab="tabVideos"] .panel-rail-label').boundingBox();
+    const stripX = Math.round(nameBox.x + 10), stripY = Math.round(nameBox.y + nameBox.height / 2);
     await page.mouse.move(stripX, stripY);
     await page.waitForTimeout(300);
     const strip = await page.evaluate(([x, y]) => ({
-        inRail: !!document.elementFromPoint(x, y).closest('#panelRail'),
+        btn: (document.elementFromPoint(x, y).closest('.panel-rail-btn') || {}).dataset?.tab,
         w: Math.round(document.querySelector('#panelRail .panel-rail-inner').getBoundingClientRect().width),
     }), [stripX, stripY]);
-    check(!strip.inRail && strip.w === 44,
-        `the label strip is display-only: the panel under it gets the pointer and the rail narrows (${strip.w})`);
+    check(strip.btn === 'tabVideos' && strip.w === 132,
+        `over a name the rail stays wide and the pointer is on that panel's button (${strip.btn}, ${strip.w})`);
     await moveAway();
     await page.waitForTimeout(300);
     const unhover = await page.evaluate(() =>
         Math.round(document.querySelector('#panelRail .panel-rail-inner').getBoundingClientRect().width));
     check(unhover === 44, `leaving the rail narrows it again (${unhover})`);
+
+    // After a mouse click the rail narrows at once (like a menu after a
+    // choice) and stays narrow while the pointer is still on it, so the panel
+    // controls beside it are reachable; leaving and coming back widens it.
+    const vidIcon = '#panelRail .panel-rail-btn[data-tab="tabVideos"]';
+    await page.hover(vidIcon);
+    await page.waitForTimeout(300);
+    await page.click(vidIcon);
+    await page.waitForTimeout(300);
+    const settled = await page.evaluate(() =>
+        Math.round(document.querySelector('#panelRail .panel-rail-inner').getBoundingClientRect().width));
+    check(settled === 44, `a mouse click narrows the rail at once (${settled})`);
+    await moveAway();
+    await page.hover(vidIcon);
+    await page.waitForTimeout(300);
+    const rewiden = await page.evaluate(() =>
+        Math.round(document.querySelector('#panelRail .panel-rail-inner').getBoundingClientRect().width));
+    check(rewiden === 132, `leaving and hovering again widens it (${rewiden})`);
+    await close('tabVideos');                       // undo: back to Instances alone, expanded
+    await fold('tabInstances');
+    await moveAway();
 
     // ---- §2 the accordion ----
     let s = await railState();
@@ -289,7 +320,7 @@ try {
         focused: document.activeElement && document.activeElement.dataset.tab,
         w: Math.round(document.querySelector('#panelRail .panel-rail-inner').getBoundingClientRect().width),
     }));
-    check(kb.focused === 'tabSkeleton' && kb.w === 184, `Tab moves between icons and keyboard focus widens the rail (${kb.focused}, ${kb.w})`);
+    check(kb.focused === 'tabSkeleton' && kb.w === 132, `Tab moves between icons and keyboard focus widens the rail (${kb.focused}, ${kb.w})`);
     await page.keyboard.press('Shift+Tab');
     await page.keyboard.press('Shift+Tab');
     await page.keyboard.press('Enter');          // Videos: not open → opens + expands

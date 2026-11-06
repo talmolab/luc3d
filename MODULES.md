@@ -12407,14 +12407,16 @@ its default multi-panel (accordion) mode.
   section's header to the top of `#infoPanel` (a rail click that opens a
   panel does too), and never hides or folds anything.
 - **Hover / keyboard focus (`:focus-visible`) widens the rail** from 44px to
-  184px over the panel to show each name (pure CSS). Only the 44px icon column
-  takes the pointer (`.panel-rail-inner { pointer-events: none }`,
-  `.panel-rail-icon { pointer-events: auto }`): the label strip is display only,
-  so it can never cover the panel's own controls (it did, and blocked
-  Skeleton's + Node). A MOUSE click on a rail button blurs it
-  (`releasePointerFocus`, `detail > 0`; Enter/Space keep focus): Chrome makes
-  a click-focused button `:focus-visible` on the next key press, so `I` after
-  a click held the rail wide once the pointer left.
+  132px (`--panel-rail-expanded-width`, just past "ID Switches") over the panel
+  to show each name (pure CSS). As in sleap-app the icon is LEFT of its name,
+  so the icons slide left as it widens, and the widened rail takes the pointer
+  (each row is its button); it stays wide until the pointer leaves it. So that
+  it never covers the panel controls beside it (Skeleton's + Node, a section's
+  ✕) right after use, a MOUSE click on a rail button (`releasePointerFocus`,
+  `detail > 0`; Enter/Space keep focus) blurs it and adds `.rail-settled`,
+  which holds the rail narrow until the pointer leaves it. The blur matters
+  too: Chrome makes a click-focused button `:focus-visible` on the next key
+  press, so `I` after a click held the rail wide.
 - The rail is a sibling AFTER `#infoPanelWrapper` in `.main-content`, so a
   collapsed wrapper still measures 0 wide and `isInfoPanelVisible` is unchanged.
 - Open / folded sections are display taste:
