@@ -17,6 +17,9 @@
  *        FORCE=1: a session refused as having no marks is run anyway, to look at it
  *        READ='{"percentile":0.85,"widthShare":0.0833,"baseExtension":0}': override the band cue's tail read
  *          (TAIL_BAND_READ in pose/tail-mark.js), through globalThis.__lucidTailBandRead
+ *        CUE_OPTS='{"suspectCost":0.5}': override IDENTITY_CUE_DEFAULTS (pose/identity-cues.js) for this run
+ *          ('{"keepObservations":true}' with WINDOW='[from,to]' saves the engine's reads of samples in that
+ *          frame window as result.windowObs: per sample, per identity name, its views' {wide, sharp})
  */
 import { chromium } from 'playwright';
 import http from 'node:http';
@@ -89,10 +92,12 @@ try {
             });
             await page.waitForFunction(() => { const s = window.__lucid.state.session; return s && s.cameras && s.cameras.length > 1 && window.__lucid.state.views && window.__lucid.state.views.some((v) => v.decoder); }, null, { polling: 1000 });
             await new Promise((r) => setTimeout(r, 3000));
-            const res = await page.evaluate(async ({ marked, heldout, maxCrops, force, extra, marksArg, animals, readArg }) => {
+            const res = await page.evaluate(async ({ marked, heldout, maxCrops, force, extra, marksArg, animals, readArg, cueOpts, windowArg }) => {
                 const s = window.__lucid.state.session;
                 const tr = await import('./pose/tracker.js');
                 if (readArg) globalThis.__lucidTailBandRead = readArg;
+                if (windowArg) window.__lucidWindow = windowArg;
+                if (cueOpts) Object.assign((await import('./pose/identity-cues.js')).IDENTITY_CUE_DEFAULTS, cueOpts);
                 tr.setTrackerNumAnimals(animals);
                 if (marksArg) tr.setIdentityMarks(marksArg); else tr.setTailMarkedIdentity(marked);
                 const t0 = performance.now();
@@ -109,6 +114,20 @@ try {
                     r = out.result = await tm.resolveTailMarks(s, { markedName: marked, fps: window.__lucid.state.fps || s.fps, reader: rd, minTeachingSamples: 1, minTemplateDifference: 0 });
                 }
                 if (!r || !r.ok) return out;
+                if (r.obs) {
+                    const win = window.__lucidWindow;
+                    if (win) {
+                        const nameOf = new Map(s.identities.map((i) => [i.id, i.name]));
+                        out.windowObs = [];
+                        r.sampleFrames.forEach((f, t) => {
+                            if (f < win[0] || f > win[1]) return;
+                            const m = r.obs[0][t], row = { frame: f, ids: {} };
+                            if (m) m.forEach((list, id) => { row.ids[nameOf.get(id)] = list.map((x) => ({ wide: Array.from(x.wide), sharp: x.sharp ? Array.from(x.sharp) : null })); });
+                            out.windowObs.push(row);
+                        });
+                    }
+                    delete r.obs;
+                }
                 if (r.names) {
                     // the identity engine: final labels per stretch are its result; body size is the independent check
                     out.engine = { runs: r.runs, changes: r.changes, swapped: r.swapped, samples: r.samples, rounds: r.rounds, models: r.models };
@@ -248,7 +267,7 @@ try {
                 }
                 out.size = Object.fromEntries([...bins].map(([k, v]) => { v.sort((a, b) => a - b); return [k, v[v.length >> 1]]; }));
                 return out;
-            }, { marked: MARKED, heldout: HELDOUT, maxCrops: MAX_CROPS, force: !!process.env.FORCE, extra: EXTRA[name] || [], marksArg: MARKS, animals: ANIMALS, readArg: process.env.READ ? JSON.parse(process.env.READ) : null });
+            }, { marked: MARKED, heldout: HELDOUT, maxCrops: MAX_CROPS, force: !!process.env.FORCE, extra: EXTRA[name] || [], marksArg: MARKS, animals: ANIMALS, readArg: process.env.READ ? JSON.parse(process.env.READ) : null, cueOpts: process.env.CUE_OPTS ? JSON.parse(process.env.CUE_OPTS) : null, windowArg: process.env.WINDOW ? JSON.parse(process.env.WINDOW) : null });
             if (SAVE && res.result && res.result.ok) {
                 const sv = await page.evaluate(async () => {
                     const s = window.__lucid.state.session;
