@@ -1998,14 +1998,14 @@ export function cameraCenter(P) {
 }
 
 // Per-projection-matrix memo for the geometry `cameraCenter` and
-// `backProjectToRay(s)` derive from P alone (its null vector, and the
-// pseudo-inverse Pᵀ(PPᵀ)⁻¹). Track All asks for both once per detection per
-// frame, and recomputing them — a 4x4 Jacobi eigen-solve plus four matMuls —
-// was ~6.8 s of a 17 s run on HardFight_1kModels. Keyed by the P array itself
-// (`Camera.projectionMatrix` is cached per camera) and VALIDATED on every hit
-// against a snapshot of its 12 entries, so a P mutated in place recomputes
-// rather than returning stale geometry. The cached values are produced by the
-// exact same code as before, so results are bit-identical.
+// `backProjectToRay(s)` derive from P alone (its null vector, and M⁻¹ with the
+// centre −M⁻¹·p4). Track All asks for the rays once per detection per frame,
+// and recomputing their geometry — then a 4x4 Jacobi eigen-solve plus four
+// matMuls — was ~6.8 s of a 17 s run on HardFight_1kModels. Keyed by the P
+// array itself (`Camera.projectionMatrix` is cached per camera) and VALIDATED
+// on every hit against a snapshot of its 12 entries, so a P mutated in place
+// recomputes rather than returning stale geometry. A hit returns exactly what
+// a fresh computation would.
 var _pGeomCache = new WeakMap();
 function _pGeometry(P) {
     var e = _pGeomCache.get(P);
@@ -2020,20 +2020,48 @@ function _pGeometry(P) {
     }
     var snapNew = new Float64Array(12);
     for (var r2 = 0, k2 = 0; r2 < 3; r2++) for (var c2 = 0; c2 < 4; c2++, k2++) snapNew[k2] = P[r2][c2];
-    e = { snap: snapNew, center: null, pinv: null };
+    e = { snap: snapNew, center: null, ray: undefined };
     _pGeomCache.set(P, e);
     return e;
 }
 
-/** Pseudo-inverse Pᵀ(PPᵀ)⁻¹ (4x3) of P, memoized per P. Read-only. */
-function _pseudoInverse(P) {
+// The rays through P = [M | p4]: M⁻¹ and the centre −M⁻¹·p4, memoized per P
+// (see `_pGeometry`); null when M is singular (a camera with no finite centre).
+// Read-only.
+//
+// NOT the line from the centre to the pseudo-inverse point P⁺·(u, v, 1), as
+// these functions used to cast it: that point lies at infinity when the camera
+// sits at the world origin (P = [M | 0] makes P⁺'s 4th row zero), so every
+// direction came out NaN and Track All's 3D term silently dropped that camera.
+function _rayBasis(P) {
     var e = _pGeometry(P);
-    if (e.pinv) return e.pinv;
-    var PT = matTranspose(P);
-    var PPT = matMul(P, PT);
-    var PPTinv = invert3x3(PPT);
-    e.pinv = matMul(PT, PPTinv);
-    return e.pinv;
+    if (e.ray !== undefined) return e.ray;
+    var Mi = invert3x3([
+        [P[0][0], P[0][1], P[0][2]],
+        [P[1][0], P[1][1], P[1][2]],
+        [P[2][0], P[2][1], P[2][2]]
+    ]);
+    if (!Mi) return (e.ray = null);
+    var tx = P[0][3], ty = P[1][3], tz = P[2][3];
+    e.ray = {
+        Mi: Mi,
+        origin: [
+            -(Mi[0][0] * tx + Mi[0][1] * ty + Mi[0][2] * tz),
+            -(Mi[1][0] * tx + Mi[1][1] * ty + Mi[1][2] * tz),
+            -(Mi[2][0] * tx + Mi[2][1] * ty + Mi[2][2] * tz)
+        ]
+    };
+    return e.ray;
+}
+
+// Unit M⁻¹·(u, v, 1): the direction the camera sees (u, v) in, pointing in
+// front of it for a P = K·[R | t]. Never zero, since M⁻¹ is invertible.
+function _rayDirection(Mi, u, v) {
+    var dx = Mi[0][0] * u + Mi[0][1] * v + Mi[0][2];
+    var dy = Mi[1][0] * u + Mi[1][1] * v + Mi[1][2];
+    var dz = Mi[2][0] * u + Mi[2][1] * v + Mi[2][2];
+    var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    return [dx / len, dy / len, dz / len];
 }
 
 /**
@@ -2041,80 +2069,33 @@ function _pseudoInverse(P) {
  *
  * @param {number[]} point2d - [u, v] pixel coordinates
  * @param {number[][]} P - 3x4 projection matrix
- * @returns {{origin: number[], direction: number[]}} Ray origin and unit direction
+ * @returns {{origin: number[], direction: (number[]|null)}} Ray origin (the
+ *   camera centre) and unit direction; NaN origin and null direction when P
+ *   has no finite centre (singular left 3x3)
  */
 export function backProjectToRay(point2d, P) {
-    var origin = cameraCenter(P);
-
-    // Pseudo-inverse pinv(P) = P^T * inv(P * P^T), memoized per P.
-    var pinvP = _pseudoInverse(P); // 4x3
-
-    // Back-project: homogeneous 3D point = pinv(P) * [u, v, 1]^T
-    var u = point2d[0], v = point2d[1];
-    var hx = pinvP[0][0] * u + pinvP[0][1] * v + pinvP[0][2];
-    var hy = pinvP[1][0] * u + pinvP[1][1] * v + pinvP[1][2];
-    var hz = pinvP[2][0] * u + pinvP[2][1] * v + pinvP[2][2];
-    var hw = pinvP[3][0] * u + pinvP[3][1] * v + pinvP[3][2];
-
-    // Dehomogenize
-    var px = hx / hw;
-    var py = hy / hw;
-    var pz = hz / hw;
-
-    // Direction = backprojected point - origin, normalized
-    var dx = px - origin[0];
-    var dy = py - origin[1];
-    var dz = pz - origin[2];
-    var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
-    if (len < 1e-15) {
-        return { origin: origin, direction: [0, 0, 1] };
-    }
-
-    return { origin: origin, direction: [dx / len, dy / len, dz / len] };
+    var b = _rayBasis(P);
+    if (!b) return { origin: [NaN, NaN, NaN], direction: null };
+    return { origin: b.origin.slice(), direction: _rayDirection(b.Mi, point2d[0], point2d[1]) };
 }
 
 /**
  * Batch back-project multiple 2D points to 3D rays.
- * Computes camera center and pseudo-inverse once for efficiency.
+ * Computes the ray geometry once per P (memoized).
  *
  * @param {(number[]|null)[]} points2d - Array of [u,v] or null
  * @param {number[][]} P - 3x4 projection matrix
- * @returns {{origin: number[], directions: (number[]|null)[]}} Ray origin and directions
+ * @returns {{origin: number[], directions: (number[]|null)[]}} Ray origin and
+ *   directions; every direction null when P has no finite centre
  */
 export function backProjectToRays(points2d, P) {
-    var origin = cameraCenter(P);
-
-    // Pseudo-inverse, memoized per P (see `_pGeometry`).
-    var pinvP = _pseudoInverse(P);
-
+    var b = _rayBasis(P);
     var directions = [];
     for (var i = 0; i < points2d.length; i++) {
-        if (points2d[i] == null) {
-            directions.push(null);
-            continue;
-        }
-        var u = points2d[i][0], v = points2d[i][1];
-        var hx = pinvP[0][0] * u + pinvP[0][1] * v + pinvP[0][2];
-        var hy = pinvP[1][0] * u + pinvP[1][1] * v + pinvP[1][2];
-        var hz = pinvP[2][0] * u + pinvP[2][1] * v + pinvP[2][2];
-        var hw = pinvP[3][0] * u + pinvP[3][1] * v + pinvP[3][2];
-
-        var px = hx / hw;
-        var py = hy / hw;
-        var pz = hz / hw;
-
-        var dx = px - origin[0];
-        var dy = py - origin[1];
-        var dz = pz - origin[2];
-        var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (len < 1e-15) {
-            directions.push([0, 0, 1]);
-        } else {
-            directions.push([dx / len, dy / len, dz / len]);
-        }
+        var p = points2d[i];
+        directions.push(p == null || !b ? null : _rayDirection(b.Mi, p[0], p[1]));
     }
-
-    return { origin: origin, directions: directions };
+    return { origin: b ? b.origin.slice() : [NaN, NaN, NaN], directions: directions };
 }
 
 /**

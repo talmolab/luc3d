@@ -213,8 +213,10 @@ try {
           if (!H.sameArr(r.errors[cn], e.errors[cn])) bad.push('errors ' + cn);
           if (!H.sameArr((r.errorsUndistorted || {})[cn], e.errorsU[cn])) bad.push('undistorted errors ' + cn);
         }
-        if (Math.abs(r.meanError - e.mean) > 1e-12 * Math.max(1, e.mean)) bad.push(`mean ${r.meanError} vs ${e.mean}`);
-        if (Math.abs(r.meanErrorUndistorted - e.meanU) > 1e-12 * Math.max(1, e.meanU)) bad.push('undistorted mean');
+        // `!(… <= tol)`, not `> tol`: a NaN mean must count as a mismatch.
+        const near = (a, b) => Object.is(a, b) || Math.abs(a - b) <= 1e-12 * Math.max(1, b);
+        if (!near(r.meanError, e.mean)) bad.push(`mean ${r.meanError} vs ${e.mean}`);
+        if (!near(r.meanErrorUndistorted, e.meanU)) bad.push('undistorted mean');
         for (const c of cams) if (!g.reprojectedInstances || !g.reprojectedInstances.get(c.name)) bad.push('no reprojected instance ' + c.name);
       }
       return bad;

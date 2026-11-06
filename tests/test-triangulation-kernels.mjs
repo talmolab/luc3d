@@ -133,7 +133,7 @@ group('DLT kernel (inverse iteration) agrees with svd3x4 (Jacobi)');
         const M = flatOf(K.matMul(K.matTranspose(s.A), s.A));
         const ref = K.svd3x4(s.A);
         const got = Array.from(K.dltHomogeneousFlat(s.xs, s.ys, s.Ps, s.nObs, new Float64Array(4)));
-        if (Math.abs(Math.hypot(...got) - 1) > 1e-12) nonUnit++;
+        if (!(Math.abs(Math.hypot(...got) - 1) <= 1e-12)) nonUnit++;   // a NaN result counts
         if (s.kind === 'clean') { nClean++; maxClean = Math.max(maxClean, dist3(toXYZ(ref), toXYZ(got))); }
         const tr = M[0] + M[5] + M[10] + M[15];
         if (rayleigh(M, got) > rayleigh(M, ref) * (1 + 1e-9) + 1e-15 * tr) worse++;

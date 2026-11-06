@@ -30,6 +30,9 @@
             var point3d = [10, 5, 50];
             var proj = cam.project(point3d);
             var result = backProjectToRay(proj, cam.projectionMatrix);
+            // assertApprox passes NaN, and this camera sits at the world origin,
+            // where the direction used to be NaN.
+            assertTrue(result.direction.every(isFinite), 'direction is finite');
             var len = Math.sqrt(10*10 + 5*5 + 50*50);
             assertApprox(result.direction[0], 10/len, 0.1, 'dx');
             assertApprox(result.direction[1], 5/len, 0.1, 'dy');
