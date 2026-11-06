@@ -53,12 +53,12 @@
  * streams from the columnar store untouched.
  */
 
-import { _buildSioPoints } from './file-io.js?v=3f8a20ee6ea5';
-import { points3dNodeCount } from '../pose/pose-data.js?v=3f8a20ee6ea5';
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=3f8a20ee6ea5';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=3f8a20ee6ea5';
-import { writePlaneMetadata } from './plane-metadata.js?v=3f8a20ee6ea5';
-import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=3f8a20ee6ea5';
+import { _buildSioPoints } from './file-io.js?v=6239512d41df';
+import { points3dNodeCount } from '../pose/pose-data.js?v=6239512d41df';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=6239512d41df';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=6239512d41df';
+import { writePlaneMetadata } from './plane-metadata.js?v=6239512d41df';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=6239512d41df';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;
@@ -447,9 +447,12 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     function buildOverlayInstance(inst, trackBase, camName, frameIdx) {
         var isPredicted = inst.type !== 'user';
         var perPointScore = isPredicted ? (inst.score != null ? inst.score : 1.0) : undefined;
-        var pts = _buildSioPoints(inst, numNodes, perPointScore, null, function (k) {
-            return session.predictedNodeScore(camName, frameIdx, inst, k);
-        });
+        // The store row is resolved once per instance, not per node (same
+        // answers as `predictedNodeScore`).
+        var nodeScore = typeof session.predictedNodeScorer === 'function'
+            ? session.predictedNodeScorer(camName, frameIdx, inst)
+            : function (k) { return session.predictedNodeScore(camName, frameIdx, inst, k); };
+        var pts = _buildSioPoints(inst, numNodes, perPointScore, null, nodeScore);
         var track = null;
         if (inst.trackIdx != null && inst.trackIdx >= 0) {
             var combinedIdx = trackBase + inst.trackIdx;
