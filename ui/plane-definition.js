@@ -1726,15 +1726,16 @@ export function togglePlaneMode() {
 }
 
 /**
- * Swap the info panel between its normal tabbed content and the Define Plane
- * panel. Only visibility is toggled (and the rail's panel icons disabled), so
- * leaving restores the panel that was active, and its scroll, exactly.
+ * Swap the info panel between its stack of panel sections and the Define
+ * Plane panel. Only visibility is toggled (and the rail's panel icons
+ * disabled), so leaving restores the open/folded sections, and the scroll,
+ * exactly.
  */
 function setPanelPlaneMode(on) {
     setPanelRailLocked(on);
-    document.querySelectorAll('.panel-tab-content').forEach(function (el) {
-        // Only the ACTIVE tab is normally visible; `.active` still governs
-        // that, so we just force-hide all of them while the mode is on.
+    document.querySelectorAll('.panel-section').forEach(function (el) {
+        // Which sections are open/folded is still the rail's (`.open` /
+        // `.folded`); we just force-hide all of them while the mode is on.
         el.style.display = on ? 'none' : '';
     });
     var panel = document.getElementById('planePanel');

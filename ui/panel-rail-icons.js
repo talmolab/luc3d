@@ -51,6 +51,10 @@ export const RAIL_ICONS = {
         '<path d="M15 3v18"/><path d="m8 9 3 3-3 3"/>',
     'panel-right-open': '<rect width="18" height="18" x="3" y="3" rx="2"/>' +
         '<path d="M15 3v18"/><path d="m10 15-3-3 3-3"/>',
+    // Section headers (sleap-app's ChevronDown / ChevronRight / X)
+    'chevron-down': '<path d="m6 9 6 6 6-6"/>',
+    'chevron-right': '<path d="m9 18 6-6-6-6"/>',
+    x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
 };
 
 /** The full `<svg>` for a Lucide icon name, sized by CSS (`.panel-rail-icon svg`). */

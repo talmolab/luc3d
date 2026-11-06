@@ -529,9 +529,9 @@ function syncMarkers(session) {
     setSeekbarSwitchMarkers(all, state.totalFrames);
 }
 
-/** Show the right panel (if hidden) on the ID Switches tab. */
+/** Open + expand the ID Switches section, showing the right panel if hidden. */
 export function openIdSwitchPanel() {
-    // Never a rail click: clicking the panel already showing would HIDE it.
+    // Never a rail click: clicking the already-expanded panel would FOLD it.
     showPanelTab('tabIdSwitches');
 }
 

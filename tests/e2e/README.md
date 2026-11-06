@@ -95,18 +95,22 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
   with no error; the sink throws instead, and this test proves it. Every
   assertion was validated against the pre-patch writer first, so it pins
   equivalence rather than merely current behavior.
-- **`panel-rail.mjs`** — the info panel's panels are switched by an icon rail
-  on the window's right edge (`ui/panel-rail.js`, sleap-app's sidebar in its
-  one-panel-at-a-time mode); it replaced the horizontal tab bar. Asserts one
-  Lucide icon per panel in the old tab order (sleap-app's glyphs where the
-  panels match; ArrowLeftRight for ID Switches), each named; that hover widens
-  the rail to show names without reflow and that the label strip never covers
-  the panel's controls; that an icon shows its panel and the active icon hides
-  the info panel; that `I`, the Panel button, View ▸ Toggle Info Panel and the
-  rail's top button still hide/show it with the rail following; Tab/Enter on
-  the icons; that `openIdSwitchPanel` shows a hidden panel and never hides it;
-  that Define Planes disables the icons; and that the chosen panel survives a
-  reload.
+- **`panel-rail.mjs`** — the info panel's panels are an accordion stack of
+  collapsible sections driven by an icon rail on the window's right edge
+  (`ui/panel-rail.js`, sleap-app's sidebar in its multi-panel mode); it
+  replaced the horizontal tab bar. Asserts one Lucide icon per panel in the old
+  tab order (sleap-app's glyphs where the panels match; ArrowLeftRight for ID
+  Switches), each named, and one section per pane with a fold chevron and ✕;
+  that hover widens the rail to show names without reflow and that the label
+  strip never covers the panel's controls; sleap-app's accordion rules (a rail
+  click opens + expands and folds the others, the expanded one folds, header
+  chevrons fold only their own section, ✕ closes, closing the last hides the
+  info panel and showing it reopens Instances); that the info panel is the one
+  scroller with sticky section headers; that `I`, the Panel button, View ▸
+  Toggle Info Panel and the rail's top button hide/show it keeping the stack;
+  Tab/Enter on icons and headers; that `openIdSwitchPanel` opens + expands
+  without hiding or folding; that Define Planes hides the stack and locks the
+  icons; and that open/folded sections survive a reload.
 - **`videos-panel-buttons.mjs`** — the Videos tab's two buttons (luc3d #216).
   Clicks **Load Videos** on a FRESH page with no session loaded (the bug: both
   handlers were assigned inside `updateInfoPanel`, which returns early when

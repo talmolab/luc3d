@@ -246,7 +246,12 @@ try {
     check(JSON.stringify(s.buttons) === JSON.stringify(['Check by body size', 'Check by images…', 'Close', 'Triangulation Wizard…']),
         `precondition: the reopened box offers both checks (${JSON.stringify(s.buttons)})`);
     const onTab = () => page.evaluate(() => !!document.querySelector('#tabIdSwitches.active'));
-    const leaveTab = () => page.evaluate(() => document.querySelector('.panel-rail-btn[data-tab]:not([data-tab="tabIdSwitches"])').click());
+    // Close the ID Switches section (its header ✕) if it is open, so a later
+    // `onTab()` sees whether the flow opened it again.
+    const leaveTab = () => page.evaluate(() => {
+        const x = document.querySelector('.panel-section.open[data-tab="tabIdSwitches"] .panel-section-close');
+        if (x) x.click();
+    });
     // whether the box came back, with `cue`'s row no longer reading `was` (before this, the tab opened instead)
     const backWith = (cue, was) => page.waitForFunction(([c, w]) => {
         const r = document.querySelector('#trackSummaryOverlay .track-summary-check[data-cue="' + c + '"] .track-summary-check-text');
