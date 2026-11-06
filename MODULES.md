@@ -2615,11 +2615,29 @@ each change to its frame, and relabels with `Session.swapIdentitiesInRange`.
 (`permutationsOf`; up to `maxAnimals` = 6, 720 states), a sample costing what its cues
 contradict (each identity capped at `maxSampleCost`), a swap of two identities costing
 `contactSwapCost` across a gap where those two touch (`pairContacts`, from the shared
-grid in `pose/id-switch-check.js`) and `apartSwapCost` elsewhere, in typical-sample
+grid in `pose/id-switch-check.js`: `pairContactRuns` once, `touchingFromRuns` per sample list;
+`opts.contactRuns` replaces it for replays) and `apartSwapCost` elsewhere, in typical-sample
 units (`combineCosts`). Classes may be shared (two red, two blue): swaps between animals
 of one class are invisible to the cue, cost nothing to leave alone, and are left as
 tracked. `swapsFor(perm)` turns an assignment into swaps (each cycle as exchanges with
 its first member).
+
+**Sampling.** The reader samples keyframes up to `maxSampleGapSeconds` (10 s) apart
+(`reader.plan(frames, maxGapSeconds)`): a keyframe decodes alone, while every frame between
+keyframes costs decoding from the last one. Then each sample that reads against the decision
+by more than `suspectCost` (`suspectSamples`) gets one read per `denseSeconds` between its
+neighbours (`denseFramesAround`, a second streaming read), and the whole decision runs again
+on all samples, on the first pass's cost scale (`combineCosts`' `typicalGiven`): the added
+samples bunch where the cues read poorly, and a scale taken from them makes every cost loom
+larger against a swap, which relabelled stretches the cameras contradict. With keyframes up
+to two seconds apart nothing is added. On `05mice_flippers` (keyframes every 4.2 s; the pass
+used to read one frame per second, 1,800 samples): 640 samples (208 dense), the pass 51 s
+instead of 232 s, the same labels except one 6 s swap at 14.70 min that one-per-second reads
+also lose when their frames shift by 10 (the evidence for it is weak either way). Below
+`suspectCost` 0.15 extra reads in a long contact tipped a 3 s relabel the cameras contradict;
+0.25-0.5 matched. Study tools: `tests/e2e/_diag-cue-dump.mjs` saves every keyframe's and
+every second's reads and `tests/e2e/_diag-replay-identity-cues.mjs` replays the engine on them in
+seconds; `_real-tail-marks.mjs` takes `CUE_OPTS` and `WINDOW`.
 
 **A cue** is `{id, learn(obs, labels, classOf, ids), costs(features, model), check?(model),
 describe?(model)}` with a reader (`plan/open/next/at/close`, as `ui/tail-mark-reader.js`).
@@ -2632,7 +2650,8 @@ identities than tracked, or for a name that does not exist; fewer than 2 or more
 `maxAnimals`; no frame rate; a cue that cannot learn or fails its check.
 
 **Key exports.** `resolveIdentityCues`, `IDENTITY_CUE_DEFAULTS`, `permutationsOf`,
-`pairContacts`, `decodeAssignments`, `swapsFor`, `combineCosts`, `cueCostRows`.
+`pairContacts`, `pairContactRuns`, `touchingFromRuns`, `decodeAssignments`, `swapsFor`,
+`combineCosts`, `cueCostRows`, `suspectSamples`, `denseFramesAround`.
 
 **Imports.** `./id-switch-check.js`. **Imported by.** `pose/tracker.js`.
 
@@ -2640,11 +2659,9 @@ identities than tracked, or for a name that does not exist; fewer than 2 or more
 cue on drawn tails); `tests/e2e/tail-mark-track-all.mjs` §7-8 (three animals, bands per
 identity, through the real tracker).
 
-**On 05mice_flippers (5 mice, 0-4 bands each, 8 cameras):** the cue learns five
-distinct tails, but the learned templates read as 3, 0, 2, 1, 3 bands for marks 0-4
-(the four-band tail reads three), so the check refuses and nothing is relabelled. A view
-of the tail base big enough to separate four bands, or naming the learned groups by
-hand, is what it would take.
+**On 05mice_flippers (5 mice, 0-4 bands each, 8 cameras, 30 min):** with the band cue's
+sharp read (`TAIL_BAND_READ`) the learned tails read 0-4 and the check passes; the labels
+agree with per-camera band counts on every stretch. See **Sampling** for the run time.
 
 ### pose/tail-mark.js
 
@@ -2687,7 +2704,8 @@ within `refineSeconds`.
 
 **Samples.** `planTailMarkSamples`: every keyframe (cheap to decode; every 250 frames
 = 1.7 s on the test recordings), or one per second when keyframes are sparser than
-`MAX_SAMPLE_GAP_SECONDS` or unknown.
+`MAX_SAMPLE_GAP_SECONDS` (or the `maxGapSeconds` given: the identity engine asks for 10 s and
+reads densely where it needs to) or unknown.
 
 **Refuses, changing nothing:** not exactly two identities, the named identity missing,
 no frame rate, no readable tail, or too few samples teaching or templates too alike
@@ -10620,7 +10638,8 @@ lazy project each read is bracketed by `hydrateFrameMembers2d` /
 bounding box read back.
 
 **Key exports.** `createTailMarkReader(session, fps, read?)` -> the reader
-`resolveTailMarks` takes, or `{failed: reason}` (no videos, no tail nodes). With `read`
+`resolveTailMarks` takes (`plan(frames, maxGapSeconds?)` passes the limit to
+`planTailMarkSamples`; the identity engine asks for 10 s), or `{failed: reason}` (no videos, no tail nodes). With `read`
 (`TAIL_BAND_READ`, which Track All passes when the identity engine runs) each view's
 feature is `{wide, sharp}`: the default read, unchanged, plus a second read started
 `baseExtension` of the first tail segment before TTI (`extendBase`), with that read's

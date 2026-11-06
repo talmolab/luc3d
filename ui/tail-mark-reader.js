@@ -104,9 +104,10 @@ export function createTailMarkReader(session, fps, read) {
     function camOf(v) { return v.cameraName || v.name; }
 
     return {
-        plan: async function (frames) {
+        // maxGapSeconds: see planTailMarkSamples
+        plan: async function (frames, maxGapSeconds) {
             var keys = await keyframeIndices(views[0].decoder);
-            return planTailMarkSamples(frames, keys, fps);
+            return planTailMarkSamples(frames, keys, fps, maxGapSeconds);
         },
         open: async function (samples) {
             readers = views.map(function (v) {
