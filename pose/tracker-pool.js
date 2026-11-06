@@ -35,6 +35,7 @@
  * cannot start never costs a run. A failure after that rejects the next wait.
  */
 import { createBusyClock } from '../ui/load-graph.js';
+import { workerReplyTimeoutMs, timeoutError, withTimeout } from './compute-governor.js';
 
 /** Frames per message: ~30 ms of tracking at 5 mice x 8 cameras — enough to amortize messaging. */
 export const TRACKER_BATCH = 100;
@@ -68,7 +69,7 @@ function serializeCamera(c) {
  * @param {Camera[]} cameras
  * @param {Object} hp  CrossViewTracker options
  * @param {function(number, Array, number)} onFrame  commit one frame's result (in order); `live` = the tracker's target count after it
- * @param {{busyDuring?: function(function)}} [opts]  `busyDuring(fn)` runs `fn` counted as
+ * @param {{busyDuring?: function(function), replyTimeoutMs?: number}} [opts]  `busyDuring(fn)` runs `fn` counted as
  *   main-thread CPU time even inside a wait (ui/loading-overlay.js) — the commits happen there
  * @returns {Promise<?Object>} the handle, or null to track inline
  */
@@ -87,6 +88,18 @@ export async function startTrackerWorker(cameras, hp, onFrame, opts) {
     var nCams = cameras.length, cur = null, lastUsed = 0, nextId = 1, inFlight = 0, failure = null, waiters = [];
     var submitted = -Infinity, committed = -Infinity;
     var wake = function () { var w = waiters; waiters = []; w.forEach(function (fn) { fn(); }); };
+    // Watchdog: while a batch is out, the worker must answer within WORKER_REPLY_TIMEOUT_MS
+    // (pose/compute-governor.js) — else the run fails (the next wait rejects) instead of
+    // waiting forever on a worker that died without an error event.
+    var timeoutMs = opts.replyTimeoutMs > 0 ? opts.replyTimeoutMs : workerReplyTimeoutMs(), watchdog = null;
+    var arm = function () {
+        clearTimeout(watchdog);
+        watchdog = inFlight > 0 && !failure ? setTimeout(function () {
+            failure = failure || timeoutError('the tracker worker', timeoutMs);
+            try { worker.terminate(); } catch (e) { /* ignore */ }
+            wake();
+        }, timeoutMs) : null;
+    };
     var waitFor = function (cond) {
         return new Promise(function (resolve, reject) {
             var check = function () {
@@ -124,6 +137,7 @@ export async function startTrackerWorker(cameras, hp, onFrame, opts) {
                 if (!failure) try {
                     busyDuring(function () { decode(m.r); });
                 } catch (err) { failure = err; }
+                arm();
             } else {
                 failure = failure || new Error('the tracker worker failed: ' + (m.message || 'unknown error'));
                 resolve(false);
@@ -133,12 +147,16 @@ export async function startTrackerWorker(cameras, hp, onFrame, opts) {
         worker.onerror = function (ev) {
             if (ev && ev.preventDefault) ev.preventDefault();
             failure = failure || new Error('the tracker worker failed' + (ev && ev.message ? ': ' + ev.message : ''));
+            clearTimeout(watchdog);
             resolve(false);
             wake();
         };
     });
     worker.postMessage({ type: 'init', hp: hp, cameras: cameras.map(serializeCamera) });
-    if (!(await ready)) {
+    // a worker that dies silently while loading never answers `init`: track inline instead
+    var started = await withTimeout(ready, opts.replyTimeoutMs > 0 ? opts.replyTimeoutMs : workerReplyTimeoutMs(), 'the tracker worker')
+        .catch(function (e) { failure = failure || e; return false; });
+    if (!started) {
         console.warn('[tracker-pool] the tracker worker did not start, tracking on the main thread:', failure);
         worker.terminate();
         return null;
@@ -155,6 +173,7 @@ export async function startTrackerWorker(cameras, hp, onFrame, opts) {
         lastUsed = b.used;
         var xy = b.xy.subarray(0, b.used), fis = Float64Array.from(b.fis), counts = Int32Array.from(b.counts), lens = Int32Array.from(b.lens);
         inFlight++;
+        if (inFlight === 1) arm();
         clock.begin('worker');
         worker.postMessage({ type: 'frames', id: nextId++, fis: fis, counts: counts, lens: lens, xy: xy },
             [xy.buffer, fis.buffer, counts.buffer, lens.buffer]);
@@ -200,6 +219,6 @@ export async function startTrackerWorker(cameras, hp, onFrame, opts) {
         },
         /** The worker's busy milliseconds so far (it held a batch), for the CPU line. */
         cpuBusyMs: function () { return clock.ms(); },
-        close: function () { clock.close(); worker.terminate(); },
+        close: function () { clearTimeout(watchdog); clock.close(); worker.terminate(); },
     };
 }

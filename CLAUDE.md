@@ -219,6 +219,14 @@ campy writes `<recording>/session.json` (`campy-session/1`); campy-live writes `
 - A folder prompt that keeps only videos must also pass the root-level manifests through (`campyManifestsAmong`).
 Tests: `tests/test-campy-session.mjs`, `tests/e2e/campy-session-folder.mjs`.
 
+## Long compute runs must not hang or make the machine stutter
+
+`pose/compute-governor.js` holds the guardrails; `prompts/compute-guardrails-report.md` has the measurements behind them.
+- **Worker counts follow the OS's CPU pressure, not a hand-picked number.** `createComputeGovernor` (Compute Pressure API): +1/s while "nominal", hold on "fair"/"serious", halve on "critical". The triangulation pool starts at half its workers, with a floor of 2. The CPU image-model pool starts at all of its workers. Pools only change where and when jobs run, never what they compute.
+- **Every worker round trip has a deadline** (`workerReplyTimeoutMs`, 120 s). A worker that dies or goes silent has only ITS work recovered (re-solved inline) or the run fails with a reason; never a wait that cannot end. A new pool needs the same deadline.
+- **Cancel never awaits a provider promise directly.** Wrap it in `abortable(p, signal)`. Handle `GPUDevice.lost` on any new WebGPU path.
+- Re-measure with `tests/e2e/_bench-compute-coexist.mjs` (headed; a 1080p60 video in another window plus OS probes). Test: `tests/e2e/compute-coexistence.mjs`, `tests/test-compute-governor.mjs`.
+
 ## UI conventions
 
 - **One scroller per panel/modal.** No inner `max-height` + `overflow-y: auto`; make a section collapsible (`<details>`) instead.
