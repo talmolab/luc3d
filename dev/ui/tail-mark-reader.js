@@ -8,10 +8,10 @@
  * each read is bracketed by `hydrateFrameMembers2d` / `releaseFrameMembers2d`.
  */
 
-import { state } from './app-state.js?v=5d43d4fc53a2';
-import { keyframeIndices, streamingReader, canStream, identityGroupsAt } from './image-embedder.js?v=5d43d4fc53a2';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=5d43d4fc53a2';
-import { tailMarkNodeIndices, readTailProfile, normalizeTailProfile, planTailMarkSamples } from '../pose/tail-mark.js?v=5d43d4fc53a2';
+import { state } from './app-state.js?v=a9f69dd10c4a';
+import { keyframeIndices, streamingReader, canStream, identityGroupsAt } from './image-embedder.js?v=a9f69dd10c4a';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=a9f69dd10c4a';
+import { tailMarkNodeIndices, readTailProfile, normalizeTailProfile, planTailMarkSamples } from '../pose/tail-mark.js?v=a9f69dd10c4a';
 
 /**
  * @param {Object} session

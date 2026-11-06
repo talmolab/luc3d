@@ -13917,6 +13917,13 @@ transform scales it. Two things are needed and each alone breaks it:
 - **A pan on the device-pixel grid** (`_alignNativeOffsets`, run by
   `applyZoom` while native): what must align is where the transform puts the
   canvas's top-left — `off + c − R·c`.
+- **Rotated: nearest-neighbour sampling.** `applyZoom` sets the video canvas's
+  `image-rendering: pixelated` while a ROTATED view is native (cleared
+  otherwise; never on the overlay, the property inherits). Unrotated 1:1 is an
+  integer translation, which Chrome composites unfiltered; rotated it filters
+  bilinearly, and in some layouts a cell-clipped quad then lands off the texel
+  centres (7% exact with every corner on the grid). Unrotated keeps the
+  default, so the two controls above stay meaningful.
 Exact at an integer devicePixelRatio (and, headless, 1.25 and 1.5). At e.g.
 dpr 2.2 Chrome resamples whatever the transform says, so the video is shown at
 its native SIZE but not pixel-exact; `tests/e2e/native-resolution-zoom.mjs`

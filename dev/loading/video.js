@@ -8,9 +8,9 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
-import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=5d43d4fc53a2';
-import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=5d43d4fc53a2';
-import { readBlobRange, guardedRangeSource } from './cold-read-guard.js?v=5d43d4fc53a2';
+import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=a9f69dd10c4a';
+import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=a9f69dd10c4a';
+import { readBlobRange, guardedRangeSource } from './cold-read-guard.js?v=a9f69dd10c4a';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -3668,6 +3668,16 @@ export class VideoController {
                 view.overlayCanvas.style.transformOrigin = "0 0";
             }
         }
+        // A rotated view at 1:1 is drawn with nearest-neighbour sampling.
+        // Unrotated, 1:1 is an integer translation, which Chrome's compositor
+        // draws unfiltered. Rotated, it filters bilinearly, and once the
+        // picture is clipped by its cell (panned past the cell's edge) the
+        // texture coordinates of the clipped quad land off the texel centres:
+        // every row came out a blend of two even with the scale and every
+        // corner exactly on the device grid. Nearest sampling at 1:1 picks
+        // the one texel under each device pixel. The video canvas only (the
+        // property inherits, and the pose overlay must stay smooth).
+        if (view.canvas) view.canvas.style.imageRendering = (z.native && rot !== 0) ? 'pixelated' : '';
 
         var cell = view.canvas ? view.canvas.closest('.video-cell') : null;
         if (cell) {
