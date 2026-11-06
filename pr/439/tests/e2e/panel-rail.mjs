@@ -1,26 +1,35 @@
 /**
- * panel-rail.mjs — the info panel's panels are switched by an icon rail on the
- * window's right edge (ui/panel-rail.js), modelled on sleap-app's sidebar in
- * its one-panel-at-a-time mode. It replaced the horizontal tab bar.
+ * panel-rail.mjs — the info panel's panels are an accordion stack of
+ * collapsible sections driven by an icon rail on the window's right edge
+ * (ui/panel-rail.js), modelled on sleap-app's sidebar in its multi-panel
+ * mode. It replaced the horizontal tab bar.
  *
  * What this pins:
  *   §1  Every panel has an icon, in the old tab bar's order, each a Lucide
  *       glyph (sleap-app's for the panels the two apps share) with the panel's
  *       name as its accessible name; hovering widens the rail over the panel
  *       to show the names. The rail sits on the window edge and is the one
- *       `user-select: none` surface here.
- *   §2  A click on an icon shows its panel; a click on the active icon hides
- *       the info panel; a click while hidden brings it back on that panel.
- *       An icon is active only while its panel is on screen.
- *   §3  Every other way of hiding/showing the info panel still works and the
- *       rail follows: the `I` shortcut, the toolbar's Panel button, View ▸
- *       Toggle Info Panel, the rail's own top button.
- *   §4  Keyboard: Tab reaches an icon, focus widens the rail, Enter clicks it.
+ *       `user-select: none` surface here. Every pane sits in a section with a
+ *       header (fold chevron + name, ✕).
+ *   §2  sleap-app's accordion: a rail click opens + expands its panel and
+ *       folds the other open ones; a click on the expanded panel folds it; a
+ *       header chevron folds/unfolds only its own section (several can be
+ *       expanded); ✕ closes a panel; every open panel's icon is active.
+ *       The info panel is the one scroller: sections never scroll on their
+ *       own and their headers stick. Closing the last panel hides the info
+ *       panel; showing it again reopens the default panel; a rail click
+ *       while hidden shows it with that panel expanded and the rest folded.
+ *   §3  Every other way of hiding/showing the info panel still works, keeps
+ *       the stack, and the rail follows: the `I` shortcut, the toolbar's
+ *       Panel button, View ▸ Toggle Info Panel, the rail's own top button.
+ *   §4  Keyboard: Tab reaches an icon, focus widens the rail, Enter clicks it;
+ *       the section header buttons are keyboard buttons too.
  *   §5  Code that opens a panel (`openIdSwitchPanel`, the ID-switch check's
- *       flow) shows it — from hidden too — and never hides it.
- *   §6  Define Planes disables the panel icons and restores them on exit.
- *   §7  The chosen panel is remembered across a reload (localStorage); the
- *       info panel still starts shown.
+ *       flow) opens + expands it — from hidden too — and never hides or folds.
+ *   §6  Define Planes hides the stack, disables the panel icons, and leaving
+ *       restores the same open / folded sections.
+ *   §7  Open and folded sections are remembered across a reload
+ *       (localStorage); the info panel still starts shown.
  *
  * Run: node panel-rail.mjs   (spawns its own http.server)
  */
@@ -71,20 +80,27 @@ try {
         const btns = Array.from(document.querySelectorAll('#panelRail .panel-rail-btn[data-tab]'));
         const active = btns.filter(b => b.classList.contains('active')).map(b => b.dataset.tab);
         const pressed = btns.filter(b => b.getAttribute('aria-pressed') === 'true').map(b => b.dataset.tab);
+        const shown = el => getComputedStyle(el).display !== 'none';
+        const sections = Array.from(document.querySelectorAll('.panel-section'));
+        const open = sections.filter(shown).map(x => x.dataset.tab);
         const content = Array.from(document.querySelectorAll('.panel-tab-content'))
-            .filter(c => getComputedStyle(c).display !== 'none').map(c => c.id);
+            .filter(c => shown(c) && shown(c.closest('.panel-section'))).map(c => c.id);
         const top = document.querySelector('#panelRail .panel-rail-collapse');
         return {
             collapsed: wrap.classList.contains('collapsed'),
             wrapWidth: Math.round(wrap.getBoundingClientRect().width),
-            active, pressed, content,
+            active, pressed, open, content,
+            ariaExpanded: sections.filter(shown).map(x => x.querySelector('.panel-section-toggle').getAttribute('aria-expanded')),
             topName: top.getAttribute('aria-label'),
             panelBtn: document.getElementById('infoPanelToggleBtn').getAttribute('aria-pressed'),
         };
     });
+    const J = JSON.stringify;
     // Click the ICON, as a user does: once hovered, the rest of the widened
     // button is a display-only label strip over the panel.
     const click = (tab) => page.click(`#panelRail .panel-rail-btn[data-tab="${tab}"] .panel-rail-icon`);
+    const fold = (tab) => page.click(`.panel-section[data-tab="${tab}"] .panel-section-toggle`);
+    const close = (tab) => page.click(`.panel-section[data-tab="${tab}"] .panel-section-close`);
     const moveAway = () => page.mouse.move(300, 300);
 
     // ---- §1 inventory, icons, names, hover labels ----
@@ -105,6 +121,13 @@ try {
             width: Math.round(r.width),
             userSelect: getComputedStyle(rail).userSelect,
             noTabBar: !document.querySelector('.panel-tabs, .panel-tab'),
+            sections: Array.from(document.querySelectorAll('#infoPanel > .panel-section')).map(x => [
+                x.dataset.tab,
+                x.querySelector('.panel-section-title').textContent,
+                !!x.querySelector(':scope > .panel-section-header .panel-section-toggle svg'),
+                x.querySelector(':scope > .panel-section-header .panel-section-close').getAttribute('aria-label'),
+                x.querySelector(':scope > .panel-tab-content').id,
+            ]),
         };
     });
     check(JSON.stringify(inv.tabs) === JSON.stringify(EXPECTED),
@@ -118,6 +141,8 @@ try {
     check(inv.rightEdge && inv.width === 44, `rail is 44px on the window's right edge (width ${inv.width})`);
     check(inv.userSelect === 'none', 'rail is user-select: none');
     check(inv.noTabBar, 'the old horizontal tab bar is gone');
+    check(J(inv.sections) === J(EXPECTED.map(([t, n]) => [t, n, true, 'Close ' + n, t])),
+        'every pane sits in its own section, in rail order, under a header with a fold chevron, its name and a ✕');
 
     await page.hover('#panelRail .panel-rail-btn[data-tab="tabVideos"] .panel-rail-icon');
     await page.waitForTimeout(300);
@@ -145,58 +170,98 @@ try {
         Math.round(document.querySelector('#panelRail .panel-rail-inner').getBoundingClientRect().width));
     check(unhover === 44, `leaving the rail narrows it again (${unhover})`);
 
-    // ---- §2 toggling ----
+    // ---- §2 the accordion ----
     let s = await railState();
-    check(!s.collapsed && JSON.stringify(s.active) === '["tabInstances"]' && JSON.stringify(s.content) === '["tabInstances"]',
-        'starts on Instances with the panel shown');
+    check(!s.collapsed && J(s.open) === '["tabInstances"]' && J(s.content) === '["tabInstances"]' && J(s.active) === '["tabInstances"]',
+        'starts with Instances open and expanded, the panel shown');
+    const opened = ['tabInstances'];
     for (const [tab] of EXPECTED.slice(1)) {
         await click(tab);
+        opened.push(tab);
         s = await railState();
-        check(!s.collapsed && JSON.stringify(s.active) === JSON.stringify([tab]) &&
-            JSON.stringify(s.pressed) === JSON.stringify([tab]) && JSON.stringify(s.content) === JSON.stringify([tab]),
-            `clicking ${tab} shows it, and only its icon is active`);
+        check(!s.collapsed && J(s.open) === J(opened) && J(s.content) === J([tab]) &&
+            J(s.active) === J(opened) && J(s.pressed) === J(opened),
+            `clicking ${tab} opens + expands it and folds the others; every open icon is active`);
     }
+    check(J(s.ariaExpanded) === J(opened.map(t => t === 'tabSession' ? 'true' : 'false')),
+        'the header chevrons say which section is expanded (aria-expanded)');
     await click('tabSession');
+    s = await railState();
+    check(!s.collapsed && s.content.length === 0 && J(s.open) === J(opened) && J(s.active) === J(opened),
+        'clicking the expanded panel folds it to its header; the panel stays shown and every section stays open');
+    await fold('tabSkeleton');
+    await fold('tabVideos');
+    s = await railState();
+    check(J(s.content) === '["tabVideos","tabSkeleton"]',
+        'a header chevron unfolds only its own section, so several can be expanded at once');
+    await fold('tabSkeleton');
+    s = await railState();
+    check(J(s.content) === '["tabVideos"]', 'and folds it again without touching its neighbour');
+
+    const scroll = await page.evaluate(() => {
+        const ov = el => getComputedStyle(el).overflowY;
+        const panes = Array.from(document.querySelectorAll('.panel-section, .panel-tab-content'));
+        return {
+            inner: panes.filter(el => /auto|scroll/.test(ov(el))).map(el => el.id || el.dataset.tab),
+            outer: ov(document.getElementById('infoPanel')),
+            sticky: Array.from(document.querySelectorAll('.panel-section-header')).every(h => getComputedStyle(h).position === 'sticky'),
+        };
+    });
+    check(scroll.inner.length === 0 && /auto|scroll/.test(scroll.outer) && scroll.sticky,
+        `the info panel is the one scroller; sections never scroll on their own and their headers stick (inner: ${J(scroll.inner)})`);
+
+    await close('tabVideos');
+    s = await railState();
+    check(J(s.open) === J(opened.filter(t => t !== 'tabVideos')) && !s.active.includes('tabVideos') && s.content.length === 0,
+        '✕ closes a panel: its section leaves the stack and its icon goes inactive');
+    for (const t of opened.filter(t => t !== 'tabVideos')) await close(t);
     await page.waitForTimeout(400);            // the panel's 250ms width transition
     s = await railState();
-    check(s.collapsed && s.active.length === 0 && s.pressed.length === 0 && s.wrapWidth === 0,
-        `clicking the active icon hides the info panel; no icon is active (wrapper ${s.wrapWidth}px)`);
-    check(s.panelBtn === 'false' && s.topName === 'Show panel', 'the Panel button and the rail top button follow');
-    await click('tabSkeleton');
-    s = await railState();
-    check(!s.collapsed && JSON.stringify(s.active) === '["tabSkeleton"]' && JSON.stringify(s.content) === '["tabSkeleton"]',
-        'clicking an icon while hidden shows the panel on that tab');
-
-    // ---- §3 every other hide/show still routes ----
+    check(s.collapsed && s.open.length === 0 && s.active.length === 0 && s.wrapWidth === 0 && s.panelBtn === 'false' && s.topName === 'Show panel',
+        `closing the last panel hides the info panel; the Panel button and the rail top button follow (wrapper ${s.wrapWidth}px)`);
     await moveAway();
     await page.keyboard.press('i');
     s = await railState();
-    check(s.collapsed && s.active.length === 0, '`I` hides the panel and the rail clears its active icon');
+    check(!s.collapsed && J(s.open) === '["tabInstances"]' && J(s.content) === '["tabInstances"]',
+        'showing the info panel with nothing open reopens Instances, never an empty panel');
+    await click('tabSkeleton');
     await page.keyboard.press('i');
     s = await railState();
-    check(!s.collapsed && JSON.stringify(s.active) === '["tabSkeleton"]', '`I` shows it again on the same panel');
+    check(s.collapsed && s.active.length === 0, 'precondition: hidden with Instances + Skeleton open');
+    await click('tabCameras');
+    s = await railState();
+    check(!s.collapsed && J(s.open) === '["tabInstances","tabCameras","tabSkeleton"]' && J(s.content) === '["tabCameras"]',
+        'a rail click while hidden shows the panel with that section expanded and the rest folded');
+
+    // ---- §3 every other hide/show still routes, keeping the stack ----
+    await fold('tabSkeleton');                 // Cameras + Skeleton expanded, Instances folded
+    const stack = await railState();
+    const same = x => !x.collapsed && J(x.open) === J(stack.open) && J(x.content) === J(stack.content) && J(x.active) === J(stack.open);
+    await moveAway();
+    await page.keyboard.press('i');
+    s = await railState();
+    check(s.collapsed && s.active.length === 0, '`I` hides the panel and the rail clears its active icons');
+    await page.keyboard.press('i');
+    check(same(await railState()), '`I` shows it again with the same sections open and folded');
 
     await page.click('#infoPanelToggleBtn');
     s = await railState();
     check(s.collapsed && s.active.length === 0, 'toolbar Panel button hides it');
     await page.click('#infoPanelToggleBtn');
-    s = await railState();
-    check(!s.collapsed && JSON.stringify(s.active) === '["tabSkeleton"]', 'toolbar Panel button shows it again');
+    check(same(await railState()), 'toolbar Panel button shows it again, stack unchanged');
 
     await page.evaluate(() => document.getElementById('menuToggleInfo').click());
     s = await railState();
     check(s.collapsed, 'View ▸ Toggle Info Panel hides it');
     await page.evaluate(() => document.getElementById('menuToggleInfo').click());
-    s = await railState();
-    check(!s.collapsed && JSON.stringify(s.active) === '["tabSkeleton"]', 'View ▸ Toggle Info Panel shows it again');
+    check(same(await railState()), 'View ▸ Toggle Info Panel shows it again, stack unchanged');
 
     await page.click('#panelRail .panel-rail-collapse .panel-rail-icon');
     s = await railState();
     check(s.collapsed && s.topName === 'Show panel', "the rail's top button hides it");
     await page.click('#panelRail .panel-rail-collapse .panel-rail-icon');
     s = await railState();
-    check(!s.collapsed && s.topName === 'Hide panel' && JSON.stringify(s.active) === '["tabSkeleton"]',
-        "the rail's top button shows it again");
+    check(same(s) && s.topName === 'Hide panel', "the rail's top button shows it again, stack unchanged");
 
     // ---- §4 keyboard ----
     await moveAway();
@@ -208,51 +273,59 @@ try {
     }));
     check(kb.focused === 'tabSkeleton' && kb.w === 184, `Tab moves between icons and keyboard focus widens the rail (${kb.focused}, ${kb.w})`);
     await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Enter');          // Videos: not open → opens + expands
+    s = await railState();
+    check(!s.collapsed && J(s.content) === '["tabVideos"]' && s.open.includes('tabVideos'), 'Enter on a focused icon opens its panel');
+    await page.evaluate(() => document.querySelector('.panel-section[data-tab="tabVideos"] .panel-section-toggle').focus());
     await page.keyboard.press('Enter');
     s = await railState();
-    check(!s.collapsed && JSON.stringify(s.active) === '["tabCameras"]', 'Enter on a focused icon shows its panel');
+    check(s.content.length === 0, 'Enter on a focused header chevron folds its section');
     await page.evaluate(() => document.activeElement && document.activeElement.blur());
 
-    // ---- §5 programmatic opens never hide ----
-    await click('tabCameras');   // hide (Cameras is active)
+    // ---- §5 programmatic opens never hide or fold ----
+    await fold('tabCameras');                    // Cameras expanded again
+    await page.keyboard.press('i');
     s = await railState();
     check(s.collapsed, 'precondition: panel hidden');
     await page.evaluate(async () => (await import('./ui/id-switch-modal.js')).openIdSwitchPanel());
     s = await railState();
-    check(!s.collapsed && JSON.stringify(s.active) === '["tabIdSwitches"]' && JSON.stringify(s.content) === '["tabIdSwitches"]',
-        'openIdSwitchPanel shows the hidden panel on ID Switches');
+    check(!s.collapsed && s.open.includes('tabIdSwitches') && J(s.content) === '["tabIdSwitches","tabCameras"]',
+        'openIdSwitchPanel shows the hidden panel with ID Switches open + expanded, folding nothing else');
     await page.evaluate(async () => (await import('./ui/id-switch-modal.js')).openIdSwitchPanel());
     s = await railState();
-    check(!s.collapsed && JSON.stringify(s.active) === '["tabIdSwitches"]', 'calling it again while showing does NOT hide it');
+    check(!s.collapsed && J(s.content) === '["tabIdSwitches","tabCameras"]', 'calling it again does NOT hide or fold it');
     const unknown = await page.evaluate(async () => (await import('./ui/panel-rail.js')).showPanelTab('tabNope'));
     check(unknown === false, 'showPanelTab refuses an unknown id');
 
-    // ---- §6 Define Planes locks the icons ----
+    // ---- §6 Define Planes hides the stack and locks the icons ----
+    const before = await railState();
     await page.evaluate(async () => (await import('./ui/plane-definition.js')).togglePlaneMode());
     const locked = await page.evaluate(() => ({
         disabled: Array.from(document.querySelectorAll('#panelRail .panel-rail-btn[data-tab]')).every(b => b.disabled),
         topLive: !document.querySelector('#panelRail .panel-rail-collapse').disabled,
         planeShown: getComputedStyle(document.getElementById('planePanel')).display !== 'none',
+        sectionsHidden: Array.from(document.querySelectorAll('.panel-section')).every(x => getComputedStyle(x).display === 'none'),
     }));
-    check(locked.disabled && locked.topLive && locked.planeShown,
-        'in Define Planes the panel icons are disabled, the top hide/show stays live');
+    check(locked.disabled && locked.topLive && locked.planeShown && locked.sectionsHidden,
+        'in Define Planes the stack is hidden, the panel icons are disabled, the top hide/show stays live');
     await page.click('#panelRail .panel-rail-btn[data-tab="tabVideos"] .panel-rail-icon', { force: true });
-    s = await railState();
-    check(JSON.stringify(s.active) === '["tabIdSwitches"]', 'a click on a disabled icon changes nothing');
     await page.evaluate(async () => (await import('./ui/plane-definition.js')).togglePlaneMode());
     s = await railState();
     const unlocked = await page.evaluate(() =>
         Array.from(document.querySelectorAll('#panelRail .panel-rail-btn[data-tab]')).every(b => !b.disabled));
-    check(unlocked && JSON.stringify(s.content) === '["tabIdSwitches"]', 'leaving restores the icons and the same panel');
+    check(unlocked && J(s.open) === J(before.open) && J(s.content) === J(before.content),
+        'a click on a disabled icon changed nothing; leaving restores the icons and the same open/folded sections');
 
     // ---- §7 remembered across reload ----
-    await click('tabVisibility');
+    await close('tabInstances');
+    const saved = await railState();
     await page.reload();
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     await page.waitForTimeout(300);
     s = await railState();
-    check(!s.collapsed && JSON.stringify(s.active) === '["tabVisibility"]' && JSON.stringify(s.content) === '["tabVisibility"]',
-        'the chosen panel is restored after a reload, with the info panel shown');
+    check(!s.collapsed && J(s.open) === J(saved.open) && J(s.content) === J(saved.content),
+        `the open and folded sections are restored after a reload, with the info panel shown (${J(s.open)})`);
 } catch (e) {
     console.log('  ✗ threw:', e && e.stack || e);
     fails++;

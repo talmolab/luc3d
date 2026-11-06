@@ -12,16 +12,16 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, hasPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=0b31a233508e';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=0b31a233508e';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=0b31a233508e';
-import { createProgressPacer } from '../ui/loading-overlay.js?v=0b31a233508e';
+         toBoxedPoints3d, hasPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=440841fa3873';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=440841fa3873';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=440841fa3873';
+import { createProgressPacer } from '../ui/loading-overlay.js?v=440841fa3873';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=0b31a233508e';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=0b31a233508e';
-import { writePlaneMetadata } from './plane-metadata.js?v=0b31a233508e';
-import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=0b31a233508e';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=440841fa3873';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=440841fa3873';
+import { writePlaneMetadata } from './plane-metadata.js?v=440841fa3873';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=440841fa3873';
 
 // ============================================
 // Generic file picker
@@ -1229,6 +1229,9 @@ function _buildCameraLabeledFrame(session, cameraName, frameIdx, fg, env) {
     // the project save does. Asking only the instance wrote the instance score
     // onto every node of every lazily loaded prediction.
     var nodeScoreOf = function (sinst) {
+        // Resolved once per instance (its store row, on a lazy project), not
+        // per node: same values as `predictedNodeScore`.
+        if (typeof session.predictedNodeScorer === 'function') return session.predictedNodeScorer(cameraName, frameIdx, sinst);
         return function (k) { return session.predictedNodeScore(cameraName, frameIdx, sinst, k); };
     };
 
@@ -1527,6 +1530,160 @@ function lazyCameraFastPathUsable(SIO, session, cameraName) {
     return !!(lazyLabels && lazyLabels.isLazy && SIO && typeof SIO.saveSlpToBytes === 'function');
 }
 
+/**
+ * Whether By Cam's camera `selection` (one session, one camera) would be
+ * written by `lazyCameraExportBytes` (the camera's own store rewritten), the
+ * route `exportSlpMultiSession` takes first, so the caller can hand every such
+ * camera to `exportCamerasLazyRewrite` at once.
+ */
+export function cameraExportUsesLazyRewrite(selection, reprojAsUser, instanceFilter) {
+    return !!(selection && !reprojAsUser && instanceFilterAllowsLazyFastPath(instanceFilter) &&
+        lazyCameraFastPathUsable(window.SleapIO, selection.session, selection.cameraName));
+}
+
+/**
+ * Whether By Cam's camera `selection` (one session, one camera) would be built
+ * by `exportSlpMultiSession`'s eager route (`buildSlpLabelsMultiSession` +
+ * `saveSlpToBytes`): a fully loaded camera — neither the store rewrite nor the
+ * streaming sweep. Such cameras can go to `exportCamerasInWorkers` together.
+ */
+export function cameraExportUsesEagerBuild(selection, reprojAsUser, instanceFilter) {
+    return !!(selection && selection.session && window.SleapIO &&
+        !cameraExportUsesLazyRewrite(selection, reprojAsUser, instanceFilter) &&
+        !_exportWouldTruncate(selection.session));
+}
+
+/**
+ * Cameras of the per-camera rewrite in workers at once (each holds its tables until written).
+ * 3, not 4: on the lab VM (8 cameras x 108,000 frames) 4 peaked Chrome at 8.1-9.4 GB for 7.9-8.5 s,
+ * 3 at 7.5-7.8 GB for 10.4-10.6 s (one thread: 6.5 GB, 24.5 s).
+ */
+var LAZY_REWRITE_IN_FLIGHT = 3;
+
+/**
+ * By Cam's one-camera files for several cameras, the compression in workers.
+ * Two kinds of camera go here, each written as `exportSlpMultiSession` would:
+ *  - a folder-loaded camera (`cameraExportUsesLazyRewrite`), its own store
+ *    rewritten: the file is written here without its big tables
+ *    (`saveSlpToBytes`'s `lucidDeferTables`, bundle patch `(deferred tables)`),
+ *    and its worker creates them with the same arguments;
+ *  - a fully loaded camera (`cameraExportUsesEagerBuild`): its `Labels` are
+ *    built here and written with the big 2D tables' rows held back
+ *    (`lucidDivertTables`, bundle patch `(eager divert)`: the tables are created
+ *    empty, same chunks and filters), and its worker appends the rows.
+ * Each camera's worker (`import-export/slp-rows-worker.js`) gzips while the next
+ * camera is built — at most LAZY_REWRITE_IN_FLIGHT at once. Same tables,
+ * values, chunks, filters, dtypes and field_names as the one-thread file.
+ *
+ * @param {Array<{session, cameraName, videoFileInfo}>} selections
+ * @param {Object} [opts] `{ onProgress(done, total) }` counts cameras finished
+ *   (throwing aborts), `workers` as `exportCamerasFromSharedStore`'s, `kinds`
+ *   (`['lazy', 'eager']` by default) which kinds to take.
+ * @returns {Promise<Array<Uint8Array|null>>} bytes per selection; null for a
+ *   camera this route does not write (the caller exports it as before).
+ */
+export async function exportCamerasInWorkers(selections, reprojAsUser, instanceFilter, opts) {
+    var SIO = window.SleapIO;
+    opts = opts || {};
+    var kinds = opts.kinds || ['lazy', 'eager'];
+    var out = selections.map(function () { return null; });
+    var idx = [], kindOf = [];
+    for (var i = 0; i < selections.length; i++) {
+        var kind = cameraExportUsesLazyRewrite(selections[i], reprojAsUser, instanceFilter) ? 'lazy'
+            : cameraExportUsesEagerBuild(selections[i], reprojAsUser, instanceFilter) ? 'eager' : null;
+        if (kind && kinds.indexOf(kind) >= 0) { idx.push(i); kindOf.push(kind); }
+    }
+    if (!idx.length) return out;
+    var nLazy = kindOf.filter(function (k) { return k === 'lazy'; }).length;
+    var nWorkers = _storeCopyWorkerCount(idx.length, opts);
+    var cap = Math.max(1, Math.min(nWorkers, LAZY_REWRITE_IN_FLIGHT));
+    var live = [];   // { h, done } in flight
+    var finished = 0;
+    var t0 = performance.now();
+    var report = async function () { if (opts.onProgress) await opts.onProgress(finished, idx.length); };
+    // One camera's file: { bytes } when whole, else { shell, tables, rows } for its worker.
+    var build = async function (k, toWorker) {
+        var sel = selections[idx[k]];
+        if (kindOf[k] === 'lazy') {
+            var lazyLabels = sel.session.lazyLoader.labelsByCam.get(sel.cameraName);
+            if (!toWorker) return { bytes: await SIO.saveSlpToBytes(lazyLabels) };
+            var tables = [];
+            var shell = await SIO.saveSlpToBytes(lazyLabels, { lucidDeferTables: tables });
+            return tables.length ? { shell: shell, tables: tables, rows: [] } : { bytes: shell };
+        }
+        var labels = buildSlpLabelsMultiSession([sel], reprojAsUser, instanceFilter);
+        if (!toWorker) return { bytes: await SIO.saveSlpToBytes(labels) };
+        var rows = [];
+        var eagerShell = await SIO.saveSlpToBytes(labels, {
+            lucidDivertTables: function (name, data, n, cols) { rows.push([name, data, n, cols]); },
+        });
+        return rows.length ? { shell: eagerShell, tables: [], rows: rows } : { bytes: eagerShell };
+    };
+    try {
+        await report();
+        for (var k = 0; k < idx.length; k++) {
+            if (!nWorkers) {
+                out[idx[k]] = (await build(k, false)).bytes;
+                finished++;
+                await report();
+                continue;
+            }
+            while (live.length >= cap) await Promise.race(live.map(function (x) { return x.done; }));
+            var part = await build(k, true);
+            if (part.bytes) {   // a small camera: nothing held back, the file is whole
+                out[idx[k]] = part.bytes;
+                finished++;
+                await report();
+                continue;
+            }
+            var h = null;
+            try {
+                h = _startRowsWorker(part.shell);   // a Worker that cannot be made throws here
+                await h.ready;
+            } catch (we) {
+                if (h) h.terminate();
+                if (finished > 0 || live.length) throw we;   // they ran for the cameras before
+                console.warn('[export-slp-cameras] export workers unavailable, compressing on this thread:', we);
+                nWorkers = 0;
+                k--;   // this camera again, on this thread
+                continue;
+            }
+            for (var t = 0; t < part.tables.length; t++) h.create(part.tables[t].spec, part.tables[t].data, part.tables[t].attrs);
+            for (var r = 0; r < part.rows.length; r++) h.send(part.rows[r][0], part.rows[r][1], part.rows[r][2], part.rows[r][3]);
+            part = null;
+            (function (slot, handle) {
+                var entry = { h: handle, done: null };
+                entry.done = handle.finish().then(function (bytes) {
+                    out[slot] = bytes;
+                    handle.terminate();
+                    live.splice(live.indexOf(entry), 1);
+                    finished++;
+                    return report();
+                });
+                live.push(entry);
+            })(idx[k], h);
+        }
+        while (live.length) await Promise.race(live.map(function (x) { return x.done; }));
+    } catch (err) {
+        for (var d = 0; d < live.length; d++) { try { live[d].h.terminate(); } catch (e) { /* ignore */ } }
+        throw err;
+    }
+    var how = nWorkers ? ' (up to ' + cap + ' worker' + (cap === 1 ? '' : 's') + ' at once)' : ' (this thread)';
+    if (nLazy) console.log('[export-slp-lazy] ' + nLazy + ' camera(s) rewritten from their own stores in ' +
+        Math.round(performance.now() - t0) + ' ms' + how);
+    if (idx.length - nLazy) console.log('[export-slp-eager] ' + (idx.length - nLazy) + ' fully loaded camera(s) written in ' +
+        Math.round(performance.now() - t0) + ' ms' + how);
+    return out;
+}
+
+/**
+ * `exportCamerasInWorkers` for folder-loaded cameras only (each rewritten from
+ * its own store); other cameras get null.
+ */
+export function exportCamerasLazyRewrite(selections, reprojAsUser, instanceFilter, opts) {
+    return exportCamerasInWorkers(selections, reprojAsUser, instanceFilter, Object.assign({}, opts || {}, { kinds: ['lazy'] }));
+}
+
 /** Copied from pose/tracker.js's identical helper — see that file's doc. */
 function frameGroupHasUserInstances(fg) {
     for (var [, insts] of fg.instances) {
@@ -1698,14 +1855,15 @@ export async function exportCamerasSlpStreaming(session, cameras, reprojAsUser, 
             var env = _buildCameraExportHeader(session, cameras[c].cameraName, cameras[c].videoFileInfo);
             env.instanceFilter = instanceFilter;
             env.reprojAsUser = reprojAsUser;
-            var writer = await SIO.openSlpWriter({
+            var header = {
                 skeletons: [env.skeleton],
                 videos: [env.video],
                 tracks: env.tracks,
                 identities: [],
                 sessions: [],
                 provenance: { source: 'lucid', exported_at: new Date().toISOString() },
-            });
+            };
+            var writer = await SIO.openSlpWriter(header);
             // COVERAGE PRECONDITION. `sweepLazyFrameWindows` hydrates through
             // `batchLoadLazyFrames`, which operates on the ACTIVE `state.session`. For any
             // other session (a multi-session project's non-active sessions) nothing
@@ -1716,9 +1874,32 @@ export async function exportCamerasSlpStreaming(session, cameras, reprojAsUser, 
             // rather than write a plausible partial file.
             var rowMap = session.lazyLoader && session.lazyLoader.frameRowByCam
                 ? session.lazyLoader.frameRowByCam.get(cameras[c].cameraName) : null;
-            cams.push({ name: cameras[c].cameraName, env: env, writer: writer, batch: [], nFrames: 0,
-                        expectedFrames: rowMap ? rowMap.size : 0 });
+            cams.push({ name: cameras[c].cameraName, env: env, header: header, writer: writer, batch: [], nFrames: 0,
+                        expectedFrames: rowMap ? rowMap.size : 0, rw: null });
         }
+        var tPass0 = performance.now();
+        // Each camera's rows go to its own worker, which writes and gzips them
+        // (`import-export/slp-rows-worker.js`, as the store copy does): gzip was
+        // ~27% of this pass on one core, the rest is hydration and building.
+        // Cameras past the worker count compress here.
+        var nWorkers = _storeCopyWorkerCount(cams.length, opts);
+        if (nWorkers) {
+            try {
+                await _attachRowsWorkers(SIO, cams.slice(0, nWorkers));
+            } catch (we) {
+                _detachRowsWorkers(cams);
+                console.warn('[export-slp-streaming] export workers unavailable, compressing on this thread:', we);
+                nWorkers = 0;
+            }
+        }
+        var roomFor = function () {
+            var waits = null;
+            for (var q = 0; q < cams.length; q++) {
+                var rq = cams[q].rw;
+                if (rq && rq.inFlight >= ROWS_WORKER_QUEUE) (waits = waits || []).push(rq.room());
+            }
+            return waits ? Promise.all(waits) : undefined;
+        };
 
         var BATCH = 256;
         var nVisited = 0;
@@ -1741,6 +1922,7 @@ export async function exportCamerasSlpStreaming(session, cameras, reprojAsUser, 
                     cam.batch = [];
                 }
             }
+            return roomFor();   // a worker that falls behind holds the pass
         }, {
             onProgress: opts.onProgress,
         });
@@ -1758,18 +1940,35 @@ export async function exportCamerasSlpStreaming(session, cameras, reprojAsUser, 
                     'not the one currently open — switch to that session and export again.');
             }
         }
+        var tPassed = performance.now();
         for (var w = 0; w < cams.length; w++) {
             var sink = opts.sinks && opts.sinks[w];
-            if (sink) {
-                await cams[w].writer.writeToSink(sink, { chunkBytes: opts.chunkBytes });
+            var cw = cams[w];
+            if (cw.rw) {
+                var wbytes = await cw.rw.finish();
+                if (!cw.writer.lucidOnlyTableRows()) {
+                    throw new Error('Export aborted: ' + cw.name + '\'s file has annotations or empty frames the export workers do not write.');
+                }
+                cw.rw.terminate();
+                cw.rw = null;
+                cw.writer.dispose();
+                if (sink) { await _writeBytesToSink(sink, wbytes, opts.chunkBytes); out.push(null); }
+                else out.push(wbytes);
+            } else if (sink) {
+                await cw.writer.writeToSink(sink, { chunkBytes: opts.chunkBytes });
                 out.push(null);
             } else {
-                out.push(cams[w].writer.close());
+                out.push(cw.writer.close());
             }
-            cams[w].writer = null;   // closed: nothing left to dispose
+            cw.writer = null;   // closed: nothing left to dispose
         }
+        console.log('[export-slp-streaming] ' + cams.length + ' camera(s) in one pass: ' +
+            nVisited.toLocaleString() + ' frames in ' + Math.round(tPassed - tPass0) + ' ms' +
+            (nWorkers ? ' (' + nWorkers + ' worker' + (nWorkers === 1 ? '' : 's') + ')' : ' (this thread)') +
+            ', close ' + Math.round(performance.now() - tPassed) + ' ms');
         return out;
     } catch (err) {
+        _detachRowsWorkers(cams);
         for (var d = 0; d < cams.length; d++) {
             var wr = cams[d].writer;
             try { if (wr && typeof wr.dispose === 'function') wr.dispose(); } catch (e) { /* ignore */ }
@@ -2078,6 +2277,9 @@ function _storeRowsBlock(session, ctx, cam, frames, rows, count, filter) {
  *
  * `opts.onProgress(done, total)` counts video frames (total = the project's
  * frame count), the cameras' copies together; throwing from it aborts.
+ * `opts.workers`: false copies on this thread, N uses N export workers; by
+ * default one per camera up to the core count (`_storeCopyWorkerCount`), each
+ * writing and gzipping its camera's file (`import-export/slp-rows-worker.js`).
  */
 export async function exportCamerasFromSharedStore(session, cameras, ctx, instanceFilter, opts) {
     var SIO = window.SleapIO;
@@ -2115,17 +2317,19 @@ export async function exportCamerasFromSharedStore(session, cameras, ctx, instan
             var env = _buildCameraExportHeader(session, cameras[c].cameraName, cameras[c].videoFileInfo);
             env.instanceFilter = instanceFilter;
             env.reprojAsUser = null;   // the copy runs only without reprojections
-            var writer = await SIO.openSlpWriter({
+            var header = {
                 skeletons: [env.skeleton], videos: [env.video], tracks: env.tracks,
                 identities: [], sessions: [],
                 provenance: { source: 'lucid', exported_at: new Date().toISOString() },
-            });
+            };
+            var writer = await SIO.openSlpWriter(header);
             if (typeof writer.appendRawRows !== 'function') {
                 try { writer.dispose(); } catch (e) { /* ignore */ }
                 throw new Error('sleap-io.js writer lacks appendRawRows (LUCID local patch, raw rows)');
             }
-            cams.push({ name: cameras[c].cameraName, env: env, writer: writer, swept: new Map(),
-                        rowMap: loader.frameRowByCam.get(cameras[c].cameraName) || new Map(), nFrames: 0 });
+            cams.push({ name: cameras[c].cameraName, env: env, header: header, writer: writer, swept: new Map(),
+                        rowMap: loader.frameRowByCam.get(cameras[c].cameraName) || new Map(), nFrames: 0,
+                        rw: null, bytes: null, done: null });
         }
 
         // 2. Hydrate the drift runs and build their frames exactly as the pass does.
@@ -2150,32 +2354,143 @@ export async function exportCamerasFromSharedStore(session, cameras, ctx, instan
         var tSwept = performance.now();
 
         // 3. Each camera, in frame order: swept and resident frames through the
-        //    pass's builder, every other frame copied from the store.
+        //    pass's builder, every other frame copied from the store. With
+        //    workers (the default), a group of cameras is built in turns, one
+        //    block each, and each camera's rows go to its own worker, which
+        //    writes and gzips them (gzip was ~3/4 of the copy, on one core).
+        //    Without, one camera after another on this thread, as before.
         var pacer = createProgressPacer();
         var BLOCK = 4096;
         for (var ci = 0; ci < cams.length; ci++) {
-            var cam = cams[ci];
-            var keySet = new Set();
-            for (var rk of cam.rowMap.keys()) if (rk >= 0 && rk < nFrames) keySet.add(rk);
-            for (var fk of session.frameGroups.keys()) if (fk >= 0 && fk < nFrames) keySet.add(fk);
-            for (var sk of sweptSet) keySet.add(sk);
-            var keys = Float64Array.from(keySet).sort();
-            var bFrames = new Float64Array(BLOCK), bRows = new Float64Array(BLOCK), bn = 0;
-            var lfs = [];
-            var flushRows = function () {
-                if (!bn) return;
-                var block = _storeRowsBlock(session, ctx, cam.name, bFrames, bRows, bn, instanceFilter);
-                cam.nFrames += block.frames.length / 5;
-                cam.writer.appendRawRows(block);
-                bn = 0;
-            };
-            var flushLfs = function () {
-                if (!lfs.length) return;
-                cam.writer.appendFrames(lfs);
-                cam.nFrames += lfs.length;
-                lfs = [];
-            };
-            for (var ki = 0; ki < keys.length; ki++) {
+            cams[ci].copier = _storeCameraCopier(session, ctx, cams[ci], sweptSet, nFrames, instanceFilter, BLOCK);
+        }
+        var nWorkers = _storeCopyWorkerCount(cams.length, opts);
+        var reportProgress = async function () {
+            if (!opts.onProgress) return;
+            var sum = 0;
+            for (var pi = 0; pi < cams.length; pi++) sum += cams[pi].copier.fraction();
+            await opts.onProgress(Math.floor(nFrames * sum / cams.length), nFrames);
+        };
+        var g0 = 0;
+        while (g0 < cams.length) {
+            var group = cams.slice(g0, g0 + Math.max(1, nWorkers));
+            if (nWorkers) {
+                try {
+                    await _attachRowsWorkers(SIO, group);
+                } catch (we) {
+                    _detachRowsWorkers(group);
+                    if (g0 > 0) throw we;   // they ran for the cameras before: this is a real failure
+                    console.warn('[export-slp-store] export workers unavailable, compressing on this thread:', we);
+                    nWorkers = 0;
+                    continue;
+                }
+            }
+            var live = group.slice();
+            while (live.length) {
+                for (var li = 0; li < live.length; li++) {
+                    var cm = live[li];
+                    if (cm.rw) await cm.rw.room();
+                    if (cm.copier.step()) {
+                        cm.swept = null;
+                        console.log('[export-slp-store] camera', cm.name + ':', cm.nFrames.toLocaleString(), 'labeled frames written');
+                        if (cm.rw) cm.done = cm.rw.finish();
+                        live.splice(li, 1);
+                        li--;
+                    }
+                }
+                // Progress after every round (cheap: no paint) so the bar and
+                // Esc keep up; a paint only when the pacer says so.
+                await reportProgress();
+                if (pacer.due()) await pacer.yield();
+            }
+            for (var gi = 0; gi < group.length; gi++) {
+                var gc = group[gi];
+                if (!gc.rw) continue;
+                gc.bytes = await gc.done;
+                // The worker's file is the whole file only if finishing the
+                // working writer would have added nothing but rows.
+                if (!gc.writer.lucidOnlyTableRows()) {
+                    throw new Error('Export aborted: ' + gc.name + '\'s file has annotations or empty frames the export workers do not write.');
+                }
+                gc.rw.terminate();
+                gc.rw = null;
+                gc.writer.dispose();
+                gc.writer = null;
+            }
+            g0 += group.length;
+        }
+        if (opts.onProgress) await opts.onProgress(nFrames, nFrames);
+        var tCopied = performance.now();
+
+        var out = [];
+        for (var w = 0; w < cams.length; w++) {
+            var sink = opts.sinks && opts.sinks[w];
+            if (cams[w].bytes) {
+                if (sink) {
+                    await _writeBytesToSink(sink, cams[w].bytes, opts.chunkBytes);
+                    out.push(null);
+                } else {
+                    out.push(cams[w].bytes);
+                }
+                cams[w].bytes = null;
+            } else if (sink) {
+                await cams[w].writer.writeToSink(sink, { chunkBytes: opts.chunkBytes });
+                out.push(null);
+            } else {
+                out.push(cams[w].writer.close());
+            }
+            cams[w].writer = null;
+        }
+        console.log('[export-slp-store] ' + cams.length + ' camera(s) from the store: plan ' +
+            Math.round(tPlan - t0) + ' ms, ' + drift.length.toLocaleString() + ' frames hydrated in ' +
+            Math.round(tSwept - tPlan) + ' ms, copy ' + Math.round(tCopied - tSwept) + ' ms' +
+            (nWorkers ? ' (' + nWorkers + ' worker' + (nWorkers === 1 ? '' : 's') + ')' : ' (this thread)') +
+            ', close ' + Math.round(performance.now() - tCopied) + ' ms');
+        return out;
+    } catch (err) {
+        _detachRowsWorkers(cams);
+        for (var d = 0; d < cams.length; d++) {
+            var wr = cams[d].writer;
+            try { if (wr && typeof wr.dispose === 'function') wr.dispose(); } catch (e) { /* ignore */ }
+        }
+        throw err;
+    }
+}
+
+/**
+ * One camera's walk for `exportCamerasFromSharedStore` step 3: its frames in
+ * order, swept and resident frames through the pass's builder (`appendFrames`),
+ * every other frame copied from the store in blocks (`appendRawRows`).
+ * `step()` walks up to `block` frames and returns true once the camera is
+ * written (everything flushed); `fraction()` is how far it got.
+ */
+function _storeCameraCopier(session, ctx, cam, sweptSet, nFrames, instanceFilter, block) {
+    var keySet = new Set();
+    for (var rk of cam.rowMap.keys()) if (rk >= 0 && rk < nFrames) keySet.add(rk);
+    for (var fk of session.frameGroups.keys()) if (fk >= 0 && fk < nFrames) keySet.add(fk);
+    for (var sk of sweptSet) keySet.add(sk);
+    var keys = Float64Array.from(keySet).sort();
+    var bFrames = new Float64Array(block), bRows = new Float64Array(block), bn = 0;
+    var lfs = [];
+    var ki = 0;
+    function flushRows() {
+        if (!bn) return;
+        var rows = _storeRowsBlock(session, ctx, cam.name, bFrames, bRows, bn, instanceFilter);
+        cam.nFrames += rows.frames.length / 5;   // before the append: a worker takes the arrays
+        cam.writer.appendRawRows(rows);
+        bn = 0;
+    }
+    function flushLfs() {
+        if (!lfs.length) return;
+        cam.writer.appendFrames(lfs);
+        cam.nFrames += lfs.length;
+        lfs = [];
+    }
+    return {
+        fraction: function () { return keys.length ? ki / keys.length : 1; },
+        step: function () {
+            var stop = Math.min(keys.length, ki + block);
+            for (; ki < stop; ki++) {
                 var f = keys[ki];
                 var lf;
                 if (sweptSet.has(f)) {
@@ -2191,50 +2506,139 @@ export async function exportCamerasFromSharedStore(session, cameras, ctx, instan
                     if (row !== undefined) {
                         flushLfs();
                         bFrames[bn] = f; bRows[bn] = row; bn++;
-                        if (bn === BLOCK) flushRows();
+                        if (bn === block) flushRows();
                     }
                 }
-                // Progress at every 4,096th frame (cheap: no paint) so the bar
-                // and Esc keep up with a copy that is over in a second or two;
-                // a paint only when the pacer says so.
-                var due = pacer.due();
-                if (due || (ki & 4095) === 4095) {
-                    if (opts.onProgress) await opts.onProgress(Math.floor((ci * nFrames + f + 1) / cams.length), nFrames);
-                    if (due) await pacer.yield();
-                }
             }
+            if (ki < keys.length) return false;
             flushLfs();
             flushRows();
-            if (opts.onProgress) await opts.onProgress(Math.floor(((ci + 1) * nFrames) / cams.length), nFrames);
-            cam.swept = null;
-            console.log('[export-slp-store] camera', cam.name + ':', cam.nFrames.toLocaleString(), 'labeled frames written');
-        }
-        if (opts.onProgress) await opts.onProgress(nFrames, nFrames);
-        var tCopied = performance.now();
+            return true;
+        },
+    };
+}
 
-        var out = [];
-        for (var w = 0; w < cams.length; w++) {
-            var sink = opts.sinks && opts.sinks[w];
-            if (sink) {
-                await cams[w].writer.writeToSink(sink, { chunkBytes: opts.chunkBytes });
-                out.push(null);
-            } else {
-                out.push(cams[w].writer.close());
-            }
-            cams[w].writer = null;
-        }
-        console.log('[export-slp-store] ' + cams.length + ' camera(s) from the store: plan ' +
-            Math.round(tPlan - t0) + ' ms, ' + drift.length.toLocaleString() + ' frames hydrated in ' +
-            Math.round(tSwept - tPlan) + ' ms, copy ' + Math.round(tCopied - tSwept) + ' ms, close ' +
-            Math.round(performance.now() - tCopied) + ' ms');
-        return out;
-    } catch (err) {
-        for (var d = 0; d < cams.length; d++) {
-            var wr = cams[d].writer;
-            try { if (wr && typeof wr.dispose === 'function') wr.dispose(); } catch (e) { /* ignore */ }
-        }
-        throw err;
+/**
+ * How many cameras the store copy writes at once in workers (0 = this thread):
+ * `opts.workers` (false/0 = none, a number = that many), else
+ * `window.LUCID_EXPORT_WORKERS`, else one per camera up to the core count.
+ */
+function _storeCopyWorkerCount(nCams, opts) {
+    if (opts.workers === false) return 0;
+    if (typeof Worker !== 'function' || typeof document === 'undefined') return 0;
+    var forced = typeof opts.workers === 'number' ? opts.workers
+        : (typeof window !== 'undefined' ? window.LUCID_EXPORT_WORKERS : undefined);
+    if (forced != null) return Math.max(0, Math.min(nCams, forced | 0));
+    var hc = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 2;
+    return Math.max(1, Math.min(nCams, hc, 16));
+}
+
+/** Row messages in flight per export worker (each one table's rows of one block). */
+var ROWS_WORKER_QUEUE = 8;
+
+/**
+ * Start `import-export/slp-rows-worker.js` on `shell` (an empty writer's file)
+ * and return its handle: `ready`, `send(name, data, rows, cols)` (transfers
+ * `data`), `room()` (resolves while fewer than ROWS_WORKER_QUEUE messages are
+ * unanswered), `finish()` → the file's bytes, `terminate()`. A failure rejects
+ * every pending and later call.
+ */
+function _startRowsWorker(shell) {
+    var w = new Worker(new URL('import-export/slp-rows-worker.js?v=440841fa3873', document.baseURI), { type: 'module' });
+    var h = { failed: null, inFlight: 0, waiters: [] };
+    var readyFns, doneFns;
+    h.ready = new Promise(function (res, rej) { readyFns = [res, rej]; });
+    var done = new Promise(function (res, rej) { doneFns = [res, rej]; });
+    h.ready.catch(function () { /* surfaced by the awaiting caller */ });
+    done.catch(function () { /* surfaced by finish() */ });
+    function wake() {
+        var ws = h.waiters;
+        h.waiters = [];
+        for (var i = 0; i < ws.length; i++) ws[i]();
     }
+    function fail(err) {
+        if (h.failed) return;
+        h.failed = err;
+        readyFns[1](err);
+        doneFns[1](err);
+        wake();
+    }
+    w.onmessage = function (ev) {
+        var m = ev.data;
+        if (m.type === 'ready') readyFns[0]();
+        else if (m.type === 'ack') { h.inFlight--; wake(); }
+        else if (m.type === 'done') doneFns[0](m.bytes);
+        else if (m.type === 'error') fail(new Error('export worker: ' + m.message));
+    };
+    w.onerror = function (e) {
+        if (e && e.preventDefault) e.preventDefault();
+        fail(new Error('export worker failed: ' + ((e && e.message) || 'it could not start')));
+    };
+    h.send = function (name, data, rows, cols) {
+        if (h.failed) throw h.failed;
+        var own = (data.byteOffset === 0 && data.byteLength === data.buffer.byteLength) ? data : data.slice();
+        h.inFlight++;
+        w.postMessage({ type: 'rows', name: name, data: own, rows: rows, cols: cols }, [own.buffer]);
+    };
+    h.create = function (spec, data, attrs) {
+        if (h.failed) throw h.failed;
+        var own = (data.byteOffset === 0 && data.byteLength === data.buffer.byteLength) ? data : data.slice();
+        h.inFlight++;
+        w.postMessage({ type: 'create', spec: spec, data: own, attrs: attrs }, [own.buffer]);
+    };
+    h.room = function () {
+        if (h.failed) return Promise.reject(h.failed);
+        if (h.inFlight < ROWS_WORKER_QUEUE) return Promise.resolve();
+        return new Promise(function (res) { h.waiters.push(res); }).then(h.room);
+    };
+    h.finish = function () {
+        if (!h.failed) w.postMessage({ type: 'finish' });
+        return done;
+    };
+    h.terminate = function () { w.terminate(); };
+    var buf = (shell.byteOffset === 0 && shell.byteLength === shell.buffer.byteLength) ? shell.buffer : shell.slice().buffer;
+    w.postMessage({ type: 'open', shell: buf }, [buf]);
+    return h;
+}
+
+/**
+ * Give each camera of `group` an export worker holding its header (an empty
+ * writer with the same header, closed at once) and send its writer's rows
+ * there (`lucidDivertRows`, the bundle's `(row divert)` patch).
+ */
+async function _attachRowsWorkers(SIO, group) {
+    for (var i = 0; i < group.length; i++) {
+        var shellWriter = await SIO.openSlpWriter(group[i].header);
+        if (typeof shellWriter.lucidDivertRows !== 'function' || typeof shellWriter.lucidOnlyTableRows !== 'function') {
+            try { shellWriter.dispose(); } catch (e) { /* ignore */ }
+            throw new Error('sleap-io.js writer lacks lucidDivertRows (LUCID local patch, row divert)');
+        }
+        group[i].rw = _startRowsWorker(shellWriter.close());
+    }
+    for (var r = 0; r < group.length; r++) await group[r].rw.ready;
+    group.forEach(function (cm) {
+        cm.writer.lucidDivertRows(function (name, data, rows, cols) { cm.rw.send(name, data, rows, cols); });
+    });
+}
+
+/** Stop `cams`' export workers and send their writers' rows to their own files again. */
+function _detachRowsWorkers(cams) {
+    for (var i = 0; i < cams.length; i++) {
+        var cm = cams[i];
+        if (!cm.rw) continue;
+        try { cm.rw.terminate(); } catch (e) { /* ignore */ }
+        cm.rw = null;
+        try { if (cm.writer && !cm.writer.closed) cm.writer.lucidDivertRows(null); } catch (e) { /* ignore */ }
+    }
+}
+
+/** Write `bytes` to a FileSystemWritableFileStream-like `sink` in chunks, then close it. */
+async function _writeBytesToSink(sink, bytes, chunkBytes) {
+    var step = Math.max(1, Math.trunc(chunkBytes || 8 * 1024 * 1024));
+    for (var pos = 0; pos < bytes.length; pos += step) {
+        await sink.write(bytes.subarray(pos, Math.min(pos + step, bytes.length)));
+    }
+    if (sink.close) await sink.close();
 }
 
 /**
@@ -3502,7 +3906,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=0b31a233508e', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=440841fa3873', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },
