@@ -1536,7 +1536,8 @@ session graph that holds them.
     **`predictedNodeScorer(cameraName, frameIdx, inst)`** returns `k → score`
     with exactly those answers, resolving the instance's store row once (via
     `lazyLoader.predictedPointScorer`) instead of per node; By Cam's per-frame
-    pass (`_buildCameraLabeledFrame`) asks it for every node of every prediction.
+    pass (`_buildCameraLabeledFrame`) and the streaming project save's overlay
+    (`buildOverlayInstance`) ask it for every node of every prediction.
   - **`numAnimals`** — the number of animals every tracking run on the session
     caps identities at: a positive integer, `'auto'`, or `null` while nobody has
     been asked, which is what makes Track Frame / Track All prompt. Saved as
@@ -14820,8 +14821,8 @@ overlay (instance by object identity, then `track`) or else to the shifted
 store row. An overlaid frame's untouched
 predicted siblings are re-materialized too (the store row is skipped
 wholesale); each node carries its OWN model score, read back from the row being
-replaced (`Session.predictedNodeScore` → `SioLazyLoader.predictedPointScore`,
-by the sibling's `_rawInstIndex`), and the instance score only where it has
+replaced (`Session.predictedNodeScorer` → `SioLazyLoader.predictedPointScorer`,
+by the sibling's `_rawInstIndex`, the row resolved once per instance), and the instance score only where it has
 none — a point with no score is one SLEAP's GUI hides. **Scope:** predictions +
 full grouping (identities + 3D) + 2D corrections.
 
