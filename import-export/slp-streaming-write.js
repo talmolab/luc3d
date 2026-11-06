@@ -447,9 +447,12 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     function buildOverlayInstance(inst, trackBase, camName, frameIdx) {
         var isPredicted = inst.type !== 'user';
         var perPointScore = isPredicted ? (inst.score != null ? inst.score : 1.0) : undefined;
-        var pts = _buildSioPoints(inst, numNodes, perPointScore, null, function (k) {
-            return session.predictedNodeScore(camName, frameIdx, inst, k);
-        });
+        // The store row is resolved once per instance, not per node (same
+        // answers as `predictedNodeScore`).
+        var nodeScore = typeof session.predictedNodeScorer === 'function'
+            ? session.predictedNodeScorer(camName, frameIdx, inst)
+            : function (k) { return session.predictedNodeScore(camName, frameIdx, inst, k); };
+        var pts = _buildSioPoints(inst, numNodes, perPointScore, null, nodeScore);
         var track = null;
         if (inst.trackIdx != null && inst.trackIdx >= 0) {
             var combinedIdx = trackBase + inst.trackIdx;
