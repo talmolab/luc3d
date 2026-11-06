@@ -8,9 +8,9 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
-import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=79508c670a7b';
-import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=79508c670a7b';
-import { readBlobRange, guardedRangeSource } from './cold-read-guard.js?v=79508c670a7b';
+import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=5d43d4fc53a2';
+import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=5d43d4fc53a2';
+import { readBlobRange, guardedRangeSource } from './cold-read-guard.js?v=5d43d4fc53a2';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -2534,6 +2534,7 @@ export class VideoController {
      *   callbacks.log: (msg, level) => void
      *   callbacks.isViewShown: (view) => boolean
      *   callbacks.onZoomChange: () => void
+     *   callbacks.onViewTransform: (view) => void — after every applyZoom
      */
     constructor(state, callbacks) {
         this.state = state;
@@ -3703,6 +3704,11 @@ export class VideoController {
             var bh = wrapper.offsetHeight;
             if (bw > 0 && bh > 0) { z.baseW = bw; z.baseH = bh; }
         }
+
+        // The overlay canvas covers only the visible part of a zoomed-in view
+        // (`ui/overlay-window.js`); a pan or zoom out past its margin needs a
+        // redraw, which nothing else would trigger (a pan never redraws).
+        if (this.callbacks && this.callbacks.onViewTransform) this.callbacks.onViewTransform(view);
     }
 
     // -----------------------------------------------------------------------
@@ -3813,6 +3819,36 @@ export class VideoController {
         this._panToDraw(view, u[0], u[1], sx, sy, qx, qy, fr);
         z.scale = sx;
         z.scaleY = sy;
+    }
+
+    /**
+     * The part of `view`'s canvas box its cell shows, as `{x0, y0, x1, y1}` in
+     * box CSS px (before the zoom transform; may extend past the box when the
+     * video does not fill the cell), or null while the view has no zoom state
+     * or is not laid out. The inverse of the whole `applyZoom` transform applied to the
+     * cell's four corners (`_boxPointAt`), so rotation and per-axis scale are
+     * included; under rotation it is the bounding box of those corners. What
+     * `ui/rendering.js` sizes the overlay window to (`ui/overlay-window.js`).
+     */
+    visibleBoxRect(view) {
+        var z = view && view.zoom;
+        if (!z || !view.canvas || !view.canvas.closest) return null;
+        var cell = view.canvas.closest('.video-cell');
+        if (!cell) return null;
+        var cw = cell.clientWidth, ch = cell.clientHeight;
+        if (!(cw > 0) || !(ch > 0) || !(z.scale > 0)) return null;
+        var fr = this._zoomFrame(view);
+        if (!(fr.cX > 0) || !(fr.cY > 0)) return null;
+        var corners = [[0, 0], [cw, 0], [0, ch], [cw, ch]];
+        var x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        for (var i = 0; i < 4; i++) {
+            var u = this._boxPointAt(view, corners[i][0], corners[i][1], fr);
+            if (u[0] < x0) x0 = u[0];
+            if (u[0] > x1) x1 = u[0];
+            if (u[1] < y0) y0 = u[1];
+            if (u[1] > y1) y1 = u[1];
+        }
+        return { x0: x0, y0: y0, x1: x1, y1: y1 };
     }
 
     /** Container-centre point of `view`'s cell, in cell CSS px. */
