@@ -219,6 +219,16 @@ export async function startTrackerWorker(cameras, hp, onFrame, opts) {
         },
         /** The worker's busy milliseconds so far (it held a batch), for the CPU line. */
         cpuBusyMs: function () { return clock.ms(); },
+        /**
+         * Stop now (Track All's Cancel): the worker is terminated, results still on
+         * their way are dropped, and every wait — pending or later — rejects with `err`.
+         */
+        cancel: function (err) {
+            failure = failure || err;
+            clearTimeout(watchdog);
+            try { worker.terminate(); } catch (e) { /* ignore */ }
+            wake();
+        },
         close: function () { clearTimeout(watchdog); clock.close(); worker.terminate(); },
     };
 }

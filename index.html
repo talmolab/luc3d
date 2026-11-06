@@ -70,17 +70,8 @@
                 </div>
                 <!-- Brave hiding the real core count: what to do (ui/browser-hints.js) -->
                 <div class="progress-hint" id="loadingBraveHint" hidden></div>
-                <div class="loading-actions"><button class="btn" id="loadingDismiss" data-dismiss="true" style="display:none;">Dismiss</button></div>
+                <div class="loading-actions"><button class="btn" id="loadingCancel" hidden>Cancel</button><button class="btn" id="loadingDismiss" data-dismiss="true" style="display:none;">Dismiss</button></div>
             </div>
-        </div>
-
-        <!-- Tracker progress overlay -->
-        <div class="tracker-progress" id="trackerProgress" style="display:none;">
-            <div class="tracker-progress-inner">
-                <div class="tracker-progress-bar" id="trackerProgressBar" style="width:0%"></div>
-            </div>
-            <span id="trackerProgressText">Tracking...</span>
-            <button class="toolbar-btn" id="trackerCancel" style="margin-left:8px;">Cancel</button>
         </div>
 
         <!-- Menu Bar -->

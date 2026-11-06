@@ -1836,7 +1836,9 @@ it, so a mid-run failure fails the pass (error status) rather than hanging.
 **Watchdog:** while a batch is out the worker must answer within
 `workerReplyTimeoutMs()` (`pose/compute-governor.js`, 120 s; `opts.replyTimeoutMs`
 for tests), else it is terminated and `failure` is a TimeoutError — a worker that
-dies without an `error` event cannot leave the run waiting.
+dies without an `error` event cannot leave the run waiting. **`cancel(err)`**
+(Track All's Cancel) terminates the worker at once, drops results still on their
+way, and makes every wait, pending or later, reject with `err`.
 
 **Imports from project modules.** `../ui/load-graph.js` (`createBusyClock`),
 `./compute-governor.js` (`workerReplyTimeoutMs`, `timeoutError`).
@@ -2085,7 +2087,9 @@ tracked and never fails the run; the status line and summary box say what it did
   `isCameraTracked` (both `trackAll`/`trackCurrentFrame` drop cameras where it is
   false; abort with a warning if fewer than 2 views remain).
 - `../import-export/save-load.js` — `markDirty`, `setStatus`, `hideLoading`.
+- `./compute-governor.js` — `abortError` (Cancel).
 - `../ui/loading-overlay.js` — `showLoadingProgress`, `createProgressPacer`,
+  `setLoadingCancel` (Cancel),
   `yieldToPaint`, `idleWhile` / `busyDuring` (the waits on the tracker worker
   are idle time, its commits are not), and `setLoadingCpu` as the identity pass
   starts: on the worker `{mainThread: true, cpuBusyMs: pool.cpuBusyMs}` (the
@@ -2140,6 +2144,18 @@ tracked and never fails the run; the status line and summary box say what it did
 
 **User-facing features.** "Track Frame" / "Track All" buttons, identity
 propagation across frames, find-match-for-selected.
+
+**Cancel** (the loading card's button or `Esc`, `setLoadingCancel`): `runTrackingPass`
+aborts `run.signal` and cancels the worker; `trackFrameListProgress` and the sweep
+(`opts.signal`) stop before the next frame and reject with an AbortError, and
+`finishCancelledPass` redraws and reports the frames tracked (`run.committedFi`,
+which `stepTrackerFrame` also sets inline) and the ones left untracked. The frames
+committed before Cancel keep their result — a commit rewrites its frame in place
+(it promotes unlinked detections), so there is no earlier state to restore — and
+the run had already cleared the rest. No ID-switch check, summary or blue Track
+button follows; the pass resolves `{ok: false, cancelled: true}`. The non-windowed
+lazy "Loading frames" stage and the tail-mark pass have no Cancel. Test:
+`tests/e2e/track-all-cancel.mjs`.
 
 **Track All runs its tracker on a worker** (`pose/tracker-pool.js` +
 `pose/tracker-worker.js`). `runTrackingPass` makes the run
@@ -2758,6 +2774,9 @@ restrict it to a range. Contract points:
 - **The window release also gives each released frame's group members' 2D back
   to the store** (`releaseFrameMembers2d`, `pose/lazy-residency.js`); otherwise
   one sweep leaves every member of the project holding a private copy of its 2D.
+- **Cancel:** once `opts.signal` fires, the windowed sweep stops before the next
+  frame, releases every window it still holds without awaiting `beforeRelease`,
+  and rejects with an AbortError (`abortError`, `./compute-governor.js`).
   Solver jobs capture their 2D at submit, so releasing a window whose solves are
   still in flight is safe.
 - **Release lag** (Track All's tracker worker): `opts.releaseLag` N keeps the
@@ -3246,6 +3265,7 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   `countPoints3d`) and `pooledPoints3d` (`_applyGroupStep` stores every
   Triangulate All result in the slab pool).
 - `./plane-fit.js` — `jacobiEigen`, `fitPlaneToPoints3d` (re-exported).
+- `./compute-governor.js` — `abortError` (a cancelled `sweepLazyFrameWindows`).
 - `../ui/app-state.js` — `state`, `timeline`, `viewport3d`, `interactionManager`
   (the objects `evictLazyFrames` must not drop out from under the UI).
 - `./lazy-residency.js` — `evictLazyFrameGroups`, `holdLazyResidency`,
@@ -3624,7 +3644,8 @@ behind each choice: `prompts/compute-guardrails-report.md`
 **Imports from project modules.** None.
 
 **Imported by.** `pose/triangulation-pool.js`, `pose/tracker-pool.js`,
-`pose/id-switch-check.js`, `ui/image-embedder.js`.
+`pose/tracker.js`, `pose/triangulation.js`, `pose/id-switch-check.js`,
+`ui/image-embedder.js`.
 
 **Coverage.** `tests/test-compute-governor.mjs`, `tests/e2e/compute-coexistence.mjs`.
 
@@ -5627,7 +5648,14 @@ no bar. Pinned by `tests/e2e/fixtures/progress-card.js`.
   restarts it). `estimateRemainingMs(samples, done, total)`,
   `formatRemaining(ms)` and the clock hook `__setLoadingOverlayClock(fn)` are
   exported for tests; the raw estimate is `#loadingEta[data-ms]`.
-- `hideLoading()` — hides the overlay and resets the bar (and stops `setLoadingCpu`).
+- `hideLoading()` — hides the overlay and resets the bar (and stops `setLoadingCpu`
+  and `setLoadingCancel`).
+- `setLoadingCancel(onCancel)` — a Cancel button on the card (`#loadingCancel`),
+  which `Esc` (a capture-phase `document` listener) also presses, for an
+  operation that can stop part-way (Track All / Track Frame Range). `onCancel`
+  runs once; the button then reads "Cancelling…", disabled. Removed (button and
+  listener) by `hideLoading()` / `setLoadingCancel(null)`. Test:
+  `tests/e2e/track-all-cancel.mjs`.
 - `setLoadingCpu(source)` — a CPU line and last-minute graph under the detail
   line (`#loadingHardware` = `#loadingCpu` + `#loadingGraph`), sampled every
   `CPU_SAMPLE_MS` as busy thread-ms / cores via `createLoadMeter`; the tooltip
