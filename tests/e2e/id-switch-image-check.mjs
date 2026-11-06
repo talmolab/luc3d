@@ -165,6 +165,25 @@ try {
         await page.keyboard.press('Escape'); await page.evaluate(() => window.__done);
         check(hidden, 'an embedder that offers no sample crops shows no square');
     }
+    {   // Cancel while an embedding NEVER comes back (a lost GPU, a stuck worker): the dialog still closes at once
+        // (pose/compute-governor.js `abortable`; it used to wait on that promise, "Cancelling…" forever)
+        await page.evaluate(async () => { await window.__buildSwap([1, 1, 1]); const M = await import('/ui/id-switch-modal.js');
+            const inner = window.__fakeEmbedder(5);
+            window.__released = 0;
+            const hanging = async (s, o) => { const e = await inner(s, o); const get = e.getEmbeddings; let n = 0;
+                e.getEmbeddings = (f, it) => (++n >= 6 ? new Promise(() => {}) : get(f, it)); e.releaseFrames = () => { window.__released++; }; return e; };
+            window.__done = M.runIdSwitchChecks({ image: true, inject: { createEmbedder: hanging } }); });
+        await page.waitForFunction(() => /frame \d/.test(document.querySelector('.id-switch-progress-text')?.textContent || ''), null, { timeout: 10000 });
+        await page.waitForTimeout(300);                              // the 6th embedding is now hanging
+        const t0 = Date.now();
+        await page.keyboard.press('Escape');
+        const out = await Promise.race([page.evaluate(async () => { const r = await window.__done; return { cancelled: !!(r && r.image && r.image.cancelled), released: window.__released }; }),
+            new Promise((res) => setTimeout(() => res('HUNG'), 5000))]);
+        const ms = Date.now() - t0;
+        const open = await page.evaluate(() => !!document.getElementById('idSwitchCancel'));
+        check(out !== 'HUNG' && out.cancelled && out.released >= 1 && !open && ms < 1500,
+            `Esc while an embedding hangs: cancelled in ${ms} ms, dialog closed, frames released (${JSON.stringify(out)})`);
+    }
 
     // ---- 2. identical sizes: only the image check finds it
     fx = await page.evaluate(async () => {

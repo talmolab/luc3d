@@ -190,6 +190,46 @@ export function hideLoading() {
     _setBarVisible(false);
     _setFill(0, false);
     setLoadingCpu(null);
+    setLoadingCancel(null);
+}
+
+var _cancelKey = null;
+
+/**
+ * Give the card a Cancel button (#loadingCancel), which `Esc` also presses, for
+ * an operation that can stop part-way. `onCancel()` runs once: the button then
+ * reads "Cancelling…" and is disabled until the operation ends. Until
+ * `hideLoading()` or `setLoadingCancel(null)`, which removes the button and the
+ * `Esc` listener. The card blocks the app, so its `Esc` goes to nothing else.
+ * @param {?function()} onCancel
+ */
+export function setLoadingCancel(onCancel) {
+    var btn = _el('loadingCancel');
+    if (_cancelKey && typeof document !== 'undefined') document.removeEventListener('keydown', _cancelKey, true);
+    _cancelKey = null;
+    if (!btn) return;
+    btn.onclick = null;
+    btn.disabled = false;
+    btn.textContent = 'Cancel';
+    btn.hidden = true;
+    if (!onCancel) return;
+    var fired = false;
+    var press = function () {
+        if (fired) return;
+        fired = true;
+        btn.disabled = true;
+        btn.textContent = 'Cancelling…';
+        onCancel();
+    };
+    btn.onclick = press;
+    _cancelKey = function (e) {
+        if (e.key !== 'Escape') return;
+        e.preventDefault();
+        e.stopPropagation();
+        press();
+    };
+    document.addEventListener('keydown', _cancelKey, true);
+    btn.hidden = false;
 }
 
 /** How often the overlay's CPU line and graph refresh (ms). */

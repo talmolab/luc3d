@@ -25,6 +25,7 @@ import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } 
 import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
 import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js';
 import { createGroupSolver } from './triangulation-pool.js';
+import { abortError } from './compute-governor.js';
 import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
          dropDerivedReprojections, lazyRowInstance, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js';
@@ -2774,12 +2775,19 @@ function _applyGroupStep(group, prep, result) {
  * frames that are still resident, while the sweep already hydrates the next
  * window. Both omitted: exactly the old behaviour.
  *
+ * CANCEL (windowed sweep): once `opts.signal` (an AbortSignal) fires, the sweep
+ * stops before the next frame, releases every window it still holds WITHOUT
+ * awaiting `beforeRelease` (the work handed elsewhere was abandoned), and
+ * rejects with an AbortError. A throw from `onFrame` or `onProgress` while the
+ * signal is set is treated the same way.
+ *
  * @param {Object} session                LUCID Session
  * @param {(frameIdx:number, fg:Object)=>void|Promise<void>} onFrame
  * @param {{window?:number, onProgress?:Function, onLoadProgress?:Function,
  *          onStatus?:Function, gcEveryWindows?:number, gcMB?:number,
  *          start?:number, end?:number, releaseLag?:number,
- *          beforeRelease?:(start:number, end:number)=>Promise<void>}} [opts]
+ *          beforeRelease?:(start:number, end:number)=>Promise<void>,
+ *          signal?:AbortSignal}} [opts]
  * @returns {Promise<number>} frames processed
  */
 function _hasFrameData(session, frameIdx) {
@@ -2819,8 +2827,8 @@ async function _sweepLazyFrameWindowsHeld(session, onFrame, opts) {
         // too (pose/lazy-residency.js) — or a Track All leaves every member
         // of the project holding a private copy of its row (1.39 GB on the
         // real 8-camera project).
-        var releaseWindow = async function (wStart, wEnd) {
-            if (opts.beforeRelease) await opts.beforeRelease(wStart, wEnd);
+        var releaseWindow = async function (wStart, wEnd, abandoned) {
+            if (opts.beforeRelease && !abandoned) await opts.beforeRelease(wStart, wEnd);
             var heldRefs = _uiHeldObjects();
             for (var rf = wStart; rf < wEnd; rf++) {
                 if (rf === state.currentFrame) continue;
@@ -2832,29 +2840,42 @@ async function _sweepLazyFrameWindowsHeld(session, onFrame, opts) {
             windowCount++;
             if (windowCount % gcEvery === 0) await _encourageGC(gcMB);
         };
-        for (var start = from; start <= to; start += W) {
-            var end = Math.min(start + W, to + 1);
-            await batchLoadLazyFrames(start, end - start);
-            for (var fi = start; fi < end; fi++) {
-                var fg = session.frameGroups.get(fi);
-                // A frame counts as HAVING DATA if it has 2D (a hydrated
-                // FrameGroup) *or* an `instanceGroups` entry — see `_hasFrameData`.
-                if (fg || _hasFrameData(session, fi)) {
-                    await onFrame(fi, fg);
-                    processed++;
+        var signal = opts.signal || null, loading = null;
+        try {
+            for (var start = from; start <= to; start += W) {
+                var end = Math.min(start + W, to + 1);
+                loading = [start, end];
+                await batchLoadLazyFrames(start, end - start);
+                for (var fi = start; fi < end; fi++) {
+                    if (signal && signal.aborted) throw abortError();
+                    var fg = session.frameGroups.get(fi);
+                    // A frame counts as HAVING DATA if it has 2D (a hydrated
+                    // FrameGroup) *or* an `instanceGroups` entry — see `_hasFrameData`.
+                    if (fg || _hasFrameData(session, fi)) {
+                        await onFrame(fi, fg);
+                        processed++;
+                    }
+                    // Checked for empty frames too, so a long run of frames with no
+                    // data still advances the bar. `fi - from + 1` is a position in
+                    // the (possibly offset) range, not the processed count.
+                    if (pacer.due()) {
+                        if (opts.onProgress) await opts.onProgress(fi - from + 1, total);
+                        await pacer.yield();
+                    }
                 }
-                // Checked for empty frames too, so a long run of frames with no
-                // data still advances the bar. `fi - from + 1` is a position in
-                // the (possibly offset) range, not the processed count.
-                if (pacer.due()) {
-                    if (opts.onProgress) await opts.onProgress(fi - from + 1, total);
-                    await pacer.yield();
-                }
+                pendingWindows.push(loading);
+                loading = null;
+                // shifted only once released, so a Cancel mid-release still releases it
+                while (pendingWindows.length > lag) { await releaseWindow(pendingWindows[0][0], pendingWindows[0][1]); pendingWindows.shift(); }
             }
-            pendingWindows.push([start, end]);
-            while (pendingWindows.length > lag) { var w = pendingWindows.shift(); await releaseWindow(w[0], w[1]); }
+            while (pendingWindows.length) { await releaseWindow(pendingWindows[0][0], pendingWindows[0][1]); pendingWindows.shift(); }
+        } catch (e) {
+            if (!(signal && signal.aborted)) throw e;
+            // Cancelled: give back every window still held, the one being loaded included.
+            if (loading) pendingWindows.push(loading);
+            while (pendingWindows.length) { var wa = pendingWindows.shift(); await releaseWindow(wa[0], wa[1], true); }
+            throw abortError();
         }
-        while (pendingWindows.length) { var wl = pendingWindows.shift(); await releaseWindow(wl[0], wl[1]); }
         if (opts.onProgress) await opts.onProgress(total, total);
         return processed;
     }

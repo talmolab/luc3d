@@ -46,6 +46,7 @@ import { triangulateAndReproject, triangulationSummary } from './triangulation-c
 import { Instance } from './pose-data.js';
 import { isCameraTracked, getTrackingThreshold } from '../ui/settings.js';
 import { createBusyClock } from '../ui/load-graph.js';
+import { createComputeGovernor, workerReplyTimeoutMs } from './compute-governor.js';
 
 /** Groups per worker message: big enough to amortize messaging, small enough
  *  to load-balance (~0.25 s of Refined solves, ~20 ms of DLT). */
@@ -130,6 +131,16 @@ export function createGroupSolver(cameras, opts) {
     const P = (useWorkers && !poolOwner) ? getPool() : null;
     const owner = {};
     if (P) poolOwner = owner;
+    // How many of the pool's workers may hold a batch NOW (pose/compute-governor.js): from half the
+    // pool, following the OS's CPU pressure. All hc - 1 at once drove it to "critical" and stalled
+    // other processes' timers by 130 ms (Refined, 71,893 groups); half was 12-20% slower. A forced
+    // LUCID_TRIANGULATION_WORKERS is a fixed count (tests, benchmarks).
+    const gov = P ? createComputeGovernor(forced != null && forced > 0
+        ? { ceiling: P.workers.length, floor: P.workers.length }
+        // floor 2: two workers alone kept the pressure "nominal" (5 ms timer lateness), and one made a
+        // run under someone else's load 4x slower without relieving it
+        : { ceiling: P.workers.length, floor: Math.min(2, P.workers.length), start: Math.ceil(P.workers.length / 2) }) : null;
+    const allowed = function () { return gov ? gov.allowed() : 0; };
     // CPU time (cpuBusyMs): a lane per worker slot while it holds a batch, and 'main' (see the header)
     const clock = createBusyClock();
     clock.begin('main');
@@ -210,6 +221,7 @@ export function createGroupSolver(cameras, opts) {
     }
     function handleReply(slot, b, m) {
         batchesById.delete(m.id);
+        clearTimeout(b.timer);
         slot.busy = false;
         clock.end(slot);
         if (m.type === 'solved') {
@@ -226,14 +238,45 @@ export function createGroupSolver(cameras, opts) {
         drain();
     }
 
+    // A worker that died or stopped answering: re-solve ITS batches inline (only its own — the
+    // other workers' replies still come), and never hand it work again. The pool is discarded
+    // at the end of the run (finish / cancel), so the next run starts with live workers.
+    function retire(slot, why) {
+        if (slot.dead) return;
+        slot.dead = true;
+        slot.busy = true;
+        console.warn('[triangulation-pool] ' + why + '; re-solving its batch inline');
+        clock.close(slot);
+        try { slot.w.terminate(); } catch (e) { /* ignore */ }
+        for (const [id, b] of batchesById) {
+            if (b.slot !== slot) continue;
+            batchesById.delete(id);
+            clearTimeout(b.timer);
+            try { solveInline(b); } catch (e) { failure = failure || e; }
+            inFlight--;
+        }
+    }
+
     function pump() {
         if (!P) return;
-        for (const slot of P.workers) {
+        const live = P.workers.filter((s) => !s.dead);
+        if (!live.length) {
+            // every worker is gone: finish the queue here rather than wait for a worker forever
+            while (queue.length) { const b = queue.shift(); try { solveInline(b); } catch (e) { failure = failure || e; } inFlight--; }
+            drain();
+            return;
+        }
+        const n = Math.min(live.length, allowed());
+        for (let i = 0; i < n; i++) {
+            const slot = live[i];
             if (!queue.length) return;
             if (slot.busy) continue;
             const b = queue.shift();
             slot.busy = true;
             clock.begin(slot);
+            b.slot = slot;
+            const ms = workerReplyTimeoutMs();
+            b.timer = setTimeout(function () { retire(slot, 'a worker did not answer within ' + (ms / 1000) + ' s'); pump(); drain(); }, ms);
             batchesById.set(b.id, b);
             slot.w.postMessage({ type: 'solve', id: b.id, jobs: b.items.map((it) => it.job) });
         }
@@ -253,17 +296,14 @@ export function createGroupSolver(cameras, opts) {
         const cams = cameras.map(serializeCamera);
         for (const slot of P.workers) {
             slot.busy = false;
+            slot.dead = false;
             slot.w.onmessage = (e) => onWorkerMessage(slot, e.data);
             slot.w.onerror = (ev) => {
-                // A worker that died (e.g. failed to load): re-solve its batch inline.
+                // A worker that died (e.g. failed to load): re-solve ITS batch inline. (It used to
+                // re-solve every in-flight batch, leaving the other workers marked busy for good:
+                // once all were, the queue never drained and finish() waited forever.)
                 ev.preventDefault && ev.preventDefault();
-                clock.close(slot);
-                for (const [id, b] of batchesById) {
-                    batchesById.delete(id);
-                    try { solveInline(b); } catch (e) { failure = failure || e; }
-                    inFlight--;
-                }
-                slot.busy = true;          // never hand it more work in this run
+                retire(slot, 'a worker failed');
                 pump();
                 drain();
             };
@@ -313,9 +353,9 @@ export function createGroupSolver(cameras, opts) {
         /** Resolves once in-flight work is below ~2 batches per worker. */
         throttle() {
             if (failure) return Promise.reject(failure);
-            if (!P || inFlight < P.workers.length * 2) return Promise.resolve();
+            if (!P || inFlight < allowed() * 2) return Promise.resolve();
             return waitOn(new Promise((resolve) => {
-                const check = () => (inFlight < P.workers.length * 2 || failure) ? resolve() : waiters.push(check);
+                const check = () => (inFlight < allowed() * 2 || failure) ? resolve() : waiters.push(check);
                 waiters.push(check);
             }));
         },
@@ -326,6 +366,9 @@ export function createGroupSolver(cameras, opts) {
             batch = [];
             queue.length = 0;
             clock.close();
+            for (const b of batchesById.values()) clearTimeout(b.timer);
+            batchesById.clear();
+            if (gov) gov.close();
             if (P) {
                 if (pool === P) terminatePool();
                 if (poolOwner === owner) poolOwner = null;
@@ -342,10 +385,20 @@ export function createGroupSolver(cameras, opts) {
             }
             drain();
             clock.close();
+            // a failed run can leave batches out: their watchdogs must not fire into the next run's pool
+            for (const b of batchesById.values()) clearTimeout(b.timer);
+            batchesById.clear();
+            if (gov) {
+                const g = gov.summary();
+                if (g.adaptive) console.log('[triangulation-pool] workers ' + g.lowest + '-' + g.highest + ' of ' + P.workers.length + ' (CPU pressure, s: ' + JSON.stringify(g.seconds) + ')');
+                gov.close();
+            }
             if (P) {
+                const anyDead = !!failure || P.workers.some((s) => s.dead);   // never reuse a pool a failed run left busy
                 for (const slot of P.workers) { slot.w.onmessage = null; slot.w.onerror = null; slot.busy = false; }
                 clearTimeout(P.idleTimer);
-                P.idleTimer = setTimeout(terminatePool, IDLE_TERMINATE_MS);
+                if (anyDead) { if (pool === P) terminatePool(); }      // never reuse a retired worker
+                else P.idleTimer = setTimeout(terminatePool, IDLE_TERMINATE_MS);
                 if (poolOwner === owner) poolOwner = null;
             }
             if (failure) throw failure;

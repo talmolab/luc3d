@@ -1838,8 +1838,15 @@ inside an `idleWhile` wait. A frame must still be RESIDENT when its result
 arrives — the caller holds sweep windows until `committedThrough`. A commit that
 throws, or a worker that errors, sets `failure`: every later wait rejects with
 it, so a mid-run failure fails the pass (error status) rather than hanging.
+**Watchdog:** while a batch is out the worker must answer within
+`workerReplyTimeoutMs()` (`pose/compute-governor.js`, 120 s; `opts.replyTimeoutMs`
+for tests), else it is terminated and `failure` is a TimeoutError — a worker that
+dies without an `error` event cannot leave the run waiting. **`cancel(err)`**
+(Track All's Cancel) terminates the worker at once, drops results still on their
+way, and makes every wait, pending or later, reject with `err`.
 
-**Imports from project modules.** `../ui/load-graph.js` (`createBusyClock`).
+**Imports from project modules.** `../ui/load-graph.js` (`createBusyClock`),
+`./compute-governor.js` (`workerReplyTimeoutMs`, `timeoutError`).
 
 **Imported by.** `pose/tracker.js`.
 
@@ -2089,7 +2096,9 @@ tracked and never fails the run; the status line and summary box say what it did
   `isCameraTracked` (both `trackAll`/`trackCurrentFrame` drop cameras where it is
   false; abort with a warning if fewer than 2 views remain).
 - `../import-export/save-load.js` — `markDirty`, `setStatus`, `hideLoading`.
+- `./compute-governor.js` — `abortError` (Cancel).
 - `../ui/loading-overlay.js` — `showLoadingProgress`, `createProgressPacer`,
+  `setLoadingCancel` (Cancel),
   `yieldToPaint`, `idleWhile` / `busyDuring` (the waits on the tracker worker
   are idle time, its commits are not), and `setLoadingCpu` as the identity pass
   starts: on the worker `{mainThread: true, cpuBusyMs: pool.cpuBusyMs}` (the
@@ -2144,6 +2153,18 @@ tracked and never fails the run; the status line and summary box say what it did
 
 **User-facing features.** "Track Frame" / "Track All" buttons, identity
 propagation across frames, find-match-for-selected.
+
+**Cancel** (the loading card's button or `Esc`, `setLoadingCancel`): `runTrackingPass`
+aborts `run.signal` and cancels the worker; `trackFrameListProgress` and the sweep
+(`opts.signal`) stop before the next frame and reject with an AbortError, and
+`finishCancelledPass` redraws and reports the frames tracked (`run.committedFi`,
+which `stepTrackerFrame` also sets inline) and the ones left untracked. The frames
+committed before Cancel keep their result — a commit rewrites its frame in place
+(it promotes unlinked detections), so there is no earlier state to restore — and
+the run had already cleared the rest. No ID-switch check, summary or blue Track
+button follows; the pass resolves `{ok: false, cancelled: true}`. The non-windowed
+lazy "Loading frames" stage and the tail-mark pass have no Cancel. Test:
+`tests/e2e/track-all-cancel.mjs`.
 
 **Track All runs its tracker on a worker** (`pose/tracker-pool.js` +
 `pose/tracker-worker.js`). `runTrackingPass` makes the run
@@ -2840,6 +2861,9 @@ restrict it to a range. Contract points:
 - **The window release also gives each released frame's group members' 2D back
   to the store** (`releaseFrameMembers2d`, `pose/lazy-residency.js`); otherwise
   one sweep leaves every member of the project holding a private copy of its 2D.
+- **Cancel:** once `opts.signal` fires, the windowed sweep stops before the next
+  frame, releases every window it still holds without awaiting `beforeRelease`,
+  and rejects with an AbortError (`abortError`, `./compute-governor.js`).
   Solver jobs capture their 2D at submit, so releasing a window whose solves are
   still in flight is safe.
 - **Release lag** (Track All's tracker worker): `opts.releaseLag` N keeps the
@@ -3328,6 +3352,7 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   `countPoints3d`) and `pooledPoints3d` (`_applyGroupStep` stores every
   Triangulate All result in the slab pool).
 - `./plane-fit.js` — `jacobiEigen`, `fitPlaneToPoints3d` (re-exported).
+- `./compute-governor.js` — `abortError` (a cancelled `sweepLazyFrameWindows`).
 - `../ui/app-state.js` — `state`, `timeline`, `viewport3d`, `interactionManager`
   (the objects `evictLazyFrames` must not drop out from under the UI).
 - `./lazy-residency.js` — `evictLazyFrameGroups`, `holdLazyResidency`,
@@ -3634,7 +3659,20 @@ thrown away.
   N-worker pool regardless of size (tests). A batch a worker fails on — or a
   worker that dies — is re-solved inline from the captured job.
 - Pool size `min(hardwareConcurrency - 1, 16)`; workers persist between runs
-  and are terminated after 30 s idle. One solver owns the pool at a time (a
+  and are terminated after 30 s idle. **How many hold a batch at once follows
+  the OS's CPU pressure** (`createComputeGovernor`, `pose/compute-governor.js`):
+  from half the pool, +1/s while "nominal", hold on "fair"/"serious", halve on
+  "critical", never below 2 (all hc - 1 drove a 10-core M5 to "critical" and
+  stalled other processes' timers 130 ms; half was 12-20% slower). A forced
+  `LUCID_TRIANGULATION_WORKERS = N` is a fixed N. `throttle()` bounds in-flight
+  work at ~2 batches per ALLOWED worker. The run logs the range it used.
+- **A dead or silent worker never hangs the run.** `retire(slot)` re-solves
+  only THAT worker's batches inline and never hands it work again (the old
+  error handler re-solved every in-flight batch and left the other workers
+  marked busy for good: once all were, `finish()` waited forever). Each batch
+  has a `workerReplyTimeoutMs()` watchdog that retires its worker; with no live
+  worker left the queue is solved inline. A pool with a retired worker is
+  terminated at `finish` (never reused). One solver owns the pool at a time (a
   concurrent second run solves inline). Every call site passes `method:
   method` explicitly (`tests/test-triangulation-method-propagation.mjs`).
 - **`cpuBusyMs()`** — the run's CPU time so far, thread-ms summed over threads,
@@ -3648,7 +3686,8 @@ thrown away.
 **Imports from project modules.** `./triangulation-core.js`
 (`triangulateAndReproject`, `triangulationSummary`), `./pose-data.js` (`Instance`), `../ui/settings.js`
 (`isCameraTracked`, `getTrackingThreshold`, read once per run in
-`createGroupSolver`), `../ui/load-graph.js` (`createBusyClock`). The pool runs on
+`createGroupSolver`), `../ui/load-graph.js` (`createBusyClock`),
+`./compute-governor.js` (`createComputeGovernor`, `workerReplyTimeoutMs`). The pool runs on
 the main thread only — the worker loads `./triangulation-core.js`, never this
 module — so these ui/ imports do not reach the worker.
 
@@ -3658,7 +3697,44 @@ module — so these ui/ imports do not reach the worker.
 
 **Coverage.** `tests/e2e/triangulate-all-worker-pool.mjs` (every Triangulate
 All route, inline vs a forced 4-worker pool, must hash identically) and
-`tests/e2e/triangulate-all-cpu-load.mjs` (`cpuBusyMs()`).
+`tests/e2e/triangulate-all-cpu-load.mjs` (`cpuBusyMs()`),
+`tests/test-compute-governor.mjs` §4 (dead / silent fake workers: the run
+finishes, every callback in order), `tests/e2e/compute-coexistence.mjs`.
+
+---
+
+### pose/compute-governor.js
+
+**Purpose.** Guardrails for the long compute runs, DOM-free and worker-safe:
+how many workers a pool may keep busy now (from the OS's CPU pressure),
+deadlines on worker round trips, Cancel that never waits on a promise that may
+not settle, and a stop before the renderer's ~4 GB heap. The measurements
+behind each choice: `prompts/compute-guardrails-report.md`
+(`tests/e2e/_bench-compute-coexist.mjs` re-measures).
+
+**Key exports.**
+- `nextConcurrency(cur, state, {floor, ceiling})` — one step: +1 on
+  'nominal', hold on 'fair' / 'serious', halve on 'critical' (other processes'
+  >50 ms stalls came only with "critical").
+- `createComputeGovernor({ceiling, floor?, start?, Observer?})` ->
+  `{allowed(), adaptive, state, summary(), close()}` — a `PressureObserver('cpu')`
+  and a 1 s step (`PRESSURE_STEP_MS`). Without the API (Firefox, Safari) or when
+  `observe` is refused, fixed at `start`. Pools only dispatch to `allowed()`
+  workers, never stop a job, so results are unchanged.
+- `WORKER_REPLY_TIMEOUT_MS` (120 s, ~25x the slowest measured round trip),
+  `workerReplyTimeoutMs()` (`globalThis.LUCID_WORKER_REPLY_TIMEOUT_MS` overrides,
+  tests), `withTimeout(p, ms, what, onTimeout)` (TimeoutError), `timeoutError`.
+- `abortable(p, signal)` (AbortError at once on abort), `abortError()`.
+- `heapNearLimit(mem?)` — `performance.memory` past `HEAP_STOP_FRACTION` (0.85)
+  of min(limit, 4 GiB), else null.
+
+**Imports from project modules.** None.
+
+**Imported by.** `pose/triangulation-pool.js`, `pose/tracker-pool.js`,
+`pose/tracker.js`, `pose/triangulation.js`, `pose/id-switch-check.js`,
+`ui/image-embedder.js`.
+
+**Coverage.** `tests/test-compute-governor.mjs`, `tests/e2e/compute-coexistence.mjs`.
 
 ---
 
@@ -3760,7 +3836,13 @@ all are in `flags` (`changes` is []), none is a repeat (`continues` is always
 false), and a change point of a pair sharing one identity within
 `followSeconds` of another is its `followOf` (a three-way relabel). A score is
 a difference of cosines between mean features, so no sample rate scales it
-(25-120 fps tested). `opts.signal` cancels (AbortError).
+(25-120 fps tested). `opts.signal` cancels (AbortError) — at once, even while an
+embedding never comes back (a lost GPU, a stuck worker): every provider await
+(`keyframes`, `croppable`, `prepareFrames`, each embedding) goes through
+`abortable` (`pose/compute-governor.js`). Every 16th frame the image check also
+stops with a reason (`{ok: false}`, "close to its memory limit") when
+`heapNearLimit()` (or the test hook `opts.heapCheck`) says the JS heap is at 85%
+of min(limit, 4 GiB).
 
 **Why not a classifier on the tracker's labels** (the earlier design): it learns
 whichever labelling covers more of the session, and when a pair swaps several
@@ -5673,7 +5755,14 @@ no bar. Pinned by `tests/e2e/fixtures/progress-card.js`.
   restarts it). `estimateRemainingMs(samples, done, total)`,
   `formatRemaining(ms)` and the clock hook `__setLoadingOverlayClock(fn)` are
   exported for tests; the raw estimate is `#loadingEta[data-ms]`.
-- `hideLoading()` — hides the overlay and resets the bar (and stops `setLoadingCpu`).
+- `hideLoading()` — hides the overlay and resets the bar (and stops `setLoadingCpu`
+  and `setLoadingCancel`).
+- `setLoadingCancel(onCancel)` — a Cancel button on the card (`#loadingCancel`),
+  which `Esc` (a capture-phase `document` listener) also presses, for an
+  operation that can stop part-way (Track All / Track Frame Range). `onCancel`
+  runs once; the button then reads "Cancelling…", disabled. Removed (button and
+  listener) by `hideLoading()` / `setLoadingCancel(null)`. Test:
+  `tests/e2e/track-all-cancel.mjs`.
 - `setLoadingCpu(source)` — a CPU line and last-minute graph under the detail
   line (`#loadingHardware` = `#loadingCpu` + `#loadingGraph`), sampled every
   `CPU_SAMPLE_MS` as busy thread-ms / cores via `createLoadMeter`; the tooltip
@@ -9520,9 +9609,15 @@ because on the CPU frames arrive in bursts); `opts.device` ('auto' | 'webgpu' |
 `clearEmbeddingCache()`, `embeddingCacheInfo()` -> `{entries, bytes, maxEntries, samples}` (the cache, above);
 `SAMPLE_FRAMES_PER_RUN`, `SAMPLE_PIXELS_MAX`, `tensorToGrey(tensor)`, `greyToTensor(grey)` (sample crops on cached runs);
 `pickImageDevice()` -> `{kind: 'webgpu'|'cpu', adapter, why}`; `cpuModelWorkerCount(cores, memoryGB)`,
-`CPU_MODEL_MAX_WORKERS`; `createCpuModelPool(count, onStatus, clock?)` -> `{size, run(data, n) ->
-Promise<Float32Array[]>, terminate()}`; `createCropPool(clock?)` -> `{broken, run(image, crops), terminate()}` | null
-(`clock`: a `createBusyClock`, ui/load-graph.js);
+`CPU_MODEL_MAX_WORKERS`; `createCpuModelPool(count, onStatus, clock?, opts?)` -> `{size, active(), run(data, n) ->
+Promise<Float32Array[]>, terminate()}` (a batch is split over `active()` workers: all of them, halved while the OS
+reports "critical" CPU pressure, `createComputeGovernor`; a run unanswered within `workerReplyTimeoutMs()` terminates
+its worker and rejects; `opts.replyTimeoutMs`, `opts.Observer` for tests); `createCropPool(clock?)` ->
+`{broken, run(image, crops), terminate()}` | null (a job unanswered within `workerReplyTimeoutMs()` fails its worker:
+`broken`, crops go inline; a frame still cropping when the pool closes is dropped silently)
+(`clock`: a `createBusyClock`, ui/load-graph.js). **GPU guardrails:** a lost `GPUDevice` (`device.lost`) clears
+`loadImageModel`'s cached model (the next run reloads it) and stops a run in progress with a `cannotRun` reason; so
+does a model batch or its readback unanswered within `workerReplyTimeoutMs()` — never a wait that cannot end;
 `loadImageModel(onStatus)` (WebGPU; once, cached promise);
 `importTransformers()` (the runtime, imported once; re-imported under a new fragment
 after a failure); `cannotRun(reason, cause)` (an Error whose message is the reason
