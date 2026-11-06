@@ -4705,7 +4705,11 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   picker) and names the method in its progress, summary and status text.
   Covered by `tests/e2e/triangulate-range-modal.mjs` (also Group by Track's
   3D-only-frame guard).
-- `exportLabels()` — JSON labels export.
+- `exportLabels()` — JSON labels export. Shows "Exporting labels: x/y
+  frames…" as a bar in the shared card (`showLoadingProgress`, fed by
+  `sweepLazyFrameWindows`' `onProgress`), then a "Closing the file…" spinner,
+  painted before the picked file's `close()` (which reports no progress).
+  Covered by `tests/e2e/save-progress-card.mjs` §6.
 - `exportPoints3dH5()` — points3d H5 export, under an "Export 3D Points"
   progress card that counts frames written; a failure closes the card and says
   nothing was saved.
@@ -14789,6 +14793,10 @@ shape) when no live video is attached, so the re-save round-trips the original
 video filename/shape instead of degrading to `<camName>.mp4` with zero
 dimensions. Covered by `tests/test-lazy-reopen.js`.
 - **`finalizeProjectWriter(writer, opts)`** — `writer.close()`/`writeToSink()`.
+  A sink with `setTotalBytes(n)` is told the finished file's size (MEMFS `stat`
+  of the writer's in-memory file, at the first write: `writeToSink` finalizes
+  before it streams) — File ▸ Save's disk bar. `opts.chunkBytes` is the write
+  chunk size.
 - **`buildSessionSlpBytesStreaming(session, views, videoFiles, opts)`** — thin
   single-session wrapper chaining all four. `opts.onProgress(stage, done,
   total, unit)` drives the Save progress card (`save-load.js`), one stage
@@ -14865,8 +14873,16 @@ loading-overlay/status-text UI helpers.
   download)`): Collecting 3D groups (counted) · Writing 3D groups and points ·
   Writing 2D poses (counted) · Finishing the file — or, for an eager project,
   Writing the file — plus Opening the save dialog on the download path.
-  `progress.disk(bytes)` reports the streamed write to a picked file
-  ("Writing to disk: N MB…"). `quickSave` puts the card up only after the
+  `progress.disk(bytes)` reports the write to a picked file as a bar on the
+  last step ("Writing to disk: x/y MB…", KB under 1 MB, one decimal under
+  10 MB) once `progress.diskTotal(bytes)` gave the size — the streaming path
+  through the sink's `setTotalBytes` (`finalizeProjectWriter`), the eager one
+  from its bytes, now written in 8 MiB chunks so the bar moves; without a
+  size, a running "Writing to disk: N MB…". `progress.closing()` shows the
+  browser's `close()` as a painted "Closing the file…" spinner saying it has no
+  progress (Chrome moves its swap file into place, reading it back on a network
+  share), so the bar never claims that part. `globalThis.__lucidSaveChunkBytes`
+  (tests only) shrinks the write chunks. `quickSave` puts the card up only after the
   save-file picker returns, since the picker needs the click's user activation.
   `isStreamingSave(sessions, SIO)` (internal) is the one test of which path
   `buildSlpBytes` takes, shared with the card. `saveProjectSlp` now sets
