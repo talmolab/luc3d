@@ -1536,6 +1536,11 @@ session graph that holds them.
     hydrated from (`_rawInstIndex`, which must be an integer — `null` is not
     row 0), via `lazyLoader.predictedPointScore` and by node NAME, so a skeleton
     edit after loading cannot pair a node with another node's score.
+    **`predictedNodeScorer(cameraName, frameIdx, inst)`** returns `k → score`
+    with exactly those answers, resolving the instance's store row once (via
+    `lazyLoader.predictedPointScorer`) instead of per node; By Cam's per-frame
+    pass (`_buildCameraLabeledFrame`) and the streaming project save's overlay
+    (`buildOverlayInstance`) ask it for every node of every prediction.
   - **`numAnimals`** — the number of animals every tracking run on the session
     caps identities at: a positive integer, `'auto'`, or `null` while nobody has
     been asked, which is what makes Track Frame / Track All prompt. Saved as
@@ -2045,7 +2050,11 @@ drifts upward.
 
 **Tail marks.** `getTailMarkedIdentity` / `setTailMarkedIdentity` /
 `onTailMarkedIdentityChange`: which identity has the tail marks in the active session
-(`Session.tailMarkedIdentity`, saved with the project; null = off). Asked in Track
+(`Session.tailMarkedIdentity`, saved with the project; null = off). `getIdentityMarks` /
+`setIdentityMarks`: what each identity shows, per identity cue (`Session.identityMarks`);
+setting one clears the other. With identity marks set, `runTailMarkPass` runs
+`resolveIdentityCues` (`pose/identity-cues.js`) with the tail-band cue; otherwise the
+two-animal `resolveTailMarks`. Asked in Track
 All's first-use dialog (pre-filled with the last answer this page saw) and in the Track
 menu (`ui/tail-mark-field.js`). When set, `runTrackingPass` runs `runTailMarkPass` right
 after a full Track All (never a range or Track Frame), before the ID-switch checks, so
@@ -2595,6 +2604,68 @@ and filling gaps each fail with the specific artifact they represent.
 
 ---
 
+### pose/identity-cues.js
+
+**Purpose.** Which animal each tracked identity is, at every moment, from features
+unique to each animal (identity CUES); DOM-free and cue-agnostic. Built so new cues
+(fur markings, dyed ear tufts, ...) plug in without touching the decision. The user
+sets what each identity shows (`Session.identityMarks`: cue id -> identity name ->
+class); `resolveIdentityCues` reads every cue at sampled frames, learns each class's
+look, finds the most likely assignment of animals to identities at each sample, bisects
+each change to its frame, and relabels with `Session.swapIdentitiesInRange`.
+
+**The decision.** `decodeAssignments`: a Viterbi over every ordering of the animals
+(`permutationsOf`; up to `maxAnimals` = 6, 720 states), a sample costing what its cues
+contradict (each identity capped at `maxSampleCost`), a swap of two identities costing
+`contactSwapCost` across a gap where those two touch (`pairContacts`, from the shared
+grid in `pose/id-switch-check.js`: `pairContactRuns` once, `touchingFromRuns` per sample list;
+`opts.contactRuns` replaces it for replays) and `apartSwapCost` elsewhere, in typical-sample
+units (`combineCosts`). Classes may be shared (two red, two blue): swaps between animals
+of one class are invisible to the cue, cost nothing to leave alone, and are left as
+tracked. `swapsFor(perm)` turns an assignment into swaps (each cycle as exchanges with
+its first member).
+
+**Sampling.** The reader samples keyframes up to `maxSampleGapSeconds` (10 s) apart
+(`reader.plan(frames, maxGapSeconds)`): a keyframe decodes alone, while every frame between
+keyframes costs decoding from the last one. Then each sample that reads against the decision
+by more than `suspectCost` (`suspectSamples`) gets one read per `denseSeconds` between its
+neighbours (`denseFramesAround`, a second streaming read), and the whole decision runs again
+on all samples, on the first pass's cost scale (`combineCosts`' `typicalGiven`): the added
+samples bunch where the cues read poorly, and a scale taken from them makes every cost loom
+larger against a swap, which relabelled stretches the cameras contradict. With keyframes up
+to two seconds apart nothing is added. On `05mice_flippers` (keyframes every 4.2 s; the pass
+used to read one frame per second, 1,800 samples): 640 samples (208 dense), the pass 51 s
+instead of 232 s, the same labels except one 6 s swap at 14.70 min that one-per-second reads
+also lose when their frames shift by 10 (the evidence for it is weak either way). Below
+`suspectCost` 0.15 extra reads in a long contact tipped a 3 s relabel the cameras contradict;
+0.25-0.5 matched. Study tools: `tests/e2e/_diag-cue-dump.mjs` saves every keyframe's and
+every second's reads and `tests/e2e/_diag-replay-identity-cues.mjs` replays the engine on them in
+seconds; `_real-tail-marks.mjs` takes `CUE_OPTS` and `WINDOW`.
+
+**A cue** is `{id, learn(obs, labels, classOf, ids), costs(features, model), check?(model),
+describe?(model)}` with a reader (`plan/open/next/at/close`, as `ui/tail-mark-reader.js`).
+`learn` gets `labels` null on the first pass (guess from the tracker's identities), then
+the decision's labels (`rounds`, default 3). A failed `check` after the last round
+relabels nothing: the engine never names animals the cue cannot vouch for.
+
+**Refuses, changing nothing:** no cue; expected marks for a different number of
+identities than tracked, or for a name that does not exist; fewer than 2 or more than
+`maxAnimals`; no frame rate; a cue that cannot learn or fails its check.
+
+**Key exports.** `resolveIdentityCues`, `IDENTITY_CUE_DEFAULTS`, `permutationsOf`,
+`pairContacts`, `pairContactRuns`, `touchingFromRuns`, `decodeAssignments`, `swapsFor`,
+`combineCosts`, `cueCostRows`, `suspectSamples`, `denseFramesAround`.
+
+**Imports.** `./id-switch-check.js`. **Imported by.** `pose/tracker.js`.
+
+**Tests.** `tests/test-identity-cues.mjs` (exact decisions with a fake cue; the tail-band
+cue on drawn tails); `tests/e2e/tail-mark-track-all.mjs` §7-8 (three animals, bands per
+identity, through the real tracker).
+
+**On 05mice_flippers (5 mice, 0-4 bands each, 8 cameras, 30 min):** with the band cue's
+sharp read (`TAIL_BAND_READ`) the learned tails read 0-4 and the check passes; the labels
+agree with per-camera band counts on every stretch. See **Sampling** for the run time.
+
 ### pose/tail-mark.js
 
 **Purpose.** Which of two tracked identities is the animal with dark marks on its
@@ -2607,7 +2678,14 @@ where the wrong one holds the marks. The tracker is untouched.
 **The measure.** `readTailProfile` walks the tail nodes from `tailMarkNodeIndices` (TTI,
 Tail_0, Tail_1: the marks end near Tail_1), reading a bright percentile of a line across
 the tail at each pixel, so keypoints a few pixels off it do not matter;
-`normalizeTailProfile` scales it to the tail's own brightness.
+`normalizeTailProfile` scales it to the tail's own brightness. `readTailProfile` takes
+`{percentile, widthShare}` (defaults 0.85 and 1/12 of the length each side).
+`TAIL_BAND_READ` (`baseExtension` 0.2, percentile 0.5, width 1/30) is the band-counting
+cue's second read: on `05mice_flippers` (5 mice, 0-4 bands) the 4-band tail has its bands
+packed before Tail_0, and TTI often lands past the first, so the default read counted it as
+3; started a little before TTI, darker and narrower, it reads 4 (the others too). The
+sharper read tells a plain tail from one wide band less well, so it only counts; the
+default read still decides.
 
 **Why templates.** Marks differ between animals (several narrow bands, or one wide one on
 the test recordings), and a plain tail in shade by a wall dims along a third of its length
@@ -2629,7 +2707,8 @@ within `refineSeconds`.
 
 **Samples.** `planTailMarkSamples`: every keyframe (cheap to decode; every 250 frames
 = 1.7 s on the test recordings), or one per second when keyframes are sparser than
-`MAX_SAMPLE_GAP_SECONDS` or unknown.
+`MAX_SAMPLE_GAP_SECONDS` (or the `maxGapSeconds` given: the identity engine asks for 10 s and
+reads densely where it needs to) or unknown.
 
 **Refuses, changing nothing:** not exactly two identities, the named identity missing,
 no frame rate, no readable tail, or too few samples teaching or templates too alike
@@ -2657,7 +2736,15 @@ frames), and Chrome there decodes these H.264 streams at 700-1,700 frames/s, on 
 `TAIL_MARK_DEFAULTS`, `MAX_SAMPLE_GAP_SECONDS`, `tailMarkNodeIndices`,
 `readTailProfile`, `normalizeTailProfile`, `tailBandScore`, `learnTailTemplates`,
 `tailVote`, `planTailMarkSamples`, `contactGaps`, `evidenceScale`, `evidenceOf`,
-`decodeMarkedStates`, `refineChange`, `stretchesToSwap`.
+`decodeMarkedStates`, `countBands`, `createTailBandCue` (the tail-band cue for
+`pose/identity-cues.js`: classes are band counts, or 'marked'/'plain'; features are
+profiles or the reader's `{wide, sharp}`: costs from the wide read's `templates`, band
+counts from the sharp read's `bandTemplates` (with one read, both are that read). First
+pass learns each identity's own tail and names it by `countBands`; later passes relearn
+per class and re-anchor each class to the template that reads as it; `check` refuses
+unless the learned tails read as the marks set, one to one. On `05mice_flippers` it now
+passes with 4 label changes over 30 min, each stretch agreeing with per-view band counts),
+`TAIL_BAND_READ`, `refineChange`, `stretchesToSwap`.
 
 **Imports.** `./id-switch-check.js` (`buildGrid`, `contactEpisodes`,
 `SIZE_CHECK_DEFAULTS`).
@@ -4650,7 +4737,17 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   of n"); a camera built in one go shows the spinner "Writing <cam>.slp…", painted
   before it holds the thread. Files save in the background, up to `SAVES_IN_FLIGHT`
   (4) at once: over an SMB share Chrome's `close()` reads each file back at ~10 MB/s
-  (measured on the lab VM, 2026-11-03), so one file's wait does not hold up the next. The modal is
+  (measured on the lab VM, 2026-11-03), so one file's wait does not hold up the next.
+  While files save (waiting for a slot, or at the end) the card shows a bar of the
+  files saved — written AND closed — out of all the export's files ("Saving files in
+  <folder>: k/n files…", `showSaving`), repainted as each one lands. Files, not
+  bytes: `close()` reports nothing, so a byte count would race to the end of
+  `write()` and stall. Two or more folder-loaded cameras
+  (`cameraExportUsesLazyRewrite`) or fully loaded cameras (`cameraExportUsesEagerBuild`)
+  are written in one step before the per-camera steps ("Writing N cameras", cameras
+  on the bar, `exportCamerasInWorkers`: built here one after another while workers
+  compress them). A camera built in one go takes the card back
+  (`savingStep = 0`) until its file is queued. The modal is
   hidden while the card shows (it sits above the card's layer) and comes back on
   cancel or failure. **Esc closes the modal**, or cancels an in-progress export:
   between cameras, or mid-sweep (the progress callback throws `ExportCancelled`;
@@ -4694,7 +4791,11 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   picker) and names the method in its progress, summary and status text.
   Covered by `tests/e2e/triangulate-range-modal.mjs` (also Group by Track's
   3D-only-frame guard).
-- `exportLabels()` — JSON labels export.
+- `exportLabels()` — JSON labels export. Shows "Exporting labels: x/y
+  frames…" as a bar in the shared card (`showLoadingProgress`, fed by
+  `sweepLazyFrameWindows`' `onProgress`), then a "Closing the file…" spinner,
+  painted before the picked file's `close()` (which reports no progress).
+  Covered by `tests/e2e/save-progress-card.mjs` §6.
 - `exportPoints3dH5()` — points3d H5 export, under an "Export 3D Points"
   progress card that counts frames written; a failure closes the card and says
   nothing was saved.
@@ -4742,7 +4843,9 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   worker pool; adoption and regrouping stay on the main thread).
 - `../import-export/file-io.js` — `exportSlpClientSide`,
   `exportSlpMultiSession` (By-Cam passes `{onProgress}`), `exportCamerasSlpStreaming`,
-  `cameraExportUsesSweep` (By-Cam's one sweep), `findSkeletonMismatch`, `buildPoints3dH5`,
+  `cameraExportUsesSweep` (By-Cam's one sweep), `exportCamerasInWorkers`,
+  `cameraExportUsesLazyRewrite`, `cameraExportUsesEagerBuild` (By-Cam's "Writing N
+  cameras" step), `findSkeletonMismatch`, `buildPoints3dH5`,
   `buildReprojH5`.
 - `../pose/initialization.js` — `update3DViewport`.
 - `./video-encode.js` — `createMp4Writer`, `videoEncodingAvailable` (Export 3D
@@ -10517,8 +10620,13 @@ lazy project each read is bracketed by `hydrateFrameMembers2d` /
 `releaseFrameMembers2d`. Pixels come through one OffscreenCanvas, only each tail's
 bounding box read back.
 
-**Key exports.** `createTailMarkReader(session, fps)` -> the reader
-`resolveTailMarks` takes, or `{failed: reason}` (no videos, no tail nodes).
+**Key exports.** `createTailMarkReader(session, fps, read?)` -> the reader
+`resolveTailMarks` takes (`plan(frames, maxGapSeconds?)` passes the limit to
+`planTailMarkSamples`; the identity engine asks for 10 s), or `{failed: reason}` (no videos, no tail nodes). With `read`
+(`TAIL_BAND_READ`, which Track All passes when the identity engine runs) each view's
+feature is `{wide, sharp}`: the default read, unchanged, plus a second read started
+`baseExtension` of the first tail segment before TTI (`extendBase`), with that read's
+percentile and width; both from one read-back of the box around the longer line.
 
 **Imports.** `./app-state.js`, `./image-embedder.js` (`keyframeIndices`,
 `streamingReader`, `canStream`, `identityGroupsAt`), `../pose/lazy-residency.js`,
@@ -10526,10 +10634,23 @@ bounding box read back.
 
 **Imported by.** `pose/tracker.js`.
 
+### ui/identity-marks-modal.js
+
+**Purpose.** What each identity's tail shows: one row per identity with its number of
+bands (0 = plain), for the identity engine (`pose/identity-cues.js`). A leaf: commits
+nothing. `buildBandCountFields(names, counts)` (also used by Track All's first-use
+dialog) refuses non-integers outside 0-9 and all-equal counts;
+`showIdentityMarksModal(names, counts)` resolves `{counts}` or null (Esc, Cancel,
+backdrop). A future cue (dye, fur) would add a column.
+
+**Imported by.** `ui/tail-mark-field.js`, `ui/track-setup-modal.js`.
+
 ### ui/tail-mark-field.js
 
 **Purpose.** The Track menu's Tail marks choice (`#tbTailMarks`): which identity Track
-All gives the tail marks in the active session. Follows the session as the Animals
+All gives the tail marks in the active session, or **Bands per id…**, which opens
+`showIdentityMarksModal` and saves `Session.identityMarks` through `setIdentityMarks`
+(`identityNamesForMarks`: the names already set, else id_0… for the animal count). Follows the session as the Animals
 field does (`ui/animal-count-field.js`).
 
 **Key exports.** `wireTailMarkField()` (from `setupUI`), `syncTailMarkField()` (from
@@ -13193,7 +13314,15 @@ The node is looked up BY NAME in the store's skeleton, because a skeleton edit
 re-indexes resident instances but not the store; an added or renamed node has
 no score. NaN for a user row, an offset outside the frame's rows, a missing
 frame/camera, or a NaN score. Pinned by `tests/test-node-scores.mjs` and
-`tests/e2e/node-score-tooltip.mjs`.
+`tests/e2e/node-score-tooltip.mjs`. **`predictedPointScorer(camName, frameIdx,
+offsetInFrame)`** is the same lookup split in two: the row, its type, skeleton
+and point range once, then a `nodeName → score` function (null when the row is
+missing or a user row); `predictedPointScore` is built on it. The store
+skeleton's name → column map is cached per skeleton (module-level
+`storeNodeColumn`, a `WeakMap`; first match, as `nodeNames.indexOf`), rebuilt
+if its `nodes` array is replaced or resized or a lookup misses or no longer
+names its node — sleap-io.js's `nodeNames` getter builds a new array per read,
+which was the hottest call of By Cam's per-frame pass.
 
 **Imports.** `./track-union.js` (`unionTrackNames`);
 `window.SleapIO.readSlpStreaming` / `window.SleapIO.Track` (via the index.html
@@ -13204,7 +13333,8 @@ bridge) and the local vendored `lib/h5wasm/h5wasm.iife.js` (passed as
 (`handleLoadSessionFolderPerCamera` routing, `handleLoadProjectSlpLazy`) and
 `import-export/save-load.js` (`reopenSessionLazyLoader`). `describeStoreFrame` is
 called duck-typed from `pose/lazy-residency.js`, `predictedPointScore` from
-`Session.predictedNodeScore` (`pose/pose-data.js`).
+`Session.predictedNodeScore` and `predictedPointScorer` from
+`Session.predictedNodeScorer` (`pose/pose-data.js`).
 
 **User-facing features.** Lets a session folder of large multi-camera prediction
 `.slp` files — and a large saved project `.slp` (Load Project) — load and render
@@ -14008,6 +14138,10 @@ touching this file and nothing else.
 **`tailMarkedIdentity`.** The identity Track All gives the tail marks
 (`Session.tailMarkedIdentity`, `pose/tail-mark.js`). Off is null and writes nothing.
 
+**`identityMarks`.** Cue id -> identity name -> class (`Session.identityMarks`,
+`pose/identity-cues.js`), e.g. `{tailBands: {id_0: 0, id_1: 1}}`. None writes nothing;
+anything not a map of numbers or short strings reads as none.
+
 **`imageModel`.** The image check's model (`Session.imageModel`,
 `ui/image-model-dialog.js`): `{key, name, input, threshold, url? | folder?}`
 (`modelChoiceOf` / `ingestModelChoice`, `pose/image-model-manifest.js`). The built-in
@@ -14527,8 +14661,48 @@ session's resident/total) rather than truncate silently. Covered by
   max(2,000, 5%) frames would need hydrating, the per-frame sweep runs. `opts.route`
   ('store' / 'sweep') forces one (tests). Progress counts video frames over the
   cameras' copies, every 4,096 frames. Synthetic 8 cameras x 20,000 frames x 5
-  animals: 6.4 s → 1.3 s. Test: `tests/e2e/export-bycam-store-copy.mjs` (both routes
-  value for value, with negative controls). `cameraExportUsesSweep(selection,
+  animals: 6.4 s → 1.3 s. **Each camera's rows are written and gzipped in its own
+  worker** (`import-export/slp-rows-worker.js`; gzip was ~74% of the copy on one
+  core, ~18 s of 25 s for 8 cameras x 108,000 frames on the lab VM): an empty writer
+  with the camera's header is closed at once and its bytes (the "shell") open in the
+  worker; the working writer sends every row there (`lucidDivertRows`, bundle patch
+  `(row divert)`), cameras built in turns one block each (`_storeCameraCopier`), at
+  most `ROWS_WORKER_QUEUE` messages unanswered per worker. The worker's file equals
+  the one-thread copy value for value with the same chunks, filters and dtypes; the
+  working writer must end with `lucidOnlyTableRows()` (no annotations or negative
+  frames) or the export aborts. `opts.workers` (false = this thread, N = that many)
+  or `window.LUCID_EXPORT_WORKERS` overrides one per camera up to
+  `hardwareConcurrency` (16 max); no `Worker`, or a worker that fails to start,
+  falls back to this thread with a console warning. The per-frame pass
+  (`exportCamerasSlpStreaming`'s sweep, e.g. Reprojections on) attaches the same
+  workers to its writers (up to the worker count; the rest compress here), the
+  sweep's callback waiting while a worker has `ROWS_WORKER_QUEUE` messages
+  unanswered; synthetic 8 x 20,000: 11.9 → 8.4 s (gzip was ~27% of it). A
+  **folder-loaded** project's cameras (each rewritten from its own store,
+  `lazyCameraExportBytes`) go through `exportCamerasLazyRewrite(selections,
+  reprojAsUser, instanceFilter, opts)`: each file is written here without its big
+  tables (`saveSlpToBytes(labels, { lucidDeferTables })`, patch `(deferred
+  tables)`), its worker creates them with the same arguments and gzips them while
+  the next camera is built, at most `LAZY_REWRITE_IN_FLIGHT` (3) at once; returns
+  bytes per selection (null = not this route). `cameraExportUsesLazyRewrite`
+  tells the dialog which cameras it covers. Synthetic 8 cameras x 20,000
+  frames, realistic noise and per-node scores: copy 5.1 s → 1.35 s
+  (`tests/e2e/_diag-profile-store-copy.mjs`). It is now a wrapper
+  (`kinds: ['lazy']`) over `exportCamerasInWorkers(selections, reprojAsUser,
+  instanceFilter, opts)`, which also takes **fully loaded** cameras
+  (`cameraExportUsesEagerBuild`: `exportSlpMultiSession` would build them with
+  `buildSlpLabelsMultiSession` + `saveSlpToBytes`): their `Labels` are built here
+  and written with `saveSlpToBytes(labels, { lucidDivertTables })` (patch `(eager
+  divert)`: the big 2D tables created empty, their rows handed back), and the
+  camera's worker appends and gzips the rows while the next camera is built.
+  Synthetic 8 cameras x 5 animals x 15 nodes: 30,000 frames 7.7 → 4.0 s, 60,000
+  frames 14.6 → 7.3 s (`tests/e2e/_bench-export-bycam-eager.mjs`; per camera
+  the build is ~0.3 s, the write ~0.65 s of which gzip ~0.35 s). A Worker
+  constructor that throws falls back to this thread like one that fails to
+  start. Test: `tests/e2e/export-bycam-eager-workers.mjs` (every dataset and
+  attribute = today's eager export, with workers, `workers: false` and the
+  fallback). Test: `tests/e2e/export-bycam-store-copy.mjs` (both routes
+  value for value, with negative controls; §4 workers = this thread, and the fallback). `cameraExportUsesSweep(selection,
   …)` says whether `exportSlpMultiSession` would route a camera there (By Cam groups
   those cameras per session). The store fast path (`lazyCameraFastPathUsable`) is
   refused on a reopened project `.slp` (`SioLazyLoader._sharedStore`): every
@@ -14536,7 +14710,8 @@ session's resident/total) rather than truncate silently. Covered by
   (and the 3D session) into each camera's file, or ran the renderer out of memory on a
   large project. Its output is compressed by the `(lazy re-emit)` bundle patch.
   `_buildCameraLabeledFrame` (both streaming exporters and `buildSlpLabels`) writes
-  each predicted node's OWN score through `Session.predictedNodeScore`; asking only the
+  each predicted node's OWN score through `Session.predictedNodeScorer` (one store-row
+  lookup per instance, the answers of `Session.predictedNodeScore`); asking only the
   instance wrote the instance score onto every node of a lazily loaded prediction
   (found comparing a real 8-camera export from both routes, 2026-11-03). For a **lazy session** these route a plain
   per-camera export through `lazyCameraExportBytes` → `saveSlpToBytes` on the
@@ -14664,6 +14839,25 @@ Videos / Export TOML / Export SLP / Export H5; spawns SLP-parse worker.
 
 ---
 
+### import-export/slp-rows-worker.js
+**Purpose:** Module worker that writes and gzips ONE By Cam export's four big
+tables (`frames`, `instances`, `points`, `pred_points`) for the store copy
+(`exportCamerasFromSharedStore`, `import-export/file-io.js`), so every camera
+compresses at once. Opens the "shell" (an empty sleap-io.js writer's closed file),
+carries incoming rows into whole column chunks exactly as the bundle's
+`(column chunks)` patch does (chunk height read from the dataset), and returns
+the finished file's bytes.
+**Messages:** in `open {shell}` → `ready`; `rows {name, data, rows, cols}` → `ack`
+(one per message: the main thread's backpressure); `create {spec, data, attrs}` →
+`ack` (a whole table the `(deferred tables)` patch held back from a per-camera
+rewrite: `create_dataset({...spec, data})` plus its attributes); `finish` →
+`done {bytes}`; any failure → `error {message}`. Used by the store copy, the
+per-frame pass and `exportCamerasInWorkers` (folder-loaded cameras' deferred
+tables via `create`; fully loaded cameras' diverted rows via `rows`).
+**Dependencies:** `lib/h5wasm/hdf5_hl.js` by RELATIVE path (a worker has no
+import map). Rows arrive already rounded (`lucidCompactRound` runs in the divert).
+**Dependents:** `import-export/file-io.js` (`_startRowsWorker`).
+
 ### import-export/slp-streaming-write.js
 
 **Purpose.** Memory-bounded SLP *save* for large lazy sessions — the write-side
@@ -14779,6 +14973,10 @@ shape) when no live video is attached, so the re-save round-trips the original
 video filename/shape instead of degrading to `<camName>.mp4` with zero
 dimensions. Covered by `tests/test-lazy-reopen.js`.
 - **`finalizeProjectWriter(writer, opts)`** — `writer.close()`/`writeToSink()`.
+  A sink with `setTotalBytes(n)` is told the finished file's size (MEMFS `stat`
+  of the writer's in-memory file, at the first write: `writeToSink` finalizes
+  before it streams) — File ▸ Save's disk bar. `opts.chunkBytes` is the write
+  chunk size.
 - **`buildSessionSlpBytesStreaming(session, views, videoFiles, opts)`** — thin
   single-session wrapper chaining all four. `opts.onProgress(stage, done,
   total, unit)` drives the Save progress card (`save-load.js`), one stage
@@ -14810,8 +15008,8 @@ overlay (instance by object identity, then `track`) or else to the shifted
 store row. An overlaid frame's untouched
 predicted siblings are re-materialized too (the store row is skipped
 wholesale); each node carries its OWN model score, read back from the row being
-replaced (`Session.predictedNodeScore` → `SioLazyLoader.predictedPointScore`,
-by the sibling's `_rawInstIndex`), and the instance score only where it has
+replaced (`Session.predictedNodeScorer` → `SioLazyLoader.predictedPointScorer`,
+by the sibling's `_rawInstIndex`, the row resolved once per instance), and the instance score only where it has
 none — a point with no score is one SLEAP's GUI hides. **Scope:** predictions +
 full grouping (identities + 3D) + 2D corrections.
 
@@ -14855,8 +15053,16 @@ loading-overlay/status-text UI helpers.
   download)`): Collecting 3D groups (counted) · Writing 3D groups and points ·
   Writing 2D poses (counted) · Finishing the file — or, for an eager project,
   Writing the file — plus Opening the save dialog on the download path.
-  `progress.disk(bytes)` reports the streamed write to a picked file
-  ("Writing to disk: N MB…"). `quickSave` puts the card up only after the
+  `progress.disk(bytes)` reports the write to a picked file as a bar on the
+  last step ("Writing to disk: x/y MB…", KB under 1 MB, one decimal under
+  10 MB) once `progress.diskTotal(bytes)` gave the size — the streaming path
+  through the sink's `setTotalBytes` (`finalizeProjectWriter`), the eager one
+  from its bytes, now written in 8 MiB chunks so the bar moves; without a
+  size, a running "Writing to disk: N MB…". `progress.closing()` shows the
+  browser's `close()` as a painted "Closing the file…" spinner saying it has no
+  progress (Chrome moves its swap file into place, reading it back on a network
+  share), so the bar never claims that part. `globalThis.__lucidSaveChunkBytes`
+  (tests only) shrinks the write chunks. `quickSave` puts the card up only after the
   save-file picker returns, since the picker needs the click's user activation.
   `isStreamingSave(sessions, SIO)` (internal) is the one test of which path
   `buildSlpBytes` takes, shared with the card. `saveProjectSlp` now sets

@@ -26,8 +26,16 @@
  *   3. Chrome path (`saveAs` with a picker): the card is NOT up while the
  *      picker is open (it comes after, so it cannot cost the click its user
  *      activation), then steps 1-4; gone after; the file is written.
- *   4. An eager (non-lazy) project: "Writing the file", step 1 of 2.
+ *      Step 4 then shows the write to the file as a bar in MB ("Writing to
+ *      disk: x/y MB…", y = the finished file's size) that only rises and ends
+ *      at 100%, then "Closing the file…" as a spinner (the browser's close()
+ *      reports no progress), painted before close() runs.
+ *   4. An eager (non-lazy) project: "Writing the file", step 1 of 2; through
+ *      a picker, the same MB bar (no steps line: one step) and close spinner.
  *   5. A failing save takes the card down and clears `isSaving`.
+ *   6. File ▸ Export ▸ Labels (JSON) (`exportLabels`, ui/export-modals.js):
+ *      "Exporting labels: x/6,000 frames…" bar that only rises to 6,000/6,000,
+ *      then "Closing the file…" before the picked file's close().
  */
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -153,6 +161,31 @@ try {
         return out;
     };
 
+    // The write to the picked file: an MB bar that only rises to 100%, on the
+    // save's last step, then the close() spinner, painted before close() ran.
+    const mbOf = (t) => t.match(/: ([\d.,]+)\/([\d.,]+) [KM]B…$/).slice(1).map(x => Number(x.replace(/,/g, '')));
+    // The unit is KB for a file under 1 MB (the eager fixture), else MB.
+    function checkDiskBar(name, r, step) {
+        const unit = r.bytes < 1048576 ? 'KB' : 'MB';
+        const onStep = (st) => step ? st.sub.startsWith('Step ' + step.replace('/', ' of ')) : !/Step \d/.test(st.sub);
+        const disk = r.states.filter(st => st.visible && /^Writing to disk/.test(st.status));
+        check(disk.length >= 3 && disk.every(st => new RegExp('^Writing to disk: [\\d.,]+/[\\d.,]+ ' + unit + '…$').test(st.status) && onStep(st)),
+            name + ': the write to disk is a bar in ' + unit + ' (' + disk.length + ' states, ' + r.writes + ' writes)' + (step ? ', on step ' + step : ''),
+            disk.map(st => st.status + ' | ' + st.sub));
+        const totals = new Set(disk.map(st => mbOf(st.status)[1]));
+        const done = disk.map(st => mbOf(st.status)[0]);
+        const pcts = disk.map(st => parseInt(st.pct, 10));
+        check(totals.size === 1 && done.every((d, i) => i === 0 || d >= done[i - 1]) && pcts.every((p, i) => i === 0 || p >= pcts[i - 1]),
+            name + ': the disk bar has one total and only rises', { done, pcts, totals: [...totals] });
+        const size = r.bytes / (unit === 'KB' ? 1024 : 1048576);
+        check(disk.length > 0 && done[done.length - 1] === [...totals][0] && pcts[pcts.length - 1] === 100 &&
+            Math.abs([...totals][0] - size) <= (unit === 'KB' ? 0.5 : 0.1),
+            name + ': it ends at 100%, and its total is the file\'s size (' + size.toFixed(2) + ' ' + unit + ')', { last: disk[disk.length - 1], size });
+        const c = r.cardAtClose;
+        check(!!c && c.visible && c.status === 'Closing the file…' && c.spinner && c.painted && onStep(c) && /no progress/.test(c.sub),
+            name + ': close() runs under a painted "Closing the file…" spinner that says it has no progress', c);
+    }
+
     // ---- 1 + 2. Brave path ----
     await page.evaluate(() => window.__fx.use('lazy'));
     const brave = await page.evaluate(async () => {
@@ -209,17 +242,21 @@ try {
         const saveLoad = await import('/import-export/save-load.js');
         const AS = await import('/ui/app-state.js');
         window.__rec.reset();
-        let cardAtPicker = null, bytes = 0, closed = false;
+        let cardAtPicker = null, bytes = 0, closed = false, writes = 0, cardAtClose = null;
         const keep = window.showSaveFilePicker;
         window.showSaveFilePicker = async () => {
             cardAtPicker = window.__rec.snap().visible;
             return { createWritable: async () => ({
-                write: async (c) => { bytes += c.byteLength; }, close: async () => { closed = true; }, abort: async () => {},
+                // slow enough that the paced disk bar repaints several times
+                write: async (c) => { bytes += c.byteLength; writes++; await new Promise(r => setTimeout(r, 40)); },
+                close: async () => { cardAtClose = window.__rec.states[window.__rec.states.length - 1]; closed = true; },
+                abort: async () => {},
             }) };
         };
-        await saveLoad.saveAs();
-        window.showSaveFilePicker = keep;
-        return { cardAtPicker, bytes, closed, states: window.__rec.states, after: window.__rec.snap(),
+        globalThis.__lucidSaveChunkBytes = 32 * 1024;
+        try { await saveLoad.saveAs(); }
+        finally { delete globalThis.__lucidSaveChunkBytes; window.showSaveFilePicker = keep; }
+        return { cardAtPicker, bytes, writes, cardAtClose, closed, states: window.__rec.states, after: window.__rec.snap(),
             savingAfter: AS.state.isSaving, dirty: AS.state.isDirty,
             status: (document.getElementById('statusText') || {}).textContent || '' };
     });
@@ -230,6 +267,7 @@ try {
     check(chrome.bytes > 1000 && chrome.closed && /^Saved \(/.test(chrome.status), 'Chrome path: the file was written and the save reported',
         { bytes: chrome.bytes, closed: chrome.closed, status: chrome.status });
     check(!chrome.after.visible && chrome.savingAfter === false, 'Chrome path: the card is gone and isSaving cleared afterwards', chrome.after);
+    checkDiskBar('Chrome path', chrome, '4/4');
 
     // ---- 4. eager project ----
     await page.evaluate(() => window.__fx.use('eager'));
@@ -246,6 +284,23 @@ try {
     check(JSON.stringify(eSteps.map(s => s.step + ' ' + s.status)) === JSON.stringify(['1/2 Writing the file…', '2/2 Opening the save dialog…']),
         'eager project: "Writing the file" (1 of 2), then the dialog step', eSteps);
     check(eager.clicks.length === 1 && !eager.after.visible, 'eager project: downloaded, card gone afterwards', eager.after);
+
+    const eagerPick = await page.evaluate(async () => {
+        const saveLoad = await import('/import-export/save-load.js');
+        window.__rec.reset();
+        let bytes = 0, writes = 0, cardAtClose = null;
+        const keep = window.showSaveFilePicker;
+        window.showSaveFilePicker = async () => ({ createWritable: async () => ({
+            write: async (c) => { bytes += c.byteLength; writes++; await new Promise(r => setTimeout(r, 120)); },
+            close: async () => { cardAtClose = window.__rec.states[window.__rec.states.length - 1]; },
+            abort: async () => {},
+        }) });
+        globalThis.__lucidSaveChunkBytes = 2048;
+        try { await saveLoad.saveAs(); }
+        finally { delete globalThis.__lucidSaveChunkBytes; window.showSaveFilePicker = keep; }
+        return { bytes, writes, cardAtClose, states: window.__rec.states };
+    });
+    checkDiskBar('eager project through a picker', eagerPick, null);
 
     // ---- 5. a failing save ----
     await page.evaluate(() => window.__fx.use('lazy'));
@@ -264,6 +319,34 @@ try {
     });
     check(/Save failed: disk on fire/.test(failed.status) && !failed.after.visible && failed.savingAfter === false && failed.clicks === 0,
         'a failing save reports the error, takes the card down and clears isSaving', failed);
+
+    // ---- 6. JSON labels export ----
+    await page.evaluate(() => window.__fx.use('lazy'));
+    const json = await page.evaluate(async () => {
+        const ex = await import('/ui/export-modals.js');
+        window.__rec.reset();
+        let writes = 0, cardAtClose = null, closed = false;
+        const keep = window.showSaveFilePicker;
+        window.showSaveFilePicker = async () => ({ createWritable: async () => ({
+            // a pause every 200 frames, so the paced bar repaints several times
+            write: async () => { if (++writes % 200 === 0) await new Promise(r => setTimeout(r, 25)); },
+            close: async () => { cardAtClose = window.__rec.states[window.__rec.states.length - 1]; closed = true; },
+        }) });
+        try { await ex.exportLabels(); } finally { window.showSaveFilePicker = keep; }
+        return { writes, closed, cardAtClose, states: window.__rec.states, after: window.__rec.snap(),
+            status: (document.getElementById('statusText') || {}).textContent || '' };
+    });
+    const jBars = json.states.filter(st => st.visible && /^Exporting labels: /.test(st.status));
+    const jDone = jBars.map(st => Number(st.status.match(/: ([\d,]+)\//)[1].replace(/,/g, '')));
+    const jPct = jBars.map(st => parseInt(st.pct, 10));
+    check(jBars.length >= 3 && jBars.every(st => /^Exporting labels: [\d,]+\/6,000 frames…$/.test(st.status) && st.pct),
+        'JSON export: a bar "Exporting labels: x/6,000 frames…" (' + jBars.length + ' states)', jBars.map(st => st.status));
+    check(jDone.every((d, i) => i === 0 || d >= jDone[i - 1]) && jPct.every((p, i) => i === 0 || p >= jPct[i - 1]) &&
+        jDone[jDone.length - 1] === 6000 && jPct[jPct.length - 1] === 100,
+        'JSON export: the bar only rises and ends at 6,000/6,000 (100%)', { jDone, jPct });
+    check(json.closed && json.cardAtClose && json.cardAtClose.status === 'Closing the file…' && json.cardAtClose.painted,
+        'JSON export: close() runs under a painted "Closing the file…" spinner', json.cardAtClose);
+    check(!json.after.visible, 'JSON export: the card is gone afterwards', { after: json.after, status: json.status });
 } catch (e) {
     console.error('FATAL', e);
     fails++;

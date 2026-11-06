@@ -9,8 +9,9 @@
  *     picker of the site last went). `folderPickerStartFor` (Load Project's video
  *     prompt) still returns the handle only for the file being opened.
  *  2. Progress is the app's card (ui/loading-overlay.js), not the button text:
- *     one step per camera ("Step k of n"). A fully loaded project writes each
- *     camera in one go (spinner + "Writing <cam>.slp…"); on a lazily opened
+ *     one step per camera ("Step k of n"), after a first step that builds every
+ *     camera of a fully loaded project while workers compress them ("Writing 2
+ *     cameras: k/2 cameras…" on the bar, `exportCamerasInWorkers`); on a lazily opened
  *     project the sweep's frames fill the bar (5). The modal steps aside while
  *     the card shows.
  *  3. End state: the card is hidden, the modal closed, the files written, and
@@ -23,6 +24,9 @@
  *     every camera's file — with each node's own prediction score (the sweep
  *     used to write the instance score on every node). Files save side by side (both writables open at
  *     once), so a share's slow close() does not hold up the next file.
+ *  6. While files save, the card shows a bar of the files saved (written and
+ *     closed) out of all the export's files ("Saving files in <folder>: k/n
+ *     files…"), moving as each one lands; never a bare spinner.
  *  4. In the picked folder, a camera's file goes into the camera's own folder
  *     (the folder load's `cameraDirMap`, else the folder its video sits in), next
  *     to the `.slp` its 2D came from, as `<source stem>_proofread.slp` — an
@@ -220,10 +224,11 @@ try {
     console.log('2/3. Progress card — fully loaded project');
     check(r.card.length > 0 && r.card.some(s => s.visible), 'the progress card showed');
     check(r.card.every(s => !s.visible || s.title === 'Export SLEAP by Camera'), 'card titled "Export SLEAP by Camera"');
-    for (const [k, cam] of [[1, 'camA'], [2, 'camB']]) {
-        check(r.card.some(s => s.visible && s.spinner && s.status === 'Writing ' + cam + '.slp…' && /^Step \d of 2/.test(s.sub) && s.sub.startsWith('Step ' + k)),
-            `step ${k} of 2: spinner + "Writing ${cam}.slp…"`);
-    }
+    // Both cameras are built in one step while workers compress them (exportCamerasInWorkers).
+    const wBars = r.card.filter(s => s.visible && s.bar && /^Writing 2 cameras: \d\/2 cameras…$/.test(s.status) && s.sub.startsWith('Step 1 of 3'));
+    check(wBars.length > 0 && wBars[wBars.length - 1].status === 'Writing 2 cameras: 2/2 cameras…',
+        'step 1 of 3: one step for both cameras, a bar "Writing 2 cameras: k/2 cameras…" up to 2/2', r.card.filter(s => s.visible).map(s => s.status + ' | ' + s.sub));
+    check(!r.card.some(s => s.visible && /^Writing cam[AB]\.slp…$/.test(s.status)), 'no camera is built again in its own step');
     check(r.card.filter(s => s.visible).every(s => !s.modalShown), 'the modal steps aside while the card shows');
     check(r.cardHidden && !r.modalOpen, 'end: card hidden, modal closed');
     check(/Download Successful/.test(r.popup || ''), 'end: "Download Successful"', r.popup);
@@ -269,8 +274,6 @@ try {
                 t.dirs.Camera_B_dir.files['b_loaded.slp'].size, Object.keys(t.files).join(',')];
     });
     check(src[0] === 7 && src[1] === 7 && src[2] === 'project.slp', 'sources untouched; nothing written in the folder itself', src);
-    check(r.card.some(s => s.visible && s.status === 'Writing 21241563/21241563-20260921105806_nn_proofread.slp…'),
-        'the card names the camera folder and file');
     check(/Exported 2 SLP files to exports: 2 in camera folders as <source>_proofread\.slp$/.test(r.status), 'status says where', r.status);
     await closePopup();
 
@@ -397,6 +400,14 @@ try {
             `${cam}.slp keeps each node's own score (${want.join(', ')}), not the instance score on every node`, c.scores);
     }
     check(lazy.maxInflight === 2, 'the two files saved side by side (both writables open at once)', lazy.maxInflight);
+    // 6. While files save, the bar counts files saved (written and closed) of all files.
+    const saves = lazy.card.filter(s => s.visible && /^Saving /.test(s.status));
+    check(saves.length > 0 && saves.every(s => s.bar && /^Saving files in exports: [0-2]\/2 files…$/.test(s.status)),
+        'saving shows a bar: "Saving files in exports: k/2 files…" (never a bare spinner)', [...new Set(saves.map(s => s.status))]);
+    check(saves.some(s => s.status === 'Saving files in exports: 0/2 files…') &&
+        saves.some(s => /: [12]\/2 files…$/.test(s.status) && s.frac > 0), 'the saving bar starts at 0/2 and moves as a file lands',
+        [...new Set(saves.map(s => s.status + ' ' + s.frac))]);
+    check(saves.map(s => s.frac).every((f, i, a) => i === 0 || f >= a[i - 1]), 'the saving bar only rises');
     const style = await page.evaluate(async () => {
         const { progressCardStyle } = await import('/tests/e2e/fixtures/progress-card.js');
         const ov = document.getElementById('loadingOverlay');
