@@ -53,12 +53,12 @@
  * streams from the columnar store untouched.
  */
 
-import { _buildSioPoints } from './file-io.js?v=cfec6ab2c021';
-import { points3dNodeCount } from '../pose/pose-data.js?v=cfec6ab2c021';
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=cfec6ab2c021';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=cfec6ab2c021';
-import { writePlaneMetadata } from './plane-metadata.js?v=cfec6ab2c021';
-import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=cfec6ab2c021';
+import { _buildSioPoints } from './file-io.js?v=3f8a20ee6ea5';
+import { points3dNodeCount } from '../pose/pose-data.js?v=3f8a20ee6ea5';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=3f8a20ee6ea5';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=3f8a20ee6ea5';
+import { writePlaneMetadata } from './plane-metadata.js?v=3f8a20ee6ea5';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=3f8a20ee6ea5';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;
@@ -843,14 +843,43 @@ export async function streamSessionIntoWriter(writer, session, refGraphResult, o
     }
 }
 
-/** Finalize the writer (bytes in memory, or streamed to `opts.sink`). */
+/**
+ * Finalize the writer (bytes in memory, or streamed to `opts.sink`). A sink
+ * with `setTotalBytes(n)` is told the finished file's size before its first
+ * write (File ▸ Save's disk bar): the vendored `writeToSink` finalizes the
+ * in-memory file and only then streams it, so its size is known by then.
+ */
 export async function finalizeProjectWriter(writer, opts) {
     opts = opts || {};
     if (opts.sink) {
-        await writer.writeToSink(opts.sink, { chunkBytes: opts.chunkBytes });
+        await writer.writeToSink(sinkReportingTotal(writer, opts.sink), { chunkBytes: opts.chunkBytes });
         return null;
     }
     return writer.close();
+}
+
+/**
+ * `sink`, unchanged, unless it has `setTotalBytes`: then a wrapper that calls
+ * it once, at the first write, with the size of the writer's finished
+ * in-memory file (h5wasm MEMFS `stat`). A failed stat reports nothing (the
+ * sink then counts bytes without a total).
+ */
+function sinkReportingTotal(writer, sink) {
+    if (typeof sink.setTotalBytes !== 'function') return sink;
+    var told = false;
+    var out = {
+        write: function (chunk) {
+            if (!told) {
+                told = true;
+                var size = NaN;
+                try { size = Number(writer.module.FS.stat(writer.memPath).size); } catch (e) { /* no total */ }
+                if (size > 0) sink.setTotalBytes(size);
+            }
+            return sink.write(chunk);
+        },
+    };
+    if (sink.close) out.close = function () { return sink.close(); };
+    return out;
 }
 
 /**
