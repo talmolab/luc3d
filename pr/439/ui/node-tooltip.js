@@ -44,7 +44,7 @@
  * make the view see a `mouseleave` and hide it again.
  */
 
-import { placeTipNear } from './info-tip.js?v=440841fa3873';
+import { placeTipNear } from './info-tip.js?v=f6f489b0283e';
 
 /** Before the first tip: Qt's `SH_ToolTip_WakeUpDelay`, so it feels like SLEAP. */
 export const NODE_TIP_DELAY_MS = 700;

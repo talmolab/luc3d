@@ -56,7 +56,7 @@
 //
 // Depends on: ui/figure-try-controls.js.
 
-import { tryStrip, tryControl, wireTryControl, settingRow, wireSettingRow } from './figure-try-controls.js?v=440841fa3873';
+import { tryStrip, tryControl, wireTryControl, settingRow, wireSettingRow } from './figure-try-controls.js?v=f6f489b0283e';
 
 var PX_PER_UNIT = 3;             // image pixels per sketch unit on an image plane
 var PLANE_HALF = 29;             // image plane half-width, sketch units
