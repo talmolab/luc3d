@@ -12,6 +12,12 @@
  *     reads a file back at ~10 MB/s, so size is time).
  *  2. A small file (every table at most 8,192 rows) is written exactly as
  *     before: contiguous, no filters.
+ *  3. By Cam's folder-loaded cameras in workers (`exportCamerasLazyRewrite`,
+ *     bundle patch "deferred tables" + `import-export/slp-rows-worker.js`):
+ *     for three cameras (two large, one small) the files written with workers
+ *     and on this thread (`workers: false`) both equal the plain rewrite, table
+ *     by table, value for value, with the same chunks, filters, dtype and
+ *     `field_names`; the workers ran (console line).
  *
  * Run: PORT=9365 node tests/e2e/lazy-reemit-compressed.mjs
  */
@@ -121,6 +127,87 @@ try {
             check(t.rows <= 8192 && !t.chunks && t.filters.length === 0 && t.diff === 0, `${n}: ${t.rows} rows, contiguous, values unchanged`, t.chunks || t.filters.length ? t : undefined);
         }
     }
+
+    console.log('3. Folder-loaded cameras rewritten in workers = the plain rewrite');
+    const logs = [];
+    page.on('console', m => { if (/export-slp-lazy/.test(m.text())) logs.push(m.text()); });
+    const par = await page.evaluate(async () => {
+        const [pd, fileio] = await Promise.all([import('/pose/pose-data.js'), import('/import-export/file-io.js')]);
+        const NODES = ['a', 'b', 'c', 'd'];
+        const SIO = window.SleapIO;
+        const h5url = new URL('lib/h5wasm/h5wasm.iife.js', document.baseURI).href;
+        const val = (k) => Math.sin(k * 12.9898) * 300.123457 + 320;
+        const labelsByCam = new Map();
+        for (const [cam, FRAMES, off] of [['c0', 20000, 0], ['c1', 15000, 7], ['c2', 300, 3]]) {
+            const camera = new pd.Camera(cam, [[600, 0, 320], [0, 600, 240], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]);
+            const s = new pd.Session([camera], new pd.Skeleton('sk', NODES, [[0, 1]]), ['t0', 't1', 't2'], 'fixture');
+            let seed = off * 100000;
+            for (let f = 0; f < FRAMES; f++) {
+                const fg = new pd.FrameGroup(f);
+                for (let t = 0; t < 3; t++) {
+                    const k = seed++ * 4;
+                    const pred = new pd.Instance(NODES.map((_, i) => [val(k + i), val(k + i + 0.5)]), t, 'predicted', 0.9);
+                    pred.setPointScores(NODES.map((_, i) => Math.abs(Math.sin(k + i)) * 0.99));
+                    fg.addInstance(cam, pred);
+                }
+                s.addFrameGroup(fg);
+            }
+            const src = await SIO.saveSlpToBytes(fileio.buildSlpLabels(s, cam, null, { name: cam, videoPath: cam + '.mp4' }, null));
+            labelsByCam.set(cam, await SIO.readSlpStreaming(new File([src], cam + '.slp'), { lazy: true, openVideos: false, h5wasmUrl: h5url }));
+        }
+        // A folder-loaded session as the rewrite sees it: one store per camera, nothing resident.
+        const session = { lazyLoader: { labelsByCam }, frameGroups: new Map() };
+        const sels = ['c0', 'c1', 'c2'].map(c => ({ session, cameraName: c }));
+        const filter = { user: true, predicted: true, reprojected: false };
+        const usable = sels.map(x => fileio.cameraExportUsesLazyRewrite(x, null, filter));
+        const plain = [];
+        for (const c of ['c0', 'c1', 'c2']) plain.push(await SIO.saveSlpToBytes(labelsByCam.get(c)));
+        const progress = [];
+        const workers = await fileio.exportCamerasLazyRewrite(sels, null, filter, { onProgress: (d, t) => progress.push(d + '/' + t) });
+        const thread = await fileio.exportCamerasLazyRewrite(sels, null, filter, { workers: false });
+        const h5 = await import('h5wasm');
+        await h5.ready;
+        let seq = 0;
+        const read = (bytes) => {
+            const p = '/__rw_' + (seq++) + '.slp';
+            h5.FS.writeFile(p, bytes);
+            const f = new h5.File(p, 'r'), o = {};
+            for (const n of ['frames', 'instances', 'points', 'pred_points']) {
+                const d = f.get(n);
+                o[n] = { v: d.value, layout: JSON.stringify({ shape: d.shape, chunks: d.metadata.chunks || null, filters: d.filters || [], dtype: d.dtype,
+                         fields: d.attrs.field_names && d.attrs.field_names.value }) };
+            }
+            f.close();
+            h5.FS.unlink(p);
+            return o;
+        };
+        const cmp = (A, B) => {
+            const bad = [];
+            for (const n of Object.keys(A)) {
+                if (A[n].layout !== B[n].layout) { bad.push(n + ' layout ' + A[n].layout + ' vs ' + B[n].layout); continue; }
+                const a = A[n].v, b = B[n].v;
+                let diff = 0;
+                for (let i = 0; i < a.length; i++) if (!(a[i] === b[i] || (Number.isNaN(a[i]) && Number.isNaN(b[i])))) diff++;
+                if (diff) bad.push(n + ': ' + diff + ' values differ');
+            }
+            return bad;
+        };
+        const res = [];
+        for (let i = 0; i < 3; i++) {
+            const P = read(plain[i]);
+            res.push({ cam: sels[i].cameraName, rows: JSON.parse(P.pred_points.layout).shape[0],
+                       workers: workers[i] ? cmp(P, read(workers[i])) : ['null'], thread: thread[i] ? cmp(P, read(thread[i])) : ['null'] });
+        }
+        return { usable, res, progress };
+    });
+    check(par.usable.every(Boolean), 'all three cameras take the per-camera rewrite', par.usable);
+    for (const r of par.res) {
+        check(r.workers.length === 0, `${r.cam} (${r.rows.toLocaleString('en-US')} pred rows): workers = plain rewrite (values, chunks, filters, dtype, field_names)`, r.workers);
+        check(r.thread.length === 0, `${r.cam}: one thread = plain rewrite`, r.thread);
+    }
+    check(par.progress[0] === '0/3' && par.progress[par.progress.length - 1] === '3/3', 'progress counts cameras 0/3 → 3/3', par.progress);
+    check(logs.some(l => /3 camera\(s\) rewritten .*\(up to \d+ workers? at once\)/.test(l)), 'the workers ran', logs);
+    check(logs.some(l => /\(this thread\)/.test(l)), 'workers: false stayed on this thread', logs);
     check(errs.length === 0, 'no page errors', errs);
 } finally {
     if (browser) await browser.close();

@@ -4647,7 +4647,15 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   of n"); a camera built in one go shows the spinner "Writing <cam>.slp…", painted
   before it holds the thread. Files save in the background, up to `SAVES_IN_FLIGHT`
   (4) at once: over an SMB share Chrome's `close()` reads each file back at ~10 MB/s
-  (measured on the lab VM, 2026-11-03), so one file's wait does not hold up the next. The modal is
+  (measured on the lab VM, 2026-11-03), so one file's wait does not hold up the next.
+  While files save (waiting for a slot, or at the end) the card shows a bar of the
+  files saved — written AND closed — out of all the export's files ("Saving files in
+  <folder>: k/n files…", `showSaving`), repainted as each one lands. Files, not
+  bytes: `close()` reports nothing, so a byte count would race to the end of
+  `write()` and stall. Two or more folder-loaded cameras
+  (`cameraExportUsesLazyRewrite`) are written in one step before the per-camera
+  steps ("Writing N cameras", cameras on the bar, `exportCamerasLazyRewrite`). A camera built in one go takes the card back
+  (`savingStep = 0`) until its file is queued. The modal is
   hidden while the card shows (it sits above the card's layer) and comes back on
   cancel or failure. **Esc closes the modal**, or cancels an in-progress export:
   between cameras, or mid-sweep (the progress callback throws `ExportCancelled`;
@@ -14571,8 +14579,34 @@ session's resident/total) rather than truncate silently. Covered by
   max(2,000, 5%) frames would need hydrating, the per-frame sweep runs. `opts.route`
   ('store' / 'sweep') forces one (tests). Progress counts video frames over the
   cameras' copies, every 4,096 frames. Synthetic 8 cameras x 20,000 frames x 5
-  animals: 6.4 s → 1.3 s. Test: `tests/e2e/export-bycam-store-copy.mjs` (both routes
-  value for value, with negative controls). `cameraExportUsesSweep(selection,
+  animals: 6.4 s → 1.3 s. **Each camera's rows are written and gzipped in its own
+  worker** (`import-export/slp-rows-worker.js`; gzip was ~74% of the copy on one
+  core, ~18 s of 25 s for 8 cameras x 108,000 frames on the lab VM): an empty writer
+  with the camera's header is closed at once and its bytes (the "shell") open in the
+  worker; the working writer sends every row there (`lucidDivertRows`, bundle patch
+  `(row divert)`), cameras built in turns one block each (`_storeCameraCopier`), at
+  most `ROWS_WORKER_QUEUE` messages unanswered per worker. The worker's file equals
+  the one-thread copy value for value with the same chunks, filters and dtypes; the
+  working writer must end with `lucidOnlyTableRows()` (no annotations or negative
+  frames) or the export aborts. `opts.workers` (false = this thread, N = that many)
+  or `window.LUCID_EXPORT_WORKERS` overrides one per camera up to
+  `hardwareConcurrency` (16 max); no `Worker`, or a worker that fails to start,
+  falls back to this thread with a console warning. The per-frame pass
+  (`exportCamerasSlpStreaming`'s sweep, e.g. Reprojections on) attaches the same
+  workers to its writers (up to the worker count; the rest compress here), the
+  sweep's callback waiting while a worker has `ROWS_WORKER_QUEUE` messages
+  unanswered; synthetic 8 x 20,000: 11.9 → 8.4 s (gzip was ~27% of it). A
+  **folder-loaded** project's cameras (each rewritten from its own store,
+  `lazyCameraExportBytes`) go through `exportCamerasLazyRewrite(selections,
+  reprojAsUser, instanceFilter, opts)`: each file is written here without its big
+  tables (`saveSlpToBytes(labels, { lucidDeferTables })`, patch `(deferred
+  tables)`), its worker creates them with the same arguments and gzips them while
+  the next camera is built, at most `LAZY_REWRITE_IN_FLIGHT` (4) at once; returns
+  bytes per selection (null = not this route). `cameraExportUsesLazyRewrite`
+  tells the dialog which cameras it covers. Synthetic 8 cameras x 20,000
+  frames, realistic noise and per-node scores: copy 5.1 s → 1.35 s
+  (`tests/e2e/_diag-profile-store-copy.mjs`). Test: `tests/e2e/export-bycam-store-copy.mjs` (both routes
+  value for value, with negative controls; §4 workers = this thread, and the fallback). `cameraExportUsesSweep(selection,
   …)` says whether `exportSlpMultiSession` would route a camera there (By Cam groups
   those cameras per session). The store fast path (`lazyCameraFastPathUsable`) is
   refused on a reopened project `.slp` (`SioLazyLoader._sharedStore`): every
@@ -14707,6 +14741,24 @@ session's resident/total) rather than truncate silently. Covered by
 Videos / Export TOML / Export SLP / Export H5; spawns SLP-parse worker.
 
 ---
+
+### import-export/slp-rows-worker.js
+**Purpose:** Module worker that writes and gzips ONE By Cam export's four big
+tables (`frames`, `instances`, `points`, `pred_points`) for the store copy
+(`exportCamerasFromSharedStore`, `import-export/file-io.js`), so every camera
+compresses at once. Opens the "shell" (an empty sleap-io.js writer's closed file),
+carries incoming rows into whole column chunks exactly as the bundle's
+`(column chunks)` patch does (chunk height read from the dataset), and returns
+the finished file's bytes.
+**Messages:** in `open {shell}` → `ready`; `rows {name, data, rows, cols}` → `ack`
+(one per message: the main thread's backpressure); `create {spec, data, attrs}` →
+`ack` (a whole table the `(deferred tables)` patch held back from a per-camera
+rewrite: `create_dataset({...spec, data})` plus its attributes); `finish` →
+`done {bytes}`; any failure → `error {message}`. Used by the store copy, the
+per-frame pass and `exportCamerasLazyRewrite`.
+**Dependencies:** `lib/h5wasm/hdf5_hl.js` by RELATIVE path (a worker has no
+import map). Rows arrive already rounded (`lucidCompactRound` runs in the divert).
+**Dependents:** `import-export/file-io.js` (`_startRowsWorker`).
 
 ### import-export/slp-streaming-write.js
 
