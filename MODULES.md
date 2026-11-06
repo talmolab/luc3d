@@ -14589,7 +14589,7 @@ session's resident/total) rather than truncate silently. Covered by
   reprojAsUser, instanceFilter, opts)`: each file is written here without its big
   tables (`saveSlpToBytes(labels, { lucidDeferTables })`, patch `(deferred
   tables)`), its worker creates them with the same arguments and gzips them while
-  the next camera is built, at most `LAZY_REWRITE_IN_FLIGHT` (4) at once; returns
+  the next camera is built, at most `LAZY_REWRITE_IN_FLIGHT` (3) at once; returns
   bytes per selection (null = not this route). `cameraExportUsesLazyRewrite`
   tells the dialog which cameras it covers. Synthetic 8 cameras x 20,000
   frames, realistic noise and per-node scores: copy 5.1 s → 1.35 s
