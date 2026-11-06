@@ -34,8 +34,8 @@
  * A-B testing), or the worker does not answer its `init` — so a worker that
  * cannot start never costs a run. A failure after that rejects the next wait.
  */
-import { createBusyClock } from '../ui/load-graph.js?v=4d7fd991548d';
-import { workerReplyTimeoutMs, timeoutError, withTimeout } from './compute-governor.js?v=4d7fd991548d';
+import { createBusyClock } from '../ui/load-graph.js?v=e5a1009382ae';
+import { workerReplyTimeoutMs, timeoutError, withTimeout } from './compute-governor.js?v=e5a1009382ae';
 
 /** Frames per message: ~30 ms of tracking at 5 mice x 8 cameras — enough to amortize messaging. */
 export const TRACKER_BATCH = 100;
@@ -79,7 +79,7 @@ export async function startTrackerWorker(cameras, hp, onFrame, opts) {
     var busyDuring = opts.busyDuring || function (fn) { fn(); };
     var worker;
     try {
-        worker = new Worker(new URL('pose/tracker-worker.js?v=4d7fd991548d', document.baseURI), { type: 'module' });
+        worker = new Worker(new URL('pose/tracker-worker.js?v=e5a1009382ae', document.baseURI), { type: 'module' });
     } catch (e) {
         console.warn('[tracker-pool] no tracker worker, tracking on the main thread:', e);
         return null;
@@ -219,6 +219,16 @@ export async function startTrackerWorker(cameras, hp, onFrame, opts) {
         },
         /** The worker's busy milliseconds so far (it held a batch), for the CPU line. */
         cpuBusyMs: function () { return clock.ms(); },
+        /**
+         * Stop now (Track All's Cancel): the worker is terminated, results still on
+         * their way are dropped, and every wait — pending or later — rejects with `err`.
+         */
+        cancel: function (err) {
+            failure = failure || err;
+            clearTimeout(watchdog);
+            try { worker.terminate(); } catch (e) { /* ignore */ }
+            wake();
+        },
         close: function () { clearTimeout(watchdog); clock.close(); worker.terminate(); },
     };
 }

@@ -10,7 +10,7 @@
 //
 // Imports only `id-switch-review.js`, which is import-free.
 
-import { idSwitchOnsets, idSwitchEncounterCount } from './id-switch-review.js?v=4d7fd991548d';
+import { idSwitchOnsets, idSwitchEncounterCount } from './id-switch-review.js?v=e5a1009382ae';
 
 /** Thousands separators, as everywhere else frame counts are shown. */
 function n(v) {
@@ -155,6 +155,10 @@ export function describeSwitchCheck(enabled, res, identities, whyNotRun) {
  */
 export function describeTailMarks(res) {
     if (!res.ok) return 'tail marks not used: ' + res.reason;
+    if (res.names) {   // the identity engine: any number of animals (pose/identity-cues.js)
+        return 'tail bands read for ' + res.names.length + ' animals (' +
+            (res.swapped ? plural(res.swapped, 'stretch', 'stretches') + ' relabelled' : 'no labels changed') + ')';
+    }
     return 'tail marks on ' + res.markedName + ' (' +
         (res.swapped ? plural(res.swapped, 'stretch', 'stretches') + ' relabelled' : 'no labels changed') + ')' +
         (res.faint ? '; the marks are faint here, so check the identities' : '');

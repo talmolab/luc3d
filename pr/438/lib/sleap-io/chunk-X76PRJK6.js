@@ -36,7 +36,7 @@ import {
   resolveIdentity,
   resolveVideoFilename,
   sessionsReadError
-} from "./chunk-H7G4PJNA.js?v=4d7fd991548d";
+} from "./chunk-H7G4PJNA.js?v=e5a1009382ae";
 import {
   RemoteIOError,
   fetchRetrying,
@@ -48,7 +48,7 @@ import {
   redactedCauseSummary,
   resolveUrl,
   statusToMessage
-} from "./chunk-YS7Q6CO6.js?v=4d7fd991548d";
+} from "./chunk-YS7Q6CO6.js?v=e5a1009382ae";
 
 // src/model/centroid.ts
 var _centroidSkeleton = null;
@@ -13386,6 +13386,13 @@ function makeLazySourceLabels(labels) {
 // over an SMB share Chrome's File System Access close() reads a file back at
 // ~10 MB/s, so size is time). A table of at most SESSION_FLUSH_ROWS rows is
 // written exactly as before (contiguous), so small files are byte-identical.
+// LUCID local patch (deferred tables): while `saveSlpToBytes(labels,
+// { lucidDeferTables: [] })` runs its lazy fast path, a table past
+// SESSION_FLUSH_ROWS is not written: its `create_dataset` arguments, data and
+// `field_names` attribute go into that array instead, so a worker can add it to
+// the returned file and gzip it there (`import-export/slp-rows-worker.js`
+// 'create'). Smaller tables are written as before.
+var lucidDeferredTables = null;
 function writeLazyMatrixDataset(file, name, columns, fieldNames, dtype) {
   const rowCount = (columns[fieldNames[0]] ?? []).length;
   const colCount = fieldNames.length;
@@ -13398,15 +13405,20 @@ function writeLazyMatrixDataset(file, name, columns, fieldNames, dtype) {
     }
   }
   if (rowCount > SESSION_FLUSH_ROWS) {
-    file.create_dataset({
+    const spec = {
       name,
-      data,
       shape: [rowCount, colCount],
       dtype,
       chunks: [Math.min(LUCID_COLUMN_CHUNK_ROWS, rowCount), 1],
       compression: "gzip",
       compression_opts: 1
-    });
+    };
+    if (lucidDeferredTables) {
+      const fields = JSON.stringify(fieldNames);
+      lucidDeferredTables.push({ spec, data, attrs: [["field_names", fields, `S${textEncoder.encode(fields).length}`]] });
+      return;
+    }
+    file.create_dataset({ ...spec, data });
   } else {
     file.create_dataset({ name, data, shape: [rowCount, colCount], dtype });
   }
@@ -13674,8 +13686,20 @@ function lucidFlushCarries(file) {
   for (const [name, st] of byName) lucidWriteCarry(file, name, st);
   lucidCarries.delete(file);
 }
+// LUCID local patch (row divert): `SlpStreamWriter.lucidDivertRows(fn)` hands
+// the four big tables' rows to `fn(name, flat, rowCount, colCount)` (rounded as
+// a carry would be) instead of writing them, so a worker can write and gzip them
+// into a copy of the writer's empty file (`import-export/slp-rows-worker.js`).
+var lucidRowDiverts = /* @__PURE__ */ new WeakMap();
 function appendMatrixRows(file, name, flat, rowCount, colCount, currentRows) {
   if (rowCount === 0) return;
+  const divert = lucidRowDiverts.get(file);
+  if (divert) {
+    const data = flat.length === rowCount * colCount ? flat : flat.slice(0, rowCount * colCount);
+    lucidCompactRound(name, data, rowCount, colCount);
+    divert(name, data, rowCount, colCount);
+    return;
+  }
   const st = lucidCarryFor(file, name, colCount);
   let src = 0;
   while (src < rowCount) {
@@ -14276,6 +14300,26 @@ var SlpStreamWriter = class {
       );
     }
   }
+  /**
+   * LUCID local patch (row divert): send every later row of the four big
+   * tables to `fn(name, flat, rowCount, colCount)` instead of this file (null
+   * stops). The caller owns `flat` (a fresh array, or one it passed in).
+   */
+  lucidDivertRows(fn) {
+    if (this.closed) throw new Error("SlpStreamWriter is closed");
+    if (fn) lucidRowDiverts.set(this.file, fn);
+    else lucidRowDiverts.delete(this.file);
+  }
+  /**
+   * LUCID local patch (row divert): true when finalizing would add nothing but
+   * the four tables' rows to the file opened from this header (no annotations,
+   * no `negative_frames`), so an empty writer's file plus the diverted rows is
+   * the whole file.
+   */
+  lucidOnlyTableRows() {
+    const b = [this.pendingRois, this.pendingMasks, this.pendingBboxes, this.pendingCentroids, this.pendingLabelImages];
+    return this.negativeFrames.size === 0 && b.every((x) => !x || x.anns.length === 0);
+  }
   /** Write pending `negative_frames` and close the HDF5 file (shared finalize). */
   finalizeFile() {
     lucidFlushCarries(this.file); // LUCID local patch (column chunks)
@@ -14518,9 +14562,11 @@ async function saveSlpToBytes(labels, options) {
         ensureH5StagingDir(module2);
         const memPath2 = `/tmp/sleap_output_${Date.now()}_${Math.random().toString(16).slice(2)}.slp`;
         const file2 = new module2.File(memPath2, "w");
+        lucidDeferredTables = Array.isArray(options?.lucidDeferTables) ? options.lucidDeferTables : null;
         try {
           writeSlpToFileLazy(file2, lazyWriteLabels);
         } finally {
+          lucidDeferredTables = null;
           file2.close();
         }
         const fs2 = getH5FileSystem(module2);
@@ -14569,7 +14615,12 @@ async function saveSlpToBytes(labels, options) {
   const file = new module.File(memPath, "w");
   try {
     try {
-      writeSlpToFile(file, writeLabels2, plan);
+      lucidEagerDivert = typeof options?.lucidDivertTables === "function" ? options.lucidDivertTables : null;
+      try {
+        writeSlpToFile(file, writeLabels2, plan);
+      } finally {
+        lucidEagerDivert = null;
+      }
       if (plan && plan.size > 0) {
         await writeEmbeddedVideoData(file, labels, plan);
       }
@@ -15262,6 +15313,11 @@ LucidAppendTable.prototype.flush = function () {
   const ds = this.file.get(this.name);
   const data = this.buf.subarray(0, this.rows * this.ncols);
   lucidCompactRound(this.name, data, this.rows, this.ncols);
+  if (this.lucidDivert) {
+    this.lucidDivert(this.name, data.slice(), this.rows, this.ncols);
+    this.rows = 0;
+    return;
+  }
   ds.resize([this.total, this.ncols]);
   ds.write_slice([[base, this.total], [0, this.ncols]], data);
   this.rows = 0;
@@ -15781,6 +15837,15 @@ function emitInstancePointsInto(table, instance, predicted) {
 // flushed row cannot be, so the instance ids it needs are found first, by a
 // pre-pass that runs only when some user instance has a `fromPredicted`. It
 // keeps the old map's rule: an instance listed twice resolves to its LAST row.
+// LUCID local patch (eager divert): while `saveSlpToBytes(labels,
+// { lucidDivertTables: fn })` runs its eager path, the four 2D tables still
+// create their datasets here exactly as before (same order, chunks, gzip,
+// field_names), but a table past SESSION_FLUSH_ROWS hands each block of rows to
+// `fn(name, rows: Float64Array (owned), rowCount, colCount)` instead of writing
+// it, so the returned file holds those tables EMPTY and a worker appends and
+// gzips the rows (`import-export/slp-rows-worker.js` 'rows', in the order
+// given). Tables of at most SESSION_FLUSH_ROWS rows are written here as before.
+var lucidEagerDivert = null;
 function writeLabeledFrames(file, labels) {
   const framesTable = new LucidAppendTable(file, "frames", 5, "<i8", FRAMES_FIELDS, "chunked", null);
   const instancesTable = new LucidAppendTable(file, "instances", 10, "<d", INSTANCES_FIELDS, "chunked", null);
@@ -15788,6 +15853,9 @@ function writeLabeledFrames(file, labels) {
   // parsed as float32, corrupting point ids beyond 2^24 point rows.
   const pointsTable = new LucidAppendTable(file, "points", 4, "<f8", POINTS_FIELDS, "chunked", null);
   const predPointsTable = new LucidAppendTable(file, "pred_points", 5, "<f8", PRED_POINTS_FIELDS, "chunked", null);
+  if (lucidEagerDivert) {
+    framesTable.lucidDivert = instancesTable.lucidDivert = pointsTable.lucidDivert = predPointsTable.lucidDivert = lucidEagerDivert;
+  }
   let instanceIndex = null;
   for (const labeledFrame of labels.labeledFrames) {
     for (const instance of labeledFrame.instances) {

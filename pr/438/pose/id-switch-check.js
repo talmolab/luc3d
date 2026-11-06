@@ -41,8 +41,8 @@
  * Depends on: pose-data.js (readPoint3d). Pure — no DOM, no app state.
  */
 
-import { readPoint3d } from './pose-data.js?v=4d7fd991548d';
-import { abortable, heapNearLimit } from './compute-governor.js?v=4d7fd991548d';
+import { readPoint3d } from './pose-data.js?v=e5a1009382ae';
+import { abortable, heapNearLimit } from './compute-governor.js?v=e5a1009382ae';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */

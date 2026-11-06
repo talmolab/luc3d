@@ -16,36 +16,38 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=4d7fd991548d';
-import { CrossViewTracker, Detection, membersPoints3d } from './cross-view-tracker.js?v=4d7fd991548d';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=4d7fd991548d';
+} from './triangulation.js?v=e5a1009382ae';
+import { CrossViewTracker, Detection, membersPoints3d } from './cross-view-tracker.js?v=e5a1009382ae';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=e5a1009382ae';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=4d7fd991548d';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=e5a1009382ae';
 import {
     getNodeWeightArray, getNodeWeight, updateNodeWeights,
     getTrackingThresholds, getTrackingThreshold, isCameraTracked,
     getTrackingThresholdDefs, updateTrackingThresholds,
-} from '../ui/settings.js?v=4d7fd991548d';
-import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=4d7fd991548d';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=4d7fd991548d';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=4d7fd991548d';
-import { startTrackerWorker } from './tracker-pool.js?v=4d7fd991548d';
-import { passesDetectionFilter } from './detection-filter-stats.js?v=4d7fd991548d';
-import { loadAllLazyFrames, sweepLazyFrameWindows, showCalibrationRequiredPopup } from './triangulation.js?v=4d7fd991548d';
-import { hasRealCalibration } from './placeholder-cameras.js?v=4d7fd991548d';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=4d7fd991548d';
-import { updateInfoPanel } from '../ui/info-panel.js?v=4d7fd991548d';
-import { setColorByIdentity } from '../ui/color-by.js?v=4d7fd991548d';
-import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=4d7fd991548d';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=4d7fd991548d';
-import { summarizeTrackedIdentities, describeSwitchCheck, describeTailMarks } from '../ui/track-summary.js?v=4d7fd991548d';
-import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=4d7fd991548d';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=4d7fd991548d';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=4d7fd991548d';
-import { noteTrackRun } from './run-state.js?v=4d7fd991548d';
-import { resolveTailMarks } from './tail-mark.js?v=4d7fd991548d';
-import { createTailMarkReader } from '../ui/tail-mark-reader.js?v=4d7fd991548d';
+} from '../ui/settings.js?v=e5a1009382ae';
+import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=e5a1009382ae';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=e5a1009382ae';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, setLoadingCancel, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=e5a1009382ae';
+import { abortError } from './compute-governor.js?v=e5a1009382ae';
+import { startTrackerWorker } from './tracker-pool.js?v=e5a1009382ae';
+import { passesDetectionFilter } from './detection-filter-stats.js?v=e5a1009382ae';
+import { loadAllLazyFrames, sweepLazyFrameWindows, showCalibrationRequiredPopup } from './triangulation.js?v=e5a1009382ae';
+import { hasRealCalibration } from './placeholder-cameras.js?v=e5a1009382ae';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=e5a1009382ae';
+import { updateInfoPanel } from '../ui/info-panel.js?v=e5a1009382ae';
+import { setColorByIdentity } from '../ui/color-by.js?v=e5a1009382ae';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=e5a1009382ae';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=e5a1009382ae';
+import { summarizeTrackedIdentities, describeSwitchCheck, describeTailMarks } from '../ui/track-summary.js?v=e5a1009382ae';
+import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=e5a1009382ae';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=e5a1009382ae';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=e5a1009382ae';
+import { noteTrackRun } from './run-state.js?v=e5a1009382ae';
+import { resolveTailMarks, createTailBandCue, TAIL_BAND_READ } from './tail-mark.js?v=e5a1009382ae';
+import { resolveIdentityCues } from './identity-cues.js?v=e5a1009382ae';
+import { createTailMarkReader } from '../ui/tail-mark-reader.js?v=e5a1009382ae';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -755,7 +757,6 @@ function triangulateGroup(group, camMap) {
 // ============================================
 
 var globalTracker = null;
-var trackerWorker = null;
 
 function getTrackerHyperparams() {
     var el2d = document.getElementById('trackerWeight2d');
@@ -883,13 +884,17 @@ async function askTrackSetup(session, title, withImageCheck) {
         imageCheck: withImageCheck
             ? getTrackingThresholdDefs().filter(function (d) { return IMAGE_CHECK_IDS.indexOf(d.id) >= 0; })
             : null,
-        tailMarks: answerTailMarks ? { value: session.tailMarkedIdentity || _lastTailMarkedIdentity } : null,
+        tailMarks: answerTailMarks ? { value: session.tailMarkedIdentity || _lastTailMarkedIdentity,
+            bands: session.identityMarks && session.identityMarks.tailBands } : null,
     });
     if (!answer) return false;  // cancelled
     updateNodeWeights(answer.nodeWeights);
     if (answer.thresholds) updateTrackingThresholds(answer.thresholds);
     setTrackerNumAnimals(answer.animals);
-    if (answerTailMarks) setTailMarkedIdentity(answer.tailMarkedIdentity);
+    if (answerTailMarks) {
+        if (answer.identityMarks) setIdentityMarks(answer.identityMarks);
+        else { setIdentityMarks(null); setTailMarkedIdentity(answer.tailMarkedIdentity); }
+    }
     return true;
 }
 
@@ -914,17 +919,46 @@ export function setTailMarkedIdentity(name) {
     if (!session) return;
     var next = name || null;
     _lastTailMarkedIdentity = next;
-    if ((session.tailMarkedIdentity || null) === next) return;
+    if ((session.tailMarkedIdentity || null) === next && !(next && session.identityMarks)) return;
     session.tailMarkedIdentity = next;
+    if (next) session.identityMarks = null;   // one or the other
     markDirty();
     for (var i = 0; i < _tailMarkListeners.length; i++) {
         try { _tailMarkListeners[i](next); } catch (e) { /* ignore */ }
     }
 }
 
-/** @param {(name: ?string) => void} fn  called whenever the choice changes */
+/** @param {(name: ?string) => void} fn  called whenever the choice changes (either kind) */
 export function onTailMarkedIdentityChange(fn) {
     if (typeof fn === 'function') _tailMarkListeners.push(fn);
+}
+
+/**
+ * What each identity of the active session should show, per identity cue
+ * (`{tailBands: {id_0: 0, ...}}`), or null. Project state, like the tail-mark choice.
+ * @returns {?Object}
+ */
+export function getIdentityMarks() {
+    var session = getActiveSession();
+    return (session && session.identityMarks) || null;
+}
+
+/**
+ * Set it (null clears it). Setting it clears the two-animal tail-mark choice: one
+ * session uses one or the other. Marks the project dirty and notifies the listeners.
+ * @param {?Object} marks
+ */
+export function setIdentityMarks(marks) {
+    var session = getActiveSession();
+    if (!session) return;
+    var next = marks && Object.keys(marks).length ? marks : null;
+    if (JSON.stringify(session.identityMarks || null) === JSON.stringify(next) && !(next && session.tailMarkedIdentity)) return;
+    session.identityMarks = next;
+    if (next) session.tailMarkedIdentity = null;
+    markDirty();
+    for (var i = 0; i < _tailMarkListeners.length; i++) {
+        try { _tailMarkListeners[i](session.tailMarkedIdentity || null); } catch (e) { /* ignore */ }
+    }
 }
 
 // Read each animal's tail in every camera and swap labels so the chosen identity has
@@ -934,20 +968,35 @@ async function runTailMarkPass(session) {
     var fps = state.fps > 0 ? state.fps : session.fps;
     var res;
     try {
-        var reader = createTailMarkReader(session, fps);
+        // counting bands needs a sharper read than telling marked from plain
+        var reader = createTailMarkReader(session, fps, session.identityMarks
+            ? Object.assign({}, TAIL_BAND_READ, globalThis.__lucidTailBandRead || {}) : undefined);
         if (reader.failed) res = { ok: false, reason: reader.failed };
         else {
             showLoadingProgress('Reading tail marks', 0, 1, { title: 'Track All' });
             await yieldToPaint();
             var pacer = createProgressPacer();
-            res = await resolveTailMarks(session, {
-                markedName: session.tailMarkedIdentity, fps: fps, reader: reader,
-                onProgress: async function (done, total) {
-                    if (!pacer.due()) return;
-                    showLoadingProgress('Reading tail marks', done, total, { title: 'Track All' });
-                    await pacer.yield();
-                },
-            });
+            var onProgress = async function (done, total) {
+                if (!pacer.due()) return;
+                showLoadingProgress('Reading tail marks', done, total, { title: 'Track All' });
+                await pacer.yield();
+            };
+            if (session.identityMarks) {
+                // Any number of animals, each with its own marks (pose/identity-cues.js).
+                var expected = {};
+                Object.keys(session.identityMarks).forEach(function (cueId) {
+                    var m = session.identityMarks[cueId];
+                    Object.keys(m).forEach(function (name) { (expected[name] = expected[name] || {})[cueId] = m[name]; });
+                });
+                res = await resolveIdentityCues(session, {
+                    fps: fps, expected: expected, onProgress: onProgress,
+                    cues: session.identityMarks.tailBands ? [{ cue: createTailBandCue(), reader: reader }] : [],
+                });
+            } else {
+                res = await resolveTailMarks(session, {
+                    markedName: session.tailMarkedIdentity, fps: fps, reader: reader, onProgress: onProgress,
+                });
+            }
         }
     } catch (e) {
         console.error('[TrackAll] tail marks failed:', e);
@@ -1274,6 +1323,7 @@ function stepTrackerFrame(session, run, fi) {
     var detsByCam = buildTrackerDetections(fg, run.cameras, fi, session);
     run.trk.trackFrame(detsByCam, run.cameras);
     commitTrackedFrame(session, run.trk, fi, run.trackToIdentity, run.identityPool);
+    run.committedFi = fi;
 }
 
 // Drive the CrossViewTracker over `frameIndices`, populating identities, the
@@ -1312,12 +1362,14 @@ export async function runCrossViewTrackerProgress(session, cameras, frameIndices
 
 // The loop of runCrossViewTrackerProgress, on a run made by the caller — on its
 // worker when `run.pool` is set (attachTrackerWorker), where progress reports
-// the frames COMMITTED, not the frames sent.
+// the frames COMMITTED, not the frames sent. Once `run.signal` fires (Track All's
+// Cancel) it stops before the next frame and rejects with an AbortError.
 async function trackFrameListProgress(session, run, frameIndices, onProgress) {
     var total = frameIndices.length;
     var pacer = createProgressPacer();
-    var pool = run.pool, done = 0;
+    var pool = run.pool, done = 0, signal = run.signal;
     for (var f = 0; f < total; f++) {
+        if (signal && signal.aborted) throw abortError();
         if (pool) {
             var wait = submitTrackerFrame(session, run, frameIndices[f]);
             if (wait) await wait;
@@ -1356,7 +1408,7 @@ async function sweepTrackAllFrames(session, run, onProgress, opts) {
     if (!pool) {
         await sweepLazyFrameWindows(session, function (fi) {
             stepTrackerFrame(session, run, fi);
-        }, { window: opts.window || 2000, start: from, end: to, onProgress: onProgress });
+        }, { window: opts.window || 2000, start: from, end: to, onProgress: onProgress, signal: run.signal });
         return trackRunResult(session, run);
     }
     // On the worker: a window stays resident until its results are committed
@@ -1366,7 +1418,7 @@ async function sweepTrackAllFrames(session, run, onProgress, opts) {
     await sweepLazyFrameWindows(session, function (fi) {
         return submitTrackerFrame(session, run, fi);
     }, {
-        window: opts.window || 2000, start: from, end: to, releaseLag: 1,
+        window: opts.window || 2000, start: from, end: to, releaseLag: 1, signal: run.signal,
         beforeRelease: function (wStart, wEnd) { return idleWhile(pool.committedThrough(wEnd - 1)); },
         onProgress: onProgress && function (done, total) {
             return onProgress(done >= total ? total : Math.max(0, Math.min(done, run.committedFi - from + 1)), total);
@@ -1527,6 +1579,27 @@ function clearTrackingStateInRange(session, lo, hi) {
         if (rec.frameIdx >= lo && rec.frameIdx <= hi) doomed.push(rec.key);
     }
     for (var d = 0; d < doomed.length; d++) session.frameIdentityMap.delete(doomed[d]);
+}
+
+// After Cancel: the frames committed before it keep their identities and groups (a
+// commit rewrites its frame in place, so there is no earlier state to put back), and
+// the rest of the swept span is left untracked — the run had already cleared it.
+// Says so, and skips what follows a finished run (the ID-switch checks, the summary,
+// the blue Track button: the result is partial). `first`/`last`: the span swept.
+function finishCancelledPass(run, label, human, first, last, bail) {
+    var through = run && run.committedFi >= first ? Math.min(run.committedFi, last) : null;
+    console.log('[' + label + '] cancelled; tracked through frame', through);
+    console.timeEnd('[' + label + '] total');
+    drawAllOverlays(state.currentFrame);
+    updateInfoPanel();
+    if (timeline) timeline.refreshTracks(state.session, { cap: true });
+    var what = through == null
+        ? 'no frames were tracked (' + displayFrame(first) + '–' + displayFrame(last) + ' are untracked)'
+        : through >= last ? 'every frame was tracked'
+        : 'frames ' + displayFrame(first) + '–' + displayFrame(through) + ' were tracked, ' +
+          displayFrame(through + 1) + '–' + displayFrame(last) + ' are untracked';
+    setStatus(human + ' cancelled: ' + what + ' — run it again to track them all', 'warning');
+    return Object.assign({}, bail, { cancelled: true });
 }
 
 /**
@@ -1723,7 +1796,16 @@ async function runTrackingPass(range) {
         // The tracker steps the frames in order — on one worker (pose/tracker-pool.js) while this thread
         // hydrates frames and commits the results, or inline when the worker cannot start.
         run = createTrackerRun(session, cameras, effectiveNumAnimals, identityPool);
+        // The card's Cancel (and Esc) stops the run before its next frame: the worker is
+        // terminated at once, so nothing waits on it (see the AbortError branch below).
+        var cancel = new AbortController();
+        run.signal = cancel.signal;
+        setLoadingCancel(function () {
+            cancel.abort();
+            if (run.pool) run.pool.cancel(abortError());
+        });
         var onWorker = await attachTrackerWorker(session, run);
+        if (cancel.signal.aborted && run.pool) run.pool.cancel(abortError());   // pressed while the worker started
         // ...with its CPU line and graph (ui/loading-overlay.js; hideLoading stops it): the worker's busy
         // time plus this thread's, or, inline, this thread alone — one core's share at most.
         setLoadingCpu(onWorker
@@ -1745,7 +1827,7 @@ async function runTrackingPass(range) {
         noteTrackRun(session);   // Track turns blue (ui/run-buttons.js)
         hideLoading();
         // Track All only: a range is a targeted re-run, whose labels stay what the range's tracker gave.
-        var tailMarks = !isRange && session.tailMarkedIdentity ? await runTailMarkPass(session) : null;
+        var tailMarks = !isRange && (session.tailMarkedIdentity || session.identityMarks) ? await runTailMarkPass(session) : null;
         // The run's product is identities, so show them (#242): switch Color
         // from Tracks to ID. Only when it assigned any — otherwise there is
         // nothing new to look at. Recolors 2D + 3D through ui-wiring's handler;
@@ -1833,6 +1915,11 @@ async function runTrackingPass(range) {
     } catch (e) {
         if (run) closeTrackerWorker(run);
         hideLoading();
+        if (e && e.name === 'AbortError') {
+            return finishCancelledPass(run, label, human,
+                isRange ? lo : (windowed ? 0 : frameIndices[0]),
+                isRange ? hi : (windowed ? loader.nFrames - 1 : frameIndices[frameIndices.length - 1]), bail);
+        }
         console.error('[' + label + '] error:', e, e.stack);
         setStatus(human + ' error: ' + e.message, 'error');
         return bail;
@@ -1863,13 +1950,9 @@ export async function trackFrameRange(startFrame, endFrame) {
 (function () {
     var btnTrackFrame = document.getElementById('tbTrackFrame');
     var btnTrackAll = document.getElementById('tbTrackAll');
-    var btnCancel = document.getElementById('trackerCancel');
 
     if (btnTrackFrame) btnTrackFrame.addEventListener('click', trackCurrentFrame);
     if (btnTrackAll) btnTrackAll.addEventListener('click', trackAll);
-    if (btnCancel) btnCancel.addEventListener('click', function () {
-        if (trackerWorker) trackerWorker.postMessage({ type: 'cancel' });
-    });
 
     // Slider value display
     ['trackerWeight2d', 'trackerWeight3d', 'trackerVelocity', 'trackerDistance', 'trackerTimePenalty'].forEach(function (id) {
