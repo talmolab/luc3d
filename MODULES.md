@@ -1614,7 +1614,9 @@ session graph that holds them.
     non-empty name per used identity, rewriting `frameIdentityMap` under the new
     keys; instances with no identity (entry-less OR the negative sentinel)
     become trackless (`trackIdx = null`) — no "No ID" track is created. Returns
-    `{tracks, instances, lazyErrorRows, ambiguousRawKeys}`. Its rules:
+    `{tracks, instances, lazyErrorRows, ambiguousRawKeys}`. Which identities
+    become which tracks is `identityTrackPlan()` (`{names, idToTrackIdx}`, changes
+    nothing), which the `.slp` exporters also read. Its rules:
     - **Whole-project on a lazy session.** The used-identity set and the
       remapped map are derived from `frameIdentityMap` itself (always complete) —
       a map built from a `frameGroups` walk would destroy identity data for every
@@ -14599,6 +14601,13 @@ project size. Manual corrections survive because the sweep hydrates live 2D — 
 case the verbatim `lazyCameraExportBytes` fast path structurally cannot handle.
 Identities are deliberately NOT passed (matching `buildSlpLabels`: non-empty
 `identities` bumps the format to 1.9, unreadable by sleap-io Python <= 0.6.x).
+They travel as the tracks: every per-camera exporter takes each instance's track
+from `_exportTrackSource`, so with identities assigned the file's tracks are the
+ones `Session.identityTrackPlan` names (the same ones "Propagate IDs → Tracks"
+makes, without changing the session) and an instance with no identity is
+trackless; with none assigned, instances keep their own tracks. The verbatim
+`lazyCameraExportBytes` path and the shared-store copy (`sharedStoreCopyContext`)
+run only when `_storeHoldsIdentityTracks` says the store already agrees. Pinned by `tests/test-export-identity-tracks.js`.
 `exportSlpClientSide` and single-selection `exportSlpMultiSession` route here
 whenever `_exportWouldTruncate(session)`; fully-resident projects keep the eager
 path. **Coverage precondition:** `sweepLazyFrameWindows` hydrates via
