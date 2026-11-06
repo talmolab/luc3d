@@ -12411,7 +12411,10 @@ its default multi-panel (accordion) mode.
   takes the pointer (`.panel-rail-inner { pointer-events: none }`,
   `.panel-rail-icon { pointer-events: auto }`): the label strip is display only,
   so it can never cover the panel's own controls (it did, and blocked
-  Skeleton's + Node).
+  Skeleton's + Node). A MOUSE click on a rail button blurs it
+  (`releasePointerFocus`, `detail > 0`; Enter/Space keep focus): Chrome makes
+  a click-focused button `:focus-visible` on the next key press, so `I` after
+  a click held the rail wide once the pointer left.
 - The rail is a sibling AFTER `#infoPanelWrapper` in `.main-content`, so a
   collapsed wrapper still measures 0 wide and `isInfoPanelVisible` is unchanged.
 - Open / folded sections are display taste:

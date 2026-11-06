@@ -300,6 +300,16 @@ function readStored() {
 }
 
 /**
+ * Drop focus from a rail button after a MOUSE click (`detail > 0`; Enter and
+ * Space give 0 and keep focus). Otherwise Chrome makes that focus
+ * :focus-visible on the next key press (e.g. `I`), and the rail's
+ * `:has(:focus-visible)` rule keeps it widened after the pointer leaves.
+ */
+function releasePointerFocus(btn, e) {
+    if (e && e.detail > 0 && document.activeElement === btn) btn.blur();
+}
+
+/**
  * Build the rail into `#panelRail`, wrap each pane in its section, and wire
  * both. `toggleInfoPanel` is the one hide/show of `#infoPanelWrapper`
  * (ui/ui-wiring.js).
@@ -316,9 +326,10 @@ export function setupPanelRail(opts) {
 
     const collapseBtn = buildButton('panel-rail-collapse', 'panel-right-close', 'Hide panel');
     collapseBtn.setAttribute('aria-controls', WRAPPER_ID);
-    collapseBtn.addEventListener('click', function () {
+    collapseBtn.addEventListener('click', function (e) {
         if (_toggleInfoPanel) _toggleInfoPanel();
         syncPanelRail();
+        releasePointerFocus(collapseBtn, e);
     });
     inner.appendChild(collapseBtn);
 
@@ -327,7 +338,10 @@ export function setupPanelRail(opts) {
         const btn = buildButton('panel-rail-tab', p.icon, p.label);
         btn.setAttribute('data-tab', p.tab);
         btn.setAttribute('aria-controls', p.tab);
-        btn.addEventListener('click', function () { clickPanelRailTab(p.tab); });
+        btn.addEventListener('click', function (e) {
+            clickPanelRailTab(p.tab);
+            releasePointerFocus(btn, e);
+        });
         inner.appendChild(btn);
     });
 
