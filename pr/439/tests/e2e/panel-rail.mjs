@@ -263,10 +263,28 @@ try {
     s = await railState();
     check(same(s) && s.topName === 'Hide panel', "the rail's top button shows it again, stack unchanged");
 
+    // A mouse click must not leave a rail button focused: Chrome turns that
+    // focus into :focus-visible on the next key press, and `I` then held the
+    // rail widened after the pointer left.
+    const innerW = () => page.evaluate(() =>
+        Math.round(document.querySelector('#panelRail .panel-rail-inner').getBoundingClientRect().width));
+    for (const [what, sel] of [['top button', '#panelRail .panel-rail-collapse .panel-rail-icon'],
+                               ['panel icon', '#panelRail .panel-rail-btn[data-tab="tabCameras"] .panel-rail-icon']]) {
+        await page.click(sel);
+        await page.keyboard.press('i');
+        await moveAway();
+        await page.waitForTimeout(250);              // past the width transition
+        check(await innerW() === 44, `click the rail's ${what}, press I, move away: the rail narrows (${await innerW()})`);
+        if ((await railState()).collapsed) await page.keyboard.press('i');
+    }
+    s = await railState();
+    check(!s.collapsed, 'precondition for §4: the panel is shown');
+
     // ---- §4 keyboard ----
     await moveAway();
     await page.evaluate(() => document.querySelector('#panelRail .panel-rail-btn[data-tab="tabSession"]').focus());
     await page.keyboard.press('Shift+Tab');      // a real keyboard move, so :focus-visible applies
+    await page.waitForTimeout(250);              // past the width transition
     const kb = await page.evaluate(() => ({
         focused: document.activeElement && document.activeElement.dataset.tab,
         w: Math.round(document.querySelector('#panelRail .panel-rail-inner').getBoundingClientRect().width),

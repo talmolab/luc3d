@@ -26,7 +26,7 @@
  *
  * DOM-free (tests: `tests/test-slp-provenance.mjs`).
  */
-import { compactProvenanceExtra } from './compact-save.js?v=f6f489b0283e';
+import { compactProvenanceExtra } from './compact-save.js?v=ef8b8f93fc19';
 
 export const LUCID_PROVENANCE_SOURCE = 'lucid';
 /** Where LUC3D's pair goes when another program owns `source`/`exported_at`. */
