@@ -38,7 +38,9 @@ import {
     exportSlpClientSide,
     exportSlpMultiSession,
     exportCamerasSlpStreaming,
+    exportCamerasLazyRewrite,
     cameraExportUsesSweep,
+    cameraExportUsesLazyRewrite,
     findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
@@ -1864,6 +1866,19 @@ export function showSlpExportByCamModal() {
             g.cams.push(cn);
             g.sels.push(sels[0]);
         });
+        // Cameras of a folder-loaded project, each rewritten from its own store:
+        // built one after another here while workers compress them side by
+        // side (`exportCamerasLazyRewrite`), as one step before the per-camera
+        // steps. A single such camera stays in the per-camera loop.
+        var rewrite = { cams: [], sels: [] };
+        cols.forEach(function (cn) {
+            var sels = buildColumnSelections(cn);
+            if (sels.length !== 1 || cameraExportUsesSweep(sels[0], reprojAsUser, instanceFilter) ||
+                !cameraExportUsesLazyRewrite(sels[0], reprojAsUser, instanceFilter)) return;
+            rewrite.cams.push(cn);
+            rewrite.sels.push(sels[0]);
+        });
+        if (rewrite.cams.length < 2) rewrite = { cams: [], sels: [] };
 
         // Progress: the app's card (ui/loading-overlay.js). The shared sweep is
         // a step of its own, its frames on the bar; then one step per camera: a
@@ -1875,7 +1890,7 @@ export function showSlpExportByCamModal() {
         // for the run and comes back on cancel or failure.
         var SAVES_IN_FLIGHT = 4;
         var title = 'Export SLEAP by Camera';
-        var sweepSteps = sweepGroups.length;
+        var sweepSteps = sweepGroups.length + (rewrite.cams.length ? 1 : 0);
         var steps = sweepSteps + cols.length;
         function cardOpts(step, extra) {
             return Object.assign({ title: title, step: step, steps: steps, detail: 'Esc cancels' }, extra || {});
@@ -1894,6 +1909,17 @@ export function showSlpExportByCamModal() {
         var saving = [];   // saves in flight, oldest first
         var succeeded = false;
         var failure = null;
+        // While files save, the card's bar counts the files saved (written AND
+        // closed) out of all the export's files, and moves as each one lands.
+        // Files, not bytes: over a share Chrome's close() reads the whole file
+        // back (most of a save's time) and reports nothing, so a byte count
+        // would race to the end of write() and then stall.
+        var savingStep = 0;   // the step the saving bar shows (0 = something else is on the card)
+        function showSaving(step) {
+            savingStep = step;
+            showLoadingProgress('Saving files in ' + dirHandle.name, exported, cols.length,
+                cardOpts(step, { unit: cols.length === 1 ? 'file' : 'files' }));
+        }
         async function saveFile(target, blob) {
             var fh = await target.dir.getFileHandle(target.name, { create: true });
             var writable = await fh.createWritable();
@@ -1901,6 +1927,7 @@ export function showSlpExportByCamModal() {
             await writable.close();
             exported++;
             if (target.inCameraFolder) inCameraFolders++;
+            if (savingStep && !cancelled) showSaving(savingStep);
         }
         try {
             for (var g = 0; g < sweepGroups.length && !cancelled; g++) {
@@ -1913,13 +1940,27 @@ export function showSlpExportByCamModal() {
                     reprojAsUser, instanceFilter, { onProgress: onSweepProgress(g + 1, label) });
                 grp.cams.forEach(function (cn, k) { prebuilt[cn] = sweptBytes[k]; });
             }
+            if (rewrite.cams.length && !cancelled) {
+                var rwStep = sweepGroups.length + 1;
+                var rwLabel = 'Writing ' + rewrite.cams.length + ' cameras';
+                showLoading(rwLabel + '…', cardOpts(rwStep));
+                await yieldToPaint();
+                var rewritten = await exportCamerasLazyRewrite(rewrite.sels, reprojAsUser, instanceFilter, {
+                    onProgress: function (done, total) {
+                        if (cancelled) throw new ExportCancelled();
+                        showLoadingProgress(rwLabel, done, total, cardOpts(rwStep, { unit: 'cameras' }));
+                    },
+                });
+                rewrite.cams.forEach(function (cn, k) { if (rewritten[k]) prebuilt[cn] = rewritten[k]; });
+            }
             for (var i = 0; i < cols.length; i++) {
                 if (cancelled) break;
                 var camName = cols[i];
                 var step = sweepSteps + i + 1;
                 var target;
                 if (useDirectory) {
-                    showLoading('Finding ' + camName + '\'s folder…', cardOpts(step));
+                    // Saves in flight keep their bar; a quick lookup needs no card of its own.
+                    if (!savingStep) showLoading('Finding ' + camName + '\'s folder…', cardOpts(step));
                     target = await cameraTarget(dirHandle, camName);
                 } else {
                     // Downloads land flat; still named after the source when the load recorded it.
@@ -1933,6 +1974,7 @@ export function showSlpExportByCamModal() {
                     blob = new Blob([prebuilt[camName]], { type: 'application/x-hdf5' });
                     prebuilt[camName] = null;
                 } else {
+                    savingStep = 0;
                     showLoading('Writing ' + target.path + '…', cardOpts(step));
                     await yieldToPaint();   // paint before a one-step camera holds the thread
                     if (cancelled) break;
@@ -1945,20 +1987,17 @@ export function showSlpExportByCamModal() {
                     exported++;
                     continue;
                 }
-                if (saving.length >= SAVES_IN_FLIGHT) {
-                    showLoading('Saving files in ' + dirHandle.name + '…', cardOpts(step));
-                    await saving.shift();
-                }
-                showLoading('Saving ' + target.path + ' in ' + dirHandle.name + '…', cardOpts(step));
+                showSaving(step);
+                if (saving.length >= SAVES_IN_FLIGHT) await saving.shift();
                 var pending = saveFile(target, blob);
                 pending.catch(function () { /* awaited below; this only keeps it from being "unhandled" */ });
                 saving.push(pending);
             }
             if (saving.length) {
-                showLoading('Saving ' + saving.length + ' file' + (saving.length === 1 ? '' : 's') + ' in ' + dirHandle.name + '…',
-                    cardOpts(steps));
+                showSaving(steps);
                 while (saving.length) await saving.shift();
             }
+            savingStep = 0;
             if (cancelled) {
                 setStatus('Download All cancelled (' + exported + ' of ' + cols.length + ' written)', 'warning');
             } else {
@@ -1975,6 +2014,7 @@ export function showSlpExportByCamModal() {
                 succeeded = true;
             }
         } catch (err) {
+            savingStep = 0;   // the files still landing must not repaint the bar over the outcome
             // Let the files already handed over finish (or fail) before reporting.
             await Promise.allSettled(saving);
             saving = [];
