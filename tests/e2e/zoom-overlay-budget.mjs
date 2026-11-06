@@ -29,6 +29,9 @@
  * for one 1920x1200 camera at zoom 10 in a solo pane — follows a pan or zoom
  * out past that margin, and is drawn exactly where the full canvas would be.
  *
+ * And §9-10: a window survives `fitCanvasesToCells` (window resize, panel
+ * toggles) un-stretched, and the Tracking Wizard's grey-out covers it.
+ *
  * Run: node tests/e2e/zoom-overlay-budget.mjs
  */
 import { chromium } from 'playwright';
@@ -354,6 +357,66 @@ try {
             `rotation ${rot}: the node is drawn at its true screen position ` +
             (c ? `(off by ${c.dx.toFixed(2)}, ${c.dy.toFixed(2)} px)` : '(not found)'));
     }
+
+    // §9 — re-fitting the cells leaves a window alone. `fitCanvasesToCells`
+    // runs on every window resize, panel toggle and pane rebuild; it used to
+    // stretch the overlay element to the whole box, which on a window smeared
+    // the skeleton (or pushed it out of view) until something else redrew —
+    // forever when the box size did not change (e.g. a window 10 px narrower
+    // around a height-limited box).
+    // §10 — the Tracking Wizard's grey-out (Camera Views = 0) covers the whole
+    // window: it used to fill [0, window size] in FULL-canvas coordinates
+    // under the window's translate, a patch near the box's top-left that is
+    // off-window once zoomed in.
+    const refit = await page.evaluate(async () => {
+        const AS = await import('/ui/app-state.js');
+        const R = await import('/ui/rendering.js');
+        const L = await import('/loading/session-loader.js');
+        const S = await import('/ui/settings.js');
+        const OW = await import('/ui/overlay-window.js');
+        const vc = window.__lucid.videoController;
+        const v = AS.state.views[0];
+        const raf = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        v.rotation = 0;
+        vc._clearZoom(v);
+        const cell = v.canvas.closest('.video-cell');
+        vc._zoomAbout(v, 10, 10, cell.clientWidth / 2, cell.clientHeight / 2);
+        v.zoom.offsetX += 37.3; v.zoom.offsetY -= 21.7;
+        vc._constrainOffsets(v.zoom, v); vc.applyZoom(v);
+        R.drawAllOverlays(0);
+        await raf();
+        const o = v.overlayCanvas, p0 = v._overlayPlan;
+        const style = () => [o.style.left, o.style.top, o.style.width, o.style.height].join(' ');
+        const s0 = style();
+        L.fitCanvasesToCells();
+        await raf();
+        const r9 = { windowed: p0.windowed, s0, s1: style(), planCss: `${p0.cssLeft}px ${p0.cssTop}px ${p0.cssW}px ${p0.cssH}px` };
+
+        // the node's centre pixel on the window, as drawn
+        const nodePx = () => {
+            const plan = v._overlayPlan;
+            const s = Math.min(plan.fullW / v.videoWidth, plan.fullH / v.videoHeight);
+            const ox = (plan.fullW - v.videoWidth * s) / 2, oy = (plan.fullH - v.videoHeight * s) / 2;
+            const [x, y] = OW.fullToWindow(plan, ox + v.videoWidth / 2 * s, oy + v.videoHeight / 2 * s);
+            return Array.from(o.getContext('2d').getImageData(Math.round(x), Math.round(y), 1, 1).data);
+        };
+        const before = S.getCameraWeights();
+        R.drawAllOverlays(0);
+        const tracked = nodePx();
+        S.setCameraWeights(Object.assign({}, before, { [v.name]: 0 }));
+        R.drawAllOverlays(0);
+        const excluded = nodePx();
+        S.setCameraWeights(before);
+        R.drawAllOverlays(0);
+        return { r9, tracked, excluded, windowed: v._overlayPlan.windowed };
+    });
+    check(refit.r9.windowed && refit.r9.s1 === refit.r9.s0 && refit.r9.s1 === refit.r9.planCss,
+        `fitCanvasesToCells leaves a zoomed-in window as planned (${refit.r9.s1}; plan ${refit.r9.planCss})`);
+    // `source-atop` rgba(140,140,140,0.85) over the node's own colour
+    const greyed = (px, under) => px[3] > 200 && [0, 1, 2].every(i => Math.abs(px[i] - (0.85 * 140 + 0.15 * under[i])) <= 4);
+    check(refit.windowed && !greyed(refit.tracked, refit.tracked) && greyed(refit.excluded, refit.tracked),
+        `a tracking-excluded view's skeleton is greyed inside the window ` +
+        `(tracked rgba ${refit.tracked.join(',')} → excluded ${refit.excluded.join(',')})`);
 
     console.log('');
     check(errs.length === 0, 'no page errors: ' + (errs.join(' | ') || 'none'));

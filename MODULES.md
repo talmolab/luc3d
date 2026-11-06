@@ -6457,7 +6457,8 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   miss part of it. Same pixels as before for an identity-transform caller.
   `options.trackingExcluded` (from `isCameraTracked`) washes everything drawn
   for the view grey via `source-atop` (before the legend), marking a
-  Tracking-Wizard-excluded view. In identity mode it also labels **predicted**
+  Tracking-Wizard-excluded view; like the clear, it fills the whole canvas
+  under an identity transform, so it covers a zoomed-in window too. In identity mode it also labels **predicted**
   instances with their identity (step 3a), so tracker output is proofreadable.
   Threads `trailLength` / `trailShade`, the `showUser` / `showPredicted` /
   `showReprojected` layer switches, the per-type `lineWidth`s and
@@ -12739,6 +12740,12 @@ filesystem enumeration, decoder rebuild.
   `createVideoPromptCell`, `fitCanvasesToCells`, `cellResizeObserver`,
   `reapplyAllZoom`, `rebuildVideoController`, `updateTotalFrames`,
   `adoptLabeledFrameCount` (see Video assignment above).
+  `fitCanvasesToCells()` sizes each view's video canvas and overlay to its cell,
+  except a zoomed-in overlay WINDOW (`view._overlayPlan.windowed`), which
+  `applyOverlayPlan` (`ui/rendering.js`) sizes and places: it calls
+  `noteOverlayViewTransform(view)` instead, which redraws (re-plans) the window
+  only when the box changed. The controller is built with
+  `onViewTransform: noteOverlayViewTransform` (also in `pose/initialization.js`).
   `reapplyAllZoom()` runs `videoController.reapplyZoom` on every view — after
   `fitCanvasesToCells` in `cellResizeObserver`, and on a devicePixelRatio change
   via a module-level `matchMedia('(resolution: Ndppx)')` watcher (re-armed each
