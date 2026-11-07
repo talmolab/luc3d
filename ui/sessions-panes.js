@@ -33,7 +33,7 @@ import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d 
 import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js';
 import {
     triangulateAndReproject, getInstanceGroupsForFrame,
-    sessionHasCalibration, resolveTriangulationMethod,
+    sessionHasCalibration, resolveTriangulationMethod, triangulationSettingsKey,
 } from '../pose/triangulation.js';
 import {
     cellResizeObserver,
@@ -689,7 +689,19 @@ function renderDuplicatePanels() {
 
         if (panelOverlay && primaryView.overlayCanvas && panelOverlay !== primaryView.overlayCanvas) {
             var octx = panelOverlay.getContext('2d');
-            try { octx.drawImage(primaryView.overlayCanvas, 0, 0, panelOverlay.width, panelOverlay.height); }
+            // A zoomed-in primary overlay is a window onto the full canvas
+            // (`ui/overlay-window.js`): copy it to the same place in the mirror.
+            var plan = primaryView._overlayPlan;
+            try {
+                if (plan && plan.windowed) {
+                    var kx = panelOverlay.width / plan.boxW, ky = panelOverlay.height / plan.boxH;
+                    octx.clearRect(0, 0, panelOverlay.width, panelOverlay.height);
+                    octx.drawImage(primaryView.overlayCanvas, plan.cssLeft * kx, plan.cssTop * ky,
+                        plan.cssW * kx, plan.cssH * ky);
+                } else {
+                    octx.drawImage(primaryView.overlayCanvas, 0, 0, panelOverlay.width, panelOverlay.height);
+                }
+            }
             catch (e) { /* canvas not ready */ }
         }
     }
@@ -1577,6 +1589,7 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
                             if (valid) {
                                 group.points3d = pooledPoints3d(result.points3d);
                                 group.triangulationMethod = result.method;
+                                group.solveSettings = triangulationSettingsKey(fromSession.cameras);
                             }
                             group.markClean();
                             totalRetriangulated++;

@@ -392,14 +392,14 @@ const TRACKING_THRESHOLDS = [
     {
         id: 'autoImageSwitchCheck', label: 'Check ID switches after tracking (image detection)', default: 0,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
-        desc: 'After Track All or Track Frame Range, also check close encounters by APPEARANCE: crops of each animal in every camera are embedded with an image model on the GPU (Tracks ▸ Check ID Switches (Images)). Catches animals of similar size that look different (e.g. coat colour), which the size check cannot. Slow — minutes for a long recording — and needs the videos loaded; the model (~44 MB) downloads on first use. Without a GPU (WebGPU) it still runs, on the CPU: about 15x slower, so a long recording can take hours.',
+        desc: 'After Track All or Track Frame Range, also check close encounters by APPEARANCE: crops of each animal in every camera are embedded with an image model on the GPU (Tracks ▸ Check ID Switches (Images)). Catches animals of similar size that look different (e.g. coat colour), which the size check cannot. Slow — minutes for a long recording — and needs the videos loaded; the model (~43 MB) downloads on first use. Without a GPU (WebGPU) it still runs, on the CPU: about 15x slower, so a long recording can take hours.',
     },
     {
         // A new id, not 'imageCheckThreshold': the score's scale changed (2026-10-09, -4..+4 instead of summed
         // log-probabilities), and an old saved -25 would otherwise be clamped to -4 and flag almost nothing.
-        id: 'imageChangeThreshold', label: 'Image check: flag threshold', default: -0.8,
+        id: 'imageChangeThreshold', label: 'Image check: flag threshold', default: -1.2,
         min: -4, max: 0, step: 0.1,
-        desc: 'A contact is a possible switch when its score falls below this. The score compares how each animal looks just before and just after the contact: about +2 means each still looks like itself, about -2 that they look like each other, near 0 that they cannot be told apart there. Closer to 0 catches more but flags more clean contacts: over 8 proofread or tail-marked recordings (1 h 45 min), -0.8 caught 10 of 12 real relabels with 2 false marks; -0.5 caught the same with 6; -1.2 caught 8 with none.',
+        desc: 'A contact is a possible switch when its score falls below this. The score compares how each animal looks just before and just after the contact: about +2 means each still looks like itself, about -2 that they look like each other, near 0 that they cannot be told apart there. Closer to 0 catches more but flags more clean contacts: over 24 proofread or tail-marked recordings (4 h 30 min), -1.2 caught 22 label changes with no false mark; -1 caught the same 22 with 2; -0.8 with 3. On 193 held-out single-camera recordings, -1.2 caught 31 with none.',
     },
     {
         id: 'imageCheckHz', label: 'Image check: crops per second', default: 2,
@@ -423,8 +423,8 @@ const TRACKING_THRESHOLDS = [
     },
     {
         id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 0,
-        min: 0, max: 500, step: 1,
-        desc: 'Robust triangulation: after an initial 3D solve, drop any 2D node whose reprojection error in a view exceeds this many pixels, then re-triangulate that node from the remaining reliable views. A node left with fewer than 2 reliable views is dropped from 3D. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless.',
+        min: 0, max: 640, step: 1,
+        desc: 'Robust triangulation: after the 3D solve, if a node\'s reprojection error in any view (the distance on that view\'s 2D image between the prediction and the reprojection) is over this many pixels, the view that misses by most is dropped for that node and the node is re-triangulated from the rest; this repeats while more than 2 views are left. A node whose last 2 views still miss by more gets no 3D point. 100 to 15 px is the recommended range: lower can drop good views too. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless. Settings ▸ Triangulation Wizard draws it.',
     },
 ];
 
@@ -582,6 +582,18 @@ export function setTrackingThresholds(map) {
     }
     _settings.trackingThresholds = next;
     persist();
+    for (var i = 0; i < _thresholdListeners.length; i++) {
+        try { _thresholdListeners[i](); } catch (e) { /* ignore */ }
+    }
+}
+
+// Told after every commit of the thresholds, so a control outside Settings can
+// show them (the Triangulate menu's Reprojection error field). A listener that
+// throws must not stop the others.
+var _thresholdListeners = [];
+
+export function onTrackingThresholdsChange(fn) {
+    if (typeof fn === 'function') _thresholdListeners.push(fn);
 }
 
 // Commit SOME thresholds (Track All's first-use dialog: the image check's

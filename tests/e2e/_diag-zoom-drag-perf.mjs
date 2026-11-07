@@ -34,7 +34,13 @@
  * records rAF frames presented (fps), main-thread long tasks, and how far the
  * node actually got. `overlay RAM` is the sum over every view.
  *
- * Env: VIDEO=1280x1024 CAMS=8 ZOOMS=1,2,4,6,8,10 MOVES=80 ZOOM_ALL=1 EXTRA_ARGS=
+ * The visible-window fix (`ui/overlay-window.js`) took the remaining case — a
+ * canvas sized to the whole zoomed video, worst in a solo pane — from 1.4 fps
+ * to ~41 at zoom 10 (9 cameras at 1920x1200, SINGLE=1 ZOOM_ALL=0, headed under
+ * Xvfb without a GPU; 13920x8700 → ~2090x1780 backing), and all 9 zoomed with
+ * `+` from 1.1 to ~40 fps (518 → 14 MB).
+ *
+ * Env: VIDEO=1280x1024 CAMS=8 ZOOMS=1,2,4,6,8,10 MOVES=80 ZOOM_ALL=1 SINGLE=0 EXTRA_ARGS=
  *
  * Run: node tests/e2e/_diag-zoom-drag-perf.mjs
  */
@@ -54,6 +60,8 @@ const ZOOMS = (process.env.ZOOMS || '1,2,4,6,8,10').split(',').map(Number);
 const MOVES = Number(process.env.MOVES || 80);
 // ZOOM_ALL=0 zooms only view 0 (the scroll-wheel gesture) instead of every view.
 const ZOOM_ALL = process.env.ZOOM_ALL !== '0';
+// SINGLE=1 solos view 0 (View ▸ single view) before measuring.
+const SINGLE = process.env.SINGLE === '1';
 const MOVE_HZ = 125;
 
 const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
@@ -73,7 +81,7 @@ try {
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     await page.bringToFront();
 
-    await page.evaluate(async ([VW, VH, NCAM]) => {
+    await page.evaluate(async ([VW, VH, NCAM, SINGLE]) => {
         const pd = await import('/pose/pose-data.js');
         const AS = await import('/ui/app-state.js');
         const sp = await import('/ui/sessions-panes.js');
@@ -117,7 +125,15 @@ try {
         await new Promise(r => requestAnimationFrame(r));
         sp.refreshPaneInteractions();
         await new Promise(r => requestAnimationFrame(r));
-    }, [VW, VH, NCAM]);
+        if (SINGLE) {
+            // One view filling the dock — where the visible-window fix matters
+            // most (the overlay used to cover the whole zoomed video).
+            const uw = await import('/ui/ui-wiring.js');
+            uw.enterSingleViewMode(); uw.setSoloView(AS.state.views[0].name);
+            await new Promise(r => setTimeout(r, 600));
+            sp.refreshPaneInteractions();
+        }
+    }, [VW, VH, NCAM, SINGLE]);
     await page.waitForTimeout(800);
 
     await page.evaluate(() => {
@@ -139,7 +155,8 @@ try {
         const vx = inst.getX(0), vy = inst.getY(0);
 
         const screenOfNode = () => {
-            const r = v.overlayCanvas.getBoundingClientRect();
+            // the VIDEO box: a zoomed-in overlay canvas is a window onto part of it
+            const r = v.canvas.getBoundingClientRect();
             return [r.left + (vx / v.videoWidth) * r.width, r.top + (vy / v.videoHeight) * r.height];
         };
 

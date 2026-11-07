@@ -1657,6 +1657,14 @@ export class InstanceGroup {
          */
         this.triangulationMethod = undefined;
         /**
+         * The solve settings `points3d` was produced under
+         * (`triangulationSettingsKey`, pose/triangulation.js): `adoptPrior3d` only
+         * reuses 3D solved under the settings in force now. In memory only, so 3D
+         * read from a file has none and is re-solved rather than trusted.
+         * @type {string|undefined}
+         */
+        this.solveSettings = undefined;
+        /**
          * @type {Map<string, Instance>} camera name -> reprojected instance.
          * Starts as the shared read-only `NO_REPROJECTED_INSTANCES`; write
          * through `addReprojectedInstance`.
@@ -1902,6 +1910,29 @@ export class Session {
          * `setTrackerNumAnimals`), which also marks the project dirty.
          */
         this.numAnimals = null;
+        /**
+         * Which identity has the tail marks ("id_0"), for Track All's tail-mark
+         * pass (pose/tail-mark.js), or null for off. Persisted as
+         * `metadata.lucid.tailMarkedIdentity`.
+         * @type {?string}
+         */
+        this.tailMarkedIdentity = null;
+        /**
+         * What each identity should show, per identity cue (pose/identity-cues.js):
+         * `{tailBands: {id_0: 0, id_1: 1, ...}}` (cue id -> identity name -> class), or
+         * null for none. Track All then relabels so each identity holds the animal that
+         * shows it. Persisted as `metadata.lucid.identityMarks`.
+         * @type {?Object<string, Object<string, *>>}
+         */
+        this.identityMarks = null;
+        /**
+         * The image ID-switch check's model for this session: null = the
+         * built-in one; else a package choice (`modelChoiceOf`,
+         * pose/image-model-manifest.js: key, name, input, threshold, url or
+         * folder). Persisted as `metadata.lucid.imageModel`.
+         * @type {?Object}
+         */
+        this.imageModel = null;
         /** @type {LazyFrameLoader|null} Set when using lazy H5 loading */
         this.lazyLoader = null;
         /** @type {Map<string,{data:Uint8Array,nTracks:number,nFrames:number}>|null} Per-camera track occupancy for timeline */
@@ -3257,6 +3288,39 @@ export class Session {
         const name = this.skeleton && this.skeleton.nodes ? this.skeleton.nodes[k] : undefined;
         if (name == null) return NaN;
         return loader.predictedPointScore(cameraName, frameIdx, inst._rawInstIndex, name);
+    }
+
+    /**
+     * `predictedNodeScore` for every node of one instance: the function maps a
+     * node index `k` to exactly what `predictedNodeScore(cameraName, frameIdx,
+     * inst, k)` returns, with the instance's store row (lazy) resolved once
+     * instead of per node (By Cam's per-frame pass asks for every node).
+     *
+     * @param {string} cameraName
+     * @param {number} frameIdx
+     * @param {Instance} inst
+     * @returns {(k: number) => number}
+     */
+    predictedNodeScorer(cameraName, frameIdx, inst) {
+        const none = function () { return NaN; };
+        if (!inst || inst.type !== 'predicted') return none;
+        const n = inst.numNodes;
+        const inRange = function (k) { return Number.isInteger(k) && k >= 0 && k < n; };
+        if (inst.hasPointScores()) return function (k) { return inRange(k) ? inst.pointScore(k) : NaN; };
+        const loader = this.lazyLoader;
+        if (!loader || !Number.isInteger(inst._rawInstIndex) || inst._rawInstIndex < 0) return none;
+        if (typeof loader.predictedPointScorer !== 'function') {
+            if (typeof loader.predictedPointScore !== 'function') return none;
+            return (k) => this.predictedNodeScore(cameraName, frameIdx, inst, k);
+        }
+        const scoreOf = loader.predictedPointScorer(cameraName, frameIdx, inst._rawInstIndex);
+        if (!scoreOf) return none;
+        const nodes = this.skeleton && this.skeleton.nodes;
+        return function (k) {
+            if (!inRange(k)) return NaN;
+            const name = nodes ? nodes[k] : undefined;
+            return name == null ? NaN : scoreOf(name);
+        };
     }
 
     /**
