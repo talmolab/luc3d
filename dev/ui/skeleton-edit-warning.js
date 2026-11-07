@@ -57,10 +57,10 @@
 // `ui/calibration-notice.js` shares them: it is the same kind of dialog — a
 // stack of titled blocks whose height depends on the project.
 
-import { state } from './app-state.js?v=a9f69dd10c4a';
+import { state } from './app-state.js?v=3ec7a8467fd9';
 import {
     splitSessionsBySkeleton, countSkeletonEditImpact, skeletonEditNeedsConfirmation,
-} from '../pose/skeleton-edit-impact.js?v=a9f69dd10c4a';
+} from '../pose/skeleton-edit-impact.js?v=3ec7a8467fd9';
 
 /** `1,234` rather than `1234`, because these numbers get large. */
 function n(v) {

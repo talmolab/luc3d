@@ -8,9 +8,9 @@
 //
 // Extracted from app.js per the consolidated Pass 3 plan, Module 13.
 
-import { noteProgress } from './progress-delta.js?v=a9f69dd10c4a';
-import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=a9f69dd10c4a';
-import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=a9f69dd10c4a';
+import { noteProgress } from './progress-delta.js?v=3ec7a8467fd9';
+import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=3ec7a8467fd9';
+import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=3ec7a8467fd9';
 import {
     triangulateAndReproject,
     frameHasGroupedUserInstances,
@@ -26,14 +26,14 @@ import {
     triangulationSettingsKey,
     triangulationMethodLabel,
     dropAllDerivedTriangulationState,
-} from '../pose/triangulation.js?v=a9f69dd10c4a';
-import { Viewport3D } from './viewport3d.js?v=a9f69dd10c4a';
-import { getTrackColor, getGroupColor } from './overlays.js?v=a9f69dd10c4a';
-import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=a9f69dd10c4a';
-import { updateInfoPanel } from './info-panel.js?v=a9f69dd10c4a';
-import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=a9f69dd10c4a';
-import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js?v=a9f69dd10c4a';
-import { createGroupSolver } from '../pose/triangulation-pool.js?v=a9f69dd10c4a';
+} from '../pose/triangulation.js?v=3ec7a8467fd9';
+import { Viewport3D } from './viewport3d.js?v=3ec7a8467fd9';
+import { getTrackColor, getGroupColor } from './overlays.js?v=3ec7a8467fd9';
+import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=3ec7a8467fd9';
+import { updateInfoPanel } from './info-panel.js?v=3ec7a8467fd9';
+import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=3ec7a8467fd9';
+import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js?v=3ec7a8467fd9';
+import { createGroupSolver } from '../pose/triangulation-pool.js?v=3ec7a8467fd9';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
@@ -45,22 +45,22 @@ import {
     findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
-} from '../import-export/file-io.js?v=a9f69dd10c4a';
+} from '../import-export/file-io.js?v=3ec7a8467fd9';
 
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from '../pose/initialization.js?v=a9f69dd10c4a';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=a9f69dd10c4a';
-import { fileSystemAccessHint } from './browser-hints.js?v=a9f69dd10c4a';
-import { pickExportFolder } from '../loading/folder-picker-start.js?v=a9f69dd10c4a';
-import { chooseProofreadSource, proofreadSlpName } from '../loading/percam-slp-choice.js?v=a9f69dd10c4a';
-import { noteTriangulateRun } from '../pose/run-state.js?v=a9f69dd10c4a';
+import { update3DViewport } from '../pose/initialization.js?v=3ec7a8467fd9';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=3ec7a8467fd9';
+import { fileSystemAccessHint } from './browser-hints.js?v=3ec7a8467fd9';
+import { pickExportFolder } from '../loading/folder-picker-start.js?v=3ec7a8467fd9';
+import { chooseProofreadSource, proofreadSlpName } from '../loading/percam-slp-choice.js?v=3ec7a8467fd9';
+import { noteTriangulateRun } from '../pose/run-state.js?v=3ec7a8467fd9';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
 // private copies of all four and had silently drifted apart (a 2x bitrate floor
 // gap at the smallest tier, and two disagreeing level tables).
 import {
     RES_PRESETS, bitrateFor, estimatedBytes, h264CodecFor, shouldStreamToDisk,
-} from './overlay-export-layout.js?v=a9f69dd10c4a';
+} from './overlay-export-layout.js?v=3ec7a8467fd9';
 
 // ============================================
 // Group by Track & Triangulate All
@@ -1528,7 +1528,8 @@ export function showSlpExportByCamModal() {
         + 'as one SLEAP file into a folder you choose (it opens in the project\'s folder). A camera with '
         + 'its own folder there gets its file in that folder, named after the camera\'s source '
         + '<code>.slp</code> plus <code>_proofread</code> (an earlier one is replaced); any other camera is '
-        + 'written as <code>&lt;camera&gt;.slp</code> in the folder itself.</div>' +
+        + 'written as <code>&lt;camera&gt;.slp</code> in the folder itself. Tracks are written as the '
+        + 'identities, if any are assigned, so a track is the same animal in every camera.</div>' +
         emptyNote +
         '<div class="slp-bycam-body">' +
         '<div class="slp-bycam-scroll slp-bycam-sess-scroll">' + sessHtml + '</div>' +
@@ -2157,7 +2158,8 @@ export function showSlpExportPerSessionModal() {
     modal.innerHTML =
         '<h3>Export SLEAP File Per Session</h3>' +
         '<div class="slp-export-note">Writes one 2D SLEAP file per camera in <b>' + sessName + '</b> '
-        + 'into each camera\'s associated directory inside a folder you choose.</div>' +
+        + 'into each camera\'s associated directory inside a folder you choose. Tracks are written '
+        + 'as the identities, if any are assigned, so a track is the same animal in every camera.</div>' +
         '<div class="slp-export-table-container">' +
         '<table class="data-table slp-export-table">' +
         '<thead><tr><th class="slp-ps-dl-cell">Download</th><th>Camera</th><th>Directory</th><th>Output Filename</th></tr></thead>' +
