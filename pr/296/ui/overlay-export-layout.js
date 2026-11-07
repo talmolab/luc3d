@@ -261,8 +261,9 @@ export function defaultOverlayExportSettings() {
         // name that the export will not carry.
         layers: {
             videoNames: true, user: true, predicted: true, reproj: true,
-            errors: false, legend: false,
+            errors: false, legend: false, symmetryEdges: false,
         },
+        symmetryEdgeWeight: 1,
         trailLength: 0,
         // A TRAIL_SHADES key. Must equal DEFAULT_TRAIL_SHADE in ui/overlays.js —
         // this module imports nothing, so the value is repeated here and a unit
@@ -444,6 +445,8 @@ export function overlayOptionsFrom(settings, videoW, videoH, canvasW, canvasH) {
         showReprojected: !!settings.layers.reproj,
         showErrors: !!settings.layers.errors,
         reprojNodeColor: r.nodeColor,
+        showSymmetryEdges: !!settings.layers.symmetryEdges,
+        symmetryEdgeWeight: lw(settings.symmetryEdgeWeight),
         userOpts: {
             nodeSize: sz(u.nodeSize), lineWidth: lw(u.lineWidth), alpha: u.alpha,
             labelSize: lb(u.labelSize), labelAlpha: u.labelAlpha,

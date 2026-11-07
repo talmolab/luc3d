@@ -53,12 +53,12 @@
  * streams from the columnar store untouched.
  */
 
-import { _buildSioPoints } from './file-io.js?v=95415559d105';
-import { points3dNodeCount } from '../pose/pose-data.js?v=95415559d105';
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=95415559d105';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=95415559d105';
-import { writePlaneMetadata } from './plane-metadata.js?v=95415559d105';
-import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=95415559d105';
+import { _buildSioPoints } from './file-io.js?v=e7f7e1de6d01';
+import { points3dNodeCount } from '../pose/pose-data.js?v=e7f7e1de6d01';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=e7f7e1de6d01';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=e7f7e1de6d01';
+import { writePlaneMetadata } from './plane-metadata.js?v=e7f7e1de6d01';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=e7f7e1de6d01';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;
@@ -447,9 +447,12 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     function buildOverlayInstance(inst, trackBase, camName, frameIdx) {
         var isPredicted = inst.type !== 'user';
         var perPointScore = isPredicted ? (inst.score != null ? inst.score : 1.0) : undefined;
-        var pts = _buildSioPoints(inst, numNodes, perPointScore, null, function (k) {
-            return session.predictedNodeScore(camName, frameIdx, inst, k);
-        });
+        // The store row is resolved once per instance, not per node (same
+        // answers as `predictedNodeScore`).
+        var nodeScore = typeof session.predictedNodeScorer === 'function'
+            ? session.predictedNodeScorer(camName, frameIdx, inst)
+            : function (k) { return session.predictedNodeScore(camName, frameIdx, inst, k); };
+        var pts = _buildSioPoints(inst, numNodes, perPointScore, null, nodeScore);
         var track = null;
         if (inst.trackIdx != null && inst.trackIdx >= 0) {
             var combinedIdx = trackBase + inst.trackIdx;
@@ -843,14 +846,43 @@ export async function streamSessionIntoWriter(writer, session, refGraphResult, o
     }
 }
 
-/** Finalize the writer (bytes in memory, or streamed to `opts.sink`). */
+/**
+ * Finalize the writer (bytes in memory, or streamed to `opts.sink`). A sink
+ * with `setTotalBytes(n)` is told the finished file's size before its first
+ * write (File ▸ Save's disk bar): the vendored `writeToSink` finalizes the
+ * in-memory file and only then streams it, so its size is known by then.
+ */
 export async function finalizeProjectWriter(writer, opts) {
     opts = opts || {};
     if (opts.sink) {
-        await writer.writeToSink(opts.sink, { chunkBytes: opts.chunkBytes });
+        await writer.writeToSink(sinkReportingTotal(writer, opts.sink), { chunkBytes: opts.chunkBytes });
         return null;
     }
     return writer.close();
+}
+
+/**
+ * `sink`, unchanged, unless it has `setTotalBytes`: then a wrapper that calls
+ * it once, at the first write, with the size of the writer's finished
+ * in-memory file (h5wasm MEMFS `stat`). A failed stat reports nothing (the
+ * sink then counts bytes without a total).
+ */
+function sinkReportingTotal(writer, sink) {
+    if (typeof sink.setTotalBytes !== 'function') return sink;
+    var told = false;
+    var out = {
+        write: function (chunk) {
+            if (!told) {
+                told = true;
+                var size = NaN;
+                try { size = Number(writer.module.FS.stat(writer.memPath).size); } catch (e) { /* no total */ }
+                if (size > 0) sink.setTotalBytes(size);
+            }
+            return sink.write(chunk);
+        },
+    };
+    if (sink.close) out.close = function () { return sink.close(); };
+    return out;
 }
 
 /**

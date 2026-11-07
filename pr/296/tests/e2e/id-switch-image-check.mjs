@@ -2,7 +2,7 @@
  * id-switch-image-check.mjs — the image ID-switch check's UI in the real app
  * (ui/id-switch-modal.js `runIdSwitchChecks({image: true})`).
  *
- * The real path needs the videos, WebGPU and a 44 MB model, so the embedder and
+ * The real path needs the videos, WebGPU and a 43 MB model, so the embedder and
  * the WebGPU probe are INJECTED (`opts.inject`, documented as test-only): a
  * synthetic embedder returns a fixed random "appearance" vector per animal plus
  * noise, from 4 cameras. The scoring underneath is the real pose/id-switch-check.js.
@@ -155,7 +155,7 @@ try {
             }
             return out;
         });
-        check(off.every(d => d < 1), `the skeleton's keypoints land on the crop's pixels, at any rotation (off by ${off.map(d => d.toFixed(2)).join(', ')} px of 224)`);
+        check(off.every(d => d < 1), `the skeleton's keypoints land on the crop's pixels, at any rotation (off by ${off.map(d => d.toFixed(2)).join(', ')} px of the model input)`);
     }
     {   // an embedder without sampleCrops (as injected here): no empty square
         await page.evaluate(async () => { await window.__buildSwap([1, 1, 1]); const M = await import('/ui/id-switch-modal.js');

@@ -31,7 +31,8 @@ const { SioLazyLoader } = await imp('loading/sio-lazy-loader.js');
 const R = await imp('pose/lazy-residency.js');
 const { frameEvictionBlocker, evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency,
         isLazyResidencyHeld, LAZY_PLAYBACK_AHEAD, LAZY_KEEP_BEHIND, LAZY_RESIDENT_CAP,
-        LAZY_PREFETCH_MARGIN, releaseFrameMembers2d, hydrateFrameMembers2d, member2dReleaseBlocker } = R;
+        LAZY_PREFETCH_MARGIN, releaseFrameMembers2d, hydrateFrameMembers2d, member2dReleaseBlocker,
+        lazyRowInstance } = R;
 const E = await imp('ui/image-embedder.js');
 
 let passed = 0, failed = 0;
@@ -185,6 +186,49 @@ group('describeStoreFrame mirrors what hydration would build');
     const Ln = makeLoader(3, twoPredicted, { noTypeColumn: true });
     eq(Ln.describeStoreFrame('A', 1).predicted[0], 0,
         'no instance_type column reads as type 0 (user), as the store\'s materializeFrame does');
+}
+
+// ---------------------------------------------------------------------------
+group('the file\'s visibility: occludedNodes, lazyRowInstance and the blockers');
+{
+    // Camera A, frame 0: a user row (nodes 0..2) and a prediction (3..5).
+    // User node 1 and predicted node 2 are placed but not visible; predicted
+    // node 0 is missing (NaN) and not visible, which is NOT occlusion.
+    const L = makeLoader(1, (cam, f) => [{ track: 0, type: 0 }, { track: 1, type: 1 }]);
+    for (const cam of CAMS) {
+        const st = L.labelsByCam.get(cam)._lazyDataStore;
+        st.instancesData.point_id_start = Float64Array.of(0, 0);
+        st.instancesData.point_id_end = Float64Array.of(3, 3);
+        st.pointsData = { x: Float64Array.of(1, 2, 3), y: Float64Array.of(1, 2, 3), visible: Uint8Array.of(1, 0, 1) };
+        st.predPointsData = { x: Float64Array.of(NaN, 2, 3), y: Float64Array.of(NaN, 2, 3), visible: Uint8Array.of(0, 1, 0) };
+    }
+    const d = L.describeStoreFrame('A', 0);
+    eq(JSON.stringify(d.occludedNodes(0)), '[1]', 'user row: node 1 is placed but not visible');
+    eq(JSON.stringify(d.occludedNodes(1)), '[2]', 'prediction: node 2 (a missing invisible node is not occlusion)');
+    eq(d.occludedNodes(2), null, 'a row past the frame has none');
+    eq(L.describeStoreFrame('A', 5).occludedNodes(0), null, 'a frame with no row has none');
+
+    const rowU = { points: [[1, 1], [2, 2], [3, 3]], trackIdx: 0, type: 'user', score: 0, occluded: [false, true, false] };
+    const rowP = { points: [null, [2, 2], [3, 3]], trackIdx: 1, type: 'predicted', score: 0.9, occluded: [false, false, true] };
+    const u = lazyRowInstance(rowU, 0);
+    eq(u.isOccluded(1) && !u.isOccluded(0) && !u.isOccluded(2), true, 'lazyRowInstance: the user row\'s node 1 is occluded');
+    eq([...u.nulledNodes].join(','), '1', 'and nulled (drawn occluded), as the eager loader does for a user label');
+    const p = lazyRowInstance(rowP, 1);
+    eq(p.isOccluded(2) && !(p.nulledNodes && p.nulledNodes.size), true, 'a prediction gets the occlusion, never nulled nodes');
+    eq(lazyRowInstance({ points: [[1, 1], null, null], type: 'predicted' }, null).anyOccluded(), false, 'a row without flags has none');
+
+    // member2dReleaseBlocker: occlusion must EQUAL the row's.
+    p._rawInstIndex = 1;
+    eq(member2dReleaseBlocker(p, d, NODES), null, 'a prediction member with its row\'s occlusion releases');
+    p.setOccluded(1, true);
+    eq(member2dReleaseBlocker(p, d, NODES), 'occlusion', 'one node more than the row: kept');
+    p.setOccluded(1, false); p.setOccluded(2, false);
+    eq(member2dReleaseBlocker(p, d, NODES), 'occlusion', 'cleared in memory while the row has it: kept');
+    // A stand-in descriptor without occludedNodes reads as a row with none.
+    const bare = { count: 2, trackIdx: Int32Array.of(0, 1), predicted: Uint8Array.of(0, 1) };
+    eq(member2dReleaseBlocker(p, bare, NODES), null, 'no occludedNodes and no occlusion: releases');
+    p.setOccluded(0, true);
+    eq(member2dReleaseBlocker(p, bare, NODES), 'occlusion', 'no occludedNodes but occlusion set: kept');
 }
 
 // ---------------------------------------------------------------------------

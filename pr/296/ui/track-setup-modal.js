@@ -11,7 +11,8 @@
  * every user passes through before tracking a session is this question, so the
  * weights are laid out under it, editable, with the values the run will use.
  *
- * A LEAF on purpose: it imports nothing, takes the current values in and hands
+ * A LEAF on purpose: it imports only another leaf (the band-count rows of
+ * `ui/identity-marks-modal.js`), takes the current values in and hands
  * the answer back, and commits nothing itself. `pose/tracker.js` writes the
  * count (`setTrackerNumAnimals`) and the weights (`setNodeWeights`) — the same
  * two writers as the toolbar's Animals field and the Tracking Wizard — so there
@@ -29,6 +30,8 @@
  * Range collects the count in its own dialog and never reaches this one.
  */
 
+import { buildBandCountFields } from './identity-marks-modal.js?v=e7f7e1de6d01';
+
 /**
  * Show the dialog. Resolves with the answer on Continue / Enter, or `null` on
  * Cancel / Esc / a backdrop click, which must leave everything as it was.
@@ -38,14 +41,16 @@
  *
  * @param {{title?: string, animals?: ?number,
  *          nodes?: Array<{name: string, weight: number}>,
- *          imageCheck?: Array<Object>}} opts
+ *          imageCheck?: Array<Object>, tailMarks?: {value: ?string, bands: ?Object<string, number>}}} opts
  *   `title` names the run ("Track All" / "Track Frame"); `animals` pre-fills
  *   the count (null/undefined = blank, auto-detect); `nodes` are the session's
  *   skeleton nodes in order, each with its CURRENT effective weight;
  *   `imageCheck`, when given, is the image check's settings as
- *   `getTrackingThresholdDefs()` describes them (`IMAGE_CHECK_IDS`).
+ *   `getTrackingThresholdDefs()` describes them (`IMAGE_CHECK_IDS`); `tailMarks`,
+ *   when given, offers the tail-mark choice, starting at `value`.
  * @returns {Promise<?{animals: ?number, nodeWeights: Object<string, number>,
- *                     thresholds: Object<string, number>}>}
+ *                     thresholds: Object<string, number>,
+ *                     tailMarkedIdentity: ?string, identityMarks: ?Object}>}
  *   `animals` null = auto-detect; `nodeWeights` maps EVERY node shown to its
  *   weight in [0, 1], edited or not; `thresholds` maps every image-check
  *   setting shown to its value ({} when none were).
@@ -96,9 +101,16 @@ export function showTrackSetupModal(opts) {
         var imageCheck = buildImageCheckFields(opts.imageCheck);
         if (imageCheck.element) modal.appendChild(imageCheck.element);
 
+        // --- Tail marks (Track All only) ---------------------------------------
+        var tailMarks = buildTailMarkField(opts.tailMarks, function () {
+            var n = Number(animalsInput.value);
+            return Number.isInteger(n) && n >= 2 ? n : 2;
+        });
+        if (tailMarks) modal.appendChild(tailMarks.element);
+
         var note = document.createElement('p');
         note.className = 'track-setup-note track-setup-later';
-        note.textContent = 'To change these later: the Animals field beside Track Frame, and ' +
+        note.textContent = 'To change these later: the Animals' + (tailMarks ? ' and Tail marks fields' : ' field') + ' in the Track menu, and ' +
             'Tracks ▸ Tracking Wizard. Node weights' + (imageCheck.element ? ' and the image check' : '') +
             ' are saved in this browser, for every project.';
         modal.appendChild(note);
@@ -137,6 +149,8 @@ export function showTrackSetupModal(opts) {
             if (w.error) return { error: w.error };
             var t = imageCheck.read();
             if (t.error) return { error: t.error };
+            var tm = tailMarks ? tailMarks.read() : null;
+            if (tm && tm.error) return { error: tm.error };
             return { animals: n, nodeWeights: w.nodeWeights, thresholds: t.thresholds, error: null };
         }
 
@@ -146,6 +160,7 @@ export function showTrackSetupModal(opts) {
             continueBtn.disabled = !!f.error;
             weights.refresh();
             imageCheck.refresh();
+            if (tailMarks) tailMarks.refresh();
         }
 
         var done = false;
@@ -160,7 +175,10 @@ export function showTrackSetupModal(opts) {
         function proceed() {
             var f = readForm();
             if (f.error) { refresh(); return; }
-            finish({ animals: f.animals, nodeWeights: f.nodeWeights, thresholds: f.thresholds });
+            var tmAnswer = tailMarks ? tailMarks.read() : null;
+            finish({ animals: f.animals, nodeWeights: f.nodeWeights, thresholds: f.thresholds,
+                tailMarkedIdentity: tmAnswer ? tmAnswer.marked : null,
+                identityMarks: tmAnswer && tmAnswer.counts ? { tailBands: tmAnswer.counts } : null });
         }
 
         // Capture phase, and the keys are consumed: Esc and Enter belong to the
@@ -187,6 +205,71 @@ export function showTrackSetupModal(opts) {
         animalsInput.focus();
         animalsInput.select();
     });
+}
+
+/**
+ * Which identity has the tail marks (pose/tail-mark.js): a menu, Off first. The
+ * dialog returns its value; `pose/tracker.js` writes it. Commits nothing.
+ * @param {?{value: ?string}} opts
+ * @returns {?{element: HTMLElement, read: () => ?string}}  null when not offered
+ */
+function buildTailMarkField(opts, animalCount) {
+    if (!opts) return null;
+    var element = document.createElement('div');
+    element.className = 'track-tail-mark-block';
+    var title = document.createElement('div');
+    title.className = 'track-setup-section-title';
+    title.textContent = 'Tail marks';
+    element.appendChild(title);
+    var hint = document.createElement('p');
+    hint.className = 'track-setup-note';
+    hint.textContent = 'Track All reads dark marks on the tails in every camera and keeps each animal on its identity ' +
+        'from start to end: for two animals, the one with marks on the identity chosen; for more, each identity\'s ' +
+        'number of bands. Needs the videos loaded.';
+    element.appendChild(hint);
+    var row = document.createElement('label');
+    row.className = 'track-setup-animals';
+    var label = document.createElement('span');
+    label.textContent = 'The animal with marks is';
+    var select = document.createElement('select');
+    select.id = 'trackSetupTailMarks';
+    [['', 'Off'], ['id_0', 'id_0'], ['id_1', 'id_1'], ['bands', 'Bands per id']].forEach(function (o) {
+        var opt = document.createElement('option');
+        opt.value = o[0];
+        opt.textContent = o[1];
+        select.appendChild(opt);
+    });
+    select.value = opts.bands ? 'bands' : (opts.value || '');
+    row.appendChild(label);
+    row.appendChild(select);
+    element.appendChild(row);
+    // one row per identity while "Bands per id" is chosen, rebuilt when the animal count changes
+    var holder = document.createElement('div');
+    element.appendChild(holder);
+    var fields = null, shownFor = null;
+    function refresh() {
+        var want = select.value === 'bands' ? animalCount() : 0;
+        if (want === shownFor) return;
+        var prev = fields ? fields.read().counts : opts.bands;
+        holder.textContent = '';
+        fields = null;
+        shownFor = want;
+        if (!want) return;
+        var names = [];
+        for (var i = 0; i < want; i++) names.push('id_' + i);
+        fields = buildBandCountFields(names, prev || null);
+        holder.appendChild(fields.element);
+    }
+    refresh();
+    return {
+        element: element,
+        refresh: refresh,
+        read: function () {
+            if (select.value !== 'bands') return { marked: select.value || null };
+            var r = fields ? fields.read() : { error: 'Set the number of animals first.' };
+            return r.error ? { error: r.error } : { counts: r.counts };
+        },
+    };
 }
 
 /**

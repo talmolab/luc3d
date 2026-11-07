@@ -14,12 +14,12 @@
  * ES module. Exports `InteractionManager` and `isInteractiveClickTarget`.
  */
 
-import { Instance } from '../pose/pose-data.js?v=95415559d105';
-import { getOrComputeReprojectedInstance } from '../pose/triangulation.js?v=95415559d105';
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=95415559d105';
-import { deleteTargetsFromStore, groupMemberTargets, unlinkedTarget } from './custom-delete-ops.js?v=95415559d105';
-import { nodeTooltipText, setNodeTooltipTarget, hideNodeTooltip } from './node-tooltip.js?v=95415559d105';
-import { getGroupColor, unlinkedDupIndices, unlinkedBaseColor } from './overlays.js?v=95415559d105';
+import { Instance } from '../pose/pose-data.js?v=e7f7e1de6d01';
+import { getOrComputeReprojectedInstance } from '../pose/triangulation.js?v=e7f7e1de6d01';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=e7f7e1de6d01';
+import { deleteTargetsFromStore, groupMemberTargets, unlinkedTarget } from './custom-delete-ops.js?v=e7f7e1de6d01';
+import { nodeTooltipText, setNodeTooltipTarget, hideNodeTooltip } from './node-tooltip.js?v=e7f7e1de6d01';
+import { getGroupColor, unlinkedDupIndices, unlinkedBaseColor, wedgeHalfWidth } from './overlays.js?v=e7f7e1de6d01';
 
 // ============================================
 // Alt + wheel instance rotation
@@ -314,7 +314,10 @@ export class InteractionManager {
         const view = this._findView(state, viewName);
         if (!view) return [clientX, clientY];
 
-        const canvas = view.overlayCanvas;
+        // The VIDEO canvas's box: the overlay canvas shares it, except on a
+        // zoomed-in view, where it is a window onto part of it
+        // (`ui/overlay-window.js`). Both sit in the same zoomed wrapper.
+        const canvas = view.canvas || view.overlayCanvas;
         if (!canvas) return [clientX, clientY];
 
         // getBoundingClientRect() includes CSS transforms (zoom/pan/rotation),
@@ -376,9 +379,11 @@ export class InteractionManager {
     /**
      * Compute the shortest distance from point (px, py) to a line segment
      * defined by endpoints (ax, ay) and (bx, by).
+     * With `wedgeHalf` > 0 the edge is drawn as a wedge from A (that half-width)
+     * to a tip at B, and the distance is measured from the wedge, 0 inside it.
      * @returns {number} Distance in the same coordinate space.
      */
-    _pointToSegmentDist(px, py, ax, ay, bx, by) {
+    _pointToSegmentDist(px, py, ax, ay, bx, by, wedgeHalf) {
         const dx = bx - ax;
         const dy = by - ay;
         const lenSq = dx * dx + dy * dy;
@@ -389,7 +394,20 @@ export class InteractionManager {
         if (t > 1) t = 1;
         const projX = ax + t * dx;
         const projY = ay + t * dy;
-        return Math.sqrt((px - projX) * (px - projX) + (py - projY) * (py - projY));
+        const dist = Math.sqrt((px - projX) * (px - projX) + (py - projY) * (py - projY));
+        return wedgeHalf ? Math.max(0, dist - wedgeHalf * (1 - t)) : dist;
+    }
+
+    /**
+     * Half-width of the wedges an instance type is drawn with, 0 when it draws
+     * lines. `lineStyleId` is the Visibility row that styles it.
+     * @private
+     */
+    _edgeWedgeHalf(lineStyleId, nodeSizeId) {
+        const styleEl = document.getElementById(lineStyleId);
+        if (!styleEl || styleEl.getAttribute('data-value') !== 'wedge') return 0;
+        const sizeEl = document.getElementById(nodeSizeId);
+        return wedgeHalfWidth(sizeEl ? parseInt(sizeEl.value) || 4 : 4);
     }
 
     /**
@@ -403,12 +421,14 @@ export class InteractionManager {
     _displayToVideo(state, viewName) {
         if (!state) return 1;
         const view = this._findView(state, viewName);
-        if (view && view.overlayCanvas) {
-            const cssW = parseFloat(view.overlayCanvas.style.width) || view.overlayCanvas.offsetWidth;
+        // The video box (see `canvasToVideo` for why not the overlay canvas).
+        const boxEl = view ? (view.canvas || view.overlayCanvas) : null;
+        if (boxEl) {
+            const cssW = parseFloat(boxEl.style.width) || boxEl.offsetWidth;
             const zoom = view.zoom ? view.zoom.scale : 1;
             const displayW = cssW * zoom;
             if (displayW > 0) {
-                return (view.videoWidth || view.overlayCanvas.width) / displayW;
+                return (view.videoWidth || boxEl.width) / displayW;
             }
         }
         return 1;
@@ -526,6 +546,11 @@ export class InteractionManager {
 
                     // --- Edge hit testing (only if no node was hit for this instance) ---
                     if (edges && !best) {
+                        const wedgeHalf = hitReprojected
+                            ? this._edgeWedgeHalf('visReprojLineStyle', 'visReprojNodeSize')
+                            : instance.type === 'predicted'
+                                ? this._edgeWedgeHalf('visPredPostLineStyle', 'visPredNodeSize')
+                                : this._edgeWedgeHalf('visUserPostLineStyle', 'visUserNodeSize');
                         for (let ei = 0; ei < edges.length; ei++) {
                             const edge = edges[ei];
                             if (!instance.hasPoint(edge[0]) || !instance.hasPoint(edge[1])) continue;
@@ -533,7 +558,7 @@ export class InteractionManager {
                             const edgeDist = this._pointToSegmentDist(
                                 videoX, videoY,
                                 instance.getX(edge[0]), instance.getY(edge[0]),
-                                instance.getX(edge[1]), instance.getY(edge[1]));
+                                instance.getX(edge[1]), instance.getY(edge[1]), wedgeHalf);
 
                             if (edgeDist < edgeThreshold && edgeDist < bestDist) {
                                 bestDist = edgeDist;
@@ -767,6 +792,9 @@ export class InteractionManager {
 
                 // --- Edge hit testing (only if no node was hit for this instance) ---
                 if (edges && !best) {
+                    const wedgeHalf = ulType === 'predicted'
+                        ? this._edgeWedgeHalf('visPredPreLineStyle', 'visPredNodeSize')
+                        : this._edgeWedgeHalf('visUserPreLineStyle', 'visUserNodeSize');
                     for (let ei = 0; ei < edges.length; ei++) {
                         const edge = edges[ei];
                         if (!ul.instance.hasPoint(edge[0]) || !ul.instance.hasPoint(edge[1])) continue;
@@ -774,7 +802,7 @@ export class InteractionManager {
                         const edgeDist = this._pointToSegmentDist(
                             videoX, videoY,
                             ul.instance.getX(edge[0]), ul.instance.getY(edge[0]),
-                            ul.instance.getX(edge[1]), ul.instance.getY(edge[1]));
+                            ul.instance.getX(edge[1]), ul.instance.getY(edge[1]), wedgeHalf);
 
                         if (edgeDist < edgeThreshold && edgeDist <= bestDist) {
                             bestDist = edgeDist;

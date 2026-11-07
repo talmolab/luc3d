@@ -9,50 +9,53 @@ import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
     toBoxedPoints3d, someValidPoint3d, pooledPoints3d,
-} from '../pose/pose-data.js?v=95415559d105';
-import { ensurePlaceholderCameras } from '../pose/placeholder-cameras.js?v=95415559d105';
+} from '../pose/pose-data.js?v=e7f7e1de6d01';
+import { ensurePlaceholderCameras } from '../pose/placeholder-cameras.js?v=e7f7e1de6d01';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
-} from '../pose/triangulation.js?v=95415559d105';
-import { OnDemandVideoDecoder } from '../loading/video.js?v=95415559d105';
-import { createDemoSkeleton } from '../demo-data.js?v=95415559d105';
+} from '../pose/triangulation.js?v=e7f7e1de6d01';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=e7f7e1de6d01';
+import { createDemoSkeleton } from '../demo-data.js?v=e7f7e1de6d01';
 import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
-} from './file-io.js?v=95415559d105';
+} from './file-io.js?v=e7f7e1de6d01';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setInteractionManager,
-} from '../ui/app-state.js?v=95415559d105';
+} from '../ui/app-state.js?v=e7f7e1de6d01';
 import {
     autoAssignVideosToCameras, forceVideoSelection, showParentDirMatchSummary,
-    forceVideoSelectionWithFolder, createViewForVideoFile, updateTotalFrames,
+    forceVideoSelectionWithFolder, folderPickerStartFor, createViewForVideoFile, updateTotalFrames,
     adoptLabeledFrameCount, rebuildVideoController, fitCanvasesToCells,
-} from '../loading/session-loader.js?v=95415559d105';
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=95415559d105';
-import { updateInfoPanel } from '../ui/info-panel.js?v=95415559d105';
+} from '../loading/session-loader.js?v=e7f7e1de6d01';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=e7f7e1de6d01';
+import { updateInfoPanel } from '../ui/info-panel.js?v=e7f7e1de6d01';
 // Pass 3i-3: setupInteraction / setup3DViewport / hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, hideWelcomeOverlay,
-} from '../pose/initialization.js?v=95415559d105';
+} from '../pose/initialization.js?v=e7f7e1de6d01';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=95415559d105';
-import { handleLoadSlpFile } from './slp-import.js?v=95415559d105';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=e7f7e1de6d01';
+import { handleLoadSlpFile } from './slp-import.js?v=e7f7e1de6d01';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
     openProjectWriter, streamSessionIntoWriter, finalizeProjectWriter,
-} from './slp-streaming-write.js?v=95415559d105';
-import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=95415559d105';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=95415559d105';
+} from './slp-streaming-write.js?v=e7f7e1de6d01';
+import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=e7f7e1de6d01';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=e7f7e1de6d01';
 import {
     showLoading, hideLoading, showLoadingProgress, createProgressPacer, yieldToPaint,
-} from '../ui/loading-overlay.js?v=95415559d105';
-import { clearReadout } from '../ui/frame-readout.js?v=95415559d105';
-import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=95415559d105';
-import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adoptSmoothingSource } from './smoothing-metadata.js?v=95415559d105';
-import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=95415559d105';
-import { buildSaveProvenance } from './slp-provenance.js?v=95415559d105';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=95415559d105';
+} from '../ui/loading-overlay.js?v=e7f7e1de6d01';
+import { clearReadout } from '../ui/frame-readout.js?v=e7f7e1de6d01';
+import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=e7f7e1de6d01';
+import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adoptSmoothingSource } from './smoothing-metadata.js?v=e7f7e1de6d01';
+import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=e7f7e1de6d01';
+import { buildSaveProvenance } from './slp-provenance.js?v=e7f7e1de6d01';
+import { withCompactSave } from './compact-save.js?v=e7f7e1de6d01';
+import { showCompactSaveModal } from '../ui/compact-save-modal.js?v=e7f7e1de6d01';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=e7f7e1de6d01';
+import { saveStartFolder } from '../loading/recording-folder.js?v=e7f7e1de6d01';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -360,7 +363,7 @@ function serializeSessionFrames(session) {
 async function ensureSleapIO() {
     if (window.SleapIO) return window.SleapIO;
     // Relative to THIS module (import-export/), not the page — hence `../`.
-    var mod = await import('../lib/sleap-io/index.browser.js?v=95415559d105');
+    var mod = await import('../lib/sleap-io/index.browser.js?v=e7f7e1de6d01');
     window.SleapIO = mod;
     return mod;
 }
@@ -627,8 +630,18 @@ function saveSteps(streaming, download) {
  * writer, and the CSS spinner keeps turning there, so the card still says the
  * app is working. Every call that changes what the card shows returns a
  * promise for the next paint, so the step is on screen BEFORE the work starts.
- * `progress.disk(bytes)` reports the streamed write to the picked file.
+ * `progress.disk(bytes)` reports the write to the picked file: a bar in MB (KB under 1 MB)
+ * once `progress.diskTotal(bytes)` gave the file's size (the streaming path
+ * learns it from the finished in-memory file, `finalizeProjectWriter`; the
+ * eager one from its bytes), else a running MB count. It stays on the last
+ * step (Finishing the file / Writing the file). `progress.closing()` shows
+ * the browser's close() as a spinner: it reports no progress (Chrome moves
+ * its swap file into place, reading it back on a network share), so the bar
+ * does not pretend to.
  */
+/** The eager save's write size per chunk (the streaming writer's default too). */
+var DISK_CHUNK_BYTES = 8 * 1024 * 1024;
+
 function createSaveProgress(steps) {
     var pacer = createProgressPacer();
     var shown = null;
@@ -648,10 +661,34 @@ function createSaveProgress(steps) {
         showLoadingProgress(SAVE_STEP_LABELS[stage], done, total, opts(stage, unit || 'frames'));
         return pacer.yield();
     };
+    var diskStep = steps[steps.length - 1];
+    var diskTotal = 0;
+    var diskShown = false;
+    // The unit the file's size reads well in: KB under 1 MB, MB to one
+    // decimal under 10 MB, whole MB above (a 25 KB file must not read 0/0 MB).
+    function diskUnit() { return diskTotal > 0 && diskTotal < 1048576 ? 'KB' : 'MB'; }
+    function mb(bytes) {
+        if (diskUnit() === 'KB') return Math.round(bytes / 1024);
+        var v = bytes / 1048576;
+        return diskTotal > 0 && diskTotal < 10 * 1048576 ? Math.round(v * 10) / 10 : Math.round(v);
+    }
+    progress.diskTotal = function (bytes) { diskTotal = bytes > 0 ? bytes : 0; };
     progress.disk = function (bytes) {
-        if (!pacer.due()) return;
-        showLoading('Writing to disk: ' + Math.round(bytes / 1048576).toLocaleString('en-US') + ' MB…',
-            opts('finish'));
+        var last = diskTotal > 0 && bytes >= diskTotal;
+        if (diskShown && !last && !pacer.due()) return null;
+        diskShown = true;
+        if (diskTotal > 0) {
+            showLoadingProgress('Writing to disk', mb(Math.min(bytes, diskTotal)), mb(diskTotal), opts(diskStep, diskUnit()));
+        } else {
+            showLoading('Writing to disk: ' + mb(bytes).toLocaleString('en-US') + ' MB…', opts(diskStep));
+        }
+        return pacer.yield();
+    };
+    progress.closing = function () {
+        var o = opts(diskStep);
+        o.detail = 'the browser shows no progress while it puts the file in place (slow on a network share)';
+        showLoading('Closing the file…', o);
+        return yieldToPaint();
     };
     return progress;
 }
@@ -732,9 +769,9 @@ async function buildSlpBytes(opts) {
             console.log('[save-slp] lazy session → streaming writer (', lazySess.lazyLoader.nFrames, 'frames ×',
                 lazySess.cameras.length, 'cameras )');
             return await buildSessionSlpBytesStreaming(lazySess, lazyViews, lazyVideoFiles,
-                { sink: opts.sink || undefined, provenance: buildSaveProvenance([lazySess]), onProgress: onProgress });
+                { sink: opts.sink || undefined, chunkBytes: opts.chunkBytes, provenance: buildSaveProvenance([lazySess]), onProgress: onProgress });
         }
-        return await saveAllSessionsStreaming(sessionsToExport, { sink: opts.sink, onProgress: onProgress });
+        return await saveAllSessionsStreaming(sessionsToExport, { sink: opts.sink, chunkBytes: opts.chunkBytes, onProgress: onProgress });
     }
 
     // MIXED PROJECT GUARD. The eager builder below iterates only the RESIDENT
@@ -1112,7 +1149,7 @@ export async function saveAllSessionsStreaming(sessions, opts) {
     return await finalizeMultiSessionSave(handle, opts);
 }
 
-export async function quickSave() {
+export async function quickSave(previousFile) {
     if (!state.session) {
         setStatus('No session to save', 'error');
         return;
@@ -1134,14 +1171,20 @@ export async function quickSave() {
             if (state.sessions.length === 1 && state.session.name) {
                 filename = state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.slp';
             }
+            var pickOpts = {
+                suggestedName: filename,
+                types: [{
+                    description: 'SLEAP Labels',
+                    accept: { 'application/x-hdf5': ['.slp'] }
+                }]
+            };
+            // Open in the open recording's folder (else beside the file Save As
+            // replaces). Without `startIn` Chromium opens wherever the last
+            // save went: another recording's folder.
+            var start = saveStartFolder(state, previousFile);
+            if (start) pickOpts.startIn = start;
             try {
-                state.slpFileHandle = await window.showSaveFilePicker({
-                    suggestedName: filename,
-                    types: [{
-                        description: 'SLEAP Labels',
-                        accept: { 'application/x-hdf5': ['.slp'] }
-                    }]
-                });
+                state.slpFileHandle = await window.showSaveFilePicker(pickOpts);
             } catch (pickErr) {
                 if (pickErr.name === 'AbortError') {
                     setStatus('Save cancelled', 'warning');
@@ -1153,38 +1196,7 @@ export async function quickSave() {
 
         state.isSaving = true;
         setStatus('Saving...', 'warning');
-        // The progress card goes up only AFTER the picker: it needs the click's
-        // user activation, which an awaited paint first could lose.
-        await ensureSleapIO();
-        var progress = createSaveProgress(saveSteps(isStreamingSave(sessionsToSave(), window.SleapIO), false));
-        showLoading('Preparing to save…', { title: 'Save' });
-
-        // Stream straight to the file handle when the streaming path is used
-        // (single or multi-session lazy save) — for a multi-GB project,
-        // materializing the whole finished file as one extra in-memory
-        // Uint8Array on top of whatever session state hasn't been reclaimed
-        // yet is itself a meaningful chunk of peak memory. `bytesWritten`
-        // tracks the total since a streamed save resolves `bytes` to `null`
-        // (see `buildSlpBytes`/`finalizeProjectWriter`).
-        var writable = await state.slpFileHandle.createWritable();
-        var bytesWritten = 0;
-        var sink = {
-            write: function (chunk) {
-                bytesWritten += chunk.byteLength;
-                progress.disk(bytesWritten);
-                return writable.write(chunk);
-            },
-            close: function () { return writable.close(); },
-        };
-        var bytes = await buildSlpBytes({ sink: sink, onProgress: progress });
-        if (bytes) {
-            // Eager (non-streaming) path returned bytes directly instead of
-            // using the sink — write them out now.
-            await writable.write(bytes);
-            await writable.close();
-            bytesWritten = bytes.byteLength;
-        }
-
+        var bytesWritten = await writeProjectToHandle(state.slpFileHandle, 'Save');
         state.isSaving = false;
         hideLoading();
         clearDirty();
@@ -1194,13 +1206,6 @@ export async function quickSave() {
         state.isSaving = false;
         hideLoading();
         if (err && err.name === 'SaveCancelledError') {
-            // `writable` (if it got that far) already has an open swap file —
-            // abort() discards it WITHOUT touching the original file at
-            // `state.slpFileHandle`, unlike close(), which would overwrite it
-            // with zero bytes.
-            if (typeof writable !== 'undefined' && writable && typeof writable.abort === 'function') {
-                try { await writable.abort(); } catch (e) { /* best effort */ }
-            }
             setStatus('Save cancelled', 'warning');
             return;
         }
@@ -1209,10 +1214,110 @@ export async function quickSave() {
     }
 }
 
+/**
+ * Build the project file and write it to `handle`; returns the bytes written.
+ * Shared by Save and Save Compact Copy. On a cancelled save the swap file is
+ * discarded (abort), never closed: close() would overwrite the file at `handle`
+ * with a partial or empty one. Rethrows, for the caller's status.
+ */
+async function writeProjectToHandle(handle, title) {
+    // The progress card goes up only AFTER the picker: it needs the click's
+    // user activation, which an awaited paint first could lose.
+    await ensureSleapIO();
+    var progress = createSaveProgress(saveSteps(isStreamingSave(sessionsToSave(), window.SleapIO), false));
+    showLoading('Preparing to save…', { title: title });
+
+    // Stream straight to the file handle when the streaming path is used
+    // (single or multi-session lazy save) — for a multi-GB project,
+    // materializing the whole finished file as one extra in-memory
+    // Uint8Array on top of whatever session state hasn't been reclaimed
+    // yet is itself a meaningful chunk of peak memory. `bytesWritten`
+    // tracks the total since a streamed save resolves `bytes` to `null`
+    // (see `buildSlpBytes`/`finalizeProjectWriter`).
+    var writable = await handle.createWritable();
+    var bytesWritten = 0;
+    var sink = {
+        setTotalBytes: function (n) { progress.diskTotal(n); },
+        write: async function (chunk) {
+            await writable.write(chunk);
+            bytesWritten += chunk.byteLength;
+            await progress.disk(bytesWritten);
+        },
+        close: async function () {
+            await progress.closing();
+            return writable.close();
+        },
+    };
+    try {
+        // `__lucidSaveChunkBytes` (tests only) shrinks the write chunks so a
+        // small file still reaches the disk in several writes.
+        var chunkBytes = globalThis.__lucidSaveChunkBytes || DISK_CHUNK_BYTES;
+        var bytes = await buildSlpBytes({ sink: sink, onProgress: progress, chunkBytes: chunkBytes });
+        if (bytes) {
+            // Eager (non-streaming) path returned bytes directly instead of
+            // using the sink — write them out now, in chunks, so the disk
+            // bar moves.
+            sink.setTotalBytes(bytes.byteLength);
+            for (var pos = 0; pos < bytes.byteLength; pos += chunkBytes) {
+                await sink.write(bytes.subarray(pos, Math.min(pos + chunkBytes, bytes.byteLength)));
+            }
+            await sink.close();
+            bytesWritten = bytes.byteLength;
+        }
+    } catch (err) {
+        if (err && err.name === 'SaveCancelledError' && typeof writable.abort === 'function') {
+            try { await writable.abort(); } catch (e) { /* best effort */ }
+        }
+        throw err;
+    }
+    return bytesWritten;
+}
+
+/**
+ * File ▸ Save Compact Copy: after a warning that says what is rounded and lost
+ * (`ui/compact-save-modal.js`), write a copy with predicted 2D, scores and 3D
+ * rounded (import-export/compact-save.js). A COPY: the open project keeps its
+ * file handle and its unsaved state, since nothing in memory is rounded.
+ * @param {{pickFile?: Function}} [opts]  `pickFile` replaces the save picker (tests)
+ */
+export async function saveCompactCopy(opts) {
+    opts = opts || {};
+    if (!state.session) { setStatus('No session to save', 'error'); return; }
+    if (state.isSaving) { setStatus('Save already in progress...', 'warning'); return; }
+    if (!opts.pickFile && !window.showSaveFilePicker) {
+        setStatus('A compact copy needs a browser that can save to a chosen file (Chrome or Edge; in Brave, ' +
+            'turn on brave://flags/#file-system-access-api)', 'warning');
+        return;
+    }
+    var base = (state.sessions.length === 1 && state.session.name)
+        ? state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_') : 'project';
+    // Opens beside the project: its recording folder, else its file.
+    var handle = await showCompactSaveModal({ suggestedName: base + '_compact.slp', pickFile: opts.pickFile,
+        startIn: saveStartFolder(state, state.slpFileHandle) || undefined });
+    if (!handle) { setStatus('Compact copy cancelled', 'warning'); return; }
+    state.isSaving = true;
+    setStatus('Saving a compact copy...', 'warning');
+    try {
+        var bytesWritten = await withCompactSave(function () { return writeProjectToHandle(handle, 'Save compact copy'); });
+        state.isSaving = false;
+        hideLoading();
+        setStatus('Saved a compact copy, ' + (bytesWritten / 1024 / 1024).toFixed(1) + ' MB, as ' + (handle.name || 'the chosen file') +
+            ' — rounded; the open project is still linked to its own file' + (state.isDirty ? ' and not saved' : ''), 'success');
+    } catch (err) {
+        state.isSaving = false;
+        hideLoading();
+        if (err && err.name === 'SaveCancelledError') { setStatus('Compact copy cancelled', 'warning'); return; }
+        console.error('Compact copy failed:', err);
+        setStatus('Compact copy failed: ' + err.message, 'error');
+    }
+}
+
 export async function saveAs() {
-    // Force a new file picker regardless of existing handle
+    // Force a new file picker regardless of existing handle; it opens beside
+    // the current file when the session has no recording folder.
+    var previous = state.slpFileHandle;
     state.slpFileHandle = null;
-    await quickSave();
+    await quickSave(previous);
 }
 
 export async function saveProjectSlp() {
@@ -1509,7 +1614,7 @@ export async function handleLoadProject(prePickedFile) {
             var LARGE_SLP_BYTES = 200 * 1024 * 1024;
             if (ext === 'slp' && file.size > LARGE_SLP_BYTES) {
                 // Dynamic import avoids a session-loader ↔ save-load import cycle.
-                var _sl = await import('../loading/session-loader.js?v=95415559d105');
+                var _sl = await import('../loading/session-loader.js?v=e7f7e1de6d01');
                 if (_sl && typeof _sl.handleLoadProjectSlpLazy === 'function') {
                     return _sl.handleLoadProjectSlpLazy(file);
                 }
@@ -1642,7 +1747,8 @@ export async function handleLoadProject(prePickedFile) {
                     // Parent dir was picked but this session wasn't matched — prompt individually
                     folderFiles = await forceVideoSelectionWithFolder(
                         'Cameras: ' + sessCameras.join(', '),
-                        sessName
+                        sessName,
+                        { startIn: folderPickerStartFor(file) }
                     );
                     if (folderFiles && folderFiles.parentResult) folderFiles = []; // shouldn't happen here
                 } else {
@@ -1650,7 +1756,7 @@ export async function handleLoadProject(prePickedFile) {
                     var promptResult = await forceVideoSelectionWithFolder(
                         'Cameras: ' + sessCameras.join(', '),
                         sessName,
-                        { allSessionNames: v3AllSessionNames }
+                        { allSessionNames: v3AllSessionNames, startIn: folderPickerStartFor(file) }
                     );
 
                     if (promptResult && promptResult.parentResult) {

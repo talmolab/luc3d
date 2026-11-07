@@ -9,7 +9,7 @@
  *  2. The Speed popover offers 0.25x and 0.5x presets, they apply, and the
  *     (now wider) popover stays inside the window.
  *  3. The Triangulate / Triangulate All buttons say which method a plain click
- *     runs (in its tooltip; the label stays "Triangulate"), and follow Settings ▸ Default Triangulation
+ *     runs (in its tooltip; the label stays "Triangulate"), and follow Settings ▸ Triangulation Wizard
  *     when it is changed through the real Settings dialog — immediately, and
  *     after a reload (the setting persists in localStorage).
  *
@@ -144,6 +144,7 @@ try {
     l = await labels();
     check(/DLT \(fast\)/.test(l.title) && l.radio === 'dlt', 'picking a card without Apply changes nothing yet');
     await page.click('.settings-btn-apply');
+    await page.click('.settings-modal-close');
     l = await labels();
     check(l.text === 'Triangulate' && l.radio === 'ba', `after Apply: "${l.text}", radio ${l.radio}`);
     check(/Ref \(slower; helps when one view is clearly wrong\)/.test(l.title), 'tooltip follows too');

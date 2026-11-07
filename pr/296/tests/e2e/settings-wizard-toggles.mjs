@@ -72,6 +72,7 @@ try {
     const grey = await page.evaluate((s) => document.querySelector(s).closest('.settings-node-weight-row').classList.contains('settings-view-excluded'), sw('Include view camB in tracking'));
     check(grey, 'switching a camera off greys its row');
     await page.click('.settings-btn-apply');
+    await page.click('.settings-modal-close');
     const applied = await page.evaluate(async () => { const S = await import('/ui/settings.js');
         return { webnn: S.getTrackingThreshold('imageCheckWebNN'), size: S.getTrackingThreshold('autoSwitchCheck'), camB: S.getCameraWeight('camB'), camA: S.getCameraWeight('camA') }; });
     check(applied.webnn === 1 && applied.size === 0 && applied.camB === 0 && applied.camA === 1, `Apply stores the switches as 1 / 0 (${JSON.stringify(applied)})`);
