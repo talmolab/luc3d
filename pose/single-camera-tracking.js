@@ -533,6 +533,8 @@ export function singleCameraCheckOptions(cue) {
  * identified detection, with its 2D as `points3d` (x, y, 0) and the detection
  * itself under `instances` (what the image check crops). Returns null when the
  * session is not single-camera (use the session itself), or {fail: reason}.
+ * It carries the session's `imageModel`, so the image check embeds with the
+ * package the session chose, not the built-in model.
  *
  * `opts.pixelCamera`: its one camera is a PIXEL camera — `project` maps a stand-in
  * point (x, y, 0) back to (x, y), no size — for readers that project 3D into a
@@ -573,6 +575,8 @@ export function singleCameraCheckSession(session, opts) {
     return {
         skeleton: session.skeleton, identities: session.identities, instanceGroups: groups,
         cameras: cameras, fps: session.fps, singleCamera: cam,
+        // the session's image model (Session.imageModel): without it the image check runs the built-in model
+        imageModel: session.imageModel || null,
     };
 }
 

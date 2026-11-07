@@ -204,6 +204,15 @@ group('2b. The stand-in with a pixel camera (the Track All summary\'s identity g
     ok(SCT.singleCameraCheckSession(s).cameras === s.cameras, 'without the option: the session\'s own camera, as before');
 }
 
+group('2c. The stand-in carries the session\'s image model');
+{
+    eq(SCT.singleCameraCheckSession(s).imageModel, null, 'no choice: null (the built-in model)');
+    const choice = { key: 'k'.repeat(64), name: 'a rig model', input: 168, threshold: -1, url: 'http://x/pkg/' };
+    s.imageModel = choice;
+    ok(SCT.singleCameraCheckSession(s).imageModel === choice, 'a package choice reaches the image check (it reads the stand-in, not the session)');
+    s.imageModel = null;
+}
+
 group('3. A fix swaps the TRACKS; the same call undoes it; else the identity layer');
 {
     const before = []; for (let f = 0; f < FRAMES; f++) before.push(instancesAt(s, f).map(i => i.trackIdx));

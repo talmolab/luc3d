@@ -2677,7 +2677,8 @@ after review 99.75% -> 99.05% at >= 3 nodes; 0.4–2% of real detections lost).
 
 **The ID-switch checks read a stand-in** (`singleCameraCheckSession`): one
 InstanceGroup-shaped object per identified detection, its 2D as `points3d`
-(x, y, 0), the detection under `instances` (what the image check crops). The
+(x, y, 0), the detection under `instances` (what the image check crops), and
+the session's `imageModel` (the image check's package choice). The
 checks are relative to the median body size and standardise their features, so
 pixels instead of millimetres cost nothing; but a 2D bone length also changes
 with posture and distance from the camera, so body size is a weaker cue on one
