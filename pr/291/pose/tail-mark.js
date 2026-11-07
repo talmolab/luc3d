@@ -24,7 +24,7 @@
  * hands when the animals touch.
  */
 
-import { buildGrid, contactEpisodes, SIZE_CHECK_DEFAULTS } from './id-switch-check.js?v=e22ca21edc74';
+import { buildGrid, contactEpisodes, SIZE_CHECK_DEFAULTS } from './id-switch-check.js?v=ab1d7965d7dc';
 
 export const TAIL_MARK_DEFAULTS = {
     /** The profile's length: positions read along the tail, whatever its length in pixels. */
