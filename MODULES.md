@@ -2769,13 +2769,15 @@ the list when one of its ends is within 2 s of a row:
   who, and fixes where a mouse wears another label for most of half a second) takes
   the 108 videos with errors from 88.1% to 99.96% correct on average, 101 of them to
   >= 99.9%. In the app, after the image rows (2026-10-29, 193 videos, by minutes):
-  94.03% -> 96.30% -> 99.97% (the list alone 99.98%); on 64 hard SLAP-2M views
-  70.79% -> 81.38% -> 98.91% (alone 99.01%). Since every row that stands for a place
+  94.03% -> 96.30% -> 99.97% (the list alone 99.98%); on 62 hard SLAP-2M views
+  69.82% -> 80.54% -> 98.86% (alone 98.97%; 142111's two views left out, its nested
+  skeleton reads with the wrong node names on main; with them 70.79% -> 81.38% ->
+  98.91%, alone 99.01%). Since every row that stands for a place
   offers the place's own fix, every video ends exactly at the simulated reviewer's
   plan, with no place it could not fix (before: 98.61% on SLAP, 17 places blocked).
   What is left is that plan itself: started from the labels the image rows leave, it
   ends lower on 5 videos (one SLAP view, 161055/backL, 93.91% vs 98.17% alone, is
-  nearly all of the 0.10 points). An image row's Fix is accepted when it is right on
+  nearly all of the 0.11 points). An image row's Fix is accepted when it is right on
   the stretch it changes, by each mouse's first-seen label: the whole-video score
   drops for a right Fix while most of the video is swapped.
 - **The simulated reviewer** (`~/luc3d-eval/oracle_lib.mjs` `playReviewN`, majority
