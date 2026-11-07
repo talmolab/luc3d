@@ -11,13 +11,14 @@
 // module back. Circular, and safe for the same reason documented in
 // `ui/plane-toolbar-lock.js`: both are read inside function bodies only.
 
-import { interactionManager } from './app-state.js?v=7e4a404cd34f';
-import { makeVideoToCanvasTransform } from './overlays.js?v=7e4a404cd34f';
+import { interactionManager } from './app-state.js?v=6004210fc07c';
+import { makeVideoToCanvasTransform } from './overlays.js?v=6004210fc07c';
+import { overlayDrawSize } from './overlay-window.js?v=6004210fc07c';
 import {
     planeEdgesPoolIndices, planeFillOrderPoolIndices, planeCentroid2d,
-} from '../pose/plane-data.js?v=7e4a404cd34f';
-import { planeModel, planeState } from './plane-definition.js?v=7e4a404cd34f';
-import { planeVisibility } from './plane-visibility.js?v=7e4a404cd34f';
+} from '../pose/plane-data.js?v=6004210fc07c';
+import { planeModel, planeState } from './plane-definition.js?v=6004210fc07c';
+import { planeVisibility } from './plane-visibility.js?v=6004210fc07c';
 
 const PLANE_LABEL_SIZE = 11;
 const NULLED_COLOR = '#777777';
@@ -64,14 +65,17 @@ export function drawPlaneOverlays(view) {
     var vis = planeVisibility(planeState.active);
     if (!vis.planes2d && !vis.nodes2d) return;
 
-    var videoW = view.videoWidth || view.overlayCanvas.width;
-    var videoH = view.videoHeight || view.overlayCanvas.height;
+    // The FULL virtual canvas: a zoomed-in overlay is a window onto it, drawn
+    // through the translate `drawAllOverlays` set (`ui/overlay-window.js`).
+    var drawSize = overlayDrawSize(view);
+    var videoW = view.videoWidth || drawSize.width;
+    var videoH = view.videoHeight || drawSize.height;
     if (!videoW || !videoH) return;
 
     var ctx = view.overlayCtx;
     var pool = model.pool;
     var tf = makeVideoToCanvasTransform(
-        videoW, videoH, view.overlayCanvas.width, view.overlayCanvas.height
+        videoW, videoH, drawSize.width, drawSize.height
     );
 
     var isSelected = !!(planeState.active && interactionManager &&

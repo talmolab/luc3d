@@ -24,7 +24,7 @@
  * hands when the animals touch.
  */
 
-import { buildGrid, contactEpisodes, SIZE_CHECK_DEFAULTS } from './id-switch-check.js?v=7e4a404cd34f';
+import { buildGrid, contactEpisodes, SIZE_CHECK_DEFAULTS } from './id-switch-check.js?v=6004210fc07c';
 
 export const TAIL_MARK_DEFAULTS = {
     /** The profile's length: positions read along the tail, whatever its length in pixels. */
@@ -67,6 +67,16 @@ export const TAIL_MARK_DEFAULTS = {
     refineMinEvidence: 0.25,
 };
 
+/**
+ * How the band-counting cue reads a tail (`ui/tail-mark-reader.js`). Bands packed near the
+ * base (4 bands with 3 short bright gaps before Tail_0) blur in the two-animal pass's wide,
+ * bright line (`readTailProfile`'s defaults: 0.85 percentile, 1/12 of the length each side),
+ * and the base keypoint often lands past the first band. On a 5-mouse recording with 0-4
+ * bands the default read counted the 4-band tail as 3; this read counts all five right.
+ * The two-animal pass keeps its validated read.
+ */
+export const TAIL_BAND_READ = { baseExtension: 0.2, percentile: 0.5, widthShare: 1 / 30 };
+
 /** The largest number of frames the sampler may leave between samples, in seconds. */
 export const MAX_SAMPLE_GAP_SECONDS = 3;
 
@@ -100,10 +110,13 @@ export function tailMarkNodeIndices(nodes) {
  * @param {number} height
  * @param {number[]} poly  [x0, y0, x1, y1, …] in `gray`'s pixels; non-finite points are left out
  * @param {number} [length]
+ * @param {{percentile?: number, widthShare?: number}} [opts]  the percentile across (default 0.85)
+ *   and the line's half width as a share of the tail's length (default 1/12)
  * @returns {?{profile: Float32Array, background: number}}  null when too short to read
  */
-export function readTailProfile(gray, width, height, poly, length) {
+export function readTailProfile(gray, width, height, poly, length, opts) {
     length = length || TAIL_MARK_DEFAULTS.profileLength;
+    var q = (opts && opts.percentile) || 0.85, share = (opts && opts.widthShare) || 1 / 12;
     var xs = [], ys = [], cum = [0];
     for (var p = 0; p + 1 < poly.length; p += 2) {
         var px = poly[p], py = poly[p + 1];
@@ -117,7 +130,7 @@ export function readTailProfile(gray, width, height, poly, length) {
     }
     var total = cum[cum.length - 1];
     if (xs.length < 2 || total < TAIL_MARK_DEFAULTS.minTailPixels) return null;
-    var half = Math.max(3, Math.round(total / 12));   // about the tail's width and its keypoints' error
+    var half = Math.max(3, Math.round(total * share));   // about the tail's width and its keypoints' error
     var nSteps = Math.floor(total), across = 2 * half + 1;
     var line = new Float32Array(nSteps), all = new Float32Array(nSteps * across), nAll = 0;
     var row = new Float32Array(across), seg = 0;
@@ -133,7 +146,7 @@ export function readTailProfile(gray, width, height, poly, length) {
             var v = gray[iy * width + ix];
             row[n++] = v; all[nAll++] = v;
         }
-        line[s] = n ? percentileOf(row.subarray(0, n), 0.85) : NaN;
+        line[s] = n ? percentileOf(row.subarray(0, n), q) : NaN;
     }
     if (!nAll) return null;
     var profile = new Float32Array(length);
@@ -276,16 +289,18 @@ export function tailVote(x, templates, opts) {
 }
 
 /**
- * Sample frames: every keyframe (the cheap ones to decode), or `hz` samples per
- * second when the keyframes are too sparse or unknown.
+ * Sample frames: every keyframe (the cheap ones to decode), or one sample per second
+ * when the keyframes are further apart than `maxGapSeconds`, or unknown.
  * @param {number[]} frames  the frames that have tracked groups, increasing
  * @param {?ArrayLike<number>} keyframes  of one camera, increasing
  * @param {number} fps
+ * @param {number} [maxGapSeconds]  default `MAX_SAMPLE_GAP_SECONDS`; the identity engine asks for
+ *   more (`maxSampleGapSeconds`): it reads densely where sparse samples disagree with its decision
  * @returns {number[]}
  */
-export function planTailMarkSamples(frames, keyframes, fps) {
+export function planTailMarkSamples(frames, keyframes, fps, maxGapSeconds) {
     if (!frames.length) return [];
-    var maxGap = Math.max(1, Math.round(MAX_SAMPLE_GAP_SECONDS * fps));
+    var maxGap = Math.max(1, Math.round((maxGapSeconds || MAX_SAMPLE_GAP_SECONDS) * fps));
     var out = [];
     if (keyframes && keyframes.length > 1) {
         var first = frames[0], last = frames[frames.length - 1];
@@ -521,4 +536,245 @@ export async function resolveTailMarks(session, opts) {
         // for the study harness: what was decided, against the labels as the tracker left them
         states: Array.from(states), contact: contact, votes: votes,
     }, study);
+}
+
+// ---------------------------------------------------------------------------
+// The tail-band cue for the identity engine (pose/identity-cues.js): any number of
+// animals, each expected to show a number of bands (0 = plain), or, for the
+// two-animal case, 'marked' / 'plain'.
+// ---------------------------------------------------------------------------
+
+/**
+ * How many dark bands a (clean, averaged) tail profile shows: dips at least
+ * `minDip` below the brighter tail on both sides within `reach` positions.
+ * Meant for TEMPLATES (medians of many views), where noise has averaged out.
+ * @param {Float32Array|number[]} x  from `normalizeTailProfile`, or a median of such
+ * @returns {number}
+ */
+export function countBands(x, minDip, reach) {
+    minDip = minDip || 0.12;
+    reach = reach || Math.round(x.length / 4);
+    var n = x.length, k = 0, i = 1;
+    while (i < n - 1) {
+        // a local minimum (flat bottoms count once)
+        if (x[i] <= x[i - 1] && x[i] <= x[i + 1]) {
+            var j = i;
+            while (j + 1 < n && x[j + 1] === x[i]) j++;
+            var left = 0, right = 0;
+            for (var a = Math.max(0, i - reach); a < i; a++) left = Math.max(left, x[a]);
+            for (var b = j + 1; b <= Math.min(n - 1, j + reach); b++) right = Math.max(right, x[b]);
+            if (Math.min(left, right) - x[i] >= minDip) k++;
+            i = j + 1;
+        } else i++;
+    }
+    return k;
+}
+
+function shiftedCopy(x, s) {
+    var n = x.length, y = new Float32Array(n);
+    for (var i = 0; i < n; i++) y[i] = x[Math.max(0, Math.min(n - 1, i - s))];
+    return y;
+}
+
+// The shift of x, within maxShift, that fits t best, and that squared distance.
+function bestShift(x, t, maxShift) {
+    var n = x.length, best = Infinity, arg = 0;
+    for (var s = -maxShift; s <= maxShift; s++) {
+        var e = 0;
+        for (var i = 0; i < n; i++) { var d = x[Math.max(0, Math.min(n - 1, i - s))] - t[i]; e += d * d; }
+        if (e < best) { best = e; arg = s; }
+    }
+    return { shift: arg, err: best };
+}
+
+// A template from many profiles: their median, then the median of them each slid onto it.
+function alignedMedian(profiles, maxShift) {
+    if (!profiles.length) return null;
+    var n = profiles[0].length, t = medianProfile(profiles, n);
+    for (var round = 0; round < 2; round++) {
+        t = medianProfile(profiles.map(function (x) { return shiftedCopy(x, bestShift(x, t, maxShift).shift); }), n);
+    }
+    return t;
+}
+
+// Hungarian on a small square cost matrix (rows to columns), exhaustively for n <= 7.
+function bestMatching(cost) {
+    var n = cost.length, best = Infinity, bestPerm = null, perm = [], used = new Uint8Array(n);
+    (function rec(r, acc) {
+        if (acc >= best) return;
+        if (r === n) { best = acc; bestPerm = perm.slice(); return; }
+        for (var c = 0; c < n; c++) {
+            if (used[c]) continue;
+            used[c] = 1; perm.push(c);
+            rec(r + 1, acc + cost[r][c]);
+            perm.pop(); used[c] = 0;
+        }
+    })(0, 0);
+    return bestPerm;
+}
+
+/**
+ * The tail-band cue (see pose/identity-cues.js for the interface). Features are
+ * `normalizeTailProfile` profiles, one per camera: either a profile, or `{wide, sharp}`
+ * from `ui/tail-mark-reader.js` given `TAIL_BAND_READ`. The wide read decides who is who
+ * (costs) and the sharp one counts the bands (naming the templates, and the check): the sharp
+ * read resolves bands packed near the base but tells a plain tail from one wide band less well.
+ *
+ * Learning: on the first pass, each tracked identity's own tail over the whole session
+ * (an aligned median) is named by its band count (`countBands`; for 'marked'/'plain',
+ * by which reads more banded) and matched to the expected classes; each class's
+ * template is then its identity's. Later passes rebuild each class's template from
+ * every view of the identities the decision says carried an animal of that class.
+ *
+ * Costs: each view's distance to every class template (best shift), minus the nearest,
+ * relative to how far apart the templates are; a view that fits no template
+ * (`fitTolerance`) counts for nothing.
+ * @param {Object} [opts]  TAIL_MARK_DEFAULTS overrides
+ */
+export function createTailBandCue(opts) {
+    var o = Object.assign({}, TAIL_MARK_DEFAULTS, opts || {});
+    return {
+        id: 'tailBands',
+        learn: function (obs, labels, classOf, ids) {
+            var classes = [], seen = new Set();
+            ids.forEach(function (id, j) { var c = classOf(j); if (c != null && !seen.has(c)) { seen.add(c); classes.push(c); } });
+            if (classes.length < 2) return { ok: false, reason: 'needs at least two different tail marks among the identities' };
+            var byClass = new Map(classes.map(function (c) { return [c, []]; }));
+            if (!labels) {
+                // each tracked identity's own tail, named, then matched to the animals
+                var own = ids.map(function (id) {
+                    var all = [];
+                    obs.forEach(function (o2) { var f = o2 && o2.get(id); if (f) f.forEach(function (x) { all.push(x); }); });
+                    return all;
+                });
+                if (own.some(function (l) { return l.length < o.minTeachingSamples; })) {
+                    return { ok: false, reason: 'could not read every animal\'s tail (are the videos loaded?)' };
+                }
+                var templates = own.map(function (l) { return alignedMedian(l.map(wideOf), o.maxShift); });
+                var marked = classes.every(function (c) { return c === 'marked' || c === 'plain'; });
+                var guess = own.map(function (l, i) {
+                    if (marked) return tailBandScore(templates[i]);
+                    var bt = sharpTemplate(l, o);
+                    return bt ? countBands(bt) : 0;
+                });
+                var cost = ids.map(function (id, i) {
+                    return ids.map(function (id2, j) {
+                        var c = classOf(j);
+                        if (c == null) return 0;
+                        if (marked) {
+                            var rank = guess.filter(function (g) { return g > guess[i]; }).length;   // 0 = most banded
+                            var nMarked = ids.filter(function (x, q) { return classOf(q) === 'marked'; }).length;
+                            return (rank < nMarked) === (c === 'marked') ? 0 : 1;
+                        }
+                        return Math.abs(guess[i] - Number(c));
+                    });
+                });
+                var match = bestMatching(cost);
+                ids.forEach(function (id, i) { var c = classOf(match[i]); if (c != null) byClass.get(c).push.apply(byClass.get(c), own[i]); });
+                var first = buildModel(byClass, classes, o);
+                first.guess = guess; first.match = match;
+                return first.ok === false ? first : { ok: true, model: first };
+            }
+            obs.forEach(function (o2, t) {
+                if (!o2) return;
+                labels[t].forEach(function (animal, id) {
+                    var c = classOf(animal), f = o2.get(id);
+                    if (c == null || !f) return;
+                    f.forEach(function (x) { byClass.get(c).push(x); });
+                });
+            });
+            var model = buildModel(byClass, classes, o);
+            if (model.ok === false) return model;
+            // keep each class's template the one whose tail reads that class: a template
+            // learned for "0 bands" that now reads 3 swaps places with the one reading 0
+            renameByReading(model);
+            return { ok: true, model: model };
+        },
+        // Do the learned templates read as the marks the user set, one to one? Else no relabel.
+        check: function (model) {
+            var read = model.templates.map(function (t, k) { return readClass(t, model.bandTemplates[k], model.classes); });
+            var want = model.classes.map(String).slice().sort().join(',');
+            var got = read.map(String).slice().sort().join(',');
+            var match = model.classes.every(function (c, k) { return String(read[k]) === String(c); });
+            if (match) return { ok: true };
+            return { ok: false, reason: 'could not tell the tails apart reliably: the learned tails read as ' +
+                read.join(', ') + ' for marks ' + model.classes.join(', ') + (want === got ? ' (in another order)' : '') };
+        },
+        costs: function (features, model) {
+            var out = new Map(), C = model.classes.length;
+            var sums = new Float64Array(C), used = 0;
+            features.forEach(function (f) {
+                var x = wideOf(f);
+                var d = model.templates.map(function (t) { return bestShift(x, t, o.maxShift).err; });
+                var lo = Math.min.apply(null, d);
+                if (lo > o.fitTolerance * model.apart) return;   // fits none
+                for (var c = 0; c < C; c++) sums[c] += Math.min((d[c] - lo) / model.apart, 1);
+                used++;
+            });
+            if (!used) return out;
+            model.classes.forEach(function (c, k) { out.set(c, sums[k]); });
+            return out;
+        },
+        describe: function (model) {
+            return model.classes.map(function (c, k) { return String(c) + ' → reads ' + (model.bandTemplates[k] ? countBands(model.bandTemplates[k]) : '?') + ' band(s)'; }).join('; ');
+        },
+    };
+}
+
+function wideOf(f) { return f && f.wide ? f.wide : f; }
+
+// A class's band-counting template: the aligned median of its views' sharp reads (or of the
+// profiles themselves, for features that carry one read).
+function sharpTemplate(features, o) {
+    var sharp = [];
+    features.forEach(function (f) { var x = f && f.wide ? f.sharp : f; if (x) sharp.push(x); });
+    return sharp.length ? alignedMedian(sharp, o.maxShift) : null;
+}
+
+// What a template reads as, among these classes: its band count (from the band-counting
+// template), or 'marked' / 'plain' (from the template).
+function readClass(t, bandT, classes) {
+    var marked = classes.every(function (c) { return c === 'marked' || c === 'plain'; });
+    if (!marked) return bandT ? countBands(bandT) : -1;
+    return tailBandScore(t) >= TAIL_MARK_DEFAULTS.teachMinScore ? 'marked' : 'plain';
+}
+
+// Reorder a model's templates so each class holds the template that reads as it, when
+// that is a one-to-one match; otherwise leave them (the final check says so).
+function renameByReading(model) {
+    if (model.classes.every(function (c) { return c === 'marked' || c === 'plain'; })) {
+        var sc = model.templates.map(tailBandScore), mk = model.classes.indexOf('marked'), pl = model.classes.indexOf('plain');
+        if (mk >= 0 && pl >= 0 && sc[pl] > sc[mk]) {
+            var t0 = model.templates[mk]; model.templates[mk] = model.templates[pl]; model.templates[pl] = t0;
+            var b0 = model.bandTemplates[mk]; model.bandTemplates[mk] = model.bandTemplates[pl]; model.bandTemplates[pl] = b0;
+        }
+        return;
+    }
+    var counts = model.bandTemplates.map(function (t) { return t ? countBands(t) : -1; });
+    var cost = model.templates.map(function (t, a) {
+        return model.classes.map(function (c) { return Math.abs(counts[a] - Number(c)); });
+    });
+    var match = bestMatching(cost);   // template a -> class match[a]
+    var exact = match.every(function (b, a) { return cost[a][b] === 0; });
+    if (!exact) return;
+    var next = new Array(model.templates.length), nextBands = new Array(model.templates.length);
+    match.forEach(function (b, a) { next[b] = model.templates[a]; nextBands[b] = model.bandTemplates[a]; });
+    model.templates = next;
+    model.bandTemplates = nextBands;
+}
+
+function buildModel(byClass, classes, o) {
+    var templates = classes.map(function (c) { return alignedMedian(byClass.get(c).map(wideOf), o.maxShift); });
+    if (templates.some(function (t) { return !t; })) return { ok: false, reason: 'no tail was read for one of the marks' };
+    // how far apart the templates are: the closest pair's squared distance
+    var apart = Infinity;
+    for (var a = 0; a < templates.length; a++) for (var b = a + 1; b < templates.length; b++) {
+        apart = Math.min(apart, bestShift(templates[a], templates[b], o.maxShift).err);
+    }
+    // the closest two marks must differ by `minTemplateDifference` (RMS), as in the two-animal pass
+    if (!(Math.sqrt(apart / templates[0].length) >= o.minTemplateDifference)) {
+        return { ok: false, reason: 'found no tail marks: two of the tails look the same' };
+    }
+    var bandTemplates = classes.map(function (c) { return sharpTemplate(byClass.get(c), o); });
+    return { classes: classes, templates: templates, bandTemplates: bandTemplates, apart: apart };
 }

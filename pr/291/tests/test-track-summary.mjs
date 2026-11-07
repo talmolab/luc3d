@@ -29,6 +29,7 @@ eq(describeTailMarks({ ok: true, markedName: 'id_0', swapped: 0 }), 'tail marks 
 eq(describeTailMarks({ ok: true, markedName: 'id_1', swapped: 1 }), 'tail marks on id_1 (1 stretch relabelled)', 'one stretch');
 eq(describeTailMarks({ ok: true, markedName: 'id_0', swapped: 3 }), 'tail marks on id_0 (3 stretches relabelled)', 'several');
 eq(describeTailMarks({ ok: true, markedName: 'id_0', swapped: 1, faint: true }), 'tail marks on id_0 (1 stretch relabelled); the marks are faint here, so check the identities', 'faint: says to check');
+eq(describeTailMarks({ ok: true, names: ['id_0', 'id_1', 'id_2'], swapped: 2 }), 'tail bands read for 3 animals (2 stretches relabelled)', 'the identity engine');
 eq(describeTailMarks({ ok: false, reason: 'found no tail marks' }), 'tail marks not used: found no tail marks', 'not used, with why');
 
 // ---- formatShare: never overstates ------------------------------------------
