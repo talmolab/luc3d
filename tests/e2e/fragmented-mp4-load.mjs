@@ -68,7 +68,7 @@ try {
         await page.route('**/__rig.mp4', route => route.fulfill({ status: 200, contentType: 'video/mp4', body }));
     }
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
 
     // One load. `opts.backend` is 'html5' or 'mediabunny'; `chunk`/`probe`
     // shrink the read sizes; `frames` are read back by barcode.

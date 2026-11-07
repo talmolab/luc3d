@@ -71,7 +71,7 @@ try {
     });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     // §9 writes `skeletonEditWarningOff`. A fresh context starts clean, but
     // clear it anyway so a re-run against a persisted profile cannot start with
     // the dialog already suppressed and pass every "no modal" check for free.

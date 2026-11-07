@@ -22,7 +22,7 @@
  *     alone in the load graph, and cancels. (The sample crops are
  *     also checked bit for bit against the inputs embedded, under 2-4.)
  *
- * Run: node tests/e2e/image-check-cpu.mjs   (downloads the ~88 MB fp32 model)
+ * Run: node tests/e2e/image-check-cpu.mjs   (downloads the ~86 MB fp32 model)
  */
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -50,7 +50,7 @@ try {
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // A tracked session whose groups also carry 2D instances, and camera "videos" that return one textured
     // frame: 3 animals, 3 cameras, labels of one pair swapped after an encounter (as id-switch-image-check.mjs).

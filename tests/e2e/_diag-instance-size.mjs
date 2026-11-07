@@ -30,7 +30,7 @@ try {
     const page = await browser.newPage();
     page.on('pageerror', e => console.log('  [pageerror]', String(e).slice(0, 200)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid, null, { timeout: 30000 });
 
     const r = await page.evaluate(async ({ NODES, N }) => {
         const pd = await import('/pose/pose-data.js');

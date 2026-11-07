@@ -121,10 +121,14 @@ function loadSettings() {
                 nodeWeights: (parsed.nodeWeights && typeof parsed.nodeWeights === 'object') ? parsed.nodeWeights : {},
                 cameraWeights: (parsed.cameraWeights && typeof parsed.cameraWeights === 'object') ? parsed.cameraWeights : {},
                 trackingThresholds: (parsed.trackingThresholds && typeof parsed.trackingThresholds === 'object') ? parsed.trackingThresholds : {},
+                smoothingParams: (parsed.smoothingParams && typeof parsed.smoothingParams === 'object') ? parsed.smoothingParams : {},
             };
         }
     } catch (e) { /* corrupt/blocked storage — fall back to defaults */ }
-    return { triangulationMethod: DEFAULTS.triangulationMethod, keybindings: {}, nodeWeights: {}, cameraWeights: {}, trackingThresholds: {} };
+    return {
+        triangulationMethod: DEFAULTS.triangulationMethod, keybindings: {},
+        nodeWeights: {}, cameraWeights: {}, trackingThresholds: {}, smoothingParams: {},
+    };
 }
 
 function persist() {
@@ -388,14 +392,14 @@ const TRACKING_THRESHOLDS = [
     {
         id: 'autoImageSwitchCheck', label: 'Check ID switches after tracking (image detection)', default: 0,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
-        desc: 'After Track All or Track Frame Range, also check close encounters by APPEARANCE: crops of each animal in every camera are embedded with an image model on the GPU (Tracks ▸ Check ID Switches (Images)). Catches animals of similar size that look different (e.g. coat colour), which the size check cannot. Slow — minutes for a long recording — and needs the videos loaded; the model (~44 MB) downloads on first use. Without a GPU (WebGPU) it still runs, on the CPU: about 15x slower, so a long recording can take hours.',
+        desc: 'After Track All or Track Frame Range, also check close encounters by APPEARANCE: crops of each animal in every camera are embedded with an image model on the GPU (Tracks ▸ Check ID Switches (Images)). Catches animals of similar size that look different (e.g. coat colour), which the size check cannot. Slow — minutes for a long recording — and needs the videos loaded; the model (~43 MB) downloads on first use. Without a GPU (WebGPU) it still runs, on the CPU: about 15x slower, so a long recording can take hours.',
     },
     {
         // A new id, not 'imageCheckThreshold': the score's scale changed (2026-10-09, -4..+4 instead of summed
         // log-probabilities), and an old saved -25 would otherwise be clamped to -4 and flag almost nothing.
-        id: 'imageChangeThreshold', label: 'Image check: flag threshold', default: -0.8,
+        id: 'imageChangeThreshold', label: 'Image check: flag threshold', default: -1.2,
         min: -4, max: 0, step: 0.1,
-        desc: 'A contact is a possible switch when its score falls below this. The score compares how each animal looks just before and just after the contact: about +2 means each still looks like itself, about -2 that they look like each other, near 0 that they cannot be told apart there. Closer to 0 catches more but flags more clean contacts: over 8 proofread or tail-marked recordings (1 h 45 min), -0.8 caught 10 of 12 real relabels with 2 false marks; -0.5 caught the same with 6; -1.2 caught 8 with none.',
+        desc: 'A contact is a possible switch when its score falls below this. The score compares how each animal looks just before and just after the contact: about +2 means each still looks like itself, about -2 that they look like each other, near 0 that they cannot be told apart there. Closer to 0 catches more but flags more clean contacts: over 24 proofread or tail-marked recordings (4 h 30 min), -1.2 caught 22 label changes with no false mark; -1 caught the same 22 with 2; -0.8 with 3. On 193 held-out single-camera recordings, -1.2 caught 31 with none.',
     },
     {
         id: 'imageCheckHz', label: 'Image check: crops per second', default: 2,
@@ -419,8 +423,8 @@ const TRACKING_THRESHOLDS = [
     },
     {
         id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 0,
-        min: 0, max: 500, step: 1,
-        desc: 'Robust triangulation: after an initial 3D solve, drop any 2D node whose reprojection error in a view exceeds this many pixels, then re-triangulate that node from the remaining reliable views. A node left with fewer than 2 reliable views is dropped from 3D. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless.',
+        min: 0, max: 640, step: 1,
+        desc: 'Robust triangulation: after the 3D solve, if a node\'s reprojection error in any view (the distance on that view\'s 2D image between the prediction and the reprojection) is over this many pixels, the view that misses by most is dropped for that node and the node is re-triangulated from the rest; this repeats while more than 2 views are left. A node whose last 2 views still miss by more gets no 3D point. 100 to 15 px is the recommended range: lower can drop good views too. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless. Settings ▸ Triangulation Wizard draws it.',
     },
 ];
 
@@ -480,6 +484,89 @@ export function getTrackingThresholds() {
     return out;
 }
 
+// --- Temporal Smoothing (luc3d #134) ---------------------------------------
+//
+// Hyperparameters for `pose/temporal-smoothing.js`, surfaced in Settings ▸
+// Temporal Smoothing. Deliberately a SEPARATE catalog from TRACKING_THRESHOLDS
+// rather than more entries in it: these are post-triangulation filter
+// parameters, not cross-view tracker knobs, and the Tracking Wizard's
+// "Tracking Thresholds" section renders every threshold the catalog exposes.
+//
+// Note the `smooth*` prefix rather than `filter*`. `filter` is already taken in
+// this file for DETECTION filtering (`filterMinVisibleNodes`,
+// `filterMinInstanceScore`), so a `filter*` smoothing parameter would read as
+// one of those.
+//
+// Both kernels default to 0 = off, matching `reprojErrorThreshold`: shipping
+// this must not change the 3D of any existing project until someone asks for it.
+export const SMOOTHING_PARAMS = [
+    {
+        id: 'smoothMedianWindow', label: 'Median window (frames)', default: 0,
+        min: 0, max: 101, step: 2,
+        desc: 'Stage 1, over time. Replaces each node\'s x, y and z with that node\'s median over this many frames, which removes one-frame spikes without averaging. Coerced to the next odd value so the window stays centered on the frame being written. 0 = off. Note that a median filter erases any feature narrower than about half the window, so keep it short for fast motion.',
+    },
+    {
+        id: 'smoothGaussianWindow', label: 'Gaussian window (frames)', default: 0,
+        min: 0, max: 101, step: 2,
+        desc: 'Stage 2, over time, applied to the median\'s output. A weighted average of each node\'s x, y and z over this many frames, with sigma = (window-1)/6, so the window spans +/-3 sigma and the current frame counts most. Removes broadband jitter. 3 barely changes anything (each frame keeps about 98% of its own value); 5 is the smallest window that smooths. Coerced to the next odd value. 0 = off.',
+    },
+    {
+        id: 'smoothMaxGap', label: 'Max gap to smooth across (frames)', default: 5,
+        min: 0, max: 1000, step: 1,
+        desc: 'An absence longer than this splits the trajectory into separate segments, and no window ever spans the break. This is what stops a filter from drawing a straight line through an occlusion or through the frames where the animal left. Shorter absences stay inside a segment as holes, which the filter skips over. Missing points are never filled in either case.',
+    },
+    {
+        id: 'smoothMinSegment', label: 'Minimum segment length (frames)', default: 5,
+        min: 1, max: 1000, step: 1,
+        desc: 'A segment shorter than this is left untouched rather than smoothed from too few samples. The analogue of aniposelib\'s refusal to optimize below 20 finite 3D points.',
+    },
+];
+
+const _smoothById = new Map();
+SMOOTHING_PARAMS.forEach(function (p) { _smoothById.set(p.id, p); });
+
+// Catalog snapshot for the Temporal Smoothing panel, effective values resolved.
+export function getSmoothingParamDefs() {
+    return SMOOTHING_PARAMS.map(function (p) {
+        return {
+            id: p.id, label: p.label, default: p.default,
+            value: getSmoothingParam(p.id),
+            min: p.min, max: p.max, step: p.step, desc: p.desc,
+        };
+    });
+}
+
+// Effective value for one smoothing parameter.
+export function getSmoothingParam(id) {
+    var def = _smoothById.get(id);
+    if (!def) return null;
+    var v = clampThreshold(def, _settings.smoothingParams[id]);
+    return v == null ? def.default : v;
+}
+
+// Effective values as an { id: value } map — the form `smoothSession` reads.
+export function getSmoothingParams() {
+    var out = {};
+    SMOOTHING_PARAMS.forEach(function (p) { out[p.id] = getSmoothingParam(p.id); });
+    return out;
+}
+
+// Commit an { id: value } override map (from the Temporal Smoothing panel's
+// Apply). Clamped to range; entries equal to the default are dropped.
+export function setSmoothingParams(map) {
+    var next = {};
+    if (map && typeof map === 'object') {
+        Object.keys(map).forEach(function (id) {
+            var def = _smoothById.get(id);
+            if (!def) return;
+            var v = clampThreshold(def, map[id]);
+            if (v != null && v !== def.default) next[id] = v;
+        });
+    }
+    _settings.smoothingParams = next;
+    persist();
+}
+
 // Commit an { id: value } override map (from the Tracking Wizard's Apply button).
 // Values are clamped to each threshold's range; entries equal to the default are
 // dropped so the stored set stays minimal.
@@ -495,6 +582,18 @@ export function setTrackingThresholds(map) {
     }
     _settings.trackingThresholds = next;
     persist();
+    for (var i = 0; i < _thresholdListeners.length; i++) {
+        try { _thresholdListeners[i](); } catch (e) { /* ignore */ }
+    }
+}
+
+// Told after every commit of the thresholds, so a control outside Settings can
+// show them (the Triangulate menu's Reprojection error field). A listener that
+// throws must not stop the others.
+var _thresholdListeners = [];
+
+export function onTrackingThresholdsChange(fn) {
+    if (typeof fn === 'function') _thresholdListeners.push(fn);
 }
 
 // Commit SOME thresholds (Track All's first-use dialog: the image check's

@@ -10,7 +10,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
   page.on('pageerror', e => console.log('[pageerror]', String(e).slice(0, 200)));
   await page.goto(`http://localhost:${PORT}/index.html`);
-  await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+  await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
   await page.evaluate(async () => {
     const pd = await import('/pose/pose-data.js');
@@ -26,7 +26,7 @@ try {
     AS.state.videoFiles = cams.map(c => ({ name:c.name, assignedCamera:c.name }));
     sp.populateViewStrip(); AS.paneManager.addAllViewsAsGrid();
   });
-  await page.waitForFunction(() => window.__lucid.state.views.every(v => !!v.overlayCanvas), { timeout: 10000 });
+  await page.waitForFunction(() => window.__lucid.state.views.every(v => !!v.overlayCanvas), null, { timeout: 30000 });
 
   // Build floor + wall at 60 deg, sharing the hinge edge.
   await page.evaluate(async () => {

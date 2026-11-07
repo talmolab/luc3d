@@ -45,7 +45,7 @@ try {
   await page.waitForFunction(() => {
     const el = document.querySelector('.test-summary');
     return el && /\d+\s*\/\s*\d+/.test(el.textContent);
-  }, { timeout: 60000 });
+  }, null, { timeout: 60000 });
   await page.waitForTimeout(300);
   console.log((HEADED ? '[headed] ' : '[headless] ') + `[dpr${DPR}] ` + (summary || '(no summary console line)'));
   if (fails.length) { console.log('\nFailures:'); fails.forEach(f => console.log(f)); }

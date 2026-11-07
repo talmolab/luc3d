@@ -72,7 +72,7 @@ try {
     });
 
     await page1.goto(`http://localhost:${PORT}/index.html`);
-    await page1.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 20000 });
+    await page1.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
 
     const buildResult = await page1.evaluate(async () => {
         const pd = await import('/pose/pose-data.js');
@@ -158,7 +158,7 @@ try {
     page2.on('dialog', async d => { await d.accept(''); });
 
     await page2.goto(`http://localhost:${PORT}/index.html`);
-    await page2.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page2.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     const sectionDisplay = () => page2.evaluate(() => {
         const el = document.getElementById('reprojErrorSection');

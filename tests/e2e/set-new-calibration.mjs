@@ -54,7 +54,7 @@ try {
     });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // =================================================================
     // Fixture: two cameras, some 3D annotation, one fitted plane
@@ -119,7 +119,7 @@ try {
         AS.paneManager.addAllViewsAsGrid();
     });
     await page.waitForFunction(
-        () => window.__lucid.state.views.every(v => !!v.overlayCanvas), { timeout: 10000 });
+        () => window.__lucid.state.views.every(v => !!v.overlayCanvas), null, { timeout: 30000 });
 
     // A tilted floor, annotated in both views from its exact projections, then
     // triangulated and fitted — the same staging the origin wizard needs.

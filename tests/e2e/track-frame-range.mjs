@@ -62,7 +62,7 @@ try {
     });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
 
     // Shared fixture builder, installed once and reused by every phase below.
     await page.evaluate(async ({ NF }) => {
@@ -295,16 +295,16 @@ try {
         window.__ASMOD.state.currentFrame = 4;
     });
 
-    const trackFrameBtn = page.locator('#tbTrackFrame');
-    check(await trackFrameBtn.count() === 1, 'Track Frame is still a clickable toolbar button');
-    check(await page.locator('#trackFrameDropdown #tbTrackFrameRange').count() === 1,
-        'the Track Frame split button carries a "Track Frame Range" dropdown item');
+    const trackFrameBtn = page.locator('#tbTrackAll');   // the Track ▾ button
+    check(await trackFrameBtn.count() === 1, 'Track is a clickable toolbar button');
+    check(await page.locator('#trackDropdown #tbTrackFrameRange').count() === 1,
+        'the Track menu carries a "Frame range…" item');
 
     // Hovering the button must reveal the menu (pure CSS, same as Triangulate).
     await trackFrameBtn.hover();
     await page.waitForTimeout(250);
     const rangeItem = page.locator('#tbTrackFrameRange');
-    check(await rangeItem.isVisible(), 'hovering Track Frame reveals the dropdown menu');
+    check(await rangeItem.isVisible(), 'hovering Track reveals the menu');
 
     // The menu is revealed purely by :hover, so every click on the item has to
     // re-establish hover first — a modal opening over the toolbar drops it.
@@ -453,14 +453,14 @@ try {
 
     const sawOverlay = page.waitForFunction(
         () => /Assigning identities/.test(document.getElementById('loadingStatus').textContent),
-        { timeout: 5000 }).then(() => true).catch(() => false);
+        null, { timeout: 30000 }).then(() => true).catch(() => false);
     await page.click('#trackRangeContinue');
     const overlayShown = await sawOverlay;
     check(overlayShown, 'Continue shows the same "Assigning identities" loading overlay as Track All');
 
     await page.waitForFunction(
         () => document.getElementById('loadingOverlay').classList.contains('hidden'),
-        { timeout: 20000 });
+        null, { timeout: 30000 });
     const afterRun = await page.evaluate(() => ({
         open: !!document.getElementById('trackRangeStart'),
         status: document.getElementById('statusText').textContent,
@@ -476,7 +476,7 @@ try {
         `and the status reports it back 1-based (status: "${afterRun.status}")`);
     // The run must leave the viewer on its own result, not wherever the user
     // happened to be (frame 4, set before phase 4 opened the modal).
-    await page.waitForFunction(() => window.__ASMOD.state.currentFrame === 16, { timeout: 5000 })
+    await page.waitForFunction(() => window.__ASMOD.state.currentFrame === 16, null, { timeout: 30000 })
         .catch(() => { });
     const parked = await page.evaluate(() => window.__ASMOD.state.currentFrame);
     check(parked === 16,

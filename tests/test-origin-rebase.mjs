@@ -22,7 +22,8 @@ import { countRebaseTargets, subsetRebaseTally, planOriginRebase,
     applyOriginRebase } from '../pose/origin-rebase.js';
 import { buildOriginFrame, rotationAboutAxis, applyOriginFrame } from '../pose/origin-frame.js';
 import { Camera, FrameGroup, Instance, InstanceGroup, UnlinkedInstance,
-    makePoints3d, setPoint3d, getPoint3d } from '../pose/pose-data.js';
+    makePoints3d, setPoint3d, getPoint3d, markPoints3dSmoothed, isPoints3dSmoothed,
+    unsmoothedPoints3d } from '../pose/pose-data.js';
 import { PlaneModel } from '../pose/plane-data.js';
 
 let passed = 0, failed = 0;
@@ -583,6 +584,30 @@ console.log('\n11c. NEGATIVE CONTROL: the omitted session moves when it IS inclu
         `(z ${bareBefore[2]} -> ${p.groups.gBare.points3d[2].toFixed(3)})`);
     check(!near(p.cams[2].tvec[2], camCBefore[2], 1e-6),
         'and so does its camera');
+}
+
+console.log('\n11d. Smoothed 3D keeps its pre-smoothing copy, re-based the same way');
+{
+    // The smoothing pass filters that copy on every later run; left in the old
+    // frame it would drag the next run's result back there.
+    const p = buildProject();
+    const g = p.groups.gBare;
+    const unsmoothed = Float64Array.from(g.points3d, v => v + 5);
+    markPoints3dSmoothed(g.points3d, unsmoothed);
+    const before = Array.from(g.points3d);
+    applyOriginRebase(await planOriginRebase(p.sessions, p.model, FRAME));
+    const after = unsmoothedPoints3d(g.points3d);
+    check(isPoints3dSmoothed(g.points3d) && !!after, 'the re-based array is still marked smoothed');
+    // A rigid motion keeps distances: the copy sits as far from the points as before.
+    let worst = 0;
+    for (let k = 0; k < before.length; k += 3) {
+        if (Number.isNaN(before[k])) continue;
+        const d0 = Math.hypot(unsmoothed[k] - before[k], unsmoothed[k + 1] - before[k + 1], unsmoothed[k + 2] - before[k + 2]);
+        const d1 = Math.hypot(after[k] - g.points3d[k], after[k + 1] - g.points3d[k + 1], after[k + 2] - g.points3d[k + 2]);
+        worst = Math.max(worst, Math.abs(d1 - d0));
+    }
+    check(worst < 1e-9, `the copy moved with the points (distance change ${worst.toExponential(2)})`);
+    check(!near(after[2], unsmoothed[2], 1e-6), 'and really moved (not left in the old frame)');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -731,7 +731,10 @@ is no hydration sweep and no resident-only hazard here.
 `mulMat3Vec3`, `rebaseExtrinsics`), `./pose-data.js` (`pooledPoints3d` — `applyOriginRebase` stores each re-based group in the slab pool — `points3dNodeCount`,
 `hasPoint3d`, `isPoints3dFromFile` / `markPoints3dFromFile` — a group whose 3D
 was read from a file keeps that mark across the re-base, so the display still
-reprojects it rather than re-solving). DOM-free.
+reprojects it rather than re-solving — and `unsmoothedPoints3d` /
+`markPoints3dSmoothed`: a smoothed group's pre-smoothing copy is re-based by the
+same `rebasePoints3d` (the plan's `nextUnsmoothed`), so a later smoothing run
+filters 3D in the new frame). DOM-free.
 
 **Imported by.** `ui/origin-rebase.js`.
 
@@ -936,17 +939,20 @@ against it. Each difference gets a `kind`:
 (`ui/calibration-notice.js`) does NOT branch on it — it lists only which
 sessions differ; the classification is for the console log and the tests.
 
-**Three deliberate details.** A session with NO cameras is excluded from the
-comparison and listed in `withoutCalibration` rather than counted as a third
-calibration — a per-camera folder load with no `.toml` would otherwise raise the
-modal on a perfectly consistent project. A camera whose rotation or translation
+**Three deliberate details.** A session with NO calibration — no cameras, or
+only placeholders (`hasRealCalibration` false: every camera has all-zero
+extrinsics, which is what a folder loaded with no `.toml` now gets) — is excluded
+from the comparison and listed in `withoutCalibration` rather than counted as a
+third calibration; it would otherwise raise the modal on a perfectly consistent
+project. A rig with only its reference camera at the origin is still compared. A camera whose rotation or translation
 will not read (NaN, wrong length) is DROPPED, so one malformed entry cannot
 masquerade as a divergence. And only cameras whose LENS matches contribute to the
 frame solve: a re-focused camera's extrinsics are not a statement about the origin.
 
 **Imports from project modules.** `./origin-frame.js` (`rotationAboutAxis`,
 `rotationMatrixToAxisAngle`, `normalize3`) — an `rvec` converts by handing
-`rotationAboutAxis` the vector and its own magnitude. DOM-free.
+`rotationAboutAxis` the vector and its own magnitude; `./placeholder-cameras.js`
+(`hasRealCalibration`). DOM-free.
 
 **Imported by.** `ui/calibration-notice.js`.
 
@@ -954,6 +960,64 @@ frame solve: a re-focused camera's extrinsics are not a statement about the orig
 app's own `buildOriginFrame` + `rebaseExtrinsics`, so the detector and the
 re-base cannot drift apart silently) and
 `tests/e2e/multi-session-calibration-notice.mjs` (the real calibrations off disk).
+
+---
+
+### pose/placeholder-cameras.js
+
+**Purpose.** The stand-in `Camera` a view gets when there is no calibration, and
+the rule that every view and every 2D camera key of an UNCALIBRATED session has
+one. The `.slp` writer (`buildSlpLabelsAllViews`) writes one video per
+`session.cameras` entry and skips any 2D instance whose camera is not in that
+list, and the save paths choose the views and videos to write by the same list —
+so a session with no cameras saved as an empty file ("Saved (0.0 MB)") and
+reopened with no views and no poses. A folder loaded with no `calibration.toml`
+was exactly that.
+
+**The placeholder** is the camera File ▸ Load Videos has always made:
+`rvec = tvec = [0,0,0]`, no distortion, f = 600, principal point at the image
+centre, sized from the video (640×480 when unknown). The app already reads that
+shape as "no calibration" (`ui/view-align-modal.js` `isCalibrated`,
+`ui/sessions-panes.js` `originHasCalib`, Triangulate's `sessionHasCalibration()`
+gate). No loader sets up the 3D viewer for placeholders only (folder loaders,
+`handleLoadSlpFile`, `handleLoadProjectSlpLazy`), tracking refuses with the
+Calibration Required popup, a new group is not auto-triangulated
+(`reTriangulateGroup`), and `handleLoadCalibration` replaces them when a real
+calibration is loaded.
+
+**Key exports.**
+- `makePlaceholderCamera(name, width?, height?)`.
+- `isPlaceholderCamera(cam)` — all-zero rotation AND translation (a 3×3
+  rotation matrix is calibrated).
+- `hasRealCalibration(session)` — any non-placeholder camera. Same rule as
+  `pose/triangulation.js` `sessionHasCalibration()` (which takes no argument and
+  reads `state.session`); this one takes any session and needs no app state.
+- `cameraNamesInUse(session, views?, videoFiles?)` — views (on-screen order),
+  then videos (`assignedCamera || name`), then 2D keys: frame-group instances
+  and unlinked instances (non-empty lists only), instance-group members, a lazy
+  loader's per-camera stores (`labelsByCam`).
+- `ensurePlaceholderCameras(session, views?, videoFiles?)` — appends a
+  placeholder for each name in use with no camera and assigns each unassigned
+  video to the camera named after it; returns the names added. **Does nothing
+  to a session with a real calibration**: a stand-in at the world origin would
+  join triangulation and corrupt the 3D.
+- `PLACEHOLDER_FOCAL`, `PLACEHOLDER_DEFAULT_SIZE`.
+
+**Imports from project modules.** `./pose-data.js` (`Camera`). DOM-free and
+state-free (callers pass the session's views and videos), so it loads under Node.
+
+**Imported by.** `loading/session-loader.js` (per-camera and single-SLP folder
+loaders; `handleLoadProjectSlpLazy`'s 3D gate), `import-export/save-load.js`
+(`buildSlpBytes`, for every session before writing), `import-export/slp-import.js`
+(`handleLoadSlpFile`'s 3D gate), `pose/calibration-compare.js` (placeholder-only
+sessions are not compared), `pose/tracker.js` and `ui/track-range-modal.js`
+(tracking needs a real calibration).
+
+**Tests.** `tests/test-placeholder-cameras.mjs`;
+`tests/e2e/nocalib-folder-save-reopen.mjs` (per-camera folder with no `.toml`:
+load → Track All refuses → annotate → Save As → File ▸ Open with the videos;
+deferred videos; a hand-built camera-less session; the single-SLP folder loader
+and its reopen).
 
 ---
 
@@ -1195,8 +1259,19 @@ points3d `.h5` import). `ui/rendering.js`'s reprojection fill reprojects marked
 3D rather than re-solving it, even with a reprojection-error threshold set,
 since a re-solve would show LUCID's answer instead of the file's. Keyed by the
 ARRAY so it lapses by itself: every path that re-solves or edits a group's 3D
-assigns a new array, and nothing writes a group's `points3d` in place. The
-origin re-base (`applyOriginRebase`) carries the mark to the re-based array.
+assigns a new array, and nothing but the smoothing pass writes a group's
+`points3d` in place. The origin re-base (`applyOriginRebase`) carries the mark
+to the re-based array.
+
+**Smoothed 3D is marked the same way.** `markPoints3dSmoothed(points3d, source)` /
+`isPoints3dSmoothed(points3d)` — a `WeakMap` from each array
+`pose/temporal-smoothing.js` wrote (in place) to a pooled copy of what it held
+before its FIRST smoothing (`unsmoothedPoints3d(points3d)`;
+`clearPoints3dSmoothed` forgets it). Every later pass filters that copy, so runs
+replace each other instead of stacking. The reprojection fill reprojects marked
+3D (a re-solve would draw the unsmoothed answer), `adoptPrior3d` never adopts it
+(re-triangulating undoes the pass), and the origin re-base re-bases the copy
+with the points.
 
 **`InstanceGroup.points3d` on the bulk paths lives in a slab pool.**
 `pooledPoints3d(points)` returns a `Float64Array` VIEW of exactly the group's 3N
@@ -1425,6 +1500,7 @@ session graph that holds them.
   re-runs that test.
 - `InstanceGroup` — cross-view grouped instances + triangulated `points3d`
   + cached `reprojectedInstances`. `markDirty`/`markClean`. Also
+  `solveSettings` (`triangulationSettingsKey`, in memory only) and
   `triangulationMethod` (`'ba'`|`'dlt'`|undefined), recording WHICH SOLVER
   produced `points3d`. Read by `resolveTriangulationMethod`,
   `ui/rendering.js`'s lazy reprojection fill, `adoptPrior3d` and the Info Panel's
@@ -1457,11 +1533,20 @@ session graph that holds them.
     hydrated from (`_rawInstIndex`, which must be an integer — `null` is not
     row 0), via `lazyLoader.predictedPointScore` and by node NAME, so a skeleton
     edit after loading cannot pair a node with another node's score.
+    **`predictedNodeScorer(cameraName, frameIdx, inst)`** returns `k → score`
+    with exactly those answers, resolving the instance's store row once (via
+    `lazyLoader.predictedPointScorer`) instead of per node; By Cam's per-frame
+    pass (`_buildCameraLabeledFrame`) and the streaming project save's overlay
+    (`buildOverlayInstance`) ask it for every node of every prediction.
   - **`numAnimals`** — the number of animals every tracking run on the session
     caps identities at: a positive integer, `'auto'`, or `null` while nobody has
     been asked, which is what makes Track Frame / Track All prompt. Saved as
     `metadata.lucid.numAnimals` (`import-export/visibility-metadata.js`), read
     and set through `pose/tracker.js`.
+  - **`imageModel`** — the image ID-switch check's model for the session: null
+    = the built-in one, else a package choice (`modelChoiceOf`,
+    `pose/image-model-manifest.js`). Set by `ui/image-model-dialog.js`, saved as
+    `metadata.lucid.imageModel` only when set.
   - `numFrames` returns `lazyLoader.nFrames` on a lazy session (`frameGroups`
     there holds only the resident window) and `frameGroups.size` otherwise.
   - **Tracks and identities are per-session.** The constructor copies the
@@ -1654,8 +1739,8 @@ session graph that holds them.
 
 **Imported by.** `demo-data.js`; `pose/` — `cross-view-tracker.js`,
 `id-switch-check.js`, `initialization.js`, `lazy-residency.js`,
-`origin-rebase.js`, `plane-data.js`, `plane-fit.js`, `tracker.js`,
-`tracker-worker.js`, `triangulation.js`, `triangulation-core.js`,
+`origin-rebase.js`, `placeholder-cameras.js`, `plane-data.js`, `plane-fit.js`,
+`tracker.js`, `tracker-worker.js`, `triangulation.js`, `triangulation-core.js`,
 `triangulation-pool.js`, `triangulation-worker.js`; `import-export/` —
 `file-io.js`, `save-load.js`, `skeleton-json.js`, `slp-import.js`,
 `slp-merge.js`, `slp-streaming-write.js`; `loading/session-loader.js`; `ui/` —
@@ -1704,13 +1789,16 @@ worker run 10% SLOWER than inline.
   — per frame, what `commitTrackedFrame` reads, in tracker order: `nT[i]`
   targets holding a detection from >= 2 cameras THIS frame, each with its
   `trackId`, `nMem` (camera index, slot) pairs in `mem` in its `detsByCam` order,
-  and a copy of its 3D as the next `p3len` values of `p3` (-1: none); `live[i]`
+  and a copy of its MEMBERS' 3D (`membersPoints3d` — not `target.points3d`,
+  which also fuses stale views the main thread never sees) as the next `p3len`
+  values of `p3` (-1: none); `live[i]`
   = the tracker's target count after the frame (the run's `numTargets`). All
   transferred.
 - Any throw → `{type: 'error', id, message}`.
 
 **Imports from project modules.** `./pose-data.js` (`Camera`, `Instance`),
-`./cross-view-tracker.js` (`CrossViewTracker`, `Detection`) — both worker-safe.
+`./cross-view-tracker.js` (`CrossViewTracker`, `Detection`, `membersPoints3d`) —
+both worker-safe.
 
 **Imported by.** Spawned by `pose/tracker-pool.js` via
 `new Worker(new URL('pose/tracker-worker.js', document.baseURI), {type: 'module'})`.
@@ -1878,9 +1966,10 @@ identity colors).
   `triangulateCurrentFrame` (`triangulation.js`) and
   `groupByIdentityAndTriangulateAll` (`ui/export-modals.js`).
 
-**WHICH function the "Triangulate All" button calls.** `ui/ui-wiring.js`
-(`wireTriDropdown('triangulateAllDropdown', …)`)
-routes the toolbar split-button by method AND by session state: `'ba'` →
+**WHICH function the Triangulate button calls.** `ui/ui-wiring.js`
+(`wireActionMenu('triangulateDropdown', …)`, its `all` handler — a click on
+the button, or its menu's All frames) routes by the default method AND by
+session state: `'ba'` →
 `triangulateAllFrames('ba')`; default/DLT with **any identities present** →
 `groupByIdentityAndTriangulateAll('dlt')` (`ui/export-modals.js`); DLT with no
 identities → `triangulateAllFrames('dlt')`. Any real tracked project takes the
@@ -1956,18 +2045,42 @@ drifts upward.
   dialog. With no session it is a no-op. Loading never goes through it — the
   readers set `numAnimals` directly, so a reopened project is not dirty.
 
+**Tail marks.** `getTailMarkedIdentity` / `setTailMarkedIdentity` /
+`onTailMarkedIdentityChange`: which identity has the tail marks in the active session
+(`Session.tailMarkedIdentity`, saved with the project; null = off). `getIdentityMarks` /
+`setIdentityMarks`: what each identity shows, per identity cue (`Session.identityMarks`);
+setting one clears the other. With identity marks set, `runTailMarkPass` runs
+`resolveIdentityCues` (`pose/identity-cues.js`) with the tail-band cue; otherwise the
+two-animal `resolveTailMarks`. Asked in Track
+All's first-use dialog (pre-filled with the last answer this page saw) and in the Track
+menu (`ui/tail-mark-field.js`). When set, `runTrackingPass` runs `runTailMarkPass` right
+after a full Track All (never a range or Track Frame), before the ID-switch checks, so
+they judge the corrected labels. A pass that refuses or fails leaves the labels as
+tracked and never fails the run; the status line and summary box say what it did
+(`describeTailMarks`). The result stays on `session._tailMarkResult`, in memory only.
+
 **Imports from project modules.**
+- `./tail-mark.js` — `resolveTailMarks`; `../ui/tail-mark-reader.js` —
+  `createTailMarkReader` (see "Tail marks").
 - `./detection-filter-stats.js` — `passesDetectionFilter` (the detection-pool
   filter; see above).
 - `./pose-data.js` — `InstanceGroup`, `points3dNodeCount`, `hasPoint3d`,
   `readPoint3d`, `pooledPoints3d` (`commitTrackedFrame` stores a COPY of the
-  target's 3D in the slab pool, so the group does not share the target's live
+  members' 3D in the slab pool, so the group does not share the target's live
   array).
 - `./triangulation.js` — `computeFundamentalMatrix`, `triangulatePointDLT`,
   `triangulatePoints`, `reprojectPoint`, `reprojectPoints`,
-  `computeInstanceDistanceTo`, `hungarianAlgorithm`, and `loadAllLazyFrames` /
-  `sweepLazyFrameWindows` (the Track All sweeps).
-- `./cross-view-tracker.js` — `CrossViewTracker`, `Detection`.
+  `computeInstanceDistanceTo`, `hungarianAlgorithm`, `loadAllLazyFrames` /
+  `sweepLazyFrameWindows` (the Track All sweeps), and
+  `showCalibrationRequiredPopup`.
+- `./placeholder-cameras.js` — `hasRealCalibration`: Track This Frame and
+  `runTrackingPass` (Track All, Track Frame Range) refuse with the Calibration
+  Required popup when every camera is a placeholder (a folder loaded with no
+  calibration), as Triangulate does — cross-view tracking on cameras that all
+  sit at the origin would build groups from 3D with no baseline.
+- `./cross-view-tracker.js` — `CrossViewTracker`, `Detection`, `membersPoints3d`.
+- `./run-state.js` — `noteTrackRun` (after `trackCurrentFrame`'s and
+  `runTrackingPass`'s run): the blue Track button.
 - `../ui/app-state.js` — `state`, `interactionManager`, `timeline`,
   `viewport3d`, `getActiveSession`.
 - `../ui/settings.js` — `getNodeWeightArray`, `getNodeWeight`,
@@ -2075,6 +2188,24 @@ the windowed path hands `onProgress` to `sweepLazyFrameWindows`.
 `Identity`, writes `setFrameIdentity`, and promotes unlinked members into the
 linked pool.
 
+**The group's 3D comes from its members only** (`membersPoints3d`,
+`pose/cross-view-tracker.js`). The members are the target's detections from THIS
+frame, while `target.points3d` also fuses any stale view a camera that missed the
+animal left behind (kept up to `stale` frames, for association). Storing the
+target's 3D put a pose up to 20 frames old into 26.7% of committed groups on the
+22 proofread SLAP sessions (node shift median 1.2 mm, p99 147 mm), and the draw
+path's members-only reprojection error did not describe it. A target with no
+stale view still commits its `points3d` bit for bit, and identities are
+unchanged (bit-identical on all 22) since the tracker never reads a group's 3D
+back. On a worker run the worker sends `membersPoints3d` (see
+`pose/tracker-worker.js`). **`triangulationMethod` is deliberately left unset:**
+this is the tracker's normalized-coordinate DLT, not the app's pixel-space
+`'dlt'` (median 0.39 mm apart), and Triangulate All ▸ DLT's `adoptPrior3d` keeps
+any identical-membership group tagged `'dlt'`, so tagging these would make
+Triangulate All after Track All solve nothing. Covered by
+`tests/test-tracker-members-3d.mjs` (a moving animal one camera misses; fails on
+the pre-fix build) and, for the worker, `tests/e2e/track-all-worker.mjs`.
+
 **Raw-trackIdx collision guard.** Per-camera prediction files number tracks
 independently, and a camera's raw tracker can briefly give the SAME trackIdx to
 two animals in one camera on one frame; both `setFrameIdentity` calls would hit
@@ -2114,8 +2245,8 @@ the `G_keeptrack_3d6` champion values, except `distanceThreshold`/`stale` — se
 `pose/cross-view-tracker.js`). Track Frame/Track All pass the user's animal count
 as `maxTargets` (a LUCID divergence; `null` = uncapped). Covered by
 `tests/test-crossview-populate.mjs` (data-structure population),
-`tests/test-cross-view-tracker.mjs` (algorithm), and
-`tests/test-tracker-collision-guard.mjs`.
+`tests/test-cross-view-tracker.mjs` (algorithm),
+`tests/test-tracker-collision-guard.mjs`, and `tests/test-tracker-members-3d.mjs`.
 
 **Track Frame Range.** `trackFrameRange(startFrame, endFrame)` tracks a
 contiguous span, so a user can re-run tracking around a known ID switch while
@@ -2232,7 +2363,8 @@ the per-node 3D term at `-maxPenalty × corr3d` (4 = flat beyond 5 × distanceTh
 re-solved by `checkedPoints3d` (campy's `TriangulateChecked`: a node whose worst view
 is over the threshold loses the view WITHOUT which its other views fit best, down to
 2 views, then is dropped) — and `matchPoints3d(target)` is what `_adjacency3d` and
-`targetProjection` read. `points3d` (written to the groups) stays the plain DLT.
+`targetProjection` read. `points3d` stays the plain DLT, and the groups get the
+plain DLT of their members (`membersPoints3d`, below); `match3d` never reaches one.
 `birthMedian` pairs births by the median epipolar distance over nodes
 (`epipolarMedianMatrix`) instead of `epipolarErrorMatrix`'s mean. Measured with an
 exact offline replay of Track All on 22 proofread SLAP sessions (8 cameras):
@@ -2271,15 +2403,38 @@ place), and `Camera.setExtrinsics` replaces `extrinsicMatrix`. Keep both true.
 The per-view projection is reusable only because of the frame-synchronous rule
 above. Pinned by `tests/test-cross-view-tracker.mjs` "Score caches".
 
+**What a committed group carries: `membersPoints3d(target, frameIdx)`.** A
+target's `points3d` is fused from every view in `detsByCam`, including a camera's
+detection from up to `stale` frames ago — right for association (the reference
+behavior plus the stale-anchor fix; the cost weights were tuned against it), but
+not the 3D of the group `commitTrackedFrame` makes, whose members are only the
+detections from the frame being committed. `membersPoints3d` returns
+`target.points3d` itself when the target holds no stale view (so the common case
+is bit-identical) and otherwise re-solves the members alone with the same DLT,
+in the same convention (`pointsNorm` + `extrinsicMatrix`, so the frame rule
+holds); fewer than two members ⇒ null. It shares `detectionObservations` with
+`_retriangulate`, and takes the target as an argument rather than being a
+`Target` method so plain-object targets in tests work. On the six proofread SLAP
+sessions 30.0% of committed groups held a stale view (median 1, age median 5
+frames); the stored 3D moved per node by a median 1.0 mm, p90 27 mm, p99 135 mm,
+and 2.8% of those nodes had 3D only thanks to the stale view (NaN now, as
+Triangulate All gives). See `pose/tracker.js`. On a worker run
+(`pose/tracker-worker.js`) the worker calls it and sends THAT 3D back: the main
+thread rebuilds each target from its this-frame members only, so a stale view
+is no longer visible by the time `commitTrackedFrame` runs. That half is pinned
+by `tests/e2e/track-all-worker.mjs` (worker == inline, bit for bit): with the
+worker sending `target.points3d` instead, 3 of its checks fail.
+
 **Exports.** `CrossViewTracker` (class: `trackFrame(detsByCam, camsOrder)`,
 maintains `.targets`), `Detection` (2D observation: `pointsNorm`/`pointsPixel` +
-`cam`/`frameIdx`/`slot`), `normalizePoint`.
+`cam`/`frameIdx`/`slot`), `normalizePoint`, `membersPoints3d` (above).
 
 **Faithful-port quirks still preserved (do NOT "fix" without new measurement).**
 `velocity`/`distance` thresholds are SOFT (drive the cost negative, not hard
 gates) and, with the gate off, negative matches are not filtered; the 3D term
 ignores the time gap; 3D velocity is zero; re-triangulation is plain DLT over all
-(freshness-filtered) stored per-view detections. Adds a defensive `nansum`-style
+(freshness-filtered) stored per-view detections — for matching only; a committed
+group's 3D is its members' (above). Adds a defensive `nansum`-style
 skip of non-finite cost terms (robust to a degenerate `[I|0]` camera).
 
 **LUCID divergence — `maxTargets` (opt-in target cap).** The reference has NO
@@ -2306,6 +2461,325 @@ load in `pose/tracker-worker.js`. Keep every import of this module worker-safe.
 **Imported by.** `pose/tracker.js`, `pose/tracker-worker.js`.
 
 ---
+
+### pose/temporal-smoothing.js
+
+**Purpose.** Post-triangulation temporal filtering of the 3D tracks — the
+smoothing half of luc3d #134 ("3d projection would benefit from anipose's
+temporal smoothing and RPE flags"). The RPE half of that issue already shipped
+as the Tracking Wizard's `reprojErrorThreshold` in `triangulateAndReproject`
+(`pose/triangulation.js`). Reads and writes `InstanceGroup.points3d` ONLY;
+`Instance._xy` (`'user'` and `'predicted'` 2D) is never modified.
+
+**Where it sits.** AFTER triangulation, never inside tracking, and never on 2D.
+Pipeline: track → proofread identities → triangulate → smooth. Smoothing before
+identities are proofread smooths ACROSS an ID swap, welding two animals'
+trajectories together; `CrossViewTracker` is causal and frame-by-frame while a
+smoother is non-causal; and the tracker's hyperparameters are measured against
+benchmark corpora that changing its 3D state would invalidate. 2D filtering was
+rejected because the low-acceleration prior is physically true in 3D and only
+approximately true under perspective projection, and because interpolating a
+missing view fabricates an observation that then votes in triangulation as if
+it were real data.
+
+**Algorithm.** Two independently switchable stages over each node's 1D
+coordinate signals (15 nodes = 45 signals per identity; nodes never enter each
+other's windows):
+1. **Median** (despike) — nonlinear, rank-based, removes impulses.
+2. **Gaussian** (smooth) — weighted mean, `sigma = (window-1)/6`, removes
+   broadband noise.
+Order is fixed: Gaussian-first would smear an isolated outlier across its
+window, after which the median can no longer remove it. Windows are coerced to
+ODD (`normalizeWindow`) so they stay centered — an even window is a half-frame
+phase shift against the video.
+
+**Missing data.** Two regimes, deliberately distinguished. ISOLATED HOLES (gap
+<= `smoothMaxGap`) are skipped with the Gaussian weights renormalized over
+present samples. SEGMENT BOUNDARIES (longer gaps, and the ends of the
+trajectory) shrink the window SYMMETRICALLY — a one-sided window is an
+extrapolation, biased toward whichever side still has data by roughly
+`velocity x half-window` (~15 mm at 10 mm/frame with a 7-window), which reads
+as the skeleton lurching at every occlusion edge. Presence is decided ONCE at
+the SKELETON level and applied to all 45 signals, because a single 1D signal
+cannot distinguish "occluded in 4 of 5 cameras" from "the animal left", and
+per-node segmentation would deform the skeleton. Gaps are NEVER filled — a NaN
+input is a NaN output — unlike anipose's `filter_3d.py`, which `np.interp`s
+across gaps of any length before filtering. This also keeps the gap structure
+invariant across the two stages, so segments are computed once and reused.
+
+**Not a lazy sweep.** `session.instanceGroups` is fully resident
+(`sweepLazyFrameWindows` releases `frameGroups`, never `instanceGroups`, and
+the SLP 2.8 columnar reader materializes every group's 3D on load — luc3d
+#189), so this walks the map directly and hydrates no 2D. It therefore cannot
+fall into the resident-only bug class of luc3d #194/#195.
+
+**Provenance.** Sets `InstanceGroup.smoothed = true` and clears the derived
+reprojection caches (`group.reprojections`; `group.reprojectedInstances` goes back
+to the shared `NO_REPROJECTED_INSTANCES`, never `clear()`ed), which refill lazily.
+It also marks the written array (`markPoints3dSmoothed`), so that refill
+reprojects the smoothed 3D instead of re-solving the 2D — without the mark,
+groups with no `triangulationMethod` (Track All's) or any group under a
+reprojection-error threshold drew the unsmoothed answer.
+
+**Runs replace, never stack.** The mark keeps a pooled copy of the group's 3D
+from before its first smoothing (taken just before the first write; the
+`slice()` matters, since `pooledPoints3d` returns an already-pooled array as-is),
+and the gather reads that copy (`unsmoothedPoints3d`), so window 60 then
+window 3 gives window 3's result. `unsmoothSession(session, {writeFrames})`
+copies it back and drops the mark (the "both windows 0" action);
+`hasSmoothed3d(session, frameIdx?)` says whether any group (on a frame, or
+anywhere) is smoothed; the session-wide answer walks only the frames a pass
+wrote (a per-session `WeakMap` set), dropping each one found no longer
+smoothed, because `ui/smoothing-button.js` asks on every overlay draw.
+Saved with the project: the source goes in the file and comes back marked
+(`import-export/smoothing-metadata.js`), and a reader registers the frames it
+re-marked with `noteSmoothedFrames(session, frames)` so the button finds them.
+`triangulationMethod` is deliberately UNTOUCHED: smoothing is
+orthogonal to which solver produced the points (a group can be BA-solved AND
+smoothed), and a third value there would erase the solver identity
+`resolveTriangulationMethod` exists to preserve.
+
+**Exports.** `normalizeWindow`, `sigmaForWindow`, `buildSegments`, `medianOf`,
+`smoothSignalInto`, `resolveSmoothingParams`, `collectTrajectories`,
+`smoothTrajectory`, `smoothSession`, `smoothSessionAsync`, `smoothFrame`,
+`unsmoothSession`, `hasSmoothed3d`, `noteSmoothedFrames`, `removeSmoothing`,
+`restoreSmoothing`, `hasRemovedSmoothing`. **Remove / Restore smoothing**:
+`removeSmoothing(session, {scope, config})` records the filter's whole input
+(`smoothingInputPrint`: every group with 3D in walk order, its frame,
+identity and `points3d` array in flat arrays; a smoothed group's
+pre-smoothing copy, otherwise a hash of its values), copies the smoothed
+values into ONE `Float64Array`, then `unsmoothSession`s. Kept per session in
+a `WeakMap`, in memory only (never saved). `restoreSmoothing(session, params)`
+puts them back, re-marking each group with its kept source, only when the
+settings resolve the same (`config`) and the input is unchanged
+(`inputUnchanged`: same groups, arrays, frames, identities, and values equal
+to the kept sources / hashes) — a smoothed value reads its neighbours' frames,
+so any change anywhere makes the kept values suspect. Else it writes nothing
+and returns `stale` with the scope and frames to smooth again. Either way the
+copy is dropped; any new run (`smoothSession*`, `smoothFrame`,
+`unsmoothSession`) drops it too. 400,000 poses x 15 nodes: remove ~0.3 s,
+restore ~0.2 s, vs ~2.9 s to smooth. `smoothFrame(session, params, frameIdx)`
+is Temporal Smoothing ▸ This frame: it writes exactly (bit for bit) what
+`smoothSession` writes on that frame, but reads only the frames that value
+depends on — within median + Gaussian radius, plus a walk out to the frame's
+segment edges (absent runs > `maxGap`), stopped once a present frame lies
+`max(reach, minSegment)` out, where the true edge can no longer change the
+result. It filters that slice with `smoothSignalInto`, passing the true segment
+in slice coordinates and `from`/`to` so only the samples the frame reads are
+computed (the sums run in the same order as the full pass). Identity bucketing
+matches `collectTrajectories`; the one whole-session walk
+(`hasAmbiguousNoIdentity`) runs only when the frame has an unidentified group.
+`skipped` counts that frame's groups. `unsmoothSession` with `writeFrames`
+walks only those frames. `smoothSessionAsync(session, params, {writeFrames, onProgress})`
+awaits `onProgress(done, total)` (poses) after each node coordinate of each
+track; both entry points run the same generators (`smoothTrajectorySteps`,
+`smoothSessionSteps`), so the result and the writes are identical, and nothing
+of a trajectory is written before its last step.
+
+**Imports.** `pose/pose-data.js` (`POINT3D_STRIDE`, `points3dNodeCount`,
+`NO_REPROJECTED_INSTANCES`, `pooledPoints3d`, `markPoints3dSmoothed`,
+`isPoints3dSmoothed`, `unsmoothedPoints3d`, `clearPoints3dSmoothed`) only —
+no UI imports, so the module stays unit-testable in plain Node.
+
+**Imported by.** `ui/ui-wiring.js` (`smoothSessionAsync`, `smoothFrame`,
+`unsmoothSession`, `resolveSmoothingParams`, `hasSmoothed3d`,
+`removeSmoothing`, `restoreSmoothing`), `ui/smoothing-button.js`
+(`hasSmoothed3d`, `hasRemovedSmoothing`),
+`import-export/smoothing-metadata.js` (`hasSmoothed3d`, `noteSmoothedFrames`),
+`ui/smoothing-windows-figure.js` (`smoothSignalInto`, `normalizeWindow`,
+`sigmaForWindow`, `buildSegments`, to draw the Settings figure with the real
+filter).
+
+**Tests.** `tests/test-temporal-smoothing.mjs` (`smoothFrame` is checked bit
+for bit against the all-frames pass on every frame of noisy fixtures with
+holes, segment edges, duplicates and unidentified groups, over 270
+configurations); save/reopen in `tests/e2e/smoothing-save-reopen.mjs`. Bench:
+`tests/e2e/_bench-smoothing-this-frame.mjs` (Node) and
+`tests/e2e/_bench-smoothing-ui.mjs` (menu click to status, eager + lazy). Verified by
+mutation: removing the symmetric shrink, zero-padding instead of renormalizing,
+and filling gaps each fail with the specific artifact they represent.
+
+---
+
+### pose/identity-cues.js
+
+**Purpose.** Which animal each tracked identity is, at every moment, from features
+unique to each animal (identity CUES); DOM-free and cue-agnostic. Built so new cues
+(fur markings, dyed ear tufts, ...) plug in without touching the decision. The user
+sets what each identity shows (`Session.identityMarks`: cue id -> identity name ->
+class); `resolveIdentityCues` reads every cue at sampled frames, learns each class's
+look, finds the most likely assignment of animals to identities at each sample, bisects
+each change to its frame, and relabels with `Session.swapIdentitiesInRange`.
+
+**The decision.** `decodeAssignments`: a Viterbi over every ordering of the animals
+(`permutationsOf`; up to `maxAnimals` = 6, 720 states), a sample costing what its cues
+contradict (each identity capped at `maxSampleCost`), a swap of two identities costing
+`contactSwapCost` across a gap where those two touch (`pairContacts`, from the shared
+grid in `pose/id-switch-check.js`: `pairContactRuns` once, `touchingFromRuns` per sample list;
+`opts.contactRuns` replaces it for replays) and `apartSwapCost` elsewhere, in typical-sample
+units (`combineCosts`). Classes may be shared (two red, two blue): swaps between animals
+of one class are invisible to the cue, cost nothing to leave alone, and are left as
+tracked. `swapsFor(perm)` turns an assignment into swaps (each cycle as exchanges with
+its first member).
+
+**Sampling.** The reader samples keyframes up to `maxSampleGapSeconds` (10 s) apart
+(`reader.plan(frames, maxGapSeconds)`): a keyframe decodes alone, while every frame between
+keyframes costs decoding from the last one. Then each sample that reads against the decision
+by more than `suspectCost` (`suspectSamples`) gets one read per `denseSeconds` between its
+neighbours (`denseFramesAround`, a second streaming read), and the whole decision runs again
+on all samples, on the first pass's cost scale (`combineCosts`' `typicalGiven`): the added
+samples bunch where the cues read poorly, and a scale taken from them makes every cost loom
+larger against a swap, which relabelled stretches the cameras contradict. With keyframes up
+to two seconds apart nothing is added. On `05mice_flippers` (keyframes every 4.2 s; the pass
+used to read one frame per second, 1,800 samples): 640 samples (208 dense), the pass 51 s
+instead of 232 s, the same labels except one 6 s swap at 14.70 min that one-per-second reads
+also lose when their frames shift by 10 (the evidence for it is weak either way). Below
+`suspectCost` 0.15 extra reads in a long contact tipped a 3 s relabel the cameras contradict;
+0.25-0.5 matched. Study tools: `tests/e2e/_diag-cue-dump.mjs` saves every keyframe's and
+every second's reads and `tests/e2e/_diag-replay-identity-cues.mjs` replays the engine on them in
+seconds; `_real-tail-marks.mjs` takes `CUE_OPTS` and `WINDOW`.
+
+**A cue** is `{id, learn(obs, labels, classOf, ids), costs(features, model), check?(model),
+describe?(model)}` with a reader (`plan/open/next/at/close`, as `ui/tail-mark-reader.js`).
+`learn` gets `labels` null on the first pass (guess from the tracker's identities), then
+the decision's labels (`rounds`, default 3). A failed `check` after the last round
+relabels nothing: the engine never names animals the cue cannot vouch for.
+
+**Refuses, changing nothing:** no cue; expected marks for a different number of
+identities than tracked, or for a name that does not exist; fewer than 2 or more than
+`maxAnimals`; no frame rate; a cue that cannot learn or fails its check.
+
+**Key exports.** `resolveIdentityCues`, `IDENTITY_CUE_DEFAULTS`, `permutationsOf`,
+`pairContacts`, `pairContactRuns`, `touchingFromRuns`, `decodeAssignments`, `swapsFor`,
+`combineCosts`, `cueCostRows`, `suspectSamples`, `denseFramesAround`.
+
+**Imports.** `./id-switch-check.js`. **Imported by.** `pose/tracker.js`.
+
+**Tests.** `tests/test-identity-cues.mjs` (exact decisions with a fake cue; the tail-band
+cue on drawn tails); `tests/e2e/tail-mark-track-all.mjs` §7-8 (three animals, bands per
+identity, through the real tracker).
+
+**On 05mice_flippers (5 mice, 0-4 bands each, 8 cameras, 30 min):** with the band cue's
+sharp read (`TAIL_BAND_READ`) the learned tails read 0-4 and the check passes; the labels
+agree with per-camera band counts on every stretch. See **Sampling** for the run time.
+
+### pose/tail-mark.js
+
+**Purpose.** Which of two tracked identities is the animal with dark marks on its
+tail, at every moment of a session; Track All's tail-mark pass. DOM-free: the pixels
+come from a reader (`ui/tail-mark-reader.js`). Two white mice look alike to the
+tracker, which keeps their labels only by following them, so the pass runs after
+tracking and swaps the identities (`Session.swapIdentitiesInRange`) over each stretch
+where the wrong one holds the marks. The tracker is untouched.
+
+**The measure.** `readTailProfile` walks the tail nodes from `tailMarkNodeIndices` (TTI,
+Tail_0, Tail_1: the marks end near Tail_1), reading a bright percentile of a line across
+the tail at each pixel, so keypoints a few pixels off it do not matter;
+`normalizeTailProfile` scales it to the tail's own brightness. `readTailProfile` takes
+`{percentile, widthShare}` (defaults 0.85 and 1/12 of the length each side).
+`TAIL_BAND_READ` (`baseExtension` 0.2, percentile 0.5, width 1/30) is the band-counting
+cue's second read: on `05mice_flippers` (5 mice, 0-4 bands) the 4-band tail has its bands
+packed before Tail_0, and TTI often lands past the first, so the default read counted it as
+3; started a little before TTI, darker and narrower, it reads 4 (the others too). The
+sharper read tells a plain tail from one wide band less well, so it only counts; the
+default read still decides.
+
+**Why templates.** Marks differ between animals (several narrow bands, or one wide one on
+the test recordings), and a plain tail in shade by a wall dims along a third of its length
+in every camera for as long as it lies there, so neither a total of what is missing nor a
+limit on gap width separates them: the first swapped the animals during the shade, the
+second missed the wide bands. What holds is that marks stay at one place along that tail.
+So `learnTailTemplates` learns the session's marked and plain profiles, with no labels, from
+samples where one tail is far more banded than the other (`tailBandScore`, which only picks
+those samples). Each view of each tail then votes (`tailVote`, sliding up to `maxShift`
+positions): marked, plain, or 0 when it fits neither (`fitTolerance`).
+
+**The decision.** Evidence per sample (`evidenceOf`) is each identity's votes summed; only
+the difference between the animals counts, so a camera where the marks are hidden adds
+nothing, and a plain vote counts against an animal even when the other was not detected.
+`decodeMarkedStates` is a two-state Viterbi: a sample costs what it contradicts, a change
+costs little across a contact (`contactGaps`, from the shared grid in
+`pose/id-switch-check.js`) and more elsewhere. `refineChange` then bisects each change to
+within `refineSeconds`.
+
+**Samples.** `planTailMarkSamples`: every keyframe (cheap to decode; every 250 frames
+= 1.7 s on the test recordings), or one per second when keyframes are sparser than
+`MAX_SAMPLE_GAP_SECONDS` (or the `maxGapSeconds` given: the identity engine asks for 10 s and
+reads densely where it needs to) or unknown.
+
+**Refuses, changing nothing:** not exactly two identities, the named identity missing,
+no frame rate, no readable tail, or too few samples teaching or templates too alike
+(`minTeachingShare`, `minTeachingSamples`, `minTemplateDifference`: "found no tail
+marks"). The share is the gate that matters: 0.50-0.98 on the 96 test recordings, 0.23 on
+an unmarked pair, which without it would have been relabelled 30 times from noise. Under
+`faintTeachingShare` (0.75) the result is `faint` and the status line and summary say to
+check the identities: the three test sessions under it were the ones whose marks could not
+be confirmed by eye.
+
+**Validation** (96 two-mouse recordings, 5 cameras, 15 min each; one mouse marked):
+`tests/e2e/_real-tail-marks.mjs` on each, plus 80 random frames per session the pass never
+read. Of held-out frames where the two tails voted clearly apart, 7,474 of 7,492 put the
+marks on the chosen identity. Body size from the 3D, which the pass does not use, has the
+marked (male) mouse larger in 95 of 96 sessions (the 96th: 0.2 mm apart). 43 sessions were
+labelled the other way round from the start and 41 were right; 12 had label changes mid-way
+(18 in all): body size agrees with every relabelled stretch but one, in the faintest
+session, and the two inspected frame by frame were real tracker switches. The pass took 15-20 s a session on an M-series Mac and about 35 s on a 48-core
+Windows workstation running two sessions at once (2-2.5 min with eight at once). Decoding
+is not what it waits on: it decodes one keyframe per camera per sample (about 2,700
+frames), and Chrome there decodes these H.264 streams at 700-1,700 frames/s, on the GPU
+(NVDEC) or the CPU.
+
+**Key exports.** `resolveTailMarks(session, opts)` (the whole pass),
+`TAIL_MARK_DEFAULTS`, `MAX_SAMPLE_GAP_SECONDS`, `tailMarkNodeIndices`,
+`readTailProfile`, `normalizeTailProfile`, `tailBandScore`, `learnTailTemplates`,
+`tailVote`, `planTailMarkSamples`, `contactGaps`, `evidenceScale`, `evidenceOf`,
+`decodeMarkedStates`, `countBands`, `createTailBandCue` (the tail-band cue for
+`pose/identity-cues.js`: classes are band counts, or 'marked'/'plain'; features are
+profiles or the reader's `{wide, sharp}`: costs from the wide read's `templates`, band
+counts from the sharp read's `bandTemplates` (with one read, both are that read). First
+pass learns each identity's own tail and names it by `countBands`; later passes relearn
+per class and re-anchor each class to the template that reads as it; `check` refuses
+unless the learned tails read as the marks set, one to one. On `05mice_flippers` it now
+passes with 4 label changes over 30 min, each stretch agreeing with per-view band counts),
+`TAIL_BAND_READ`, `refineChange`, `stretchesToSwap`.
+
+**Imports.** `./id-switch-check.js` (`buildGrid`, `contactEpisodes`,
+`SIZE_CHECK_DEFAULTS`).
+
+**Imported by.** `pose/tracker.js`, `ui/tail-mark-reader.js`.
+
+**Tests.** `tests/test-tail-mark.mjs`, `tests/e2e/tail-mark-track-all.mjs`. Real data:
+`tests/e2e/_real-tail-marks.mjs`.
+
+### pose/run-state.js
+
+**Purpose.** Has Track or Triangulate been run on a session, and does its result
+still stand? Drives the blue Track and Triangulate toolbar buttons
+(`ui/run-buttons.js`). A run is noted when it finishes; its result stands while
+the session shows it: Track while some instance group has an identity,
+Triangulate while some group still holds a 3D array the run produced or kept.
+Arrays are marked by reference (a `WeakSet`), so anything that replaces a
+group's 3D (Track All's own 3D, a re-solve outside a run, a skeleton edit)
+drops that group out, while a node move's re-solve keeps it
+(`carryTriangulateMark`); smoothing writes in place and keeps it. In memory
+only: a reopened project starts with neither noted (the user chose this over
+saving it).
+
+Asked on every overlay draw, so each answer keeps a WITNESS (frame + group that
+showed the result) and walks `session.instanceGroups` only when the witness
+stops holding: it finds a new one or forgets the run, after which nothing is
+walked until the next run.
+
+**Exports.** `noteTrackRun(session)`, `noteTriangulateRun(session, frames)`
+(marks the 3D of every group on `frames`, null = all, that has a
+`triangulationMethod` and valid 3D, solved or kept by the run),
+`carryTriangulateMark(old, new)`, `hasTrackResult(session)`,
+`hasTriangulateResult(session)`.
+
+**Imports.** `./pose-data.js` (`someValidPoint3d`). **Imported by**
+`pose/triangulation.js`, `pose/tracker.js`, `ui/export-modals.js`,
+`ui/run-buttons.js`. **Tests.** `tests/test-run-state.mjs`,
+`tests/e2e/run-buttons-blue.mjs`.
 
 ### pose/triangulation.js
 
@@ -2497,7 +2971,7 @@ stop being a diagnostic — are spelled out in the "LUCID DOES NON-LINEAR
 TRIANGULATION ONLY" comment in `pose/triangulation-core.js`.
 
 Naming note: the user-facing label is **"Refined" / "Ref"** (Settings ▸ Default
-Triangulation shows "Refined (Ref)"; the Triangulate / Triangulate All dropdowns
+Triangulation shows "Refined (Bundle adjustment), per node"; the Triangulate / Triangulate All dropdowns
 show "Ref"), not "Bundle Adjustment", which wrongly implied camera refinement.
 The method key is still `'ba'` in `options.method`,
 `group.triangulationMethod`, `localStorage`, and the per-group
@@ -2524,11 +2998,18 @@ a Refined solve with a DLT one behind the user's back. Three helpers:
   `triangulationMethod` exactly.
 - `findEquivalentPriorGroup(priorGroups, group)` → the prior group with identical
   membership (camera for camera, by `Instance` object identity), or null.
-- `adoptPrior3d(group, prior, method)` → copies `points3d`,
-  `triangulationMethod` and `usedCameras`; returns true when `group` therefore
-  needs no solve. Requires identical membership **AND**
-  `prior.triangulationMethod === method`, so it only fires when re-solving would
-  be a provable no-op (an *unknown* prior method never matches). Does **not**
+- `triangulationSettingsKey(cameras)` → a string naming the settings a solve reads
+  besides its method and 2D input: the reprojection error threshold and the
+  cameras included in tracking. Every solve stores it on the group
+  (`solveSettings`, in memory only).
+- `adoptPrior3d(group, prior, method, settingsKey)` → copies `points3d`,
+  `triangulationMethod`, `solveSettings` and `usedCameras`; returns true when
+  `group` therefore needs no solve. Requires identical membership **AND**
+  `prior.triangulationMethod === method` **AND** `prior.solveSettings ===
+  settingsKey`, so it only fires when re-solving would be a provable no-op (an
+  *unknown* prior method never matches; smoothed 3D, `isPoints3dSmoothed`, never
+  matches; 3D read from a file has no `solveSettings`, so it never matches and is
+  re-solved). Does **not**
   copy `reprojections` — leaving them empty is what lets `ui/rendering.js`'s fill
   regenerate them (and `state.triangulationResults`) with the adopted method.
 
@@ -2712,7 +3193,9 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   re-triangulating between passes; a node left with <2 views under the threshold
   is nulled. Covered by `tests/test-triangulation-robust.js`.
 - Lazy loading: class `LazyFrameLoader` (analysis `.h5`, worker-backed) +
-  `shouldUseLazyH5(file)`; `shouldUseLazySlp(file)` + `LAZY_SLP_THRESHOLD` route
+  `shouldUseLazyH5(file)`; `shouldUseLazySlp(file)` + `LAZY_SLP_THRESHOLD`, and
+  `shouldUseLazySlpFolder(files)` (any one file, or the cameras' `.slp` files together,
+  over the threshold: Save crashed on five eager 125 MB cameras) route
   large prediction `.slp` to the main-thread `SioLazyLoader`
   (`loading/sio-lazy-loader.js`). Shared consumers: `ensureLazyFrameData`,
   `buildLazyFrameGroupSync`, `batchLoadLazyFrames` (branches on `loader.isSync`
@@ -2806,8 +3289,9 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   `frameHasGroupedUserInstances`, `updateTimelineForFrame`.
 - Method preservation ("exported 3D == displayed 3D", see above):
   `resolveTriangulationMethod(group)`, `findEquivalentPriorGroup(priorGroups,
-  group)`, `adoptPrior3d(group, prior, method)` (not `reprojections`,
-  deliberately). The latter two exist for the regrouping sweeps, which rebuild
+  group)`, `triangulationSettingsKey(cameras)`,
+  `adoptPrior3d(group, prior, method, settingsKey)` (not `reprojections`,
+  deliberately). The latter three exist for the regrouping sweeps, which rebuild
   `InstanceGroup` objects around unchanged `Instance`s.
 - Orchestration: `triangulateMultiFrameInstances(start, end, onProgress, method)`
   -> `{ triangulated, totalGroups, errSum, errN, frames }` (keeps only the 3D;
@@ -2816,7 +3300,9 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
   reprojected instances, and `state.triangulationResults`; both Triangulate All
   paths and Group by Track call it before they start),
   `reTriangulateGroup` (preserves the group's existing method via
-  `resolveTriangulationMethod`),
+  `resolveTriangulationMethod`; the auto-triangulation of a group created by
+  Shift+G — does nothing without a real calibration, `sessionHasCalibration()`,
+  so placeholder cameras never produce 3D that would be saved and exported),
   `triangulateCurrentFrame(method)`, `triangulateAllFrames(method)`
   (`method` defaults to `'dlt'`), `sessionHasCalibration`,
   `showCalibrationRequiredPopup`,
@@ -2865,6 +3351,10 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
 - `./triangulation-core.js` — the pure math (re-exported) and
   `setTriangulationSettingsHooks`.
 - `./triangulation-pool.js` — `createGroupSolver` (Triangulate All's parallel solve).
+- `./run-state.js` — `noteTriangulateRun` (at the end of `triangulateAllFrames`,
+  both paths, `triangulateCurrentFrame` and `triangulateMultiFrameInstances`)
+  and `carryTriangulateMark` (`reTriangulateGroup`): the blue Triangulate
+  button.
 - `../loading/track-union.js` — `unionTrackNames`, `remapTrackIdx`,
   `isIdentityRemap` (`LazyFrameLoader`'s track union).
 - `./initialization.js` — `update3DViewport` (circular).
@@ -2917,8 +3407,8 @@ for ONE group, leaving the frame's other groups and their results entries alone
   (default `ahead` = `LAZY_PLAYBACK_AHEAD + LAZY_PREFETCH_MARGIN`).
 - No hold is active (the windowed sweeps hold for their whole run).
 - **Re-hydration would rebuild exactly what is resident** (`frameEvictionBlocker`
-  returns null). Re-hydration makes one Instance per store row tagged
-  `_rawInstIndex`, re-seats this frame's `instanceGroups` members by
+  returns null). Re-hydration makes one Instance per store row
+  (`lazyRowInstance`) tagged `_rawInstIndex`, re-seats this frame's `instanceGroups` members by
   `_rawInstIndex` (`finalizeLazyFrameGroup`) and unlinks the rest. So: every
   camera with data must be backed by the loader (`'camera'`); per camera the
   resident instances must be a bijection onto the store rows (`'count'`, `'row'`);
@@ -2928,7 +3418,8 @@ for ONE group, leaving the frame's other groups and their results entries alone
   backed-up mid-edit or nulled (`'modified'`), resized by a skeleton edit
   (`'skeleton'`), or held by the UI (`'ui'`); and each unlinked instance must
   still match its row — track (`'track'`), type (`'type'`), and no #201 identity
-  stamped on the instance (`'identity'`, not persisted). Group members' own fields
+  stamped on the instance (`'identity'`, not persisted). Every resident
+  instance's occlusion must be its row's (`'occlusion'`, `desc.occludedNodes`). Group members' own fields
   are not compared: they survive in `instanceGroups` (never evicted) and come back
   as the SAME objects. Points are not compared — every 2D edit path promotes to
   `user`, sets `modified` or `nulledNodes`. A loader without
@@ -2948,10 +3439,11 @@ the row's 2D the next time the frame is hydrated. Rules:
 - **Only for a NON-resident frame** (its members are what is on screen), never
   for a group or member the UI holds, and only for a member re-hydration would
   give back exactly (`member2dReleaseBlocker`): an untouched prediction — not
-  `'user'`, `'modified'`/mid-edit/nulled, no `'occlusion'` set (hydration brings
-  occlusion back clear), no `'skeleton'` change — whose store `'row'` exists and
-  is a prediction. Its other fields (track, type, score, identity) stay on the
-  member object; only `_xy` is given back.
+  `'user'`, `'modified'`/mid-edit/nulled, its occlusion exactly its row's
+  (`'occlusion'`: re-adoption copies the row's, `adoptPointsFrom`), no
+  `'skeleton'` change — whose store `'row'` exists and is a prediction. Its
+  other fields (track, type, score, identity) stay on the member object; only
+  `_xy` is given back (its `_occ` stays, equal to the row's).
 - **Re-adoption keys on the member's CURRENT `_rawInstIndex`**, never a cached
   row or position — a store compaction (Custom Delete, interactive deletes)
   renumbers released members too, and must keep pointing each at its own row.
@@ -2963,8 +3455,20 @@ the row's 2D the next time the frame is hydrated. Rules:
   each row exactly as `buildLazyFrameGroupSync` + `finalizeLazyFrameGroup` do
   and does NOT make the frame resident.
 
+**Row -> Instance.** `lazyRowInstance(rowDict, trackIdx)` is the one way a lazy
+store row becomes an Instance (`ensureLazyFrameData`, `hydrateLazyCameras`,
+`buildLazyFrameGroupSync`, `batchLoadLazyFrames`, `hydrateFrameMembers2d`). It
+applies the file's visibility as the eager loader does: a node placed but not
+visible is occluded, and on a USER row also nulled (`nulledNodesFromOcclusion`,
+drawn occluded — an unlinked user label has no group metadata to keep nulled
+nodes). A group member adopts only coordinates and occlusion; its nulled nodes
+are its group's. Without it a reopened project showed such a node visible and
+re-saved it visible from any resident frame. Test: e2e `lazy-hydrate-visibility`.
+
 **Imports from project modules.** `./pose-data.js` (`Instance`,
-`lazyPlaceholderXY`) — still DOM-free, so the Node test can drive it.
+`lazyPlaceholderXY`), `../import-export/import-track-resolve.js`
+(`nulledNodesFromOcclusion`, dependency-free) — still DOM-free, so the Node test
+can drive it.
 
 **Imported by.** `pose/triangulation.js` (`evictLazyFrames`,
 `sweepLazyFrameWindows`), `ui/ui-wiring.js` (`LAZY_PLAYBACK_AHEAD`),
@@ -3210,7 +3714,7 @@ keyframeGap, maxShift}` (which frame each image sample decodes in one camera —
 `episodeGapSeconds` 3, `minApartSeconds` 3, `windowSeconds` 10,
 `maxSpanSeconds` 60, `followSeconds` 5, `metricPcaDims` 64, `metricDims` 16,
 `metricReg` 0.1, `signal`; `threshold` -1, `maxTrainRows` 200000);
-`IMAGE_CHECK_DEFAULTS` (the same shared ones; `threshold` -0.8, `maxTrainRows`
+`IMAGE_CHECK_DEFAULTS` (the same shared ones; `threshold` -1, `maxTrainRows`
 20000, `imageHz` 2, `backgroundHz` 0.1, `getEmbeddings` REQUIRED: `async (frame,
 items[{k, group}]) -> per item [{camera, vector}]`, STARTED in increasing frame order
 with up to `inFlight` (default 2; the image embedder asks for 8) in flight; optional
@@ -3341,6 +3845,68 @@ dips just past -1 now and then (2 of 24 contacts in the synthetic fixture of
 per session. (Those sessions also carry `*.predictions.static.externals.slp`
 per camera, which a harness must leave out of the folder pick.)
 
+**Recalibrated for the 168-px model input (2026-10-22; `INPUT` was 224, the crop
+stays 160 — `ui/image-embedder.js`).** Same contacts and tracking (Track All
+defaults), scored per truth change point (a row is right when it lies within
+its contact ± 3 s of one), on 24 recordings: the 22 proofread SLAP sessions,
+five white mice, CD1FSCR3_CSI (4 h 30 min):
+
+| | original six + 5 mice + CD1 | 16 held-out | all 24 |
+|---|---|---|---|
+| 224 at -0.8 (before) | 12 caught, 12 rows, 2 false | 13 caught, 11 rows, 0 false | 25, 23 rows, 2 false |
+| **168 at -1** | 12 caught, 11 rows, 1 false | 13 caught, 11 rows, 0 false | 25, 22 rows, 1 false |
+| 168 at -0.8 | 12 caught, 14 rows, 4 false | 13 caught, 11 rows, 0 false | 25, 25 rows, 4 false |
+
+The same change points are caught; the extra false rows at -0.8 are all on five
+white mice (contacts that sat just above -0.8 at 224). The held-out set is
+identical at every threshold from -0.4 to -1.2 (per-contact AUC 1.000). A
+repeat 224 run is bit-identical, so these differences are the input size, not
+noise. Cutting the crop at 168 directly (one resample) was no better (2 false at
+-1); 140 lost a real swap. Separation of same-animal vs different-animal
+10 s means (the check's metric, proofread labels): AUC 0.962 at 224, 0.955 at
+168; same-coat pairs 0.877 / 0.861. Speed: model alone 132 -> 243 crops/s
+(WebGPU fp16, M2 Pro), CPU workers 10.9 -> 19.2; the whole check on that Mac
+only 11-14% faster (CD1 114 -> 101 s, 145420 86 -> 74 s), because video decoding
+becomes the limit once the model is faster. Raw CLS embeddings of the same crop
+at 168 vs 224: median cosine 0.86 — irrelevant to the check, which learns its
+metric per recording, but it means any embedding saved at one size cannot be
+compared with another.
+Re-checked after #375 (sampling near contacts + 0.1 Hz background), 2026-10-27:
+on all 24 recordings, 168 at -1 flags exactly the same rows with that sampling
+as with every sample embedded (25 caught, 22 rows, 1 false), on 70% of the
+crops. Margins tighten: two real swaps sit at -1.09 (181300 0:37) and -1.11
+(183527 8:28) instead of -1.74 / -1.49, and the closest clean contact at -0.96
+(05mice 26:53) — so -1.2 would lose those two swaps.
+
+**Model switched to DINOv3 ViT-S/16 (2026-11-03; was DINOv2-small at 168 px).**
+`IMAGE_MODEL_ID` is a conversion of onnx-community/dinov3-vits16-pretrain-lvd1689m-ONNX
+(DINOv3 License): fp16 with layer 0's attention kept fp32 (its logits reach ~2.5e6,
+past fp16's range; a plain fp16 copy gave unrelated vectors on WebGPU, median cosine
+0.16, while matching on the CPU, which runs those ops in fp32), the export's 24
+SplitToSequence/SequenceAt pairs rewritten as Split (no WebGPU kernel: model time
+10.5 -> 6.0 ms/crop in fp32, 8.6 -> 4.2 in fp16, vs 3.2 for DINOv2-small), and
+pooler_output removed. `INPUT` 192 (12 x 12 of its 16-px patches), threshold -1.2.
+Same tracking, sampling and views; caught / rows / false of 65 change points:
+
+| all 24 (bg = as shipped) | -0.8 | -1 | -1.2 | -1.4 | -1.6 |
+|---|---|---|---|---|---|
+| DINOv2-small, 168 | 24 / 25 / 4 | 22 / 21 / 1 | 20 / 18 / 0 | 20 / 18 / 0 | 16 / 14 / 0 |
+| DINOv2-base, 168 | 22 / 22 / 2 | 22 / 21 / 1 | 20 / 19 / 1 | 16 / 15 / 1 | 14 / 12 / 0 |
+| **DINOv3 ViT-S/16, 192** | 22 / 23 / 3 | 22 / 22 / 2 | **22 / 20 / 0** | 21 / 19 / 0 | 19 / 17 / 0 |
+
+(Track All has changed since the 168-px calibration, hence 22, not 25, catches
+for DINOv2-small at -1.) DINOv3's real swaps sit further below the threshold
+(183527 8:28 -1.06 -> -1.66, five white mice 20:42 -1.16 -> -1.34). Separation of
+10 s means: all 0.959 -> 0.967, same coat 0.884 -> 0.903, five white mice ~0.74 ->
+~0.77. Held out: Mae's 193 single-camera sham_gdx recordings (light coats, 240
+truth changes, CPU fp32): at -1.2 DINOv3 catches 31 with 0 false (most with 0
+false: 33 at -1, vs 30 for DINOv2-small and 21 for DINOv2-base); single-crop
+separation 0.905 -> 0.947. The fp16 file through the app vs DINOv3 fp32 on 233,206
+crops: median CLS cosine 0.99962 (DINOv2-small fp16 vs its fp32: 0.99910), rows
+identical at every threshold from -0.8 to -1.6. Cost on an M2 Pro: whole check
++13-19% over DINOv2-small (145420 80 vs 68 s), 43 MB; CPU workers the same speed
+(19.4 vs 19.9 crops/s). DINOv2-base was worse on the held-out set (5 false at -1).
+
 **Imports from project modules.** `pose/pose-data.js` (`readPoint3d`).
 
 **Imported by.** `ui/id-switch-modal.js`, `ui/image-embedder.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`).
@@ -3402,6 +3968,57 @@ order, slot recycling, copies, pooling, freeing); end to end
 `tests/e2e/image-check-cache.mjs`.
 
 ---
+
+### pose/image-model-manifest.js
+
+**Purpose.** What an image-model PACKAGE for the image ID-switch check is,
+independent of where its files come from. DOM-free, import-free. Layout:
+`lucid-model.json` (this module's manifest), `config.json`, `onnx/model.onnx` (fp32,
+required, `last_hidden_state` with CLS at token 0), `onnx/model_fp16.onnx`
+(optional), `preprocessor_config.json` (optional).
+
+**Key exports.** `parseModelManifest(raw, crop)` -> `{ok, manifest}` | `{ok: false,
+error}` (a sentence for the user): `format: "lucid-image-model"`, `version: 1`,
+`name`, `input` (112–512 px, a multiple of 14 or 16: `validModelInput`), `crop`
+(must equal the app's `CROP`), `threshold` (−4..0), `fp16`, `sha256` (path -> hex),
+free-form `training` / `validation`. `modelKeyMaterial(manifest, fileHashes)`: the
+text a package's key hashes (input, crop, fp16, weight hashes; not the name).
+`modelChoiceOf(pkg)` / `ingestModelChoice(raw)`: what a session saves
+(`metadata.lucid.imageModel`: key, name, input, threshold, url or folder) and its
+tolerant read (malformed -> null = built-in). `packageBaseUrl(input)`: a Hugging
+Face repo id or an https folder URL (http only on localhost) -> the base URL;
+`hexOf`; the file-name constants.
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/image-model-package.js`, `ui/image-model-dialog.js`,
+`import-export/visibility-metadata.js`.
+
+**Coverage.** `tests/test-image-model-package.mjs`; the saved choice in
+`tests/test-visibility-metadata.js`.
+
+---
+
+### pose/threshold-examples.js
+
+**Purpose.** The session's own nodes for the reprojection error threshold card.
+`scanThresholdExamples` solves up to `EXAMPLE_MAX_FRAMES` frames with the threshold
+off, a slice per task, and lists every node 3 or more cameras see, smallest worst
+camera error first; `firstOverThreshold` counts those over a threshold, and
+`pickRepresentativeExamples` takes a fixed set spread on a log scale of error.
+`solveExample` runs the rule on one node solve by solve, through
+`triangulateAndReproject` on a one-node view of the group with `includedCameras`, so
+it matches a real Triangulate. Read-only; a lazy frame's members are hydrated for the
+read and given back.
+
+**Key exports.** `EXAMPLE_MAX_FRAMES`, `EXAMPLE_MIN_CAMERAS`, `EXAMPLE_SET_SIZE`,
+`pickRepresentativeExamples`, `calibratedCameras`,
+`sampleExampleFrames`, `firstOverThreshold`, `scanThresholdExamples`, `solveExample`,
+`solveExample3d`, `solveFrame3d`, `frameFromPoints`, `lineOfSight`, `pickShownCameras`.
+
+**Imports.** `pose/triangulation-core.js`, `pose/lazy-residency.js`,
+`pose/placeholder-cameras.js`. **Imported by** `ui/threshold-examples-panel.js`.
+**Tests.** `tests/test-threshold-examples.mjs`.
 
 ### pose/view-align.js
 
@@ -3993,7 +4610,7 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   (`dropAllDerivedTriangulationState`) and stores no reprojections or
   `state.triangulationResults`; its timeline pass walks the frames it
   regrouped (see "Nor does any other bulk path" under
-  `pose/triangulation.js`). Solves with Settings ▸ Default Triangulation
+  `pose/triangulation.js`). Solves with Settings ▸ Triangulation Wizard
   (`resolveTriangulationMethod(null)`). A frame the sweep visits with no
   FrameGroup (3D grouping, no 2D — `sweepLazyFrameWindows`' contract) is
   skipped and its groups left as they are, as in Group by Identity; without
@@ -4001,7 +4618,7 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `groupByIdentityAndTriangulateAll(explicitMethod)` — bulk-group then
   triangulate. `explicitMethod` (`'ba'|'dlt'`) is the user's explicit pick when
   there was one — "Triangulate All ▸ DLT" routes here and passes `'dlt'`; omitting
-  it (Tracks ▸ Group by Identity) means "use Settings ▸ Default Triangulation".
+  it (Tracks ▸ Group by Identity) means "use Settings ▸ Triangulation Wizard".
   Either way the resolved method **governs the whole sweep**. Ends by
   calling `update3DViewport(state.currentFrame)` so the 3D viewer populates for
   the current frame (this is the path "Triangulate All" takes when identities
@@ -4019,10 +4636,11 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   project's 3D to DLT — and save/export read `group.points3d`.
 
   Each sweep resolves ONE governing method up front (the explicit pick, else
-  Settings ▸ Default Triangulation) and every group ends up with 3D from that
+  Settings ▸ Triangulation Wizard) and every group ends up with 3D from that
   method. A group is ADOPTED — `findEquivalentPriorGroup` + `adoptPrior3d`, no
   solve — only when its membership is unchanged AND its existing 3D already
-  came from that same method, i.e. only when re-solving is a provable no-op.
+  came from that same method under the same threshold and cameras
+  (`triangulationSettingsKey`), i.e. only when re-solving is a provable no-op.
   Switching the default to BA re-solves the project (~3-6x the DLT cost); that
   is the user's explicit choice, so both sweeps name the method and report 3D
   provenance ("N kept existing 3D, N solved via Bundle Adjustment, N via DLT")
@@ -4082,9 +4700,18 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `showSlpExportByCamModal()` — "Export SLEAP File By Cam": camera×session grid.
   Each camera column exports across all its selected sessions into one SLEAP
   file; **Download All** bulk-exports every included column, **always
-  prompting** for a destination folder (no cached `state.exportDirHandle`), and
-  writes each included camera as a flat `<CamName>.slp` into it (falling back to
-  per-file `downloadBlob` downloads without the File System Access API). A cell
+  prompting** for a destination folder (no cached `state.exportDirHandle`) —
+  `pickExportFolder` (`loading/folder-picker-start.js`) opens it in the project
+  `.slp`'s folder, else where the last export went. In that folder a camera
+  exported from ONE session whose own folder is there (`state.cameraDirMap`, else
+  the folder its video sits in, else the camera's name — `cameraTarget`) gets
+  `<source stem>_proofread.slp` next to the `.slp` its 2D came from
+  (`chooseProofreadSource`, `loading/percam-slp-choice.js`; the video's name when
+  the folder has none), replacing an earlier one. Any other camera (several
+  sessions in one file, or no camera folder there) is written as a flat
+  `<CamName>.slp` in the picked folder; the status line counts both. Without the
+  File System Access API it falls back to per-file `downloadBlob` downloads,
+  named `<source>_proofread.slp` when the load recorded the source. A cell
   is a green ✓ (toggle on/off) only where the camera VIEW exists in that
   session — derived from `state.videoFiles` (real loaded views), plus cameras
   with labeled data for SLP-only projects; NOT from `session.cameras`, which is
@@ -4098,8 +4725,33 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   tables (`#slpByCamSkelWarning`). The shared **Include** group's two options
   become the `instanceFilter` (`{user:true, predicted, reprojected}`) passed to
   `exportSlpMultiSession`. The Reprojections row is **disabled as a unit**
-  (`.slp-inc-row-disabled`) unless at least one session has reprojections. Download All shows per-file
-  progress; **Esc closes the modal**, or cancels an in-progress export mid-run.
+  (`.slp-inc-row-disabled`) unless at least one session has reprojections. Cameras
+  the streaming writer would sweep (`cameraExportUsesSweep`: a lazy project that would
+  truncate, e.g. a reopened project or any proofread one) are built first, in ONE
+  `exportCamerasSlpStreaming` sweep per session. Download All's progress is the app's
+  card (`loading-overlay.js`, titled "Export SLEAP by Camera"): that sweep is a step of
+  its own ("Reading N cameras", frames on the bar), then one step per camera ("Step k
+  of n"); a camera built in one go shows the spinner "Writing <cam>.slp…", painted
+  before it holds the thread. Files save in the background, up to `SAVES_IN_FLIGHT`
+  (4) at once: over an SMB share Chrome's `close()` reads each file back at ~10 MB/s
+  (measured on the lab VM, 2026-11-03), so one file's wait does not hold up the next.
+  While files save (waiting for a slot, or at the end) the card shows a bar of the
+  files saved — written AND closed — out of all the export's files ("Saving files in
+  <folder>: k/n files…", `showSaving`), repainted as each one lands. Files, not
+  bytes: `close()` reports nothing, so a byte count would race to the end of
+  `write()` and stall. Two or more folder-loaded cameras
+  (`cameraExportUsesLazyRewrite`) or fully loaded cameras (`cameraExportUsesEagerBuild`)
+  are written in one step before the per-camera steps ("Writing N cameras", cameras
+  on the bar, `exportCamerasInWorkers`: built here one after another while workers
+  compress them). A camera built in one go takes the card back
+  (`savingStep = 0`) until its file is queued. The modal is
+  hidden while the card shows (it sits above the card's layer) and comes back on
+  cancel or failure. **Esc closes the modal**, or cancels an in-progress export:
+  between cameras, or mid-sweep (the progress callback throws `ExportCancelled`;
+  nothing is written for that camera; files already handed over finish). Tests:
+  `tests/e2e/export-bycam-folder-progress.mjs`, `tests/e2e/lazy-reemit-compressed.mjs`;
+  timing on real data: `tests/e2e/_diag-export-bycam-timing.js` (load it from jsDelivr at
+  a commit: the deployed site drops `_` files).
   Columns ordered by session frequency, then within-session name order, then
   session recency for session-unique views.
 - `showSlpExportAllModal()` — multi-session SLP export. **Deprecated**: not
@@ -4136,9 +4788,17 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   picker) and names the method in its progress, summary and status text.
   Covered by `tests/e2e/triangulate-range-modal.mjs` (also Group by Track's
   3D-only-frame guard).
-- `exportLabels()` — JSON labels export.
-- `exportPoints3dH5()` — points3d H5 export.
-- `exportReprojH5()` — reprojection H5 export.
+- `exportLabels()` — JSON labels export. Shows "Exporting labels: x/y
+  frames…" as a bar in the shared card (`showLoadingProgress`, fed by
+  `sweepLazyFrameWindows`' `onProgress`), then a "Closing the file…" spinner,
+  painted before the picked file's `close()` (which reports no progress).
+  Covered by `tests/e2e/save-progress-card.mjs` §6.
+- `exportPoints3dH5()` — points3d H5 export, under an "Export 3D Points"
+  progress card that counts frames written; a failure closes the card and says
+  nothing was saved.
+- `exportReprojH5()` — reprojection H5 export, under an "Export Reprojections"
+  progress card that counts frames written (`createProgressPacer`); a failure
+  closes the card and says nothing was saved.
 
 **Imports from project modules.**
 - `./progress-delta.js` — `noteProgress` (the lit stretch on the Choose Frames for
@@ -4154,7 +4814,8 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   `sessionHasCalibration`, `showCalibrationRequiredPopup`,
   `getInstanceGroupsForFrame`, `sweepLazyFrameWindows`,
   `resolveTriangulationMethod`, `findEquivalentPriorGroup`, `adoptPrior3d`,
-  `triangulationMethodLabel` (the last four for the adopt-don't-downgrade rule),
+  `triangulationSettingsKey`, `triangulationMethodLabel` (the last five for the
+  adopt-don't-downgrade rule),
   `dropAllDerivedTriangulationState` (Group by Track keeps only the 3D).
 - `./viewport3d.js` — `Viewport3D` (Export 3D Video modal).
 - `./overlays.js` — `getTrackColor`, `getGroupColor` (Export 3D Video modal).
@@ -4162,15 +4823,26 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   `showReprojectionsOnly`, `REPROJ_ONLY_NOTE` (both group-and-triangulate-all
   paths end Reproj-only).
 - `./info-panel.js` — `updateInfoPanel`.
+- `../pose/run-state.js` — `noteTriangulateRun` (after
+  `groupByIdentityAndTriangulateAll`, Triangulate All's DLT path once
+  identities exist, and `groupByTrackAndTriangulateAll`).
 - `../import-export/save-load.js` — `showLoading`, `hideLoading`,
   `setStatus`.
 - `./loading-overlay.js` — `showLoadingProgress`, `yieldToPaint` (the
-  "Grouping & triangulating" bar in both group-and-triangulate-all paths).
+  "Grouping & triangulating" bar in both group-and-triangulate-all paths, and
+  the By-Cam Download All card),
+  `createProgressPacer` (the Export Reprojections and Export 3D Points cards).
+- `../loading/folder-picker-start.js` — `pickExportFolder` (By-Cam Download All).
+- `../loading/percam-slp-choice.js` — `chooseProofreadSource`, `proofreadSlpName`
+  (By-Cam Download All's file names).
 - `../pose/triangulation-pool.js` — `createGroupSolver`
   (`groupByIdentityAndTriangulateAll` solves its non-adopted groups on the
   worker pool; adoption and regrouping stay on the main thread).
 - `../import-export/file-io.js` — `exportSlpClientSide`,
-  `exportSlpMultiSession`, `findSkeletonMismatch`, `buildPoints3dH5`,
+  `exportSlpMultiSession` (By-Cam passes `{onProgress}`), `exportCamerasSlpStreaming`,
+  `cameraExportUsesSweep` (By-Cam's one sweep), `exportCamerasInWorkers`,
+  `cameraExportUsesLazyRewrite`, `cameraExportUsesEagerBuild` (By-Cam's "Writing N
+  cameras" step), `findSkeletonMismatch`, `buildPoints3dH5`,
   `buildReprojH5`.
 - `../pose/initialization.js` — `update3DViewport`.
 - `./video-encode.js` — `createMp4Writer`, `videoEncodingAvailable` (Export 3D
@@ -4623,11 +5295,17 @@ edit-group mode, keyboard shortcuts.
   `getAssignmentSelectedIds`, `onMouseDown`/`onMouseMove`/`onMouseUp`/
   `onMouseLeave`/`onWheel`, `onKeyDown`, `_addNewInstance` (used by smart-add;
   lays out a new skeleton via an inline BFS fan-out from the highest-degree
-  root, with a vertical-line fallback when there are no edges).
+  root, with a vertical-line fallback when there are no edges). Edge hit tests
+  measure from the wedge when that instance type draws wedges
+  (`_edgeWedgeHalf`, `wedgeHalfWidth` from `ui/overlays.js`).
   `canvasToVideo(clientX, clientY, viewName)` maps a pointer to video pixels;
   on a ROTATED view it must use `zoom.scaleY` for the vertical axis (it differs
   a hair from `zoom.scale` at native resolution), or a click lands up to ~0.3%
-  of the frame height off.
+  of the frame height off. It (and `_displayToVideo`) reads the video box off
+  the VIDEO canvas (`view.canvas`, falling back to the overlay canvas): a
+  zoomed-in overlay canvas is a window onto part of the box
+  (`ui/overlay-window.js`), so its rect is not the video's. Events still attach
+  to the overlay canvas, which always covers what the cell shows.
 - `isInteractiveClickTarget(target)` — used by other UI to skip
   click-through on form controls.
 
@@ -4846,8 +5524,8 @@ The `blur()` is deferred a turn: focus from a label click lands *after* the
 listener runs, and `input`/`change` are still dispatching.
 
 The listener is in the **capture** phase (issue #230) so a control whose own
-handler calls `e.stopPropagation()` (the Triangulate split buttons,
-`wireTriDropdown`) cannot opt itself out of focus release and keep `Space`.
+handler calls `e.stopPropagation()` (the toolbar's action menus,
+`wireActionMenu`) cannot opt itself out of focus release and keep `Space`.
 
 **Imports from project modules.** None — every predicate reads only
 `tagName` / `type` / `role` / `isContentEditable` off its argument, so it
@@ -5165,9 +5843,26 @@ Gives a modal card a drag handle, a resize grip (CSS `resize: both`) and a
   clamping on the way in would let one small window permanently shrink the
   remembered size.
 - `installModalGeometry(card, opts)` — restores, wires the header drag, watches
-  the CSS resize via `ResizeObserver`, re-clamps on window resize, and returns a
+  the CSS resize via `ResizeObserver`, re-clamps on window resize (with
+  `opts.fillHeight` and `opts.fillWidth` (a cap in px), a card takes the viewport's
+  height and width along each axis the user has not dragged, and follows it, centred
+  until moved. A record older than `heightChosen` / `widthChosen` fills. Settings uses
+  this, up to 1700 px wide. With `fillWidth` the returned dispose also has
+  `setSizePreset('narrow'|'default'|'full')` and `sizePreset()`; `opts.onSizePreset` hears changes), and returns a
   `dispose()` that also flushes the final rect (a resize that ended inside the
   200 ms persist debounce would otherwise be lost when the modal closes).
+- `rememberedSizeIsChosen(geom, legacyDefaultSize)` — whether a record's size
+  was the user's choice (see below).
+
+**Only a size the user chose is remembered.** Position always is; size only
+once the user resized the card with its grip (the `ResizeObserver` sees a size
+other than the one `apply()` set, and the record gets `sized: true`). Otherwise
+the card opens at the stylesheet's size, so changing the default reaches
+everyone who never resized. Records from before the flag saved the opening size
+on every close: `opts.legacyDefaultSize` names that old default, and such a
+record opens at the new default, centred where the old card was. Settings passes
+`{w: 880, h: 620}` (its default before it widened; it now opens at 1320x800,
+wide enough for the Temporal Smoothing figure's two charts).
 
 **This module is the ONE owner of the card's rect.** `.settings-modal`
 deliberately has no `max-width`/`max-height`, and `apply()` sets both to `none`
@@ -5491,9 +6186,9 @@ survive a `drawImage`, so the tile re-applies them: brightness/contrast via
 **`ctx.filter`** with `buildVideoFilter`'s exact string; rotation and zoom via a
 context transform on **video and overlays together** (transforming only the
 pixels would slide every skeleton off the animal). Load-bearing details:
-- clear the overlay canvas under the **identity** transform first —
-  `drawFrameOverlays`'s `clearRect` clears a *rotated* rect otherwise, leaving
-  stale skeleton in the corners;
+- clear the overlay canvas under the **identity** transform first (kept,
+  though `drawFrameOverlays` now clears the whole canvas under identity itself —
+  it used to clear a *rotated* rect, leaving stale skeleton in the corners);
 - draw the legend **outside** the transform — `drawLegend` anchors to
   `ctx.canvas.width`, so inside it drifts by the letterbox offset and flips at 180°;
 - reset `ctx.filter` with `'none'`, never `''` (silently ignored, leaking the
@@ -5629,6 +6324,25 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `[4, 4]` dash only when no style is passed) and `drawUnlinkedInstances`
   (`instNodeShape`). `drawFrameOverlays` passes the per-type Node Style as
   `nodeShape`.
+- Wedge edges: `lineStyle: 'wedge'` (SLEAP's Edge Style > Wedge) draws an edge
+  as a triangle from its source node to a tip on its destination:
+  `wedgeHalfWidth(nodeSize)` (half the node radius) each side at the source,
+  half-opacity fill, full-colour outline at the edge weight. `drawSkeleton`,
+  `drawReprojectedSkeleton`, `drawUnlinkedInstances` and
+  `drawSelectionHighlight` (`options.wedgeNodeSize`) share `traceEdge` +
+  `paintEdges`; `drawDragPreview` stays lines. `ui/interaction.js` hit-tests the
+  same shape. Test: `tests/e2e/edge-style-wedge.mjs`.
+- Symmetry edges: `symmetricNodePairs(names)` finds left/right node pairs from
+  the names alone (`.slp` symmetries are not read), `symmetryEdgesFor(skeleton)`
+  leaves out pairs that are already edges and remembers the last answer.
+  `drawFrameOverlays` (`showSymmetryEdges`, `symmetryEdgeWeight`) passes them to
+  `drawSkeleton`, `drawReprojectedSkeleton` and `drawUnlinkedInstances`, which draw
+  them solid grey behind their edges, 2D only, not clickable. Test:
+  `tests/test-symmetry-edges.mjs`, `tests/e2e/symmetry-edges.mjs`.
+- Reprojection node color: `reprojNodeColor` is `'white'`, `'black'`, `'track'`
+  (the Brightness-adjusted track color) or `'dark'` (that color in the Dark
+  trail shade, `trailColor`). Test:
+  `tests/e2e/reprojection-fallback-color-setting.mjs`.
 - Independent node/edge visibility: `drawSkeleton` and
   `drawReprojectedSkeleton` accept `options.showNodes` / `options.showEdges`,
   **defaulting to `true`**. Only the overlay-video export sets them; they ride
@@ -5839,9 +6553,15 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   - Benchmark: `tests/e2e/_bench-playback.mjs` `SCENARIOS=...,trails<N>,...`.
 - Composite: `drawFrameOverlays(ctx, viewName, frameGroup,
   instanceGroups, session, options)` — the main per-view draw entrypoint.
+  It opens by clearing the WHOLE canvas under an identity transform
+  (`save` / `setTransform(1,0,0,1,0,0)` / `clearRect` / `restore`), whatever
+  transform the caller set: the live view draws a zoomed-in overlay window
+  through one (`ui/overlay-window.js`), under which a plain `clearRect` would
+  miss part of it. Same pixels as before for an identity-transform caller.
   `options.trackingExcluded` (from `isCameraTracked`) washes everything drawn
   for the view grey via `source-atop` (before the legend), marking a
-  Tracking-Wizard-excluded view. In identity mode it also labels **predicted**
+  Tracking-Wizard-excluded view; like the clear, it fills the whole canvas
+  under an identity transform, so it covers a zoomed-in window too. In identity mode it also labels **predicted**
   instances with their identity (step 3a), so tracker output is proofreadable.
   Threads `trailLength` / `trailShade`, the `showUser` / `showPredicted` /
   `showReprojected` layer switches, the per-type `lineWidth`s and
@@ -5992,9 +6712,47 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `MAX_OVERLAY_DIM` / `MAX_OVERLAY_AREA` then clamp `ss` to Chrome's canvas
   limits (16384 px per side, 2^28 px of area) — a **correctness** guard: past
   them the allocation reports the requested size and every draw silently
-  no-ops, so the overlay goes blank with no error.
-  Covered by `tests/e2e/zoom-overlay-budget.mjs`; `tests/e2e/_diag-zoom-drag-perf.mjs`
-  is the headed fps harness.
+  no-ops, so the overlay goes blank with no error. The clamp applies to the
+  canvas actually ALLOCATED (the window below), inside `planOverlayWindow`.
+
+  **Overlay visible window.** Bounding `ss` still sized a canvas covering the
+  WHOLE zoomed video (`videoW * ss` x `videoH * ss`), which grows as zoom²: a
+  solo 1920x1200 pane at zoom 10 was 13920x8700 (~480 MB), cleared and redrawn
+  on every mouse move of a node drag (1.4 fps against 47 unzoomed; 9 views
+  zoomed with `+`, 518 MB and 1.1 fps). So a zoomed-in view's overlay canvas is
+  a WINDOW: `planOverlayWindow` (`ui/overlay-window.js`) sizes it to the part
+  of the video box the cell shows (`VideoController.visibleBoxRect`) plus
+  `OVERLAY_WINDOW_MARGIN` on each side, and `applyOverlayPlan` places the
+  element there (inline left/top/width/height, whole box CSS px) and stores the
+  plan as `view._overlayPlan`. Drawing stays in FULL-canvas coordinates
+  (`targetW` x `targetH`, passed as `canvasWidth`/`canvasHeight`, never the
+  element's size): the per-view draw runs inside `octx.save()` / `restore()`
+  with `setTransform(plan.ax, 0, 0, plan.ay, plan.ex, plan.ey)`, so the context
+  is identity again for anyone else who clears it (`loading/video.js`). Rules:
+  - **A full plan when the whole box is on screen** — every unzoomed view, and
+    any zoom whose margin still spans the box: the canvas, element and pixels
+    are exactly what they were (no inline left/top; width/height back to the
+    video canvas's when leaving a window).
+  - **Read the video BOX off `view.canvas`, never the overlay canvas**
+    (`videoBoxSize` here; `canvasToVideo` / `_displayToVideo` in
+    `ui/interaction.js`): a windowed overlay's element is only part of it.
+  - **Whole CSS px placement.** Blink paints a canvas into its pixel-snapped
+    rect in its own pre-zoom coordinates; a fractional left/width was snapped
+    there and magnified by the zoom (2-3 screen px off at zoom 10).
+  - **Pan/zoom-out coverage:** `VideoController.applyZoom` ends in
+    `callbacks.onViewTransform(view)` = **`noteOverlayViewTransform(view)`**
+    (exported; wired in both VideoController constructions,
+    `pose/initialization.js` and `loading/session-loader.js`): when the drawn
+    window no longer covers what the cell shows (`overlayPlanCovers`: a pan or
+    zoom out past the margin, a box resize), one `drawAllOverlays` on the next
+    animation frame (coalesced; not during playback, which redraws anyway). A
+    pan inside the margin costs nothing; a zoom IN is only magnified until the
+    existing 200 ms zoom redraw sharpens it, as before. The window's SIZE
+    depends on the visible size only, so a pan never reallocates.
+  Covered by `tests/e2e/zoom-overlay-budget.mjs` (§6-8: window size, pan /
+  zoom-out redraw, on-screen node position rotated and panned) and
+  `tests/test-overlay-window.mjs`; `tests/e2e/_diag-zoom-drag-perf.mjs` is the
+  headed fps harness.
 
   **Lazy reprojection fill — honors the group's triangulation method.** A group
   with `points3d` but no `reprojections`/`reprojectedInstances` is re-solved here
@@ -6019,8 +6777,10 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   after one. **3D read from a file** (`isPoints3dFromFile`: a loaded `.slp`'s,
   an imported points3d `.h5`'s) is reprojected whenever the group is clean,
   threshold or not, method or not — a re-solve would show LUCID's answer
-  instead of the 3D the project holds. Anything else (Track All's provisional
-  3D, an edited group) is re-solved. The `.slp` load, moving a view between
+  instead of the 3D the project holds. **Smoothed 3D** (`isPoints3dSmoothed`)
+  is reprojected the same way, or the overlay would re-solve the unsmoothed
+  answer (`tests/e2e/temporal-smoothing-display.mjs`). Anything else (Track
+  All's provisional 3D, an edited group) is re-solved. The `.slp` load, moving a view between
   sessions and the overlay video export also leave derived state to this fill
   (`tests/e2e/load-export-move-bounded-derived-state.mjs`).
 
@@ -6084,6 +6844,11 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   every frame and in every mode (planes are static scene geometry). Pinned by
   `tests/e2e/define-plane-mode.mjs`.
 
+  **The Group menu button and Temporal Smoothing are synced here too.**
+  `#tbGroupMenu` (the hover menu holding Group / Edit Group) is `.active` while
+  either item is, and `syncSmoothingButton()` (`ui/smoothing-button.js`)
+  re-derives the Temporal Smoothing button's blue state on every draw.
+
   **Defining Plane Mode's toolbar lock is re-asserted here.** `drawAllOverlays`
   RECOMPUTES `tbGroup.disabled` / `tbEditGroup.disabled` from the pose selection
   on every draw, so `applyPlaneModeToolbarLock()` (`ui/plane-toolbar-lock.js`,
@@ -6103,7 +6868,7 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `getInstanceGroupsForFrame`, `triangulateAndReproject`,
   `reprojectStoredPoints3d`, `storeReprojectedInstances`.
 - `../pose/lazy-residency.js` — `dropDerivedReprojections`.
-- `../pose/pose-data.js` — `points3dNodeCount`, `isPoints3dFromFile`.
+- `../pose/pose-data.js` — `points3dNodeCount`, `isPoints3dFromFile`, `isPoints3dSmoothed`.
 - `./overlays.js` — `drawFrameOverlays`.
 - `./view-legend.js` — `syncViewLegends`.
 - `./settings.js` — `isCameraTracked` (passed to `drawFrameOverlays` as
@@ -6115,6 +6880,8 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `computeLazyCameraBaseline`, `createFrameCounterBaselineBuilder`,
   `countFrameCounters`, `nonResidentCameraCounts`, `refreshCountedFrame`.
 - `./plane-definition.js` — `drawPlaneOverlays`, `applyPlaneModeToolbarLock`.
+- `./smoothing-button.js` — `syncSmoothingButton` (every draw).
+- `./run-buttons.js` — `syncRunButtons` (every draw).
   **Circular** (that module imports `drawAllOverlays` back); safe because both
   call sites are inside function bodies.
 - `./animal-count-field.js` — `syncAnimalCountField`. **Circular** through
@@ -6136,6 +6903,34 @@ re-triangulate, identity assignment, or visibility-toggle change.
 
 ---
 
+
+### ui/overlay-window.js
+
+**Purpose.** DOM-free plan for a zoomed-in view's overlay canvas: allocate and
+draw only the part of the video box the cell shows, plus a pan margin (see
+`ui/rendering.js` ▸ *Overlay visible window* for why and the rules).
+
+**Key exports.**
+- `OVERLAY_WINDOW_MARGIN` (0.25) — fraction of the visible size added on EACH
+  side, so a pan redraws only once it leaves the margin.
+- `planOverlayWindow({videoW, videoH, boxW, boxH, ss, visible, margin?, maxDim,
+  maxArea})` → `{windowed, ss, fullW, fullH, bw, bh, ax, ay, ex, ey, cssLeft,
+  cssTop, cssW, cssH, boxW, boxH}`. `visible` is box CSS px
+  (`VideoController.visibleBoxRect`); null or one whose margin spans the box →
+  the FULL canvas (identity transform, luc3d #200's clamp). Windowed: the
+  element sits on whole box CSS px, its size depends on the visible size only
+  (a pan never reallocates), the canvas is `bw` x `bh`, and full-canvas point X
+  lands on window px `X * ax + ex`. Chrome's canvas limits clamp `ss` against
+  the canvas allocated, not the full virtual one.
+- `fullToWindow(plan, X, Y)` — that mapping.
+- `overlayPlanCovers(plan, visible, boxW, boxH)` — false when a redraw is due:
+  the box resized, or a windowed plan no longer contains `visible`.
+- `overlayDrawSize(view)` — the full virtual canvas size a view's drawing code
+  works in (`view._overlayPlan`), else its canvas's size. Used by
+  `ui/plane-overlays.js`.
+
+**Imports** nothing. **Imported by** `ui/rendering.js`, `ui/plane-overlays.js`;
+tests `tests/test-overlay-window.mjs`, `tests/e2e/zoom-overlay-budget.mjs`.
 ### ui/plane-dialog.js
 
 **Purpose.** The small blocking-error / confirmation modal the plane and origin
@@ -6159,10 +6954,34 @@ stays reachable at its original path) and `ui/plane-nodes-panel.js`;
 `ui/plane-angle.js` and `ui/origin-definition.js` reach it through the
 `ui/plane-definition.js` re-export.
 
+### ui/reproj-threshold-field.js
+
+**Purpose.** The toolbar's **Reprojection error (px)** field
+(`#tbReprojThreshold`), in the Triangulate menu (hover **Triangulate ▾**) below
+Method: shows and edits the Tracking Wizard's `reprojErrorThreshold`, which every
+Triangulate run reads when it starts. Blank is off (`placeholder="off"`); the
+setting's 0 shows as blank and typing 0 means the same. Browser-wide, not per
+session, so it only follows the setting (`onTrackingThresholdsChange`, e.g.
+Settings ▸ Apply).
+
+**Editing.** As the Animals field: commits on `change` (Enter or blur), Enter
+blurs, Esc reverts and blurs. An entry out of the setting's range, or text
+`value` reports as `''` (`validity.badInput`, a stray "e"), reverts with an error
+status rather than being read as blank, and changes nothing. A change does not
+touch 3D already solved. Not in Defining Plane Mode's toolbar lock: a setting, not
+an action.
+
+**Key exports.** `wireReprojThresholdField()`.
+
+**Imports.** `./settings.js` (`getTrackingThreshold`, `getTrackingThresholdDefs`,
+`updateTrackingThresholds`, `onTrackingThresholdsChange`),
+`../import-export/save-load.js` (`setStatus`). **Imported by** `ui/ui-wiring.js`.
+Test: `tests/e2e/toolbar-reproj-threshold.mjs`.
+
 ### ui/animal-count-field.js
 
-**Purpose.** The toolbar's **Animals** field (`#tbNumAnimals`), first in the
-Track group: shows and edits the ACTIVE session's animal count, the number every
+**Purpose.** The toolbar's **Animals** field (`#tbNumAnimals`), in the Track
+menu (hover **Track ▾**) below its run items: shows and edits the ACTIVE session's animal count, the number every
 tracking run caps identities at (`Session.numAnimals`, through
 `pose/tracker.js`). Blank is
 auto-detect (`placeholder="auto"`), as in the first-use dialog
@@ -6224,7 +7043,14 @@ from the rest of the panel.
 Adding a button to the lock means adding its id to `PLANE_LOCKED_TOOLBAR_IDS`;
 if it opens a menu, its wrapper also needs `PLANE_LOCKED_DROPDOWN_IDS`, since a
 `.tri-dropdown` menu opens on hover and its items are `div`s, so `disabled` on
-the button reaches neither.
+the button reaches neither. Locked menus: Instance and Group (actions only).
+The Track / Triangulate / Smooth menus are NOT wrapper-locked:
+they also hold settings that stay live in the mode (Method, Animals,
+Settings…), so they open, and each run item is a `<button>` in
+`PLANE_LOCKED_TOOLBAR_IDS` (a new run item there must be too; Smooth's
+Remove/Restore smoothing toggle, `tbSmoothToggle`, is one). A disabled
+button still opens its menu on hover (`tests/e2e/plane-mode-toolbar-lock.mjs`
+§4b).
 
 **Imports** `planeState` from `ui/plane-definition.js` — circular, and safe only
 because the binding is read INSIDE the function body. **Imported by**
@@ -6247,6 +7073,9 @@ into it.
   make them look lost. Only the SELECTION and HOVER decorations are mode-gated.
   Fills and edges are per PLANE; NODES are drawn once each over the union, since
   a corner two planes share is one node with one 2D point.
+  It maps video px through `overlayDrawSize(view)` (`ui/overlay-window.js`) —
+  the FULL virtual canvas — never the overlay canvas's own size: a zoomed-in
+  overlay is a window drawn through the transform `drawAllOverlays` set.
 
 **What is drawn outside the mode is the user's to choose**, through the
 Visibility panel's `Planes` section: `planeVisibility`
@@ -8101,6 +8930,9 @@ and commits the rounded degree to the session once, on keyup.
 `applyVideoFilters` also writes the filter onto any **duplicate panes** of the
 same view: they receive pixels via `drawImage` (`renderDuplicatePanels`), which
 does not inherit the primary canvas's CSS filter.
+`renderDuplicatePanels` copies a zoomed-in primary overlay, which is a window
+onto part of the video box (`view._overlayPlan`, `ui/overlay-window.js`), into
+the same part of the mirror's overlay.
 
 **Visibility-tab toggle list refresh.** After `timeline.setData(newSession)`,
 `switchSession` calls `populateTimelineVisibility(newSession)` (through the
@@ -8209,7 +9041,7 @@ The dialog's `finally` also calls the embedder's `releaseFrames` (idempotent):
 `checkImageSwitches` does too, but not when it fails before its first frame,
 and the CPU workers hold ~600 MB each. On a CPU run "About these flags" says the
 model ran on the CPU. Reads `imageCheckHz` (default 2), `imageChangeThreshold`
-(default -0.8 — a new id rather than the old `imageCheckThreshold`, because the
+(default -1, -0.8 before the 168-px input — a new id rather than the old `imageCheckThreshold`, because the
 image score's scale changed), `imageCheckMaxViews` (default 3, passed as
 `maxViewsPerAnimal`) and `imageCheckWebNN` (default 0, as `webnn`), and passes
 `inFlight: embedder.inFlight`. The embedder's `backend()` outcome is attached to
@@ -8300,7 +9132,14 @@ spinner, not a counter: it is one uninterrupted short block whose counter would
 read a frozen "0/1"),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
 `ui/image-embedder.js` (`createImageEmbedder`, `IMAGE_MODEL_MB`, `formatEmbedTiming`,
-`formatEmbedDevice`, `formatEmbedCpu`, `inputTensorToPixels`, `INPUT`),
+`formatEmbedDevice`, `formatEmbedCpu`, `inputTensorToPixels`, `INPUT`, `setActiveImageModel`),
+`ui/image-model-dialog.js` (`resolveSessionImageModel`, `imageModelLineHtml`,
+`wireImageModelLine`: the image check runs the session's model at that model's
+threshold — a package's own, the Wizard's `imageChangeThreshold` for the built-in
+one — and refuses, with the reason, when the session's model is a folder package not
+loaded on the page; the result carries `imageModel: {key, name, threshold}` (null for
+the built-in model), named in "About these flags"; the tab shows the model with
+Change…; the progress dialog's sample crop resizes to the model's input side),
 `ui/load-graph.js` (`createLoadMeter`, `createLoadGraph`, `setLoadLine`, `cpuCores`),
 `ui/browser-hints.js` (`renderBraveFingerprintingHint`: in Brave with its fingerprinting
 protection on, the note under the CPU and GPU lines — `prog.braveHint(cores)`),
@@ -8366,7 +9205,8 @@ renamed (selecting it must still box the same animals); the fixed pair's own
 rows are not.
 
 **Format.** `{v: 1, checks: {size?|image?: {encounters, sampleHz, step, fps,
-fpsFromVideo, [imageHz, crops, cameras, model: {name, note}], points: [[frame,
+fpsFromVideo, [imageHz, crops, cameras, model: {name, note}, imageModel?: {key, name,
+threshold} (a package model only)], points: [[frame,
 nameA, nameB, score (0.1), kind ('' | 'end'), followOf (frame | -1), continues
 (0 | 1), startFrame (the encounter's first close frame | -1; absent in older
 files — rows then land on the end frame), link (`switchBackAt` / `switchedAt` |
@@ -8455,8 +9295,22 @@ with a row selected).
 frame and the identities present, decode that frame in every camera
 (streamed, and moved to the nearest keyframe when keyframes are dense: see
 below), cut a masked, pose-aligned crop of each identity from
-its own 2D keypoints, and embed the crops with DINOv2-small — on the GPU, or
+its own 2D keypoints, and embed the crops with DINOv3 ViT-S/16 — on the GPU, or
 without one on the CPU.
+
+**Which model** (`activeImageModel` / `setActiveImageModel`, set by
+`createImageEmbedder`'s `opts.imageModel`): `BUILTIN_IMAGE_MODEL` (key `'builtin'`,
+`IMAGE_MODEL_ID`, 192 px, fp16 on `shader-f16` GPUs), or a model PACKAGE
+(`ui/image-model-package.js`, typically fine-tuned on one rig) with its own repo id
+`lucid-pkg/<key16>`, input side, recommended threshold and fp16 flag. `INPUT` is a
+LIVE binding (`export let`) set to the active model's input side; the crop workers
+and CPU model workers are other module instances, so the side (and, for the CPU
+workers, the package's files: `modelPackageTransfer`) travel in their messages.
+The resize table is cached per side. Every embedding-cache tag starts with the
+model's key (`builtin:` or the key's first 16 hex), so a vector is never served for
+another model and switching back finds the old vectors. A package without an fp16
+build runs fp32 and is not tried on WebNN. Switching models drops the loaded model
+(`_modelPromise`); the browser cache keeps the weights.
 
 **Where the model runs** (`pickImageDevice`, at `createImageEmbedder`): a HARDWARE
 WebGPU adapter, else the CPU — no WebGPU, no adapter, or only a software one.
@@ -8498,18 +9352,23 @@ Model runs are serialised on a queue, so the check's one-ahead request decodes
 and crops the next frame while the GPU embeds the current one.
 `maxViewsPerAnimal` (from `imageCheckMaxViews`) embeds only each animal's N
 largest views (`selectViews`, by Nose–TTI pixel length, decided from the
-keypoints before decoding); cameras no animal needs are not fetched.
+keypoints before decoding); a camera decodes only the frames where it has a crop to
+cut: `prepareFrames` plans every frame's crops (`planFrameCrops`) before it opens the
+readers, each camera's reader gets only its frames, and `getEmbeddings` cuts exactly
+the planned crops. Streaming decodes from a keyframe up to the last frame asked in its
+gap, so a camera saves where it has no crop in the rest of a gap (CD1, 3 mice: 18%
+fewer frames decoded; SLAP 145420, 4 mice: 1%).
 Cropping runs in a pool of module workers (`createCropPool`,
 `ui/image-crop-worker.js`; one per core but one, at most 8; one job = one view of
 one frame, its VideoFrame transferred and closed by the worker — a decoder-cached
 frame is sent as a `clone()`, anything else as an ImageBitmap copy). A failed
 worker drops that one view of that frame and the rest of the run crops inline;
-`window.LUCID_CROP_WORKERS = 0` forces inline. `writeInputTensor`'s 160 -> 224
+`window.LUCID_CROP_WORKERS = 0` forces inline. `writeInputTensor`'s 160 -> 168
 sample positions are a precomputed table (same arithmetic, bit-identical).
 **GPU feeding.** (1) The model's output stays on the GPU
 (`preferredOutputLocation: 'gpu-buffer'`; its ONLY output is `last_hidden_state`
-[n, 257, 384]) and `clsFromGpu` copies just token 0 of each crop into a staging
-buffer — bit-identical, 1/257 of the readback. (2) Model runs are a greedy BATCH
+[n, 145, 384] at the 168-px input) and `clsFromGpu` copies just token 0 of each crop into a staging
+buffer — bit-identical, 1/145 of the readback. (2) Model runs are a greedy BATCH
 QUEUE: one run at a time, each taking every crop queued meanwhile (up to
 `EMBED_MAX_BATCH` = 64), with the check keeping `EMBED_IN_FLIGHT` = 8 frames in
 flight (`inFlight` on the provider) so batches fill while the GPU works (M2 Pro:
@@ -8533,7 +9392,22 @@ other apps' GPU use is not in it (no browser API reports it), and its tooltip
 says so. WebNN is not called a GPU (the browser picks its device).
 **Decode workers were tried and removed** (no gain on an M2 Pro, half speed on
 a Windows RTX VM). Cheaper decoding has to come from the recordings (dense
-keyframes — see below).
+keyframes — see below) or from decoding fewer frames: on an M2 Pro the check
+decodes at the hardware's rate for each stream (SLAP's open-GOP B-frame HEVC ~2,150
+frames/s for 8 cameras, CD1's P-only HEVC ~4,400; a bare decoder never flushed, mediabunny's
+queue caps and two decoders per camera all measured the same, 2026-10-28).
+**Unreferenced frames are not decoded** unless they are a sample
+(`unreferencedSkipper`, `skippingSamples`): each streaming reader gets a
+`VideoSampleSink` of its own whose packet sink notes each target's packet (mediabunny
+reads it before decoding up to it) and whose decoder drops every other packet that
+`isUnreferenced` (`referenceFormat` of the track's decoder config: HEVC `_N` slice
+types at the SPS's highest temporal sub-layer, H.264 `nal_ref_idc` 0; other codecs,
+or no avcC/hvcC: nothing dropped). No picture is predicted from those, so every sample
+decodes to the same pixels (raw planes compared on the SLAP videos and in
+`tests/e2e/image-unreferenced-skip.mjs`). x265's defaults (the SLAP recordings) make
+~59% of frames TRAIL_N; recordings without B-frames (campy NVENC/QSV) have none.
+Playback's sink is untouched. `window.LUCID_IMAGE_SKIP_UNREFERENCED = 0` turns it off;
+`stats().skippedFrames` counts them (the speed line: "· N unreferenced frames not decoded").
 **Keyframe sampling.** `prepareFrames` reads each camera's keyframes from the
 container's packet index (`keyframeIndices`: mediabunny
 `EncodedPacketSink.packets(…, {metadataOnly: true})`, `type === 'key'`, mapped to
@@ -8592,7 +9466,7 @@ the cache, F frames not decoded" (or "all N crops from the cache" when the model
 never ran). **Sample crops on cached runs:** a frame answered from the cache cuts
 no crop, so each run keeps the grey pixels (`tensorToGrey`, INPUT² bytes) of the
 dialog's sample crop on `SAMPLE_FRAMES_PER_RUN` (200) evenly spaced frames, under
-that crop's cache key (at most `SAMPLE_PIXELS_MAX` = 256 kept, 12.8 MB, dropped with
+that crop's cache key (at most `SAMPLE_PIXELS_MAX` = 256 kept, 7.2 MB at the 168-px input, dropped with
 the vectors); when such a frame comes from the cache, `sampleCrops()` gets that
 crop back (`greyToTensor`: channel 0 only, all `inputTensorToPixels` reads, so the
 dialog shows the same bytes), marked `cached: true`, with the skeleton overlay
@@ -8654,7 +9528,9 @@ Promise<Float32Array[]>, terminate()}`; `createCropPool(clock?)` -> `{broken, ru
 after a failure); `cannotRun(reason, cause)` (an Error whose message is the reason
 the check cannot run, flagged `cannotRun`); `asModelDownloadFailure(err)` (a failed
 download as `MODEL_OFFLINE_REASON`, else `err` unchanged); `MODEL_OFFLINE_REASON`;
-`selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
+`selectViews(geos, maxViews)`; `referenceFormat(config)` -> `{codec: 'hevc'|'avc', lengthSize, maxTid}` | null,
+`isUnreferenced(data, fmt)`, `unreferencedSkipper(decoder)` -> Promise<`{VideoSampleSink, track, fmt}` | null>,
+`skippingSamples(skipper, ts, count)` (unreferenced frames, above); `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
 `summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`;
 `describeAdapter(info)`, `gpuAdapterInfo(device, adapter)` -> `{name, fallback}`,
 `createLoadMeter` (re-exported from ui/load-graph.js, where it now lives), `GPU_LOAD_WINDOW_MS` (=
@@ -8666,7 +9542,7 @@ the CPU model, fitting — not video decoding); `inputTensorToPixels(tensor, rgb
 (a model input back to grey RGBA, the inverse of `writeInputTensor`'s normalisation),
 `SAMPLE_CROPS` (12); `cropPointsToInput(g)` (`g.pts`, the keypoints `cropGeometry` also
 records, NaN when missing, into model-input pixels: cutCrop's rotate-about-the-body-centre
-and scale, then x 224/160 — exact for an align_corners=false resize; pinned
+and scale, then x INPUT/CROP — exact for an align_corners=false resize; pinned
 against `cutCrop` itself within 0.04 px, at any rotation);
 `keyframeIndices(decoder)` -> `Promise<Int32Array|null>` (cached per video);
 `summarizeKeyframePlans(plans)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
@@ -8674,13 +9550,14 @@ against `cutCrop` itself within 0.04 px, at any rotation);
 `cropGeometry` (also `pts`: every keypoint, for the overlay — cutCrop ignores it), `cutCrop`,
 `convexHull`, `writeInputTensor`, `skeletonIndex(nodes)` (also `n`, the node count),
 `frameCropGeometry(session, frame, items, cams, atFrames, sk)` -> `geo[view][item]`; constants
-`TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (224).
+`TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (168; 224 until 2026-10-22).
 
 **The crop** (must match the calibration): rotate so the nose points right
 (Nose − TTI), centre on the mean of the body keypoints, side 1.3 x body length,
 160 x 160, greyscale; outside the animal's convex hull dilated by a quarter body
 length is black, and so are the other animals' hulls in that view; resized to
-224 (bilinear) and ImageNet-normalised; embedding = CLS token of
+168 (bilinear; 12 x 12 patches of 14 px — any multiple of 14 runs, the model resizes its 37 x 37
+position table) and ImageNet-normalised; embedding = CLS token of
 `last_hidden_state` (post-layernorm). Checked against the offline pipeline on
 real crops: embeddings cosine 0.971 (vs 0.644 between different crops).
 
@@ -8693,10 +9570,10 @@ reads (the sampled frame and any keyframe-snapped `atFrames`) with
 `releaseFrameMembers2d` — so the check costs no residency.
 
 **Dependencies.** transformers.js **pinned to 4.3.0** (`/+esm` from jsdelivr —
-pinned for the reason dockview is) and `onnx-community/dinov2-small` from the
-Hugging Face CDN, both fetched on FIRST USE and cached by the browser; nothing
-about the user's data is sent. fp16 (~44 MB) when the GPU has `shader-f16`, else
-fp32 (~88 MB). Without a hardware GPU the fp32 model runs on the CPU in workers
+pinned for the reason dockview is) and `IMAGE_MODEL_ID` (DINOv3 ViT-S/16, converted
+for this check: see `pose/id-switch-check.js`) from the Hugging Face CDN, both
+fetched on FIRST USE and cached by the browser; nothing about the user's data is
+sent. fp16 (~43 MB) when the GPU has `shader-f16`, else fp32 (~86 MB). Without a hardware GPU the fp32 model runs on the CPU in workers
 — never the CPU runtime's default int8 model, which drifts (cosine 0.953 vs the
 calibrated model). Re-check the CLS extraction (`last_hidden_state` token 0) on
 any version bump.
@@ -8704,15 +9581,18 @@ any version bump.
 **Imports from project modules.** `ui/app-state.js` (`state.views`, `state.sessions`),
 `pose/id-switch-check.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`),
 `pose/embedding-cache.js` (`EmbeddingCache`, `cropKeyHash`),
+`ui/image-model-package.js` (`installModelPackageFetch`, `withPackageCachePolicy`,
+`modelPackageTransfer`),
 `pose/lazy-residency.js` (`hydrateFrameMembers2d`, `releaseFrameMembers2d` — DOM-free,
 so the crop worker can load it), `ui/load-graph.js` (`createLoadMeter`,
 `createBusyClock`, `formatCpuLoad`, `LOAD_WINDOW_MS`); `mediabunny`
-(`EncodedPacketSink`, imported LAZILY inside `keyframeIndices` — a static bare
+(`EncodedPacketSink` and `VideoSampleSink`, imported LAZILY inside `keyframeIndices` and
+`unreferencedSkipper` — a static bare
 import would break this module in Node tests and in the crop worker, which has no
 importmap). Spawns `ui/image-crop-worker.js` and `ui/image-model-worker.js`.
 
 **Imported by.** `ui/id-switch-modal.js`, `ui/image-crop-worker.js`,
-`ui/image-model-worker.js`.
+`ui/image-model-worker.js`, `ui/image-model-dialog.js` (`BUILTIN_IMAGE_MODEL`).
 
 **Coverage.** Crop geometry, `selectViews`, `chooseBackend`, the resize table,
 `formatEmbedTiming`'s keyframe line and the dialog's lines in
@@ -8729,7 +9609,9 @@ real embedder over streamed fake videos and a pixel-sensitive stand-in model:
 cache on = off, a warm run decodes and embeds nothing, one moved keypoint re-embeds
 exactly the crops whose key changed, leaving unreachable hulls out of the key is
 lossless, a cached run's sample crops are the crops' own pixels and the real dialog
-shows one); accuracy on real data by
+shows one; §7: another model reuses none of the built-in model's vectors and a
+168-px package's side reaches every crop); a package with the real model in
+`tests/e2e/image-model-package.mjs`; accuracy on real data by
 `tests/e2e/_diag-image-keyframe-snap.mjs`, the cache's speed and equality on real
 data by `tests/e2e/_bench-image-cache.mjs` (both diagnostic, not in the suite).
 
@@ -8743,12 +9625,26 @@ main thread, for `createCropPool` in `ui/image-embedder.js`. It runs the same
 bit-identical (asserted).
 
 **Messages.** IN `{id, image: VideoFrame|ImageBitmap (transferred), crops:
-[{g: cropGeometry, others: [hull]}]}` — one camera view of one frame; OUT `{id,
-tensors: [Float32Array(3 x 224 x 224)]}` (transferred, one per crop, in order) or
+[{g: cropGeometry, others: [hull]}], input}` — one camera view of one frame, `input`
+the active model's input side (default `BUILTIN_INPUT`); OUT `{id,
+tensors: [Float32Array(3 x input x input)]}` (transferred, one per crop, in order) or
 `{id, error}`. The worker owns the image and closes it.
 
+**Read token.** Cutting is serialised across the pool; turning crops into model inputs
+is not. A job posts `{want: id}`, waits for the pool's `{grant: true}`, cuts all its
+crops, closes the frame and posts `{release: id}`. The pool (`createCropPool`) grants
+one worker at a time. Why: Chrome on an M2 Pro sometimes gave a worker ANOTHER
+picture's pixels when two workers drew hardware-decoded VideoFrames at once — whole
+frames, about one camera-frame per run of SLAP 145420 (11,345 crops), at a different
+place every run; never with one worker, never on the main thread, and more often
+the faster frames arrive (2026-10-28; in 4 of 9 runs with the faster decoding, 1 of 9
+before it). With the token, 8 + 4 runs gave the old code's crops bit for bit, at
+~315 crops/s (above the model's ~132 crops/s at the 224-px input, ~243 at 168). Cutting from a 1:1 canvas copy of the frame
+outside the token is NOT a substitute: the frame's border is drawn differently (hard
+vs anti-aliased edge), and for a software-made VideoFrame every pixel can differ.
+
 **Imports from project modules.** `ui/image-embedder.js` (`cutCrop`,
-`writeInputTensor`, `CROP`, `INPUT`; that module's static imports —
+`writeInputTensor`, `CROP`, `BUILTIN_INPUT`; that module's static imports —
 `ui/app-state.js`, `pose/id-switch-check.js`, `pose/lazy-residency.js`,
 `ui/load-graph.js` — must stay worker-safe, which is why it imports
 `mediabunny` lazily).
@@ -8762,33 +9658,119 @@ tensors: [Float32Array(3 x 224 x 224)]}` (transferred, one per crop, in order) o
 ### ui/image-model-worker.js
 
 **Purpose.** Module worker that runs the image ID-switch check's model on the CPU
-when there is no hardware GPU: DINOv2-small at **fp32** on WebAssembly (the
+when there is no hardware GPU: the image model at **fp32** on WebAssembly (the
 default int8 is what drifts from the calibration; fp32 matches the WebGPU fp32
 model). Off the main thread because there a run blocks the page for seconds;
 several run side by side because WebAssembly gets one thread without
 cross-origin isolation. See
 `ui/image-embedder.js` ("The CPU path") for the measurements.
 
-**Messages.** IN `{type: 'load'}` -> `{type: 'loaded'}` (while downloading:
+**Messages.** IN `{type: 'load', model: {id, input, pkg}}` (`id` the transformers.js
+repo id; `pkg` a package's `modelPackageTransfer` — its files as Blobs or its base URL —
+null for the built-in model) -> `{type: 'loaded'}` (while downloading:
 `{type: 'progress', loaded, total}`) or `{type: 'error', message, cannotRun}`
 (`cannotRun`: a failed download, `message` then being `MODEL_OFFLINE_REASON` —
 classified here by `asModelDownloadFailure`, where the error is still a real
 one); IN `{type:
-'run', id, data: Float32Array(n x 3 x 224 x 224) (transferred), n}` -> `{type:
+'run', id, data: Float32Array(n x 3 x input x input) (transferred), n}` -> `{type:
 'result', id, cls: Float32Array(n x 384) (transferred), dim}` — each crop's CLS
 token, read exactly as the main thread's `clsVectors` does — or `{type: 'error',
 id, message}`.
 
 **Imports from project modules.** `ui/image-embedder.js` (`importTransformers`,
-`asModelDownloadFailure`, `IMAGE_MODEL_ID`, `INPUT` — so the pin stays in one
-place), then the runtime through `importTransformers` (a dynamic cross-origin
+`asModelDownloadFailure`, `IMAGE_MODEL_ID`, `BUILTIN_INPUT` — so the pin stays in one
+place), `ui/image-model-package.js` (`installModelPackageFetch`, `serveModelPackage`,
+`withTransferCachePolicy`: this worker serves a package's files to its own copy of
+the runtime), then the runtime through `importTransformers` (a dynamic cross-origin
 import of `TRANSFORMERS_URL`, which a module worker may do).
 
 **Spawned by.** `ui/image-embedder.js` (`createCpuModelPool`).
 
 **Coverage.** `tests/e2e/image-check-cpu.mjs` (headless Chromium has no GPU;
 vectors bit-identical to the main thread's), `tests/e2e/id-switch-image-check.mjs`
-§4, `tests/e2e/image-check-offline.mjs`.
+§4, `tests/e2e/image-check-offline.mjs`, `tests/e2e/image-model-package.mjs` (a package
+in the worker: the built-in model's vectors bit for bit).
+
+---
+
+### ui/image-model-package.js
+
+**Purpose.** Loads image-model PACKAGES for the image ID-switch check (format:
+`pose/image-model-manifest.js`) and serves their files to transformers.js, on the
+main thread and in the CPU model workers. A package is a folder with
+`lucid-model.json`, `config.json` and `onnx/model.onnx` (optional
+`onnx/model_fp16.onnx`); `scripts/make_image_model_package.py` writes the manifest.
+
+**Sources.** `loadModelPackageFromFiles(files, onStatus)`: a picked folder
+(`webkitRelativePath`s; the manifest at the top or one level down). Every file is
+read once through `readBlobArrayBuffer` (cloud-synced folders), the weights are
+hashed and checked against the manifest's `sha256`, and the bytes are kept in
+memory for the page; weights the app never loads (e.g. a quantized model) are
+skipped; `fp16: true` without its file falls back to fp32.
+`loadModelPackageFromUrl(input)`: a Hugging Face repo id or an https folder URL
+(http only on localhost); only the manifest is fetched up front, the weights on
+first use, cached by the browser like the built-in model.
+
+**Key.** SHA-256 of `modelKeyMaterial` (input, crop, fp16 and every weight file's
+hash). The same weights from a folder or a URL whose manifest lists their hashes get
+the SAME key; a URL manifest without hashes is keyed to its URL and manifest text.
+A name edit keeps the key. Loading the same key again returns the loaded package.
+
+**Serving.** Each package gets the repo id `lucid-pkg/<key16>` (`modelRepoId`).
+transformers.js 4.3 asks for every file through `env.fetch`
+(`https://huggingface.co/<repo>/resolve/main/<path>`, metadata Range requests too);
+`installModelPackageFetch(T)` wraps it once per realm so package URLs are answered
+from the package — its Blobs (a missing file is a 404, never a network request) or
+its base URL — and every other URL goes out unchanged. A worker learns a package
+from `modelPackageTransfer` and calls `serveModelPackage`. `withPackageCachePolicy`
+/ `withTransferCachePolicy` turn transformers.js's browser cache off while a LOCAL
+package loads, or it would copy the in-memory files into Cache Storage under the
+made-up URL.
+
+**Other exports.** `registeredModelPackage(key)`, `registeredModelPackages()`,
+`clearModelPackages()` (tests), `packageFileOf(url)`, `PACKAGE_REPO_PREFIX`,
+`PACKAGE_CROP` (= `CROP`; kept here so this module imports no UI).
+
+**Imports from project modules.** `pose/image-model-manifest.js`,
+`loading/cold-read-guard.js` (`readBlobArrayBuffer`).
+
+**Imported by.** `ui/image-embedder.js`, `ui/image-model-worker.js`,
+`ui/image-model-dialog.js`.
+
+**Coverage.** `tests/test-image-model-package.mjs` (loading, keys, refusals, the
+fetch hook, the cache policy), `tests/e2e/image-model-package.mjs` (the real model
+from a folder and a URL: the built-in model's vectors bit for bit on the main
+thread and in a worker, no request for the package's files, nothing in Cache
+Storage).
+
+---
+
+### ui/image-model-dialog.js
+
+**Purpose.** Which model the image ID-switch check uses for a session
+(`Session.imageModel`): the built-in one or a loaded package. The ID Switches tab
+shows the model with a **Change…** button (`imageModelLineHtml`,
+`wireImageModelLine`); the dialog (`showImageModelDialog(session, {pickFiles?})`)
+lists the built-in model and every package loaded on the page, loads one from a
+folder (`<input webkitdirectory>`) or a URL / Hugging Face repo, shows its details
+(base, license, input, threshold, precision, source, training and validation
+notes), and on **Use this model** sets `session.imageModel = modelChoiceOf(pkg)`
+(null for the built-in one) and marks the project dirty when it changed. Esc,
+Cancel and a backdrop click change nothing.
+
+**`resolveSessionImageModel(session)`** — what `runImage` (`ui/id-switch-modal.js`)
+calls: null for the built-in model; the loaded package with the saved key; a saved
+URL choice not loaded is fetched again and must still have the same key; a saved
+FOLDER choice not loaded throws an Error whose message is the check's skip reason
+(never a silent fall-back to another model).
+
+**Imports from project modules.** `ui/image-embedder.js` (`BUILTIN_IMAGE_MODEL`),
+`ui/image-model-package.js`, `pose/image-model-manifest.js` (`modelChoiceOf`),
+`import-export/save-load.js` (`markDirty`).
+
+**Imported by.** `ui/id-switch-modal.js`.
+
+**Coverage.** `tests/e2e/image-model-package.mjs` §3–4.
 
 ---
 
@@ -8826,8 +9808,8 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   read/write the default method used by implicit triangulation paths.
 - `onDefaultTriangulationMethodChange(fn)` — called with the new method when
   `setDefaultTriangulationMethod` actually changes it (a throwing listener is
-  ignored). `ui/ui-wiring.js` uses it to keep the toolbar's "Triangulate: DLT"
-  / "Triangulate: Ref" labels in step with Settings.
+  ignored). `ui/ui-wiring.js` uses it to keep the toolbar Triangulate button's
+  tooltip and its menu's Method radios in step with Settings.
 - `getNodeWeight(name)` / `getNodeWeights()` / `getNodeWeightArray(nodeNames)` /
   `setNodeWeights(map)` — read/write per-node tracking weights (clamped to
   `[0,1]`; entries equal to the default `1` are dropped). `getNodeWeightArray`
@@ -8845,6 +9827,8 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   persist). `isCameraTracked` is the boolean the tracker filters cameras by
   (`pose/tracker.js` `trackAll`/`trackCurrentFrame`); at least 2 views must stay
   included or tracking aborts with a warning.
+- `onTrackingThresholdsChange(fn)` — told after every commit of the thresholds
+  (`ui/reproj-threshold-field.js` follows it).
 - `updateTrackingThresholds(map)` — commit SOME thresholds, keeping every other
   stored override (the two tracking dialogs write the image-check settings
   through it).
@@ -8861,7 +9845,7 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   default (the tracker's third, `birthMedian`, is not in the wizard),
   `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
-  0/1, the image check likewise, default 0; `imageChangeThreshold` -0.8;
+  0/1, the image check likewise, default 0; `imageChangeThreshold` -1;
   `imageCheckHz` 2; `imageCheckBackgroundHz` 0.1 (crops per second away from contacts:
   `backgroundHz`, see pose/id-switch-check.js "Which samples are embedded"; Wizard only, not
   the Track All dialog); `imageCheckMaxViews` 3; `imageCheckWebNN` — 0/1, try WebNN,
@@ -8871,6 +9855,19 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   but still resolve via `getTrackingThreshold`. `getTrackingThresholds` returns
   the effective `{ id: value }` map the tracker snapshots per run; values clamp to
   range and entries equal to the default are dropped.
+- `SMOOTHING_PARAMS` / `getSmoothingParamDefs()` / `getSmoothingParam(id)` /
+  `getSmoothingParams()` / `setSmoothingParams(map)` — the Temporal Smoothing
+  hyperparameters (luc3d #134): `smoothMedianWindow`, `smoothGaussianWindow`
+  (both default **0 = off**, matching `reprojErrorThreshold`, so shipping the
+  feature changes no existing project's 3D), `smoothMaxGap` (5),
+  `smoothMinSegment` (5). A SEPARATE catalog from `TRACKING_THRESHOLDS`, not more
+  entries in it: these are post-triangulation filter parameters rather than
+  cross-view tracker knobs, and the Tracking Wizard's Thresholds section renders
+  every threshold the catalog exposes. Note the `smooth*` prefix — `filter*` is
+  already taken here for DETECTION filtering (`filterMinVisibleNodes`,
+  `filterMinInstanceScore`). Same clamp + drop-if-default persistence as the
+  thresholds, under `_settings.smoothingParams`. Read by `ui/ui-wiring.js` and
+  passed to `smoothSession` (`pose/temporal-smoothing.js`).
 - `getActions()` — catalog snapshot `[{ id, label, category, binding,
   defaultBinding, editable, dispatched }]` with effective bindings, for the modal.
 - `getBinding(id)` — effective binding string (user override or catalog default).
@@ -8953,7 +9950,31 @@ commas. One scroller: the block grows to its full height.
 
 ### ui/settings-modal.js
 
-**Resizable, draggable, and it remembers.** The card carries CSS `resize: both`
+The Triangulation Wizard panel's footer adds **Triangulate All** ("Apply & Triangulate All" with
+edits pending): it applies them, closes Settings and clicks `#tbTriangulateAll`, so it runs what the
+toolbar runs. It is disabled when that button is, or with no session.
+
+The same panel's footer also says what will be used (`.settings-tri-readout`): the method and the
+reprojection error threshold, from `working`, so it holds wherever the panel is scrolled and follows
+an edit made on the Tracking Wizard. A value not yet applied is lit, with what it was (`paintFooter`).
+
+**The threshold card's examples.** It builds `buildThresholdExamples`
+(`ui/threshold-examples-panel.js`), hands it to the figure as `opts.examples`, starts it
+when the Triangulation Wizard panel is first shown, re-solves it when a Camera Views
+switch changes, and routes ← → to it while focus is inside it.
+
+**Apply keeps the window open.** Every write to `working` (a `Proxy`) repaints the
+footer by comparing it with what is stored: Apply is disabled with nothing pending
+and reads "Applied ✓" (`.is-applied`) once clicked, until the next edit; the other
+button reads Cancel with edits pending, otherwise Close. Apply also tells both
+figures what is now stored, which clears their "not saved" notes. Cancel, ×, Esc and
+the backdrop discard what has not been applied. Covered by
+`tests/e2e/settings-apply-stays-open.mjs`.
+
+**Resizable, draggable, and it remembers.** Until the user drags it, the card fills the
+browser's height and, up to 1700 px, its width (`fillHeight`, `fillWidth`). The footer's
+Window buttons pick Narrow (the same height, up to 1320 px wide), Default (that) or Full
+(the whole browser), and forget any drag. The card carries CSS `resize: both`
 and is dragged by its header (minus the ×, via `noDragSelector`);
 `installModalGeometry` (`ui/modal-geometry.js`, id `settings`) restores the last
 size/position on open and records it on close. It is installed AFTER the
@@ -8974,48 +9995,76 @@ right panel area (`settings-panel-container`), with a Cancel / Apply footer.
 
 **Key exports.**
 - `showSettingsModal(initialPanel)` — `initialPanel` ∈ `'triangulation'` |
-  `'keyboard'` | `'wizard'` (default `'triangulation'`). Single-instance.
+  `'keyboard'` | `'wizard'` | `'smoothing'`. Without one (Help ▸ Settings and its
+  shortcut) it opens on the panel last shown (`localStorage.settingsLastPanel`,
+  browser-local, written by `selectPanel`), else the first, Tracking Wizard.
+  Single-instance.
 
-**Behavior.** Three panels: **Default Triangulation** (DLT / Refined radio rows
-— `'ba'` is labelled "Refined (Ref)"), **Keyboard Shortcuts** (the
+**Behavior.** Four panels, listed in the nav in the order they are used (Tracking
+Wizard, Triangulation Wizard, Temporal Smoothing, then Keyboard Shortcuts):
+**Triangulation Wizard** (the method is picked by
+clicking one of two diagram cards from `ui/triangulation-methods-figure.js`,
+DLT or "Refined (Bundle adjustment)" — no separate rows; Enter/Space on a
+focused card is handled in `onDocKeyDown`, which stops every keydown in the
+capture phase, so a listener on the card would never run; the figure's third
+card draws the wizard's reprojection error threshold: `pickMethod` and the wizard
+field's `onEdit` redraw it, its slider only tries values, and its Use and Turn off
+buttons set `working.thresholds.reprojErrorThreshold` and the wizard field through
+`onThreshold`), **Keyboard Shortcuts** (the
 `getActions()` catalog by category; an editable entry's key chip captures a
 **chord or multi-key sequence** — keys accumulate, Ctrl/Cmd normalized to `Mod`
 via `chordFromEvent`, until a click sets it or Esc cancels; duplicates are
-rejected; fixed entries show a greyed dashed chip), and **Tracking Wizard**:
+rejected; fixed entries show a greyed dashed chip), **Tracking Wizard**:
 **Node Weights** (number field `0–1` per node of the active skeleton; `0` drops
-the node from the association cost and greys the row), **Camera Views** (an
+the node from the association cost and greys the row; under the hint, the
+tracking dialogs' `NODE_WEIGHT_TIP` from `ui/track-setup-modal.js`), **Camera Views** (an
 on/off switch per camera, stored as a `0/1` weight; off excludes the view from
 tracking and greys the row), and **Tracking Thresholds** (one field per
 `getTrackingThresholdDefs()` entry, or an on/off switch stored as `1`/`0` for a
 `kind: 'toggle'` entry, via `makeToggle`). Covered by
-`tests/e2e/settings-wizard-toggles.mjs`. Edits mutate a local `working` state
-only; nothing commits until **Apply** (`setDefaultTriangulationMethod` +
-`applyBindings` + `setNodeWeights` + `setCameraWeights` +
-`setTrackingThresholds`), which repaints overlays + timeline and re-fits the
-ID-switch box (`refreshIdSwitchHighlight`, which encloses only nonzero-weight
-nodes). Cancel / × / backdrop / Escape discard. Under the three
-detection-filter fields sits `ui/detection-filter-preview.js`'s per-camera
-readout of what they would remove; it re-counts on every `input` and camera
-switch (it reads `working`, so it moves before Apply), and its one walk of the
-session starts the first time the wizard panel is SHOWN (`selectPanel`), so
-Settings opened for anything else walks nothing. Teardown disposes it. A capture-phase document keydown
-listener keeps background shortcuts from firing while it is open, and is
-removed on teardown.
+`tests/e2e/settings-wizard-toggles.mjs`. And **Temporal Smoothing** (luc3d
+#134 — one **Filter Parameters** section rendering `getSmoothingParamDefs()`:
+median window, Gaussian window, max gap, minimum segment, under a figure from
+`ui/smoothing-windows-figure.js` that the fields redraw through `onEdit`. Its
+sliders only try values; its Use and Turn off buttons set the window, max gap and
+minimum segment fields back through `onParam`. Its own panel because
+it is not a tracking parameter — it runs after triangulation, on 3D the tracker
+has finished with. A note warns that raising the reprojection-error threshold
+creates more gaps, hence more gap edges where the filter is least accurate. The
+pass itself runs from the Triangulate / Triangulate All dropdowns.) Threshold
+and smoothing rows share one `buildParamRow(def, bag, onEdit)` helper (same
+`{ id, label, desc, min, max, step }` catalog shape, clamp on blur, `kind:
+'toggle'` → switch; `onEdit` lets the filter fields re-count the preview).
+Edits mutate a local `working` state only; nothing commits until **Apply**
+(`setDefaultTriangulationMethod` + `applyBindings` + `setNodeWeights` +
+`setCameraWeights` + `setTrackingThresholds` + `setSmoothingParams`), which
+repaints overlays + timeline and re-fits the ID-switch box
+(`refreshIdSwitchHighlight`, which encloses only nonzero-weight nodes). Cancel /
+× / backdrop / Escape discard. Under the three detection-filter fields sits
+`ui/detection-filter-preview.js`'s per-camera readout of what they would remove;
+it re-counts on every `input` and camera switch (it reads `working`, so it moves
+before Apply), and its one walk of the session starts the first time the wizard
+panel is SHOWN (`selectPanel`), so Settings opened for anything else walks
+nothing. Teardown disposes it. A capture-phase document keydown listener keeps
+background shortcuts from firing while it is open, and is removed on teardown.
 
 **Imports from project modules.** `./settings.js` (`getDefaultTriangulationMethod`,
 `setDefaultTriangulationMethod`, `getActions`, `applyBindings`, `formatBinding`,
 `getNodeWeight`, `setNodeWeights`, `getCameraWeight`, `setCameraWeights`,
-`getTrackingThresholdDefs`, `setTrackingThresholds`); `./detection-filter-preview.js`
+`getTrackingThresholdDefs`, `setTrackingThresholds`, `getSmoothingParamDefs`,
+`setSmoothingParams`); `./detection-filter-preview.js`
 (`buildDetectionFilterPreview`); `./app-state.js`
 (`getActiveSession`, `state`, `timeline`); `./rendering.js` (`drawAllOverlays`,
 for the post-Apply repaint); `./modal-geometry.js` (`installModalGeometry`);
-`./id-switch-highlight.js` (`refreshIdSwitchHighlight`, on Apply).
+`./id-switch-highlight.js` (`refreshIdSwitchHighlight`, on Apply);
+`./track-setup-modal.js` (`NODE_WEIGHT_TIP`, a leaf).
 
 **Imported by.** `ui/ui-wiring.js`.
 
 **User-facing features.** Settings modal — choose default triangulation method,
-remap keyboard shortcuts, set per-node tracking weights, and exclude camera views
-from tracking (Tracking Wizard, also reachable via Tracks ▸ Tracking Wizard).
+remap keyboard shortcuts, set per-node tracking weights, exclude camera views
+from tracking (Tracking Wizard, also reachable via Tracks ▸ Tracking Wizard),
+and tune the Temporal Smoothing filter (luc3d #134).
 
 ---
 
@@ -9411,7 +10460,9 @@ window (e.g. around a known ID switch) while iterating on settings.
 **Imports from project modules.** `ui/app-state.js` (`state`,
 `getActiveSession`), `import-export/save-load.js` (`setStatus`),
 `pose/tracker.js` (`trackFrameRange`, `trackableFrameBounds`,
-`getTrackerNumAnimals`, `setTrackerNumAnimals`), `ui/settings.js`
+`getTrackerNumAnimals`, `setTrackerNumAnimals`), `pose/placeholder-cameras.js`
+(`hasRealCalibration` — with placeholder cameras only, the dialog does not open
+and the status says tracking needs a calibration), `ui/settings.js`
 (`getNodeWeight`, `updateNodeWeights`, `getTrackingThresholdDefs`,
 `updateTrackingThresholds`), `ui/track-setup-modal.js`
 (`buildNodeWeightFields`, `buildImageCheckFields`, `IMAGE_CHECK_IDS`; a leaf).
@@ -9464,6 +10515,23 @@ Cancel. On success the viewer is parked on the **last frame tracked**.
 
 ---
 
+### ui/compact-save-modal.js
+
+**Purpose.** The warning File ▸ Save Compact Copy shows before anything is written:
+what is rounded and by how much (from `COMPACT_STEPS`), what is lost (the model's
+exact numbers; exact-equality matching such as merging fresh predictions), what is
+kept (user keypoints, identities, groups, settings), and that the open project stays
+as it is. Cancel has the focus; Esc and a backdrop click cancel. Its "Choose where to
+save…" button opens the save picker inside its own click (the browser needs that
+user activation) and resolves with the handle; a closed picker leaves the dialog up.
+A leaf: imports only `import-export/compact-save.js`.
+
+**Key exports.** `showCompactSaveModal({suggestedName, startIn?, pickFile?})` -> handle or null.
+`startIn` (from `saveStartFolder`, `loading/recording-folder.js`) is where the picker opens:
+the recording's folder, else the project file's.
+
+**Imported by.** `import-export/save-load.js`. Styles: `.compact-save-modal` in `styles.css`.
+
 ### ui/track-setup-modal.js
 
 **Purpose.** What Track All and Track Frame ask the first time they run on a
@@ -9477,11 +10545,18 @@ tracking a session.
 Track All's copy also carries the **image ID-switch check**: its switch
 (`autoImageSwitchCheck`, off by default) and, while on, its four options — the
 Tracking Wizard's own settings. Track Frame's copy leaves it out (a single
-frame is never checked); Track Frame Range shows the same section.
+frame is never checked); Track Frame Range shows the same section. It also asks
+which identity has the **tail marks** (`opts.tailMarks`, answered as
+`tailMarkedIdentity`; `pose/tail-mark.js`).
 
 **Key exports.**
+- `NODE_WEIGHT_TIP` — the advice shown under the node weights here, in Track
+  Frame Range and in the Tracking Wizard (nodes with high tracking error, like
+  tail nodes, weighted 0 often prevent ID switches; consider 0 for every tail
+  node). Advice only: skeletons differ between projects, so
+  nothing picks the nodes or changes a weight for the user.
 - `buildNodeWeightFields(nodes)` → `{element, read, refresh}` — the node-weight
-  editor both tracking dialogs show (title, one sentence, the grid). `element`
+  editor both tracking dialogs show (title, one sentence, the tip, the grid). `element`
   is null for no nodes; `read()` returns `{nodeWeights}` or `{error}` (a weight
   outside `[0, 1]`, naming the node — never clamped); `refresh()` greys the
   rows weighted 0. Commits nothing. Also used by `ui/track-range-modal.js`.
@@ -9514,7 +10589,8 @@ field and the Tracking Wizard edit, so there is no second copy of any of them
 and no cycle with the tracker.
 
 **Imported by.** `pose/tracker.js`; `ui/track-range-modal.js`
-(`buildNodeWeightFields`, `buildImageCheckFields`, `IMAGE_CHECK_IDS`).
+(`buildNodeWeightFields`, `buildImageCheckFields`, `IMAGE_CHECK_IDS`);
+`ui/settings-modal.js` (`NODE_WEIGHT_TIP`).
 
 **User-facing features.** The count field (focused, `placeholder="auto"`),
 then one row per skeleton node in the Tracking Wizard's own markup
@@ -9599,8 +10675,9 @@ unit-tested in Node (`tests/test-track-summary.mjs`). It gives every outcome
   `clear` / `skipped` / `failed` / `cancelled` / `off` / `na` (one identity).
   Switches are `idSwitchOnsets` — the "possible switches" count the tab uses.
 - `planTrackSummary(summary, checks)` — the rows, the notes, the next step and the
-  buttons. Recommends **Review switches** when any check found one; **Triangulate
-  All** otherwise (with "Check by images…" / "Check by body size" offered when that
+  buttons. Recommends **Review switches** when any check found one; **Default
+  Triangulation…** otherwise (it opens that Settings panel, whose footer has
+  Triangulate All) (with "Check by images…" / "Check by body size" offered when that
   check did not run, and a caveat that body size cannot separate similar-sized
   animals when only size came back clear); **Tracking Wizard…** when nothing was
   matched. A skipped check never gets a "nothing found" headline. Notes flag more
@@ -9632,6 +10709,55 @@ unit-tested in Node (`tests/test-track-summary.mjs`). It gives every outcome
 `idSwitchEncounterCount`), itself import-free.
 
 **Imported by.** `pose/tracker.js`, `ui/track-summary-modal.js`.
+
+### ui/tail-mark-reader.js
+
+**Purpose.** The video side of the tail-mark pass (`pose/tail-mark.js`): decode a
+sampled frame in every camera and read each identity's tail profile there. Keyframes go
+through `streamingReader`, a change's exact frame through `decoder.getFrame`. On a
+lazy project each read is bracketed by `hydrateFrameMembers2d` /
+`releaseFrameMembers2d`. Pixels come through one OffscreenCanvas, only each tail's
+bounding box read back.
+
+**Key exports.** `createTailMarkReader(session, fps, read?)` -> the reader
+`resolveTailMarks` takes (`plan(frames, maxGapSeconds?)` passes the limit to
+`planTailMarkSamples`; the identity engine asks for 10 s), or `{failed: reason}` (no videos, no tail nodes). With `read`
+(`TAIL_BAND_READ`, which Track All passes when the identity engine runs) each view's
+feature is `{wide, sharp}`: the default read, unchanged, plus a second read started
+`baseExtension` of the first tail segment before TTI (`extendBase`), with that read's
+percentile and width; both from one read-back of the box around the longer line.
+
+**Imports.** `./app-state.js`, `./image-embedder.js` (`keyframeIndices`,
+`streamingReader`, `canStream`, `identityGroupsAt`), `../pose/lazy-residency.js`,
+`../pose/tail-mark.js`.
+
+**Imported by.** `pose/tracker.js`.
+
+### ui/identity-marks-modal.js
+
+**Purpose.** What each identity's tail shows: one row per identity with its number of
+bands (0 = plain), for the identity engine (`pose/identity-cues.js`). A leaf: commits
+nothing. `buildBandCountFields(names, counts)` (also used by Track All's first-use
+dialog) refuses non-integers outside 0-9 and all-equal counts;
+`showIdentityMarksModal(names, counts)` resolves `{counts}` or null (Esc, Cancel,
+backdrop). A future cue (dye, fur) would add a column.
+
+**Imported by.** `ui/tail-mark-field.js`, `ui/track-setup-modal.js`.
+
+### ui/tail-mark-field.js
+
+**Purpose.** The Track menu's Tail marks choice (`#tbTailMarks`): which identity Track
+All gives the tail marks in the active session, or **Bands per id…**, which opens
+`showIdentityMarksModal` and saves `Session.identityMarks` through `setIdentityMarks`
+(`identityNamesForMarks`: the names already set, else id_0… for the animal count). Follows the session as the Animals
+field does (`ui/animal-count-field.js`).
+
+**Key exports.** `wireTailMarkField()` (from `setupUI`), `syncTailMarkField()` (from
+`drawAllOverlays`, O(1)).
+
+**Imports.** `./app-state.js`, `../import-export/save-load.js`, `../pose/tracker.js`.
+
+**Imported by.** `ui/ui-wiring.js`, `ui/rendering.js`.
 
 ### ui/track-summary-modal.js
 
@@ -9673,7 +10799,7 @@ summary through `reopenTrackSummary`'s `latest`, so the row reads e.g.
 **Notes / caveats.**
 - **A note, not a prompt.** Nothing changes until a button is pressed; Close,
   `Esc` and a backdrop click dismiss it. Each action button clicks the existing
-  control — `#tbTriangulateAll`, `#menuCheckImageSwitches`,
+  control — `#tbTriangulateSettings`, `#menuCheckImageSwitches`,
   `#menuCheckSizeSwitches` (both through `clickCheckFromSummary`, so the box comes
   back when the check ends), `#menuTrackingWizard` — so it runs exactly what the
   user would have run by hand (a disabled button, e.g. under Defining Plane Mode,
@@ -9722,7 +10848,9 @@ either ID-switch check is run.
   (its nearest other identity more than 1.5 of its body sizes away), the
   isolated frame nearest the middle winning (maximising isolation pushed picks
   to slot edges). Only the middle 60% of each slot is searched, so neighbouring
-  samples stay 40% of a slot apart even in a crowded cage.
+  samples stay 40% of a slot apart even in a crowded cage. A gap wider than a
+  slot would send several slots to one frame, so the count is made up evenly over
+  the tracked frames: more than five tracked frames always give five samples.
 - `pickCamera` — among the views where the group has a 2D member: the largest
   projection of its 3D (diagonal, with the camera's distortion) inside the image
   is the best, and among the views good enough to use (inside the image, at
@@ -9981,9 +11109,9 @@ stopping at the last frame; the step transport buttons/keys stop it first.
 - Menu / setup: `setupMenus`, `setupUI`. The menu bar ends with a **Help**
   dropdown (Docs, Settings) after Hot Keys; Docs / Settings are ALSO direct
   buttons at its right end (`menuBarDocs` / `menuBarSettings`, sharing
-  `openDocs` / `openSettings`). The Triangulate / Triangulate All split buttons
-  carry a `.tri-method` span that `updateTriangulateButtonLabels` fills with
-  the Settings default (": DLT" / ": Ref"), refreshed via
+  `openDocs` / `openSettings`). `updateTriangulateButtonLabels` names the
+  Settings default method in the Triangulate button's tooltip and checks the
+  menu's Method radio (the label stays a bare "Triangulate"), refreshed via
   `onDefaultTriangulationMethodChange`. The Speed popover (0.25x–3x) is
   right-aligned to its button. Tracks menu: `Propagate Tracks → IDs`
   (`menuPropagateTracksToIds` — an identity per track, assigned to every group;
@@ -10256,6 +11384,8 @@ Edit Group, `startManualAssignment`, `purgeTriangulationDataForGroup`,
 dropdown item),
 `animal-count-field.js` (`wireAnimalCountField`, the Track group's Animals
 field),
+`reproj-threshold-field.js` (`wireReprojThresholdField`, the Triangulate menu's
+Reprojection error field),
 `view-align-modal.js` (`showAlignViewsModal`, View ▸ "Align Views to
 References…"),
 `seekbar-tooltip.js` (`installSeekbarTooltip`),
@@ -10300,22 +11430,91 @@ opens the docs site (`https://talmolab.github.io/luc3d-docs/`) in a new tab;
 **Hot Keys** modal is generated from `getActions()`, so it follows the catalog
 and user rebindings.
 
-**Triangulate dropdowns + default method.** `Triangulate` / `Triangulate All`
-are **split buttons**: the button runs `getDefaultTriangulationMethod()`; the
-hover menu picks DLT / BA explicitly (`wireTriDropdown`). Both handlers
-`stopPropagation()`, which is why `ui/keyboard-target.js`'s focus-release
-listener must run in the **capture** phase (in bubble these buttons kept focus
-and swallowed `Space`/`Enter`). Implicit triangulation (`t`, Edit ▸
-Triangulate) and the environment-skeleton solve (Load Environment, via
-`resolveTriangulationMethod(group)` on a new group) use the default too.
+**Toolbar layout.** After Sessions come two groups, one per kind of work:
+manual labelling (`#tbLabellingGroup`: Instance ▾, Group ▾), then
+proofreading in the order it runs (`#tbProofreadingGroup`: Track ▾,
+Triangulate ▾, Smooth ▾, then the triangulation badge). Labels are short to
+save width ("Smooth" is Temporal Smoothing; the tooltip says so). Covered by
+`tests/e2e/toolbar-hover-menus.mjs` §4.
 
-**Track Frame is a split button too.** Same `.tri-dropdown` markup, but NOT
-`wireTriDropdown` — its button keeps its own handler in `pose/tracker.js`'s
-IIFE (`trackCurrentFrame`); `ui-wiring.js` wires only `#tbTrackFrameRange` to
-`showTrackRangeModal()`, passing `navigateToFrame` as `onTracked` (injected to
-avoid the `initialization.js` → `ui-wiring.js` → modal cycle). The menu is
-pure `:hover`: in a test, a modal opening over the toolbar drops hover, so a
-second click must re-hover the button first (`tests/e2e/track-frame-range.mjs`).
+**Track, Triangulate and Smooth share one menu shape**
+(`wireActionMenu(dropdownId, handlers)`). Each is ONE button whose click runs
+**all frames**; its `:hover` menu (`.tri-dropdown.action-menu`) has **This
+frame**, **All frames** (Track also **Frame range…**), the action's quick
+settings, and **Settings…** for its Settings panel. The All frames item
+forwards to the button (`button.click()`), so the two cannot differ and a
+disabled button disables both; other items call `handlers[data-scope]`. Each
+button keeps the id of the old all-frames button (`#tbTriangulateAll`,
+`#tbTrackAll`), so a click on it does what it always did; This frame is
+`#tbTriangulate` / `#tbSmoothFrame` / `#tbTrackFrame`. All items are
+`<button>`s so Defining Plane Mode can disable the runs one by one while the
+settings in the same menu stay live. `:focus-within` keeps a menu open, so
+typing in Animals does not lose it and Tab walks into the items.
+- **Triangulate ▾** (`#triangulateDropdown`): a bare "Triangulate"; the
+  tooltip names the method a click runs (#138); the Method radios (`input[name="tbTriMethod"]`) ARE Settings ▸ Default
+  Triangulation (`setDefaultTriangulationMethod`; `updateTriangulateButtonLabels`
+  re-checks them on `onDefaultTriangulationMethodChange`). This frame runs
+  `triangulateCurrentFrame(default)`; Settings… → `'triangulation'`. Implicit
+  triangulation (`t`, Edit ▸ Triangulate) and the environment-skeleton solve
+  (Load Environment, via `resolveTriangulationMethod(group)` on a new group)
+  use the default too.
+- **Smooth ▾** (`#smoothingDropdown`, `#tbSmooth`; Temporal Smoothing): also
+  has the **Remove smoothing / Restore smoothing** toggle (`#tbSmoothToggle`,
+  `data-scope="toggle"`) after All frames; see below.
+  Settings… → `'smoothing'`.
+- **Track ▾** (`#trackDropdown`): the button (Track All) and This frame keep
+  their own handlers in `pose/tracker.js`'s IIFE; `ui-wiring.js` wires Frame
+  range… to `showTrackRangeModal()`, passing `navigateToFrame` as `onTracked`
+  (injected to avoid the `initialization.js` → `ui-wiring.js` → modal cycle),
+  and Settings… → `'wizard'`. The Animals field sits in this menu.
+The menus are pure `:hover`: in a test, a modal opening over the toolbar drops
+hover, so a second click must re-hover the button first
+(`tests/e2e/track-frame-range.mjs`). Shape covered by
+`tests/e2e/toolbar-hover-menus.mjs` §5.
+
+**Instance and Group are hover menus.** To save toolbar width, `+ Instance` /
+`- Instance` sit under an **Instance ▾** button (`#tbInstanceMenu`,
+`#instanceDropdown`) and `Group` / `Edit Group` under **Group ▾**
+(`#tbGroupMenu`, `#groupDropdown`), opening on `:hover`. The four items are
+still the original `<button>`s with their ids and handlers
+(`button.tri-dropdown-item` restyles them as rows), so `ui/rendering.js` keeps
+rewriting Group's label and both items' `disabled` / `.active`; it also turns
+`#tbGroupMenu` blue whenever either item is. Tab skips the items while the menu
+is closed; their shortcuts (`Mod+I`, `Delete`, `Shift+G`) still work.
+Covered by `tests/e2e/toolbar-hover-menus.mjs`.
+
+**Temporal Smoothing** (luc3d #134) runs the private async
+`runTemporalSmoothing(currentFrameOnly, toggle)` (a re-entry guard drops a
+second click while one runs). The menu's toggle (`#tbSmoothToggle`,
+`toggle`), for comparing with and without: while anything is smoothed,
+**Remove smoothing** restores the pre-smoothing 3D on every frame and keeps
+what it took off (`removeSmoothing`, with the settings as they are then);
+otherwise **Restore smoothing** (`restoreSmoothing`) copies it back with no
+recompute and no card, or, when the settings or any 3D changed since,
+smooths again with the current settings in the removed run's scope (all
+frames, or `smoothFrame` on each removed this-frame run's frames), its status
+ending "— recomputed…". "Nothing is smoothed" if neither applies. Otherwise
+it reads `getSmoothingParams()`; when
+both kernels are off it restores the pre-smoothing 3D (`unsmoothSession`), or, with nothing
+smoothed, says so and opens Settings ▸ Temporal Smoothing rather than silently
+doing nothing; otherwise All frames runs `smoothSessionAsync`
+(`pose/temporal-smoothing.js`; every run filters the pre-smoothing 3D, so it
+replaces the last) behind the shared progress card, counted in POSES (one per
+animal per frame), shown at once and painted (`yieldToPaint`) before the pass.
+This frame runs `smoothFrame(session, params, state.currentFrame)`
+synchronously with no card: it reads only the frames within the filter windows
+of the current one (~1–4 ms on 200,000 frames, vs ~1.3 s when it filtered whole
+trajectories) and writes the values an All frames run gives that frame. Then it
+records the scope (`noteSmoothingScope`), drops the `state.triangulationResults`
+entries of every group whose reprojections the pass cleared (the fill appends a
+fresh one, and the panel would average both; This frame checks only its own
+frame), and runs `markDirty` + `drawAllOverlays` + `update3DViewport(state.currentFrame)`
+(the frame matters: without it the 3D view got no groups and went blank) +
+`updateInfoPanel`, setting the summary status last. Both-windows-0 restores
+pass `writeFrames: new Set([state.currentFrame])` for This frame. It touches only `points3d` on the
+already-resident `session.instanceGroups`, hydrating no 2D. The button is blue
+while smoothing is applied, and the menu lights only the last run's scope
+(`ui/smoothing-button.js`, synced on every overlay draw).
 
 **The Animals field (`#tbNumAnimals`)** is wired by `wireAnimalCountField()`
 from `ui/animal-count-field.js`, which owns it (see that entry).
@@ -10869,6 +12068,277 @@ function, so the cycle through the info panel is hoist-safe).
 
 **Tests.** `tests/e2e/campy-session-folder.mjs`.
 
+### ui/figure-try-controls.js
+
+**Purpose.** The controls shared by the Settings figures, so that someone playing
+with a demo cannot change a setting by accident: `tryStrip` / `tryControl` (a dashed
+"changes the sketch only" strip of sliders, each with a text box) and `settingRow`
+(an outlined row saying what the setting is, with the only buttons that change it:
+Use, Turn off, plus Reset sketch, and "not saved until you click Apply").
+
+**Key exports.** `tryStrip`, `tryControl`, `wireTryControl(root, key, o, onValue)` →
+`{ set(value, sliderValue) }` (never rewrites the box while it has focus; ignores a
+half-typed or out-of-range entry; a slider may map positions to values, `toSlider` /
+`fromSlider`, with `ticks` under the track and a `zone` behind it), `settingRow`, `wireSettingRow(root, key, on)` →
+a function showing the setting.
+
+**Imports.** None. **Imported by** `ui/triangulation-methods-figure.js`,
+`ui/smoothing-windows-figure.js`.
+
+### ui/threshold-examples-panel.js
+
+**Purpose.** The threshold card's "In this session" band, its last section, below the
+controls and the sketches: up to four small tiles, one large one, then the
+animal in 3D. The tiles are all at one scale, each a crop of a camera's video around the
+node's prediction with the skeleton as Predictions are drawn in the views (`drawSkeleton`
+in the Visibility panel's style, `getGroupColor`), the node's prediction (orange once
+outside the threshold and no longer used), the reprojection after the rule has run, the reprojection error, the threshold as a dashed
+ring and, where a camera was dropped, the first solve's reprojection. The tiles are the
+cameras with the largest errors (`pickShownCameras`), and a line names the rest. Clicking
+a tile enlarges it; the pick holds while that camera has a tile, otherwise the largest
+error is enlarged. The arrows
+(and the ← → keys, through the modal's `onDocKeyDown`) walk a fixed set of 12 examples,
+spread from small errors to large (`pickRepresentativeExamples`), opening on the first
+at 50 px or more. The slider and the DLT / Refined switch never change the example, the
+tiles' cameras or the crops, which all come from a DLT solve with the threshold off
+(`baselineFor`): only the marks and numbers move. Never changes a setting or the
+session. The session is solved once when the panel is first shown, and once more for
+Refined's count if tried; only the example on screen decodes video
+(`view.decoder.getFrame`), a crop is copied at once, and only the newest request per
+camera runs.
+
+**Key exports.** `buildThresholdExamples({ session, isCameraIncluded })` →
+`{ el, start, update({ threshold, method }), step(by), setActive(on), invalidate, dispose }`,
+`SMALL_TILES`, `exampleResultText`, `tileVerdict`, `cropSide`.
+
+**Imports.** `pose/threshold-examples.js`, `ui/threshold-examples-3d.js`,
+`ui/app-state.js`, `ui/frame-readout.js`, `ui/overlays.js`, `ui/rendering.js`.
+**Imported by** `ui/settings-modal.js`. **Tests.**
+`tests/e2e/threshold-session-examples.mjs`; on a real recording,
+`tests/e2e/_real-threshold-examples.mjs` (no assertions).
+
+### ui/threshold-examples-3d.js
+
+**Purpose.** The 3D view in "In this session": the app's own `Viewport3D`, styled from
+Visibility ▸ 3D Viewer as the overlay export's tile is, with no cameras and with sizes
+grown to suit the close framing, showing every animal in the example's frame from the solve being tried. On top go the example node's 3D point, the
+first solve's point if a camera was dropped, and each camera's line of sight (orange if
+dropped). The framing is set per example and holds as values are tried; a drag turns it,
+the angle holds between examples, and the wheel is left to the panel's scroller.
+
+**Key exports.** `build3dView(host, { session, getGroupColor })` →
+`{ setScene, setFraming, setVisible, dispose }`; throws without WebGL or three.js.
+
+**Imports.** `ui/viewport3d.js`, `ui/overlays.js`. **Imported by**
+`ui/threshold-examples-panel.js`.
+
+### ui/triangulation-methods-figure.js
+
+**Purpose.** The Settings ▸ Triangulation Wizard choice: two cards that each
+explain one method (DLT, Refined = bundle adjustment) and are clicked to pick
+it (`role="radio"`, `data-method` `'dlt'`/`'ba'`; `ui/settings-modal.js` wires
+the selection). Two top-down sketches of the
+same three cameras: each camera's 2D detection on its image plane, its line of
+sight, the 3D answer, where that answer lands back in each camera and the pixel
+error between the two. One camera's detection is a stray: DLT is pulled toward
+it and every camera ends up a little off; Refined starts at the DLT point and
+fits the two cameras that agree; in this layout that ignores the stray camera
+entirely, so it gets no line, landing spot or error (a `null` landing). Captions are HTML
+so they wrap; the sketches are inline SVG coloured by theme variables
+(`.tri-methods` in `styles.css`).
+
+Every sketch is the same scene from above: four cameras, one node, a green cross at
+the true position (the target), and each camera's line of sight dashed from the camera
+on (grey if the camera is a little off, orange if stray). Cameras 0, 1 and 2 are 14-16 px
+off and camera 3 is a stray, chosen so that DLT at a 50 px threshold drops it and solves again. DLT is pulled well away; Refined counts the stray less and
+lands closer, two marker diameters from the target, with the stray still counted; the
+threshold removes it, and set too low it also drops a camera that was only a little off.
+`sketch()` draws them from `FIGURE_SCENE`. A legend at the bottom-left of each card
+(`SKETCH_LEGEND`, pinned by `.tm-sketch`, clear of the centred scene) names its target, projection, prediction, reprojection,
+reprojection error and ground truth error; the legend below the figures covers the rest. Bars at the
+bottom-right (`errorTotals`, one scale in every sketch) stack each numbered camera's
+reprojection error above their sum, so DLT's larger sum can be seen against Refined's. A
+dark red line, over every other line and under the markers, is the ground truth error:
+how far the projection is from the target, also a row in the bars (in 3D, so it counts
+the part out of the page; about 52 for DLT, 20 for Refined, 15 after the threshold). The left and bottom cameras are a little off and
+the right one is a stray. DLT is pulled well away; Refined counts the stray less and
+lands close to the true position, with the stray still counted; the threshold removes
+it. `sketch()` draws them from `FIGURE_SCENE`.
+
+**The answers are the real solvers', not hand-drawn.** `FIGURE_SCENE.solves` holds
+`triangulateAndReproject`'s output (3D, landings, errors) for each method and set of
+cameras. `tests/test-triangulation-threshold-figure.mjs` re-solves it, checks every
+threshold from 1 to 120 px and the captions' claims, and on a mismatch prints the
+right numbers. The layout itself is hand-picked so that the stray is the worst
+camera for both methods (it often isn't: with no majority of good cameras, the real
+solvers can make a good camera look worst). Change it and update the wiki's
+copy (`docs/assets/triangulation/` in talmolab/luc3d-docs) too.
+
+A third, full-width card (`.tri-thr`, not a choice) shows the Tracking Wizard's
+**reprojection error threshold** (`reprojErrorThreshold`) in up to three more sketches,
+one per solve, each titled with the method: every re-solve uses the first solve's. In a
+re-solve, each camera dropped so far is drawn faded (`.tm-dropped`), its prediction
+orange (`.tm-det-out`), as in the session tiles. On every
+image plane still checked, a band `threshold` px either side of the detection (2 px
+per sketch unit, cut at the plane's ends) is where the answer may land, green /
+orange / red as that camera is within / over / over and dropped; a verdict line per
+camera sits under each sketch, and a sentence says what becomes of the node.
+Which camera is dropped, and whether the node keeps its 3D, comes from
+`thresholdPasses`, the rule `triangulateAndReproject` applies.
+
+**Trying a value never changes a setting** (`ui/figure-try-controls.js`). The
+slider, its text box and the DLT/Refined switch only redraw the sketch. Only Use
+and Turn off change the threshold, through `opts.onThreshold`; Apply saves it.
+`update({ method, threshold, saved })` follows the picked method and the setting;
+the sketch jumps to a value set elsewhere, and opens at the setting. The slider runs from
+off (every camera counts, no band, nothing dropped), then from 640 px (half of a 1280 px
+monitor, also the setting's top) down to 1 px on a log scale (`thresholdSliderPos`,
+`thresholdFromSliderPos`), with a recommended zone from 100 to 15 px. In the scene DLT
+drops camera 3 at 53 px, inside the zone, and a good camera only at 8 px, past it. The large value (`.fig-big`) is what the sketch shows.
+
+**The card never changes size as the value moves.** Every step keeps its place (a
+faded scene when the rule does not reach it, its verdict rows kept but hidden), and
+every line whose wording changes is a `stack()`: all its wordings in one grid cell,
+only the current one visible, so it is always as tall as its longest wording at any
+width. Keep new changing text in a `stack()`;
+`tests/e2e/triangulation-threshold-figure.mjs` §4 checks one size across 32 states.
+
+**Don't call Refined more accurate in general.** Measured on held-out cameras
+(9 proofread SLAP sessions), shipped Refined beat DLT in only 1 of 9 (median
+3.32 vs 3.20 px): it wins when one view is clearly wrong, but its L1 polish
+step leaves everyday points slightly worse. Its "never worse than DLT" guard is
+on the in-sample reprojection error only. The caption (and the toolbar's Ref
+tooltip in `index.html`) say just that.
+
+**Keep the threshold card's rule the solver's.** `thresholdPasses(cameras,
+solve, threshold)` restates the loop in `triangulateAndReproject` (drop only the
+worst view over the threshold per pass, never below 2 views, an error equal to
+the threshold is not over it, a node whose last views still miss is cleared).
+`tests/test-triangulation-threshold-figure.mjs` feeds it the solver's own
+errors on noisy scenes and checks it predicts the solver node for node; change
+both together. The card also says the threshold is not used by Track All's
+matching (`pose/cross-view-tracker.js` solves plain DLT on every view).
+
+**Key exports.** `buildTriangulationMethodsFigure(opts)` → `{ el, update }`
+(`opts.onThreshold(px)`, `opts.examples`: a `buildThresholdExamples` panel, shown
+last in the threshold card and told what is being tried); `thresholdPasses` and `FIGURE_SCENE` (pure, Node-importable).
+
+**Imports.** `./figure-try-controls.js`. **Imported by** `ui/settings-modal.js`,
+`tests/test-triangulation-threshold-figure.mjs`. e2e:
+`tests/e2e/triangulation-threshold-figure.mjs`.
+
+### ui/smoothing-windows-figure.js
+
+**Purpose.** The figure at the top of Settings ▸ Temporal Smoothing: what the
+Median window and the Gaussian window each do, as two cards (stage 1, stage 2).
+Both plot one made-up trace (one node's x over 40 frames: a slow movement, a
+solid white line under everything else that ends low, with one fast real move
+up and back, tall enough that a Gaussian visibly damps it, plus jitter and one
+one-frame spike) and draw what the stage
+makes of its input, the window around one frame (shaded) and stems at the
+bottom of that window: for the Gaussian its weights, for the median the
+window's values sorted low to high, the middle one (the median, what the spike
+frame becomes) green and the spike red. The median's output is green in both
+cards (the same line and dots, on the right as the Gaussian's input); the
+Gaussian's output is blue, with an open black circle at every frame. Raw samples
+are open grey rings joined by a grey line, the rings drawn over the green dots,
+since a median keeps many samples exactly and a filled dot would hide under the
+green one. Each card has its own legend, naming only what that card draws (the
+top two stand it in the card's top right corner, over the space above the trace's
+low end, or under the title in a narrow card; the gaps card keeps it under the chart): the Gaussian's second row follows its input (raw with the median off),
+and a key for the ring appears while a frame is picked. The legend has a fixed
+width and every entry a fixed row, blank while its mark is not drawn, so nothing
+in it moves as a stage is turned on or off. The Gaussian's
+window sits on the fast move, which survives the example windows and is
+flattened by long ones (over-smoothing).
+
+**The lines are the real filter, not drawn by hand.** `update(params)` runs
+`smoothSignalInto` (`pose/temporal-smoothing.js`) on the trace with the panel's
+working windows, so the cards follow what is typed. A stage that is off (0) draws
+no window and no output, only its input, and its Frame control is disabled. The
+Gaussian card's input is the median's output, except with the median off: then it
+is the raw trace, and with the Gaussian on a note says the spike becomes a bump
+(why the median runs first). The gaps card still smooths with an example (median 5,
+Gaussian 9, labelled so) while a stage is off, because it is about the segments. Colours come from `.smooth-fig` in `styles.css`.
+
+**Trying a value never changes a setting** (`ui/figure-try-controls.js`). Each card
+has a Window slider with a text box (slider off, then 1–31 frames, box up to 101; under 3 the
+filter leaves the 3D as it is, drawn as a 1-frame window) and a Frame slider with a
+text box and ▶ that slides the shaded window along the 40 frames (90 ms a frame;
+stops at the end, on a second click, or once the figure leaves the page). They only
+redraw the sketch (`tried`, kept apart from `setting`). While a frame is picked,
+that stage's output is solid up to it and faint after it, with a ring on its value.
+Only a card's Use and Turn off buttons change a setting, through `onParam(id, value)`
+(the panel sets its working value and field; Apply stores it). The large value
+(`.fig-big`) is what the sketch shows.
+
+**Card 3, gaps and segments** (full width, below the two): Max gap and Minimum
+segment length on its own 60-frame trace (a 2-frame hole, a 7-frame and a
+6-frame absence with a 3-frame stretch between them; the node comes back 12 mm
+away after the 7-frame one, and is moving fast after the 6-frame one, so raising
+Max gap past it visibly pulls the first frame back ahead of the true movement). It runs both stages at the windows the other cards
+show over the segments `buildSegments` cuts, as the real pass does, and draws
+each absence (labelled hole or split), the measurements' grey line (broken at
+every absence), the output per segment (grey where too
+short to smooth) and the segments as bars. Its Max gap and Min segment sliders
+(0–15, 1–15; the text boxes go further) try values the same way; its Use button
+sets both through `onParam`.
+
+**Key exports.** `buildSmoothingWindowsFigure({ onParam, saved })` → `{ el, update(params) }`;
+`stageSketch(stage, window, { medianWindow, frame })` → `{ svg, keys, truth, raw, medOut, out }`,
+one card's sketch with no controls, DOM-free, and `gapSketch({ median, gaussian, maxGap, minSegment })`
+→ `{ svg, keys, segments, truth, raw, out }`, the gaps card's; `scripts/smoothing-wiki-figures.mjs`
+draws the docs' step figures from them.
+
+**Imports.** `pose/temporal-smoothing.js` (`smoothSignalInto`, `normalizeWindow`,
+`sigmaForWindow`, `buildSegments`). **Imported by** `ui/settings-modal.js`,
+`scripts/smoothing-wiki-figures.mjs`.
+
+**Tests.** `tests/e2e/smoothing-windows-figure.mjs`; `tests/test-smoothing-figure-steps.mjs`
+(what the docs' step captions claim about the trace).
+
+### ui/smoothing-button.js
+
+**Purpose.** The toolbar's Temporal Smoothing button state (luc3d #134):
+`#tbSmooth` is blue (`.active`) while any 3D in the session is smoothed. Its
+menu lights (`.applied`) only the scope of the LAST run, never both: **All
+frames** after an all-frames run (while anything is still smoothed), **This
+frame** after a this-frame run, on the frames it smoothed. The toggle
+(`#tbSmoothToggle`) reads **Remove smoothing** while something is smoothed,
+**Restore smoothing** while a removal is kept (`hasRemovedSmoothing`), and is
+disabled otherwise; its tooltip follows. Never while it carries
+`.plane-mode-locked` (that lock owns `disabled` and the tooltip then; the next
+draw re-derives them after the unlock's snapshot restore).
+
+**Key exports.** `syncSmoothingButton()` — re-derives that state from the
+session. `noteSmoothingScope(session, 'all' | 'frame', config)` — records the
+scope and resolved windows a run used, kept by
+`import-export/smoothing-metadata.js` (`noteSmoothingRun` / `smoothingRunOf`),
+which saves them so a reopened project lights the same item. Smoothing lapses by itself when a re-solve or edit replaces a group's
+3D (`isPoints3dSmoothed` keys the array), so nothing tracks it: `ui/rendering.js`
+calls this on every overlay draw and the pass calls it after running.
+`hasSmoothed3d` (`pose/temporal-smoothing.js`) keeps the per-draw cost small.
+
+**Imports.** `./app-state.js` (`state`), `../pose/temporal-smoothing.js`
+(`hasSmoothed3d`, `hasRemovedSmoothing`), `../import-export/smoothing-metadata.js` (`noteSmoothingRun`,
+`smoothingRunOf`). **Imported by** `ui/rendering.js`, `ui/ui-wiring.js`.
+Covered by `tests/e2e/temporal-smoothing-display.mjs` §E–H and
+`tests/e2e/smoothing-save-reopen.mjs`.
+
+### ui/run-buttons.js
+
+**Purpose.** The toolbar's Track (`#tbTrackAll`) and Triangulate
+(`#tbTriangulateAll`) buttons are blue (`.active`) once that step has been run
+on the active session and while its result stands (`pose/run-state.js`), as
+Smooth is while smoothing is applied (`ui/smoothing-button.js`). Derived on
+every overlay draw, so session switches and results that go away (re-tracking
+replaces Triangulate's 3D) need no bookkeeping.
+
+**Exports.** `syncRunButtons()`. **Imports.** `./app-state.js` (`state`),
+`../pose/run-state.js` (`hasTrackResult`, `hasTriangulateResult`).
+**Imported by** `ui/rendering.js` (every `drawAllOverlays`). **Tests.**
+`tests/e2e/run-buttons-blue.mjs`.
+
 ### ui/section-state.js
 
 **Purpose.** Remember which collapsible `<details>` sections a user left open,
@@ -11044,15 +12514,50 @@ deliberately NOT authoritative. `newer` is the most-recently-modified candidate
 when that is not the chosen file, else `null` — the signal that a leftover
 `_vN` is outranking a file the user just wrote.
 
+**Proofread export names** (File ▸ Export SLEAP File By Cam, `ui/export-modals.js`):
+`proofreadSlpName(source)` → `<stem>_proofread.slp` (`PROOFREAD_SUFFIX`);
+`isProofreadSlp(name)`; `chooseProofreadSource(slps, loadedName)` — the `.slp` in a
+camera folder the project's 2D came from: never a `_proofread` output, the
+recorded `loadedName` (`videoFiles[].slpFilename`) while it is there, else
+`chooseCameraSlp`. The loaders do NOT skip `_proofread` files: a camera folder
+holding one is loaded from the newer of the two (same version 0, `lastModified`
+breaks the tie). Test: `tests/test-proofread-export-name.mjs`.
+
 **Imports from project modules.** None (deliberately).
 
 **Imported by.** `loading/session-loader.js`, which re-exports it so its own
-import site is unchanged; bridged into the test runner as
-`window.__PerCamSlpChoice`.
+import site is unchanged; `ui/export-modals.js` (the proofread export names);
+bridged into the test runner as `window.__PerCamSlpChoice`.
 
-**Tests.** `tests/test-percam-slp-choice.js`.
+**Tests.** `tests/test-percam-slp-choice.js`, `tests/test-proofread-export-name.mjs`.
 
 ---
+
+### loading/folder-picker-start.js
+
+**Purpose.** Where a `showDirectoryPicker` opens. `startIn` = a file handle opens
+in that file's folder; the project's `.slp` handle is `state.slpFileHandle` (Load
+Project, Load SLP and Save As keep it; it is what File ▸ Save writes). Without
+`startIn` or `id`, Chromium opens wherever ANY picker of the origin last picked
+(Load Project, Save As, an export…), else Documents — so a picker with neither
+lands somewhere that depends on the browser's history, not the project. An `id`
+gives a picker its own memory; a `startIn` handle wins over it.
+
+**Key exports.**
+- `projectFolderStart()` — `state.slpFileHandle` when set and the browser has
+  `showDirectoryPicker`, else null.
+- `pickExportFolder()` — `showDirectoryPicker({ id: EXPORT_FOLDER_PICKER_ID,
+  mode: 'readwrite', startIn? })`: the project's folder, else where the last
+  export went. Rejects with AbortError on cancel.
+- `EXPORT_FOLDER_PICKER_ID` — `'lucid-export-folder'`.
+
+**Imports from project modules.** `../ui/app-state.js` — `state`. Import-light on
+purpose, so `ui/export-modals.js` can use it without a cycle through
+`loading/session-loader.js`.
+
+**Imported by.** `loading/session-loader.js` (`folderPickerStartFor`),
+`ui/export-modals.js` (By-Cam Download All). Test:
+`tests/e2e/export-bycam-folder-progress.mjs`.
 
 ### loading/calibration-pick.js
 
@@ -11086,6 +12591,39 @@ and every reprojection is wrong.
 only cites it in a comment.)
 
 **Tests.** `tests/test-calibration-file-pick.mjs`.
+
+### loading/recording-folder.js
+
+**Purpose.** Remember the folder a recording was opened from, so File ▸ Save
+opens there. A folder picked with `<input webkitdirectory>` gives File objects
+only, never the folder, so the session folder loaders pick with
+`showDirectoryPicker` when the browser has it and keep the handle on the
+session (`session._recordingFolder`, in memory only, never written to the
+`.slp`). Firefox, Safari, Brave with the File System Access API off and
+Playwright's headless shell have no `showDirectoryPicker`: they pick through the
+input, and Save opens where the browser chooses. A project opened from a `.slp`
+has no recording folder: Save writes that file, Save As opens beside it.
+
+**Key exports.**
+- `RECORDING_FOLDER_PICKER_ID` (`'lucid-recording-folder'`): the folder
+  picker's own memory, so the next recording's pick opens beside the last one.
+- `pickRecordingFolder(fallbackPick)` → `{files, dirHandle}`: files as
+  `pickFolder` gives them (`webkitRelativePath` = `<folder>/…`); a cancel gives
+  no files; without `showDirectoryPicker`, `fallbackPick()`'s files and no handle.
+  An automated browser (`navigator.webdriver`) keeps the input while its
+  `showDirectoryPicker` is native code (Playwright cannot answer the native
+  dialog; the e2e suites fill the input); a stubbed picker takes the picker path.
+- `enumerateDirectoryHandle(dirHandle, rootName, prefix)`: every file under a
+  directory handle, wrapped with `webkitRelativePath` (moved here from
+  `session-loader.js`, which re-exports it).
+- `saveStartFolder(state, previousFile)`: the save picker's `startIn` — the
+  active session's `_recordingFolder`, else `previousFile` if it is a file
+  handle, else null.
+
+**Imported by.** `loading/session-loader.js`, `import-export/save-load.js`.
+Imports nothing.
+
+**Tests.** `tests/e2e/save-opens-in-recording-folder.mjs`.
 
 ### loading/campy-session.js
 
@@ -11241,6 +12779,8 @@ session, per-camera SLPs, single-SLP, multi-session, video-only,
 calibration-only. Owns view/grid layout, video selection prompts,
 filesystem enumeration, decoder rebuild.
 
+**Compact copies.** The single-SLP folder loader and the lazy project reopen end on `withCompactNote` (`import-export/compact-save.js`): a file saved as a compact copy opens with a warning status saying its keypoints and 3D were rounded.
+
 **Key exports.**
 - Loaders: `handleLoadCalibration`, `handleLoadVideos`,
   `handleLoadMultiSession`, `loadSingleSessionFromCache`,
@@ -11251,11 +12791,19 @@ filesystem enumeration, decoder rebuild.
   per-camera load's Instance builder from the SLP worker's columnar result;
   exported for `tests/e2e/slp-import-fast-compound.mjs`).
   `handleLoadSessionFolderSingleSlp()` loads a folder holding a project `.slp`
-  plus `videos/` + calibration. It reads the SLP with the **typed** reader
+  plus `videos/` + calibration. More than one root `.slp` (a project and a Save As
+  beside it) is refused with a status naming them and pointing at Load Project:
+  picking by folder cannot say which is meant. A LARGE root `.slp` (`shouldUseLazySlp`, not a campy
+  recording) goes to `handleLoadProjectSlpLazy(slpFile, {folderFiles})` instead,
+  whose videos are matched from the same folder pick, wherever they sit in it (one
+  folder per camera too): one pick opens a saved project with its videos, where
+  Load Project asks for the folder a second time (a page given one file cannot
+  see the folder around it). Otherwise it reads the SLP with the **typed** reader
   (`parseSlpViaSleapIO`, raw `parseSlpH5` only as fallback) and restores
   grouping, `nulledNodes`/occlusion, identities and 3D via the shared
   `restoreGroupingAndUnlink` (`import-export/slp-import.js`), then the rest of
-  `metadata.lucid` through `readVisibilityMetadata` and `readPlaneMetadata`.
+  `metadata.lucid` through `readVisibilityMetadata`, `readSmoothingMetadata`
+  and `readPlaneMetadata`.
   Unlike the other readers it **adds** a session (it is also the Sessions list's
   "Add session folder"), so it calls `resetPlaneState()` only when no session is
   open. With a project open its planes stay, and the new session's 2D is seated
@@ -11276,7 +12824,14 @@ filesystem enumeration, decoder rebuild.
   `forceVideoSelectionWithFolder(refInfo, sessionName, options)` accepts
   `options.allowSkip` (a "Skip — Load Videos Later" button; used by the lazy
   reopen) and closes on `Esc`; both resolve `null`, which every caller treats as
-  "no videos picked".
+  "no videos picked". `options.startIn` (from `folderPickerStartFor(file)`: the
+  `.slp` being opened's `state.slpFileHandle` — `projectFolderStart()`,
+  `loading/folder-picker-start.js` — only when the handle is THAT file's) makes Select Session Folder open
+  `pickFolderNear(startIn)`: the folder picker starts in the project's own folder
+  and the files are listed as `pickFolder` lists them. A page given one file cannot
+  read the folder around it, but can start the picker there, so the user confirms
+  the folder instead of finding it again. Load Project, Load SLP and both project
+  reopens pass it; without the API (Brave by default) it is the old upload picker.
   `forceVideoSelection(refInfo, options)` (Load Project on a V2/legacy `.json`,
   Add SLP with no embedded video) is NOT blocking: a **Continue Without Video**
   button and `Esc` both resolve `[]`, which both callers treat as "no videos"
@@ -11306,6 +12861,12 @@ filesystem enumeration, decoder rebuild.
   `createVideoPromptCell`, `fitCanvasesToCells`, `cellResizeObserver`,
   `reapplyAllZoom`, `rebuildVideoController`, `updateTotalFrames`,
   `adoptLabeledFrameCount` (see Video assignment above).
+  `fitCanvasesToCells()` sizes each view's video canvas and overlay to its cell,
+  except a zoomed-in overlay WINDOW (`view._overlayPlan.windowed`), which
+  `applyOverlayPlan` (`ui/rendering.js`) sizes and places: it calls
+  `noteOverlayViewTransform(view)` instead, which redraws (re-plans) the window
+  only when the box changed. The controller is built with
+  `onViewTransform: noteOverlayViewTransform` (also in `pose/initialization.js`).
   `reapplyAllZoom()` runs `videoController.reapplyZoom` on every view — after
   `fitCanvasesToCells` in `cellResizeObserver`, and on a devicePixelRatio change
   via a module-level `matchMedia('(resolution: Ndppx)')` watcher (re-armed each
@@ -11327,7 +12888,16 @@ filesystem enumeration, decoder rebuild.
   removing the solo'd view itself falls back to the clamp AND re-renders the
   dock (`updateVideoGridDisplay`). Covered by `tests/e2e/videos-panel-buttons.mjs`.
 - Session-mode UI: `showSessionModeModal`, `showMissingFilesPopup`.
-- Filesystem: `enumerateDirectoryHandle`.
+- Filesystem: `enumerateDirectoryHandle` (re-exported from `./recording-folder.js`).
+- **Recording folder for Save.** The per-camera and single-SLP folder loaders
+  pick through `pickRecordingFolder` (`./recording-folder.js`):
+  `showDirectoryPicker` when the browser has it, else `<input webkitdirectory>`
+  (`pickFolder`). With a handle, the new session keeps it as
+  `session._recordingFolder` (in memory only, never in the `.slp`), and
+  File ▸ Save / Save As open there. `handleLoadSessionFolderPerCamera(files,
+  deferVideos, folderHandle)` takes the handle as its third argument, which
+  `handleLoadMultiSession` passes for each session subfolder. Test:
+  `tests/e2e/save-opens-in-recording-folder.mjs`.
 - **campy recordings** (`loading/campy-session.js`):
   `adoptCampyRecording(session, files, {record, calibFile, calibrationNames})`
   reads a picked folder's session.json (+ campy-live's manifests) onto
@@ -11341,8 +12911,9 @@ filesystem enumeration, decoder rebuild.
   fps readout's `title`; the estimate is kept as `videoFrameRate` when it
   differs by > 1%); views follow campy's camera order (the calibration's own
   camera list keeps its order); each camera loads the file at campy's `video`
-  path; with no calibration, views are named after campy's cameras, not the
-  video stem (campy's are all `0.mp4`); the single-SLP loader takes videos from
+  path; with no calibration, views are named after campy's cameras (as every
+  uncalibrated camera folder's view is, never by video stem — campy's are all
+  `0.mp4`); the single-SLP loader takes videos from
   session.json when there is no `videos/` and reads the root `.slp` over
   campy-live-export's `points3d.h5`; the load's final status gains the
   warnings (`withCampyWarnings`). `forceVideoSelectionWithFolder`'s folder
@@ -11419,7 +12990,9 @@ max():
   `tests/e2e/percam-slp-choice-and-failure.mjs`.
 
 **Large `.slp` → lazy loading.** The chosen `.slp` files are routed by
-`shouldUseLazySlp` (`> 150 MB`): large prediction files go to a `SioLazyLoader`
+`shouldUseLazySlpFolder`: when any one is over 150 MB (`shouldUseLazySlp`), or all of
+them together are (five 125 MB cameras loaded eagerly, and File ▸ Save then crashed the
+tab building 1.35 million poses), the whole folder goes to a `SioLazyLoader`
 instead of the eager `parseSlpH5` worker, which OOMs the tab on 100k-frame
 predictions. The lazy loader is chosen when all lazy jobs are `.slp` (analysis
 `.h5` folders still use `LazyFrameLoader`); a lazy-open failure surfaces an error
@@ -11458,7 +13031,10 @@ attach step lists the reason per file too.
 
 **Lazy project reopen (`handleLoadProjectSlpLazy`).** The memory-bounded "Load
 Project" path for a large saved project `.slp` (routed by `handleLoadProject` in
-`import-export/save-load.js` via `shouldUseLazySlp`). **It shows the progress
+`import-export/save-load.js` via `shouldUseLazySlp`, and by
+`handleLoadSessionFolderSingleSlp` for a large root `.slp`, which passes
+`{folderFiles}` so `attachVideosForLazyReopen` takes the videos from that pick
+instead of prompting). **It shows the progress
 card, titled "Open project"** (`createOpenProgress(fileName)`, exported for the
 test), one step per stage, the file name on the detail line: 1. Reading the
 project file — counted in MB, from `openProjectSlp`'s `onReadBytes` (one decimal
@@ -11505,10 +13081,33 @@ neither step (`tests/e2e/lazy-reopen-group-identities.mjs`).
 in, and queued behind the skeleton prompt (as its `onDone`) so two modals never
 stack. See `ui/calibration-notice.js`.
 
+**No calibration → placeholder cameras, so the folder can be saved.** A folder
+loaded with no `calibration.toml` (and nothing embedded) gets one PLACEHOLDER
+camera per view (`pose/placeholder-cameras.js`: all-zero extrinsics, f = 600,
+sized from the video — the shape Load Videos always made). Per-camera loader: the
+view, the video's `assignedCamera` and the folder's 2D are all keyed by the
+camera directory's name (campy's camera name when it names one); the camera is
+made in the video loop when the video decodes, else after it (deferred, failed or
+missing video), and the cameras are then put in folder order (the order they are
+written and reopened in). Single-SLP loader: `ensurePlaceholderCameras` after the video
+loop (after the campy step, which compares the real calibration names), and a
+recovered EMBEDDED calibration of placeholders only sets `hasCalibration` false,
+so 3D stays off on reopen — as in `handleLoadProjectSlpLazy`. Before, both loaders created NO camera: the `.slp`
+writer writes one video per `session.cameras` entry and drops every pose whose
+camera is missing, so Save wrote an empty file ("Saved (0.0 MB)"), and the
+per-camera loader named views by video stem — `cam1/video.mp4` and
+`cam2/video.mp4` were both `video`, and the folder's own poses (`cam1`, `cam2`)
+reached no view. A placeholder is never added to a session that has a real
+calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
+
 **Imports from project modules.**
+- `../pose/placeholder-cameras.js` (`makePlaceholderCamera`,
+  `hasRealCalibration`, `ensurePlaceholderCameras`),
 - `./calibration-pick.js` (`REBASED_CALIBRATION_NAME`, `pickCalibrationFile`),
+  `./folder-picker-start.js` (`projectFolderStart`),
   `./percam-slp-choice.js` (`chooseCameraSlp`), `./video-file-pick.js`,
   `./video-codec-diagnosis.js` (`videoLoadFailureText`),
+  `../ui/video-codec-notice.js` (`noteUnplayableVideos`),
   `../ui/app-state.js` (incl. `buildRememberedSkeleton`, and `isViewDocked` as the
   rebuilt video controller's `isViewShown`), `../pose/pose-data.js`,
   `../ui/browser-hints.js` (`fileSystemAccessHint`),
@@ -11517,7 +13116,7 @@ stack. See `ui/calibration-notice.js`.
   `./video.js` (`OnDemandVideoDecoder`, `VideoController`, `releaseViewsFrames` —
   called wherever an outgoing session's views are stashed in `_views`: empty
   session, single-SLP folder, per-camera folder), `../import-export/file-io.js`,
-  `../pose/triangulation.js` (`shouldUseLazyH5`, `shouldUseLazySlp`, `LazyFrameLoader`),
+  `../pose/triangulation.js` (`shouldUseLazyH5`, `shouldUseLazySlpFolder`, `LazyFrameLoader`),
   `./sio-lazy-loader.js` (`SioLazyLoader`),
   `./track-union.js` (`unionTrackNames`, `remapTrackIdx`),
   `../import-export/save-load.js`,
@@ -11532,6 +13131,7 @@ stack. See `ui/calibration-notice.js`.
   `yieldToPaint`), `../import-export/import-track-resolve.js`,
   `../pose/initialization.js`, `../ui/sessions-panes.js`, `../ui/ui-wiring.js`,
   `../import-export/visibility-metadata.js` (`readVisibilityMetadata`),
+  `../import-export/smoothing-metadata.js` (`readSmoothingMetadata`),
   `../import-export/frame-identity-metadata.js` (`readFrameIdentityMetadata`,
   called by `handleLoadProjectSlpLazy` after the groups are rebuilt) and
   `../import-export/plane-metadata.js` (`readPlaneMetadata`, `resetPlaneState`,
@@ -11709,9 +13309,11 @@ resident ones):
 
 **`describeStoreFrame(camName, frameIdx)`** — what re-hydrating one
 camera-frame WOULD build, read straight from the columns: `{ count, trackIdx:
-Int32Array, predicted: Uint8Array }` (entry `k` = the row an `_rawInstIndex` of
-`k` names; trackless and a track id with no `Track` behind it are -1; an absent
-`instance_type` reads as 0, a user row, as `materializeFrame` defaults it),
+Int32Array, predicted: Uint8Array, occludedNodes(k) }` (entry `k` = the row an
+`_rawInstIndex` of `k` names; trackless and a track id with no `Track` behind it
+are -1; an absent `instance_type` reads as 0, a user row, as `materializeFrame`
+defaults it; `occludedNodes(k)` = the row's nodes placed but not visible,
+ascending, or null — read from the point columns only when called),
 `count: 0` for a frame with no row, null for a camera this loader does not back.
 The playback eviction (`pose/lazy-residency.js`) proves a resident frame
 rebuildable against it; `tests/e2e/lazy-playback-eviction.mjs` pins it to the
@@ -11725,7 +13327,15 @@ The node is looked up BY NAME in the store's skeleton, because a skeleton edit
 re-indexes resident instances but not the store; an added or renamed node has
 no score. NaN for a user row, an offset outside the frame's rows, a missing
 frame/camera, or a NaN score. Pinned by `tests/test-node-scores.mjs` and
-`tests/e2e/node-score-tooltip.mjs`.
+`tests/e2e/node-score-tooltip.mjs`. **`predictedPointScorer(camName, frameIdx,
+offsetInFrame)`** is the same lookup split in two: the row, its type, skeleton
+and point range once, then a `nodeName → score` function (null when the row is
+missing or a user row); `predictedPointScore` is built on it. The store
+skeleton's name → column map is cached per skeleton (module-level
+`storeNodeColumn`, a `WeakMap`; first match, as `nodeNames.indexOf`), rebuilt
+if its `nodes` array is replaced or resized or a lookup misses or no longer
+names its node — sleap-io.js's `nodeNames` getter builds a new array per read,
+which was the hottest call of By Cam's per-frame pass.
 
 **Imports.** `./track-union.js` (`unionTrackNames`);
 `window.SleapIO.readSlpStreaming` / `window.SleapIO.Track` (via the index.html
@@ -11736,7 +13346,8 @@ bridge) and the local vendored `lib/h5wasm/h5wasm.iife.js` (passed as
 (`handleLoadSessionFolderPerCamera` routing, `handleLoadProjectSlpLazy`) and
 `import-export/save-load.js` (`reopenSessionLazyLoader`). `describeStoreFrame` is
 called duck-typed from `pose/lazy-residency.js`, `predictedPointScore` from
-`Session.predictedNodeScore` (`pose/pose-data.js`).
+`Session.predictedNodeScore` and `predictedPointScorer` from
+`Session.predictedNodeScorer` (`pose/pose-data.js`).
 
 **User-facing features.** Lets a session folder of large multi-camera prediction
 `.slp` files — and a large saved project `.slp` (Load Project) — load and render
@@ -11924,7 +13535,12 @@ actionable message. Measured cases (`tests/e2e/_probe-capabilities.mjs`):
 Safari plays HEVC-in-MP4 only when tagged `hvc1` (`hev1` → canPlayType "") — a
 lossless `ffmpeg -c copy -tag:v hvc1` re-tag fixes it; Safari decodes AV1 only
 with hardware AV1 (Apple M3+), while Chrome/Firefox decode it in software;
-otherwise suggest another browser / converting to H.264. Cheap on multi-GB
+Chrome and Edge have no HEVC decoder of their own and play it only on the GPU,
+so for them the advice depends on WebGL's renderer (`graphicsRenderer`): no GPU
+(Microsoft Basic Render Driver, llvmpipe, a virtual machine's adapter: measured
+on a Windows 11 VM, Chrome 155) → add a GPU and its driver; SwiftShader or a
+real GPU → turn on graphics acceleration / update the driver; otherwise suggest
+another browser / converting to H.264 (`-fps_mode passthrough` keeps every frame). Cheap on multi-GB
 recordings: it walks top-level box headers with random-access reads
 (`Blob.slice`, or HTTP Range for URLs) and reads only `moov` (often at the
 END, after the `mdat`). No diagnosis (null) when the codec can't be read or the
@@ -11934,8 +13550,13 @@ browser claims support — the original error then stands.
 - `sniffMp4VideoCodec(source)` → `{fourcc, codecName}|null` (File/Blob/URL).
 - `videoFourccFromMoov(moovBytes)` — first video sample-entry fourcc in a `moov`.
 - `explainUnplayableCodec(fourcc, fileName, env?)` → `{fourcc, codecName, kind,
-  message}|null`; pure (`env.canPlayType`, `env.isSafari` injectable). Kinds:
-  `hevc-hev1-tag`, `av1-unsupported`, `hevc-unsupported`, `unsupported`, `encrypted`.
+  message, title?, why?, steps?, command?}|null`; pure (`env.canPlayType`,
+  `env.isSafari`, `env.isChromium`, `env.renderer` injectable). Kinds:
+  `hevc-hev1-tag`, `av1-unsupported`, `hevc-no-gpu`, `hevc-gpu-no-decode`,
+  `hevc-unsupported`, `unsupported`, `encrypted`. The three HEVC-unsupported
+  kinds carry `title`/`why`/`steps` for `ui/video-codec-notice.js`.
+- `graphicsRenderer()` — WebGL's unmasked renderer string, cached ('' unknown).
+- `rendererHasGpu(renderer)` → true / false (software or virtual adapter) / null.
 - `diagnoseUnplayableVideo(source, fileName?, env?)` — sniff + explain.
 - `videoLoadFailureText(name, err)` — one-line reason for loaders' status
   messages: `err.codecDiagnosis.message` when present, else the error text.
@@ -11947,8 +13568,40 @@ browser claims support — the original error then stands.
 `loading/session-loader.js` (`videoLoadFailureText`).
 
 **Tests.** `tests/test-video-codec-diagnosis.js` (synthetic MP4s, every message
-kind, decoder integration); real browsers via the `decoderErrors` step of
-`tests/e2e/_probe-capabilities.html`.
+kind, renderer classes, decoder integration); real browsers via the
+`decoderErrors` step of `tests/e2e/_probe-capabilities.html`;
+`tests/e2e/video-codec-notice.mjs` (the notice, through File ▸ Load Videos).
+
+### ui/video-codec-notice.js
+
+**Purpose.** The note a load leaves when its videos can't play in this browser:
+why, and what to change. The loaders also put the one-line diagnosis in the
+status line, but on a multi-camera project that line runs off the window and
+the fix was cut off (H.265 in Chrome on a Windows VM with no GPU: poses loaded,
+every view black).
+
+**When.** Only for a failure whose `err.codecDiagnosis` has `steps` (the HEVC
+kinds), so corrupt or undiagnosed files keep the status line alone. One note per
+load, for the first such diagnosis, counting every file with the same kind. It
+waits for any other open overlay (`.plane-confirm-overlay`, `*modal-overlay`, the
+loading overlay) to close rather than stacking on it, and never opens twice.
+
+**Layout.** Title, the files ("N of M videos could not be played: …", 4 names),
+the why paragraph, "What to change" as a numbered list with the ffmpeg command
+as selectable code, one **Got it** button; Esc closes it. Changes nothing.
+
+**Key exports.** `noteUnplayableVideos(failures, totalVideos?)` (`failures`:
+`[{name, error}]`; returns the diagnosis shown or null; never throws) and
+`showVideoCodecNotice(diag, fileNames, totalVideos?)`.
+
+**Imported by.** `loading/session-loader.js` — after the final status of
+`handleLoadVideos`, the single-SLP folder loader, the attach-videos path and the
+session-folder loader.
+
+**Tests.** `tests/e2e/video-codec-notice.mjs` (a VM with no GPU simulated: H.265
+hidden from canPlayType, WebGL renderer "Microsoft Basic Render Driver"; one note
+for three files; Esc / Got it; waits for another dialog; SwiftShader; none for a
+non-video).
 
 ### loading/video.js
 
@@ -12150,10 +13803,17 @@ stops when the primary `<video>` ends.
   are detected per decoder by `judgeVideoFrameTimestamps` (the timestamp must
   move, agree with the clock within max(3 frames, 50 ms) — 3 frames alone
   misjudged Chrome at 150 fps on 60 Hz — and not BE the clock; cached as
-  `decoder._vfTimestamps = 'ok'|'bad'`). **WebKit never captures at all**
+  `decoder._vfTimestamps = 'ok'|'bad'`, with the reason in `_vfTsWhy`). Only a
+  clock copy, and a timestamp that stands still in Firefox, are final at the
+  first look. Elsewhere a timestamp that stands still or trails the clock is
+  also what a slow start looks like (Chrome on an integrated GPU, first picture
+  359-799 ms after play, luc3d #411), so the look repeats until it agrees or
+  `VF_JUDGE_WINDOW_MS` (2 s) has passed. A 'bad' reached by that timeout is
+  judged again at the next `startPlayback`. **WebKit never captures at all**
   (`videoFrameCaptureUnsafe()`): Safari's capture timestamp rarely names the
   captured picture yet can pass judging, and captures cost it presented frames.
-  While a view is still being judged it is not drawn.
+  While a view is still being judged it is not drawn, unless its timestamp
+  already moves (`'lagging'`): then its captures are painted at their own index.
 - A `'bad'` view stops capturing, is painted with `drawCurrentFrame`, and is
   indexed from a per-view requestVideoFrameCallback. **Safari** (one callback
   per shown picture) is painted INSIDE the callback at its `mediaTime`, but only
@@ -12257,6 +13917,13 @@ transform scales it. Two things are needed and each alone breaks it:
 - **A pan on the device-pixel grid** (`_alignNativeOffsets`, run by
   `applyZoom` while native): what must align is where the transform puts the
   canvas's top-left — `off + c − R·c`.
+- **Rotated: nearest-neighbour sampling.** `applyZoom` sets the video canvas's
+  `image-rendering: pixelated` while a ROTATED view is native (cleared
+  otherwise; never on the overlay, the property inherits). Unrotated 1:1 is an
+  integer translation, which Chrome composites unfiltered; rotated it filters
+  bilinearly, and in some layouts a cell-clipped quad then lands off the texel
+  centres (7% exact with every corner on the grid). Unrotated keeps the
+  default, so the two controls above stay meaningful.
 Exact at an integer devicePixelRatio (and, headless, 1.25 and 1.5). At e.g.
 dpr 2.2 Chrome resamples whatever the transform says, so the video is shown at
 its native SIZE but not pixel-exact; `tests/e2e/native-resolution-zoom.mjs`
@@ -12304,6 +13971,7 @@ How it behaves:
 - `STEP_CURSOR_IDLE_MS` (3000) — idle time before a paused-stepping stream closes.
 - `STEP_BACK_CHUNK` (24) — frames decoded and cached per backward step.
 - `STEP_BACK_WARM_MS` (250) — pause after landing on a frame before warming the chunk behind it.
+- `VF_JUDGE_WINDOW_MS` (2000) — longest a playback's VideoFrame-timestamp judgement stays open before a still or trailing timestamp counts as unusable (`window.LUCID_VF_JUDGE_MS`).
 - `snapZoomToNative(oldScale, newScale, nativeScale)` → `{scale, snapped}` — the
   pure snap rule. `NATIVE_SNAP_TOL` (0.02), `NATIVE_SNAP_HOLD_MS` (250).
 - `zoomPercentLabel(scale, nativeScale, isNative)` → the pane badge's read-out
@@ -12412,7 +14080,13 @@ How it behaves:
   while not laid out), `setNativeResolution(on)`, `toggleNativeResolution()`,
   `nativeResolutionActive()`, `zoomPercent(view)` (% of 1:1, or null),
   `setZoomPercent(view, pct)` (the badge presets), `reapplyZoom`,
-  `resetAllZoom`, `setupZoomHandlers`.
+  `resetAllZoom`, `setupZoomHandlers`, `visibleBoxRect(view)` (the part of the
+  canvas box the cell shows, `{x0, y0, x1, y1}` in box CSS px: `_boxPointAt`
+  of the cell's corners, rotation included; null without zoom state or layout —
+  what `ui/rendering.js` sizes the overlay window to). `applyZoom` ends in the
+  optional `callbacks.onViewTransform(view)` (the app passes
+  `noteOverlayViewTransform`, which redraws once a pan or zoom out leaves the
+  overlay window, `ui/overlay-window.js`).
 
 **Only the views on screen are decoded, played and captured** —
 `_shownViews()`: views with a decoder for which the optional
@@ -12486,6 +14160,18 @@ the project file: the ID Switches tab's review checklist (`idSwitchReview`,
 (`numAnimals` ↔ `Session.numAnimals`, the toolbar's Animals field). One module
 owns the key list so a writer and a reader cannot drift: adding a setting means
 touching this file and nothing else.
+
+**`tailMarkedIdentity`.** The identity Track All gives the tail marks
+(`Session.tailMarkedIdentity`, `pose/tail-mark.js`). Off is null and writes nothing.
+
+**`identityMarks`.** Cue id -> identity name -> class (`Session.identityMarks`,
+`pose/identity-cues.js`), e.g. `{tailBands: {id_0: 0, id_1: 1}}`. None writes nothing;
+anything not a map of numbers or short strings reads as none.
+
+**`imageModel`.** The image check's model (`Session.imageModel`,
+`ui/image-model-dialog.js`): `{key, name, input, threshold, url? | folder?}`
+(`modelChoiceOf` / `ingestModelChoice`, `pose/image-model-manifest.js`). The built-in
+model is null and writes nothing; a malformed value reads back as null.
 
 **`numAnimals`.** A positive integer or `"auto"`. A never-asked session
 (`null`) writes nothing, so it is asked again after a reopen exactly as a new
@@ -12596,6 +14282,57 @@ instance), so it sits outside the slp-import / session-loader import graph.
 
 **Tests.** `tests/e2e/frame-identity-compact-roundtrip.mjs`;
 `tests/e2e/lazy-reopen-group-identities.mjs` (the group-only campy case).
+
+---
+
+### import-export/smoothing-metadata.js
+
+**Purpose.** Temporal Smoothing's state in the project file, so a reopened
+project is exactly as smoothed as the saved one: button and last scope lit, a
+re-run replaces the last run (filters the source, not its output), windows 0
+restores the 3D from before smoothing. DOM-free.
+
+**What is stored** (only while something is smoothed, so a never-smoothed
+project saves byte-identically — `save-golden-digest.mjs`):
+- per group, its source (`unsmoothedPoints3d`): the writers set
+  `Instance3D.lucidUnsmoothed`, the vendored writer appends it to
+  `/session_data/unsmoothed_points_3d` (N x 3 f64, gzip), ROW-PARALLEL to
+  `points_3d` with NaN rows for groups that have none, created only once a group
+  has one (LUCID local patch (smoothing source)); the vendored reader returns
+  it per group (all-NaN rows = none) and `adoptSmoothingSource` re-marks it;
+- per session, `metadata.lucid.temporalSmoothing` = `{scope, medianWindow,
+  gaussianWindow, maxGap, minSegment}` of the last run (the windows are
+  informational; a re-run uses the current Settings).
+
+A full copy, not "re-triangulate on demand": the source is not reproducible from
+the 2D when the 3D was imported (campy-live), the triangulation settings or the
+calibration changed, and a re-solve would cost a Triangulate All on reopen. Cost
+is about one more `points_3d`: ~0.89 of its raw size after gzip (191 MB raw on
+the 5-camera, 180,210-frame project). The state still lapses per group as
+before: the mark is keyed by the `points3d` array, which every re-solve or edit
+replaces.
+
+**Key exports.** `SMOOTHING_METADATA_KEYS`; `noteSmoothingRun(session, scope,
+config)` / `smoothingRunOf(session)` (the last run, per session `WeakMap`);
+`smoothingSourceFor(group)` (writers); `adoptSmoothingSource(session, frameIdx,
+group, instance3d)` (readers, after `points3d` is final: marks, sets
+`group.smoothed`, registers the frame); `writeSmoothingMetadata(lucid,
+session)`; `readSmoothingMetadata(session, lucid)`.
+
+**Imports.** `pose/pose-data.js` (`unsmoothedPoints3d`, `markPoints3dSmoothed`,
+`pooledPoints3d`), `pose/temporal-smoothing.js` (`hasSmoothed3d`,
+`noteSmoothedFrames`).
+
+**Imported by.** Writers `import-export/file-io.js`,
+`import-export/slp-streaming-write.js`, `import-export/save-load.js` (project
+JSON: `unsmoothedPoints3d` per group, the key at the session-dict level).
+Readers `import-export/slp-import.js` (both typed group rebuilders +
+`handleLoadSlpFile`), `loading/session-loader.js` (lazy reopen, single-SLP
+folder), `import-export/save-load.js`. `ui/smoothing-button.js`;
+`ui/ui-wiring.js` (`smoothingRunOf`: the scope Remove smoothing keeps).
+
+**Tests.** `tests/e2e/smoothing-save-reopen.mjs` (eager + lazy reopen, both
+writers, two sessions, an edit after reopen, a never-smoothed project).
 
 ---
 
@@ -12732,6 +14469,30 @@ incl. `planeMetadataConflict`).
 
 ---
 
+### import-export/compact-save.js
+
+**Purpose.** File ▸ Save Compact Copy: the rounding steps, the switch a compact save
+turns on for its duration, the marker a compact file carries, and the note shown when
+one is opened. Predicted 2D x/y are rounded to 1/64 px, prediction scores to 1/1024,
+3D to 1/1024 of the calibration unit (binary fractions: exact in float32/float64, so
+gzip compresses them); user keypoints never. The rounding itself is the vendored
+writer's (`lib/sleap-io`, LUCID local patch "compact save"), which reads
+`globalThis.__lucidCompactSave` only while `withCompactSave` runs. LOSSY: never the
+default, asked for through `ui/compact-save-modal.js`. The marker (`lucid_compact` in
+the file's provenance, via `slp-provenance.js`) is kept by every later save, since the
+data stay rounded. DOM-free and import-free.
+
+**Key exports.** `COMPACT_STEPS`, `COMPACT_PROVENANCE_KEY`, `withCompactSave(save)`
+(refuses a second one while one runs; switches off however the save ends),
+`compactSaveActive()`, `compactMarker(steps)`, `compactProvenanceExtra()`,
+`compactRoundingOf(provenance)`, `withCompactNote(message, kind, session)` (the
+end-of-load status, warning when the file is a compact copy).
+
+**Imported by.** `import-export/slp-provenance.js`, `import-export/save-load.js`,
+`import-export/slp-import.js`, `loading/session-loader.js`, `ui/compact-save-modal.js`.
+
+**Tests.** `tests/test-compact-save.mjs`, `tests/e2e/compact-save-copy.mjs`.
+
 ### import-export/slp-provenance.js
 
 **Purpose.** Keeps a loaded `.slp`'s `provenance` dict through LUC3D's project
@@ -12750,6 +14511,9 @@ is kept whole under `lucid_sessions` by session name (`{}` = none; a repeated
 name is `name #2`, …), and goes back to that session on reopen. No provenance
 anywhere → exactly `{ source, exported_at }`. The 2D exports (one camera,
 multi-session export) do not use it: they keep `{ source, exported_at }`.
+While a compact save runs, `buildSaveProvenance` adds `lucid_compact`
+(`compactProvenanceExtra`, `import-export/compact-save.js`); like any key the file
+had, it is then kept by later saves.
 
 **Key exports.** `buildSaveProvenance(sessions, exportedAt?)` (reads each
 session's `name` + `fileProvenance`); `fileSessionProvenance(fileProv, names,
@@ -12887,11 +14651,95 @@ session's resident/total) rather than truncate silently. Covered by
   holds that track in the same frame (SLEAP forbids two instances sharing
   a (frame, track) pair). Reprojections still export trackless.
   **Both normalize a null/undefined `videoFileInfo` to `{}`** (a lazy session
-  before "Load Videos", or a calibration-only camera), degrading to the
-  `cameraName + '.mp4'` / zero-dimension fallback, like
-  `slp-streaming-write.js`'s `resolveVideoPath`.
+  before "Load Videos", or a calibration-only camera). **Every per-camera builder
+  takes its video from `cameraExportVideo(session, cameraName, videoFileInfo)`**
+  (exported): the attached video's path and size, else the reopened file's own
+  record (`session.lazyLoader.videos`, as `slp-streaming-write.js`'s
+  `resolveVideoPath` does for the project save), else `cameraName + '.mp4'` with
+  zero dimensions. A reopened project exported before Load Videos used to write
+  `<cam>.mp4` with 0 frames, and SLEAP 1.6.6's GUI failed to open it
+  (ZeroDivisionError in its status bar). Test:
+  `tests/e2e/export-bycam-reopened-video.mjs`.
 - SLP export (client-side): `exportSlpClientSide`,
-  `exportSlpMultiSession`, `exportCameraSlpStreaming` (above). For a **lazy session** these route a plain
+  `exportSlpMultiSession(selections, reprojAsUser, instanceFilter, opts)`, `exportCameraSlpStreaming` (above).
+  `opts.onProgress(done, total)` reaches only the streaming path (frames swept;
+  throwing from it aborts); the fast and eager paths are one step and never call it.
+  `exportCamerasSlpStreaming(session, cameras, reprojAsUser, instanceFilter, opts)`
+  builds several cameras of one session in ONE sweep (one writer each; hydrating is
+  nearly all of a camera's cost, so N cameras cost about one sweep);
+  `exportCameraSlpStreaming` is its one-camera case. **On a project reopened from one
+  file** (`SioLazyLoader._sharedStore`) with Reprojections off it does not hydrate
+  every frame: `exportCamerasFromSharedStore(session, cameras, ctx, instanceFilter,
+  opts)` copies each camera's rows out of the shared store into that camera's writer
+  (`SlpStreamWriter.appendRawRows`, bundle patch `(raw rows)`), in frame order, and
+  builds with `_buildCameraLabeledFrame` only the frames the store cannot speak for:
+  resident frames (edits, deletions, additions) and the frames `storeCopyDriftFrames`
+  finds (a group member whose track, type, score, own per-node scores or held 2D
+  differ from its row; two kept rows on one track; a resident frame missing the
+  camera), hydrated by `sweepLazyFrameWindows` over their runs. The copy writes the
+  pass's values and order (members first, then the rest, each by row; instance score
+  `score || 0`; each node's own score else the instance score; `complete` 1 for a
+  placed node; no tracking score or `from_predicted`), visibility included (a member
+  whose occlusion or nulled nodes write a different `visible` than its row is
+  drift). `sharedStoreCopyContext(session, reprojAsUser, instanceFilter)` gives
+  the store's columns or a `blocker` (Reprojections on, a skeleton or track list that
+  differs from the file's, several stores, format < 1.1); then, or when more than
+  max(2,000, 5%) frames would need hydrating, the per-frame sweep runs. `opts.route`
+  ('store' / 'sweep') forces one (tests). Progress counts video frames over the
+  cameras' copies, every 4,096 frames. Synthetic 8 cameras x 20,000 frames x 5
+  animals: 6.4 s → 1.3 s. **Each camera's rows are written and gzipped in its own
+  worker** (`import-export/slp-rows-worker.js`; gzip was ~74% of the copy on one
+  core, ~18 s of 25 s for 8 cameras x 108,000 frames on the lab VM): an empty writer
+  with the camera's header is closed at once and its bytes (the "shell") open in the
+  worker; the working writer sends every row there (`lucidDivertRows`, bundle patch
+  `(row divert)`), cameras built in turns one block each (`_storeCameraCopier`), at
+  most `ROWS_WORKER_QUEUE` messages unanswered per worker. The worker's file equals
+  the one-thread copy value for value with the same chunks, filters and dtypes; the
+  working writer must end with `lucidOnlyTableRows()` (no annotations or negative
+  frames) or the export aborts. `opts.workers` (false = this thread, N = that many)
+  or `window.LUCID_EXPORT_WORKERS` overrides one per camera up to
+  `hardwareConcurrency` (16 max); no `Worker`, or a worker that fails to start,
+  falls back to this thread with a console warning. The per-frame pass
+  (`exportCamerasSlpStreaming`'s sweep, e.g. Reprojections on) attaches the same
+  workers to its writers (up to the worker count; the rest compress here), the
+  sweep's callback waiting while a worker has `ROWS_WORKER_QUEUE` messages
+  unanswered; synthetic 8 x 20,000: 11.9 → 8.4 s (gzip was ~27% of it). A
+  **folder-loaded** project's cameras (each rewritten from its own store,
+  `lazyCameraExportBytes`) go through `exportCamerasLazyRewrite(selections,
+  reprojAsUser, instanceFilter, opts)`: each file is written here without its big
+  tables (`saveSlpToBytes(labels, { lucidDeferTables })`, patch `(deferred
+  tables)`), its worker creates them with the same arguments and gzips them while
+  the next camera is built, at most `LAZY_REWRITE_IN_FLIGHT` (3) at once; returns
+  bytes per selection (null = not this route). `cameraExportUsesLazyRewrite`
+  tells the dialog which cameras it covers. Synthetic 8 cameras x 20,000
+  frames, realistic noise and per-node scores: copy 5.1 s → 1.35 s
+  (`tests/e2e/_diag-profile-store-copy.mjs`). It is now a wrapper
+  (`kinds: ['lazy']`) over `exportCamerasInWorkers(selections, reprojAsUser,
+  instanceFilter, opts)`, which also takes **fully loaded** cameras
+  (`cameraExportUsesEagerBuild`: `exportSlpMultiSession` would build them with
+  `buildSlpLabelsMultiSession` + `saveSlpToBytes`): their `Labels` are built here
+  and written with `saveSlpToBytes(labels, { lucidDivertTables })` (patch `(eager
+  divert)`: the big 2D tables created empty, their rows handed back), and the
+  camera's worker appends and gzips the rows while the next camera is built.
+  Synthetic 8 cameras x 5 animals x 15 nodes: 30,000 frames 7.7 → 4.0 s, 60,000
+  frames 14.6 → 7.3 s (`tests/e2e/_bench-export-bycam-eager.mjs`; per camera
+  the build is ~0.3 s, the write ~0.65 s of which gzip ~0.35 s). A Worker
+  constructor that throws falls back to this thread like one that fails to
+  start. Test: `tests/e2e/export-bycam-eager-workers.mjs` (every dataset and
+  attribute = today's eager export, with workers, `workers: false` and the
+  fallback). Test: `tests/e2e/export-bycam-store-copy.mjs` (both routes
+  value for value, with negative controls; §4 workers = this thread, and the fallback). `cameraExportUsesSweep(selection,
+  …)` says whether `exportSlpMultiSession` would route a camera there (By Cam groups
+  those cameras per session). The store fast path (`lazyCameraFastPathUsable`) is
+  refused on a reopened project `.slp` (`SioLazyLoader._sharedStore`): every
+  `labelsByCam` entry is then the WHOLE project, and re-emitting it wrote every camera
+  (and the 3D session) into each camera's file, or ran the renderer out of memory on a
+  large project. Its output is compressed by the `(lazy re-emit)` bundle patch.
+  `_buildCameraLabeledFrame` (both streaming exporters and `buildSlpLabels`) writes
+  each predicted node's OWN score through `Session.predictedNodeScorer` (one store-row
+  lookup per instance, the answers of `Session.predictedNodeScore`); asking only the
+  instance wrote the instance score onto every node of a lazily loaded prediction
+  (found comparing a real 8-camera export from both routes, 2026-11-03). For a **lazy session** these route a plain
   per-camera export through `lazyCameraExportBytes` → `saveSlpToBytes` on the
   camera's already-lazy `Labels` (all frames, memory-bounded) instead of the
   eager `buildSlpLabels*`. The multi-view project save uses the streaming
@@ -12959,11 +14807,28 @@ session's resident/total) rather than truncate silently. Covered by
   (`labels.provenance`; the raw worker returns it too), for
   `import-export/slp-provenance.js`.
 - H5 build/parse: `buildPoints3dH5`, `buildReprojH5`,
-  `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`. `buildReprojH5`
+  `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`,
+  `reprojTrackAxis`, `reprojChunkFrames`. `buildReprojH5`
   (Save Reprojections) projects a group's stored 3D into each camera when it has
   no `reprojections` — they are derived, kept only for frames that have been
   shown, and Triangulate All stores none; skipping such groups would leave every
-  unshown frame NaN.
+  unshown frame NaN. It writes `reprojections` (frames, tracks, cameras, nodes, 2)
+  float64 in windows of whole chunks into a chunked gzip-1 dataset (dtype `'<d'`:
+  h5wasm reads `'<f8'` as float32), awaiting `opts.onProgress(done, total)` after
+  each window, so a 135,181-frame recording never holds the whole array (it once
+  asked h5wasm for 4.7 GB). The track axis is the identities, by position in
+  `session.identities` (`reprojTrackAxis`; the session's tracks only when there
+  are none); `reprojChunkFrames` sizes a chunk to ~1 MB. The MEMFS file is
+  unlinked once it is in the Blob. Test: `tests/e2e/reproj-h5-long-recording.mjs`
+  (real data: `tests/e2e/_real-reproj-h5.mjs`). `buildPoints3dH5` writes
+  `points_3d` (frames, tracks, nodes, 3) and `reprojection_error` (frames,
+  tracks, nodes; all NaN, no per-node error is kept) the same way (one
+  `createFramesDataset` per dataset, same `reprojTrackAxis`), for the frames
+  with a group that has 3D and a track row; it fills each window straight from
+  the groups' flat `points3d`, never through `buildPoints3dExportData`, which
+  boxes every node and is kept for tests and small sessions with the same
+  frames, axis and values. Test: `tests/e2e/points3d-h5-long-recording.mjs`
+  (real data: `tests/e2e/_real-points3d-h5.mjs`).
 - Misc: `downloadJSON`, `downloadBytes` (the binary sibling, for the STL/GLB
   mesh exports; the Blob is handed the VIEW, never `bytes.buffer`, which on a
   subarray would write the neighbouring bytes too), `instancePointsMatch`,
@@ -12984,6 +14849,8 @@ session's resident/total) rather than truncate silently. Covered by
 - `./frame-identity-metadata.js` — `writeFrameIdentityMetadata` (fills
   `metadata.lucid.frameIdentityMap` in `buildSlpLabelsAllViews`; no imports).
 - `./plane-metadata.js` — `writePlaneMetadata`.
+- `./smoothing-metadata.js` — `writeSmoothingMetadata`, and `smoothingSourceFor`
+  (each smoothed group's source rides on its `Instance3D` as `lucidUnsmoothed`).
 
 **Imported by.** `import-export/save-load.js`,
 `import-export/slp-import.js`, `import-export/slp-streaming-write.js`
@@ -12997,6 +14864,25 @@ session's resident/total) rather than truncate silently. Covered by
 Videos / Export TOML / Export SLP / Export H5; spawns SLP-parse worker.
 
 ---
+
+### import-export/slp-rows-worker.js
+**Purpose:** Module worker that writes and gzips ONE By Cam export's four big
+tables (`frames`, `instances`, `points`, `pred_points`) for the store copy
+(`exportCamerasFromSharedStore`, `import-export/file-io.js`), so every camera
+compresses at once. Opens the "shell" (an empty sleap-io.js writer's closed file),
+carries incoming rows into whole column chunks exactly as the bundle's
+`(column chunks)` patch does (chunk height read from the dataset), and returns
+the finished file's bytes.
+**Messages:** in `open {shell}` → `ready`; `rows {name, data, rows, cols}` → `ack`
+(one per message: the main thread's backpressure); `create {spec, data, attrs}` →
+`ack` (a whole table the `(deferred tables)` patch held back from a per-camera
+rewrite: `create_dataset({...spec, data})` plus its attributes); `finish` →
+`done {bytes}`; any failure → `error {message}`. Used by the store copy, the
+per-frame pass and `exportCamerasInWorkers` (folder-loaded cameras' deferred
+tables via `create`; fully loaded cameras' diverted rows via `rows`).
+**Dependencies:** `lib/h5wasm/hdf5_hl.js` by RELATIVE path (a worker has no
+import map). Rows arrive already rounded (`lucidCompactRound` runs in the divert).
+**Dependents:** `import-export/file-io.js` (`_startRowsWorker`).
 
 ### import-export/slp-streaming-write.js
 
@@ -13113,6 +14999,10 @@ shape) when no live video is attached, so the re-save round-trips the original
 video filename/shape instead of degrading to `<camName>.mp4` with zero
 dimensions. Covered by `tests/test-lazy-reopen.js`.
 - **`finalizeProjectWriter(writer, opts)`** — `writer.close()`/`writeToSink()`.
+  A sink with `setTotalBytes(n)` is told the finished file's size (MEMFS `stat`
+  of the writer's in-memory file, at the first write: `writeToSink` finalizes
+  before it streams) — File ▸ Save's disk bar. `opts.chunkBytes` is the write
+  chunk size.
 - **`buildSessionSlpBytesStreaming(session, views, videoFiles, opts)`** — thin
   single-session wrapper chaining all four. `opts.onProgress(stage, done,
   total, unit)` drives the Save progress card (`save-load.js`), one stage
@@ -13144,8 +15034,8 @@ overlay (instance by object identity, then `track`) or else to the shifted
 store row. An overlaid frame's untouched
 predicted siblings are re-materialized too (the store row is skipped
 wholesale); each node carries its OWN model score, read back from the row being
-replaced (`Session.predictedNodeScore` → `SioLazyLoader.predictedPointScore`,
-by the sibling's `_rawInstIndex`), and the instance score only where it has
+replaced (`Session.predictedNodeScorer` → `SioLazyLoader.predictedPointScorer`,
+by the sibling's `_rawInstIndex`, the row resolved once per instance), and the instance score only where it has
 none — a point with no score is one SLEAP's GUI hides. **Scope:** predictions +
 full grouping (identities + 3D) + 2D corrections.
 
@@ -13154,7 +15044,9 @@ full grouping (identities + 3D) + 2D corrections.
 `writeVisibilityMetadata` (`import-export/visibility-metadata.js` — must stay in
 lockstep with the eager writer in `file-io.js`, which is why both call the one
 helper); `writeFrameIdentityMetadata` (`import-export/frame-identity-metadata.js`,
-same reason); `writePlaneMetadata` (`import-export/plane-metadata.js`, same reason).
+same reason); `writePlaneMetadata` (`import-export/plane-metadata.js`, same reason);
+`writeSmoothingMetadata` + `smoothingSourceFor` (`import-export/smoothing-metadata.js`,
+same reason).
 **Imported by.** `import-export/save-load.js`
 (`buildSlpBytes`, `saveAllSessionsStreaming`, `commitSessionForMultiSessionSave`,
 `finalizeMultiSessionSave`).
@@ -13162,11 +15054,17 @@ same reason); `writePlaneMetadata` (`import-export/plane-metadata.js`, same reas
 ### import-export/save-load.js
 
 **Purpose.** Project lifecycle — newProject, save paths (quickSave,
-saveAs, saveProjectSlp, saveProject), load dispatcher
+saveAs, saveCompactCopy, saveProjectSlp, saveProject), load dispatcher
 (`handleLoadProject`), session-frame serialization helpers, the
 loading-overlay/status-text UI helpers.
 
 **Key exports.**
+- **Save Compact Copy.** `saveCompactCopy({pickFile?})` (File menu): the warning
+  dialog (`ui/compact-save-modal.js`, which opens the save picker inside its own
+  click), then the shared write (`writeProjectToHandle`, also Save's) inside
+  `withCompactSave` (`import-export/compact-save.js`). A COPY: `state.slpFileHandle`
+  and the dirty state are left alone, since nothing in memory is rounded. Without
+  `showSaveFilePicker` (Brave's default) it says which browser setting it needs.
 - **The Save progress card.** `quickSave`/`saveAs` and `saveProjectSlp` (the
   download path, which is what Save is in Brave — its save dialog cannot open
   until the whole file is built) show the shared loading overlay
@@ -13181,14 +15079,31 @@ loading-overlay/status-text UI helpers.
   download)`): Collecting 3D groups (counted) · Writing 3D groups and points ·
   Writing 2D poses (counted) · Finishing the file — or, for an eager project,
   Writing the file — plus Opening the save dialog on the download path.
-  `progress.disk(bytes)` reports the streamed write to a picked file
-  ("Writing to disk: N MB…"). `quickSave` puts the card up only after the
+  `progress.disk(bytes)` reports the write to a picked file as a bar on the
+  last step ("Writing to disk: x/y MB…", KB under 1 MB, one decimal under
+  10 MB) once `progress.diskTotal(bytes)` gave the size — the streaming path
+  through the sink's `setTotalBytes` (`finalizeProjectWriter`), the eager one
+  from its bytes, now written in 8 MiB chunks so the bar moves; without a
+  size, a running "Writing to disk: N MB…". `progress.closing()` shows the
+  browser's `close()` as a painted "Closing the file…" spinner saying it has no
+  progress (Chrome moves its swap file into place, reading it back on a network
+  share), so the bar never claims that part. `globalThis.__lucidSaveChunkBytes`
+  (tests only) shrinks the write chunks. `quickSave` puts the card up only after the
   save-file picker returns, since the picker needs the click's user activation.
   `isStreamingSave(sessions, SIO)` (internal) is the one test of which path
   `buildSlpBytes` takes, shared with the card. `saveProjectSlp` now sets
   `state.isSaving` and refuses a second save while one runs (two builds would
   hold two copies of the file in memory), and `quickSave` awaits it. Covered by
   `tests/e2e/save-progress-card.mjs`.
+- **Where the save picker opens.** `quickSave`'s `showSaveFilePicker` gets
+  `startIn` from `saveStartFolder` (`loading/recording-folder.js`): the active
+  session's recording folder, else (Save As, which passes the file it is
+  replacing as `quickSave(previousFile)`) that file's folder, else none (the
+  browser's own choice, as before). Without it Chromium opened wherever the last
+  save went, and one recording's labels were saved in another's folder. The
+  suggested name is the session's name when there is one session. Save Compact
+  Copy's picker gets the same `startIn` (else the project file's folder). Covered by
+  `tests/e2e/save-opens-in-recording-folder.mjs`.
 - Project: `newProject(force)` (`force` skips the unsaved-changes confirm and
   is used by the 3D-import reset), `markDirty`, `clearDirty`, `quickSave`,
   `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject` (routes a
@@ -13199,7 +15114,17 @@ loading-overlay/status-text UI helpers.
   decoder to size it, so `state.totalFrames` comes from the last labeled frame
   (`adoptLabeledFrameCount`), the view opens on the first, and the status line
   says to attach videos via File ▸ Load Videos.
-- `buildSlpBytes` (internal) assembles the multi-session SLP. **When EVERY
+- `buildSlpBytes` (internal) assembles the multi-session SLP. **First, every
+  UNCALIBRATED session gets a placeholder camera for each view, video and 2D
+  camera key that has none** (`ensurePlaceholderCameras`, with
+  `sessionViewsForSave` — `state.views` for the active session, its `_views`
+  stash otherwise — and `sessionVideoFilesForSave` — its `videoFileIndices`, or
+  the `vf.sessionIdx` tag Load Videos leaves). Every path below writes one video
+  per `session.cameras` entry and drops any view or pose whose camera is
+  missing, so a session with none (a folder loaded without calibration.toml)
+  used to save as an EMPTY file. A session with a real calibration is never
+  touched (`ensurePlaceholderCameras` returns early; `tests/test-placeholder-cameras.mjs`
+  §5), so what it writes does not change. **When EVERY
   session in `state.sessions` has an open `lazyLoader`, it routes to the
   memory-bounded streaming path** — `buildSessionSlpBytesStreaming`
   (`import-export/slp-streaming-write.js`) for a single lazy session, or
@@ -13314,6 +15239,7 @@ project save/reload — matching the SLP import path in `slp-import.js`.
 
 **Imports from project modules.**
 - `../pose/pose-data.js`, `../pose/triangulation.js`,
+  `../pose/placeholder-cameras.js` (`ensurePlaceholderCameras`),
   `../ui/browser-hints.js` (`fileSystemAccessHint` — `saveProjectSlp`, the
   download fallback when there is no save-file picker, says why and how to
   enable it in Brave), `../loading/video.js`, `../demo-data.js`, `./file-io.js`,
@@ -13330,6 +15256,8 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   settings in the legacy v2/v3 project JSON — same keys and omit-the-defaults
   rule as the `.slp` writers, at the session-dict level), `./plane-metadata.js`
   (`writePlaneMetadata`/`readPlaneMetadata`/`resetPlaneState`, same reason),
+  `./smoothing-metadata.js` (Temporal Smoothing: `unsmoothedPoints3d` per group
+  and the session-level key in the project JSON, same reason),
   `./slp-provenance.js` (`buildSaveProvenance` — every `.slp` project save keeps
   the loaded files' provenance).
 - `../lib/sleap-io/index.browser.js` — dynamic `import()` in the private
@@ -13361,6 +15289,8 @@ the status bar at the bottom.
 **Purpose.** SLP/H5 project import + 3D-points-overlay import. Three
 workflows: load fresh SLP (replaces state), additive merge SLP into
 current session, overlay reprojected points3d from H5.
+
+**Compact copies.** `handleLoadSlpFile`'s end-of-load status goes through `withCompactNote` (`import-export/compact-save.js`): a compact copy opens with a warning saying what was rounded.
 
 **campy recordings.** When the video prompt's folder is a campy recording
 (session.json), `handleLoadSlpFile` puts it on the session
@@ -13546,6 +15476,9 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
 **Imports from project modules.**
 - `../pose/pose-data.js` (incl. `lazyPlaceholderXY`, `markPoints3dFromFile`),
   `../pose/triangulation.js` (`getInstanceGroupsForFrame`),
+  `../pose/placeholder-cameras.js` (`hasRealCalibration` — `handleLoadSlpFile`
+  sets up the 3D viewer only for a real calibration, not for the placeholder
+  cameras of a SLEAP file or of a project saved without one),
   `../pose/lazy-residency.js` (`dropGroupDerivedReprojections`), `./file-io.js`,
   `./slp-merge.js`, `../loading/video.js`, `../ui/app-state.js`,
   `../loading/session-loader.js`, `./save-load.js`,
@@ -13558,7 +15491,8 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
   sets the frame count), `../ui/sessions-panes.js`, `./visibility-metadata.js`
   (`readVisibilityMetadata`), `./frame-identity-metadata.js`
   (`stampFrameIdentitiesFromGroups`, `readFrameIdentityMetadata`), `./plane-metadata.js` (`readPlaneMetadata`,
-  `resetPlaneState`), `./import-track-resolve.js`
+  `resetPlaneState`), `./smoothing-metadata.js` (`readSmoothingMetadata`, and
+  `adoptSmoothingSource` in both typed group rebuilders), `./import-track-resolve.js`
   (`remapGlobalTrackToSession`, `nulledNodesFromOcclusion`),
   `./slp-provenance.js` (`fileSessionProvenance`, `fileSessionNames` — each
   session keeps its part of the file's provenance),
@@ -13748,3 +15682,26 @@ checks pinning the API each package must still expose), `check_pins()`
 **Imported by.** `server.py`; `tests/e2e/offline-server.mjs` shells out to it.
 
 **User-facing features.** Offline install and the distributable bundle.
+
+---
+
+### scripts/board_study/
+
+**Purpose.** Offline study tool, not part of the app: compares ChArUco calibration
+boards across camera rigs. Detects corners in calibration videos (cached), calibrates
+whole recordings, disjoint parts and first-N-second prefixes (aniposelib, as
+sleap-anipose; or calibrat3 headless), and scores every calibration the same way:
+reprojection, held-out board geometry ("ruler" lengths, flat-board fit), repeatability
+(intrinsics, camera poses, 3D points), detection range (square size in pixels, tilt),
+proofread-pose and ruler errors. `simulate` renders calib.io boards into a copy of a real
+rig. Protocol and shopping list in `PROTOCOL.md`, usage in `README.md`, findings in
+`RESULTS.md`.
+
+**CLI.** `uv run --no-project --with numpy --with scipy --with opencv-contrib-python-headless
+--with aniposelib --with matplotlib --with sleap-io python scripts/board_study
+{boards|scan|run|report|simulate}`.
+
+**Imports from project modules.** None (Python; reads the same anipose
+`calibration.toml` format LUC3D loads).
+
+**User-facing features.** None in the app; its recommendations feed the calibration docs.

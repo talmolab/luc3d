@@ -41,7 +41,7 @@ try {
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
 
     const boot = async () => {
-        await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+        await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
         await page.evaluate(async () => {
             const P = await import('/ui/plane-definition.js');
             if (!P.planeState.active) P.togglePlaneMode();
@@ -210,7 +210,7 @@ try {
         });
     });
     await p2.goto(`http://localhost:${PORT}/index.html`);
-    await p2.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await p2.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     await p2.evaluate(async () => {
         const P = await import('/ui/plane-definition.js');
         if (!P.planeState.active) P.togglePlaneMode();

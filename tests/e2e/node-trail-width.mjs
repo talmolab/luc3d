@@ -43,7 +43,7 @@ try {
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.evaluate(() => { try { localStorage.removeItem('visibilitySettings'); } catch (e) { /* none */ } });
     await page.reload();
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 60000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 60000 });
 
     // Two predicted animals walking circles, with skeleton edges. Every stroke
     // on the overlay is recorded with its width from the frame's opening

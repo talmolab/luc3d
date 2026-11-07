@@ -48,7 +48,7 @@ try {
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     const cores = await page.evaluate(() => navigator.hardwareConcurrency);
     const oneCore = 100 / cores;
     const loadOf = (t) => { const m = /^CPU: \d+ cores? · load (\d+)%$/.exec(t || ''); return m ? +m[1] : NaN; };
