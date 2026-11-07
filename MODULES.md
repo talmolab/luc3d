@@ -1533,6 +1533,10 @@ session graph that holds them.
     hydrated from (`_rawInstIndex`, which must be an integer — `null` is not
     row 0), via `lazyLoader.predictedPointScore` and by node NAME, so a skeleton
     edit after loading cannot pair a node with another node's score.
+    **`predictedNodeScorer(cameraName, frameIdx, inst)`** returns `k → score`
+    with exactly those answers, resolving the instance's store row once (via
+    `lazyLoader.predictedPointScorer`) instead of per node; By Cam's per-frame
+    pass (`_buildCameraLabeledFrame`) asks it for every node of every prediction.
   - **`numAnimals`** — the number of animals every tracking run on the session
     caps identities at: a positive integer, `'auto'`, or `null` while nobody has
     been asked, which is what makes Track Frame / Track All prompt. Saved as
@@ -13229,12 +13233,23 @@ from `pred_points.score` via `point_id_start`: the lazy half of
 `Session.predictedNodeScore`. Nothing is materialized or kept on the instance.
 The node is looked up BY NAME, because a skeleton edit re-indexes resident
 instances but not the store (an added or renamed node has no score), in the
-order the camera's rows are in NOW: `_nodeOrderByCam` once `_unifyNodeOrder`
-has re-ordered the camera (the store's skeleton keeps the file's order, so
-reading it there gave every node its neighbour's score), else the store
-skeleton's. NaN for a user row, an offset outside the frame's rows, a missing
+order the camera's rows are in NOW: the store's skeleton, except for a camera
+`_unifyNodeOrder` has re-ordered, whose rows follow its `_nodeOrderByCam` entry
+(the store's skeleton keeps the file's order, so reading it there gave every
+node its neighbour's score). `open()` marks each camera's file-order array in
+`_fileNodeOrders` (a module-level `WeakSet`), so an entry still in it is read
+through the store skeleton; a re-ordered camera's names go through
+`rowOrderColumn` (a `WeakMap` per order array, which is replaced, never edited). NaN for a user row, an offset outside the frame's rows, a missing
 frame/camera, or a NaN score. Pinned by `tests/test-node-scores.mjs` (a re-ordered camera included) and
-`tests/e2e/node-score-tooltip.mjs`.
+`tests/e2e/node-score-tooltip.mjs`. **`predictedPointScorer(camName, frameIdx,
+offsetInFrame)`** is the same lookup split in two: the row, its type, skeleton
+and point range once, then a `nodeName → score` function (null when the row is
+missing or a user row); `predictedPointScore` is built on it. The store
+skeleton's name → column map is cached per skeleton (module-level
+`storeNodeColumn`, a `WeakMap`; first match, as `nodeNames.indexOf`), rebuilt
+if its `nodes` array is replaced or resized or a lookup misses or no longer
+names its node — sleap-io.js's `nodeNames` getter builds a new array per read,
+which was the hottest call of By Cam's per-frame pass.
 
 **Imports.** `./track-union.js` (`unionTrackNames`); `./slp-skeleton.js`
 (`nodeOrderRemap`, `permuteStoreNodeRows`);
@@ -13246,7 +13261,8 @@ bridge) and the local vendored `lib/h5wasm/h5wasm.iife.js` (passed as
 (`handleLoadSessionFolderPerCamera` routing, `handleLoadProjectSlpLazy`) and
 `import-export/save-load.js` (`reopenSessionLazyLoader`). `describeStoreFrame` is
 called duck-typed from `pose/lazy-residency.js`, `predictedPointScore` from
-`Session.predictedNodeScore` (`pose/pose-data.js`).
+`Session.predictedNodeScore` and `predictedPointScorer` from
+`Session.predictedNodeScorer` (`pose/pose-data.js`).
 
 **User-facing features.** Lets a session folder of large multi-camera prediction
 `.slp` files — and a large saved project `.slp` (Load Project) — load and render
@@ -14614,7 +14630,8 @@ session's resident/total) rather than truncate silently. Covered by
   (and the 3D session) into each camera's file, or ran the renderer out of memory on a
   large project. Its output is compressed by the `(lazy re-emit)` bundle patch.
   `_buildCameraLabeledFrame` (both streaming exporters and `buildSlpLabels`) writes
-  each predicted node's OWN score through `Session.predictedNodeScore`; asking only the
+  each predicted node's OWN score through `Session.predictedNodeScorer` (one store-row
+  lookup per instance, the answers of `Session.predictedNodeScore`); asking only the
   instance wrote the instance score onto every node of a lazily loaded prediction
   (found comparing a real 8-camera export from both routes, 2026-11-03). For a **lazy session** these route a plain
   per-camera export through `lazyCameraExportBytes` → `saveSlpToBytes` on the
