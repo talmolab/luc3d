@@ -35,6 +35,11 @@
  *  6. The single-camera options (`skipEmpty`, `clearestEndLeads`) are the
  *     coat-brightness check's: the label-free size and image checks (stand-in
  *     embedder) take none of them.
+ *  6b. The image check uses the image model package the session chose
+ *     (`session.imageModel`), not the built-in model, although on one camera it
+ *     reads a stand-in session: the embedder is handed the package, the result
+ *     names it and flags at its threshold, and the progress dialog names it. (A
+ *     tiny folder package; the injected embedder stands in for its weights.)
  *  7. Duplicate removal is offered in the Tracking Wizard, off by default (box
  *     IoU 0.5, OKS 0.6); switched on, Track All leaves a planted partial copy of
  *     an animal without a track and says so, and every animal keeps its track.
@@ -334,6 +339,43 @@ try {
         `coat brightness on one camera skips encounters with no samples; the label-free size check has no such rule (size ${img.sizeSkip}, brightness ${img.brSkip})`);
     check(img.lead[0] === undefined && img.lead[1] === undefined && img.lead[2] === true,
         `…and lets the clearest of nearby 'end' rows lead (size / image / brightness: ${img.lead})`);
+
+    console.log('\n6b. The image check embeds with the image model package the session chose, on one camera too');
+    const pk = await page.evaluate(async () => {
+        const S = window.__lucid.state.session, M = await import('/ui/id-switch-modal.js');
+        const P = await import('/ui/image-model-package.js'), Man = await import('/pose/image-model-manifest.js');
+        const E = await import('/ui/image-embedder.js');
+        // A tiny package from a "folder" (files as <input webkitdirectory> gives them): the injected embedder
+        // stands in for the model, so its weights are a few bytes and never run.
+        const file = (p, body) => { const f = new File([body], p.split('/').pop()); Object.defineProperty(f, 'webkitRelativePath', { value: 'tiny-package/' + p }); return f; };
+        const manifest = { format: 'lucid-image-model', version: 1, name: 'Tiny test package', base: 'test', license: 'test',
+            input: 168, crop: P.PACKAGE_CROP, threshold: -0.7, fp16: false };
+        P.clearModelPackages();
+        const pkg = await P.loadModelPackageFromFiles([file('lucid-model.json', JSON.stringify(manifest)), file('config.json', '{}'),
+            file('onnx/model.onnx', new Uint8Array([1, 2, 3, 4]))]);
+        S.imageModel = Man.modelChoiceOf(pkg);
+        const animalOf = new Map();
+        for (const fg of S.frameGroups.values()) fg.getUnlinkedInstances('mouse_video').forEach((u, a) => animalOf.set(u.instance, a));
+        const proto = [0, 1, 2].map(a => Float32Array.from({ length: 16 }, (_, i) => Math.sin(3 * a + i)));
+        let given;
+        const fake = async (target, opts) => { given = opts.imageModel;
+            return { views: ['mouse_video'], inFlight: 2, getEmbeddings: async (frame, items) => items.map(it =>
+                [{ camera: 'mouse_video', vector: Float32Array.from(proto[animalOf.get(it.group.instances.get('mouse_video'))]) }]) }; };
+        const titles = [];
+        const seen = new MutationObserver(() => document.querySelectorAll('.id-switch-progress').forEach(d => titles.push(d.textContent)));
+        seen.observe(document.body, { childList: true, subtree: true });
+        await M.runIdSwitchChecks({ image: true, inject: { createEmbedder: fake, hasWebGPU: async () => true } });
+        seen.disconnect();
+        const res = S._idSwitch.results.image;
+        const out = { key: pkg.key, given: given ? given.key : null, ok: !!(res && res.ok), threshold: res && res.threshold,
+                      model: res && res.imageModel, title: titles.some(t => /Tiny test package/.test(t)) };
+        S.imageModel = null; E.setActiveImageModel(null); P.clearModelPackages();
+        return out;
+    });
+    check(pk.ok && pk.given === pk.key, `the embedder is handed the session's package (key ${String(pk.given).slice(0, 8)}, chosen ${pk.key.slice(0, 8)}), not the built-in model`);
+    check(pk.threshold === -0.7 && pk.model && pk.model.key === pk.key && pk.model.name === 'Tiny test package',
+        `…flags at the package's own threshold (${pk.threshold}) and the result names it (${JSON.stringify(pk.model)})`);
+    check(pk.title, '…and the progress dialog names it');
 
     console.log('\n7. Duplicate removal: opt-in in the Tracking Wizard, then a planted copy keeps no track');
     await page.evaluate(async () => { const M = await import('/ui/settings-modal.js'); M.showSettingsModal('wizard'); });

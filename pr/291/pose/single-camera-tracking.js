@@ -46,8 +46,8 @@
  * DOM-free. Depends on: pose/sleap-tracker.js, pose/detection-filter-stats.js.
  */
 
-import { runSleapTrackerAsync } from './sleap-tracker.js?v=ab1d7965d7dc';
-import { passesDetectionFilter } from './detection-filter-stats.js?v=ab1d7965d7dc';
+import { runSleapTrackerAsync } from './sleap-tracker.js?v=5a479e97140c';
+import { passesDetectionFilter } from './detection-filter-stats.js?v=5a479e97140c';
 
 /** Why a lazy single-camera project is not tracked (shown in the status bar). */
 export const SINGLE_CAMERA_LAZY_REASON = 'single-camera tracking does not support a lazily loaded (> 150 MB) project yet';
