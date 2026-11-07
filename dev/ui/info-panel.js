@@ -5,44 +5,44 @@
 
 import {
     Skeleton, Camera, Session,
-} from '../pose/pose-data.js?v=3ec7a8467fd9';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=3ec7a8467fd9';
-import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=3ec7a8467fd9';
-import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=3ec7a8467fd9';
-import { isInteractiveClickTarget } from './interaction.js?v=3ec7a8467fd9';
-import { persistSectionState } from './section-state.js?v=3ec7a8467fd9';
-import { renderRecordingInfo } from './recording-info.js?v=3ec7a8467fd9';
-import { buildLazySelect } from './lazy-select.js?v=3ec7a8467fd9';
+} from '../pose/pose-data.js?v=e5291f7738fd';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=e5291f7738fd';
+import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=e5291f7738fd';
+import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=e5291f7738fd';
+import { isInteractiveClickTarget } from './interaction.js?v=e5291f7738fd';
+import { persistSectionState } from './section-state.js?v=e5291f7738fd';
+import { renderRecordingInfo } from './recording-info.js?v=e5291f7738fd';
+import { buildLazySelect } from './lazy-select.js?v=e5291f7738fd';
 import { confirmSkeletonEdit, isSkeletonEditWarningSuppressed,
-         setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js?v=3ec7a8467fd9';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=3ec7a8467fd9';
-import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=3ec7a8467fd9';
+         setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js?v=e5291f7738fd';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=e5291f7738fd';
+import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=e5291f7738fd';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
-         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=3ec7a8467fd9';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=3ec7a8467fd9';
-import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=3ec7a8467fd9';
+         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=e5291f7738fd';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=e5291f7738fd';
+import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=e5291f7738fd';
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
     loadSingleSessionFromCache, removeVideoFile,
-} from '../loading/session-loader.js?v=3ec7a8467fd9';
+} from '../loading/session-loader.js?v=e5291f7738fd';
 
 // Circular import — these are still defined in app.js for now. They will be
 // retargeted as later passes land:
 // - swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu
 //   → ui/identity-assignment.js (Pass 3f)
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
-import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=3ec7a8467fd9';
+import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=e5291f7738fd';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
 // luc3d #172: every manual identity switch routes through applyIdentitySwitch,
 // which subsumes this file's former direct propagateIdentityForward calls.
 import {
     swapAssignTrack, applyIdentitySwitch, describeIdentitySwitch,
-} from './identity-assignment.js?v=3ec7a8467fd9';
+} from './identity-assignment.js?v=e5291f7738fd';
 // Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import {
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
-} from './sessions-panes.js?v=3ec7a8467fd9';
+} from './sessions-panes.js?v=e5291f7738fd';
 // Block 2 (Prompt 4): per-session timeline visibility toggles.
 import {
     toggleCameraVisibility,
@@ -51,7 +51,7 @@ import {
     getCameraVisibilityList,
     getTrackVisibilityList,
     getIdentityVisibilityList,
-} from './timeline-visibility.js?v=3ec7a8467fd9';
+} from './timeline-visibility.js?v=e5291f7738fd';
 
 // ============================================
 // Inline name entry for "+ New Track" / "+ New Identity"

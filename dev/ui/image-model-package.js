@@ -27,8 +27,8 @@
 import {
     parseModelManifest, modelKeyMaterial, hexOf, packageBaseUrl,
     MODEL_MANIFEST_NAME, MODEL_FP32_PATH, MODEL_FP16_PATH, MODEL_CONFIG_PATH,
-} from '../pose/image-model-manifest.js?v=3ec7a8467fd9';
-import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=3ec7a8467fd9';
+} from '../pose/image-model-manifest.js?v=e5291f7738fd';
+import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=e5291f7738fd';
 
 /** Repo-id prefix of packages, as transformers.js sees them. */
 export const PACKAGE_REPO_PREFIX = 'lucid-pkg/';
