@@ -59,7 +59,7 @@ try {
   const errs = [];
   page.on('pageerror', e => errs.push(String(e)));
   await page.goto(`http://localhost:${PORT}/index.html`);
-  await page.waitForFunction(() => window.SleapIO && window.h5wasm && window.__lucid, { timeout: 120000 });
+  await page.waitForFunction(() => window.SleapIO && window.h5wasm && window.__lucid, null, { timeout: 120000 });
 
   const out = await page.evaluate(async () => {
     const AS = await import('/ui/app-state.js');

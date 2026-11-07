@@ -51,7 +51,7 @@ async function open(brave, allowSite) {
     const errs = [];
     page.on('pageerror', e => errs.push(String(e).slice(0, 300)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 30000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     return { page, errs, close: async () => { await ctx.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
 }
 

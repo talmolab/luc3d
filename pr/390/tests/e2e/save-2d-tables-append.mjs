@@ -57,7 +57,7 @@ try {
     page.on('console', m => { if (m.type() === 'error') LOG('[console.error]', m.text().slice(0, 300)); });
 
     await page.goto(`http://localhost:${PORT}/index.html`, { waitUntil: 'domcontentloaded', timeout: 120000 });
-    await page.waitForFunction(() => window.SleapIO && window.h5wasm, { timeout: 120000 });
+    await page.waitForFunction(() => window.SleapIO && window.h5wasm, null, { timeout: 120000 });
 
     const r = await page.evaluate(async () => {
         const SIO = window.SleapIO;

@@ -49,7 +49,7 @@ try {
     page.on('console', m => { if (m.type() === 'error') LOG('[console.error]', m.text().slice(0, 300)); });
 
     await page.goto(`http://localhost:${PORT}/index.html`, { waitUntil: 'domcontentloaded', timeout: 120000 });
-    await page.waitForFunction(() => window.SleapIO && window.h5wasm, { timeout: 120000 });
+    await page.waitForFunction(() => window.SleapIO && window.h5wasm, null, { timeout: 120000 });
 
     // Build a Labels graph directly against the vendored sleap-io.js typed API —
     // the same objects `writeSessions` consumes on the real save path — with 3D

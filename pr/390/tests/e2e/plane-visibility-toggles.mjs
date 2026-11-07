@@ -65,7 +65,7 @@ try {
     page.on('console', m => { if (m.type() === 'error') errs.push('console.error: ' + m.text().slice(0, 200)); });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // --- §1 the four controls -------------------------------------------
     const boxes = await page.evaluate(async () => {
@@ -400,7 +400,7 @@ try {
         `and stored exactly as set (${JSON.stringify(stored && [stored.planes2d, stored.planes3d, stored.nodes2d, stored.nodes3d])})`);
 
     await page.reload();
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     const afterReload = await page.evaluate(async () => {
         const V = await import('/ui/plane-visibility.js');
         const r = V.planeVisibility(false);

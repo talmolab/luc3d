@@ -53,7 +53,7 @@ try {
     const errs = [];
     page.on('pageerror', e => errs.push(String(e).slice(0, 300)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     await page.evaluate(async () => {
         const pd = await import('/pose/pose-data.js'); const AS = await import('/ui/app-state.js');
@@ -249,6 +249,7 @@ try {
     await page.evaluate(async () => (await import('/ui/settings-modal.js')).showSettingsModal('wizard'));
     await page.fill('input[aria-label="Weight for node TTI"]', '0');
     await page.click('.settings-btn-apply');
+    await page.click('.settings-modal-close');
     await page.waitForTimeout(200);
     const tight = await tailCensus();
     const frameAfterApply = await cur();

@@ -193,7 +193,7 @@ async function runPage(browser, label, body) {
     page.on('dialog', async d => { await d.accept(ANIMALS != null ? String(ANIMALS) : ''); });
     await answerTrackSetup(page, ANIMALS != null ? ANIMALS : '');
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.SleapIO, { timeout: 30000 });
+    await page.waitForFunction(() => window.__lucid && window.SleapIO, null, { timeout: 30000 });
     // The folder loader ends in interactive modals that never resolve
     // headlessly; dismiss them on a timer and poll the state instead.
     await page.evaluate(() => {
@@ -216,7 +216,7 @@ async function runPage(browser, label, body) {
         const s = window.__lucid.state.session;
         return !!(s && s.cameras && s.cameras.length >= 2 && s.frameGroups && s.frameGroups.size > 100)
             || window.__loadErr;
-    }, { timeout: 600000 });
+    }, null, { timeout: 600000 });
     const info = await page.evaluate(() => {
         const s = window.__lucid.state.session;
         return {

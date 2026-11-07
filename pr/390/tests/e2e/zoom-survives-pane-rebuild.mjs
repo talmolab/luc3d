@@ -82,7 +82,7 @@ try {
     });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     // Let the page's own startup layout finish first. A grid built inside it
     // can come out lopsided (columns of 461 and 100 px instead of 280/281),
     // which would quietly change every cell this test measures.
@@ -150,7 +150,9 @@ try {
         // preset menu) is display:none at fit, so ask for rendered boxes
         // rather than reading one element's inline style.
         const badge = cell.querySelector('.unzoom-btn');
-        const r = v.overlayCanvas.getBoundingClientRect();
+        // The VIDEO canvas: a zoomed-in overlay canvas covers only the part of
+        // the video on screen (ui/overlay-window.js).
+        const r = v.canvas.getBoundingClientRect();
         return {
             z, shown, centre,
             cell: [c.width, c.height],
@@ -223,7 +225,7 @@ try {
         const AS = await import('/ui/app-state.js');
         const v = AS.state.views.find(x => x.name === name);
         const c = v.canvas.closest('.video-cell').getBoundingClientRect();
-        const r = v.overlayCanvas.getBoundingClientRect();
+        const r = v.canvas.getBoundingClientRect();   // the video, not the overlay window
         return Math.min(c.left - r.left, r.right - c.right, c.top - r.top, r.bottom - c.bottom);
     }, name);
     const gridB = await look('camB');
@@ -369,7 +371,7 @@ try {
             shown, native: !!v.zoom.native, scale: v.zoom.scale, natX: n ? n.x : null,
             mode: !!AS.state.nativeResolution,
             // On-screen width of the whole video: its own width at 1:1 (dpr 1).
-            width: shown ? v.overlayCanvas.getBoundingClientRect().width : null,
+            width: shown ? v.canvas.getBoundingClientRect().width : null,
         };
     }, name);
     const zoomBy = (name, factor) => page.evaluate(async ([name, factor]) => {

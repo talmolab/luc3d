@@ -77,7 +77,7 @@ try {
     page.on('dialog', d => d.accept());
 
     await page.goto(`http://localhost:${PORT}/index.html`, { waitUntil: 'domcontentloaded', timeout: 120000 });
-    await page.waitForFunction(() => window.SleapIO && window.h5wasm && window.__lucid && window.__lucid.state, { timeout: 120000 });
+    await page.waitForFunction(() => window.SleapIO && window.h5wasm && window.__lucid && window.__lucid.state, null, { timeout: 120000 });
 
     // ---- page helpers: fixtures, the provenance in a file's bytes, the real Save ----
     await page.evaluate(() => {

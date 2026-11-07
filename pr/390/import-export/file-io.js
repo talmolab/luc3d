@@ -12,14 +12,16 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=7d8d604c13c8';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=7d8d604c13c8';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=7d8d604c13c8';
+         toBoxedPoints3d, hasPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=b6111f59ef09';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=b6111f59ef09';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=b6111f59ef09';
+import { createProgressPacer } from '../ui/loading-overlay.js?v=b6111f59ef09';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=7d8d604c13c8';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=7d8d604c13c8';
-import { writePlaneMetadata } from './plane-metadata.js?v=7d8d604c13c8';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=b6111f59ef09';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=b6111f59ef09';
+import { writePlaneMetadata } from './plane-metadata.js?v=b6111f59ef09';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=b6111f59ef09';
 
 // ============================================
 // Generic file picker
@@ -738,78 +740,89 @@ export function buildSlpExportData(session, views, videoFiles) {
 
 /**
  * Export 3D triangulated points as a JSON representation of the points3d.h5 structure.
- * Can be converted to HDF5 via a Python script.
+ * Can be converted to HDF5 via a Python script. Same frames, track axis
+ * (`reprojTrackAxis`) and values as `buildPoints3dH5`, but boxed per node: for
+ * tests and small sessions, not for a long recording.
  *
  * @param {Session} session
  * @returns {Object} { points_3d, frame_indices, track_names, node_names, reprojection_errors }
  */
 export function buildPoints3dExportData(session) {
     const nodeNames = session.skeleton.nodes.slice();
-    const trackNames = (session.identities && session.identities.length > 0)
-        ? session.identities.map(function (id) { return id.name; })
-        : session.tracks.slice();
+    const axis = reprojTrackAxis(session);
     const numNodes = nodeNames.length;
-    const numTracks = Math.max(
-        (session.identities ? session.identities.length : 0),
-        session.tracks.length
-    );
-
-    const frameIndices = [];
+    const numTracks = axis.names.length;
+    const frameIndices = points3dExportFrames(session, axis);
     const points3dFrames = [];
     const errorFrames = [];
+    const buf = new Float64Array(numTracks * numNodes * 3);
 
-    // Collect frames that have triangulated data, sorted
-    const sortedFrameIndices = Array.from(session.instanceGroups.keys()).sort(function (a, b) { return a - b; });
-
-    for (let fi = 0; fi < sortedFrameIndices.length; fi++) {
-        const frameIdx = sortedFrameIndices[fi];
-        const groups = session.instanceGroups.get(frameIdx);
-
-        // Build a per-track array for this frame
+    for (let fi = 0; fi < frameIndices.length; fi++) {
+        buf.fill(NaN);
+        fillPoints3dFrame(buf, 0, session.instanceGroups.get(frameIndices[fi]), axis.index, numTracks, numNodes);
         const framePts = new Array(numTracks);
         const frameErr = new Array(numTracks);
-        let hasData = false;
-
         for (let t = 0; t < numTracks; t++) {
             framePts[t] = new Array(numNodes);
             frameErr[t] = new Array(numNodes);
             for (let n = 0; n < numNodes; n++) {
-                framePts[t][n] = [NaN, NaN, NaN];
+                const o = (t * numNodes + n) * 3;
+                framePts[t][n] = [buf[o], buf[o + 1], buf[o + 2]];
                 frameErr[t][n] = NaN;
             }
         }
-
-        if (groups) {
-            for (const group of groups) {
-                const idIdx = group.identityId;
-                if (idIdx < 0 || idIdx >= numTracks) continue;
-                if (group.points3d) {
-                    hasData = true;
-                    const _nPts = Math.min(numNodes, points3dNodeCount(group.points3d));
-                    for (let n = 0; n < _nPts; n++) {
-                        // Missing nodes are all-NaN in the data model; leave the
-                        // [NaN,NaN,NaN] default so they round-trip back to NaN.
-                        var p = getPoint3d(group.points3d, n);
-                        if (p != null) framePts[idIdx][n] = p;
-                    }
-                }
-            }
-        }
-
-        if (hasData) {
-            frameIndices.push(frameIdx);
-            points3dFrames.push(framePts);
-            errorFrames.push(frameErr);
-        }
+        points3dFrames.push(framePts);
+        errorFrames.push(frameErr);
     }
 
     return {
         points_3d: points3dFrames,
         frame_indices: frameIndices,
-        track_names: trackNames,
+        track_names: axis.names,
         node_names: nodeNames,
         reprojection_errors: errorFrames,
     };
+}
+
+/** A group's row on the track axis (`reprojTrackAxis`), or -1 if it has none. */
+function trackAxisRow(group, idIndex, nTracks) {
+    var t = idIndex ? idIndex.get(group.identityId) : group.identityId;
+    return (t == null || t < 0 || t >= nTracks) ? -1 : t;
+}
+
+/**
+ * The frames the 3D export writes, sorted: those with a group that has 3D and
+ * a row on the track axis.
+ */
+function points3dExportFrames(session, axis) {
+    const nTracks = axis.names.length;
+    const out = [];
+    for (const [frameIdx, groups] of session.instanceGroups) {
+        if (!groups) continue;
+        for (const group of groups) {
+            if (group.points3d && trackAxisRow(group, axis.index, nTracks) >= 0) { out.push(frameIdx); break; }
+        }
+    }
+    return out.sort(function (a, b) { return a - b; });
+}
+
+/** One frame's 3D into `buf` at `base` (layout: track, node, xyz); missing nodes stay as they are (NaN). */
+function fillPoints3dFrame(buf, base, groups, idIndex, nTracks, nNodes) {
+    if (!groups) return;
+    for (const group of groups) {
+        const t = trackAxisRow(group, idIndex, nTracks);
+        if (t < 0 || !group.points3d) continue;
+        const pts = group.points3d;
+        const n = Math.min(nNodes, points3dNodeCount(pts));
+        const tbase = base + t * nNodes * 3;
+        for (let k = 0; k < n; k++) {
+            // A partly-NaN triple is a missing node (`hasPoint3d`).
+            if (!hasPoint3d(pts, k)) continue;
+            buf[tbase + k * 3] = pts[k * 3];
+            buf[tbase + k * 3 + 1] = pts[k * 3 + 1];
+            buf[tbase + k * 3 + 2] = pts[k * 3 + 2];
+        }
+    }
 }
 
 /**
@@ -911,6 +924,33 @@ export function h5FileToBlob(filename) {
  * @param {Object} videoFileInfo - Entry from state.videoFiles with videoWidth/videoHeight
  * @returns {Object} SLP export data object
  */
+/**
+ * The video one camera's exported file points at: filename and
+ * [frames, height, width]. Taken from the attached video (`videoFileInfo`) when
+ * there is one; a field it lacks comes from the video record of the project
+ * file the session was reopened from (`session.lazyLoader.videos`), as the
+ * project save does (`resolveVideoPath`, slp-streaming-write.js). Without that
+ * fallback a reopened project exported before File ▸ Load Videos wrote
+ * `<camera>.mp4` with 0 frames, and SLEAP's GUI fails to open a file whose
+ * video it cannot find and has 0 frames (ZeroDivisionError in its status bar).
+ *
+ * @returns {{ filename: string, frames: number, height: number, width: number }}
+ */
+export function cameraExportVideo(session, cameraName, videoFileInfo) {
+    var vfi = videoFileInfo || {};
+    var loader = session && session.lazyLoader;
+    var rec = (loader && loader.videos && typeof loader.videos.get === 'function')
+        ? loader.videos.get(cameraName) : null;
+    var shape = (rec && rec.shape && rec.shape.length >= 3) ? rec.shape : null;
+    return {
+        filename: vfi.videoPath || (vfi.file && vfi.file.name)
+            || (rec && rec.filename) || (cameraName + '.mp4'),
+        frames: vfi.frameCount || (shape && Number(shape[0])) || 0,
+        height: vfi.videoHeight || (shape && Number(shape[1])) || 0,
+        width: vfi.videoWidth || (shape && Number(shape[2])) || 0,
+    };
+}
+
 export function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFileInfo) {
     // Skeleton metadata
     var skelData = serializeSkeleton(session.skeleton);
@@ -922,15 +962,15 @@ export function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFi
     };
 
     // Single video entry for this camera
-    var vw = videoFileInfo.videoWidth || 0;
-    var vh = videoFileInfo.videoHeight || 0;
-    var videoFilename = videoFileInfo.videoPath
-        || (videoFileInfo.file ? videoFileInfo.file.name : (cameraName + '.mp4'));
+    var cv = cameraExportVideo(session, cameraName, videoFileInfo);
+    var vw = cv.width;
+    var vh = cv.height;
+    var videoFilename = cv.filename;
     var videos = [{
         filename: videoFilename,
         backend: {
             type: 'MediaVideo',
-            shape: [videoFileInfo.frameCount || 0, vh, vw, 1],
+            shape: [cv.frames, vh, vw, 1],
             filename: videoFilename,
             grayscale: false,
             bgr: false,
@@ -941,7 +981,7 @@ export function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFi
             filename: videoFilename,
             backend: {
                 type: 'MediaVideo',
-                shape: [videoFileInfo.frameCount || 0, vh, vw, 1],
+                shape: [cv.frames, vh, vw, 1],
                 filename: videoFilename,
                 grayscale: false,
                 bgr: false,
@@ -1184,13 +1224,23 @@ function _buildCameraLabeledFrame(session, cameraName, frameIdx, fg, env) {
     // duplicates a track a grouped instance holds (SLEAP forbids two
     // instances sharing a (frame, track) pair).
     var usedTrackIdx = {};
+    // Each node's OWN score (CLAUDE.md "Per-node prediction scores"): a lazy
+    // instance holds none, the store is the only copy, so ask the session, as
+    // the project save does. Asking only the instance wrote the instance score
+    // onto every node of every lazily loaded prediction.
+    var nodeScoreOf = function (sinst) {
+        // Resolved once per instance (its store row, on a lazy project), not
+        // per node: same values as `predictedNodeScore`.
+        if (typeof session.predictedNodeScorer === 'function') return session.predictedNodeScorer(cameraName, frameIdx, sinst);
+        return function (k) { return session.predictedNodeScore(cameraName, frameIdx, sinst, k); };
+    };
 
     // 1. Grouped UserInstances first (retain their track)
     for (var ii = 0; ii < groupedInstances.length; ii++) {
         var inst = groupedInstances[ii];
         var instIsPred = inst.type === 'predicted';
         var instScore = inst.score != null ? inst.score : 1.0;
-        var pts = _buildSioPoints(inst, numNodes, instIsPred ? instScore : undefined);
+        var pts = _buildSioPoints(inst, numNodes, instIsPred ? instScore : undefined, null, nodeScoreOf(inst));
         // inst.trackIdx can be null (trackless UserInstance imported
         // from a 2D SLP with track=null). `null >= 0` is true in JS
         // so we need the explicit != null guard before the range check.
@@ -1221,7 +1271,7 @@ function _buildCameraLabeledFrame(session, cameraName, frameIdx, fg, env) {
         var ugInst = ungroupedInstances[ugi];
         var ugIsPred = ugInst.type === 'predicted';
         var ugScore = ugInst.score != null ? ugInst.score : 1.0;
-        var ugPts = _buildSioPoints(ugInst, numNodes, ugIsPred ? ugScore : undefined);
+        var ugPts = _buildSioPoints(ugInst, numNodes, ugIsPred ? ugScore : undefined, null, nodeScoreOf(ugInst));
         var ugTrack = (ugInst.trackIdx != null && ugInst.trackIdx >= 0 &&
             ugInst.trackIdx < tracks.length && !usedTrackIdx[ugInst.trackIdx])
             ? tracks[ugInst.trackIdx] : null;
@@ -1316,11 +1366,11 @@ export function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo,
     var allFrameIndices = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
 
     // 3. Build video
-    var videoFilename = videoFileInfo.videoPath
-        || (videoFileInfo.file ? videoFileInfo.file.name : (cameraName + '.mp4'));
-    var vw = videoFileInfo.videoWidth || 0;
-    var vh = videoFileInfo.videoHeight || 0;
-    var fc = videoFileInfo.frameCount || 0;
+    var cv = cameraExportVideo(session, cameraName, videoFileInfo);
+    var videoFilename = cv.filename;
+    var vw = cv.width;
+    var vh = cv.height;
+    var fc = cv.frames;
     var video = new SIO.Video({
         filename: videoFilename,
         backendMetadata: {
@@ -1449,8 +1499,19 @@ export function _buildSioPoints(inst, numNodes, perPointScore, nodeOrder, nodeSc
  * session) and would re-materialize the whole store.
  */
 async function lazyCameraExportBytes(SIO, session, cameraName) {
+    if (!lazyCameraFastPathUsable(SIO, session, cameraName)) return null;
+    return await SIO.saveSlpToBytes(session.lazyLoader.labelsByCam.get(cameraName));
+}
+
+/** Whether `lazyCameraExportBytes` can re-emit this camera's store (see its guards). */
+function lazyCameraFastPathUsable(SIO, session, cameraName) {
     var loader = session && session.lazyLoader;
-    if (!loader || !loader.labelsByCam || typeof loader.labelsByCam.get !== 'function') return null;
+    if (!loader || !loader.labelsByCam || typeof loader.labelsByCam.get !== 'function') return false;
+    // A reopened project `.slp` keeps every camera in ONE store, and every
+    // `labelsByCam` entry is that whole project (`SioLazyLoader._sharedStore`):
+    // re-emitting it wrote ALL cameras (and the 3D session) into each camera's
+    // file — and on a large project ran the renderer out of memory first.
+    if (loader._sharedStore) return false;
     // Safety guard: this path re-emits the RAW columnar store verbatim — it
     // has no notion of a live, manually-corrected Instance object sitting in
     // a resident FrameGroup. If any resident frame carries a user-type
@@ -1463,11 +1524,164 @@ async function lazyCameraExportBytes(SIO, session, cameraName) {
     // file is deliberately import-free vanilla JS besides pose-data.js/
     // slp-merge.js).
     for (var fg of session.frameGroups.values()) {
-        if (frameGroupHasUserInstances(fg)) return null;
+        if (frameGroupHasUserInstances(fg)) return false;
     }
     var lazyLabels = loader.labelsByCam.get(cameraName);
-    if (!lazyLabels || !lazyLabels.isLazy || typeof SIO.saveSlpToBytes !== 'function') return null;
-    return await SIO.saveSlpToBytes(lazyLabels);
+    return !!(lazyLabels && lazyLabels.isLazy && SIO && typeof SIO.saveSlpToBytes === 'function');
+}
+
+/**
+ * Whether By Cam's camera `selection` (one session, one camera) would be
+ * written by `lazyCameraExportBytes` (the camera's own store rewritten), the
+ * route `exportSlpMultiSession` takes first, so the caller can hand every such
+ * camera to `exportCamerasLazyRewrite` at once.
+ */
+export function cameraExportUsesLazyRewrite(selection, reprojAsUser, instanceFilter) {
+    return !!(selection && !reprojAsUser && instanceFilterAllowsLazyFastPath(instanceFilter) &&
+        lazyCameraFastPathUsable(window.SleapIO, selection.session, selection.cameraName));
+}
+
+/**
+ * Whether By Cam's camera `selection` (one session, one camera) would be built
+ * by `exportSlpMultiSession`'s eager route (`buildSlpLabelsMultiSession` +
+ * `saveSlpToBytes`): a fully loaded camera — neither the store rewrite nor the
+ * streaming sweep. Such cameras can go to `exportCamerasInWorkers` together.
+ */
+export function cameraExportUsesEagerBuild(selection, reprojAsUser, instanceFilter) {
+    return !!(selection && selection.session && window.SleapIO &&
+        !cameraExportUsesLazyRewrite(selection, reprojAsUser, instanceFilter) &&
+        !_exportWouldTruncate(selection.session));
+}
+
+/**
+ * Cameras of the per-camera rewrite in workers at once (each holds its tables until written).
+ * 3, not 4: on the lab VM (8 cameras x 108,000 frames) 4 peaked Chrome at 8.1-9.4 GB for 7.9-8.5 s,
+ * 3 at 7.5-7.8 GB for 10.4-10.6 s (one thread: 6.5 GB, 24.5 s).
+ */
+var LAZY_REWRITE_IN_FLIGHT = 3;
+
+/**
+ * By Cam's one-camera files for several cameras, the compression in workers.
+ * Two kinds of camera go here, each written as `exportSlpMultiSession` would:
+ *  - a folder-loaded camera (`cameraExportUsesLazyRewrite`), its own store
+ *    rewritten: the file is written here without its big tables
+ *    (`saveSlpToBytes`'s `lucidDeferTables`, bundle patch `(deferred tables)`),
+ *    and its worker creates them with the same arguments;
+ *  - a fully loaded camera (`cameraExportUsesEagerBuild`): its `Labels` are
+ *    built here and written with the big 2D tables' rows held back
+ *    (`lucidDivertTables`, bundle patch `(eager divert)`: the tables are created
+ *    empty, same chunks and filters), and its worker appends the rows.
+ * Each camera's worker (`import-export/slp-rows-worker.js`) gzips while the next
+ * camera is built — at most LAZY_REWRITE_IN_FLIGHT at once. Same tables,
+ * values, chunks, filters, dtypes and field_names as the one-thread file.
+ *
+ * @param {Array<{session, cameraName, videoFileInfo}>} selections
+ * @param {Object} [opts] `{ onProgress(done, total) }` counts cameras finished
+ *   (throwing aborts), `workers` as `exportCamerasFromSharedStore`'s, `kinds`
+ *   (`['lazy', 'eager']` by default) which kinds to take.
+ * @returns {Promise<Array<Uint8Array|null>>} bytes per selection; null for a
+ *   camera this route does not write (the caller exports it as before).
+ */
+export async function exportCamerasInWorkers(selections, reprojAsUser, instanceFilter, opts) {
+    var SIO = window.SleapIO;
+    opts = opts || {};
+    var kinds = opts.kinds || ['lazy', 'eager'];
+    var out = selections.map(function () { return null; });
+    var idx = [], kindOf = [];
+    for (var i = 0; i < selections.length; i++) {
+        var kind = cameraExportUsesLazyRewrite(selections[i], reprojAsUser, instanceFilter) ? 'lazy'
+            : cameraExportUsesEagerBuild(selections[i], reprojAsUser, instanceFilter) ? 'eager' : null;
+        if (kind && kinds.indexOf(kind) >= 0) { idx.push(i); kindOf.push(kind); }
+    }
+    if (!idx.length) return out;
+    var nLazy = kindOf.filter(function (k) { return k === 'lazy'; }).length;
+    var nWorkers = _storeCopyWorkerCount(idx.length, opts);
+    var cap = Math.max(1, Math.min(nWorkers, LAZY_REWRITE_IN_FLIGHT));
+    var live = [];   // { h, done } in flight
+    var finished = 0;
+    var t0 = performance.now();
+    var report = async function () { if (opts.onProgress) await opts.onProgress(finished, idx.length); };
+    // One camera's file: { bytes } when whole, else { shell, tables, rows } for its worker.
+    var build = async function (k, toWorker) {
+        var sel = selections[idx[k]];
+        if (kindOf[k] === 'lazy') {
+            var lazyLabels = sel.session.lazyLoader.labelsByCam.get(sel.cameraName);
+            if (!toWorker) return { bytes: await SIO.saveSlpToBytes(lazyLabels) };
+            var tables = [];
+            var shell = await SIO.saveSlpToBytes(lazyLabels, { lucidDeferTables: tables });
+            return tables.length ? { shell: shell, tables: tables, rows: [] } : { bytes: shell };
+        }
+        var labels = buildSlpLabelsMultiSession([sel], reprojAsUser, instanceFilter);
+        if (!toWorker) return { bytes: await SIO.saveSlpToBytes(labels) };
+        var rows = [];
+        var eagerShell = await SIO.saveSlpToBytes(labels, {
+            lucidDivertTables: function (name, data, n, cols) { rows.push([name, data, n, cols]); },
+        });
+        return rows.length ? { shell: eagerShell, tables: [], rows: rows } : { bytes: eagerShell };
+    };
+    try {
+        await report();
+        for (var k = 0; k < idx.length; k++) {
+            if (!nWorkers) {
+                out[idx[k]] = (await build(k, false)).bytes;
+                finished++;
+                await report();
+                continue;
+            }
+            while (live.length >= cap) await Promise.race(live.map(function (x) { return x.done; }));
+            var part = await build(k, true);
+            if (part.bytes) {   // a small camera: nothing held back, the file is whole
+                out[idx[k]] = part.bytes;
+                finished++;
+                await report();
+                continue;
+            }
+            var h = null;
+            try {
+                h = _startRowsWorker(part.shell);   // a Worker that cannot be made throws here
+                await h.ready;
+            } catch (we) {
+                if (h) h.terminate();
+                if (finished > 0 || live.length) throw we;   // they ran for the cameras before
+                console.warn('[export-slp-cameras] export workers unavailable, compressing on this thread:', we);
+                nWorkers = 0;
+                k--;   // this camera again, on this thread
+                continue;
+            }
+            for (var t = 0; t < part.tables.length; t++) h.create(part.tables[t].spec, part.tables[t].data, part.tables[t].attrs);
+            for (var r = 0; r < part.rows.length; r++) h.send(part.rows[r][0], part.rows[r][1], part.rows[r][2], part.rows[r][3]);
+            part = null;
+            (function (slot, handle) {
+                var entry = { h: handle, done: null };
+                entry.done = handle.finish().then(function (bytes) {
+                    out[slot] = bytes;
+                    handle.terminate();
+                    live.splice(live.indexOf(entry), 1);
+                    finished++;
+                    return report();
+                });
+                live.push(entry);
+            })(idx[k], h);
+        }
+        while (live.length) await Promise.race(live.map(function (x) { return x.done; }));
+    } catch (err) {
+        for (var d = 0; d < live.length; d++) { try { live[d].h.terminate(); } catch (e) { /* ignore */ } }
+        throw err;
+    }
+    var how = nWorkers ? ' (up to ' + cap + ' worker' + (cap === 1 ? '' : 's') + ' at once)' : ' (this thread)';
+    if (nLazy) console.log('[export-slp-lazy] ' + nLazy + ' camera(s) rewritten from their own stores in ' +
+        Math.round(performance.now() - t0) + ' ms' + how);
+    if (idx.length - nLazy) console.log('[export-slp-eager] ' + (idx.length - nLazy) + ' fully loaded camera(s) written in ' +
+        Math.round(performance.now() - t0) + ' ms' + how);
+    return out;
+}
+
+/**
+ * `exportCamerasInWorkers` for folder-loaded cameras only (each rewritten from
+ * its own store); other cameras get null.
+ */
+export function exportCamerasLazyRewrite(selections, reprojAsUser, instanceFilter, opts) {
+    return exportCamerasInWorkers(selections, reprojAsUser, instanceFilter, Object.assign({}, opts || {}, { kinds: ['lazy'] }));
 }
 
 /** Copied from pose/tracker.js's identical helper — see that file's doc. */
@@ -1533,11 +1747,11 @@ function _buildCameraExportHeader(session, cameraName, videoFileInfo) {
         nodes: sioNodes, edges: sioEdges, name: session.skeleton.name || 'skeleton',
     });
     var tracks = session.tracks.map(function (name) { return new SIO.Track(name); });
-    var videoFilename = videoFileInfo.videoPath
-        || (videoFileInfo.file ? videoFileInfo.file.name : (cameraName + '.mp4'));
-    var vw = videoFileInfo.videoWidth || 0;
-    var vh = videoFileInfo.videoHeight || 0;
-    var fc = videoFileInfo.frameCount || 0;
+    var cv = cameraExportVideo(session, cameraName, videoFileInfo);
+    var videoFilename = cv.filename;
+    var vw = cv.width;
+    var vh = cv.height;
+    var fc = cv.frames;
     var video = new SIO.Video({
         filename: videoFilename,
         backendMetadata: {
@@ -1592,79 +1806,852 @@ function _buildCameraExportHeader(session, cameraName, videoFileInfo) {
  * @returns {Promise<Uint8Array|null>} bytes, or null when streamed to a sink.
  */
 export async function exportCameraSlpStreaming(session, cameraName, reprojAsUser, videoFileInfo, instanceFilter, opts) {
+    opts = opts || {};
+    var out = await exportCamerasSlpStreaming(session, [{ cameraName: cameraName, videoFileInfo: videoFileInfo }],
+        reprojAsUser, instanceFilter, { onProgress: opts.onProgress, sinks: opts.sink ? [opts.sink] : null, chunkBytes: opts.chunkBytes });
+    return out[0];
+}
+
+/**
+ * `exportCameraSlpStreaming` for several cameras of ONE session in ONE sweep:
+ * one writer per camera, each frame hydrated once and built for every camera.
+ * Hydrating is nearly all of a camera's cost (a sweep that builds nothing takes
+ * as long as a one-camera export), so N cameras cost about one sweep instead of
+ * N (By Cam's Download All on a lazy project).
+ *
+ * @param {Array<{cameraName: string, videoFileInfo: Object}>} cameras
+ * @param {Object} [opts] `{ onProgress(done, total), sinks }` — `sinks[i]`
+ *   streams camera i to a `FileSystemWritableFileStream` (its result is null).
+ *   Throwing from `onProgress` aborts and disposes every writer.
+ * @returns {Promise<Array<Uint8Array|null>>} bytes per camera, in order.
+ */
+export async function exportCamerasSlpStreaming(session, cameras, reprojAsUser, instanceFilter, opts) {
     var SIO = window.SleapIO;
     if (!SIO || typeof SIO.openSlpWriter !== 'function') {
         throw new Error('sleap-io.js streaming writer (openSlpWriter) not available');
     }
     opts = opts || {};
-    var env = _buildCameraExportHeader(session, cameraName, videoFileInfo);
-    env.instanceFilter = instanceFilter;
-    env.reprojAsUser = reprojAsUser;
-
-    var writer = await SIO.openSlpWriter({
-        skeletons: [env.skeleton],
-        videos: [env.video],
-        tracks: env.tracks,
-        identities: [],
-        sessions: [],
-        provenance: { source: 'lucid', exported_at: new Date().toISOString() },
-    });
-
-    // COVERAGE PRECONDITION. `sweepLazyFrameWindows` hydrates through
-    // `batchLoadLazyFrames`, which operates on the ACTIVE `state.session`. For any
-    // other session (a multi-session project's non-active sessions) nothing
-    // hydrates, and this would emit a resident-only file — the very truncation it
-    // exists to prevent, just harder to notice. So count the frames the sweep
-    // actually offered and compare against the frames this camera HAS in the
-    // store; short means hydration did not happen and the export must fail loudly
-    // rather than write a plausible partial file.
-    var rowMap = session.lazyLoader && session.lazyLoader.frameRowByCam
-        ? session.lazyLoader.frameRowByCam.get(cameraName) : null;
-    var expectedFrames = rowMap ? rowMap.size : 0;
-
-    var BATCH = 256;
-    var batch = [];
-    var nFrames = 0;
-    var nVisited = 0;
+    // A reopened project keeps every camera in ONE store: copy each camera's
+    // rows from it instead of hydrating every frame (`exportCamerasFromSharedStore`).
+    // `opts.route` 'store' / 'sweep' forces one route (tests); the default picks
+    // the store whenever it can write exactly what the sweep would.
+    var route = opts.route || 'auto';
+    if (route !== 'sweep') {
+        var storeCtx = sharedStoreCopyContext(session, reprojAsUser, instanceFilter);
+        if (storeCtx.blocker) {
+            if (route === 'store') throw new Error('store copy unavailable: ' + storeCtx.blocker);
+            if (session && session.lazyLoader && session.lazyLoader._sharedStore) {
+                console.log('[export-slp-streaming] per-frame pass, not the store copy:', storeCtx.blocker);
+            }
+        } else {
+            var copied = await exportCamerasFromSharedStore(session, cameras, storeCtx, instanceFilter,
+                Object.assign({}, opts, { force: route === 'store' }));
+            if (copied) return copied;
+        }
+    }
+    var cams = [];
     try {
+        for (var c = 0; c < cameras.length; c++) {
+            var env = _buildCameraExportHeader(session, cameras[c].cameraName, cameras[c].videoFileInfo);
+            env.instanceFilter = instanceFilter;
+            env.reprojAsUser = reprojAsUser;
+            var header = {
+                skeletons: [env.skeleton],
+                videos: [env.video],
+                tracks: env.tracks,
+                identities: [],
+                sessions: [],
+                provenance: { source: 'lucid', exported_at: new Date().toISOString() },
+            };
+            var writer = await SIO.openSlpWriter(header);
+            // COVERAGE PRECONDITION. `sweepLazyFrameWindows` hydrates through
+            // `batchLoadLazyFrames`, which operates on the ACTIVE `state.session`. For any
+            // other session (a multi-session project's non-active sessions) nothing
+            // hydrates, and this would emit a resident-only file — the very truncation it
+            // exists to prevent, just harder to notice. So count the frames the sweep
+            // actually offered and compare against the frames this camera HAS in the
+            // store; short means hydration did not happen and the export must fail loudly
+            // rather than write a plausible partial file.
+            var rowMap = session.lazyLoader && session.lazyLoader.frameRowByCam
+                ? session.lazyLoader.frameRowByCam.get(cameras[c].cameraName) : null;
+            cams.push({ name: cameras[c].cameraName, env: env, header: header, writer: writer, batch: [], nFrames: 0,
+                        expectedFrames: rowMap ? rowMap.size : 0, rw: null });
+        }
+        var tPass0 = performance.now();
+        // Each camera's rows go to its own worker, which writes and gzips them
+        // (`import-export/slp-rows-worker.js`, as the store copy does): gzip was
+        // ~27% of this pass on one core, the rest is hydration and building.
+        // Cameras past the worker count compress here.
+        var nWorkers = _storeCopyWorkerCount(cams.length, opts);
+        if (nWorkers) {
+            try {
+                await _attachRowsWorkers(SIO, cams.slice(0, nWorkers));
+            } catch (we) {
+                _detachRowsWorkers(cams);
+                console.warn('[export-slp-streaming] export workers unavailable, compressing on this thread:', we);
+                nWorkers = 0;
+            }
+        }
+        var roomFor = function () {
+            var waits = null;
+            for (var q = 0; q < cams.length; q++) {
+                var rq = cams[q].rw;
+                if (rq && rq.inFlight >= ROWS_WORKER_QUEUE) (waits = waits || []).push(rq.room());
+            }
+            return waits ? Promise.all(waits) : undefined;
+        };
+
+        var BATCH = 256;
+        var nVisited = 0;
         await sweepLazyFrameWindows(session, function (frameIdx, fg) {
             // `fg` is undefined for a frame with 3D grouping but no resident 2D
             // (the sweep's contract) — nothing to emit for a 2D export.
             if (!fg) return;
             nVisited++;
-            var lf = _buildCameraLabeledFrame(session, cameraName, frameIdx, fg, env);
-            // A frame with no instances for THIS camera (or none surviving
-            // `instanceFilter`) yields null — legitimately fewer written than
-            // visited, which is why the coverage check below uses `nVisited`.
-            if (!lf) return;
-            batch.push(lf);
-            nFrames++;
-            if (batch.length >= BATCH) {
-                writer.appendFrames(batch);
-                batch = [];
+            for (var k = 0; k < cams.length; k++) {
+                var cam = cams[k];
+                var lf = _buildCameraLabeledFrame(session, cam.name, frameIdx, fg, cam.env);
+                // A frame with no instances for THIS camera (or none surviving
+                // `instanceFilter`) yields null — legitimately fewer written than
+                // visited, which is why the coverage check below uses `nVisited`.
+                if (!lf) continue;
+                cam.batch.push(lf);
+                cam.nFrames++;
+                if (cam.batch.length >= BATCH) {
+                    cam.writer.appendFrames(cam.batch);
+                    cam.batch = [];
+                }
             }
+            return roomFor();   // a worker that falls behind holds the pass
         }, {
             onProgress: opts.onProgress,
         });
-        if (batch.length > 0) writer.appendFrames(batch);
-        console.log('[export-slp-streaming] camera', cameraName + ':', nFrames.toLocaleString(),
-            'labeled frames written,', nVisited.toLocaleString(), 'of', expectedFrames.toLocaleString(),
-            'store frames visited');
-        if (expectedFrames > 0 && nVisited < expectedFrames) {
-            throw new Error('Export aborted: only ' + nVisited.toLocaleString() + ' of ' +
-                expectedFrames.toLocaleString() + ' frames could be read for camera "' + cameraName +
-                '", so the file would be incomplete. This happens when exporting a session that is ' +
-                'not the one currently open — switch to that session and export again.');
+        var out = [];
+        for (var j = 0; j < cams.length; j++) {
+            var cj = cams[j];
+            if (cj.batch.length > 0) { cj.writer.appendFrames(cj.batch); cj.batch = []; }
+            console.log('[export-slp-streaming] camera', cj.name + ':', cj.nFrames.toLocaleString(),
+                'labeled frames written,', nVisited.toLocaleString(), 'of', cj.expectedFrames.toLocaleString(),
+                'store frames visited');
+            if (cj.expectedFrames > 0 && nVisited < cj.expectedFrames) {
+                throw new Error('Export aborted: only ' + nVisited.toLocaleString() + ' of ' +
+                    cj.expectedFrames.toLocaleString() + ' frames could be read for camera "' + cj.name +
+                    '", so the file would be incomplete. This happens when exporting a session that is ' +
+                    'not the one currently open — switch to that session and export again.');
+            }
         }
-        if (opts.sink) {
-            await writer.writeToSink(opts.sink, { chunkBytes: opts.chunkBytes });
-            return null;
+        var tPassed = performance.now();
+        for (var w = 0; w < cams.length; w++) {
+            var sink = opts.sinks && opts.sinks[w];
+            var cw = cams[w];
+            if (cw.rw) {
+                var wbytes = await cw.rw.finish();
+                if (!cw.writer.lucidOnlyTableRows()) {
+                    throw new Error('Export aborted: ' + cw.name + '\'s file has annotations or empty frames the export workers do not write.');
+                }
+                cw.rw.terminate();
+                cw.rw = null;
+                cw.writer.dispose();
+                if (sink) { await _writeBytesToSink(sink, wbytes, opts.chunkBytes); out.push(null); }
+                else out.push(wbytes);
+            } else if (sink) {
+                await cw.writer.writeToSink(sink, { chunkBytes: opts.chunkBytes });
+                out.push(null);
+            } else {
+                out.push(cw.writer.close());
+            }
+            cw.writer = null;   // closed: nothing left to dispose
         }
-        return writer.close();
+        console.log('[export-slp-streaming] ' + cams.length + ' camera(s) in one pass: ' +
+            nVisited.toLocaleString() + ' frames in ' + Math.round(tPassed - tPass0) + ' ms' +
+            (nWorkers ? ' (' + nWorkers + ' worker' + (nWorkers === 1 ? '' : 's') + ')' : ' (this thread)') +
+            ', close ' + Math.round(performance.now() - tPassed) + ' ms');
+        return out;
     } catch (err) {
-        try { if (typeof writer.dispose === 'function') writer.dispose(); } catch (e) { /* ignore */ }
+        _detachRowsWorkers(cams);
+        for (var d = 0; d < cams.length; d++) {
+            var wr = cams[d].writer;
+            try { if (wr && typeof wr.dispose === 'function') wr.dispose(); } catch (e) { /* ignore */ }
+        }
         throw err;
     }
+}
+
+// ============================================
+// Per-camera export copied straight from a reopened project's shared store
+// ============================================
+//
+// A project reopened with Load Project keeps every camera in ONE columnar store
+// (`SioLazyLoader._sharedStore`). The per-frame pass above hydrates every frame
+// to export it — 56 s for 8 cameras x 108,000 frames on the lab VM, nearly all
+// of it hydration. The store already holds every frame the pass would write, so
+// `exportCamerasFromSharedStore` copies each camera's rows out of it instead,
+// the way the project save copies the whole store, and builds only the frames
+// the store cannot speak for with the pass's own `_buildCameraLabeledFrame`:
+//   - RESIDENT frames (`session.frameGroups`): what is on screen, edits and
+//     deletions included — the store still has the original rows there;
+//   - frames whose in-memory group members disagree with their rows (track,
+//     type, score, own per-node scores, edited 2D), or with two kept rows on one
+//     track (the pass drops the later one's track): `storeCopyDriftFrames`.
+//     They are hydrated through `sweepLazyFrameWindows`, as the pass would.
+// Frames come out in frame order and each frame's instances in the pass's order
+// (group members first, then the rest, each by row), with the values the pass
+// would write: instance score `score || 0`, each node's own score or else the
+// instance score, `complete` 1 for a placed node, no tracking score, no
+// `from_predicted`, and the file's visibility (hydration applies it,
+// `lazyRowInstance` in pose/lazy-residency.js, so the pass writes it too).
+// Reprojections exist only in memory, so with Reprojections on the export keeps
+// the per-frame pass (`sharedStoreCopyContext` says why it cannot copy).
+
+/** A column value as a number (`dflt` when the column or value is absent). */
+function _colNum(col, i, dflt) {
+    var v = col ? col[i] : undefined;
+    return v === undefined || v === null ? dflt : Number(v);
+}
+
+/**
+ * What `exportCamerasFromSharedStore` reads, or `{ blocker }` saying why this
+ * export cannot be copied from the store (the caller then runs the per-frame
+ * pass). Copying needs ONE store behind every camera, read the way hydration
+ * reads it: the session's skeleton and track list must still be the store's
+ * (a skeleton edit re-shapes resident instances only), and no reprojections.
+ */
+export function sharedStoreCopyContext(session, reprojAsUser, instanceFilter) {
+    var SIO = window.SleapIO;
+    var loader = session && session.lazyLoader;
+    if (!loader || !loader._sharedStore || !loader.labelsByCam || !loader.frameRowByCam) {
+        return { blocker: 'not a project reopened from one file' };
+    }
+    if (reprojAsUser !== null && (!instanceFilter || instanceFilter.reprojected !== false)) {
+        return { blocker: 'Reprojections are on (they exist only in memory)' };
+    }
+    if (!SIO || typeof SIO.openSlpWriter !== 'function') return { blocker: 'no streaming writer' };
+    var labels = null, store = null;
+    for (var lb of loader.labelsByCam.values()) {
+        var st = lb && lb._lazyDataStore;
+        if (!st) return { blocker: 'a camera has no store' };
+        if (store && st !== store) return { blocker: 'cameras in different stores' };
+        store = st;
+        labels = lb;
+    }
+    if (!store) return { blocker: 'no store' };
+    var fd = store.framesData || {}, idn = store.instancesData || {};
+    var pts = store.pointsData || {}, pps = store.predPointsData || {};
+    if (!fd.instance_id_start || !fd.instance_id_end || !idn.instance_type || !idn.point_id_start ||
+        !idn.point_id_end || !pts.x || !pts.y || !pps.x || !pps.y) {
+        return { blocker: 'the store lacks a column' };
+    }
+    // Format < 1.1 user points are shifted by -0.5 when materialized.
+    if (store.formatId != null && store.formatId < 1.1) return { blocker: 'file format older than 1.1' };
+    var names = _skelNodeNames(session.skeleton);
+    var skels = store.skeletons || [];
+    var storeNames = (skels.length === 1 && skels[0] && skels[0].nodeNames) || null;
+    var sameSkel = !!storeNames && storeNames.length === names.length;
+    for (var ni = 0; sameSkel && ni < names.length; ni++) sameSkel = storeNames[ni] === names[ni];
+    if (sameSkel && loader.numNodesByCam) {
+        for (var nn of loader.numNodesByCam.values()) if (nn !== names.length) sameSkel = false;
+    }
+    if (!sameSkel) return { blocker: 'the skeleton differs from the file\'s' };
+    var storeTracks = store.tracks || labels.tracks || [];
+    if (labels.tracks && storeTracks !== labels.tracks) return { blocker: 'the store has two track lists' };
+    var sTracks = session.tracks || [];
+    var sameTracks = storeTracks.length === sTracks.length;
+    for (var ti = 0; sameTracks && ti < sTracks.length; ti++) {
+        sameTracks = !!storeTracks[ti] && storeTracks[ti].name === sTracks[ti];
+    }
+    if (!sameTracks) return { blocker: 'the track list differs from the file\'s' };
+    return {
+        loader: loader, fd: fd, idn: idn, pts: pts, pps: pps,
+        numNodes: names.length, nTracks: sTracks.length,
+    };
+}
+
+/** The track the per-frame pass writes for store instance row `j` (-1: none). */
+function _storeOutTrack(ctx, j) {
+    var t = _colNum(ctx.idn.track, j, -1);
+    return (t >= 0 && t < ctx.nTracks && t === Math.floor(t)) ? t : -1;
+}
+
+function _storeRowPredicted(ctx, j) { return _colNum(ctx.idn.instance_type, j, 0) !== 0; }
+
+function _storeRowKept(ctx, j, filter) {
+    return !filter || filter[_storeRowPredicted(ctx, j) ? 'predicted' : 'user'] !== false;
+}
+
+/**
+ * The rows of `frameIdx`'s `n` store instances for `cam` that hydration seats
+ * as group members (`finalizeLazyFrameGroup`: a member whose `_rawInstIndex`
+ * names the row), as a Uint8Array mask, or null when none is. Members come
+ * first in the per-frame pass's output.
+ */
+function _storeSeatedRows(session, frameIdx, cam, n) {
+    var groups = session.instanceGroups ? session.instanceGroups.get(frameIdx) : null;
+    if (!groups || groups.length === 0 || n === 0) return null;
+    var seated = null;
+    for (var gi = 0; gi < groups.length; gi++) {
+        var m = groups[gi].instances.get(cam);
+        var k = m ? m._rawInstIndex : null;
+        if (k == null || !(k >= 0 && k < n) || k !== Math.floor(k)) continue;
+        if (!seated) seated = new Uint8Array(n);
+        seated[k] = 1;
+    }
+    return seated;
+}
+
+/**
+ * Whether group member `m`, seated at store row `j`, would be written other
+ * than the row says — its own track, type, score or per-node scores, or 2D it
+ * holds that differs from the row (an edit). A member whose 2D went back to the
+ * store (`_lazy2d`) is hydrated from the row, so only its other fields count.
+ */
+function _memberDiffersFromStore(m, ctx, j) {
+    var pred = _storeRowPredicted(ctx, j);
+    if (m.type !== (pred ? 'predicted' : 'user')) return true;
+    var mt = (m.trackIdx != null && m.trackIdx >= 0 && m.trackIdx < ctx.nTracks) ? m.trackIdx : -1;
+    if (mt !== _storeOutTrack(ctx, j)) return true;
+    if (pred && (m.score != null ? m.score : 1.0) !== (_colNum(ctx.idn.score, j, 0) || 0)) return true;
+    if (typeof m.hasPointScores === 'function' && m.hasPointScores()) return true;
+    var nulled = m.nulledNodes && m.nulledNodes.size > 0 ? m.nulledNodes : null;
+    if (m._lazy2d && !nulled) return false;
+    if (m.numNodes !== ctx.numNodes) return true;
+    var src = pred ? ctx.pps : ctx.pts;
+    var pS = _colNum(ctx.idn.point_id_start, j, 0), pE = _colNum(ctx.idn.point_id_end, j, 0);
+    for (var k = 0; k < ctx.numNodes; k++) {
+        var p = pS + k, x = NaN, y = NaN;
+        if (p < pE) { x = Number(src.x[p]); y = Number(src.y[p]); }
+        var has = isFinite(x) && isFinite(y);
+        var vis = has && !!(src.visible && Number(src.visible[p]));
+        // A nulled node is written placed-but-invisible.
+        if (nulled && nulled.has(k) && vis) return true;
+        if (m._lazy2d) continue;
+        if (m.hasPoint(k) !== has) return true;
+        if (!has) continue;
+        if (m.getX(k) !== x || m.getY(k) !== y) return true;
+        // The per-frame pass writes a placed node visible unless it is nulled
+        // or occluded; hydration gives a member the file's occlusion
+        // (`lazyRowInstance`), so any other flag is an edit.
+        if (vis === !!((nulled && nulled.has(k)) || m.isOccluded(k))) return true;
+    }
+    return false;
+}
+
+/** Whether `fg` holds any instance of `cam`, linked or not. */
+function _fgHasCamera(fg, cam) {
+    var linked = fg.instances.get(cam);
+    if (linked && linked.length > 0) return true;
+    var ul = fg.getUnlinkedInstances(cam);
+    return !!(ul && ul.length > 0);
+}
+
+/**
+ * The frames of `cam` the store cannot speak for, so they must be hydrated and
+ * built like the per-frame pass does: a non-resident frame whose members
+ * disagree with their rows, or that holds two kept rows on one track; and a
+ * RESIDENT frame that never got this camera's rows (the pass's hydration would
+ * add them). Exported for `tests/e2e/export-bycam-store-copy.mjs`.
+ */
+export function storeCopyDriftFrames(session, ctx, cam, filter) {
+    var rowMap = ctx.loader.frameRowByCam.get(cam);
+    var out = [];
+    if (!rowMap) return out;
+    var nFrames = ctx.loader.nFrames || 0;
+    for (var [f, row] of rowMap) {
+        if (!(f >= 0 && f < nFrames)) continue;
+        var iS = _colNum(ctx.fd.instance_id_start, row, 0), iE = _colNum(ctx.fd.instance_id_end, row, 0);
+        var fg = session.frameGroups.get(f);
+        if (fg) {
+            if (iE > iS && !_fgHasCamera(fg, cam)) out.push(f);
+            continue;
+        }
+        if (_storeFrameDrifts(session, ctx, cam, f, iS, iE, filter)) out.push(f);
+    }
+    return out;
+}
+
+function _storeFrameDrifts(session, ctx, cam, f, iS, iE, filter) {
+    var n = iE - iS;
+    if (n <= 0) return false;
+    var seenT = null;
+    for (var j = iS; j < iE; j++) {
+        if (!_storeRowKept(ctx, j, filter)) continue;
+        var t = _storeOutTrack(ctx, j);
+        if (t < 0) continue;
+        if (!seenT) seenT = [];
+        else if (seenT.indexOf(t) >= 0) return true;
+        seenT.push(t);
+    }
+    var groups = session.instanceGroups ? session.instanceGroups.get(f) : null;
+    if (!groups) return false;
+    var taken = null;
+    for (var gi = 0; gi < groups.length; gi++) {
+        var m = groups[gi].instances.get(cam);
+        var k = m ? m._rawInstIndex : null;
+        if (k == null || !(k >= 0 && k < n) || k !== Math.floor(k)) continue;
+        if (!taken) taken = new Uint8Array(n);
+        if (taken[k]) return true;   // two members on one row: which one hydration seats is not ours to guess
+        taken[k] = 1;
+        if (_memberDiffersFromStore(m, ctx, iS + k)) return true;
+    }
+    return false;
+}
+
+/**
+ * Build the raw table rows (`SlpStreamWriter.appendRawRows`, LUCID local patch
+ * (raw rows)) for `count` store frames of one camera: `frames[e]` is the video
+ * frame, `rows[e]` its store row. Ids are relative to the block; video 0.
+ */
+function _storeRowsBlock(session, ctx, cam, frames, rows, count, filter) {
+    var fd = ctx.fd, idn = ctx.idn, nNodes = ctx.numNodes;
+    var nF = 0, nU = 0, nP = 0;
+    for (var e = 0; e < count; e++) {
+        var iS0 = _colNum(fd.instance_id_start, rows[e], 0), iE0 = _colNum(fd.instance_id_end, rows[e], 0);
+        var kept0 = 0;
+        for (var j0 = iS0; j0 < iE0; j0++) {
+            if (!_storeRowKept(ctx, j0, filter)) continue;
+            if (_storeRowPredicted(ctx, j0)) nP++; else nU++;
+            kept0++;
+        }
+        if (kept0) nF++;
+    }
+    var F = new Float64Array(nF * 5), I = new Float64Array((nU + nP) * 10);
+    var P = new Float64Array(nU * nNodes * 4), Q = new Float64Array(nP * nNodes * 5);
+    var fi = 0, ii = 0, pu = 0, pq = 0;
+    var order = [];
+    var ux = ctx.pts.x, uy = ctx.pts.y, uv = ctx.pts.visible;
+    var qx = ctx.pps.x, qy = ctx.pps.y, qv = ctx.pps.visible, qs = ctx.pps.score;
+    for (var e2 = 0; e2 < count; e2++) {
+        var f = frames[e2];
+        var iS = _colNum(fd.instance_id_start, rows[e2], 0), iE = _colNum(fd.instance_id_end, rows[e2], 0);
+        var seated = _storeSeatedRows(session, f, cam, iE - iS);
+        order.length = 0;
+        // The pass's order: seated members (by row), then the rest (by row).
+        for (var pass = seated ? 0 : 1; pass < 2; pass++) {
+            for (var j = iS; j < iE; j++) {
+                if (seated && !!seated[j - iS] !== (pass === 0)) continue;
+                if (_storeRowKept(ctx, j, filter)) order.push(j);
+            }
+        }
+        if (order.length === 0) continue;
+        var o5 = fi * 5;
+        F[o5] = fi; F[o5 + 1] = 0; F[o5 + 2] = f; F[o5 + 3] = ii; F[o5 + 4] = ii + order.length;
+        for (var oi = 0; oi < order.length; oi++) {
+            var jj = order[oi];
+            var pred = _storeRowPredicted(ctx, jj);
+            var s = pred ? (_colNum(idn.score, jj, 0) || 0) : 0;
+            var pS = _colNum(idn.point_id_start, jj, 0), pE = _colNum(idn.point_id_end, jj, 0);
+            var o = ii * 10;
+            I[o] = ii; I[o + 1] = pred ? 1 : 0; I[o + 2] = fi; I[o + 3] = 0;
+            I[o + 4] = _storeOutTrack(ctx, jj); I[o + 5] = -1; I[o + 6] = s;
+            I[o + 7] = pred ? pq : pu; I[o + 8] = (pred ? pq : pu) + nNodes; I[o + 9] = 0;
+            var X = pred ? qx : ux, Y = pred ? qy : uy, V = pred ? qv : uv;
+            for (var k = 0; k < nNodes; k++) {
+                var p = pS + k, inRange = p < pE;
+                var x = inRange ? Number(X[p]) : NaN, y = inRange ? Number(Y[p]) : NaN;
+                var has = isFinite(x) && isFinite(y);
+                var vis = has && !!(V && Number(V[p])) ? 1 : 0;
+                if (pred) {
+                    var q = pq * 5;
+                    var ns = inRange && qs ? Number(qs[p]) : NaN;
+                    Q[q] = has ? x : NaN; Q[q + 1] = has ? y : NaN; Q[q + 2] = vis; Q[q + 3] = has ? 1 : 0;
+                    Q[q + 4] = isFinite(ns) ? ns : s;
+                    pq++;
+                } else {
+                    var u = pu * 4;
+                    P[u] = has ? x : NaN; P[u + 1] = has ? y : NaN; P[u + 2] = vis; P[u + 3] = has ? 1 : 0;
+                    pu++;
+                }
+            }
+            ii++;
+        }
+        fi++;
+    }
+    return { frames: F, instances: I, points: P, predPoints: Q };
+}
+
+/**
+ * `exportCamerasSlpStreaming` for a project reopened from one file: each
+ * camera's rows are copied out of the shared store (see the section comment
+ * above). Resolves to the same `[bytes|null]` per camera, or to null when too
+ * many frames would need hydrating for the copy to pay (the caller then runs
+ * the per-frame pass; `opts.force` copies anyway).
+ *
+ * `opts.onProgress(done, total)` counts video frames (total = the project's
+ * frame count), the cameras' copies together; throwing from it aborts.
+ * `opts.workers`: false copies on this thread, N uses N export workers; by
+ * default one per camera up to the core count (`_storeCopyWorkerCount`), each
+ * writing and gzipping its camera's file (`import-export/slp-rows-worker.js`).
+ */
+export async function exportCamerasFromSharedStore(session, cameras, ctx, instanceFilter, opts) {
+    var SIO = window.SleapIO;
+    opts = opts || {};
+    var t0 = performance.now();
+    var loader = ctx.loader;
+    var nFrames = loader.nFrames || 0;
+
+    // 1. Frames the store cannot speak for, all cameras together.
+    var driftSet = new Set();
+    for (var dc = 0; dc < cameras.length; dc++) {
+        var dfs = storeCopyDriftFrames(session, ctx, cameras[dc].cameraName, instanceFilter);
+        for (var di = 0; di < dfs.length; di++) driftSet.add(dfs[di]);
+    }
+    var drift = Array.from(driftSet).sort(function (a, b) { return a - b; });
+    // Contiguous runs (gaps under 64 frames bridged), each hydrated by one sweep.
+    var runs = [];
+    for (var ri = 0; ri < drift.length; ri++) {
+        var last = runs[runs.length - 1];
+        if (last && drift[ri] - last[1] <= 64) last[1] = drift[ri];
+        else runs.push([drift[ri], drift[ri]]);
+    }
+    var sweptFrames = 0;
+    for (var rr = 0; rr < runs.length; rr++) sweptFrames += runs[rr][1] - runs[rr][0] + 1;
+    if (!opts.force && sweptFrames > Math.max(2000, nFrames * 0.05)) {
+        console.log('[export-slp-store] ' + drift.length.toLocaleString() + ' frames differ from the store (' +
+            sweptFrames.toLocaleString() + ' to hydrate): using the per-frame pass');
+        return null;
+    }
+    var tPlan = performance.now();
+
+    var cams = [];
+    try {
+        for (var c = 0; c < cameras.length; c++) {
+            var env = _buildCameraExportHeader(session, cameras[c].cameraName, cameras[c].videoFileInfo);
+            env.instanceFilter = instanceFilter;
+            env.reprojAsUser = null;   // the copy runs only without reprojections
+            var header = {
+                skeletons: [env.skeleton], videos: [env.video], tracks: env.tracks,
+                identities: [], sessions: [],
+                provenance: { source: 'lucid', exported_at: new Date().toISOString() },
+            };
+            var writer = await SIO.openSlpWriter(header);
+            if (typeof writer.appendRawRows !== 'function') {
+                try { writer.dispose(); } catch (e) { /* ignore */ }
+                throw new Error('sleap-io.js writer lacks appendRawRows (LUCID local patch, raw rows)');
+            }
+            cams.push({ name: cameras[c].cameraName, env: env, header: header, writer: writer, swept: new Map(),
+                        rowMap: loader.frameRowByCam.get(cameras[c].cameraName) || new Map(), nFrames: 0,
+                        rw: null, bytes: null, done: null });
+        }
+
+        // 2. Hydrate the drift runs and build their frames exactly as the pass does.
+        var sweptSet = new Set();
+        for (var rn = 0; rn < runs.length; rn++) {
+            for (var sf = runs[rn][0]; sf <= runs[rn][1]; sf++) sweptSet.add(sf);
+            await sweepLazyFrameWindows(session, function (frameIdx, fg) {
+                if (!fg) return;
+                for (var k = 0; k < cams.length; k++) {
+                    cams[k].swept.set(frameIdx, _buildCameraLabeledFrame(session, cams[k].name, frameIdx, fg, cams[k].env));
+                }
+            }, { start: runs[rn][0], end: runs[rn][1] });
+        }
+        // The sweep hydrates through the ACTIVE session only: a frame it should
+        // have built but did not means the file would silently miss it.
+        for (var dv = 0; dv < drift.length; dv++) {
+            if (!cams[0] || cams[0].swept.has(drift[dv])) continue;
+            throw new Error('Export aborted: frame ' + drift[dv].toLocaleString() + ' could not be read, so the ' +
+                'file would be incomplete. This happens when exporting a session that is not the one currently ' +
+                'open — switch to that session and export again.');
+        }
+        var tSwept = performance.now();
+
+        // 3. Each camera, in frame order: swept and resident frames through the
+        //    pass's builder, every other frame copied from the store. With
+        //    workers (the default), a group of cameras is built in turns, one
+        //    block each, and each camera's rows go to its own worker, which
+        //    writes and gzips them (gzip was ~3/4 of the copy, on one core).
+        //    Without, one camera after another on this thread, as before.
+        var pacer = createProgressPacer();
+        var BLOCK = 4096;
+        for (var ci = 0; ci < cams.length; ci++) {
+            cams[ci].copier = _storeCameraCopier(session, ctx, cams[ci], sweptSet, nFrames, instanceFilter, BLOCK);
+        }
+        var nWorkers = _storeCopyWorkerCount(cams.length, opts);
+        var reportProgress = async function () {
+            if (!opts.onProgress) return;
+            var sum = 0;
+            for (var pi = 0; pi < cams.length; pi++) sum += cams[pi].copier.fraction();
+            await opts.onProgress(Math.floor(nFrames * sum / cams.length), nFrames);
+        };
+        var g0 = 0;
+        while (g0 < cams.length) {
+            var group = cams.slice(g0, g0 + Math.max(1, nWorkers));
+            if (nWorkers) {
+                try {
+                    await _attachRowsWorkers(SIO, group);
+                } catch (we) {
+                    _detachRowsWorkers(group);
+                    if (g0 > 0) throw we;   // they ran for the cameras before: this is a real failure
+                    console.warn('[export-slp-store] export workers unavailable, compressing on this thread:', we);
+                    nWorkers = 0;
+                    continue;
+                }
+            }
+            var live = group.slice();
+            while (live.length) {
+                for (var li = 0; li < live.length; li++) {
+                    var cm = live[li];
+                    if (cm.rw) await cm.rw.room();
+                    if (cm.copier.step()) {
+                        cm.swept = null;
+                        console.log('[export-slp-store] camera', cm.name + ':', cm.nFrames.toLocaleString(), 'labeled frames written');
+                        if (cm.rw) cm.done = cm.rw.finish();
+                        live.splice(li, 1);
+                        li--;
+                    }
+                }
+                // Progress after every round (cheap: no paint) so the bar and
+                // Esc keep up; a paint only when the pacer says so.
+                await reportProgress();
+                if (pacer.due()) await pacer.yield();
+            }
+            for (var gi = 0; gi < group.length; gi++) {
+                var gc = group[gi];
+                if (!gc.rw) continue;
+                gc.bytes = await gc.done;
+                // The worker's file is the whole file only if finishing the
+                // working writer would have added nothing but rows.
+                if (!gc.writer.lucidOnlyTableRows()) {
+                    throw new Error('Export aborted: ' + gc.name + '\'s file has annotations or empty frames the export workers do not write.');
+                }
+                gc.rw.terminate();
+                gc.rw = null;
+                gc.writer.dispose();
+                gc.writer = null;
+            }
+            g0 += group.length;
+        }
+        if (opts.onProgress) await opts.onProgress(nFrames, nFrames);
+        var tCopied = performance.now();
+
+        var out = [];
+        for (var w = 0; w < cams.length; w++) {
+            var sink = opts.sinks && opts.sinks[w];
+            if (cams[w].bytes) {
+                if (sink) {
+                    await _writeBytesToSink(sink, cams[w].bytes, opts.chunkBytes);
+                    out.push(null);
+                } else {
+                    out.push(cams[w].bytes);
+                }
+                cams[w].bytes = null;
+            } else if (sink) {
+                await cams[w].writer.writeToSink(sink, { chunkBytes: opts.chunkBytes });
+                out.push(null);
+            } else {
+                out.push(cams[w].writer.close());
+            }
+            cams[w].writer = null;
+        }
+        console.log('[export-slp-store] ' + cams.length + ' camera(s) from the store: plan ' +
+            Math.round(tPlan - t0) + ' ms, ' + drift.length.toLocaleString() + ' frames hydrated in ' +
+            Math.round(tSwept - tPlan) + ' ms, copy ' + Math.round(tCopied - tSwept) + ' ms' +
+            (nWorkers ? ' (' + nWorkers + ' worker' + (nWorkers === 1 ? '' : 's') + ')' : ' (this thread)') +
+            ', close ' + Math.round(performance.now() - tCopied) + ' ms');
+        return out;
+    } catch (err) {
+        _detachRowsWorkers(cams);
+        for (var d = 0; d < cams.length; d++) {
+            var wr = cams[d].writer;
+            try { if (wr && typeof wr.dispose === 'function') wr.dispose(); } catch (e) { /* ignore */ }
+        }
+        throw err;
+    }
+}
+
+/**
+ * One camera's walk for `exportCamerasFromSharedStore` step 3: its frames in
+ * order, swept and resident frames through the pass's builder (`appendFrames`),
+ * every other frame copied from the store in blocks (`appendRawRows`).
+ * `step()` walks up to `block` frames and returns true once the camera is
+ * written (everything flushed); `fraction()` is how far it got.
+ */
+function _storeCameraCopier(session, ctx, cam, sweptSet, nFrames, instanceFilter, block) {
+    var keySet = new Set();
+    for (var rk of cam.rowMap.keys()) if (rk >= 0 && rk < nFrames) keySet.add(rk);
+    for (var fk of session.frameGroups.keys()) if (fk >= 0 && fk < nFrames) keySet.add(fk);
+    for (var sk of sweptSet) keySet.add(sk);
+    var keys = Float64Array.from(keySet).sort();
+    var bFrames = new Float64Array(block), bRows = new Float64Array(block), bn = 0;
+    var lfs = [];
+    var ki = 0;
+    function flushRows() {
+        if (!bn) return;
+        var rows = _storeRowsBlock(session, ctx, cam.name, bFrames, bRows, bn, instanceFilter);
+        cam.nFrames += rows.frames.length / 5;   // before the append: a worker takes the arrays
+        cam.writer.appendRawRows(rows);
+        bn = 0;
+    }
+    function flushLfs() {
+        if (!lfs.length) return;
+        cam.writer.appendFrames(lfs);
+        cam.nFrames += lfs.length;
+        lfs = [];
+    }
+    return {
+        fraction: function () { return keys.length ? ki / keys.length : 1; },
+        step: function () {
+            var stop = Math.min(keys.length, ki + block);
+            for (; ki < stop; ki++) {
+                var f = keys[ki];
+                var lf;
+                if (sweptSet.has(f)) {
+                    lf = cam.swept.get(f) || null;
+                } else {
+                    var fg = session.frameGroups.get(f);
+                    lf = fg ? _buildCameraLabeledFrame(session, cam.name, f, fg, cam.env) : undefined;
+                }
+                if (lf !== undefined) {
+                    if (lf) { flushRows(); lfs.push(lf); if (lfs.length >= 256) flushLfs(); }
+                } else {
+                    var row = cam.rowMap.get(f);
+                    if (row !== undefined) {
+                        flushLfs();
+                        bFrames[bn] = f; bRows[bn] = row; bn++;
+                        if (bn === block) flushRows();
+                    }
+                }
+            }
+            if (ki < keys.length) return false;
+            flushLfs();
+            flushRows();
+            return true;
+        },
+    };
+}
+
+/**
+ * How many cameras the store copy writes at once in workers (0 = this thread):
+ * `opts.workers` (false/0 = none, a number = that many), else
+ * `window.LUCID_EXPORT_WORKERS`, else one per camera up to the core count.
+ */
+function _storeCopyWorkerCount(nCams, opts) {
+    if (opts.workers === false) return 0;
+    if (typeof Worker !== 'function' || typeof document === 'undefined') return 0;
+    var forced = typeof opts.workers === 'number' ? opts.workers
+        : (typeof window !== 'undefined' ? window.LUCID_EXPORT_WORKERS : undefined);
+    if (forced != null) return Math.max(0, Math.min(nCams, forced | 0));
+    var hc = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 2;
+    return Math.max(1, Math.min(nCams, hc, 16));
+}
+
+/** Row messages in flight per export worker (each one table's rows of one block). */
+var ROWS_WORKER_QUEUE = 8;
+
+/**
+ * Start `import-export/slp-rows-worker.js` on `shell` (an empty writer's file)
+ * and return its handle: `ready`, `send(name, data, rows, cols)` (transfers
+ * `data`), `room()` (resolves while fewer than ROWS_WORKER_QUEUE messages are
+ * unanswered), `finish()` → the file's bytes, `terminate()`. A failure rejects
+ * every pending and later call.
+ */
+function _startRowsWorker(shell) {
+    var w = new Worker(new URL('import-export/slp-rows-worker.js?v=b6111f59ef09', document.baseURI), { type: 'module' });
+    var h = { failed: null, inFlight: 0, waiters: [] };
+    var readyFns, doneFns;
+    h.ready = new Promise(function (res, rej) { readyFns = [res, rej]; });
+    var done = new Promise(function (res, rej) { doneFns = [res, rej]; });
+    h.ready.catch(function () { /* surfaced by the awaiting caller */ });
+    done.catch(function () { /* surfaced by finish() */ });
+    function wake() {
+        var ws = h.waiters;
+        h.waiters = [];
+        for (var i = 0; i < ws.length; i++) ws[i]();
+    }
+    function fail(err) {
+        if (h.failed) return;
+        h.failed = err;
+        readyFns[1](err);
+        doneFns[1](err);
+        wake();
+    }
+    w.onmessage = function (ev) {
+        var m = ev.data;
+        if (m.type === 'ready') readyFns[0]();
+        else if (m.type === 'ack') { h.inFlight--; wake(); }
+        else if (m.type === 'done') doneFns[0](m.bytes);
+        else if (m.type === 'error') fail(new Error('export worker: ' + m.message));
+    };
+    w.onerror = function (e) {
+        if (e && e.preventDefault) e.preventDefault();
+        fail(new Error('export worker failed: ' + ((e && e.message) || 'it could not start')));
+    };
+    h.send = function (name, data, rows, cols) {
+        if (h.failed) throw h.failed;
+        var own = (data.byteOffset === 0 && data.byteLength === data.buffer.byteLength) ? data : data.slice();
+        h.inFlight++;
+        w.postMessage({ type: 'rows', name: name, data: own, rows: rows, cols: cols }, [own.buffer]);
+    };
+    h.create = function (spec, data, attrs) {
+        if (h.failed) throw h.failed;
+        var own = (data.byteOffset === 0 && data.byteLength === data.buffer.byteLength) ? data : data.slice();
+        h.inFlight++;
+        w.postMessage({ type: 'create', spec: spec, data: own, attrs: attrs }, [own.buffer]);
+    };
+    h.room = function () {
+        if (h.failed) return Promise.reject(h.failed);
+        if (h.inFlight < ROWS_WORKER_QUEUE) return Promise.resolve();
+        return new Promise(function (res) { h.waiters.push(res); }).then(h.room);
+    };
+    h.finish = function () {
+        if (!h.failed) w.postMessage({ type: 'finish' });
+        return done;
+    };
+    h.terminate = function () { w.terminate(); };
+    var buf = (shell.byteOffset === 0 && shell.byteLength === shell.buffer.byteLength) ? shell.buffer : shell.slice().buffer;
+    w.postMessage({ type: 'open', shell: buf }, [buf]);
+    return h;
+}
+
+/**
+ * Give each camera of `group` an export worker holding its header (an empty
+ * writer with the same header, closed at once) and send its writer's rows
+ * there (`lucidDivertRows`, the bundle's `(row divert)` patch).
+ */
+async function _attachRowsWorkers(SIO, group) {
+    for (var i = 0; i < group.length; i++) {
+        var shellWriter = await SIO.openSlpWriter(group[i].header);
+        if (typeof shellWriter.lucidDivertRows !== 'function' || typeof shellWriter.lucidOnlyTableRows !== 'function') {
+            try { shellWriter.dispose(); } catch (e) { /* ignore */ }
+            throw new Error('sleap-io.js writer lacks lucidDivertRows (LUCID local patch, row divert)');
+        }
+        group[i].rw = _startRowsWorker(shellWriter.close());
+    }
+    for (var r = 0; r < group.length; r++) await group[r].rw.ready;
+    group.forEach(function (cm) {
+        cm.writer.lucidDivertRows(function (name, data, rows, cols) { cm.rw.send(name, data, rows, cols); });
+    });
+}
+
+/** Stop `cams`' export workers and send their writers' rows to their own files again. */
+function _detachRowsWorkers(cams) {
+    for (var i = 0; i < cams.length; i++) {
+        var cm = cams[i];
+        if (!cm.rw) continue;
+        try { cm.rw.terminate(); } catch (e) { /* ignore */ }
+        cm.rw = null;
+        try { if (cm.writer && !cm.writer.closed) cm.writer.lucidDivertRows(null); } catch (e) { /* ignore */ }
+    }
+}
+
+/** Write `bytes` to a FileSystemWritableFileStream-like `sink` in chunks, then close it. */
+async function _writeBytesToSink(sink, bytes, chunkBytes) {
+    var step = Math.max(1, Math.trunc(chunkBytes || 8 * 1024 * 1024));
+    for (var pos = 0; pos < bytes.length; pos += step) {
+        await sink.write(bytes.subarray(pos, Math.min(pos + step, bytes.length)));
+    }
+    if (sink.close) await sink.close();
+}
+
+/**
+ * Whether By Cam's camera `selection` (one session, one camera) would be written
+ * by the streaming sweep — the same routing as `exportSlpMultiSession` — so the
+ * caller can put every such camera of a session into ONE `exportCamerasSlpStreaming`.
+ */
+export function cameraExportUsesSweep(selection, reprojAsUser, instanceFilter) {
+    var session = selection && selection.session;
+    if (!_exportWouldTruncate(session)) return false;
+    if (!reprojAsUser && instanceFilterAllowsLazyFastPath(instanceFilter) &&
+        lazyCameraFastPathUsable(window.SleapIO, session, selection.cameraName)) return false;
+    return true;
 }
 
 export async function exportSlpClientSide(session, cameraName, reprojAsUser, videoFileInfo, outputFilename, instanceFilter) {
@@ -1817,11 +2804,11 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
             }
         }
 
-        var videoFilename = videoFileInfo.videoPath
-            || (videoFileInfo.file ? videoFileInfo.file.name : (cameraName + '.mp4'));
-        var vw = videoFileInfo.videoWidth || 0;
-        var vh = videoFileInfo.videoHeight || 0;
-        var fc = videoFileInfo.frameCount || 0;
+        var cv = cameraExportVideo(session, cameraName, videoFileInfo);
+        var videoFilename = cv.filename;
+        var vw = cv.width;
+        var vh = cv.height;
+        var fc = cv.frames;
         var video = new SIO.Video({
             filename: videoFilename,
             backendMetadata: {
@@ -1955,9 +2942,13 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
  * @param {Array<{session, cameraName, videoFileInfo}>} selections
  * @param {boolean|null} reprojAsUser
  * @param {object} [instanceFilter]
+ * @param {object} [opts]
+ * @param {function(number, number): (Promise|void)} [opts.onProgress]  frames swept
+ *   of total, only on the streaming path (a lazy project that would truncate); the
+ *   other paths are one step each and never call it. Throwing from it aborts.
  * @returns {Promise<Blob>}
  */
-export async function exportSlpMultiSession(selections, reprojAsUser, instanceFilter) {
+export async function exportSlpMultiSession(selections, reprojAsUser, instanceFilter, opts) {
     var SIO = window.SleapIO;
     if (!SIO) throw new Error('sleap-io.js not loaded');
 
@@ -1976,7 +2967,8 @@ export async function exportSlpMultiSession(selections, reprojAsUser, instanceFi
     if (selections.length === 1 && _exportWouldTruncate(selections[0].session)) {
         var oneBytes = await exportCameraSlpStreaming(
             selections[0].session, selections[0].cameraName, reprojAsUser,
-            selections[0].videoFileInfo, instanceFilter);
+            selections[0].videoFileInfo, instanceFilter,
+            { onProgress: opts && opts.onProgress });
         return new Blob([oneBytes], { type: 'application/x-hdf5' });
     }
     // Multi-selection (several sessions/cameras into ONE file) still has no
@@ -2287,6 +3279,8 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
     // every session's dict) plus THIS session's per-view 2D. Same omit-the-
     // defaults rule, so a project that never opened the feature is unchanged.
     writePlaneMetadata(sioSession.metadata.lucid, session);
+    // Temporal Smoothing's last run, only while something is smoothed.
+    writeSmoothingMetadata(sioSession.metadata.lucid, session);
     session.cameras.forEach(function (cam, i) {
         sioSession.addVideo(sioVideos[i], sioCameras[i]);
     });
@@ -2386,6 +3380,10 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
             // accepts boxed rows, so don't reject them here.
             if (group.points3d && group.points3d.length > 0) {
                 instance3d = new SIO.Instance3D({ points: group.points3d, skeleton: skeleton });
+                // Temporal Smoothing's source (smoothing-metadata.js): the vendored
+                // writer stores it row-parallel to `points_3d`.
+                var unsmoothed = smoothingSourceFor(group);
+                if (unsmoothed) instance3d.lucidUnsmoothed = unsmoothed;
             }
 
             // Resolve identity
@@ -2474,76 +3472,102 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
 /**
  * Build a points3d.h5 HDF5 file as a Blob.
  * Ports json_to_h5.py logic to JavaScript using h5wasm.
+ * `points_3d` (n_frames, n_tracks, n_nodes, 3) and `reprojection_error`
+ * (n_frames, n_tracks, n_nodes), float64, NaN = none; n_frames = the frames
+ * with 3D, n_tracks = the identities (`reprojTrackAxis`).
+ *
+ * Written in windows of frames into chunked, gzip-1 datasets, like
+ * `buildReprojH5`: building both arrays at once (and boxed per node first)
+ * took a lazily opened 135,219-frame project from 2.3 to 3.8 GB of heap.
  *
  * @param {Session} session
+ * @param {Object} [opts]
+ * @param {function(number, number): (Promise|void)} [opts.onProgress]
+ *        (framesDone, nFrames), awaited after each window (paint the card here)
  * @returns {Promise<Blob>} The .h5 file as a Blob
  */
-export async function buildPoints3dH5(session) {
+export async function buildPoints3dH5(session, opts) {
+    opts = opts || {};
     const mod = await initH5wasm();
     const fname = 'export_points3d.h5';
 
-    // Build JSON intermediate
-    const data = buildPoints3dExportData(session);
-
-    const frameIndices = data.frame_indices;
-    const trackNames = data.track_names;
-    const nodeNames = data.node_names;
-    const pts3dRaw = data.points_3d;
-    const reprojRaw = data.reprojection_errors;
-
+    const axis = reprojTrackAxis(session);
+    const trackNames = axis.names;
+    const nodeNames = session.skeleton.nodes.slice();
+    const frameIndices = points3dExportFrames(session, axis);
     const nFrames = frameIndices.length;
     const nTracks = trackNames.length;
     const nNodes = nodeNames.length;
-
-    // Build 4D flat array: (n_frames, n_tracks, n_nodes, 3)
-    const pts3d = new Float64Array(nFrames * nTracks * nNodes * 3);
-    pts3d.fill(NaN);
-    for (var fi = 0; fi < nFrames; fi++) {
-        if (!pts3dRaw[fi]) continue;
-        for (var ti = 0; ti < nTracks; ti++) {
-            if (!pts3dRaw[fi][ti]) continue;
-            for (var ni = 0; ni < nNodes; ni++) {
-                var pt = pts3dRaw[fi][ti][ni];
-                if (pt && pt.length === 3) {
-                    var base = ((fi * nTracks + ti) * nNodes + ni) * 3;
-                    pts3d[base] = pt[0];
-                    pts3d[base + 1] = pt[1];
-                    pts3d[base + 2] = pt[2];
-                }
-            }
-        }
-    }
-
-    // Build 3D flat array: (n_frames, n_tracks, n_nodes)
-    const reprojErr = new Float64Array(nFrames * nTracks * nNodes);
-    reprojErr.fill(NaN);
-    for (var fi2 = 0; fi2 < nFrames; fi2++) {
-        if (!reprojRaw[fi2]) continue;
-        for (var ti2 = 0; ti2 < nTracks; ti2++) {
-            if (!reprojRaw[fi2][ti2]) continue;
-            for (var ni2 = 0; ni2 < nNodes; ni2++) {
-                var val = reprojRaw[fi2][ti2][ni2];
-                if (val != null && !isNaN(val)) {
-                    reprojErr[(fi2 * nTracks + ti2) * nNodes + ni2] = val;
-                }
-            }
-        }
-    }
+    const perFrame = nTracks * nNodes;   // reprojection_error; points_3d is 3×
+    const ptsTail = [nTracks, nNodes, 3];
+    const errTail = [nTracks, nNodes];
 
     const f = new mod.File(fname, 'w');
     try {
-        f.create_dataset({name: 'points_3d', data: pts3d, shape: [nFrames, nTracks, nNodes, 3]});
-        f.create_dataset({name: 'frame_indices', data: new Float64Array(frameIndices)});
-        f.create_dataset({name: 'reprojection_error', data: reprojErr, shape: [nFrames, nTracks, nNodes]});
+        if (perFrame === 0 || nFrames === 0) {
+            // Nothing to chunk (HDF5 chunks cannot have a zero dimension).
+            f.create_dataset({name: 'points_3d', data: new Float64Array(0), shape: [nFrames].concat(ptsTail)});
+            f.create_dataset({name: 'frame_indices', data: new Float64Array(frameIndices)});
+            f.create_dataset({name: 'reprojection_error', data: new Float64Array(0), shape: [nFrames].concat(errTail)});
+        } else {
+            const chunkFrames = Math.min(nFrames, reprojChunkFrames(perFrame * 3));
+            // A window is whole chunks, so no chunk is compressed twice.
+            const winFrames = chunkFrames * Math.max(1, Math.floor(4194304 / (chunkFrames * perFrame * 3)));
+            const ptsDs = createFramesDataset(f, 'points_3d', nFrames, ptsTail, chunkFrames);
+            f.create_dataset({name: 'frame_indices', data: new Float64Array(frameIndices)});
+            const errDs = createFramesDataset(f, 'reprojection_error', nFrames, errTail, chunkFrames);
+            const ptsWin = new Float64Array(winFrames * perFrame * 3);
+            // No per-node error is kept, so the error dataset is all NaN.
+            const errWin = new Float64Array(winFrames * perFrame).fill(NaN);
+            const ptsSel = [[0, 0], [0, nTracks], [0, nNodes], [0, 3]];
+            const errSel = [[0, 0], [0, nTracks], [0, nNodes]];
+            for (var w0 = 0; w0 < nFrames; w0 += winFrames) {
+                var w1 = Math.min(nFrames, w0 + winFrames);
+                var buf = ptsWin.subarray(0, (w1 - w0) * perFrame * 3);
+                buf.fill(NaN);
+                for (var fi = w0; fi < w1; fi++) {
+                    fillPoints3dFrame(buf, (fi - w0) * perFrame * 3, session.instanceGroups.get(frameIndices[fi]),
+                        axis.index, nTracks, nNodes);
+                }
+                ptsSel[0] = [w0, w1];
+                ptsDs.write_slice(ptsSel, buf);
+                errSel[0] = [w0, w1];
+                errDs.write_slice(errSel, errWin.subarray(0, (w1 - w0) * perFrame));
+                if (opts.onProgress) await opts.onProgress(w1, nFrames);
+            }
+        }
         f.create_dataset({name: 'track_names', data: trackNames});
         f.create_dataset({name: 'node_names', data: nodeNames});
 
         f.close();
         return h5FileToBlob(fname);
     } catch (err) {
-        f.close();
+        try { f.close(); } catch (e) { /* already closed */ }
         throw err;
+    } finally {
+        // The finished file is in the Blob; don't keep a copy in h5wasm's MEMFS.
+        try { mod.FS.unlink(fname); } catch (e) { /* not there */ }
     }
+}
+
+/**
+ * A float64 dataset of `nFrames` × `tail`, chunked by `chunkFrames` frames and
+ * gzip-1, for writing in windows of frames with `write_slice`.
+ */
+function createFramesDataset(f, name, nFrames, tail, chunkFrames) {
+    f.create_dataset({
+        name: name,
+        data: new Float64Array(0),
+        shape: [0].concat(tail),
+        maxshape: [null].concat(tail),
+        chunks: [chunkFrames].concat(tail),
+        dtype: '<d',   // not '<f8': h5wasm reads that as float32
+        compression: 'gzip',
+        compression_opts: 1,
+    });
+    const ds = f.get(name);
+    ds.resize([nFrames].concat(tail));
+    return ds;
 }
 
 // ============================================
@@ -2551,72 +3575,92 @@ export async function buildPoints3dH5(session) {
 // ============================================
 
 /**
+ * Frames per HDF5 chunk of `reprojections`: as many as fit in ~1 MB of float64
+ * (436 for 2 animals × 5 cameras × 15 nodes), at least one.
+ */
+export function reprojChunkFrames(perFrame) {
+    return Math.max(1, Math.floor(131072 / Math.max(1, perFrame)));
+}
+
+/**
+ * The `reprojections` track axis: one entry per identity (a group is placed by
+ * its identity), in `session.identities` order; without identities, the
+ * session's tracks as before. `index` maps an identity id to its position.
+ */
+export function reprojTrackAxis(session) {
+    var ids = session.identities || [];
+    if (ids.length > 0) {
+        var index = new Map();
+        ids.forEach(function (id, i) { index.set(id.id, i); });
+        return { names: ids.map(function (id) { return id.name; }), index: index };
+    }
+    var names = session.tracks.slice();
+    return { names: names, index: null };
+}
+
+/**
  * Build a reprojections.h5 HDF5 file as a Blob.
  * Contains 2D reprojected points per camera.
- * Shape: (n_frames, n_tracks, n_cameras, n_nodes, 2)
+ * Shape: (n_frames, n_tracks, n_cameras, n_nodes, 2), float64, NaN = none;
+ * n_tracks = the identities (`reprojTrackAxis`).
+ *
+ * Written in windows of frames into a chunked, gzip-1 dataset, so neither the
+ * JS heap nor h5wasm's 2 GB heap ever holds the whole array: a 135,181-frame,
+ * 5-camera recording built it as one 4.7 GB Float64Array (sized by every
+ * tracklet instead of the identities) and failed. Values, shape and dtype are
+ * what any HDF5 reader expects; only the storage is chunked.
  *
  * @param {Session} session
+ * @param {Object} [opts]
+ * @param {function(number, number): (Promise|void)} [opts.onProgress]
+ *        (framesDone, nFrames), awaited after each window (paint the card here)
  * @returns {Promise<Blob>} The .h5 file as a Blob
  */
-export async function buildReprojH5(session) {
+export async function buildReprojH5(session, opts) {
+    opts = opts || {};
     const mod = await initH5wasm();
     const fname = 'export_reprojections.h5';
 
     const cameras = session.cameras;
     const nodeNames = session.skeleton.nodes;
-    const trackNames = (session.identities && session.identities.length > 0)
-        ? session.identities.map(function (id) { return id.name; })
-        : session.tracks.slice();
+    const axis = reprojTrackAxis(session);
+    const trackNames = axis.names;
     const nCameras = cameras.length;
     const nNodes = nodeNames.length;
-    const nTracks = Math.max(
-        (session.identities ? session.identities.length : 0),
-        session.tracks.length
-    );
+    const nTracks = trackNames.length;
     const cameraNames = cameras.map(function (c) { return c.name; });
 
     // Collect frames sorted
     const sortedFrameIndices = Array.from(session.instanceGroups.keys()).sort(function (a, b) { return a - b; });
     const nFrames = sortedFrameIndices.length;
-
-    // Build 5D flat array: (n_frames, n_tracks, n_cameras, n_nodes, 2)
-    const reproj = new Float64Array(nFrames * nTracks * nCameras * nNodes * 2);
-    reproj.fill(NaN);
-
-    for (var fi = 0; fi < nFrames; fi++) {
-        var frameIdx = sortedFrameIndices[fi];
-        var groups = session.instanceGroups.get(frameIdx);
-        if (!groups) continue;
-
-        for (var group of groups) {
-            var idIdx = group.identityId;
-            if (idIdx < 0 || idIdx >= nTracks) continue;
-            // A group's reprojections are derived and kept only for frames
-            // that have been shown (Triangulate All stores none — see
-            // `sweepTriangulateAllFrames` in pose/triangulation.js), so
-            // project its stored 3D for the rest rather than skipping them.
-            var stored = group.reprojections;
-            if (!stored && points3dNodeCount(group.points3d) === 0) continue;
-            for (var ci = 0; ci < nCameras; ci++) {
-                var camName = cameraNames[ci];
-                var reprojPts = stored ? stored[camName]
-                    : (cameras[ci].projectionMatrix ? reprojectPointsCamera(group.points3d, cameras[ci]) : null);
-                if (!reprojPts) continue;
-                for (var ni = 0; ni < Math.min(nNodes, reprojPts.length); ni++) {
-                    var rpt = reprojPts[ni];
-                    if (rpt) {
-                        var rbase = (((fi * nTracks + idIdx) * nCameras + ci) * nNodes + ni) * 2;
-                        reproj[rbase] = rpt[0];
-                        reproj[rbase + 1] = rpt[1];
-                    }
-                }
-            }
-        }
-    }
+    const perFrame = nTracks * nCameras * nNodes * 2;
+    const tail = [nTracks, nCameras, nNodes, 2];
 
     const f = new mod.File(fname, 'w');
     try {
-        f.create_dataset({name: 'reprojections', data: reproj, shape: [nFrames, nTracks, nCameras, nNodes, 2]});
+        if (perFrame === 0 || nFrames === 0) {
+            // Nothing to chunk (HDF5 chunks cannot have a zero dimension).
+            f.create_dataset({name: 'reprojections', data: new Float64Array(0), shape: [nFrames].concat(tail)});
+        } else {
+            const chunkFrames = Math.min(nFrames, reprojChunkFrames(perFrame));
+            // A window is whole chunks, so no chunk is compressed twice.
+            const winFrames = chunkFrames * Math.max(1, Math.floor(4194304 / (chunkFrames * perFrame)));
+            const ds = createFramesDataset(f, 'reprojections', nFrames, tail, chunkFrames);
+            const win = new Float64Array(winFrames * perFrame);
+            const sel = [[0, 0], [0, nTracks], [0, nCameras], [0, nNodes], [0, 2]];
+            for (var w0 = 0; w0 < nFrames; w0 += winFrames) {
+                var w1 = Math.min(nFrames, w0 + winFrames);
+                var buf = win.subarray(0, (w1 - w0) * perFrame);
+                buf.fill(NaN);
+                for (var fi = w0; fi < w1; fi++) {
+                    fillReprojFrame(buf, (fi - w0) * perFrame, session.instanceGroups.get(sortedFrameIndices[fi]),
+                        axis.index, nTracks, cameras, cameraNames, nNodes);
+                }
+                sel[0] = [w0, w1];
+                ds.write_slice(sel, buf);
+                if (opts.onProgress) await opts.onProgress(w1, nFrames);
+            }
+        }
         f.create_dataset({name: 'frame_indices', data: new Float64Array(sortedFrameIndices)});
         f.create_dataset({name: 'track_names', data: trackNames});
         f.create_dataset({name: 'node_names', data: nodeNames.slice()});
@@ -2625,8 +3669,40 @@ export async function buildReprojH5(session) {
         f.close();
         return h5FileToBlob(fname);
     } catch (err) {
-        f.close();
+        try { f.close(); } catch (e) { /* already closed */ }
         throw err;
+    } finally {
+        // The finished file is in the Blob; don't keep a copy in h5wasm's MEMFS.
+        try { mod.FS.unlink(fname); } catch (e) { /* not there */ }
+    }
+}
+
+/** One frame's groups into `buf` at `base` (layout: track, camera, node, xy). */
+function fillReprojFrame(buf, base, groups, idIndex, nTracks, cameras, cameraNames, nNodes) {
+    if (!groups) return;
+    const nCameras = cameras.length;
+    for (var group of groups) {
+        var idIdx = trackAxisRow(group, idIndex, nTracks);
+        if (idIdx < 0) continue;
+        // A group's reprojections are derived and kept only for frames
+        // that have been shown (Triangulate All stores none — see
+        // `sweepTriangulateAllFrames` in pose/triangulation.js), so
+        // project its stored 3D for the rest rather than skipping them.
+        var stored = group.reprojections;
+        if (!stored && points3dNodeCount(group.points3d) === 0) continue;
+        for (var ci = 0; ci < nCameras; ci++) {
+            var reprojPts = stored ? stored[cameraNames[ci]]
+                : (cameras[ci].projectionMatrix ? reprojectPointsCamera(group.points3d, cameras[ci]) : null);
+            if (!reprojPts) continue;
+            var cbase = base + ((idIdx * nCameras + ci) * nNodes) * 2;
+            for (var ni = 0; ni < Math.min(nNodes, reprojPts.length); ni++) {
+                var rpt = reprojPts[ni];
+                if (rpt) {
+                    buf[cbase + ni * 2] = rpt[0];
+                    buf[cbase + ni * 2 + 1] = rpt[1];
+                }
+            }
+        }
     }
 }
 
@@ -2830,7 +3906,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=7d8d604c13c8', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=b6111f59ef09', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },

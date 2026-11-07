@@ -54,7 +54,7 @@ try {
     });
 
     await page.goto(`http://localhost:${PORT}/index.html`, { waitUntil: 'domcontentloaded', timeout: 120000 });
-    await page.waitForFunction(() => window.SleapIO && window.h5wasm, { timeout: 120000 });
+    await page.waitForFunction(() => window.SleapIO && window.h5wasm, null, { timeout: 120000 });
 
     // ---- 1. build + save a calibrated multi-frame project ----
     const built = await page.evaluate(async () => {

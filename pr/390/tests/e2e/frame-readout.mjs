@@ -40,7 +40,7 @@ try {
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     const readout = () => page.evaluate(() => {
         const q = (id) => document.getElementById(id);
@@ -115,7 +115,7 @@ try {
     await page.dblclick('#currentFrame');
     await page.fill('#currentFrame input', '12,345');
     await page.keyboard.press('Enter');
-    await page.waitForFunction(() => window.__lucid.state.currentFrame === 12344, { timeout: 3000 }).catch(() => {});
+    await page.waitForFunction(() => window.__lucid.state.currentFrame === 12344, null, { timeout: 30000 }).catch(() => {});
     r = await readout();
     check(r.frame === '12,345' && r.time === '06:51.467', `typing "12,345" seeks there: "${r.time}" / "${r.frame}"`);
 

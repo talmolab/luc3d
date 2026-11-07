@@ -85,7 +85,7 @@ try {
     page.on('pageerror', e => errs.push(String(e).slice(0, 300)));
     page.on('request', r => urls.push({ url: r.url(), type: r.resourceType() }));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 30000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
     // ---- 5: at ready, every same-site module requested is a preload or one of index.html's own tags
     const atReady = urls.map(r => new URL(r.url)).filter(u => u.host === `localhost:${PORT}` && /\.m?js$/.test(u.pathname));
     const tags = new Set(['/app.js', '/lib/h5wasm/h5wasm.iife.js']);
@@ -122,7 +122,7 @@ try {
     tp.on('request', r => turls.push({ url: r.url(), type: r.resourceType() }));
     tp.on('console', m => { if (m.text().startsWith('  FAIL:')) tfails.push(m.text()); });
     await tp.goto(`http://localhost:${PORT}/tests/test-runner.html`);
-    await tp.waitForFunction(() => { const el = document.querySelector('.test-summary'); return el && /\d+\s*\/\s*\d+/.test(el.textContent); }, { timeout: 120000 });
+    await tp.waitForFunction(() => { const el = document.querySelector('.test-summary'); return el && /\d+\s*\/\s*\d+/.test(el.textContent); }, null, { timeout: 120000 });
     const summary = (await tp.textContent('.test-summary')).replace(/\s+/g, ' ').trim();
     const m = summary.match(/(\d+)\s*\/\s*(\d+)/);
     check(m && m[1] === m[2] && +m[2] > 1000 && tfails.length === 0, `browser suite on the stamped copy: ${summary}${tfails.length ? ' — ' + tfails.slice(0, 3).join(' | ') : ''}`);
