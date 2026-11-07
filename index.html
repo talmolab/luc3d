@@ -275,12 +275,13 @@
                         </label>
                         <!-- Which identity Track All gives the tail marks (pose/tail-mark.js).
                              Wired in ui/tail-mark-field.js. -->
-                        <label class="tri-dropdown-setting" title="For two animals, one with dark marks on its tail: after Track All, read the marks in every camera and keep the marked animal on this identity from start to end. Saved with the project.">
+                        <label class="tri-dropdown-setting" title="After Track All, read dark marks on the tails in every camera and keep each animal on its identity from start to end: for two animals, the one with marks on id_0 or id_1; for more, each identity's number of bands (Bands per id…). Saved with the project.">
                             <span class="tri-dropdown-setting-label">Tail marks</span>
                             <select id="tbTailMarks" aria-label="Which identity has the tail marks">
                                 <option value="">Off</option>
                                 <option value="id_0">id_0</option>
                                 <option value="id_1">id_1</option>
+                                <option value="bands">Bands per id…</option>
                             </select>
                         </label>
                         <button class="tri-dropdown-item" data-scope="settings" role="menuitem"

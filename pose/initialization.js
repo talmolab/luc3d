@@ -32,7 +32,7 @@ import {
     setupPlaneDefinition, planeInteractionCallbacks, syncPlanes3D, refreshPlanePanel,
 } from '../ui/plane-definition.js';
 import { setupSplitHandles } from '../ui/layout-controls.js';
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
+import { drawAllOverlays, setReprojErrorVisible, noteOverlayViewTransform } from '../ui/rendering.js';
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import {
     manualAssignState, getTotalUnlinkedCount, cleanupManualAssignment, startManualAssignment,
@@ -111,6 +111,7 @@ function setupEmptyVideoController() {
                 drawAllOverlays(state.currentFrame);
             }, 200);
         },
+        onViewTransform: noteOverlayViewTransform,
     }));
 }
 
