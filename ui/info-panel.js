@@ -7,6 +7,8 @@ import {
     Skeleton, Camera, Session,
 } from '../pose/pose-data.js';
 import { getInstanceGroupsForFrame } from '../pose/triangulation.js';
+import { meanNodeScore } from '../pose/detection-filter-stats.js';
+import { setInfoTip } from './info-tip.js';
 import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from './overlays.js';
 import { drawAllOverlays, updateFrameCounters } from './rendering.js';
 import { isInteractiveClickTarget } from './interaction.js';
@@ -1494,6 +1496,11 @@ function updateStatusBarForFrame(meanError) {
 // they line up. Covered by tests/e2e/info-panel-instance-tables.mjs.
 const STACKED_SELECT_PX = 80;
 
+// The Ungrouped table's "Score / Node" header.
+const SCORE_NODE_TIP = 'Top: the instance score. Below: the mean node score — the model\'s node scores averaged over ' +
+    'every node of the skeleton, a missing node counting as 0 (sleap-nn\'s), which the Tracking Wizard\'s ' +
+    '"Min mean node score" filter tests; "-" when there is none (e.g. a user instance).';
+
 function buildTrackSelect(trackIdx, noneLabel, maxWidth) {
     const session = state.session;
     const tracks = session.tracks || [];
@@ -2206,6 +2213,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
     const ulTbody = document.querySelector('#unlinkedTable tbody');
     const ulEmpty = document.getElementById('unlinkedEmpty');
     ulTbody.textContent = '';
+    setInfoTip(document.getElementById('unlinkedScoreHead'), SCORE_NODE_TIP);
 
     const fg = state.session.getFrameGroup(frameIdx);
     let hasUnlinked = false;
@@ -2393,9 +2401,20 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 const validPts = ul.instance.countPoints();
                 tdPoints.textContent = validPts + '/' + ul.instance.numNodes;
 
+                // "Score / Node": the instance score, and under it the mean node score the Tracking
+                // Wizard's "Min mean node score" filter tests (`meanNodeScore`, sleap-nn's: a missing
+                // node counts as 0; '-' with no node scores). Stacked like Track / Identity — a fifth
+                // column does not fit a 300 px panel with its scrollbar showing.
                 const tdScore = document.createElement('td');
                 tdScore.className = 'mono';
-                tdScore.textContent = ul.instance.score != null ? ul.instance.score.toFixed(2) : '-';
+                const instScoreLine = document.createElement('div');
+                instScoreLine.textContent = ul.instance.score != null ? ul.instance.score.toFixed(2) : '-';
+                const nodeScoreLine = document.createElement('div');
+                nodeScoreLine.className = 'unlinked-node-score';
+                const mns = meanNodeScore(ul.instance, state.session, cam.name, frameIdx);
+                nodeScoreLine.textContent = mns === mns ? mns.toFixed(2) : '-';
+                tdScore.appendChild(instScoreLine);
+                tdScore.appendChild(nodeScoreLine);
 
                 tr.appendChild(tdTrackUl);
                 tr.appendChild(tdType);
