@@ -1,0 +1,14 @@
+# The 18-camera rig's 2024-12-06 calibration recording, calibrated with aniposelib and calibrat3
+# (same detections for scoring; each tool on the same 3 disjoint parts).
+
+[study]
+name = "18-camera rig: aniposelib vs calibrat3"
+
+[[take]]
+id = "cam18-2024-12-06"
+rig = "cam18"
+session = "2024-12-06"
+board = "boards/printed-8x11-24mm-4x4.toml"
+path = "/Users/soline/Documents/scratchSLEAP/calibrationTesting/2024-12-06_19-12-39calibration"
+stride = 2
+reference = "calibration.toml"

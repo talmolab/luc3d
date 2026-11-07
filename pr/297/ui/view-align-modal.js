@@ -21,12 +21,12 @@
  * ui/sessions-panes.js (syncRotationUI), ui/rendering.js, save-load.js.
  */
 
-import { state, videoController, getActiveSession } from './app-state.js?v=78058ee33dd8';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=78058ee33dd8';
-import { drawAllOverlays } from './rendering.js?v=78058ee33dd8';
-import { syncRotationUI } from './sessions-panes.js?v=78058ee33dd8';
-import { getSessionRotation, setSessionRotation, clampRotationSetting } from './video-filters.js?v=78058ee33dd8';
-import { alignViewRotations } from '../pose/view-align.js?v=78058ee33dd8';
+import { state, videoController, getActiveSession } from './app-state.js?v=4bf3092bd308';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=4bf3092bd308';
+import { drawAllOverlays } from './rendering.js?v=4bf3092bd308';
+import { syncRotationUI } from './sessions-panes.js?v=4bf3092bd308';
+import { getSessionRotation, setSessionRotation, clampRotationSetting } from './video-filters.js?v=4bf3092bd308';
+import { alignViewRotations } from '../pose/view-align.js?v=4bf3092bd308';
 
 // The last references applied, by camera name, so reopening the dialog (or
 // opening it on the next session of the same rig) starts from the same ones.

@@ -20,8 +20,8 @@
  *   { type: 'error', message: string }
  */
 
-import * as h5wasm from '../lib/h5wasm/hdf5_hl.js?v=78058ee33dd8';   // local vendored 0.10.3 ESM
-import { parseSlpSkeleton } from './slp-skeleton.js?v=78058ee33dd8';
+import * as h5wasm from '../lib/h5wasm/hdf5_hl.js?v=4bf3092bd308';   // local vendored 0.10.3 ESM
+import { parseSlpSkeleton } from './slp-skeleton.js?v=4bf3092bd308';
 
 var h5wasmReady = false;
 var FS = null;

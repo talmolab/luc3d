@@ -204,6 +204,76 @@ function fakeLoader(storeNodeNames) {
 }
 
 // ---------------------------------------------------------------------------
+// 5b. The per-instance scorers answer exactly as the per-node lookups
+//     (By Cam's per-frame pass resolves each instance's store row once)
+// ---------------------------------------------------------------------------
+{
+    const same = (a, b) => (Number.isNaN(a) && Number.isNaN(b)) || a === b;
+    // A store skeleton shaped like sleap-io.js's: `nodes` of objects and a
+    // `nodeNames` getter that builds a new array on every read.
+    let reads = 0;
+    const sioSkel = (names) => ({
+        nodes: names.map(name => ({ name })),
+        get nodeNames() { reads++; return this.nodes.map(n => n.name); },
+    });
+    for (const skelOf of [names => ({ nodeNames: names }), sioSkel]) {
+        const L = fakeLoader(NODES);
+        L.labelsByCam.get('camA')._lazyDataStore.skeletons = [skelOf(NODES)];
+        let all = true;
+        for (const [cam, f] of [['camA', 10], ['camA', 11], ['camA', 12], ['camB', 10]]) {
+            for (const off of [0, 1, 2, 3, null, -1, 0.5]) {
+                const fn = L.predictedPointScorer(cam, f, off);
+                for (const nm of ['head', 'trunk', 'tail', 'whisker']) {
+                    const want = L.predictedPointScore(cam, f, off, nm);
+                    if (!same(fn ? fn(nm) : NaN, want)) all = false;
+                }
+            }
+        }
+        ok(all, 'predictedPointScorer = predictedPointScore on every row, offset and name');
+    }
+    {
+        const L = fakeLoader(NODES);
+        const sk = sioSkel(NODES);
+        L.labelsByCam.get('camA')._lazyDataStore.skeletons = [sk];
+        reads = 0;
+        const fn = L.predictedPointScorer('camA', 10, 0);
+        for (let r = 0; r < 50; r++) fn('head'), fn('tail');
+        ok(reads === 1, 'the store skeleton\'s names are read once, not per node (' + reads + ')');
+        sk.nodes[0].name = 'snout';   // renamed in place: the cache must notice
+        ok(Number.isNaN(fn('head')) && fn('snout') === 0.11, 'a node renamed in place is found by its new name');
+        sk.nodes = [{ name: 'tail' }, { name: 'trunk' }, { name: 'snout' }];
+        ok(fn('tail') === 0.11 && fn('snout') === 0.13, 'a replaced nodes array is re-read');
+    }
+
+    const sk = new Skeleton('sk', NODES.slice(), [[0, 1], [1, 2]]);
+    const session = new Session([], sk, ['t0'], 'S');
+    session.lazyLoader = fakeLoader(NODES);
+    const eager = new Instance([[1, 1], [2, 2], [3, 3]], 0, 'predicted', 0.6);
+    eager.setPointScores([0.9, 0.8, 0.7]);
+    const lazy = new Instance([[1, 1], [2, 2], [3, 3]], 0, 'predicted', 0.6);
+    const lazyUserRow = new Instance([[1, 1], [2, 2], [3, 3]], 0, 'predicted', 0.6);
+    lazyUserRow._rawInstIndex = 1;
+    const noRow = new Instance([[1, 1], [2, 2], [3, 3]], 0, 'predicted', 0.6);
+    const user = new Instance([[1, 1], [2, 2], [3, 3]], 0, 'user', 1);
+    user._rawInstIndex = 0;
+    let all = true;
+    const check = () => {
+        for (const inst of [eager, lazy, lazyUserRow, noRow, user, null]) {
+            for (const f of [10, 11, 12]) {
+                const fn = session.predictedNodeScorer('camA', f, inst);
+                for (const k of [0, 1, 2, 3, -1, null, 1.5]) {
+                    if (!same(fn(k), session.predictedNodeScore('camA', f, inst, k))) all = false;
+                }
+            }
+        }
+    };
+    for (const idx of [0, 2]) { lazy._rawInstIndex = idx; check(); }
+    sk.nodes.splice(0, 1); lazy.removeNodeAt(0); eager.removeNodeAt(0); check();
+    sk.nodes.push('whisker'); lazy.insertNodeAt(2); check();
+    ok(all, 'Session.predictedNodeScorer = predictedNodeScore for every instance kind, frame and node, across skeleton edits');
+}
+
+// ---------------------------------------------------------------------------
 // 6. Tooltip text — SLEAP 1.6.5: f"{name}\n(score: {score:.2f})", else name
 // ---------------------------------------------------------------------------
 ok(nodeTooltipText('trunk', 0.94) === 'trunk\n(score: 0.94)', 'name and score, two decimals');

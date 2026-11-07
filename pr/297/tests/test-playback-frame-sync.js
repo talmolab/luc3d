@@ -272,29 +272,137 @@
             assertTrue(t.log.captured.every(function (c) { return c.closed; }), 'held and skipped captures are all closed');
         });
 
-        // Safari 27 / Firefox 157: `new VideoFrame(video).timestamp` is 0 or a
-        // constant during playback (measured, tests/e2e/_probe-capabilities).
-        // The loop must notice and stop trusting it, or playback freezes.
-        it('unusable VideoFrame timestamps: stops capturing, draws the <video>, overlays at the clock', async function () {
+        // Firefox 157: `new VideoFrame(video).timestamp` is a constant during
+        // playback (measured, tests/e2e/_probe-capabilities). The loop must
+        // notice at once and stop trusting it, or playback freezes.
+        function withUserAgent(ua, fn) {
+            var desc = Object.getOwnPropertyDescriptor(navigator, 'userAgent');
+            Object.defineProperty(navigator, 'userAgent', { configurable: true, value: ua });
+            return Promise.resolve().then(fn).finally(function () {
+                delete navigator.userAgent;
+                if (desc) Object.defineProperty(navigator, 'userAgent', desc);
+            });
+        }
+        var FIREFOX_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:157.0) Gecko/20100101 Firefox/157.0';
+        function withJudgeWindow(ms, fn) {
+            var prev = window.LUCID_VF_JUDGE_MS;
+            window.LUCID_VF_JUDGE_MS = ms;
+            return Promise.resolve().then(fn).finally(function () {
+                if (prev === undefined) delete window.LUCID_VF_JUDGE_MS; else window.LUCID_VF_JUDGE_MS = prev;
+            });
+        }
+        it('Firefox: a constant VideoFrame timestamp is judged unusable at once; draws the <video>, overlays at the clock', async function () {
             if (!canRun()) return;
-            var a = { idx: 0, frozenTs: 0, clockIdx: 0, tsMode: undefined };
+            await withUserAgent(FIREFOX_UA, async function () {
+                var a = { idx: 0, frozenTs: 0, clockIdx: 0, tsMode: undefined };
+                var t = setup([a]);
+                var el = t.views[0].decoder._videoEl;
+                t.ctrl.startPlayback();
+                for (var k = 0; k < 12; k++) {          // the clock advances, the timestamp doesn't
+                    a.clockIdx = 100 + k * 2; el.currentTime = a.clockIdx / 60;
+                    await nextFrames(1);
+                }
+                var capturedSoFar = t.log.captured.length;
+                a.clockIdx = 140; el.currentTime = 140 / 60;
+                await nextFrames(3);
+                var lastOv = t.log.overlays[t.log.overlays.length - 1];
+                t.ctrl.stopPlayback();
+                assertEqual(t.views[0].decoder._vfTimestamps, 'bad', 'timestamps judged unusable');
+                assertEqual(t.views[0].decoder._vfTsWhy, 'constant', 'for being constant, not for running out of time');
+                assertEqual(t.log.captured.length, capturedSoFar, 'no more VideoFrame captures once judged unusable');
+                assertTrue(t.log.fallbackDraws.length > 0, 'painted via drawCurrentFrame');
+                assertEqual(lastOv.vf.cam0, 140, 'overlay follows the clock');
+                assertTrue(t.log.captured.every(function (c) { return c.closed; }), 'judging captures were closed');
+            });
+        });
+
+        // luc3d #411: in Chrome a slow start looks like a timestamp that stands
+        // still or trails the clock by more than 3 frames. One look used to send
+        // every view to the fallback for good.
+        it('slow start: a timestamp that trails the clock, then catches up, is judged ok — and its captures are painted meanwhile', async function () {
+            if (!canRun()) return;
+            var a = { idx: 0, tsMode: undefined };
             var t = setup([a]);
             var el = t.views[0].decoder._videoEl;
             t.ctrl.startPlayback();
-            for (var k = 0; k < 12; k++) {          // the clock advances, the timestamp doesn't
-                a.clockIdx = 100 + k * 2; el.currentTime = a.clockIdx / 60;
+            var lagIdx = [];
+            for (var k = 0; k < 24; k++) {
+                var clock = 100 + k * 2;
+                a.idx = k < 12 ? clock - 10 : clock;   // 10 frames behind for the first 12 refreshes
+                if (k < 12) lagIdx.push(a.idx);
+                el.currentTime = clock / 60;
                 await nextFrames(1);
+                if (k === 11) assertTrue(t.views[0].decoder._vfTimestamps === undefined, 'not judged bad while trailing');
             }
-            var capturedSoFar = t.log.captured.length;
-            a.clockIdx = 140; el.currentTime = 140 / 60;
-            await nextFrames(3);
-            var lastOv = t.log.overlays[t.log.overlays.length - 1];
             t.ctrl.stopPlayback();
-            assertEqual(t.views[0].decoder._vfTimestamps, 'bad', 'timestamps judged unusable');
-            assertEqual(t.log.captured.length, capturedSoFar, 'no more VideoFrame captures once judged unusable');
-            assertTrue(t.log.fallbackDraws.length > 0, 'painted via drawCurrentFrame');
-            assertEqual(lastOv.vf.cam0, 140, 'overlay follows the clock');
-            assertTrue(t.log.captured.every(function (c) { return c.closed; }), 'judging captures were closed');
+            assertEqual(t.views[0].decoder._vfTimestamps, 'ok', 'judged usable once it caught up');
+            assertEqual(t.log.fallbackDraws.length, 0, 'never fell back to drawing the <video>');
+            assertTrue(t.log.overlays.some(function (o) { return lagIdx.indexOf(o.vf.cam0) >= 0; }),
+                'while trailing, each view was overlaid at its own captured frame');
+            assertTrue(t.log.captured.every(function (c) { return c.closed; }), 'every capture was closed');
+        });
+
+        it('slow start: a timestamp that stands still for a while (outside Firefox), then moves, is judged ok', async function () {
+            if (!canRun()) return;
+            var a = { idx: 0, frozenTs: 90 / 60 * 1e6, tsMode: undefined };
+            var t = setup([a]);
+            var el = t.views[0].decoder._videoEl;
+            t.ctrl.startPlayback();
+            for (var k = 0; k < 24; k++) {
+                var clock = 100 + k * 2;
+                if (k === 12) a.frozenTs = null;     // the first picture finally changes
+                a.idx = clock;
+                el.currentTime = clock / 60;
+                await nextFrames(1);
+                if (k === 11) assertTrue(t.views[0].decoder._vfTimestamps === undefined, 'still undecided while it stands still');
+            }
+            t.ctrl.stopPlayback();
+            assertEqual(t.views[0].decoder._vfTimestamps, 'ok', 'judged usable once it moved with the clock');
+        });
+
+        it('a timestamp that keeps trailing is judged unusable after the window, and judged again at the next playback', async function () {
+            if (!canRun()) return;
+            await withJudgeWindow(150, async function () {
+                var a = { idx: 0, tsMode: undefined };
+                var t = setup([a]);
+                var el = t.views[0].decoder._videoEl;
+                var dec = t.views[0].decoder;
+                t.ctrl.startPlayback();
+                var t0 = performance.now(), k = 0;
+                while (dec._vfTimestamps === undefined && performance.now() - t0 < 2000) {
+                    var clock = 100 + 2 * k++;
+                    a.idx = clock - 10; el.currentTime = clock / 60;
+                    await nextFrames(1);
+                }
+                var waited = performance.now() - t0;
+                t.ctrl.stopPlayback();
+                assertEqual(dec._vfTimestamps, 'bad', 'judged unusable in the end');
+                assertEqual(dec._vfTsWhy, 'timeout', 'for running out of time');
+                assertTrue(waited >= 150, 'not before the window (' + Math.round(waited) + ' ms)');
+                t.ctrl.startPlayback();
+                assertTrue(dec._vfTimestamps === undefined, 'a timeout verdict is open again at the next playback');
+                t.ctrl.stopPlayback();
+            });
+        });
+
+        it('a timestamp that stands still outside Firefox is judged unusable after the window', async function () {
+            if (!canRun()) return;
+            await withJudgeWindow(150, async function () {
+                var a = { idx: 0, frozenTs: 0, clockIdx: 0, tsMode: undefined };
+                var t = setup([a]);
+                var el = t.views[0].decoder._videoEl;
+                var dec = t.views[0].decoder;
+                t.ctrl.startPlayback();
+                var t0 = performance.now(), k = 0;
+                while (dec._vfTimestamps === undefined && performance.now() - t0 < 2000) {
+                    a.clockIdx = 100 + 2 * k++; el.currentTime = a.clockIdx / 60;
+                    await nextFrames(1);
+                }
+                t.ctrl.stopPlayback();
+                assertEqual(dec._vfTimestamps, 'bad', 'judged unusable');
+                assertEqual(dec._vfTsWhy, 'timeout', 'after the window');
+                assertTrue(t.log.captured.every(function (c) { return c.closed; }), 'judging captures were closed');
+            });
         });
 
         it('usable VideoFrame timestamps: judged ok and the captured frame keeps being painted', async function () {
@@ -427,6 +535,7 @@
             }
             t.ctrl.stopPlayback();
             assertEqual(t.views[0].decoder._vfTimestamps, 'bad', 'clock-valued timestamps rejected');
+            assertEqual(t.views[0].decoder._vfTsWhy, 'clock', 'at once, as a clock copy (not after the window)');
         });
 
         it('falls back to drawCurrentFrame + the clock index when capture is unavailable', async function () {
