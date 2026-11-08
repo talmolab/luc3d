@@ -10,12 +10,12 @@
 (function () {
     const { describe, it, assertEqual, assertTrue, assertDeepEqual } = TestFramework;
 
-    const h5wasmUrl = new URL('../lib/h5wasm/h5wasm.iife.js?v=7ee16183c88d', document.baseURI).href;
+    const h5wasmUrl = new URL('../lib/h5wasm/h5wasm.iife.js?v=35e07cd5cb2a', document.baseURI).href;
     const FILTER = { user: true, predicted: true, reprojected: false };
     const CAMS = ['camA', 'camB'];
     const N = 4;
 
-    const poseData = import('../pose/pose-data.js?v=7ee16183c88d').then((m) => { window.__poseData = m; });
+    const poseData = import('../pose/pose-data.js?v=35e07cd5cb2a').then((m) => { window.__poseData = m; });
 
     function camera(name) {
         return new window.Camera(name, [[600, 0, 320], [0, 600, 240], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]);
@@ -68,7 +68,7 @@
     describe('SLP export: identities are written as tracks', function () {
         it('a track is the same animal in every camera, though the raw tracks disagree', async function () {
             await poseData;
-            const fio = await import('../import-export/file-io.js?v=7ee16183c88d');
+            const fio = await import('../import-export/file-io.js?v=35e07cd5cb2a');
             const session = buildSession(true);
             for (const cam of CAMS) {
                 const labels = fio.buildSlpLabels(session, cam, null, null, FILTER);
@@ -83,7 +83,7 @@
 
         it('a proofreading swap reaches the file, from the frame it was made on', async function () {
             await poseData;
-            const fio = await import('../import-export/file-io.js?v=7ee16183c88d');
+            const fio = await import('../import-export/file-io.js?v=35e07cd5cb2a');
             const session = buildSession(true);
             const [a, b] = session.identities;
             session.swapIdentitiesForward(2, a.id, b.id);
@@ -97,7 +97,7 @@
 
         it('matches what Propagate IDs → Tracks then export writes', async function () {
             await poseData;
-            const fio = await import('../import-export/file-io.js?v=7ee16183c88d');
+            const fio = await import('../import-export/file-io.js?v=35e07cd5cb2a');
             const direct = buildSession(true);
             const [a, b] = direct.identities;
             direct.swapIdentitiesForward(2, a.id, b.id);
@@ -115,7 +115,7 @@
 
         it('exporting does not change the project', async function () {
             await poseData;
-            const fio = await import('../import-export/file-io.js?v=7ee16183c88d');
+            const fio = await import('../import-export/file-io.js?v=35e07cd5cb2a');
             const session = buildSession(true);
             const before = JSON.stringify([session.tracks, [...session.frameIdentityEntries()].map((r) => [r.key, r.identityId])]);
             const trackIdx = session.frameGroups.get(0).instances.get('camB').map((i) => i.trackIdx);
@@ -126,7 +126,7 @@
 
         it('with no identities, instances keep their own tracks', async function () {
             await poseData;
-            const fio = await import('../import-export/file-io.js?v=7ee16183c88d');
+            const fio = await import('../import-export/file-io.js?v=35e07cd5cb2a');
             const session = buildSession(false);
             const got = tracksByAnimal(fio.buildSlpLabels(session, 'camB', null, null, FILTER));
             assertEqual(got[0][100], 'track_1', 'camB raw track');
@@ -135,10 +135,10 @@
 
         it('an instance with no identity is trackless, and a group fills a key the map marks ambiguous', async function () {
             await poseData;
-            const fio = await import('../import-export/file-io.js?v=7ee16183c88d');
+            const fio = await import('../import-export/file-io.js?v=35e07cd5cb2a');
             const session = buildSession(true);
             const unnamed = new window.Instance([[300, 0], [300, 1]], 0, 'predicted', 0.9);
-            session.frameGroups.get(0).addUnlinkedInstance('camA', new (await import('../pose/pose-data.js?v=7ee16183c88d')).UnlinkedInstance(unnamed, 'camA'));
+            session.frameGroups.get(0).addUnlinkedInstance('camA', new (await import('../pose/pose-data.js?v=35e07cd5cb2a')).UnlinkedInstance(unnamed, 'camA'));
             session.setFrameIdentity(1, 'camA', 0, -1);   // commitTrackedFrame's collision sentinel
             const got = tracksByAnimal(fio.buildSlpLabels(session, 'camA', null, null, FILTER));
             assertEqual(got[0][300], null, 'no identity: no track, not the raw track_0 another animal holds');
@@ -147,7 +147,7 @@
 
         it('the By Cam builder writes them too', async function () {
             await poseData;
-            const fio = await import('../import-export/file-io.js?v=7ee16183c88d');
+            const fio = await import('../import-export/file-io.js?v=35e07cd5cb2a');
             const session = buildSession(true);
             const [a, b] = session.identities;
             session.swapIdentitiesForward(2, a.id, b.id);
@@ -201,8 +201,8 @@
         // so rows are told apart by position; tests/e2e/export-identity-tracks.mjs
         // covers a real lazy reopen, coordinates included.
         async function exportLazy(session, fn) {
-            const { exportSlpClientSide } = await import('../import-export/file-io.js?v=7ee16183c88d');
-            const appState = await import('../ui/app-state.js?v=7ee16183c88d');
+            const { exportSlpClientSide } = await import('../import-export/file-io.js?v=35e07cd5cb2a');
+            const appState = await import('../ui/app-state.js?v=35e07cd5cb2a');
             const prev = appState.state.session;
             appState.state.session = session;
             let blob;

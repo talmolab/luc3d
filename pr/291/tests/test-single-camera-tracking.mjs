@@ -484,7 +484,7 @@ group('9. The review list: handovers, rows, Fix plan, saved checklist');
     ok(S2._idSwitch.reviewed.has(RV.idSwitchRowKey(m0)), '…with their reviewed ticks');
 }
 
-group('10. Returns: an animal back after more than a second out of sight, tested by the coat-brightness check');
+group('10. Returns: an animal back after more than a second out of sight, tested by the coat-brightness check; on the review list while the other was out of sight too');
 {
     const fr = (f, n) => ({ frameIdx: f, dets: Array.from({ length: n }, () => ({ points: new Float64Array(30) })) });
     const run = (goneFrom, goneTo, nTracks = 2, from = 0) => {     // track 0 unseen on [goneFrom, goneTo); the others always
@@ -516,7 +516,40 @@ group('10. Returns: an animal back after more than a second out of sight, tested
     ok(rets.length >= 2 && rets.every(x => x.frame === 510 && x.startFrame === 449),
         `the checks' moments carry the return of the hidden animal, one per other track (${JSON.stringify(rets.map(x => [x.frame, x.startFrame, x.identityA, x.identityB]))})`);
     ok(res.moments.every((x, i) => i === 0 || x.frame >= res.moments[i - 1].frame), '…in frame order with the other moments');
-    ok(!res.review.some(x => x.cues.includes('return')), '…and the review list does not take them (one place per return would double it)');
+    ok(!res.review.some(x => x.cues.includes('return')), '…and the review list does not take them while the others stay in view (one place per return would double it)');
+
+    // The review list's returns: only while the other track was out of sight too
+    const two = (gone) => {   // gone[t] = [from, to): track t unseen there; frames with no detection are left out, as Track All's are
+        const frames = [], out = [];
+        for (let f = 0; f < 300; f++) { const ids = [0, 1].filter(t => !gone[t] || f < gone[t][0] || f >= gone[t][1]);
+            if (ids.length) { frames.push(fr(f, ids.length)); out.push(ids); } }
+        return SCT.reviewReturnCandidates(frames, out, 30);
+    };
+    eq(SCT.REVIEW_RETURN_DEFAULTS.gapSeconds, 1, 'the review list\'s returns: more than a second unseen…');
+    eq(SCT.REVIEW_RETURN_DEFAULTS.otherAwaySeconds, 0.5, '…with the other track unseen for at least half a second of it');
+    eq(two({ 0: [100, 160] }).length, 0, 'the other animal tracked throughout: no review return (the one coming back takes the track left)');
+    let rc = two({ 0: [100, 160], 1: [110, 135] });               // 1 away 0.8 s (not a return itself) while 0 was
+    ok(rc.length === 1 && rc[0].f === 160 && rc[0].a === 0 && rc[0].b === 1 && rc[0].cue === 'return',
+        `both out of sight together: a return at the first one back (${JSON.stringify(rc)})`);
+    rc = two({ 0: [100, 160], 1: [100, 170] });
+    ok(rc.length === 2 && rc.map(c => c.f).join() === '160,170', `both hidden, back one after the other: a return for each (${JSON.stringify(rc)})`);
+    eq(two({ 0: [100, 160], 1: [110, 120] }).length, 0, 'the other away for only a third of a second: none');
+    eq(two({ 0: [100, 160], 1: [110, 125] }).length, 1, '…half a second: one');
+    eq(two({ 0: [100, 125], 1: [100, 125] }).length, 0, 'both away under a second: none');
+    eq(SCT.reviewReturnCandidates([fr(0, 1), fr(100, 2)], [[0], [0, 1]], 30).length, 0, 'a track seen for the first time is not a return');
+
+    // Track All: both animals out of sight for 2 s puts a 'return' row on the review list
+    const S3 = new PD.Session([cam], new PD.Skeleton('mouse', NODES, []), ['t0', 't1'], 'both hide');
+    for (let f = 0; f < 900; f++) for (let a = 0; a < 2; a++) {
+        if (f >= 450 && f < 510) continue;                          // both out of sight for 2 s
+        S3.addUnlinkedInstance(f, CAM, new PD.Instance(pose(a, f), a, 'predicted', 0.9));
+    }
+    S3.identities = []; S3.frameIdentityMap = new Map();
+    const res3 = await SCT.trackSingleCamera(S3, SCT.singleCameraTrackerConfig(2, {}), { fps: FPS });
+    const rr3 = res3.review.filter(x => x.cues.includes('return'));
+    ok(rr3.length === 1 && rr3[0].frame === 510 && rr3[0].identityA === 0 && rr3[0].identityB === 1,
+        `both animals hidden for 2 s: one 'return' row on the review list, where they come back (${JSON.stringify(rr3.map(x => [x.frame, x.startFrame, x.cues]))})`);
+    ok(res3.review.every((x, i) => i === 0 || x.frame >= res3.review[i - 1].frame), '…in frame order with the other rows');
 }
 
 group('11. The Tracking Wizard\'s detection filters, before the tracker');

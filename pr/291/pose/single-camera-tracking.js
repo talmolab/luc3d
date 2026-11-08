@@ -46,8 +46,8 @@
  * DOM-free. Depends on: pose/sleap-tracker.js, pose/detection-filter-stats.js.
  */
 
-import { runSleapTrackerAsync } from './sleap-tracker.js?v=7ee16183c88d';
-import { passesDetectionFilter } from './detection-filter-stats.js?v=7ee16183c88d';
+import { runSleapTrackerAsync } from './sleap-tracker.js?v=35e07cd5cb2a';
+import { passesDetectionFilter } from './detection-filter-stats.js?v=35e07cd5cb2a';
 
 /** Why a lazy single-camera project is not tracked (shown in the status bar). */
 export const SINGLE_CAMERA_LAZY_REASON = 'single-camera tracking does not support a lazily loaded (> 150 MB) project yet';
@@ -222,7 +222,8 @@ function trackerPoints(inst) {
  *          the frames with a detection before anything was left out; `untracked` excludes the
  *          `filtered` and the `duplicates`; `moments` = the candidate moments plus returns
  *          (`returnMoments`), what the checks test; `review` = the candidate moments plus
- *          handovers (`handoverCandidates`), the review list's rows
+ *          handovers (`handoverCandidates`) and returns while the other animal was out of
+ *          sight too (`reviewReturnCandidates`), the review list's rows
  */
 export async function trackSingleCamera(session, cfg, opts) {
     var cam = singleCameraName(session);
@@ -302,10 +303,12 @@ export async function trackSingleCamera(session, cfg, opts) {
     }
     // The checks test the candidate moments plus every RETURN (an animal back after more than a second out of
     // sight, returnMoments): the coat-brightness check then compares the labels before it went out of sight with
-    // the labels after it came back. The review list adds handovers (where a lone animal's track changes) instead.
+    // the labels after it came back. The review list adds handovers (where a lone animal's track changes) instead,
+    // and only the returns while the other animal was out of sight too (reviewReturnCandidates).
     var moments = candidateMoments(frames, out, inputTracks, ambiguous, look, fps).concat(returnMoments(frames, out, fps))
         .sort(function (x, y) { return x.frame - y.frame || x.identityA - y.identityA || x.identityB - y.identityB; });
-    var review = candidateMoments(frames, out, inputTracks, ambiguous, look, fps, handoverCandidates(frames, out, fps));
+    var review = candidateMoments(frames, out, inputTracks, ambiguous, look, fps,
+        handoverCandidates(frames, out, fps).concat(reviewReturnCandidates(frames, out, fps)));
     if (lone && lone.arrival) {
         review.push({ frame: lone.arrival.frame, startFrame: lone.arrival.startFrame, identityA: Math.min(lone.arrival.a, lone.arrival.b),
                       identityB: Math.max(lone.arrival.a, lone.arrival.b), cues: ['arrival'] });
@@ -595,8 +598,9 @@ export const RETURN_DEFAULTS = { gapSeconds: 1 };
  * moment per return of track a and each other track b, its `startFrame` the
  * frame a was last seen, so the check reads the labels before the animal went
  * out of sight against the labels after it came back (`testMoments`). Read from
- * the tracker's output only. Not on the review list: one place per return would
- * double it (measured, MODULES.md).
+ * the tracker's output only. Not on the review list as such: one place per return
+ * would double it (measured, MODULES.md); the list takes only the returns
+ * `reviewReturnCandidates` picks.
  * @returns {Array<{frame, startFrame, identityA, identityB, cues: string[]}>}
  */
 export function returnMoments(frames, out, fps, opts) {
@@ -619,10 +623,62 @@ export function returnMoments(frames, out, fps, opts) {
     return moments;
 }
 
+/** The returns the review list takes: back after more than `gapSeconds` unseen, while the other track was ALSO
+ *  unseen for at least `otherAwaySeconds` of that time. */
+export const REVIEW_RETURN_DEFAULTS = { gapSeconds: 1, otherAwaySeconds: 0.5 };
+
+/**
+ * The returns that go on the review list: a track back after more than
+ * `gapSeconds` unseen, paired with each other track that was ALSO out of sight
+ * for at least `otherAwaySeconds` of that absence. With the other animal tracked
+ * the whole time, the one coming back can only take the track that is left; with
+ * both out of sight (both hidden in the bedding, both lifted out), the first one
+ * back can take either. As candidates `{f, a, b, cue: 'return'}` (final ids) for
+ * `candidateMoments`' `extra`, which clusters them with the other places.
+ * Measured 2026-11-07 on proofread data (MODULES.md), with a reviewer who watches
+ * only 2 s before to 5 s after each row: +0.00–0.05 rows a minute; held-out intact
+ * 99.825 -> 99.840% (one video 92.9 -> 100%), sham_gdx 99.939 -> 99.942%, SLAP
+ * 99.423 -> 99.620%, SLAP-2M unchanged; no video worse. Every return as a row
+ * gained more but added 0.2–1.4 rows a minute and cost one SLAP-2M view 25 points.
+ * @returns {Array<{f: number, a: number, b: number, cue: 'return'}>}
+ */
+export function reviewReturnCandidates(frames, out, fps, opts) {
+    var o = Object.assign({}, REVIEW_RETURN_DEFAULTS, opts || {});
+    var rate = fps || 30, gap = o.gapSeconds * rate, away = o.otherAwaySeconds * rate, seen = new Map(), cands = [];
+    for (var p = 0; p < frames.length; p++) {
+        var f = frames[p].frameIdx, ids = out[p] || [];
+        for (var q = 0; q < ids.length; q++) {
+            var t = ids[q];
+            if (t == null || t < 0) continue;
+            var L = seen.get(t);
+            if (!L) seen.set(t, L = []);
+            if (L[L.length - 1] !== f) L.push(f);
+        }
+    }
+    // frames of L in [a, b]
+    var countIn = function (L, a, b) {
+        var lo = function (x) { var l = 0, h = L.length; while (l < h) { var m = (l + h) >> 1; if (L[m] < x) l = m + 1; else h = m; } return l; };
+        return Math.max(0, lo(b + 1) - lo(a));
+    };
+    seen.forEach(function (L, t) {
+        for (var i = 1; i < L.length; i++) {
+            var a = L[i - 1], f = L[i];
+            if (f - a <= gap) continue;
+            seen.forEach(function (Lu, u) {
+                if (u === t || Lu[0] >= f) return;                         // not seen before the return: nothing to swap with
+                if ((f - a - 1) - countIn(Lu, a + 1, f - 1) < away) return; // tracked throughout: the return takes what is left
+                cands.push({ f: f, a: Math.min(t, u), b: Math.max(t, u), cue: 'return' });
+            });
+        }
+    });
+    return cands;
+}
+
 /**
  * The review list single-camera Track All leaves in the ID Switches tab: every
- * candidate moment (near-ties, input-tracklet changes) plus every handover, one
- * row per pair per run of them no more than `clusterSeconds` apart. Rows are
+ * candidate moment (near-ties, input-tracklet changes) plus every handover and
+ * every return while the other animal was out of sight too, one row per pair per
+ * run of them no more than `clusterSeconds` apart. Rows are
  * change points with no score (0) and no far edge — a Fix swaps from the frame the
  * reviewer stopped on to the end of the video, and later rows fix their own
  * stretches in turn. Measured on 87 proofread SLAP views and 207 sham_gdx
