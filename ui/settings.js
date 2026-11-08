@@ -398,7 +398,7 @@ const TRACKING_THRESHOLDS = [
     {
         id: 'scLoneAnimal', label: 'Single camera: one track while one animal is in view', default: 1,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
-        desc: 'Until two animals are in view together, the one animal there keeps one track, and the review list gets a row where the second arrives. When an animal starts alone (a subject before its partner is put in), the tracker otherwise moves it between tracks: a hand carries it, it comes back at the edge, a stray detection takes its track. On 725 proofread two-mouse videos this cut the review list by about 30% and the fixes by about 45% (99.877% -> 99.905% correct); with every animal in view from the start (SLAP) it almost never acts.',
+        desc: 'Until two animals are in view together, the one animal there keeps one track, and the review list gets a row where the second arrives. When an animal starts alone (a subject before its partner is put in), the tracker otherwise moves it between tracks: a hand carries it, it comes back at the edge, a stray detection takes its track. On 725 proofread two-mouse videos this cut the review list by about 28% (99.877% -> 99.92% correct after the review); with every animal in view from the start (SLAP) it almost never acts.',
     },
     {
         id: 'scDuplicateIou', label: 'Single camera: duplicate box IoU', default: 0.5,

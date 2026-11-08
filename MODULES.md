@@ -2748,24 +2748,30 @@ Until two animals are in view TOGETHER there is one animal, so it keeps one trac
 "Together": two tracked detections, both at least `score` (0.4) x the median
 detection score, centroids more than `apart` (0.15) body lengths apart, on frames
 filling at least `fill` (0.5) of `holdSeconds` (1) — huddled animals count, a
-duplicate does not (`LONE_DEFAULTS`). Before the shared phase the lone animal is
-followed by position and keeps the track the tracker gave the detection continuing
-it at the arrival; other detections lose their track. It runs on the tracker's
-output in `trackSingleCamera` (`opts.lone`) before anything is written, so the
-counts, moments and rows read the result, and the review list gets an 'arrival'
-row where the second animal comes in (the place a person sees which one was
-already there). Why: on two-mouse recordings where the subject starts alone, the
-lone mouse moves between the two tracks (carried by hand, back at the edge after a
-gap, a stray detection on its holder taking its track) where no row looks, and
-the reviewer then meets it on whichever track it holds. Measured 2026-11-07
-offline (the harness's simulated reviewer): Mae's intact set (725 videos, held
-out) 99.877% -> 99.905%, videos >= 99.9% 600 -> 611, rows 1.47 -> 1.04 a minute,
-Fixes 927 -> 523; sham_gdx 99.975% -> 99.981%, Fixes 186 -> 102; SLAP (83 views)
-and SLAP-2M (163) fire on 4 views, otherwise unchanged. Without the arrival row
-intact fell to 99.31% (the reviewer met the mice later, sometimes swapped); at 0.5
-body lengths huddled SLAP mice read as one animal. Some videos get worse (163
-intact, one by 11 points: 154251_L 240523 f251L cdf_home, arrival found 4.9 s
-late) — under investigation.
+duplicate does not (`LONE_DEFAULTS`). The lone phase ends where that arrival's
+CLUSTER starts (the first two-animal frame in the `clusterSeconds` (5) before it);
+from there the tracker's tracks stand, through the arrival. Before then the lone
+animal is followed by position and keeps the track its last pick before the
+cluster wore; other detections lose their track. It runs on the tracker's output in
+`trackSingleCamera` (`opts.lone`) before anything is written, so the counts,
+moments and rows read the result, and the review list gets an 'arrival' row from
+the cluster's start to the arrival (the place a person sees which one was already
+there). Why: on two-mouse recordings where the subject starts alone, the lone
+mouse moves between the two tracks (carried by hand, back at the edge after a gap,
+a stray detection on its holder taking its track) where no row looks, and the
+reviewer then meets it on whichever track it holds. Measured 2026-11-07 offline
+(the harness's simulated reviewer): Mae's intact set (725 videos, held out)
+99.877% -> 99.9245%, videos >= 99.9% 600 -> 614, review rows 6,113 -> 4,416;
+sham_gdx 99.975% -> 99.981%; SLAP (83 views) and SLAP-2M (163) unchanged to within
+1 detection on 2 views. Ending the lone phase at the arrival itself (the first
+version) gave 99.905%: while the newcomer is put down the lone animal is often
+undetected for a frame, the follower jumped to the newcomer and the whole lone
+phase took its track (10 videos, 2,478 detections; 154251_L 240523 f251L cdf_home
+100% -> 88.9%, now 98.8%). Without the arrival row intact fell to 99.31% (the
+reviewer met the mice later, sometimes swapped); at 0.5 body lengths huddled SLAP
+mice read as one animal. Left: one-frame blips where the follower takes the copy
+of a resting animal the proofreader deleted (138 intact videos, a median of 2
+detections each); nothing in the detections tells the copies apart.
 Measured 2026-10-21/27 offline through this code (the harness rebuilt in
 `~/luc3d-eval`, `measure_review.mjs` / `measure_fix.mjs`), a switch counting as on
 the list when one of its ends is within 2 s of a row:
@@ -2899,7 +2905,8 @@ cannot see.
 `{numIdentities, frames, tracked, untracked, filtered, duplicates, moments, review, lone}` (`lone`:
 `{until, relabelled, untracked}` when the lone-animal rule acted, else null);
 `loneAnimalPhase(frames, out, fps, opts)` -> `{fired, until, relabelled, untracked, arrival}`
-(rewrites `out`); `LONE_DEFAULTS` (`apart` 0.15, `score` 0.4, `fill` 0.5, `holdSeconds` 1); `candidateMoments(frames,
+(rewrites `out`; `until` = where the tracker's tracks stand again, `arrival` = `{frame, startFrame, a, b}`);
+`LONE_DEFAULTS` (`apart` 0.15, `score` 0.4, `fill` 0.5, `holdSeconds` 1, `clusterSeconds` 5); `candidateMoments(frames,
 out, inputTracks, ambiguous, look, fps, extra?)` (`extra`: more candidates `{f, a, b,
 cue}` to cluster with them); `CANDIDATE_DEFAULTS` (`ambiguityMargin`
 0.1, `trackletGapFrames` 5, `clusterSeconds` 3); `handoverCandidates(frames, out, fps,
