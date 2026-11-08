@@ -1971,6 +1971,7 @@ async function runSingleCameraTrackAll(session, bail) {
             fps: state.fps,
             filter: filter,
             duplicates: duplicates,
+            lone: getTrackingThreshold('scLoneAnimal') > 0,
             onProgress: async function (done, n) { showLoadingProgress('Tracking (SLEAP tracker)', done, n); await yieldToPaint(); },
         });
         var trackMs = performance.now() - trackT0;
@@ -2000,6 +2001,8 @@ async function runSingleCameraTrackAll(session, bail) {
                 ' removed by the detection filters (left without a track)' : '') +
             (res.duplicates ? ', ' + res.duplicates.toLocaleString() + ' duplicate detection' + (res.duplicates === 1 ? '' : 's') +
                 ' removed first (left without a track)' : '') +
+            (res.lone ? ', one animal alone ' + (res.lone.until != null ? 'until frame ' + (res.lone.until + 1).toLocaleString('en-US') : 'throughout') +
+                ' kept on one track' : '') +
             (nReview ? ', ' + nReview.toLocaleString() + ' place' + (nReview === 1 ? '' : 's') + ' to review in the ID Switches tab' : '') +
             (switchedToIds ? ', now coloring by ID' : '') +
             (trailsOn ? ', node trails on (' + trailSecondsName(TRACK_ALL_TRAIL_SECONDS) + ')' : '') + (predOnly ? PREDICTED_ONLY_NOTE : '');

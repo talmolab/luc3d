@@ -2742,6 +2742,30 @@ drops out of detection for over half a second and comes back on the other track
 (sham_gdx R289: 0.6 s, a switch the 0.5 s list missed entirely); 2 s added places
 without catching more. The checks test `moments`: the candidate moments plus
 RETURNS, not the handovers (see below).
+
+**The lone-animal rule (`loneAnimalPhase`, Wizard `scLoneAnimal`, on by default).**
+Until two animals are in view TOGETHER there is one animal, so it keeps one track.
+"Together": two tracked detections, both at least `score` (0.4) x the median
+detection score, centroids more than `apart` (0.15) body lengths apart, on frames
+filling at least `fill` (0.5) of `holdSeconds` (1) — huddled animals count, a
+duplicate does not (`LONE_DEFAULTS`). Before the shared phase the lone animal is
+followed by position and keeps the track the tracker gave the detection continuing
+it at the arrival; other detections lose their track. It runs on the tracker's
+output in `trackSingleCamera` (`opts.lone`) before anything is written, so the
+counts, moments and rows read the result, and the review list gets an 'arrival'
+row where the second animal comes in (the place a person sees which one was
+already there). Why: on two-mouse recordings where the subject starts alone, the
+lone mouse moves between the two tracks (carried by hand, back at the edge after a
+gap, a stray detection on its holder taking its track) where no row looks, and
+the reviewer then meets it on whichever track it holds. Measured 2026-11-07
+offline (the harness's simulated reviewer): Mae's intact set (725 videos, held
+out) 99.877% -> 99.905%, videos >= 99.9% 600 -> 611, rows 1.47 -> 1.04 a minute,
+Fixes 927 -> 523; sham_gdx 99.975% -> 99.981%, Fixes 186 -> 102; SLAP (83 views)
+and SLAP-2M (163) fire on 4 views, otherwise unchanged. Without the arrival row
+intact fell to 99.31% (the reviewer met the mice later, sometimes swapped); at 0.5
+body lengths huddled SLAP mice read as one animal. Some videos get worse (163
+intact, one by 11 points: 154251_L 240523 f251L cdf_home, arrival found 4.9 s
+late) — under investigation.
 Measured 2026-10-21/27 offline through this code (the harness rebuilt in
 `~/luc3d-eval`, `measure_review.mjs` / `measure_fix.mjs`), a switch counting as on
 the list when one of its ends is within 2 s of a row:
@@ -2871,8 +2895,11 @@ cannot see.
 
 **Key exports.** `singleCameraName(session)` (the camera, or null);
 `singleCameraTrackerConfig(numAnimals, {windowSize, oksStddev, connectBreaks})`;
-`trackSingleCamera(session, cfg, {onProgress, signal, fps, look, filter, duplicates})` ->
-`{numIdentities, frames, tracked, untracked, filtered, duplicates, moments, review}`; `candidateMoments(frames,
+`trackSingleCamera(session, cfg, {onProgress, signal, fps, look, filter, duplicates, lone})` ->
+`{numIdentities, frames, tracked, untracked, filtered, duplicates, moments, review, lone}` (`lone`:
+`{until, relabelled, untracked}` when the lone-animal rule acted, else null);
+`loneAnimalPhase(frames, out, fps, opts)` -> `{fired, until, relabelled, untracked, arrival}`
+(rewrites `out`); `LONE_DEFAULTS` (`apart` 0.15, `score` 0.4, `fill` 0.5, `holdSeconds` 1); `candidateMoments(frames,
 out, inputTracks, ambiguous, look, fps, extra?)` (`extra`: more candidates `{f, a, b,
 cue}` to cluster with them); `CANDIDATE_DEFAULTS` (`ambiguityMargin`
 0.1, `trackletGapFrames` 5, `clusterSeconds` 3); `handoverCandidates(frames, out, fps,

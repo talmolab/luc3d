@@ -958,6 +958,7 @@ function lookNote(cues) {
     return cues.map(function (c) {
         return c === 'ambiguity' ? 'tracker nearly chose the swap' : c === 'tracklet' ? 'input tracklet changes animal'
             : c === 'handover' ? 'a lone animal\'s track changes'
+            : c === 'arrival' ? 'a second animal arrives (the one already there kept one track until here)'
             : c === 'return' ? 'an animal comes back after being out of sight' : c;
     }).join(', ');
 }
