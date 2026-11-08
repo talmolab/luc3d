@@ -42,6 +42,11 @@
  *     Wizard's own count — not in `untracked`; every minimum at 0 changes
  *     nothing; a frame left with no detection still counts in `frames`; and
  *     duplicates are looked for among the detections the filters kept.
+ * 12. The lone-animal rule (`loneAnimalPhase`, Track All's `lone` option): while
+ *     one animal is in view it keeps the track it holds as the second arrives,
+ *     stray detections lose theirs, and an 'arrival' review row marks the
+ *     arrival; nothing changes with two animals from the start (huddled ones
+ *     included), for a duplicate, or for a lone phase under a second.
  *
  * Run:  node tests/test-single-camera-tracking.mjs
  */
@@ -596,6 +601,85 @@ group('11. The Tracking Wizard\'s detection filters, before the tracker');
     const b0 = F.S.frameGroups.get(300).getUnlinkedInstances(CAM)[0].instance;
     ok(r.duplicates === 0 && F.copy.trackIdx === null && b0.trackIdx !== null && r.filtered === F.partial.length + F.junk.length + 1,
         `filter first: the copy is filtered, the animal is kept and tracked (duplicates ${r.duplicates}, filtered ${r.filtered})`);
+}
+
+group('12. The lone-animal rule: one track while one animal is in view, a review row where the second arrives');
+{
+    const at = (cx, cy, k = 1, h = 0) => NODES.map(n => { const [x, y] = T[n], c = Math.cos(h), si = Math.sin(h); return [cx + k * (c * x - si * y), cy + k * (si * x + c * y)]; });
+    const P = pts => Float64Array.from(pts.flat());
+    const det = (x, y, score = 0.9) => ({ points: P(at(x, y)), score, isUser: false });
+    // frames: [{frameIdx, dets}], out: track per det; `spec(f)` -> [[x, y, track, score?], ...]
+    const make = (n, spec) => { const frames = [], out = [];
+        for (let f = 0; f < n; f++) { const s = spec(f); if (!s.length) continue;
+            frames.push({ frameIdx: f, dets: s.map(d => det(d[0], d[1], d[3] ?? 0.9)) }); out.push(s.map(d => d[2])); }
+        return { frames, out }; };
+    const walk = f => 300 + 100 * Math.sin(f / 40);
+    // alone on track 1 for 0-99, track 0 from 100 (a hop); a weak stray detection far away on frames 50-60 takes
+    // track 0; from frame 300 a second animal 500 px away on track 1
+    let F = make(450, f => [[walk(f), 200, f < 100 ? 1 : 0], ...(f >= 50 && f <= 60 ? [[900, 400, 0, 0.1]] : []),
+        ...(f >= 300 ? [[900, 380, 1]] : [])]);
+    let r = SCT.loneAnimalPhase(F.frames, F.out, FPS);
+    ok(r.fired && r.until === 300, `fires, the shared phase from the second animal's arrival (until ${r.until})`);
+    let lone = new Set(), strays = 0; F.frames.forEach((fr, p) => { if (fr.frameIdx < 300) { lone.add(F.out[p][0]); if (F.out[p].length > 1 && F.out[p][1] === null) strays++; } });
+    ok(lone.size === 1 && lone.has(0), `the lone animal keeps ONE track before then: the one it holds as the second arrives (${[...lone]})`);
+    eq(strays, 11, 'the stray detection before then loses its track');
+    eq(r.relabelled, 100 + 11, 'relabelled = the hop\'s 100 detections + the 11 strays');
+    eq(r.untracked, 11, '…of which 11 lost their track');
+    ok(r.arrival && r.arrival.frame === 300 && r.arrival.a === 0 && r.arrival.b === 1, `an arrival row at frame 300 between the two tracks (${JSON.stringify(r.arrival)})`);
+    const after = F.out.slice(F.frames.findIndex(fr => fr.frameIdx === 300)).map(o => o.join(',')), want = F.frames.filter(fr => fr.frameIdx >= 300).map(() => '0,1');
+    eq(after.join(';'), want.join(';'), 'nothing changes from the arrival on');
+
+    // two animals from the start: nothing
+    F = make(300, f => [[walk(f), 200, 0], [900, 400, 1]]);
+    const before = JSON.stringify(F.out);
+    r = SCT.loneAnimalPhase(F.frames, F.out, FPS);
+    ok(!r.fired && JSON.stringify(F.out) === before, 'two animals in view from the start: does not fire, changes nothing');
+    // huddled (0.3 body lengths apart) still counts as two animals; a duplicate (a few px off) does not
+    F = make(300, f => [[walk(f), 200, 0], [walk(f) + 60, 200, 1]]);
+    ok(!SCT.loneAnimalPhase(F.frames, F.out, FPS).fired, 'two huddled animals (60 px apart, body ~180 px) are two animals');
+    F = make(300, f => [[walk(f), 200, f < 150 ? 0 : 1], ...(f < 200 ? [[walk(f) + 3, 202, f < 150 ? 1 : 0, 0.5]] : []), ...(f >= 200 ? [[900, 400, 0]] : [])]);
+    r = SCT.loneAnimalPhase(F.frames, F.out, FPS);
+    ok(r.fired && r.until === 200, `a duplicate of the lone animal is not a second animal (until ${r.until})`);
+    // a lone phase shorter than a second: nothing
+    F = make(300, f => [[walk(f), 200, f < 10 ? 1 : 0], ...(f >= 20 ? [[900, 400, 1]] : [])]);
+    ok(!SCT.loneAnimalPhase(F.frames, F.out, FPS).fired, 'a lone phase under a second changes nothing');
+    // one animal throughout: one track throughout, no arrival row
+    F = make(300, f => [[walk(f), 200, f < 100 ? 1 : 0]]);
+    r = SCT.loneAnimalPhase(F.frames, F.out, FPS);
+    ok(r.fired && r.until === null && r.arrival === null && new Set(F.out.map(o => o[0])).size === 1, 'one animal throughout: one track, no arrival row');
+
+    // Track All end to end (opt-in here; the app passes the Wizard's scLoneAnimal, on by default): the lone animal
+    // that hops onto its copies' tracks (the fixture of group 8) keeps one track, the partner enters on the other,
+    // the copies lose their track, and the review list has an 'arrival' row at the entry
+    const N = 900, ENTER = 600, walk2 = f => [600 + 300 * Math.sin(f / 30), 240 + 40 * Math.sin(f / 50)];
+    const mk = () => {
+        const c = new PD.Camera(CAM, [[600, 0, 320], [0, 600, 240], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [1280, 480]);
+        const S = new PD.Session([c], new PD.Skeleton('mouse', NODES, []), ['t0', 't1'], 'lone'), dups = [];
+        for (let f = 0; f < N; f++) {
+            const [x, y] = walk2(f);
+            S.addUnlinkedInstance(f, CAM, new PD.Instance(at(x, y), 0, 'predicted', 0.9));
+            if (f >= ENTER) S.addUnlinkedInstance(f, CAM, new PD.Instance(at(1150, 400 - 0.2 * (f - ENTER), 1, Math.PI), 1, 'predicted', 0.9));
+            else if (f % 50 === 25) { const [nx, ny] = walk2(f + 1), copy = new PD.Instance(at(nx, ny), null, 'predicted', 0.7); S.addUnlinkedInstance(f, CAM, copy); dups.push(copy); }
+        }
+        S.identities = []; S.frameIdentityMap = new Map();
+        return { S, dups };
+    };
+    const cfg2 = SCT.singleCameraTrackerConfig(2, {});
+    const animalTracks = (S, i, f0, f1) => { const t = new Set(); for (let f = f0; f < f1; f++) t.add(S.frameGroups.get(f).getUnlinkedInstances(CAM)[i].instance.trackIdx); return t; };
+    let L = mk();
+    const off = await SCT.trackSingleCamera(L.S, cfg2, { fps: FPS });
+    ok(animalTracks(L.S, 0, 0, N).size > 1 && off.lone === null && !off.review.some(m => m.cues.includes('arrival')),
+        `without the rule the lone animal hops (tracks ${[...animalTracks(L.S, 0, 0, N)]}); no lone result, no arrival row`);
+    L = mk();
+    const on = await SCT.trackSingleCamera(L.S, cfg2, { fps: FPS, lone: true });
+    const subj = animalTracks(L.S, 0, 0, N), part = animalTracks(L.S, 1, ENTER, N);
+    ok(subj.size === 1 && part.size === 1 && !part.has([...subj][0]), `with it: the animal keeps one track (${[...subj]}), the partner enters on the other (${[...part]})`);
+    ok(on.lone && on.lone.until === ENTER, `res.lone says until the entry (${JSON.stringify(on.lone)})`);
+    ok(L.dups.every(d => d.trackIdx === null && d.identityId == null), 'the copies lose their track and identity');
+    const arr = on.review.filter(m => m.cues.includes('arrival'));
+    ok(arr.length === 1 && arr[0].frame === ENTER && arr[0].startFrame === ENTER, `one 'arrival' review row at the entry (${arr.map(m => m.frame)})`);
+    ok(on.review.every((m, i, a) => i === 0 || a[i - 1].frame <= m.frame), 'the review rows stay sorted by frame');
+    ok(!on.review.some(m => m.frame < ENTER && m.cues.includes('handover')), 'no handover rows left in the lone phase (it has one track)');
 }
 
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);

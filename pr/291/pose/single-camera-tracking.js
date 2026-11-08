@@ -46,8 +46,8 @@
  * DOM-free. Depends on: pose/sleap-tracker.js, pose/detection-filter-stats.js.
  */
 
-import { runSleapTrackerAsync } from './sleap-tracker.js?v=5a479e97140c';
-import { passesDetectionFilter } from './detection-filter-stats.js?v=5a479e97140c';
+import { runSleapTrackerAsync } from './sleap-tracker.js?v=b111ea59182e';
+import { passesDetectionFilter } from './detection-filter-stats.js?v=b111ea59182e';
 
 /** Why a lazy single-camera project is not tracked (shown in the status bar). */
 export const SINGLE_CAMERA_LAZY_REASON = 'single-camera tracking does not support a lazily loaded (> 150 MB) project yet';
@@ -267,6 +267,11 @@ export async function trackSingleCamera(session, cfg, opts) {
     var out = await runSleapTrackerAsync(frames, cfg, Object.assign({}, opts, {
         observe: function (m) { collectAmbiguous(m, posOf.get(m.frameIdx), look.ambiguityMargin, ambiguous); },
     }));
+    var fps = (opts && opts.fps) || session.fps || 30;
+    // While only one animal has been in view it keeps ONE track (loneAnimalPhase, opt-out `opts.lone`): its
+    // detections are relabelled in `out` before anything is written, so every count, row and check below reads the
+    // result, and the review list gets a row where the second animal arrives.
+    var lone = opts && opts.lone ? loneAnimalPhase(frames, out, fps, opts.lone === true ? null : opts.lone) : null;
 
     var nTracks = 0;
     out.forEach(function (ids) { ids.forEach(function (t) { if (t != null && t + 1 > nTracks) nTracks = t + 1; }); });
@@ -295,15 +300,20 @@ export async function trackSingleCamera(session, cfg, opts) {
             groups[g].identityId = m && m.trackIdx != null ? m.trackIdx : null;
         }
     }
-    var fps = (opts && opts.fps) || session.fps || 30;
     // The checks test the candidate moments plus every RETURN (an animal back after more than a second out of
     // sight, returnMoments): the coat-brightness check then compares the labels before it went out of sight with
     // the labels after it came back. The review list adds handovers (where a lone animal's track changes) instead.
     var moments = candidateMoments(frames, out, inputTracks, ambiguous, look, fps).concat(returnMoments(frames, out, fps))
         .sort(function (x, y) { return x.frame - y.frame || x.identityA - y.identityA || x.identityB - y.identityB; });
     var review = candidateMoments(frames, out, inputTracks, ambiguous, look, fps, handoverCandidates(frames, out, fps));
+    if (lone && lone.arrival) {
+        review.push({ frame: lone.arrival.frame, startFrame: lone.arrival.frame, identityA: Math.min(lone.arrival.a, lone.arrival.b),
+                      identityB: Math.max(lone.arrival.a, lone.arrival.b), cues: ['arrival'] });
+        review.sort(function (x, y) { return x.frame - y.frame || x.identityA - y.identityA || x.identityB - y.identityB; });
+    }
     return { numIdentities: nTracks, frames: seenFrames, tracked: tracked, untracked: untracked,
-             filtered: filtered.length, duplicates: removed.length, moments: moments, review: review };
+             filtered: filtered.length, duplicates: removed.length, moments: moments, review: review,
+             lone: lone && lone.fired ? { until: lone.until, relabelled: lone.relabelled, untracked: lone.untracked } : null };
 }
 
 /**
@@ -411,15 +421,7 @@ function pointsCentroid(p) {
  */
 export function handoverCandidates(frames, out, fps, opts) {
     var o = Object.assign({}, HANDOVER_DEFAULTS, opts || {});
-    var ext = [], total = 0;
-    frames.forEach(function (fr) { total += fr.dets.length; });
-    var every = Math.max(1, Math.floor(total / 5000)), i = 0;
-    frames.forEach(function (fr) { fr.dets.forEach(function (d) {
-        if (i++ % every) return;
-        var b = pointsBox(d.points); if (b) ext.push(Math.max(b[2] - b[0], b[3] - b[1]));
-    }); });
-    ext.sort(function (x, y) { return x - y; });
-    var body = ext.length ? ext[ext.length >> 1] : 0, out2 = [];
+    var body = bodyLengthOf(frames), out2 = [];
     if (!(body > 0)) return out2;
     var look = Math.max(1, Math.round(o.lookSeconds * (fps || 30))), near = o.nearBody * body, recent = [];
     for (var p = 0; p < frames.length; p++) {
@@ -441,6 +443,130 @@ export function handoverCandidates(frames, out, fps, opts) {
         for (var q2 = 0; q2 < cs.length; q2++) if (cs[q2] && ids[q2] != null) recent.push({ f: f, c: cs[q2], t: ids[q2] });
     }
     return out2;
+}
+
+/** The median detection extent (the larger side of its box over present nodes), from up to ~5,000 detections
+ *  sampled evenly; 0 when there is none. Resolution-free unit for the looks below. */
+function bodyLengthOf(frames) {
+    var ext = [], total = 0;
+    frames.forEach(function (fr) { total += fr.dets.length; });
+    var every = Math.max(1, Math.floor(total / 5000)), i = 0;
+    frames.forEach(function (fr) { fr.dets.forEach(function (d) {
+        if (i++ % every) return;
+        var b = pointsBox(d.points); if (b) ext.push(Math.max(b[2] - b[0], b[3] - b[1]));
+    }); });
+    ext.sort(function (x, y) { return x - y; });
+    return ext.length ? ext[ext.length >> 1] : 0;
+}
+
+/**
+ * The lone-animal rule (Tracking Wizard `scLoneAnimal`, on by default). Until two
+ * animals are in view TOGETHER there is one animal, so it keeps one track: on
+ * two-mouse recordings where the subject starts alone and the partner is put in
+ * later, the lone animal otherwise moves between tracks — a hand carries it, it
+ * comes back at the edge after a gap, a stray detection on its holder takes its
+ * track — and nothing puts a review row there (the rows look at moments between
+ * two animals). The reviewer then meets it later on whichever track it holds, so
+ * the stretch before the hop keeps the other one.
+ *
+ * "Together": a frame with two tracked detections both at least `score` x the
+ * median detection score (a missing score, a user instance, passes) and centroids
+ * more than `apart` body lengths apart (`bodyLengthOf`) — low enough that huddled
+ * animals count, while a duplicate of one animal (near-identical keypoints) does
+ * not. The shared phase starts at the first such frame from which they fill at
+ * least `fill` of the next `holdSeconds`. Before it, the lone animal is followed
+ * by position (the best-scoring detection first, then the detection nearest its
+ * last place), and keeps the track the tracker gave the detection that continues
+ * it where the shared phase starts (no shared phase: its most common track over
+ * the last `holdSeconds`). Every other detection before then loses its track. A
+ * lone phase shorter than `holdSeconds` after the first detection changes nothing.
+ *
+ * Measured 2026-11-07 on proofread data (Track All, then the review list played by
+ * the simulated reviewer; MODULES.md): Mae's intact two-mouse set (725 videos, held
+ * out) 99.877% -> 99.905%, videos >= 99.9% 600 -> 611, review rows 1.47 -> 1.04 a
+ * minute, Fixes 927 -> 523; sham_gdx (207) 99.975% -> 99.981%, Fixes 186 -> 102;
+ * SLAP (83 views) and SLAP-2M (163), where every animal is in view from the start,
+ * fire on 4 views and are otherwise unchanged (at most -0.06 points on one view).
+ * Without the arrival row the simulated reviewer met the mice later, sometimes
+ * already swapped, and intact fell to 99.31%; at 0.5 body lengths huddled SLAP mice
+ * read as one animal.
+ *
+ * Rewrites `out` in place (DOM-free; reads only the detections and the tracker's
+ * output).
+ * @returns {{fired: boolean, until: ?number, relabelled: number, untracked: number,
+ *            arrival: ?{frame: number, a: number, b: number}}}  `until` = the frame the shared phase
+ *            starts (null: never); `arrival` = the review row there, between the kept track and the
+ *            other animal's (null without a second tracked animal)
+ */
+export const LONE_DEFAULTS = { apart: 0.15, score: 0.4, fill: 0.5, holdSeconds: 1 };
+
+export function loneAnimalPhase(frames, out, fps, opts) {
+    var o = Object.assign({}, LONE_DEFAULTS, opts || {});
+    var none = { fired: false, until: null, relabelled: 0, untracked: 0, arrival: null };
+    if (!frames.length) return none;
+    var body = bodyLengthOf(frames), H = Math.max(1, Math.round(o.holdSeconds * (fps || 30)));
+    var scores = [];
+    frames.forEach(function (fr) { fr.dets.forEach(function (d) { if (d.score === d.score) scores.push(d.score); }); });
+    scores.sort(function (x, y) { return x - y; });
+    var minScore = scores.length ? o.score * scores[scores.length >> 1] : -Infinity;
+    var cents = frames.map(function (fr) { return fr.dets.map(function (d) { return pointsCentroid(d.points); }); });
+    var tracked = function (p) { var r = []; for (var q = 0; q < out[p].length; q++) if (out[p][q] != null) r.push(q); return r; };
+    // the frames (positions) with two animals together
+    var twoAt = [];
+    for (var p = 0; p < frames.length; p++) {
+        var ks = tracked(p).filter(function (q) { var s = frames[p].dets[q].score; return !(s === s) || s >= minScore; }), two = null;
+        for (var i = 0; i < ks.length && !two; i++) for (var j = i + 1; j < ks.length && !two; j++) {
+            var a = cents[p][ks[i]], b = cents[p][ks[j]];
+            if (a && b && Math.hypot(a[0] - b[0], a[1] - b[1]) > o.apart * body) two = [ks[i], ks[j]];
+        }
+        if (two) twoAt.push({ p: p, f: frames[p].frameIdx, pair: two });
+    }
+    // the shared phase: the first two-animal frame from which two-animal frames fill `fill` of the next H frames
+    var start = null;
+    for (var s = 0, e = 0; s < twoAt.length && !start; s++) {
+        if (e < s) e = s;
+        while (e + 1 < twoAt.length && twoAt[e + 1].f < twoAt[s].f + H) e++;
+        if (e - s + 1 >= o.fill * H) start = twoAt[s];
+    }
+    var until = start ? start.f : Infinity, firstP = -1;
+    for (var p1 = 0; p1 < frames.length && firstP < 0; p1++) if (tracked(p1).length) firstP = p1;
+    if (firstP < 0 || until - frames[firstP].frameIdx < H) return Object.assign(none, { until: start ? start.f : null });
+    var bestOf = function (p, ks) { return ks.reduce(function (x, y) {
+        var sx = frames[p].dets[x].score, sy = frames[p].dets[y].score;
+        return (sx === sx ? sx : -Infinity) >= (sy === sy ? sy : -Infinity) ? x : y; }); };
+    var nearest = function (p, ks, at) { var b = ks[0], d = Infinity;
+        ks.forEach(function (q) { var c = cents[p][q], dd = c ? Math.hypot(c[0] - at[0], c[1] - at[1]) : Infinity; if (dd < d) { d = dd; b = q; } });
+        return b; };
+    // the lone animal, followed by position: which detection it is on each lone frame
+    var chain = [], at = null, keep = null, counts = new Map();
+    for (var p2 = firstP; p2 < frames.length && frames[p2].frameIdx < until; p2++) {
+        var ks2 = tracked(p2); if (!ks2.length) continue;
+        var q2 = at ? nearest(p2, ks2, at) : bestOf(p2, ks2);
+        chain.push({ p: p2, q: q2, ks: ks2 });
+        at = cents[p2][q2] || at;
+        if (frames[p2].frameIdx >= until - H) { var tb = out[p2][bestOf(p2, ks2)]; counts.set(tb, (counts.get(tb) || 0) + 1); }
+    }
+    if (counts.size) keep = Array.from(counts).sort(function (x, y) { return y[1] - x[1]; })[0][0];
+    // its track: the one the tracker gave the detection that continues it where the shared phase starts
+    for (var p3 = 0; p3 < frames.length && at; p3++) {
+        if (frames[p3].frameIdx < until) continue;
+        if (frames[p3].frameIdx >= until + H) break;
+        var ks3 = tracked(p3); if (!ks3.length) continue;
+        keep = out[p3][nearest(p3, ks3, at)];
+        break;
+    }
+    if (keep == null) for (var c0 = chain.length - 1; c0 >= 0 && keep == null; c0--) keep = out[chain[c0].p][chain[c0].q];
+    var relabelled = 0, lost = 0;
+    chain.forEach(function (c) { c.ks.forEach(function (q) {
+        var want = q === c.q ? keep : null;
+        if (out[c.p][q] !== want) { relabelled++; if (want == null) lost++; out[c.p][q] = want; }
+    }); });
+    var arrival = null;
+    if (start) {
+        var other = start.pair.map(function (q) { return out[start.p][q]; }).filter(function (t) { return t != null && t !== keep; })[0];
+        if (other != null) arrival = { frame: start.f, a: keep, b: other };
+    }
+    return { fired: true, until: start ? start.f : null, relabelled: relabelled, untracked: lost, arrival: arrival };
 }
 
 /** A return: a track's first detection after more than `gapSeconds` with none. */

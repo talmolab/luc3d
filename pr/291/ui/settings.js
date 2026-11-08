@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=5a479e97140c';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=b111ea59182e';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -396,6 +396,11 @@ const TRACKING_THRESHOLDS = [
         desc: 'Before tracking, leave out a detection that duplicates a stronger one in the same frame — box IoU and OKS both at least the two values below. SLEAP sometimes puts a second instance on an animal it already detected; that copy takes a track, and a lone animal can hop onto it. Removed detections keep no track and stay in the project. On a proofread two-mouse dataset where a lone animal hopped tracks at its duplicates, this fixed both hops (96.95% -> 99.98% correct); on 87 proofread SLAP videos it was about neutral (88.52% -> 88.73%, fewer swaps but some videos worse), hence off by default.',
     },
     {
+        id: 'scLoneAnimal', label: 'Single camera: one track while one animal is in view', default: 1,
+        min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
+        desc: 'Until two animals are in view together, the one animal there keeps one track, and the review list gets a row where the second arrives. When an animal starts alone (a subject before its partner is put in), the tracker otherwise moves it between tracks: a hand carries it, it comes back at the edge, a stray detection takes its track. On 725 proofread two-mouse videos this cut the review list by about 30% and the fixes by about 45% (99.877% -> 99.905% correct); with every animal in view from the start (SLAP) it almost never acts.',
+    },
+    {
         id: 'scDuplicateIou', label: 'Single camera: duplicate box IoU', default: 0.5,
         min: 0.05, max: 1, step: 0.05,
         desc: 'With duplicate removal on: a detection is a duplicate only if its bounding box overlaps the stronger one\'s by at least this IoU (and their OKS is at least the value below). Box overlap alone would also take two touching animals.',
@@ -486,7 +491,7 @@ const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore', 'filterMinMeanNodeScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
     'stale', 'matchGate', 'maxPenalty', 'matchReproj',
-    'scWindowSize', 'scOksStddev', 'scConnectBreaks', 'scRemoveDuplicates', 'scDuplicateIou', 'scDuplicateOks',
+    'scWindowSize', 'scOksStddev', 'scConnectBreaks', 'scLoneAnimal', 'scRemoveDuplicates', 'scDuplicateIou', 'scDuplicateOks',
     'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz', 'imageCheckMaxViews', 'imageCheckWebNN',
     'autoBrightnessSwitchCheck', 'brightnessCheckThreshold', 'brightnessCheckHz',
     'reprojErrorThreshold',
