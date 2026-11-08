@@ -2728,8 +2728,10 @@ connect-single-breaks renumbers tracks, so its ids are read through the final
 output, never from the observer.
 
 **The review list: where to look, as rows of their own.** Track All also returns
-`review` — the candidate moments plus HANDOVERS, clustered the same way
-(`candidateMoments(..., extra)` with `handoverCandidates(frames, out, fps)`) — and
+`review` — the candidate moments plus HANDOVERS and the returns while the other
+animal was out of sight too, clustered the same way (`candidateMoments(..., extra)`
+with `handoverCandidates(frames, out, fps)` and `reviewReturnCandidates(frames, out,
+fps)`, below) — and
 `pose/tracker.js` puts it in the ID Switches tab as unscored rows
 (`reviewResult(moments, session, fps)` -> a result with `cue: 'review'`, one
 'onset' row per moment, `score` 0, `look` = its cues, no far edge). A handover is
@@ -2832,8 +2834,9 @@ identityB, cues: ['return']}` per return of a track (its first detection after m
 than `RETURN_DEFAULTS.gapSeconds` (1) unseen) and each other track, `startFrame` the
 frame it was last seen, so `testMoments` reads the labels before the animal went out
 of sight against the labels after it came back. `trackSingleCamera`'s `moments` =
-candidate moments + returns (sorted); the review list does not take them (a place
-per return would add 1–2.5 places a minute). Their rows note "an animal comes back
+candidate moments + returns (sorted); the review list takes only the returns while
+the other animal was out of sight too (below: a place per return would add 1–2.5
+places a minute). Their rows note "an animal comes back
 after being out of sight". They cost no decoding: the check reads its 4 Hz samples
 anyway. Measured 2026-10-27 offline with the check's own code on precomputed coat
 vectors (`~/luc3d-eval/extract_bright.mjs`, `eval_bright.mjs`), the simulated reviewer
@@ -2868,6 +2871,28 @@ working through the review list plus the check's rows:
   was neutral to worse (sham_gdx 94.08% -> 94.04%, 24 videos worse and 13 better; only
   SLAP six gained, at beta 1.5): mice come back far from where they left (handled, hidden),
   so where they were heading says little.
+
+**Returns on the review list: only while the other animal was out of sight too.**
+`reviewReturnCandidates(frames, out, fps, opts)` -> `[{f, a, b, cue: 'return'}]` for
+`candidateMoments`' `extra` (beside the handovers): a track back after more than
+`REVIEW_RETURN_DEFAULTS.gapSeconds` (1) unseen, paired with each other track that was
+ALSO unseen for at least `otherAwaySeconds` (0.5) of that absence. With the other
+animal tracked the whole time, the one coming back can only take the track that is
+left; with both out of sight (both in the bedding, both lifted out) the first one back
+can take either. Measured 2026-11-07 offline (Spock `runs/2026-11-07_lone/<set>/ret.mjs`,
+`oracle_win.mjs`), on the app's Track All + lone-animal rule, with two simulated
+reviewers. The one every figure above uses watches from a row up to the NEXT row, so
+it sees every return anyway. A stricter one watches only 2 s before to 5 s after each
+row, and does worse on the list without returns: intact 99.925 vs 99.825%, sham_gdx
+99.981 vs 99.939, SLAP 99.838 vs 99.423, SLAP-2M 99.595 vs 98.885.
+- **These returns:** +0.00–0.05 rows a minute; with the 5 s reviewer intact 99.840%
+  (2750m 220711 cdm_home 92.9 -> 100%), sham_gdx 99.942, SLAP 99.620, SLAP-2M
+  unchanged; with the other reviewer only SLAP moves (99.838 -> 99.919%, 150448/midL).
+  No video worse with either.
+- **Not adopted: every return as a row:** +0.2–0.3 rows a minute on Mae's sets, +0.8–1.4
+  on SLAP (doubling it); 5 s reviewer intact 99.867, SLAP 99.841, SLAP-2M 99.302, but
+  one SLAP-2M view 98.95 -> 73.93% (10192022183808/mid). Returns after 3 s unseen fall
+  in between.
 
 **Eager sessions only.** A lazy (> 150 MB) single-camera project is refused with
 `SINGLE_CAMERA_LAZY_REASON` rather than tracked from its resident window. Track
@@ -2912,7 +2937,9 @@ cue}` to cluster with them); `CANDIDATE_DEFAULTS` (`ambiguityMargin`
 0.1, `trackletGapFrames` 5, `clusterSeconds` 3); `handoverCandidates(frames, out, fps,
 opts)` -> `[{f, a, b, cue: 'handover'}]`; `HANDOVER_DEFAULTS` (`lookSeconds` 1,
 `nearBody` 0.5); `returnMoments(frames, out, fps, opts)` -> `[{frame, startFrame, identityA,
-identityB, cues: ['return']}]`; `RETURN_DEFAULTS` (`gapSeconds` 1); `reviewResult(moments, session, fps)` -> the review list's result; `singleCameraCheckSession(session)`
+identityB, cues: ['return']}]`; `RETURN_DEFAULTS` (`gapSeconds` 1); `reviewReturnCandidates(frames,
+out, fps, opts)` -> `[{f, a, b, cue: 'return'}]`; `REVIEW_RETURN_DEFAULTS` (`gapSeconds` 1,
+`otherAwaySeconds` 0.5); `reviewResult(moments, session, fps)` -> the review list's result; `singleCameraCheckSession(session)`
 -> stand-in | null | `{fail}`; `swapSingleCameraIdentities(session, from, to, idA, idB)`
 -> `{frames, tracks: boolean}` | null; `singleCameraCheckOptions(cue)` -> the options
 the coat-brightness check runs with on one camera (`{skipEmpty: true,
