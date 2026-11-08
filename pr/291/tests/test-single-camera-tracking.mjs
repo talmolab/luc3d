@@ -43,9 +43,10 @@
  *     nothing; a frame left with no detection still counts in `frames`; and
  *     duplicates are looked for among the detections the filters kept.
  * 12. The lone-animal rule (`loneAnimalPhase`, Track All's `lone` option): while
- *     one animal is in view it keeps the track it holds as the second arrives,
- *     stray detections lose theirs, and an 'arrival' review row marks the
- *     arrival; nothing changes with two animals from the start (huddled ones
+ *     one animal is in view it keeps the track it holds before the second
+ *     arrives (the lone phase ends where the arrival's cluster starts, so a
+ *     newcomer put down beside it keeps its own track), stray detections lose
+ *     theirs, and an 'arrival' review row marks the arrival; nothing changes with two animals from the start (huddled ones
  *     included), for a duplicate, or for a lone phase under a second.
  *
  * Run:  node tests/test-single-camera-tracking.mjs
@@ -628,6 +629,21 @@ group('12. The lone-animal rule: one track while one animal is in view, a review
     ok(r.arrival && r.arrival.frame === 300 && r.arrival.a === 0 && r.arrival.b === 1, `an arrival row at frame 300 between the two tracks (${JSON.stringify(r.arrival)})`);
     const after = F.out.slice(F.frames.findIndex(fr => fr.frameIdx === 300)).map(o => o.join(',')), want = F.frames.filter(fr => fr.frameIdx >= 300).map(() => '0,1');
     eq(after.join(';'), want.join(';'), 'nothing changes from the arrival on');
+
+    // the newcomer is put down beside the lone animal, which then goes undetected for a moment (frames 282-299): the
+    // lone phase ends where the arrival's cluster starts (frame 280), the lone animal keeps the track it wore there,
+    // and the newcomer's detections in the cluster keep theirs (following by position alone jumped to the newcomer)
+    F = make(450, f => f < 280 ? [[walk(f), 200, f < 100 ? 1 : 0]]
+        : f < 282 ? [[walk(f), 200, 0], [walk(f) + 150, 200, 1]]
+        : f < 300 ? [[walk(f) + 10, 200, 1]]
+        : [[walk(f), 200, 0], [900, 400, 1]]);
+    r = SCT.loneAnimalPhase(F.frames, F.out, FPS);
+    ok(r.fired && r.until === 280, `the lone phase ends at the arrival cluster's start (until ${r.until})`);
+    lone = new Set(); F.frames.forEach((fr, p) => { if (fr.frameIdx < 280) lone.add(F.out[p][0]); });
+    ok(lone.size === 1 && lone.has(0), `the lone animal keeps the track it wore before the cluster (${[...lone]})`);
+    ok(F.frames.filter(fr => fr.frameIdx >= 282 && fr.frameIdx < 300).every(fr => F.out[F.frames.indexOf(fr)][0] === 1), 'the newcomer keeps its own track inside the cluster');
+    ok(r.arrival && r.arrival.startFrame === 280 && r.arrival.frame === 300 && r.arrival.a === 0 && r.arrival.b === 1,
+        `the arrival row runs from the cluster's start to the arrival (${JSON.stringify(r.arrival)})`);
 
     // two animals from the start: nothing
     F = make(300, f => [[walk(f), 200, 0], [900, 400, 1]]);

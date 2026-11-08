@@ -46,8 +46,8 @@
  * DOM-free. Depends on: pose/sleap-tracker.js, pose/detection-filter-stats.js.
  */
 
-import { runSleapTrackerAsync } from './sleap-tracker.js?v=b111ea59182e';
-import { passesDetectionFilter } from './detection-filter-stats.js?v=b111ea59182e';
+import { runSleapTrackerAsync } from './sleap-tracker.js?v=7ee16183c88d';
+import { passesDetectionFilter } from './detection-filter-stats.js?v=7ee16183c88d';
 
 /** Why a lazy single-camera project is not tracked (shown in the status bar). */
 export const SINGLE_CAMERA_LAZY_REASON = 'single-camera tracking does not support a lazily loaded (> 150 MB) project yet';
@@ -307,7 +307,7 @@ export async function trackSingleCamera(session, cfg, opts) {
         .sort(function (x, y) { return x.frame - y.frame || x.identityA - y.identityA || x.identityB - y.identityB; });
     var review = candidateMoments(frames, out, inputTracks, ambiguous, look, fps, handoverCandidates(frames, out, fps));
     if (lone && lone.arrival) {
-        review.push({ frame: lone.arrival.frame, startFrame: lone.arrival.frame, identityA: Math.min(lone.arrival.a, lone.arrival.b),
+        review.push({ frame: lone.arrival.frame, startFrame: lone.arrival.startFrame, identityA: Math.min(lone.arrival.a, lone.arrival.b),
                       identityB: Math.max(lone.arrival.a, lone.arrival.b), cues: ['arrival'] });
         review.sort(function (x, y) { return x.frame - y.frame || x.identityA - y.identityA || x.identityB - y.identityB; });
     }
@@ -474,31 +474,39 @@ function bodyLengthOf(frames) {
  * more than `apart` body lengths apart (`bodyLengthOf`) — low enough that huddled
  * animals count, while a duplicate of one animal (near-identical keypoints) does
  * not. The shared phase starts at the first such frame from which they fill at
- * least `fill` of the next `holdSeconds`. Before it, the lone animal is followed
- * by position (the best-scoring detection first, then the detection nearest its
- * last place), and keeps the track the tracker gave the detection that continues
- * it where the shared phase starts (no shared phase: its most common track over
- * the last `holdSeconds`). Every other detection before then loses its track. A
+ * least `fill` of the next `holdSeconds`. The lone phase ends EARLIER, where that
+ * arrival's cluster starts: the first two-animal frame in the `clusterSeconds`
+ * before it. From there on the tracker's own tracks stand, through the arrival
+ * (while the second animal is being put in, the lone one is often undetected for a
+ * frame, and following it by position alone then jumps to the newcomer). Before
+ * then, the lone animal is followed by position (the best-scoring detection first,
+ * then the detection nearest its last place) and keeps the track its last pick
+ * before the cluster wore; every other detection before then loses its track. A
  * lone phase shorter than `holdSeconds` after the first detection changes nothing.
  *
  * Measured 2026-11-07 on proofread data (Track All, then the review list played by
  * the simulated reviewer; MODULES.md): Mae's intact two-mouse set (725 videos, held
- * out) 99.877% -> 99.905%, videos >= 99.9% 600 -> 611, review rows 1.47 -> 1.04 a
- * minute, Fixes 927 -> 523; sham_gdx (207) 99.975% -> 99.981%, Fixes 186 -> 102;
- * SLAP (83 views) and SLAP-2M (163), where every animal is in view from the start,
- * fire on 4 views and are otherwise unchanged (at most -0.06 points on one view).
- * Without the arrival row the simulated reviewer met the mice later, sometimes
- * already swapped, and intact fell to 99.31%; at 0.5 body lengths huddled SLAP mice
- * read as one animal.
+ * out) 99.877% -> 99.9245%, videos >= 99.9% 600 -> 614, review rows 6,113 -> 4,416;
+ * sham_gdx (207) 99.975% -> 99.981%; SLAP (83 views) and SLAP-2M (163), where
+ * every animal is in view from the start, unchanged to within 1 detection on 2
+ * views. Ending the lone phase at the arrival itself instead (the first version)
+ * gave intact 99.905%: the follower jumped to the newcomer in 10 videos (2,478
+ * detections, one video 100% -> 88.9%). Without the arrival row the simulated
+ * reviewer met the mice later, sometimes already swapped (intact 99.31%); at 0.5
+ * body lengths huddled SLAP mice read as one animal. Left: one-frame blips where
+ * the follower takes the copy of a resting animal the proofreader deleted (138
+ * intact videos, a median of 2 detections each) — nothing in the detections tells
+ * the copies apart.
  *
  * Rewrites `out` in place (DOM-free; reads only the detections and the tracker's
  * output).
  * @returns {{fired: boolean, until: ?number, relabelled: number, untracked: number,
- *            arrival: ?{frame: number, a: number, b: number}}}  `until` = the frame the shared phase
- *            starts (null: never); `arrival` = the review row there, between the kept track and the
+ *            arrival: ?{frame: number, startFrame: number, a: number, b: number}}}  `until` = the first
+ *            frame the tracker's tracks stand again (the arrival cluster's start; null: never);
+ *            `arrival` = the review row from there to the arrival, between the kept track and the
  *            other animal's (null without a second tracked animal)
  */
-export const LONE_DEFAULTS = { apart: 0.15, score: 0.4, fill: 0.5, holdSeconds: 1 };
+export const LONE_DEFAULTS = { apart: 0.15, score: 0.4, fill: 0.5, holdSeconds: 1, clusterSeconds: 5 };
 
 export function loneAnimalPhase(frames, out, fps, opts) {
     var o = Object.assign({}, LONE_DEFAULTS, opts || {});
@@ -537,6 +545,11 @@ export function loneAnimalPhase(frames, out, fps, opts) {
     var nearest = function (p, ks, at) { var b = ks[0], d = Infinity;
         ks.forEach(function (q) { var c = cents[p][q], dd = c ? Math.hypot(c[0] - at[0], c[1] - at[1]) : Infinity; if (dd < d) { d = dd; b = q; } });
         return b; };
+    // where the lone phase ends: the arrival cluster's first two-animal frame (the arrival itself when none is
+    // within clusterSeconds before it; with no arrival, the last clusterSeconds before the last detection)
+    var arriveAt = start ? start.f : frames[frames.length - 1].frameIdx + 1, end = arriveAt;
+    var from = Math.max(frames[firstP].frameIdx, arriveAt - Math.round(o.clusterSeconds * (fps || 30)));
+    for (var t0 = 0; t0 < twoAt.length; t0++) if (twoAt[t0].f >= from && twoAt[t0].f < arriveAt) { end = twoAt[t0].f; break; }
     // the lone animal, followed by position: which detection it is on each lone frame
     var chain = [], at = null, keep = null, counts = new Map();
     for (var p2 = firstP; p2 < frames.length && frames[p2].frameIdx < until; p2++) {
@@ -555,18 +568,20 @@ export function loneAnimalPhase(frames, out, fps, opts) {
         keep = out[p3][nearest(p3, ks3, at)];
         break;
     }
+    // the track its last pick before the cluster wore (the follower can jump to the newcomer inside the cluster)
+    for (var c1 = chain.length - 1; c1 >= 0; c1--) if (frames[chain[c1].p].frameIdx < end) { keep = out[chain[c1].p][chain[c1].q]; break; }
     if (keep == null) for (var c0 = chain.length - 1; c0 >= 0 && keep == null; c0--) keep = out[chain[c0].p][chain[c0].q];
     var relabelled = 0, lost = 0;
-    chain.forEach(function (c) { c.ks.forEach(function (q) {
+    chain.forEach(function (c) { if (frames[c.p].frameIdx >= end) return; c.ks.forEach(function (q) {
         var want = q === c.q ? keep : null;
         if (out[c.p][q] !== want) { relabelled++; if (want == null) lost++; out[c.p][q] = want; }
     }); });
     var arrival = null;
     if (start) {
         var other = start.pair.map(function (q) { return out[start.p][q]; }).filter(function (t) { return t != null && t !== keep; })[0];
-        if (other != null) arrival = { frame: start.f, a: keep, b: other };
+        if (other != null) arrival = { frame: start.f, startFrame: end, a: keep, b: other };
     }
-    return { fired: true, until: start ? start.f : null, relabelled: relabelled, untracked: lost, arrival: arrival };
+    return { fired: true, until: isFinite(end) && (start || end < arriveAt) ? end : null, relabelled: relabelled, untracked: lost, arrival: arrival };
 }
 
 /** A return: a track's first detection after more than `gapSeconds` with none. */
