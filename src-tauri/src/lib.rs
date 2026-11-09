@@ -221,16 +221,21 @@ pub fn run() {
             tauri::WebviewUrl::App("index.html".into())
         };
 
-        tauri::WebviewWindowBuilder::new(app, "main", url)
-            .title("luc3d")
+        let window = tauri::WebviewWindowBuilder::new(app, "main", url)
+            .title("LUC3D")
             .inner_size(1440.0, 900.0)
             .min_inner_size(1024.0, 700.0)
             .resizable(true)
             // Lets LUCID's own HTML5 drag-and-drop receive file drops (on
             // Windows the native handler would swallow them).
             .disable_drag_drop_handler()
-            .initialization_script(desktop_shim())
-            .build()?;
+            .initialization_script(desktop_shim());
+        // macOS: keep the title bar and traffic lights but not the centred
+        // title text; the title above still names the window in the Window
+        // menu, Mission Control and the Dock.
+        #[cfg(target_os = "macos")]
+        let window = window.hidden_title(true);
+        window.build()?;
         Ok(())
     });
 
