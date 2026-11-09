@@ -56,6 +56,8 @@ const BLANK = `${BASE}/__desktop_shim_blank.html`;
 const MIB = 1024 * 1024;
 const BROWSER = process.env.BROWSER || 'chromium';
 const IS_CHROMIUM = BROWSER === 'chromium';
+// Chromium reports the machine it runs on; the shim maps it as below.
+const HOST_PLATFORM = { darwin: 'macos', win32: 'windows' }[process.platform] || 'linux';
 
 let fails = 0;
 const check = (c, m, extra) => {
@@ -1000,7 +1002,7 @@ try {
                 { title: 'Export', message: 'Overwrite?', okLabel: 'Overwrite', cancelLabel: 'Keep' }]),
             'lucidDesktop.confirm(message, opts) → ask_dialog with defaults LUCID / OK / Cancel, resolves to a boolean', r.confirmArgs);
         check(r.nativeConfirm, 'window.confirm / window.prompt are not overridden');
-        check(r.status.available === false && r.gpu === 'cpu' && r.sys === true && JSON.stringify(r.reveal) === '[{"path":"/dl/report.csv"}]' && (IS_CHROMIUM ? r.platform === 'linux' : ['macos', 'linux'].includes(r.platform)),
+        check(r.status.available === false && r.gpu === 'cpu' && r.sys === true && JSON.stringify(r.reveal) === '[{"path":"/dl/report.csv"}]' && (IS_CHROMIUM ? r.platform === HOST_PLATFORM : ['macos', 'linux'].includes(r.platform)),
             'sleapNn.status/detectGpu, systemInfo, revealPath, platform', r);
         await page.close();
     }

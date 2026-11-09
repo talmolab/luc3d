@@ -145,9 +145,10 @@ group('6. argument validation');
 }
 
 // Real `npx @tauri-apps/cli@2 signer sign` output over the bytes "dummy payload\n".
-// Public data only: a minisign public key and two signatures. APP_PUB is the
-// key in src-tauri/tauri.conf.json (key id 671DF8EBE3DE402A); OTHER_* came from
-// a throwaway key generated for this test and discarded.
+// Public data only: two minisign public keys and their signatures, both from
+// throwaway keys generated for this test and discarded (APP_* stands in for the
+// app's key; the test writes its own tauri.conf.json, so it does not depend on
+// the real pubkey in src-tauri/tauri.conf.json).
 const APP_PUB = 'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY3MURGOEVCRTNERTQwMkEKUldRcVFON2o2L2dkWjBYc0pJMmxwTGd6RW1sRjhSNEJOT0k3aWE2WXA1WStkRW5Ib2VqRjNpNVYK';
 const APP_SIG = 'dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVFON2o2L2dkWjhoaWVyblpZT05jamhCZkRkalo5NVBYYnlSWWMrUlhselYyYXZjS2RYQXpvVmpqemZXTjFJSy9IRm4zRnRmOFVoRlZhdllHOEtyQjdnTWF6bmd4SFE4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzODIyMjY3CWZpbGU6cGF5bG9hZC5iaW4KNS9IcDF3MnMwMDJPcElNNnNWNE5UWnBnVHF1VTZtWVRiSmYrTFJCdnE3SHh0eTkzbHh0MFN4TE1WR0lFb1VHR3I4MncvaDZvSDhjR3AwOFh6Z0tMQ2c9PQo=';
 const OTHER_PUB = 'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUyQzMzMUM3N0I1NDE2MjIKUldRaUZsUjd4ekhENHJpaTF1eFllS29yZW41TnRPMytHMzc4SGRGamsvWlhuZFVuZ1ZqUW9rZ3MK';

@@ -28,22 +28,22 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js?v=b4b6796a9f11';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=b4b6796a9f11';
-import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=b4b6796a9f11';
+} from './app-state.js?v=552ac39b914d';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=552ac39b914d';
+import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=552ac39b914d';
 import {
     triangulateAndReproject, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod, triangulationSettingsKey,
-} from '../pose/triangulation.js?v=b4b6796a9f11';
+} from '../pose/triangulation.js?v=552ac39b914d';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js?v=b4b6796a9f11';
-import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js?v=b4b6796a9f11';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=b4b6796a9f11';
+} from '../loading/session-loader.js?v=552ac39b914d';
+import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js?v=552ac39b914d';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=552ac39b914d';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -51,24 +51,24 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js?v=b4b6796a9f11';
+} from './video-filters.js?v=552ac39b914d';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=b4b6796a9f11';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=552ac39b914d';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js?v=b4b6796a9f11';
-import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=b4b6796a9f11';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=b4b6796a9f11';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=b4b6796a9f11';
+import { setSoloView } from './ui-wiring.js?v=552ac39b914d';
+import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=552ac39b914d';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=552ac39b914d';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=552ac39b914d';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=b4b6796a9f11';
-import { getLoadingProgressModal } from './loading-progress-modal.js?v=b4b6796a9f11';
-import { askConfirm } from './ask.js?v=b4b6796a9f11';
+import { setup3DViewport } from '../pose/initialization.js?v=552ac39b914d';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=552ac39b914d';
+import { askConfirm } from './ask.js?v=552ac39b914d';
 
 // ============================================
 // Dockview Pane Manager
@@ -690,7 +690,19 @@ function renderDuplicatePanels() {
 
         if (panelOverlay && primaryView.overlayCanvas && panelOverlay !== primaryView.overlayCanvas) {
             var octx = panelOverlay.getContext('2d');
-            try { octx.drawImage(primaryView.overlayCanvas, 0, 0, panelOverlay.width, panelOverlay.height); }
+            // A zoomed-in primary overlay is a window onto the full canvas
+            // (`ui/overlay-window.js`): copy it to the same place in the mirror.
+            var plan = primaryView._overlayPlan;
+            try {
+                if (plan && plan.windowed) {
+                    var kx = panelOverlay.width / plan.boxW, ky = panelOverlay.height / plan.boxH;
+                    octx.clearRect(0, 0, panelOverlay.width, panelOverlay.height);
+                    octx.drawImage(primaryView.overlayCanvas, plan.cssLeft * kx, plan.cssTop * ky,
+                        plan.cssW * kx, plan.cssH * ky);
+                } else {
+                    octx.drawImage(primaryView.overlayCanvas, 0, 0, panelOverlay.width, panelOverlay.height);
+                }
+            }
             catch (e) { /* canvas not ready */ }
         }
     }

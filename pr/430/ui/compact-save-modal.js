@@ -13,10 +13,11 @@
  * A leaf: imports only the rounding steps.
  */
 
-import { COMPACT_STEPS } from '../import-export/compact-save.js?v=b4b6796a9f11';
+import { COMPACT_STEPS } from '../import-export/compact-save.js?v=552ac39b914d';
 
 /**
- * @param {{suggestedName?: string, pickFile?: function(Object): Promise<Object>}} [opts]
+ * @param {{suggestedName?: string, startIn?: Object, pickFile?: function(Object): Promise<Object>}} [opts]
+ *   `startIn`: where the picker opens (the recording's folder or the project file; see `saveStartFolder`).
  *   `pickFile` stands in for `window.showSaveFilePicker` (tests).
  * @returns {Promise<?Object>} the FileSystemFileHandle to write, or null (cancelled)
  */
@@ -105,8 +106,10 @@ export function showCompactSaveModal(opts) {
             // Synchronously inside the click: the picker needs its user activation.
             var p;
             try {
-                p = pick({ suggestedName: opts.suggestedName || 'project_compact.slp',
-                    types: [{ description: 'SLEAP Labels', accept: { 'application/x-hdf5': ['.slp'] } }] });
+                var pickOpts = { suggestedName: opts.suggestedName || 'project_compact.slp',
+                    types: [{ description: 'SLEAP Labels', accept: { 'application/x-hdf5': ['.slp'] } }] };
+                if (opts.startIn) pickOpts.startIn = opts.startIn;
+                p = pick(pickOpts);
             } catch (e) { p = Promise.reject(e); }
             Promise.resolve(p).then(finish, function (e) {
                 if (e && e.name === 'AbortError') return;   // picker closed: the dialog stays, to cancel or retry

@@ -31,7 +31,33 @@
  * (`loading/track-union.js`) — see `_unifyTracks`.
  */
 
-import { unionTrackNames } from './track-union.js?v=b4b6796a9f11';
+import { unionTrackNames } from './track-union.js?v=552ac39b914d';
+
+/**
+ * A store skeleton's node name → column, as `skel.nodeNames.indexOf(name)`
+ * (first match; -1 when absent). sleap-io.js's `nodeNames` getter builds a new
+ * array on every read, which was the hottest call of By Cam's per-frame pass
+ * when asked per node. The map is kept per skeleton and rebuilt if its `nodes`
+ * array is replaced or resized, a hit no longer names the node, or a name is
+ * missing (either could be a rename in place).
+ */
+var _storeNodeColumns = new WeakMap();
+function storeNodeColumn(skel, nodeName) {
+    if (!skel) return -1;
+    var nodes = skel.nodes;
+    if (!Array.isArray(nodes)) return skel.nodeNames ? skel.nodeNames.indexOf(nodeName) : -1;
+    var c = _storeNodeColumns.get(skel);
+    if (c && c.nodes === nodes && c.len === nodes.length) {
+        var hit = c.map.get(nodeName);
+        if (hit !== undefined && nodes[hit] && nodes[hit].name === nodeName) return hit;
+    }
+    var names = skel.nodeNames;
+    var map = new Map();
+    for (var i = names.length - 1; i >= 0; i--) map.set(names[i], i);
+    _storeNodeColumns.set(skel, { nodes: nodes, len: nodes.length, map: map });
+    var k = map.get(nodeName);
+    return k === undefined ? -1 : k;
+}
 
 /**
  * `deleteInstanceRows` moves surviving rows with one `copyWithin` per run when
@@ -83,6 +109,35 @@ function adaptTypedInstance(inst, typedTracks, numNodes, PredictedInstance) {
         occluded: occluded,
     };
 }
+
+/**
+ * The nodes of store instance row `j` that `adaptTypedInstance` would mark
+ * occluded — coordinates present, `visible` false — read straight from the
+ * point columns, as `materializeFrame` + `slicePoints` would read them: a user
+ * row (instance_type 0, or no type column) from `pointsData`, any other from
+ * `predPointsData`, node `k` at `point_id_start + k` while that is before
+ * `point_id_end`.
+ *
+ * @returns {number[]|null} ascending node indices, null when there are none
+ */
+function storeRowOccludedNodes(store, j, numNodes) {
+    var idn = store.instancesData || {};
+    if (!idn.point_id_start) return null;
+    var rawType = idn.instance_type ? idn.instance_type[j] : undefined;
+    var pts = Number(rawType == null ? 0 : rawType) === 0 ? store.pointsData : store.predPointsData;
+    if (!pts || !pts.x || !pts.y) return null;
+    var p0 = Number(idn.point_id_start[j]) || 0;
+    var p1 = Number(idn.point_id_end ? idn.point_id_end[j] : 0) || 0;
+    var vis = pts.visible || [];
+    var out = null;
+    for (var k = 0; k < numNodes && p0 + k < p1; k++) {
+        var i = p0 + k;
+        if (isFinite(Number(pts.x[i])) && isFinite(Number(pts.y[i])) && !vis[i]) (out || (out = [])).push(k);
+    }
+    return out;
+}
+
+function noOccludedNodes() { return null; }
 
 export class SioLazyLoader {
     constructor() {
@@ -168,7 +223,7 @@ export class SioLazyLoader {
         }
         // Point the reader's internal I/O worker at LUCID's local vendored h5wasm
         // IIFE (document.baseURI keeps this correct on sub-path deployments).
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=b4b6796a9f11', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=552ac39b914d', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -402,7 +457,7 @@ export class SioLazyLoader {
         if (!SIO || typeof SIO.readSlpStreaming !== 'function') {
             throw new Error('sleap-io.js readSlpStreaming not available on window.SleapIO');
         }
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=b4b6796a9f11', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=552ac39b914d', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -803,10 +858,15 @@ export class SioLazyLoader {
      *   - `trackIdx[k]`: the session track index, or -1 for trackless. A track
      *     id with no `Track` behind it is trackless there too.
      *   - `predicted[k]`: 1 unless `instance_type` is 0 (a user instance).
+     *   - `occludedNodes(k)`: the nodes hydration marks occluded (placed, not
+     *     visible), ascending, or null for none. A function, read only when a
+     *     caller asks (`pose/lazy-residency.js` compares it with an instance's
+     *     own occlusion), so a descriptor costs no more than before.
      *
      * @param {string} camName
      * @param {number} frameIdx - video frame index
-     * @returns {{count: number, trackIdx: Int32Array, predicted: Uint8Array}|null}
+     * @returns {{count: number, trackIdx: Int32Array, predicted: Uint8Array,
+     *   occludedNodes: function(number): (number[]|null)}|null}
      *   null when this loader does not back `camName` at all (the caller must
      *   then treat that camera's data as NOT rebuildable). A camera with no row
      *   for this frame reports `count: 0`.
@@ -817,7 +877,7 @@ export class SioLazyLoader {
         var store = labels && labels._lazyDataStore;
         if (!store || !rowMap) return null;
         var row = rowMap.get(frameIdx);
-        if (row === undefined) return { count: 0, trackIdx: new Int32Array(0), predicted: new Uint8Array(0) };
+        if (row === undefined) return { count: 0, trackIdx: new Int32Array(0), predicted: new Uint8Array(0), occludedNodes: noOccludedNodes };
         var fd = store.framesData || {};
         var idn = store.instancesData || {};
         var iStart = Number(fd.instance_id_start ? fd.instance_id_start[row] : 0) || 0;
@@ -844,7 +904,12 @@ export class SioLazyLoader {
             var rawType = idn.instance_type ? idn.instance_type[j] : undefined;
             predicted[k] = Number(rawType == null ? 0 : rawType) === 0 ? 0 : 1;
         }
-        return { count: n, trackIdx: trackIdx, predicted: predicted };
+        var numNodes = this.numNodesByCam.get(camName) || (this.skeleton ? this.skeleton.nodes.length : 0);
+        var occludedNodes = function (k) {
+            if (!(k >= 0 && k < n)) return null;
+            return storeRowOccludedNodes(store, iStart + k, numNodes);
+        };
+        return { count: n, trackIdx: trackIdx, predicted: predicted, occludedNodes: occludedNodes };
     }
 
     /**
@@ -866,30 +931,50 @@ export class SioLazyLoader {
      * @returns {number} NaN when the row is not a prediction, or has no score
      */
     predictedPointScore(camName, frameIdx, offsetInFrame, nodeName) {
+        var scoreOf = this.predictedPointScorer(camName, frameIdx, offsetInFrame);
+        return scoreOf ? scoreOf(nodeName) : NaN;
+    }
+
+    /**
+     * `predictedPointScore` for every node of ONE store row: the row, its
+     * type, skeleton and point range are looked up once, and the returned
+     * function maps a node NAME to its score (same values, same NaN cases).
+     * By Cam's per-frame pass asks for every node of every prediction, and
+     * resolving the row per node was most of its score cost.
+     *
+     * @param {string} camName
+     * @param {number} frameIdx
+     * @param {number} offsetInFrame
+     * @returns {((nodeName: string) => number)|null} null when the row is
+     *   missing or not a prediction (every node would be NaN)
+     */
+    predictedPointScorer(camName, frameIdx, offsetInFrame) {
         var labels = this.labelsByCam.get(camName);
         var rowMap = this.frameRowByCam.get(camName);
         var store = labels && labels._lazyDataStore;
-        if (!store || !rowMap) return NaN;
+        if (!store || !rowMap) return null;
         var row = rowMap.get(frameIdx);
-        if (row === undefined) return NaN;
+        if (row === undefined) return null;
         var fd = store.framesData || {};
         var idn = store.instancesData || {};
         var iStart = Number(fd.instance_id_start ? fd.instance_id_start[row] : 0) || 0;
         var iEnd = Number(fd.instance_id_end ? fd.instance_id_end[row] : 0) || 0;
         var j = iStart + offsetInFrame;
-        if (!Number.isInteger(offsetInFrame) || offsetInFrame < 0 || j >= iEnd) return NaN;
+        if (!Number.isInteger(offsetInFrame) || offsetInFrame < 0 || j >= iEnd) return null;
         // Same rule as `materializeFrame`: type 0 is a user instance.
         var rawType = idn.instance_type ? idn.instance_type[j] : undefined;
-        if (Number(rawType == null ? 0 : rawType) === 0) return NaN;
+        if (Number(rawType == null ? 0 : rawType) === 0) return null;
         var skeletons = store.skeletons || [];
         var skel = skeletons[Number(idn.skeleton ? idn.skeleton[j] : 0)] || skeletons[0];
-        var k = skel && skel.nodeNames ? skel.nodeNames.indexOf(nodeName) : -1;
         var pStart = Number(idn.point_id_start ? idn.point_id_start[j] : NaN);
         var pEnd = Number(idn.point_id_end ? idn.point_id_end[j] : NaN);
-        if (k < 0 || !(pStart + k < pEnd)) return NaN;
         var scores = store.predPointsData && store.predPointsData.score;
-        var s = scores ? Number(scores[pStart + k]) : NaN;
-        return Number.isFinite(s) ? s : NaN;
+        return function (nodeName) {
+            var k = storeNodeColumn(skel, nodeName);
+            if (k < 0 || !(pStart + k < pEnd)) return NaN;
+            var s = scores ? Number(scores[pStart + k]) : NaN;
+            return Number.isFinite(s) ? s : NaN;
+        };
     }
 
     /**

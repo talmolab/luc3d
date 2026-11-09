@@ -11,6 +11,10 @@
  *  4. A range does not run the pass.
  *  5. Neither tail marked: the pass says so and changes no label.
  *  6. No videos: the pass says so, and tracking still succeeds.
+ *  7. Three animals with 0, 1 and 2 bands, the count per identity chosen in the
+ *     dialog: each animal ends on the identity with its bands, for two different choices
+ *     (the identity engine, pose/identity-cues.js).
+ *  8. The Track menu's Bands per id… asks per identity and saves; Off clears it.
  *
  * Run: node tests/e2e/tail-mark-track-all.mjs
  */
@@ -53,7 +57,7 @@ try {
             for (let f = 0; f < FRAMES; f++) {
                 const fg = new pd.FrameGroup(f);
                 // animal 1 is listed first in the data, so the tracker's id_0 is not animal 0 by accident of order
-                [[8, 4, 48, 1], [-8, -4, 48, 0]].forEach(([x, y, z, ai]) => {
+                (opts.animals || [[8, 4, 48, 1], [-8, -4, 48, 0]]).forEach(([x, y, z, ai]) => {
                     const ctr = [x + 0.6 * Math.sin(f / 90 + ai), y + 0.4 * Math.cos(f / 70 + ai), z];
                     const pts3 = NODES.map((n) => [ctr[0] + T[n][0] * SC, ctr[1] + T[n][1] * SC, ctr[2] + T[n][2] * SC]);
                     CAMS.forEach((c) => fg.addInstance(c.name, new pd.Instance(pts3.map((p) => c.project(p)), ai, 'predicted', 1.0)));
@@ -68,9 +72,11 @@ try {
                     const a = inst.getPoint(ti), b = inst.getPoint(t1);
                     ctx.strokeStyle = '#666'; ctx.lineWidth = 5;
                     ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
-                    if (inst.trackIdx !== opts.marked) continue;
+                    // `bands[trackIdx]`: that animal's number of bands; else `marked`: three bands on one animal
+                    const nb = opts.bands ? opts.bands[inst.trackIdx] : (inst.trackIdx === opts.marked ? 3 : 0);
+                    if (!nb) continue;
                     ctx.strokeStyle = '#0c0c0c'; ctx.lineWidth = 8;
-                    for (const u of [0.25, 0.5, 0.75]) {
+                    for (const u of Array.from({ length: nb }, (_, q) => 0.2 + q * 0.25)) {
                         ctx.beginPath();
                         ctx.moveTo(a[0] + (u - 0.04) * (b[0] - a[0]), a[1] + (u - 0.04) * (b[1] - a[1]));
                         ctx.lineTo(a[0] + (u + 0.04) * (b[0] - a[0]), a[1] + (u + 0.04) * (b[1] - a[1]));
@@ -112,9 +118,14 @@ try {
                 const m = document.querySelector('.track-setup-modal');
                 if (!m) return;
                 clearInterval(t);
-                m.querySelector('#trackSetupAnimals').value = '2';
+                m.querySelector('#trackSetupAnimals').value = String(ans.animals || 2);
                 m.querySelector('#trackSetupTailMarks').value = ans.tail;
                 m.querySelector('#trackSetupAnimals').dispatchEvent(new Event('input', { bubbles: true }));
+                // "Bands per id": one row per identity, filled in from `ans.bands`
+                Object.entries(ans.bands || {}).forEach(([name, n]) => {
+                    const inp = m.querySelector('input[data-identity="' + name + '"]');
+                    if (inp) { inp.value = String(n); inp.dispatchEvent(new Event('input', { bubbles: true })); }
+                });
                 window.__dialogOffered = [...m.querySelectorAll('#trackSetupTailMarks option')].map((o) => o.value);
                 m.querySelector('#trackSetupContinue').click();
                 r();
@@ -126,7 +137,14 @@ try {
         AS.state.views = [];
         const r = AS.state.session._tailMarkResult || null;
         const box = document.getElementById('trackSummaryTailMarks');
-        const out = { result: r && { ok: r.ok, reason: r.reason, swapped: r.swapped, markedName: r.markedName },
+        // per animal (trackIdx in the fixture), the identity names it carried, counted over every frame
+        const byAnimal = {};
+        for (const [, groups] of AS.state.session.instanceGroups) for (const g of groups) {
+            const inst = g.instances.get('c0'); if (!inst) continue;
+            const nm = AS.state.session.identities.find((i) => i.id === g.identityId).name;
+            (byAnimal[inst.trackIdx] = byAnimal[inst.trackIdx] || {})[nm] = (byAnimal[inst.trackIdx][nm] || 0) + 1;
+        }
+        const out = { byAnimal, marks: AS.state.session.identityMarks, result: r && { ok: r.ok, reason: r.reason, swapped: r.swapped, markedName: r.markedName, names: r.names },
             status: document.getElementById('statusText').textContent, note: box ? box.textContent : null,
             menu: document.getElementById('tbTailMarks').value, ids: AS.state.session.identities.map((i) => i.name),
             dirty: AS.state.isDirty, reads: window.__reads, marked: window.__markedIdentityNames() };
@@ -137,7 +155,7 @@ try {
     console.log('1. off by default');
     await page.evaluate(() => window.__build({ marked: 0 }));
     let r = await trackAll({ tail: '', dialog: true });
-    check(JSON.stringify(await page.evaluate(() => window.__dialogOffered)) === '["","id_0","id_1"]', 'the dialog offers Off, id_0 and id_1');
+    check(JSON.stringify(await page.evaluate(() => window.__dialogOffered)) === '["","id_0","id_1","bands"]', 'the dialog offers Off, id_0, id_1 and Bands per id');
     check(r.result === null && r.reads === 0, 'no pass and no video read');
     check(r.note === null, 'the summary says nothing about tail marks');
     check(r.ids.length === 2, 'two identities tracked');
@@ -185,6 +203,42 @@ try {
     check(r.result && !r.result.ok && /no tail marks/.test(r.result.reason), 'it says so: ' + JSON.stringify(r.result));
     check(JSON.stringify(r.marked) === JSON.stringify(asTracked), 'and leaves the labels as tracked');
     check(/tail marks not used/.test(r.status), 'the status line says it: ' + r.status.slice(0, 120));
+
+    console.log('7. three animals, a number of bands each, chosen per identity in the dialog');
+    const three = { animals: [[10, 4, 48, 0], [-10, -4, 48, 1], [0, 12, 48, 2]], bands: [2, 0, 1] };
+    for (const want of [{ id_0: 0, id_1: 1, id_2: 2 }, { id_0: 2, id_1: 0, id_2: 1 }]) {
+        await page.evaluate((o) => window.__build(o), three);
+        r = await trackAll({ tail: 'bands', dialog: true, animals: 3, bands: want });
+        check(r.result && r.result.ok && r.result.names && r.result.names.length === 3, 'the identity engine ran: ' + JSON.stringify(r.result));
+        check(JSON.stringify(r.marks) === JSON.stringify({ tailBands: want }), 'the per-identity bands are saved on the session: ' + JSON.stringify(r.marks));
+        const wantName = (bands) => Object.keys(want).find((k) => want[k] === bands);
+        const right = [0, 1, 2].every((a) => { const m = r.byAnimal[a] || {}; return Object.keys(m).length === 1 && m[wantName(three.bands[a])] > 0; });
+        check(right, 'each animal is on the identity with its bands on every frame (' + JSON.stringify(want) + '): ' + JSON.stringify(r.byAnimal));
+        check(r.menu === 'bands', 'the Track menu shows Bands per id');
+        check(/tail bands read for 3 animals/.test(r.status), 'the status line says so: ' + r.status.slice(0, 140));
+    }
+
+    console.log('8. the Track menu: Bands per id… asks per identity, Off clears it');
+    const menuBands = await page.evaluate(async () => {
+        const AS = await import('/ui/app-state.js');
+        await window.__build({ animals: [[10, 4, 48, 0], [-10, -4, 48, 1], [0, 12, 48, 2]], bands: [2, 0, 1] });
+        (await import('/pose/tracker.js')).setTrackerNumAnimals(3);
+        (await import('/ui/rendering.js')).drawAllOverlays(0);
+        const el = document.getElementById('tbTailMarks');
+        el.value = 'bands'; el.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((res) => setTimeout(res, 100));
+        const modal = document.querySelector('.identity-marks-modal');
+        const rows = modal ? [...modal.querySelectorAll('input[data-identity]')].map((i) => i.dataset.identity + '=' + i.value) : null;
+        modal.querySelector('input[data-identity="id_2"]').value = '4';
+        modal.querySelector('#identityMarksSave').click();
+        await new Promise((res) => setTimeout(res, 50));
+        const saved = JSON.stringify(AS.state.session.identityMarks);
+        el.value = ''; el.dispatchEvent(new Event('change', { bubbles: true }));
+        return { rows, saved, after: AS.state.session.identityMarks, menu: el.value };
+    });
+    check(JSON.stringify(menuBands.rows) === '["id_0=0","id_1=1","id_2=2"]', 'it asks for each of the 3 identities, id_N = N to start: ' + JSON.stringify(menuBands.rows));
+    check(menuBands.saved === JSON.stringify({ tailBands: { id_0: 0, id_1: 1, id_2: 4 } }), 'Save writes them: ' + menuBands.saved);
+    check(menuBands.after === null && menuBands.menu === '', 'Off clears them');
 
     console.log('6. no videos');
     await page.evaluate(() => window.__build({ marked: 0, videos: false }));

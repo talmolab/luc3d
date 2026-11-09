@@ -6,36 +6,37 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=b4b6796a9f11';
-import { points3dNodeCount, isPoints3dFromFile, isPoints3dSmoothed } from '../pose/pose-data.js?v=b4b6796a9f11';
+import { state, interactionManager, timeline, isViewDocked, videoController } from './app-state.js?v=552ac39b914d';
+import { planOverlayWindow, overlayPlanCovers } from './overlay-window.js?v=552ac39b914d';
+import { points3dNodeCount, isPoints3dFromFile, isPoints3dSmoothed } from '../pose/pose-data.js?v=552ac39b914d';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
     triangulateAndReproject, reprojectStoredPoints3d, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=b4b6796a9f11';
-import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=b4b6796a9f11';
-import { drawFrameOverlays } from './overlays.js?v=b4b6796a9f11';
-import { syncViewLegends } from './view-legend.js?v=b4b6796a9f11';
-import { isCameraTracked, getTrackingThreshold } from './settings.js?v=b4b6796a9f11';
+} from '../pose/triangulation.js?v=552ac39b914d';
+import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=552ac39b914d';
+import { drawFrameOverlays } from './overlays.js?v=552ac39b914d';
+import { syncViewLegends } from './view-legend.js?v=552ac39b914d';
+import { isCameraTracked, getTrackingThreshold } from './settings.js?v=552ac39b914d';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=b4b6796a9f11';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=552ac39b914d';
 // The toolbar's Animals field shows the ACTIVE session's count. Circular
 // (it reaches pose/tracker.js, which imports this module) — safe for the same
 // reason: the call site is inside drawAllOverlays' body.
-import { syncAnimalCountField } from './animal-count-field.js?v=b4b6796a9f11';
-import { syncTailMarkField } from './tail-mark-field.js?v=b4b6796a9f11';
-import { syncNodeTooltipFrame } from './node-tooltip.js?v=b4b6796a9f11';
-import { syncSmoothingButton } from './smoothing-button.js?v=b4b6796a9f11';
-import { syncRunButtons } from './run-buttons.js?v=b4b6796a9f11';
+import { syncAnimalCountField } from './animal-count-field.js?v=552ac39b914d';
+import { syncTailMarkField } from './tail-mark-field.js?v=552ac39b914d';
+import { syncNodeTooltipFrame } from './node-tooltip.js?v=552ac39b914d';
+import { syncSmoothingButton } from './smoothing-button.js?v=552ac39b914d';
+import { syncRunButtons } from './run-buttons.js?v=552ac39b914d';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=b4b6796a9f11';
-import { updateFrameInfo } from './info-panel.js?v=b4b6796a9f11';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=552ac39b914d';
+import { updateFrameInfo } from './info-panel.js?v=552ac39b914d';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
-} from './frame-counters.js?v=b4b6796a9f11';
+} from './frame-counters.js?v=552ac39b914d';
 
 // ============================================
 // Reproj/Error visibility
@@ -319,6 +320,87 @@ function frameHasDirtyGroup(session, fi) {
 }
 
 /**
+ * The video box of `view` in CSS px, before the zoom transform: the layout
+ * size of its video canvas (the overlay canvas shares it unless it is a window
+ * onto part of it). Falls back to an explicit px inline size while detached —
+ * the stylesheet gives the canvases width:100%, and parseFloat('100%') would
+ * happily hand back 100.
+ */
+function videoBoxSize(view) {
+    var el = view.canvas || view.overlayCanvas;
+    var w = el ? el.offsetWidth : 0, h = el ? el.offsetHeight : 0;
+    if (!w || !h) {
+        var els = [view.canvas, view.overlayCanvas];
+        for (var i = 0; i < els.length && (!w || !h); i++) {
+            var c = els[i];
+            if (!c) continue;
+            var sw = c.style.width || '', sh = c.style.height || '';
+            if (!w && /px\s*$/.test(sw)) w = parseFloat(sw) || 0;
+            if (!h && /px\s*$/.test(sh)) h = parseFloat(sh) || 0;
+        }
+    }
+    return { w: w, h: h };
+}
+
+/**
+ * Size and place `view`'s overlay canvas as `plan` says (`ui/overlay-window.js`)
+ * and remember the plan on the view (`view._overlayPlan`: what
+ * `noteOverlayViewTransform`, `overlayDrawSize` and the duplicate-pane mirror
+ * read). A full plan leaves the element as `fitCanvasesToCells` laid it out.
+ */
+function applyOverlayPlan(view, plan) {
+    var c = view.overlayCanvas;
+    if (c.width !== plan.bw || c.height !== plan.bh) {
+        c.width = plan.bw;
+        c.height = plan.bh;
+    }
+    var prev = view._overlayPlan;
+    if (plan.windowed) {
+        c.style.left = plan.cssLeft + 'px';
+        c.style.top = plan.cssTop + 'px';
+        c.style.width = plan.cssW + 'px';
+        c.style.height = plan.cssH + 'px';
+    } else if (prev && prev.windowed) {
+        c.style.left = '';
+        c.style.top = '';
+        var vc = view.canvas;
+        c.style.width = (vc && vc.style.width) || (plan.boxW + 'px');
+        c.style.height = (vc && vc.style.height) || (plan.boxH + 'px');
+    }
+    view._overlayPlan = plan;
+}
+
+var _coverRedrawPending = false;
+
+/**
+ * After a view's zoom transform changed (`VideoController.applyZoom` →
+ * `callbacks.onViewTransform`): if its overlay is a window that no longer
+ * covers what the cell shows — a pan or zoom out past its margin, a resize —
+ * redraw on the next frame. A pan inside the margin costs nothing, and a zoom
+ * IN keeps the drawn window covering (it is only magnified until the debounced
+ * zoom redraw sharpens it, as before).
+ */
+export function noteOverlayViewTransform(view) {
+    if (!view || !view.overlayCanvas || !videoController) return;
+    var plan = view._overlayPlan;
+    var zs = view.zoom ? view.zoom.scale : 1;
+    var box = videoBoxSize(view);
+    var visible = zs > 1 ? videoController.visibleBoxRect(view) : null;
+    var covered = plan && plan.windowed
+        ? overlayPlanCovers(plan, visible, box.w, box.h)
+        // A full canvas covers whatever is visible; it is only a window that
+        // could now be due, which the next real redraw (zoom debounce) handles.
+        : true;
+    // Playback redraws every frame anyway.
+    if (covered || _coverRedrawPending || state.isPlaying) return;
+    _coverRedrawPending = true;
+    requestAnimationFrame(function () {
+        _coverRedrawPending = false;
+        drawAllOverlays(state.currentFrame);
+    });
+}
+
+/**
  * Redraw every view's pose overlay.
  *
  * @param {number} frameIdx - the frame being shown (drives selection, the info
@@ -470,17 +552,13 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             if (vSelected && (!vGroups || vGroups.indexOf(vSelected) < 0)) vSelected = null;
         }
 
-        // The canvas's LAYOUT width — deliberately NOT getBoundingClientRect(),
+        // The video box's LAYOUT size — deliberately NOT getBoundingClientRect(),
         // which reports the rotated element's axis-aligned bounding box and so
-        // would shrink every label whenever Video Rotation is non-zero.
-        var cssW = view.overlayCanvas.offsetWidth;
-        if (!cssW) {
-            // Detached / not laid out yet. Only an explicit px inline width is
-            // usable here — the stylesheet gives `.overlay-canvas` width:100%,
-            // and parseFloat('100%') would happily hand back 100.
-            var inlineW = view.overlayCanvas.style.width || '';
-            if (/px\s*$/.test(inlineW)) cssW = parseFloat(inlineW) || 0;
-        }
+        // would shrink every label whenever Video Rotation is non-zero. Read off
+        // the VIDEO canvas: the overlay canvas may be a window onto part of the
+        // box (`ui/overlay-window.js`), and the two share the box otherwise.
+        var box = videoBoxSize(view);
+        var cssW = box.w, cssH = box.h;
 
         // Resize the overlay backing store for sharp rendering under zoom.
         //
@@ -519,25 +597,34 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             ss = Math.min(zs, Math.max(1, Math.ceil(want * 4) / 4));
         }
 
-        // Correctness backstop, NOT a budget one. Past Chrome's canvas limits the
-        // allocation reports the size you asked for and every draw silently
-        // no-ops, so the whole annotation overlay goes blank with no error — the
-        // old `ss = zs` reached that at 2048x1536 video and zoom 10
-        // (20480x15360). The quality bound above normally keeps `ss` far under
-        // this, so the clamp only bites for an unusually wide cell.
-        var vwPx = view.videoWidth || 1;
-        var vhPx = view.videoHeight || 1;
-        ss = Math.min(ss, MAX_OVERLAY_DIM / vwPx, MAX_OVERLAY_DIM / vhPx,
-                      Math.sqrt(MAX_OVERLAY_AREA / (vwPx * vhPx)));
-
-        // `Math.floor`, not `round`: rounding up at the clamp is what would put
-        // the canvas back over the limit it was just clamped to.
-        var targetW = Math.max(1, Math.floor(view.videoWidth * ss));
-        var targetH = Math.max(1, Math.floor(view.videoHeight * ss));
-        if (view.overlayCanvas.width !== targetW || view.overlayCanvas.height !== targetH) {
-            view.overlayCanvas.width = targetW;
-            view.overlayCanvas.height = targetH;
-        }
+        // Only the VISIBLE part of a zoomed-in box is allocated and drawn. The
+        // bound above holds backing px per screen px; it still sized a canvas
+        // covering the WHOLE zoomed video, which grows as zoom², while the cell
+        // shows a cell-sized window onto it: at zoom 10 in a solo pane of a
+        // 1920x1200 camera, 13920x8700 (~480 MB), cleared and redrawn on every
+        // mouse move of a node drag (1.4 fps against 47 unzoomed). So the
+        // canvas element is placed over the visible part of the box plus a pan
+        // margin, and drawing stays in the coordinates of the full virtual
+        // canvas (`targetW` x `targetH`) through a context transform. Whenever the whole
+        // box is on screen — every unzoomed view — the plan is the full canvas,
+        // as before. See `ui/overlay-window.js`.
+        //
+        // The plan also clamps `ss` to Chrome's canvas limits, applied to the
+        // canvas actually allocated. Past them the allocation reports the size
+        // you asked for and every draw silently no-ops, so the whole annotation
+        // overlay goes blank with no error — the old `ss = zs` reached that at
+        // 2048x1536 video and zoom 10 (20480x15360).
+        var visible = (zs > 1 && videoController && typeof videoController.visibleBoxRect === 'function')
+            ? videoController.visibleBoxRect(view) : null;
+        var plan = planOverlayWindow({
+            videoW: view.videoWidth, videoH: view.videoHeight,
+            boxW: cssW, boxH: cssH, ss: ss, visible: visible,
+            maxDim: MAX_OVERLAY_DIM, maxArea: MAX_OVERLAY_AREA,
+        });
+        ss = plan.ss;
+        var targetW = plan.fullW;
+        var targetH = plan.fullH;
+        applyOverlayPlan(view, plan);
 
         // Node radii and line widths are expressed in BACKING pixels and drawn
         // unscaled, which is what held them at a constant on-screen size while
@@ -584,7 +671,13 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             }
         }
 
-        drawFrameOverlays(view.overlayCtx, view.name, overlayFrameGroup, vGroups, state.session, {
+        // A windowed canvas is drawn through a transform from the full virtual
+        // canvas; the context is put back to identity after the planes, so
+        // anything else clearing it (`loading/video.js`) clears the real canvas.
+        var octx = view.overlayCtx;
+        octx.save();
+        if (plan.windowed) octx.setTransform(plan.ax, 0, 0, plan.ay, plan.ex, plan.ey);
+        drawFrameOverlays(octx, view.name, overlayFrameGroup, vGroups, state.session, {
             colorByIdentity: state.colorByIdentity,
             trailLength: state.trailLength,
             trailShade: state.trailShade,
@@ -605,8 +698,9 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             reprojOpts: vis.reprojOpts,
             videoWidth: view.videoWidth,
             videoHeight: view.videoHeight,
-            canvasWidth: view.overlayCanvas.width,
-            canvasHeight: view.overlayCanvas.height,
+            // The FULL virtual canvas, not the (possibly windowed) element.
+            canvasWidth: targetW,
+            canvasHeight: targetH,
             labelDisplayScale: labelDisplayScale,
             labelRotation: labelRotation,
             // Backing store no longer tracks `zs` exactly (luc3d #200); 1 at
@@ -629,6 +723,7 @@ export function drawAllOverlays(frameIdx, viewFrames) {
         // Annotated planes (View ▸ Define Planes). Frame-independent, so they
         // are drawn on every frame regardless of the current FrameGroup.
         drawPlaneOverlays(view);
+        octx.restore();
     }
 
     // The legend lives in the pane, outside the rotating `.canvas-wrapper`, so

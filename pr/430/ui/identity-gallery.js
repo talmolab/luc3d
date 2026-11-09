@@ -22,8 +22,8 @@
 // Depends on: ui/app-state.js (state), pose/lazy-residency.js
 // (hydrateFrameMembers2d, releaseFrameMembers2d).
 
-import { state } from './app-state.js?v=b4b6796a9f11';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=b4b6796a9f11';
+import { state } from './app-state.js?v=552ac39b914d';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=552ac39b914d';
 
 /** Sample images per identity. */
 export const GALLERY_SAMPLES = 5;
@@ -156,6 +156,8 @@ function isolationAt(session, frame, identityId, own) {
  * Only the middle 60% of a slot is searched, so neighbouring samples stay at
  * least 40% of a slot apart even in a cage too crowded for any frame to be
  * isolated. At most `maxCandidates` frames per slot are scored, evenly strided.
+ * With more than `k` tracked frames there are always `k` samples: slots that a
+ * long gap left without one of their own are filled evenly over the tracked frames.
  *
  * @param {Object} session
  * @param {{frames: Int32Array, xyz: Float64Array}} track  from `identityTracks`
@@ -191,6 +193,13 @@ export function pickSampleFrames(session, track, identityId, k, opts) {
         }
         var pick = near >= 0 ? near : most;
         if (pick >= 0 && out.indexOf(F[pick]) < 0) out.push(F[pick]);
+    }
+    // A gap wider than a slot sends those slots all to the frame after it. Make up
+    // the count evenly over the frames the identity WAS tracked on, so a row keeps
+    // its samples and shows every stretch.
+    for (var t = 0; t < k && out.length < k; t++) {
+        var extra = F[Math.floor((t + 0.5) * n / k)];
+        if (out.indexOf(extra) < 0) out.push(extra);
     }
     return out.sort(function (p, q) { return p - q; });
 }

@@ -151,10 +151,12 @@ try {
                 frames: s.views.map(v => v.decoder ? v.decoder.samples.length : null),
                 skeleton: s.session && s.session.skeleton ? s.session.skeleton.nodes.map(n => n.name || n).join(',') : null,
                 calls: window.__dirPickerCalls.length,
+                recFolders: s.sessions.filter(x => x._recordingFolder).length,
             };
         });
         console.log('  measured:', JSON.stringify(r));
         check(chooserInfo && chooserInfo.dir, 'the folder was picked with a webkitdirectory input');
+        check(r.recFolders === 0, 'no session keeps a rebuilt (unreadable) handle as its recording folder for Save');
         check(r.calls === 0, 'the write-only showDirectoryPicker was never called');
         check(r.sessions.length === 2 && r.sessions.every((n, i) => n.indexOf(['sessA', 'sessB'][i]) >= 0),
             `both sessions loaded, in folder order (${r.sessions})`);
@@ -218,6 +220,26 @@ try {
         check(r.matched[0] === 'sessA:experiment/sessA/Camera0/0.mp4|experiment/sessA/Camera1/0.mp4',
             'with their camera-folder files');
         check(r.calls === 0, 'without calling showDirectoryPicker');
+    }
+
+    // =================================================================
+    console.log('\n3b. Recording-folder pick (per-camera / single-SLP folder loaders)');
+    {
+        let chooserDir = null;
+        page.once('filechooser', async (fc) => {
+            chooserDir = await fc.element().evaluate(el => !!el.webkitdirectory);
+            await fc.setFiles(path.join(parent, 'sessA'));
+        });
+        const r = await page.evaluate(async () => {
+            const rf = await import('/loading/recording-folder.js');
+            const { pickFolder } = await import('/import-export/file-io.js');
+            const res = await rf.pickRecordingFolder(pickFolder);
+            return { files: res.files.length, handle: !!res.dirHandle, calls: window.__dirPickerCalls.length };
+        });
+        console.log('  measured:', JSON.stringify(r));
+        check(chooserDir === true, 'pickRecordingFolder used the webkitdirectory input, not the write-only polyfill');
+        check(r.files > 0 && !r.handle, `its files, and no handle for Save (${JSON.stringify(r)})`);
+        check(r.calls === 0, 'showDirectoryPicker never called');
     }
     await page.context().close();
 

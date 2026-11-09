@@ -51,10 +51,10 @@ import {
     serializeVideoContrast, ingestVideoContrast,
     serializeVideoBrightness, ingestVideoBrightness,
     serializeVideoRotation, ingestVideoRotation,
-} from '../ui/video-filters.js?v=b4b6796a9f11';
-import { serializeHiddenSets, ingestHiddenSets } from '../ui/timeline-visibility.js?v=b4b6796a9f11';
-import { serializeIdSwitchReview, ingestIdSwitchReview } from '../ui/id-switch-review.js?v=b4b6796a9f11';
-import { ingestModelChoice } from '../pose/image-model-manifest.js?v=b4b6796a9f11';
+} from '../ui/video-filters.js?v=552ac39b914d';
+import { serializeHiddenSets, ingestHiddenSets } from '../ui/timeline-visibility.js?v=552ac39b914d';
+import { serializeIdSwitchReview, ingestIdSwitchReview } from '../ui/id-switch-review.js?v=552ac39b914d';
+import { ingestModelChoice } from '../pose/image-model-manifest.js?v=552ac39b914d';
 
 /**
  * Every `metadata.lucid` key this module may write. Exported so tests (and the
@@ -73,6 +73,7 @@ export const VISIBILITY_METADATA_KEYS = [
     'idSwitchReview',
     'numAnimals',
     'tailMarkedIdentity',
+    'identityMarks',
     'imageModel',
 ];
 
@@ -91,6 +92,25 @@ function serializeNumAnimals(session) {
 
 function ingestNumAnimals(session, raw) {
     session.numAnimals = (raw === 'auto' || (Number.isInteger(raw) && raw >= 1)) ? raw : null;
+}
+
+// `Session.identityMarks` <-> `metadata.lucid.identityMarks`: cue id -> identity
+// name -> class (a number or a short string). Anything else, and an empty map,
+// reads and writes as null.
+function serializeIdentityMarks(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    var out = null;
+    Object.keys(raw).forEach(function (cue) {
+        var m = raw[cue];
+        if (!m || typeof m !== 'object' || Array.isArray(m)) return;
+        var clean = {};
+        Object.keys(m).forEach(function (name) {
+            var v = m[name];
+            if ((typeof v === 'number' && isFinite(v)) || (typeof v === 'string' && v)) clean[name] = v;
+        });
+        if (Object.keys(clean).length) { out = out || {}; out[cue] = clean; }
+    });
+    return out;
 }
 
 /**
@@ -136,6 +156,9 @@ export function writeVisibilityMetadata(lucid, session) {
         lucid.tailMarkedIdentity = session.tailMarkedIdentity;
     }
 
+    // What each identity should show, per identity cue: absent unless set.
+    var marks = serializeIdentityMarks(session.identityMarks);
+    if (marks) lucid.identityMarks = marks;
     // The image check's model (ID Switches tab ▸ Image model): absent while it is the built-in one.
     var model = ingestModelChoice(session.imageModel);
     if (model) lucid.imageModel = model;
@@ -162,6 +185,7 @@ export function readVisibilityMetadata(session, lucid) {
     ingestIdSwitchReview(session, src.idSwitchReview);
     ingestNumAnimals(session, src.numAnimals);
     session.tailMarkedIdentity = (typeof src.tailMarkedIdentity === 'string' && src.tailMarkedIdentity) ? src.tailMarkedIdentity : null;
+    session.identityMarks = serializeIdentityMarks(src.identityMarks);
     session.imageModel = ingestModelChoice(src.imageModel);
     return session;
 }
