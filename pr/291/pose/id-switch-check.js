@@ -43,10 +43,11 @@
  * A score is a difference of cosine similarities between mean features, which no
  * sample rate scales.
  *
- * Depends on: pose-data.js (readPoint3d). Pure — no DOM, no app state.
+ * Depends on: pose-data.js (readPoint3d), image-prejudge.js (the review list's pre-judge). Pure — no DOM, no app state.
  */
 
-import { readPoint3d } from './pose-data.js?v=6660138ad311';
+import { readPoint3d } from './pose-data.js?v=22aa05e92cd0';
+import { prejudgeReviewRows, unitVector } from './image-prejudge.js?v=22aa05e92cd0';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
@@ -103,6 +104,9 @@ export const IMAGE_CHECK_DEFAULTS = Object.assign({}, SWITCH_CHECK_DEFAULTS, {
                            // return at least one crop of it? (from the keypoints, before decoding; lets planImageSamples
                            // plan in one round what missing crops would otherwise make it ask for in a second)
     releaseFrames: null,   // optional: () — called when done (or cancelled)
+    reviewRows: null,      // optional: single-camera Track All's review rows [{frame, startFrame, identityA, identityB}]:
+                           // embeds EVERY image sample and returns `prejudge` (pose/image-prejudge.js) for them
+    prejudge: null,        // optional: PREJUDGE_DEFAULTS overrides
 });
 
 /**
@@ -944,6 +948,10 @@ export function planKeyframeSamples(frames, keyframes, hasFrame) {
 export async function checkImageSwitches(session, opts) {
     var o = Object.assign({}, IMAGE_CHECK_DEFAULTS, opts || {});
     if (typeof o.getEmbeddings !== 'function') return failure('No image embedder available');
+    // Pre-judging a review list (pose/image-prejudge.js) needs every image sample, as it was calibrated:
+    // its 2-means reads every sample showing both animals, not just the windows the scoring reads.
+    var prejudging = Array.isArray(o.reviewRows) && o.reviewRows.length > 0;
+    if (prejudging) o.backgroundHz = Infinity;
     var grid = buildGrid(session, o, false);
     if (grid.fail) return failure(grid.fail);
     var T = grid.T, K = grid.K;
@@ -1015,6 +1023,7 @@ export async function checkImageSwitches(session, opts) {
         if (typeof o.releaseFrames === 'function') o.releaseFrames();
     }
     if (!crops) return failure('No crops could be embedded');
+    var prejudge = prejudging ? prejudgeFromEmbeddings(grid, perCam, every, st, o) : null;
 
     // ---- per camera: centre, learn the identity metric (weighted: backgroundWeights), score the contacts
     var sampleWeight = backgroundWeights(grid, o, every, st);
@@ -1029,7 +1038,26 @@ export async function checkImageSwitches(session, opts) {
         progress ? function (d, t) { return progress('fit', d, t); } : null, sampleWeight);
     return result(grid, scored, o, { cue: 'image', imageHz: imgHz, crops: crops, cameras: cams,
         // how many of the image samples were embedded (planImageSamples), in how many rounds
-        samples: { embedded: answered, of: jobAt.size, rounds: rounds } });
+        samples: { embedded: answered, of: jobAt.size, rounds: rounds }, prejudge: prejudge });
+}
+
+/**
+ * The review list's pre-judge (pose/image-prejudge.js) from the image check's crops: per embedded image
+ * sample, each identity's unit vector (the first camera that has one; a single-camera session has one).
+ * Before the scoring, which reads the same vectors.
+ */
+function prejudgeFromEmbeddings(grid, perCam, every, st, o) {
+    var K = grid.K, vec = new Map();
+    perCam.forEach(function (v) {
+        for (var r = 0; r < v.rows.length; r++) if (!vec.has(v.rows[r])) { var u = unitVector(v.vecs[r]); if (u) vec.set(v.rows[r], u); }
+    });
+    var kOf = new Map(grid.idents.map(function (id, k) { return [id.id, k]; }));
+    var sampI = [], frames = [];
+    for (var i = 0; i < grid.T; i += every) if (st.embedded[i]) { sampI.push(i); frames.push(grid.frames[i]); }
+    return prejudgeReviewRows({
+        frames: frames,
+        vector: function (j, id) { var k = kOf.get(id); return k == null ? null : (vec.get(sampI[j] * K + k) || null); },
+    }, o.reviewRows, o.fps, o.prejudge);
 }
 
 // ---------------------------------------------------------------------------

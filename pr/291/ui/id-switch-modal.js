@@ -30,25 +30,26 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { noteProgress } from './progress-delta.js?v=6660138ad311';
-import { state, getActiveSession } from './app-state.js?v=6660138ad311';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=6660138ad311';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=6660138ad311';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=6660138ad311';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=6660138ad311';
-import { getTrackingThreshold } from './settings.js?v=6660138ad311';
-import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=6660138ad311';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js?v=6660138ad311';
+import { noteProgress } from './progress-delta.js?v=22aa05e92cd0';
+import { state, getActiveSession } from './app-state.js?v=22aa05e92cd0';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=22aa05e92cd0';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=22aa05e92cd0';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=22aa05e92cd0';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=22aa05e92cd0';
+import { getTrackingThreshold } from './settings.js?v=22aa05e92cd0';
+import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=22aa05e92cd0';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js?v=22aa05e92cd0';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=6660138ad311';
-import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine } from './image-model-dialog.js?v=6660138ad311';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=6660138ad311';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=6660138ad311';
-import { createBrightnessSampler } from './brightness-sampler.js?v=6660138ad311';
+         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=22aa05e92cd0';
+import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine, wireTrainingPrompt } from './image-model-dialog.js?v=22aa05e92cd0';
+import { prejudgeFor, PREJUDGE_DEFAULTS } from '../pose/image-prejudge.js?v=22aa05e92cd0';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=22aa05e92cd0';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=22aa05e92cd0';
+import { createBrightnessSampler } from './brightness-sampler.js?v=22aa05e92cd0';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
          idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary,
-         idSwitchPlaceOf, idSwitchPrevPlaceEnd } from './id-switch-review.js?v=6660138ad311';
+         idSwitchPlaceOf, idSwitchPrevPlaceEnd } from './id-switch-review.js?v=22aa05e92cd0';
 
 const CUE_LABEL = { size: 'body size', image: 'images', brightness: 'coat brightness', review: 'review list' };
 
@@ -332,7 +333,7 @@ async function runSize(session, rate) {
     } finally { hideLoading(); }
 }
 
-async function runImage(session, rate, inject) {
+async function runImage(session, rate, inject, reviewRows) {
     inject = inject || {};
     var threshold = getTrackingThreshold('imageChangeThreshold');
     var views = (state.views || []).filter(function (v) { return v && v.decoder; });
@@ -398,6 +399,8 @@ async function runImage(session, rate, inject) {
             keyframes: embedder.keyframes,
             inFlight: embedder.inFlight || 2,
             releaseFrames: embedder.releaseFrames,
+            // single camera with a review list: pre-judge its rows (pose/image-prejudge.js; embeds every sample)
+            reviewRows: reviewRows || null,
             signal: prog.signal,
             onProgress: async function (stage, done, total) {
                 if (stage === 'embed') {
@@ -534,12 +537,14 @@ export async function runIdSwitchChecks(opts) {
     // (pose/single-camera-tracking.js `candidateMoments`); the coat-brightness check scores those too (the
     // size and image checks score every contact without the tracker's labels, so they take no moments).
     var moments = single && session._idSwitchCandidates ? session._idSwitchCandidates : null;
+    // ...and its review list, which the image check pre-judges (pose/image-prejudge.js): the rows' frames and pairs.
+    var reviewRows = single ? reviewRowsOf(session) : null;
     var rate = recordingFps(session), results = {}, parts = [], level = 'success';
     for (var cue of cues) {
         var res, t0 = performance.now();
         try {
             res = cue === 'size' ? await runSize(target, rate)
-                : cue === 'image' ? await runImage(target, rate, opts.inject)
+                : cue === 'image' ? await runImage(target, rate, opts.inject, reviewRows)
                 : await runBrightness(target, rate, opts.inject, moments, single);
         }
         catch (e) {
@@ -650,13 +655,75 @@ export function setReviewList(session, result, navigateToFrame) {
     refreshIdSwitchPanel(session);
 }
 
+/** The review list's rows, for the image check to pre-judge: frame, close-spell start and pair. Null without a list. */
+function reviewRowsOf(session) {
+    var rv = session && session._idSwitch && session._idSwitch.results.review;
+    if (!rv || !rv.ok || !rv.flags.length) return null;
+    return rv.flags.map(function (f) {
+        return { frame: f.frame, startFrame: f.startFrame, identityA: f.identityA, identityB: f.identityB };
+    });
+}
+
+/** The image check's pre-judge of a row that is (or agrees with) a review-list row; null when there is none. */
+function prejudgeOfRow(st, f) {
+    var im = st.results.image, pj = im && im.ok ? im.prejudge : null;
+    if (!pj) return null;
+    var rv = f.cue === 'review' ? f : f.agree && f.agree.cue === 'review' ? f.agree : null;
+    return rv ? prejudgeFor(pj, rv) : null;
+}
+
+const PREJUDGE_TEXT = {
+    swapped: 'images: <b>look swapped</b>', kept: 'images: look right', unsure: 'images: unsure',
+    alike: 'images can\'t tell these two apart', sparse: 'images: too few crops to judge',
+    unknown: 'images: too few frames with both animals',
+};
+
+/** A row's pre-judge, for its second line: the verdict, the numbers in its tooltip. */
+function prejudgeNote(p, fixed, pj) {
+    var num = function (v) { return (v < 0 ? '−' : '+') + Math.abs(v).toFixed(2); };
+    var tip = 'Image pre-judge: ' + (p.score != null ? 'keep − swap score ' + num(p.score) + ' (below −' + pj.margin.toFixed(1) +
+        ' looks swapped, above +' + pj.margin.toFixed(1) + ' looks right); ' : '') +
+        (p.cos != null ? 'how alike the two animals look to the model: ' + p.cos.toFixed(2) + ' (a verdict only below ' + pj.gateCos.toFixed(2) + ')' : 'too few frames show both animals');
+    return '<span class="id-switch-prejudge pj-' + p.verdict + '" title="' + escapeHtml(tip) + '">' + PREJUDGE_TEXT[p.verdict] +
+        (fixed && (p.verdict === 'swapped' || p.verdict === 'kept') ? ' (before the Fix)' : '') + '</span>';
+}
+
+/** The review list's pre-judge summary line, plus the prompt to train a model when the built-in one made it. */
+function prejudgeSummaryHtml(st) {
+    var im = st.results.image, pj = im && im.ok ? im.prejudge : null;
+    if (!pj || !pj.rows.length) return '';
+    var n = { swapped: 0, kept: 0, unsure: 0, alike: 0, sparse: 0, unknown: 0 };
+    pj.rows.forEach(function (p) { n[p.verdict]++; });
+    var fmt = function (v) { return v.toLocaleString('en-US'); };
+    var looks = function (v) { return v === 1 ? 'looks' : 'look'; };
+    var allAlike = n.alike === pj.rows.length;
+    var cos = pj.pairs.filter(function (q) { return q.cos != null; }).map(function (q) { return q.cos.toFixed(2); });
+    var line = allAlike
+        ? 'Images can\'t tell ' + (pj.pairs.length > 1 ? 'these animals' : 'these two animals') + ' apart (how alike they look: ' + cos.join(', ') +
+          '; a verdict needs under ' + pj.gateCos.toFixed(2) + '), so the rows have no image verdict'
+        : 'Image pre-judge: <b>' + fmt(n.swapped) + '</b> ' + looks(n.swapped) + ' swapped · ' + fmt(n.kept) + ' ' + looks(n.kept) + ' right · ' + fmt(n.unsure) + ' unsure' +
+          (n.alike ? ' · ' + fmt(n.alike) + ' can\'t tell apart' : '') + (n.sparse + n.unknown ? ' · ' + fmt(n.sparse + n.unknown) + ' too few crops' : '');
+    var builtin = !im.imageModel;
+    return '<div class="id-switch-summary id-switch-prejudge-summary">' + line + '</div>' +
+        (builtin ? '<div class="id-switch-train-prompt">' + (allAlike ? 'The built-in image model was never trained on your recordings. '
+            : 'These come from the built-in image model, never trained on your recordings. ') +
+            'A model fine-tuned on this rig\'s own videos tells its animals apart much better. ' +
+            '<button class="panel-btn image-model-train-open" type="button">How to train one…</button></div>' : '');
+}
+
 function aboutHtml(st, ran) {
     var checks = ran.filter(function (c) { return c !== 'review'; });
     var rv = st.results.review && st.results.review.ok ? st.results.review : null;
     var reviewAbout = rv ? '<p><b>The review list</b> is where a switch is most likely on one camera — where the tracker nearly ' +
         'chose the other assignment, where the input file\'s own tracks disagree with Track All, or where a lone animal\'s track ' +
         'changes, plus a check of who is who at the end. About one place a minute; on proofread videos about 9 of every 10 switches were within 2 s of one. Rows have ' +
-        'no score: look at each, and Fix the ones where the labels swap.</p>' : '';
+        'no score: look at each, and Fix the ones where the labels swap.</p>' +
+        (st.results.image && st.results.image.ok && st.results.image.prejudge ? '<p><b>Image pre-judge.</b> The image check also ' +
+            'compares each animal\'s look in the ' + PREJUDGE_DEFAULTS.windowSeconds + ' s before a place with the ' + PREJUDGE_DEFAULTS.windowSeconds +
+            ' s after it. It gives a verdict only where the model tells this video\'s two animals apart: where they look too alike, ' +
+            'the row says so instead. On 1,626 places in 395 proofread two-mouse videos, with a model trained on that rig, it gave a ' +
+            'verdict at 4 places in 5 and called 64 of 94 swaps, with no false alarm and one miss. Still watch each place: a verdict ' +
+            'is a lead, not the answer.</p>' : '') : '';
     if (!checks.length) return reviewAbout;
     return reviewAbout + aboutChecksHtml(st, checks);
 }
@@ -980,6 +1047,8 @@ function rowHtml(session, st, f, both) {
             (f.followOf != null ? ' · follows the switch at ' + fmtTime(f.followOf) : '');
     }
     var fixed = idSwitchFixFor(st, f);
+    var pj = prejudgeOfRow(st, f);
+    if (pj) note = (note ? note + ' · ' : '') + prejudgeNote(pj, fixed, st.results.image.prejudge);
     return '<div class="id-switch-row cue-' + cue + (f.agree ? ' cue-both-' + f.cue + '-' + f.agree.cue : '') +
         (f.continues || f.followOf != null ? ' is-repeat' : '') + (rev ? ' is-reviewed' : '') +
         (fixed ? ' is-fixed' : '') +
@@ -1094,7 +1163,7 @@ export function refreshIdSwitchPanel(session) {
             var r = st.results[c], n = countOnsets(r);
             if (c === 'review') {
                 return '<div class="id-switch-summary">' + (both ? '<b>Review list:</b> ' : '') + '<b>' + n.toLocaleString() + '</b> place' +
-                    (n === 1 ? '' : 's') + ' to look at</div>';
+                    (n === 1 ? '' : 's') + ' to look at</div>' + prejudgeSummaryHtml(st);
             }
             var mo = r.moments && r.moments.length;
             return '<div class="id-switch-summary">' + (both ? '<b>' + { size: 'Body size', image: 'Images', brightness: 'Coat brightness' }[c] + ':</b> ' : '') +
@@ -1118,6 +1187,7 @@ export function refreshIdSwitchPanel(session) {
     _progStale = true;                               // the list was rebuilt: re-find the selected row's bar
     wireTrackSummary(host, session);
     wireImageModelLine(host, session, function () { refreshIdSwitchPanel(session); });
+    wireTrainingPrompt(host, session, function () { refreshIdSwitchPanel(session); });
     highlightRow(rows.filter(function (f) { return rowKey(f) === st.current; })[0] || null);
     var nav = st.navigate || _navigate;
     // A row lands its lead-in (1 s, 2 s on one camera) before the animals come close (data-go), so pressing play

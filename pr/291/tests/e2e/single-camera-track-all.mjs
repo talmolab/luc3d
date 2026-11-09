@@ -66,6 +66,12 @@
  *     there is none; after it the place's Fix may start before the place (and
  *     the dialog says why), without it a frame before the place still falls back
  *     to just after it.
+ * 10. With a review list, the image check embeds every image sample and
+ *     pre-judges each row (pose/image-prejudge.js): "images: look right" /
+ *     "look swapped" on the rows and a count under the list; animals that look
+ *     too alike get "can't tell these two apart" instead; with the built-in
+ *     model a "How to train one…" prompt opens the image model dialog on its
+ *     training steps, and Esc closes it.
  *  1b. Track All ends on the summary box, planned for one camera: it counts
  *     tracks, lists coat brightness / images / body size, recommends reviewing
  *     the list (here only its check row at the end) then saving, and
@@ -785,6 +791,73 @@ try {
     const dlg9b = await page.evaluate(() => (document.querySelector('.id-switch-fix-modal') || {}).textContent || '');
     check(/just after this place/.test(dlg9b), 'without "Earlier encounter", a frame before the place still starts the Fix just after it');
     await page.keyboard.press('Escape');
+
+    console.log('\n10. The image check pre-judges the review list, unless the animals look too alike to tell apart');
+    // Two animals meeting every 10 s for 75 s (the image check needs 60 s). The stand-in embedder gives each
+    // animal (known by its height in the frame) its own look, and swaps the two looks from 0:40 on: the images
+    // then say the labels change hands there although the tracks follow the animals.
+    await page.evaluate(async () => {
+        const pd = await import('/pose/pose-data.js'), AS = await import('/ui/app-state.js');
+        const NODES = ['Nose', 'Ear_R', 'Ear_L', 'TTI', 'TailTip', 'Head', 'Trunk', 'Tail_0', 'Tail_1', 'Tail_2',
+            'Shoulder_left', 'Shoulder_right', 'Haunch_left', 'Haunch_right', 'Neck'];
+        const T = { Nose: [45, 0], Ear_R: [25, -11], Ear_L: [25, 11], Head: [30, 0], Neck: [20, 0], Trunk: [-5, 0], TTI: [-40, 0],
+            Shoulder_left: [10, 12], Shoulder_right: [10, -12], Haunch_left: [-25, 15], Haunch_right: [-25, -15],
+            Tail_0: [-65, 0], Tail_1: [-88, 0], Tail_2: [-110, 0], TailTip: [-132, 0] };
+        const at = (cx, cy, h) => NODES.map(n => { const [x, y] = T[n], c = Math.cos(h), si = Math.sin(h); return [cx + c * x - si * y, cy + si * x + c * y]; });
+        const N = 2250, cam = new pd.Camera('look_video', [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [1280, 960]);
+        const s = new pd.Session([cam], new pd.Skeleton('mouse', NODES, []), ['t0', 't1'], 'look');
+        for (let f = 0; f < N; f++) for (let a = 0; a < 2; a++) {
+            const t = f / 30, d = 300 * Math.abs(Math.cos(Math.PI * ((t % 10) / 10)));
+            s.addUnlinkedInstance(f, cam.name, new pd.Instance(at(640 + (a ? d : -d), 400 + 60 * a, a ? Math.PI : 0), a, 'predicted', 0.9));
+        }
+        AS.state.sessions = [s]; AS.state.activeSessionIdx = 0; AS.state.session = s;
+        AS.state.totalFrames = N; AS.state.currentFrame = 0; AS.state.fps = 30;
+        if (AS.timeline) { AS.timeline.setTotalFrames(N); AS.timeline.setData(s); }
+        window.__looks = (alike) => {
+            let seed = 11; const r = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+            const proto = [0, 1].map(a => Float32Array.from({ length: 16 }, (_, i) => Math.sin((alike ? 0 : 3 * a) + i)));
+            return async () => ({ views: ['look_video'], inFlight: 2, getEmbeddings: async (frame, items) => items.map(it => {
+                const inst = it.group.instances.get('look_video'), a = Math.round((inst.getY(0) - 400) / 60), look = frame >= 1200 ? 1 - a : a;
+                return [{ camera: 'look_video', vector: Float32Array.from(proto[look], v => v + 0.3 * (r() - 0.5)) }];
+            }) });
+        };
+    });
+    await page.evaluate(() => { document.getElementById('statusText').textContent = ''; document.getElementById('tbTrackAll').click(); });
+    await page.waitForFunction(() => /Tracked \d+ animal|Track All error/.test(document.getElementById('statusText').textContent), { timeout: 60000 });
+    await page.click('#trackSummaryPrimary').catch(() => {});
+    const runLooks = async (alike) => page.evaluate(async (alike) => {
+        const S = window.__lucid.state.session, st = S._idSwitch, R = await import('/ui/id-switch-review.js'), M = await import('/ui/id-switch-modal.js');
+        const row = (frame) => ({ frame: frame + 5, startFrame: frame - 5, identityA: 0, identityB: 1, nameA: 'id_0', nameB: 'id_1', kind: 'onset', score: 0,
+            look: ['ambiguity'], switchBackAt: null, cue: 'review' });
+        st.results.review.flags = [row(600), row(1200)];
+        delete st.results.image;
+        R.linkIdSwitchResults(st.results); M.refreshIdSwitchPanel(S);
+        await M.runIdSwitchChecks({ image: true, inject: { createEmbedder: window.__looks(alike), hasWebGPU: async () => true } });
+        const res = st.results.image, rows = [...document.querySelectorAll('#idSwitchPanel .id-switch-row')];
+        const text = (f) => { const el = rows.find(x => Number(x.dataset.frame) === f); return el ? el.querySelector('.id-switch-line2').textContent : ''; };
+        return { ok: !!(res && res.ok), reason: res && res.reason, all: res && res.samples && res.samples.embedded === res.samples.of,
+                 verdicts: res && res.prejudge ? res.prejudge.rows.map(p => p.verdict) : null, cos: res && res.prejudge ? res.prejudge.pairs.map(q => q.cos) : null,
+                 at600: text(605), at1200: text(1205),
+                 summary: (document.querySelector('#idSwitchPanel .id-switch-prejudge-summary') || {}).textContent || '',
+                 prompt: (document.querySelector('#idSwitchPanel .id-switch-train-prompt') || {}).textContent || '' };
+    }, alike);
+    const lk = await runLooks(false);
+    check(lk.ok && lk.all, `the image check ran and, with a review list, embedded every image sample (${lk.reason || 'ok'})`);
+    check(JSON.stringify(lk.verdicts) === '["kept","swapped"]', `verdicts: the place at 0:20 looks right, the one at 0:40 looks swapped (${JSON.stringify(lk.verdicts)}, cos ${lk.cos})`);
+    check(/images: look right/.test(lk.at600) && /images: look swapped/.test(lk.at1200), `the rows say so: "${lk.at600.slice(-30)}" / "${lk.at1200.slice(-30)}"`);
+    check(/^Image pre-judge: 1 looks swapped · 1 looks right · 0 unsure/.test(lk.summary), 'the review list\'s summary counts them: ' + lk.summary);
+    check(/built-in image model/.test(lk.prompt) && /How to train one…/.test(lk.prompt), 'with the built-in model, a prompt to train one for this rig: ' + lk.prompt.slice(0, 60));
+    const al = await runLooks(true);
+    check(JSON.stringify(al.verdicts) === '["alike","alike"]', `look-alike animals: no verdict (${JSON.stringify(al.verdicts)}, cos ${al.cos})`);
+    check(/images can't tell these two apart/.test(al.at1200) && /^Images can't tell these two animals apart \(how alike they look: [\d.]+; a verdict needs under 0\.70\)/.test(al.summary),
+        'the rows and the summary say the images can\'t tell them apart: ' + al.summary);
+    await page.click('#idSwitchPanel .image-model-train-open');
+    const train = await page.evaluate(() => { const d = document.querySelector('.image-model-modal .image-model-train');
+        return d ? { open: d.open, text: d.textContent } : null; });
+    check(train && train.open && /train_image_model\.py/.test(train.text) && /Load package folder…/.test(train.text),
+        '"How to train one…" opens the image model dialog on its training steps');
+    await page.keyboard.press('Escape');
+    check(await page.evaluate(() => !document.querySelector('.image-model-modal')), 'Esc closes it');
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {
