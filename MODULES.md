@@ -12613,7 +12613,13 @@ Post-processing, Remote), same defaults, labels and hints, same progress block
 Cancel, Load Results, log tail + Expand window, Copy Log, Dismiss).
 LUCID differences: one sleap-nn job PER VIEW, all views with the SAME models
 (a per-view slot exists in the config, `perViewModels`); Data gains **Videos on
-disk** (native folder pick → each view's video matched, `ui/inference-video-paths.js`);
+disk**, now **Views**: a checkbox per session camera (run a subset), each
+with its video path found from the files the user OPENED
+(`lucidDesktop.fs.pathOfFile`, macOS capture in `src-tauri/src/input_paths.rs`),
+else the path the .slp recorded if readable, else Choose folder… (native folder
+pick → matched, `ui/inference-video-paths.js`); predictions go to the picked
+session folder's `predictions/`. Lazy-loaded views are listed as blocked
+(TEMPORARY, `viewInferenceBlocker`);
 targets are per session (no suggestions in LUCID); Track only is shown but not
 available; no Full Configuration window (its settings are all in the panel);
 Backend offers Local only (`INFERENCE_BACKENDS`, the seam for a SLEAP Connect
@@ -12669,7 +12675,10 @@ Training job would be another `kind`.
 
 **Key exports.** `planInferenceJobs(config, views, {outputDir, subcommand, stamp})`
 → `{jobs, skipped}`, `runJobQueue(jobs, runJob, opts)` → `{done, failed, notRun}`,
-`joinPath`, `safeFilePart`, `predictionsTimestamp`.
+`joinPath`, `safeFilePart`, `predictionsTimestamp`,
+`viewInferenceBlocker(session, view)` — why a view cannot run, or null.
+TEMPORARY: a lazy-loaded camera (`session.lazyLoader.labelsByCam`) is blocked;
+lifting it (or allowing a chosen subset) changes only this function.
 
 **Imports from project modules.** `./inference-args.js`. **Imported by.**
 `ui/inference-panel.js`. Test: `tests/test-inference-args.mjs`.

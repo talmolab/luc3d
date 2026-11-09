@@ -10,6 +10,7 @@
 mod close_guard;
 mod dialogs;
 mod files;
+mod input_paths;
 mod localhost;
 mod native_menu;
 mod sleap_nn;
@@ -95,6 +96,7 @@ fn lucid_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
             sleap_nn::cancel_command,
             sleap_nn::detect_uv,
             sleap_nn::detect_gpu,
+            input_paths::input_picks,
             sleap_nn::detect_sleap_nn,
         ])
         .build()
@@ -189,6 +191,7 @@ pub fn run() {
 
     let builder = builder.setup(move |app| {
         app.manage(updates::UpdateState::load(app.handle()));
+
         // luc3d | Edit | Window until the page sends its own menus
         // (set_app_menu); also what stays if it never does.
         #[cfg(target_os = "macos")]
@@ -224,7 +227,7 @@ pub fn run() {
             tauri::WebviewUrl::App("index.html".into())
         };
 
-        tauri::WebviewWindowBuilder::new(app, "main", url)
+        let window = tauri::WebviewWindowBuilder::new(app, "main", url)
             .title("luc3d")
             .inner_size(1440.0, 900.0)
             .min_inner_size(1024.0, 700.0)
@@ -234,6 +237,10 @@ pub fn run() {
             .disable_drag_drop_handler()
             .initialization_script(desktop_shim())
             .build()?;
+        // Record the paths of files the user picks through the page's own
+        // file inputs (macOS; see input_paths.rs). AFTER the window: wry
+        // registers the Objective-C class it patches when it makes a webview.
+        input_paths::install(&window, Arc::clone(&app.state::<Arc<files::GrantState>>()));
         Ok(())
     });
 
@@ -278,7 +285,7 @@ mod tests {
             .map(|s| s.rsplit("::").next().unwrap())
             .collect();
 
-        assert_eq!(from_build.len(), 31);
+        assert_eq!(from_build.len(), 32);
         from_build.sort_unstable();
         from_lib.sort_unstable();
         assert_eq!(from_build, from_lib);

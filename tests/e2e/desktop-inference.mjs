@@ -18,8 +18,12 @@
  *  3. Desktop with sleap-nn: an Inference rail button + section; sections in
  *     sleap-app's order; Run disabled until a model and the video folder.
  *  4. A session of 2 views (cam1, cam2; skeleton A,B; cam1 has a USER label on
- *     frame 0 and an old PREDICTION on frame 1). Add model, Choose folder:
- *     each view's video is matched by relative path + size.
+ *     frame 0 and an old PREDICTION on frame 1), opened from a folder the user
+ *     picked in the page's file dialog (input_picks reports /rec, as the macOS
+ *     capture does): each view's video path is found WITHOUT asking again
+ *     (`lucidDesktop.fs.pathOfFile`), predictions go to /rec/predictions.
+ *     Choose folder… (the fallback) gives the same paths; unchecking a view
+ *     disables Run when it was the only one.
  *  5. Run Inference: one job per view, in order, distinct job ids; argv is a
  *     video --data_path, the model, --output_path under <folder>/predictions,
  *     no --video_index; the predictions come back as ungrouped predicted
@@ -31,7 +35,8 @@
  *  7. REAL tracked sleap-nn output merged
  *     with "keep": its tracks arrive named `<view>: track_N`, so two views'
  *     `track_0` never become one LUCID track; instances carry them.
- *  8. A lazy project: the same merge removes the old prediction's STORE row,
+ *  8. A lazy project: its views are listed as blocked (TEMPORARY) and Run is
+ *     disabled with the reason; the merge itself (for when that is lifted): the same merge removes the old prediction's STORE row,
  *     keeps the user label, adds 20 predictions, and pins the new frames
  *     (frameEvictionBlocker) so nothing is lost before a save.
  *
@@ -77,6 +82,13 @@ function installMock(cfg) {
     const mock = {
         files, dirs, grants, calls,
         runPlan: [],                     // per run: 'ok' | {fail: stderrLine}
+        picks: [],                       // what input_picks reports (the macOS capture)
+        pickSupported: true,
+        /** Pretend the user picked `path` in a page file-input dialog (input_paths.rs). */
+        inputPick(path, directories) {
+            grants.push({ path, kind: 'dir' });
+            mock.picks.push({ paths: [path], directories, seq: mock.picks.length + 1 });
+        },
         put(p, bytes) { files.set(p, bytes); mkdirp(parent(p)); },
         pred: b64(cfg.predB64),
     };
@@ -134,6 +146,7 @@ function installMock(cfg) {
             return true;
         },
         cancel_command: () => null,
+        input_picks: () => ({ supported: mock.pickSupported, picks: mock.picks.slice() }),
     };
     window.__TAURI_INTERNALS__ = {
         invoke(cmd, args) {
@@ -262,6 +275,7 @@ try {
             mkFile([v1], ROOT + '/cam1/cam1.mp4', 'video/mp4'), mkFile([v2], ROOT + '/cam2/cam2.mp4', 'video/mp4'),
             mkFile([await slp('cam1')], ROOT + '/cam1/cam1.slp'), mkFile([await slp('cam2')], ROOT + '/cam2/cam2.slp')];
         AS.state.sessions = []; AS.state.activeSessionIdx = 0; AS.state.videoFiles = []; AS.state.session = null; AS.state.views = [];
+        window.__mock.inputPick('/rec', true);   // the session folder, picked in the page's own dialog
         await loader.handleLoadSessionFolderPerCamera(files, false);
         // The same videos on "disk", plus a decoy of another size with cam1's name.
         const bytes = async (b) => new Uint8Array(await b.arrayBuffer());
@@ -274,8 +288,29 @@ try {
     check(sizes.views.join() === 'cam1,cam2' && sizes.skel.join() === 'A,B', 'session loaded', sizes);
 
     await page.click('#infAddModel');
+    await page.dispatchEvent('#tabInference', 'pointerenter');
+    await page.waitForFunction(() => document.querySelectorAll('#infViewVideos .inf-view .inf-ok').length === 2, null, { timeout: 15000 });
+    const auto = await page.evaluate(() => ({
+        views: Array.from(document.querySelectorAll('#infViewVideos .inf-view')).map((r) => r.textContent),
+        root: document.getElementById('infVideoRoot').textContent,
+        listed: window.__mock.calls.filter((c) => c.name === 'list_dir').length,
+        chose: window.__mock.calls.filter((c) => c.name === 'pick_directory').length,
+    }));
+    check(auto.views[0] === 'cam1cam1/cam1.mp4' && auto.views[1] === 'cam2cam2/cam2.mp4',
+        'video paths found from the folder the user OPENED, without asking again', auto);
+    check(auto.chose === 0 && auto.listed === 0, 'no folder dialog, no folder scan', auto);
+    check(auto.root === 'Predictions go to /rec/predictions', 'predictions go next to the session', auto.root);
+    // Unchecking both views disables Run; re-checking enables it.
+    await page.click('#infViewVideos .inf-view[data-view="cam1"] input');
+    await page.click('#infViewVideos .inf-view[data-view="cam2"] input');
+    const unchecked = await page.evaluate(() => document.getElementById('infRun').disabled);
+    await page.click('#infViewVideos .inf-view[data-view="cam1"] input');
+    await page.click('#infViewVideos .inf-view[data-view="cam2"] input');
+    check(unchecked === true, 'no checked view → Run disabled');
+    // The fallback: Choose folder… scans the picked folder and matches by path + size.
     await page.click('#infChooseVideos');
-    await page.waitForFunction(() => document.querySelectorAll('#infViewVideos .inf-view').length === 2);
+    await page.waitForFunction(() => window.__mock.calls.some((c) => c.name === 'list_dir'));
+    await page.waitForFunction(() => document.querySelectorAll('#infViewVideos .inf-view .inf-ok').length === 2);
     const p4 = await page.evaluate(() => ({
         models: Array.from(document.querySelectorAll('#tabInference .inf-model-name')).map((e) => e.textContent),
         views: Array.from(document.querySelectorAll('#infViewVideos .inf-view')).map((r) => r.textContent),
@@ -286,7 +321,7 @@ try {
     check(p4.modelCall === 1 && p4.modelGrant && p4.modelGrant.kind === 'model', 'Add opens the READ-ONLY model picker');
     check(p4.models.join() === 'topdown', 'the model chip shows the folder name', p4.models);
     check(p4.views[0] === 'cam1cam1/cam1.mp4' && p4.views[1] === 'cam2cam2/cam2.mp4',
-        'each view matched to its own video by path + size (not the decoy)', p4.views);
+        'Choose folder… matches each view to its own video by path + size (not the decoy)', p4.views);
     check(!p4.runDisabled, 'Run enabled');
 
     // ---------------------------------------------------------------- 5
@@ -386,6 +421,7 @@ try {
 
     // ---------------------------------------------------------------- 8
     console.log('\n8. A lazy project: the same merge, store-backed');
+    await page.click('#infDismiss');   // the failed run from 6 would otherwise hold the panel
     const p7 = await page.evaluate(async (predB64) => {
         const fio = await import('/import-export/file-io.js');
         const pd = await import('/pose/pose-data.js');
@@ -417,6 +453,15 @@ try {
         }
         const L = window.__lucid.state.session;
         if (err || !L || !L.lazyLoader) return { err: err || 'not lazy' };
+        document.getElementById('tabInference').dispatchEvent(new Event('pointerenter'));
+        await new Promise((r) => setTimeout(r, 300));
+        const panel = {
+            rows: Array.from(document.querySelectorAll('#infViewVideos .inf-view')).map((r) => ({
+                view: r.dataset.view, why: r.querySelector('.inf-view-why').textContent,
+                disabled: r.querySelector('input').disabled })),
+            runDisabled: document.getElementById('infRun').disabled,
+            runWhy: document.querySelector('#tabInference .inf-run + .inf-muted').textContent,
+        };
         const before1 = L.lazyLoader.describeStoreFrame('cam1', 1).count;
         // Evict what is resident so the merge has to hydrate.
         const pred = Uint8Array.from(atob(predB64), (c) => c.charCodeAt(0));
@@ -435,10 +480,14 @@ try {
         }
         const pinned = [];
         for (let f = 0; f < 10; f++) pinned.push(lr.frameEvictionBlocker(L, f, L.frameGroups.get(f), null));
-        return { r, before1, after1, after0, preds, users0, pinned };
+        return { r, before1, after1, after0, preds, users0, pinned, panel };
     }, PRED_B64);
     check(!p7.err, 'lazy project opened', p7.err);
     if (!p7.err) {
+        check(p7.panel.rows.length === 2 && p7.panel.rows.every((r) => r.disabled && /lazy-loaded/.test(r.why)),
+            'lazy-loaded views are listed as blocked (TEMPORARY)', p7.panel);
+        check(p7.panel.runDisabled && /lazy-loaded views is not supported yet/.test(p7.panel.runWhy),
+            'Run is disabled and says why', p7.panel);
         check(p7.before1 === 1 && p7.after1 === 0, 'the old prediction\'s STORE row is deleted (replace)', p7);
         check(p7.after0 === 1 && p7.users0 === 1, 'the user label (store row + instance) is kept', p7);
         check(p7.r.instances === 20 && p7.preds === 20, '20 predictions added on frames 0-9', p7);

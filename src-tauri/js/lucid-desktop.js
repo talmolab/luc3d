@@ -40,7 +40,9 @@
  *     update channel, and install-then-restart, never over unsaved work.
  *  `lucidDesktop.sleapNn` — thin wrappers for the (feature-gated) sleap-nn
  *     commands (run/cancel by job id, detection, the read-only model-folder
- *     picker); `lucidDesktop.fs` — grant-checked path helpers. The Inference
+ *     picker); `lucidDesktop.fs` — grant-checked path helpers, incl.
+ *     `pathOfFile(file)` (the disk path of a File from a file input, from what
+ *     the user picked in that dialog: src-tauri/src/input_paths.rs, macOS). The Inference
  *     panel (`ui/inference-panel.js`) is their only user.
  */
 (function () {
@@ -211,6 +213,48 @@
             listDir: function (path) { return call('list_dir', { path: String(path) }); },
             stat: function (path) { return call('path_stat', { path: String(path) }); },
             makeDir: function (path) { return call('make_dir', { path: String(path) }); },
+            /**
+             * {supported, picks:[{paths, directories, seq}]}: what the user chose in
+             * the page's own file-input dialogs this run (macOS; the app grants them).
+             */
+            inputPicks: function () { return call('input_picks', {}); },
+            /**
+             * The disk path of a File the page got from a file input, or null:
+             * matched against the recorded picks (newest first) by its
+             * webkitRelativePath under a picked folder, or by name for a picked
+             * file, and confirmed by size. Resolves {path, root} — root is the
+             * picked folder (null for a picked file).
+             */
+            pathOfFile: async function (file) {
+                if (!file || typeof file.name !== 'string') return null;
+                var res;
+                try { res = await call('input_picks', {}); } catch (e) { return null; }
+                if (!res || !res.supported) return null;
+                var rel = String(file.webkitRelativePath || '');
+                var relParts = rel ? rel.split('/').filter(Boolean) : [];
+                var picks = (res.picks || []).slice().sort(function (a, b) { return b.seq - a.seq; });
+                for (var i = 0; i < picks.length; i++) {
+                    var pk = picks[i];
+                    for (var j = 0; j < pk.paths.length; j++) {
+                        var p = String(pk.paths[j]);
+                        var sep = p.indexOf('\\') !== -1 && p.indexOf('/') === -1 ? '\\' : '/';
+                        var base = p.split(/[\\/]/).pop();
+                        var cand = null, root = null;
+                        if (relParts.length > 1 && base === relParts[0]) {
+                            cand = p + sep + relParts.slice(1).join(sep);
+                            root = p;
+                        } else if (!relParts.length && base === file.name) {
+                            cand = p;
+                        }
+                        if (!cand) continue;
+                        try {
+                            var st = await call('path_stat', { path: cand });
+                            if (st && st.isFile && Number(st.size) === file.size) return { path: cand, root: root };
+                        } catch (e) { /* not granted / gone: try the next pick */ }
+                    }
+                }
+                return null;
+            },
             /** The whole file as a Uint8Array, read in slices. */
             readFile: async function (path) {
                 var st = await call('path_stat', { path: String(path) });
