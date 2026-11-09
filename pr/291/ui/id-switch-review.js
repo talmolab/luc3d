@@ -227,6 +227,24 @@ function nextPlaceStart(m, results, totalFrames) {
     return next;
 }
 
+/**
+ * Where the place before `m` ends (its last frame), on any of `results`, or -1 before the first: how far back
+ * "Earlier encounter" steps from `m` (the stretch before it is that place's to fix). Same rules as the next place.
+ */
+export function idSwitchPrevPlaceEnd(m, results) {
+    var prev = -1, tol = contactTolerance(results), ms = m.startFrame != null && m.startFrame <= m.frame ? m.startFrame : m.frame;
+    ID_SWITCH_CUES.forEach(function (cue) {
+        var r = results[cue];
+        if (!hasRows(r)) return;
+        idSwitchPrimary(r).forEach(function (x) {
+            if (x.frame >= ms || x === m || x === m.agree || !idSwitchIsPlace(x)) return;
+            if (x.cue !== m.cue && samePair(x, m) && sameContact(x, m, tol)) return;   // this place, on another list
+            if (x.frame > prev) prev = x.frame;
+        });
+    });
+    return prev;
+}
+
 /** The fix that covers row `m` (its own, or its partner's), or null. */
 export function idSwitchFixFor(st, m) {
     var keys = [idSwitchRowKey(m)].concat(m.agree ? [idSwitchRowKey(m.agree)] : []);

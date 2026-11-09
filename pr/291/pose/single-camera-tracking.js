@@ -46,8 +46,8 @@
  * DOM-free. Depends on: pose/sleap-tracker.js, pose/detection-filter-stats.js.
  */
 
-import { runSleapTrackerAsync } from './sleap-tracker.js?v=35e07cd5cb2a';
-import { passesDetectionFilter } from './detection-filter-stats.js?v=35e07cd5cb2a';
+import { runSleapTrackerAsync } from './sleap-tracker.js?v=2060ff311efb';
+import { passesDetectionFilter } from './detection-filter-stats.js?v=2060ff311efb';
 
 /** Why a lazy single-camera project is not tracked (shown in the status bar). */
 export const SINGLE_CAMERA_LAZY_REASON = 'single-camera tracking does not support a lazily loaded (> 150 MB) project yet';
@@ -223,7 +223,8 @@ function trackerPoints(inst) {
  *          `filtered` and the `duplicates`; `moments` = the candidate moments plus returns
  *          (`returnMoments`), what the checks test; `review` = the candidate moments plus
  *          handovers (`handoverCandidates`) and returns while the other animal was out of
- *          sight too (`reviewReturnCandidates`), the review list's rows
+ *          sight too (`reviewReturnCandidates`), the review list's rows, plus the lone-animal
+ *          arrival row and a check row at the end of the tracking (`videoEndRow`)
  */
 export async function trackSingleCamera(session, cfg, opts) {
     var cam = singleCameraName(session);
@@ -314,6 +315,9 @@ export async function trackSingleCamera(session, cfg, opts) {
                       identityB: Math.max(lone.arrival.a, lone.arrival.b), cues: ['arrival'] });
         review.sort(function (x, y) { return x.frame - y.frame || x.identityA - y.identityA || x.identityB - y.identityB; });
     }
+    // a check row at the end of the tracking, unless a row already ends near it: a swap after the last place shows only there
+    var endRow = videoEndRow(frames, out, review, fps);
+    if (endRow) review.push(endRow);
     return { numIdentities: nTracks, frames: seenFrames, tracked: tracked, untracked: untracked,
              filtered: filtered.length, duplicates: removed.length, moments: moments, review: review,
              lone: lone && lone.fired ? { until: lone.until, relabelled: lone.relabelled, untracked: lone.untracked } : null };
@@ -672,6 +676,102 @@ export function reviewReturnCandidates(frames, out, fps, opts) {
         }
     });
     return cands;
+}
+
+/** The check row at the end of the tracking: none when a row already ends within `clearSeconds` of it. */
+export const VIDEO_END_DEFAULTS = { clearSeconds: 5, pairSeconds: 2 };
+
+/**
+ * A review row at the last tracked frame — "check who is who at the end" —
+ * unless a row already ends within `clearSeconds` of it. A swap after the last
+ * place on the list shows nowhere else: the reviewer sees the labels swapped
+ * there and steps back through the pair's earlier close encounters
+ * (`pairEncounters`) to where it began. Its pair is the two tracks seen most in
+ * the last `pairSeconds` (else the two seen last); with more tracks the Fix
+ * dialog picks the pair. Null with fewer than two tracks.
+ * Measured 2026-11-09 on proofread data (MODULES.md), with a reviewer who watches
+ * only 2 s before to 5 s after each row and steps back through encounters:
+ * +0.08–0.16 rows a minute; held-out intact 99.840 -> 99.927%, sham_gdx 99.942 ->
+ * 99.980%, SLAP 99.620 -> 99.923%, SLAP-2M 98.885 -> 99.550% (the row alone,
+ * without stepping back, changes almost nothing).
+ * @returns {?{frame, startFrame, identityA, identityB, cues: ['videoEnd']}}
+ */
+export function videoEndRow(frames, out, review, fps, opts) {
+    var o = Object.assign({}, VIDEO_END_DEFAULTS, opts || {});
+    if (!frames.length) return null;
+    var rate = fps || 30, last = frames[frames.length - 1].frameIdx;
+    if ((review || []).some(function (m) { return m.frame >= last - o.clearSeconds * rate; })) return null;
+    var count = new Map(), lastSeen = new Map();
+    for (var p = 0; p < frames.length; p++) {
+        var f = frames[p].frameIdx, ids = out[p] || [];
+        for (var q = 0; q < ids.length; q++) {
+            var t = ids[q];
+            if (t == null || t < 0) continue;
+            lastSeen.set(t, f);
+            if (f >= last - o.pairSeconds * rate) count.set(t, (count.get(t) || 0) + 1);
+        }
+    }
+    if (lastSeen.size < 2) return null;
+    var pick = Array.from(lastSeen.keys()).sort(function (a, b) {
+        return (count.get(b) || 0) - (count.get(a) || 0) || lastSeen.get(b) - lastSeen.get(a) || a - b;
+    });
+    return { frame: last, startFrame: last, identityA: Math.min(pick[0], pick[1]), identityB: Math.max(pick[0], pick[1]), cues: ['videoEnd'] };
+}
+
+/** What counts as a close encounter when stepping back: centroids under `closeBody` body lengths apart, runs
+ *  joined across gaps of up to `gapSeconds`. */
+export const PAIR_ENCOUNTER_DEFAULTS = { closeBody: 1.5, gapSeconds: 0.25 };
+
+var _bodyCache = new WeakMap();
+/** A single-camera session's body length (median detection extent over ~5,000 sampled detections), cached per
+ *  frame count. */
+function sessionBodyLength(session, cam) {
+    var c = _bodyCache.get(session);
+    if (c && c.n === session.frameGroups.size) return c.body;
+    var frameIdx = Array.from(session.frameGroups.keys()), every = Math.max(1, Math.floor(frameIdx.length / 5000)), frames = [];
+    for (var i = 0; i < frameIdx.length; i += every) {
+        frames.push({ dets: instancesOf(session.frameGroups.get(frameIdx[i]), cam).map(function (inst) { return { points: trackerPoints(inst) }; }) });
+    }
+    var body = bodyLengthOf(frames);
+    _bodyCache.set(session, { n: session.frameGroups.size, body: body });
+    return body;
+}
+
+/**
+ * The close encounters of identities `idA` and `idB` on frames [from, to] of a
+ * single-camera session: runs of frames where a detection of each has its
+ * centroid within `closeBody` body lengths of the other's, joined across gaps of
+ * up to `gapSeconds`. Read from the current labels (so after a Fix too), label
+ * by identity. What the ID Switches tab's "Earlier encounter" steps back through,
+ * latest first, when the labels are already swapped as a place starts: on
+ * proofread data a reviewer stepping back this way recovered nearly all of what
+ * a reviewer shown the exact frame recovers (MODULES.md, 2026-11-09).
+ * @param {{fps?: number, closeBody?: number, gapSeconds?: number}} [opts]
+ * @returns {Array<{start: number, end: number}>}  ascending; [] when not single-camera
+ */
+export function pairEncounters(session, idA, idB, from, to, opts) {
+    var cam = singleCameraName(session);
+    if (!cam || session.lazyLoader || idA == null || idB == null) return [];
+    var o = Object.assign({}, PAIR_ENCOUNTER_DEFAULTS, opts || {});
+    var body = sessionBodyLength(session, cam);
+    if (!(body > 0)) return [];
+    var lim = o.closeBody * body, gap = Math.round(o.gapSeconds * (o.fps || session.fps || 30)), runs = [];
+    var frameIdx = Array.from(session.frameGroups.keys()).filter(function (f) { return f >= from && f <= to; }).sort(function (a, b) { return a - b; });
+    for (var i = 0; i < frameIdx.length; i++) {
+        var f = frameIdx[i], list = instancesOf(session.frameGroups.get(f), cam), A = [], B = [];
+        for (var q = 0; q < list.length; q++) {
+            var id = session.getIdentityIdForUnlinkedInstance(cam, list[q], f);
+            if (id !== idA && id !== idB) continue;
+            var c = pointsCentroid(trackerPoints(list[q]));
+            if (c) (id === idA ? A : B).push(c);
+        }
+        var near = A.some(function (a) { return B.some(function (b) { return Math.hypot(a[0] - b[0], a[1] - b[1]) < lim; }); });
+        if (!near) continue;
+        var run = runs[runs.length - 1];
+        if (run && f - run.end <= gap + 1) run.end = f;
+        else runs.push({ start: f, end: f });
+    }
+    return runs;
 }
 
 /**

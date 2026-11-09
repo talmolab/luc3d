@@ -731,5 +731,49 @@ group('12. The lone-animal rule: one track while one animal is in view, a review
     ok(!on.review.some(m => m.frame < ENTER && m.cues.includes('handover')), 'no handover rows left in the lone phase (it has one track)');
 }
 
+group('13. A check row at the end of the tracking, and the pair encounters "Earlier encounter" steps through');
+{
+    const fr = (f, n) => ({ frameIdx: f, dets: Array.from({ length: n }, () => ({ points: new Float64Array(2) })) });
+    const vid = (n, tracks) => { const frames = [], out = []; for (let f = 0; f < n; f++) { frames.push(fr(f, tracks(f).length)); out.push(tracks(f)); } return { frames, out }; };
+    eq(SCT.VIDEO_END_DEFAULTS.clearSeconds, 5, 'no end row when a row already ends within 5 s of the last tracked frame');
+    let v = vid(300, () => [0, 1]), row = SCT.videoEndRow(v.frames, v.out, [], 30);
+    ok(row && row.frame === 299 && row.startFrame === 299 && row.identityA === 0 && row.identityB === 1 && row.cues.join() === 'videoEnd',
+        `two tracks, no rows: a 'videoEnd' row at the last tracked frame (${JSON.stringify(row)})`);
+    ok(SCT.videoEndRow(v.frames, v.out, [{ frame: 148 }], 30) !== null, 'a row more than 5 s before the end leaves it…');
+    eq(SCT.videoEndRow(v.frames, v.out, [{ frame: 160 }], 30), null, '…one within 5 s replaces it');
+    v = vid(300, () => [0]);
+    eq(SCT.videoEndRow(v.frames, v.out, [], 30), null, 'one track: no end row');
+    v = vid(300, f => f < 200 ? [0, 1, 2] : [1, 2]);
+    row = SCT.videoEndRow(v.frames, v.out, [], 30);
+    ok(row && row.identityA === 1 && row.identityB === 2, `three tracks: the two in view at the end (${row && [row.identityA, row.identityB]})`);
+    v = vid(250, f => f < 200 ? [0, 1] : [0]);
+    row = SCT.videoEndRow(v.frames, v.out, [], 30);
+    ok(row && row.identityA === 0 && row.identityB === 1, `one in view at the end: it and the one seen last (${row && [row.identityA, row.identityB]})`);
+
+    // Track All on the three-animal fixture: the review list ends with the check row unless a place is near the end
+    const S = build(); S.identities = []; S.frameIdentityMap = new Map();
+    const r = await SCT.trackSingleCamera(S, cfg, { fps: FPS });
+    const last = Math.max(...S.frameGroups.keys()), endRows = r.review.filter(m => m.cues.includes('videoEnd'));
+    const near = r.review.some(m => !m.cues.includes('videoEnd') && m.frame >= last - 5 * FPS);
+    ok(near ? endRows.length === 0 : endRows.length === 1 && endRows[0].frame === last && r.review[r.review.length - 1] === endRows[0],
+        `Track All: ${near ? 'a place near the end, no end row' : 'one end row, last on the list, at frame ' + last} (${endRows.map(m => m.frame)})`);
+
+    // pairEncounters: animals 0 and 1 meet every 10 s (frames 150, 450, 750 in the first 30 s)
+    const idOf = (f, q) => S.getIdentityIdForUnlinkedInstance(CAM, instancesAt(S, f)[q], f);
+    const a = idOf(0, 0), b = idOf(0, 1);
+    let enc = SCT.pairEncounters(S, a, b, 0, 899, { fps: FPS });
+    ok(enc.length === 3 && [150, 450, 750].every((m, i) => enc[i].start <= m && enc[i].end >= m && enc[i].end - enc[i].start < 300),
+        `the pair's close encounters in the first 30 s: three, around 0:05, 0:15, 0:25 (${JSON.stringify(enc)})`);
+    ok(enc.every((e, i) => i === 0 || e.start > enc[i - 1].end), '…ascending, not overlapping');
+    eq(SCT.pairEncounters(S, a, b, 300, 899, { fps: FPS }).length, 2, 'only the frames asked for');
+    eq(SCT.pairEncounters(S, a, idOf(0, 2), 0, 899, { fps: FPS }).length, 0, 'animal 2 keeps to itself: no encounter with it');
+    const tight = SCT.pairEncounters(S, a, b, 0, 899, { fps: FPS, closeBody: 0.5 });
+    ok(tight.length === 3 && tight.every((e, i) => e.end - e.start < enc[i].end - enc[i].start), 'a tighter closeness: the same encounters, shorter');
+    // read from the current labels: swap the pair from frame 600 on, the encounters stay (the pair is still the pair)
+    SCT.swapSingleCameraIdentities(S, 600, last, a, b);
+    eq(SCT.pairEncounters(S, a, b, 0, 899, { fps: FPS }).length, 3, 'after a Fix the same encounters (labels read as they are now)');
+    eq(SCT.pairEncounters({ cameras: [] }, a, b, 0, 899).length, 0, 'not a single-camera session: none');
+}
+
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);
 if (failed > 0) { console.error('\nFailures:\n - ' + failures.join('\n - ')); process.exit(1); }
