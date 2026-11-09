@@ -66,7 +66,7 @@
  */
 
 import { Instance, lazyPlaceholderXY } from './pose-data.js';
-import { nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js';
+import { nulledNodesFromOcclusion, fileNulledNodes } from '../import-export/import-track-resolve.js';
 
 /** Frames the playback loader keeps hydrated ahead of the playhead. */
 export const LAZY_PLAYBACK_AHEAD = 600;
@@ -424,6 +424,27 @@ export function releaseFrameMembers2d(session, frameIdx, opts) {
 }
 
 /**
+ * Give a lazy group member (`_lazy2d`) its store row's 2D: points and
+ * occlusion by reference (`adoptPointsFrom`). A USER member's hidden nodes are
+ * then settled from that row (`fileNulledNodes`): until now it carried only its
+ * group metadata's copy, which goes stale when another tool edits the file, and
+ * the file's visibility wins (as it does for an eager load). A user member is
+ * never released again (`member2dReleaseBlocker`), so this runs once per member.
+ * The ONE way a placeholder member gets its 2D.
+ *
+ * @param {Instance} m - the member
+ * @param {Instance} built - its row, from `lazyRowInstance`
+ */
+export function adoptMemberRow(m, built) {
+    m.adoptPointsFrom(built);
+    m._lazy2d = false;
+    if (m.type === 'user') {
+        var nulled = fileNulledNodes(m, m.nulledNodes);
+        if (nulled) m.nulledNodes = nulled; else delete m.nulledNodes;
+    }
+}
+
+/**
  * Give `frameIdx`'s released group members their 2D back WITHOUT making the
  * frame resident — for a reader that needs member 2D of frames it does not
  * hydrate. Builds each member's row exactly as `buildLazyFrameGroupSync` +
@@ -446,8 +467,7 @@ export function hydrateFrameMembers2d(session, frameIdx) {
             var rows = data.get(cam);
             var d = rows ? rows[m._rawInstIndex] : null;
             if (!d) continue;
-            m.adoptPointsFrom(lazyRowInstance(d, null));
-            m._lazy2d = false;
+            adoptMemberRow(m, lazyRowInstance(d, null));
             n++;
         }
     }

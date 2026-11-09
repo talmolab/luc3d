@@ -27,7 +27,7 @@ import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu }
 import { createGroupSolver } from './triangulation-pool.js';
 import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
-         dropDerivedReprojections, lazyRowInstance, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js';
+         dropDerivedReprojections, lazyRowInstance, adoptMemberRow, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from './initialization.js';
 import { noteTriangulateRun, carryTriangulateMark } from './run-state.js';
@@ -1540,9 +1540,9 @@ function finalizeLazyFrameGroup(session, fg, frameIdx) {
             var member = mm2 ? mm2.get(bi) : undefined;
             if (member) {
                 if (member._lazy2d) {
-                    // Hydrate the member's 2D from the store instance at this row.
-                    member.adoptPointsFrom(built[bi]);
-                    member._lazy2d = false;
+                    // Hydrate the member's 2D from the store instance at this row
+                    // (and, for a user member, its hidden nodes from the row).
+                    adoptMemberRow(member, built[bi]);
                 }
                 grouped.push(member);
             } else {

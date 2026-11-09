@@ -3472,14 +3472,21 @@ store row becomes an Instance (`ensureLazyFrameData`, `hydrateLazyCameras`,
 applies the file's visibility as the eager loader does: a node placed but not
 visible is occluded, and on a USER row also nulled (`nulledNodesFromOcclusion`,
 drawn occluded — an unlinked user label has no group metadata to keep nulled
-nodes). A group member adopts only coordinates and occlusion; its nulled nodes
-are its group's. Without it a reopened project showed such a node visible and
+nodes). Without it a reopened project showed such a node visible and
 re-saved it visible from any resident frame. Test: e2e `lazy-hydrate-visibility`.
+
+**Member 2D.** `adoptMemberRow(member, built)` is the one way a lazy group member
+(`_lazy2d`) gets its 2D (`finalizeLazyFrameGroup` in `pose/triangulation.js`,
+`hydrateFrameMembers2d`): coordinates and occlusion by reference
+(`adoptPointsFrom`), then, for a USER member, its hidden nodes settled from that
+row by `fileNulledNodes` (until then it carries its group metadata's copy, set
+at load). The file's visibility wins, as on an eager load. A user member is never
+released again, so this runs once per member. Test: e2e `sleap-visibility-grouped`.
 
 **Imports from project modules.** `./pose-data.js` (`Instance`,
 `lazyPlaceholderXY`), `../import-export/import-track-resolve.js`
-(`nulledNodesFromOcclusion`, dependency-free) — still DOM-free, so the Node test
-can drive it.
+(`nulledNodesFromOcclusion`, `fileNulledNodes`, dependency-free) — still DOM-free,
+so the Node test can drive it.
 
 **Imported by.** `pose/triangulation.js` (`evictLazyFrames`,
 `sweepLazyFrameWindows`), `ui/ui-wiring.js` (`LAZY_PLAYBACK_AHEAD`),
@@ -15573,14 +15580,27 @@ its occlusion on reload. Called in the pass-1 raw-instance build of BOTH
 are excluded (an invisible predicted point is low-confidence, not a user
 occlusion). Covered by `tests/test-occlusion-derive.js`.
 
+Also exports `fileNulledNodes(inst, metaNulled)` — a loaded GROUP member's
+hidden nodes, the file's visibility winning over LUC3D's metadata copy
+(`instanceMeta[cam].nulledNodes`). For a user member every placed node is hidden
+exactly when not visible, whatever the metadata says; the metadata only keeps a
+node with NO position hidden (old builds wrote hidden nodes as NaN), and an index
+past the node count is ignored. Other types keep the metadata as-is. Why: SLEAP /
+sleap-io pass the metadata through unchanged, so a hide, un-hide or node removal
+made there left it stale, and it used to win. The writers still write the copy
+(older LUC3D builds read it). Called by `slp-import.js` (both group readers) and
+`pose/lazy-residency.js` `adoptMemberRow`. Tests: `tests/test-occlusion-derive.js`,
+`tests/e2e/sleap-visibility-grouped.mjs`.
+
 **Key exports.** `resolveImportTrackIdx`, `remapGlobalTrackToSession`,
-`nulledNodesFromOcclusion`.
+`nulledNodesFromOcclusion`, `fileNulledNodes`.
 
 **Imported by.** `loading/session-loader.js` (`resolveImportTrackIdx`, which it
 re-exports, and `nulledNodesFromOcclusion`),
 `import-export/slp-import.js` (`remapGlobalTrackToSession`,
-`nulledNodesFromOcclusion`; it takes `resolveImportTrackIdx` via
-`session-loader.js`). Bridged into
+`nulledNodesFromOcclusion`, `fileNulledNodes`; it takes `resolveImportTrackIdx` via
+`session-loader.js`), `pose/lazy-residency.js` (`nulledNodesFromOcclusion`,
+`fileNulledNodes`). Bridged into
 `tests/test-runner.html`; covered by `tests/test-import-track-resolve.js`.
 
 ---
