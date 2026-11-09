@@ -140,6 +140,9 @@ try {
         `the bar is orange lead-in/out around a red close spell (${JSON.stringify(bar)})`);
 
     // ---- 5. click / drag on the bar (interval 10..80): x of t across it -> frame round(10 + 70 t)
+    // Other panel sections can be open above ID Switches, so bring the bar
+    // into the info panel's view first, as a user would by scrolling.
+    await page.locator('#idSwitchPanel .id-switch-row.is-current .id-switch-pbar').scrollIntoViewIfNeeded();
     const barBox = await page.locator('#idSwitchPanel .id-switch-row.is-current .id-switch-pbar').boundingBox();
     const atT = t => barBox.x + t * barBox.width, midY = barBox.y + barBox.height / 2;
     const cur = () => page.evaluate(() => window.__lucid.state.currentFrame);
