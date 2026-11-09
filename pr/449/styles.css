@@ -8856,3 +8856,6 @@ div.track-summary-steps { padding-left: 0; }
   border-bottom: 1px solid var(--border-color); font-weight: 500; user-select: none; }
 .inf-log-full { flex: 1; margin: 0; overflow: auto; padding: 8px 12px; font-size: 11px; font-family: monospace;
   white-space: pre-wrap; word-break: break-all; background: var(--bg-primary); }
+.inf-view input { margin: 0; }
+.inf-view { cursor: pointer; }
+.inf-view-blocked { cursor: default; opacity: 0.75; }

@@ -42,6 +42,7 @@ const COMMANDS: &[&str] = &[
     "detect_uv",
     "detect_gpu",
     "detect_sleap_nn",
+    "input_picks",
 ];
 
 fn main() {

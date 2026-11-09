@@ -22,17 +22,17 @@
  * sleap-nn's own tracks (Tracking section) are per video: they are imported
  * named `<view>: <track>` so two views' `track_0` never become one LUCID track.
  */
-import { state, timeline, viewport3d, interactionManager } from './app-state.js?v=9c2b1f2c0e48';
-import { parseSlpForImport } from '../import-export/slp-import.js?v=9c2b1f2c0e48';
+import { state, timeline, viewport3d, interactionManager } from './app-state.js?v=4e11dcec98dc';
+import { parseSlpForImport } from '../import-export/slp-import.js?v=4e11dcec98dc';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession, mergePredictionsIntoCamera,
-} from '../import-export/slp-merge.js?v=9c2b1f2c0e48';
-import { collectDeletionTargets, executeDeletion } from './custom-delete-ops.js?v=9c2b1f2c0e48';
-import { batchLoadLazyFrames, updateTimelineForFrame, getInstanceGroupsForFrame } from '../pose/triangulation.js?v=9c2b1f2c0e48';
-import { purgeTriangulationDataForGroup } from './identity-assignment.js?v=9c2b1f2c0e48';
-import { markDirty } from '../import-export/save-load.js?v=9c2b1f2c0e48';
-import { drawAllOverlays } from './rendering.js?v=9c2b1f2c0e48';
-import { updateInfoPanel } from './info-panel.js?v=9c2b1f2c0e48';
+} from '../import-export/slp-merge.js?v=4e11dcec98dc';
+import { collectDeletionTargets, executeDeletion } from './custom-delete-ops.js?v=4e11dcec98dc';
+import { batchLoadLazyFrames, updateTimelineForFrame, getInstanceGroupsForFrame } from '../pose/triangulation.js?v=4e11dcec98dc';
+import { purgeTriangulationDataForGroup } from './identity-assignment.js?v=4e11dcec98dc';
+import { markDirty } from '../import-export/save-load.js?v=4e11dcec98dc';
+import { drawAllOverlays } from './rendering.js?v=4e11dcec98dc';
+import { updateInfoPanel } from './info-panel.js?v=4e11dcec98dc';
 
 /** Contiguous runs of sorted frame indices: [[start, count], …]. */
 export function frameRuns(frames) {

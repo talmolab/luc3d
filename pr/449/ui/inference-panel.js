@@ -9,9 +9,12 @@
  * progress / log / Copy Log / Dismiss block. What LUCID changes:
  *   - one run = one sleap-nn job PER VIEW (`ui/inference-jobs.js`), all views
  *     with the SAME models for now (a per-view model slot exists in the config);
- *   - the Data section adds "Videos on disk": the user picks the recording
- *     folder natively and each view's video is matched by path and size
- *     (`ui/inference-video-paths.js`), since LUCID's Files have no disk path;
+ *   - the Data section adds "Views": which views run, and each one's video
+ *     on disk, found from the files the user OPENED (the desktop app records
+ *     what was picked in the file dialogs, `lucidDesktop.fs.pathOfFile`), or
+ *     the path the .slp recorded; Choose folder… is the fallback (each view's
+ *     video matched by path and size, `ui/inference-video-paths.js`);
+ *   - lazy-loaded views are blocked for now (`viewInferenceBlocker`, TEMPORARY);
  *   - targets are per session (all views share frame numbers), and LUCID has
  *     no suggestions, so "Suggested frames" is not offered;
  *   - Track only needs a per-view .slp input and is shown but not available;
@@ -25,18 +28,18 @@
  * native code only through `window.lucidDesktop` (installed by
  * src-tauri/js/lucid-desktop.js); it imports no desktop code.
  */
-import { state } from './app-state.js?v=9c2b1f2c0e48';
-import { registerPanelRailPanel, showPanelTab } from './panel-rail.js?v=9c2b1f2c0e48';
-import { railIconSvg } from './panel-rail-icons.js?v=9c2b1f2c0e48';
-import { setInfoTip } from './info-tip.js?v=9c2b1f2c0e48';
-import { noteProgress, resetProgress } from './progress-delta.js?v=9c2b1f2c0e48';
+import { state } from './app-state.js?v=4e11dcec98dc';
+import { registerPanelRailPanel, showPanelTab } from './panel-rail.js?v=4e11dcec98dc';
+import { railIconSvg } from './panel-rail-icons.js?v=4e11dcec98dc';
+import { setInfoTip } from './info-tip.js?v=4e11dcec98dc';
+import { noteProgress, resetProgress } from './progress-delta.js?v=4e11dcec98dc';
 import {
     defaultInferenceConfig, INFERENCE_DEFAULTS, targetFrames, sampleFrames, pickInferenceSubcommand,
     parseProgressLine, formatDuration, formatEta,
-} from './inference-args.js?v=9c2b1f2c0e48';
-import { planInferenceJobs, runJobQueue, joinPath } from './inference-jobs.js?v=9c2b1f2c0e48';
-import { matchViewVideos, isVideoName } from './inference-video-paths.js?v=9c2b1f2c0e48';
-import { mergeViewPredictions } from './inference-merge.js?v=9c2b1f2c0e48';
+} from './inference-args.js?v=4e11dcec98dc';
+import { planInferenceJobs, runJobQueue, joinPath, viewInferenceBlocker } from './inference-jobs.js?v=4e11dcec98dc';
+import { matchViewVideos, isVideoName } from './inference-video-paths.js?v=4e11dcec98dc';
+import { mergeViewPredictions } from './inference-merge.js?v=4e11dcec98dc';
 
 export const INFERENCE_TAB_ID = 'tabInference';
 
@@ -79,7 +82,10 @@ const cfg = defaultInferenceConfig();
 let noMaxInstances = true;
 let noMaxTracks = true;
 const env = { checked: false, sleapNn: null, gpu: null, error: null };
-const videos = { root: null, session: null, byView: {}, scanning: false, error: null };
+const videos = {
+    root: null, session: null, byView: {}, scanning: false, error: null,
+    manual: false, autoKey: null, autoBusy: false, unselected: new Set(),
+};
 const run = {
     status: 'idle', error: null, progress: null, log: [], stderrTail: [], startedAt: null, endedAt: null,
     jobIndex: 0, jobCount: 0, view: null, pendingMerges: [], cancelled: false, merging: false,
@@ -227,11 +233,14 @@ function shownIf(node, pred) {
 // Session facts
 // ---------------------------------------------------------------------------
 
+/** The session's cameras: those shown as views first (in view order), then the rest. */
 function sessionViews() {
     const s = state.session;
     if (!s) return [];
-    return (state.views || []).map(function (v) { return v.name; })
-        .filter(function (n) { return s.cameras.some(function (c) { return c.name === n; }); });
+    const cams = s.cameras.map(function (c) { return c.name; });
+    const shown = (state.views || []).map(function (v) { return v.name; })
+        .filter(function (n) { return cams.indexOf(n) !== -1; });
+    return shown.concat(cams.filter(function (n) { return shown.indexOf(n) === -1; }));
 }
 
 function videoFileOf(view) {
@@ -321,7 +330,7 @@ function viewDescriptors() {
 async function chooseVideoFolder() {
     let root;
     try {
-        root = await fsApi.pickDirectory('Folder with this session’s videos');
+        root = await fsApi.pickDirectory('Folder with this session\u2019s videos');
     } catch (e) { videos.error = e.message; refresh(); return; }
     if (!root) return;
     await scanVideoFolder(root);
@@ -341,6 +350,7 @@ async function scanVideoFolder(root) {
         videos.root = root;
         videos.session = state.session;
         videos.byView = byView;
+        videos.manual = true;
     } catch (e) {
         videos.error = 'Could not read the folder: ' + e.message;
     } finally {
@@ -349,16 +359,85 @@ async function scanVideoFolder(root) {
     }
 }
 
+function isAbsolutePath(p) { return /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(String(p || '')); }
+function dirnameOf(p) { return String(p).replace(/[\\/][^\\/]*$/, ''); }
+function relLabel(path, root) {
+    if (root && path.indexOf(root) === 0) return path.slice(root.length).replace(/^[\\/]/, '');
+    return basename(path);
+}
+
+/**
+ * Each view's video path from what the user already OPENED (the session
+ * folder, the project's video prompt, a video file): the desktop app records
+ * what was picked in those dialogs (`lucidDesktop.fs.pathOfFile`), else the
+ * path the .slp / session recorded, if that file is one the app may read and
+ * has the same size. Runs again only when the session, its views or their
+ * Files change; a folder chosen by hand (Choose folder…) wins.
+ */
+async function autoResolveVideos() {
+    const s = state.session;
+    if (!s || !fsApi || videos.autoBusy || videos.manual) return;
+    const views = sessionViews();
+    const key = views.map(function (v) {
+        const vf = videoFileOf(v);
+        const f = vf && vf.file;
+        return v + '\u0000' + (f ? f.name + ':' + f.size + ':' + (f.webkitRelativePath || '') : '') + '\u0000' + (vf ? vf.videoPath || '' : '');
+    }).join('\u0001');
+    if (videos.session === s && videos.autoKey === key) return;
+    videos.autoBusy = true;
+    try {
+        const byView = {};
+        let root = null;
+        for (const v of views) {
+            const vf = videoFileOf(v);
+            const f = vf && vf.file;
+            let hit = null;
+            if (f && typeof fsApi.pathOfFile === 'function') hit = await fsApi.pathOfFile(f);
+            if (!hit && vf && isAbsolutePath(vf.videoPath)) {
+                try {
+                    const st = await fsApi.stat(vf.videoPath);
+                    if (st && st.isFile && (!f || Number(st.size) === f.size)) hit = { path: vf.videoPath, root: null };
+                } catch (e) { /* not readable by the app */ }
+            }
+            if (hit) {
+                byView[v] = { path: hit.path, root: hit.root };
+                if (!root && hit.root) root = hit.root;
+            } else {
+                byView[v] = { error: 'not found among the files you opened' };
+            }
+        }
+        if (state.session !== s || videos.manual) return;
+        const first = views.map(function (v) { return byView[v]; }).find(function (m) { return m && m.path; });
+        videos.root = root || (first ? dirnameOf(first.path) : null);
+        Object.keys(byView).forEach(function (v) {
+            if (byView[v].path) byView[v].rel = relLabel(byView[v].path, videos.root);
+        });
+        videos.byView = byView;
+        videos.session = s;
+        videos.autoKey = key;
+    } finally {
+        videos.autoBusy = false;
+        refresh();
+    }
+}
+
 /** Forget a mapping made for another session. */
 function syncVideosToSession() {
     if (videos.session && videos.session !== state.session) {
         videos.root = null; videos.session = null; videos.byView = {}; videos.error = null;
+        videos.manual = false; videos.autoKey = null; videos.unselected = new Set();
     }
 }
 
-function mappedViewCount() {
-    return sessionViews().filter(function (v) { return videos.byView[v] && videos.byView[v].path; }).length;
+/** Views a run would actually start: checked, not blocked, with a video on disk. */
+function runnableViews() {
+    return sessionViews().filter(function (v) {
+        return !videos.unselected.has(v) && !viewInferenceBlocker(state.session, v) &&
+            videos.byView[v] && videos.byView[v].path;
+    });
 }
+
+function mappedViewCount() { return runnableViews().length; }
 
 // ---------------------------------------------------------------------------
 // Environment
@@ -445,7 +524,13 @@ async function startInference() {
     refresh();
     try {
         const outputDir = joinPath(videos.root, 'predictions');
-        const plan = planInferenceJobs(cfg, perViewFrames(sessionViews()), {
+        sessionViews().forEach(function (v) {
+            if (runnableViews().indexOf(v) !== -1) return;
+            const why = viewInferenceBlocker(state.session, v) || (videos.unselected.has(v) ? 'not checked'
+                : (videos.byView[v] && videos.byView[v].error) || 'no video file on disk');
+            appendLog('\u2014 ' + v + ' skipped: ' + why);
+        });
+        const plan = planInferenceJobs(cfg, perViewFrames(runnableViews()), {
             outputDir: outputDir,
             subcommand: pickInferenceSubcommand(env.sleapNn && env.sleapNn.version),
         });
@@ -453,7 +538,9 @@ async function startInference() {
         if (plan.jobs.length === 0) throw new Error('No view has a video on disk and frames to run');
         try { await fsApi.makeDir(outputDir); } catch (e) {
             const st = await fsApi.stat(outputDir).catch(function () { return null; });
-            if (!st || !st.isDir) throw e;
+            if (!st || !st.isDir) {
+                throw new Error('cannot write ' + outputDir + ' (' + e.message + '). Use Choose folder\u2026 to pick the folder');
+            }
         }
         run.jobCount = plan.jobs.length;
         const res = await runJobQueue(plan.jobs, runOneJob, {
@@ -705,20 +792,21 @@ function buildPanel(root) {
         startIn.disabled = endIn.disabled = isRunning();
     });
 
-    // Videos on disk (LUCID-only row)
+    // Views (LUCID-only rows): which views run, and each one's video on disk.
     const vd = el('div', 'inf-block');
     const vdHead = el('div', 'inf-row');
-    vdHead.appendChild(fieldLabel('Videos on disk',
-        'sleap-nn reads each view’s video from disk. Pick the recording folder; each view’s video is found by path and size.'));
+    vdHead.appendChild(fieldLabel('Views',
+        'Each checked view runs with the models above. Its video is found among the files you opened; if one is missing, Choose folder\u2026 to pick the recording folder.'));
     const choose = el('button', 'btn btn-sm inf-btn-outline');
     choose.type = 'button';
     choose.id = 'infChooseVideos';
     choose.appendChild(icon('folder-open'));
-    choose.appendChild(document.createTextNode(' Choose folder…'));
+    choose.appendChild(document.createTextNode(' Choose folder\u2026'));
     choose.addEventListener('click', chooseVideoFolder);
     vdHead.appendChild(choose);
     vd.appendChild(vdHead);
     const vdRoot = el('p', 'inf-muted inf-path');
+    vdRoot.id = 'infVideoRoot';
     vd.appendChild(vdRoot);
     const vdList = el('div', 'inf-view-list');
     vdList.id = 'infViewVideos';
@@ -726,20 +814,33 @@ function buildPanel(root) {
     data.appendChild(vd);
     onRefresh(function () {
         syncVideosToSession();
+        autoResolveVideos();
         choose.disabled = isRunning() || videos.scanning || !state.session;
-        vdRoot.textContent = videos.scanning ? 'Scanning…' : (videos.error || (videos.root ? videos.root :
-            (state.session ? 'No folder chosen.' : 'Open a session first.')));
+        vdRoot.textContent = videos.scanning ? 'Scanning\u2026' : (videos.error || (videos.root ? 'Predictions go to ' +
+            joinPath(videos.root, 'predictions') : (state.session ? (videos.autoBusy ? 'Finding videos\u2026' : '') : 'Open a session first.')));
+        vdRoot.hidden = !vdRoot.textContent;
         vdRoot.classList.toggle('inf-error-text', !!videos.error);
         vdList.textContent = '';
-        if (!videos.root) return;
         sessionViews().forEach(function (v) {
             const m = videos.byView[v];
-            const row = el('div', 'inf-view');
+            const blocked = viewInferenceBlocker(state.session, v);
+            const row = el('label', 'inf-view' + (blocked ? ' inf-view-blocked' : ''));
             row.setAttribute('data-view', v);
-            row.appendChild(icon(m && m.path ? 'circle-check' : 'circle-alert', m && m.path ? 'inf-ok' : 'inf-bad'));
+            const box = el('input');
+            box.type = 'checkbox';
+            box.checked = !blocked && !videos.unselected.has(v);
+            box.disabled = isRunning() || !!blocked;
+            box.addEventListener('change', function () {
+                if (box.checked) videos.unselected.delete(v); else videos.unselected.add(v);
+                refresh();
+            });
+            row.appendChild(box);
+            const ok = !blocked && m && m.path;
+            row.appendChild(icon(ok ? 'circle-check' : 'circle-alert', ok ? 'inf-ok' : (blocked ? 'inf-warnc' : 'inf-bad')));
             row.appendChild(el('span', 'inf-view-name', v));
-            const what = el('span', 'inf-view-file', m && m.path ? m.rel : (m ? m.error : 'not in the folder'));
-            if (m && m.path) what.title = m.path;
+            const what = el('span', 'inf-view-file inf-view-why',
+                blocked || (m && m.path ? m.rel : (m ? m.error : (videos.autoBusy ? 'looking\u2026' : 'no video found'))));
+            if (!blocked && m && m.path) what.title = m.path;
             row.appendChild(what);
             vdList.appendChild(row);
         });
@@ -953,7 +1054,10 @@ function buildPanel(root) {
         runBtn.disabled = !canRun();
         const why = isRunning() || isDone() ? '' : !state.session ? 'Open a session first.'
             : !sleapNnAvailable() ? '' : cfg.modelPaths.length === 0 ? 'Add a model.'
-                : mappedViewCount() === 0 ? 'Choose the folder with the videos (Data).' : '';
+                : mappedViewCount() === 0 ? (sessionViews().some(function (v) { return viewInferenceBlocker(state.session, v); })
+                    && sessionViews().every(function (v) { return viewInferenceBlocker(state.session, v); })
+                    ? 'Inference on lazy-loaded views is not supported yet.'
+                    : 'No checked view has its video on disk: Choose folder\u2026 (Data).') : '';
         runWhy.textContent = why;
         runWhy.hidden = !why;
     });

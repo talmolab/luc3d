@@ -13,7 +13,7 @@
  *
  * Import-free except `./inference-args.js` (Node tests: tests/test-inference-jobs.mjs).
  */
-import { buildInferenceArgs, modelsForView } from './inference-args.js?v=9c2b1f2c0e48';
+import { buildInferenceArgs, modelsForView } from './inference-args.js?v=4e11dcec98dc';
 
 /** Filesystem-safe piece of a view name for an output file name. */
 export function safeFilePart(name) {
@@ -105,4 +105,23 @@ export async function runJobQueue(jobs, runJob, opts) {
     for (var w = 0; w < Math.min(concurrency, jobs.length); w++) workers.push(worker());
     await Promise.all(workers);
     return { done: done, failed: failed, notRun: jobs.filter(function (j) { return !started.has(j); }) };
+}
+
+/**
+ * Why `view` cannot get an inference job right now, or null.
+ *
+ * TEMPORARY: a view whose poses are LAZY-loaded (a camera backed by the
+ * project's columnar store, `session.lazyLoader.labelsByCam`) is blocked.
+ * Merging into a lazy view works (`ui/inference-merge.js`, e2e
+ * desktop-inference §8) but keeps every predicted frame resident until saved,
+ * which a long recording cannot afford. Later a chosen SUBSET of lazy views
+ * (and their frames) will be allowed; the panel's per-view selection is
+ * already in place, so lifting this means changing only this function.
+ */
+export function viewInferenceBlocker(session, view) {
+    var loader = session && session.lazyLoader;
+    if (loader && loader.labelsByCam && typeof loader.labelsByCam.has === 'function' && loader.labelsByCam.has(view)) {
+        return 'lazy-loaded — not supported yet';
+    }
+    return null;
 }

@@ -9,8 +9,8 @@
  * Depends on: ui/app-state.js, pose/run-state.js
  */
 
-import { state } from './app-state.js?v=9c2b1f2c0e48';
-import { hasTrackResult, hasTriangulateResult } from '../pose/run-state.js?v=9c2b1f2c0e48';
+import { state } from './app-state.js?v=4e11dcec98dc';
+import { hasTrackResult, hasTriangulateResult } from '../pose/run-state.js?v=4e11dcec98dc';
 
 /** Re-derive the two buttons' blue state from the active session. */
 export function syncRunButtons() {

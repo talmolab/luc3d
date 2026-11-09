@@ -10,8 +10,8 @@
 //
 // Depends on: ui/viewport3d.js (Viewport3D), ui/overlays.js (getTrackColor).
 
-import { getTrackColor } from './overlays.js?v=9c2b1f2c0e48';
-import { Viewport3D } from './viewport3d.js?v=9c2b1f2c0e48';
+import { getTrackColor } from './overlays.js?v=4e11dcec98dc';
+import { Viewport3D } from './viewport3d.js?v=4e11dcec98dc';
 
 const RAY = 0xc8c8c8, RAY_DROPPED = 0xf39c12, POINT = 0xffffff, FIRST_SOLVE = 0xb5b5b5;
 
