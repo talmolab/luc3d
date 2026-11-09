@@ -10,41 +10,41 @@
 
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline,
-         hasRealVideo, isViewDocked, VIEW_NAMES } from '../ui/app-state.js?v=4e11dcec98dc';
-import { Instance, UnlinkedInstance, points3dNodeCount, getPoint3d, groupDisplayName } from './pose-data.js?v=4e11dcec98dc';
+         hasRealVideo, isViewDocked, VIEW_NAMES } from '../ui/app-state.js?v=c48237d0952d';
+import { Instance, UnlinkedInstance, points3dNodeCount, getPoint3d, groupDisplayName } from './pose-data.js?v=c48237d0952d';
 import {
     getInstanceGroupsForFrame, updateTimelineForFrame,
     reTriangulateGroup, sessionHasCalibration, getOrComputeReprojectedInstance,
-} from './triangulation.js?v=4e11dcec98dc';
-import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=4e11dcec98dc';
-import { rebuildVideoController } from '../loading/session-loader.js?v=4e11dcec98dc';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=4e11dcec98dc';
-import { resetPlaneState } from '../import-export/plane-metadata.js?v=4e11dcec98dc';
-import { createDemoSession } from '../demo-data.js?v=4e11dcec98dc';
-import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData, toggleInfoPanel } from '../ui/ui-wiring.js?v=4e11dcec98dc';
-import { setupPanelRail } from '../ui/panel-rail.js?v=4e11dcec98dc';
-import { installInfoTips } from '../ui/info-tip.js?v=4e11dcec98dc';
-import { installNodeTooltip } from '../ui/node-tooltip.js?v=4e11dcec98dc';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=4e11dcec98dc';
-import { installTimelineShortcuts } from '../ui/timeline-controller.js?v=4e11dcec98dc';
-import { setupSkeletonEditing, setupVideosTab, updateInfoPanel } from '../ui/info-panel.js?v=4e11dcec98dc';
-import { setupRecordingInfo } from '../ui/recording-info.js?v=4e11dcec98dc';
+} from './triangulation.js?v=c48237d0952d';
+import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=c48237d0952d';
+import { rebuildVideoController } from '../loading/session-loader.js?v=c48237d0952d';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=c48237d0952d';
+import { resetPlaneState } from '../import-export/plane-metadata.js?v=c48237d0952d';
+import { createDemoSession } from '../demo-data.js?v=c48237d0952d';
+import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData, toggleInfoPanel } from '../ui/ui-wiring.js?v=c48237d0952d';
+import { setupPanelRail } from '../ui/panel-rail.js?v=c48237d0952d';
+import { installInfoTips } from '../ui/info-tip.js?v=c48237d0952d';
+import { installNodeTooltip } from '../ui/node-tooltip.js?v=c48237d0952d';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=c48237d0952d';
+import { installTimelineShortcuts } from '../ui/timeline-controller.js?v=c48237d0952d';
+import { setupSkeletonEditing, setupVideosTab, updateInfoPanel } from '../ui/info-panel.js?v=c48237d0952d';
+import { setupRecordingInfo } from '../ui/recording-info.js?v=c48237d0952d';
 import {
     setupPlaneDefinition, planeInteractionCallbacks, syncPlanes3D, refreshPlanePanel,
-} from '../ui/plane-definition.js?v=4e11dcec98dc';
-import { setupSplitHandles } from '../ui/layout-controls.js?v=4e11dcec98dc';
-import { drawAllOverlays, setReprojErrorVisible, noteOverlayViewTransform } from '../ui/rendering.js?v=4e11dcec98dc';
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=4e11dcec98dc';
+} from '../ui/plane-definition.js?v=c48237d0952d';
+import { setupSplitHandles } from '../ui/layout-controls.js?v=c48237d0952d';
+import { drawAllOverlays, setReprojErrorVisible, noteOverlayViewTransform } from '../ui/rendering.js?v=c48237d0952d';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=c48237d0952d';
 import {
     manualAssignState, getTotalUnlinkedCount, cleanupManualAssignment, startManualAssignment,
     editGroupState, cancelEditGroup, finishEditGroup, updateEditGroupToast,
     purgeTriangulationDataForGroup,
-} from '../ui/identity-assignment.js?v=4e11dcec98dc';
-import { getTrackColor, getGroupColor } from '../ui/overlays.js?v=4e11dcec98dc';
-import { Viewport3D } from '../ui/viewport3d.js?v=4e11dcec98dc';
-import { isViewport3DVisible, markViewport3DSkipped } from '../ui/panel-visibility.js?v=4e11dcec98dc';
-import { Timeline } from '../ui/timeline.js?v=4e11dcec98dc';
-import { InteractionManager } from '../ui/interaction.js?v=4e11dcec98dc';
+} from '../ui/identity-assignment.js?v=c48237d0952d';
+import { getTrackColor, getGroupColor } from '../ui/overlays.js?v=c48237d0952d';
+import { Viewport3D } from '../ui/viewport3d.js?v=c48237d0952d';
+import { isViewport3DVisible, markViewport3DSkipped } from '../ui/panel-visibility.js?v=c48237d0952d';
+import { Timeline } from '../ui/timeline.js?v=c48237d0952d';
+import { InteractionManager } from '../ui/interaction.js?v=c48237d0952d';
 
 // ============================================
 // Logging
@@ -87,7 +87,7 @@ async function init() {
         // Desktop app only: the sleap-nn Inference panel. Fetched only when
         // the shim says sleap-nn is there, so the web app never loads it.
         if (window.lucidDesktop && window.lucidDesktop.sleapNn) {
-            import('../ui/inference-panel.js?v=4e11dcec98dc')
+            import('../ui/inference-panel.js?v=c48237d0952d')
                 .then(function (m) { return m.setupInferencePanel(); })
                 .catch(function (e) { console.warn('[inference] panel not added:', e); });
         }

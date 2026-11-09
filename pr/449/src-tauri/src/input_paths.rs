@@ -24,6 +24,7 @@ use serde::Serialize;
 use std::sync::Mutex;
 
 /// How many recent picks are kept (each is one dialog's answer).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // only the macOS capture records
 const MAX_PICKS: usize = 64;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -47,10 +48,12 @@ pub struct InputPicks {
 #[derive(Default)]
 pub struct PickLog {
     picks: Mutex<Vec<InputPick>>,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))] // only the macOS capture records
     seq: Mutex<u64>,
 }
 
 impl PickLog {
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))] // only the macOS capture records
     pub fn record(&self, paths: Vec<String>, directories: bool) {
         if paths.is_empty() {
             return;
@@ -61,7 +64,11 @@ impl PickLog {
             *s
         };
         let mut p = self.picks.lock().unwrap_or_else(|e| e.into_inner());
-        p.push(InputPick { paths, directories, seq });
+        p.push(InputPick {
+            paths,
+            directories,
+            seq,
+        });
         let excess = p.len().saturating_sub(MAX_PICKS);
         p.drain(..excess);
     }
@@ -270,7 +277,11 @@ mod tests {
     fn json_is_camel_case() {
         let v = serde_json::to_value(InputPicks {
             supported: true,
-            picks: vec![InputPick { paths: vec!["/a".into()], directories: true, seq: 1 }],
+            picks: vec![InputPick {
+                paths: vec!["/a".into()],
+                directories: true,
+                seq: 1,
+            }],
         })
         .unwrap();
         assert_eq!(v["picks"][0]["directories"], true);

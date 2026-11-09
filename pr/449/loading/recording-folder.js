@@ -17,7 +17,7 @@
  * `<input webkitdirectory>`, and Save opens where the browser chooses.
  */
 
-import { canReadDirectoryHandles } from '../ui/browser-hints.js?v=4e11dcec98dc';
+import { canReadDirectoryHandles } from '../ui/browser-hints.js?v=c48237d0952d';
 
 /** The folder loaders' own picker memory: the next recording is usually beside the last one. */
 export var RECORDING_FOLDER_PICKER_ID = 'lucid-recording-folder';
