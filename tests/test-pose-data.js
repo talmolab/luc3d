@@ -158,6 +158,52 @@
             inst.restorePoints();
             assertEqual(inst.getX(0), 10, 'backup was an independent copy');
         });
+
+        // toggleNulled: un-hiding a node loaded hidden (nulled AND occluded,
+        // from the file's visible=0) must clear BOTH, or the save keeps
+        // writing it visible=0 (writers use !nulled && !occluded).
+        it('toggleNulled hides, then un-hides clearing the loaded occlusion bit', function () {
+            const inst = new Instance([[10, 20], [30, 40]], 0, 'user', 1);
+            inst.setOccludedFrom([false, true]);
+            inst.nulledNodes = new Set([1]);
+            assertFalse(inst.toggleNulled(1), 'now un-hidden');
+            assertFalse(inst.nulledNodes.has(1));
+            assertFalse(inst.isOccluded(1), 'occlusion cleared with it');
+            assertTrue(inst.toggleNulled(1), 'hidden again');
+            assertTrue(inst.nulledNodes.has(1));
+            assertDeepEqual(inst.getPoint(1), [30, 40], 'position kept throughout');
+        });
+
+        it('toggleNulled creates the set and leaves other nodes alone', function () {
+            const inst = new Instance([[10, 20], [30, 40]], 0, 'user', 1);
+            inst.setOccludedFrom([true, false]);
+            assertTrue(inst.toggleNulled(1));
+            assertTrue(inst.isOccluded(0), 'node 0 untouched by node 1');
+            assertFalse(inst.toggleNulled(1));
+            assertTrue(inst.isOccluded(0), 'node 0 untouched by un-hiding node 1');
+        });
+
+        it('toggleNulled keeps a prediction\'s occlusion (it is the model\'s)', function () {
+            const inst = new Instance([[10, 20], [30, 40]], 0, 'predicted', 0.9);
+            inst.setOccludedFrom([false, true]);
+            inst.nulledNodes = new Set([1]);
+            inst.toggleNulled(1);
+            assertTrue(inst.isOccluded(1));
+        });
+
+        it('toggleNulled on >32 nodes never writes through a shared occlusion set', function () {
+            const pts = [];
+            for (let k = 0; k < 40; k++) pts.push([k, k]);
+            const src = new Instance(pts, 0, 'user', 1);
+            const occ = new Array(40).fill(false); occ[35] = true;
+            src.setOccludedFrom(occ);
+            const member = new Instance(pts, 0, 'user', 1);
+            member.adoptPointsFrom(src);           // shares src's Uint32Array
+            member.nulledNodes = new Set([35]);
+            member.toggleNulled(35);
+            assertFalse(member.isOccluded(35), 'member un-hidden');
+            assertTrue(src.isOccluded(35), 'the instance it shared with is untouched');
+        });
     });
 
     // ---- FrameGroup ----

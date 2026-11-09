@@ -987,6 +987,34 @@ export class Instance {
     }
 
     /**
+     * Toggle node `k` in `nulledNodes` (the right-click hide/unhide). Returns
+     * whether it is now nulled.
+     *
+     * Un-hiding also clears the node's occlusion bit on a non-predicted
+     * instance. A node loaded hidden carries BOTH flags (the file's
+     * `visible=0` sets the bit, `nulledNodes` is derived from it), and every
+     * writer saves `visible = !nulled && !occluded`, so clearing only
+     * `nulledNodes` kept writing it hidden. A prediction's occlusion is the
+     * model's and stays (predictions cannot be nulled anyway). Hiding leaves
+     * the bit alone: a nulled node is written invisible regardless.
+     * @param {number} k @returns {boolean}
+     */
+    toggleNulled(k) {
+        if (this.nulledNodes && this.nulledNodes.has(k)) {
+            this.nulledNodes.delete(k);
+            if (this.type !== 'predicted' && occGet(this._occ, k)) {
+                // A fresh set, never a write through one `adoptPointsFrom` shares.
+                if (typeof this._occ !== 'number') this._occ = new Uint32Array(this._occ);
+                this._occ = occSet(this._occ, k, false);
+            }
+            return false;
+        }
+        if (!this.nulledNodes) this.nulledNodes = new Set();
+        this.nulledNodes.add(k);
+        return true;
+    }
+
+    /**
      * Toggle the occluded state of a node.
      * Only works if the point has valid coordinates.
      * @param {number} nodeIdx

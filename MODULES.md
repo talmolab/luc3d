@@ -1419,7 +1419,12 @@ Accessors: `numNodes`, `hasPoint`, `getX`/`getY`, `getPoint` (allocates),
 `setPointsFrom`/`setOccludedFrom`, `adoptPointsFrom` (deliberate buffer sharing,
 for lazy-2D hydration), `insertNodeAt`/`removeNodeAt` (skeleton edits — these
 resize any backup alongside, so `restorePoints()` stays node-aligned),
-`backupPoints`/`restorePoints`/`hasBackup`.
+`backupPoints`/`restorePoints`/`hasBackup`, `toggleNulled(k)` (the right-click
+hide/unhide: un-hiding also clears node `k`'s occlusion bit on a non-predicted
+instance, since a node loaded hidden carries both flags and every writer saves
+`visible = !nulled && !occluded`; it assigns a fresh bit set rather than writing
+through one `adoptPointsFrom` shares. Tests: `tests/test-pose-data.js`,
+`tests/e2e/node-unhide-visible.mjs`).
 
 **The constructor** still takes boxed `[[x,y]|null, ...]` (or a
 `Float64Array`, adopted by reference) and normalizes. A boxed `[NaN, NaN]` row
@@ -5315,7 +5320,9 @@ edit-group mode, keyboard shortcuts.
 - Right-click null toggles report through callbacks, never by mutating
   silently: grouped and reprojected nodes → `onNodeSetNull`, unlinked
   instances → `onUnlinkedNodeSetNull`, plane nodes → `onPlaneChanged`. Each
-  handler marks the project dirty.
+  handler marks the project dirty. The pose-instance toggles all go through
+  `Instance.toggleNulled`, so un-hiding a node loaded hidden also clears its
+  occlusion and it is saved visible again.
 - `isInteractiveClickTarget(target)` — used by other UI to skip
   click-through on form controls.
 
