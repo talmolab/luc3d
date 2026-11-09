@@ -1,5 +1,0 @@
-# Fetched by scripts/offline_deps.py, never committed.
-# The directory and its docs stay tracked so lib/ documents itself.
-*
-!.gitignore
-!PROVENANCE.txt
