@@ -258,6 +258,7 @@ In Google Drive for desktop (macOS File Provider), a Blob read of a not-yet-down
 View ▸ Native Resolution / `Shift+0` (`setNativeResolution`, `loading/video.js`) is a zoom scale (1 video px per device px). Wheel/`+`/`-` steps snap to it (`snapZoomToNative`). Two rules keep it exact:
 - **Per-axis scale** (`zoom.scale` / `zoom.scaleY`, read via `_scaleY`): anything mapping screen ↔ video must use both.
 - **Pan on the device-pixel grid** (`_alignNativeOffsets` in `applyZoom`).
+- A **rotated** view at 1:1 draws its video canvas `image-rendering: pixelated` (`applyZoom`): Chrome filters a rotated quad, and a clipped one can land off the texel centres.
 Enter 1:1 only via `_enterNative` (incl. the 100% preset). Anything changing the canvas box or devicePixelRatio must end in `reapplyZoom`/`reapplyAllZoom`. `state.nativeResolution` is derived (every shown view at 1:1); while on, a view coming on screen joins at 1:1 (`refreshPaneInteractions`). Exact only at integer devicePixelRatio; don't promise exactness otherwise. Only a view held at 1:1 may read "100%". Tests: `tests/e2e/native-resolution-zoom.mjs` (+`HEADED=1`), `tests/test-video-controller.js`.
 
 ## Tests
