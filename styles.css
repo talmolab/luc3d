@@ -8419,6 +8419,12 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-id { font-weight: 600; }
 .id-switch-score { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
 .id-switch-line2 { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+/* the image check's pre-judge of a review-list row (pose/image-prejudge.js) */
+.id-switch-prejudge.pj-swapped { color: var(--warning-color); }
+.id-switch-prejudge.pj-kept { color: var(--success-color); }
+.id-switch-prejudge.pj-alike { font-style: italic; }
+.id-switch-train-prompt { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+.id-switch-train-prompt .panel-btn { margin-left: 4px; }
 .id-switch-end {
   margin-left: 2px; padding: 0 5px; font-size: 10px; line-height: 15px; cursor: pointer;
   background: transparent; color: var(--text-secondary); border: 1px solid var(--border-color); border-radius: 3px;
@@ -8640,5 +8646,12 @@ div.track-summary-steps { padding-left: 0; }
 .image-model-details { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 12px; margin: 0 0 6px; }
 .image-model-details dt { color: var(--text-secondary, #aaa); }
 .image-model-details dd { margin: 0; overflow-wrap: anywhere; }
+/* "Train a model for this rig" (trainingHelpHtml) */
+.image-model-train { font-size: 12px; margin: 4px 0 8px; }
+.image-model-train summary { cursor: pointer; font-size: 13px; }
+.image-model-steps { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 6px; }
+.image-model-train a { color: var(--accent); }
+.image-model-cmd { display: block; margin-top: 4px; padding: 4px 6px; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere;
+  background: var(--surface-hover, rgba(127, 127, 127, 0.12)); border-radius: 3px; user-select: text; }
 .image-model-modal.is-busy { cursor: progress; }
 .image-model-modal.is-busy button { pointer-events: none; opacity: 0.6; }

@@ -283,6 +283,28 @@ group('Image check — catches a swap between animals of IDENTICAL size (the siz
     eq(clean.flags.length, 0, 'image check: clean labels → no flags');
 }
 
+group('Image check — pre-judges review rows (pose/image-prejudge.js) from every image sample');
+{
+    const SWAP = 16, fps = 60;
+    const { session, events } = buildSession(SWAP, fps, [1, 1, 1]);
+    const id = k => session.identities[k].id;
+    const rowAt = e => ({ frame: Math.round((events[e].t0 + 60) / 15 * fps), startFrame: Math.round((events[e].t0 + 40) / 15 * fps),
+                          identityA: id(events[e].pair[0]), identityB: id(events[e].pair[1]) });
+    const rows = [rowAt(SWAP), rowAt(SWAP - 3)];          // the swap, and the same pair's earlier encounter
+    const img = await SC.checkImageSwitches(session, { fps, getEmbeddings: syntheticEmbedder(), reviewRows: rows });
+    const plain = await SC.checkImageSwitches(session, { fps, getEmbeddings: syntheticEmbedder() });
+    ok(img.ok && img.prejudge, 'returns a pre-judge (' + (img.reason || 'ok') + ')');
+    eq(img.samples.embedded, img.samples.of, 'with review rows, every image sample is embedded');
+    ok(plain.samples.embedded < plain.samples.of && plain.prejudge === null, `without, only what the scoring reads + background (${plain.samples.embedded} of ${plain.samples.of}), no pre-judge`);
+    const [sw, kept] = img.prejudge.rows;
+    eq(sw.verdict, 'swapped', `the swap's row looks swapped (score ${sw.score && sw.score.toFixed(2)}, cos ${sw.cos && sw.cos.toFixed(2)})`);
+    eq(kept.verdict, 'kept', `the earlier encounter looks kept (score ${kept.score && kept.score.toFixed(2)})`);
+    ok(img.prejudge.pairs.length === 1 && img.prejudge.pairs[0].cos < 0.7, 'one pair separated, below the gate');
+    const alike = await SC.checkImageSwitches(session, { fps, getEmbeddings: syntheticEmbedder(), reviewRows: rows, prejudge: { gateCos: -1 } });
+    eq(alike.prejudge.rows[0].verdict, 'alike', 'a gate no pair passes: can\'t tell apart');
+    eq(img.flags.length, plain.flags.length, 'the check\'s own rows are unchanged by embedding every sample');
+}
+
 group('Coat brightness check — the image machinery on brightness vectors (ui/brightness-sampler.js)');
 {
     const B = await import(pathToFileURL(path.join(ROOT, 'ui', 'brightness-sampler.js')).href);

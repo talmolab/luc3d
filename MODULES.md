@@ -4537,7 +4537,17 @@ identical at every threshold from -0.8 to -1.6. Cost on an M2 Pro: whole check
 +13-19% over DINOv2-small (145420 80 vs 68 s), 43 MB; CPU workers the same speed
 (19.4 vs 19.9 crops/s). DINOv2-base was worse on the held-out set (5 false at -1).
 
-**Imports from project modules.** `pose/pose-data.js` (`readPoint3d`).
+**Review-list pre-judge.** `checkImageSwitches(session, {reviewRows})` (single-camera
+Track All's review rows `[{frame, startFrame, identityA, identityB}]`, passed by
+`ui/id-switch-modal.js`) embeds EVERY image sample (`backgroundHz` set to Infinity:
+the 2-means was calibrated on every sample, not the scored windows; the check's own
+rows were unchanged by it on the synthetic sessions) and returns `prejudge`
+(`pose/image-prejudge.js` `prejudgeReviewRows`, computed before the scoring from the
+same vectors, unit-normalised; `opts.prejudge` overrides its defaults). Without
+`reviewRows`, `prejudge` is null and nothing changes.
+
+**Imports from project modules.** `pose/pose-data.js` (`readPoint3d`), `pose/image-prejudge.js`
+(`prejudgeReviewRows`, `unitVector`).
 
 **Imported by.** `ui/id-switch-modal.js`, `ui/image-embedder.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`),
 `ui/brightness-sampler.js` (`planKeyframeSamples`).
@@ -4551,9 +4561,66 @@ three-animal scenarios; the identity metric on look-alikes; `symmetricEigen`;
 geometry of `ui/image-embedder.js`; `planKeyframeSamples`; the sample plan: every sample
 the scoring reads is planned and scores match embedding all, a dropped window sample
 fails it (negative control), one round with `croppable` and the same result after a
-second without, keyframe placement, the round cap; sample weights in the metric),
-`tests/e2e/image-keyframe-sampling.mjs`, `tests/e2e/size-switch-check.mjs`,
+second without, keyframe placement, the round cap; sample weights in the metric; with
+review rows every sample is embedded and the pre-judge calls a swap and a kept row),
+`tests/test-image-prejudge.mjs`, `tests/e2e/image-keyframe-sampling.mjs`, `tests/e2e/size-switch-check.mjs`,
 `tests/e2e/track-auto-size-switch-check.mjs`, `tests/e2e/id-switch-image-check.mjs`.
+
+---
+
+### pose/image-prejudge.js
+
+**Purpose.** The image check's pre-judge of single-camera Track All's review list:
+for each review row, do the two animals look like themselves after it, or like
+each other — given only where the image model tells this video's two animals
+apart. Pure — no DOM, no app state, no imports. Called by `checkImageSwitches`
+(`pose/id-switch-check.js`) with the check's own crop embeddings.
+
+**Key exports.** `PREJUDGE_DEFAULTS` (`windowSeconds` 3, `gateCos` 0.7, `margin`
+0.1, `minCrops` 2, `minPairs` 10, `iterations` 15); `pairSeparation(pairs, opts)`
+→ `{cos, agree, n}` or null: 2-means over the samples showing both animals, one
+crop per cluster per sample, started from the labels; cos between the cluster
+means (lower = more distinct; label-free); `rowScore({a0, b0, a1, b1}, minCrops)`
+→ keep − swap from each animal's mean embedding over the window before the row's
+close spell `[start − W, start)` and after it `(frame, frame + W]` (negative = looks
+swapped), or null with too few crops; `prejudgeVerdict(sep, score, opts)` →
+`'alike'` (cos ≥ gate: the model can't tell this pair apart; no verdict, whatever
+the score), `'swapped'` / `'kept'` (beyond ±margin), `'unsure'`, `'sparse'` (too
+few crops on a side), `'unknown'` (fewer than 10 samples with both);
+`prejudgeReviewRows({frames, vector(i, identityId)}, rows, fps, opts)` →
+`{rows: [{frame, startFrame, identityA, identityB, score, cos, verdict}], pairs:
+[{identityA, identityB, cos, agree, samples}], gateCos, margin, windowSeconds}`
+(each pair separated once); `prejudgeFor(prejudge, row)` (by frame and pair, either
+order); `unitVector(v)`.
+
+**Calibration (2026-11-09).** The study's code (`runs/2026-11-09_hard-swaps/audit.py`
+on cup) on 1,633 review rows of Mae's 395 intact two-mouse videos (100 proofread
+swaps; fine-tuned dinov2-small, held-out fold; crops every 2nd s), gate chosen in
+`gate_sweep/` there. Score alone: AUC 0.960 against the proofread files, 0.996 with
+the 7 rows the images show to be proofreading errors set aside (94 swaps). With
+that clean truth:
+
+| gate (cos <) | rows with a verdict | swaps called | false alarms | misses |
+|---|---|---|---|---|
+| 0.5 | 981 (60%) | 29 | 0 | 1 |
+| 0.7 | 1,318 (81%) | 66 | 2 | 2 |
+| **0.7 + margin 0.1** | **1,312 (81%)** | **64** | **0** | **1** |
+| 0.8 + margin 0.2 | 1,440 (89%) | 76 | 1 | 1 |
+| none | 1,626 | 94 | 25 | 5 |
+
+Above cos 0.85 the AUC falls to ~0.8. Window lengths 1.5–8 s, gaps and medians did
+not beat ±3 s. The built-in DINOv3 model (frozen) uses the same numbers, not
+measured (user's choice): the tab then prompts to train a model for the rig.
+
+**Imports from project modules.** None.
+
+**Imported by.** `pose/id-switch-check.js`, `ui/id-switch-modal.js` (`prejudgeFor`,
+`PREJUDGE_DEFAULTS`).
+
+**Coverage.** `tests/test-image-prejudge.mjs` (separation of distinct vs look-alike
+animals, under partly swapped labels; score signs; every verdict and the gate; the
+windows; `prejudgeFor`), `tests/test-id-switch-check.mjs` (through
+`checkImageSwitches`), `tests/e2e/single-camera-track-all.mjs` §10.
 
 ---
 
@@ -9848,8 +9915,17 @@ read a frozen "0/1"),
 `swapSingleCameraIdentities`, `singleCameraCheckOptions`),
 `ui/image-embedder.js` (`createImageEmbedder`, `IMAGE_MODEL_MB`, `formatEmbedTiming`,
 `formatEmbedDevice`, `formatEmbedCpu`, `inputTensorToPixels`, `INPUT`, `setActiveImageModel`),
-`ui/image-model-dialog.js` (`resolveSessionImageModel`, `imageModelLineHtml`,
-`wireImageModelLine`: the image check runs the session's model at that model's
+`pose/image-prejudge.js` (`prejudgeFor`, `PREJUDGE_DEFAULTS`: on a single-camera
+session with a review list, `runImage` passes the list's rows as `reviewRows`, and
+each review row — or a check's row agreeing with one — says the image check's
+verdict on its second line ("images: look swapped" / "look right" / "unsure" /
+"can't tell these two apart" / too few crops; score and separation in its tooltip;
+"(before the Fix)" once fixed); the review list's summary counts them, or says the
+images can't tell the animals apart; NOT saved: a reopened project shows none until
+the image check runs again), `ui/image-model-dialog.js` (`resolveSessionImageModel`,
+`imageModelLineHtml`, `wireImageModelLine`, `wireTrainingPrompt`: after a pre-judge
+by the built-in model, a "How to train one…" prompt opens the dialog on its training
+steps; the image check runs the session's model at that model's
 threshold — a package's own, the Wizard's `imageChangeThreshold` for the built-in
 one — and refuses, with the reason, when the session's model is a folder package not
 loaded on the page; the result carries `imageModel: {key, name, threshold}` (null for
@@ -9876,7 +9952,9 @@ and its persistence, Clear, one scroller),
 merge, Esc cancel, the progress dialog's lines, graph and sample crop, the
 no-GPU CPU run, default off), `tests/e2e/image-check-cpu.mjs` (the real
 dialog's measured CPU line and CPU-only graph), `tests/e2e/id-switch-fix.mjs`
-(Fix switch…: the dialog, the swap, the renamed follow-on, saved, Undo exact).
+(Fix switch…: the dialog, the swap, the renamed follow-on, saved, Undo exact),
+`tests/e2e/single-camera-track-all.mjs` §10 (the review list's pre-judge, the
+look-alike gate, the training prompt).
 
 ---
 
@@ -10538,7 +10616,13 @@ folder (`<input webkitdirectory>`) or a URL / Hugging Face repo, shows its detai
 (base, license, input, threshold, precision, source, training and validation
 notes), and on **Use this model** sets `session.imageModel = modelChoiceOf(pkg)`
 (null for the built-in one) and marks the project dirty when it changed. Esc,
-Cancel and a backdrop click change nothing.
+Cancel and a backdrop click change nothing. Its **Train a model for this rig**
+fold (`trainingHelpHtml(open)`) gives the three steps — save tracked recordings,
+run `scripts/train_image_model.py` on a CUDA machine (`TRAIN_SCRIPT_URL`, the
+script on main), load the package folder; `showImageModelDialog(session,
+{showTraining: true})` opens on it, as the ID Switches tab's "How to train one…"
+does (`wireTrainingPrompt(host, session, onChanged)` wires every
+`.image-model-train-open` button in `host`).
 
 **`resolveSessionImageModel(session)`** — what `runImage` (`ui/id-switch-modal.js`)
 calls: null for the built-in model; the loaded package with the saved key; a saved
@@ -10552,7 +10636,8 @@ FOLDER choice not loaded throws an Error whose message is the check's skip reaso
 
 **Imported by.** `ui/id-switch-modal.js`.
 
-**Coverage.** `tests/e2e/image-model-package.mjs` §3–4.
+**Coverage.** `tests/e2e/image-model-package.mjs` §3–4, `tests/e2e/single-camera-track-all.mjs` §10
+(the training fold).
 
 ---
 
