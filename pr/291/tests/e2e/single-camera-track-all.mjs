@@ -241,6 +241,28 @@ try {
     for (let f = cur; f < 2250; f++) for (let a = 0; a < 3; a++) if (fixed[f][a] !== tr[f][a]) wrong++;
     check(wrong === 0, `after Fix every detection from the fix on is back on its animal's track (${wrong} wrong)`);
     check(JSON.stringify(fixed.slice(0, 1655)) === JSON.stringify(tr.slice(0, 1655)), '…and nothing before the swap moved');
+    // A SLEAP export writes identities as the tracks (#423, `_exportTrackSource`). On one camera the Fix moved
+    // tracks and the identities with them, so the exported file holds the session's own tracks: the fix included.
+    const exported = await page.evaluate(async () => {
+        const fio = await import('/import-export/file-io.js');
+        const S = window.__lucid.state.session, labels = fio.buildSlpLabels(S, 'mouse_video', null, null);
+        const key = (x, y) => Math.round(x * 100) + ',' + Math.round(y * 100);
+        const want = new Map();
+        for (const [f, fg] of S.frameGroups) for (const u of fg.getUnlinkedInstances('mouse_video')) {
+            const p = u.instance.getPoint(0);
+            want.set(f + ':' + key(p[0], p[1]), u.instance.trackIdx != null ? S.tracks[u.instance.trackIdx] : null);
+        }
+        let n = 0, differ = 0, first = null;
+        for (const lf of labels.labeledFrames) for (const inst of lf.instances) {
+            const xy = inst.points[0].xy, k = lf.frameIdx + ':' + key(xy[0], xy[1]);
+            const got = inst.track ? inst.track.name : null;
+            n++;
+            if (!want.has(k) || want.get(k) !== got) { differ++; if (!first) first = { k, want: want.get(k), got }; }
+        }
+        return { n, want: want.size, differ, first, tracks: (labels.tracks || []).map(t => t.name).join(',') };
+    });
+    check(exported.n === exported.want && exported.differ === 0 && exported.tracks === 'track_0,track_1,track_2',
+        `a SLEAP export after the Fix writes every detection on its session track, fix included (${exported.n} of ${exported.want}, ${exported.differ} differ; tracks ${exported.tracks})`, exported.first);
     await page.click(rowSel + ' .id-switch-line1');
     await page.click(rowSel + ' .id-switch-undo');
     check(JSON.stringify(await page.evaluate(() => window.__tracks())) === JSON.stringify(planted), 'Undo puts the planted swap back exactly');
