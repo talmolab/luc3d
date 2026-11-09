@@ -1,0 +1,69 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "luc3d",
+  "version": "1.0.5",
+  "identifier": "org.sleap.luc3d",
+  "build": {
+    "frontendDist": "../dist-desktop",
+    "devUrl": "http://localhost:8080",
+    "beforeDevCommand": {
+      "script": "python3 server.py 8080 --offline",
+      "cwd": "..",
+      "wait": false
+    },
+    "beforeBuildCommand": {
+      "script": "python3 scripts/desktop/stage_frontend.py --out dist-desktop",
+      "cwd": ".."
+    }
+  },
+  "app": {
+    "windows": [],
+    "withGlobalTauri": true,
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Productivity",
+    "shortDescription": "Multi-view pose annotation",
+    "longDescription": "luc3d — LUCID (Label Unification and Correspondence in 3D): multi-view pose annotation, cross-view tracking and triangulation.",
+    "homepage": "https://luc3d.sleap.ai",
+    "createUpdaterArtifacts": true,
+    "macOS": {
+      "signingIdentity": null,
+      "minimumSystemVersion": "13.3"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "gstreamer1.0-plugins-good",
+          "gstreamer1.0-plugins-bad",
+          "gstreamer1.0-libav"
+        ]
+      },
+      "appimage": {
+        "bundleMediaFramework": true
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDA3QzA2MEY0RDMwRkYyRkEKUldUNjhnL1Q5R0RBQjRick9DeTVNckY3UWEvMUlYc2lHK0d2blFad0pIb3luUkMyWjQxSldZdmMK",
+      "endpoints": []
+    }
+  }
+}
