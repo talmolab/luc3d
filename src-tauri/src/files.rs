@@ -96,6 +96,9 @@ pub fn resolve_request(raw: &str) -> Result<PathBuf, String> {
 pub struct Grants {
     files: HashSet<PathBuf>,
     dirs: HashSet<PathBuf>,
+    /// READ-ONLY model folders (see `grant_model_dir`). Kept apart from
+    /// `dirs` on purpose: `is_granted` never looks here.
+    model_dirs: HashSet<PathBuf>,
 }
 
 impl Grants {
@@ -109,10 +112,32 @@ impl Grants {
             .insert(resolve_path(path).unwrap_or_else(|_| path.to_path_buf()));
     }
 
+    /// Grant a folder of trained models, READ-ONLY.
+    ///
+    /// Why this is separate from `grant_dir`: a model checkpoint
+    /// (`best.ckpt`) is a Python pickle, and loading a pickle can run any
+    /// code in it. Page scripts can already WRITE inside every folder the
+    /// user picked (the write shim). If the inference command accepted models
+    /// from any granted folder, a hostile script could write a booby-trapped
+    /// checkpoint there and then tell sleap-nn to load it. So a model folder
+    /// is only ever picked through `pick_model_directory`, never counts as a
+    /// normal grant, and writes inside it are refused even when another
+    /// grant also covers the place (`check_writable`).
+    pub fn grant_model_dir(&mut self, path: &Path) {
+        self.model_dirs
+            .insert(resolve_path(path).unwrap_or_else(|_| path.to_path_buf()));
+    }
+
     /// `resolved` must come from `resolve_path`. `Path::starts_with` compares
-    /// whole components, so `/a/bc` is not under a granted `/a/b`.
+    /// whole components, so `/a/bc` is not under a granted `/a/b`. Model
+    /// folders are NOT included (they are read-only).
     pub fn is_granted(&self, resolved: &Path) -> bool {
         self.files.contains(resolved) || self.dirs.iter().any(|d| resolved.starts_with(d))
+    }
+
+    /// Is `resolved` inside (or equal to) a model folder?
+    pub fn is_model_path(&self, resolved: &Path) -> bool {
+        self.model_dirs.iter().any(|d| resolved.starts_with(d))
     }
 
     /// `GrantState::check` without the lock (tests).
@@ -127,9 +152,59 @@ impl Grants {
     }
 
     #[cfg(test)]
+    pub fn check_readable(&self, raw: &str) -> Result<PathBuf, String> {
+        let resolved = resolve_request(raw)?;
+        pick_readable(self, resolved, raw)
+    }
+
+    #[cfg(test)]
+    #[cfg_attr(not(feature = "sleap-nn"), allow(dead_code))]
+    pub fn check_model(&self, raw: &str) -> Result<PathBuf, String> {
+        let resolved = resolve_request(raw)?;
+        pick_model(self, resolved, raw)
+    }
+
+    #[cfg(test)]
+    pub fn check_writable(&self, raw: &str) -> Result<PathBuf, String> {
+        let resolved = resolve_request(raw)?;
+        pick_writable(self, resolved, raw)
+    }
+
+    #[cfg(test)]
     pub fn clear(&mut self) {
         self.files.clear();
         self.dirs.clear();
+        self.model_dirs.clear();
+    }
+}
+
+fn pick_readable(g: &Grants, resolved: PathBuf, raw: &str) -> Result<PathBuf, String> {
+    if g.is_granted(&resolved) || g.is_model_path(&resolved) {
+        Ok(resolved)
+    } else {
+        Err(format!("NOT_GRANTED: {raw}"))
+    }
+}
+
+#[cfg_attr(not(feature = "sleap-nn"), allow(dead_code))]
+fn pick_model(g: &Grants, resolved: PathBuf, raw: &str) -> Result<PathBuf, String> {
+    if g.is_model_path(&resolved) {
+        Ok(resolved)
+    } else {
+        Err(format!("NOT_GRANTED: {raw} is not inside a model folder"))
+    }
+}
+
+fn pick_writable(g: &Grants, resolved: PathBuf, raw: &str) -> Result<PathBuf, String> {
+    if g.is_model_path(&resolved) {
+        return Err(format!(
+            "NOT_GRANTED: {raw} is inside a read-only model folder"
+        ));
+    }
+    if g.is_granted(&resolved) {
+        Ok(resolved)
+    } else {
+        Err(format!("NOT_GRANTED: {raw}"))
     }
 }
 
@@ -139,18 +214,56 @@ impl Grants {
 pub struct GrantState(pub Mutex<Grants>);
 
 impl GrantState {
+    /// Resolve outside the lock (it can be slow on a network share), then
+    /// run `f` on the grants while holding it.
+    fn with(
+        &self,
+        raw: &str,
+        f: fn(&Grants, PathBuf, &str) -> Result<PathBuf, String>,
+    ) -> Result<PathBuf, String> {
+        let resolved = resolve_request(raw)?;
+        let grants = self.0.lock().map_err(|e| e.to_string())?;
+        f(&grants, resolved, raw)
+    }
+
+    #[allow(dead_code)] // the plain grant test; production code uses the specific checks
     /// Validate, resolve and require a grant. Returns the RESOLVED path, which
     /// is what every caller must then operate on. The error prefixes are the
     /// contract the JS shim matches on.
     pub fn check(&self, raw: &str) -> Result<PathBuf, String> {
-        // Resolve outside the lock: it can be slow on a network share.
-        let resolved = resolve_request(raw)?;
-        let grants = self.0.lock().map_err(|e| e.to_string())?;
-        if grants.is_granted(&resolved) {
-            Ok(resolved)
-        } else {
-            Err(format!("NOT_GRANTED: {raw}"))
-        }
+        self.with(raw, |g, resolved, raw| {
+            if g.is_granted(&resolved) {
+                Ok(resolved)
+            } else {
+                Err(format!("NOT_GRANTED: {raw}"))
+            }
+        })
+    }
+
+    /// Reading: a normal grant OR a read-only model folder.
+    pub fn check_readable(&self, raw: &str) -> Result<PathBuf, String> {
+        self.with(raw, pick_readable)
+    }
+
+    /// Only a path inside a model folder (what `--model_paths` may name).
+    #[cfg_attr(not(feature = "sleap-nn"), allow(dead_code))]
+    pub fn check_model(&self, raw: &str) -> Result<PathBuf, String> {
+        self.with(raw, pick_model)
+    }
+
+    /// Creating or changing files: a normal grant, and never inside a model
+    /// folder even when another grant also covers it. Same `NOT_GRANTED: `
+    /// prefix, so the JS shim maps it to NotAllowedError.
+    pub fn check_writable(&self, raw: &str) -> Result<PathBuf, String> {
+        self.with(raw, pick_writable)
+    }
+
+    pub fn grant_model_dir(&self, path: &Path) -> Result<(), String> {
+        self.0
+            .lock()
+            .map_err(|e| e.to_string())?
+            .grant_model_dir(path);
+        Ok(())
     }
 }
 
@@ -668,7 +781,7 @@ pub async fn path_stat(
     path: String,
 ) -> Result<PathStat, String> {
     let grants = grants_of(&grants);
-    blocking(move || path_stat_impl(&grants.check(&path)?)).await
+    blocking(move || path_stat_impl(&grants.check_readable(&path)?)).await
 }
 
 #[tauri::command]
@@ -679,7 +792,8 @@ pub async fn read_range(
     length: u32,
 ) -> Result<tauri::ipc::Response, String> {
     let grants = grants_of(&grants);
-    let bytes = blocking(move || read_range_impl(&grants.check(&path)?, offset, length)).await?;
+    let bytes =
+        blocking(move || read_range_impl(&grants.check_readable(&path)?, offset, length)).await?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
@@ -689,7 +803,7 @@ pub async fn list_dir(
     path: String,
 ) -> Result<Vec<DirEntry>, String> {
     let grants = grants_of(&grants);
-    blocking(move || list_dir_impl(&grants.check(&path)?)).await
+    blocking(move || list_dir_impl(&grants.check_readable(&path)?)).await
 }
 
 #[tauri::command]
@@ -699,7 +813,7 @@ pub async fn make_dir(
 ) -> Result<(), String> {
     let grants = grants_of(&grants);
     blocking(move || {
-        let p = grants.check(&path)?;
+        let p = grants.check_writable(&path)?;
         std::fs::create_dir_all(&p).map_err(|e| format!("make_dir({}): {e}", p.display()))
     })
     .await
@@ -716,7 +830,7 @@ pub async fn write_open(
 ) -> Result<WriteOpened, String> {
     let grants = grants_of(&grants);
     let sessions = Arc::clone(&sessions);
-    blocking(move || sessions.open(&grants.check(&path)?, keep_existing_data)).await
+    blocking(move || sessions.open(&grants.check_writable(&path)?, keep_existing_data)).await
 }
 
 fn header<'a>(request: &'a tauri::ipc::Request<'_>, name: &str) -> Result<&'a str, String> {
@@ -783,7 +897,7 @@ pub async fn write_abort(
     blocking(move || sessions.abort(id)).await
 }
 
-/// Grant-checked like the file commands: even "show in folder" must not
+/// Grant-checked like the reads (a model folder may be revealed too): even "show in folder" must not
 /// let the page probe for or open arbitrary locations.
 #[tauri::command]
 pub async fn reveal_path(
@@ -792,7 +906,7 @@ pub async fn reveal_path(
 ) -> Result<(), String> {
     let grants = grants_of(&grants);
     blocking(move || {
-        grants.check(&path)?;
+        grants.check_readable(&path)?;
         // Reveal the path as the user knows it (on Windows the resolved form
         // is a `\\?\` verbatim path, which Explorer does not accept).
         reveal(&validate_path(&path)?)
@@ -857,6 +971,83 @@ mod tests {
         assert!(err.starts_with("NOT_GRANTED: "), "{err}");
         // A granted file does not grant its directory.
         assert!(g.check(&s(&d.0)).unwrap_err().starts_with("NOT_GRANTED"));
+    }
+
+    // --- read-only model folders --------------------------------------------
+
+    #[test]
+    fn model_dir_is_readable_but_never_writable() {
+        let d = Scratch::new("model-ro");
+        std::fs::create_dir_all(d.path("models").join("run1")).unwrap();
+        let mut g = Grants::default();
+        g.grant_model_dir(&d.path("models"));
+        let ckpt = s(&d.path("models").join("run1").join("best.ckpt"));
+        assert!(g.check_readable(&ckpt).is_ok());
+        assert!(g.check_model(&ckpt).is_ok());
+        assert!(g.check(&ckpt).unwrap_err().starts_with("NOT_GRANTED: "));
+        assert!(g
+            .check_writable(&ckpt)
+            .unwrap_err()
+            .starts_with("NOT_GRANTED: "));
+        // Outside the model folder: not a model path.
+        assert!(g.check_model(&s(&d.path("other"))).is_err());
+        assert!(g.check_readable(&s(&d.path("other"))).is_err());
+    }
+
+    #[test]
+    fn normal_grant_is_not_a_model_path() {
+        let d = Scratch::new("model-normal");
+        let mut g = Grants::default();
+        g.grant_dir(&d.0);
+        assert!(g.check_writable(&s(&d.path("x"))).is_ok());
+        assert!(g.check_readable(&s(&d.path("x"))).is_ok());
+        assert!(g.check_model(&s(&d.path("x"))).is_err());
+    }
+
+    #[test]
+    fn model_dir_inside_a_normal_grant_stays_unwritable() {
+        let d = Scratch::new("model-overlap");
+        std::fs::create_dir_all(d.path("proj").join("models")).unwrap();
+        let mut g = Grants::default();
+        g.grant_dir(&d.path("proj"));
+        g.grant_model_dir(&d.path("proj").join("models"));
+        let inside = s(&d.path("proj").join("models").join("best.ckpt"));
+        assert!(g.check(&inside).is_ok(), "the plain grant still covers it");
+        assert!(g
+            .check_writable(&inside)
+            .unwrap_err()
+            .starts_with("NOT_GRANTED: "));
+        assert!(g.check_readable(&inside).is_ok());
+        assert!(g
+            .check_writable(&s(&d.path("proj").join("out.slp")))
+            .is_ok());
+    }
+
+    #[test]
+    fn grant_state_applies_the_same_rules() {
+        let d = Scratch::new("model-state");
+        std::fs::create_dir_all(d.path("m")).unwrap();
+        let st = GrantState::default();
+        st.grant_model_dir(&d.path("m")).unwrap();
+        let p = s(&d.path("m").join("a"));
+        assert!(st.check_model(&p).is_ok());
+        assert!(st.check_readable(&p).is_ok());
+        assert!(st.check(&p).is_err());
+        assert!(st.check_writable(&p).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_out_of_a_model_dir_is_refused() {
+        let d = Scratch::new("model-symlink");
+        std::fs::create_dir(d.path("m")).unwrap();
+        std::fs::create_dir(d.path("outside")).unwrap();
+        std::os::unix::fs::symlink(d.path("outside"), d.path("m").join("link")).unwrap();
+        let mut g = Grants::default();
+        g.grant_model_dir(&d.path("m"));
+        let p = s(&d.path("m").join("link").join("evil.ckpt"));
+        assert!(g.check_model(&p).is_err());
+        assert!(g.check_readable(&p).is_err());
     }
 
     #[test]

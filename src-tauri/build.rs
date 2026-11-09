@@ -13,6 +13,7 @@ use tauri_build::{Attributes, DefaultPermissionRule, InlinedPlugin};
 const COMMANDS: &[&str] = &[
     "pick_save_path",
     "pick_directory",
+    "pick_model_directory",
     "path_stat",
     "read_range",
     "list_dir",
@@ -40,6 +41,8 @@ const COMMANDS: &[&str] = &[
     "cancel_command",
     "detect_uv",
     "detect_gpu",
+    "detect_sleap_nn",
+    "input_picks",
 ];
 
 fn main() {

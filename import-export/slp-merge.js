@@ -183,3 +183,57 @@ export function rebuildInstanceGroupsForFrames(session, frameIndices) {
         session.instanceGroups.set(frameIdx, groupsList);
     }
 }
+
+/**
+ * Add one camera's predictions (a single-video `.slp` from `sleap-nn predict`,
+ * parsed by `parseSlpForImport`) to `camName` as UNGROUPED predicted
+ * instances. Nothing already in the session is touched or regrouped: the
+ * caller removes old predictions first if it wants them replaced, and Track
+ * All groups the new ones across views. Used by the desktop Inference panel
+ * (`ui/inference-merge.js`).
+ *
+ * A lazy project must have every frame in `slpData.frames` hydrated first
+ * (`addUnlinkedInstance` would otherwise create a frame the store also has);
+ * the new instances are memory-only, so they pin their frames
+ * (`frameEvictionBlocker` 'count') until saved.
+ *
+ * @param {Session} session
+ * @param {{frames: Array<{frameIdx:number, instances:Array}>}} slpData
+ * @param {string} camName
+ * @param {{trackRemap?: Map<number, number>, nodeReorderMap?: number[]|null}} [opts]
+ * @returns {{frames:number[], instances:number}}
+ */
+export function mergePredictionsIntoCamera(session, slpData, camName, opts) {
+    var o = opts || {};
+    var trackRemap = o.trackRemap || new Map();
+    var reorder = o.nodeReorderMap || null;
+    var frames = new Set();
+    var count = 0;
+    for (var fi = 0; fi < slpData.frames.length; fi++) {
+        var fd = slpData.frames[fi];
+        for (var ii = 0; ii < fd.instances.length; ii++) {
+            var d = fd.instances[ii];
+            if (d.type && d.type !== 'predicted') continue;   // a predictions file holds predictions only
+            var t = (d.trackIdx != null && d.trackIdx >= 0)
+                ? (trackRemap.has(d.trackIdx) ? trackRemap.get(d.trackIdx) : null) : null;
+            var points = d.points;
+            var scores = d.pointScores || null;
+            if (reorder) {
+                var rp = new Array(reorder.length);
+                var rs = scores ? new Array(reorder.length).fill(NaN) : null;
+                for (var ri = 0; ri < reorder.length; ri++) {
+                    rp[reorder[ri]] = points[ri] || null;
+                    if (rs && ri < scores.length) rs[reorder[ri]] = scores[ri];
+                }
+                points = rp;
+                scores = rs;
+            }
+            var inst = new Instance(points, t, 'predicted', d.score != null ? d.score : 1.0);
+            if (scores) inst.setPointScores(scores);
+            session.addUnlinkedInstance(fd.frameIdx, camName, inst);
+            frames.add(fd.frameIdx);
+            count++;
+        }
+    }
+    return { frames: Array.from(frames).sort(function (a, b) { return a - b; }), instances: count };
+}

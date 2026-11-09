@@ -12,7 +12,7 @@
  *
  * What it does (contract: luc3d-app-contract.md, "JS shim"):
  *  1. `window.lucidDesktop` — {isDesktop, fsaWriteOnly, platform, systemInfo(),
- *     revealPath(p), openExternal(url), sleapNn{...}} and
+ *     revealPath(p), openExternal(url), sleapNn{...}, fs{...}} and
  *     `<html data-lucid-desktop="1">`.
  *  2. Where the webview has no File System Access API (WKWebView, WebKitGTK):
  *     `showSaveFilePicker` / `showDirectoryPicker` polyfills backed by the
@@ -39,7 +39,11 @@
  *     a silent check 10 s after start and every 6 h with a small notice, the
  *     update channel, and install-then-restart, never over unsaved work.
  *  `lucidDesktop.sleapNn` — thin wrappers for the (feature-gated) sleap-nn
- *     commands; unused by the app in iteration 1.
+ *     commands (run/cancel by job id, detection, the read-only model-folder
+ *     picker); `lucidDesktop.fs` — grant-checked path helpers, incl.
+ *     `pathOfFile(file)` (the disk path of a File from a file input, from what
+ *     the user picked in that dialog: src-tauri/src/input_paths.rs, macOS). The Inference
+ *     panel (`ui/inference-panel.js`) is their only user.
  */
 (function () {
     'use strict';
@@ -161,7 +165,7 @@
              * ({event:'stdout'|'stderr', data:{line}} | {event:'finished', data:{success, code}})
              * to `onEvent`. Resolves to the command's bool result.
              */
-            runPythonCommand: function (program, args, onEvent) {
+            runPythonCommand: function (program, args, onEvent, opts) {
                 var Channel = tauriChannelCtor();
                 if (!Channel) return Promise.reject(new Error(LOG + ' window.__TAURI__.core.Channel is unavailable'));
                 var channel = new Channel();
@@ -169,15 +173,101 @@
                     if (typeof onEvent !== 'function') return;
                     try { onEvent(msg); } catch (e) { console.error(LOG, 'sleapNn onEvent threw', e); }
                 };
-                return call('run_python_command', {
+                var payload = {
                     program: String(program),
                     args: (args || []).map(String),
                     onEvent: channel,
-                });
+                };
+                // Several jobs may run at once, each under its own id (Rust caps them).
+                if (opts && opts.jobId != null) payload.jobId = String(opts.jobId);
+                return call('run_python_command', payload);
             },
-            cancel: function () { return call('cancel_command', {}); },
+            /** Kill job `jobId`, or every running job when it is omitted. */
+            cancel: function (jobId) {
+                return call('cancel_command', jobId != null ? { jobId: String(jobId) } : {});
+            },
             detectUv: function () { return call('detect_uv', {}); },
             detectGpu: function () { return call('detect_gpu', {}); },
+            /** {available, version, path} of the uv-tool `sleap-nn`. */
+            detectSleapNn: function () { return call('detect_sleap_nn', {}); },
+            /**
+             * Native folder dialog for a trained model. The folder becomes
+             * READABLE ONLY (never writable): a checkpoint is a Python pickle.
+             * Resolves to its path, or null when cancelled.
+             */
+            pickModelDirectory: function (title) {
+                return call('pick_model_directory', title != null ? { title: String(title) } : {});
+            },
+        },
+        /**
+         * Paths on disk, for features that hand files to native tools
+         * (Inference). Every call is checked against what the user picked in a
+         * native dialog this run.
+         */
+        fs: {
+            /** Native folder dialog; the folder becomes readable and writable. Path or null. */
+            pickDirectory: function (title) {
+                return call('pick_directory', title != null ? { title: String(title) } : {});
+            },
+            /** [{name, kind:'file'|'directory', size, mtimeMs}] */
+            listDir: function (path) { return call('list_dir', { path: String(path) }); },
+            stat: function (path) { return call('path_stat', { path: String(path) }); },
+            makeDir: function (path) { return call('make_dir', { path: String(path) }); },
+            /**
+             * {supported, picks:[{paths, directories, seq}]}: what the user chose in
+             * the page's own file-input dialogs this run (macOS; the app grants them).
+             */
+            inputPicks: function () { return call('input_picks', {}); },
+            /**
+             * The disk path of a File the page got from a file input, or null:
+             * matched against the recorded picks (newest first) by its
+             * webkitRelativePath under a picked folder, or by name for a picked
+             * file, and confirmed by size. Resolves {path, root} — root is the
+             * picked folder (null for a picked file).
+             */
+            pathOfFile: async function (file) {
+                if (!file || typeof file.name !== 'string') return null;
+                var res;
+                try { res = await call('input_picks', {}); } catch (e) { return null; }
+                if (!res || !res.supported) return null;
+                var rel = String(file.webkitRelativePath || '');
+                var relParts = rel ? rel.split('/').filter(Boolean) : [];
+                var picks = (res.picks || []).slice().sort(function (a, b) { return b.seq - a.seq; });
+                for (var i = 0; i < picks.length; i++) {
+                    var pk = picks[i];
+                    for (var j = 0; j < pk.paths.length; j++) {
+                        var p = String(pk.paths[j]);
+                        var sep = p.indexOf('\\') !== -1 && p.indexOf('/') === -1 ? '\\' : '/';
+                        var base = p.split(/[\\/]/).pop();
+                        var cand = null, root = null;
+                        if (relParts.length > 1 && base === relParts[0]) {
+                            cand = p + sep + relParts.slice(1).join(sep);
+                            root = p;
+                        } else if (!relParts.length && base === file.name) {
+                            cand = p;
+                        }
+                        if (!cand) continue;
+                        try {
+                            var st = await call('path_stat', { path: cand });
+                            if (st && st.isFile && Number(st.size) === file.size) return { path: cand, root: root };
+                        } catch (e) { /* not granted / gone: try the next pick */ }
+                    }
+                }
+                return null;
+            },
+            /** The whole file as a Uint8Array, read in slices. */
+            readFile: async function (path) {
+                var st = await call('path_stat', { path: String(path) });
+                var size = Number(st && st.size) || 0;
+                var out = new Uint8Array(size);
+                for (var off = 0; off < size; off += READ_SLICE) {
+                    var len = Math.min(READ_SLICE, size - off);
+                    var part = toU8(await call('read_range', { path: String(path), offset: off, length: len }));
+                    out.set(part, off);
+                    if (part.length < len) return out.subarray(0, off + part.length);
+                }
+                return out;
+            },
         },
     };
 

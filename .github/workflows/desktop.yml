@@ -479,7 +479,10 @@ jobs:
           # The dev version (X.Y.Z-dev.N) has a non-numeric pre-release, which
           # the MSI bundler rejects; the NSIS installer is also the updater's.
           if [ "$CHANNEL" = dev ] && [ "$OS_TAG" = windows ]; then BUNDLES=nsis; fi
-          args=(build --bundles "$BUNDLES")
+          # sleap-nn ON: the Inference panel. Safe to ship because the native side
+          # allowlists every argument (src-tauri/src/sleap_nn_args.rs) and model
+          # folders are read-only grants; capabilities are unchanged.
+          args=(build --bundles "$BUNDLES" --features sleap-nn)
           if [ -n "$TARGET" ]; then args+=(--target "$TARGET"); fi
           if [ "$SIGNED" = true ]; then
             # Only now, and only in this step's process: the bundler signs the
