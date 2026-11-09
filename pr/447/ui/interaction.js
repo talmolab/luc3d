@@ -14,12 +14,12 @@
  * ES module. Exports `InteractionManager` and `isInteractiveClickTarget`.
  */
 
-import { Instance } from '../pose/pose-data.js?v=7ea27b0a82fd';
-import { getOrComputeReprojectedInstance } from '../pose/triangulation.js?v=7ea27b0a82fd';
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=7ea27b0a82fd';
-import { deleteTargetsFromStore, groupMemberTargets, unlinkedTarget } from './custom-delete-ops.js?v=7ea27b0a82fd';
-import { nodeTooltipText, setNodeTooltipTarget, hideNodeTooltip } from './node-tooltip.js?v=7ea27b0a82fd';
-import { getGroupColor, unlinkedDupIndices, unlinkedBaseColor, wedgeHalfWidth } from './overlays.js?v=7ea27b0a82fd';
+import { Instance } from '../pose/pose-data.js?v=2fe04bdb310a';
+import { getOrComputeReprojectedInstance } from '../pose/triangulation.js?v=2fe04bdb310a';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=2fe04bdb310a';
+import { deleteTargetsFromStore, groupMemberTargets, unlinkedTarget } from './custom-delete-ops.js?v=2fe04bdb310a';
+import { nodeTooltipText, setNodeTooltipTarget, hideNodeTooltip } from './node-tooltip.js?v=2fe04bdb310a';
+import { getGroupColor, unlinkedDupIndices, unlinkedBaseColor, wedgeHalfWidth } from './overlays.js?v=2fe04bdb310a';
 
 // ============================================
 // Alt + wheel instance rotation
@@ -1078,12 +1078,7 @@ export class InteractionManager {
                 this.select(hit.instanceGroup, -1, hit.hitReprojected);
                 if (hit.hitReprojected) {
                     // Toggle null directly on the reprojected instance
-                    if (!hitInstance.nulledNodes) hitInstance.nulledNodes = new Set();
-                    if (hitInstance.nulledNodes.has(nullNodeIdx)) {
-                        hitInstance.nulledNodes.delete(nullNodeIdx);
-                    } else {
-                        hitInstance.nulledNodes.add(nullNodeIdx);
-                    }
+                    hitInstance.toggleNulled(nullNodeIdx);
                     this._requestRedraw();
                     if (this.callbacks.onNodeSetNull) {
                         this.callbacks.onNodeSetNull(viewName, hit.instanceGroup, nullNodeIdx);
@@ -1100,13 +1095,9 @@ export class InteractionManager {
                     ulNullNodeIdx = this._resolveNearestNode(ulInst, vx, vy);
                 }
                 if (ulNullNodeIdx < 0) return;
-                // Toggle null directly on the unlinked instance
-                if (!ulInst.nulledNodes) ulInst.nulledNodes = new Set();
-                if (ulInst.nulledNodes.has(ulNullNodeIdx)) {
-                    ulInst.nulledNodes.delete(ulNullNodeIdx);
-                } else {
-                    ulInst.nulledNodes.add(ulNullNodeIdx);
-                }
+                // Toggle null directly on the unlinked instance (`toggleNulled`
+                // also clears a loaded node's occlusion when un-hiding it).
+                ulInst.toggleNulled(ulNullNodeIdx);
                 this._requestRedraw();
                 if (this.callbacks.onUnlinkedNodeSetNull) {
                     this.callbacks.onUnlinkedNodeSetNull(viewName, ulInst, ulNullNodeIdx);
@@ -2521,13 +2512,9 @@ export class InteractionManager {
         const instance = group.getInstance(viewName);
         if (!instance || instance.numNodes === 0) return;
 
-        if (!instance.nulledNodes) instance.nulledNodes = new Set();
-
-        if (instance.nulledNodes.has(nodeIdx)) {
-            instance.nulledNodes.delete(nodeIdx);
-        } else {
-            instance.nulledNodes.add(nodeIdx);
-        }
+        // `toggleNulled` also clears a loaded node's occlusion when un-hiding
+        // it, so the save writes it visible again.
+        instance.toggleNulled(nodeIdx);
 
         if (this.callbacks.onNodeSetNull) {
             this.callbacks.onNodeSetNull(viewName, group, nodeIdx);

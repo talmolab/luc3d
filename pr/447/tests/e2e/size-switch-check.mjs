@@ -15,7 +15,7 @@
  *  2. The SEEKBAR carries the marker as a tick (no faint repeats: the check makes
  *     none) and the timeline none; hovering a tick names the switch in the
  *     seekbar tooltip, and clicking near it lands on exactly its frame.
- *  3. The tab is the panel's one scroller (the list has no scroller of its own);
+ *  3. The info panel is the one scroller (neither the tab nor the list has its own);
  *     with no repeats there is no "Show repeats" control.
  *  4. Each row shows its encounter's span ("close m:ss.s–m:ss.s"); clicking it
  *     lands 1 s before the animals come close (so play shows the whole
@@ -180,10 +180,12 @@ try {
     }
 
     // ---- 3. one scroller; no repeats to show
-    const scroll = await page.evaluate(() => ({ tab: getComputedStyle(document.getElementById('tabIdSwitches')).overflowY,
+    const scroll = await page.evaluate(() => ({ panel: getComputedStyle(document.getElementById('infoPanel')).overflowY,
+        tab: getComputedStyle(document.getElementById('tabIdSwitches')).overflowY,
         list: getComputedStyle(document.getElementById('idSwitchList')).overflowY, repeats: !!document.getElementById('idSwitchRepeats') }));
     check(!scroll.repeats, 'no "Show repeats" control: the check makes no repeats');
-    check(scroll.tab === 'auto' && scroll.list === 'visible', `the tab is the one scroller (tab ${scroll.tab}, list ${scroll.list})`);
+    check(scroll.panel === 'auto' && scroll.tab === 'visible' && scroll.list === 'visible',
+        `the info panel is the one scroller (panel ${scroll.panel}, tab ${scroll.tab}, list ${scroll.list})`);
     if (process.env.PANEL_SHOT) await page.screenshot({ path: process.env.PANEL_SHOT });
 
     // ---- 4. click a row -> 1 s before the animals come close; "end ⇥" -> the encounter's end
@@ -258,10 +260,9 @@ try {
         check(await page.evaluate(() => document.getElementById('idSwitchNext').disabled), '"Next unreviewed" is disabled once all are ticked');
     }
     // leave the tab and come back; re-run; switch sessions away and back — results and ticks persist
-    await page.click('.panel-tab[data-tab="tabInstances"]');
-    // Every tab is always in the bar now; at the default panel width this one
-    // is scrolled out of sight, which Playwright's own auto-scroll handles.
-    await page.click('.panel-tab[data-tab="tabIdSwitches"]');
+    await page.click('.panel-rail-btn[data-tab="tabInstances"]');
+    await page.click('.panel-rail-btn[data-tab="tabIdSwitches"]');
+    await page.mouse.move(300, 300);   // off the rail: widened, it covers the panel's right edge
     let back = await rowsNow();
     check(back.length === ui.rows.length && back[0].reviewed, `reopening the tab shows the same ${back.length} rows, first still ticked`);
     await page.evaluate(() => document.getElementById('menuCheckSizeSwitches').click());
