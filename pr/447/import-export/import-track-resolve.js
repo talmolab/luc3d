@@ -108,3 +108,40 @@ export function nulledNodesFromOcclusion(points, occluded, type) {
     }
     return s.size > 0 ? s : null;
 }
+
+/**
+ * A loaded GROUP MEMBER's hidden (nulled) nodes, with the file's own
+ * visibility winning over LUC3D's metadata copy (`instanceMeta[cam].nulledNodes`).
+ *
+ * For a USER instance "hidden" is exactly "placed, visible=0" — what LUC3D
+ * writes for a hidden node and what SLEAP's own hide (`toggleVisibility`) writes
+ * — so the file decides for every placed node: hidden if not visible, shown if
+ * visible, whatever the metadata says. The metadata copy goes stale whenever
+ * another tool edits the file (SLEAP / sleap-io pass it through unchanged: a
+ * hide or un-hide there, or a node removed, which shifts its indices). It is
+ * still written, so older LUC3D builds keep reading hides, but it is used only
+ * for a node with NO position (an old build wrote hidden nodes as NaN), and an
+ * index past the node count is ignored.
+ *
+ * Other types keep the metadata as-is: a prediction's visible=0 is the model's
+ * "occluded", never a user hide.
+ *
+ * @param {{numNodes:number, type:string, hasPoint:function(number):boolean,
+ *          isOccluded:function(number):boolean}} inst - the member, with the
+ *          file's points and occlusion already set
+ * @param {Iterable<number>|null|undefined} metaNulled - the metadata copy
+ * @returns {Set<number>|null}
+ */
+export function fileNulledNodes(inst, metaNulled) {
+    var meta = metaNulled ? new Set(metaNulled) : null;
+    if (!inst || inst.type !== 'user') return meta && meta.size > 0 ? meta : null;
+    var s = new Set();
+    for (var k = 0; k < inst.numNodes; k++) {
+        if (inst.hasPoint(k)) {
+            if (inst.isOccluded(k)) s.add(k);
+        } else if (meta && meta.has(k)) {
+            s.add(k);
+        }
+    }
+    return s.size > 0 ? s : null;
+}

@@ -14,8 +14,10 @@
  *     `batchLoadLazyFrames`) sets each of those nodes occluded (`isOccluded`)
  *     and no other node; the unlinked user instance also gets the node as a
  *     nulled node (drawn occluded), as the eager loader does
- *     (`nulledNodesFromOcclusion`); a grouped member keeps the nulled nodes its
- *     group's metadata gives it.
+ *     (`nulledNodesFromOcclusion`); so does the grouped user member, whose
+ *     hidden nodes are settled from its row when its 2D arrives
+ *     (`adoptMemberRow` → `fileNulledNodes`: the file's visibility wins over the
+ *     group metadata's copy).
  *  2. Residency stays lossless: the prediction member whose occlusion equals
  *     its row is released (`releaseFrameMembers2d`) and comes back occluded,
  *     from both `finalizeLazyFrameGroup` and `hydrateFrameMembers2d`; one whose
@@ -173,7 +175,9 @@ try {
         'the file stores 2 user + 2 predicted placed-but-invisible nodes', built.invisible);
 
     const EXPECT = {
-        5: { occ: '010', nulled: '', type: 'user' },
+        // Placed + not visible on a USER member is a hide: the file decides
+        // (`fileNulledNodes`, via `adoptMemberRow`), whatever the metadata says.
+        5: { occ: '010', nulled: '1', type: 'user' },
         6: { occ: '001', nulled: '2', type: 'user' },
         8: { occ: '100', nulled: '', type: 'predicted' },
         9: { occ: '010', nulled: '', type: 'predicted' },
