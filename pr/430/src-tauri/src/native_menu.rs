@@ -5,7 +5,7 @@
 //! JSON spec and sends it with `set_app_menu`, again whenever it changes. This
 //! module turns the spec into the native bar
 //!
-//!   luc3d | <page menus…> | Window | Help
+//!   LUC3D | <page menus…> | Window | Help
 //!
 //! with the page's Edit menu merged with the native text-editing items, and
 //! routes a click on a page item back to the page, which clicks the same
@@ -51,14 +51,14 @@ pub const PAGE_ITEM_PREFIX: &str = "lucid-page:";
 pub const QUIT_MENU_ID: &str = "lucid-quit";
 /// The page function a click calls (defined, non-writable, by the shim).
 pub const PAGE_ACTION_FN: &str = "__lucidNativeMenuAction";
-/// luc3d ▸ Check for Updates… and the Update Channel items (updates.rs); a
+/// LUC3D ▸ Check for Updates… and the Update Channel items (updates.rs); a
 /// click calls the shim's `window.__lucidUpdates.menu(<action>)`.
 pub const UPDATE_ITEM_PREFIX: &str = "lucid-update:";
 const UPDATE_CHECK_ID: &str = "lucid-update:check";
 const UPDATE_CHANNELS_ID: &str = "lucid-update:channels";
 const UPDATE_CHANNEL_PREFIX: &str = "lucid-update:channel:";
 pub const UPDATES_FN: &str = "__lucidUpdates";
-const APP_NAME: &str = "luc3d";
+const APP_NAME: &str = "LUC3D";
 /// Deeper page submenus are cut off (a sane page has two levels).
 const MAX_DEPTH: usize = 6;
 
@@ -101,7 +101,7 @@ impl Default for PageItem {
 }
 
 /// The build label the page shows beside Settings (`#menuBarVersion`): it
-/// moves into About luc3d while the in-page bar is hidden.
+/// moves into About LUC3D while the in-page bar is hidden.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(default)]
 pub struct AboutInfo {
@@ -433,7 +433,7 @@ pub fn build_model(menus: &[PageMenu], about: Option<AboutInfo>) -> Vec<TopMenu>
     out
 }
 
-/// Tick `channel` (and only it) under luc3d ▸ Update Channel.
+/// Tick `channel` (and only it) under LUC3D ▸ Update Channel.
 pub fn with_update_channel(mut model: Vec<TopMenu>, channel: &str) -> Vec<TopMenu> {
     let want = format!("{UPDATE_CHANNEL_PREFIX}{channel}");
     for top in model.iter_mut().filter(|t| t.role == Role::App) {
@@ -803,7 +803,7 @@ fn show<R: Runtime>(
 }
 
 /// The bar before the page has sent its menus (and if it never does):
-/// luc3d, Edit (native items), Window.
+/// LUC3D, Edit (native items), Window.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn install_initial<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     show(
@@ -880,7 +880,7 @@ pub fn on_page_item<R: Runtime>(app: &AppHandle<R>, id: &str) {
     eval_in_focused(app, activation_script(key), key);
 }
 
-/// A click on luc3d ▸ Check for Updates… or an Update Channel item. The page
+/// A click on LUC3D ▸ Check for Updates… or an Update Channel item. The page
 /// runs the flow (it owns the unsaved-work check and the dialogs) and, for a
 /// channel, calls set_update_channel, which re-ticks the menu.
 pub fn on_update_item<R: Runtime>(app: &AppHandle<R>, id: &str) {
@@ -979,7 +979,7 @@ mod tests {
         assert_eq!(
             texts(&m),
             [
-                "luc3d",
+                "LUC3D",
                 "File",
                 "Edit",
                 "Calibrate",
@@ -1153,11 +1153,11 @@ mod tests {
             menu("View", vec![item("b", "B")]),
         ];
         let m = build_model(&menus, None);
-        assert_eq!(texts(&m), ["luc3d", "File", "Edit", "View", "Window"]);
+        assert_eq!(texts(&m), ["LUC3D", "File", "Edit", "View", "Window"]);
         let edit = &m[2];
         assert_eq!(edit.children.len(), 4);
-        // No page menus at all: luc3d, Edit, Window (the startup bar).
-        assert_eq!(texts(&build_model(&[], None)), ["luc3d", "Edit", "Window"]);
+        // No page menus at all: LUC3D, Edit, Window (the startup bar).
+        assert_eq!(texts(&build_model(&[], None)), ["LUC3D", "Edit", "Window"]);
     }
 
     #[test]
@@ -1309,7 +1309,7 @@ mod tests {
             menu("Whatever", vec![item("w", "W")]),
         ];
         let m = build_model(&menus, None);
-        assert_eq!(texts(&m), ["luc3d", "Edit", "Whatever", "Window"]);
+        assert_eq!(texts(&m), ["LUC3D", "Edit", "Whatever", "Window"]);
         let edit = &m[1];
         assert_eq!(
             edit.children[0],

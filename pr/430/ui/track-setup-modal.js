@@ -30,7 +30,7 @@
  * Range collects the count in its own dialog and never reaches this one.
  */
 
-import { buildBandCountFields } from './identity-marks-modal.js?v=69999949ab05';
+import { buildBandCountFields } from './identity-marks-modal.js?v=bcaa9594081d';
 
 /**
  * Show the dialog. Resolves with the answer on Continue / Enter, or `null` on
