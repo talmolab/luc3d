@@ -1528,7 +1528,8 @@ export function showSlpExportByCamModal() {
         + 'as one SLEAP file into a folder you choose (it opens in the project\'s folder). A camera with '
         + 'its own folder there gets its file in that folder, named after the camera\'s source '
         + '<code>.slp</code> plus <code>_proofread</code> (an earlier one is replaced); any other camera is '
-        + 'written as <code>&lt;camera&gt;.slp</code> in the folder itself.</div>' +
+        + 'written as <code>&lt;camera&gt;.slp</code> in the folder itself. Tracks are written as the '
+        + 'identities, if any are assigned, so a track is the same animal in every camera.</div>' +
         emptyNote +
         '<div class="slp-bycam-body">' +
         '<div class="slp-bycam-scroll slp-bycam-sess-scroll">' + sessHtml + '</div>' +
@@ -2157,7 +2158,8 @@ export function showSlpExportPerSessionModal() {
     modal.innerHTML =
         '<h3>Export SLEAP File Per Session</h3>' +
         '<div class="slp-export-note">Writes one 2D SLEAP file per camera in <b>' + sessName + '</b> '
-        + 'into each camera\'s associated directory inside a folder you choose.</div>' +
+        + 'into each camera\'s associated directory inside a folder you choose. Tracks are written '
+        + 'as the identities, if any are assigned, so a track is the same animal in every camera.</div>' +
         '<div class="slp-export-table-container">' +
         '<table class="data-table slp-export-table">' +
         '<thead><tr><th class="slp-ps-dl-cell">Download</th><th>Camera</th><th>Directory</th><th>Output Filename</th></tr></thead>' +

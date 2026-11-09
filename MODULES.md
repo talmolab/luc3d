@@ -1626,7 +1626,9 @@ session graph that holds them.
     non-empty name per used identity, rewriting `frameIdentityMap` under the new
     keys; instances with no identity (entry-less OR the negative sentinel)
     become trackless (`trackIdx = null`) — no "No ID" track is created. Returns
-    `{tracks, instances, lazyErrorRows, ambiguousRawKeys}`. Its rules:
+    `{tracks, instances, lazyErrorRows, ambiguousRawKeys}`. Which identities
+    become which tracks is `identityTrackPlan()` (`{names, idToTrackIdx}`, changes
+    nothing), which the `.slp` exporters also read. Its rules:
     - **Whole-project on a lazy session.** The used-identity set and the
       remapped map are derived from `frameIdentityMap` itself (always complete) —
       a map built from a `frameGroups` walk would destroy identity data for every
@@ -15466,6 +15468,13 @@ project size. Manual corrections survive because the sweep hydrates live 2D — 
 case the verbatim `lazyCameraExportBytes` fast path structurally cannot handle.
 Identities are deliberately NOT passed (matching `buildSlpLabels`: non-empty
 `identities` bumps the format to 1.9, unreadable by sleap-io Python <= 0.6.x).
+They travel as the tracks: every per-camera exporter takes each instance's track
+from `_exportTrackSource`, so with identities assigned the file's tracks are the
+ones `Session.identityTrackPlan` names (the same ones "Propagate IDs → Tracks"
+makes, without changing the session) and an instance with no identity is
+trackless; with none assigned, instances keep their own tracks. The verbatim
+`lazyCameraExportBytes` path and the shared-store copy (`sharedStoreCopyContext`)
+run only when `_storeHoldsIdentityTracks` says the store already agrees. Pinned by `tests/test-export-identity-tracks.js`.
 `exportSlpClientSide` and single-selection `exportSlpMultiSession` route here
 whenever `_exportWouldTruncate(session)`; fully-resident projects keep the eager
 path. **Coverage precondition:** `sweepLazyFrameWindows` hydrates via
@@ -16159,6 +16168,17 @@ was picked loads only that video, views follow campy's camera order, the frame
 rate is session.json's, and the final status gains each session's warnings
 (`campyRecordingWarnings`). No calibration hash check here: the calibration
 came from the `.slp`.
+
+**Picked videos that match no camera.** `handleLoadSlpFile` binds each picked
+video by name only (`slpMatchCam`: parent directory, exact stem, the file name
+the SLP references; then `autoAssignVideosToCameras`). After all of those, a
+session with exactly ONE camera and exactly ONE picked video (after the
+extension, calibration-clip and `preferNonCalibrationVideos` filters) that none
+matched binds it to that camera (logged), since a renamed copy or export of a
+single-camera video is otherwise dropped. Any other unmatched video still gets
+no view, and the final status becomes a warning naming the unused videos and
+the cameras left without one (per session). Test:
+`tests/e2e/slp-load-unmatched-video.mjs`.
 
 The `.slp` parse is dispatched by the private `parseSlpForImport(file,
 onProgress)`: real `.slp` files go through `parseSlpViaSleapIO` (sleap-io.js
