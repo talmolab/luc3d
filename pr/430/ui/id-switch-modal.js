@@ -28,22 +28,23 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { noteProgress } from './progress-delta.js?v=552ac39b914d';
-import { state, getActiveSession } from './app-state.js?v=552ac39b914d';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=552ac39b914d';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=552ac39b914d';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=552ac39b914d';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=552ac39b914d';
-import { getTrackingThreshold } from './settings.js?v=552ac39b914d';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=552ac39b914d';
+import { noteProgress } from './progress-delta.js?v=69999949ab05';
+import { state, getActiveSession } from './app-state.js?v=69999949ab05';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=69999949ab05';
+import { showPanelTab } from './panel-rail.js?v=69999949ab05';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=69999949ab05';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=69999949ab05';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=69999949ab05';
+import { getTrackingThreshold } from './settings.js?v=69999949ab05';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=69999949ab05';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=552ac39b914d';
-import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine } from './image-model-dialog.js?v=552ac39b914d';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=552ac39b914d';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=552ac39b914d';
+         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=69999949ab05';
+import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine } from './image-model-dialog.js?v=69999949ab05';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=69999949ab05';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=69999949ab05';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=552ac39b914d';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=69999949ab05';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -528,12 +529,10 @@ function syncMarkers(session) {
     setSeekbarSwitchMarkers(all, state.totalFrames);
 }
 
-/** Show the right panel (if hidden) on the ID Switches tab. */
+/** Open + expand the ID Switches section, showing the right panel if hidden. */
 export function openIdSwitchPanel() {
-    var wrap = document.getElementById('infoPanelWrapper');
-    if (wrap && wrap.classList.contains('collapsed')) { var t = document.getElementById('infoPanelToggleBtn'); if (t) t.click(); }
-    var tab = document.querySelector('.panel-tab[data-tab="tabIdSwitches"]');
-    if (tab) tab.click();
+    // Never a rail click: clicking the already-expanded panel would FOLD it.
+    showPanelTab('tabIdSwitches');
 }
 
 /** Forget a session's results (a new tracking pass relabels everything) and clear its markers. */

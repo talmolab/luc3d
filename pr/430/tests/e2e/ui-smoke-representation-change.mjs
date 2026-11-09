@@ -388,9 +388,10 @@ try {
     console.log('\n-- info panel tabs --');
     for (const tab of TABS) {
         const r = await page.evaluate((t) => {
-            const el = document.querySelector(`[data-tab="${t}"]`);
+            const el = document.querySelector(`.panel-rail-btn[data-tab="${t}"]`);
             if (!el) return { missing: true };
-            el.click();
+            // A rail click on the panel already showing HIDES it; only switch.
+            if (el.getAttribute('aria-pressed') !== 'true') el.click();
             const pane = document.getElementById(t);
             return {
                 missing: false,

@@ -151,7 +151,7 @@ try {
         return { value: el.getAttribute('data-value'), active: active && active.getAttribute('data-style') };
     });
     const picked = await page.evaluate(async () => {
-        document.querySelector('.panel-tab[data-tab="tabVisibility"]').click();
+        document.querySelector('.panel-rail-btn[data-tab="tabVisibility"]').click();
         document.querySelector('#visReprojNodeColor [data-style="dark"]').click();
         const { getVisibilitySettings } = await import('/ui/rendering.js');
         const tab = document.getElementById('tabVisibility');

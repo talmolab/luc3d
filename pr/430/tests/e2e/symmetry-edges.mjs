@@ -186,7 +186,7 @@ try {
     const toggled = await page.evaluate(async () => {
         const { state } = window.__lucid;
         const statusText = () => document.getElementById('statusText').textContent;
-        document.querySelector('.panel-tab[data-tab="tabVisibility"]').click();
+        document.querySelector('.panel-rail-btn[data-tab="tabVisibility"]').click();
         const el = document.getElementById('visSymmetryEdges');
         const flip = (on) => { el.checked = on; el.dispatchEvent(new Event('change', { bubbles: true })); };
         const saved = state.session.skeleton;
