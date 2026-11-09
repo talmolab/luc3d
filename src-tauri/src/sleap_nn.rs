@@ -9,6 +9,7 @@
 //! `sleap-nn` cargo feature they answer `Err("SLEAP_NN_NOT_IN_THIS_BUILD")`.
 
 use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::Mutex;
 #[cfg(feature = "sleap-nn")]
 use tauri::Manager;
@@ -43,17 +44,27 @@ pub struct UvInfo {
     pub self_update_supported: Option<bool>,
 }
 
+/// What `detect_sleap_nn` reports.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SleapNnInfo {
+    pub available: bool,
+    pub version: Option<String>,
+    pub path: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SleapNnStatus {
     pub available: bool,
     pub reason: String,
 }
 
-/// The child spawned by `run_python_command`, kept so `cancel_command` can
-/// kill it. One command at a time.
+/// The children spawned by `run_python_command`, by job id, kept so
+/// `cancel_command` can kill them. Several jobs may run at once (one per
+/// camera, say), up to `MAX_CONCURRENT_JOBS`.
 #[cfg_attr(not(feature = "sleap-nn"), allow(dead_code))]
 #[derive(Default)]
-pub struct RunningProcess(pub Mutex<Option<std::process::Child>>);
+pub struct RunningProcess(pub Mutex<HashMap<String, std::process::Child>>);
 
 #[tauri::command]
 pub fn sleap_nn_status() -> SleapNnStatus {
@@ -70,6 +81,13 @@ pub fn sleap_nn_status() -> SleapNnStatus {
     }
 }
 
+/// The job id used when the page passes none (sleap-app's one-command world).
+#[cfg_attr(not(feature = "sleap-nn"), allow(dead_code))]
+pub const DEFAULT_JOB: &str = "default";
+/// At most this many commands run at the same time.
+#[cfg_attr(not(feature = "sleap-nn"), allow(dead_code))]
+pub const MAX_CONCURRENT_JOBS: usize = 4;
+
 /// Spawn `program args...`, streaming each stdout/stderr line and a final
 /// `finished` event through `on_event`. Resolves to whether it exited 0.
 ///
@@ -77,40 +95,65 @@ pub fn sleap_nn_status() -> SleapNnStatus {
 /// ("uv", "sleap-nn", "sleap-nn-python") or equal the path Rust resolves for
 /// one of them (what `detect_uv` reported), and Rust spawns its own
 /// resolution. Any page-realm script can reach this command, so it must not
-/// be a generic "run this executable" primitive.
+/// be a generic "run this executable" primitive: the ARGUMENTS are validated
+/// too (`sleap_nn_args::validate_invocation`; refusals start `ARGS_NOT_ALLOWED: `),
+/// with every path checked against the user's folder grants.
+///
+/// `job_id` (JS `jobId`, default "default") names the run so several can go
+/// at once and `cancel_command` can stop one. Refusals: a job with that id is
+/// already running ("A command is already running"), `TOO_MANY_JOBS`
+/// (4 running), `INVALID_JOB_ID`.
 #[tauri::command]
 pub async fn run_python_command<R: Runtime>(
     app: AppHandle<R>,
     program: String,
     args: Vec<String>,
     on_event: Channel<ProcessEvent>,
+    job_id: Option<String>,
 ) -> Result<bool, String> {
     #[cfg(feature = "sleap-nn")]
     {
         tauri::async_runtime::spawn_blocking(move || {
-            let program = imp::resolve_program(&program)?;
-            imp::run(&app.state::<RunningProcess>(), &program, &args, &on_event)
+            let job = imp::job_id(job_id)?;
+            let (logical, path) = imp::resolve_program(&program)?;
+            let grants =
+                std::sync::Arc::clone(&*app.state::<std::sync::Arc<crate::files::GrantState>>());
+            let argv = crate::sleap_nn_args::validate_invocation(
+                logical,
+                &args,
+                &imp::GrantPolicy(grants),
+            )?;
+            imp::run(
+                &app.state::<RunningProcess>(),
+                &job,
+                &path,
+                &argv,
+                &on_event,
+            )
         })
         .await
         .map_err(|e| format!("run_python_command: {e}"))?
     }
     #[cfg(not(feature = "sleap-nn"))]
     {
-        let _ = (app, program, args, on_event);
+        let _ = (app, program, args, on_event, job_id);
         Err(NOT_IN_THIS_BUILD.into())
     }
 }
 
-/// Kill the process started by `run_python_command`, if any.
+/// Kill the job `job_id` (JS `jobId`), or ALL running jobs when none is given.
 #[tauri::command]
-pub fn cancel_command(running: tauri::State<'_, RunningProcess>) -> Result<(), String> {
+pub fn cancel_command(
+    running: tauri::State<'_, RunningProcess>,
+    job_id: Option<String>,
+) -> Result<(), String> {
     #[cfg(feature = "sleap-nn")]
     {
-        imp::cancel(&running)
+        imp::cancel(&running, job_id.as_deref())
     }
     #[cfg(not(feature = "sleap-nn"))]
     {
-        let _ = running;
+        let _ = (running, job_id);
         Err(NOT_IN_THIS_BUILD.into())
     }
 }
@@ -122,6 +165,21 @@ pub async fn detect_uv() -> Result<UvInfo, String> {
         tauri::async_runtime::spawn_blocking(imp::detect_uv)
             .await
             .map_err(|e| format!("detect_uv: {e}"))
+    }
+    #[cfg(not(feature = "sleap-nn"))]
+    {
+        Err(NOT_IN_THIS_BUILD.into())
+    }
+}
+
+/// Find the `sleap-nn` tool and ask it for its version.
+#[tauri::command]
+pub async fn detect_sleap_nn() -> Result<SleapNnInfo, String> {
+    #[cfg(feature = "sleap-nn")]
+    {
+        tauri::async_runtime::spawn_blocking(imp::detect_sleap_nn)
+            .await
+            .map_err(|e| format!("detect_sleap_nn: {e}"))
     }
     #[cfg(not(feature = "sleap-nn"))]
     {
@@ -146,11 +204,16 @@ pub async fn detect_gpu() -> Result<String, String> {
 
 #[cfg(feature = "sleap-nn")]
 mod imp {
-    use super::{ProcessEvent, RunningProcess, UvInfo};
+    use super::{
+        ProcessEvent, RunningProcess, SleapNnInfo, UvInfo, DEFAULT_JOB, MAX_CONCURRENT_JOBS,
+    };
+    use crate::files::GrantState;
+    use crate::sleap_nn_args::PathPolicy;
     use std::ffi::{OsStr, OsString};
     use std::io::BufReader;
     use std::path::PathBuf;
     use std::process::{Command, Output, Stdio};
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
     use tauri::ipc::Channel;
 
@@ -315,22 +378,24 @@ mod imp {
     pub const ALLOWED_PROGRAMS: &[&str] = &["uv", "sleap-nn", "sleap-nn-python"];
 
     /// Pure allowlist match: `requested` is an allowed name, or exactly the
-    /// path Rust resolved for one. Returns what to spawn.
-    pub fn match_program(
+    /// path Rust resolved for one. Returns the logical name (what argument
+    /// validation keys on) and what to spawn.
+    pub fn match_program<'a>(
         requested: &str,
-        candidates: &[(&str, Option<String>)],
-    ) -> Result<String, String> {
+        candidates: &[(&'a str, Option<String>)],
+    ) -> Result<(&'a str, String), String> {
         for (name, resolved) in candidates {
             if requested == *name || resolved.as_deref() == Some(requested) {
                 return resolved
                     .clone()
+                    .map(|p| (*name, p))
                     .ok_or_else(|| format!("PROGRAM_NOT_FOUND: {name}"));
             }
         }
         Err(format!("PROGRAM_NOT_ALLOWED: {requested}"))
     }
 
-    pub fn resolve_program(requested: &str) -> Result<String, String> {
+    pub fn resolve_program(requested: &str) -> Result<(&'static str, String), String> {
         // Refuse anything that could not match before probing the system.
         let path_like = std::path::Path::new(requested).is_absolute();
         if !path_like && !ALLOWED_PROGRAMS.contains(&requested) {
@@ -408,6 +473,36 @@ mod imp {
         }
     }
 
+    /// `sleap-nn 0.3.5` -> `0.3.5`. Only STDOUT is parsed: on macOS the tool
+    /// prints `objc[...] Class AVF... is implemented in both` noise on stderr,
+    /// and other lines may precede the version.
+    pub fn parse_sleap_nn_version(stdout: &str) -> Option<String> {
+        stdout
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("sleap-nn "))
+            .and_then(|rest| rest.split_whitespace().next())
+            .map(str::to_string)
+    }
+
+    pub fn detect_sleap_nn() -> SleapNnInfo {
+        let path = resolve_tool("sleap-nn");
+        let Some(out) = output_with_timeout(command(&path, &["--version"], false), PROBE_TIMEOUT)
+        else {
+            return SleapNnInfo::default();
+        };
+        if !out.status.success() {
+            return SleapNnInfo::default();
+        }
+        let Some(version) = parse_sleap_nn_version(&String::from_utf8_lossy(&out.stdout)) else {
+            return SleapNnInfo::default();
+        };
+        SleapNnInfo {
+            available: true,
+            version: Some(version),
+            path: (path != "sleap-nn").then_some(path),
+        }
+    }
+
     pub fn detect_gpu() -> String {
         if shell_output("nvidia-smi", &["--query-gpu=name", "--format=csv,noheader"]).is_some() {
             return "cuda".into();
@@ -442,8 +537,61 @@ mod imp {
         })
     }
 
+    /// `^[A-Za-z0-9_.:-]{1,64}$`; None means the default job.
+    pub fn job_id(raw: Option<String>) -> Result<String, String> {
+        let id = raw.unwrap_or_else(|| DEFAULT_JOB.to_string());
+        let ok = (1..=64).contains(&id.len())
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"_.:-".contains(&b));
+        if ok {
+            Ok(id)
+        } else {
+            Err("INVALID_JOB_ID: use 1-64 letters, digits or _ . : -".into())
+        }
+    }
+
+    /// The real path rules, over the user's folder grants (files.rs).
+    pub struct GrantPolicy(pub Arc<GrantState>);
+
+    impl PathPolicy for GrantPolicy {
+        fn readable_file(&self, raw: &str) -> Result<String, String> {
+            if raw.contains("://") {
+                return Err(format!("{raw} is a URL, not a local file"));
+            }
+            let p = self.0.check_readable(raw)?;
+            if !p.is_file() {
+                return Err(format!("{raw} is not an existing file"));
+            }
+            Ok(p.to_string_lossy().into_owned())
+        }
+
+        fn model_path(&self, raw: &str) -> Result<String, String> {
+            let p = self.0.check_model(raw)?;
+            if !p.exists() {
+                return Err(format!("{raw} does not exist"));
+            }
+            Ok(p.to_string_lossy().into_owned())
+        }
+
+        fn writable_output(&self, raw: &str) -> Result<String, String> {
+            let p = self.0.check_writable(raw)?;
+            if p.extension().and_then(|e| e.to_str()) != Some("slp") {
+                return Err(format!("{raw} is not a .slp file"));
+            }
+            if p.is_dir() {
+                return Err(format!("{raw} is a directory"));
+            }
+            if !p.parent().is_some_and(|d| d.is_dir()) {
+                return Err(format!("the folder of {raw} does not exist"));
+            }
+            Ok(p.to_string_lossy().into_owned())
+        }
+    }
+
     pub fn run(
         running: &RunningProcess,
+        job: &str,
         program: &str,
         args: &[String],
         on_event: &Channel<ProcessEvent>,
@@ -451,9 +599,18 @@ mod imp {
         let mut cmd = command(program, &[], false);
         cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
         let (out, err) = {
-            let mut slot = running.0.lock().map_err(|e| e.to_string())?;
-            if slot.is_some() {
-                return Err("A command is already running".into());
+            let mut jobs = running.0.lock().map_err(|e| e.to_string())?;
+            if jobs.contains_key(job) {
+                return Err(if job == DEFAULT_JOB {
+                    "A command is already running".into()
+                } else {
+                    format!("A command is already running: job {job}")
+                });
+            }
+            if jobs.len() >= MAX_CONCURRENT_JOBS {
+                return Err(format!(
+                    "TOO_MANY_JOBS: at most {MAX_CONCURRENT_JOBS} commands run at once"
+                ));
             }
             let mut child = cmd
                 .spawn()
@@ -466,10 +623,10 @@ mod imp {
                 .stderr
                 .take()
                 .map(|p| pump(p, on_event.clone(), |line| ProcessEvent::Stderr { line }));
-            *slot = Some(child);
+            jobs.insert(job.to_string(), child);
             (out, err)
         };
-        let status = wait_polling(running);
+        let status = wait_polling(running, job);
         // Every line is delivered before `finished`.
         for h in [out, err].into_iter().flatten() {
             let _ = h.join();
@@ -481,21 +638,21 @@ mod imp {
     }
 
     /// Wait without holding the lock, so `cancel` can reach the child.
-    fn wait_polling(running: &RunningProcess) -> Option<std::process::ExitStatus> {
+    fn wait_polling(running: &RunningProcess, job: &str) -> Option<std::process::ExitStatus> {
         loop {
             {
-                let Ok(mut slot) = running.0.lock() else {
+                let Ok(mut jobs) = running.0.lock() else {
                     return None;
                 };
-                let child = slot.as_mut()?;
+                let child = jobs.get_mut(job)?;
                 match child.try_wait() {
                     Ok(Some(status)) => {
-                        *slot = None;
+                        jobs.remove(job);
                         return Some(status);
                     }
                     Ok(None) => {}
                     Err(_) => {
-                        *slot = None;
+                        jobs.remove(job);
                         return None;
                     }
                 }
@@ -504,15 +661,19 @@ mod imp {
         }
     }
 
-    /// Kill only; `run`'s wait loop reaps the child and sends `finished`.
-    pub fn cancel(running: &RunningProcess) -> Result<(), String> {
-        let mut slot = running.0.lock().map_err(|e| e.to_string())?;
-        if let Some(child) = slot.as_mut() {
-            child
-                .kill()
-                .map_err(|e| format!("Failed to kill process: {e}"))?;
+    /// Kill one job, or every job when `job` is None. Kill only; `run`'s
+    /// wait loop reaps the child and sends `finished`. An unknown id is fine.
+    pub fn cancel(running: &RunningProcess, job: Option<&str>) -> Result<(), String> {
+        let mut jobs = running.0.lock().map_err(|e| e.to_string())?;
+        let mut result = Ok(());
+        for (id, child) in jobs.iter_mut() {
+            if job.is_none_or(|j| j == id) {
+                if let Err(e) = child.kill() {
+                    result = Err(format!("Failed to kill process: {e}"));
+                }
+            }
         }
-        Ok(())
+        result
     }
 
     #[cfg(test)]
@@ -542,14 +703,17 @@ mod imp {
                 ("sleap-nn", Some("/home/u/.local/bin/sleap-nn".to_string())),
                 ("sleap-nn-python", None),
             ];
-            assert_eq!(match_program("uv", &c).unwrap(), "/home/u/.local/bin/uv");
+            assert_eq!(
+                match_program("uv", &c).unwrap(),
+                ("uv", "/home/u/.local/bin/uv".to_string())
+            );
             assert_eq!(
                 match_program("/home/u/.local/bin/uv", &c).unwrap(),
-                "/home/u/.local/bin/uv"
+                ("uv", "/home/u/.local/bin/uv".to_string())
             );
             assert_eq!(
                 match_program("sleap-nn", &c).unwrap(),
-                "/home/u/.local/bin/sleap-nn"
+                ("sleap-nn", "/home/u/.local/bin/sleap-nn".to_string())
             );
             assert!(match_program("sleap-nn-python", &c)
                 .unwrap_err()
@@ -621,7 +785,14 @@ mod imp {
             let running = RunningProcess::default();
             let (ch, seen) = recording_channel();
             let script = "printf 'one\\ntwo\\r'; printf 'err\\n' >&2; exit 3";
-            let ok = run(&running, "sh", &["-c".into(), script.into()], &ch).unwrap();
+            let ok = run(
+                &running,
+                "default",
+                "sh",
+                &["-c".into(), script.into()],
+                &ch,
+            )
+            .unwrap();
             assert!(!ok);
             let ev = seen.lock().unwrap().clone();
             let lines = |kind: &str| -> Vec<String> {
@@ -636,30 +807,155 @@ mod imp {
                 ev.last().unwrap(),
                 &serde_json::json!({"event": "finished", "data": {"success": false, "code": 3}})
             );
-            assert!(running.0.lock().unwrap().is_none(), "slot cleared");
+            assert!(running.0.lock().unwrap().is_empty(), "slot cleared");
+        }
+
+        type Sleeper = (
+            std::thread::JoinHandle<Result<bool, String>>,
+            Arc<Mutex<Vec<serde_json::Value>>>,
+        );
+
+        /// Start `sleep 30` as `job` on a thread; returns once it is running.
+        #[cfg(unix)]
+        fn start_sleeper(running: &Arc<RunningProcess>, job: &str) -> Sleeper {
+            let (ch, seen) = recording_channel();
+            let (r, j) = (Arc::clone(running), job.to_string());
+            let t = std::thread::spawn(move || run(&r, &j, "sleep", &["30".into()], &ch));
+            let start = Instant::now();
+            while !running.0.lock().unwrap().contains_key(job) {
+                assert!(start.elapsed() < Duration::from_secs(5));
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            (t, seen)
         }
 
         #[cfg(unix)]
         #[test]
-        fn cancel_kills_the_running_command() {
+        fn cancel_all_kills_every_job_and_same_id_is_refused() {
             let running = Arc::new(RunningProcess::default());
-            let (ch, seen) = recording_channel();
-            let r = Arc::clone(&running);
-            let t = std::thread::spawn(move || run(&r, "sleep", &["30".into()], &ch));
+            let (t1, seen) = start_sleeper(&running, "default");
+            let (t2, _) = start_sleeper(&running, "cam2");
             let start = Instant::now();
-            while running.0.lock().unwrap().is_none() {
-                assert!(start.elapsed() < Duration::from_secs(5));
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            // A second command is refused while one runs.
+            // Two at once; the same id twice is refused.
             let (ch2, _) = recording_channel();
-            assert!(run(&running, "true", &[], &ch2).is_err());
-            cancel(&running).unwrap();
-            assert!(!t.join().unwrap().unwrap());
+            let e = run(&running, "default", "true", &[], &ch2).unwrap_err();
+            assert_eq!(e, "A command is already running");
+            let e = run(&running, "cam2", "true", &[], &ch2).unwrap_err();
+            assert!(e.starts_with("A command is already running"), "{e}");
+            cancel(&running, None).unwrap();
+            assert!(!t1.join().unwrap().unwrap());
+            assert!(!t2.join().unwrap().unwrap());
             assert!(start.elapsed() < Duration::from_secs(10));
             let last = seen.lock().unwrap().last().cloned().unwrap();
             assert_eq!(last["event"], "finished");
             assert_eq!(last["data"]["success"], false);
+            assert!(running.0.lock().unwrap().is_empty());
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn cancel_one_job_leaves_the_others_running() {
+            let running = Arc::new(RunningProcess::default());
+            let (t1, _) = start_sleeper(&running, "a");
+            let (t2, _) = start_sleeper(&running, "b");
+            cancel(&running, Some("nope")).unwrap();
+            cancel(&running, Some("a")).unwrap();
+            assert!(!t1.join().unwrap().unwrap());
+            assert!(running.0.lock().unwrap().contains_key("b"), "b still runs");
+            assert!(!t2.is_finished());
+            cancel(&running, None).unwrap();
+            assert!(!t2.join().unwrap().unwrap());
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn fifth_job_is_refused() {
+            let running = Arc::new(RunningProcess::default());
+            let ids = ["j1", "j2", "j3", "j4"];
+            let threads: Vec<_> = ids.iter().map(|id| start_sleeper(&running, id).0).collect();
+            let (ch, _) = recording_channel();
+            let e = run(&running, "j5", "true", &[], &ch).unwrap_err();
+            assert!(e.starts_with("TOO_MANY_JOBS"), "{e}");
+            cancel(&running, None).unwrap();
+            for t in threads {
+                t.join().unwrap().unwrap();
+            }
+        }
+
+        #[test]
+        fn job_ids_are_validated() {
+            assert_eq!(job_id(None).unwrap(), "default");
+            assert_eq!(job_id(Some("cam-1.a:b_2".into())).unwrap(), "cam-1.a:b_2");
+            for bad in ["", "a b", "a/b", "x;y", &"a".repeat(65), "é"] {
+                assert!(
+                    job_id(Some(bad.into()))
+                        .unwrap_err()
+                        .starts_with("INVALID_JOB_ID"),
+                    "{bad:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn sleap_nn_version_parsing_ignores_stderr_noise() {
+            assert_eq!(
+                parse_sleap_nn_version("sleap-nn 0.3.5\n").as_deref(),
+                Some("0.3.5")
+            );
+            assert_eq!(
+                parse_sleap_nn_version("warming up\n  sleap-nn 0.3.5 (abc)\n").as_deref(),
+                Some("0.3.5")
+            );
+            // The noise lives on stderr; if it ever reached here it is not a version.
+            assert_eq!(
+                parse_sleap_nn_version("objc[1]: Class AVFFrameReceiver is implemented in both\n"),
+                None
+            );
+            assert_eq!(parse_sleap_nn_version(""), None);
+        }
+
+        #[test]
+        fn grant_policy_follows_the_grants() {
+            let base = std::env::temp_dir().join(format!("lucid-policy-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&base);
+            for d in ["data", "models/run1", "out"] {
+                std::fs::create_dir_all(base.join(d)).unwrap();
+            }
+            let base = std::fs::canonicalize(&base).unwrap();
+            std::fs::write(base.join("data/a.mp4"), b"x").unwrap();
+            std::fs::write(base.join("models/run1/best.ckpt"), b"x").unwrap();
+            let st = Arc::new(GrantState::default());
+            {
+                let mut g = st.0.lock().unwrap();
+                g.grant_dir(&base.join("data"));
+                g.grant_dir(&base.join("out"));
+                g.grant_model_dir(&base.join("models"));
+            }
+            let pol = GrantPolicy(st);
+            let p = |rel: &str| base.join(rel).to_string_lossy().into_owned();
+            assert!(pol.readable_file(&p("data/a.mp4")).is_ok());
+            assert!(pol.readable_file(&p("data/missing.mp4")).is_err());
+            assert!(
+                pol.readable_file(&p("data")).is_err(),
+                "a folder is not a file"
+            );
+            assert!(pol.readable_file("https://x/a.mp4").is_err());
+            assert!(
+                pol.readable_file(&p("models/run1/best.ckpt")).is_ok(),
+                "model dirs readable"
+            );
+            assert!(pol.model_path(&p("models/run1")).is_ok());
+            assert!(pol.model_path(&p("models/none")).is_err());
+            assert!(
+                pol.model_path(&p("data/a.mp4")).is_err(),
+                "not a model grant"
+            );
+            assert!(pol.writable_output(&p("out/a.slp")).is_ok());
+            assert!(pol.writable_output(&p("out/a.txt")).is_err());
+            assert!(pol.writable_output(&p("out/nodir/a.slp")).is_err());
+            assert!(pol.writable_output(&p("models/a.slp")).is_err());
+            assert!(pol.writable_output(&p("data/../x.slp")).is_err());
+            let _ = std::fs::remove_dir_all(&base);
         }
 
         #[cfg(unix)]
@@ -722,6 +1018,14 @@ mod tests {
             "latestVersion",
             "selfUpdateSupported",
         ] {
+            assert!(v.get(k).is_some(), "missing {k}");
+        }
+    }
+
+    #[test]
+    fn sleap_nn_info_is_camel_case() {
+        let v = serde_json::to_value(SleapNnInfo::default()).unwrap();
+        for k in ["available", "version", "path"] {
             assert!(v.get(k).is_some(), "missing {k}");
         }
     }

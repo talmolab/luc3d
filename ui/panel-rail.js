@@ -35,6 +35,11 @@
  * `<section class="panel-section" data-tab>` holding its header; the pane
  * keeps its id and markup, and carries `.active` while its body is on screen.
  *
+ * A panel that only exists in some builds (the desktop app's Inference
+ * panel) adds itself after setup with `registerPanelRailPanel`: it goes at
+ * the end of the rail and the stack, and its remembered open/folded state is
+ * restored then (setup drops ids it does not know yet).
+ *
  * Imports only the icon strings; `toggleInfoPanel` is handed in by
  * `setupPanelRail` (it lives in `ui/ui-wiring.js`, which would close a cycle
  * for `ui/id-switch-modal.js` and `ui/plane-definition.js`).
@@ -283,6 +288,37 @@ function buildSection(p) {
     pane.parentNode.insertBefore(section, pane);
     section.appendChild(header);
     section.appendChild(pane);
+}
+
+/**
+ * Add a panel after `setupPanelRail` (the desktop Inference panel). `p` is
+ * `{tab, label, icon}`; `pane` is its `.panel-tab-content` element (id = tab),
+ * appended after the last pane. Idempotent per tab id. Returns false when the
+ * rail is not set up.
+ */
+export function registerPanelRailPanel(p, pane) {
+    if (!_rail || !p || !pane || isKnownTab(p.tab)) return false;
+    const inner = _rail.querySelector('.panel-rail-inner');
+    const last = document.getElementById(PANEL_RAIL_PANELS[PANEL_RAIL_PANELS.length - 1].tab);
+    const lastSection = last ? last.closest('.panel-section') : null;
+    if (!inner || !lastSection) return false;
+    pane.id = p.tab;
+    pane.classList.add('panel-tab-content');
+    lastSection.parentNode.insertBefore(pane, lastSection.nextSibling);
+    PANEL_RAIL_PANELS.push({ tab: p.tab, label: p.label, icon: p.icon });
+    buildSection(p);
+    const btn = buildButton('panel-rail-tab', p.icon, p.label);
+    btn.setAttribute('data-tab', p.tab);
+    btn.setAttribute('aria-controls', p.tab);
+    btn.addEventListener('click', function () { clickPanelRailTab(p.tab); });
+    inner.appendChild(btn);
+    const stored = readStored();
+    if (stored && stored.open.indexOf(p.tab) !== -1 && _open.indexOf(p.tab) === -1) {
+        _open.push(p.tab);
+        if (stored.folded.indexOf(p.tab) !== -1) _folded.push(p.tab);
+    }
+    applySections();
+    return true;
 }
 
 function readStored() {

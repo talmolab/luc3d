@@ -13,6 +13,7 @@ mod files;
 mod localhost;
 mod native_menu;
 mod sleap_nn;
+mod sleap_nn_args;
 mod system;
 mod updates;
 
@@ -66,6 +67,7 @@ fn lucid_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
         .invoke_handler(tauri::generate_handler![
             dialogs::pick_save_path,
             dialogs::pick_directory,
+            dialogs::pick_model_directory,
             files::path_stat,
             files::read_range,
             files::list_dir,
@@ -93,6 +95,7 @@ fn lucid_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
             sleap_nn::cancel_command,
             sleap_nn::detect_uv,
             sleap_nn::detect_gpu,
+            sleap_nn::detect_sleap_nn,
         ])
         .build()
 }
@@ -275,7 +278,7 @@ mod tests {
             .map(|s| s.rsplit("::").next().unwrap())
             .collect();
 
-        assert_eq!(from_build.len(), 29);
+        assert_eq!(from_build.len(), 31);
         from_build.sort_unstable();
         from_lib.sort_unstable();
         assert_eq!(from_build, from_lib);

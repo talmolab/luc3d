@@ -37,7 +37,10 @@ its target to the list on the next deploy, and a dynamic `import()` stays lazy.
 
 **Purpose.** App startup logic. Builds the empty-session UI, wires the
 `InteractionManager`, sets up the 3D viewport and timeline, and exposes
-helpers used by every load path. Calls `init()` at module-load.
+helpers used by every load path. Calls `init()` at module-load. On the desktop
+app only (`window.lucidDesktop.sleapNn` present) `init` dynamically imports
+`ui/inference-panel.js` and calls `setupInferencePanel()`; the web app never
+fetches it.
 
 **Key exports.**
 - `hideWelcomeOverlay()` — hides the dock empty-state overlay.
@@ -12591,11 +12594,123 @@ disables the panel icons; the top button stays live), `syncPanelRail()`.
 cycle.
 
 **Imported by.** `pose/initialization.js` (`setupPanelRail`),
+`ui/inference-panel.js` (`registerPanelRailPanel`, `showPanelTab`),
 `ui/id-switch-modal.js` (`showPanelTab` in `openIdSwitchPanel`),
 `ui/plane-definition.js` (`setPanelRailLocked` in `setPanelPlaneMode`).
 
 **User-facing features.** The icon rail on the window's right edge and the
 collapsible panel sections. Covered by `tests/e2e/panel-rail.mjs`.
+
+### ui/inference-panel.js
+
+**Purpose.** The desktop app's **Inference** panel (right-edge rail, Zap icon):
+run sleap-nn on every camera view of the open session and bring the
+predictions back. A replica of sleap-app's Inference panel (`InferencePanel.tsx`,
+`inferenceStore.ts`, `BackendPicker.tsx`): same sections in the same order
+(Track only, Pipeline, Models, Data, Inference, Tracking › Advanced,
+Post-processing, Remote), same defaults, labels and hints, same progress block
+(status + elapsed, bar with `n / total frames` and %, fps, ETA, error box,
+Cancel, Load Results, log tail + Expand window, Copy Log, Dismiss).
+LUCID differences: one sleap-nn job PER VIEW, all views with the SAME models
+(a per-view slot exists in the config, `perViewModels`); Data gains **Videos on
+disk** (native folder pick → each view's video matched, `ui/inference-video-paths.js`);
+targets are per session (no suggestions in LUCID); Track only is shown but not
+available; no Full Configuration window (its settings are all in the panel);
+Backend offers Local only (`INFERENCE_BACKENDS`, the seam for a SLEAP Connect
+worker). The log tail is not a scroller (one scroller per panel); Expand opens
+a window (Esc closes). Output: `<video folder>/predictions/<view>.<stamp>.predictions.slp`.
+- **Loaded only on desktop with sleap-nn in the build:** `pose/initialization.js`
+  `import()`s it when `window.lucidDesktop.sleapNn` exists, and it adds the
+  panel only if `sleapNn.status().available`. Talks to native code only through
+  `window.lucidDesktop.sleapNn` / `.fs` (no desktop import), so the web app
+  never fetches it and is unchanged.
+
+**Key exports.** `setupInferencePanel()` → Promise<bool>, `showInferencePanel()`,
+`INFERENCE_TAB_ID` (`tabInference`), `INFERENCE_BACKENDS`, `_inferenceState()` (tests).
+
+**Imports from project modules.** `./app-state.js`, `./panel-rail.js`,
+`./panel-rail-icons.js`, `./info-tip.js`, `./progress-delta.js`,
+`./inference-args.js`, `./inference-jobs.js`, `./inference-video-paths.js`,
+`./inference-merge.js`.
+
+**Imported by.** `pose/initialization.js` (dynamic `import()`, desktop only).
+
+**User-facing features.** Inference panel. Test: `tests/e2e/desktop-inference.mjs`.
+
+### ui/inference-args.js
+
+**Purpose.** The `sleap-nn predict` argv for ONE view (port of sleap-app's
+`inferenceArgs.ts`), plus sleap-app's panel defaults, the version gate
+(`predict` from 0.3.2, else legacy `track`), `--gui` progress-line parsing and
+duration/ETA formatting. `--data_path` is always a video: no `--video_index`,
+and every frame selection is an explicit `--frames` (one run → `a-b`, anything
+else a full comma list: sleap-nn 0.3.5 rejects mixed `0-4,10-11`). A flag added
+here must also be added to `src-tauri/src/sleap_nn_args.rs` (the native allowlist).
+Import-free.
+
+**Key exports.** `INFERENCE_DEFAULTS`, `defaultInferenceConfig()`,
+`modelsForView(config, view)` (per-view slot, else the shared list),
+`framesToSpec`, `sampleFrames`, `targetFrames(config, ctx)`,
+`buildInferenceArgs(config, {dataPath, outputPath, modelPaths, frames, subcommand})`,
+`compareVersions`, `pickInferenceSubcommand`, `MIN_SLEAP_NN_PREDICT_VERSION`,
+`parseProgressLine`, `formatDuration`, `formatEta`.
+
+**Imported by.** `ui/inference-jobs.js`, `ui/inference-panel.js`. Test:
+`tests/test-inference-args.mjs`.
+
+### ui/inference-jobs.js
+
+**Purpose.** One run → per-view JOBS (`{id, kind:'inference', view, videoPath,
+modelPaths, frames, outputPath, args}`; ids pass the native job-id rule), and a
+job queue (`runJobQueue`: in order, `concurrency` workers, stop on failure,
+cancellable). Today concurrency 1; the native side already runs up to 4
+processes keyed by job id, so parallel or per-GPU jobs need no rework, and a
+Training job would be another `kind`.
+
+**Key exports.** `planInferenceJobs(config, views, {outputDir, subcommand, stamp})`
+→ `{jobs, skipped}`, `runJobQueue(jobs, runJob, opts)` → `{done, failed, notRun}`,
+`joinPath`, `safeFilePart`, `predictionsTimestamp`.
+
+**Imports from project modules.** `./inference-args.js`. **Imported by.**
+`ui/inference-panel.js`. Test: `tests/test-inference-args.mjs`.
+
+### ui/inference-video-paths.js
+
+**Purpose.** Match each view's browser `File` to a video on disk under the
+folder the user picked: by `webkitRelativePath` (without its first component,
+or as a suffix), by the `.slp`'s recorded `videoPath` (last two components), or
+by a unique file name; the size must equal the File's. A file goes to one view
+only; anything else is unmatched with a reason. Import-free.
+
+**Key exports.** `matchViewVideos(views, listing)`, `isVideoName`, `VIDEO_EXTENSIONS`.
+
+**Imported by.** `ui/inference-panel.js`. Test: `tests/test-inference-video-paths.mjs`.
+
+### ui/inference-merge.js
+
+**Purpose.** Bring one view's predictions `.slp` into the open session through
+the SLP import path: `parseSlpForImport` → `validateSkeletonCompatibility`
+(same node names, any order) → existing-predictions mode for THAT view
+(replace: delete its predicted instances on the re-inferred frames;
+clear_all: all of them; keep) via the Custom Delete path
+(`collectDeletionTargets` type=predicted + `executeDeletion`, store rows
+included on a lazy project) → hydrate the frames on a lazy project
+(`batchLoadLazyFrames`) → `mergePredictionsIntoCamera` (ungrouped predicted
+instances, per-node scores kept). User instances are never touched. sleap-nn's
+per-video tracks arrive as `<view>: <track>`. Then `markDirty`, timeline,
+overlays, info panel. On a lazy project the new instances pin their frames
+(`frameEvictionBlocker` 'count') until saved.
+
+**Key exports.** `mergeViewPredictions(file, camName, mode)` →
+`{instances, frames, deleted}`, `frameRuns(sortedFrames)`.
+
+**Imports from project modules.** `./app-state.js`,
+`../import-export/slp-import.js` (`parseSlpForImport`),
+`../import-export/slp-merge.js`, `./custom-delete-ops.js`,
+`../pose/triangulation.js`, `./identity-assignment.js`,
+`../import-export/save-load.js`, `./rendering.js`, `./info-panel.js`.
+
+**Imported by.** `ui/inference-panel.js`. Test: `tests/e2e/desktop-inference.mjs` §5, §7, §8.
 
 ### ui/panel-rail-icons.js
 
@@ -12605,15 +12720,17 @@ and `lib/LICENSES.txt`). sleap-app's glyph wherever the panel matches:
 Instances = Users, Visibility = Eye (sleap-app's View panel), Videos = Film,
 Skeleton = Bone. Others: ID Switches = ArrowLeftRight (two opposing arrows),
 Cameras = Camera, Session = FolderTree, plus PanelRightClose / PanelRightOpen
-and the section headers' ChevronDown / ChevronRight / X (sleap-app's).
-Inline strings: no fetch, so offline mode and the version stamp are unaffected.
+and the section headers' ChevronDown / ChevronRight / X (sleap-app's). The
+desktop Inference panel adds Zap (its rail icon, sleap-app's) and the glyphs its
+buttons and status use (Folder, FolderOpen, Play, LoaderCircle, CircleCheck,
+CircleX, CircleAlert, Download, Copy, Maximize2). Inline strings: no fetch, so offline mode and the version stamp are unaffected.
 
 **Key exports.** `RAIL_ICONS` (Lucide name → SVG child markup),
 `railIconSvg(name)` (wraps it in Lucide's 24x24 stroke-2 currentColor `<svg>`;
 throws on an unknown name).
 
 **Imports from project modules.** None (leaf). **Imported by.**
-`ui/panel-rail.js`.
+`ui/panel-rail.js`, `ui/inference-panel.js`.
 
 ---
 
@@ -15643,7 +15760,7 @@ no view, and the final status becomes a warning naming the unused videos and
 the cameras left without one (per session). Test:
 `tests/e2e/slp-load-unmatched-video.mjs`.
 
-The `.slp` parse is dispatched by the private `parseSlpForImport(file,
+The `.slp` parse is dispatched by `parseSlpForImport(file,
 onProgress)`: real `.slp` files go through `parseSlpViaSleapIO` (sleap-io.js
 streaming reader), with `parseSlpH5` (raw h5wasm worker) kept for SLEAP
 analysis `.h5` and as a fallback on any typed-read error. Both yield the same
@@ -15761,7 +15878,8 @@ first track.
 - `restoreGroupingAndUnlink` also calls `readFrameIdentityMetadata` right after
   the groups are rebuilt, which rebuilds `frameIdentityMap` from them when the
   file stored it in the compact form (see `import-export/frame-identity-metadata.js`).
-- `parseSlpForImport(file, onProgress)` (private) — dispatches `.slp` →
+- `parseSlpForImport(file, onProgress)` (exported for `ui/inference-merge.js`,
+  which reads sleap-nn's predictions through it) — dispatches `.slp` →
   `parseSlpViaSleapIO`, else / on error → `parseSlpH5`.
 
 **Private helpers (not exported).**
@@ -15909,13 +16027,17 @@ compatibility check, track merging, frame merging, group rebuild.
   `nodeReorderMap` exactly as its points are.
 - `rebuildInstanceGroupsForFrames(session, frameIndices)` — groups by `trackIdx`;
   trackless instances of any type are skipped (not bucketed into track 0).
+- `mergePredictionsIntoCamera(session, slpData, camName, {trackRemap, nodeReorderMap})`
+  → `{frames, instances}` — a single-video predictions file into ONE view as
+  ungrouped predicted instances (non-predicted rows skipped); touches nothing
+  else and regroups nothing. A lazy project must hydrate those frames first.
 
 **Imports from project modules.**
 - `../pose/pose-data.js` — `Skeleton`, `Camera`, `Instance`,
   `InstanceGroup`, `FrameGroup`, `Session`.
 
 **Imported by.** `import-export/slp-import.js`, `import-export/file-io.js`
-(`validateSkeletonCompatibility`).
+(`validateSkeletonCompatibility`), `ui/inference-merge.js`.
 
 **User-facing features.** Backs File ▸ Load SLP's merge path (`handleAddSlp`) — merging an SLP into
 an existing session without overwriting it.

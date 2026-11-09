@@ -14,8 +14,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [features]
 default = []
 # The sleap-nn training/inference seam (spawning a local Python / uv process
-# and streaming its output). OFF in shipped iteration-1 builds: the commands
-# stay registered and answer Err("SLEAP_NN_NOT_IN_THIS_BUILD").
+# and streaming its output, arguments allowlisted in sleap_nn_args.rs). Off by
+# default (`cargo build`, `tauri dev`); CI's installer builds turn it on
+# (desktop.yml) for the Inference panel. Without it the commands stay
+# registered and answer Err("SLEAP_NN_NOT_IN_THIS_BUILD").
 sleap-nn = []
 
 [build-dependencies]

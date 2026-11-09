@@ -82,7 +82,7 @@ import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
  * @param {(msg:string)=>void} onProgress
  * @returns {Promise<Object>} slpData
  */
-async function parseSlpForImport(file, onProgress) {
+export async function parseSlpForImport(file, onProgress) {
     if (/\.slp$/i.test(file.name || '')) {
         try {
             return await parseSlpViaSleapIO(file, onProgress);

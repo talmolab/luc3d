@@ -99,6 +99,32 @@ pub async fn pick_directory<R: Runtime>(
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 
+/// Pick a folder of trained models for sleap-nn. The result goes ONLY into the
+/// read-only `model_dirs` set (see `Grants::grant_model_dir` for why): the
+/// page can list and read it, never write into it, and it is the only kind of
+/// folder `--model_paths` accepts. Harmless without the sleap-nn feature, so
+/// it is always registered.
+#[tauri::command]
+pub async fn pick_model_directory<R: Runtime>(
+    app: AppHandle<R>,
+    window: WebviewWindow<R>,
+    title: Option<String>,
+) -> Result<Option<String>, String> {
+    let mut builder = app.dialog().file().set_parent(&window);
+    if let Some(t) = title {
+        builder = builder.set_title(t);
+    }
+    let picked = tauri::async_runtime::spawn_blocking(move || builder.blocking_pick_folder())
+        .await
+        .map_err(|e| format!("pick_model_directory: {e}"))?;
+    let Some(fp) = picked else { return Ok(None) };
+    let path = fp
+        .into_path()
+        .map_err(|e| format!("pick_model_directory: {e}"))?;
+    app.state::<Arc<GrantState>>().grant_model_dir(&path)?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
 /// OK/Cancel question with custom labels; true = OK.
 #[tauri::command]
 pub async fn ask_dialog<R: Runtime>(

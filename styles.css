@@ -8767,3 +8767,92 @@ div.track-summary-steps { padding-left: 0; }
 .image-model-details dd { margin: 0; overflow-wrap: anywhere; }
 .image-model-modal.is-busy { cursor: progress; }
 .image-model-modal.is-busy button { pointer-events: none; opacity: 0.6; }
+
+/* ============================================
+   Inference panel (desktop app only; ui/inference-panel.js) —
+   sleap-app's InferencePanel.tsx look: 10px labels, compact rows,
+   chevron sections, green model chips, a slim progress bar.
+   ============================================ */
+.inference-panel { padding: 0; font-size: 11px; }
+.inf-config { padding: 8px 12px; display: flex; flex-direction: column; gap: 4px; }
+.inf-sep { height: 1px; background: var(--border-color); margin: 2px 0; }
+.inf-section-title { display: flex; align-items: center; gap: 4px; padding: 4px 0; cursor: pointer;
+  font-size: 12px; font-weight: 500; list-style: none; user-select: none; }
+.inf-section-title::-webkit-details-marker { display: none; }
+.inf-chevron { width: 12px; height: 12px; color: var(--text-muted); display: inline-flex; }
+.inf-chevron::before { content: '\25B8'; font-size: 10px; line-height: 12px; }
+.inf-section[open] > .inf-section-title .inf-chevron::before { content: '\25BE'; }
+.inf-section-body { padding: 0 0 4px 16px; display: flex; flex-direction: column; gap: 6px; }
+.inf-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.inf-block { display: flex; flex-direction: column; gap: 4px; }
+.inf-right { display: flex; justify-content: flex-end; }
+.inf-label { font-size: 10px; color: var(--text-muted); display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.inf-caps { text-transform: uppercase; letter-spacing: 0.05em; font-weight: 500; }
+.inf-muted { font-size: 10px; color: var(--text-muted); margin: 0; }
+.inf-error-text { font-size: 10px; color: var(--error-color); margin: 0; }
+.inf-hint { width: 12px; height: 12px; }
+.inf-check { display: flex; align-items: center; gap: 6px; font-size: 10px; cursor: pointer; }
+.inf-check input { margin: 0; }
+.inf-num { width: 80px; height: 22px; font-size: 10px; padding: 0 6px; background: var(--bg-primary);
+  color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px; }
+.inf-num.inf-grow { flex: 1; width: auto; min-width: 0; }
+.inf-num.inf-invalid { border-color: var(--error-color); }
+.inf-select { height: 26px; font-size: 11px; width: 100%; background: var(--bg-primary); color: var(--text-primary);
+  border: 1px solid var(--border-color); border-radius: 4px; padding: 0 6px; }
+.inf-select.inf-select-sm { width: 128px; height: 22px; font-size: 10px; }
+.inf-custom { display: flex; flex-direction: column; gap: 4px; }
+.inf-custom-row { display: flex; align-items: center; gap: 4px; }
+.inf-icon { display: inline-flex; width: 12px; height: 12px; vertical-align: -2px; }
+.inf-icon svg { width: 100%; height: 100%; }
+.inf-ok { color: var(--success-color); }
+.inf-bad { color: var(--error-color); }
+.inf-warnc { color: var(--warning-color); }
+.inf-spin { color: var(--accent); animation: inf-spin 1s linear infinite; }
+@keyframes inf-spin { to { transform: rotate(360deg); } }
+.inf-btn-outline { background: transparent; border: 1px solid var(--border-light); }
+.inf-btn-ghost { background: transparent; border: none; }
+.inf-btn-danger { background: var(--error-color); color: #fff; }
+.inf-model-list, .inf-view-list { display: flex; flex-direction: column; gap: 4px; }
+.inf-model { display: flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 4px;
+  border: 1px solid rgba(46, 204, 113, 0.5); background: rgba(46, 204, 113, 0.05); }
+.inf-model-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 500; }
+.inf-x { background: none; border: none; padding: 0; width: 12px; height: 12px; color: var(--text-muted); cursor: pointer; display: inline-flex; }
+.inf-x:hover { color: var(--error-color); }
+.inf-x svg { width: 100%; height: 100%; }
+.inf-path { overflow-wrap: anywhere; }
+.inf-view { display: flex; align-items: center; gap: 6px; font-size: 10px; }
+.inf-view-name { font-weight: 500; flex-shrink: 0; }
+.inf-view-file { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.inf-sub, .inf-sub0 { display: flex; flex-direction: column; gap: 6px; }
+.inf-subtitle { padding-top: 4px; font-size: 10px; font-weight: 500; color: var(--text-muted); }
+.inf-node-list { border: 1px solid var(--border-color); border-radius: 4px; padding: 4px; display: flex; flex-direction: column; gap: 2px; }
+.inf-warn { border: 1px solid rgba(243, 156, 18, 0.4); background: rgba(243, 156, 18, 0.1); color: var(--warning-color);
+  border-radius: 6px; padding: 8px; font-size: 10px; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.inf-warn p { margin: 0; }
+.inf-warn-title { font-weight: 500; }
+.inf-code { font-family: monospace; font-size: 10px; color: var(--text-primary); user-select: all; overflow-wrap: anywhere; }
+.inf-run { width: 100%; height: 32px; font-size: 12px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.inf-progress { border-top: 1px solid var(--border-color); padding: 8px 12px; display: flex; flex-direction: column; gap: 8px; }
+.inf-status { display: flex; align-items: center; gap: 8px; }
+.inf-status .inf-icon { width: 16px; height: 16px; }
+.inf-status-text { font-size: 12px; font-weight: 500; }
+.inf-elapsed { margin-left: auto; font-size: 10px; color: var(--text-muted); }
+.inf-bar { height: 8px; width: 100%; border-radius: 999px; background: var(--bg-tertiary); overflow: hidden; position: relative; }
+.inf-bar-fill { height: 100%; width: 0; background: var(--accent); transition: width 300ms; position: relative; }
+.inf-counts { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); }
+.inf-stats { display: flex; gap: 12px; font-size: 10px; color: var(--text-muted); white-space: pre; }
+.inf-errbox { border-radius: 6px; background: rgba(231, 76, 60, 0.15); border: 1px solid rgba(231, 76, 60, 0.3);
+  padding: 6px 8px; font-size: 10px; color: var(--error-color); overflow-wrap: anywhere; }
+.inf-actions { display: flex; gap: 8px; }
+.inf-actions .btn { display: inline-flex; align-items: center; gap: 4px; }
+.inf-log { margin: 0; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-tertiary);
+  padding: 6px; font-size: 10px; font-family: monospace; white-space: pre-wrap; word-break: break-all; cursor: pointer; }
+.inf-log:hover { border-color: var(--border-light); }
+.inf-log-scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 10000; display: flex;
+  align-items: center; justify-content: center; }
+.inf-log-dialog { width: min(900px, 90vw); height: min(640px, 80vh); background: var(--bg-secondary);
+  border: 1px solid var(--border-color); border-radius: 8px; display: flex; flex-direction: column; }
+.inf-log-head { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color); font-weight: 500; user-select: none; }
+.inf-log-full { flex: 1; margin: 0; overflow: auto; padding: 8px 12px; font-size: 11px; font-family: monospace;
+  white-space: pre-wrap; word-break: break-all; background: var(--bg-primary); }

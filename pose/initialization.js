@@ -84,6 +84,13 @@ async function init() {
         setupSplitHandles();
         setupTimeline();
         setupMenus();
+        // Desktop app only: the sleap-nn Inference panel. Fetched only when
+        // the shim says sleap-nn is there, so the web app never loads it.
+        if (window.lucidDesktop && window.lucidDesktop.sleapNn) {
+            import('../ui/inference-panel.js')
+                .then(function (m) { return m.setupInferencePanel(); })
+                .catch(function (e) { console.warn('[inference] panel not added:', e); });
+        }
 
         hideLoading();
         setStatus('Ready - load session via File menu', 'success');
