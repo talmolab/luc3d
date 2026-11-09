@@ -38,7 +38,7 @@ import { setStatus, markDirty } from '../import-export/save-load.js';
 import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js';
 import { getTrackingThreshold } from './settings.js';
 import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions } from '../pose/single-camera-tracking.js';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
          inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js';
 import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine } from './image-model-dialog.js';
@@ -48,7 +48,7 @@ import { createBrightnessSampler } from './brightness-sampler.js';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
          idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary,
-         idSwitchPlaceOf } from './id-switch-review.js';
+         idSwitchPlaceOf, idSwitchPrevPlaceEnd } from './id-switch-review.js';
 
 const CUE_LABEL = { size: 'body size', image: 'images', brightness: 'coat brightness', review: 'review list' };
 
@@ -655,7 +655,7 @@ function aboutHtml(st, ran) {
     var rv = st.results.review && st.results.review.ok ? st.results.review : null;
     var reviewAbout = rv ? '<p><b>The review list</b> is where a switch is most likely on one camera — where the tracker nearly ' +
         'chose the other assignment, where the input file\'s own tracks disagree with Track All, or where a lone animal\'s track ' +
-        'changes. About one place a minute; on proofread videos about 9 of every 10 switches were within 2 s of one. Rows have ' +
+        'changes, plus a check of who is who at the end. About one place a minute; on proofread videos about 9 of every 10 switches were within 2 s of one. Rows have ' +
         'no score: look at each, and Fix the ones where the labels swap.</p>' : '';
     if (!checks.length) return reviewAbout;
     return reviewAbout + aboutChecksHtml(st, checks);
@@ -783,7 +783,9 @@ function afterIdentityChange(session) {
 function openFixDialog(session, st, f, asPlace) {
     var res = st.results[f.cue] || st.results.size;
     var rr = rowRange(f);                          // the row's window: its progress bar, lead-in .. lead-out
-    var plan = idSwitchFixPlan(f, res, { currentFrame: state.currentFrame, totalFrames: state.totalFrames, window: [rr.p0, rr.p1],
+    // after "Earlier encounter" on this place, its own fix may start anywhere back to the place before it
+    var sb = asPlace || f.cue === 'review' ? stepBackOf(st, f) : null, w0 = sb ? Math.min(rr.p0, sb.bound) : rr.p0;
+    var plan = idSwitchFixPlan(f, res, { currentFrame: state.currentFrame, totalFrames: state.totalFrames, window: [w0, rr.p1],
                                          place: asPlace, results: st.results });
     if (!plan) { setStatus('Nothing to fix here: the stretch this switch covers is empty', 'warning'); return; }
     var idA = identityIdByName(session, plan.nameA), idB = identityIdByName(session, plan.nameB);
@@ -801,7 +803,7 @@ function openFixDialog(session, st, f, asPlace) {
     var isReview = !!asPlace || f.cue === 'review';
     var pickPair = isReview && (session.identities || []).length > 2;
     if (isReview) {
-        startWhy = plan.start === 'current' ? 'the frame you are on'
+        startWhy = plan.start === 'current' ? (plan.from < rr.p0 ? 'the frame you are on, before this place (you went back to an earlier encounter)' : 'the frame you are on')
             : 'just after this place — the frame you are on is before it, or past the next place on the list';
         endWhy = 'the end of the video — later places on the list fix their own stretches';
     } else if (f.kind === 'end') {
@@ -867,6 +869,47 @@ function swapForFix(session, from, to, idA, idB) {
         if (m.identityB === idA || m.identityB === idB) m.identityB = m.identityB === idA ? idB : idA;
     });
     return swapSingleCameraIdentities(session, from, to, idA, idB) || session.swapIdentitiesInRange(from, to, idA, idB);
+}
+
+// ---- Earlier encounter --------------------------------------------------------------
+// On one camera a swap often happens at a close encounter with no place on the list near it: the reviewer finds
+// the labels already swapped as the next place starts. "◂ Earlier encounter" goes to 1 s before the pair's latest
+// close encounter before that (pairEncounters), then the one before, …, no further back than the place before
+// (whose stretch it is); and from then on this place's own fix may start anywhere back to there. On proofread data
+// a reviewer doing this (with a check row at the end of the tracking) matched one who watches every frame between
+// places (MODULES.md, 2026-11-09). Kept in memory only (`st.stepBack`), never saved.
+var EARLIER_LEAD_SECONDS = 1;
+
+/** The step-back state of the place `f` stands for, or null. */
+function stepBackOf(st, f) {
+    var place = idSwitchPlaceOf(f) || f;
+    return st.stepBack && st.stepBack.key === rowKey(place) ? st.stepBack : null;
+}
+
+/** Go to just before the pair's next earlier close encounter (see above), or say there is none. */
+function stepBackToEncounter(session, st, f) {
+    var place = idSwitchPlaceOf(f) || f, key = rowKey(place);
+    var idA = identityIdByName(session, place.nameA), idB = identityIdByName(session, place.nameB);
+    var fps = state.fps > 0 ? state.fps : 30, rr = rowRange(place), lead = Math.round(EARLIER_LEAD_SECONDS * fps);
+    var bound = idSwitchPrevPlaceEnd(place, st.results) + 1, sb = stepBackOf(st, place);
+    var cur = state.currentFrame != null ? state.currentFrame : rr.p0;
+    // pressed again: the encounter before the last one it went to (or before where you are, if further back)
+    var anchor = Math.min(cur, sb ? sb.start : rr.p0);
+    var encs = anchor > bound ? pairEncounters(session, idA, idB, bound, anchor - 1, { fps: fps }) : [];
+    st.stepBack = { key: key, bound: bound, start: sb ? sb.start : anchor, at: sb ? sb.at : null, n: sb ? sb.n : 0 };
+    var since = bound > 0 ? ' since the place before (' + fmtTenths(bound - 1) + ')' : ' before this place';
+    if (!encs.length) {
+        setStatus('No earlier close encounter of ' + place.nameA + ' and ' + place.nameB + since +
+            ' — if the labels are swapped there, the swap began elsewhere: go back to it and click Fix again', 'warning');
+        return;
+    }
+    var e = encs[encs.length - 1], to = Math.max(bound, e.start - lead), nav = st.navigate || _navigate;
+    st.stepBack = { key: key, bound: bound, start: e.start, at: to, n: st.stepBack.n + 1 };
+    if (nav) nav(to);
+    updateIdSwitchProgress(to);
+    setStatus('Earlier encounter of ' + place.nameA + ' ↔ ' + place.nameB + ': ' + fmtTenths(e.start) + '–' + fmtTenths(e.end) +
+        ' (' + st.stepBack.n + ' back). Play it: if they wear each other\'s labels already before it, press Earlier encounter ' +
+        'again; otherwise stop where the labels swap and fix from there');
 }
 
 /** Swap, record, rename the rows the swap re-labels, then replay the row from its lead-in. */
@@ -959,7 +1002,8 @@ function lookNote(cues) {
         return c === 'ambiguity' ? 'tracker nearly chose the swap' : c === 'tracklet' ? 'input tracklet changes animal'
             : c === 'handover' ? 'a lone animal\'s track changes'
             : c === 'arrival' ? 'a second animal arrives (the one already there kept one track until here)'
-            : c === 'return' ? 'an animal comes back after being out of sight' : c;
+            : c === 'return' ? 'an animal comes back after being out of sight'
+            : c === 'videoEnd' ? 'the end of the tracking: check who is who (a swap after the last place shows only here)' : c;
     }).join(', ');
 }
 
@@ -995,6 +1039,10 @@ function selectedHtml(st, f) {
               (place ? placeBtn('Fix from here…', 'Swap the two tracks from the frame you are on to the end of the video — ' +
                 'this place\'s own fix, for when the check\'s Fix switch… covers the wrong frames') : '');
     } else return progressHtml(f);
+    // one camera: step back through the pair's earlier close encounters, for labels already swapped as the place starts
+    if (place && singleCameraName(getActiveSession())) act += '<button class="panel-btn id-switch-back" title="Already swapped when this place ' +
+        'starts? Go to where these two were last close before it — press again to go further back. Then Fix from where the labels swap">' +
+        '◂ Earlier encounter</button>';
     return progressHtml(f) + '<div class="id-switch-actions">' + act + '</div>';
 }
 
@@ -1101,6 +1149,7 @@ export function refreshIdSwitchPanel(session) {
             return;
         }
         if (e.target.closest('.id-switch-undo')) { undoLastFix(session, st); return; }
+        if (e.target.closest('.id-switch-back')) { var fb = byKey.get(row.dataset.key); if (fb) stepBackToEncounter(session, st, fb); return; }
         if (e.target.classList.contains('id-switch-tick')) {
             if (e.target.checked) st.reviewed.add(row.dataset.key); else st.reviewed.delete(row.dataset.key);
             st.current = row.dataset.key;

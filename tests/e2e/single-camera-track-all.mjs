@@ -60,8 +60,15 @@
  *     dialog (three tracks here), and Esc cancels it; the fixed row offers Fix
  *     again…, which from a frame past its own window (before the next place)
  *     swaps back, leaving only the stretch between the two fixes swapped.
+ *  9. The review list ends with a check row at the last tracked frame ("the end
+ *     of the tracking: check who is who"); on a place, "◂ Earlier encounter" goes
+ *     to 1 s before the pair's close encounters before it, latest first, then says
+ *     there is none; after it the place's Fix may start before the place (and
+ *     the dialog says why), without it a frame before the place still falls back
+ *     to just after it.
  *  1b. Track All ends on the summary box, planned for one camera: it counts
- *     tracks, lists coat brightness / images / body size, recommends saving and
+ *     tracks, lists coat brightness / images / body size, recommends reviewing
+ *     the list (here only its check row at the end) then saving, and
  *     never Triangulate All, has an Identities row per track, and the ID
  *     Switches tab reopens it.
  *
@@ -164,8 +171,9 @@ try {
     check(box && box.stats[0] === 'Tracks3for 3 animals' && box.ids === 3, `it counts the TRACKS, one per animal (${box && box.stats[0]}, ${box && box.ids} bars)`);
     check(box && box.checks.join('|').startsWith('brightness:skipped:') && /^image:off:/.test(box.checks[1]) && /^size:off:not run automatically on one camera — optional/.test(box.checks[2]),
         'its checks: coat brightness (skipped here: no video), images (not run), body size (not run on one camera, the reason on hover)');
-    check(box && !/Triangulate/.test(box.text) && box.primary === 'Save project' && /File ▸ Save/.test(box.text),
-        `no Triangulate All on one camera: the next step is saving (primary "${box && box.primary}")`);
+    // the review list holds only its check row at the end here (no other place), so reviewing comes before saving
+    check(box && !/Triangulate/.test(box.text) && box.primary === 'Review the list' && /File ▸ Save/.test(box.text),
+        `no Triangulate All on one camera: review the list (its check row at the end), then save (primary "${box && box.primary}")`);
     check(box && box.gallery === 3, `the Identities section has a row per track (${box && box.gallery}), from the single-camera stand-in`);
     await page.click('#trackSummaryClose');
     const re = await page.evaluate(async () => {
@@ -207,7 +215,7 @@ try {
     await page.click('#menuCheckSizeSwitches', { force: true }).catch(() => page.evaluate(() => document.getElementById('menuCheckSizeSwitches').click()));
     await page.waitForFunction(() => /Check ID Switches: /.test(document.getElementById('statusText').textContent), { timeout: 60000 });
     check(/Check ID Switches: 1 possible switch/.test(await status()), 'the size check finds one possible switch: ' + (await status()).slice(0, 80));
-    const rowFrames = await page.evaluate(() => Array.from(document.querySelectorAll('#idSwitchPanel .id-switch-row')).map(r => Number(r.dataset.frame)));
+    const rowFrames = await page.evaluate(() => Array.from(document.querySelectorAll('#idSwitchPanel .id-switch-row:not(.cue-review)')).map(r => Number(r.dataset.frame)));
     const rowFrame = rowFrames.find(f => Math.abs(f - 1650) < 60);
     check(rowFrames.length === 1 && rowFrame != null, `its one row is at the planted encounter (rows at ${rowFrames.join(', ')})`);
     const rowSel = `#idSwitchPanel .id-switch-row[data-frame="${rowFrame}"]`;
@@ -594,7 +602,7 @@ try {
     const beforeM = await page.evaluate(() => window.__lone());
     await page.click(rowSelM + ' .id-switch-line1');
     const acts0 = await page.evaluate((s) => [...document.querySelectorAll(s + ' .id-switch-actions button')].map(b => b.textContent), rowSelM);
-    check(JSON.stringify(acts0) === JSON.stringify(['Fix switch…', 'Fix from here…']), `unfixed, it offers the check's Fix and the place's (${acts0.join(', ')})`);
+    check(JSON.stringify(acts0) === JSON.stringify(['Fix switch…', 'Fix from here…', '◂ Earlier encounter']), `unfixed, it offers the check's Fix and the place's (${acts0.join(', ')})`);
     await page.click(rowSelM + ' .id-switch-fix[data-place]');
     const dlgP = await page.evaluate(() => (document.querySelector('.id-switch-fix-modal') || {}).textContent || '');
     check(/the end of the video — later places on the list fix their own stretches/.test(dlgP), 'Fix from here… is the place\'s fix, to the end of the video');
@@ -648,7 +656,7 @@ try {
     const rowSelR = `#idSwitchPanel .id-switch-row[data-key="${ret.key}"]`;
     await page.click(rowSelR + ' .id-switch-line1');
     const actsR0 = await page.evaluate((s) => [...document.querySelectorAll(s + ' .id-switch-actions button')].map(b => b.textContent), rowSelR);
-    check(JSON.stringify(actsR0) === JSON.stringify(['Fix switch…', 'Fix from here…']), `an image row shown with a return offers both fixes (${actsR0.join(', ')})`);
+    check(JSON.stringify(actsR0) === JSON.stringify(['Fix switch…', 'Fix from here…', '◂ Earlier encounter']), `an image row shown with a return offers both fixes (${actsR0.join(', ')})`);
     await page.click(rowSelR + ' .id-switch-fix');
     await page.click('#idSwitchFixOk');
     const actsR = await page.evaluate((s) => [...document.querySelectorAll(s + ' .id-switch-actions button')].map(b => b.textContent), rowSelR);
@@ -671,6 +679,90 @@ try {
     }
     check(bad === 0 && swapped > 0 && fixR.from === hereR && fixR.key.startsWith('brightness:'),
         `it swaps from the frame you are on to the end, as the return's fix (${swapped} detections moved, ${bad} wrong)`);
+
+    console.log('\n9. A check row at the end, and "Earlier encounter" steps back through the pair\'s close encounters');
+    // Two animals that meet every 10 s (around 0:05, 0:15, 0:25), 30 s; then one place at 0:27 stands in for a row
+    // the reviewer reaches with the labels already swapped.
+    const enc9 = await page.evaluate(async () => {
+        const pd = await import('/pose/pose-data.js'), AS = await import('/ui/app-state.js');
+        const NODES = ['Nose', 'Ear_R', 'Ear_L', 'TTI', 'TailTip', 'Head', 'Trunk', 'Tail_0', 'Tail_1', 'Tail_2',
+            'Shoulder_left', 'Shoulder_right', 'Haunch_left', 'Haunch_right', 'Neck'];
+        const T = { Nose: [45, 0], Ear_R: [25, -11], Ear_L: [25, 11], Head: [30, 0], Neck: [20, 0], Trunk: [-5, 0], TTI: [-40, 0],
+            Shoulder_left: [10, 12], Shoulder_right: [10, -12], Haunch_left: [-25, 15], Haunch_right: [-25, -15],
+            Tail_0: [-65, 0], Tail_1: [-88, 0], Tail_2: [-110, 0], TailTip: [-132, 0] };
+        const at = (cx, cy, h) => NODES.map(n => { const [x, y] = T[n], c = Math.cos(h), si = Math.sin(h); return [cx + c * x - si * y, cy + si * x + c * y]; });
+        const N = 900, cam = new pd.Camera('meet_video', [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [1280, 960]);
+        const s = new pd.Session([cam], new pd.Skeleton('mouse', NODES, []), ['t0', 't1'], 'meet');
+        for (let f = 0; f < N; f++) for (let a = 0; a < 2; a++) {
+            const t = f / 30, d = 300 * Math.abs(Math.cos(Math.PI * ((t % 10) / 10)));
+            s.addUnlinkedInstance(f, cam.name, new pd.Instance(at(640 + (a ? d : -d), 400 + 60 * a, a ? Math.PI : 0), a, 'predicted', 0.9));
+        }
+        AS.state.sessions = [s]; AS.state.activeSessionIdx = 0; AS.state.session = s;
+        AS.state.totalFrames = N; AS.state.currentFrame = 0; AS.state.fps = 30;
+        if (AS.timeline) { AS.timeline.setTotalFrames(N); AS.timeline.setData(s); }
+        window.__meet = () => { const S = AS.state.session, out = [];
+            for (let f = 0; f < N; f++) out.push(S.frameGroups.get(f).getUnlinkedInstances('meet_video').map(u => u.instance.trackIdx));
+            return out; };
+    });
+    await page.evaluate(() => { document.getElementById('statusText').textContent = ''; document.getElementById('tbTrackAll').click(); });
+    await page.waitForFunction(() => /Tracked \d+ animal|Track All error/.test(document.getElementById('statusText').textContent), { timeout: 60000 });
+    const end9 = await page.evaluate(() => { const r = window.__lucid.state.session._idSwitch.results.review;
+        const m = r.flags[r.flags.length - 1]; return m ? { frame: m.frame, look: m.look } : null; });
+    check(end9 && end9.frame === 899 && end9.look.join() === 'videoEnd', `the review list ends with a check row at the last tracked frame (${JSON.stringify(end9)})`);
+    await page.click('#trackSummaryPrimary').catch(() => {});
+    const endNote = await page.evaluate(() => { const r = [...document.querySelectorAll('#idSwitchPanel .id-switch-row.cue-review')].pop(); return r ? r.textContent : ''; });
+    check(/the end of the tracking: check who is who/.test(endNote), 'its row says so: …' + endNote.slice(endNote.indexOf('the end of the tracking'), endNote.indexOf('the end of the tracking') + 40));
+    // one place at 0:27 (frame 810), between id_0 and id_1
+    const key9 = await page.evaluate(async () => {
+        const S = window.__lucid.state.session, st = S._idSwitch, R = await import('/ui/id-switch-review.js'), M = await import('/ui/id-switch-modal.js');
+        st.results.review.flags = [{ frame: 810, startFrame: 810, identityA: 0, identityB: 1, nameA: 'id_0', nameB: 'id_1', kind: 'onset', score: 0,
+            look: ['handover'], switchBackAt: null, cue: 'review' }];
+        R.linkIdSwitchResults(st.results); M.refreshIdSwitchPanel(S);
+        const P = await import('/pose/single-camera-tracking.js');
+        window.__enc = P.pairEncounters(S, 0, 1, 0, 749, { fps: 30 });
+        return R.idSwitchRowKey(st.results.review.flags[0]);
+    });
+    const enc = await page.evaluate(() => window.__enc);
+    check(enc.length === 3, `the pair's close encounters before the place's lead-in: three (${JSON.stringify(enc)})`);
+    const rowSel9 = `#idSwitchPanel .id-switch-row[data-key="${key9}"]`;
+    await page.click(rowSel9 + ' .id-switch-line1');
+    const acts9 = await page.evaluate((s) => [...document.querySelectorAll(s + ' .id-switch-actions button')].map(b => b.textContent), rowSel9);
+    check(acts9.includes('◂ Earlier encounter'), `the selected place offers "◂ Earlier encounter" (${acts9.join(', ')})`);
+    const steps = [];
+    for (let i = 0; i < 4; i++) {
+        await page.click(rowSel9 + ' .id-switch-back');
+        await page.waitForTimeout(150);
+        steps.push(await page.evaluate(() => ({ f: window.__lucid.state.currentFrame, st: document.getElementById('statusText').textContent })));
+    }
+    const want = enc.slice().reverse().map(e => Math.max(0, e.start - 30));
+    check(steps.slice(0, 3).every((x, i) => x.f === want[i] && /^Earlier encounter of id_0 ↔ id_1: /.test(x.st) && x.st.includes('(' + (i + 1) + ' back)')),
+        `each press goes to 1 s before the next earlier encounter, latest first (${steps.slice(0, 3).map(x => x.f)}; want ${want})`);
+    check(/^No earlier close encounter of id_0 and id_1 before this place/.test(steps[3].st) && steps[3].f === want[2],
+        'past the first, it says there is none and stays: ' + steps[3].st.slice(0, 60));
+    // Fix from a frame before the place: allowed once stepped back, and the dialog says why
+    const from9 = want[1] + 20, before9 = await page.evaluate(() => window.__meet());
+    await page.evaluate(async (f) => { const I = await import('/pose/initialization.js'); I.navigateToFrame(f); }, from9);
+    await page.click(rowSel9 + ' .id-switch-fix');
+    const dlg9 = await page.evaluate(() => (document.querySelector('.id-switch-fix-modal') || {}).textContent || '');
+    check(/Starts at frame [\d,]+: the frame you are on, before this place \(you went back to an earlier encounter\)/.test(dlg9),
+        'the Fix starts at the frame you are on, before the place: ' + dlg9.slice(dlg9.indexOf('Starts at'), dlg9.indexOf('Starts at') + 110));
+    await page.click('#idSwitchFixOk');
+    const after9 = await page.evaluate(() => window.__meet());
+    let bad9 = 0, sw9 = 0;
+    for (let f = 0; f < before9.length; f++) for (let q = 0; q < before9[f].length; q++) {
+        const t = before9[f][q], w = f < from9 ? t : 1 - t;
+        if (after9[f][q] !== w) bad9++; else if (w !== t) sw9++;
+    }
+    check(bad9 === 0 && sw9 > 0, `it swaps the pair from there to the end (${sw9} detections moved, ${bad9} wrong)`);
+    // without stepping back, a frame before the place still falls back to just after it (unchanged)
+    await page.evaluate(async () => { const S = window.__lucid.state.session; S._idSwitch.stepBack = null; S._idSwitch.fixes = []; });
+    await page.evaluate(async (f) => { const I = await import('/pose/initialization.js'); I.navigateToFrame(f); }, 300);
+    await page.click(rowSel9 + ' .id-switch-line1');
+    await page.evaluate(async (f) => { const I = await import('/pose/initialization.js'); I.navigateToFrame(f); }, 300);
+    await page.click(rowSel9 + ' .id-switch-fix');
+    const dlg9b = await page.evaluate(() => (document.querySelector('.id-switch-fix-modal') || {}).textContent || '');
+    check(/just after this place/.test(dlg9b), 'without "Earlier encounter", a frame before the place still starts the Fix just after it');
+    await page.keyboard.press('Escape');
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

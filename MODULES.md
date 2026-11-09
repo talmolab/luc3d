@@ -2894,6 +2894,36 @@ row, and does worse on the list without returns: intact 99.925 vs 99.825%, sham_
   one SLAP-2M view 98.95 -> 73.93% (10192022183808/mid). Returns after 3 s unseen fall
   in between.
 
+**A check row at the end, and stepping back through the pair's encounters.**
+`videoEndRow(frames, out, review, fps, opts)` adds a review row at the last tracked
+frame (cue `videoEnd`, "the end of the tracking: check who is who") unless a row
+already ends within `VIDEO_END_DEFAULTS.clearSeconds` (5) of it; its pair is the two
+tracks seen most in the last `pairSeconds` (2). `pairEncounters(session, idA, idB,
+from, to, opts)` lists the close encounters of two identities on a single-camera
+session as they are labelled now (centroids under `PAIR_ENCOUNTER_DEFAULTS.closeBody`
+(1.5) body lengths, runs joined across `gapSeconds` (0.25)), for the ID Switches
+tab's **◂ Earlier encounter** (`ui/id-switch-modal.js`). Why: measured 2026-11-09
+offline (Spock `runs/2026-11-07_lone/<set>/miss*.mjs`, `oracle_back*.mjs`), the
+5 s reviewer's loss comes from ~29 of 1,178 videos where two mice swap tracks in a
+close encounter with NO place near it (0.2–0.6 body lengths apart). The reviewer
+reaches it at the next place with the labels already swapped and fixes from there,
+or never when no place follows (SLAP 151549-top at 8:24, intact 111696_3328 at
+4:09). With the 5 s reviewer (intact / sham_gdx / SLAP / SLAP-2M):
+- the list: 99.840 / 99.942 / 99.620 / 98.885%;
+- the end row alone: 99.841 / 99.942 / 99.623 / 98.887 (a swap found there still needs finding where it began);
+- end row + stepping back through the pair's encounters (1.5 bodies; to the place
+  before, no cap) to where the label is still right, fixing from where it goes
+  wrong: **99.927 / 99.980 / 99.923 / 99.550**, against 99.925 / 99.981 / 99.919 /
+  99.595 for the reviewer who watches to the next place. +0.08–0.16 rows a minute;
+  a step-back on 32 of 725 intact videos, 7 of 207 sham_gdx, ~30 SLAP views, 46 of
+  163 SLAP-2M views, 0.8–1.9 steps each (max 7–20); no intact or sham_gdx video
+  worse, 0–2 SLAP / SLAP-2M views slightly worse against 9–12 better. A 5-step cap
+  cost SLAP-2M 99.55 -> 99.31% (not adopted). 1 body length instead of 1.5: the same
+  within 0.01 points but SLAP 99.916.
+- Not adopted: starting the Fix automatically at the pair's last encounter (no
+  help; SLAP 99.478%, the last encounter often is not the one), and a check row
+  every 60 s without one (99.902 / 99.942 / 99.698 / 99.608 for +0.6 rows a minute).
+
 **Eager sessions only.** A lazy (> 150 MB) single-camera project is refused with
 `SINGLE_CAMERA_LAZY_REASON` rather than tracked from its resident window. Track
 Frame and Track Frame Range are refused on one camera (the tracker is temporal,
@@ -2939,7 +2969,10 @@ opts)` -> `[{f, a, b, cue: 'handover'}]`; `HANDOVER_DEFAULTS` (`lookSeconds` 1,
 `nearBody` 0.5); `returnMoments(frames, out, fps, opts)` -> `[{frame, startFrame, identityA,
 identityB, cues: ['return']}]`; `RETURN_DEFAULTS` (`gapSeconds` 1); `reviewReturnCandidates(frames,
 out, fps, opts)` -> `[{f, a, b, cue: 'return'}]`; `REVIEW_RETURN_DEFAULTS` (`gapSeconds` 1,
-`otherAwaySeconds` 0.5); `reviewResult(moments, session, fps)` -> the review list's result; `singleCameraCheckSession(session)`
+`otherAwaySeconds` 0.5); `videoEndRow(frames, out, review, fps, opts)` -> the check row at the end or
+null; `VIDEO_END_DEFAULTS` (`clearSeconds` 5, `pairSeconds` 2); `pairEncounters(session, idA, idB, from,
+to, opts)` -> `[{start, end}]` ascending; `PAIR_ENCOUNTER_DEFAULTS` (`closeBody` 1.5, `gapSeconds` 0.25);
+`reviewResult(moments, session, fps)` -> the review list's result; `singleCameraCheckSession(session)`
 -> stand-in | null | `{fail}`; `swapSingleCameraIdentities(session, from, to, idA, idB)`
 -> `{frames, tracks: boolean}` | null; `singleCameraCheckOptions(cue)` -> the options
 the coat-brightness check runs with on one camera (`{skipEmpty: true,
@@ -2955,7 +2988,7 @@ stddev, minNodes)`; `SINGLE_CAMERA_LAZY_REASON`. In `trackSingleCamera`,
 `pose/detection-filter-stats.js` (`passesDetectionFilter`).
 
 **Imported by.** `pose/tracker.js` (Track All), `ui/id-switch-modal.js` (the
-checks and the fix).
+checks, the fix, and Earlier encounter's `pairEncounters`).
 
 **Coverage.** `tests/test-single-camera-tracking.mjs` (one track per animal
 across 18 input tracklet breaks, the spurious detection and the user frame, the
@@ -9593,7 +9626,8 @@ the image model and the coat-brightness sampler — test-only
 
 **The review list (single camera).** After single-camera Track All the tab also
 lists `results.review` (`pose/single-camera-tracking.js` `reviewResult`): the places
-a switch is most likely — near-ties, input-tracklet changes, handovers. They are
+a switch is most likely — near-ties, input-tracklet changes, handovers, returns, the
+lone-animal arrival, and a check row at the end of the tracking. They are
 rows like the checks' (ticks, seekbar markers, progress bar, Next unreviewed,
 the saved checklist), drawn grey, with NO score; their note says why the place is
 listed ("a lone animal's track changes", "an animal comes back after being out of sight", …); the header counts them ("N places to
@@ -9620,6 +9654,18 @@ second too early once cost a sham_gdx video 90.2% instead of 99.9%. With more th
 pick the two tracks (`pairSelect`, `#idSwitchFixA` / `#idSwitchFixB`, defaulting to
 the row's pair): on 3–4 mice the row's own pair was the swapped one in only a third
 to two thirds of the switches found. The dialog keeps Esc / Cancel.
+**◂ Earlier encounter** (one camera, on every row that stands for a place): for
+labels already swapped as the place starts, it goes to 1 s before the pair's latest
+close encounter before the place's lead-in (`pairEncounters`, current labels), and
+on each further press the one before that, no further back than the place before
+(`idSwitchPrevPlaceEnd`), saying "No earlier close encounter …" past the first.
+From then on that place's own Fix may start anywhere back to the place before
+(the dialog says "before this place (you went back to an earlier encounter)");
+without it a frame before the place still falls back to just after it. The
+state (`st.stepBack`: key, bound, last encounter, count) is in memory only, never
+saved. Measured with the check row at the end (`pose/single-camera-tracking.js`,
+2026-11-09): a reviewer watching 5 s past each place and stepping back this way
+matched one who watches every frame between places.
 
 **The coat-brightness check** (`brightness: true`, `runBrightness`) runs
 `checkBrightnessSwitches` with `ui/brightness-sampler.js`'s vectors under the same
@@ -9856,6 +9902,8 @@ through its partner); `idSwitchIsPlace(m)` (a row that stands for a place, not a
 scored encounter: a review-list row, or a check's row at a moment, `look`);
 `idSwitchPlaceOf(m)` (the place a tab row stands for: a review-list place first —
 itself or its linked row — else itself or its linked row when at a moment; null);
+`idSwitchPrevPlaceEnd(m, results)` (the last frame of the place before `m`, on any
+list, or -1: how far back Earlier encounter steps);
 `serializeIdSwitchReview(session)` -> payload or `null` (no check results -> no
 key, so untouched projects keep their bytes); `ingestIdSwitchReview(session,
 payload)` (rebuilds `session._idSwitch`, re-links "Both"; ignores anything
