@@ -104,7 +104,10 @@ helpers used by every load path. Calls `init()` at module-load.
   the first `[data-infotip]` element exists.
 - `../ui/node-tooltip.js` — `installNodeTooltip`, right after it (the listeners
   that put the node tooltip away on a press, key, wheel, scroll or resize).
-- `../ui/info-panel.js` — `setupPanelTabs`, `setupSkeletonEditing`,
+- `../ui/panel-rail.js` — `setupPanelRail({ toggleInfoPanel })` (builds the
+  right-edge icon rail and wraps each panel in its collapsible section; `toggleInfoPanel` from `../ui/ui-wiring.js` is handed
+  in so the rail stays free of that import).
+- `../ui/info-panel.js` — `setupSkeletonEditing`,
   `setupVideosTab` (the Videos tab's Load/Remove buttons, wired once here
   because `updateInfoPanel` returns early with no session),
   `updateInfoPanel`.
@@ -5050,33 +5053,11 @@ select ignores a scripted `.value` until focused, which
 rely on. Covered by `tests/test-lazy-select.js` and
 `tests/e2e/info-panel-many-tracks.mjs`.
 
-**The panel tab bar is ONE horizontal scroller.** `setupPanelTabs` makes
-`.panel-tabs` scroll sideways with every tab (Instances, Visibility, ID
-Switches, Videos, Cameras, Skeleton, Session) always inside it, in markup
-order, each sized to its full name. Do not bring back a "More ▾" overflow
-dropdown: it hid most tabs at the default width, and which ones moved as the
-panel was resized.
-- **A vertical wheel scrolls it too** (a trackpad swipe over the strip is
-  vertical); the bar sits OUTSIDE `.panel-tab-content`, so this breaks no
-  "one scroller" rule. It `preventDefault()`s only when the bar moved, so a
-  swipe past either end is still the page's.
-- **Click-and-drag has a 4px threshold, and a real drag SUPPRESSES the click**
-  (a capture-phase `click` listener on the bar, cleared on the next
-  `pointerdown`). Pointer capture is taken only once the threshold is crossed —
-  capturing on every press re-targets the plain click that follows. Touch
-  pointers are skipped: native `pan-x` already pans, and driving `scrollLeft`
-  on top would move it twice.
-- **Selecting a tab scrolls it into view**, by hand rather than with
-  `scrollIntoView` (which could scroll the app's layout), so
-  `openIdSwitchPanel` (`ui/id-switch-modal.js`, which just `.click()`s the
-  button) never leaves the active tab off-screen. `.panel-tabs` is
-  `position: relative` so each tab's `offsetLeft` is in the scroller's space.
-- **The edge fades are the only affordance** (`scroll-left` / `scroll-right`
-  classes, drawn with `mask-image`; the scrollbar is suppressed), recomputed by
-  a `ResizeObserver`.
-- **`user-select: none` on the bar** — the documented exception for "a surface
-  whose job is to be dragged".
-Covered by `tests/e2e/panel-tabs-scroller.mjs`.
+**The panels are opened, folded and closed by the right-edge rail and the
+section headers, not by this module.** `ui/panel-rail.js` owns which
+`.panel-tab-content` panes are shown (several can be); this module only fills
+them. (The old horizontal tab bar and `setupPanelTabs`
+are gone.)
 
 **The Videos tab's two buttons are wired at SETUP, not per-session.**
 `setupVideosTab()` (called once from `pose/initialization.js`) installs the
@@ -5093,7 +5074,7 @@ would have no handler on a freshly-opened app.
 Covered by `tests/e2e/videos-panel-buttons.mjs`.
 
 **Key exports.**
-- Tab control: `setupPanelTabs`, `setupVideosTab`.
+- Tab control: `setupVideosTab` (switching is `ui/panel-rail.js`).
 - Tables: `populateVideosTable`, `populateCamerasTable`,
   `populateSkeletonTable`, `populateSessionAssignTable`,
   `populateUnassignedVideos`.
@@ -7527,8 +7508,9 @@ the user made and forgot. Pinned by `define-plane-mode.mjs` §1b.
     editor, the drag-end status, the padlock tooltip and the pin picker.
 - `enterPlaneMode()` / `exitPlaneMode()` / `togglePlaneMode()` /
   `isPlaneModeActive()` — show/hide the `#planeModeBar` banner and swap the
-  info panel's `.panel-tabs` + `.panel-tab-content` for `#planePanel` by inline
-  `display` only, so exiting restores the previously-active tab and its scroll.
+  info panel's `.panel-section` stack for `#planePanel` by inline
+  `display` only, and disable the rail's panel icons (`setPanelRailLocked`,
+  `ui/panel-rail.js`), so exiting restores the same open / folded sections and the scroll.
   Exiting also clears the plane selection/hover and unwinds the two things that
   lock this panel: `exitOriginMode()` and `closeAngleModal()`.
 - `handlePlaneDrop(planeId, viewName, clientX, clientY)` — the drop listener's
@@ -8973,7 +8955,9 @@ summary with its results (`reopenTrackSummary(session, results)`) instead of ope
 the tab; with no summary kept for the session it opens the tab as from the menu);
 `refreshIdSwitchPanel(session?)` (render the tab and put that session's
 markers on the seekbar — called after a check, from `updateInfoPanel` and from
-`switchSession`); `openIdSwitchPanel()` (show the panel, if hidden, on the tab);
+`switchSession`); `openIdSwitchPanel()` (open + expand the ID Switches section,
+showing the info panel if hidden, via `showPanelTab` in `ui/panel-rail.js` —
+never a rail click, which would fold an already-expanded section);
 `clearIdSwitchResults(session?)` (called by `runTrackingPass` before it relabels);
 `ID_SWITCH_LEAD_IN_SECONDS`, `idSwitchLeadInFrame(marker, fps)`,
 `updateIdSwitchProgress(frame)`; back-compat
@@ -9056,9 +9040,8 @@ embeds only the samples its scoring reads plus a sparse background. Time scales 
 (~9 min for a 30-min, 5-animal session on an M-series Mac).
 
 **User-facing features.** The **ID Switches** tab (`#tabIdSwitches` /
-`#idSwitchPanel` in `index.html`, third tab; at the default panel width it is
-scrolled off the right of the tab bar, and `openIdSwitchPanel` scrolls it back
-into view). Results are stored per session on `session._idSwitch` (`{results:
+`#idSwitchPanel` in `index.html`, the third icon on the right-edge rail, a
+two-opposing-arrows swap glyph; `openIdSwitchPanel` shows it). Results are stored per session on `session._idSwitch` (`{results:
 {size?, image?}, reviewed: Set, fixes, showRepeats, current}`), so they survive
 closing/reopening the tab and switching sessions — and are SAVED in the `.slp`
 (`metadata.lucid.idSwitchReview`, see `ui/id-switch-review.js`; ticking a row,
@@ -12465,6 +12448,101 @@ instances must render regardless of the main panel.
 
 **User-facing features.** Hiding the 3D viewport (`\`) or info panel (`I`)
 actually stops the corresponding rendering / data work.
+
+---
+
+### ui/panel-rail.js
+
+**Purpose.** The right-edge icon rail and the stack of collapsible panel
+sections it drives (Instances, Visibility, ID Switches, Videos, Cameras,
+Skeleton, Session); it also shows/hides the info panel. It replaced the
+horizontal tab bar. Modelled on sleap-app's sidebar
+(`src/components/layout/AppShell.tsx` `Sidebar`; rules in `appStore.ts`
+`togglePanelOpen` / `openPanel` / `closePanel` / `toggleSectionCollapsed`) in
+its default multi-panel (accordion) mode.
+- **Sections:** at setup each `.panel-tab-content` pane is wrapped in a
+  `<section class="panel-section" data-tab>` with a header: a chevron + name
+  button (`.panel-section-toggle`, `aria-expanded`) that folds the body to the
+  header strip, and an ✕ (`.panel-section-close`, "Close <name>") that takes
+  the panel out of the stack. Panes keep their ids and markup; a pane carries
+  `.active` while its body is on screen (open and not folded). Open sections
+  stack in rail order.
+- **Click rules (sleap-app's accordion):** a rail click on a panel that is not
+  expanded opens it if needed, expands it and folds every other open panel; a
+  click on the expanded panel folds it; while the info panel is hidden a click
+  shows it with that panel expanded and the rest folded. A header chevron
+  folds/unfolds only its own section (several can be expanded). Closing the
+  last open panel hides the info panel; showing the info panel with nothing
+  open reopens Instances (never an empty panel). Every OPEN panel's icon is
+  `.active` / `aria-pressed`; a hidden info panel shows none. The top button
+  (Lucide PanelRightClose / PanelRightOpen) is a fourth hide/show beside the
+  Panel button, `I` and View ▸ Toggle Info Panel; all four go through
+  `toggleInfoPanel`, keep the stack, and a `MutationObserver` on
+  `#infoPanelWrapper`'s class keeps the rail in step.
+- **One scroller:** unlike sleap-app, sections never scroll on their own:
+  `#infoPanel` is the one scroller (CLAUDE.md), sections have their natural
+  height, and each header is `position: sticky` (rows that already stuck at
+  `top: 0` inside a pane — `.data-table` heads, `.id-switch-toolbar` — stick
+  below it, `--panel-section-header-height`). So no section-resize splitters.
+  sleap-app's single-panel mode (View ▸ Allow Multiple Panels) is not ported.
+- **Code never clicks a rail button to open a panel** (clicking the expanded
+  one folds it): it calls `showPanelTab(tabId)` (sleap-app's `openPanel`),
+  which opens + expands that panel, shows the info panel, scrolls the
+  section's header to the top of `#infoPanel` (a rail click that opens a
+  panel does too), and never hides or folds anything.
+- **The rail widens** from 44px to 132px (`--panel-rail-expanded-width`, just
+  past "ID Switches") over the panel to show each name, with sleap-app's rules
+  (AppShell `railExpanded`, `wireRailExpansion`): `.expanded` is set on mouse
+  enter and on focus entering the rail, and cleared on mouse leave (whatever
+  has focus, so `I` after a click and then moving away narrows it) and on
+  focus leaving the rail. A click neither narrows it nor drops focus. As in
+  sleap-app the icon is LEFT of its name, so the icons slide left as it
+  widens, and the widened rail takes the pointer (each row is its button): it
+  covers the panel's right edge until the pointer leaves it.
+- The rail is a sibling AFTER `#infoPanelWrapper` in `.main-content`, so a
+  collapsed wrapper still measures 0 wide and `isInfoPanelVisible` is unchanged.
+- Open / folded sections are display taste:
+  `localStorage.lucidPanelRailSections` (`{open, folded}`, best-effort),
+  restored once in `setupPanelRail`; whether the info panel is shown is not
+  remembered (it starts shown, as before).
+
+**Key exports.** `PANEL_RAIL_PANELS` (`{tab, label, icon}` in rail order),
+`PANEL_RAIL_STORAGE_KEY`, `setupPanelRail({ toggleInfoPanel })`,
+`showPanelTab(tabId)` (returns false for an unknown id),
+`clickPanelRailTab(tabId)` (the rail-click rule), `togglePanelSection(tabId)`
+(header chevron), `closePanelTab(tabId)` (header ✕), `getOpenPanelTabs()`
+(`[{tab, expanded}]` in stack order), `setPanelRailLocked(on)` (Define Planes
+disables the panel icons; the top button stays live), `syncPanelRail()`.
+
+**Imports from project modules.** `ui/panel-rail-icons.js` only.
+`toggleInfoPanel` is passed in, because `ui/id-switch-modal.js` and
+`ui/plane-definition.js` import this module and `ui/ui-wiring.js` would close a
+cycle.
+
+**Imported by.** `pose/initialization.js` (`setupPanelRail`),
+`ui/id-switch-modal.js` (`showPanelTab` in `openIdSwitchPanel`),
+`ui/plane-definition.js` (`setPanelRailLocked` in `setPanelPlaneMode`).
+
+**User-facing features.** The icon rail on the window's right edge and the
+collapsible panel sections. Covered by `tests/e2e/panel-rail.mjs`.
+
+### ui/panel-rail-icons.js
+
+**Purpose.** The rail's icons, inlined from Lucide 0.575.0 (`lucide-static`, the
+release sleap-app uses through `lucide-react`; ISC, notice in the file header
+and `lib/LICENSES.txt`). sleap-app's glyph wherever the panel matches:
+Instances = Users, Visibility = Eye (sleap-app's View panel), Videos = Film,
+Skeleton = Bone. Others: ID Switches = ArrowLeftRight (two opposing arrows),
+Cameras = Camera, Session = FolderTree, plus PanelRightClose / PanelRightOpen
+and the section headers' ChevronDown / ChevronRight / X (sleap-app's).
+Inline strings: no fetch, so offline mode and the version stamp are unaffected.
+
+**Key exports.** `RAIL_ICONS` (Lucide name → SVG child markup),
+`railIconSvg(name)` (wraps it in Lucide's 24x24 stroke-2 currentColor `<svg>`;
+throws on an unknown name).
+
+**Imports from project modules.** None (leaf). **Imported by.**
+`ui/panel-rail.js`.
 
 ---
 
