@@ -228,15 +228,20 @@ pub fn run() {
         };
 
         let window = tauri::WebviewWindowBuilder::new(app, "main", url)
-            .title("luc3d")
+            .title("LUC3D")
             .inner_size(1440.0, 900.0)
             .min_inner_size(1024.0, 700.0)
             .resizable(true)
             // Lets LUCID's own HTML5 drag-and-drop receive file drops (on
             // Windows the native handler would swallow them).
             .disable_drag_drop_handler()
-            .initialization_script(desktop_shim())
-            .build()?;
+            .initialization_script(desktop_shim());
+        // macOS: keep the title bar and traffic lights but not the centred
+        // title text; the title above still names the window in the Window
+        // menu, Mission Control and the Dock.
+        #[cfg(target_os = "macos")]
+        let window = window.hidden_title(true);
+        let window = window.build()?;
         // Record the paths of files the user picks through the page's own
         // file inputs (macOS; see input_paths.rs). AFTER the window: wry
         // registers the Objective-C class it patches when it makes a webview.
