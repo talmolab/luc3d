@@ -1,48 +1,48 @@
 // ui/info-panel.js — info-panel tables (videos, cameras, skeleton, sessions, frame info)
-// Pass 3d-2 extraction. Holds the panel-tab switching, every "populate" call
+// Pass 3d-2 extraction. Holds every "populate" call
 // for the right-hand info panel, the skeleton editor wiring, and the per-frame
 // instance-group / unlinked-instance tables (updateFrameInfo).
 
 import {
     Skeleton, Camera, Session,
-} from '../pose/pose-data.js?v=e5291f7738fd';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=e5291f7738fd';
-import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=e5291f7738fd';
-import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=e5291f7738fd';
-import { isInteractiveClickTarget } from './interaction.js?v=e5291f7738fd';
-import { persistSectionState } from './section-state.js?v=e5291f7738fd';
-import { renderRecordingInfo } from './recording-info.js?v=e5291f7738fd';
-import { buildLazySelect } from './lazy-select.js?v=e5291f7738fd';
+} from '../pose/pose-data.js?v=c0e1927f6e27';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=c0e1927f6e27';
+import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=c0e1927f6e27';
+import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=c0e1927f6e27';
+import { isInteractiveClickTarget } from './interaction.js?v=c0e1927f6e27';
+import { persistSectionState } from './section-state.js?v=c0e1927f6e27';
+import { renderRecordingInfo } from './recording-info.js?v=c0e1927f6e27';
+import { buildLazySelect } from './lazy-select.js?v=c0e1927f6e27';
 import { confirmSkeletonEdit, isSkeletonEditWarningSuppressed,
-         setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js?v=e5291f7738fd';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=e5291f7738fd';
-import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=e5291f7738fd';
+         setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js?v=c0e1927f6e27';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=c0e1927f6e27';
+import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=c0e1927f6e27';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
-         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=e5291f7738fd';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=e5291f7738fd';
-import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=e5291f7738fd';
+         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=c0e1927f6e27';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=c0e1927f6e27';
+import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=c0e1927f6e27';
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
     loadSingleSessionFromCache, removeVideoFile,
-} from '../loading/session-loader.js?v=e5291f7738fd';
+} from '../loading/session-loader.js?v=c0e1927f6e27';
 
 // Circular import — these are still defined in app.js for now. They will be
 // retargeted as later passes land:
 // - swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu
 //   → ui/identity-assignment.js (Pass 3f)
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
-import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=e5291f7738fd';
+import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=c0e1927f6e27';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
 // luc3d #172: every manual identity switch routes through applyIdentitySwitch,
 // which subsumes this file's former direct propagateIdentityForward calls.
 import {
     swapAssignTrack, applyIdentitySwitch, describeIdentitySwitch,
-} from './identity-assignment.js?v=e5291f7738fd';
+} from './identity-assignment.js?v=c0e1927f6e27';
 // Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import {
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
-} from './sessions-panes.js?v=e5291f7738fd';
+} from './sessions-panes.js?v=c0e1927f6e27';
 // Block 2 (Prompt 4): per-session timeline visibility toggles.
 import {
     toggleCameraVisibility,
@@ -51,7 +51,7 @@ import {
     getCameraVisibilityList,
     getTrackVisibilityList,
     getIdentityVisibilityList,
-} from './timeline-visibility.js?v=e5291f7738fd';
+} from './timeline-visibility.js?v=c0e1927f6e27';
 
 // ============================================
 // Inline name entry for "+ New Track" / "+ New Identity"
@@ -90,170 +90,6 @@ function startInlineNameEntry(selectEl, defaultName, onCommit) {
     input.addEventListener('blur', function () { finish(false); });
     input.addEventListener('click', function (e) { e.stopPropagation(); });
     input.addEventListener('mousedown', function (e) { e.stopPropagation(); });
-}
-
-// ============================================
-// Panel tab switching
-// ============================================
-
-export function setupPanelTabs() {
-    const tabBar = document.querySelector('.panel-tabs');
-    if (!tabBar) return;
-    const tabs = Array.from(tabBar.querySelectorAll('.panel-tab'));
-
-    // --- The bar scrolls sideways; every tab is always IN it -------------
-    // This replaced a "More ▾" dropdown that demoted the tabs which did not
-    // fit. Two tabs visible out of seven meant the panel's own name for the
-    // thing you were looking at was usually behind a control you had to open
-    // first — and WHICH tabs were behind it moved as the panel was resized,
-    // so the bar never looked the same twice. A scroller shows every tab in
-    // one fixed order, and the one you want is a swipe away rather than a
-    // click, a read and a second click.
-
-    // Does the bar overflow, and which way? The fades keyed off these classes
-    // are the ONLY thing saying there is more past an edge: the scrollbar is
-    // suppressed because this strip is ~31px tall and a horizontal bar under
-    // it would sit on top of the active tab's 2px underline.
-    function updateScrollAffordance() {
-        const max = tabBar.scrollWidth - tabBar.clientWidth;
-        // Sub-pixel layout widths leave a fraction of a pixel of "scroll" on
-        // a bar that visibly fits, which would fade an edge for no reason.
-        tabBar.classList.toggle('scroll-left', tabBar.scrollLeft > 1);
-        tabBar.classList.toggle('scroll-right', tabBar.scrollLeft < max - 1);
-    }
-
-    // Bring a tab fully into view, by hand rather than with
-    // `scrollIntoView`: that walks EVERY scrollable ancestor, so revealing a
-    // tab could scroll the app's own layout out from under it. `.panel-tabs`
-    // is `position: relative` in styles.css precisely so that it is each
-    // tab's `offsetParent` and `offsetLeft` is measured in the scroller's
-    // own coordinate space.
-    function scrollTabIntoView(btn) {
-        if (!btn) return;
-        const left = btn.offsetLeft;
-        const right = left + btn.offsetWidth;
-        if (left < tabBar.scrollLeft) tabBar.scrollLeft = left;
-        else if (right > tabBar.scrollLeft + tabBar.clientWidth) {
-            tabBar.scrollLeft = right - tabBar.clientWidth;
-        }
-        updateScrollAffordance();
-    }
-
-    // --- Tab selection -------------------------------------------------
-    function selectTab(tabId) {
-        tabs.forEach(function (t) { t.classList.remove('active'); });
-        document.querySelectorAll('.panel-tab-content').forEach(function (c) {
-            c.classList.remove('active');
-        });
-        const btn = tabs.find(function (t) { return t.getAttribute('data-tab') === tabId; });
-        if (btn) btn.classList.add('active');
-        const target = document.getElementById(tabId);
-        if (target) target.classList.add('active');
-        // A tab selected from code (`openIdSwitchPanel`) is very often one
-        // that is scrolled out of sight, and an active tab nobody can see
-        // reads as no tab being active at all.
-        scrollTabIntoView(btn);
-    }
-
-    tabs.forEach(function (tab) {
-        tab.addEventListener('click', function () {
-            selectTab(tab.getAttribute('data-tab'));
-        });
-    });
-
-    // --- Trackpad ------------------------------------------------------
-    // A trackpad over a 31px strip gives a VERTICAL two-finger swipe, so map
-    // that onto the horizontal axis. It steals nothing: the bar sits outside
-    // `.panel-tab-content`, which is the panel's one vertical scroller, so a
-    // vertical wheel here moved nothing at all before this existed.
-    tabBar.addEventListener('wheel', function (e) {
-        const max = tabBar.scrollWidth - tabBar.clientWidth;
-        if (max <= 0) return;
-        // A sideways swipe is already on the right axis; take whichever one
-        // the gesture is actually on rather than summing the two.
-        const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-        if (!delta) return;
-        const before = tabBar.scrollLeft;
-        tabBar.scrollLeft = Math.max(0, Math.min(max, before + delta));
-        updateScrollAffordance();
-        // Swallow the gesture only when it actually moved the bar, so a swipe
-        // that runs past either end is still the page's to handle.
-        if (tabBar.scrollLeft !== before) e.preventDefault();
-    }, { passive: false });
-
-    // --- Click and drag ------------------------------------------------
-    // A few pixels of travel while pressing a tab is a click with a shaky
-    // hand, not a drag. Below this the bar does not move and the tab fires.
-    const DRAG_THRESHOLD_PX = 4;
-    var dragPointerId = null;
-    var dragStartX = 0;
-    var dragStartScroll = 0;
-    var dragging = false;
-    var suppressClick = false;
-
-    tabBar.addEventListener('pointerdown', function (e) {
-        // Touch already gets the browser's own momentum panning out of
-        // `overflow-x: auto`; driving `scrollLeft` on top of it would move
-        // the bar twice per gesture.
-        if (e.pointerType === 'touch' || e.button !== 0) return;
-        // Clear a suppression left behind by a drag that ended without ever
-        // producing a click, so that it cannot eat this press instead.
-        suppressClick = false;
-        dragging = false;
-        dragPointerId = e.pointerId;
-        dragStartX = e.clientX;
-        dragStartScroll = tabBar.scrollLeft;
-    });
-
-    tabBar.addEventListener('pointermove', function (e) {
-        if (dragPointerId === null || e.pointerId !== dragPointerId) return;
-        const dx = e.clientX - dragStartX;
-        if (!dragging && Math.abs(dx) < DRAG_THRESHOLD_PX) return;
-        if (!dragging) {
-            dragging = true;
-            tabBar.classList.add('dragging');
-            // Captured only once the drag is real: capturing on every press
-            // would re-target the plain click that follows one.
-            tabBar.setPointerCapture(dragPointerId);
-        }
-        tabBar.scrollLeft = dragStartScroll - dx;
-        updateScrollAffordance();
-    });
-
-    function endDrag(e) {
-        if (dragPointerId === null || e.pointerId !== dragPointerId) return;
-        if (dragging) {
-            tabBar.releasePointerCapture(dragPointerId);
-            tabBar.classList.remove('dragging');
-            // The pointerup that ends a drag still produces a click on
-            // whatever tab it landed on — dragging the bar across a tab must
-            // not also switch to it.
-            suppressClick = true;
-        }
-        dragging = false;
-        dragPointerId = null;
-    }
-    tabBar.addEventListener('pointerup', endDrag);
-    tabBar.addEventListener('pointercancel', endDrag);
-
-    // Capture phase, so this runs BEFORE the tab's own listener rather than
-    // after it has already switched.
-    tabBar.addEventListener('click', function (e) {
-        if (!suppressClick) return;
-        suppressClick = false;
-        e.stopPropagation();
-        e.preventDefault();
-    }, true);
-
-    // The bar also scrolls without going through any of the above: a
-    // keyboard Tab onto an off-screen button, or a trackpad's own sideways
-    // inertia once `preventDefault` has stopped being called.
-    tabBar.addEventListener('scroll', updateScrollAffordance, { passive: true });
-    // Resizing the panel changes WHETHER it overflows, not just by how much.
-    if (typeof ResizeObserver !== 'undefined') {
-        new ResizeObserver(updateScrollAffordance).observe(tabBar);
-    }
-    updateScrollAffordance();
 }
 
 // ============================================

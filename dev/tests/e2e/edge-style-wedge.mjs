@@ -70,7 +70,7 @@ try {
     }), ROWS);
     check(restored.every(r => r[0] === 'wedge' && r[1] === 'wedge'), 'a reload restores all five, with the button lit');
     const fit = await page.evaluate((rows) => {
-        document.querySelector('.panel-tab[data-tab="tabVisibility"]').click();
+        document.querySelector('.panel-rail-btn[data-tab="tabVisibility"]').click();
         const tab = document.getElementById('tabVisibility');
         const right = tab.getBoundingClientRect().right;
         return {

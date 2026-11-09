@@ -9,7 +9,7 @@
 
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline, VIEW_NAMES,
-         getActiveSession, hasRealVideo, setInstanceClipboard, getInstanceClipboard } from './app-state.js?v=e5291f7738fd';
+         getActiveSession, hasRealVideo, setInstanceClipboard, getInstanceClipboard } from './app-state.js?v=c0e1927f6e27';
 // Block 1 (Prompt 4): the timeline collapse/fit/sync helpers and the
 // Ctrl/Cmd+J keyboard shortcut installer live in `timeline-controller.js`.
 // Import them explicitly so the local call sites in this file (menu
@@ -21,74 +21,74 @@ import {
     installTimelineShortcuts,
     getCachedTimelineHeight,
     setCachedTimelineHeight,
-} from './timeline-controller.js?v=e5291f7738fd';
+} from './timeline-controller.js?v=c0e1927f6e27';
 import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance, Identity, Session,
-         someValidPoint3d } from '../pose/pose-data.js?v=e5291f7738fd';
+         someValidPoint3d } from '../pose/pose-data.js?v=c0e1927f6e27';
 import { ensureLazyFrameData, batchLoadLazyFrames, getInstanceGroupsForFrame, evictLazyFrames,
          loadAllLazyFrames, updateTimelineForFrame, triangulateAndReproject,
-         resolveTriangulationMethod } from '../pose/triangulation.js?v=e5291f7738fd';
-import { LAZY_PLAYBACK_AHEAD } from '../pose/lazy-residency.js?v=e5291f7738fd';
-import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js?v=e5291f7738fd';
+         resolveTriangulationMethod } from '../pose/triangulation.js?v=c0e1927f6e27';
+import { LAZY_PLAYBACK_AHEAD } from '../pose/lazy-residency.js?v=c0e1927f6e27';
+import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js?v=c0e1927f6e27';
 import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          populateVideosTable, populateCamerasTable, populateSkeletonTable,
-         setupPanelTabs, setupSkeletonEditing, exportSkeletonJSON,
+         setupSkeletonEditing, exportSkeletonJSON,
          ensureSession, populateSessionAssignTable, populateUnassignedVideos,
-         populateTimelineVisibility } from './info-panel.js?v=e5291f7738fd';
-import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js?v=e5291f7738fd';
+         populateTimelineVisibility } from './info-panel.js?v=c0e1927f6e27';
+import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js?v=c0e1927f6e27';
 // Block 2 (Prompt 4): rename migration for the per-session hidden-track
 // / hidden-identity Sets when the user renames an entity.
-import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js?v=e5291f7738fd';
+import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js?v=c0e1927f6e27';
 // View ▸ Define Planes — "Defining Plane Mode".
-import { togglePlaneMode, syncPlanes3D } from './plane-definition.js?v=e5291f7738fd';
+import { togglePlaneMode, syncPlanes3D } from './plane-definition.js?v=c0e1927f6e27';
 // The Visibility panel's `Planes` section — the four ids, named from the one
 // module that reads them so this file cannot drift from it.
-import { PLANE_VIS_IDS } from './plane-visibility.js?v=e5291f7738fd';
+import { PLANE_VIS_IDS } from './plane-visibility.js?v=c0e1927f6e27';
 import { newProject, markDirty, clearDirty, quickSave, saveAs, saveCompactCopy, saveProjectSlp, saveProject,
-         handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=e5291f7738fd';
-import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js?v=e5291f7738fd';
-import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js?v=e5291f7738fd';
+         handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=c0e1927f6e27';
+import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js?v=c0e1927f6e27';
+import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js?v=c0e1927f6e27';
 import { handleLoadCalibration, handleLoadVideos, handleLoadMultiSession,
-         loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js?v=e5291f7738fd';
-import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=e5291f7738fd';
+         loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js?v=c0e1927f6e27';
+import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=c0e1927f6e27';
 
 // Pass 3i-1: tracker functions moved out of app.js.
-import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js?v=e5291f7738fd';
+import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js?v=c0e1927f6e27';
 // The toolbar's Animals field, beside Track Frame / Track All.
-import { wireAnimalCountField } from './animal-count-field.js?v=e5291f7738fd';
-import { wireTailMarkField } from './tail-mark-field.js?v=e5291f7738fd';
-import { wireReprojThresholdField } from './reproj-threshold-field.js?v=e5291f7738fd';
+import { wireAnimalCountField } from './animal-count-field.js?v=c0e1927f6e27';
+import { wireTailMarkField } from './tail-mark-field.js?v=c0e1927f6e27';
+import { wireReprojThresholdField } from './reproj-threshold-field.js?v=c0e1927f6e27';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
-import { showTrackRangeModal } from './track-range-modal.js?v=e5291f7738fd';
-import { showAlignViewsModal } from './view-align-modal.js?v=e5291f7738fd';
+import { showTrackRangeModal } from './track-range-modal.js?v=c0e1927f6e27';
+import { showAlignViewsModal } from './view-align-modal.js?v=c0e1927f6e27';
 // The deployed release beside the menu bar's Settings button.
-import { showVersionLabel } from './version-label.js?v=e5291f7738fd';
-import { onColorByChange, setColorByIdentity } from './color-by.js?v=e5291f7738fd';
+import { showVersionLabel } from './version-label.js?v=c0e1927f6e27';
+import { onColorByChange, setColorByIdentity } from './color-by.js?v=c0e1927f6e27';
 import { TRAIL_PRESETS, MAX_TRAIL_FRAMES, trailPresetFor, trailLabel, trailFrames, trailRate,
          formatTrailSeconds, trailSecondsForFrames, parseTrailSeconds, parseTrailFrames,
-         setTrailSeconds, onTrailSecondsChange } from './trail-presets.js?v=e5291f7738fd';
-import { TRAIL_SHADES, TRACK_COLORS, trailShadeFor, trailColor, symmetryEdgesFor } from './overlays.js?v=e5291f7738fd';
-import { installSeekbarTooltip } from './seekbar-tooltip.js?v=e5291f7738fd';
-import { installSeekbarPreview } from './seekbar-preview.js?v=e5291f7738fd';
-import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js?v=e5291f7738fd';
-import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js?v=e5291f7738fd';
-import { installSeekbarTicks, refreshSeekbarTicks } from './seekbar-ticks.js?v=e5291f7738fd';
+         setTrailSeconds, onTrailSecondsChange } from './trail-presets.js?v=c0e1927f6e27';
+import { TRAIL_SHADES, TRACK_COLORS, trailShadeFor, trailColor, symmetryEdgesFor } from './overlays.js?v=c0e1927f6e27';
+import { installSeekbarTooltip } from './seekbar-tooltip.js?v=c0e1927f6e27';
+import { installSeekbarPreview } from './seekbar-preview.js?v=c0e1927f6e27';
+import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js?v=c0e1927f6e27';
+import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js?v=c0e1927f6e27';
+import { installSeekbarTicks, refreshSeekbarTicks } from './seekbar-ticks.js?v=c0e1927f6e27';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
-import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js?v=e5291f7738fd';
+import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js?v=c0e1927f6e27';
 // User settings: default triangulation method + editable keyboard bindings.
 import { getDefaultTriangulationMethod, setDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler,
-         dispatchEvent, getActions, formatBinding, getSmoothingParams } from './settings.js?v=e5291f7738fd';
+         dispatchEvent, getActions, formatBinding, getSmoothingParams } from './settings.js?v=c0e1927f6e27';
 // luc3d #134: post-triangulation temporal smoothing of the 3D tracks.
 import { smoothSessionAsync, smoothFrame, unsmoothSession, resolveSmoothingParams, hasSmoothed3d,
-    removeSmoothing, restoreSmoothing } from '../pose/temporal-smoothing.js?v=e5291f7738fd';
-import { syncSmoothingButton, noteSmoothingScope } from './smoothing-button.js?v=e5291f7738fd';
-import { smoothingRunOf } from '../import-export/smoothing-metadata.js?v=e5291f7738fd';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from './loading-overlay.js?v=e5291f7738fd';
-import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js?v=e5291f7738fd';
-import { showSettingsModal } from './settings-modal.js?v=e5291f7738fd';
+    removeSmoothing, restoreSmoothing } from '../pose/temporal-smoothing.js?v=c0e1927f6e27';
+import { syncSmoothingButton, noteSmoothingScope } from './smoothing-button.js?v=c0e1927f6e27';
+import { smoothingRunOf } from '../import-export/smoothing-metadata.js?v=c0e1927f6e27';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from './loading-overlay.js?v=c0e1927f6e27';
+import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js?v=c0e1927f6e27';
+import { showSettingsModal } from './settings-modal.js?v=c0e1927f6e27';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
-import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js?v=e5291f7738fd';
-import { runIdSwitchChecks, setIdSwitchNavigator, setIdSwitchRefresher, updateIdSwitchProgress } from './id-switch-modal.js?v=e5291f7738fd';
-import { setTrackSummaryNavigator } from './track-summary-modal.js?v=e5291f7738fd';
+import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js?v=c0e1927f6e27';
+import { runIdSwitchChecks, setIdSwitchNavigator, setIdSwitchRefresher, updateIdSwitchProgress } from './id-switch-modal.js?v=c0e1927f6e27';
+import { setTrackSummaryNavigator } from './track-summary-modal.js?v=c0e1927f6e27';
 // Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
 // (`swapTracks` joined this module in 3i-4; `seekToLabeledFrame` is now in-module.)
 import {
@@ -97,10 +97,10 @@ import {
     startManualAssignment,
     purgeTriangulationDataForGroup,
     swapTracks,
-} from './identity-assignment.js?v=e5291f7738fd';
+} from './identity-assignment.js?v=c0e1927f6e27';
 // Custom Instance Delete: DOM-free matching/cascade/durability logic. Imports no
 // project modules itself, which is why it can also be unit tested in isolation.
-import { collectDeletionTargets, executeDeletion, deleteTargetsFromStore, groupMemberTargets } from './custom-delete-ops.js?v=e5291f7738fd';
+import { collectDeletionTargets, executeDeletion, deleteTargetsFromStore, groupMemberTargets } from './custom-delete-ops.js?v=c0e1927f6e27';
 // Pass 3g: export-modals workflow symbols moved out of app.js.
 import {
     exportLabels, exportPoints3dH5, exportReprojH5,
@@ -108,19 +108,19 @@ import {
     showSlpExportPerSessionModal,
     showTriangulateMultiFrameModal,
     showGroupByTrackModal, groupByIdentityAndTriangulateAll, showExport3DVideoModal,
-} from './export-modals.js?v=e5291f7738fd';
-import { showOverlayExportModal } from './overlay-export-modal.js?v=e5291f7738fd';
+} from './export-modals.js?v=c0e1927f6e27';
+import { showOverlayExportModal } from './overlay-export-modal.js?v=c0e1927f6e27';
 // Pass 3h: sessions-panes workflow symbols moved out of app.js.
 import {
     panelRenderers, multiSelectViews, activatePanelForView, scrollViewStripTo,
     refreshPaneInteractions, clearMultiSelect, clampRotation, syncRotationUI,
     populateViewStrip, populateSessionsPanel, populateSessionStrip,
     showMoveVideoModal, removeSession, switchSession,
-} from './sessions-panes.js?v=e5291f7738fd';
+} from './sessions-panes.js?v=c0e1927f6e27';
 import {
     nameExists, countNulledByCamera, deleteTrackAt, deleteIdentityAt,
-} from './track-identity-ops.js?v=e5291f7738fd';
-import { setSessionRotation } from './video-filters.js?v=e5291f7738fd';
+} from './track-identity-ops.js?v=c0e1927f6e27';
+import { setSessionRotation } from './video-filters.js?v=c0e1927f6e27';
 
 // ============================================
 // Rename Track / Identity modal
