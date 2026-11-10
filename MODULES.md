@@ -4081,6 +4081,207 @@ Real-data check: `tests/e2e/_diag-real-align-views.mjs`.
 
 ---
 
+### pose/connect/ (SLEAP Connect client, helper modules)
+
+Ports of sleap-app's Connect client (`/Users/joshuapark/Documents/repos/sleap-app`
+@ `683a159`) for sending inference jobs to a sleap-connect worker. DOM-free, no
+`window` at import time, no CDN imports, only relative imports inside
+`pose/connect/`; every ported file's header names its source file and lists its
+"LUCID changes". The protocol, transport and store modules of this directory are
+documented in their own entries. Tests: `tests/test-connect-*.mjs`, run with
+`node tests/run-mjs-tests.mjs connect` (they use `tests/bun-test-shim.mjs`, a tiny
+`describe/it/expect` over node:assert, so sleap-app's bun:test bodies port nearly
+verbatim; a file ends with `await run()`).
+
+#### pose/connect/device-name.js
+
+**Purpose.** The default name this device reports to a worker (`hello`'s
+`agent.device_name`). **Exports.** `DEVICE_NAME_MAX`, `normalizeDeviceName`,
+`browserDeviceName(ua)` ("Chrome on macOS"), `defaultDeviceName({ computerName,
+userAgent })` — the OS lookup is INJECTED (sleap-app read Tauri's `computer_name`).
+**Imports.** None. **Imported by.** the Connect store port.
+**Coverage.** `tests/test-connect-device-name.mjs`.
+
+#### pose/connect/job-telemetry.js
+
+**Purpose.** Typed parsers for a training job's `job.epoch` / `job.curve` /
+`job.metric` events (`null` for a malformed payload). Kept so the protocol layer
+matches sleap-app though LUCID has no training UI. **Exports.** `parseJobTelemetry`.
+**Imports.** None. **Coverage.** `tests/test-connect-job-telemetry.mjs`.
+
+#### pose/connect/connect-sync.js
+
+**Purpose.** Three-way merge (`base` / `mine` / `theirs`) of the Connect state every
+window shares (paired workers, tracked jobs, device name, last selected worker), so
+a stale window cannot undo another's pairings. **Exports.** `mergeShared`,
+`sameShared`, typedef `SharedConnectState`. **Imports.** None.
+**Imported by.** the Connect store port, `store-helpers.js` (types).
+**Coverage.** `tests/test-connect-sync.mjs`.
+
+#### pose/connect/project-tag.js
+
+**Purpose.** The short stable `{ name, id }` tag (`JobProject`) that marks which
+project submitted a job. **Exports.** `projectTag(projectPath)` (verbatim from
+sleap-app: basename + 8-hex FNV-1a of the full path) and the LUCID addition
+`lucidProjectTag({ fileName, sessionFolders })`: a LUCID project is one `.slp` plus
+session folders and has no single path, so `name` is the file's basename
+(`untitled.slp` if none) and `id` hashes the file name plus each session's folder
+NAME, sorted — stable across reopen, session order and moving the project; equal to
+`projectTag(null)` with neither. **Imports.** None. **Imported by.** `job-groups.js`
+callers (`myProjectId`), the Connect store port.
+**Coverage.** `tests/test-connect-project-tag.mjs`.
+
+#### pose/connect/path-mappings.js
+
+**Purpose.** Local <-> worker path rules. **Exports.** `translatePath` (longest
+directory-boundary prefix), `isWorkerPath`, `detectPrefixDiff`, `buildPathMappings`,
+`parsePathMappingsFromToml`, `resolveProjectPaths`, and
+`loadSavedMappings(storage)` / `saveMapping(mapping, storage)` over an INJECTED
+`PathMappingsStorage` adapter (`homeDir/join/exists/readTextFile/writeTextFile/mkdir`;
+sleap-app used Tauri plugin-fs) — with no adapter both are no-ops. They read/write
+`~/.sleap-connect/config.toml` (falling back to the pre-rename `~/.sleap-rtc`).
+**Imports.** None. **Imported by.** `remote-output-dir.js`, `remote-visibility.js`.
+**Coverage.** `tests/test-connect-path-mappings.mjs` (incl. an in-memory adapter).
+
+#### pose/connect/remote-visibility.js
+
+**Purpose.** Can the worker see each video? **Exports.** `projectVideoPaths(labels)`
+(accepts a sleap-io `Labels`-like `{ videos }`, OR — LUCID — a plain array of path
+strings / `{ filename }` objects, so LUCID can pass one path per (session, camera)),
+`checkVideoVisibility(paths, { rules, mounts, stat, concurrency })` (bounded `stat`
+probes -> `VideoVisibility[]`), `classifyVisibility` (`all`/`some`/`none`),
+`inferRuleFromLocate`. **Imports.** `path-mappings.js`.
+**Coverage.** `tests/test-connect-remote-visibility.mjs`.
+
+#### pose/connect/remote-output-dir.js
+
+**Purpose.** Where a remote run saves its predictions on the worker: the project's own
+folder if shared, else `<serve folder>/sleap-connect/<project>/`. **Exports.**
+`projectFolderName`, `defaultOutputDir({ projectPath, projectName, rules, mounts,
+serveFolder, isSharedFolder })` (the worker probe is a parameter). **Imports.**
+`path-mappings.js`. **Coverage.** `tests/test-connect-remote-output-dir.mjs`.
+
+#### pose/connect/timestamp.js
+
+**Purpose.** Run/elapsed-time formatting. **Exports.** `formatDuration`,
+`formatRunTimestamp` (`YYMMDD_HHMMSS`), `modelRunTimestamp(modelName)`, `timeAgo(iso)`.
+**Imports.** None. **Imported by.** `job-groups.js`, `launcher-spec.js`.
+**Coverage.** `tests/test-connect-timestamp.mjs`.
+
+#### pose/connect/process-log.js
+
+**Purpose.** Bounded subprocess/job log helpers. **Exports.** `MAX_LOG_LINES`,
+`appendLogLine`, `lastErrorLine`, `subprocessFailureMessage`, `isErrorLine`,
+`logLineClassName` (sleap-app's Tailwind class strings, verbatim). **Imports.** None.
+**Coverage.** `tests/test-connect-process-log.mjs`.
+
+#### pose/connect/launcher-spec.js
+
+**Purpose.** Pure job-spec builders. **Exports.** `buildLauncherTrainSpec(input,
+deps)`, `buildRunInferenceSpecs(labelsPath, modelDirs, config, labels, deps)`,
+`seedFromJobSpec(spec, deps)`, `inferModelType(headTypes)`, `hydraQuote(value)` (from
+sleap-app's `platform/trainingArgs.ts`). The training-store, channel-detection and
+track-spec helpers sleap-app imports are passed in as `deps` (`LauncherSpecDeps`), and
+YAML is never parsed here (`deps.parseYamlConfig`), so the module has no `yaml` import.
+**Imports.** `timestamp.js`. **Imported by.** `store-helpers.js` (`hydraQuote`).
+**Coverage.** `tests/test-connect-launcher-spec.mjs` (fake deps).
+
+#### pose/connect/job-groups.js
+
+**Purpose.** Everything the Jobs tab and sidebar queue compute from the worker's job
+list, minus React. **Exports.** `isMineJob`, `sortWorkerJobs`, `isManagedJob`,
+`siblingJobIds`, `jobTitle`, `canDeleteRun`, `deleteRunMessage`, `statusChipFor`,
+`jobStatusChip` (chip `className` is sleap-app's Tailwind string; the LUCID UI keys its
+own CSS off `text`), `jobTimeLabel`, `groupTimeLabel`, `groupJobs` (runs by
+`run.id`, status rolled up running > failed > queued > completed), `jobMatches`,
+`isActiveGroup`, `unfinishedJobs`, `cancelRunConfirm`, `queueRows`, `queueRunEntries`,
+`endJobConfirm`, `STOP_EARLY_BUTTON_CLASS` / `CANCEL_BUTTON_CLASS`. **Imports.**
+`timestamp.js`. **Coverage.** `tests/test-connect-job-groups.mjs`.
+
+#### pose/connect/store-helpers.js
+
+**Purpose.** The pure exports of sleap-app's `connectStore.ts`: `UNPAIRED_MESSAGE`,
+`runJobsToEnd`, `capTrackedJobs`, `migrateConnectPersisted`, `withYamlRunName(spec,
+yamlLoad)` (the YAML parser is injected), plus the module-private pure helpers the store
+needs (`upsertWorker`, `activeJobsFor`, `latestActiveJobFor`, `trackedJobLabel`,
+`isMultiModelTrainSpec`, `sharedSlice`/`toShared`/`readStoredShared`/`capShared`,
+`mapLinkStatus`, `fetchAllRemoteEntries`, `withTimeout`, storage-key constants).
+**Imports.** `launcher-spec.js`. **Imported by.** the Connect store port.
+**Coverage.** `tests/test-connect-store-helpers.mjs`.
+
+#### pose/connect/errors.js, envelope.js
+
+**Purpose.** Protocol v1 vocabulary (spec §2, §8). `errors.js`: every error code constant
+(`auth.*`, `proto.*`, `fs.*`, `blob.*`, `job.*`, `media.*`, `internal`, locally detected
+`client.*`) and `WorkerProtocolError(code, msg, data)`. `envelope.js`: `PROTOCOL_VERSION`,
+`buildHello`, `buildReq`, `parseEnvelope` (throws `EnvelopeError`), JSDoc typedefs of the
+four frames. **Imports.** None. **Imported by.** `client.js`, `managed-connection.js`.
+**Coverage.** `tests/test-connect-errors.mjs`, `test-connect-envelope.mjs`.
+
+#### pose/connect/pair-code.js
+
+**Purpose.** Decoder of the one-line `sleap1...` pairing code (base32 of version, node id,
+secret, expiry, LAN addrs, relay, 2-byte SHA-256 checksum). **Exports.** `CODE_PREFIX`,
+`RELAY_TABLE` (APPEND-ONLY, frozen), `PairCodeError`, `isPairCode`, `decodePairCode`.
+Never mints codes (the test-only encoder is `tests/connect/pair-code.mjs`). **Imports.**
+None (WebCrypto at call time). **Coverage.** `tests/test-connect-pair-code.mjs` against
+`tests/fixtures/connect/pair_code_vectors.json`.
+
+#### pose/connect/pairing-plan.js, transport.js
+
+**Purpose.** How a pasted code (or a paired worker) is reached. `pairing-plan.js`:
+`planPairing(code, {irohAvailable, addrOverride, now})` (ready ws / ready iroh /
+needs-address / error), `preferredTransport(worker, irohAvailable)`, `NOT_A_CODE`.
+`transport.js`: `parseTicketIroh`, `transportLabel`, `toIrohDialTarget`,
+`encodeIrohDialUrl`/`decodeIrohDialUrl`, and the iroh SEAM: iroh is available only once
+`registerIrohSocketFactory(createSocket-shaped factory)` has been called (the desktop app
+does, in a later phase; the web never does), `irohTransportAvailable()`,
+`getIrohSocketFactory()`. **Imports.** None. **Coverage.**
+`tests/test-connect-pairing-plan.mjs`, `test-connect-transport.mjs`.
+
+#### pose/connect/identity.js
+
+**Purpose.** The device's persistent Ed25519 identity (raw pkcs8 + raw public bytes under
+`client-identity`; node id = base64url raw public key). **Exports.** `getClientIdentity`
+(memoized, cross-tab Web Lock `lucid-connect-identity`), `clearClientIdentity`,
+`setIdentityStorage(adapter)`, `createIndexedDbAdapter` (database `lucid-connect`, store
+`identity`, opened lazily per call, never at import), `createMemoryAdapter` (Node tests),
+`withIdentityLock`, `IDENTITY_LOCK_NAME`, `_resetClientIdentityCache`. An adapter is
+`{get, put, delete, has?}`. A record the adapter cannot read is never replaced.
+**Imports.** None. **Coverage.** `tests/test-connect-identity.mjs` (memory adapter + a fake
+`IDBFactory`).
+
+#### pose/connect/client.js
+
+**Purpose.** `WorkerClient`: one WebSocket to a worker (hello with symmetric `hello.proof`
+check, `pair.claim` / `auth.prove`, req/res by monotonic id with `requestTimeoutMs`
+(15 s), events fanned out by job id, `jobs.*`, `clients.*`, `worker.info`, `fs.*`
+(with the `error_code`-inside-`ok` mapping), `media.frame`, `onClose`). `createSocket`
+and `fetchImpl` are injectable and resolved at use, never at import. **Blob download:**
+`fetchBlob(sha256, size, {fsFallback})` fetches `http://<host>:<blob_port>/blobs/<sha>`
+and verifies size + sha256; a browser page cannot read the blob port (no CORS headers),
+so with `fsFallback: {path, pageSize?, onProgress?}` a network `TypeError` falls back to
+`fetchFileViaFsRead` (paged `fs.read` into Blob parts, same verification). **Exports.**
+`WorkerClient`, `FS_READ_PAGE_BYTES`, JSDoc typedefs. **Imports.** `envelope.js`,
+`errors.js`. **Coverage.** `tests/test-connect-client.mjs` (sleap-app's tests on the
+permissive fake socket), `tests/test-connect-worker-client.mjs` (the server-faithful
+`FakeWorker`: pair, `auth.prove` reconnect, `auth.untrusted`, fs, jobs, backlog +
+`since_seq`, blob over real HTTP and over the `fs.read` fallback).
+
+#### pose/connect/managed-connection.js
+
+**Purpose.** Reconnect/fallback state machine around one worker: backoff 1/2/4/8/15/30 s,
+ws to iroh after `FALLBACK_AFTER_MS` (10 s) of failure, probe the preferred route every
+`PROBE_PREFERRED_EVERY_MS` (60 s), terminal `unpaired` on `auth.untrusted`. Injectable
+`dial`, `now`, `sleep`. **Exports.** `ManagedConnection`, `isUnpairedError`,
+`RECONNECT_BACKOFF_MS`, `FALLBACK_AFTER_MS`, `PROBE_PREFERRED_EVERY_MS`. **Imports.**
+`errors.js`. **Coverage.** `tests/test-connect-managed-connection.mjs` (fake clock).
+
+Test helper `tests/connect-test-utils.mjs` (not a suite) adds `.rejects.toThrow`,
+`.toBeInstanceOf`, class-aware `toThrow` and `itEach` on top of `bun-test-shim.mjs`.
+
+---
+
 ## ui/
 
 ### ui/app-state.js
