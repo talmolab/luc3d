@@ -51,6 +51,7 @@ await new Promise(r => setTimeout(r, 1200));
 const EXPECTED = [
     ['tabInstances', 'Instances'], ['tabVisibility', 'Visibility'], ['tabIdSwitches', 'ID Switches'],
     ['tabVideos', 'Videos'], ['tabCameras', 'Cameras'], ['tabSkeleton', 'Skeleton'], ['tabSession', 'Session'],
+    ['tabConnect', 'Connect'],   // added after init by ui/connect/index.js, web and desktop
 ];
 // First path of the Lucide glyph each panel must show. Instances/Visibility/
 // Videos/Skeleton are sleap-app's Users/Eye/Film/Bone; ID Switches is the
@@ -73,6 +74,7 @@ try {
 
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
+    await page.waitForSelector('#panelRail .panel-rail-btn[data-tab="tabConnect"]', { timeout: 30000 });
     await page.waitForTimeout(300);
 
     const railState = () => page.evaluate(() => {
@@ -214,9 +216,9 @@ try {
             J(s.active) === J(opened) && J(s.pressed) === J(opened),
             `clicking ${tab} opens + expands it and folds the others; every open icon is active`);
     }
-    check(J(s.ariaExpanded) === J(opened.map(t => t === 'tabSession' ? 'true' : 'false')),
+    check(J(s.ariaExpanded) === J(opened.map(t => t === 'tabConnect' ? 'true' : 'false')),
         'the header chevrons say which section is expanded (aria-expanded)');
-    await click('tabSession');
+    await click('tabConnect');
     s = await railState();
     check(!s.collapsed && s.content.length === 0 && J(s.open) === J(opened) && J(s.active) === J(opened),
         'clicking the expanded panel folds it to its header; the panel stays shown and every section stays open');

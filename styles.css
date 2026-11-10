@@ -8859,3 +8859,99 @@ div.track-summary-steps { padding-left: 0; }
 .inf-view input { margin: 0; }
 .inf-view { cursor: pointer; }
 .inf-view-blocked { cursor: default; opacity: 0.75; }
+
+/* ============================================
+   Connect panel (ui/connect/*) — sleap-app's ConnectPanel.tsx look:
+   10px caps label, compact worker cards with a status dot, a pairing card.
+   ============================================ */
+.connect-panel { contain: inline-size; min-width: 190px; padding: 8px; display: flex; flex-direction: column; gap: 12px; font-size: 11px; }
+.connect-panel [hidden], .connect-toasts [hidden] { display: none !important; }
+.connect-icon { display: inline-flex; width: 12px; height: 12px; flex-shrink: 0; }
+.connect-icon svg { width: 100%; height: 100%; }
+.connect-spin { animation: inf-spin 1s linear infinite; }
+.connect-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 12px;
+  font-size: 12px; font-family: inherit; border-radius: 4px; cursor: pointer; border: 1px solid transparent; color: var(--text-primary); }
+.connect-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.connect-btn-primary { background: var(--accent); color: #fff; }
+.connect-btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+.connect-btn-outline { background: transparent; border-color: var(--border-light); }
+.connect-btn-outline:hover:not(:disabled) { background: var(--bg-button); }
+.connect-btn-ghost { background: transparent; }
+.connect-btn-ghost:hover { background: var(--bg-button); }
+.connect-full { width: 100%; }
+.connect-grow { flex: 1; }
+.connect-btn-row { display: flex; gap: 6px; }
+.connect-sep { height: 1px; background: var(--border-light); }
+.connect-caps { font-size: 10px; font-weight: 500; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.connect-workers { display: flex; flex-direction: column; gap: 6px; }
+.connect-worker { border: 1px solid var(--border-color); border-radius: 6px; padding: 8px; background: var(--bg-tertiary); }
+.connect-worker.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.connect-worker-head { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; }
+.connect-worker-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.connect-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
+.connect-dot.on { background: var(--success-color); }
+.connect-dot.warn { background: var(--warning-color); }
+.connect-icon-btn { margin-left: auto; background: none; border: none; padding: 0; width: 20px; height: 20px; align-items: center; justify-content: center; border-radius: 4px; cursor: pointer; color: var(--text-muted); display: inline-flex; flex-shrink: 0; }
+.connect-icon-btn:hover { color: var(--error-color); }
+.connect-worker-id { margin-top: 2px; font-size: 10px; color: var(--text-muted); font-family: monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connect-worker-line { margin-top: 2px; font-size: 10px; color: var(--text-muted); }
+.connect-worker-actions { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.connect-ok { color: var(--success-color); }
+.connect-bad { color: var(--error-color); }
+.connect-warn { color: var(--warning-color); }
+.connect-errbox { border-radius: 6px; background: rgba(231, 76, 60, 0.15); border: 1px solid rgba(231, 76, 60, 0.3);
+  padding: 6px 8px; font-size: 11px; color: var(--error-color); overflow-wrap: anywhere; }
+.connect-card { border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; background: var(--bg-tertiary);
+  display: flex; flex-direction: column; gap: 8px; }
+.connect-card-title { margin: 0; font-size: 12px; font-weight: 500; }
+.connect-hint { margin: 0; font-size: 10px; color: var(--text-muted); line-height: 1.625; }
+.connect-code { background: rgba(0, 0, 0, 0.3); padding: 2px 4px; border-radius: 4px; font-family: monospace; font-size: 10px; }
+.connect-input { width: 100%; height: 28px; padding: 0 8px; font-size: 12px; box-sizing: border-box;
+  background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px; }
+.connect-mono { font-family: monospace; }
+.connect-plan { margin: 0; display: flex; align-items: flex-start; gap: 6px; font-size: 10px; }
+.connect-plan .connect-icon { margin-top: 1px; }
+.connect-link-btn { display: inline-flex; align-items: center; gap: 2px; align-self: flex-start; background: none; border: none;
+  padding: 0; font-size: 10px; color: var(--text-muted); cursor: pointer; }
+.connect-link-btn:hover { color: var(--text-primary); }
+.connect-chevron { transition: transform 150ms ease; }
+.connect-link-btn.open .connect-chevron { transform: rotate(90deg); }
+.connect-addr { display: flex; flex-direction: column; gap: 4px; }
+.connect-error-text { margin: 0; font-size: 10px; color: var(--error-color); }
+.connect-device { margin: 0; padding-top: 4px; font-size: 9px; color: var(--text-muted); font-family: monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Toasts (ui/connect/notify.js): sonner as sleap-app configures it (bottom-right, offset 56px,
+   per-kind icon, copy icon top-right, close x on the top-left corner). Not a modal. */
+.connect-toasts { position: fixed; right: 16px; bottom: 56px; z-index: 9000; display: flex; flex-direction: column;
+  gap: 8px; width: min(356px, calc(100vw - 32px)); pointer-events: none; }
+.connect-toast { pointer-events: auto; position: relative; display: flex; align-items: center; gap: 8px;
+  padding: 12px 36px 12px 12px; font-size: 13px; background: var(--bg-secondary); color: var(--text-primary);
+  border: 1px solid var(--border-color); border-radius: 8px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4); user-select: text; }
+.connect-toast .connect-toast-kind { width: 16px; height: 16px; }
+.connect-toast-success .connect-toast-kind { color: var(--success-color); }
+.connect-toast-error .connect-toast-kind { color: var(--error-color); }
+.connect-toast-info .connect-toast-kind { color: var(--accent); }
+.connect-toast-body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.connect-toast-title { font-weight: 500; }
+.connect-toast-desc { margin-top: 2px; font-size: 12px; color: var(--text-secondary); }
+.connect-toast-action { flex-shrink: 0; background: var(--accent); color: #fff; border: none; border-radius: 4px;
+  padding: 3px 8px; font-size: 11px; font-family: inherit; cursor: pointer; }
+.connect-toast:has(.connect-toast-action) { padding-right: 12px; }
+.connect-toast-copy { position: absolute; top: 8px; right: 8px; display: inline-flex; padding: 4px; border: none; border-radius: 4px;
+  background: none; color: var(--text-muted); cursor: pointer; }
+.connect-toast-copy .connect-icon { width: 14px; height: 14px; }
+.connect-toast-copy:hover { color: var(--text-primary); background: var(--bg-button); }
+.connect-toast-close { position: absolute; top: -6px; left: -6px; display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; padding: 0; border-radius: 50%; border: 1px solid var(--border-color);
+  background: var(--bg-secondary); color: var(--text-muted); cursor: pointer; }
+.connect-toast-close .connect-icon { width: 10px; height: 10px; }
+.connect-toast-close:hover { color: var(--text-primary); }
+.connect-toasts-clear { position: fixed; right: 24px; bottom: 16px; z-index: 9001; width: 356px; max-width: calc(100vw - 48px);
+  display: flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 16px; font-size: 13px; font-weight: 500;
+  font-family: inherit; color: var(--text-muted); background: #000; border: 1px solid var(--border-color); border-radius: 999px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4); cursor: pointer; }
+.connect-toasts-clear[hidden] { display: none; }
+.connect-toasts-clear:hover { color: var(--text-primary); background: #171717; }
+.connect-toasts-clear .connect-icon { width: 14px; height: 14px; }

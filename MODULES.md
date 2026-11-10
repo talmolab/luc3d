@@ -12825,6 +12825,9 @@ its default multi-panel (accordion) mode.
   the panel out of the stack. Panes keep their ids and markup; a pane carries
   `.active` while its body is on screen (open and not folded). Open sections
   stack in rail order.
+- **Late panels (Inference, Connect):** their stored open/folded ids are kept in
+  `_later` and written back by every `persist()` until the panel registers, so the
+  repaint at startup cannot wipe the state they restore.
 - **Click rules (sleap-app's accordion):** a rail click on a panel that is not
   expanded opens it if needed, expands it and folds every other open panel; a
   click on the expanded panel folds it; while the info panel is hidden a click
@@ -13016,14 +13019,69 @@ Cameras = Camera, Session = FolderTree, plus PanelRightClose / PanelRightOpen
 and the section headers' ChevronDown / ChevronRight / X (sleap-app's). The
 desktop Inference panel adds Zap (its rail icon, sleap-app's) and the glyphs its
 buttons and status use (Folder, FolderOpen, Play, LoaderCircle, CircleCheck,
-CircleX, CircleAlert, Download, Copy, Maximize2). Inline strings: no fetch, so offline mode and the version stamp are unaffected.
+CircleX, CircleAlert, Download, Copy, Maximize2). The Connect panel adds Globe (its rail icon), Plug, Unplug, Trash2, ExternalLink and TriangleAlert. Inline strings: no fetch, so offline mode and the version stamp are unaffected.
 
 **Key exports.** `RAIL_ICONS` (Lucide name → SVG child markup),
 `railIconSvg(name)` (wraps it in Lucide's 24x24 stroke-2 currentColor `<svg>`;
 throws on an unknown name).
 
 **Imports from project modules.** None (leaf). **Imported by.**
-`ui/panel-rail.js`, `ui/inference-panel.js`.
+`ui/panel-rail.js`, `ui/inference-panel.js`, `ui/connect/pair-worker-form.js`, `ui/connect/connect-panel.js`.
+
+### ui/connect/ (SLEAP Connect panel)
+
+The UI half of the Connect port (`pose/connect/` is the logic): sleap-app
+(`/Users/joshuapark/Documents/repos/sleap-app` @ `683a159`) `ConnectPanel.tsx`,
+`PairWorkerForm.tsx`, and a toast stack standing in for its sonner `toast`.
+Everything reads and writes through `useConnectStore` / `subscribeSelector`.
+Loaded by ONE literal `import('../ui/connect/index.js')` in
+`pose/initialization.js` (web and desktop). Tests: `tests/e2e/connect-rail-tab.mjs`,
+`tests/e2e/connect-pairing.mjs`.
+
+#### ui/connect/index.js
+**Purpose.** `setupConnect()` (idempotent): `configureConnect({notify,
+openConnectWindow, platform: 'desktop'|'web', appVersion: <meta lucid-release>|'dev'})`,
+`installConnectStorageSync(window)`, registers the rail panel (`tabConnect`, label
+Connect, icon `globe`) via `registerPanelRailPanel`, `resumeTrackedJobs()` once,
+`releaseIdleConnections()` on `pagehide`. A marked hook for the iroh socket
+factory (P8). **Exports.** `setupConnect`, `setConnectWindowOpener(fn)` (the
+Connect window replaces what "Open Connect window" does; default focuses the
+panel with `showPanelTab`), `CONNECT_TAB_ID`. **Imports.** `pose/connect/store.js`,
+`ui/panel-rail.js`, `./notify.js`, `./connect-panel.js`. **Imported by.**
+`pose/initialization.js` (dynamic).
+
+#### ui/connect/connect-panel.js
+**Purpose.** The panel: Open Connect window button, error box, "Paired workers
+(n)" cards (dot, label, Forget, node id + address, "Connected via …",
+"Unpaired by this worker …", "Reconnecting…", Connect / Connecting… /
+Disconnect), the pairing form or "Pair a new worker", "This device: <id>…".
+Forget confirms through `ui/ask.js` with `forgetWorkerConfirm`'s text (once per worker
+while one is open). With no worker paired the form always shows (also after Forget of
+the last); the form closes once when a paired worker first appears (as ConnectPanel.tsx) and resets (blank) whenever it is hidden; a repaint keeps
+keyboard focus on the card's button (through "Connecting…"); `contain: inline-size`
+stops a long label widening the panel.
+**Exports.** `createConnectPanel({openConnectWindow})` -> `{el, dispose}`,
+`forgetWorkerWithConfirm(nodeId)`. **Imports.** `pose/connect/{store,
+worker-ui-helpers,pairing-plan,transport,mini-store,identity}.js`, `ui/ask.js`,
+`ui/panel-rail-icons.js`, `./pair-worker-form.js`.
+
+#### ui/connect/pair-worker-form.js
+**Purpose.** "Pair with a worker": code box, live plan line (`planPairingForText`),
+"Advanced: connect by address" (opens itself when the plan needs an address),
+Pair -> `pairWithCode`, Cancel when a worker is already paired. **Exports.**
+`createPairWorkerForm({onPaired, onCancel, showCancel})` -> `{el, setShowCancel, reset}`;
+`reset()` blanks it (code, plan, Advanced, address, error); boxes are read-only while pairing, an edit
+clears the last failure, Enter in either box pairs (LUCID addition).
+**Imports.** `pose/connect/store.js`, `ui/panel-rail-icons.js`.
+
+#### ui/connect/notify.js
+**Purpose.** Toast stack (bottom-right, `.connect-toasts`): `success/error/info(message,
+{description, action:{label,onClick}, id})`, deduped by id, 4 s auto-dismiss
+(hovering the stack pauses all), 3 shown and older ones collapsed (come back, not dropped), per-kind
+Lucide icon, copy icon only on a toast without an action, close x top-left, "Clear all (n)" pill
+at 2+, selectable text, not modal. Notification history is not ported.
+**Exports.** `notify` (also `dismiss(id)`, `dismissAll()`), `TOAST_MS`. **Imports.** `ui/panel-rail-icons.js`.
+**Imported by.** `ui/connect/index.js`.
 
 ---
 

@@ -74,6 +74,16 @@ Rules:
 - **The image ID-switch check is the one feature that does not work offline**: `TRANSFORMERS_URL` (`ui/image-embedder.js`) is `unmapped` because the model weights come from huggingface.co too. Offline it reports `MODEL_OFFLINE_REASON` and retries without reload via `importTransformers`. Test: `tests/e2e/image-check-offline.mjs`.
 - Test: `tests/e2e/offline-server.mjs` (all off-origin requests aborted). Licenses in `lib/LICENSES.txt`.
 
+## Connect (remote GPU workers)
+
+A port of sleap-app's SLEAP Connect (protocol v1 to a `sleap-connect` worker); training is out of scope. Conventions: each ported file's header names its sleap-app source and its "LUCID changes".
+- `pose/connect/` is DOM-free logic (client, store, pairing, job groups); `ui/connect/` is the UI (rail panel `tabConnect`, pairing form, toasts). Loaded by ONE literal `import('../ui/connect/index.js')` in `pose/initialization.js`, web and desktop (cold start unchanged; the stamp sees it).
+- The PAGE opens the worker's WebSocket (`pose/connect/transport.js`); Rust is only the iroh byte pipe (P8 registers the factory at the marked hook in `ui/connect/index.js`, before the first connect). Wire it only through `configureConnect({notify, openConnectWindow, platform, appVersion, computerName})`.
+- Pairing and jobs: localStorage `lucid-connect` (+ sessionStorage `lucid-connect-selected` per window). The device's Ed25519 key: IndexedDB `lucid-connect` (`pose/connect/identity.js`). **Nothing goes in the `.slp`** (`save-golden-digest.mjs` must not move).
+- A result blob comes from the worker's blob port, which sends NO CORS headers: a fetch from the page throws TypeError and `fetchBlob` falls back to `fs.read` over the socket (`fsFallback`).
+- The panel mirrors sleap-app's `ConnectPanel.tsx` (statuses Idle/Busy/GPU belong to its Connect window, not the panel); tests use `tests/connect/fake-worker.mjs` (`FakeWorker.serveOnPage`).
+- Tests: `node tests/run-mjs-tests.mjs connect`, e2e `connect-rail-tab`, `connect-pairing`.
+
 ## Dependencies
 
 Loaded via `index.html` script tags / importmap (mirrored in `tests/test-runner.html`).
