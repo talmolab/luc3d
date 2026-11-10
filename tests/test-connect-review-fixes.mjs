@@ -190,6 +190,21 @@ describe('connect-sync mergeJob carries fetchedAt', () => {
   });
 });
 
+describe('connect-sync mergeJob carries mergeMode', () => {
+  const base = { pairedWorkers: [], trackedJobs: [job('j', { sessionId: 's' })], deviceName: null, lastSelectedWorkerId: null };
+  const mk = (jobs) => ({ ...base, trackedJobs: jobs });
+  it('the mode recorded at submit survives a merge of two windows', () => {
+    const mine = mk([job('j', { sessionId: 's', mergeMode: 'keep', lastSeq: 9 })]);
+    const theirs = mk([job('j', { sessionId: 's', lastSeq: 3 })]);
+    expect(mergeShared(base, mine, theirs).trackedJobs[0].mergeMode).toBe('keep');
+    expect(mergeShared(base, theirs, mine).trackedJobs[0].mergeMode).toBe('keep');
+  });
+  it('jobs without one gain no key', () => {
+    const x = mk([job('j', { lastSeq: 1 })]); const y = mk([job('j', { lastSeq: 2 })]);
+    expect('mergeMode' in mergeShared(mk([job('j')]), x, y).trackedJobs[0]).toBe(false);
+  });
+});
+
 describe('client naming', () => {
   it('names the client by its reported agent', () => {
     expect(clientDisplayName('lucid')).toBe('LUC3D');

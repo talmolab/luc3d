@@ -168,20 +168,25 @@ try {
     browser = await chromium.launch();
 
     // ---------------------------------------------------------------- 1, 2
-    console.log('\n1. Web build: no Inference panel');
+    console.log('\n1. Web build: the panel is there, remote only (no local sleap-nn)');
     {
         const page = await browser.newPage();
-        const fetched = [];
-        page.on('request', (r) => { if (/inference-panel\.js/.test(r.url())) fetched.push(r.url()); });
+        page.on('pageerror', (e) => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
         await page.goto(`${BASE}/index.html`);
         await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 60000 });
-        await page.waitForTimeout(500);
-        check(await page.$('#tabInference') === null, 'no #tabInference');
-        check(await page.$('.panel-rail-btn[data-tab="tabInference"]') === null, 'no rail button');
-        check(fetched.length === 0, 'inference-panel.js never fetched', fetched);
+        await page.waitForSelector('.panel-rail-btn[data-tab="tabInference"]', { timeout: 20000 });
+        const w = await page.evaluate(() => ({
+            backend: Array.from(document.querySelectorAll('#infBackend option')).map((o) => o.textContent),
+            warn: !!document.querySelector('#tabInference .inf-warn:not([hidden])'),
+            run: document.getElementById('infRun').textContent.trim(),
+            desktop: !!window.lucidDesktop,
+        }));
+        check(!w.desktop && !w.backend.some((t) => /Local/.test(t)), 'no Local backend on the web', w);
+        check(!w.warn, 'no "sleap-nn not detected" box on the web', w);
+        check(/Remote/.test(w.run), 'Run says Remote', w);
         await page.close();
     }
-    console.log('\n2. Desktop build without sleap-nn: no Inference panel');
+    console.log('\n2. Desktop build without sleap-nn: remote-only panel');
     {
         const page = await browser.newPage();
         await page.addInitScript(installMock, { sleapNn: false, predB64: '' });
@@ -189,7 +194,8 @@ try {
         await page.goto(`${BASE}/index.html`);
         await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.lucidDesktop, null, { timeout: 60000 });
         await page.waitForTimeout(800);
-        check(await page.$('#tabInference') === null, 'no #tabInference when sleap_nn_status says unavailable');
+        check(await page.$('#tabInference') !== null, 'the panel is there (remote only) when sleap_nn_status says unavailable');
+        check(await page.evaluate(() => Array.from(document.querySelectorAll('#infBackend option')).some((o) => /Local/.test(o.textContent) && o.disabled)), 'Local is listed but disabled');
         await page.close();
     }
 

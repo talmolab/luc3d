@@ -181,6 +181,7 @@ export {
  * @property {string} [sessionId] LUCID: the session the job's video belongs to.
  * @property {string} [camera] LUCID: the camera/view the job ran on.
  * @property {string} [projectTag] LUCID: `projectTag(...).id` of the project that submitted it.
+ * @property {string} [mergeMode] LUCID: the Inference panel's "Existing predictions" mode at submit, used at Fetch & Load.
  * @property {number | null} [fetchedAt] LUCID: when the result was fetched (`markJobFetched`); null on a tagged job until then.
  */
 
@@ -353,14 +354,16 @@ export function pathRulesFor(workerId) {
 
 /**
  * LUCID: the tag fields a job entry carries, taken from submit options (only those given).
- * @param {{ sessionId?: string, camera?: string, projectTag?: string } | undefined} o
+ * @param {{ sessionId?: string, camera?: string, projectTag?: string, mergeMode?: string } | undefined} o
  */
 function jobTag(o) {
-  /** @type {{ sessionId?: string, camera?: string, projectTag?: string, fetchedAt?: number | null }} */
+  /** @type {{ sessionId?: string, camera?: string, projectTag?: string, mergeMode?: string, fetchedAt?: number | null }} */
   const tag = {};
   if (o?.sessionId !== undefined) tag.sessionId = o.sessionId;
   if (o?.camera !== undefined) tag.camera = o.camera;
   if (o?.projectTag !== undefined) tag.projectTag = o.projectTag;
+  // The panel's "Existing predictions" mode at Run, used at Fetch & Load (sleap-app `pendingRemoteMerge.mode`).
+  if (o?.mergeMode !== undefined) tag.mergeMode = o.mergeMode;
   // Null until `markJobFetched` records that the result was loaded (see `capTrackedJobs`).
   if (tag.sessionId !== undefined || tag.camera !== undefined) tag.fetchedAt = null;
   return tag;
@@ -849,10 +852,33 @@ export function resubscribeWorker(workerId, client) {
     if (sub.workerId !== workerId) continue;
     // LUCID: a failed re-attach (the new connection dropped again, the job is gone) is retried by
     // the next reconnect; it must not surface as an unhandled rejection.
-    attachSubscription(client, sub, trackedLastSeq(sub.jobId)).catch((err) => {
+    attachSubscription(client, sub, trackedLastSeq(sub.jobId)).then(() => reconcileTerminalJob(client, sub)).catch((err) => {
       console.warn(`[connect] couldn't re-attach job ${sub.jobId}:`, err);
     });
   }
+}
+
+/**
+ * LUCID: after a re-attach, asks the worker for the job's own state. A worker that was restarted
+ * (crash, reboot) marks the jobs it lost `failed` WITHOUT sending a `job.status` event, so the
+ * backlog replay never ends the job and it would read "Running" for ever. A terminal state found
+ * here is fed to the watcher as the events it missed (`job.result`, then `job.status`) with a
+ * seq past anything real, so it is applied once and the replay can't re-apply it.
+ *
+ * @param {WorkerClient} client @param {ActiveSubscription} sub
+ */
+async function reconcileTerminalJob(client, sub) {
+  if (activeSubscriptions.get(sub.jobId) !== sub) return; // the replay already ended it
+  // Only a job still tracked as active (one dropped from the list, or already ended, is not ours to end).
+  if (useConnectStore.getState().trackedJobs.find((j) => j.jobId === sub.jobId)?.state !== "active") return;
+  let status;
+  try { status = await client.jobsStatus(sub.jobId); } catch { return; } // unknown job / dropped again: leave it
+  if (activeSubscriptions.get(sub.jobId) !== sub || !TERMINAL_JOB_STATES.has(status.state)) return;
+  if (status.result) sub.handle({ seq: Number.MAX_SAFE_INTEGER - 1, topic: "job.result", data: status.result });
+  sub.handle({
+    seq: Number.MAX_SAFE_INTEGER, topic: "job.status",
+    data: { state: status.state, ...(status.error ? { detail: status.error } : {}) },
+  });
 }
 
 /** @typedef {(partial: Record<string, any> | ((state: any) => Record<string, any>)) => void} ConnectSet */
@@ -1870,7 +1896,7 @@ export const useConnectStore = createStore(
        * LUCID: `opts.run` (`{id, index, count}`) is used instead of a new run id, so a caller can group
        * the jobs of several calls (one per (session, camera)) as one run; `opts.label` is the tracked
        * job's label (default `trackedJobLabel(spec)`).
-       * @param {{ source: TrackedJob["source"], sessionId?: string, camera?: string, projectTag?: string, run?: { id: string, index: number, count: number }, label?: string }} opts
+       * @param {{ source: TrackedJob["source"], sessionId?: string, camera?: string, projectTag?: string, mergeMode?: string, run?: { id: string, index: number, count: number }, label?: string }} opts
        * @returns {Promise<string[]>}
        */
       submitJobsOn: async (workerId, spec, opts) => {

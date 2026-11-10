@@ -38,9 +38,10 @@ its target to the list on the next deploy, and a dynamic `import()` stays lazy.
 **Purpose.** App startup logic. Builds the empty-session UI, wires the
 `InteractionManager`, sets up the 3D viewport and timeline, and exposes
 helpers used by every load path. Calls `init()` at module-load. On the desktop
-app only (`window.lucidDesktop.sleapNn` present) `init` dynamically imports
-`ui/inference-panel.js` and calls `setupInferencePanel()`; the web app never
-fetches it.
+every build `init` dynamically imports `ui/inference-panel.js` (a literal
+`import()`, after the rail exists) and calls `setupInferencePanel()`, then the
+Connect panel (`ui/connect/index.js`), in that order (rail order Inference,
+Connect). The panel uses local sleap-nn only where the desktop shim has it.
 
 **Key exports.**
 - `hideWelcomeOverlay()` — hides the dock empty-state overlay.
@@ -4114,7 +4115,8 @@ matches sleap-app though LUCID has no training UI. **Exports.** `parseJobTelemet
 **Purpose.** Three-way merge (`base` / `mine` / `theirs`) of the Connect state every
 window shares (paired workers, tracked jobs, device name, last selected worker), so
 a stale window cannot undo another's pairings. **Exports.** `mergeShared`,
-`sameShared`, typedef `SharedConnectState`. **Imports.** None.
+`sameShared`, typedef `SharedConnectState`. A tracked job's `fetchedAt` (latest wins) and `mergeMode`
+(the Inference panel's Existing-predictions mode recorded at submit) carry across windows. **Imports.** None.
 **Imported by.** the Connect store port, `store-helpers.js` (types).
 **Coverage.** `tests/test-connect-sync.mjs`.
 
@@ -4160,6 +4162,22 @@ folder if shared, else `<serve folder>/sleap-connect/<project>/`. **Exports.**
 `projectFolderName`, `defaultOutputDir({ projectPath, projectName, rules, mounts,
 serveFolder, isSharedFolder })` (the worker probe is a parameter). **Imports.**
 `path-mappings.js`. **Coverage.** `tests/test-connect-remote-output-dir.mjs`.
+
+#### pose/connect/remote-inference-plan.js
+
+**Purpose.** DOM-free planning of a remote inference run: each view's local key (web: session
+folder + relative path) and worker path (`resolveViewVideos`), `inferLocateRule` (one Locate per
+session root), the duplicate-worker-file refusal, `remoteOutputPath`
+(`<dir>/predictions/<session>__<view>.<stamp>.predictions.slp`), `buildViewSpec` (via
+`buildRemoteTrackSpecs`), `planRemoteRun`, `pendingFetches`, progress-line helpers
+(`progressFromLine`: sleap-nn `--gui` JSON, else the rich bar line `NN%|..| a/b [t<eta, x it/s]` /
+`NN% a/b`), `lastErrorLine` (the exception line of a failed job's log, shown beside the worker's "exit
+code 1"), `unresolvedViews` (checked views not on the worker: Run waits), `MAX_FRAMES_SPEC_CHARS` /
+`framesTooLongMessage`. `frames` is a range `a-b` or a plain list (sleap-nn `predict.py` `frame_list`
+takes no mix like `0-4,10-11`); `planRemoteRun` refuses a list over 100,000 characters (one argv entry on
+the worker, Linux caps it at 128 KiB). **Imports.**
+`path-mappings.js`, `remote-visibility.js`, `remote-track-spec.js`. **Imported by.**
+`ui/connect/remote-inference.js`. **Coverage.** `tests/test-connect-remote-inference-plan.mjs`.
 
 #### pose/connect/timestamp.js
 
@@ -4231,7 +4249,8 @@ WS->iroh fallback, `refreshWorkerInfo`, `listJobs`/`jobDetail`/`cancelJobOn`/`de
 `submitJob` (awaited, multi-model split) / `submitJobsOn` (fire and track) / `cancelJob` / `stopJob`,
 `fetchResultBlob` / `fetchResultBlobOn(workerId, …)`, `markJobFetched(jobId)`, `resumeTrackedJobs`; `submitJobsOn` takes
 `opts.run` / `opts.label`; `planPairingForText` (non-throwing pairing-form plan); job subscriptions that resume from the persisted `lastSeq`
-(`resubscribeWorker`), `watchTrackedJob`, chained jobs, one finish notification per job. Persisted under
+(`resubscribeWorker`, which after each re-attach asks `jobs.status` and ends a job the worker marked
+terminal without an event, as a restarted worker does: `reconcileTerminalJob`), `watchTrackedJob`, chained jobs, one finish notification per job. Persisted under
 `lucid-connect` through a three-way-merging storage shared with other windows (`syncConnectFromStorage`,
 `installConnectStorageSync`); the selection is per window (`lucid-connect-selected`, sessionStorage).
 **LUCID.** Singleton `useConnectStore` (not a hook; alias `connectStore`); every runtime difference is an
@@ -5860,6 +5879,10 @@ bridges into both test runners and unit-tests against plain object stubs.
 
 **Imported by.** `ui/ui-wiring.js`, `ui/settings.js`, `ui/interaction.js`,
 `loading/video.js`.
+
+**Modal owns the keyboard.** `shouldIgnoreShortcut` is true while any element with
+`data-shortcut-modal` is in the document (`shortcutModalOpen`; the worker file browser and the
+inference log dialog set it), so no app shortcut acts on the view behind such a modal.
 
 **Tests.** `tests/test-keyboard-target.js`,
 `tests/e2e/checkbox-focus-hotkeys.mjs`, `tests/e2e/copy-panel-text.mjs` (the
@@ -12890,7 +12913,14 @@ collapsible panel sections. Covered by `tests/e2e/panel-rail.mjs`.
 
 ### ui/inference-panel.js
 
-**Purpose.** The desktop app's **Inference** panel (right-edge rail, Zap icon):
+**Remote / web (P4).** Loaded on every build. Backend picker
+(`ui/connect/backend-picker.js`): Local (desktop with sleap-nn) or a paired
+SLEAP Connect worker; with no local sleap-nn (web, desktop without it) the panel
+is remote-only (Models/Views/run block swap to `ui/connect/remote-inference.js`).
+Local code reaches `window.lucidDesktop` only inside `setupInferencePanel` and
+the local paths. A 2 s refresh while shown notices a session opened meanwhile.
+
+**Purpose.** The **Inference** panel (right-edge rail, Zap icon):
 run sleap-nn on every camera view of the open session and bring the
 predictions back. A replica of sleap-app's Inference panel (`InferencePanel.tsx`,
 `inferenceStore.ts`, `BackendPicker.tsx`): same sections in the same order
@@ -13073,6 +13103,49 @@ Pair -> `pairWithCode`, Cancel when a worker is already paired. **Exports.**
 `reset()` blanks it (code, plan, Advanced, address, error); boxes are read-only while pairing, an edit
 clears the last failure, Enter in either box pairs (LUCID addition).
 **Imports.** `pose/connect/store.js`, `ui/panel-rail-icons.js`.
+
+#### ui/connect/backend-picker.js
+**Purpose.** Port of sleap-app `BackendPicker.tsx`: the Inference panel's Backend select (Local /
+each paired worker; picking a worker `selectWorker`s + connects), pair hint, status line
+(dot, text, "via <transport>", Connect button when idle), reattach banner with "Cancel it". `render()`
+runs on the panel's 2 s refresh, so it writes text and rebuilds the banner only when they change.
+Never a blank select: with no usable Local it has a disabled "Select a worker…" choice, and on the web
+with no worker paired the select is replaced by sleap-app's "Connect to a worker in the Connect tab to
+start remote inference." **Exports.** `createBackendPicker`, `LOCAL_VALUE`, `backendSelectValue`,
+`resolveBackendChange`, `connectionStatusText`. **Imports.** `pose/connect/{store,mini-store,transport}.js`, `ui/info-tip.js`.
+**Imported by.** `ui/inference-panel.js`.
+
+#### ui/connect/remote-file-browser.js
+**Purpose.** Port of sleap-app `RemoteFileBrowser.tsx` (list view): `openRemoteFileBrowser({workerId,
+mounts, mountLabels, mode: 'directory'|'file'|'browse', fileFilter, title})` -> Promise of the picked
+worker path or null. Breadcrumb / "Go to folder", back/forward, Favorites, Recents, Locations (the
+mounts), sort by column header, search, 100-entry batches, greyed non-matching files, stays inside the
+mounts, Esc closes (goto/search first). A sort other than name / a search keeps loading the remaining
+batches in the background. Long names keep their last 12 characters (`middleTruncate`); the fallback
+notice has a Dismiss. The scrim is a `data-shortcut-modal` (app shortcuts stay off the view behind it),
+handled keys stop propagating and Tab is trapped in the card. Icons/Columns views not ported. **Exports.**
+`openRemoteFileBrowser`, `remoteBrowserStore`, `mountRootFor`, `middleTruncate`. **Imports.** `pose/connect/{store,
+remote-browser-store,remote-browser}.js`, `ui/panel-rail-icons.js`. **Imported by.**
+`ui/connect/remote-inference.js` (P5's Connect window reuses it).
+
+#### ui/connect/remote-inference.js
+**Purpose.** The Inference panel's remote branch (sleap-app `inferenceStore.ts` remote path +
+`RemoteOutputFolder.tsx`): models picked on the worker, each view's video placed on the worker
+(path rules, `fs.stat`, Locate on worker...), the output folder (per worker per project,
+`setOutputDir`), Run = one `track` job per view in one `run` (`submitJobsOn`, explicit
+`output_path`), per-view progress from job streams, Cancel, and Fetch & Load Results
+(`fetchResultBlobOn` + `fsFallback`, `mergeViewPredictions`, `markJobFetched`, a progress card);
+completed unfetched jobs of the project are offered again after a reload. The panel re-evaluates every
+2 s, so each block (models, views, run box) repaints only when its content signature changes (a focused
+control or a click in progress is never replaced); a failed job shows the log's exception line. Run waits
+until every checked view is on the worker and a finished run is Dismissed (sleap-app's all-resolved gate
+and `!isDone`); each job records the Existing-predictions `mergeMode` at submit, which Fetch & Load uses
+(a job without one uses the panel's current mode). Progress shows frames / percent / fps / ETA
+("Initializing..." first); the log holds the echoed spec (`$ Remote (N videos): …`), submit / fetch lines
+and each job's worker output (`[cam1] …`), with Expand and Copy Log. **Exports.**
+`createRemoteInference(host)`. **Imports.** `pose/connect/*`, `remote-file-browser.js`,
+`ui/{loading-overlay,progress-delta,panel-rail-icons}.js`. **Imported by.** `ui/inference-panel.js`.
+**Coverage.** `tests/e2e/connect-inference-merge.mjs`.
 
 #### ui/connect/notify.js
 **Purpose.** Toast stack (bottom-right, `.connect-toasts`): `success/error/info(message,

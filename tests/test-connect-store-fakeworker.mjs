@@ -143,6 +143,25 @@ describe('Connect store against FakeWorker', () => {
     expect(toast.success).toHaveBeenCalledTimes(1);
   });
 
+  it('a worker that was restarted and marked the job failed without an event: the reconnect still ends it', async () => {
+    await useConnectStore.getState().pairWithCode(await worker.mintPairCode({ addrs: [WS_ADDR] }));
+    const [jobId] = await useConnectStore.getState().submitJobsOn(
+      worker.nodeId, { type: 'track', data_path: '/data/a.slp', model_paths: ['/data/m'] }, { source: 'window', sessionId: 'S4', camera: 'cam3' });
+    await waitFor(() => worker.calls.some((c) => c.method === 'jobs.subscribe'), 'subscribe');
+    worker.setJobState(jobId, 'running');
+    await waitFor(() => useConnectStore.getState().trackedJobs[0].lastSeq >= 1, 'lastSeq');
+    const before = worker.calls.filter((c) => c.method === 'jobs.subscribe').length;
+    worker.closeAll(1006, 'worker killed');
+    // What a restarted real worker does: the lost job becomes `failed` in its store, with no event.
+    const job = worker._job(jobId);
+    job.state = 'failed';
+    job.error = 'worker restarted and this job\'s subprocess was no longer running';
+    await waitFor(() => worker.calls.filter((c) => c.method === 'jobs.subscribe').length > before, 'resubscribe');
+    await waitFor(() => useConnectStore.getState().trackedJobs[0].state === 'failed', 'failed found by the reconnect');
+    expect(useConnectStore.getState().trackedJobs[0].error).toContain('worker restarted');
+    expect(toast.error).toHaveBeenCalledTimes(1);
+  });
+
   it('a reload resumes an active tracked job: resumeTrackedJobs redials and re-watches from its lastSeq', async () => {
     await useConnectStore.getState().pairWithCode(await worker.mintPairCode({ addrs: [WS_ADDR] }));
     const [jobId] = await useConnectStore.getState().submitJobsOn(

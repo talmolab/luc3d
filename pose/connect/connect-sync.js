@@ -94,6 +94,8 @@ function mergeJob(mine, theirs) {
     lastSeq: Math.max(mine.lastSeq, theirs.lastSeq),
     seen: mine.seen || theirs.seen,
     ...(fetchedAt !== null ? { fetchedAt } : {}),
+    // LUCID: the Existing-predictions mode recorded at submit; either window's copy will do.
+    ...(mine.mergeMode ?? theirs.mergeMode ? { mergeMode: mine.mergeMode ?? theirs.mergeMode } : {}),
   };
 }
 

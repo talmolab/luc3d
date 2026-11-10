@@ -82,7 +82,8 @@ A port of sleap-app's SLEAP Connect (protocol v1 to a `sleap-connect` worker); t
 - Pairing and jobs: localStorage `lucid-connect` (+ sessionStorage `lucid-connect-selected` per window). The device's Ed25519 key: IndexedDB `lucid-connect` (`pose/connect/identity.js`). **Nothing goes in the `.slp`** (`save-golden-digest.mjs` must not move).
 - A result blob comes from the worker's blob port, which sends NO CORS headers: a fetch from the page throws TypeError and `fetchBlob` falls back to `fs.read` over the socket (`fsFallback`).
 - The panel mirrors sleap-app's `ConnectPanel.tsx` (statuses Idle/Busy/GPU belong to its Connect window, not the panel); tests use `tests/connect/fake-worker.mjs` (`FakeWorker.serveOnPage`).
-- Tests: `node tests/run-mjs-tests.mjs connect`, e2e `connect-rail-tab`, `connect-pairing`.
+- **Remote inference** (`ui/inference-panel.js` on every build, remote-only without local sleap-nn; `ui/connect/remote-inference.js`, plan in `pose/connect/remote-inference-plan.js`): one `track` job per view sharing one `run`, each with an explicit `output_path` (the worker never makes folders, so the output folder must exist), video paths via path rules (web key = session folder + relative path, one Locate per root; two views on one worker file are refused). Fetch & Load = `fetchResultBlobOn` + `fsFallback` -> `mergeViewPredictions`, then `markJobFetched`; unfetched jobs come back after a reload; another session's results are refused.
+- Tests: `node tests/run-mjs-tests.mjs connect`, e2e `connect-rail-tab`, `connect-pairing`, `connect-inference-merge`.
 
 ## Dependencies
 
