@@ -36,7 +36,9 @@ import {
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
     adoptCampyRecording,
 } from '../loading/session-loader.js';
-import { preferNonCalibrationVideos } from '../loading/video-file-pick.js';
+import {
+    preferNonCalibrationVideos, assignFolderVideos, isFolderPick, isVideoFileName,
+} from '../loading/video-file-pick.js';
 import {
     campyVideoFile, orderByCampyCameras, campyRecordingWarnings,
 } from '../loading/campy-session.js';
@@ -1426,6 +1428,32 @@ export async function handleLoadSlpFile(slpFile) {
                     return null;
                 };
 
+                // A picked folder holds more than this session's videos (the
+                // side cameras of the same recording), and campy names every
+                // camera's video 0.mp4, which the referenced-name rule above
+                // would bind to the first camera. So a folder's videos are
+                // placed by `assignFolderVideos` instead: one per camera, by
+                // folder or a name that tells the cameras apart; any other
+                // video is left out before it is decoded. A folder with ONE
+                // video keeps the rules above (and the one-camera fallback
+                // below): nothing shares its name.
+                if (isFolderPick(vidFiles) && vidFiles.length > 1) {
+                    var slpRefPathByCam = new Map();
+                    for (var srpi in videoIdxToCameraName) {
+                        var srpCam = videoIdxToCameraName[srpi];
+                        var srpMeta = slpData.videos[srpi];
+                        if (!srpCam || !srpMeta || slpRefPathByCam.has(srpCam)) continue;
+                        slpRefPathByCam.set(srpCam, srpMeta.sourceFilename || srpMeta.filename || '');
+                    }
+                    var slpFolder = assignFolderVideos(vidFiles, cameraNames, slpRefPathByCam);
+                    if (slpFolder.unused.length) {
+                        console.log('[load-slp] folder videos on no camera of this session, not loaded: ' +
+                            slpFolder.unused.map(function (f) { return f.webkitRelativePath || f.name; }).join(', '));
+                    }
+                    vidFiles = slpFolder.assigned;
+                    slpMatchCam = function (vFile) { return slpFolder.cameraOf.get(vFile) || null; };
+                }
+
                 // A `-calibration` stem loses to a plainly-named video of the
                 // SAME camera, but still loads when it is that camera's only
                 // candidate (#199). Applied before the decoders open so a
@@ -2054,8 +2082,38 @@ export async function handleAddSlp() {
             console.log('[add-slp] SLP references videos:', addSlpVideoRefs);
 
             // Ask for the video files; [] = the user continued without video.
+            // Each camera's video can sit in its own camera folder, so a whole
+            // recording folder is offered too.
             var addVideoFiles = await forceVideoSelection(addRefInfo,
-                { title: 'SLP loaded — now select the video file(s)' });
+                { title: 'SLP loaded — now select the video file(s)', folder: true });
+
+            // A picked folder holds more than this file's videos (the side
+            // cameras of the same recording, campy's manifests), and campy
+            // names every camera's video 0.mp4: only a video placed on one of
+            // the file's cameras by its folder or name loads, and nothing is
+            // bound by elimination (`assignFolderVideos`).
+            // A folder with ONE video keeps the name rules below.
+            var addFolderCam = null;
+            var addRefPathByCam = new Map();
+            if (isFolderPick(addVideoFiles)) {
+                addVideoFiles = addVideoFiles.filter(function (f) { return isVideoFileName(f.name); });
+            }
+            if (isFolderPick(addVideoFiles) && addVideoFiles.length > 1) {
+                for (var arp = 0; arp < slpData.videos.length; arp++) {
+                    var arpCam = videoIdxToCameraName[arp];
+                    var arpMeta = slpData.videos[arp];
+                    if (!arpCam || !arpMeta || addRefPathByCam.has(arpCam)) continue;
+                    addRefPathByCam.set(arpCam, arpMeta.sourceFilename || arpMeta.filename || '');
+                }
+                var addFolder = assignFolderVideos(addVideoFiles,
+                    cameras.map(function (c) { return c.name; }), addRefPathByCam);
+                if (addFolder.unused.length) {
+                    console.log('[add-slp] folder videos on no camera of this file, not loaded: ' +
+                        addFolder.unused.map(function (f) { return f.webkitRelativePath || f.name; }).join(', '));
+                }
+                addFolderCam = addFolder.cameraOf;
+                addVideoFiles = addFolder.assigned;
+            }
 
             if (addVideoFiles.length > 0) {
                 for (var amvi = 0; amvi < addVideoFiles.length; amvi++) {
@@ -2066,11 +2124,16 @@ export async function handleAddSlp() {
                         var amvDec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
                         await amvDec.init(amvFile);
 
-                        // Match to SLP video reference by filename
-                        var amvCam = null;
+                        // Match to SLP video reference by filename (a folder
+                        // pick's videos are already placed, above)
+                        var amvCam = addFolderCam ? addFolderCam.get(amvFile) : null;
                         var amvMatchedVideoPath = null;
+                        if (amvCam) {
+                            var amvRefPath = addRefPathByCam.get(amvCam);
+                            if (amvRefPath && amvRefPath !== '.') amvMatchedVideoPath = amvRefPath;
+                        }
                         var amvStemLower = amvStem.toLowerCase();
-                        for (var arvi = 0; arvi < addSlpVideoRefs.length; arvi++) {
+                        for (var arvi = 0; !amvCam && arvi < addSlpVideoRefs.length; arvi++) {
                             var aRefName = addSlpVideoRefs[arvi];
                             if (!aRefName) continue;
                             var aRefStem = aRefName.replace(/\.[^.]+$/, '').toLowerCase();

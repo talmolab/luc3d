@@ -33,6 +33,7 @@
 import { noteProgress } from './progress-delta.js';
 import { state, getActiveSession } from './app-state.js';
 import { setSeekbarSwitchMarkers } from './seekbar-markers.js';
+import { showPanelTab } from './panel-rail.js';
 import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js';
 import { setStatus, markDirty } from '../import-export/save-load.js';
 import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js';
@@ -625,12 +626,10 @@ function syncMarkers(session) {
     setSeekbarSwitchMarkers(all, state.totalFrames);
 }
 
-/** Show the right panel (if hidden) on the ID Switches tab. */
+/** Open + expand the ID Switches section, showing the right panel if hidden. */
 export function openIdSwitchPanel() {
-    var wrap = document.getElementById('infoPanelWrapper');
-    if (wrap && wrap.classList.contains('collapsed')) { var t = document.getElementById('infoPanelToggleBtn'); if (t) t.click(); }
-    var tab = document.querySelector('.panel-tab[data-tab="tabIdSwitches"]');
-    if (tab) tab.click();
+    // Never a rail click: clicking the already-expanded panel would FOLD it.
+    showPanelTab('tabIdSwitches');
 }
 
 /** Forget a session's results (a new tracking pass relabels everything) and clear its markers. */

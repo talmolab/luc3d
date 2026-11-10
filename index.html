@@ -458,16 +458,9 @@
             <!-- Info Panel wrapper (toggle button + panel) -->
             <div class="info-panel-wrapper" id="infoPanelWrapper">
                 <div class="info-panel" id="infoPanel">
-                <!-- Tab bar -->
-                <div class="panel-tabs">
-                    <button class="panel-tab active" data-tab="tabInstances">Instances</button>
-                    <button class="panel-tab" data-tab="tabVisibility">Visibility</button>
-                    <button class="panel-tab" data-tab="tabIdSwitches">ID Switches</button>
-                    <button class="panel-tab" data-tab="tabVideos">Videos</button>
-                    <button class="panel-tab" data-tab="tabCameras">Cameras</button>
-                    <button class="panel-tab" data-tab="tabSkeleton">Skeleton</button>
-                    <button class="panel-tab" data-tab="tabSession">Session</button>
-                </div>
+                <!-- Each panel below becomes a collapsible section at setup,
+                     opened / folded / closed from the icon rail at the window's
+                     right edge (#panelRail, ui/panel-rail.js). -->
 
                 <!-- ==================== Instances Tab ==================== -->
                 <div class="panel-tab-content active" id="tabInstances">
@@ -1071,7 +1064,7 @@
                 </div>
 
                 <!-- ==================== Define Plane Panel ====================
-                     Shown INSTEAD of the tab bar + tab contents while Defining
+                     Shown INSTEAD of the tab contents (rail icons disabled) while Defining
                      Plane Mode is active (View ▸ Define Planes). Populated by
                      ui/plane-definition.js.
 
@@ -1441,6 +1434,10 @@
                 <div class="instance-list" id="instanceList" style="display:none;"></div>
             </div>
             </div><!-- end info-panel-wrapper -->
+
+            <!-- Right-edge icon rail: shows / hides each info-panel panel
+                 (sleap-app's sidebar rail). Built by ui/panel-rail.js. -->
+            <nav class="panel-rail" id="panelRail" aria-label="Panels"></nav>
         </div>
 
         <!-- Timeline resize handle -->

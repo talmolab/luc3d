@@ -104,7 +104,10 @@ helpers used by every load path. Calls `init()` at module-load.
   the first `[data-infotip]` element exists.
 - `../ui/node-tooltip.js` — `installNodeTooltip`, right after it (the listeners
   that put the node tooltip away on a press, key, wheel, scroll or resize).
-- `../ui/info-panel.js` — `setupPanelTabs`, `setupSkeletonEditing`,
+- `../ui/panel-rail.js` — `setupPanelRail({ toggleInfoPanel })` (builds the
+  right-edge icon rail and wraps each panel in its collapsible section; `toggleInfoPanel` from `../ui/ui-wiring.js` is handed
+  in so the rail stays free of that import).
+- `../ui/info-panel.js` — `setupSkeletonEditing`,
   `setupVideosTab` (the Videos tab's Load/Remove buttons, wired once here
   because `updateInfoPanel` returns early with no session),
   `updateInfoPanel`.
@@ -5753,33 +5756,11 @@ select ignores a scripted `.value` until focused, which
 rely on. Covered by `tests/test-lazy-select.js` and
 `tests/e2e/info-panel-many-tracks.mjs`.
 
-**The panel tab bar is ONE horizontal scroller.** `setupPanelTabs` makes
-`.panel-tabs` scroll sideways with every tab (Instances, Visibility, ID
-Switches, Videos, Cameras, Skeleton, Session) always inside it, in markup
-order, each sized to its full name. Do not bring back a "More ▾" overflow
-dropdown: it hid most tabs at the default width, and which ones moved as the
-panel was resized.
-- **A vertical wheel scrolls it too** (a trackpad swipe over the strip is
-  vertical); the bar sits OUTSIDE `.panel-tab-content`, so this breaks no
-  "one scroller" rule. It `preventDefault()`s only when the bar moved, so a
-  swipe past either end is still the page's.
-- **Click-and-drag has a 4px threshold, and a real drag SUPPRESSES the click**
-  (a capture-phase `click` listener on the bar, cleared on the next
-  `pointerdown`). Pointer capture is taken only once the threshold is crossed —
-  capturing on every press re-targets the plain click that follows. Touch
-  pointers are skipped: native `pan-x` already pans, and driving `scrollLeft`
-  on top would move it twice.
-- **Selecting a tab scrolls it into view**, by hand rather than with
-  `scrollIntoView` (which could scroll the app's layout), so
-  `openIdSwitchPanel` (`ui/id-switch-modal.js`, which just `.click()`s the
-  button) never leaves the active tab off-screen. `.panel-tabs` is
-  `position: relative` so each tab's `offsetLeft` is in the scroller's space.
-- **The edge fades are the only affordance** (`scroll-left` / `scroll-right`
-  classes, drawn with `mask-image`; the scrollbar is suppressed), recomputed by
-  a `ResizeObserver`.
-- **`user-select: none` on the bar** — the documented exception for "a surface
-  whose job is to be dragged".
-Covered by `tests/e2e/panel-tabs-scroller.mjs`.
+**The panels are opened, folded and closed by the right-edge rail and the
+section headers, not by this module.** `ui/panel-rail.js` owns which
+`.panel-tab-content` panes are shown (several can be); this module only fills
+them. (The old horizontal tab bar and `setupPanelTabs`
+are gone.)
 
 **The Videos tab's two buttons are wired at SETUP, not per-session.**
 `setupVideosTab()` (called once from `pose/initialization.js`) installs the
@@ -5796,7 +5777,7 @@ would have no handler on a freshly-opened app.
 Covered by `tests/e2e/videos-panel-buttons.mjs`.
 
 **Key exports.**
-- Tab control: `setupPanelTabs`, `setupVideosTab`.
+- Tab control: `setupVideosTab` (switching is `ui/panel-rail.js`).
 - Tables: `populateVideosTable`, `populateCamerasTable`,
   `populateSkeletonTable`, `populateSessionAssignTable`,
   `populateUnassignedVideos`.
@@ -8233,8 +8214,9 @@ the user made and forgot. Pinned by `define-plane-mode.mjs` §1b.
     editor, the drag-end status, the padlock tooltip and the pin picker.
 - `enterPlaneMode()` / `exitPlaneMode()` / `togglePlaneMode()` /
   `isPlaneModeActive()` — show/hide the `#planeModeBar` banner and swap the
-  info panel's `.panel-tabs` + `.panel-tab-content` for `#planePanel` by inline
-  `display` only, so exiting restores the previously-active tab and its scroll.
+  info panel's `.panel-section` stack for `#planePanel` by inline
+  `display` only, and disable the rail's panel icons (`setPanelRailLocked`,
+  `ui/panel-rail.js`), so exiting restores the same open / folded sections and the scroll.
   Exiting also clears the plane selection/hover and unwinds the two things that
   lock this panel: `exitOriginMode()` and `closeAngleModal()`.
 - `handlePlaneDrop(planeId, viewName, clientX, clientY)` — the drop listener's
@@ -9681,7 +9663,9 @@ summary with its results (`reopenTrackSummary(session, results)`) instead of ope
 the tab; with no summary kept for the session it opens the tab as from the menu);
 `refreshIdSwitchPanel(session?)` (render the tab and put that session's
 markers on the seekbar — called after a check, from `updateInfoPanel` and from
-`switchSession`); `openIdSwitchPanel()` (show the panel, if hidden, on the tab);
+`switchSession`); `openIdSwitchPanel()` (open + expand the ID Switches section,
+showing the info panel if hidden, via `showPanelTab` in `ui/panel-rail.js` —
+never a rail click, which would fold an already-expanded section);
 `clearIdSwitchResults(session?)` (called by `runTrackingPass` before it relabels);
 `setReviewList(session, result, navigateToFrame?)` (single-camera Track All puts its
 review list on the session as `results.review` — see below);
@@ -9831,9 +9815,8 @@ embeds only the samples its scoring reads plus a sparse background. Time scales 
 (~9 min for a 30-min, 5-animal session on an M-series Mac).
 
 **User-facing features.** The **ID Switches** tab (`#tabIdSwitches` /
-`#idSwitchPanel` in `index.html`, third tab; at the default panel width it is
-scrolled off the right of the tab bar, and `openIdSwitchPanel` scrolls it back
-into view). Results are stored per session on `session._idSwitch` (`{results:
+`#idSwitchPanel` in `index.html`, the third icon on the right-edge rail, a
+two-opposing-arrows swap glyph; `openIdSwitchPanel` shows it). Results are stored per session on `session._idSwitch` (`{results:
 {size?, image?}, reviewed: Set, fixes, showRepeats, current}`), so they survive
 closing/reopening the tab and switching sessions — and are SAVED in the `.slp`
 (`metadata.lucid.idSwitchReview`, see `ui/id-switch-review.js`; ticking a row,
@@ -13392,6 +13375,101 @@ actually stops the corresponding rendering / data work.
 
 ---
 
+### ui/panel-rail.js
+
+**Purpose.** The right-edge icon rail and the stack of collapsible panel
+sections it drives (Instances, Visibility, ID Switches, Videos, Cameras,
+Skeleton, Session); it also shows/hides the info panel. It replaced the
+horizontal tab bar. Modelled on sleap-app's sidebar
+(`src/components/layout/AppShell.tsx` `Sidebar`; rules in `appStore.ts`
+`togglePanelOpen` / `openPanel` / `closePanel` / `toggleSectionCollapsed`) in
+its default multi-panel (accordion) mode.
+- **Sections:** at setup each `.panel-tab-content` pane is wrapped in a
+  `<section class="panel-section" data-tab>` with a header: a chevron + name
+  button (`.panel-section-toggle`, `aria-expanded`) that folds the body to the
+  header strip, and an ✕ (`.panel-section-close`, "Close <name>") that takes
+  the panel out of the stack. Panes keep their ids and markup; a pane carries
+  `.active` while its body is on screen (open and not folded). Open sections
+  stack in rail order.
+- **Click rules (sleap-app's accordion):** a rail click on a panel that is not
+  expanded opens it if needed, expands it and folds every other open panel; a
+  click on the expanded panel folds it; while the info panel is hidden a click
+  shows it with that panel expanded and the rest folded. A header chevron
+  folds/unfolds only its own section (several can be expanded). Closing the
+  last open panel hides the info panel; showing the info panel with nothing
+  open reopens Instances (never an empty panel). Every OPEN panel's icon is
+  `.active` / `aria-pressed`; a hidden info panel shows none. The top button
+  (Lucide PanelRightClose / PanelRightOpen) is a fourth hide/show beside the
+  Panel button, `I` and View ▸ Toggle Info Panel; all four go through
+  `toggleInfoPanel`, keep the stack, and a `MutationObserver` on
+  `#infoPanelWrapper`'s class keeps the rail in step.
+- **One scroller:** unlike sleap-app, sections never scroll on their own:
+  `#infoPanel` is the one scroller (CLAUDE.md), sections have their natural
+  height, and each header is `position: sticky` (rows that already stuck at
+  `top: 0` inside a pane — `.data-table` heads, `.id-switch-toolbar` — stick
+  below it, `--panel-section-header-height`). So no section-resize splitters.
+  sleap-app's single-panel mode (View ▸ Allow Multiple Panels) is not ported.
+- **Code never clicks a rail button to open a panel** (clicking the expanded
+  one folds it): it calls `showPanelTab(tabId)` (sleap-app's `openPanel`),
+  which opens + expands that panel, shows the info panel, scrolls the
+  section's header to the top of `#infoPanel` (a rail click that opens a
+  panel does too), and never hides or folds anything.
+- **The rail widens** from 44px to 132px (`--panel-rail-expanded-width`, just
+  past "ID Switches") over the panel to show each name, with sleap-app's rules
+  (AppShell `railExpanded`, `wireRailExpansion`): `.expanded` is set on mouse
+  enter and on focus entering the rail, and cleared on mouse leave (whatever
+  has focus, so `I` after a click and then moving away narrows it) and on
+  focus leaving the rail. A click neither narrows it nor drops focus. As in
+  sleap-app the icon is LEFT of its name, so the icons slide left as it
+  widens, and the widened rail takes the pointer (each row is its button): it
+  covers the panel's right edge until the pointer leaves it.
+- The rail is a sibling AFTER `#infoPanelWrapper` in `.main-content`, so a
+  collapsed wrapper still measures 0 wide and `isInfoPanelVisible` is unchanged.
+- Open / folded sections are display taste:
+  `localStorage.lucidPanelRailSections` (`{open, folded}`, best-effort),
+  restored once in `setupPanelRail`; whether the info panel is shown is not
+  remembered (it starts shown, as before).
+
+**Key exports.** `PANEL_RAIL_PANELS` (`{tab, label, icon}` in rail order),
+`PANEL_RAIL_STORAGE_KEY`, `setupPanelRail({ toggleInfoPanel })`,
+`showPanelTab(tabId)` (returns false for an unknown id),
+`clickPanelRailTab(tabId)` (the rail-click rule), `togglePanelSection(tabId)`
+(header chevron), `closePanelTab(tabId)` (header ✕), `getOpenPanelTabs()`
+(`[{tab, expanded}]` in stack order), `setPanelRailLocked(on)` (Define Planes
+disables the panel icons; the top button stays live), `syncPanelRail()`.
+
+**Imports from project modules.** `ui/panel-rail-icons.js` only.
+`toggleInfoPanel` is passed in, because `ui/id-switch-modal.js` and
+`ui/plane-definition.js` import this module and `ui/ui-wiring.js` would close a
+cycle.
+
+**Imported by.** `pose/initialization.js` (`setupPanelRail`),
+`ui/id-switch-modal.js` (`showPanelTab` in `openIdSwitchPanel`),
+`ui/plane-definition.js` (`setPanelRailLocked` in `setPanelPlaneMode`).
+
+**User-facing features.** The icon rail on the window's right edge and the
+collapsible panel sections. Covered by `tests/e2e/panel-rail.mjs`.
+
+### ui/panel-rail-icons.js
+
+**Purpose.** The rail's icons, inlined from Lucide 0.575.0 (`lucide-static`, the
+release sleap-app uses through `lucide-react`; ISC, notice in the file header
+and `lib/LICENSES.txt`). sleap-app's glyph wherever the panel matches:
+Instances = Users, Visibility = Eye (sleap-app's View panel), Videos = Film,
+Skeleton = Bone. Others: ID Switches = ArrowLeftRight (two opposing arrows),
+Cameras = Camera, Session = FolderTree, plus PanelRightClose / PanelRightOpen
+and the section headers' ChevronDown / ChevronRight / X (sleap-app's).
+Inline strings: no fetch, so offline mode and the version stamp are unaffected.
+
+**Key exports.** `RAIL_ICONS` (Lucide name → SVG child markup),
+`railIconSvg(name)` (wraps it in Lucide's 24x24 stroke-2 currentColor `<svg>`;
+throws on an unknown name).
+
+**Imports from project modules.** None (leaf). **Imported by.**
+`ui/panel-rail.js`.
+
+---
+
 ## loading/
 
 ### loading/frame-worker.js
@@ -13633,6 +13711,16 @@ this decision is pure and worth pinning in Node.
   null when nothing matches. Used both to assign a camera and, in the same load,
   as the group key above — matching twice with two rules is how a video gets
   dropped for one camera and bound to another.
+- `assignFolderVideos(files, cameraNames, refPathByCam)` →
+  `{cameraOf, assigned, unused}` — one video per camera from a picked FOLDER,
+  which can hold cameras the project does not name and videos that all share a
+  name (campy's `<camera>/0.mp4`). Signals, strongest first: folder = camera
+  name; folder + name = the referenced path's; stem = camera name; the
+  referenced file name when only one picked video has it; camera name in the
+  stem; the referenced stem in only one video's stem. A `-calibration` stem
+  loses a tie. A video with no signal is `unused` — never bound by elimination.
+- `isFolderPick(files)` (a relative path with a folder in it),
+  `isVideoFileName(name)`, `FOLDER_VIDEO_EXTENSIONS`.
 
 **Why the stem is only a hint.** As a hard exclusion it dropped ordinary
 session videos like `cam1-calibration.mp4`, leaving a folder load with ZERO views
@@ -13642,11 +13730,13 @@ and no message; real calibration clips live under `calibration_images/`.
 one camera's plain video suppress another camera's only video.
 
 **Imported by.** `loading/session-loader.js` (the per-camera folder loader, the
-single-SLP folder loader, and `attachVideosForLazyReopen`),
-`import-export/slp-import.js`.
+single-SLP folder loader, `attachVideosForLazyReopen`, and
+`sessionFolderVideos`), `import-export/slp-import.js`.
 
 **Tests.** `tests/test-video-file-pick.mjs`,
-`tests/e2e/calibration-named-videos-load.mjs` (both real loaders).
+`tests/e2e/calibration-named-videos-load.mjs` (both real loaders),
+`tests/e2e/load-slp-session-folder.mjs` (`assignFolderVideos` in both Load SLP
+paths).
 
 ### loading/track-union.js
 
@@ -13746,7 +13836,15 @@ filesystem enumeration, decoder rebuild.
   `setProjectSkeleton`.
 - Video assignment: `autoAssignVideosToCameras`, `forceVideoSelection`,
   `forceVideoSelectionWithFolder`, `matchSessionFolder`,
-  `pickParentDirectoryForSessions`, `showParentDirMatchSummary`.
+  `pickParentDirectoryForSessions`, `showParentDirMatchSummary`,
+  `sessionFolderVideos`, `pickSessionFolderVideos`.
+  **Select Session Folder** is one helper for both prompts:
+  `pickSessionFolderVideos(startIn)` = `confirmFolderPick` + `pickFolder` (or,
+  with `startIn`, `pickFolderNear` in the project's folder) +
+  `sessionFolderVideos(allFiles)` (every video below the picked root except
+  calibration clips, then `campyManifestsAmong`), resolving `null` on a cancel
+  or a folder with no video. It keeps EVERY video, cameras the project does not
+  name included; the caller places them (`assignFolderVideos`).
   `forceVideoSelectionWithFolder(refInfo, sessionName, options)` accepts
   `options.allowSkip` (a "Skip — Load Videos Later" button; used by the lazy
   reopen) and closes on `Esc`; both resolve `null`, which every caller treats as
@@ -13763,7 +13861,10 @@ filesystem enumeration, decoder rebuild.
   button and `Esc` both resolve `[]`, which both callers treat as "no videos"
   (#337); a cancelled picker leaves it up. `options.title` names what was
   loaded, and the "Expected:" line is omitted when `refInfo` is empty — callers
-  pass `''`, not a `'(unknown)'` placeholder.
+  pass `''`, not a `'(unknown)'` placeholder. `options.folder` adds **Select
+  Session Folder** first (`pickSessionFolderVideos`; a cancelled pick leaves the
+  prompt up): Add SLP passes it, Load Project's `.json` route does not (its
+  loop would decode every folder video and the manifests).
 - `adoptLabeledFrameCount()` — sizes a labeled project that has NO view:
   `totalFrames = last labeled frame + 1`, plus the readout and the timeline;
   returns the first labeled frame (or -1 when it did nothing). Called right
@@ -13842,8 +13943,8 @@ filesystem enumeration, decoder rebuild.
   `0.mp4`); the single-SLP loader takes videos from
   session.json when there is no `videos/` and reads the root `.slp` over
   campy-live-export's `points3d.h5`; the load's final status gains the
-  warnings (`withCampyWarnings`). `forceVideoSelectionWithFolder`'s folder
-  button and `pickParentDirectoryForSessions` pass the root-level manifests
+  warnings (`withCampyWarnings`). Both prompts' Select Session Folder
+  (`pickSessionFolderVideos`) and `pickParentDirectoryForSessions` pass the root-level manifests
   through with the videos (JSON, so every caller's video filter drops them).
 - `recomputeUploadedCameras`.
 - Misc re-exports: `resolveImportTrackIdx` (from
@@ -16325,8 +16426,20 @@ first track.
   copy turned a one-camera session into a two-camera one. If that camera has
   no view yet, it only asks for the video (Load SLP again after continuing
   without video); otherwise it changes nothing and says so. A same-named camera
-  from another video (campy's `0.mp4`) is still added as `<name>_2`. Test:
-  `tests/e2e/load-slp-same-video-twice.mjs`.
+  from another video (campy's `0.mp4`) is still added as `<name>_2`. Its video prompt
+  (`forceVideoSelection` with `folder: true`) offers Select Session Folder.
+  Test: `tests/e2e/load-slp-same-video-twice.mjs`.
+- **A folder pick's videos are placed by `assignFolderVideos`** in both
+  `handleLoadSlpFile` and `handleAddSlp` (detected by `isFolderPick`): one video
+  per camera, by its folder or a name that tells cameras apart (the path the file
+  references, folder + name, is how Add SLP's renamed `_2` cameras find theirs),
+  and a video on none of the file's cameras — a recording folder's other
+  cameras — is left out before it is decoded (console only). In
+  `handleLoadSlpFile` it replaces `slpMatchCam` for that pick, because the
+  referenced-stem rule bound campy's every-camera `0.mp4` to the first camera.
+  Videos picked one by one, and a folder with only one video, keep the name
+  rules (and #390's one-camera fallback). Test:
+  `tests/e2e/load-slp-session-folder.mjs`.
 - `handleLoadPoints3dH5()` — overlay 3D points from H5. Requires only a loaded
   **skeleton** (not a full session): a camera-less skeleton-only project is
   accepted, the 3D viewport is force-created (bypassing the calibration gate)
@@ -16457,7 +16570,8 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
   (`remapGlobalTrackToSession`, `nulledNodesFromOcclusion`),
   `./slp-provenance.js` (`fileSessionProvenance`, `fileSessionNames` — each
   session keeps its part of the file's provenance),
-  `../loading/video-file-pick.js` (`preferNonCalibrationVideos`),
+  `../loading/video-file-pick.js` (`preferNonCalibrationVideos`,
+  `assignFolderVideos`, `isFolderPick`, `isVideoFileName`),
   `../ui/loading-progress-modal.js` (`getLoadingProgressModal`),
   `../loading/cold-read-guard.js`
   (`readBlobArrayBuffer`: Load 3D Points reads its `.h5` into memory, outside
