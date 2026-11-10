@@ -85,12 +85,15 @@ function mergeRecords(
 /** A job both sides changed: progress never goes backwards, and a finished state beats `active`. */
 function mergeJob(mine, theirs) {
   const finished = mine.state !== "active" ? mine : theirs.state !== "active" ? theirs : mine;
+  // LUCID: `fetchedAt` (set by `markJobFetched`) carries across windows; the latest non-null wins.
+  const fetchedAt = Math.max(mine.fetchedAt ?? 0, theirs.fetchedAt ?? 0) || null;
   return {
     ...mine,
     state: finished.state,
     error: finished.error,
     lastSeq: Math.max(mine.lastSeq, theirs.lastSeq),
     seen: mine.seen || theirs.seen,
+    ...(fetchedAt !== null ? { fetchedAt } : {}),
   };
 }
 

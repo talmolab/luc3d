@@ -4,8 +4,8 @@
  * pose/connect/store-helpers.js.
  *
  * Skipped (they drive the live zustand store, a fake WorkerClient and storage events, so they
- * belong with the store port): everything in `describe("connectStore")` and "Connect state
- * shared across windows (#453)". sleap-app has no direct unit tests for the rest of this file's
+ * belong with the store port, now `tests/test-connect-store.mjs`): everything in `describe("connectStore")`
+ * and "Connect state shared across windows (#453)". sleap-app has no direct unit tests for the rest of this file's
  * exports (`runJobsToEnd`, `withYamlRunName`, `toShared` ... are exercised only through the
  * store), so those are covered here with new tests — the `withYamlRunName` ones mirror
  * connectStore.test.ts's "sends each split job's YAML run name as a Hydra-quoted run_name" and

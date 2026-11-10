@@ -15,7 +15,8 @@
  *    `seedFromJobSpec` take those functions as a trailing `deps` object
  *    (`LauncherSpecDeps`, below). Logic and key names in the produced specs are unchanged,
  *    so a caller that supplies sleap-app-identical helpers gets sleap-app-identical specs.
- *    `deps.formatRunTimestamp` defaults to `./timestamp.js`.
+ *    `deps.formatRunTimestamp` defaults to `./timestamp.js`; `buildRunInferenceSpecs`'s
+ *    `deps.buildRemoteTrackSpecs` defaults to `./remote-track-spec.js` (now ported).
  *  - `labels` is only read as `labels.videos[i].shape?.[0]` (frame counts) and passed to the
  *    deps; any object with that shape (not just a sleap-io `Labels`) works.
  *  - YAML is never parsed here: `seedFromJobSpec` delegates to `deps.parseYamlConfig`, so
@@ -43,6 +44,7 @@
  * @property {() => string} [formatRunTimestamp]
  */
 import { formatRunTimestamp as defaultFormatRunTimestamp } from "./timestamp.js";
+import { buildRemoteTrackSpecs as defaultBuildRemoteTrackSpecs } from "./remote-track-spec.js";
 
 /**
  * Quote a value for use inside a Hydra CLI override so that `=`, spaces, commas,
@@ -164,11 +166,11 @@ export function buildLauncherTrainSpec(input, deps) {
  * @param {string[]} modelDirs
  * @param {InferenceConfig} config
  * @param {any} labels
- * @param {Pick<LauncherSpecDeps, "buildRemoteTrackSpecs">} deps
+ * @param {Partial<Pick<LauncherSpecDeps, "buildRemoteTrackSpecs">>} [deps] `buildRemoteTrackSpecs` defaults to `./remote-track-spec.js` (LUCID).
  * @returns {TrackJobSpec[]}
  */
-export function buildRunInferenceSpecs(labelsPath, modelDirs, config, labels, deps) {
-  return deps.buildRemoteTrackSpecs(
+export function buildRunInferenceSpecs(labelsPath, modelDirs, config, labels, deps = {}) {
+  return (deps.buildRemoteTrackSpecs ?? defaultBuildRemoteTrackSpecs)(
     { ...config, modelPaths: modelDirs },
     {
       dataPath: labelsPath,

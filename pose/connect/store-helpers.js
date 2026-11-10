@@ -9,6 +9,10 @@
  * (`store.js`) imports these.
  *
  * LUCID changes:
+ *  - `capTrackedJobs` keeps completed, unfetched (`fetchedAt` unset), LUCID-tagged (`sessionId`/`camera`) jobs past
+ *    the 50 cap (hard ceiling `MAX_HELD_TAGGED_JOBS` = 500, oldest evicted); untagged jobs behave as in sleap-app.
+ *  - `toShared` drops corrupt records (a non-object, or one with no `nodeId` / `jobId`), where sleap-app keeps them:
+ *    one in the store would make every later merge throw, and so every action that saves.
  *  - localStorage/sessionStorage keys are `lucid-connect` / `lucid-connect-selected`
  *    (sleap-app: `sleap-app-connect` / `sleap-app-connect-selected`).
  *  - Types are JSDoc. `withYamlRunName(spec, yamlLoad)` takes the YAML parser as a parameter
@@ -50,6 +54,8 @@ export const SELECTED_WORKER_SESSION_KEY = "lucid-connect-selected";
 export const FORGET_LEAVE_TIMEOUT_MS = 5000;
 
 export const MAX_TRACKED_JOBS = 50;
+/** LUCID: hard ceiling on completed, unfetched, LUCID-tagged jobs `capTrackedJobs` keeps past the cap. */
+export const MAX_HELD_TAGGED_JOBS = 500;
 
 /** Shown wherever a worker refused this device as no longer paired. */
 export const UNPAIRED_MESSAGE =
@@ -222,19 +228,23 @@ export function runJobsToEnd(latest, active, summaries, wantedRunId) {
  * @returns {TrackedJob[]}
  */
 export function capTrackedJobs(jobs) {
-  let excess = jobs.length - MAX_TRACKED_JOBS;
-  if (excess <= 0) return jobs;
+  // LUCID: a LUCID-tagged job that completed and has not been fetched (`fetchedAt` unset) holds a
+  // result nobody has loaded yet; it is never evicted by the 50 cap, only by the hard ceiling.
+  const isHeld = (j) => (j.sessionId || j.camera) && j.state === "completed" && !j.fetchedAt;
   const dropIdx = new Set();
-  const byAge = jobs
-    .map((j, i) => ({ j, i }))
-    .filter(({ j }) => j.state !== "active")
-    .sort((a, b) => a.j.submittedAt - b.j.submittedAt);
-  for (const { i } of byAge) {
-    if (excess <= 0) break;
-    dropIdx.add(i);
-    excess--;
+  const byAge = (list) => list.sort((a, b) => a.j.submittedAt - b.j.submittedAt);
+  const held = byAge(jobs.map((j, i) => ({ j, i })).filter(({ j }) => isHeld(j)));
+  for (let k = 0; k < held.length - MAX_HELD_TAGGED_JOBS; k++) dropIdx.add(held[k].i);
+
+  let excess = jobs.length - dropIdx.size - MAX_TRACKED_JOBS;
+  if (excess > 0) {
+    for (const { i } of byAge(jobs.map((j, i) => ({ j, i })).filter(({ j, i }) => j.state !== "active" && !isHeld(j) && !dropIdx.has(i)))) {
+      if (excess <= 0) break;
+      dropIdx.add(i);
+      excess--;
+    }
   }
-  return jobs.filter((_, i) => !dropIdx.has(i));
+  return dropIdx.size === 0 ? jobs : jobs.filter((_, i) => !dropIdx.has(i));
 }
 
 /**
@@ -307,9 +317,12 @@ export function sharedSlice(state) {
 export function toShared(state) {
   const p = state;
   if (!p || !Array.isArray(p.pairedWorkers) || !Array.isArray(p.trackedJobs)) return null;
+  // LUCID: a corrupt entry (null, a number, no id) is dropped here — one in the store would make
+  // every later merge throw, and so every action that saves.
+  const isRec = (r, key) => !!r && typeof r === "object" && typeof r[key] === "string" && r[key] !== "";
   return {
-    pairedWorkers: p.pairedWorkers,
-    trackedJobs: p.trackedJobs,
+    pairedWorkers: p.pairedWorkers.filter((w) => isRec(w, "nodeId")),
+    trackedJobs: p.trackedJobs.filter((j) => isRec(j, "jobId")),
     deviceName: typeof p.deviceName === "string" ? p.deviceName : null,
     lastSelectedWorkerId: typeof p.lastSelectedWorkerId === "string" ? p.lastSelectedWorkerId : null,
   };

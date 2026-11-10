@@ -4181,9 +4181,9 @@ serveFolder, isSharedFolder })` (the worker probe is a parameter). **Imports.**
 deps)`, `buildRunInferenceSpecs(labelsPath, modelDirs, config, labels, deps)`,
 `seedFromJobSpec(spec, deps)`, `inferModelType(headTypes)`, `hydraQuote(value)` (from
 sleap-app's `platform/trainingArgs.ts`). The training-store, channel-detection and
-track-spec helpers sleap-app imports are passed in as `deps` (`LauncherSpecDeps`), and
+track-spec helpers sleap-app imports are passed in as `deps` (`LauncherSpecDeps`; `buildRunInferenceSpecs`'s `buildRemoteTrackSpecs` defaults to `remote-track-spec.js`), and
 YAML is never parsed here (`deps.parseYamlConfig`), so the module has no `yaml` import.
-**Imports.** `timestamp.js`. **Imported by.** `store-helpers.js` (`hydraQuote`).
+**Imports.** `timestamp.js`, `remote-track-spec.js`. **Imported by.** `store-helpers.js` (`hydraQuote`).
 **Coverage.** `tests/test-connect-launcher-spec.mjs` (fake deps).
 
 #### pose/connect/job-groups.js
@@ -4205,9 +4205,49 @@ own CSS off `text`), `jobTimeLabel`, `groupTimeLabel`, `groupJobs` (runs by
 yamlLoad)` (the YAML parser is injected), plus the module-private pure helpers the store
 needs (`upsertWorker`, `activeJobsFor`, `latestActiveJobFor`, `trackedJobLabel`,
 `isMultiModelTrainSpec`, `sharedSlice`/`toShared`/`readStoredShared`/`capShared`,
-`mapLinkStatus`, `fetchAllRemoteEntries`, `withTimeout`, storage-key constants).
-**Imports.** `launcher-spec.js`. **Imported by.** the Connect store port.
+`mapLinkStatus`, `fetchAllRemoteEntries`, `withTimeout`, storage-key constants). LUCID: `capTrackedJobs`
+keeps completed, unfetched (`fetchedAt` unset), tagged jobs past the 50 cap (`MAX_HELD_TAGGED_JOBS` = 500).
+**Imports.** `launcher-spec.js`. **Imported by.** `store.js`.
 **Coverage.** `tests/test-connect-store-helpers.mjs`.
+
+#### pose/connect/mini-store.js
+
+**Purpose.** The zustand subset the Connect store needs, no dependency: `createStore(initializer)` ->
+`{getState, setState(partial|fn, replace?), subscribe, subscribeSelector(selector, listener(selected, prev),
+equalityFn = Object.is), getInitialState}`, a `shallowEqual` helper, and the `persist(config, options)`
+middleware (`name`, `version`, `storage`, `partialize`, `merge`, `migrate`, `skipHydration`;
+`api.persist.{rehydrate, hasHydrated, getOptions, setOptions, clearStorage, onHydrate, onFinishHydration}`).
+Synchronous storage only. **Imports.** None. **Imported by.** `store.js`. **Coverage.**
+`tests/test-connect-mini-store.mjs`.
+
+#### pose/connect/store.js
+
+**Purpose.** Port of sleap-app `connectStore.ts` @ 683a159: the Connect state (paired workers, per-window
+selection, tracked jobs, device name; runtime connection status/mounts/errors/worker info) and every
+action: pairing (`pairWithTicket` incl. `sleap1…` codes, `pairWithCode` = `readCodeInfo` -> `planPairing`
+-> pair), connect / select / disconnect / forget (`clients.leave`), `clientFor` + managed connections with
+WS->iroh fallback, `refreshWorkerInfo`, `listJobs`/`jobDetail`/`cancelJobOn`/`deleteJobsOn`,
+`browseRemoteDir(On)`/`mountsFor`/`devicesFor`/`statWorkerPath`, `setDeviceName`, path rules / output dirs,
+`submitJob` (awaited, multi-model split) / `submitJobsOn` (fire and track) / `cancelJob` / `stopJob`,
+`fetchResultBlob` / `fetchResultBlobOn(workerId, …)`, `markJobFetched(jobId)`, `resumeTrackedJobs`; `submitJobsOn` takes
+`opts.run` / `opts.label`; `planPairingForText` (non-throwing pairing-form plan); job subscriptions that resume from the persisted `lastSeq`
+(`resubscribeWorker`), `watchTrackedJob`, chained jobs, one finish notification per job. Persisted under
+`lucid-connect` through a three-way-merging storage shared with other windows (`syncConnectFromStorage`,
+`installConnectStorageSync`); the selection is per window (`lucid-connect-selected`, sessionStorage).
+**LUCID.** Singleton `useConnectStore` (not a hook; alias `connectStore`); every runtime difference is an
+injected dep set with `configureConnect` (`WorkerClient`, `getClientIdentity`, `localStorage`,
+`sessionStorage`, `notify` {success,error,info}, `openConnectWindow`, `appVersion`, `platform`,
+`computerName`, `userAgent`, `pathMappingsStorage`, `yamlLoad`, `randomUUID`), defaults resolved at use;
+iroh = the transport's registered socket factory; tracked jobs may carry `{sessionId, camera, projectTag}`.
+Test hooks `__setManagedDeps`, `__resetManagedConnections`, `__resetConnectState`. Also exports
+`pathRulesFor`, `resolveDeviceName`, `agentInfo`, `planPairingForText`, `readCodeInfo` (re-exported from `worker-ui-helpers.js`) and re-exports `capTrackedJobs`,
+`migrateConnectPersisted`, `runJobsToEnd`, `withYamlRunName`, `UNPAIRED_MESSAGE`. **Imports.**
+`mini-store.js`, `store-helpers.js`, `connect-sync.js`, `client.js`, `identity.js`, `managed-connection.js`,
+`transport.js`, `pair-code.js`, `pairing-plan.js`, `path-mappings.js`, `device-name.js`, `job-telemetry.js`,
+`errors.js`, `worker-ui-helpers.js`. **Coverage.** `tests/test-connect-store.mjs` (port of connectStore.test.ts),
+`test-connect-store-iroh.mjs`, `test-connect-store-lucid.mjs`, `test-connect-store-fakeworker.mjs`
+(pair from a minted code -> tagged job -> events -> reconnect resubscribe against `FakeWorker`);
+`test-connect-review-fixes.mjs` (P2 review fixes); helpers `tests/connect/store-test-env.mjs`.
 
 #### pose/connect/errors.js, envelope.js
 
@@ -4276,6 +4316,49 @@ ws to iroh after `FALLBACK_AFTER_MS` (10 s) of failure, probe the preferred rout
 `dial`, `now`, `sleep`. **Exports.** `ManagedConnection`, `isUnpairedError`,
 `RECONNECT_BACKOFF_MS`, `FALLBACK_AFTER_MS`, `PROBE_PREFERRED_EVERY_MS`. **Imports.**
 `errors.js`. **Coverage.** `tests/test-connect-managed-connection.mjs` (fake clock).
+
+#### pose/connect/remote-track-spec.js
+
+**Purpose.** `buildRemoteTrackSpecs(config, ctx)`: the protocol-v1 `track` job spec(s) for an
+inference config (one spec, or one per video for `random` / a restricted
+`allowedVideoIndices`). Pure, logic verbatim from sleap-app. **Imports.** None.
+**Imported by.** `launcher-spec.js` (default for `deps.buildRemoteTrackSpecs`).
+**Coverage.** `tests/test-connect-remote-track-spec.mjs`.
+
+#### pose/connect/job-stream.js
+
+**Purpose.** Replay/live reducer for one worker job's event stream plus the non-React core of
+`useJobStream`. **Exports.** `initialJobStream`, `reduceJobEvents` (pure fold, dedupes by `seq`),
+`createJobStream(client, jobId, { sinceSeq, label, onUpdate, flushIntervalMs, setIntervalImpl,
+clearIntervalImpl })` returning `{ getState, ready, resume, stop }` (buffers events, folds them on an
+interval, `resume()` re-subscribes from the last seq; latest-wins, `resume()`/`stop()` also drop a subscribe still in flight), and the `trainingStore` pieces it needs copied
+verbatim: `mergeLogLines`, `emptyModelProgress`, `emptyMetrics`. **Imports.** `job-telemetry.js`,
+`process-log.js`. **Coverage.** `tests/test-connect-job-stream.mjs`, `test-connect-review-fixes.mjs`.
+
+#### pose/connect/worker-ui-helpers.js
+
+**Purpose.** The pure helpers of sleap-app's `src/components/connect/*.tsx`, `forgetWorker.ts`,
+`ConnectPanel.tsx` and `RemoteFileBrowser.tsx` for the future `ui/connect` code.
+**Exports.** `classifyWorkerStatus`, `workerSpecsLine`, `WORKER_FILTERS`, `sortDevices`,
+`describeError`, `describeVisibilityOutcome`, `shouldAutoMerge`, `forgetWorkerConfirm`,
+`FAILED_SHOWN_MS`, `failedRunShown`, `DISMISSED_FAILED_RUNS_KEY`
+(`lucid-connect-dismissed-failed-runs`), `loadDismissedFailedRuns(storage)` /
+`saveDismissedFailedRuns(storage, keys)`, `WORKER_FILE_INFERENCE_TARGETS`,
+`readWholeWorkerFile`, `summarizeVideoCheck`, `groupCompletedRuns`, `labelPastRuns`, `formatMB`,
+`readCodeInfo`, `clientDisplayName` / `clientAgentLabel` (`lucid` -> LUC3D, `sleap-app` -> SLEAP), `toTrainingStatus`, `connectionDotClass`, `basename`/`dirname`/`extOf`, and the
+file browser's constants. **Imports.** `errors.js`, `device-name.js`, `remote-visibility.js`,
+`timestamp.js`, `pair-code.js`, `transport.js`. **Coverage.** `tests/test-connect-worker-ui-helpers.mjs`.
+
+#### pose/connect/remote-browser.js, remote-browser-store.js
+
+**Purpose.** The worker file browser's logic. `remote-browser.js`: `joinPath`, `parentPath`,
+`baseName`, `mountRootFor`, `pathTrail`, `fileKind`, `filterLabel`, `normalizeFilter`,
+`matchesFilter`, `matchesSearch`, `sortEntries`, `formatSize`, `formatModified`, `DEFAULT_SORT`,
+`SORT_LABELS`, `KIND_LABELS` (verbatim). `remote-browser-store.js`:
+`createRemoteBrowserStore({ storage, now })`, a `{ getState, setState, subscribe }` store holding
+view/sort/size/columnWidth and per-worker favorites/recents, persisted (zustand's
+`{ state, version: 1 }` shape) under `lucid-connect-remote-browser`. **Imports.** the store imports `mini-store.js` and
+`remote-browser.js`. **Coverage.** `tests/test-connect-remote-browser.mjs`.
 
 Test helper `tests/connect-test-utils.mjs` (not a suite) adds `.rejects.toThrow`,
 `.toBeInstanceOf`, class-aware `toThrow` and `itEach` on top of `bun-test-shim.mjs`.
