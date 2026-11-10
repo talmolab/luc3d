@@ -359,6 +359,48 @@ mod imp {
         resolve_tool("uv")
     }
 
+    /// The `sleap-nn` uv installed, as sleap-app finds it: uv's own tool shim
+    /// (`<uv tool dir --bin>/sleap-nn`, i.e. `~/.local/bin/sleap-nn`), else
+    /// the first known tool dir holding one, else the bare name (spawned with
+    /// the augmented PATH, where those dirs come FIRST). Never `which` on the
+    /// user's own PATH: an activated or stale virtualenv there (one whose
+    /// interpreter was moved: "bad interpreter") would shadow the working
+    /// uv install, and detection would report sleap-nn missing.
+    fn resolve_sleap_nn() -> String {
+        let exe = if cfg!(windows) { "sleap-nn.exe" } else { "sleap-nn" };
+        if let Some(bin) = shell_output(&resolve_uv(), &["tool", "dir", "--bin"]) {
+            let shim = PathBuf::from(bin.trim()).join(exe);
+            if shim.is_file() {
+                return shim.to_string_lossy().into_owned();
+            }
+        }
+        for dir in tool_bin_dirs() {
+            let candidate = dir.join(exe);
+            if candidate.is_file() {
+                return candidate.to_string_lossy().into_owned();
+            }
+        }
+        "sleap-nn".to_string()
+    }
+
+    /// The version `uv tool list` reports for `tool`, as sleap-app reads it
+    /// (`parse_uv_tool_list`): a tool line is `<name> v<version>`, its
+    /// commands follow as `- <command>` lines.
+    pub fn parse_uv_tool_version(output: &str, tool: &str) -> Option<String> {
+        output.lines().map(str::trim).find_map(|line| {
+            if line.is_empty() || line.starts_with("- ") {
+                return None;
+            }
+            let mut parts = line.splitn(2, ' ');
+            if parts.next()? != tool {
+                return None;
+            }
+            let v = parts.next()?.split_whitespace().next()?;
+            let v = v.strip_prefix('v').unwrap_or(v);
+            (!v.is_empty()).then(|| v.to_string())
+        })
+    }
+
     /// The interpreter inside sleap-nn's uv-tool venv
     /// (`<uv tool dir>/sleap-nn/bin/python3`, `Scripts\python.exe` on Windows).
     fn sleap_nn_python() -> Option<String> {
@@ -403,7 +445,7 @@ mod imp {
         }
         let candidates = [
             ("uv", Some(resolve_uv())),
-            ("sleap-nn", Some(resolve_tool("sleap-nn"))),
+            ("sleap-nn", Some(resolve_sleap_nn())),
             ("sleap-nn-python", sleap_nn_python()),
         ];
         match_program(requested, &candidates)
@@ -473,29 +515,16 @@ mod imp {
         }
     }
 
-    /// `sleap-nn 0.3.5` -> `0.3.5`. Only STDOUT is parsed: on macOS the tool
-    /// prints `objc[...] Class AVF... is implemented in both` noise on stderr,
-    /// and other lines may precede the version.
-    pub fn parse_sleap_nn_version(stdout: &str) -> Option<String> {
-        stdout
-            .lines()
-            .find_map(|l| l.trim().strip_prefix("sleap-nn "))
-            .and_then(|rest| rest.split_whitespace().next())
-            .map(str::to_string)
-    }
-
+    /// Installed = listed by `uv tool list` (uv's own record, as sleap-app's
+    /// Environment tab checks), not whatever `sleap-nn` the PATH finds first.
     pub fn detect_sleap_nn() -> SleapNnInfo {
-        let path = resolve_tool("sleap-nn");
-        let Some(out) = output_with_timeout(command(&path, &["--version"], false), PROBE_TIMEOUT)
-        else {
+        let Some(list) = shell_output(&resolve_uv(), &["tool", "list"]) else {
             return SleapNnInfo::default();
         };
-        if !out.status.success() {
-            return SleapNnInfo::default();
-        }
-        let Some(version) = parse_sleap_nn_version(&String::from_utf8_lossy(&out.stdout)) else {
+        let Some(version) = parse_uv_tool_version(&list, "sleap-nn") else {
             return SleapNnInfo::default();
         };
+        let path = resolve_sleap_nn();
         SleapNnInfo {
             available: true,
             version: Some(version),
@@ -897,21 +926,21 @@ mod imp {
         }
 
         #[test]
-        fn sleap_nn_version_parsing_ignores_stderr_noise() {
+        fn uv_tool_list_parsing_as_in_sleap_app() {
+            let out = "sleap-io v0.6.1\n- sio\nsleap-nn v0.3.5\n- sleap-nn\n";
+            assert_eq!(parse_uv_tool_version(out, "sleap-nn").as_deref(), Some("0.3.5"));
+            assert_eq!(parse_uv_tool_version(out, "sleap-io").as_deref(), Some("0.6.1"));
+            // A command line ("- sleap-nn") is not a tool line.
+            assert_eq!(parse_uv_tool_version("other v1.0\n- sleap-nn\n", "sleap-nn"), None);
+            // A name that only starts with the tool's name is a different tool.
+            assert_eq!(parse_uv_tool_version("sleap-nn-extra v2.0\n", "sleap-nn"), None);
+            // uv 0.4+ may append the source in brackets; the version is the first token.
             assert_eq!(
-                parse_sleap_nn_version("sleap-nn 0.3.5\n").as_deref(),
+                parse_uv_tool_version("sleap-nn v0.3.5 [required: >=0.3]\n", "sleap-nn").as_deref(),
                 Some("0.3.5")
             );
-            assert_eq!(
-                parse_sleap_nn_version("warming up\n  sleap-nn 0.3.5 (abc)\n").as_deref(),
-                Some("0.3.5")
-            );
-            // The noise lives on stderr; if it ever reached here it is not a version.
-            assert_eq!(
-                parse_sleap_nn_version("objc[1]: Class AVFFrameReceiver is implemented in both\n"),
-                None
-            );
-            assert_eq!(parse_sleap_nn_version(""), None);
+            assert_eq!(parse_uv_tool_version("No tools installed\n", "sleap-nn"), None);
+            assert_eq!(parse_uv_tool_version("", "sleap-nn"), None);
         }
 
         #[test]
