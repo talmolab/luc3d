@@ -28,18 +28,18 @@
  * native code only through `window.lucidDesktop` (installed by
  * src-tauri/js/lucid-desktop.js); it imports no desktop code.
  */
-import { state } from './app-state.js?v=116fdc4f8393';
-import { registerPanelRailPanel, showPanelTab } from './panel-rail.js?v=116fdc4f8393';
-import { railIconSvg } from './panel-rail-icons.js?v=116fdc4f8393';
-import { setInfoTip } from './info-tip.js?v=116fdc4f8393';
-import { noteProgress, resetProgress } from './progress-delta.js?v=116fdc4f8393';
+import { state } from './app-state.js?v=6a08874aa4a2';
+import { registerPanelRailPanel, showPanelTab } from './panel-rail.js?v=6a08874aa4a2';
+import { railIconSvg } from './panel-rail-icons.js?v=6a08874aa4a2';
+import { setInfoTip } from './info-tip.js?v=6a08874aa4a2';
+import { noteProgress, resetProgress } from './progress-delta.js?v=6a08874aa4a2';
 import {
     defaultInferenceConfig, INFERENCE_DEFAULTS, targetFrames, sampleFrames, pickInferenceSubcommand,
     parseProgressLine, formatDuration, formatEta,
-} from './inference-args.js?v=116fdc4f8393';
-import { planInferenceJobs, runJobQueue, joinPath, viewInferenceBlocker } from './inference-jobs.js?v=116fdc4f8393';
-import { matchViewVideos, isVideoName } from './inference-video-paths.js?v=116fdc4f8393';
-import { mergeViewPredictions } from './inference-merge.js?v=116fdc4f8393';
+} from './inference-args.js?v=6a08874aa4a2';
+import { planInferenceJobs, runJobQueue, joinPath, viewInferenceBlocker } from './inference-jobs.js?v=6a08874aa4a2';
+import { matchViewVideos, isVideoName } from './inference-video-paths.js?v=6a08874aa4a2';
+import { mergeViewPredictions } from './inference-merge.js?v=6a08874aa4a2';
 
 export const INFERENCE_TAB_ID = 'tabInference';
 
