@@ -171,7 +171,7 @@ try {
             'Group by Track & Triangulate All', 'Group by Identity & Triangulate All'],
         Calibrate: ['Calibrate in New Tab'],
         View: ['Toggle 3D Viewport', 'Toggle Timeline', 'Toggle Info Panel', '---', 'Native Resolution (1:1) [ ]', '---',
-            'Reset 3D View', 'Fit 3D to Scene', '---', 'Define Planes', 'Align Views to References…'],
+            'Reset 3D View', 'Fit 3D to Scene', '---', 'Define Planes', 'Align Views to References…', '---', 'Connect Window…'],
         'Hot Keys': ['Show Hot Keys'],
         Help: ['Docs', 'Settings'],
     };

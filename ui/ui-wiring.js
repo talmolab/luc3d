@@ -1649,6 +1649,14 @@ export function setupMenus() {
         document.getElementById('btnLoadSkeleton').click();
     });
 
+    // View > Connect Window...: the SLEAP Connect window (ui/connect/connect-window.js), loaded on first use.
+    document.getElementById('menuConnectWindow').addEventListener('click', function () {
+        closeMenus();
+        import('./connect/index.js').then(function (m) { m.openConnectWindow(); }).catch(function (err) {
+            console.warn('[connect] could not open the Connect window:', err);
+        });
+    });
+
     document.getElementById('menuHotkeys').addEventListener('click', showHotkeysHelp);
 
     // Calibrate menu: calibrat3 (browser-based multi-camera ChArUco calibration)

@@ -99,7 +99,8 @@ export function createStore(initializer) {
       listener(selected, prevSelected);
     });
   };
-  const api = { getState, getInitialState, setState, subscribe, subscribeSelector };
+  // LUCID: `listenerCount` is a test aid (leak checks count the store's live subscriptions).
+  const api = { getState, getInitialState, setState, subscribe, subscribeSelector, listenerCount: () => listeners.size };
   const initialState = (state = initializer(setState, getState, api));
   return api;
 }

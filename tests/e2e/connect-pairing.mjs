@@ -67,13 +67,13 @@ try {
     const open = async () => {
         await page.waitForSelector('.panel-rail-btn[data-tab="tabConnect"]', { timeout: 30000 });
         // showPanelTab semantics: the button toggles, so only click when closed.
-        if (!(await page.$('#connectPairBtn, #connectPairNew')) || !(await page.evaluate(() =>
-            (document.getElementById('connectPairBtn') || document.getElementById('connectPairNew')).offsetParent !== null))) {
+        if (!(await page.$('[data-pf="pair"], #connectPairNew')) || !(await page.evaluate(() =>
+            (document.querySelector('[data-pf="pair"]') || document.getElementById('connectPairNew')).offsetParent !== null))) {
             await page.click('.panel-rail-btn[data-tab="tabConnect"]');
         }
     };
     const plan = () => page.evaluate(() => {
-        const p = document.getElementById('connectPairPlan');
+        const p = document.querySelector('[data-pf="plan"]');
         return p.hidden ? null : { kind: p.dataset.kind, text: p.textContent };
     });
     const cards = () => page.evaluate(() => [...document.querySelectorAll('.connect-worker')].map((c) => ({
@@ -82,7 +82,7 @@ try {
         text: c.textContent, btn: (c.querySelector('.connect-connect, .connect-disconnect') || {}).textContent,
         btnDisabled: !!(c.querySelector('.connect-connect') || {}).disabled,
     })));
-    const typeCode = async (code) => { await page.fill('#connectPairCode', code); await page.waitForTimeout(150); };
+    const typeCode = async (code) => { await page.fill('[data-pf="code"]', code); await page.waitForTimeout(150); };
     const myNodeId = () => page.evaluate(async () => (await import('./pose/connect/identity.js')).getClientIdentity().then((i) => i.nodeId));
 
     await page.goto(`${BASE}/index.html`);
@@ -93,8 +93,8 @@ try {
     await typeCode(code1);
     const p1 = await plan();
     check(p1 && p1.kind === 'ready' && p1.text === `Connects over your network (${WS}).`, 'live plan line', p1);
-    check(await page.evaluate(() => !document.getElementById('connectPairBtn').disabled), 'Pair is enabled');
-    await page.click('#connectPairBtn');
+    check(await page.evaluate(() => !document.querySelector('[data-pf="pair"]').disabled), 'Pair is enabled');
+    await page.click('[data-pf="pair"]');
     await page.waitForSelector('.connect-worker .connect-dot.on', { timeout: 15000 });
     let cs = await cards();
     check(cs.length === 1 && cs[0].on, 'one card, connected dot', cs);
@@ -133,27 +133,27 @@ try {
     await open();
     await page.click('#connectPairNew').catch(() => {});
     await typeCode(code1);
-    await page.click('#connectPairBtn');
-    await page.waitForSelector('#connectPairError:not([hidden])', { timeout: 15000 });
-    const spent = await page.evaluate(() => document.getElementById('connectPairError').textContent);
+    await page.click('[data-pf="pair"]');
+    await page.waitForSelector('[data-pf="error"]:not([hidden])', { timeout: 15000 });
+    const spent = await page.evaluate(() => document.querySelector('[data-pf="error"]').textContent);
     check(/already used|invalid/i.test(spent), 'a spent code shows the worker\'s refusal', spent);
     check((await cards()).length === 0, 'and nothing was paired');
 
     console.log('\n--- 5. A code without an address ---');
-    await page.fill('#connectPairCode', '');
+    await page.fill('[data-pf="code"]', '');
     const code2 = await worker.mintPairCode({});
     await typeCode(code2);
     const p2 = await plan();
     check(p2 && p2.kind === 'needs-address' && p2.text === "This code doesn't say how to reach the worker. Make sure it's running (sleap-connect serve), then run sleap-connect pair again.",
         'needs-address message', p2);
-    check(await page.evaluate(() => document.getElementById('connectPairAddress').offsetParent !== null && document.getElementById('connectPairAdvanced').hidden),
+    check(await page.evaluate(() => document.querySelector('[data-pf="address"]').offsetParent !== null && document.querySelector('[data-pf="advanced"]').hidden),
         'the address box is open, the Advanced toggle gone');
-    check(await page.evaluate(() => document.getElementById('connectPairBtn').disabled), 'Pair disabled until an address');
-    await page.fill('#connectPairAddress', WS);
+    check(await page.evaluate(() => document.querySelector('[data-pf="pair"]').disabled), 'Pair disabled until an address');
+    await page.fill('[data-pf="address"]', WS);
     await page.waitForTimeout(150);
     const p2b = await plan();
     check(p2b && p2b.kind === 'ready' && p2b.text === `Connects to ${WS}.`, 'typing an address makes it ready', p2b);
-    await page.click('#connectPairBtn');
+    await page.click('[data-pf="pair"]');
     await page.waitForSelector('.connect-worker .connect-dot.on', { timeout: 15000 });
     check((await cards()).length === 1, 'paired through the typed address');
 
@@ -163,14 +163,14 @@ try {
         await typeCode(bad);
         const pb = await plan();
         check(pb && pb.kind === 'error' && pb.text === "That doesn't look like a pairing code. Copy the whole line starting with sleap1.", `"${bad}" → NOT_A_CODE`, pb);
-        check(await page.evaluate(() => document.getElementById('connectPairBtn').disabled), '  Pair disabled');
+        check(await page.evaluate(() => document.querySelector('[data-pf="pair"]').disabled), '  Pair disabled');
     }
     const expired = await worker.mintPairCode({ addrs: [WS], expiresAt: Math.floor(Date.now() / 1000) - 120 });
     await typeCode(expired);
     const pe = await plan();
     check(pe && pe.kind === 'error' && /^This code expired 2 min ago\. Run sleap-connect pair on the worker for a new one\.$/.test(pe.text), 'expired code', pe);
-    check(await page.evaluate(() => !document.getElementById('connectPairCancel').hidden), 'Cancel is offered now a worker is paired');
-    await page.click('#connectPairCancel');
+    check(await page.evaluate(() => !document.querySelector('[data-pf="cancel"]').hidden), 'Cancel is offered now a worker is paired');
+    await page.click('[data-pf="cancel"]');
     check(await page.evaluate(() => document.getElementById('connectPairNew').offsetParent !== null), 'Cancel returns to "Pair a new worker"');
 
     console.log('\n--- 9. Relay-only code, legacy JSON ticket, Cancel resets ---');
@@ -179,20 +179,20 @@ try {
     await typeCode(relayCode);
     const pr = await plan();
     check(pr && pr.kind === 'needs-address' && /^The web version can only reach workers on your network/.test(pr.text), 'relay-only code: the web version message', pr);
-    check(await page.evaluate(() => document.getElementById('connectPairBtn').disabled && document.getElementById('connectPairAddress').offsetParent !== null),
+    check(await page.evaluate(() => document.querySelector('[data-pf="pair"]').disabled && document.querySelector('[data-pf="address"]').offsetParent !== null),
         '  Pair disabled, the address box open');
-    await page.fill('#connectPairAddress', WS);
+    await page.fill('[data-pf="address"]', WS);
     await page.waitForTimeout(150);
-    check((await plan()).kind === 'ready' && await page.evaluate(() => !document.getElementById('connectPairBtn').disabled), '  an address enables Pair');
-    await page.click('#connectPairCancel');
+    check((await plan()).kind === 'ready' && await page.evaluate(() => !document.querySelector('[data-pf="pair"]').disabled), '  an address enables Pair');
+    await page.click('[data-pf="cancel"]');
     await page.click('#connectPairNew');
-    check(await page.evaluate(() => document.getElementById('connectPairCode').value === '' && document.getElementById('connectPairAddress').value === ''
-        && document.getElementById('connectPairPlan').hidden && document.getElementById('connectPairAddress').offsetParent === null
-        && document.getElementById('connectPairError').hidden), 'Cancel then reopen: code, address, plan line, Advanced and error all reset');
+    check(await page.evaluate(() => document.querySelector('[data-pf="code"]').value === '' && document.querySelector('[data-pf="address"]').value === ''
+        && document.querySelector('[data-pf="plan"]').hidden && document.querySelector('[data-pf="address"]').offsetParent === null
+        && document.querySelector('[data-pf="error"]').hidden), 'Cancel then reopen: code, address, plan line, Advanced and error all reset');
     await typeCode(JSON.stringify(worker.mintTicket({ addrs: [WS] })));
     const pj = await plan();
     check(pj && pj.kind === 'ready', 'a legacy JSON ticket is ready', pj);
-    await page.click('#connectPairBtn');
+    await page.click('[data-pf="pair"]');
     await page.waitForSelector('#connectPairNew', { state: 'visible', timeout: 15000 });
     cs = await cards();
     check(cs.length === 1 && cs[0].on, 'the legacy ticket paired (card connected)', cs);
@@ -222,7 +222,7 @@ try {
     const code3 = await worker.mintPairCode({ addrs: [WS] });
     await page.click('#connectPairNew');
     await typeCode(code3);
-    await page.click('#connectPairBtn');
+    await page.click('[data-pf="pair"]');
     await page.waitForFunction(() => !/Unpaired by this worker/.test(document.querySelector('.connect-worker').textContent), null, { timeout: 15000 })
         .then(() => check(true, 're-pairing with a new code clears it'), () => check(false, 're-pair clears Unpaired'));
 } finally {

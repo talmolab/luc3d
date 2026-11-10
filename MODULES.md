@@ -4163,6 +4163,15 @@ folder if shared, else `<serve folder>/sleap-connect/<project>/`. **Exports.**
 serveFolder, isSharedFolder })` (the worker probe is a parameter). **Imports.**
 `path-mappings.js`. **Coverage.** `tests/test-connect-remote-output-dir.mjs`.
 
+#### pose/connect/new-job-plan.js
+**Purpose.** DOM-free planning of the New job wizard's Inference path: `workerFileKind` (.slp / video /
+other), `inferenceTargetsFor` (a `.slp` = sleap-app's targets minus Random sample; a video = Entire video |
+Frame range), `frameRangeError`, `buildWorkerInferenceConfig`, `buildWorkerFileSpecs` (a `.slp` via
+`buildRunInferenceSpecs`, a video via `buildRemoteTrackSpecs`; both get the `project` tag of the worker
+path), `fileSourceBlocker`, and `seedWizardFromRun` (labels path + model type of a past run; training
+configs are not read). **Imports.** `launcher-spec`, `remote-track-spec`, `project-tag`, `worker-ui-helpers`.
+**Imported by.** `ui/connect/new-job-wizard.js`. **Coverage.** `tests/test-connect-new-job-plan.mjs`.
+
 #### pose/connect/remote-inference-plan.js
 
 **Purpose.** DOM-free planning of a remote inference run: each view's local key (web: session
@@ -4235,7 +4244,7 @@ keeps completed, unfetched (`fetchedAt` unset), tagged jobs past the 50 cap (`MA
 equalityFn = Object.is), getInitialState}`, a `shallowEqual` helper, and the `persist(config, options)`
 middleware (`name`, `version`, `storage`, `partialize`, `merge`, `migrate`, `skipHydration`;
 `api.persist.{rehydrate, hasHydrated, getOptions, setOptions, clearStorage, onHydrate, onFinishHydration}`).
-Synchronous storage only. **Imports.** None. **Imported by.** `store.js`. **Coverage.**
+Synchronous storage only. `listenerCount()` is a test aid (leak checks). **Imports.** None. **Imported by.** `store.js`. **Coverage.**
 `tests/test-connect-mini-store.mjs`.
 
 #### pose/connect/store.js
@@ -12948,7 +12957,7 @@ a window (Esc closes). Output: `<video folder>/predictions/<view>.<stamp>.predic
   `window.lucidDesktop.sleapNn` / `.fs` (no desktop import), so the web app
   never fetches it and is unchanged.
 
-**Key exports.** `setupInferencePanel()` → Promise<bool>, `showInferencePanel()`,
+**Key exports.** `setupInferencePanel()` → Promise<bool>, `showInferencePanel()`, `runRemoteInferenceWithModels(models)` (the Connect New job wizard's "This project" hand-off: sets the remote models and starts the panel's own remote Run),
 `INFERENCE_TAB_ID` (`tabInference`), `INFERENCE_BACKENDS`, `_inferenceState()` (tests).
 
 **Imports from project modules.** `./app-state.js`, `./panel-rail.js`,
@@ -13074,9 +13083,10 @@ openConnectWindow, platform: 'desktop'|'web', appVersion: <meta lucid-release>|'
 `installConnectStorageSync(window)`, registers the rail panel (`tabConnect`, label
 Connect, icon `globe`) via `registerPanelRailPanel`, `resumeTrackedJobs()` once,
 `releaseIdleConnections()` on `pagehide`. A marked hook for the iroh socket
-factory (P8). **Exports.** `setupConnect`, `setConnectWindowOpener(fn)` (the
-Connect window replaces what "Open Connect window" does; default focuses the
-panel with `showPanelTab`), `CONNECT_TAB_ID`. **Imports.** `pose/connect/store.js`,
+factory (P8). **Exports.** `setupConnect`, `setConnectWindowOpener(fn)` (`setupConnect` installs
+a lazy opener: ONE literal `import('./connect-window.js')` on first open, the panel comes to
+the front if that fails; `null` restores the default, `showPanelTab`), `openConnectWindow(opts)`
+(what the panel button, the toasts' "Open" and View > Connect Window call), `CONNECT_TAB_ID`. **Imports.** `pose/connect/store.js`,
 `ui/panel-rail.js`, `./notify.js`, `./connect-panel.js`. **Imported by.**
 `pose/initialization.js` (dynamic).
 
@@ -13101,7 +13111,9 @@ worker-ui-helpers,pairing-plan,transport,mini-store,identity}.js`, `ui/ask.js`,
 Pair -> `pairWithCode`, Cancel when a worker is already paired. **Exports.**
 `createPairWorkerForm({onPaired, onCancel, showCancel})` -> `{el, setShowCancel, reset}`;
 `reset()` blanks it (code, plan, Advanced, address, error); boxes are read-only while pairing, an edit
-clears the last failure, Enter in either box pairs (LUCID addition).
+clears the last failure, Enter in either box pairs (LUCID addition). Element ids are per instance
+(`connectPairCode-<n>`, ...; the rail panel and the Connect window each hold a form) and every field also
+carries `data-pf="code|plan|advanced|address|error|pair|cancel"` for callers and tests.
 **Imports.** `pose/connect/store.js`, `ui/panel-rail-icons.js`.
 
 #### ui/connect/backend-picker.js
@@ -13143,12 +13155,79 @@ and `!isDone`); each job records the Existing-predictions `mergeMode` at submit,
 (a job without one uses the panel's current mode). Progress shows frames / percent / fps / ETA
 ("Initializing..." first); the log holds the echoed spec (`$ Remote (N videos): …`), submit / fetch lines
 and each job's worker output (`[cam1] …`), with Expand and Copy Log. **Exports.**
-`createRemoteInference(host)`. **Imports.** `pose/connect/*`, `remote-file-browser.js`,
-`ui/{loading-overlay,progress-delta,panel-rail-icons}.js`. **Imported by.** `ui/inference-panel.js`.
-**Coverage.** `tests/e2e/connect-inference-merge.mjs`.
+`createRemoteInference(host)`, and for the Connect window's Jobs tab: `fetchAndLoadJobs(jobs, {mode, mergeFile?, onLog?})`
+(the Fetch & Load loop: overlay per job, Esc cancels, `{loaded, failures, cancelled}`; the panel's own button runs
+through it), `fetchJobPredictions(workerId, jobId, {name, onProgress})` (blob or `fs.read` of the job's `output_path` →
+`{file, outPath, detail}`), `openProjectInfo()` (the open file name + session folder names, for `lucidProjectTag`).
+**Imports.** `pose/connect/*`, `remote-file-browser.js`, `ui/{app-state,inference-merge,loading-overlay,progress-delta,panel-rail-icons}.js`.
+**Imported by.** `ui/inference-panel.js`, `ui/connect/{worker-jobs,merge-predictions-dialog}.js`.
+**Coverage.** `tests/e2e/connect-inference-merge.mjs`, `connect-jobs.mjs`.
+
+#### ui/connect/layers.js
+**Purpose.** Which modal layer is on top: `layerAbove(el)` is true when another Connect layer (`.cw-scrim`,
+`.njw-scrim`, `.rfb-scrim`, `.cj-scrim`, the in-app `.ask-modal-overlay`) sits over the one `el` is in
+(computed z-index, then DOM order). Every capture-phase Esc/Tab handler (wizard, job viewer, merge dialog,
+file browser, devices popover, queue menu) returns early when it is not the top layer, because listeners on
+one `document` run in registration order and the layer opened first used to close together with the dialog
+above it. **Exports.** `layerAbove`, `MODAL_LAYER_SELECTOR`. **Imports.** None. **Imported by.** the dialogs
+above. Tests: `tests/e2e/connect-window-stress.mjs` §4.
+
+#### ui/connect/connect-window.js
+**Purpose.** Port of sleap-app `ConnectDialog.tsx`: the Connect window, a full-window overlay (92vw x
+90vh, resizable, `data-shortcut-modal`, z-index 8500: under toasts (10500), the dialogs opened from it, a
+Fetch & Load progress card (`.loading-overlay` raised to 10100 by `body:has(.cw-scrim, …)`) and the ask
+dialogs (20000); header notes the web `askConfirm` = `window.confirm` difference, the one sleap-app
+parity gap left alone). Header (Connect, description, Refresh, close); 320 px sidebar = `worker-list.js` (top 45%) over
+`sidebar-queue.js`; right = the picked worker's name, Jobs / Data access tabs (`worker-jobs.js` /
+`worker-data-access.js`, agents B / C, `(container, props) -> {update, destroy}`), `worker-devices.js`,
+Forget (`forgetWorkerWithConfirm`), or "Pair a worker to see its jobs here.". The pick is window-local
+(never `selectedWorkerId`; default the backend worker, else the first; re-picked when forgotten). Open and
+Refresh refresh every worker's info (a worker paired while open too); `refreshToken` bumps on Refresh, a
+queue Stop Early / Cancel, and re-pairing an unpaired worker; a queue card click sets the Jobs tab and
+`focusRun {key, nonce}`. Close (Esc, X, click on the dim area, never a drag that began in the card)
+releases idle connections and returns focus; Tab is trapped. **Exports.** `openConnectWindow({workerId?})`,
+`closeConnectWindow`, `isConnectWindowOpen`. **Imports.** `pose/connect/{store,mini-store}.js`,
+`ui/panel-rail-icons.js`, the sibling components, `./connect-panel.js`. **Imported by.** `ui/connect/index.js`
+(dynamic). Tests: `tests/e2e/connect-window.mjs`.
+
+#### ui/connect/worker-list.js
+**Purpose.** Port of `WorkerList.tsx`: "Paired workers (n)", "+ Pair worker" (a `createPairWorkerForm`),
+the empty state (`sleap-connect serve`), All / Idle / Busy / Offline chips with counts, a card per worker
+(status dot, label, status, specs line, "via <route>"), the "has a new identity" and "unpaired" notes with
+Re-pair / Forget. Status, specs and filters come from `worker-ui-helpers.js`. A repaint keeps focus and what
+is typed in a form. **Exports.** `createWorkerList(container, {selectedId, onSelect})`, `dotClassFor`.
+**Imports.** `pose/connect/{store,mini-store,worker-ui-helpers,transport}.js`, `./pair-worker-form.js`,
+`./connect-panel.js`.
+
+#### ui/connect/worker-queue.js
+**Purpose.** Port of `WorkerQueue.tsx`: queue cards (failed, running, queued `#n`; a row per model with the
+Jobs-tab badges, an "After training" row; click opens in Jobs, right-click: Open / Stop Early / Cancel run /
+"View only (another project's run)") and the small context menu (`openContextMenu`; Esc closes only it).
+Re-exports the pure helpers of `pose/connect/job-groups.js` under WorkerQueue.tsx's names. **Exports.**
+`createQueueRunList(container, {entries, canManage, onOpen, onStopEarly, onCancelRun})`, `chipClassFor`,
+`openContextMenu`, `isActiveGroup`, `unfinishedJobs`, `cancelRunConfirm`, `queueRows`, `queueRunEntries`.
+**Imports.** `pose/connect/job-groups.js`. **Imported by.** `sidebar-queue.js`.
+
+#### ui/connect/sidebar-queue.js
+**Purpose.** Port of `SidebarQueue.tsx`: the picked worker's queue under Paired workers: polls `listJobs`
+(10 s; `refreshToken` refetches), my project's id from `lucidProjectTag` of the open project, failed runs of
+mine from the last day stay until clicked (cleared ones in `localStorage` `lucid-connect-dismissed-failed-runs`),
+Stop Early / Cancel run confirm (`ui/ask.js`) then `cancelJobOn` and `onChanged`. **Exports.**
+`createSidebarQueue(container, {workerId, workerLabel, refreshToken, onChanged, onOpenRun, ...})`.
+**Imports.** `pose/connect/{store,job-groups,worker-ui-helpers,project-tag}.js`, `ui/ask.js`, `ui/app-state.js`,
+`./notify.js`, `./worker-queue.js`.
+
+#### ui/connect/worker-devices.js
+**Purpose.** Port of `WorkerDevices.tsx`: the "N devices with access" button and its popover (`clients.list`
+via `devicesFor`, this device first, rename this device, `describeError` text). The worker records a device's
+version but not its app, so only THIS device's row names the client ("LUC3D <version>", `clientAgentLabel`).
+Esc closes the rename box, then the popover; opening moves focus into it; a `refreshToken` bump goes back to
+"Devices…" (list cleared) and reloads, as sleap-app. **Exports.** `createWorkerDevicesButton(container,
+{workerId, workerLabel, refreshToken})`. **Imports.** `pose/connect/{store,worker-ui-helpers,timestamp}.js`,
+`ui/panel-rail-icons.js`.
 
 #### ui/connect/notify.js
-**Purpose.** Toast stack (bottom-right, `.connect-toasts`): `success/error/info(message,
+**Purpose.** Toast stack (bottom-right, `.connect-toasts`, z-index 10500: over every Connect dialog and its scrim, under the ask dialogs): `success/error/info(message,
 {description, action:{label,onClick}, id})`, deduped by id, 4 s auto-dismiss
 (hovering the stack pauses all), 3 shown and older ones collapsed (come back, not dropped), per-kind
 Lucide icon, copy icon only on a toast without an action, close x top-left, "Clear all (n)" pill
@@ -13159,6 +13238,77 @@ at 2+, selectable text, not modal. Notification history is not ported.
 ---
 
 ## loading/
+
+#### ui/connect/worker-data-access.js
+**Purpose.** Port of `WorkerDataAccess.tsx` (the Connect window's Data access tab): the worker's mounts
+(`fs.mounts`: path + label; "No mounts configured."; a fetch error is shown, not an empty list), Browse
+files (the look-only worker browser), and the worker's remembered local<->worker path rules (both sides on
+their own line, "Not in a shared folder" note, Clear via the store's `clearPathRule`; "None yet."). The rule
+list follows the store (`subscribeSelector`), so Clear repaints at once; `update({workerId, refreshToken})`
+re-fetches only when the worker or the token changed. **Exports.** `createWorkerDataAccess(container,
+{workerId, refreshToken}) -> {update, destroy}`. **Imports.** `pose/connect/{store,path-mappings}.js`,
+`./remote-file-browser.js`, `ui/panel-rail-icons.js`. **Imported by.** `ui/connect/connect-window.js`.
+**Coverage.** `tests/e2e/connect-data-access.mjs`.
+
+#### ui/connect/new-job-wizard.js
+**Purpose.** Port of the Inference half of `NewJobWizard.tsx` (the Jobs tab's "+ New job" / "Run again"):
+Train | Inference (Train shown disabled with a note: training is out of scope), Data (This project |
+A file on the worker), Models (finished training runs via `groupCompletedRuns`, "Browse model folder",
+removable chips), Inference on (target / frame range), summary, Add to queue, success card, toasts, Esc /
+Tab trap / `data-shortcut-modal` (z-index 10000: over the window, under the file browser). "This project"
+hands the models to the Inference panel's own remote run (`runRemoteInferenceWithModels`), which works on the
+selected Backend only: for another worker the wizard says so on its project line, selects it for the run and
+selects the previous Backend again afterwards (also after a failure); "A file on the
+worker" submits a `.slp` (sleap-app's spec) or a video (a plain track job, no view tag) with
+`source: 'worker-file'`. A worker `.slp` is not summarized: sleap-io's `readSlpStreaming` over a
+`RangeSource` needs SharedArrayBuffer and the page is not cross-origin isolated (no "Random sample",
+no missing-video check). **Exports.** `openNewJobWizard({workerId, workerLabel, seed?})`, re-exports
+`seedWizardFromRun`, `groupCompletedRuns`, `labelPastRuns`, `WORKER_FILE_INFERENCE_TARGETS`. **Imports.**
+`pose/connect/{store,worker-ui-helpers,new-job-plan,timestamp}.js`, `ui/{inference-args,app-state}.js`,
+`./remote-file-browser.js`, `./notify.js`, dynamic `ui/inference-panel.js`. **Imported by.**
+`ui/connect/worker-jobs.js`. **Coverage.** `tests/e2e/connect-new-job.mjs`.
+
+#### ui/connect/worker-jobs.js
+**Purpose.** The Connect window's Jobs tab (port of `WorkerJobs.tsx`, same strings): search box, "+ New job",
+one card per run (★ for this project's, rolled-up chip, "Queued · #N", time, short run id, Cancel run /
+"Canceling…", trash "Remove this run") with a row per job (Watch live / View / Logs / Stop Early / Cancel /
+Run again / Fetch & Load by sleap-app's ownership rules; Run again is hidden on a failed TRAIN job, since
+training is out of scope, and offered on a failed job of ours that is not a train job). Polls `listJobs` every 10 s; each run card is kept and
+repainted only when its signature changes (scroll, focus and search survive; a refresh never blanks), `focusRun`
+scrolls to and rings a run. "This project" = `lucidProjectTag(openProjectInfo())`; a job this page submitted for a
+view shows `· <view>`. All decisions are `pose/connect/job-groups.js`. **Exports.** `createWorkerJobs(container,
+{workerId, workerLabel, refreshToken, focusRun, pollIntervalMs?, setIntervalImpl?, clearIntervalImpl?})` →
+`{update, destroy, refresh}`. **Imports.** `pose/connect/{store,project-tag,job-groups,worker-ui-helpers}.js`,
+`ui/{ask,panel-rail-icons}.js`, `./{notify,job-viewer,merge-predictions-dialog,remote-inference,new-job-wizard}.js`.
+**Imported by.** `ui/connect/connect-window.js`. **Coverage.** `tests/e2e/connect-jobs.mjs`.
+
+#### ui/connect/job-viewer.js
+**Purpose.** Port of `JobViewerDialog.tsx`: replay + live viewer of any worker job (Monitor / Logs, Copy, Errors
+only, Wrap, Stop Early / Cancel while running and `canStop`, failure detail) over `pose/connect/job-stream.js`
+`createJobStream`; resumes the stream when the worker's link returns to "connected". Esc / X close, Tab trapped,
+`data-shortcut-modal`. **Exports.** `openJobViewer({workerId, jobId, label, initialView, kind, canStop, onClose})`
+→ `{el, close, stream}`. **Imports.** `pose/connect/{store,job-stream,process-log,job-groups,worker-ui-helpers}.js`,
+`ui/ask.js`, `./{notify,loss-plot}.js`. **Imported by.** `worker-jobs.js`. **Coverage.** `tests/e2e/connect-jobs.mjs`.
+
+#### ui/connect/loss-plot.js
+**Purpose.** The viewer's loss curve on a `<canvas>` (batch scatter, epoch train / val lines, best-val ring, log-y,
+"Log scale" / "Ignore outliers" / Batches 200-1000-5000-All, hover tooltip, drag-zoom + Reset zoom (double-click
+resets), PNG and CSV export through `downloadBytes`; colours from CSS variables), with LossPlot.tsx's empty-state
+texts and title numbering (`Epoch ${model.epoch}`, best epoch 1-based). **Exports.**
+`createLossPlot(container, {height})` → `{update({model, status}), destroy}`, `lossCsv`, `lossTitle`, `lossYRange`,
+`lossTicks`. **Imports.** `import-export/file-io.js` (`downloadBytes`). **Imported by.** `job-viewer.js`. **Coverage.** `tests/e2e/connect-jobs.mjs` §D.
+
+#### ui/connect/merge-predictions-dialog.js
+**Purpose.** Fetch & Load from a Jobs-tab row (`MergePredictionsDialog.tsx`, adapted to LUCID's views): a job this
+page submitted for a view of the open session merges straight in through `fetchAndLoadJobs` (Replace unless the job
+recorded a mode); one for another session is refused with its name; a job with no LUCID tag opens "Load
+predictions" (skeleton check, the predictions' video name(s) and frame count, "Merge into view" picker with
+the view named in the job's labels / video preselected, and NO preselection with Merge disabled when no view
+name matches (the stand-in for sleap-app's unmatched-video block), `mergeViewPredictions`, Download .slp through `downloadBytes`). No "Open predictions as a new project".
+**Exports.** `loadJobPredictions({workerId, jobId, mine})`, `openMergePredictionsDialog`, `planFetchRoute`.
+**Imports.** `pose/connect/{store,project-tag}.js`, `ui/{app-state,inference-merge}.js`,
+`import-export/{slp-import,slp-merge,file-io}.js`, `./{remote-inference,notify}.js`. **Imported by.**
+`worker-jobs.js`. **Coverage.** `tests/e2e/connect-jobs.mjs` §E.
 
 ### loading/frame-worker.js
 

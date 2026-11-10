@@ -1401,7 +1401,15 @@ export const useConnectStore = createStore(
           dial = { transport: "ws", url: addr, display: addr };
         }
 
-        get()._client?.close();
+        // LUCID: `_client` is the SELECTED worker's live client. Closing it while pairing a DIFFERENT
+        // worker left that worker's managed connection holding a dead client (clientFor then answered
+        // "Not connected" until the next unload). Back the other worker off like connectToWorker does
+        // (kept alive when it has an active job, else stopped); only a same-node leftover is closed.
+        {
+          const { selectedWorkerId: sel } = get();
+          if (sel && sel !== ticket.node_id) get().disconnect();
+          else get()._client?.close();
+        }
         set({ connectionStatus: "connecting", connectionError: null, activeTransport: transport });
 
         /** @type {WorkerClient | null} */

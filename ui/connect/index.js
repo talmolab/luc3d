@@ -7,8 +7,9 @@
  * the desktop app alike. It:
  *   1. `configureConnect({ notify, openConnectWindow, platform, appVersion })`
  *      — the toast stack (`ui/connect/notify.js`), the Connect window opener
- *      (`setConnectWindowOpener`; until that window exists it only brings the
- *      Connect panel to the front), 'desktop' when `window.lucidDesktop`
+ *      (`setConnectWindowOpener(openConnectWindowLazy)`: the window,
+ *      `ui/connect/connect-window.js`, is imported on first open; the Connect
+ *      panel comes to the front if that fails), 'desktop' when `window.lucidDesktop`
  *      exists else 'web', and the version from `<meta name="lucid-release">`
  *      ('dev' when empty). The desktop shim exposes no computer name
  *      (`system_info` has none), so `computerName` is omitted and the device
@@ -49,13 +50,25 @@ function focusConnectPanel() {
     showPanelTab(CONNECT_TAB_ID);
 }
 
-/** The Connect window (a later phase) replaces what "Open Connect window" does. `null` restores the default. */
+/** Replaces what "Open Connect window" does. `null` restores the default (bring the Connect panel to the front). */
 export function setConnectWindowOpener(fn) {
     _opener = typeof fn === 'function' ? fn : null;
 }
 
-function openConnectWindow() {
-    (_opener || focusConnectPanel)();
+/**
+ * The Connect window (`ui/connect/connect-window.js`), loaded on first use through ONE literal dynamic
+ * `import()` so cold start is unchanged. Falls back to the panel if the module cannot load.
+ * @param {{workerId?: string}} [opts]
+ */
+function openConnectWindowLazy(opts) {
+    return import('./connect-window.js').then(
+        function (m) { m.openConnectWindow(opts); },
+        function (err) { console.warn('[connect] could not open the Connect window:', err); focusConnectPanel(); });
+}
+
+/** What the panel's button, the toasts' "Open" action and View > Connect Window call. */
+export function openConnectWindow(opts) {
+    return (_opener || focusConnectPanel)(opts);
 }
 
 function releaseVersion() {
@@ -69,6 +82,7 @@ export function setupConnect() {
     if (_setUp) return false;
     _setUp = true;
 
+    setConnectWindowOpener(openConnectWindowLazy);
     configureConnect({
         notify: notify,
         openConnectWindow: openConnectWindow,

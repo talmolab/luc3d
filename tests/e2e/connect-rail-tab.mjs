@@ -55,17 +55,17 @@ try {
 
     console.log('\n--- 2. Opening it: the empty state ---');
     await page.click('.panel-rail-btn[data-tab="tabConnect"]');
-    await page.waitForSelector('#connectPairBtn', { state: 'visible', timeout: 5000 });
+    await page.waitForSelector('[data-pf="pair"]', { state: 'visible', timeout: 5000 });
     const s = await page.evaluate(() => ({
         open: document.getElementById('connectOpenWindow').textContent.trim(),
         workersHidden: document.getElementById('connectWorkers').hidden,
         err: document.getElementById('connectError').hidden,
         title: document.querySelector('.connect-pair-form .connect-card-title').textContent,
-        placeholder: document.getElementById('connectPairCode').placeholder,
-        cancelHidden: document.getElementById('connectPairCancel').hidden,
+        placeholder: document.querySelector('[data-pf="code"]').placeholder,
+        cancelHidden: document.querySelector('[data-pf="cancel"]').hidden,
         newBtn: !!document.getElementById('connectPairNew') && !!document.getElementById('connectPairNew').offsetParent,
-        pairDisabled: document.getElementById('connectPairBtn').disabled,
-        pairText: document.getElementById('connectPairBtn').textContent.trim(),
+        pairDisabled: document.querySelector('[data-pf="pair"]').disabled,
+        pairText: document.querySelector('[data-pf="pair"]').textContent.trim(),
         scrollers: [...document.querySelectorAll('.connect-panel, .connect-panel *')]
             .filter((e) => /auto|scroll/.test(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 1).length,
     }));
@@ -84,16 +84,18 @@ try {
     console.log('\n--- 3. Form text ---');
     const help = await page.evaluate(() => document.querySelector('.connect-pair-form .connect-hint').textContent);
     check(help === 'Paste the code sleap-connect serve printed on the worker, or get a new one there with sleap-connect pair.', 'help line', help);
-    check(await page.evaluate(() => document.getElementById('connectPairAddress').offsetParent === null), 'address box hidden under Advanced');
-    await page.click('#connectPairAdvanced');
-    check(await page.evaluate(() => document.getElementById('connectPairAddress').offsetParent !== null), 'Advanced: connect by address shows it');
-    check(await page.evaluate(() => document.getElementById('connectPairAddress').placeholder) === 'ws://192.168.1.42:9631', 'with its placeholder');
+    check(await page.evaluate(() => document.querySelector('[data-pf="address"]').offsetParent === null), 'address box hidden under Advanced');
+    await page.click('[data-pf="advanced"]');
+    check(await page.evaluate(() => document.querySelector('[data-pf="address"]').offsetParent !== null), 'Advanced: connect by address shows it');
+    check(await page.evaluate(() => document.querySelector('[data-pf="address"]').placeholder) === 'ws://192.168.1.42:9631', 'with its placeholder');
 
-    console.log('\n--- 4. Open Connect window (none yet) ---');
+    console.log('\n--- 4. Open Connect window (default opener: the panel; the window itself is connect-window.mjs) ---');
     await page.click('.panel-rail-btn[data-tab="tabConnect"]');   // fold the section
-    check(await page.evaluate(() => document.getElementById('connectPairBtn').offsetParent === null), 'the folded panel shows nothing');
+    check(await page.evaluate(() => document.querySelector('[data-pf="pair"]').offsetParent === null), 'the folded panel shows nothing');
+    // `setupConnect` installs the lazy Connect window opener; with none set the button only fronts the panel.
+    await page.evaluate(async () => { (await import('./ui/connect/index.js')).setConnectWindowOpener(null); });
     await page.evaluate(() => document.getElementById('connectOpenWindow').click());
-    check(await page.evaluate(() => document.getElementById('connectPairBtn').offsetParent !== null), 'the button brings the Connect panel to the front');
+    check(await page.evaluate(() => document.querySelector('[data-pf="pair"]').offsetParent !== null), 'the button brings the Connect panel to the front');
     await page.evaluate(async () => {
         const m = await import('./ui/connect/index.js');
         window.__opened = 0;

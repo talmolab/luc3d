@@ -1288,6 +1288,30 @@ export async function setupInferencePanel() {
     return true;
 }
 
+/**
+ * The Connect window's New job wizard ("This project" data source) hands its model folders here: they
+ * replace the remote model list and the panel's own remote Run starts (one job per view, the panel's
+ * views / frames / options / output folder), exactly as pressing Run Remote Inference would. Waits for the
+ * worker checks, and says why not when Run is not possible. P4 behaviour is unchanged.
+ *
+ * @param {string[]} models worker paths of the model folders
+ * @returns {Promise<{ok: true, jobs: number} | {ok: false, error: string}>}
+ */
+export async function runRemoteInferenceWithModels(models) {
+    if (!remote) return { ok: false, error: 'The Inference panel is not available.' };
+    if (sn) backend.remote = true;
+    remote.models.splice(0, remote.models.length, ...models);
+    refresh();
+    const t0 = Date.now();
+    while (Date.now() - t0 < 20000 && /^Checking/.test(remote.whyNot())) await new Promise(function (r) { setTimeout(r, 150); });
+    const why = customRangeError() || remote.whyNot();
+    if (why) return { ok: false, error: why };
+    await remote.start();
+    const s = remote._state();
+    if (s.run.error) return { ok: false, error: s.run.error };
+    return { ok: true, jobs: s.runIds.size };
+}
+
 /** Test/automation hook: show the panel. */
 export function showInferencePanel() { return showPanelTab(INFERENCE_TAB_ID); }
 

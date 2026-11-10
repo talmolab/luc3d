@@ -55,9 +55,9 @@ try {
     };
     const cardCount = (p) => p.evaluate(() => document.querySelectorAll('.connect-worker').length);
     const pairVia = async (p) => {
-        await p.fill('#connectPairCode', await worker.mintPairCode({ addrs: [WS] }));
+        await p.fill('[data-pf="code"]', await worker.mintPairCode({ addrs: [WS] }));
         await p.waitForTimeout(150);
-        await p.click('#connectPairBtn');
+        await p.click('[data-pf="pair"]');
         await p.waitForSelector('.connect-worker .connect-dot.on', { timeout: 15000 });
     };
     const page = await newPage();
@@ -66,34 +66,34 @@ try {
     await pairVia(page);
     await page.click('.connect-forget');
     await page.waitForFunction(() => !document.querySelector('.connect-worker'), null, { timeout: 10000 });
-    check(await page.evaluate(() => !!document.getElementById('connectPairBtn').offsetParent), 'the pairing form shows');
-    check(await page.evaluate(() => document.getElementById('connectPairCancel').hidden), 'with no Cancel (nothing to go back to)');
+    check(await page.evaluate(() => !!document.querySelector('[data-pf="pair"]').offsetParent), 'the pairing form shows');
+    check(await page.evaluate(() => document.querySelector('[data-pf="cancel"]').hidden), 'with no Cancel (nothing to go back to)');
 
     console.log('\n--- 3. Pairing form details ---');
     // a failed attempt (a worker that hangs up) sets the failure line; an edit clears it
     await page.unroute(/^ws:\/\/127\.0\.0\.1:9631/).catch(() => {});
     await page.routeWebSocket(/^ws:\/\/127\.0\.0\.1:9631/, (ws) => { setTimeout(() => ws.close({ code: 1011, reason: 'boom' }), 150); });
-    await page.fill('#connectPairCode', await worker.mintPairCode({ addrs: [WS] }));
+    await page.fill('[data-pf="code"]', await worker.mintPairCode({ addrs: [WS] }));
     await page.waitForTimeout(150);
-    await page.click('#connectPairBtn');
-    check(await page.evaluate(() => document.getElementById('connectPairCode').readOnly), 'the code box is read-only while pairing');
-    await page.waitForFunction(() => !document.getElementById('connectPairError').hidden, null, { timeout: 20000 });
+    await page.click('[data-pf="pair"]');
+    check(await page.evaluate(() => document.querySelector('[data-pf="code"]').readOnly), 'the code box is read-only while pairing');
+    await page.waitForFunction(() => !document.querySelector('[data-pf="error"]').hidden, null, { timeout: 20000 });
     check(true, 'a hung-up pairing shows a failure line');
-    await page.fill('#connectPairCode', (await page.inputValue('#connectPairCode')) + ' ');
+    await page.fill('[data-pf="code"]', (await page.inputValue('[data-pf="code"]')) + ' ');
     await page.waitForTimeout(100);
-    check(await page.evaluate(() => document.getElementById('connectPairError').hidden), 'editing the code clears it');
-    check(await page.evaluate(() => !document.getElementById('connectPairCode').readOnly), 'and the box is editable again');
+    check(await page.evaluate(() => document.querySelector('[data-pf="error"]').hidden), 'editing the code clears it');
+    check(await page.evaluate(() => !document.querySelector('[data-pf="code"]').readOnly), 'and the box is editable again');
     await page.unroute(/^ws:\/\/127\.0\.0\.1:9631/);
     await worker.serveOnPage(page, /^ws:\/\/127\.0\.0\.1:9631/);
 
     console.log('\n--- 2. Two tabs ---');
     const page2 = await newPage();
-    await page.fill('#connectPairCode', await worker.mintPairCode({ addrs: [WS] }));
+    await page.fill('[data-pf="code"]', await worker.mintPairCode({ addrs: [WS] }));
     await page.waitForTimeout(150);
-    await page.click('#connectPairBtn');
+    await page.click('[data-pf="pair"]');
     await page.waitForSelector('.connect-worker .connect-dot.on', { timeout: 15000 });
     await page2.waitForSelector('.connect-worker', { timeout: 5000 });
-    check(await page2.evaluate(() => !document.getElementById('connectPairBtn')?.offsetParent && !!document.getElementById('connectPairNew')?.offsetParent),
+    check(await page2.evaluate(() => !document.querySelector('[data-pf="pair"]')?.offsetParent && !!document.getElementById('connectPairNew')?.offsetParent),
         'the other tab shows the list and "Pair a new worker", the form gave way');
 
     console.log('\n--- 4. Keyboard: Connect via Enter keeps focus ---');
@@ -110,7 +110,7 @@ try {
     await page2.waitForFunction(() => !document.querySelector('.connect-worker'), null, { timeout: 10000 });
     await page.waitForFunction(() => !document.querySelector('.connect-worker'), null, { timeout: 5000 })
         .then(() => check(true, 'the first tab lost the worker too'), () => check(false, 'first tab still lists it'));
-    check(await page.evaluate(() => !!document.getElementById('connectPairBtn').offsetParent), 'and shows the form');
+    check(await page.evaluate(() => !!document.querySelector('[data-pf="pair"]').offsetParent), 'and shows the form');
 
     console.log('\n--- 5. Open/folded state survives a reload ---');
     await page.evaluate(() => document.querySelector('.panel-section[data-tab="tabConnect"] .panel-section-toggle').click());

@@ -48,6 +48,8 @@ import {
     lastProgress, lastErrorLine, sessionRootOf, unresolvedViews, progressFromLine,
 } from '../../pose/connect/remote-inference-plan.js';
 import { openRemoteFileBrowser } from './remote-file-browser.js';
+import { state } from '../app-state.js';
+import { mergeViewPredictions } from '../inference-merge.js';
 import { railIconSvg } from '../panel-rail-icons.js';
 import { noteProgress, resetProgress } from '../progress-delta.js';
 import { formatEta } from '../inference-args.js';
@@ -66,6 +68,90 @@ function icon(name, cls) {
 }
 function basename(p) { return String(p).split(/[\\/]/).pop(); }
 const LOG_TAIL = 12;
+
+/** The open project as the Connect tag sees it: the file's name and every session's folder name (the Inference panel's `getProjectInfo`). */
+export function openProjectInfo() {
+    return {
+        fileName: state.slpFileHandle ? state.slpFileHandle.name : null,
+        sessionFolders: (state.sessions || []).map(function (s) { return s.name; }),
+    };
+}
+
+/**
+ * Download one completed track job's predictions from its worker (the blob, or `fs.read` of the job's
+ * `output_path` when the blob port is unreachable from a page).
+ *
+ * @param {string} workerId
+ * @param {string} jobId
+ * @param {{ name?: string, onProgress?: (done: number, total: number) => void }} [o]  `onProgress` may throw to cancel.
+ * @returns {Promise<{ file: File, outPath: string | undefined, detail: any }>}
+ */
+export async function fetchJobPredictions(workerId, jobId, o) {
+    o = o || {};
+    const st = useConnectStore.getState();
+    const detail = await st.jobDetail(workerId, jobId);
+    const ref = detail.result && detail.result.blobs && detail.result.blobs.predictions;
+    if (!ref) throw new Error('the worker reported no predictions file for this job');
+    const outPath = detail.spec && detail.spec.output_path;
+    const bytes = await st.fetchResultBlobOn(workerId, ref, {
+        fsFallback: outPath ? { path: outPath, onProgress: o.onProgress } : undefined,
+    });
+    return { file: new File([bytes], (o.name || jobId) + '.predictions.slp'), outPath: outPath, detail: detail };
+}
+
+/**
+ * Fetch & Load: for each tracked job (`{workerId, jobId, camera, ...}`) download its predictions and merge them into
+ * view `camera` of the open session through `mergeFile(file, camera, mode)`, then `markJobFetched`. Shows the loading
+ * overlay per job (MB progress), Esc cancels, and a job that fails stays pending (its camera is in `failures`).
+ * Shared by the Inference panel's "Fetch & Load Results" and the Connect window's Jobs tab.
+ *
+ * @param {Array<{workerId: string, jobId: string, camera: string}>} jobs
+ * @param {{ mode: string | ((job: any) => string), mergeFile?: (file: File, view: string, mode: string) => Promise<{instances: number, frames: number, deleted: number}>, onLog?: (line: string) => void }} o
+ * @returns {Promise<{ loaded: number, failures: string[], cancelled: boolean }>}
+ */
+export async function fetchAndLoadJobs(jobs, o) {
+    const mergeFile = o.mergeFile || mergeViewPredictions;
+    const appendLog = o.onLog || function () {};
+    const st = useConnectStore.getState();
+    let cancelled = false;
+    const onKey = function (e) { if (e.key === 'Escape') { cancelled = true; e.preventDefault(); e.stopPropagation(); } };
+    document.addEventListener('keydown', onKey, true);
+    const failures = [];
+    let loaded = 0;
+    try {
+        for (let i = 0; i < jobs.length && !cancelled; i++) {
+            const j = jobs[i];
+            const opts = { title: 'Fetch & Load Results', step: i + 1, steps: jobs.length, unit: 'MB' };
+            try {
+                showLoading('Fetching ' + j.camera + '…', opts);
+                const mb = function (b) { return Math.round(b / 1048576 * 10) / 10; };
+                const got = await fetchJobPredictions(j.workerId, j.jobId, {
+                    name: j.camera,
+                    onProgress: function (done, total) {
+                        if (cancelled) throw new Error('Cancelled');
+                        showLoadingProgress('Fetching ' + j.camera, mb(done), mb(total), opts);
+                    },
+                });
+                if (cancelled) break;
+                showLoading('Loading ' + j.camera + ' predictions…', opts);
+                const mode = typeof o.mode === 'function' ? o.mode(j) : o.mode;
+                const r = await mergeFile(got.file, j.camera, mode);
+                st.markJobFetched(j.jobId);
+                loaded++;
+                appendLog('✓ ' + j.camera + ': ' + r.instances.toLocaleString('en-US') + ' predicted instances on ' + r.frames.toLocaleString('en-US') +
+                    ' frames' + (r.deleted ? ' (' + r.deleted.toLocaleString('en-US') + ' old removed)' : '') + (got.outPath ? ' ← ' + basename(got.outPath) : ''));
+            } catch (e) {
+                if (cancelled) break;
+                failures.push(j.camera);
+                appendLog('✗ ' + j.camera + ': ' + ((e && e.message) || e));
+            }
+        }
+    } finally {
+        document.removeEventListener('keydown', onKey, true);
+        hideLoading();
+    }
+    return { loaded: loaded, failures: failures, cancelled: cancelled };
+}
 
 /**
  * @param {{
@@ -439,56 +525,17 @@ export function createRemoteInference(host) {
             return;
         }
         run.fetching = true; run.error = null;
-        let cancelled = false;
-        const onKey = function (e) { if (e.key === 'Escape') { cancelled = true; e.preventDefault(); e.stopPropagation(); } };
-        document.addEventListener('keydown', onKey, true);
         changed();
-        const failures = [];
-        let loaded = 0;
-        const st = S();
+        let result = { loaded: 0, failures: [], cancelled: false };
         try {
-            for (let i = 0; i < mine.length && !cancelled; i++) {
-                const j = mine[i];
-                const opts = { title: 'Fetch & Load Results', step: i + 1, steps: mine.length, unit: 'MB' };
-                try {
-                    showLoading('Fetching ' + j.camera + '…', opts);
-                    const detail = await st.jobDetail(j.workerId, j.jobId);
-                    const ref = detail.result && detail.result.blobs && detail.result.blobs.predictions;
-                    if (!ref) throw new Error('the worker reported no predictions file for this job');
-                    const outPath = detail.spec && detail.spec.output_path;
-                    const mb = function (b) { return Math.round(b / 1048576 * 10) / 10; };
-                    const bytes = await st.fetchResultBlobOn(j.workerId, ref, {
-                        fsFallback: outPath ? {
-                            path: outPath,
-                            onProgress: function (done, total) {
-                                if (cancelled) throw new Error('Cancelled');
-                                showLoadingProgress('Fetching ' + j.camera, mb(done), mb(total), opts);
-                            },
-                        } : undefined,
-                    });
-                    if (cancelled) break;
-                    showLoading('Loading ' + j.camera + ' predictions…', opts);
-                    const file = new File([bytes], j.camera + '.predictions.slp');
-                    const r = await host.mergeFile(file, j.camera, mergeModeOf(j));
-                    st.markJobFetched(j.jobId);
-                    loaded++;
-                    appendLog('✓ ' + j.camera + ': ' + r.instances.toLocaleString('en-US') + ' predicted instances on ' + r.frames.toLocaleString('en-US') +
-                        ' frames' + (r.deleted ? ' (' + r.deleted.toLocaleString('en-US') + ' old removed)' : '') + (outPath ? ' ← ' + basename(outPath) : ''));
-                } catch (e) {
-                    if (cancelled) break;
-                    failures.push(j.camera);
-                    appendLog('✗ ' + j.camera + ': ' + ((e && e.message) || e));
-                }
-            }
+            result = await fetchAndLoadJobs(mine, { mode: mergeModeOf, mergeFile: host.mergeFile, onLog: appendLog });
         } finally {
-            document.removeEventListener('keydown', onKey, true);
-            hideLoading();
             run.fetching = false;
             const left = pending().length;
-            if (cancelled) run.error = 'Cancelled: ' + loaded + ' of ' + mine.length + ' views loaded; the rest are still on the worker.';
-            else if (failures.length) run.error = 'Could not load ' + failures.join(', ') + ' (see the log); they stay pending, press Fetch & Load Results to retry.';
+            if (result.cancelled) run.error = 'Cancelled: ' + result.loaded + ' of ' + mine.length + ' views loaded; the rest are still on the worker.';
+            else if (result.failures.length) run.error = 'Could not load ' + result.failures.join(', ') + ' (see the log); they stay pending, press Fetch & Load Results to retry.';
             else if (left && !all.every(function (j) { return mine.indexOf(j) !== -1; })) {
-                run.error = 'Loaded ' + loaded + ' view(s). The other results are for another session: switch to it to load them.';
+                run.error = 'Loaded ' + result.loaded + ' view(s). The other results are for another session: switch to it to load them.';
             }
             changed();
         }

@@ -40,6 +40,7 @@ import {
     matchesSearch, mountRootFor, normalizeFilter, parentPath, pathTrail, sortEntries,
 } from '../../pose/connect/remote-browser.js';
 import { railIconSvg } from '../panel-rail-icons.js';
+import { layerAbove } from './layers.js';
 
 export { mountRootFor };
 
@@ -574,7 +575,7 @@ export function openRemoteFileBrowser(opts) {
         }
 
         function onKey(e) {
-            if (closed) return;
+            if (closed || layerAbove(scrim)) return;
             const t = e.target;
             const typing = t && t.tagName === 'INPUT';
             const mod = e.metaKey || e.ctrlKey;

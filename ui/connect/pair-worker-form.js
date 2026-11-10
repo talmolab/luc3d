@@ -46,12 +46,17 @@ function codeTag(text) {
     return el('code', 'connect-code', text);
 }
 
+let formSeq = 0;
+
 /**
  * @param {{onPaired?: () => void, onCancel?: () => void, showCancel?: boolean}} [opts]
  * @returns {{el: HTMLElement, setShowCancel: (v: boolean) => void, reset: () => void}}
  */
 export function createPairWorkerForm(opts) {
     opts = opts || {};
+    // LUCID: the rail panel and the Connect window each hold a form, so ids are per instance (`data-pf`
+    // names the field for tests and callers); the address label's `for` follows its input's id.
+    const uid = ++formSeq;
     let showCancel = !!opts.showCancel;
     let advancedOpen = false;
     let pairing = false;
@@ -70,7 +75,7 @@ export function createPairWorkerForm(opts) {
 
     const codeInput = el('input', 'connect-input connect-mono');
     codeInput.type = 'text';
-    codeInput.id = 'connectPairCode';
+    codeInput.id = 'connectPairCode-' + uid; codeInput.dataset.pf = 'code';
     codeInput.placeholder = 'sleap1…';
     codeInput.setAttribute('aria-label', 'Pairing code');
     codeInput.autocomplete = 'off';
@@ -78,12 +83,12 @@ export function createPairWorkerForm(opts) {
     root.appendChild(codeInput);
 
     const planLine = el('p', 'connect-plan');
-    planLine.id = 'connectPairPlan';
+    planLine.id = 'connectPairPlan-' + uid; planLine.dataset.pf = 'plan';
     root.appendChild(planLine);
 
     const advBtn = el('button', 'connect-link-btn');
     advBtn.type = 'button';
-    advBtn.id = 'connectPairAdvanced';
+    advBtn.id = 'connectPairAdvanced-' + uid; advBtn.dataset.pf = 'advanced';
     const advChevron = icon('chevron-right', 'connect-chevron');
     advBtn.appendChild(advChevron);
     advBtn.append('Advanced: connect by address');
@@ -91,10 +96,10 @@ export function createPairWorkerForm(opts) {
 
     const addrWrap = el('div', 'connect-addr');
     const addrLabel = el('label', 'connect-hint', 'Worker address (e.g. its Tailscale IP)');
-    addrLabel.htmlFor = 'connectPairAddress';
+    addrLabel.htmlFor = 'connectPairAddress-' + uid;
     const addrInput = el('input', 'connect-input connect-mono');
     addrInput.type = 'text';
-    addrInput.id = 'connectPairAddress';
+    addrInput.id = 'connectPairAddress-' + uid; addrInput.dataset.pf = 'address';
     addrInput.placeholder = 'ws://192.168.1.42:9631';
     addrInput.autocomplete = 'off';
     addrInput.spellcheck = false;
@@ -102,16 +107,16 @@ export function createPairWorkerForm(opts) {
     root.appendChild(addrWrap);
 
     const errLine = el('p', 'connect-error-text');
-    errLine.id = 'connectPairError';
+    errLine.id = 'connectPairError-' + uid; errLine.dataset.pf = 'error';
     root.appendChild(errLine);
 
     const row = el('div', 'connect-btn-row');
     const pairBtn = el('button', 'connect-btn connect-btn-primary connect-grow');
     pairBtn.type = 'button';
-    pairBtn.id = 'connectPairBtn';
+    pairBtn.id = 'connectPairBtn-' + uid; pairBtn.dataset.pf = 'pair';
     const cancelBtn = el('button', 'connect-btn connect-btn-ghost', 'Cancel');
     cancelBtn.type = 'button';
-    cancelBtn.id = 'connectPairCancel';
+    cancelBtn.id = 'connectPairCancel-' + uid; cancelBtn.dataset.pf = 'cancel';
     row.append(pairBtn, cancelBtn);
     root.appendChild(row);
 
