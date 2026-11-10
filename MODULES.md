@@ -12787,6 +12787,16 @@ this decision is pure and worth pinning in Node.
   null when nothing matches. Used both to assign a camera and, in the same load,
   as the group key above — matching twice with two rules is how a video gets
   dropped for one camera and bound to another.
+- `assignFolderVideos(files, cameraNames, refPathByCam)` →
+  `{cameraOf, assigned, unused}` — one video per camera from a picked FOLDER,
+  which can hold cameras the project does not name and videos that all share a
+  name (campy's `<camera>/0.mp4`). Signals, strongest first: folder = camera
+  name; folder + name = the referenced path's; stem = camera name; the
+  referenced file name when only one picked video has it; camera name in the
+  stem; the referenced stem in only one video's stem. A `-calibration` stem
+  loses a tie. A video with no signal is `unused` — never bound by elimination.
+- `isFolderPick(files)` (a relative path with a folder in it),
+  `isVideoFileName(name)`, `FOLDER_VIDEO_EXTENSIONS`.
 
 **Why the stem is only a hint.** As a hard exclusion it dropped ordinary
 session videos like `cam1-calibration.mp4`, leaving a folder load with ZERO views
@@ -12796,11 +12806,13 @@ and no message; real calibration clips live under `calibration_images/`.
 one camera's plain video suppress another camera's only video.
 
 **Imported by.** `loading/session-loader.js` (the per-camera folder loader, the
-single-SLP folder loader, and `attachVideosForLazyReopen`),
-`import-export/slp-import.js`.
+single-SLP folder loader, `attachVideosForLazyReopen`, and
+`sessionFolderVideos`), `import-export/slp-import.js`.
 
 **Tests.** `tests/test-video-file-pick.mjs`,
-`tests/e2e/calibration-named-videos-load.mjs` (both real loaders).
+`tests/e2e/calibration-named-videos-load.mjs` (both real loaders),
+`tests/e2e/load-slp-session-folder.mjs` (`assignFolderVideos` in both Load SLP
+paths).
 
 ### loading/track-union.js
 
@@ -12900,7 +12912,15 @@ filesystem enumeration, decoder rebuild.
   `setProjectSkeleton`.
 - Video assignment: `autoAssignVideosToCameras`, `forceVideoSelection`,
   `forceVideoSelectionWithFolder`, `matchSessionFolder`,
-  `pickParentDirectoryForSessions`, `showParentDirMatchSummary`.
+  `pickParentDirectoryForSessions`, `showParentDirMatchSummary`,
+  `sessionFolderVideos`, `pickSessionFolderVideos`.
+  **Select Session Folder** is one helper for both prompts:
+  `pickSessionFolderVideos(startIn)` = `confirmFolderPick` + `pickFolder` (or,
+  with `startIn`, `pickFolderNear` in the project's folder) +
+  `sessionFolderVideos(allFiles)` (every video below the picked root except
+  calibration clips, then `campyManifestsAmong`), resolving `null` on a cancel
+  or a folder with no video. It keeps EVERY video, cameras the project does not
+  name included; the caller places them (`assignFolderVideos`).
   `forceVideoSelectionWithFolder(refInfo, sessionName, options)` accepts
   `options.allowSkip` (a "Skip — Load Videos Later" button; used by the lazy
   reopen) and closes on `Esc`; both resolve `null`, which every caller treats as
@@ -12917,7 +12937,10 @@ filesystem enumeration, decoder rebuild.
   button and `Esc` both resolve `[]`, which both callers treat as "no videos"
   (#337); a cancelled picker leaves it up. `options.title` names what was
   loaded, and the "Expected:" line is omitted when `refInfo` is empty — callers
-  pass `''`, not a `'(unknown)'` placeholder.
+  pass `''`, not a `'(unknown)'` placeholder. `options.folder` adds **Select
+  Session Folder** first (`pickSessionFolderVideos`; a cancelled pick leaves the
+  prompt up): Add SLP passes it, Load Project's `.json` route does not (its
+  loop would decode every folder video and the manifests).
 - `adoptLabeledFrameCount()` — sizes a labeled project that has NO view:
   `totalFrames = last labeled frame + 1`, plus the readout and the timeline;
   returns the first labeled frame (or -1 when it did nothing). Called right
@@ -12996,8 +13019,8 @@ filesystem enumeration, decoder rebuild.
   `0.mp4`); the single-SLP loader takes videos from
   session.json when there is no `videos/` and reads the root `.slp` over
   campy-live-export's `points3d.h5`; the load's final status gains the
-  warnings (`withCampyWarnings`). `forceVideoSelectionWithFolder`'s folder
-  button and `pickParentDirectoryForSessions` pass the root-level manifests
+  warnings (`withCampyWarnings`). Both prompts' Select Session Folder
+  (`pickSessionFolderVideos`) and `pickParentDirectoryForSessions` pass the root-level manifests
   through with the videos (JSON, so every caller's video filter drops them).
 - `recomputeUploadedCameras`.
 - Misc re-exports: `resolveImportTrackIdx` (from
@@ -15452,7 +15475,19 @@ first track.
   `readVisibilityMetadata` / `readPlaneMetadata` itself.
 - Occlusion of **unlinked** user labels is restored in pass 1 by
   `nulledNodesFromOcclusion` (`import-export/import-track-resolve.js`).
-- `handleAddSlp()` — additive merge into current session.
+- `handleAddSlp()` — additive merge into current session. Its video prompt
+  (`forceVideoSelection` with `folder: true`) offers Select Session Folder.
+- **A folder pick's videos are placed by `assignFolderVideos`** in both
+  `handleLoadSlpFile` and `handleAddSlp` (detected by `isFolderPick`): one video
+  per camera, by its folder or a name that tells cameras apart (the path the file
+  references, folder + name, is how Add SLP's renamed `_2` cameras find theirs),
+  and a video on none of the file's cameras — a recording folder's other
+  cameras — is left out before it is decoded (console only). In
+  `handleLoadSlpFile` it replaces `slpMatchCam` for that pick, because the
+  referenced-stem rule bound campy's every-camera `0.mp4` to the first camera.
+  Videos picked one by one, and a folder with only one video, keep the name
+  rules (and #390's one-camera fallback). Test:
+  `tests/e2e/load-slp-session-folder.mjs`.
 - `handleLoadPoints3dH5()` — overlay 3D points from H5. Requires only a loaded
   **skeleton** (not a full session): a camera-less skeleton-only project is
   accepted, the 3D viewport is force-created (bypassing the calibration gate)
@@ -15583,7 +15618,8 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
   (`remapGlobalTrackToSession`, `nulledNodesFromOcclusion`),
   `./slp-provenance.js` (`fileSessionProvenance`, `fileSessionNames` — each
   session keeps its part of the file's provenance),
-  `../loading/video-file-pick.js` (`preferNonCalibrationVideos`),
+  `../loading/video-file-pick.js` (`preferNonCalibrationVideos`,
+  `assignFolderVideos`, `isFolderPick`, `isVideoFileName`),
   `../ui/loading-progress-modal.js` (`getLoadingProgressModal`),
   `../loading/cold-read-guard.js`
   (`readBlobArrayBuffer`: Load 3D Points reads its `.h5` into memory, outside
