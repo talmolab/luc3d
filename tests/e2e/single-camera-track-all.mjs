@@ -68,7 +68,8 @@
  *     to just after it.
  * 10. With a review list, the image check embeds every image sample and
  *     pre-judges each row (pose/image-prejudge.js): "images: look right" /
- *     "look swapped" on the rows and a count under the list. With the built-in
+ *     "look swapped" on the rows and a count under the list (the end-of-tracking
+ *     row is left out: nothing follows it). With the built-in
  *     model there is no gate (look-alikes are "unsure") and a "How to train
  *     one…" prompt opens the image model dialog on its training steps, and Esc
  *     closes it; with a model package, animals that look too alike get "can't
@@ -830,7 +831,8 @@ try {
         const S = window.__lucid.state.session, st = S._idSwitch, R = await import('/ui/id-switch-review.js'), M = await import('/ui/id-switch-modal.js');
         const row = (frame) => ({ frame: frame + 5, startFrame: frame - 5, identityA: 0, identityB: 1, nameA: 'id_0', nameB: 'id_1', kind: 'onset', score: 0,
             look: ['ambiguity'], switchBackAt: null, cue: 'review' });
-        st.results.review.flags = [row(600), row(1200)];
+        // ...and the end-of-tracking row, which the pre-judge leaves out (nothing follows it)
+        st.results.review.flags = [row(600), row(1200), Object.assign(row(2239), { frame: 2244, startFrame: 2244, look: ['videoEnd'] })];
         delete st.results.image;
         R.linkIdSwitchResults(st.results); M.refreshIdSwitchPanel(S);
         await M.runIdSwitchChecks({ image: true, inject: { createEmbedder: window.__looks(alike), hasWebGPU: async () => true,
@@ -839,7 +841,7 @@ try {
         const text = (f) => { const el = rows.find(x => Number(x.dataset.frame) === f); return el ? el.querySelector('.id-switch-line2').textContent : ''; };
         return { ok: !!(res && res.ok), reason: res && res.reason, all: res && res.samples && res.samples.embedded === res.samples.of,
                  verdicts: res && res.prejudge ? res.prejudge.rows.map(p => p.verdict) : null, cos: res && res.prejudge ? res.prejudge.pairs.map(q => q.cos) : null,
-                 at600: text(605), at1200: text(1205),
+                 at600: text(605), at1200: text(1205), atEnd: text(2244),
                  summary: (document.querySelector('#idSwitchPanel .id-switch-prejudge-summary') || {}).textContent || '',
                  prompt: (document.querySelector('#idSwitchPanel .id-switch-train-prompt') || {}).textContent || '',
                  tip: ((rows.find(x => Number(x.dataset.frame) === 1205) || document).querySelector('.id-switch-prejudge') || {}).title || '' };
@@ -848,7 +850,8 @@ try {
     check(lk.ok && lk.all, `the image check ran and, with a review list, embedded every image sample (${lk.reason || 'ok'})`);
     check(JSON.stringify(lk.verdicts) === '["kept","swapped"]', `verdicts: the place at 0:20 looks right, the one at 0:40 looks swapped (${JSON.stringify(lk.verdicts)}, cos ${lk.cos})`);
     check(/images: look right/.test(lk.at600) && /images: look swapped/.test(lk.at1200), `the rows say so: "${lk.at600.slice(-30)}" / "${lk.at1200.slice(-30)}"`);
-    check(/^Image pre-judge: 1 looks swapped · 1 looks right · 0 unsure/.test(lk.summary), 'the review list\'s summary counts them: ' + lk.summary);
+    check(/^Image pre-judge: 1 looks swapped · 1 looks right · 0 unsure/.test(lk.summary) && !/too few/.test(lk.summary), 'the review list\'s summary counts them: ' + lk.summary);
+    check(lk.atEnd && !/images/.test(lk.atEnd), 'the end-of-tracking row has no pre-judge (not "too few crops"): ' + lk.atEnd.slice(-60));
     check(/built-in image model/.test(lk.prompt) && /How to train one…/.test(lk.prompt), 'with the built-in model, a prompt to train one for this rig: ' + lk.prompt.slice(0, 60));
     check(/below −0\.2 looks swapped/.test(lk.tip) && /no check of how alike/.test(lk.tip), 'the built-in model: margin 0.2, no gate (row tooltip): ' + lk.tip);
     const bl = await runLooks(true, false);

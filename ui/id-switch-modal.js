@@ -657,11 +657,16 @@ export function setReviewList(session, result, navigateToFrame) {
     refreshIdSwitchPanel(session);
 }
 
-/** The review list's rows, for the image check to pre-judge: frame, close-spell start and pair. Null without a list. */
+/**
+ * The review list's rows, for the image check to pre-judge: frame, close-spell start and pair. Null without a list.
+ * Leaves out the end-of-tracking row (cue 'videoEnd'): nothing follows it, so it could never get a verdict.
+ */
 function reviewRowsOf(session) {
     var rv = session && session._idSwitch && session._idSwitch.results.review;
     if (!rv || !rv.ok || !rv.flags.length) return null;
-    return rv.flags.map(function (f) {
+    var rows = rv.flags.filter(function (f) { return !(f.look && f.look.indexOf('videoEnd') >= 0); });
+    if (!rows.length) return null;
+    return rows.map(function (f) {
         return { frame: f.frame, startFrame: f.startFrame, identityA: f.identityA, identityB: f.identityB };
     });
 }

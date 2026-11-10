@@ -9920,7 +9920,7 @@ read a frozen "0/1"),
 `formatEmbedDevice`, `formatEmbedCpu`, `inputTensorToPixels`, `INPUT`, `setActiveImageModel`),
 `pose/image-prejudge.js` (`prejudgeFor`, `prejudgeSettings`, `PREJUDGE_DEFAULTS`,
 `PREJUDGE_BUILTIN`: on a single-camera session with a review list, `runImage` passes
-the list's rows as `reviewRows`, with `prejudgeSettings(!pkg)` — the built-in model
+the list's rows as `reviewRows` (all but the end-of-tracking row, which nothing follows), with `prejudgeSettings(!pkg)` — the built-in model
 has no gate and margin 0.2 — and
 each review row — or a check's row agreeing with one — says the image check's
 verdict on its second line ("images: look swapped" / "look right" / "unsure" /
