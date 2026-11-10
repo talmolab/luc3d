@@ -15,10 +15,10 @@
 // Not in Defining Plane Mode's toolbar lock: it is a setting a run reads when
 // it starts, not an action on annotation.
 
-import { setStatus } from '../import-export/save-load.js?v=704282ea8376';
+import { setStatus } from '../import-export/save-load.js?v=ad20197d939c';
 import {
     getTrackingThreshold, getTrackingThresholdDefs, updateTrackingThresholds, onTrackingThresholdsChange,
-} from './settings.js?v=704282ea8376';
+} from './settings.js?v=ad20197d939c';
 
 var ID = 'reprojErrorThreshold';
 
