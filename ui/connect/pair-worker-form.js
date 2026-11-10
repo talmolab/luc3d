@@ -1,46 +1,17 @@
 /**
  * ui/connect/pair-worker-form.js — the "Pair with a worker" form.
  *
- * Port of sleap-app src/components/connect/PairWorkerForm.tsx @ 683a159: paste
- * the one-line code `sleap-connect serve` printed (or a legacy JSON ticket);
- * the live plan line (`planPairingForText`, the store's `readCodeInfo` +
- * `planPairing`) says how it will connect; the address box stays under
- * "Advanced: connect by address" unless the code can't be used without one;
- * Pair calls the store's `pairWithCode`. Every string is sleap-app's.
+ * Port of sleap-app src/components/connect/PairWorkerForm.tsx @ 683a159: paste the `sleap-connect serve`
+ * code (or a legacy JSON ticket), a live plan line, "Advanced: connect by address", Pair. Same strings.
  *
- * LUCID changes: vanilla DOM instead of React (state lives in the closure, one
- * stale-guarded async plan per keystroke); `pairWithCode` (read + plan + pair
- * in one store action) in place of `pairWithTicket` + the form's own plan.
- *
- * `reset()` returns the form to its first state (empty boxes, no plan line,
- * Advanced closed, no error): sleap-app UNMOUNTS the form on Cancel / once a
- * worker is paired, so reopening it starts blank; the panel calls `reset()`
- * whenever the form is hidden.
- *
- * LUCID addition (not in sleap-app): Enter in either box pairs when Pair is
- * enabled (LUCID's keyboard convention for dialogs and forms).
- *
- * The iroh cases of sleap-app's `pairWorkerFormIroh.test.tsx` (relay code ->
- * iroh route, typed address over a relay code -> ws) are in `tests/e2e/connect-iroh.mjs`
- * (a desktop shim is registered there); the web build only plans `ws`.
- *
- * Used by `ui/connect/connect-panel.js` (and, later, the Connect window).
+ * LUCID changes:
+ *  - vanilla DOM (closure state, one stale-guarded async plan per keystroke);
+ *  - the store's `pairWithCode` (read + plan + pair) replaces `pairWithTicket` + the form's own plan;
+ *  - `reset()` stands in for sleap-app's unmount (the panel calls it whenever the form is hidden);
+ *  - Enter in either box pairs when Pair is enabled. iroh cases: `tests/e2e/connect-iroh.mjs`.
  */
 import { useConnectStore, planPairingForText } from '../../pose/connect/store.js';
-import { railIconSvg } from '../panel-rail-icons.js';
-
-function el(tag, cls, text) {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
-}
-
-function icon(name, cls) {
-    const s = el('span', 'connect-icon' + (cls ? ' ' + cls : ''));
-    s.innerHTML = railIconSvg(name);
-    return s;
-}
+import { el, button, icon } from './dom.js';
 
 function codeTag(text) {
     return el('code', 'connect-code', text);
@@ -86,8 +57,7 @@ export function createPairWorkerForm(opts) {
     planLine.id = 'connectPairPlan-' + uid; planLine.dataset.pf = 'plan';
     root.appendChild(planLine);
 
-    const advBtn = el('button', 'connect-link-btn');
-    advBtn.type = 'button';
+    const advBtn = button('connect-link-btn');
     advBtn.id = 'connectPairAdvanced-' + uid; advBtn.dataset.pf = 'advanced';
     const advChevron = icon('chevron-right', 'connect-chevron');
     advBtn.appendChild(advChevron);
@@ -111,11 +81,9 @@ export function createPairWorkerForm(opts) {
     root.appendChild(errLine);
 
     const row = el('div', 'connect-btn-row');
-    const pairBtn = el('button', 'connect-btn connect-btn-primary connect-grow');
-    pairBtn.type = 'button';
+    const pairBtn = button('connect-btn connect-btn-primary connect-grow');
     pairBtn.id = 'connectPairBtn-' + uid; pairBtn.dataset.pf = 'pair';
-    const cancelBtn = el('button', 'connect-btn connect-btn-ghost', 'Cancel');
-    cancelBtn.type = 'button';
+    const cancelBtn = button('connect-btn connect-btn-ghost', 'Cancel');
     cancelBtn.id = 'connectPairCancel-' + uid; cancelBtn.dataset.pf = 'cancel';
     row.append(pairBtn, cancelBtn);
     root.appendChild(row);

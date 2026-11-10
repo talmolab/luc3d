@@ -6,13 +6,13 @@
  *  - `MemoryStorage`: a `Storage` stand-in (inject with `configureConnect({localStorage, sessionStorage})`).
  *  - `makeToast()`: the injected `notify` (`success/error/info`) as spies (`.mock.calls`, `.mockClear()`).
  *  - `fakePathMappingsStorage(getMappings)`: a `PathMappingsStorage` whose config.toml holds `getMappings()`.
- *  - `expect` = connect-test-utils' expect plus `toHaveBeenCalled / ...Times / ...With` for those spies and
+ *  - `expect` = bun-test-shim's expect plus `toHaveBeenCalled / ...Times / ...With` for those spies and
  *    `expect.stringContaining` / `expect.anything`.
  *  - `buildPairCode` / `base64UrlEncode` / `fakeBytes` / `mistypeCode`: sleap-app's `buildPairCode.ts` helpers
  *    over the `pair-code.mjs` encoder.
  *  - `FAKE_IDENTITY`: the `getClientIdentity` the store tests inject.
  */
-import { expect as baseExpect, describe, it, beforeEach, afterEach, run, itEach } from '../connect-test-utils.mjs';
+import { expect as baseExpect, describe, it, beforeEach, afterEach, run, itEach } from '../bun-test-shim.mjs';
 import { encodePairCode, mistypeCode, b64urlEncode, RELAY_TABLE } from './pair-code.mjs';
 
 export { describe, it, beforeEach, afterEach, run, itEach, mistypeCode };

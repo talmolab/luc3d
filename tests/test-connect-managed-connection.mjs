@@ -8,7 +8,7 @@
  * real timers: `now`/`sleep` are injected so every test runs on a fake clock
  * that advances only when the code under test calls `sleep`.
  */
-import { describe, it, expect, run } from './connect-test-utils.mjs';
+import { describe, it, expect, run } from './bun-test-shim.mjs';
 import {
   ManagedConnection,
   RECONNECT_BACKOFF_MS,

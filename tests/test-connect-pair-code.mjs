@@ -10,7 +10,7 @@
  * against the SAME fixture so a format drift between languages is always
  * caught.
  */
-import { describe, it, expect, run } from './connect-test-utils.mjs';
+import { describe, it, expect, run } from './bun-test-shim.mjs';
 import { decodePairCode, isPairCode, PairCodeError, RELAY_TABLE } from '../pose/connect/pair-code.js';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

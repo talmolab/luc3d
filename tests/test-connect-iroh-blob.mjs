@@ -5,7 +5,7 @@
  * replies, and `fetchBlobOverIroh` (whole-blob download, verified like the HTTP path).
  */
 import { createHash } from 'node:crypto';
-import { describe, it, expect, run } from './connect-test-utils.mjs';
+import { describe, it, expect, run } from './bun-test-shim.mjs';
 import { createIrohBlobRangeSource, fetchBlobOverIroh, validateBlobOpen, MAX_BLOB_RANGE, MAX_FETCH_BYTES } from '../pose/connect/iroh-blob.js';
 import { BLOB_HASH_MISMATCH, BLOB_INCOMPLETE, WorkerProtocolError } from '../pose/connect/errors.js';
 

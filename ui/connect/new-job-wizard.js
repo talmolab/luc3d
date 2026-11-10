@@ -1,47 +1,17 @@
 /**
- * ui/connect/new-job-wizard.js — the New job wizard (Inference only).
+ * ui/connect/new-job-wizard.js — the New job wizard (Inference only), opened by "+ New job" / "Run again".
  *
- * Port of sleap-app src/components/connect/NewJobWizard.tsx @ 683a159 (§5b.2):
- * "New job on <worker>" / "Starts a job on data that already lives on this
- * worker.", the Train | Inference job-kind choice, the Models list (every
- * finished training run on the worker, plus "Browse model folder on <worker>…";
- * chosen folders show as removable chips), "Inference on" (target + sample
- * count), the summary box, Cancel / "Add to queue" ("Adding…"), the success card
- * ("Added to <worker>'s queue." Add another / Done) and the toasts "Added to
- * <worker> queue" / "Couldn't submit inference job". The Inference helpers it
- * shares with sleap-app live in `pose/connect/worker-ui-helpers.js`
- * (`groupCompletedRuns`, `labelPastRuns`, `WORKER_FILE_INFERENCE_TARGETS`) and
- * the spec building in `pose/connect/new-job-plan.js`.
+ * Port of sleap-app src/components/connect/NewJobWizard.tsx @ 683a159 (§5b.2): job kind, Models (finished
+ * runs + "Browse model folder on <worker>…"), "Inference on", the summary, Add to queue, the success card and
+ * toasts. Shared logic: `pose/connect/worker-ui-helpers.js`, `pose/connect/new-job-plan.js`.
  *
  * LUCID changes:
- *  - TRAINING is out of scope for LUCID, so Train is shown disabled (sleap-app
- *    always offers it) with a one-line note, and the Train path (config starting
- *    points, Edit hyperparameters, post-train inference, the training config
- *    dialog) is not ported. `RemoteDataSummary`, `RemoteOutputFolder` and
- *    `HiddenVideosDialog` belong to the Training panel's remote mode, not to this
- *    wizard, so they are not ported either.
- *  - A Data source choice: "This project" runs the current session through the
- *    Inference panel's own remote run (one `track` job per view, explicit
- *    `output_path`, the panel's frame choice, merge mode and project/session/camera
- *    tags; the results come back with Fetch & Load Results in the panel or the Jobs
- *    tab); the models picked here replace the panel's model list for that run
- *    (`runRemoteInferenceWithModels`, `ui/inference-panel.js`). That run reads the selected Backend only
- *    (views, mounts, path rules, output folder), so for a worker that is not the Backend the wizard selects
- *    it for the run, says so on the project line, and selects the previous Backend again afterwards
- *    (nothing to restore when none was selected). "A file on <worker>"
- *    is sleap-app's flow: a worker `.slp` (labels) or a worker VIDEO (a plain track
- *    job with no LUCID view tag; save or merge its results later from the Jobs tab).
- *  - A worker `.slp`'s structure is not read (no summary line, no missing-video
- *    check, no "Locate on worker…" for its videos, no "Random sample"): sleap-app's
- *    `workerLabels.ts` reads it with sleap-io's `readSlpStreaming` over a
- *    `RangeSource`, which needs SharedArrayBuffer, and LUCID's page is not
- *    cross-origin isolated. The worker reads the file's videos itself.
- *  - vanilla DOM modal (scrim + card, Esc closes, Tab trapped, `data-shortcut-modal`).
- *
- * Exports: openNewJobWizard, seedWizardFromRun, groupCompletedRuns, labelPastRuns,
- * WORKER_FILE_INFERENCE_TARGETS.
- *
- * Opened from `ui/connect/worker-jobs.js` ("+ New job", "Run again").
+ *  - Train is shown disabled with a note; the Train path and its dialogs are not ported;
+ *  - a Data source choice: "This project" runs the Inference panel's own remote run with the models picked
+ *    here (`runRemoteInferenceWithModels`), selecting this worker as Backend for it and the previous one
+ *    again afterwards; "A file on <worker>" is sleap-app's flow (a worker .slp or video);
+ *  - a worker .slp is not read (no summary, no Random sample): that needs SharedArrayBuffer;
+ *  - vanilla DOM modal (Esc closes, Tab trapped, `data-shortcut-modal`).
  */
 import { useConnectStore } from '../../pose/connect/store.js';
 import {
@@ -56,16 +26,10 @@ import { INFERENCE_DEFAULTS } from '../inference-args.js';
 import { state as appState } from '../app-state.js';
 import { openRemoteFileBrowser } from './remote-file-browser.js';
 import { notify } from './notify.js';
-import { layerAbove } from './layers.js';
+import { trapModal } from './layers.js';
+import { el, button } from './dom.js';
 
 export { seedWizardFromRun, groupCompletedRuns, labelPastRuns, WORKER_FILE_INFERENCE_TARGETS };
-
-function el(tag, cls, text) {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
-}
 
 let openWizard = null;
 
@@ -127,11 +91,11 @@ export function openNewJobWizard(opts) {
 
         // job kind
         const kindRow = el('div', 'njw-kinds');
-        const trainBtn = el('button', 'btn btn-sm njw-kind', 'Train');
-        trainBtn.type = 'button'; trainBtn.id = 'njwKindTrain'; trainBtn.disabled = true;
+        const trainBtn = button('btn btn-sm njw-kind', 'Train');
+        trainBtn.id = 'njwKindTrain'; trainBtn.disabled = true;
         trainBtn.title = 'Training isn’t available in LUCID.';
-        const infBtn = el('button', 'btn btn-sm njw-kind njw-on', 'Inference');
-        infBtn.type = 'button'; infBtn.id = 'njwKindInference';
+        const infBtn = button('btn btn-sm njw-kind njw-on', 'Inference');
+        infBtn.id = 'njwKindInference';
         kindRow.append(trainBtn, infBtn);
         const trainNote = el('p', 'njw-muted njw-note', 'Training isn’t available in LUCID: train with SLEAP, then run inference here.');
         trainNote.id = 'njwTrainNote';
@@ -140,10 +104,10 @@ export function openNewJobWizard(opts) {
         const srcBox = el('div', 'njw-sect');
         srcBox.appendChild(el('p', 'njw-caps', 'Data'));
         const srcRow = el('div', 'njw-kinds');
-        const srcProject = el('button', 'btn btn-sm njw-kind', 'This project');
-        srcProject.type = 'button'; srcProject.id = 'njwSrcProject';
-        const srcFile = el('button', 'btn btn-sm njw-kind', 'A file on ' + workerLabel);
-        srcFile.type = 'button'; srcFile.id = 'njwSrcFile';
+        const srcProject = button('btn btn-sm njw-kind', 'This project');
+        srcProject.id = 'njwSrcProject';
+        const srcFile = button('btn btn-sm njw-kind', 'A file on ' + workerLabel);
+        srcFile.id = 'njwSrcFile';
         srcRow.append(srcProject, srcFile);
         const srcDetail = el('div', 'njw-src-detail');
         // project detail
@@ -151,8 +115,8 @@ export function openNewJobWizard(opts) {
         // file detail
         const fileRow = el('div', 'njw-filerow');
         const filePathBox = el('div', 'njw-path'); filePathBox.id = 'njwFilePath';
-        const browseFile = el('button', 'btn btn-sm njw-btn', 'Browse…');
-        browseFile.type = 'button'; browseFile.id = 'njwBrowseFile';
+        const browseFile = button('btn btn-sm njw-btn', 'Browse…');
+        browseFile.id = 'njwBrowseFile';
         fileRow.append(el('div', 'njw-pathwrap'), browseFile);
         fileRow.firstChild.appendChild(filePathBox);
         const fileNote = el('p', 'njw-muted njw-note'); fileNote.id = 'njwFileNote';
@@ -163,8 +127,8 @@ export function openNewJobWizard(opts) {
         const modelsBox = el('div', 'njw-sect');
         modelsBox.appendChild(el('p', 'njw-caps', 'Models'));
         const runList = el('div', 'njw-stack'); runList.id = 'njwRuns';
-        const browseModel = el('button', 'btn btn-sm njw-btn njw-wide', 'Browse model folder on ' + workerLabel + '…');
-        browseModel.type = 'button'; browseModel.id = 'njwBrowseModel';
+        const browseModel = button('btn btn-sm njw-btn njw-wide', 'Browse model folder on ' + workerLabel + '…');
+        browseModel.id = 'njwBrowseModel';
         const dirList = el('div', 'njw-stack'); dirList.id = 'njwModelDirs';
         modelsBox.append(runList, browseModel, dirList);
 
@@ -190,8 +154,8 @@ export function openNewJobWizard(opts) {
         const errBox = el('p', 'njw-error'); errBox.id = 'njwError';
         const why = el('p', 'njw-muted njw-note'); why.id = 'njwWhy';
         const foot = el('div', 'njw-foot');
-        const cancel = el('button', 'btn njw-btn', 'Cancel'); cancel.type = 'button'; cancel.id = 'njwCancel';
-        const submit = el('button', 'btn btn-primary', 'Add to queue'); submit.type = 'button'; submit.id = 'njwSubmit';
+        const cancel = button('btn njw-btn', 'Cancel'); cancel.id = 'njwCancel';
+        const submit = button('btn btn-primary', 'Add to queue'); submit.id = 'njwSubmit';
         foot.append(cancel, submit);
 
         form.append(kindRow, trainNote, srcBox, modelsBox, onBox, summary, errBox, why, foot);
@@ -199,8 +163,8 @@ export function openNewJobWizard(opts) {
         // success card
         const okBox = el('div', 'njw-ok'); okBox.id = 'njwOk';
         const okFoot = el('div', 'njw-foot');
-        const another = el('button', 'btn njw-btn', 'Add another'); another.type = 'button'; another.id = 'njwAnother';
-        const doneBtn = el('button', 'btn btn-primary', 'Done'); doneBtn.type = 'button'; doneBtn.id = 'njwDone';
+        const another = button('btn njw-btn', 'Add another'); another.id = 'njwAnother';
+        const doneBtn = button('btn btn-primary', 'Done'); doneBtn.id = 'njwDone';
         okFoot.append(another, doneBtn);
         done.append(okBox, okFoot);
 
@@ -230,7 +194,7 @@ export function openNewJobWizard(opts) {
         function close() {
             if (closed) return;
             closed = true;
-            document.removeEventListener('keydown', onKey, true);
+            trap.release();
             scrim.remove();
             openWizard = null;
             resolve();
@@ -266,9 +230,9 @@ export function openNewJobWizard(opts) {
             // models
             runList.textContent = '';
             st.completedRuns.forEach(function (run) {
-                const b = el('button', 'btn btn-sm njw-btn njw-wide njw-left' + (st.selectedRunId === run.runId ? ' njw-on' : ''),
+                const b = button('btn btn-sm njw-btn njw-wide njw-left' + (st.selectedRunId === run.runId ? ' njw-on' : ''),
                     run.modelTypes.join(' + ') + ' · ' + (basename(run.labelsPath) || '—') + ' · ' + timeAgo(run.createdAt));
-                b.type = 'button'; b.disabled = st.loadingRunModels || st.submitting; b.dataset.runId = run.runId;
+                b.disabled = st.loadingRunModels || st.submitting; b.dataset.runId = run.runId;
                 b.addEventListener('click', function () { void chooseModelsFromRun(run); });
                 runList.appendChild(b);
             });
@@ -277,7 +241,7 @@ export function openNewJobWizard(opts) {
             st.modelDirs.forEach(function (dir) {
                 const row = el('div', 'njw-chip');
                 const name = el('span', 'njw-chip-name', dir); name.title = dir;
-                const x = el('button', 'njw-x'); x.type = 'button'; x.setAttribute('aria-label', 'Remove ' + dir); x.textContent = '×';
+                const x = button('njw-x'); x.setAttribute('aria-label', 'Remove ' + dir); x.textContent = '×';
                 x.addEventListener('click', function () { removeModelDir(dir); });
                 row.append(name, x);
                 dirList.appendChild(row);
@@ -440,27 +404,12 @@ export function openNewJobWizard(opts) {
         });
         scrim.addEventListener('mousedown', function (e) { if (e.target === scrim) close(); });
 
-        function focusables() {
-            return Array.from(card.querySelectorAll('button, input, select, textarea, [tabindex]'))
-                .filter(function (n) { return !n.disabled && n.tabIndex >= 0 && !n.closest('[hidden]') && n.offsetParent !== null; });
-        }
-        function onKey(e) {
-            if (closed) return;
+        const trap = trapModal(scrim, card, {
+            onEscape: close,
             // The worker file browser (or a confirm) on top owns Esc and Tab.
-            if (document.getElementById('remoteFileBrowser') || layerAbove(scrim)) return;
-            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
-            if (e.key === 'Tab') {
-                e.stopPropagation();
-                const f = focusables();
-                const a = document.activeElement;
-                if (f.length === 0) { e.preventDefault(); card.focus(); return; }
-                const first = f[0], last = f[f.length - 1];
-                if (!card.contains(a) || a === card) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
-                else if (e.shiftKey && a === first) { e.preventDefault(); last.focus(); }
-                else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }
-            }
-        }
-        document.addEventListener('keydown', onKey, true);
+            blocked: function () { return !!document.getElementById('remoteFileBrowser'); },
+            focusable: function (n) { return !n.closest('[hidden]') && n.offsetParent !== null; },
+        });
 
         // ---- load ----
         document.body.appendChild(scrim);

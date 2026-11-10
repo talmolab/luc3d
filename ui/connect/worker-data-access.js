@@ -1,36 +1,20 @@
 /**
  * ui/connect/worker-data-access.js — the Connect window's Data access tab.
  *
- * Port of sleap-app src/components/connect/WorkerDataAccess.tsx @ 683a159
- * (§4b.5): the worker's configured mounts (read-only, from `fs.mounts`, with a
- * Browse files button that opens the look-only worker file browser) and this
- * worker's remembered local<->worker path rules (the Locate-on-worker
- * overrides), each with Clear. There is no mapping editor: rules are only
- * created by browsing elsewhere ("Locate on worker…", the store's
- * `addPathRule`). Every string is sleap-app's.
+ * Port of sleap-app src/components/connect/WorkerDataAccess.tsx @ 683a159 (§4b.5): the worker's mounts
+ * (read-only, Browse files) and its remembered local<->worker path rules, each with Clear. Same strings.
  *
- * LUCID changes: vanilla DOM factory (`createWorkerDataAccess(container,
- * {workerId, refreshToken})` -> `{update(props), destroy()}`) instead of a React
- * component; `update` with a changed `workerId` or a bumped `refreshToken`
- * re-fetches the mounts, anything else repaints from the store; the rule list
- * follows the store (`subscribeSelector` on the worker's `pathRules`), so Clear
- * re-renders at once.
- *
- * Used by `ui/connect/connect-window.js`.
+ * LUCID changes:
+ *  - a vanilla factory `(container, {workerId, refreshToken}) -> {update, destroy}`: a new worker or token
+ *    refetches the mounts; the rules follow the store.
  */
 import { useConnectStore } from '../../pose/connect/store.js';
 import { isWorkerPath } from '../../pose/connect/path-mappings.js';
 import { openRemoteFileBrowser } from './remote-file-browser.js';
 import { railIconSvg } from '../panel-rail-icons.js';
+import { el, button } from './dom.js';
 
 const NO_PATH_RULES = [];
-
-function el(tag, cls, text) {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
-}
 
 /**
  * @param {HTMLElement} container
@@ -54,8 +38,8 @@ export function createWorkerDataAccess(container, props) {
     const mountsBox = el('div', 'cda-section');
     const mountsHead = el('div', 'cda-head');
     mountsHead.appendChild(el('p', 'cda-caps', 'Folders this worker shares (where it was started, plus sleap-connect add-folder)'));
-    const browse = el('button', 'btn btn-sm cda-btn cda-browse');
-    browse.type = 'button'; browse.id = 'cdaBrowse';
+    const browse = button('btn btn-sm cda-btn cda-browse');
+    browse.id = 'cdaBrowse';
     const bIcon = el('span', 'cda-icon'); bIcon.innerHTML = railIconSvg('folder-open');
     browse.append(bIcon, ' Browse files');
     browse.addEventListener('click', function () {
@@ -118,8 +102,7 @@ export function createWorkerDataAccess(container, props) {
                 warn.title = 'Videos there still work. Labels, configs or models there will be refused by the worker.';
                 body.appendChild(warn);
             }
-            const clear = el('button', 'btn btn-sm cda-btn cda-clear', 'Clear');
-            clear.type = 'button';
+            const clear = button('btn btn-sm cda-btn cda-clear', 'Clear');
             clear.addEventListener('click', function () { useConnectStore.getState().clearPathRule(workerId, rule.local); });
             row.append(body, clear);
             rulesList.appendChild(row);

@@ -27,36 +27,21 @@
  *
  * Usage: node tests/e2e/connect-jobs.mjs   (PORT= to move its server)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { FakeWorker } from '../connect/fake-worker.mjs';
+import { runConnectE2E, check, fail, watchPage, repoRoot, pair } from './fixtures/connect-e2e.mjs';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PRED = new Uint8Array(fs.readFileSync(path.join(repoRoot, 'tests', 'fixtures', 'sleap-nn-predictions', 'two-node.predictions.slp')));
-const PORT = Number(process.env.PORT || 9395);
-const BASE = `http://localhost:${PORT}`;
 const WS = 'ws://127.0.0.1:9631';
 
-let fails = 0;
-const check = (c, m, extra) => {
-    console.log((c ? '  ✓ ' : '  ✗ ') + m + (c || extra === undefined ? '' : '  ' + JSON.stringify(extra).slice(0, 700)));
-    if (!c) fails++;
-};
-
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-let browser, context;
-try {
-    await new Promise((r) => setTimeout(r, 800));
-    browser = await chromium.launch();
+await runConnectE2E(9395, async ({ browser, BASE }) => {
+    let context;
     context = await browser.newContext({ viewport: { width: 1500, height: 950 } });
     await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: BASE });
     const page = await context.newPage();
     page.setDefaultTimeout(30000);
-    page.on('console', (m) => { if (/error/i.test(m.type())) console.log('  [console.' + m.type() + ']', m.text().slice(0, 300)); });
-    page.on('pageerror', (e) => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
+    watchPage(page, { consoleTypes: /error/i });
     const dialogs = [];
     let dialogAnswer = true;
     page.on('dialog', (d) => { dialogs.push(d.message()); if (dialogAnswer) d.accept(); else d.dismiss(); });
@@ -68,8 +53,7 @@ try {
     await page.goto(`${BASE}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 60000 });
     await page.waitForSelector('.panel-rail-btn[data-tab="tabConnect"]');
-    const code = await worker.mintPairCode({ addrs: [WS] });
-    await page.evaluate((c) => import('./pose/connect/store.js').then((m) => m.useConnectStore.getState().pairWithCode(c)), code);
+    await pair(page, worker, WS);
     const nodeId = worker.nodeId;
 
     // waitForFunction does not await a promise: poll store state from node.
@@ -755,12 +739,9 @@ try {
     await page.waitForSelector('.cj-merge .cj-merge-error', { timeout: 15000 });
     check(await page.evaluate(() => document.querySelector('.cj-merge-error').textContent === 'No predictions were found for this job.'), '"No predictions were found for this job."');
     await page.keyboard.press('Escape');
-} catch (e) {
-    console.log('  ✗ threw', e);
-    fails++;
-} finally {
-    if (browser) await browser.close();
-    server.kill();
-}
-console.log(fails ? `\n${fails} FAILED` : '\nall passed');
-process.exit(fails ? 1 : 0);
+}, {
+    onError: async (e) => {
+        console.log('  ✗ threw', e);
+        fail();
+    },
+});

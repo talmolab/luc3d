@@ -6,7 +6,7 @@
 
 // Several tests drive the client into its logged-and-ignored paths on purpose.
 console.warn = () => {};
-import { describe, it, expect, run } from './connect-test-utils.mjs';
+import { describe, it, expect, run } from './bun-test-shim.mjs';
 import {
   WorkerClient,
 } from '../pose/connect/client.js';

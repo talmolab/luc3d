@@ -1,32 +1,17 @@
 /**
  * ui/connect/merge-predictions-dialog.js — Fetch & Load for one completed track job of the Jobs tab.
  *
- * Port of sleap-app src/components/connect/MergePredictionsDialog.tsx @ 683a159 (§5b.4, design §6):
- * "Load predictions" with a stage per state (loading "Loading predictions…", "Merging…", an error
- * line "No predictions were found for this job."), a summary box (the open project, the skeleton
- * check as ✓ / !), and the choices. sleap-app's auto path (a job that is unambiguously ours skips the
- * dialog and merges at once, `shouldAutoMerge`) is kept: a job this project submitted for a view of
- * the open session goes straight through `fetchAndLoadJobs` (`ui/connect/remote-inference.js`, the
- * Inference panel's own Fetch & Load, with the "Existing predictions" mode recorded on the job,
- * default Replace).
+ * Port of sleap-app src/components/connect/MergePredictionsDialog.tsx @ 683a159 (§5b.4): "Load predictions"
+ * with a stage per state, the summary box (open project, skeleton check) and the choices. Its auto path is
+ * kept: this project's job for a view of the open session merges at once through `fetchAndLoadJobs`
+ * (mode recorded on the job, default Replace).
  *
- * LUCID changes (a LUCID project is several sessions of several views, and an Open predictions
- * "as a new project" does not exist here):
- *  - "Ours" is the tracked job's `{sessionId, camera}` (what the Inference panel recorded at submit)
- *    matching the open session and one of its views. A job of the open project for ANOTHER session is
- *    refused with the session name ("switch to it first"), like the panel, and offers only
- *    Download .slp.
- *  - A job with no LUCID tag (submitted by sleap-app or from a worker file) cannot say which view it
- *    is for, so the dialog asks: "Merge into view" picks one of the open session's views (the one
- *    named in the job's labels / output path / predictions video is preselected; when none matches nothing
- *    is preselected and Merge stays disabled until one is picked, the stand-in for sleap-app's unmatched-video
- *    block) and merges through `mergeViewPredictions`
- *    in Replace mode; the skeleton is checked first with `validateSkeletonCompatibility`, like the
- *    merge itself. A merged job is marked fetched so the Inference panel does not offer it again.
- *  - Open predictions is not offered (LUCID opens projects from the File menu); Download .slp keeps
- *    the file: `downloadBytes`, the app's one download path (a browser download, also in the desktop shell).
- *
- * Exports: loadJobPredictions, openMergePredictionsDialog.
+ * LUCID changes:
+ *  - "ours" = the tracked job's {sessionId, camera}; a job for ANOTHER session of the project is refused
+ *    by name and offers only Download .slp;
+ *  - an untagged job asks "Merge into view" (the view its paths name is preselected, else none and Merge
+ *    waits), skeleton-checked first, Replace mode, then marked fetched;
+ *  - no Open predictions; Download .slp goes through `downloadBytes`; Esc waits while merging.
  */
 import { useConnectStore } from '../../pose/connect/store.js';
 import { lucidProjectTag } from '../../pose/connect/project-tag.js';
@@ -38,19 +23,11 @@ import { mergeViewPredictions } from '../inference-merge.js';
 import { fetchAndLoadJobs, fetchJobPredictions, openProjectInfo } from './remote-inference.js';
 import { notify } from './notify.js';
 import { railIconSvg } from '../panel-rail-icons.js';
-import { layerAbove } from './layers.js';
+import { trapModal } from './layers.js';
+import { el, button, errMsg } from './dom.js';
 
 const DEFAULT_MODE = 'replace';
 const NONE = 'No predictions were found for this job.';
-
-function el(tag, cls, text) {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
-}
-
-function errMsg(err) { return err instanceof Error ? err.message : String(err); }
 
 /** The open session's view names ([] with none open). */
 function sessionViews() {
@@ -59,7 +36,7 @@ function sessionViews() {
 }
 
 /** sleap-app `shouldAutoMerge`, in LUCID's terms: this project's job for a view of the open session. */
-export function planFetchRoute(tracked, mine, session) {
+function planFetchRoute(tracked, mine, session) {
     if (!tracked || tracked.camera === undefined || tracked.sessionId === undefined) return { kind: 'ask' };
     if (!session) return { kind: 'ask' };
     const tagId = lucidProjectTag(openProjectInfo()).id;
@@ -99,7 +76,7 @@ export async function loadJobPredictions(o) {
  * @param {{workerId: string, jobId: string, tracked?: any, route?: {kind: string, sessionId?: string}}} o
  * @returns {Promise<void>}
  */
-export function openMergePredictionsDialog(o) {
+function openMergePredictionsDialog(o) {
     return new Promise(function (resolve) {
         let closed = false;
         let stage = { kind: 'loading', text: 'Loading predictions…' };
@@ -114,7 +91,7 @@ export function openMergePredictionsDialog(o) {
         const head = el('div', 'cj-card-head');
         const titleRow = el('div', 'cj-card-title');
         titleRow.append(el('span', 'cj-card-title-text', 'Load predictions'));
-        const x = el('button', 'cj-card-x'); x.type = 'button'; x.setAttribute('aria-label', 'Close'); x.title = 'Close';
+        const x = button('cj-card-x', undefined, 'Close'); x.setAttribute('aria-label', 'Close');
         x.innerHTML = railIconSvg('x');
         titleRow.appendChild(x);
         const desc = el('p', 'cj-card-desc');
@@ -180,8 +157,8 @@ export function openMergePredictionsDialog(o) {
                 viewSelect.value = pick || '';
                 lab.appendChild(viewSelect);
                 body.appendChild(lab);
-                const mergeBtn = el('button', 'connect-btn connect-btn-primary', 'Merge into view');
-                mergeBtn.type = 'button'; mergeBtn.id = 'cjMergeGo';
+                const mergeBtn = button('connect-btn connect-btn-primary', 'Merge into view');
+                mergeBtn.id = 'cjMergeGo';
                 mergeBtn.disabled = !viewSelect.value;
                 viewSelect.addEventListener('change', function () { mergeBtn.disabled = !viewSelect.value; });
                 mergeBtn.addEventListener('click', function () { if (viewSelect.value) void doMerge(viewSelect.value); });
@@ -189,8 +166,8 @@ export function openMergePredictionsDialog(o) {
             } else if (!session) {
                 row.appendChild(el('span', 'cj-muted', 'Open a project to merge these predictions, or download them.'));
             }
-            const dl = el('button', 'connect-btn connect-btn-outline', 'Download .slp');
-            dl.type = 'button'; dl.id = 'cjMergeDownload';
+            const dl = button('connect-btn connect-btn-outline', 'Download .slp');
+            dl.id = 'cjMergeDownload';
             dl.addEventListener('click', doDownload);
             row.appendChild(dl);
             body.appendChild(row);
@@ -242,32 +219,15 @@ export function openMergePredictionsDialog(o) {
         function close() {
             if (closed) return;
             closed = true;
-            document.removeEventListener('keydown', onKey, true);
+            trap.release();
             scrim.remove();
-            if (prevFocus && prevFocus.isConnected) { try { prevFocus.focus(); } catch (e) { /* gone */ } }
+            trap.restoreFocus();
             resolve();
-        }
-        function focusables() {
-            return Array.from(card.querySelectorAll('button, input, select, textarea, [tabindex]'))
-                .filter(function (n) { return !n.disabled && n.tabIndex >= 0; });
-        }
-        function onKey(e) {
-            if (closed || layerAbove(scrim)) return;
-            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (stage.kind !== 'merging') close(); return; }
-            if (e.key === 'Tab') {
-                e.stopPropagation();
-                const f = focusables(), a = document.activeElement;
-                if (!f.length) { e.preventDefault(); card.focus(); return; }
-                const first = f[0], last = f[f.length - 1];
-                if (!card.contains(a) || a === card) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
-                else if (e.shiftKey && a === first) { e.preventDefault(); last.focus(); }
-                else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }
-            }
         }
         x.addEventListener('click', close);
         scrim.addEventListener('mousedown', function (e) { if (e.target === scrim) close(); });
-        document.addEventListener('keydown', onKey, true);
-        const prevFocus = document.activeElement;
+        // Esc waits while a merge runs.
+        const trap = trapModal(scrim, card, { onEscape: function () { if (stage.kind !== 'merging') close(); } });
         document.body.appendChild(scrim);
         render();
         card.focus();

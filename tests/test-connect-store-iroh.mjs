@@ -40,29 +40,19 @@ class FakeWorkerClient {
     }
     async fetchBlob() {
         this.fetchBlobCalls++;
-        return new Uint8Array([
-            1
-        ]);
+        return new Uint8Array([1]);
     }
     onClose(cb) {
         this._closeListeners.add(cb);
         return ()=>this._closeListeners.delete(cb);
     }
     simulateDrop() {
-        for (const cb of [
-            ...this._closeListeners
-        ])cb({
-            intentional: false
-        });
+        for (const cb of [...this._closeListeners])cb({ intentional: false });
     }
     close() {
         if (this.closed) return;
         this.closed = true;
-        for (const cb of [
-            ...this._closeListeners
-        ])cb({
-            intentional: true
-        });
+        for (const cb of [...this._closeListeners])cb({ intentional: true });
     }
 }
 // Desktop mode: an iroh socket factory is registered (sleap-app: `isTauri: true`).
@@ -80,23 +70,13 @@ function setup() {
 setup();
 const TICKET_WITH_IROH = JSON.stringify({
     node_id: "worker-node-id",
-    addrs: [
-        "ws://192.168.1.42:9631"
-    ],
+    addrs: ["ws://192.168.1.42:9631"],
     secret: "s",
-    iroh: {
-        node_id: "iroh-id",
-        relay_url: "https://relay.example",
-        direct_addrs: [
-            "1.2.3.4:5"
-        ]
-    }
+    iroh: { node_id: "iroh-id", relay_url: "https://relay.example", direct_addrs: ["1.2.3.4:5"] }
 });
 const TICKET_NO_IROH = JSON.stringify({
     node_id: "worker-node-id",
-    addrs: [
-        "ws://192.168.1.42:9631"
-    ],
+    addrs: ["ws://192.168.1.42:9631"],
     secret: "s"
 });
 function last() {
@@ -127,17 +107,13 @@ describe("connectStore iroh transport (desktop)", ()=>{
     });
     it("dials the iroh endpoint via the tauri iroh socket when explicitly requested", async ()=>{
         const s = await store();
-        await s.getState().pairWithTicket(TICKET_WITH_IROH, undefined, {
-            transport: "iroh"
-        });
+        await s.getState().pairWithTicket(TICKET_WITH_IROH, undefined, { transport: "iroh" });
         const client = last();
         expect(typeof client.opts.createSocket).toBe("function");
         expect(JSON.parse(client.opts.url)).toEqual({
             nodeId: "iroh-id",
             relayUrl: "https://relay.example",
-            directAddrs: [
-                "1.2.3.4:5"
-            ]
+            directAddrs: ["1.2.3.4:5"]
         });
         const state = s.getState();
         expect(state.activeTransport).toBe("iroh");
@@ -149,13 +125,9 @@ describe("connectStore iroh transport (desktop)", ()=>{
         const ticket = JSON.stringify({
             node_id: "worker-node-id",
             secret: "s",
-            iroh: {
-                relay_url: "https://relay.example"
-            }
+            iroh: { relay_url: "https://relay.example" }
         });
-        await s.getState().pairWithTicket(ticket, undefined, {
-            transport: "iroh"
-        });
+        await s.getState().pairWithTicket(ticket, undefined, { transport: "iroh" });
         expect(JSON.parse(last().opts.url).nodeId).toBe("worker-node-id");
     });
     it("stays on ws by default even in the desktop app", async ()=>{
@@ -175,15 +147,11 @@ describe("connectStore iroh transport (desktop)", ()=>{
     });
     it("reconnect reuses the remembered iroh transport, and an explicit ws override wins", async ()=>{
         const s = await store();
-        await s.getState().pairWithTicket(TICKET_WITH_IROH, undefined, {
-            transport: "iroh"
-        });
+        await s.getState().pairWithTicket(TICKET_WITH_IROH, undefined, { transport: "iroh" });
         await s.getState().connectToWorker("worker-node-id");
         expect(s.getState().activeTransport).toBe("iroh");
         expect(typeof last().opts.createSocket).toBe("function");
-        await s.getState().connectToWorker("worker-node-id", {
-            transport: "ws"
-        });
+        await s.getState().connectToWorker("worker-node-id", { transport: "ws" });
         expect(s.getState().activeTransport).toBe("ws");
         expect(last().opts.url).toBe("ws://192.168.1.42:9631");
         expect(s.getState().pairedWorkers[0].transport).toBeUndefined();
@@ -193,13 +161,9 @@ describe("connectStore iroh transport (desktop)", ()=>{
         const ticket = JSON.stringify({
             node_id: "worker-node-id",
             secret: "s",
-            iroh: {
-                node_id: "iroh-id"
-            }
+            iroh: { node_id: "iroh-id" }
         });
-        await s.getState().pairWithTicket(ticket, undefined, {
-            transport: "iroh"
-        });
+        await s.getState().pairWithTicket(ticket, undefined, { transport: "iroh" });
         expect(s.getState().pairedWorkers[0].addrs).toEqual([]);
         await s.getState().connectToWorker("worker-node-id");
         expect(s.getState().activeTransport).toBe("iroh");
@@ -237,9 +201,7 @@ describe("connectStore iroh transport (desktop)", ()=>{
     });
     it("fetchResultBlob gives a clear error over iroh instead of hitting the ws-only blob path", async ()=>{
         const s = await store();
-        await s.getState().pairWithTicket(TICKET_WITH_IROH, undefined, {
-            transport: "iroh"
-        });
+        await s.getState().pairWithTicket(TICKET_WITH_IROH, undefined, { transport: "iroh" });
         last().irohConnectionId = 3;
         await expect(s.getState().fetchResultBlob({
             sha256: "abc",
@@ -250,9 +212,7 @@ describe("connectStore iroh transport (desktop)", ()=>{
     // P8: with the desktop's iroh blob fetcher registered, a result downloads over the connection's blob stream.
     it("fetchResultBlob downloads over iroh through the registered blob fetcher (connection id + progress forwarded)", async ()=>{
         const s = await store();
-        await s.getState().pairWithTicket(TICKET_WITH_IROH, undefined, {
-            transport: "iroh"
-        });
+        await s.getState().pairWithTicket(TICKET_WITH_IROH, undefined, { transport: "iroh" });
         last().irohConnectionId = 9;
         const calls = [];
         registerIrohBlobFetcher(async (connId, ref, o)=>{
@@ -279,9 +239,7 @@ describe("connectStore iroh transport (desktop)", ()=>{
     });
     it("a fetcher that fails surfaces its error; a connection with no id is refused with the clear message", async ()=>{
         const s = await store();
-        await s.getState().pairWithTicket(TICKET_WITH_IROH, undefined, {
-            transport: "iroh"
-        });
+        await s.getState().pairWithTicket(TICKET_WITH_IROH, undefined, { transport: "iroh" });
         registerIrohBlobFetcher(async ()=>{ throw new Error("blob.hash_mismatch"); });
         try {
             last().irohConnectionId = 3;

@@ -1,74 +1,31 @@
 /**
  * ui/connect/connect-window.js — the Connect window.
  *
- * Port of sleap-app src/components/connect/ConnectDialog.tsx @ 683a159: a full-window overlay (92vw x 90vh,
- * resizable from its bottom-right corner) listing every paired worker and the jobs on it, opened from the
- * Connect panel's "Open Connect window", a RemoteRunCard's "Run again" / "Open in Connect", a job-finished
- * toast's "Open", or View > Connect Window. Header: "Connect", "Your workers and the jobs on them",
- * Refresh, close. Left column (320 px): Paired workers (top 45%, `createWorkerList`) over the picked
- * worker's queue (`createSidebarQueue`), each scrolling on its own. Right: the picked worker's name, the
- * Jobs / Data access tabs, the Devices button, Forget; or "Pair a worker to see its jobs here.".
+ * Port of sleap-app src/components/connect/ConnectDialog.tsx @ 683a159: a 92vw x 90vh overlay (resizable)
+ * with the paired workers (`createWorkerList`) over the picked worker's queue (`createSidebarQueue`), and the
+ * picked worker's Jobs / Data access tabs, Devices button and Forget. The pick is LOCAL to the window (never
+ * the store's `selectedWorkerId`). Open and Refresh refresh every worker's info and bump `refreshToken`;
+ * closing releases idle connections.
  *
- * The worker picked here is LOCAL to this window: it never changes the store's `selectedWorkerId` (the app's
- * Backend). It defaults to that worker when paired, else the first, and is re-picked if the pick is forgotten.
- * On open every paired worker's info is refreshed in parallel; Refresh does the same and bumps `refreshToken`,
- * which the queue, Devices and the open tab watch to refetch now rather than on their next poll; re-pairing
- * an unpaired worker bumps it too. Closing releases the idle connections opened just to fill the window
- * (`releaseIdleConnections`). A queue card's click switches to the Jobs tab and asks it to scroll to that run
- * (`focusRun {key, nonce}`); a Stop Early / Cancel run from the queue bumps `refreshToken`.
- *
- * The tab bodies are agents B and C's components, mounted through the shared factory contract
- * (`createWorkerJobs`, `createWorkerDataAccess`: `(container, props) -> {update, destroy}`).
- *
- * LUCID changes: vanilla DOM; Esc closes the window (a popover, menu or dialog above it takes the Esc first);
- * the overlay is a `data-shortcut-modal` (app shortcuts stay off the views behind it) with Tab trapped in the
- * card; a click on the dim area closes it (as Radix does); focus returns to where it was. A worker paired while
- * the window is open gets its info refreshed here (sleap-app's comment says its card does, but nothing does).
- * z-index sits under the toasts (so a "finished" toast shows over it, as does one raised from a dialog opened
- * from the window), under the file browser / viewer / merge dialog / wizard, and under a progress card
- * (`.loading-overlay`, raised to 10100 by `body:has(.cw-scrim …)` so Fetch & Load's card shows over the window)
- * and the ask dialogs (20000), which stay above the toasts.
- *
- * Known difference: confirms go through `ui/ask.js`, which outside the desktop shell is `window.confirm(message)`
- * (a repo-wide convention, left alone). sleap-app's titles ("Remove this run from <worker>?"), the red destructive
- * button and the "Keep running" / "Keep queued" / "Keep training" cancel labels are dropped there (the texts
- * themselves are identical); the desktop shell's `lucidDesktop.confirm` shows them. Esc layering between the
- * window and the dialogs above it is `ui/connect/layers.js` (`layerAbove`).
- *
- * Exports: openConnectWindow({workerId?}), closeConnectWindow, isConnectWindowOpen.
+ * LUCID changes:
+ *  - vanilla DOM, a `data-shortcut-modal`; Esc / Tab via `trapModal` in the bubble phase (a layer above takes
+ *    Esc first); a click on the dim area closes; focus returns;
+ *  - a worker paired while open gets its info refreshed;
+ *  - z-index under the toasts, the dialogs it opens, a progress card and the ask dialogs (see styles.css);
+ *  - confirms go through `ui/ask.js` (outside the desktop shell: `window.confirm`, without sleap-app's titles).
  */
 import { useConnectStore } from '../../pose/connect/store.js';
 import { shallowEqual } from '../../pose/connect/mini-store.js';
-import { railIconSvg } from '../panel-rail-icons.js';
 import { createWorkerList } from './worker-list.js';
 import { createSidebarQueue } from './sidebar-queue.js';
 import { createWorkerDevicesButton } from './worker-devices.js';
 import { createWorkerJobs } from './worker-jobs.js';
 import { createWorkerDataAccess } from './worker-data-access.js';
 import { forgetWorkerWithConfirm } from './connect-panel.js';
-
-function el(tag, cls, text) {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
-}
-
-function icon(name, cls) {
-    const s = el('span', 'connect-icon' + (cls ? ' ' + cls : ''));
-    s.innerHTML = railIconSvg(name);
-    return s;
-}
+import { trapModal } from './layers.js';
+import { el, button, icon } from './dom.js';
 
 let current = null;
-
-export function isConnectWindowOpen() {
-    return !!current;
-}
-
-export function closeConnectWindow() {
-    if (current) current.close();
-}
 
 /**
  * Open the window (a second call while open just brings focus back, optionally picking `workerId`).
@@ -113,13 +70,11 @@ function mountWindow(opts) {
     title.id = 'cwTitle';
     const desc = el('span', 'cw-desc', 'Your workers and the jobs on them');
     desc.id = 'cwDesc';
-    const refreshBtn = el('button', 'connect-btn connect-btn-ghost cw-btn-sm cw-refresh');
-    refreshBtn.type = 'button';
+    const refreshBtn = button('connect-btn connect-btn-ghost cw-btn-sm cw-refresh');
     refreshBtn.id = 'cwRefresh';
     const refreshIcon = icon('refresh-cw');
     refreshBtn.append(refreshIcon, document.createTextNode('Refresh'));
-    const closeBtn = el('button', 'connect-icon-btn cw-close');
-    closeBtn.type = 'button';
+    const closeBtn = button('connect-icon-btn cw-close');
     closeBtn.id = 'cwClose';
     closeBtn.setAttribute('aria-label', 'Close');
     closeBtn.appendChild(icon('x'));
@@ -139,8 +94,7 @@ function mountWindow(opts) {
     tabs.setAttribute('role', 'tablist');
     const tabBtns = {};
     [['jobs', 'Jobs'], ['data', 'Data access']].forEach(function (t) {
-        const b = el('button', 'cw-tab', t[1]);
-        b.type = 'button';
+        const b = button('cw-tab', t[1]);
         b.id = 'cwTab-' + t[0];
         b.setAttribute('role', 'tab');
         b.dataset.tab = t[0];
@@ -149,8 +103,7 @@ function mountWindow(opts) {
         tabs.appendChild(b);
     });
     const devicesHost = el('span', 'cw-devices-host');
-    const forgetBtn = el('button', 'connect-btn connect-btn-ghost cw-btn-sm cw-forget');
-    forgetBtn.type = 'button';
+    const forgetBtn = button('connect-btn connect-btn-ghost cw-btn-sm cw-forget');
     forgetBtn.id = 'cwForget';
     forgetBtn.title = 'Remove this worker from the app and unpair this device there';
     forgetBtn.append(icon('trash-2'), document.createTextNode('Forget'));
@@ -312,7 +265,7 @@ function mountWindow(opts) {
         if (closed) return;
         closed = true;
         current = null;
-        document.removeEventListener('keydown', onKey);
+        trap.release();
         unsubWorkers();
         list.destroy();
         if (queue) queue.destroy();
@@ -330,27 +283,11 @@ function mountWindow(opts) {
     scrim.addEventListener('mouseup', function (e) { if (downOnScrim && e.target === scrim) close(); downOnScrim = false; });
 
     // Bubble phase: a popover, menu or dialog above the window handles (and swallows) its own Esc first.
-    function onKey(e) {
-        if (e.key === 'Escape') {
-            if (e.defaultPrevented) return;
-            e.preventDefault();
-            close();
-            return;
-        }
-        if (e.key === 'Tab') {
-            const a = document.activeElement;
-            if (a && a !== document.body && !card.contains(a)) return; // a popover / dialog above owns Tab
-            const f = Array.prototype.filter.call(card.querySelectorAll('button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])'), function (n) {
-                return !n.disabled && n.offsetParent !== null;
-            });
-            if (f.length === 0) { e.preventDefault(); card.focus(); return; }
-            const first = f[0], last = f[f.length - 1];
-            if (!card.contains(a) || a === card) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
-            else if (e.shiftKey && a === first) { e.preventDefault(); last.focus(); }
-            else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }
-        }
-    }
-    document.addEventListener('keydown', onKey);
+    const trap = trapModal(scrim, card, {
+        bubble: true, onEscape: close,
+        selector: 'button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        focusable: function (n) { return n.offsetParent !== null; },
+    });
 
     // --------------------------------------------------------------- start
     S().pairedWorkers.forEach(function (w) { knownWorkers.add(w.nodeId); });

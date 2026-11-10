@@ -19,30 +19,12 @@
  *
  * Usage: node tests/e2e/connect-rail-tab.mjs   (PORT= to move its server)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { runConnectE2E, check, watchPage, bootApp } from './fixtures/connect-e2e.mjs';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const PORT = Number(process.env.PORT || 9391);
-const BASE = `http://localhost:${PORT}`;
-
-let fails = 0;
-const check = (c, m, extra) => {
-    console.log((c ? '  ✓ ' : '  ✗ ') + m + (c || extra === undefined ? '' : '  ' + JSON.stringify(extra).slice(0, 600)));
-    if (!c) fails++;
-};
-
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-let browser;
-try {
-    await new Promise((r) => setTimeout(r, 800));
-    browser = await chromium.launch();
+await runConnectE2E(9391, async ({ browser, BASE }) => {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-    page.on('pageerror', (e) => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
-    await page.goto(`${BASE}/index.html`);
-    await page.waitForSelector('.panel-rail-btn[data-tab="tabConnect"]', { timeout: 30000 });
+    watchPage(page);
+    await bootApp(page, BASE);
 
     console.log('\n--- 1. The rail button ---');
     const btn = await page.evaluate(() => {
@@ -164,9 +146,4 @@ try {
     await page.evaluate(async () => { const { notify } = await import('./ui/connect/notify.js'); notify.info('p'); notify.info('q'); });
     await page.click('#connectToastsClear');
     check(await page.evaluate(() => document.querySelectorAll('.connect-toast').length) === 0, 'Clear all dismisses the stack');
-} finally {
-    if (browser) await browser.close();
-    server.kill();
-}
-console.log(fails ? `\n${fails} FAILED` : '\nall passed');
-process.exit(fails ? 1 : 0);
+});

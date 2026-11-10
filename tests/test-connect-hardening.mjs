@@ -5,7 +5,7 @@
  * send a malformed hello, stop() can land while the first dial is in flight).
  */
 console.warn = () => {};
-import { describe, it, expect, run } from './connect-test-utils.mjs';
+import { describe, it, expect, run } from './bun-test-shim.mjs';
 import { WorkerClient } from '../pose/connect/client.js';
 import { ManagedConnection } from '../pose/connect/managed-connection.js';
 import { CLIENT_CLOSED, CLIENT_PROTO_MISMATCH, CLIENT_TIMEOUT, WorkerProtocolError } from '../pose/connect/errors.js';

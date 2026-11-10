@@ -7,30 +7,16 @@
  *   `summarizeVideoCheck`, `groupCompletedRuns`, `labelPastRuns`, `formatMB`, `readWholeWorkerFile`),
  *   PairWorkerForm.tsx (`readCodeInfo`), JobViewerDialog.tsx (`toTrainingStatus`), RemoteRunCard.tsx
  *   (`connectionDotClass`), RemoteOutputFolder.tsx (`dirname`), RemoteFileBrowser.tsx (its module-level
- *   constants). Already ported elsewhere and not repeated here: the WorkerJobs / WorkerQueue helpers and
- *   `endJobConfirm` (`./job-groups.js`), `timeAgo` / `modelRunTimestamp` (`./timestamp.js`), the browser's
- *   path/sort/filter helpers (`./remote-browser.js`). `ConnectPanel.tsx`, `ConnectDialog.tsx`,
- *   `WorkerDataAccess.tsx`, `HiddenVideosDialog.tsx` and `RemoteRunCard.tsx` have no other pure logic.
- *
- * Every user-facing string is verbatim.
+ *   constants). Ported elsewhere: WorkerJobs/WorkerQueue helpers + `endJobConfirm` (job-groups.js),
+ *   timestamp.js, remote-browser.js. User-facing strings verbatim.
  *
  * LUCID changes:
- *  - `forgetWorkerConfirm` returns the same `ConfirmRequest` object; `forgetWorkerWithConfirm` (it reads
- *    the zustand store and `confirmStore`) is not ported: the UI feeds the request to `ui/ask.js` and
- *    calls the Connect store's `forgetWorker` itself.
- *  - The dismissed-failed-runs list takes its storage as an argument (`loadDismissedFailedRuns(storage)` /
- *    `saveDismissedFailedRuns(storage, keys)`; a missing or throwing storage is treated as empty / unsaved,
- *    as sleap-app's try/catch did). The key is `lucid-connect-dismissed-failed-runs` (sleap-app:
- *    `sleap-app:connect-dismissed-failed-runs`), a separate namespace so the two apps never read each
- *    other's list on the same origin.
- *  - `failedRunShown(group, manages, now)` is SidebarQueue's inline `showFailed` rule pulled out so it can
- *    be tested: a failed job of a run this project manages, updated less than `FAILED_SHOWN_MS` ago.
- *  - `readCodeInfo` takes `decodePairCode`/`isPairCode`/`parseTicketIroh` from the pose/connect ports
- *    (same behavior; `parseTicketIroh` and `decodePairCode` are imported, not injected).
- *  - `clientDisplayName(agentName)` / `clientAgentLabel(agent)` name a device's client by its reported hello agent
- *    (`lucid` -> "LUC3D", `sleap-app` -> "SLEAP"); sleap-app's devices list hardcodes `sleap-app <version>`.
- *  - Tailwind class strings (`connectionDotClass`, `classifyWorkerStatus.dotClass`) are kept verbatim;
- *    the LUCID UI keys its own CSS off `bucket` / the status instead.
+ *  - `forgetWorkerWithConfirm` not ported: the UI shows `forgetWorkerConfirm` via `ui/ask.js` and calls the store's `forgetWorker`.
+ *  - Dismissed-failed-runs storage is an argument (missing/throwing = empty/unsaved); key `lucid-connect-dismissed-failed-runs`.
+ *  - `failedRunShown` is SidebarQueue's inline `showFailed` rule, pulled out for tests.
+ *  - `readCodeInfo` imports `decodePairCode`/`isPairCode`/`parseTicketIroh` from the pose/connect ports.
+ *  - `clientDisplayName`/`clientAgentLabel` name a device's client by its hello agent (sleap-app hardcodes `sleap-app <version>`).
+ *  - Tailwind class strings kept verbatim; LUCID's CSS keys off `bucket` / the status.
  *
  * @typedef {import("./job-groups.js").JobSummary} JobSummary
  * @typedef {import("./remote-visibility.js").VideoVisibility} VideoVisibility
@@ -51,14 +37,7 @@ export { DEVICE_NAME_MAX };
 
 const IDENTITY_MISMATCH_MARKER = "identified itself as a different node";
 
-/**
- * Pure classification of one worker's card status.
- * @param {{ status: string, route: string } | undefined} connection
- * @param {string | null | undefined} error
- * @param {boolean | undefined} busy
- * @param {boolean} [unpaired] The worker refused this device as no longer paired.
- * @returns {WorkerStatusInfo}
- */
+/** One worker card's status; `unpaired` = the worker refused this device. @returns {WorkerStatusInfo} */
 export function classifyWorkerStatus(connection, error, busy, unpaired = false) {
   if (unpaired || connection?.status === "unpaired") {
     return { bucket: "offline", dotClass: "bg-red-500", label: "Unpaired", identityMismatch: false, unpaired: true };
@@ -80,11 +59,7 @@ export function classifyWorkerStatus(connection, error, busy, unpaired = false) 
   }
 }
 
-/**
- * `gpuModel · N GB ×count · CUDA x · sleap-nn y`, or `null` while unknown (not yet refreshed).
- * @param {{ gpuModel: string, gpuMemoryMb: number, gpuCount: number, cudaVersion: string, sleapNnVersion: string } | undefined} info
- * @returns {string | null}
- */
+/** `gpuModel · N GB ×count · CUDA x · sleap-nn y`, or null while unknown. */
 export function workerSpecsLine(info) {
   if (!info) return null;
   const gb = info.gpuMemoryMb / 1024;
@@ -102,10 +77,7 @@ export const WORKER_FILTERS = [
 
 // ── WorkerDevices.tsx ───────────────────────────────────────────────
 
-/**
- * This device first, then most recently seen.
- * @param {Array<{ you?: boolean, lastSeenAt?: string } & Record<string, any>>} devices
- */
+/** This device first, then most recently seen. */
 export function sortDevices(devices) {
   return [...devices].sort((a, b) => {
     if (a.you !== b.you) return a.you ? -1 : 1;
@@ -113,7 +85,6 @@ export function sortDevices(devices) {
   });
 }
 
-/** @param {unknown} err */
 export function describeError(err) {
   if (err instanceof WorkerProtocolError && err.code === PROTO_UNKNOWN_METHOD) {
     return "This worker's SLEAP Connect is too old to list devices — update it to see who has access.";
@@ -123,31 +94,20 @@ export function describeError(err) {
 
 // ── RemoteDataSummary.tsx ───────────────────────────────────────────
 
-/** Last path segment, `/` or `\`. @param {string} path */
+/** Last path segment, `/` or `\`. */
 export function basename(path) {
   const parts = path.split(/[\\/]/);
   return parts[parts.length - 1] || path;
 }
 
-/**
- * File extension (with dot), lowercased, or `undefined` if none — scopes the Locate file browser to the
- * same kind of file as the hidden video.
- * @param {string} path
- */
+/** Lowercased extension with dot, or undefined (scopes the Locate browser to the hidden video's kind). */
 export function extOf(path) {
   const name = basename(path);
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(dot).toLowerCase() : undefined;
 }
 
-/** Debounce of the data summary's visibility check, and how many hidden videos it names. */
-export const DEFAULT_DEBOUNCE_MS = 300;
-export const MAX_HIDDEN_SHOWN = 3;
-
-/**
- * Shared by the hidden-videos dialog and the data summary so both describe coverage identically.
- * @param {VideoVisibility[]} visibility
- */
+/** Shared by the hidden-videos dialog and the data summary. @param {VideoVisibility[]} visibility */
 export function describeVisibilityOutcome(visibility) {
   const kase = classifyVisibility(visibility);
   if (kase === "all") return "Training + inference on worker";
@@ -158,23 +118,14 @@ export function describeVisibilityOutcome(visibility) {
 
 // ── MergePredictionsDialog.tsx ──────────────────────────────────────
 
-/**
- * A "mine" job whose predictions fully match the open project needs no dialog at all (design §6).
- * @param {boolean} mine
- * @param {{ skeletonOk: boolean, total: number, matchedCount: number }} compat
- */
+/** A "mine" job whose predictions fully match the open project needs no dialog (design §6). */
 export function shouldAutoMerge(mine, compat) {
   return mine && compat.skeletonOk && compat.total > 0 && compat.matchedCount === compat.total;
 }
 
 // ── forgetWorker.ts ─────────────────────────────────────────────────
 
-/**
- * The confirm dialog for Forget. Forgetting also unpairs this device on the worker, so getting back in
- * takes a new pairing code. A worker that already unpaired this device only needs removing locally.
- * @param {{ label: string, unpairedAt?: string }} worker
- * @returns {ConfirmRequest}
- */
+/** Forget's confirm (it also unpairs this device on the worker). @returns {ConfirmRequest} */
 export function forgetWorkerConfirm(worker) {
   if (worker.unpairedAt) {
     return {
@@ -204,10 +155,6 @@ export const FAILED_SHOWN_MS = 24 * 60 * 60 * 1000;
 /** Poll interval of the queue and the Jobs tab. */
 export const DEFAULT_POLL_MS = 10000;
 
-/**
- * @param {{ getItem(k: string): string | null } | null | undefined} storage
- * @returns {Set<string>}
- */
 export function loadDismissedFailedRuns(storage) {
   try {
     return new Set(JSON.parse(storage?.getItem(DISMISSED_FAILED_RUNS_KEY) ?? "[]"));
@@ -216,10 +163,6 @@ export function loadDismissedFailedRuns(storage) {
   }
 }
 
-/**
- * @param {{ setItem(k: string, v: string): void } | null | undefined} storage
- * @param {Set<string>} keys
- */
 export function saveDismissedFailedRuns(storage, keys) {
   try {
     storage?.setItem(DISMISSED_FAILED_RUNS_KEY, JSON.stringify([...keys]));
@@ -228,12 +171,7 @@ export function saveDismissedFailedRuns(storage, keys) {
   }
 }
 
-/**
- * SidebarQueue's `showFailed` rule: a run this project manages that has a job failed less than a day ago.
- * @param {{ jobs: JobSummary[] }} group
- * @param {boolean} manages Whether this project manages the group (`isManagedJob` on any job).
- * @param {number} [now]
- */
+/** SidebarQueue's `showFailed`: a run this project manages with a job failed less than a day ago. */
 export function failedRunShown(group, manages, now = Date.now()) {
   return (
     manages &&
@@ -243,11 +181,7 @@ export function failedRunShown(group, manages, now = Date.now()) {
 
 // ── NewJobWizard.tsx ────────────────────────────────────────────────
 
-/**
- * Post-training inference targets valid for a worker-file launch — there's no open project, so no
- * "current frame"/"current video".
- * @type {{ value: string, label: string }[]}
- */
+/** Inference targets for a worker-file launch (no open project, so no current frame/video). */
 export const WORKER_FILE_INFERENCE_TARGETS = [
   { value: "suggestions", label: "Suggested frames" },
   { value: "user_labeled", label: "User labeled frames" },
@@ -256,15 +190,8 @@ export const WORKER_FILE_INFERENCE_TARGETS = [
   { value: "random", label: "Random sample (all videos)" },
 ];
 
-/**
- * Reads a whole small worker-side text file (a YAML config) via repeated `fs.read` calls — unbounded by
- * the worker's per-call cap, unlike a single `fsRead`.
- * @param {{ fsRead(path: string, offset: number): Promise<{ content: Uint8Array, eof: boolean }> }} client
- * @param {string} path
- * @returns {Promise<string>}
- */
+/** A whole small worker text file via repeated `fs.read` calls (past the per-call cap). */
 export async function readWholeWorkerFile(client, path) {
-  /** @type {Uint8Array[]} */
   const chunks = [];
   let offset = 0;
   for (;;) {
@@ -282,15 +209,9 @@ export async function readWholeWorkerFile(client, path) {
   return new TextDecoder().decode(total);
 }
 
-/**
- * Per-video resolution summary lines for videos that needed something other than their recorded path.
- * A video found at its exact recorded path, or embedded, says nothing.
- * @param {Array<{ via?: string }>} check
- * @returns {string[]}
- */
+/** Summary lines for videos found somewhere other than their recorded path. */
 export function summarizeVideoCheck(check) {
-  const countVia = (/** @type {string} */ via) => check.filter((v) => v.via === via).length;
-  /** @type {string[]} */
+  const countVia = (via) => check.filter((v) => v.via === via).length;
   const lines = [];
   const ruleCount = countVia("rule");
   if (ruleCount > 0) {
@@ -313,22 +234,14 @@ export function summarizeVideoCheck(check) {
  * @property {string | null} timestamp Leading `YYMMDD_HHMMSS` of this run's model names, or null.
  */
 
-/**
- * Groups `jobs` (a worker's full `listJobs` result) into {@link CompletedRun}s. A job without `run` is its
- * own one-job run (`run.count` defaults to 1). A run is included only once EVERY sibling `run.count`
- * expects is present in `jobs` AND `completed`.
- * @param {JobSummary[]} jobs
- * @returns {CompletedRun[]}
- */
+/** A worker's train jobs as CompletedRuns: only runs whose every expected sibling is present and completed. */
 export function groupCompletedRuns(jobs) {
-  /** @type {Map<string, JobSummary[]>} */
   const byRun = new Map();
   for (const j of jobs) {
     if (j.kind !== "train") continue;
     const key = j.run?.id ?? j.jobId;
     byRun.set(key, [...(byRun.get(key) ?? []), j]);
   }
-  /** @type {CompletedRun[]} */
   const runs = [];
   for (const [runId, runJobs] of byRun.entries()) {
     const expectedCount = runJobs[0]?.run?.count ?? 1;
@@ -348,20 +261,13 @@ export function groupCompletedRuns(jobs) {
   return runs;
 }
 
-/**
- * Dropdown entry text for each {@link CompletedRun}: primary "(<types joined with ' + '>) · <timestamp>"
- * (falling back to the run's short id), secondary "<labels basename> · <age>". Appends the short run id to
- * the primary line when two entries would otherwise read identically.
- * @param {CompletedRun[]} runs
- * @returns {Array<{ run: CompletedRun, primary: string, secondary: string }>}
- */
+/** Dropdown text per run: "(types) · timestamp" / "labels · age"; short run id appended to duplicates. */
 export function labelPastRuns(runs) {
   const base = runs.map((run) => ({
     run,
     primary: `(${run.modelTypes.join(" + ")}) · ${run.timestamp ?? run.runId.slice(0, 8)}`,
     secondary: `${basename(run.labelsPath) || "—"} · ${timeAgo(run.createdAt)}`,
   }));
-  /** @type {Map<string, number>} */
   const primaryCounts = new Map();
   for (const b of base) primaryCounts.set(b.primary, (primaryCounts.get(b.primary) ?? 0) + 1);
   return base.map((b) =>
@@ -369,10 +275,7 @@ export function labelPastRuns(runs) {
   );
 }
 
-/**
- * Bytes as megabytes, one decimal under 10 MB.
- * @param {number} bytes
- */
+/** Bytes as megabytes, one decimal under 10 MB. */
 export function formatMB(bytes) {
   const mb = bytes / 1e6;
   return mb < 10 ? mb.toFixed(1) : Math.round(mb).toString();
@@ -380,13 +283,7 @@ export function formatMB(bytes) {
 
 // ── PairWorkerForm.tsx ──────────────────────────────────────────────
 
-/**
- * What pasted text says about reaching the worker — a one-line pairing code or a legacy JSON ticket — or
- * null if it's neither. Never throws on partial input; validating the ticket for real is the pairing
- * call's job once Pair is clicked.
- * @param {string} text
- * @returns {Promise<{ expiresAt?: number, addrs: string[], hasRelay: boolean } | null>}
- */
+/** What a pasted pairing code / legacy JSON ticket says about reaching the worker, or null. Never throws. */
 export async function readCodeInfo(text) {
   const trimmed = text.trim();
   if (isPairCode(trimmed)) {
@@ -411,11 +308,7 @@ export async function readCodeInfo(text) {
 
 // ── JobViewerDialog.tsx / RemoteRunCard.tsx / RemoteOutputFolder.tsx ─
 
-/**
- * Maps the job stream's worker-facing status onto the loss plot's training-status vocabulary.
- * @param {import("./job-stream.js").JobStreamStatus} status
- * @returns {"running" | "completed" | "error" | "stopped" | "idle"}
- */
+/** Job stream status -> the loss plot's training-status vocabulary. */
 export function toTrainingStatus(status) {
   switch (status) {
     case "running":
@@ -431,7 +324,6 @@ export function toTrainingStatus(status) {
   }
 }
 
-/** @param {string} status A link status ("connected" | "reconnecting" | "connecting" | ...). */
 export function connectionDotClass(status) {
   if (status === "connected") return "bg-green-500";
   if (status === "reconnecting") return "bg-amber-500";
@@ -439,10 +331,7 @@ export function connectionDotClass(status) {
   return "bg-zinc-500";
 }
 
-/**
- * Parent folder of a worker path, `/` at the top.
- * @param {string} path
- */
+/** Parent folder of a worker path, `/` at the top. */
 export function dirname(path) {
   const i = path.replace(/\/+$/, "").lastIndexOf("/");
   return i <= 0 ? "/" : path.slice(0, i);
@@ -452,27 +341,17 @@ export function dirname(path) {
 
 /** Remembered settings' key for the no-`workerId` (selected-worker) case. */
 export const SELECTED_WORKER_KEY = "";
-export const DEFAULT_BROWSER_SIZE = { width: 900, height: 600 };
-/** Entries fetched per batch; big folders load more on scroll. */
-export const BROWSER_BATCH = 100;
-export const DEFAULT_COLUMN_WIDTH = 224;
 
 // ── Client naming (WorkerDevices.tsx, LUCID) ─────────────────────
 
-/**
- * The display name of a client from its hello `agent.name`.
- * @param {string | undefined | null} name
- */
+/** A client's display name from its hello `agent.name`. */
 export function clientDisplayName(name) {
   if (name === "lucid") return "LUC3D";
   if (name === "sleap-app") return "SLEAP";
   return name || "client";
 }
 
-/**
- * `"<client> <version>"` for a device's reported agent (sleap-app wrote `sleap-app ${appVersion}`).
- * @param {{ name?: string, version?: string } | undefined | null} agent
- */
+/** `"<client> <version>"` for a device's reported agent. */
 export function clientAgentLabel(agent) {
   const name = clientDisplayName(agent?.name);
   return agent?.version ? `${name} ${agent.version}` : name;

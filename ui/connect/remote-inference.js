@@ -1,41 +1,17 @@
 /**
- * ui/connect/remote-inference.js — the remote branch of the Inference panel:
- * run sleap-nn on a paired SLEAP Connect worker, one `track` job per view of the
- * current session, then Fetch & Load the predictions back.
+ * ui/connect/remote-inference.js — the Inference panel's remote branch: one sleap-nn `track` job per view
+ * of the current session on a paired worker, then Fetch & Load.
  *
- * Port of the remote branch of sleap-app `src/stores/inferenceStore.ts`
- * (`startInference(config, remoteOpts)`, `pendingRemoteMerge`,
- * `mergeRemoteResults`) and of `RemoteOutputFolder.tsx`, with the Inference
- * panel's remote widgets (Models "Browse Worker", the data path, the "Fetch &
- * Load Results" button). The DOM-free decisions live in
- * `pose/connect/remote-inference-plan.js`; this file does the I/O and the DOM.
+ * Port of sleap-app's remote branch of src/stores/inferenceStore.ts (`startInference`, `pendingRemoteMerge`,
+ * `mergeRemoteResults`) and RemoteOutputFolder.tsx @ 683a159. Decisions: `pose/connect/remote-inference-plan.js`.
+ * Videos are placed by path rules / shared folders / `fs.stat` (Locate on worker… adds a rule); jobs share
+ * one `run` with explicit `output_path`s; Fetch & Load = `fetchResultBlobOn` (+ `fs.read` fallback) then
+ * `mergeViewPredictions` in the job's recorded mode, then `markJobFetched`. Run is blocked until every
+ * checked view resolves; a finished run must be Dismissed first.
  *
- * Flow: the Backend picker selects + connects a worker; Models are picked ON
- * the worker (`remote-file-browser.js`); each view's video is placed on the
- * worker by path rules (`pathRulesFor`), the worker's shared folders and
- * `fs.stat` (Locate on worker… records a rule); Run submits one job per view,
- * all sharing one `run`, each with an explicit `output_path` in the output
- * folder (remembered per worker per project, `setOutputDir`); progress is read
- * from each job's event stream; Fetch & Load downloads each completed job
- * (`fetchResultBlobOn` with the `fs.read` fallback, since the worker's blob port
- * sends no CORS headers) and merges it through `mergeViewPredictions` with the
- * "Existing predictions" mode recorded on the job when it was submitted (`mergeMode`, like sleap-app's
- * `pendingRemoteMerge.mode`; a job without one uses the panel's current mode), then `markJobFetched`. Completed,
- * unfetched jobs of this project survive a reload in the store's tracked jobs,
- * so the button is offered again.
- *
- * Run is blocked (with the reason under the button) until every CHECKED view has its video on the
- * worker (sleap-app's PathResolutionDialog blocks Submit until all paths resolve), and a finished run
- * must be Dismissed before the next (sleap-app's `!isDone`). Progress shows the frame count, percent,
- * fps and ETA (summed / maximum over the running jobs), "Initializing..." before the first progress,
- * and a log with the echoed spec(s) (`$ Remote (N videos): …`), the submit / fetch lines and each
- * job's worker output (`[cam1] …`), with Expand and Copy Log.
- *
- * LUCID changes: one job per view (see the plan module); a result of another
- * session is refused until that session is current; the output folder must
- * already exist (the protocol has no mkdir); a progress card shows the fetch.
- *
- * Exports: createRemoteInference.
+ * LUCID changes:
+ *  - one job per view; another session's result is refused until that session is current;
+ *  - the output folder must already exist (no mkdir in the protocol); a progress card shows the fetch.
  */
 import { useConnectStore, pathRulesFor } from '../../pose/connect/store.js';
 import { shallowEqual } from '../../pose/connect/mini-store.js';
@@ -54,18 +30,9 @@ import { railIconSvg } from '../panel-rail-icons.js';
 import { noteProgress, resetProgress } from '../progress-delta.js';
 import { formatEta } from '../inference-args.js';
 import { showLoading, showLoadingProgress, hideLoading } from '../loading-overlay.js';
+import { el, button, icon as baseIcon } from './dom.js';
 
-function el(tag, cls, text) {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
-}
-function icon(name, cls) {
-    const s = el('span', 'inf-icon' + (cls ? ' ' + cls : ''));
-    s.innerHTML = railIconSvg(name);
-    return s;
-}
+function icon(name, cls) { return baseIcon(name, cls, 'inf-icon'); }
 function basename(p) { return String(p).split(/[\\/]/).pop(); }
 const LOG_TAIL = 12;
 
@@ -561,8 +528,8 @@ export function createRemoteInference(host) {
 
     function buildModels(parent) {
         const row = el('div', 'inf-right');
-        const add = el('button', 'btn btn-sm inf-btn-outline');
-        add.type = 'button'; add.id = 'infAddRemoteModel';
+        const add = button('btn btn-sm inf-btn-outline');
+        add.id = 'infAddRemoteModel';
         add.append(icon('folder-open'), ' Browse Worker');
         add.addEventListener('click', addModel);
         row.appendChild(add);
@@ -589,8 +556,8 @@ export function createRemoteInference(host) {
                 const name = el('span', 'inf-model-name', p);
                 name.title = p;
                 item.appendChild(name);
-                const rm = el('button', 'inf-x');
-                rm.type = 'button'; rm.innerHTML = railIconSvg('x'); rm.setAttribute('aria-label', 'Remove');
+                const rm = button('inf-x');
+                rm.innerHTML = railIconSvg('x'); rm.setAttribute('aria-label', 'Remove');
                 rm.disabled = isRunning();
                 rm.addEventListener('click', function () { models.splice(i, 1); changed(); });
                 item.appendChild(rm);
@@ -608,11 +575,11 @@ export function createRemoteInference(host) {
         const outHead = el('div', 'inf-row');
         outHead.appendChild(el('span', 'inf-label', 'Output folder'));
         const outBtns = el('span', 'inf-actions');
-        const change = el('button', 'btn btn-sm inf-btn-outline');
-        change.type = 'button'; change.id = 'infOutputChange';
+        const change = button('btn btn-sm inf-btn-outline');
+        change.id = 'infOutputChange';
         change.addEventListener('click', chooseOutputDir);
-        const reset = el('button', 'btn btn-sm inf-btn-ghost', 'Reset');
-        reset.type = 'button'; reset.id = 'infOutputReset';
+        const reset = button('btn btn-sm inf-btn-ghost', 'Reset');
+        reset.id = 'infOutputReset';
         reset.addEventListener('click', resetOutputDir);
         outBtns.append(change, reset);
         outHead.appendChild(outBtns);
@@ -649,8 +616,8 @@ export function createRemoteInference(host) {
                 if (r && r.visible) what.title = r.worker;
                 row.append(lab, what);
                 if (!d.blocker && connected() && r && !r.visible && r.local) {
-                    const loc = el('button', 'btn btn-sm inf-btn-outline inf-locate', 'Locate on worker…');
-                    loc.type = 'button'; loc.disabled = running;
+                    const loc = button('btn btn-sm inf-btn-outline inf-locate', 'Locate on worker…');
+                    loc.disabled = running;
                     loc.addEventListener('click', function () { locate(d.view); });
                     row.appendChild(loc);
                 }
@@ -679,17 +646,17 @@ export function createRemoteInference(host) {
         const stats = el('div', 'inf-stats'); stats.id = 'infRemoteStats';
         const errBox = el('div', 'inf-errbox'); errBox.id = 'infRemoteError';
         const actions = el('div', 'inf-actions');
-        const cancelBtn = el('button', 'btn btn-sm inf-btn-danger'); cancelBtn.type = 'button'; cancelBtn.id = 'infRemoteCancel';
+        const cancelBtn = button('btn btn-sm inf-btn-danger'); cancelBtn.id = 'infRemoteCancel';
         cancelBtn.append(icon('x'), ' Cancel'); cancelBtn.addEventListener('click', cancel);
-        const fetchBtn = el('button', 'btn btn-sm btn-primary'); fetchBtn.type = 'button'; fetchBtn.id = 'infFetchLoad';
+        const fetchBtn = button('btn btn-sm btn-primary'); fetchBtn.id = 'infFetchLoad';
         fetchBtn.addEventListener('click', fetchAndLoad);
-        const dismissBtn = el('button', 'btn btn-sm inf-btn-outline', 'Dismiss'); dismissBtn.type = 'button'; dismissBtn.id = 'infRemoteDismiss';
+        const dismissBtn = button('btn btn-sm inf-btn-outline', 'Dismiss'); dismissBtn.id = 'infRemoteDismiss';
         dismissBtn.addEventListener('click', dismiss);
         actions.append(cancelBtn, fetchBtn, dismissBtn);
         const logWrap = el('div');
         const logHead = el('div', 'inf-row');
         logHead.appendChild(el('span', 'inf-label', 'Log'));
-        const expand = el('button', 'btn btn-sm inf-btn-ghost'); expand.type = 'button'; expand.id = 'infRemoteLogExpand';
+        const expand = button('btn btn-sm inf-btn-ghost'); expand.id = 'infRemoteLogExpand';
         expand.append(icon('maximize-2'), ' Expand');
         expand.addEventListener('click', function () { if (host.openLogDialog) host.openLogDialog(fullLog()); });
         logHead.appendChild(expand);
@@ -697,7 +664,7 @@ export function createRemoteInference(host) {
         logPre.title = 'Click to open the full log';
         logPre.addEventListener('click', function () { if (host.openLogDialog) host.openLogDialog(fullLog()); });
         logWrap.append(logHead, logPre);
-        const copyBtn = el('button', 'btn btn-sm inf-btn-outline'); copyBtn.type = 'button'; copyBtn.id = 'infRemoteLogCopy';
+        const copyBtn = button('btn btn-sm inf-btn-outline'); copyBtn.id = 'infRemoteLogCopy';
         copyBtn.append(icon('copy'), ' Copy Log');
         copyBtn.addEventListener('click', function () {
             if (navigator.clipboard) navigator.clipboard.writeText(fullLog().join('\n')).catch(function () { /* best effort */ });

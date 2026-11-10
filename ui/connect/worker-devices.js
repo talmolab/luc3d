@@ -1,47 +1,20 @@
 /**
  * ui/connect/worker-devices.js — "Devices with access" for one worker.
  *
- * Port of sleap-app src/components/connect/WorkerDevices.tsx @ 683a159: every device paired with a worker
- * (who can use it), with when it paired and was last seen, from the worker's `clients.list`. Read-only
- * except renaming THIS device (pencil -> box, Enter saves, Esc cancels, optimistic, then reloaded).
- * Removing devices is done on the worker (`sleap-connect clients`). Shown as a header button, "N devices
- * with access" ("Devices…" while loading, "Devices with access" when the list could not load), that opens a
- * popover. The list (`sortDevices`: this device first, then most recently seen), the error text
- * (`describeError`: "too old to list devices" for an unknown method) and the name limit (`DEVICE_NAME_MAX`)
- * are `pose/connect/worker-ui-helpers.js`; `devicesFor` / `setDeviceName` are the store's.
+ * Port of sleap-app src/components/connect/WorkerDevices.tsx @ 683a159: the worker's `clients.list` (this
+ * device first), read-only except renaming THIS device; a header button opens it. Helpers:
+ * `pose/connect/worker-ui-helpers.js`.
  *
- * LUCID changes: vanilla DOM; the popover (Radix in sleap-app) is a fixed panel under the button, right
- * aligned, closed by Esc (the rename box's Esc closes just the box), a click outside, or the window closing.
- * The worker records a device's version but not which app it is, so each row's second line is
- * "Browser" / "Desktop app" and the version; only THIS device's row names the client (`clientAgentLabel`,
- * "LUC3D <version>"), sleap-app wrote "sleap-app <version>" for every row.
- *
- * Contract (p5): `createWorkerDevicesButton(container, {workerId, workerLabel, refreshToken}) ->
- * {update(props), destroy()}`. Exports: createWorkerDevicesButton.
+ * LUCID changes:
+ *  - the popover is a fixed panel under the button; Esc (the rename box's Esc closes just the box), a click
+ *    outside or the window closing close it;
+ *  - each row says "Browser" / "Desktop app" + version; only THIS device names its client ("LUC3D <version>").
  */
 import { useConnectStore } from '../../pose/connect/store.js';
 import { sortDevices, describeError, DEVICE_NAME_MAX, clientAgentLabel } from '../../pose/connect/worker-ui-helpers.js';
 import { timeAgo } from '../../pose/connect/timestamp.js';
-import { railIconSvg } from '../panel-rail-icons.js';
 import { layerAbove } from './layers.js';
-
-function el(tag, cls, text) {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
-}
-
-function icon(name, cls) {
-    const s = el('span', 'connect-icon' + (cls ? ' ' + cls : ''));
-    s.innerHTML = railIconSvg(name);
-    return s;
-}
-
-function releaseVersion() {
-    const m = document.querySelector('meta[name="lucid-release"]');
-    return (m && (m.getAttribute('content') || '').trim()) || 'dev';
-}
+import { el, button, icon, releaseVersion } from './dom.js';
 
 /**
  * @param {HTMLElement} container
@@ -57,8 +30,7 @@ export function createWorkerDevicesButton(container, props) {
     let seq = 0;
     let popover = null;
 
-    const btn = el('button', 'connect-btn connect-btn-outline cw-btn-sm cw-devices-btn');
-    btn.type = 'button';
+    const btn = button('connect-btn connect-btn-outline cw-btn-sm cw-devices-btn');
     btn.id = 'cwDevicesBtn';
     btn.setAttribute('aria-haspopup', 'dialog');
     btn.setAttribute('aria-expanded', 'false');
@@ -119,9 +91,9 @@ export function createWorkerDevicesButton(container, props) {
                 if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); save(); }
             });
             input.addEventListener('focus', function () { input.select(); });
-            const ok = el('button', 'connect-icon-btn cw-dev-btn'); ok.type = 'button'; ok.setAttribute('aria-label', 'Save name'); ok.appendChild(icon('check'));
+            const ok = button('connect-icon-btn cw-dev-btn'); ok.setAttribute('aria-label', 'Save name'); ok.appendChild(icon('check'));
             ok.addEventListener('click', save);
-            const no = el('button', 'connect-icon-btn cw-dev-btn'); no.type = 'button'; no.setAttribute('aria-label', 'Cancel rename'); no.appendChild(icon('x'));
+            const no = button('connect-icon-btn cw-dev-btn'); no.setAttribute('aria-label', 'Cancel rename'); no.appendChild(icon('x'));
             no.addEventListener('click', function () { editing = false; render(); });
             top.append(input, ok, no);
             setTimeout(function () { if (input.isConnected) input.focus(); }, 0);
@@ -129,8 +101,7 @@ export function createWorkerDevicesButton(container, props) {
             top.appendChild(el('span', 'cw-dev-name' + (d.name ? '' : ' unnamed'), d.name == null ? 'Unnamed device' : d.name));
             if (d.you) {
                 top.appendChild(el('span', 'cw-dev-you', 'This device'));
-                const pen = el('button', 'connect-icon-btn cw-dev-btn');
-                pen.type = 'button';
+                const pen = button('connect-icon-btn cw-dev-btn');
                 pen.setAttribute('aria-label', 'Rename this device');
                 pen.appendChild(icon('pencil'));
                 pen.addEventListener('click', function () { draft = d.name || ''; editing = true; render(); });

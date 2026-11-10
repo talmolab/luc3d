@@ -2,7 +2,7 @@
  * Port of sleap-app tests/unit/protocolV1Transport.test.ts @ 683a159.
  * Ticket iroh parsing and labels (pose/connect/transport.js).
  */
-import { describe, it, expect, itEach, run } from './connect-test-utils.mjs';
+import { describe, it, expect, itEach, run } from './bun-test-shim.mjs';
 import {
   parseTicketIroh,
   toIrohDialTarget,

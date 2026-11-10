@@ -8,7 +8,7 @@
  * `IDBFactory` below covers the real IndexedDB adapter (database `lucid-connect`,
  * store `identity`, key `client-identity`, lazily created).
  */
-import { describe, it, expect, beforeEach, run } from './connect-test-utils.mjs';
+import { describe, it, expect, beforeEach, run } from './bun-test-shim.mjs';
 import {
   getClientIdentity,
   clearClientIdentity,

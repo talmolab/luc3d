@@ -1,37 +1,18 @@
 /**
- * ui/connect/remote-file-browser.js — the Finder-style browser for a worker's
- * filesystem: the picker behind the Inference panel (models, "Locate on
- * worker…", the output folder) and, in "browse" mode, the Connect window's
+ * ui/connect/remote-file-browser.js — the Finder-style browser of a worker's filesystem: the Inference
+ * panel's picker (models, Locate on worker…, output folder) and, in "browse" mode, the Connect window's
  * look-only Browse files.
  *
- * Port of sleap-app src/components/dialogs/RemoteFileBrowser.tsx @ 683a159, in
- * vanilla DOM: toolbar (Back / Forward, a clickable breadcrumb that turns into
- * a "Go to folder" box on a click or Cmd/Ctrl+Shift+G, an add / remove
- * Favourites star, a search box), a sidebar (Favorites, Recents, Locations =
- * the worker's shared folders), a list with Name / Date Modified / Size / Kind
- * columns (click a header to sort, again to flip), entries loaded 100 at a
- * time as the end of the list scrolls into view, files outside the filter
- * greyed out and unselectable (like a Mac Open dialog), a footer with the
- * selected path, "Shows <filter>" and Cancel / Open (Choose Folder / Close).
- * It never leaves the worker's shared folders (`mountRootFor`: Back to a mount
- * root stops, a typed path outside every mount is refused with sleap-app's
- * message), a folder that cannot be opened falls back to its nearest openable
- * parent with a notice, and the last folder browsed per worker is remembered
- * for the session. Favorites, Recents ("Date Last Opened"), the sort and the
- * window size persist in `pose/connect/remote-browser-store.js`
- * (`lucid-connect-remote-browser`). Keys: Up / Down move the selection, Enter
- * opens a folder or picks, Cmd/Ctrl+F search, Cmd/Ctrl+Up parent,
- * Cmd/Ctrl+[ and ] history, Esc closes (a "Go to folder" box or a non-empty
- * search takes the first Esc).
+ * Port of sleap-app src/components/dialogs/RemoteFileBrowser.tsx @ 683a159: toolbar (Back / Forward,
+ * breadcrumb + "Go to folder", Favorites star, search), sidebar (Favorites, Recents, Locations), a sortable
+ * list loaded 100 at a time, filtered files greyed out, never outside the shared folders (`mountRootFor`),
+ * an unopenable folder falls back to its parent. Favorites / Recents / sort / size persist
+ * (`pose/connect/remote-browser-store.js`). Keys as sleap-app's (Esc: a Go-to box or search goes first).
  *
- * LUCID changes: List view only (sleap-app also has Icons and Columns views;
- * they are a later phase); the sort is chosen by the column headers (no sort
- * menu, so "Date Last Opened" and "Keep folders on top" are not offered, though
- * the stored sort keeps them); one scroller (the list; the sidebar scrolls
- * only if it overflows); Lucide icons are the rail's inlined set; the dialog
- * is a LUCID scrim + card (`.rfb-*`), closes on Esc and on a scrim click.
- *
- * Exports: openRemoteFileBrowser, mountRootFor (re-export).
+ * LUCID changes:
+ *  - List view only; sort by column headers (no sort menu);
+ *  - one scroller (the list); Lucide icons from the rail's set;
+ *  - a scrim + card (`.rfb-*`): Esc and a scrim click close, Tab trapped (`trapModal`).
  */
 import { useConnectStore } from '../../pose/connect/store.js';
 import { createRemoteBrowserStore } from '../../pose/connect/remote-browser-store.js';
@@ -39,8 +20,8 @@ import {
     KIND_LABELS, baseName, fileKind, filterLabel, formatModified, formatSize, joinPath, matchesFilter,
     matchesSearch, mountRootFor, normalizeFilter, parentPath, pathTrail, sortEntries,
 } from '../../pose/connect/remote-browser.js';
-import { railIconSvg } from '../panel-rail-icons.js';
-import { layerAbove } from './layers.js';
+import { trapModal } from './layers.js';
+import { el, button, icon as baseIcon } from './dom.js';
 
 export { mountRootFor };
 
@@ -62,25 +43,14 @@ export function remoteBrowserStore() {
     return _store;
 }
 
-function el(tag, cls, text) {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
-}
-
-function icon(name, cls) {
-    const s = el('span', 'rfb-icon' + (cls ? ' ' + cls : ''));
-    s.innerHTML = railIconSvg(name);
-    return s;
-}
+function icon(name, cls) { return baseIcon(name, cls, 'rfb-icon'); }
 
 /**
  * sleap-app `MiddleTruncate`: a name over 24 characters keeps its last 12 (the version and extension)
  * and truncates the head with an ellipsis; the whole name is in the title and, for a screen reader, in
  * an off-screen copy. A short name is one text node.
  */
-export function middleTruncate(text) {
+function middleTruncate(text) {
     const wrap = el('span', 'rfb-name-text');
     wrap.title = text;
     if (text.length <= 24) {
@@ -159,13 +129,12 @@ export function openRemoteFileBrowser(opts) {
         card.style.height = size.height + 'px';
 
         const toolbar = el('div', 'rfb-toolbar');
-        const backBtn = el('button', 'rfb-tbtn', '‹');
-        backBtn.type = 'button'; backBtn.setAttribute('aria-label', 'Back'); backBtn.title = 'Back';
-        const fwdBtn = el('button', 'rfb-tbtn', '›');
-        fwdBtn.type = 'button'; fwdBtn.setAttribute('aria-label', 'Forward'); fwdBtn.title = 'Forward';
+        const backBtn = button('rfb-tbtn', '‹', 'Back');
+        backBtn.setAttribute('aria-label', 'Back');
+        const fwdBtn = button('rfb-tbtn', '›', 'Forward');
+        fwdBtn.setAttribute('aria-label', 'Forward');
         const pathHost = el('div', 'rfb-path');
-        const starBtn = el('button', 'rfb-tbtn rfb-star');
-        starBtn.type = 'button';
+        const starBtn = button('rfb-tbtn rfb-star');
         starBtn.appendChild(icon('star'));
         const searchWrap = el('div', 'rfb-search');
         const search = el('input', 'rfb-search-input');
@@ -181,8 +150,8 @@ export function openRemoteFileBrowser(opts) {
         const content = el('div', 'rfb-content');
         const noticeBox = el('div', 'rfb-notice');
         const noticeText = el('span', 'rfb-notice-text');
-        const noticeX = el('button', 'rfb-tbtn rfb-notice-x', '×');
-        noticeX.type = 'button'; noticeX.setAttribute('aria-label', 'Dismiss'); noticeX.title = 'Dismiss';
+        const noticeX = button('rfb-tbtn rfb-notice-x', '×', 'Dismiss');
+        noticeX.setAttribute('aria-label', 'Dismiss');
         noticeBox.append(noticeText, noticeX);
         const listScroll = el('div', 'rfb-list');
         listScroll.setAttribute('role', 'listbox');
@@ -194,10 +163,8 @@ export function openRemoteFileBrowser(opts) {
         const footPath = el('p', 'rfb-foot-path');
         const footHint = el('p', 'rfb-foot-hint');
         footInfo.append(footPath, footHint);
-        const cancelBtn = el('button', 'rfb-btn', 'Cancel');
-        cancelBtn.type = 'button';
-        const okBtn = el('button', 'rfb-btn rfb-btn-primary', mode === 'directory' ? 'Choose Folder' : 'Open');
-        okBtn.type = 'button';
+        const cancelBtn = button('rfb-btn', 'Cancel');
+        const okBtn = button('rfb-btn rfb-btn-primary', mode === 'directory' ? 'Choose Folder' : 'Open');
         if (mode === 'browse') {
             cancelBtn.hidden = true;
             okBtn.textContent = 'Close';
@@ -322,7 +289,7 @@ export function openRemoteFileBrowser(opts) {
         function finish(path) {
             if (closed) return;
             closed = true;
-            document.removeEventListener('keydown', onKey, true);
+            trap.release();
             scrim.remove();
             resolve(path || null);
         }
@@ -379,8 +346,7 @@ export function openRemoteFileBrowser(opts) {
             trail.forEach(function (p, i) {
                 const last = i === trail.length - 1;
                 if (i > 0) crumbs.appendChild(el('span', 'rfb-sepchev', '›'));
-                const b = el('button', 'rfb-crumb' + (last ? ' rfb-crumb-last' : ''), i === 0 ? ((mountLabels && mountLabels[p]) || p) : baseName(p));
-                b.type = 'button';
+                const b = button('rfb-crumb' + (last ? ' rfb-crumb-last' : ''), i === 0 ? ((mountLabels && mountLabels[p]) || p) : baseName(p));
                 b.addEventListener('click', function () { if (!last) navigateTo(p); });
                 crumbs.appendChild(b);
             });
@@ -397,8 +363,7 @@ export function openRemoteFileBrowser(opts) {
             row.appendChild(icon(iconName));
             row.appendChild(el('span', 'rfb-side-label', label));
             if (onRemove) {
-                const x = el('button', 'rfb-side-x');
-                x.type = 'button';
+                const x = button('rfb-side-x');
                 x.setAttribute('aria-label', 'Remove ' + label + ' from Favorites');
                 x.appendChild(icon('x'));
                 x.addEventListener('click', function (e) { e.stopPropagation(); onRemove(); });
@@ -463,8 +428,7 @@ export function openRemoteFileBrowser(opts) {
             const sort = rb.getState().sort;
             const head = el('div', 'rfb-row rfb-head');
             [['name', 'Name'], ['modified', 'Date Modified'], ['size', 'Size'], ['kind', 'Kind']].forEach(function (c) {
-                const b = el('button', 'rfb-hbtn' + (sort.key === c[0] ? ' on' : ''), c[1] + (sort.key === c[0] ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''));
-                b.type = 'button';
+                const b = button('rfb-hbtn' + (sort.key === c[0] ? ' on' : ''), c[1] + (sort.key === c[0] ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''));
                 b.dataset.key = c[0];
                 b.addEventListener('click', function () {
                     const s = rb.getState().sort;
@@ -569,35 +533,16 @@ export function openRemoteFileBrowser(opts) {
             }
         });
 
-        function focusables() {
-            return Array.from(card.querySelectorAll('button, input, select, textarea, [tabindex]'))
-                .filter(function (n) { return !n.disabled && n.tabIndex >= 0 && !n.closest('[hidden]'); });
+        // A "Go to folder" box or a non-empty search takes the first Esc.
+        function onEscape(e) {
+            if (goto !== null) { goto = null; gotoError = null; renderPath(); return; }
+            if (query && e.target === search) { query = ''; search.value = ''; render(); return; }
+            finish(null);
         }
-
         function onKey(e) {
-            if (closed || layerAbove(scrim)) return;
             const t = e.target;
             const typing = t && t.tagName === 'INPUT';
             const mod = e.metaKey || e.ctrlKey;
-            // Tab stays inside the card (a dialog traps focus, as sleap-app's Radix one does).
-            if (e.key === 'Tab') {
-                e.stopPropagation();
-                const f = focusables();
-                const a = document.activeElement;
-                if (f.length === 0) { e.preventDefault(); e.stopPropagation(); card.focus(); return; }
-                const first = f[0], last = f[f.length - 1];
-                if (!card.contains(a) || a === card) { e.preventDefault(); e.stopPropagation(); (e.shiftKey ? last : first).focus(); }
-                else if (e.shiftKey && a === first) { e.preventDefault(); e.stopPropagation(); last.focus(); }
-                else if (!e.shiftKey && a === last) { e.preventDefault(); e.stopPropagation(); first.focus(); }
-                return;
-            }
-            if (e.key === 'Escape') {
-                e.preventDefault(); e.stopPropagation();
-                if (goto !== null) { goto = null; gotoError = null; renderPath(); return; }
-                if (query && t === search) { query = ''; search.value = ''; render(); return; }
-                finish(null);
-                return;
-            }
             if (mod && e.key.toLowerCase() === 'f') { e.preventDefault(); e.stopPropagation(); search.focus(); return; }
             if (mod && e.shiftKey && e.key.toLowerCase() === 'g') { e.preventDefault(); e.stopPropagation(); goto = currentPath || ''; renderPath(); return; }
             if (mod && e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); goUp(); return; }
@@ -621,7 +566,10 @@ export function openRemoteFileBrowser(opts) {
                 if (se && se.isDir && selected) navigateTo(selected); else pick();
             }
         }
-        document.addEventListener('keydown', onKey, true);
+        const trap = trapModal(scrim, card, {
+            onEscape: onEscape, onKey: onKey,
+            focusable: function (n) { return !n.closest('[hidden]'); },
+        });
 
         // Start where this worker was last browsed (if still inside a mount), else the first mount.
         const remembered = lastBrowsedPaths.get(workerKey);

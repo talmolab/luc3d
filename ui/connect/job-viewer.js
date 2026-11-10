@@ -1,28 +1,15 @@
 /**
- * ui/connect/job-viewer.js — the per-job replay + live viewer of the Connect window's Jobs tab.
+ * ui/connect/job-viewer.js — the per-job replay + live viewer of the Jobs tab.
  *
- * Port of sleap-app src/components/connect/JobViewerDialog.tsx @ 683a159 (§4b.6): a dialog for ANY
- * job on a paired worker, with the label and the stream's status in the header ("Replayed from the
- * worker's history; per-epoch timing for earlier epochs isn't available." / "Replayed from the
- * worker's history."), a Monitor / Logs toggle (an inference job has no loss curve, so only its
- * logs, no toggle), Stop Early + Cancel on the right while the job runs (only when `canStop`,
- * which a view-only job of another project never gets; an inference job has no Stop Early), the
- * worker's failure detail in red for a failed / canceled job, the loss plot (`loss-plot.js`) or
- * the log terminal (Copy, "Errors only", "Wrap", "No log output." / "No error lines.", error /
- * best / section lines coloured by `logLineClassName`). Stop / Cancel confirm with
- * `endJobConfirm` and send `cancelJobOn(workerId, jobId, mode)`; a failure toasts "Failed to stop
- * training early" / "Failed to cancel job". The log and the epochs come from
- * `pose/connect/job-stream.js` (`createJobStream`), the non-React core of `useJobStream`.
+ * Port of sleap-app src/components/connect/JobViewerDialog.tsx @ 683a159 (§4b.6): label + stream status,
+ * Monitor / Logs (an inference job has only logs), Stop Early / Cancel while it runs (`canStop`), the
+ * failure detail, the loss plot (`loss-plot.js`) or the log (Copy, Errors only, Wrap). The stream is
+ * `pose/connect/job-stream.js`.
  *
- * LUCID changes: vanilla DOM scrim + card (`.cj-*`), closes on Esc (nested above the Connect window,
- * so Esc closes this first) and on the scrim / the X; Tab stays inside; `data-shortcut-modal`
- * keeps app hotkeys off the view behind. Resume on reconnect (sleap-app's `useJobStream` effect):
- * the viewer subscribes to the store's link status for its worker and calls the stream's
- * `resume()` when it returns to "connected", so a worker that restarts keeps the viewer live. The
- * log follows its end while the reader is at the end (a browser `pre` does not do that for free).
- * Copy writes through `navigator.clipboard` and falls back to a hidden textarea.
- *
- * Exports: openJobViewer.
+ * LUCID changes:
+ *  - vanilla DOM scrim + card; Esc / scrim / X close, Tab trapped (`trapModal`), `data-shortcut-modal`;
+ *  - resumes the stream when its worker's link comes back; the log follows its end while read there;
+ *  - Copy falls back to a hidden textarea.
  */
 import { useConnectStore } from '../../pose/connect/store.js';
 import { createJobStream } from '../../pose/connect/job-stream.js';
@@ -33,14 +20,8 @@ import { askConfirm } from '../ask.js';
 import { notify } from './notify.js';
 import { railIconSvg } from '../panel-rail-icons.js';
 import { createLossPlot } from './loss-plot.js';
-import { layerAbove } from './layers.js';
-
-function el(tag, cls, text) {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
-}
+import { trapModal } from './layers.js';
+import { el, button } from './dom.js';
 
 /** Tailwind class names of `logLineClassName` mapped to the Connect window's own. */
 function logClass(line) {
@@ -89,8 +70,8 @@ export function openJobViewer(props) {
     const titleRow = el('div', 'cj-card-title');
     const titleText = el('span', 'cj-card-title-text', props.label);
     const statusText = el('span', 'cj-card-status');
-    const close = el('button', 'cj-card-x');
-    close.type = 'button'; close.setAttribute('aria-label', 'Close'); close.title = 'Close';
+    const close = button('cj-card-x', undefined, 'Close');
+    close.setAttribute('aria-label', 'Close');
     close.innerHTML = railIconSvg('x');
     titleRow.append(titleText, statusText, close);
     const desc = el('p', 'cj-card-desc', showMonitor
@@ -99,11 +80,11 @@ export function openJobViewer(props) {
     head.append(titleRow, desc);
 
     const bar = el('div', 'cj-viewer-bar');
-    const monBtn = el('button', 'connect-btn cj-btn', 'Monitor'); monBtn.type = 'button';
-    const logBtn = el('button', 'connect-btn cj-btn', 'Logs'); logBtn.type = 'button';
+    const monBtn = button('connect-btn cj-btn', 'Monitor'); 
+    const logBtn = button('connect-btn cj-btn', 'Logs'); 
     const ends = el('div', 'cj-viewer-ends');
-    const stopBtn = el('button', 'connect-btn connect-btn-outline cj-btn cj-stop', 'Stop Early'); stopBtn.type = 'button';
-    const cancelBtn = el('button', 'connect-btn connect-btn-outline cj-btn cj-cancel', 'Cancel'); cancelBtn.type = 'button';
+    const stopBtn = button('connect-btn connect-btn-outline cj-btn cj-stop', 'Stop Early'); 
+    const cancelBtn = button('connect-btn connect-btn-outline cj-btn cj-cancel', 'Cancel'); 
     ends.append(stopBtn, cancelBtn);
     if (showMonitor) bar.append(monBtn, logBtn);
     bar.appendChild(ends);
@@ -112,7 +93,7 @@ export function openJobViewer(props) {
     const monitorHost = el('div', 'cj-viewer-monitor');
     const logHost = el('div', 'cj-viewer-logs');
     const tools = el('div', 'cj-viewer-tools');
-    const copyBtn = el('button', 'connect-btn connect-btn-outline cj-btn', 'Copy'); copyBtn.type = 'button';
+    const copyBtn = button('connect-btn connect-btn-outline cj-btn', 'Copy'); 
     function check(label, on, set) {
         const l = el('label', 'cj-check');
         const i = el('input'); i.type = 'checkbox'; i.checked = on;
@@ -206,36 +187,17 @@ export function openJobViewer(props) {
     function doClose() {
         if (closed) return;
         closed = true;
-        document.removeEventListener('keydown', onKey, true);
+        trap.release();
         unsub();
         stream.stop();
         plot.destroy();
         scrim.remove();
-        if (prevFocus && prevFocus.isConnected) { try { prevFocus.focus(); } catch (e) { /* gone */ } }
+        trap.restoreFocus();
         if (props.onClose) props.onClose();
-    }
-    function focusables() {
-        return Array.from(card.querySelectorAll('button, input, select, textarea, [tabindex]'))
-            .filter(function (n) { return !n.disabled && n.tabIndex >= 0 && n.offsetParent !== null; });
-    }
-    function onKey(e) {
-        if (closed || layerAbove(scrim)) return;
-        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); doClose(); return; }
-        if (e.key === 'Tab') {
-            e.stopPropagation();
-            const f = focusables(), a = document.activeElement;
-            if (!f.length) { e.preventDefault(); card.focus(); return; }
-            const first = f[0], last = f[f.length - 1];
-            if (!card.contains(a) || a === card) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
-            else if (e.shiftKey && a === first) { e.preventDefault(); last.focus(); }
-            else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }
-        }
     }
     close.addEventListener('click', doClose);
     scrim.addEventListener('mousedown', function (e) { if (e.target === scrim) doClose(); });
-    document.addEventListener('keydown', onKey, true);
-
-    const prevFocus = document.activeElement;
+    const trap = trapModal(scrim, card, { onEscape: doClose, focusable: function (n) { return n.offsetParent !== null; } });
     document.body.appendChild(scrim);
     paint();
     if (view === 'logs') paintLog(true);

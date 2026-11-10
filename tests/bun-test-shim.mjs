@@ -4,7 +4,9 @@
  * sleap-app's unit tests are written against bun:test. The LUCID ports keep the
  * test bodies as close to the originals as they can, so this implements just the
  * matchers those bodies use (toBe, toEqual, toMatchObject, toBeNull, toContain,
- * toHaveLength, `.not`, ...) on top of node:assert. Not a general test framework:
+ * toHaveLength, `.not`, `toThrow` with a class / RegExp / substring, toBeInstanceOf,
+ * `.rejects.toThrow` / `.rejects.toMatchObject`, and `itEach` = bun's `it.each`)
+ * on top of node:assert. Not a general test framework:
  * a test file imports `{ describe, it, expect, run }`, registers its tests, and
  * ends with `await run()`, which runs them in order, prints a summary and sets
  * `process.exitCode` (so `tests/run-mjs-tests.mjs` sees a failure).
@@ -82,19 +84,48 @@ function matchers(actual, negate) {
     toThrow: (m) => {
       let threw = false, err;
       try { actual(); } catch (e) { threw = true; err = e; }
-      const ok = threw && (m === undefined || (m instanceof RegExp ? m.test(err?.message) : String(err?.message).includes(m)));
-      check(ok, `expected function toThrow ${m ?? ''}`);
+      check(threw && matchesThrow(err, m), `expected function toThrow ${m === undefined ? '' : describeThrowArg(m)}`);
     },
+    toBeInstanceOf: (cls) => check(actual instanceof cls, `expected value toBeInstanceOf ${cls.name}`),
   };
+}
+
+/** Does `err` satisfy a `toThrow` argument (undefined = anything, an Error class, RegExp, or message substring)? */
+function matchesThrow(err, arg) {
+  if (arg === undefined) return true;
+  if (typeof arg === 'function') return err instanceof arg;
+  const msg = String(err?.message ?? err);
+  return arg instanceof RegExp ? arg.test(msg) : msg.includes(arg);
+}
+const describeThrowArg = (arg) => (typeof arg === 'function' ? arg.name : String(arg));
+
+/** Awaits `promise` and returns the rejection, or throws if it resolved. */
+async function rejectionOf(promise) {
+  try { await promise; } catch (e) { return e; }
+  throw new assert.AssertionError({ message: 'expected promise to reject, but it resolved' });
 }
 
 export function expect(actual) {
   const m = matchers(actual, false);
   m.not = matchers(actual, true);
+  m.rejects = {
+    async toThrow(arg) {
+      const err = await rejectionOf(actual);
+      if (!matchesThrow(err, arg)) throw new assert.AssertionError({ message: `expected rejection toThrow ${describeThrowArg(arg)}, got ${err?.name}: ${err?.message}` });
+    },
+    async toMatchObject(expected) { expect(await rejectionOf(actual)).toMatchObject(expected); },
+  };
   return m;
 }
 expect.objectContaining = (expected) => ({ [ASYM]: true, match: (a) => matchesObject(a, expected) });
 expect.any = (ctor) => ({ [ASYM]: true, match: (a) => (ctor === String ? typeof a === 'string' : ctor === Number ? typeof a === 'number' : a instanceof ctor) });
+
+/** bun's `it.each(cases)(name, fn)`: one test per case, `%p` in the name replaced by the case. */
+export function itEach(cases) {
+  return (name, fn) => {
+    for (const c of cases) it(name.replace('%p', JSON.stringify(c) ?? String(c)), () => fn(c));
+  };
+}
 
 /** Runs every registered test in order, prints a summary, sets process.exitCode. */
 export async function run() {

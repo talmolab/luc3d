@@ -1,38 +1,21 @@
 /**
- * ui/connect/loss-plot.js — the loss curve of the Connect window's job viewer (Monitor tab).
+ * ui/connect/loss-plot.js — the loss curve of the job viewer's Monitor tab.
  *
- * Port of the use of sleap-app src/components/monitors/LossPlot.tsx @ 683a159 by JobViewerDialog: the
- * batch training loss as a faint scatter, the epoch training / validation loss as lines with dots, the
- * best validation epoch as a ring, a log-y axis, and the same empty-state text ("Waiting for first
- * epoch…" / "No loss data", "Loss curves will appear after the first epoch completes." / "No loss data
- * was recorded for this model."). `model` is a `ModelProgress` of `pose/connect/job-stream.js`; epoch
- * `e` sits at x = (e + 1) * epochSize on the batch axis, as `buildLossPlotDataBatched` places it.
+ * Port of sleap-app's use of src/components/monitors/LossPlot.tsx @ 683a159 by JobViewerDialog: batch loss
+ * scatter, epoch train / val lines, best-val ring, log-y axis, the same empty-state texts.
  *
- * LUCID changes: a plain `<canvas>` instead of uPlot (no new dependency); colours come from the page's
- * CSS variables (`--accent` train, `--warning-color` validation, `--success-color` best, `--text-*`
- * axes, `--bg-primary` plane) so the plot follows the theme; only "Log scale" and "Ignore outliers"
- * are the same controls as sleap-app's: Log scale, Ignore outliers, Batches (200 / 1000 / 5000 / All,
- * the last N batch dots), Reset zoom (drag on the plot to zoom the batch axis, double-click resets), PNG and
- * CSV export (`downloadBytes`, the app's one download path; `<label>-loss.png` / `-loss.csv`, `lossCsv`'s
- * 1-based epoch rows) and a hover tooltip naming the nearest point (series, batch, loss);
- * the runtime title is one short line (epoch / loss / best val) because `formatRuntimeTitle`'s
- * wall-clock metrics are not available for a replayed job (sleap-app passes them the same empty
- * defaults). Training runs are out of scope in LUCID, but any train job a worker reports is shown.
- *
- * Exports: createLossPlot, lossCsv, lossTitle, lossYRange, lossTicks.
+ * LUCID changes:
+ *  - a plain `<canvas>` (no uPlot), coloured from the theme's CSS variables;
+ *  - controls: Log scale, Ignore outliers, Batches (200 / 1000 / 5000 / All), Reset zoom (drag zooms the
+ *    batch axis, double-click resets), PNG / CSV export (`downloadBytes`), a hover tooltip;
+ *  - a one-line title (epoch / loss / best val): wall-clock metrics do not exist for a replayed job.
  */
 
 import { downloadBytes } from '../../import-export/file-io.js';
+import { el, button } from './dom.js';
 
 /** Cap on drawn batch dots (a 20k-point scatter is not legible and costs a frame). */
 const MAX_BATCH_DOTS = 2000;
-
-function el(tag, cls, text) {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
-}
 
 function quantile(sorted, q) {
     const pos = (sorted.length - 1) * q;
@@ -41,7 +24,7 @@ function quantile(sorted, q) {
 }
 
 /** The y range of `values` (sleap-app `computeYRange`, bounded): log-aware, optionally trimmed to Tukey fences. */
-export function lossYRange(values, o) {
+function lossYRange(values, o) {
     const finite = values.filter(function (v) { return Number.isFinite(v); });
     const vals = o.logScale ? finite.filter(function (v) { return v > 0; }).map(Math.log10) : finite;
     if (!vals.length) return null;
@@ -58,7 +41,7 @@ export function lossYRange(values, o) {
 }
 
 /** Round tick values over [min, max]: decades when `log`, else 1-2-5 steps. */
-export function lossTicks(min, max, log) {
+function lossTicks(min, max, log) {
     const out = [];
     if (!(max > min) || !Number.isFinite(min) || !Number.isFinite(max)) return out;
     if (log) {
@@ -79,7 +62,7 @@ function fmt(v) {
 }
 
 /** CSV of the per-epoch loss curve (sleap-app `lossCsv`): `epoch,train_loss,val_loss`, 1-based epochs, trailing newline. */
-export function lossCsv(epochSamples) {
+function lossCsv(epochSamples) {
     const rows = ['epoch,train_loss,val_loss'];
     epochSamples.forEach(function (s) {
         rows.push((s.epoch + 1) + ',' + (s.trainLoss == null ? '' : String(s.trainLoss)) + ',' + (s.valLoss == null ? '' : String(s.valLoss)));
@@ -145,8 +128,8 @@ export function createLossPlot(container, props) {
     batchSel.addEventListener('change', function () { batchesToShow = Number(batchSel.value); draw(); });
     batchLab.appendChild(batchSel);
     function tool(text, tt, fn, id) {
-        const b = el('button', 'connect-btn connect-btn-ghost cj-loss-tool', text);
-        b.type = 'button'; b.title = tt; b.id = id;
+        const b = button('connect-btn connect-btn-ghost cj-loss-tool', text, tt);
+        b.id = id;
         b.addEventListener('click', fn);
         return b;
     }

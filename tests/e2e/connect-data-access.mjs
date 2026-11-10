@@ -14,33 +14,17 @@
  *
  * Usage: node tests/e2e/connect-data-access.mjs   (PORT= to move its server)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { FakeWorker } from '../connect/fake-worker.mjs';
+import { runConnectE2E, check, watchPage, bootApp, pair } from './fixtures/connect-e2e.mjs';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const PORT = Number(process.env.PORT || 9394);
-const BASE = `http://localhost:${PORT}`;
 const WS = 'ws://127.0.0.1:9633';
 const WS2 = 'ws://127.0.0.1:9634';
 
-let fails = 0;
-const check = (c, m, extra) => {
-    console.log((c ? '  ✓ ' : '  ✗ ') + m + (c || extra === undefined ? '' : '  ' + JSON.stringify(extra).slice(0, 600)));
-    if (!c) fails++;
-};
-
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-let browser;
-try {
-    await new Promise((r) => setTimeout(r, 800));
-    browser = await chromium.launch();
+await runConnectE2E(9394, async ({ browser, BASE }) => {
     const context = await browser.newContext({ viewport: { width: 1200, height: 800 } });
     const page = await context.newPage();
     page.setDefaultTimeout(30000);
-    page.on('pageerror', (e) => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
+    watchPage(page);
 
     const worker = await FakeWorker.create({ mounts: [{ path: '/root/vast', label: 'lab-data' }, { path: '/data' }], serveFolder: '/data', workerInfo: { hostname: 'gpu-box' } });
     worker.addFile('/root/vast/x.txt', 'x');
@@ -48,13 +32,8 @@ try {
     await worker.serveOnPage(page, /^ws:\/\/127\.0\.0\.1:9633/);
     await empty.serveOnPage(page, /^ws:\/\/127\.0\.0\.1:9634/);
 
-    await page.goto(`${BASE}/index.html`);
-    await page.waitForSelector('.panel-rail-btn[data-tab="tabConnect"]', { timeout: 60000 });
-    const pair = async (w, addr) => {
-        const code = await w.mintPairCode({ addrs: [addr] });
-        await page.evaluate((c) => import('./pose/connect/store.js').then((m) => m.useConnectStore.getState().pairWithCode(c)), code);
-    };
-    await pair(worker, WS);
+    await bootApp(page, BASE, { timeout: 60000 });
+    await pair(page, worker, WS);
     const ID = worker.nodeId;
     const mount = (workerId, token) => page.evaluate(async ([id, t]) => {
         const m = await import('./ui/connect/worker-data-access.js');
@@ -118,7 +97,7 @@ try {
     check(worker.calls.filter((c) => c.method === 'fs.mounts').length === n1, 'the same props do not re-fetch');
 
     console.log('\n--- 2. A worker with no mounts ---');
-    await pair(empty, WS2);
+    await pair(page, empty, WS2);
     await page.evaluate((id) => window.__cda.update({ workerId: id, refreshToken: 1 }), empty.nodeId);
     await page.waitForFunction(() => document.getElementById('cdaMounts').textContent === 'No mounts configured.');
     check(await page.evaluate(() => document.getElementById('cdaBrowse').disabled), '"No mounts configured." and Browse files disabled');
@@ -133,9 +112,4 @@ try {
     check(await page.evaluate(() => !document.getElementById('connectDataAccess')), 'destroy removes its DOM');
     const noThrow = await page.evaluate(() => import('./pose/connect/store.js').then((m) => { try { m.useConnectStore.getState().addPathRule('no-such-worker', { local: '/a', worker: '/b' }); return true; } catch (e) { return String(e); } }));
     check(noThrow === true, 'a store change after destroy is harmless', noThrow);
-} finally {
-    if (browser) await browser.close();
-    server.kill();
-}
-console.log(fails ? `\nFAIL — ${fails} check(s) failed` : '\nPASS');
-process.exit(fails ? 1 : 0);
+});

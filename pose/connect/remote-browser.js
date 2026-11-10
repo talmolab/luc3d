@@ -16,15 +16,6 @@
 /** @type {SortSpec} */
 export const DEFAULT_SORT = { key: "name", dir: "asc", foldersFirst: true };
 
-/** @type {Record<SortKey, string>} */
-export const SORT_LABELS = {
-  name: "Name",
-  kind: "Kind",
-  modified: "Date Modified",
-  lastOpened: "Date Last Opened",
-  size: "Size",
-};
-
 /** `base` + `/name`, without doubling or dropping the slash. */
 export function joinPath(base, name) {
   const clean = base.endsWith("/") ? base.slice(0, -1) : base;

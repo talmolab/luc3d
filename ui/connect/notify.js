@@ -1,38 +1,17 @@
 /**
- * ui/connect/notify.js — the small toast stack Connect reports through.
+ * ui/connect/notify.js — the toast stack Connect reports through (`configureConnect({ notify })`).
  *
- * Stands in for sleap-app's `toast` (`src/lib/notify.tsx` + the `<Toaster>` in
- * `AppShell.tsx` @ 683a159: sonner, `theme="dark"`, `position="bottom-right"`,
- * `closeButton`, `offset={{ bottom: 56 }}`, `visibleToasts` 3 default).
- * `notify.success / error / info(message, { description, action: { label,
- * onClick }, id })`; the shape `configureConnect({ notify })` takes
- * (`pose/connect/store.js`).
+ * Stands in for sleap-app's `toast` (src/lib/notify.tsx + AppShell's sonner `<Toaster>` @ 683a159), with
+ * sonner's defaults: 4 s, hover / hidden tab pauses all, same `id` replaces, 3 visible (older collapse,
+ * never dropped), per-kind icon, action button OR copy button, close x top-left, "Clear all (n)" at 2+.
  *
- * Behaviour (sonner's defaults, which sleap-app uses unchanged):
- *   - a toast closes itself after 4 s; hovering the stack pauses EVERY toast's
- *     clock (so does a hidden tab);
- *   - a second toast with the same `id` REPLACES the first (and restarts the clock);
- *   - at most 3 show; older ones are collapsed (hidden, clock stopped) and come
- *     back as newer ones close, never dropped;
- *   - a per-kind icon (check / x-circle / info) leads the toast;
- *   - an action button (e.g. "View") runs its handler and closes the toast, and
- *     a toast WITH an action has no copy button (sleap-app: `action ?? <CopyAction/>`);
- *     otherwise a copy icon sits top-right (turns into a check for 1.5 s);
- *   - the close button (x) sits on the top-left corner, as sonner's;
- *   - a "Clear all (n)" pill under the stack when 2+ are stacked
- *     (`ClearAllToastsButton.tsx`).
- * Not a modal: no scrim, never takes focus, ignores Esc; its text is
- * selectable (CLAUDE.md "Text is selectable").
- *
- * NOT ported: sleap-app's notification history (`pushNotification` -> the
- * Notifications panel); LUCID has no such panel.
- *
- * Imports only `ui/panel-rail-icons.js` (a leaf). The container is created on
- * the first toast.
+ * LUCID changes:
+ *  - vanilla DOM; not a modal (no scrim, no focus, ignores Esc), text selectable;
+ *  - no notification history (LUCID has no Notifications panel).
  */
-import { railIconSvg } from '../panel-rail-icons.js';
+import { button, icon } from './dom.js';
 
-export const TOAST_MS = 4000;
+const TOAST_MS = 4000;
 const MAX_VISIBLE = 3;
 const CONTAINER_ID = 'connectToasts';
 const CLEAR_ID = 'connectToastsClear';
@@ -44,13 +23,6 @@ let seq = 0;
 let hovering = false;
 let tabHidden = false;
 let clearBtn = null;
-
-function icon(name, cls) {
-    const s = document.createElement('span');
-    s.className = 'connect-icon ' + (cls || '');
-    s.innerHTML = railIconSvg(name);
-    return s;
-}
 
 function container() {
     let c = document.getElementById(CONTAINER_ID);
@@ -104,10 +76,8 @@ function syncClearAll(count) {
         return;
     }
     if (!clearBtn) {
-        clearBtn = document.createElement('button');
-        clearBtn.type = 'button';
+        clearBtn = button('connect-toasts-clear');
         clearBtn.id = CLEAR_ID;
-        clearBtn.className = 'connect-toasts-clear';
         clearBtn.addEventListener('click', function () { dismissAll(); });
         document.body.appendChild(clearBtn);
     }
@@ -165,10 +135,7 @@ function show(kind, message, opts) {
     el.appendChild(body);
 
     if (opts.action && opts.action.label) {
-        const a = document.createElement('button');
-        a.type = 'button';
-        a.className = 'connect-toast-action';
-        a.textContent = opts.action.label;
+        const a = button('connect-toast-action', opts.action.label);
         a.addEventListener('click', function () {
             try { opts.action.onClick(); } catch (e) { console.error('[connect] toast action threw', e); }
             dismiss(id);
@@ -177,9 +144,7 @@ function show(kind, message, opts) {
     } else {
         // sleap-app: `action: data.action ?? <CopyAction/>` — only a toast without an action gets Copy.
         const text = opts.description ? message + '\n' + opts.description : message;
-        const copy = document.createElement('button');
-        copy.type = 'button';
-        copy.className = 'connect-toast-copy';
+        const copy = button('connect-toast-copy');
         copy.setAttribute('aria-label', 'Copy');
         copy.appendChild(icon('copy'));
         copy.addEventListener('click', function (e) {
@@ -195,9 +160,7 @@ function show(kind, message, opts) {
         el.appendChild(copy);
     }
 
-    const close = document.createElement('button');
-    close.type = 'button';
-    close.className = 'connect-toast-close';
+    const close = button('connect-toast-close');
     close.setAttribute('aria-label', 'Close');
     close.appendChild(icon('x'));
     close.addEventListener('click', function () { dismiss(id); });

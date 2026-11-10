@@ -1,37 +1,23 @@
 /**
- * ui/connect/worker-queue.js — the Connect window's queue cards (sidebar, under Paired workers).
+ * ui/connect/worker-queue.js — the queue cards of the Connect window's sidebar.
  *
- * Port of sleap-app src/components/connect/WorkerQueue.tsx @ 683a159: one card per run, the failed run(s)
- * first (red, kept until you click them), then the run in progress, then queued runs in the order they
- * will start, each with a row per model (+ inference) carrying the same status badges as the Jobs tab
- * and, for a training run that chains inference the worker has not created yet, an "After training" row.
- * Cards have no buttons: a click opens the run's entry in the Jobs tab, a right-click offers Open in Jobs
- * (and clear) / Stop Early / Cancel run, or "View only (another project's run)".
+ * Port of sleap-app src/components/connect/WorkerQueue.tsx @ 683a159: failed run(s) first, then running,
+ * then queued, a row per model with the Jobs tab's badges (+ "After training"). A click opens the run in
+ * the Jobs tab; a right-click offers Open in Jobs / Stop Early / Cancel run. Pure parts: `job-groups.js`
+ * (re-exported under WorkerQueue.tsx's names).
  *
- * The pure parts (`isActiveGroup`, `unfinishedJobs`, `cancelRunConfirm`, `queueRows`, `queueRunEntries`)
- * are `pose/connect/job-groups.js`, re-exported here under WorkerQueue.tsx's names.
- *
- * LUCID changes: vanilla DOM; the context menu (Radix in sleap-app) is a small menu at the pointer (Esc
- * closes just it, arrows move, a click elsewhere closes it; the keyboard menu key opens it at the card);
- * sleap-app's Tailwind chip classes become `cw-chip-*` (`chipClassFor`).
- *
- * Exports: createQueueRunList(container, props) -> {update(props), destroy()}, chipClassFor,
- * openContextMenu, plus the re-exported pure helpers.
+ * LUCID changes:
+ *  - the context menu is a small menu at the pointer (Esc closes just it, arrows move, menu key opens it);
+ *  - Tailwind chip classes become `cw-chip-*` (styled exactly as the Jobs tab's `cj-chip-*`).
  */
 import { isActiveGroup, unfinishedJobs, cancelRunConfirm, queueRows, queueRunEntries } from '../../pose/connect/job-groups.js';
 import { layerAbove } from './layers.js';
+import { el, button } from './dom.js';
 
 export { isActiveGroup, unfinishedJobs, cancelRunConfirm, queueRows, queueRunEntries };
 
-function el(tag, cls, text) {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
-}
-
 /** sleap-app's Tailwind badge class string (job-groups.js `CHIP_STYLES`, "After training") as a `cw-chip-*` class. */
-export function chipClassFor(tailwindClass) {
+function chipClassFor(tailwindClass) {
     const c = tailwindClass || '';
     const kind = c.includes('orange') ? 'running' : c.includes('green') ? 'completed' : c.includes('red') ? 'failed'
         : c.includes('text-zinc-400') ? 'muted' : 'queued';
@@ -57,13 +43,12 @@ function closeMenu() {
  * A context menu at (x, y). `items`: `{label, onSelect, destructive?, disabled?}`.
  * Esc closes it alone (the Connect window stays open).
  */
-export function openContextMenu(x, y, items, returnFocus) {
+function openContextMenu(x, y, items, returnFocus) {
     closeMenu();
     const menu = el('div', 'cw-menu');
     menu.setAttribute('role', 'menu');
     const buttons = items.map(function (it) {
-        const b = el('button', 'cw-menu-item' + (it.destructive ? ' destructive' : ''), it.label);
-        b.type = 'button';
+        const b = button('cw-menu-item' + (it.destructive ? ' destructive' : ''), it.label);
         b.setAttribute('role', 'menuitem');
         b.disabled = !!it.disabled;
         b.addEventListener('click', function () { closeMenu(); if (!it.disabled) it.onSelect(); });

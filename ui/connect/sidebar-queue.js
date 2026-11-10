@@ -2,23 +2,13 @@
  * ui/connect/sidebar-queue.js — the Connect window's sidebar queue.
  *
  * Port of sleap-app src/components/connect/SidebarQueue.tsx @ 683a159: the picked worker's runs in progress
- * and waiting (`createQueueRunList`), under Paired workers. Polls `listJobs` every 10 s (like the Jobs tab;
- * `refreshToken` restarts it and refetches now) and calls `onChanged` after a Stop Early / Cancel run so
- * the Jobs tab catches up right away. A failed run of yours stays in the queue, red, until you click it
- * (which also opens it in the Jobs tab): only yours, and only from the last day. Cleared runs are kept per
- * browser in localStorage (`DISMISSED_FAILED_RUNS_KEY`, `lucid-connect-dismissed-failed-runs`).
- * Stop Early / Cancel run ask first (`endJobConfirm` / `cancelRunConfirm`).
+ * and waiting (`createQueueRunList`), polled every 10 s (`refreshToken` refetches now). A failed run of
+ * yours from the last day stays, red, until clicked (cleared runs: localStorage
+ * `lucid-connect-dismissed-failed-runs`). Rules: `pose/connect/job-groups.js`, `worker-ui-helpers.js`.
  *
- * The queue / failed-run rules are `pose/connect/job-groups.js` and `worker-ui-helpers.js`
- * (`failedRunShown`, `loadDismissedFailedRuns`, `saveDismissedFailedRuns`).
- *
- * LUCID changes: `myProjectId` comes from `lucidProjectTag({fileName, sessionFolders})` of the open project
- * (as the Inference panel tags its jobs), not a project path; confirms go through `ui/ask.js`; toasts
- * through `ui/connect/notify.js`; a response that arrives after the worker changed is dropped.
- *
- * Contract (p5): `createSidebarQueue(container, {workerId, workerLabel, refreshToken, onChanged, onOpenRun,
- * pollIntervalMs?, setIntervalImpl?, clearIntervalImpl?}) -> {update(props), destroy()}`.
- * Exports: createSidebarQueue.
+ * LUCID changes:
+ *  - "my project" = `lucidProjectTag` of the open project, not a path;
+ *  - confirms via `ui/ask.js`, toasts via `notify.js`; a response after a worker switch is dropped.
  */
 import { useConnectStore } from '../../pose/connect/store.js';
 import { groupJobs, isManagedJob, jobTitle, endJobConfirm, queueRunEntries, unfinishedJobs, cancelRunConfirm } from '../../pose/connect/job-groups.js';
@@ -30,13 +20,7 @@ import { askConfirm } from '../ask.js';
 import { state } from '../app-state.js';
 import { notify } from './notify.js';
 import { createQueueRunList } from './worker-queue.js';
-
-function el(tag, cls, text) {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
-}
+import { el } from './dom.js';
 
 function storage() {
     try { return window.localStorage; } catch (e) { return null; }

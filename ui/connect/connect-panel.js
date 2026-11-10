@@ -1,29 +1,14 @@
 /**
  * ui/connect/connect-panel.js — the Connect rail panel (remote GPU workers).
  *
- * Port of sleap-app src/components/panels/ConnectPanel.tsx @ 683a159, section
- * for section: the "Open Connect window" button; the red connection-error box
- * (`connectionStatus === "error"`); "PAIRED WORKERS (n)" with one card per
- * worker (status dot: green connected / amber reconnecting / grey; the label
- * and a Forget trash button; node id + first address; "Connected via …";
- * "Unpaired by this worker — re-pair with a new code to use it again.";
- * "Reconnecting… via …"; Connect / Connecting… / Disconnect); a divider; the
- * "Pair a new worker" button or the pairing form (Cancel only when a worker is
- * already paired); and "This device: <id>…". Forget confirms through
- * `ui/ask.js` with the store's `forgetWorkerConfirm` text. Reads and writes
- * only through the store (`useConnectStore`, `subscribeSelector`) and
- * `pose/connect/pairing-plan.js`; no logic is re-implemented here.
+ * Port of sleap-app src/components/panels/ConnectPanel.tsx @ 683a159, section for section: Open Connect
+ * window, the connection-error box, the paired-worker cards, Pair a new worker / the pairing form, "This
+ * device: …". All logic is the store's and `pose/connect/pairing-plan.js`.
  *
- * LUCID changes: vanilla DOM re-rendered from a store selector (the pairing
- * form is built once and kept, so what is typed survives a repaint, and
- * `form.reset()` stands in for sleap-app's unmount whenever it is hidden:
- * Cancel, paired, or auto-closed); the
- * button's target is `openConnectWindow`, handed in (the Connect window is a
- * later phase); Forget uses `askConfirm`. sleap-app's worker cards do not show
- * Idle/Busy/GPU lines (those are the Connect window's `WorkerList`), so
- * neither does this panel.
- *
- * Exports: createConnectPanel.
+ * LUCID changes:
+ *  - vanilla DOM; the pairing form is built once and kept (typing survives a repaint), `form.reset()`
+ *    standing in for sleap-app's unmount whenever it is hidden;
+ *  - the Open button calls the `openConnectWindow` handed in; Forget confirms through `ui/ask.js`.
  */
 import { useConnectStore } from '../../pose/connect/store.js';
 import { forgetWorkerConfirm } from '../../pose/connect/worker-ui-helpers.js';
@@ -32,21 +17,8 @@ import { irohTransportAvailable, transportLabel } from '../../pose/connect/trans
 import { shallowEqual } from '../../pose/connect/mini-store.js';
 import { getClientIdentity } from '../../pose/connect/identity.js';
 import { askConfirm } from '../ask.js';
-import { railIconSvg } from '../panel-rail-icons.js';
 import { createPairWorkerForm } from './pair-worker-form.js';
-
-function el(tag, cls, text) {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
-}
-
-function icon(name, cls) {
-    const s = el('span', 'connect-icon' + (cls ? ' ' + cls : ''));
-    s.innerHTML = railIconSvg(name);
-    return s;
-}
+import { el, button, icon } from './dom.js';
 
 /** Forget after the user confirms (forgetWorker.ts `forgetWorkerWithConfirm`). Resolves whether it was forgotten. */
 const forgetting = new Set();
@@ -87,8 +59,7 @@ export function createConnectPanel(opts) {
     let formShown = true;
 
     // Static frame, so a repaint never rebuilds the pairing form (or what is typed in it).
-    const openBtn = el('button', 'connect-btn connect-btn-outline connect-full');
-    openBtn.type = 'button';
+    const openBtn = button('connect-btn connect-btn-outline connect-full');
     openBtn.id = 'connectOpenWindow';
     openBtn.append(icon('external-link'), 'Open Connect window');
     openBtn.addEventListener('click', function () { if (opts.openConnectWindow) opts.openConnectWindow(); });
@@ -99,8 +70,7 @@ export function createConnectPanel(opts) {
     workersHost.id = 'connectWorkers';
     const divider = el('div', 'connect-sep');
     const pairHost = el('div', 'connect-pair-host');
-    const addBtn = el('button', 'connect-btn connect-btn-outline connect-full', 'Pair a new worker');
-    addBtn.type = 'button';
+    const addBtn = button('connect-btn connect-btn-outline connect-full', 'Pair a new worker');
     addBtn.id = 'connectPairNew';
     addBtn.addEventListener('click', function () { showPairForm = true; render(); });
     const deviceLine = el('p', 'connect-device');
@@ -135,9 +105,7 @@ export function createConnectPanel(opts) {
         head.appendChild(el('span', 'connect-dot ' + (isConnected ? 'on' : isReconnecting ? 'warn' : '')));
         const name = el('span', 'connect-worker-name', w.label);
         head.appendChild(name);
-        const forget = el('button', 'connect-icon-btn connect-forget');
-        forget.type = 'button';
-        forget.title = 'Forget this worker';
+        const forget = button('connect-icon-btn connect-forget', undefined, 'Forget this worker');
         forget.setAttribute('aria-label', 'Forget this worker');
         forget.appendChild(icon('trash-2'));
         forget.addEventListener('click', function () { void forgetWorkerWithConfirm(w.nodeId); });
@@ -160,14 +128,12 @@ export function createConnectPanel(opts) {
 
         const actions = el('div', 'connect-worker-actions');
         if (isConnected || isReconnecting) {
-            const b = el('button', 'connect-btn connect-btn-outline connect-full connect-disconnect');
-            b.type = 'button';
+            const b = button('connect-btn connect-btn-outline connect-full connect-disconnect');
             b.append(icon('unplug'), 'Disconnect');
             b.addEventListener('click', function () { useConnectStore.getState().disconnect(); });
             actions.appendChild(b);
         } else {
-            const b = el('button', 'connect-btn connect-btn-primary connect-full connect-connect');
-            b.type = 'button';
+            const b = button('connect-btn connect-btn-primary connect-full connect-connect');
             b.disabled = isConnecting || route === null;
             if (route === null) b.title = "This worker can't be reached from here: pair it again with a new code.";
             b.appendChild(icon(isConnecting ? 'loader-circle' : 'plug', isConnecting ? 'connect-spin' : ''));

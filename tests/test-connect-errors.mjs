@@ -2,7 +2,7 @@
  * Port of sleap-app tests/unit/protocolV1Errors.test.ts @ 683a159.
  * Error code strings and WorkerProtocolError (pose/connect/errors.js).
  */
-import { describe, it, expect, run } from './connect-test-utils.mjs';
+import { describe, it, expect, run } from './bun-test-shim.mjs';
 import {
   AUTH_BAD_SIGNATURE,
   AUTH_PAIRING_EXPIRED,

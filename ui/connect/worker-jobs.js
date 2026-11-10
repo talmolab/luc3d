@@ -1,36 +1,17 @@
 /**
- * ui/connect/worker-jobs.js — the Connect window's Jobs tab: every job on a worker (not just ones this
- * page is tracking), this project's runs pinned first (★) and live, others view-only.
+ * ui/connect/worker-jobs.js — the Connect window's Jobs tab: every job on a worker, this project's runs
+ * pinned first (★) and live, others view-only.
  *
- * Port of sleap-app src/components/connect/WorkerJobs.tsx @ 683a159 (§4b.4, PR5b/PR6a), string for
- * string: the search box ("Search labels file, job id, run id, or model"), "+ New job", "Loading
- * jobs…" / "No jobs yet." / "No jobs match.", one card per RUN (a split run's models and a chained
- * inference under one ★ title with a rolled-up chip, "Queued · #N", a time label that is "started …" /
- * "finished …" and absent while queued, the short run id, "Cancel run" / "Canceling…" and the trash
- * "Remove this run"), then a row per job (title, "→ inference", "run 2/2", the short job id, chip, time,
- * the model name in mono, the failure's first line) with its buttons: Watch live / View / Logs / Stop
- * Early / Cancel / Run again / Fetch & Load, offered by the same rules (Cancel, Stop Early and Run
- * again only on a job this project owns or is tracking; Fetch & Load on any completed track job;
- * Run again is LUCID's exception: hidden on a failed TRAIN job, since training is out of scope and the
- * Inference-only wizard could not re-run it, shown on a failed inference/track job). All
- * decisions are `pose/connect/job-groups.js` (`groupJobs`, `jobMatches`, `isManagedJob`,
- * `canDeleteRun`, the chips, the time labels, the confirm texts); nothing is re-implemented here. The
- * "viewer" is `job-viewer.js`, Fetch & Load is `merge-predictions-dialog.js`, "+ New job" and "Run
- * again" are `new-job-wizard.js`.
+ * Port of sleap-app src/components/connect/WorkerJobs.tsx @ 683a159 (§4b.4), string for string: search,
+ * "+ New job", one card per run (chip, times, Cancel run, Remove), a row per job with Watch live / View /
+ * Logs / Stop Early / Cancel / Run again / Fetch & Load by the same rules (`pose/connect/job-groups.js`).
+ * Polls every 10 s; run cards repaint only when their signature changes (scroll, focus and search
+ * survive); a `focusRun` scrolls to a run and rings it.
  *
- * Polling (`listJobs` every 10 s while mounted; a refreshToken bump re-fetches now and restarts the
- * timer) keeps the rows STABLE: each run card is kept as an element and repainted only when what it
- * shows changed (its signature), so the list's scroll position, a focused button and the search text
- * survive a poll, and a manual refresh never blanks to "Loading…" (only a worker switch does). A
- * queue card's click (`focusRun`) clears the search, scrolls to the run and rings it for ~2 s.
- *
- * LUCID changes: "this project" is `lucidProjectTag(openProjectInfo())` (the open file name plus the
- * sessions' folder names, `pose/connect/project-tag.js`), not a path hash; a job this page submitted
- * for a view shows that view as a muted `· <view>` after its title (from the tracked job's `camera`);
- * the Fetch & Load button connects to the worker first when it is not the selected one, then
- * `loadJobPredictions`. Confirms go through `ui/ask.js`; errors through the Connect toasts.
- *
- * Exports: createWorkerJobs.
+ * LUCID changes:
+ *  - "this project" = `lucidProjectTag(openProjectInfo())`; a tracked job shows its view after the title;
+ *  - Run again is hidden on a failed TRAIN job (Inference-only wizard);
+ *  - Fetch & Load connects first when needed, then `loadJobPredictions`; confirms via `ui/ask.js`.
  */
 import { useConnectStore } from '../../pose/connect/store.js';
 import { lucidProjectTag } from '../../pose/connect/project-tag.js';
@@ -47,15 +28,7 @@ import { openJobViewer } from './job-viewer.js';
 import { loadJobPredictions } from './merge-predictions-dialog.js';
 import { openProjectInfo } from './remote-inference.js';
 import * as wizard from './new-job-wizard.js';
-
-function el(tag, cls, text) {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
-}
-
-function errMsg(err) { return err instanceof Error ? err.message : String(err); }
+import { el, button, errMsg } from './dom.js';
 
 function confirmOpts(req) { return { title: req.title, okLabel: req.confirmLabel, cancelLabel: req.cancelLabel }; }
 
@@ -121,8 +94,8 @@ export function createWorkerJobs(container, props) {
     search.type = 'text'; search.id = 'cjJobsSearch';
     search.placeholder = 'Search labels file, job id, run id, or model';
     search.setAttribute('aria-label', 'Search jobs');
-    const newBtn = el('button', 'connect-btn connect-btn-primary cj-btn-new', '+ New job');
-    newBtn.type = 'button'; newBtn.id = 'cjNewJob';
+    const newBtn = button('connect-btn connect-btn-primary cj-btn-new', '+ New job');
+    newBtn.id = 'cjNewJob';
     top.append(search, newBtn);
     const errBox = el('div', 'connect-errbox cj-jobs-err');
     const note = el('p', 'cj-muted');
@@ -245,8 +218,8 @@ export function createWorkerJobs(container, props) {
 
     // ------------------------------------------------------------------ rendering
     function btn(text, cls, act, jobId, onClick, disabled) {
-        const b = el('button', 'connect-btn connect-btn-outline cj-btn ' + (cls || ''), text);
-        b.type = 'button'; b.dataset.act = act; b.dataset.fk = act + ':' + (jobId || '');
+        const b = button('connect-btn connect-btn-outline cj-btn ' + (cls || ''), text);
+        b.dataset.act = act; b.dataset.fk = act + ':' + (jobId || '');
         if (disabled) b.disabled = true;
         b.addEventListener('click', onClick);
         return b;
@@ -336,8 +309,8 @@ export function createWorkerJobs(container, props) {
             head.appendChild(c);
         }
         if (canDeleteRun(group.jobs)) {
-            const d = el('button', 'connect-icon-btn cj-trash');
-            d.type = 'button'; d.setAttribute('aria-label', 'Remove this run'); d.title = 'Remove this run';
+            const d = button('connect-icon-btn cj-trash', undefined, 'Remove this run');
+            d.setAttribute('aria-label', 'Remove this run');
             d.dataset.fk = 'trash:' + group.key;
             d.innerHTML = railIconSvg('trash-2');
             d.addEventListener('click', function () { void deleteRun(group); });

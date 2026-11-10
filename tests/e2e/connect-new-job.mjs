@@ -21,32 +21,16 @@
  *
  * Usage: node tests/e2e/connect-new-job.mjs   (PORT= to move its server)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { FakeWorker } from '../connect/fake-worker.mjs';
+import { runConnectE2E, check, watchPage, pair } from './fixtures/connect-e2e.mjs';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const PORT = Number(process.env.PORT || 9395);
-const BASE = `http://localhost:${PORT}`;
 const WS = 'ws://127.0.0.1:9635';
 
-let fails = 0;
-const check = (c, m, extra) => {
-    console.log((c ? '  ✓ ' : '  ✗ ') + m + (c || extra === undefined ? '' : '  ' + JSON.stringify(extra).slice(0, 700)));
-    if (!c) fails++;
-};
-
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-let browser;
-try {
-    await new Promise((r) => setTimeout(r, 800));
-    browser = await chromium.launch();
+await runConnectE2E(9395, async ({ browser, BASE }) => {
     const context = await browser.newContext({ viewport: { width: 1500, height: 950 } });
     const page = await context.newPage();
     page.setDefaultTimeout(60000);
-    page.on('pageerror', (e) => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
+    watchPage(page);
 
     const worker = await FakeWorker.create({ mounts: [{ path: '/data', label: 'Data' }], serveFolder: '/data', workerInfo: { hostname: 'gpu-box' } });
     for (const p of ['/data/models/td/training_config.yaml', '/data/models/other/training_config.yaml', '/data/sess/a.slp', '/data/sess/cam1.mp4',
@@ -139,8 +123,7 @@ try {
     await page.goto(`${BASE}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 60000 });
     await page.waitForSelector('.panel-rail-btn[data-tab="tabConnect"]');
-    const code = await worker.mintPairCode({ addrs: [WS] });
-    await page.evaluate((c) => import('./pose/connect/store.js').then((m) => m.useConnectStore.getState().pairWithCode(c)), code);
+    await pair(page, worker, WS);
     await page.waitForFunction(() => import('./pose/connect/store.js').then((m) => m.useConnectStore.getState().connectionStatus === 'connected'));
 
     console.log('\n--- 1. The dialog ---');
@@ -356,9 +339,4 @@ try {
     });
     check(!sab.isolated && !sab.sab && sab.streaming === 'function' && /RangeSource streaming requires SharedArrayBuffer/.test(sab.error || ''),
         'the page is not cross-origin isolated, so sleap-io readSlpStreaming over a RangeSource refuses (no worker .slp summary)', sab);
-} finally {
-    if (browser) await browser.close();
-    server.kill();
-}
-console.log(fails ? `\nFAIL — ${fails} check(s) failed` : '\nPASS');
-process.exit(fails ? 1 : 0);
+});

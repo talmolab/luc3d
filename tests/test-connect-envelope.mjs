@@ -2,7 +2,7 @@
  * Port of sleap-app tests/unit/protocolV1Envelope.test.ts @ 683a159.
  * Wire envelope build/parse (pose/connect/envelope.js).
  */
-import { describe, it, expect, run } from './connect-test-utils.mjs';
+import { describe, it, expect, run } from './bun-test-shim.mjs';
 import {
   PROTOCOL_VERSION,
   buildHello,

@@ -1,65 +1,41 @@
 /**
- * ui/connect/backend-picker.js — the "Backend: Local | worker" picker of the
- * Inference panel's Remote section.
+ * ui/connect/backend-picker.js — "Backend: Local | <worker>" in the Inference panel's Remote section.
  *
- * Port of sleap-app src/components/common/BackendPicker.tsx @ 683a159: one
- * control choosing among "Local (this machine)" and each paired worker (by its
- * label); picking a worker selects it in the connect store and connects to it
- * (`selectWorker`); picking Local just turns remote off. Under it: the hint
- * ("Run this inference job on this machine, or send it to a paired
- * sleap-connect worker."), "Pair with a worker in the Connect tab to run a
- * inference job remotely." while no worker is paired, the status line (green /
- * yellow / amber / grey dot, "Connected" / "Connecting…" / "Reconnecting…" /
- * "Connection failed: …" / "Not connected", "via <transport>"), and the blue
- * "A inference job (<id>) is still <state> on this worker from a previous
- * session." banner with a "Cancel it" button (the store's `reattachableJob`).
- * Same strings and the same pure helpers (`LOCAL_VALUE`, `backendSelectValue`,
- * `resolveBackendChange`).
+ * Port of sleap-app src/components/common/BackendPicker.tsx @ 683a159 (same strings, incl. its
+ * "A inference job" grammar; same pure helpers). Picking a worker selects + connects it; Local turns remote off.
  *
- * LUCID changes: vanilla DOM re-rendered from a store selector; "Local" is a
- * disabled option on the desktop app without sleap-nn and absent on the web
- * (there is no local engine there); on the web, remote is the only backend, so
- * the select picks the worker. The select never shows a blank or a disabled
- * Local as its value: with a worker paired but none chosen (and no usable Local)
- * it reads "Select a worker…", and on the web with no worker paired at all it
- * is replaced by sleap-app's empty-state text ("Connect to a worker in the
- * Connect tab to start remote inference."). The strings keep sleap-app's
- * grammar ("A inference job").
- *
- * Exports: createBackendPicker, LOCAL_VALUE, backendSelectValue, resolveBackendChange.
+ * LUCID changes:
+ *  - vanilla DOM re-rendered from a store selector;
+ *  - Local is disabled on desktop without sleap-nn and absent on the web (remote is the only backend);
+ *  - never shows a blank / disabled Local: "Select a worker…", or on the web with nothing paired
+ *    sleap-app's empty-state text.
  */
 import { useConnectStore } from '../../pose/connect/store.js';
 import { shallowEqual } from '../../pose/connect/mini-store.js';
 import { transportLabel } from '../../pose/connect/transport.js';
 import { setInfoTip } from '../info-tip.js';
+import { el, button } from './dom.js';
 
-export const LOCAL_VALUE = '__local__';
+const LOCAL_VALUE = '__local__';
 
 /** The select's value, derived from the panel's own remote / worker state. */
-export function backendSelectValue(remoteEnabled, selectedWorkerId) {
+function backendSelectValue(remoteEnabled, selectedWorkerId) {
     return remoteEnabled && selectedWorkerId ? selectedWorkerId : LOCAL_VALUE;
 }
 
 /** Pure decision behind picking a value. */
-export function resolveBackendChange(value) {
+function resolveBackendChange(value) {
     if (value === LOCAL_VALUE) return { remoteEnabled: false, workerIdToConnect: null };
     return { remoteEnabled: true, workerIdToConnect: value };
 }
 
 /** The status line's words (BackendPicker.tsx). */
-export function connectionStatusText(status, error) {
+function connectionStatusText(status, error) {
     return status === 'connected' ? 'Connected'
         : status === 'connecting' ? 'Connecting…'
             : status === 'reconnecting' ? 'Reconnecting…'
                 : status === 'error' ? 'Connection failed' + (error ? ': ' + error : '')
                     : 'Not connected';
-}
-
-function el(tag, cls, text) {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
 }
 
 /**
@@ -95,8 +71,7 @@ export function createBackendPicker(o) {
     const statusText = el('span', 'backend-status-text');
     const via = el('span', 'backend-via');
     via.setAttribute('data-testid', 'backend-transport');
-    const connectBtn = el('button', 'btn btn-sm inf-btn-outline backend-connect', 'Connect');
-    connectBtn.type = 'button';
+    const connectBtn = button('btn btn-sm inf-btn-outline backend-connect', 'Connect');
     connectBtn.id = 'infBackendConnect';
     connectBtn.addEventListener('click', function () {
         const id = useConnectStore.getState().selectedWorkerId;
@@ -174,8 +149,7 @@ export function createBackendPicker(o) {
                 p.append(') is still ');
                 p.appendChild(el('b', null, rj.state));
                 p.append(' on this worker from a previous session.');
-                const cancel = el('button', 'btn btn-sm inf-btn-outline', 'Cancel it');
-                cancel.type = 'button';
+                const cancel = button('btn btn-sm inf-btn-outline', 'Cancel it');
                 cancel.id = 'infReattachCancel';
                 cancel.addEventListener('click', function () { useConnectStore.getState().cancelJob(); });
                 banner.append(p, cancel);

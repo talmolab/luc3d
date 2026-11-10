@@ -2,7 +2,7 @@
  * Port of sleap-app tests/unit/pairingPlan.test.ts @ 683a159.
  * Pairing-code transport plan (pose/connect/pairing-plan.js).
  */
-import { describe, it, expect, run } from './connect-test-utils.mjs';
+import { describe, it, expect, run } from './bun-test-shim.mjs';
 import { planPairing, preferredTransport } from '../pose/connect/pairing-plan.js';
 
 const NOW = 1_000_000;

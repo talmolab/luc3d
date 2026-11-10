@@ -1,24 +1,13 @@
 /**
  * ui/connect/worker-list.js — the Connect window's left column: the paired workers.
  *
- * Port of sleap-app src/components/connect/WorkerList.tsx @ 683a159 (Connect window §4b.3): a status dot
- * (idle / busy / offline, or a flagged identity mismatch), the GPU specs line (`workerInfo`, refreshed by
- * the window on open), the route ("via …"), filter chips with counts, "+ Pair worker", the empty state, and
- * the Re-pair / Forget affordances of a worker that changed identity or unpaired this device. Selecting a
- * card only changes which worker THIS WINDOW shows (`onSelect`); it never touches the store's
- * `selectedWorkerId` (the app's backend, owned by the Backend picker).
+ * Port of sleap-app src/components/connect/WorkerList.tsx @ 683a159 (§4b.3): status dot, GPU specs line,
+ * route, filter chips with counts, "+ Pair worker", the empty state, Re-pair / Forget. Selecting a card
+ * changes only the window's pick (`onSelect`). Helpers: `pose/connect/worker-ui-helpers.js`.
  *
- * The classification (`classifyWorkerStatus`), specs line (`workerSpecsLine`) and the filter list
- * (`WORKER_FILTERS`) are `pose/connect/worker-ui-helpers.js`; nothing is re-implemented here.
- *
- * LUCID changes: vanilla DOM re-rendered from a store selector (`subscribeSelector`, shallow); sleap-app's
- * Tailwind dot / chip classes become `cw-dot-*` classes (`dotClassFor`); a repaint keeps keyboard focus on
- * the card or chip that had it; the pairing forms are `createPairWorkerForm` instances that stay alive across
- * repaints (what is typed survives) and are `reset()` whenever they are hidden, standing in for React's
- * unmount.
- *
- * Contract (p5): `createWorkerList(container, {selectedId, onSelect(id)}) -> {update(props), destroy()}`.
- * Exports: createWorkerList, dotClassFor.
+ * LUCID changes:
+ *  - vanilla DOM from a store selector; Tailwind dot classes become `cw-dot-*`;
+ *  - a repaint keeps focus on its card / chip; pairing forms survive repaints and `reset()` when hidden.
  */
 import { useConnectStore } from '../../pose/connect/store.js';
 import { shallowEqual } from '../../pose/connect/mini-store.js';
@@ -26,16 +15,10 @@ import { classifyWorkerStatus, workerSpecsLine, WORKER_FILTERS } from '../../pos
 import { transportLabel } from '../../pose/connect/transport.js';
 import { createPairWorkerForm } from './pair-worker-form.js';
 import { forgetWorkerWithConfirm } from './connect-panel.js';
-
-function el(tag, cls, text) {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
-}
+import { el, button } from './dom.js';
 
 /** sleap-app's Tailwind dot class (`bg-green-500`, …) as the Connect window's own class. */
-export function dotClassFor(tailwindClass) {
+function dotClassFor(tailwindClass) {
     const m = /bg-([a-z]+)-\d+/.exec(tailwindClass || '');
     return 'cw-dot cw-dot-' + (m ? m[1] : 'zinc');
 }
@@ -122,8 +105,7 @@ export function createWorkerList(container, props) {
         root.replaceChildren();
         const head = el('div', 'cw-wl-head');
         head.appendChild(el('span', 'connect-caps', 'Paired workers (' + s.pairedWorkers.length + ')'));
-        const pairBtn = el('button', 'connect-btn connect-btn-outline cw-btn-xs', '+ Pair worker');
-        pairBtn.type = 'button';
+        const pairBtn = button('connect-btn connect-btn-outline cw-btn-xs', '+ Pair worker');
         pairBtn.id = 'cwPairWorker';
         pairBtn.setAttribute('data-fk', 'pair');
         pairBtn.addEventListener('click', function () { setShowPairForm(!showPairForm); });
@@ -145,9 +127,8 @@ export function createWorkerList(container, props) {
         } else {
             const chips = el('div', 'cw-chips');
             WORKER_FILTERS.forEach(function (f) {
-                const b = el('button', 'cw-chip' + (filter === f.key ? ' on' : ''),
+                const b = button('cw-chip' + (filter === f.key ? ' on' : ''),
                     f.label + ' (' + (f.key === 'all' ? s.pairedWorkers.length : counts[f.key]) + ')');
-                b.type = 'button';
                 b.setAttribute('data-filter', f.key);
                 b.setAttribute('data-fk', 'f:' + f.key);
                 b.setAttribute('aria-pressed', filter === f.key ? 'true' : 'false');
@@ -181,8 +162,7 @@ export function createWorkerList(container, props) {
         const route = s.connections[w.nodeId] && s.connections[w.nodeId].route;
         const isSelected = p.selectedId === w.nodeId;
 
-        const btn = el('button', 'cw-wcard' + (isSelected ? ' selected' : ''));
-        btn.type = 'button';
+        const btn = button('cw-wcard' + (isSelected ? ' selected' : ''));
         btn.dataset.nodeId = w.nodeId;
         btn.setAttribute('data-fk', 'w:' + w.nodeId);
         btn.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
@@ -199,8 +179,7 @@ export function createWorkerList(container, props) {
         if (status.identityMismatch && repairingId !== w.nodeId) {
             const note = el('div', 'cw-wl-note cw-wl-note-row');
             note.appendChild(el('span', '', w.label + ' has a new identity.'));
-            const b = el('button', 'connect-btn connect-btn-outline cw-btn-xs cw-btn-xxs', 'Re-pair');
-            b.type = 'button';
+            const b = button('connect-btn connect-btn-outline cw-btn-xs cw-btn-xxs', 'Re-pair');
             b.setAttribute('data-fk', 'r:' + w.nodeId);
             b.addEventListener('click', function () { setRepairing(w.nodeId); });
             note.appendChild(b);
@@ -213,12 +192,10 @@ export function createWorkerList(container, props) {
             msg.appendChild(document.createTextNode(') to use it again.'));
             note.appendChild(msg);
             const acts = el('div', 'cw-wl-note-row');
-            const re = el('button', 'connect-btn connect-btn-outline cw-btn-xs cw-btn-xxs', 'Re-pair');
-            re.type = 'button';
+            const re = button('connect-btn connect-btn-outline cw-btn-xs cw-btn-xxs', 'Re-pair');
             re.setAttribute('data-fk', 'r:' + w.nodeId);
             re.addEventListener('click', function () { setRepairing(w.nodeId); });
-            const fg = el('button', 'connect-btn connect-btn-ghost cw-btn-xs cw-btn-xxs cw-muted', 'Forget');
-            fg.type = 'button';
+            const fg = button('connect-btn connect-btn-ghost cw-btn-xs cw-btn-xxs cw-muted', 'Forget');
             fg.setAttribute('data-fk', 'g:' + w.nodeId);
             fg.addEventListener('click', function () { void forgetWorkerWithConfirm(w.nodeId); });
             acts.append(re, fg);

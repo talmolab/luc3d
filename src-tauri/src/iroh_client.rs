@@ -1,69 +1,28 @@
 //! Port of sleap-app `src-tauri/src/iroh_client.rs` @ 683a159.
 //!
 //! LUCID changes (everything else is sleap-app's file):
-//!  - the commands live in the inlined plugin `lucid` (`plugin:lucid|iroh_*`);
-//!  - the reader pushes to an [`EventSink`] instead of a `tauri::ipc::Channel`
-//!    directly, so the core (`dial`, `IrohClients`, frames, blobs) runs without
-//!    a Tauri app (tests, `examples/iroh_real_worker.rs`);
-//!  - frames are capped at [`MAX_FRAME_BYTES`] (256 MiB, far above any real frame: the
-//!    largest is a 4 MiB `fs.read` reply) on both sides: sleap-app allocated
-//!    whatever length a worker claimed;
-//!  - a blob read is capped at [`MAX_BLOB_RANGE`] (4 MiB) and a worker's reply
-//!    may not exceed what was asked for; the body goes back as raw bytes
-//!    (`tauri::ipc::Response`, an ArrayBuffer) instead of a JSON number array
-//!    (the JS side accepts both).
-//!  - hardening against a broken or hostile worker or page (P8 stress review):
-//!    a frame's payload is read in steps that must each make progress within
-//!    [`STALL_TIMEOUT`] (nothing is sized up front from the announced length);
-//!    blob headers are capped far below a frame ([`MAX_BLOB_OPEN_HEADER`],
-//!    [`MAX_BLOB_READ_HEADER`]) and every blob wait and every write is bounded
-//!    in time; a failed blob read drops the stream (its body could otherwise be
-//!    misread as the next header); a failed or timed-out control write closes
-//!    the connection (a half-written frame desyncs the stream). Connection ids
-//!    are never reused, and every command but `iroh_connect` only touches
-//!    connections its own webview opened ([`IrohClients::with_conn`]).
-//!    A webview may hold [`MAX_CONNS_PER_OWNER`] connections (dials in flight
-//!    count); a dial that finishes after its webview reloaded is closed, not
-//!    registered ([`DialTicket`]); the endpoint accepts no streams from the
-//!    worker (it only ever opens them).
+//!  - commands live in the inlined plugin `lucid` (`plugin:lucid|iroh_*`);
+//!  - the reader pushes to an [`EventSink`], so the core runs without a Tauri
+//!    app (tests, `examples/iroh_real_worker.rs`);
+//!  - frames are capped at [`MAX_FRAME_BYTES`] both ways and read in steps that
+//!    must each progress within [`STALL_TIMEOUT`] (never sized up front);
+//!  - blob reads are capped at [`MAX_BLOB_RANGE`], a reply may not exceed the
+//!    request, blob headers have their own small caps, and the body returns as
+//!    raw bytes (`tauri::ipc::Response`);
+//!  - every write and blob wait is time-bounded; a failed blob read drops its
+//!    stream and a failed control write closes the connection (either would
+//!    desync the framing);
+//!  - connections belong to the webview that dialed them
+//!    ([`IrohClients::with_conn`]), ids are never reused, at most
+//!    [`MAX_CONNS_PER_OWNER`] per webview, a dial outliving its webview is
+//!    closed ([`DialTicket`]), and the endpoint accepts no worker streams.
 //!
-//! iroh QUIC transport for the desktop app's protocol-v1 client (item 2.3).
-//!
-//! This is the dial-only counterpart to sleap-connect's worker-side iroh
-//! endpoint (`sleap_rtc/protocol_v1/iroh_transport.py`, item 2.2): it never
-//! accepts connections, it only opens one bidirectional QUIC stream to a
-//! worker and forwards framed protocol-v1 envelope JSON to/from the
-//! frontend's `WorkerClient` (`src/lib/protocolV1/client.ts`) unchanged.
-//! Unlike `rtc.rs` (the legacy WebRTC role this replaces for iroh
-//! connections), this module is a dumb byte pipe, not a second protocol
-//! implementation: all hello/auth/job dispatch logic stays in TypeScript
-//! and is shared unchanged between the browser (raw `WebSocket`) and desktop
-//! (this module) transports, via `WorkerClient`'s injectable `createSocket`
-//! (built for exactly this purpose in item 1.7).
-//!
-//! Wire framing must match `iroh_transport.py`'s `IrohStreamTransport`
-//! exactly: a 4-byte big-endian length prefix, then that many bytes of
-//! UTF-8 JSON, over a single `BiStream` for the connection's lifetime. The
-//! ALPN must match too — a mismatched ALPN is a different application
-//! entirely to iroh, not a malformed request.
-//!
-//! Identity: this endpoint intentionally does NOT reuse the app's
-//! protocol-v1 Ed25519 identity (`src/lib/protocolV1/identity.ts`, which
-//! also isn't guaranteed to be exportable out of the browser's IndexedDB/
-//! WebCrypto storage) as its iroh `SecretKey`. The worker does this pairing
-//! (item 2.2) because it's dialed *by* its `node_id`, so its transport-level
-//! and application-level identities need to be the same key. This side only
-//! ever dials out and is never addressed by its own iroh identity, so a
-//! fresh, ephemeral iroh identity per connection (iroh's own default when no
-//! `secret_key` is set) is simplest and correct — protocol-v1's own
-//! hello/pairing/auth re-authenticates independently at the application
-//! layer regardless of which transport carries it.
-//!
-//! Relay/discovery: uses iroh's own `N0` preset (n0's public relay +
-//! discovery), mirroring what the worker's `runner.py` uses today with no
-//! override (`iroh.EndpointOptions(secret_key=..., alpns=[ALPN])`, no custom
-//! relay config). Pointing both ends at a self-hosted relay/DNS server
-//! instead is item 2.5 (not started) — not bundled here.
+//! A dial-only byte pipe: one bidirectional QUIC stream to a worker carrying
+//! protocol-v1 envelope JSON, framed exactly as the worker's
+//! `IrohStreamTransport` (4-byte big-endian length, then UTF-8 JSON) under the
+//! same ALPN. All hello/auth/job logic stays in JS. Each dial uses a fresh
+//! ephemeral iroh identity (protocol v1 authenticates on its own) and iroh's
+//! `N0` preset (n0's relays and discovery), as the worker does.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use iroh::{
@@ -119,18 +78,8 @@ pub const MAX_DIRECT_ADDRS: usize = 32;
 /// splits a chunk-aligned window into reads of at most this size.
 pub const MAX_BLOB_RANGE: u64 = 4 * 1024 * 1024;
 
-/// Everything needed to dial a worker over iroh. `node_id` is the same
-/// base64url (no padding) raw Ed25519 public key already used throughout
-/// protocol v1 (`hello.node_id`, `identity.ts`'s `ClientIdentity`) — item
-/// 2.2 confirmed the worker's iroh `EndpointId` and its `node_id` are
-/// byte-identical, so no separate iroh-specific ID encoding is needed here.
-///
-/// `relay_url`/`direct_addrs` are accepted as plain, explicit fields rather
-/// than a single opaque "ticket" string on purpose: item 2.1 (how a live
-/// worker's iroh reachability info gets embedded in a pairing ticket) is
-/// still unimplemented and its wire format undecided, so this command
-/// doesn't assume one. Whatever 2.1 eventually produces should be decoded
-/// into these same fields before calling `iroh_connect`.
+/// Everything needed to dial a worker over iroh. `node_id` is the worker's
+/// base64url (no padding) Ed25519 key, which is also its iroh `EndpointId`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IrohDialTarget {
@@ -139,10 +88,8 @@ pub struct IrohDialTarget {
     pub direct_addrs: Option<Vec<String>>,
 }
 
-/// Pushed to the frontend over the `on_message` IPC channel. Mirrors what a
-/// real `WebSocket`'s `onmessage`/`onclose`/`onerror` callbacks distinguish
-/// — `tauriIrohSocket.ts` dispatches on `kind` to drive its
-/// `WebSocketLike` adapter.
+/// Pushed to the frontend over the `on_message` IPC channel: what a
+/// `WebSocket`'s `onmessage`/`onclose`/`onerror` distinguish.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum IrohClientEvent {
@@ -314,20 +261,20 @@ impl IrohClients {
     /// Removes and closes connection `id`. A no-op if it's already gone.
     /// (The reader task's own connection; commands go through [`close_as`].)
     pub async fn close(&self, id: ConnId) {
-        let conn = self.0.lock().await.conns.remove(&id);
-        if let Some(conn) = conn {
-            conn.close().await;
-        }
+        self.close_if(id, |_| true).await;
     }
 
     /// [`close`] for a command: only when `owner` opened it.
     pub async fn close_as(&self, owner: &str, id: ConnId) {
+        self.close_if(id, |c| c.owner == owner).await;
+    }
+
+    async fn close_if(&self, id: ConnId, pred: impl FnOnce(&IrohConn) -> bool) {
         let conn = {
             let mut r = self.0.lock().await;
-            if r.conns.get(&id).is_some_and(|c| c.owner == owner) {
-                r.conns.remove(&id)
-            } else {
-                None
+            match r.conns.get(&id).is_some_and(pred) {
+                true => r.conns.remove(&id),
+                false => None,
             }
         };
         if let Some(conn) = conn {
@@ -356,14 +303,9 @@ impl IrohClients {
     }
 }
 
-/// State for one connection's blob-reading stream (item 2.4), kept
-/// **separate** from the control stream behind its own lock — a blob read in
-/// progress (which can take a while over a slow/relayed path) must never
-/// block `iroh_send`/`iroh_disconnect`, or vice versa. One blob stream per
-/// connection: today's remote-merge flow fetches one job result at a time,
-/// sequentially, so a single slot matches actual usage. A second
-/// `iroh_blob_open` before `iroh_blob_close` replaces the slot outright,
-/// dropping whatever stream was open before.
+/// One connection's blob stream, behind its own lock so a slow blob read never
+/// blocks `iroh_send`/`iroh_disconnect`. One slot per connection: a second
+/// `iroh_blob_open` replaces (drops) the stream open before.
 #[derive(Debug, Default)]
 pub struct IrohBlobState {
     #[allow(dead_code)] // kept for debugging/future multi-slot support, not read today
@@ -406,10 +348,8 @@ pub fn build_endpoint_addr(target: &IrohDialTarget) -> Result<EndpointAddr, Stri
 // ── Connect Command ──────────────────────────────────────────────
 
 /// Binds a fresh endpoint under `preset` and dials `endpoint_addr`, opening
-/// one bidirectional stream. Parameterized over the preset so tests can
-/// dial with `presets::Minimal` (no relay/DNS, no external network
-/// dependency) while the real command uses `presets::N0` — mirrors the
-/// worker's own `iroh_preset` test-override in `runner.py`.
+/// one bidirectional stream. Tests dial with `presets::Minimal` (no relay or
+/// DNS); the command uses `presets::N0`.
 pub async fn dial(
     endpoint_addr: EndpointAddr,
     preset: impl iroh::endpoint::presets::Preset,
@@ -426,31 +366,36 @@ pub async fn dial(
         .await
         .map_err(|e| format!("Failed to bind iroh endpoint: {e}"))?;
 
-    let connection = match timeout(CONNECT_TIMEOUT, endpoint.connect(endpoint_addr, ALPN)).await {
-        Ok(Ok(conn)) => conn,
-        Ok(Err(e)) => {
+    let opened = async {
+        let connect = async {
+            (endpoint.connect(endpoint_addr, ALPN).await)
+                .map_err(|e| format!("iroh connect failed: {e}"))
+        };
+        let connection = bounded(CONNECT_TIMEOUT, connect, "iroh connect timed out (20s)").await?;
+        let open = async {
+            (connection.open_bi().await).map_err(|e| format!("Failed to open iroh stream: {e}"))
+        };
+        let (send, recv) =
+            bounded(CONNECT_TIMEOUT, open, "Opening the iroh stream timed out (20s)").await?;
+        Ok((connection, send, recv))
+    }
+    .await;
+    match opened {
+        Ok((connection, send, recv)) => Ok((endpoint, connection, send, recv)),
+        Err(e) => {
             endpoint.close().await;
-            return Err(format!("iroh connect failed: {e}"));
+            Err(e)
         }
-        Err(_) => {
-            endpoint.close().await;
-            return Err("iroh connect timed out (20s)".to_string());
-        }
-    };
+    }
+}
 
-    let (send, recv) = match timeout(CONNECT_TIMEOUT, connection.open_bi()).await {
-        Ok(Ok(streams)) => streams,
-        Ok(Err(e)) => {
-            endpoint.close().await;
-            return Err(format!("Failed to open iroh stream: {e}"));
-        }
-        Err(_) => {
-            endpoint.close().await;
-            return Err("Opening the iroh stream timed out (20s)".to_string());
-        }
-    };
-
-    Ok((endpoint, connection, send, recv))
+/// `fut`'s result, or `Err(msg)` when it takes longer than `limit`.
+async fn bounded<T>(
+    limit: Duration,
+    fut: impl std::future::Future<Output = Result<T, String>>,
+    msg: &str,
+) -> Result<T, String> {
+    timeout(limit, fut).await.unwrap_or_else(|_| Err(msg.to_string()))
 }
 
 /// Dials a worker and returns the new connection's [`ConnId`], which the
@@ -510,8 +455,7 @@ pub fn decode_frame_len_max(header: [u8; 4], max: usize) -> Result<usize, String
 }
 
 /// Writes one length-prefixed frame: a 4-byte big-endian length, then that
-/// many UTF-8 bytes. Must match `iroh_transport.py`'s `IrohStreamTransport`
-/// exactly — shared by the real `iroh_send` command and tests.
+/// many UTF-8 bytes (the worker's `IrohStreamTransport` framing).
 pub async fn write_frame(send: &mut SendStream, text: &str) -> Result<(), String> {
     write_frame_with(send, text, WRITE_TIMEOUT).await
 }
@@ -532,17 +476,13 @@ pub async fn write_frame_with(
             .await
             .map_err(|e| format!("iroh send failed: {e}"))
     };
-    match timeout(limit, write).await {
-        Ok(r) => r,
-        Err(_) => Err("iroh send timed out: the worker is not reading".to_string()),
-    }
+    bounded(limit, write, "iroh send timed out: the worker is not reading").await
 }
 
 /// Reads one length-prefixed frame (the read-side counterpart of
-/// [`write_frame`]). `Ok(None)` means the stream ended cleanly or abruptly —
-/// per `iroh_transport.py`'s doc comment, iroh doesn't reliably distinguish
-/// those and this protocol doesn't need to. A header over the size cap is an
-/// `Err` (and the stream is not read further).
+/// [`write_frame`]). `Ok(None)` means the stream ended, cleanly or not (iroh
+/// does not reliably tell them apart). A header over the size cap is an `Err`
+/// (and the stream is not read further).
 pub async fn read_frame(recv: &mut RecvStream) -> Result<Option<String>, String> {
     read_frame_with(recv, MAX_FRAME_BYTES, STALL_TIMEOUT).await
 }
@@ -630,18 +570,13 @@ pub async fn iroh_disconnect<R: tauri::Runtime>(
     Ok(())
 }
 
-// ── Blob Commands (item 2.4) ────────────────────────────────────────
+// ── Blob Commands ───────────────────────────────────────────────────
 //
-// A blob is a job-result file (today, only a track job's `predictions.slp`)
-// fetched by range — never the whole thing at once, see
-// `docs/plans/2026-09-30-item-2-4-blob-over-iroh-design.md`. This module
-// stays a dumb byte pipe here too: chunk-alignment and hash verification
-// belong to the TypeScript caller (`tauriIrohBlob.ts`), which knows about
-// `VERIFY_CHUNK_SIZE`/`chunkHashes` — these commands don't.
+// A blob (a job-result file) is fetched by range on its own stream. Still a
+// byte pipe: chunk alignment and hash checks belong to the JS caller.
 
-/// Shape of every `{ok, ...}` / `{ok:false, error}` JSON header the worker
-/// sends on the blob stream (open response and each read response) — see
-/// the design doc §6.1. Fields not present in a given response are `None`.
+/// Every `{ok, ...}` / `{ok:false, error}` JSON header the worker sends on the
+/// blob stream (open reply and each read reply); absent fields are `None`.
 #[derive(Deserialize)]
 struct BlobHeader {
     ok: bool,
@@ -668,9 +603,7 @@ pub fn valid_blob_sha256(sha256: &str) -> bool {
     sha256.len() == 64 && sha256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// Core of `iroh_blob_open`, taking a plain `Connection` handle instead of
-/// `tauri::State` — directly testable (mirrors [`dial`]'s role for
-/// `iroh_connect`).
+/// Core of `iroh_blob_open`, without `tauri::State` (testable).
 pub async fn open_blob_stream(
     connection: Connection,
     sha256: String,
@@ -684,10 +617,8 @@ pub async fn open_blob_stream_with(
     sha256: String,
     limit: Duration,
 ) -> Result<(IrohBlobOpenResult, IrohBlobState), String> {
-    match timeout(limit, open_blob_stream_inner(connection, sha256, limit)).await {
-        Ok(r) => r,
-        Err(_) => Err("Opening the blob stream timed out".to_string()),
-    }
+    let open = open_blob_stream_inner(connection, sha256, limit);
+    bounded(limit, open, "Opening the blob stream timed out").await
 }
 
 async fn open_blob_stream_inner(
@@ -734,9 +665,8 @@ async fn open_blob_stream_inner(
     Ok((result, state))
 }
 
-/// Opens a fresh stream on connection `conn_id` dedicated to reading one
-/// blob, and replaces whatever blob stream that connection previously had
-/// open (§1/§5 of the design doc scope this to one blob stream at a time).
+/// Opens a fresh stream on connection `conn_id` for reading one blob,
+/// replacing whatever blob stream that connection had open.
 #[tauri::command]
 pub async fn iroh_blob_open<R: tauri::Runtime>(
     conn_id: ConnId,
@@ -747,9 +677,8 @@ pub async fn iroh_blob_open<R: tauri::Runtime>(
     if !valid_blob_sha256(&sha256) {
         return Err("A blob id is a 64-character lowercase hex sha256".to_string());
     }
-    // Only clone the handles under the registry lock — opening the new
-    // stream and the read/write that follows must not hold it, or every
-    // other connection's iroh_send would stall for the whole round trip.
+    // Only clone the handles under the registry lock: the round trip below
+    // must not stall every other connection's iroh_send.
     let (connection, blob) = clients
         .with_conn(webview.label(), conn_id, |c| {
             (c.connection.clone(), c.blob.clone())
@@ -760,8 +689,7 @@ pub async fn iroh_blob_open<R: tauri::Runtime>(
     Ok(result)
 }
 
-/// Core of `iroh_blob_read_range`, taking a plain `&mut IrohBlobState`
-/// instead of `tauri::State` — directly testable.
+/// Core of `iroh_blob_read_range`, without `tauri::State` (testable).
 pub async fn read_blob_range(
     state: &mut IrohBlobState,
     offset: u64,
@@ -789,10 +717,8 @@ pub async fn read_blob_range_with(
     if offset.checked_add(length).is_none() {
         return Err("blob read range overflows".to_string());
     }
-    let result = match timeout(limit, read_blob_range_inner(state, offset, length, stall)).await {
-        Ok(r) => r,
-        Err(_) => Err("blob read timed out".to_string()),
-    };
+    let read = read_blob_range_inner(state, offset, length, stall);
+    let result = bounded(limit, read, "blob read timed out").await;
     if result.is_err() && state.recv.is_some() {
         *state = IrohBlobState::default();
     }
@@ -805,10 +731,7 @@ async fn read_blob_range_inner(
     length: u64,
     stall: Duration,
 ) -> Result<Vec<u8>, String> {
-    // Destructure both fields out of the same `&mut IrohBlobState` at once —
-    // taking two sequential `.as_mut()` calls on a field borrows the whole
-    // struct twice, which the borrow checker rejects even though the two
-    // underlying fields never alias.
+    // Destructured at once: two `.as_mut()` calls would borrow `state` twice.
     let IrohBlobState { send, recv, .. } = state;
     let send = send
         .as_mut()
@@ -851,11 +774,8 @@ async fn read_blob_range_inner(
     Ok(buf)
 }
 
-/// Reads exactly `[offset, offset + length)` off the currently-open blob
-/// stream — a dumb pipe, same as [`iroh_send`]: it forwards whatever
-/// `offset`/`length` it's given verbatim and does no chunk-alignment or
-/// hash verification itself (see this section's own header comment). The
-/// caller is responsible for having called [`iroh_blob_open`] first.
+/// Reads `[offset, offset + length)` off the open blob stream (opened by
+/// [`iroh_blob_open`]), forwarding the range verbatim.
 #[tauri::command]
 pub async fn iroh_blob_read_range<R: tauri::Runtime>(
     conn_id: ConnId,
@@ -874,8 +794,7 @@ pub async fn iroh_blob_read_range<R: tauri::Runtime>(
 }
 
 /// Ends connection `conn_id`'s open blob stream, if any. A no-op (not an
-/// error) if nothing was open or the connection is already gone — mirrors
-/// `dispose()`'s no-op-when-never-opened contract on the TypeScript side.
+/// error) if nothing was open or the connection is already gone.
 #[tauri::command]
 pub async fn iroh_blob_close<R: tauri::Runtime>(
     conn_id: ConnId,
@@ -888,25 +807,17 @@ pub async fn iroh_blob_close<R: tauri::Runtime>(
     else {
         return Ok(());
     };
-    let mut b = blob.lock().await;
-    if let Some(mut send) = b.send.take() {
+    let old = std::mem::take(&mut *blob.lock().await);
+    if let Some(mut send) = old.send {
         let _ = send.finish();
     }
-    b.recv = None;
-    b.sha256 = None;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    //! Real iroh endpoints, real QUIC streams, `presets::Minimal` (relay
-    //! disabled, direct addresses only) on both sides — no external network
-    //! dependency, mirroring `sleap-connect`'s own
-    //! `tests/protocol_v1/test_iroh_transport.py` (item 2.2). These exist to
-    //! hands-on-verify the exact Rust API (this crate renamed
-    //! Node*->Endpoint* vs. the Python bindings' node-language `iroh` 1.1.0
-    //! — a real API divergence between the two, not just cosmetic) and this
-    //! module's framing, not to re-test iroh itself.
+    //! Real iroh endpoints and QUIC streams with `presets::Minimal` (no relay,
+    //! direct addresses only) on both sides: no external network.
     use super::*;
     use iroh::endpoint::presets::Minimal;
     use tokio::time::sleep;
@@ -935,40 +846,44 @@ mod tests {
         }
     }
 
-    /// Spins up a fake worker: a real iroh endpoint that accepts one
-    /// connection, opens the same protocol-v1 ALPN, reads one framed
-    /// message, and echoes it back prefixed with `"echo:"`.
-    async fn spawn_fake_worker() -> EndpointAddr {
+    /// A worker endpoint (protocol-v1 ALPN) that hands its one accepted
+    /// connection to `script`, then stays up for `linger` and closes.
+    async fn spawn_worker<F, Fut>(linger: Duration, script: F) -> EndpointAddr
+    where
+        F: FnOnce(Connection) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
         let endpoint = Endpoint::builder(Minimal)
             .alpns(vec![ALPN.to_vec()])
             .bind()
             .await
-            .expect("fake worker endpoint bind");
+            .expect("worker endpoint bind");
         let addr = timeout(Duration::from_secs(5), wait_for_direct_address(&endpoint))
             .await
-            .expect("fake worker never reported a direct address");
-
+            .expect("worker never reported a direct address");
         tokio::spawn(async move {
-            let incoming = endpoint.accept().await.expect("no incoming connection");
-            let connecting = incoming.accept().expect("incoming.accept()");
-            let conn = connecting.await.expect("connection handshake");
-            let (mut send, mut recv) = conn.accept_bi().await.expect("accept_bi");
+            let incoming = endpoint.accept().await.expect("incoming");
+            let conn = incoming.accept().expect("accept").await.expect("handshake");
+            script(conn.clone()).await;
+            sleep(linger).await; // `conn` stays open until here
+            drop(conn);
+            endpoint.close().await;
+        });
+        addr
+    }
 
+    /// A fake worker that reads one frame and echoes it back prefixed with
+    /// `"echo:"`, then closes after 500 ms.
+    async fn spawn_fake_worker() -> EndpointAddr {
+        spawn_worker(Duration::from_millis(500), |conn| async move {
+            let (mut send, mut recv) = conn.accept_bi().await.expect("accept_bi");
             let text = read_frame(&mut recv)
                 .await
                 .expect("read_frame")
                 .expect("stream closed before a frame arrived");
-            write_frame(&mut send, &format!("echo:{text}"))
-                .await
-                .expect("write_frame");
-
-            // Keep the endpoint (and thus the connection) alive until the
-            // test's own client side has read the reply and torn down.
-            sleep(Duration::from_millis(500)).await;
-            endpoint.close().await;
-        });
-
-        addr
+            write_frame(&mut send, &format!("echo:{text}")).await.expect("write_frame");
+        })
+        .await
     }
 
     #[tokio::test]
@@ -1055,22 +970,15 @@ mod tests {
         assert_eq!(addr.relay_urls().count(), 1);
     }
 
-    // ── Blob commands (item 2.4) ─────────────────────────────────────
+    // ── Blob commands ────────────────────────────────────────────────
     //
-    // A fake worker that serves each incoming `BiStream` as one blob-fetch
-    // session (open frame, then read frames until the client finishes its
-    // send side) against a single known file's bytes — enough to hands-on
-    // verify this module's own open/read logic without needing a real
-    // Python worker (that cross-language proof is a separate step, item
-    // 2.4's §11).
+    // A fake worker serving each incoming stream as one blob session (open
+    // frame, then read frames until the client finishes) over known bytes.
 
     const TEST_CHUNK_SIZE: u64 = 4; // tiny on purpose, to exercise multiple chunks
 
-    // A real sha256 isn't needed here — this module never verifies
-    // `chunkHashes` itself (that's TS-side, §8/§9 of the design doc); this
-    // test only needs a deterministic, chunk-unique stand-in to prove the
-    // field round-trips from the fake worker's open response through to the
-    // caller unchanged, without adding a new crate dependency just for that.
+    // A chunk-unique stand-in for sha256s: this module only passes
+    // `chunkHashes` through (the JS side verifies them).
     fn test_chunk_hashes(bytes: &[u8]) -> Vec<String> {
         bytes
             .chunks(TEST_CHUNK_SIZE as usize)
@@ -1079,20 +987,7 @@ mod tests {
     }
 
     async fn spawn_fake_blob_worker(bytes: &'static [u8]) -> EndpointAddr {
-        let endpoint = Endpoint::builder(Minimal)
-            .alpns(vec![ALPN.to_vec()])
-            .bind()
-            .await
-            .expect("fake worker endpoint bind");
-        let addr = timeout(Duration::from_secs(5), wait_for_direct_address(&endpoint))
-            .await
-            .expect("fake worker never reported a direct address");
-
-        tokio::spawn(async move {
-            let incoming = endpoint.accept().await.expect("no incoming connection");
-            let connecting = incoming.accept().expect("incoming.accept()");
-            let conn = connecting.await.expect("connection handshake");
-
+        spawn_worker(Duration::from_millis(500), move |conn| async move {
             loop {
                 let (mut send, mut recv) = match conn.accept_bi().await {
                     Ok(streams) => streams,
@@ -1149,11 +1044,8 @@ mod tests {
                     let _ = send.finish();
                 });
             }
-            sleep(Duration::from_millis(500)).await;
-            endpoint.close().await;
-        });
-
-        addr
+        })
+        .await
     }
 
     const TEST_BLOB_BYTES: &[u8] = b"0123456789abcdefghij"; // 20 bytes = 5 chunks of 4
@@ -1266,22 +1158,11 @@ mod tests {
     /// header instead of allocating.
     #[tokio::test]
     async fn read_frame_refuses_an_announced_frame_over_the_cap() {
-        let endpoint = Endpoint::builder(Minimal)
-            .alpns(vec![ALPN.to_vec()])
-            .bind()
-            .await
-            .expect("bind");
-        let addr = timeout(Duration::from_secs(5), wait_for_direct_address(&endpoint))
-            .await
-            .expect("address");
-        tokio::spawn(async move {
-            let incoming = endpoint.accept().await.expect("incoming");
-            let conn = incoming.accept().expect("accept").await.expect("handshake");
+        let addr = spawn_worker(Duration::from_millis(500), |conn| async move {
             let (mut send, _recv) = conn.accept_bi().await.expect("accept_bi");
             send.write_all(&[0xff, 0xff, 0xff, 0xff]).await.expect("write");
-            sleep(Duration::from_millis(500)).await;
-            endpoint.close().await;
-        });
+        })
+        .await;
         let (client, _conn, mut send, mut recv) = dial(addr, Minimal).await.expect("dial");
         // The control stream only becomes visible to the worker once written to.
         write_frame(&mut send, "x").await.expect("write_frame");
@@ -1336,29 +1217,13 @@ mod tests {
 
     // ── P8 stress review: hostile workers, hostile pages ─────────────
 
-    /// A worker that hands its accepted connection to `script`, then keeps the
-    /// endpoint alive for a few seconds.
+    /// [`spawn_worker`] that stays up 5 s after its script.
     async fn spawn_script_worker<F, Fut>(script: F) -> EndpointAddr
     where
         F: FnOnce(Connection) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
-        let endpoint = Endpoint::builder(Minimal)
-            .alpns(vec![ALPN.to_vec()])
-            .bind()
-            .await
-            .expect("bind");
-        let addr = timeout(Duration::from_secs(5), wait_for_direct_address(&endpoint))
-            .await
-            .expect("address");
-        tokio::spawn(async move {
-            let incoming = endpoint.accept().await.expect("incoming");
-            let conn = incoming.accept().expect("accept").await.expect("handshake");
-            script(conn).await;
-            sleep(Duration::from_secs(5)).await;
-            endpoint.close().await;
-        });
-        addr
+        spawn_worker(Duration::from_secs(5), script).await
     }
 
     /// Dials a script worker, writes one frame (so the worker sees the

@@ -20,29 +20,19 @@
  *
  * Usage: node tests/e2e/connect-iroh.mjs   (PORT= to move its server)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { FakeWorker } from '../connect/fake-worker.mjs';
 import { RELAY_TABLE } from '../connect/pair-code.mjs';
+import { runConnectE2E, check, watchPage, bootApp, repoRoot } from './fixtures/connect-e2e.mjs';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SHIM = fs.readFileSync(path.join(repoRoot, 'src-tauri', 'js', 'lucid-desktop.js'), 'utf8');
 const PRED = fs.readFileSync(path.join(repoRoot, 'tests', 'fixtures', 'sleap-nn-predictions', 'two-node.predictions.slp'));
-const PORT = Number(process.env.PORT || 9397);
-const BASE = `http://localhost:${PORT}`;
 const WS = 'ws://127.0.0.1:9641';
 const RELAY = RELAY_TABLE[2];
 const CHUNK = 4096; // the real worker's is 256 KiB; small here so the file spans several chunks
 
-let fails = 0;
-const check = (c, m, extra) => {
-    console.log((c ? '  ✓ ' : '  ✗ ') + m + (c || extra === undefined ? '' : '  ' + JSON.stringify(extra).slice(0, 600)));
-    if (!c) fails++;
-};
 const sha = (b) => createHash('sha256').update(b).digest('hex');
 
 /** The mock Tauri runtime (page side): every iroh_* invoke goes through the Node bridge `__irohBridge`. */
@@ -82,19 +72,14 @@ function installMock() {
     };
 }
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-let browser;
-try {
-    await new Promise((r) => setTimeout(r, 800));
-    browser = await chromium.launch();
+await runConnectE2E(9397, async ({ browser, BASE }) => {
 
     // ---------------------------------------------------------------- 0
     console.log('\n--- 0. Web build: no iroh ---');
     {
         const page = await browser.newPage();
-        page.on('pageerror', (e) => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
-        await page.goto(`${BASE}/index.html`);
-        await page.waitForSelector('.panel-rail-btn[data-tab="tabConnect"]', { timeout: 30000 });
+        watchPage(page);
+        await bootApp(page, BASE);
         const w = await page.evaluate(async () => (await import('./pose/connect/transport.js')).irohTransportAvailable());
         check(w === false, 'irohTransportAvailable() is false without the desktop shim');
         await page.close();
@@ -106,7 +91,7 @@ try {
     const page = await context.newPage();
     page.setDefaultTimeout(30000);
     page.on('dialog', (d) => d.accept());
-    page.on('pageerror', (e) => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
+    watchPage(page);
 
     const conns = new Map();       // connId -> {socket}
     const dialed = [];             // iroh targets
@@ -157,8 +142,7 @@ try {
 
     await page.addInitScript(installMock);
     await page.addInitScript(SHIM);
-    await page.goto(`${BASE}/index.html`);
-    await page.waitForSelector('.panel-rail-btn[data-tab="tabConnect"]', { timeout: 30000 });
+    await bootApp(page, BASE);
 
     console.log('\n--- 1. The shim and the registered transport ---');
     const reg = await page.evaluate(async () => ({
@@ -262,9 +246,4 @@ try {
     check(took >= 9, `fell back to iroh only after the outage lasted ~10 s (${took.toFixed(1)} s)`, took);
     check(dialed.length > dialsBefore, 'iroh_connect dialed on the fallback');
     wsDown = false;
-} finally {
-    if (browser) await browser.close();
-    server.kill();
-}
-console.log(fails ? `\n${fails} FAILED` : '\nALL PASSED');
-process.exit(fails ? 1 : 0);
+});

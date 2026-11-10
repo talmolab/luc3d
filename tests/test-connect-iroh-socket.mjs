@@ -3,7 +3,7 @@
  * pose/connect/iroh-socket.js, with a fake `window.lucidDesktop.iroh` shim
  * (connect(target, onEvent) / send / disconnect) instead of fake Tauri IPC.
  */
-import { describe, it, expect, run } from './connect-test-utils.mjs';
+import { describe, it, expect, run } from './bun-test-shim.mjs';
 import { createIrohSocketFactory, encodeIrohDialUrl } from '../pose/connect/iroh-socket.js';
 
 async function flush(ticks = 20) {
