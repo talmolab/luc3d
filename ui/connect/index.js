@@ -25,9 +25,12 @@
  * startup network work is `resumeTrackedJobs()` (AppShell.tsx's mount effect,
  * which dials workers that have an active job).
  *
- * HOOK (P8): register the iroh socket factory
- * (`registerIrohSocketFactory`, `pose/connect/transport.js`) at the marked
- * line BEFORE `resumeTrackedJobs()` — it must exist before the first connect.
+ * iroh (desktop only): when `window.lucidDesktop.iroh` exists (the shim over the
+ * `iroh_*` commands, `src-tauri/src/iroh_client.rs`) the iroh socket factory and
+ * blob fetcher are registered BEFORE `resumeTrackedJobs()` — they must exist
+ * before the first connect, since a relay-only code pairs over iroh and a
+ * dropped WebSocket falls back to it. The web build never has one, so it stays
+ * ws-only.
  *
  * Nothing here touches the `.slp`: pairing and keys live in localStorage /
  * IndexedDB (`lucid-connect`).
@@ -38,8 +41,27 @@ import {
 import { registerPanelRailPanel, showPanelTab } from '../panel-rail.js';
 import { notify } from './notify.js';
 import { createConnectPanel } from './connect-panel.js';
+import { registerIrohSocketFactory, registerIrohBlobFetcher } from '../../pose/connect/transport.js';
+import { createIrohSocketFactory } from '../../pose/connect/iroh-socket.js';
+import { fetchBlobOverIroh } from '../../pose/connect/iroh-blob.js';
 
 export const CONNECT_TAB_ID = 'tabConnect';
+
+/**
+ * Registers the iroh transport (socket factory + blob fetcher) over the desktop
+ * shim's `iroh` object; a no-op without one (the web build). Exported for tests.
+ * @param {{iroh?: object} | null | undefined} desktop `window.lucidDesktop`
+ * @returns {boolean} whether iroh is now available
+ */
+export function registerDesktopIroh(desktop) {
+    const iroh = desktop && desktop.iroh;
+    if (!iroh || typeof iroh.connect !== 'function') return false;
+    registerIrohSocketFactory(createIrohSocketFactory(function () { return iroh; }));
+    registerIrohBlobFetcher(function (connId, ref, options) {
+        return fetchBlobOverIroh(function () { return iroh; }, connId, ref.sha256, ref.size, options);
+    });
+    return true;
+}
 
 let _setUp = false;
 let _panel = null;
@@ -91,13 +113,15 @@ export function setupConnect() {
     });
     installConnectStorageSync(window);
 
+    // Before anything can plan or dial a pairing (the panel's form asks whether iroh exists).
+    registerDesktopIroh(window.lucidDesktop);
+
     _panel = createConnectPanel({ openConnectWindow: openConnectWindow });
     const pane = document.createElement('div');
     pane.className = 'connect-pane';
     pane.appendChild(_panel.el);
     registerPanelRailPanel({ tab: CONNECT_TAB_ID, label: 'Connect', icon: 'globe' }, pane);
 
-    // P8 HOOK: registerIrohSocketFactory(...) goes here, before the first connect below.
 
     const store = useConnectStore.getState();
     Promise.resolve(store.resumeTrackedJobs()).catch(function (e) {

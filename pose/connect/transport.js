@@ -24,6 +24,9 @@
  *  - `encodeIrohDialUrl` / `decodeIrohDialUrl` (sleap-app: in
  *    `tauriIrohSocket.ts`) live here, since they are pure JSON and both the
  *    dialer and the future Tauri socket need them.
+ *  - ADDED `registerIrohBlobFetcher` / `getIrohBlobFetcher`: the iroh blob path
+ *    (`iroh-blob.js`) the store uses instead of refusing a result download
+ *    over iroh (sleap-app streams it from `inferenceStore`).
  *  - `toIrohDialTarget` returns a plain object (no `IrohDialTarget` import).
  */
 
@@ -83,6 +86,26 @@ export function registerIrohSocketFactory(factory) {
 /** The registered iroh socket factory, or null when iroh is unavailable. */
 export function getIrohSocketFactory() {
   return irohSocketFactory;
+}
+
+/** @type {((connId: number, ref: {sha256: string, size?: number}, options?: {onProgress?: (done: number, total: number) => void}) => Promise<Uint8Array>) | null} */
+let irohBlobFetcher = null;
+
+/**
+ * Registers (or removes) the iroh counterpart of `WorkerClient.fetchBlob`:
+ * `(connId, {sha256, size}, {onProgress}) => Promise<Uint8Array>`, verified
+ * (`iroh-blob.js` `fetchBlobOverIroh`). Registered with the socket factory by
+ * the desktop app; without one a result file cannot be downloaded over iroh.
+ *
+ * @param {typeof irohBlobFetcher} fetcher
+ */
+export function registerIrohBlobFetcher(fetcher) {
+  irohBlobFetcher = fetcher ?? null;
+}
+
+/** The registered iroh blob fetcher, or null. */
+export function getIrohBlobFetcher() {
+  return irohBlobFetcher;
 }
 
 /** Whether direct iroh connections can be dialed from this runtime. */

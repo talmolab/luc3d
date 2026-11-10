@@ -89,6 +89,7 @@ import { loadSavedMappings } from "./path-mappings.js";
 import {
   getIrohSocketFactory,
   irohTransportAvailable,
+  getIrohBlobFetcher,
   parseTicketIroh,
   toIrohDialTarget,
   encodeIrohDialUrl,
@@ -389,6 +390,27 @@ const IROH_DESKTOP_ONLY =
  * What to dial: `url` is a ws address, or the encoded iroh target for `"iroh"`.
  * @typedef {{ transport: TransportKind, url: string, display: string }} DialSpec
  */
+
+/**
+ * LUCID (P8): a result blob over the iroh blob stream (`iroh-blob.js`, registered by the desktop app
+ * through `registerIrohBlobFetcher`). Without a fetcher, or a connection id, it says so as sleap-app's
+ * refusal did. `options.onProgress` (or `options.fsFallback.onProgress`, which Fetch & Load passes)
+ * receives `(done, total)`; there is no `fs.read` fallback here — the iroh stream IS the fallback.
+ *
+ * @param {any} client @param {{ sha256: string, size?: number }} ref @param {any} [options]
+ */
+async function fetchOverIroh(client, ref, options) {
+  const fetcher = getIrohBlobFetcher();
+  const connId = client?.irohConnectionId;
+  if (connId === null || connId === undefined) throw new Error("Not connected to a worker");
+  if (!fetcher) {
+    throw new Error(
+      `Result files can't be downloaded over an ${transportLabel("iroh")} connection here — ` +
+        "reconnect over the worker's network address to fetch them.",
+    );
+  }
+  return fetcher(connId, ref, { onProgress: options?.onProgress ?? options?.fsFallback?.onProgress });
+}
 
 /** @returns {Promise<DialSpec>} */
 async function irohDial(info, nodeId) {
@@ -1984,12 +2006,9 @@ export const useConnectStore = createStore(
           throw new Error("Not connected to a worker");
         }
         if (activeTransport === "iroh") {
-          // Blob downloads dial the worker's HTTP blob port derived from a
-          // ws:// URL, which a direct iroh connection doesn't have.
-          throw new Error(
-            `Result files can't be downloaded over an ${transportLabel("iroh")} connection this way yet — ` +
-              "reconnect over the worker's network address to fetch them.",
-          );
+          // The HTTP blob port is derived from a ws:// URL, which a direct
+          // iroh connection doesn't have: use the iroh blob stream.
+          return fetchOverIroh(_client, ref, options);
         }
         return options
           ? _client.fetchBlob(ref.sha256, ref.size, options)
@@ -1998,18 +2017,13 @@ export const useConnectStore = createStore(
 
       /**
        * LUCID: `fetchResultBlob` for ANY paired worker (its managed connection, dialed through
-       * `clientFor` if needed), not only the selected `_client`. Same iroh refusal and `options`.
+       * `clientFor` if needed), not only the selected `_client`. Over iroh it reads the blob stream (`fetchOverIroh`); same `options`.
        * @param {string} workerId @param {{ sha256: string, size?: number }} ref @param {object} [options]
        */
       fetchResultBlobOn: async (workerId, ref, options) => {
         const client = await get().clientFor(workerId);
         if (!client.authenticated) throw new Error("Not connected to a worker");
-        if (managed.get(workerId)?.route === "iroh") {
-          throw new Error(
-            `Result files can't be downloaded over an ${transportLabel("iroh")} connection this way yet — ` +
-              "reconnect over the worker's network address to fetch them.",
-          );
-        }
+        if (managed.get(workerId)?.route === "iroh") return fetchOverIroh(client, ref, options);
         return options
           ? client.fetchBlob(ref.sha256, ref.size, options)
           : client.fetchBlob(ref.sha256, ref.size);

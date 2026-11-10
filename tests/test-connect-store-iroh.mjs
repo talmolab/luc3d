@@ -7,7 +7,7 @@
 console.warn = () => {};
 import { describe, it, expect, beforeEach, run, MemoryStorage } from './connect/store-test-env.mjs';
 import { useConnectStore, configureConnect, __resetManagedConnections, __setManagedDeps } from '../pose/connect/store.js';
-import { registerIrohSocketFactory } from '../pose/connect/transport.js';
+import { registerIrohSocketFactory, registerIrohBlobFetcher } from '../pose/connect/transport.js';
 class FakeWorkerClient {
     opts;
     static instances = [];
@@ -240,11 +240,57 @@ describe("connectStore iroh transport (desktop)", ()=>{
         await s.getState().pairWithTicket(TICKET_WITH_IROH, undefined, {
             transport: "iroh"
         });
+        last().irohConnectionId = 3;
         await expect(s.getState().fetchResultBlob({
             sha256: "abc",
             size: 1
         })).rejects.toThrow(/internet \(direct or relay\).*network address/);
         expect(last().fetchBlobCalls).toBe(0);
+    });
+    // P8: with the desktop's iroh blob fetcher registered, a result downloads over the connection's blob stream.
+    it("fetchResultBlob downloads over iroh through the registered blob fetcher (connection id + progress forwarded)", async ()=>{
+        const s = await store();
+        await s.getState().pairWithTicket(TICKET_WITH_IROH, undefined, {
+            transport: "iroh"
+        });
+        last().irohConnectionId = 9;
+        const calls = [];
+        registerIrohBlobFetcher(async (connId, ref, o)=>{
+            calls.push([connId, ref, typeof o.onProgress]);
+            o.onProgress?.(1, 2);
+            return new Uint8Array([7, 7]);
+        });
+        try {
+            const seen = [];
+            const bytes = await s.getState().fetchResultBlob({ sha256: "abc", size: 2 }, { fsFallback: { path: "/x.slp", onProgress: (d, t)=>seen.push([d, t]) } });
+            expect(Array.from(bytes)).toEqual([7, 7]);
+            expect(calls).toEqual([[9, { sha256: "abc", size: 2 }, "function"]]);
+            expect(seen).toEqual([[1, 2]]);
+            expect(last().fetchBlobCalls).toBe(0);
+            // ...for any paired worker too (the Connect window / Fetch & Load path).
+            const workerId = s.getState().pairedWorkers[0].nodeId;
+            const again = await s.getState().fetchResultBlobOn(workerId, { sha256: "def", size: 2 });
+            expect(Array.from(again)).toEqual([7, 7]);
+            expect(calls.length).toBe(2);
+            expect(calls[1][0]).toBe(9);
+        } finally {
+            registerIrohBlobFetcher(null);
+        }
+    });
+    it("a fetcher that fails surfaces its error; a connection with no id is refused with the clear message", async ()=>{
+        const s = await store();
+        await s.getState().pairWithTicket(TICKET_WITH_IROH, undefined, {
+            transport: "iroh"
+        });
+        registerIrohBlobFetcher(async ()=>{ throw new Error("blob.hash_mismatch"); });
+        try {
+            last().irohConnectionId = 3;
+            await expect(s.getState().fetchResultBlob({ sha256: "abc", size: 1 })).rejects.toThrow("blob.hash_mismatch");
+            last().irohConnectionId = null;
+            await expect(s.getState().fetchResultBlob({ sha256: "abc", size: 1 })).rejects.toThrow("Not connected to a worker");
+        } finally {
+            registerIrohBlobFetcher(null);
+        }
     });
 });
 

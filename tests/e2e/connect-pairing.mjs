@@ -27,8 +27,8 @@
  *
  * NOT here: the iroh cases of sleap-app's `pairWorkerFormIroh.test.tsx` (relay
  * code -> iroh route with "Connects directly when it can…", typed address over a
- * relay code -> ws, no relay and no address -> "Make sure it's running"). The web
- * build has no iroh transport; those belong to P8 (desktop iroh). `planPairing`
+ * relay code -> ws): the web build has no iroh transport; they are in
+ * `connect-iroh.mjs` (desktop shim). `planPairing`
  * itself is unit-tested in tests/test-connect-pairing-plan.mjs.
  *
  * Usage: node tests/e2e/connect-pairing.mjs   (PORT= to move its server)

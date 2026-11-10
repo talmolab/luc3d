@@ -21,8 +21,8 @@
  * enabled (LUCID's keyboard convention for dialogs and forms).
  *
  * The iroh cases of sleap-app's `pairWorkerFormIroh.test.tsx` (relay code ->
- * iroh route, typed address over a relay code -> ws) need the desktop iroh
- * transport and belong to P8; the web build only plans `ws`.
+ * iroh route, typed address over a relay code -> ws) are in `tests/e2e/connect-iroh.mjs`
+ * (a desktop shim is registered there); the web build only plans `ws`.
  *
  * Used by `ui/connect/connect-panel.js` (and, later, the Connect window).
  */

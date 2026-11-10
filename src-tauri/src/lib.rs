@@ -11,6 +11,7 @@ mod close_guard;
 mod dialogs;
 mod files;
 mod input_paths;
+pub mod iroh_client;
 mod localhost;
 mod native_menu;
 mod sleap_nn;
@@ -60,6 +61,13 @@ fn desktop_shim() -> Cow<'static, str> {
     Cow::Borrowed(EMBEDDED)
 }
 
+/// Closes the iroh connections webview `label` opened, in the background.
+fn close_iroh_connections(clients: &iroh_client::IrohClients, label: &str) {
+    let clients = clients.clone();
+    let label = label.to_string();
+    tauri::async_runtime::spawn(async move { clients.close_owned_by(&label).await });
+}
+
 /// The inlined plugin `lucid`: invoked from JS as `plugin:lucid|<name>`.
 /// Plugin commands (unlike bare app commands) can be granted to the remote
 /// http://localhost origin. Keep this list identical to build.rs COMMANDS.
@@ -98,6 +106,12 @@ fn lucid_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
             sleap_nn::detect_gpu,
             input_paths::input_picks,
             sleap_nn::detect_sleap_nn,
+            iroh_client::iroh_connect,
+            iroh_client::iroh_send,
+            iroh_client::iroh_disconnect,
+            iroh_client::iroh_blob_open,
+            iroh_client::iroh_blob_read_range,
+            iroh_client::iroh_blob_close,
         ])
         .build()
 }
@@ -153,8 +167,28 @@ pub fn run() {
         .manage(Arc::new(files::WriteSessions::default()))
         .manage(close_guard::CloseGuardState::default())
         .manage(sleap_nn::RunningProcess::default())
+        .manage(iroh_client::IrohClients::default())
         .manage(native_menu::NativeMenuState::<tauri::Wry>::default())
-        .on_window_event(close_guard::handle_window_event)
+        .on_window_event(|window, event| {
+            close_guard::handle_window_event(window, event);
+            // A closed window's page can never disconnect what it opened.
+            if let tauri::WindowEvent::Destroyed = event {
+                close_iroh_connections(
+                    window.state::<iroh_client::IrohClients>().inner(),
+                    window.label(),
+                );
+            }
+        })
+        // A reloaded page has a fresh JS heap that knows nothing of the iroh
+        // connections its previous page opened, so close them.
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                close_iroh_connections(
+                    webview.state::<iroh_client::IrohClients>().inner(),
+                    webview.label(),
+                );
+            }
+        })
         .on_menu_event(|app, event| {
             let id = event.id().as_ref();
             if id == native_menu::QUIT_MENU_ID {
@@ -290,7 +324,7 @@ mod tests {
             .map(|s| s.rsplit("::").next().unwrap())
             .collect();
 
-        assert_eq!(from_build.len(), 32);
+        assert_eq!(from_build.len(), 38);
         from_build.sort_unstable();
         from_lib.sort_unstable();
         assert_eq!(from_build, from_lib);

@@ -4303,9 +4303,35 @@ needs-address / error), `preferredTransport(worker, irohAvailable)`, `NOT_A_CODE
 `transport.js`: `parseTicketIroh`, `transportLabel`, `toIrohDialTarget`,
 `encodeIrohDialUrl`/`decodeIrohDialUrl`, and the iroh SEAM: iroh is available only once
 `registerIrohSocketFactory(createSocket-shaped factory)` has been called (the desktop app
-does, in a later phase; the web never does), `irohTransportAvailable()`,
-`getIrohSocketFactory()`. **Imports.** None. **Coverage.**
+does, `ui/connect/index.js` `registerDesktopIroh`; the web never does), `irohTransportAvailable()`,
+`getIrohSocketFactory()`, and the blob seam `registerIrohBlobFetcher(fn)` / `getIrohBlobFetcher()`
+(the store downloads a result over iroh through it). **Imports.** None. **Coverage.**
 `tests/test-connect-pairing-plan.mjs`, `test-connect-transport.mjs`.
+
+#### pose/connect/iroh-socket.js, iroh-blob.js
+
+**Purpose.** The page side of the desktop iroh byte pipe (Rust `src-tauri/src/iroh_client.rs`; the page
+still speaks protocol v1, Rust only moves 4-byte length-prefixed frames). Ports of sleap-app
+`tauriIrohSocket.ts` / `tauriIrohBlob.ts` over the shim `window.lucidDesktop.iroh`
+(`src-tauri/js/lucid-desktop.js`: `connect(target, onEvent)` -> connection id, `send`, `disconnect`,
+`blobOpen`, `blobReadRange`, `blobClose`), injected so Node tests fake it. `iroh-socket.js`:
+`createIrohSocketFactory(getIroh)` -> `(url) => IrohSocket` (a `WebSocketLike` with `irohConnectionId`),
+re-exports `encodeIrohDialUrl`. `iroh-blob.js`: `createIrohBlobRangeSource(getIroh, connId, sha256, size)`
+(a sleap-io `RangeSource` + `dispose`, chunk-aligned, every chunk verified against the worker's hashes),
+`fetchBlobOverIroh(getIroh, connId, sha256, size, {onProgress})` (LUCID: the whole blob, size and sha256
+verified like `fetchBlob`; what the store's `fetchResultBlob(On)` uses), `MAX_BLOB_RANGE` (4 MiB, the
+Rust cap: reads are split into pieces of at most that size), `validateBlobOpen`, `MAX_FETCH_BYTES`. The
+open reply is validated before anything is sized from it; a failed open is not cached; `readRange` refuses
+bad ranges. `IrohSocket` buffers events that beat `iroh_connect`'s reply, delivers nothing after CLOSED, and
+ends a `close()` during CONNECTING at once (error + close 1006). **Rust hardening** (`iroh_client.rs`): frame
+payloads are read in steps that must progress within 60 s (never allocated from the announced length); blob
+headers, waits and writes are capped/timed; a failed blob read drops the stream; a failed write closes the
+connection; ids are never reused; each command touches only its own webview's connections; 16 per window; a
+dial that outlives its webview's reload is closed (`DialTicket`); the endpoint accepts no worker-opened
+streams. **Imports.** `transport.js`, `errors.js`.
+**Imported by.** `ui/connect/index.js`. **Coverage.** `tests/test-connect-iroh-socket.mjs`,
+`test-connect-iroh-blob.mjs`, `test-connect-store-iroh.mjs`, `tests/e2e/connect-iroh.mjs`; the Rust pipe
+against a real worker: `src-tauri/examples/iroh_real_worker.rs`.
 
 #### pose/connect/identity.js
 
@@ -13082,11 +13108,11 @@ Loaded by ONE literal `import('../ui/connect/index.js')` in
 openConnectWindow, platform: 'desktop'|'web', appVersion: <meta lucid-release>|'dev'})`,
 `installConnectStorageSync(window)`, registers the rail panel (`tabConnect`, label
 Connect, icon `globe`) via `registerPanelRailPanel`, `resumeTrackedJobs()` once,
-`releaseIdleConnections()` on `pagehide`. A marked hook for the iroh socket
-factory (P8). **Exports.** `setupConnect`, `setConnectWindowOpener(fn)` (`setupConnect` installs
+`releaseIdleConnections()` on `pagehide`. `registerDesktopIroh(window.lucidDesktop)` registers the
+iroh socket factory and blob fetcher before the first connect when the shim has `iroh` (desktop only). **Exports.** `setupConnect`, `registerDesktopIroh`, `setConnectWindowOpener(fn)` (`setupConnect` installs
 a lazy opener: ONE literal `import('./connect-window.js')` on first open, the panel comes to
 the front if that fails; `null` restores the default, `showPanelTab`), `openConnectWindow(opts)`
-(what the panel button, the toasts' "Open" and View > Connect Window call), `CONNECT_TAB_ID`. **Imports.** `pose/connect/store.js`,
+(what the panel button, the toasts' "Open" and View > Connect Window call), `CONNECT_TAB_ID`. **Imports.** `pose/connect/store.js`, `transport.js`, `iroh-socket.js`, `iroh-blob.js`,
 `ui/panel-rail.js`, `./notify.js`, `./connect-panel.js`. **Imported by.**
 `pose/initialization.js` (dynamic).
 
