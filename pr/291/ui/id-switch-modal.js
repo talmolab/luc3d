@@ -30,27 +30,27 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { noteProgress } from './progress-delta.js?v=ad20197d939c';
-import { state, getActiveSession } from './app-state.js?v=ad20197d939c';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=ad20197d939c';
-import { showPanelTab } from './panel-rail.js?v=ad20197d939c';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=ad20197d939c';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=ad20197d939c';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=ad20197d939c';
-import { getTrackingThreshold } from './settings.js?v=ad20197d939c';
-import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=ad20197d939c';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js?v=ad20197d939c';
+import { noteProgress } from './progress-delta.js?v=b5c6154bd415';
+import { state, getActiveSession } from './app-state.js?v=b5c6154bd415';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=b5c6154bd415';
+import { showPanelTab } from './panel-rail.js?v=b5c6154bd415';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=b5c6154bd415';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=b5c6154bd415';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=b5c6154bd415';
+import { getTrackingThreshold } from './settings.js?v=b5c6154bd415';
+import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=b5c6154bd415';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js?v=b5c6154bd415';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=ad20197d939c';
-import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine, wireTrainingPrompt } from './image-model-dialog.js?v=ad20197d939c';
-import { prejudgeFor, PREJUDGE_DEFAULTS } from '../pose/image-prejudge.js?v=ad20197d939c';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=ad20197d939c';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=ad20197d939c';
-import { createBrightnessSampler } from './brightness-sampler.js?v=ad20197d939c';
+         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=b5c6154bd415';
+import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine, wireTrainingPrompt } from './image-model-dialog.js?v=b5c6154bd415';
+import { prejudgeFor, prejudgeSettings, PREJUDGE_DEFAULTS, PREJUDGE_BUILTIN } from '../pose/image-prejudge.js?v=b5c6154bd415';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=b5c6154bd415';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=b5c6154bd415';
+import { createBrightnessSampler } from './brightness-sampler.js?v=b5c6154bd415';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
          idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary,
-         idSwitchPlaceOf, idSwitchPrevPlaceEnd } from './id-switch-review.js?v=ad20197d939c';
+         idSwitchPlaceOf, idSwitchPrevPlaceEnd } from './id-switch-review.js?v=b5c6154bd415';
 
 const CUE_LABEL = { size: 'body size', image: 'images', brightness: 'coat brightness', review: 'review list' };
 
@@ -343,7 +343,7 @@ async function runImage(session, rate, inject, reviewRows) {
     // this page, or reloadable from its URL. Its own threshold replaces the Wizard's, which is calibrated
     // for the built-in model.
     var pkg = null;
-    try { pkg = await resolveSessionImageModel(session); }
+    try { pkg = inject.imageModel !== undefined ? inject.imageModel : await resolveSessionImageModel(session); }
     catch (e) { return { ok: false, reason: (e && e.message) || String(e) }; }
     setActiveImageModel(pkg);
     var threshold = pkg ? pkg.threshold : getTrackingThreshold('imageChangeThreshold');
@@ -402,6 +402,8 @@ async function runImage(session, rate, inject, reviewRows) {
             releaseFrames: embedder.releaseFrames,
             // single camera with a review list: pre-judge its rows (pose/image-prejudge.js; embeds every sample)
             reviewRows: reviewRows || null,
+            // ...with the settings measured for this kind of model: the built-in one has no gate and a wider margin
+            prejudge: prejudgeSettings(!pkg),
             signal: prog.signal,
             onProgress: async function (stage, done, total) {
                 if (stage === 'embed') {
@@ -503,6 +505,7 @@ async function runBrightness(session, rate, inject, moments, single) {
  * @param {{size?: boolean, image?: boolean, auto?: boolean, statusPrefix?: string,
  *          navigateToFrame?: function(number), inject?: {createEmbedder?}}} opts
  *   `inject.createEmbedder` replaces the image model — for tests only
+ *   `inject.imageModel` stands for the session's model package (null = the built-in one) — for tests only
  *   (tests/e2e/id-switch-image-check.mjs), so they need no GPU or model download.
  * @returns {Promise<{size?: object, image?: object}|null>}  each result carries `elapsedMs`
  */
@@ -682,7 +685,8 @@ function prejudgeNote(p, fixed, pj) {
     var num = function (v) { return (v < 0 ? '−' : '+') + Math.abs(v).toFixed(2); };
     var tip = 'Image pre-judge: ' + (p.score != null ? 'keep − swap score ' + num(p.score) + ' (below −' + pj.margin.toFixed(1) +
         ' looks swapped, above +' + pj.margin.toFixed(1) + ' looks right); ' : '') +
-        (p.cos != null ? 'how alike the two animals look to the model: ' + p.cos.toFixed(2) + ' (a verdict only below ' + pj.gateCos.toFixed(2) + ')' : 'too few frames show both animals');
+        (pj.gateCos == null ? 'the built-in model: no check of how alike the two animals look' :
+         p.cos != null ? 'how alike the two animals look to the model: ' + p.cos.toFixed(2) + ' (a verdict only below ' + pj.gateCos.toFixed(2) + ')' : 'too few frames show both animals');
     return '<span class="id-switch-prejudge pj-' + p.verdict + '" title="' + escapeHtml(tip) + '">' + PREJUDGE_TEXT[p.verdict] +
         (fixed && (p.verdict === 'swapped' || p.verdict === 'kept') ? ' (before the Fix)' : '') + '</span>';
 }
@@ -695,7 +699,7 @@ function prejudgeSummaryHtml(st) {
     pj.rows.forEach(function (p) { n[p.verdict]++; });
     var fmt = function (v) { return v.toLocaleString('en-US'); };
     var looks = function (v) { return v === 1 ? 'looks' : 'look'; };
-    var allAlike = n.alike === pj.rows.length;
+    var allAlike = n.alike > 0 && n.alike === pj.rows.length;
     var cos = pj.pairs.filter(function (q) { return q.cos != null; }).map(function (q) { return q.cos.toFixed(2); });
     var line = allAlike
         ? 'Images can\'t tell ' + (pj.pairs.length > 1 ? 'these animals' : 'these two animals') + ' apart (how alike they look: ' + cos.join(', ') +
@@ -704,8 +708,8 @@ function prejudgeSummaryHtml(st) {
           (n.alike ? ' · ' + fmt(n.alike) + ' can\'t tell apart' : '') + (n.sparse + n.unknown ? ' · ' + fmt(n.sparse + n.unknown) + ' too few crops' : '');
     var builtin = !im.imageModel;
     return '<div class="id-switch-summary id-switch-prejudge-summary">' + line + '</div>' +
-        (builtin ? '<div class="id-switch-train-prompt">' + (allAlike ? 'The built-in image model was never trained on your recordings. '
-            : 'These come from the built-in image model, never trained on your recordings. ') +
+        (builtin ? '<div class="id-switch-train-prompt">These come from the built-in image model, never trained on your recordings: ' +
+            'it gives a verdict only where the images clearly lean one way, and is unsure at most places. ' +
             'A model fine-tuned on this rig\'s own videos tells its animals apart much better. ' +
             '<button class="panel-btn image-model-train-open" type="button">How to train one…</button></div>' : '');
 }
@@ -719,10 +723,14 @@ function aboutHtml(st, ran) {
         'no score: look at each, and Fix the ones where the labels swap.</p>' +
         (st.results.image && st.results.image.ok && st.results.image.prejudge ? '<p><b>Image pre-judge.</b> The image check also ' +
             'compares each animal\'s look in the ' + PREJUDGE_DEFAULTS.windowSeconds + ' s before a place with the ' + PREJUDGE_DEFAULTS.windowSeconds +
-            ' s after it. It gives a verdict only where the model tells this video\'s two animals apart: where they look too alike, ' +
-            'the row says so instead. On 1,626 places in 395 proofread two-mouse videos, with a model trained on that rig, it gave a ' +
-            'verdict at 4 places in 5 and called 64 of 94 swaps, with no false alarm and one miss. Still watch each place: a verdict ' +
-            'is a lead, not the answer.</p>' : '') : '';
+            ' s after it. ' + (st.results.image.imageModel
+                ? 'It gives a verdict only where the model tells this video\'s two animals apart: where they look too alike, ' +
+                  'the row says so instead. On 1,626 places in 395 proofread two-mouse videos, with a model trained on that rig, it gave a ' +
+                  'verdict at 4 places in 5 and called 64 of 94 swaps, with no false alarm and one miss. '
+                : 'With the built-in model, never trained on your animals, it calls a place only when the score is past ±' +
+                  PREJUDGE_BUILTIN.margin.toFixed(1) + ': on 1,626 places in 395 proofread two-mouse videos it called 17 of 94 swaps, ' +
+                  'with no false alarm, and was unsure at 7 places in 10 (a model trained on that rig called 64, also with none). ') +
+            'Still watch each place: a verdict is a lead, not the answer.</p>' : '') : '';
     if (!checks.length) return reviewAbout;
     return reviewAbout + aboutChecksHtml(st, checks);
 }

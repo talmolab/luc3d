@@ -14,12 +14,12 @@
  * ES module. Exports `InteractionManager` and `isInteractiveClickTarget`.
  */
 
-import { Instance } from '../pose/pose-data.js?v=ad20197d939c';
-import { getOrComputeReprojectedInstance } from '../pose/triangulation.js?v=ad20197d939c';
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=ad20197d939c';
-import { deleteTargetsFromStore, groupMemberTargets, unlinkedTarget } from './custom-delete-ops.js?v=ad20197d939c';
-import { nodeTooltipText, setNodeTooltipTarget, hideNodeTooltip } from './node-tooltip.js?v=ad20197d939c';
-import { getGroupColor, unlinkedDupIndices, unlinkedBaseColor, wedgeHalfWidth } from './overlays.js?v=ad20197d939c';
+import { Instance } from '../pose/pose-data.js?v=b5c6154bd415';
+import { getOrComputeReprojectedInstance } from '../pose/triangulation.js?v=b5c6154bd415';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=b5c6154bd415';
+import { deleteTargetsFromStore, groupMemberTargets, unlinkedTarget } from './custom-delete-ops.js?v=b5c6154bd415';
+import { nodeTooltipText, setNodeTooltipTarget, hideNodeTooltip } from './node-tooltip.js?v=b5c6154bd415';
+import { getGroupColor, unlinkedDupIndices, unlinkedBaseColor, wedgeHalfWidth } from './overlays.js?v=b5c6154bd415';
 
 // ============================================
 // Alt + wheel instance rotation

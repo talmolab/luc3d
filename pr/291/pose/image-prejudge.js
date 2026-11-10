@@ -17,7 +17,8 @@
  *    look swapped across the row.
  *
  * Verdicts (`prejudgeReviewRows`): 'alike' when the pair's separation is not
- * below `gateCos` (the model cannot tell these animals apart, so no verdict);
+ * below `gateCos` (the model cannot tell these animals apart, so no verdict;
+ * `gateCos: null` = no gate, and then the separation is not needed);
  * 'swapped' / 'kept' when the score is below −`margin` / above `margin`;
  * 'unsure' between; 'sparse' when a side has fewer than `minCrops` crops of an
  * animal; 'unknown' when fewer than `minPairs` samples show both animals.
@@ -30,12 +31,21 @@
  * (the defaults): a verdict on 80% of rows (1,312 of 1,626), 64 of 94 swaps
  * called, 0 false alarms, 1 miss. Without the gate: 25 false alarms, 5 misses
  * (above cos 0.85 the AUC falls to ~0.8). Window lengths 1.5–8 s, gaps and
- * medians did not beat ±3 s. Other models use the same numbers, unmeasured.
+ * medians did not beat ±3 s. Other fine-tuned packages use the same numbers,
+ * unmeasured.
+ *
+ * The built-in model (frozen DINOv3 ViT-S/16 at 192 px, same 1,633 rows) gets
+ * its own settings, `PREJUDGE_BUILTIN`: to it every pair looks alike (median
+ * separation 0.92 vs the package's 0.16; none below 0.7), its separation does
+ * not predict where its score holds (AUC 0.92–0.96 at every level), and its
+ * scores are ~6x smaller (AUC 0.945 clean). No gate, margin 0.2: 17 of 94
+ * swaps called, 0 false alarms, 2 of 450 "look right" were swaps, 71% unsure
+ * (margin 0.15: 31 called, 4 false alarms; 0.1: 49 and 15).
  *
  * Pure — no DOM, no app state, no imports.
  */
 
-/** The pre-judge's settings (see the module doc for how they were chosen). */
+/** The pre-judge's settings for a fine-tuned model package (see the module doc for how they were chosen). */
 export const PREJUDGE_DEFAULTS = Object.freeze({
     windowSeconds: 3,   // each side of a row's close spell
     gateCos: 0.7,       // a verdict only for a pair whose cluster means' cosine is below this
@@ -44,6 +54,14 @@ export const PREJUDGE_DEFAULTS = Object.freeze({
     minPairs: 10,       // samples showing both animals, or 'unknown'
     iterations: 15,     // 2-means rounds
 });
+
+/** Overrides of PREJUDGE_DEFAULTS for the built-in (not fine-tuned) image model: no gate, a wider margin. */
+export const PREJUDGE_BUILTIN = Object.freeze({ gateCos: null, margin: 0.2 });
+
+/** The pre-judge settings for an image model: `builtin` true = the built-in model. */
+export function prejudgeSettings(builtin) {
+    return Object.assign({}, PREJUDGE_DEFAULTS, builtin ? PREJUDGE_BUILTIN : {});
+}
 
 function unitMean(vecs) {
     if (!vecs.length) return null;
@@ -119,8 +137,10 @@ export function rowScore(sides, minCrops) {
 /** The verdict for a score in a pair of a given separation (see the module doc). */
 export function prejudgeVerdict(sep, score, opts) {
     var o = Object.assign({}, PREJUDGE_DEFAULTS, opts || {});
-    if (!sep) return 'unknown';
-    if (!(sep.cos < o.gateCos)) return 'alike';
+    if (o.gateCos != null) {
+        if (!sep) return 'unknown';
+        if (!(sep.cos < o.gateCos)) return 'alike';
+    }
     if (score == null) return 'sparse';
     return score < -o.margin ? 'swapped' : score > o.margin ? 'kept' : 'unsure';
 }
@@ -134,7 +154,7 @@ export function prejudgeVerdict(sep, score, opts) {
  * @param {number} fps
  * @param {object} [opts] PREJUDGE_DEFAULTS overrides
  * @returns {{rows: Array<{frame, startFrame, identityA, identityB, score: ?number, cos: ?number, verdict: string}>,
- *            pairs: Array<{identityA, identityB, cos: ?number, agree: ?number, samples: number}>, gateCos, margin, windowSeconds}}
+ *            pairs: Array<{identityA, identityB, cos: ?number, agree: ?number, samples: number}>, gateCos: ?number, margin, windowSeconds}}
  */
 export function prejudgeReviewRows(emb, rows, fps, opts) {
     var o = Object.assign({}, PREJUDGE_DEFAULTS, opts || {});
