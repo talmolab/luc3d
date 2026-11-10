@@ -8,7 +8,8 @@
  *  - a row's keep − swap score: negative across a swap, positive across none;
  *  - verdicts: the gate (cos ≥ 0.7: 'alike', whatever the score), the margin
  *    ('unsure'), too few crops ('sparse'), too few samples ('unknown');
- *  - windows: ±3 s around the close spell, the spell itself left out.
+ *  - windows: ±3 s around the close spell, the spell itself left out;
+ *  - the built-in model's settings (PREJUDGE_BUILTIN): no gate, margin 0.2.
  *
  * Run:  node tests/test-image-prejudge.mjs
  */
@@ -94,6 +95,29 @@ group('prejudgeVerdict — gate, margin, missing data');
     eq(PJ.PREJUDGE_DEFAULTS.gateCos, 0.7, 'default gate 0.7 (gate_sweep, 2026-11-09)');
     eq(PJ.PREJUDGE_DEFAULTS.margin, 0.1, 'default margin 0.1');
     eq(PJ.PREJUDGE_DEFAULTS.windowSeconds, 3, 'default window ±3 s');
+}
+
+group('the built-in model — no gate, margin 0.2');
+{
+    const B = PJ.prejudgeSettings(true), F = PJ.prejudgeSettings(false);
+    eq(B.gateCos, null, 'built-in: no gate (gate_sweep builtin_options, 2026-11-10)');
+    eq(B.margin, 0.2, 'built-in: margin 0.2');
+    eq(B.windowSeconds, 3, 'built-in: the rest as for a package');
+    eq(F.gateCos, 0.7, 'a package: the gate');
+    eq(F.margin, 0.1, 'a package: margin 0.1');
+    const sep = (cos) => ({ cos, agree: 1, n: 100 });
+    eq(PJ.prejudgeVerdict(sep(0.95), -0.25, B), 'swapped', 'no gate: cos 0.95 still gets a verdict');
+    eq(PJ.prejudgeVerdict(sep(0.95), 0.15, B), 'unsure', 'margin 0.2: +0.15 unsure');
+    eq(PJ.prejudgeVerdict(sep(0.95), 0.21, B), 'kept', 'margin 0.2: +0.21 kept');
+    eq(PJ.prejudgeVerdict(null, -0.5, B), 'swapped', 'no gate: no separation needed');
+    eq(PJ.prejudgeVerdict(null, null, B), 'sparse', 'no gate, no score: too few crops');
+    const fps = 40, s = stream(animals(0.6, 31), { fps, swapAt: 2400, gaps: [[2380, 2420]], noise: 0.2 });
+    const r = [{ frame: 2420, startFrame: 2380, identityA: 0, identityB: 1 }];
+    const pk = PJ.prejudgeReviewRows(s, r, fps).rows[0];
+    eq(pk.verdict, 'alike', `fairly alike (cos ${pk.cos.toFixed(3)}), the package settings: alike`);
+    const b = PJ.prejudgeReviewRows(s, r, fps, B);
+    eq(b.rows[0].verdict, 'swapped', `fairly alike, the built-in settings: judged by the score alone (${b.rows[0].score.toFixed(3)})`);
+    eq(b.gateCos, null, 'reports no gate');
 }
 
 group('prejudgeReviewRows — rows of a video with one swap');

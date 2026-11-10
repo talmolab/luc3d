@@ -4579,8 +4579,11 @@ each other — given only where the image model tells this video's two animals
 apart. Pure — no DOM, no app state, no imports. Called by `checkImageSwitches`
 (`pose/id-switch-check.js`) with the check's own crop embeddings.
 
-**Key exports.** `PREJUDGE_DEFAULTS` (`windowSeconds` 3, `gateCos` 0.7, `margin`
-0.1, `minCrops` 2, `minPairs` 10, `iterations` 15); `pairSeparation(pairs, opts)`
+**Key exports.** `PREJUDGE_DEFAULTS` (a fine-tuned package's settings:
+`windowSeconds` 3, `gateCos` 0.7, `margin` 0.1, `minCrops` 2, `minPairs` 10,
+`iterations` 15); `PREJUDGE_BUILTIN` (the built-in model's overrides: `gateCos`
+null = no gate, `margin` 0.2); `prejudgeSettings(builtin)` (the defaults, with
+`PREJUDGE_BUILTIN` when `builtin`); `pairSeparation(pairs, opts)`
 → `{cos, agree, n}` or null: 2-means over the samples showing both animals, one
 crop per cluster per sample, started from the labels; cos between the cluster
 means (lower = more distinct; label-free); `rowScore({a0, b0, a1, b1}, minCrops)`
@@ -4588,7 +4591,7 @@ means (lower = more distinct; label-free); `rowScore({a0, b0, a1, b1}, minCrops)
 close spell `[start − W, start)` and after it `(frame, frame + W]` (negative = looks
 swapped), or null with too few crops; `prejudgeVerdict(sep, score, opts)` →
 `'alike'` (cos ≥ gate: the model can't tell this pair apart; no verdict, whatever
-the score), `'swapped'` / `'kept'` (beyond ±margin), `'unsure'`, `'sparse'` (too
+the score; with `gateCos` null never, and no separation is needed), `'swapped'` / `'kept'` (beyond ±margin), `'unsure'`, `'sparse'` (too
 few crops on a side), `'unknown'` (fewer than 10 samples with both);
 `prejudgeReviewRows({frames, vector(i, identityId)}, rows, fps, opts)` →
 `{rows: [{frame, startFrame, identityA, identityB, score, cos, verdict}], pairs:
@@ -4612,17 +4615,34 @@ that clean truth:
 | none | 1,626 | 94 | 25 | 5 |
 
 Above cos 0.85 the AUC falls to ~0.8. Window lengths 1.5–8 s, gaps and medians did
-not beat ±3 s. The built-in DINOv3 model (frozen) uses the same numbers, not
-measured (user's choice): the tab then prompts to train a model for the rig.
+not beat ±3 s. Other packages use the same numbers, unmeasured.
+
+**The built-in model (2026-11-10, `gate_sweep/builtin*.py`).** The frozen DINOv3
+ViT-S/16 at 192 px on the same rows: every pair looks alike to it (median
+separation 0.92, 10–90% 0.85–0.95, vs 0.16 for the package; none below 0.7, so
+the package's gate gave no verdict anywhere), the separation does not predict
+where its score holds (AUC 0.92–0.96 at every level), and its scores are ~6x
+smaller (median −0.10 swap, +0.13 kept; AUC 0.913, 0.945 clean). Hence
+`PREJUDGE_BUILTIN`, no gate:
+
+| margin | "look swapped": swaps / false | "look right": kept / swaps | unsure |
+|---|---|---|---|
+| 0.1 | 49 / 15 | 934 / 4 | 624 |
+| 0.15 | 31 / 4 | 644 / 3 | 944 |
+| **0.2** | **17 / 0** | **448 / 2** | **1,159** |
+| 0.25 | 9 / 0 | 303 / 1 | 1,313 |
+
+(gate 0.95 + margin 0.2: 13 / 0, 260 "can't tell"; no better.) The tab prompts
+to train a model for the rig.
 
 **Imports from project modules.** None.
 
 **Imported by.** `pose/id-switch-check.js`, `ui/id-switch-modal.js` (`prejudgeFor`,
-`PREJUDGE_DEFAULTS`).
+`prejudgeSettings`, `PREJUDGE_DEFAULTS`, `PREJUDGE_BUILTIN`).
 
 **Coverage.** `tests/test-image-prejudge.mjs` (separation of distinct vs look-alike
 animals, under partly swapped labels; score signs; every verdict and the gate; the
-windows; `prejudgeFor`), `tests/test-id-switch-check.mjs` (through
+windows; `prejudgeFor`; the built-in settings), `tests/test-id-switch-check.mjs` (through
 `checkImageSwitches`), `tests/e2e/single-camera-track-all.mjs` §10.
 
 ---
@@ -9898,13 +9918,15 @@ read a frozen "0/1"),
 `swapSingleCameraIdentities`, `singleCameraCheckOptions`),
 `ui/image-embedder.js` (`createImageEmbedder`, `IMAGE_MODEL_MB`, `formatEmbedTiming`,
 `formatEmbedDevice`, `formatEmbedCpu`, `inputTensorToPixels`, `INPUT`, `setActiveImageModel`),
-`pose/image-prejudge.js` (`prejudgeFor`, `PREJUDGE_DEFAULTS`: on a single-camera
-session with a review list, `runImage` passes the list's rows as `reviewRows`, and
+`pose/image-prejudge.js` (`prejudgeFor`, `prejudgeSettings`, `PREJUDGE_DEFAULTS`,
+`PREJUDGE_BUILTIN`: on a single-camera session with a review list, `runImage` passes
+the list's rows as `reviewRows`, with `prejudgeSettings(!pkg)` — the built-in model
+has no gate and margin 0.2 — and
 each review row — or a check's row agreeing with one — says the image check's
 verdict on its second line ("images: look swapped" / "look right" / "unsure" /
 "can't tell these two apart" / too few crops; score and separation in its tooltip;
 "(before the Fix)" once fixed); the review list's summary counts them, or says the
-images can't tell the animals apart; NOT saved: a reopened project shows none until
+images can't tell the animals apart (a package only); NOT saved: a reopened project shows none until
 the image check runs again), `ui/image-model-dialog.js` (`resolveSessionImageModel`,
 `imageModelLineHtml`, `wireImageModelLine`, `wireTrainingPrompt`: after a pre-judge
 by the built-in model, a "How to train one…" prompt opens the dialog on its training
@@ -9937,7 +9959,8 @@ no-GPU CPU run, default off), `tests/e2e/image-check-cpu.mjs` (the real
 dialog's measured CPU line and CPU-only graph), `tests/e2e/id-switch-fix.mjs`
 (Fix switch…: the dialog, the swap, the renamed follow-on, saved, Undo exact),
 `tests/e2e/single-camera-track-all.mjs` §10 (the review list's pre-judge, the
-look-alike gate, the training prompt).
+built-in settings, a package's look-alike gate via `inject.imageModel`, the training
+prompt).
 
 ---
 

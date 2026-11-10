@@ -68,10 +68,11 @@
  *     to just after it.
  * 10. With a review list, the image check embeds every image sample and
  *     pre-judges each row (pose/image-prejudge.js): "images: look right" /
- *     "look swapped" on the rows and a count under the list; animals that look
- *     too alike get "can't tell these two apart" instead; with the built-in
- *     model a "How to train one…" prompt opens the image model dialog on its
- *     training steps, and Esc closes it.
+ *     "look swapped" on the rows and a count under the list. With the built-in
+ *     model there is no gate (look-alikes are "unsure") and a "How to train
+ *     one…" prompt opens the image model dialog on its training steps, and Esc
+ *     closes it; with a model package, animals that look too alike get "can't
+ *     tell these two apart" instead, and no prompt.
  *  1b. Track All ends on the summary box, planned for one camera: it counts
  *     tracks, lists coat brightness / images / body size, recommends reviewing
  *     the list (here only its check row at the end) then saving, and
@@ -825,32 +826,34 @@ try {
     await page.evaluate(() => { document.getElementById('statusText').textContent = ''; document.getElementById('tbTrackAll').click(); });
     await page.waitForFunction(() => /Tracked \d+ animal|Track All error/.test(document.getElementById('statusText').textContent), { timeout: 60000 });
     await page.click('#trackSummaryPrimary').catch(() => {});
-    const runLooks = async (alike) => page.evaluate(async (alike) => {
+    const runLooks = async (alike, pkg) => page.evaluate(async ([alike, pkg]) => {
         const S = window.__lucid.state.session, st = S._idSwitch, R = await import('/ui/id-switch-review.js'), M = await import('/ui/id-switch-modal.js');
         const row = (frame) => ({ frame: frame + 5, startFrame: frame - 5, identityA: 0, identityB: 1, nameA: 'id_0', nameB: 'id_1', kind: 'onset', score: 0,
             look: ['ambiguity'], switchBackAt: null, cue: 'review' });
         st.results.review.flags = [row(600), row(1200)];
         delete st.results.image;
         R.linkIdSwitchResults(st.results); M.refreshIdSwitchPanel(S);
-        await M.runIdSwitchChecks({ image: true, inject: { createEmbedder: window.__looks(alike), hasWebGPU: async () => true } });
+        await M.runIdSwitchChecks({ image: true, inject: { createEmbedder: window.__looks(alike), hasWebGPU: async () => true,
+            imageModel: pkg ? { key: 'stand-in', name: 'stand-in package', threshold: -1.2, input: 192 } : null } });
         const res = st.results.image, rows = [...document.querySelectorAll('#idSwitchPanel .id-switch-row')];
         const text = (f) => { const el = rows.find(x => Number(x.dataset.frame) === f); return el ? el.querySelector('.id-switch-line2').textContent : ''; };
         return { ok: !!(res && res.ok), reason: res && res.reason, all: res && res.samples && res.samples.embedded === res.samples.of,
                  verdicts: res && res.prejudge ? res.prejudge.rows.map(p => p.verdict) : null, cos: res && res.prejudge ? res.prejudge.pairs.map(q => q.cos) : null,
                  at600: text(605), at1200: text(1205),
                  summary: (document.querySelector('#idSwitchPanel .id-switch-prejudge-summary') || {}).textContent || '',
-                 prompt: (document.querySelector('#idSwitchPanel .id-switch-train-prompt') || {}).textContent || '' };
-    }, alike);
+                 prompt: (document.querySelector('#idSwitchPanel .id-switch-train-prompt') || {}).textContent || '',
+                 tip: ((rows.find(x => Number(x.dataset.frame) === 1205) || document).querySelector('.id-switch-prejudge') || {}).title || '' };
+    }, [alike, !!pkg]);
     const lk = await runLooks(false);
     check(lk.ok && lk.all, `the image check ran and, with a review list, embedded every image sample (${lk.reason || 'ok'})`);
     check(JSON.stringify(lk.verdicts) === '["kept","swapped"]', `verdicts: the place at 0:20 looks right, the one at 0:40 looks swapped (${JSON.stringify(lk.verdicts)}, cos ${lk.cos})`);
     check(/images: look right/.test(lk.at600) && /images: look swapped/.test(lk.at1200), `the rows say so: "${lk.at600.slice(-30)}" / "${lk.at1200.slice(-30)}"`);
     check(/^Image pre-judge: 1 looks swapped · 1 looks right · 0 unsure/.test(lk.summary), 'the review list\'s summary counts them: ' + lk.summary);
     check(/built-in image model/.test(lk.prompt) && /How to train one…/.test(lk.prompt), 'with the built-in model, a prompt to train one for this rig: ' + lk.prompt.slice(0, 60));
-    const al = await runLooks(true);
-    check(JSON.stringify(al.verdicts) === '["alike","alike"]', `look-alike animals: no verdict (${JSON.stringify(al.verdicts)}, cos ${al.cos})`);
-    check(/images can't tell these two apart/.test(al.at1200) && /^Images can't tell these two animals apart \(how alike they look: [\d.]+; a verdict needs under 0\.70\)/.test(al.summary),
-        'the rows and the summary say the images can\'t tell them apart: ' + al.summary);
+    check(/below −0\.2 looks swapped/.test(lk.tip) && /no check of how alike/.test(lk.tip), 'the built-in model: margin 0.2, no gate (row tooltip): ' + lk.tip);
+    const bl = await runLooks(true, false);
+    check(JSON.stringify(bl.verdicts) === '["unsure","unsure"]', `look-alike animals, the built-in model: no gate, so "unsure" (${JSON.stringify(bl.verdicts)})`);
+    check(/^Image pre-judge: 0 look swapped · 0 look right · 2 unsure/.test(bl.summary), 'the built-in model\'s summary: ' + bl.summary);
     await page.click('#idSwitchPanel .image-model-train-open');
     const train = await page.evaluate(() => { const d = document.querySelector('.image-model-modal .image-model-train');
         return d ? { open: d.open, text: d.textContent } : null; });
@@ -858,6 +861,13 @@ try {
         '"How to train one…" opens the image model dialog on its training steps');
     await page.keyboard.press('Escape');
     check(await page.evaluate(() => !document.querySelector('.image-model-modal')), 'Esc closes it');
+    const pp = await runLooks(false, true);
+    check(JSON.stringify(pp.verdicts) === '["kept","swapped"]' && !pp.prompt, `a model package: the same verdicts, no training prompt (${JSON.stringify(pp.verdicts)})`);
+    const al = await runLooks(true, true);
+    check(JSON.stringify(al.verdicts) === '["alike","alike"]', `look-alike animals, a model package: no verdict (${JSON.stringify(al.verdicts)}, cos ${al.cos})`);
+    check(/images can't tell these two apart/.test(al.at1200) && /^Images can't tell these two animals apart \(how alike they look: [\d.]+; a verdict needs under 0\.70\)/.test(al.summary),
+        'the rows and the summary say the images can\'t tell them apart: ' + al.summary);
+    await page.evaluate(async () => (await import('/ui/image-embedder.js')).setActiveImageModel(null));
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {
