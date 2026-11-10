@@ -200,31 +200,32 @@ try {
         barText: document.querySelector('.plane-mode-label').textContent,
         hasExit: !!document.getElementById('planeModeExit'),
         panelShown: getComputedStyle(document.getElementById('planePanel')).display !== 'none',
-        tabsHidden: getComputedStyle(document.querySelector('.panel-tabs')).display === 'none',
-        contentsHidden: Array.from(document.querySelectorAll('.panel-tab-content'))
-            .every(el => getComputedStyle(el).display === 'none'),
+        railLocked: Array.from(document.querySelectorAll('.panel-rail-btn[data-tab]')).every(b => b.disabled),
+        // checkVisibility: a pane is hidden by its section, not its own display.
+        contentsHidden: Array.from(document.querySelectorAll('.panel-section, .panel-tab-content'))
+            .every(el => !el.checkVisibility()),
     }));
     check(m.barShown, 'banner is visible');
     check(m.barText === 'Defining Plane Mode', `banner reads "Defining Plane Mode" (got "${m.barText}")`);
     check(m.hasExit, 'banner has an exit button');
     check(m.panelShown, 'Define Plane panel is shown in the info panel');
-    check(m.tabsHidden, 'info-panel tab bar is hidden while in the mode');
-    check(m.contentsHidden, 'no normal tab content is showing');
+    check(m.railLocked, "the rail's panel icons are disabled while in the mode");
+    check(m.contentsHidden, 'no normal panel section is showing');
 
     await page.click('#planeModeExit');
     m = await page.evaluate(() => ({
         barHidden: getComputedStyle(document.getElementById('planeModeBar')).display === 'none',
         panelHidden: getComputedStyle(document.getElementById('planePanel')).display === 'none',
-        tabsBack: getComputedStyle(document.querySelector('.panel-tabs')).display !== 'none',
-        // Exactly the previously-active tab is visible again — the swap must be
-        // exact, not "show everything".
+        railBack: Array.from(document.querySelectorAll('.panel-rail-btn[data-tab]')).every(b => !b.disabled),
+        // Exactly the previously-open, expanded panel is visible again — the
+        // swap must be exact, not "show everything".
         visibleContents: Array.from(document.querySelectorAll('.panel-tab-content'))
-            .filter(el => getComputedStyle(el).display !== 'none').map(el => el.id),
+            .filter(el => el.checkVisibility()).map(el => el.id),
     }));
     check(m.barHidden, 'exit hides the banner');
     check(m.panelHidden, 'exit hides the Define Plane panel');
-    check(m.tabsBack, 'exit restores the tab bar');
-    check(eq(m.visibleContents, ['tabInstances']), `exit restores exactly the active tab (got ${JSON.stringify(m.visibleContents)})`);
+    check(m.railBack, "exit re-enables the rail's panel icons");
+    check(eq(m.visibleContents, ['tabInstances']), `exit restores exactly the open panel (got ${JSON.stringify(m.visibleContents)})`);
 
     // Re-enter for the rest of the run.
     await page.click('.menu-item[data-menu="view"]');
@@ -2043,7 +2044,12 @@ try {
 
     // 8b — drag a node.
     const from = await toClient('camB', 200, 200);
-    const to = await toClient('camB', 260, 240);
+    // Chrome reports mouse positions in whole CSS px, and one CSS px can be
+    // several video px: aim at a whole-px point and expect the video point
+    // the app maps THAT to (~[260,240]), not [260,240] itself.
+    const to = (await toClient('camB', 260, 240)).map(Math.round);
+    const want = await page.evaluate(async ([x, y]) =>
+        (await import('/ui/app-state.js')).interactionManager.canvasToVideo(x, y, 'camB'), to);
     await page.mouse.move(from[0], from[1]);
     await page.mouse.down();
     await page.mouse.move(to[0], to[1], { steps: 8 });
@@ -2051,12 +2057,14 @@ try {
     m = await page.evaluate(async () => {
         const P = await import('/ui/plane-definition.js');
         return {
+            raw: window.__getPts(window.__plane(0), 'camB')[0],
             pts: window.__getPts(window.__plane(0), 'camB').map(q => q.map(Math.round)),
             modified: P.getPlaneInstance('camB').modified,
         };
     });
-    check(Math.abs(m.pts[0][0] - 260) <= 2 && Math.abs(m.pts[0][1] - 240) <= 2,
-        `dragging a node moves it (node 0 now ${JSON.stringify(m.pts[0])}, want ~[260,240])`);
+    check(Math.abs(m.raw[0] - want[0]) <= 0.5 && Math.abs(m.raw[1] - want[1]) <= 0.5 &&
+        Math.abs(want[0] - 260) <= 4 && Math.abs(want[1] - 240) <= 4,
+        `dragging a node moves it to the cursor (node 0 now ${JSON.stringify(m.pts[0])}, cursor at ${JSON.stringify(want.map(Math.round))}, aimed at [260,240])`);
     check(eq(m.pts[1], [400, 200]) && eq(m.pts[3], [200, 350]),
         `the other nodes stay put (got ${JSON.stringify(m.pts)})`);
     check(m.modified, 'the drag marks the instance modified');

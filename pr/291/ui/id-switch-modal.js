@@ -30,26 +30,27 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { noteProgress } from './progress-delta.js?v=22aa05e92cd0';
-import { state, getActiveSession } from './app-state.js?v=22aa05e92cd0';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=22aa05e92cd0';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=22aa05e92cd0';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=22aa05e92cd0';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=22aa05e92cd0';
-import { getTrackingThreshold } from './settings.js?v=22aa05e92cd0';
-import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=22aa05e92cd0';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js?v=22aa05e92cd0';
+import { noteProgress } from './progress-delta.js?v=704282ea8376';
+import { state, getActiveSession } from './app-state.js?v=704282ea8376';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=704282ea8376';
+import { showPanelTab } from './panel-rail.js?v=704282ea8376';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=704282ea8376';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=704282ea8376';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=704282ea8376';
+import { getTrackingThreshold } from './settings.js?v=704282ea8376';
+import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=704282ea8376';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js?v=704282ea8376';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=22aa05e92cd0';
-import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine, wireTrainingPrompt } from './image-model-dialog.js?v=22aa05e92cd0';
-import { prejudgeFor, PREJUDGE_DEFAULTS } from '../pose/image-prejudge.js?v=22aa05e92cd0';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=22aa05e92cd0';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=22aa05e92cd0';
-import { createBrightnessSampler } from './brightness-sampler.js?v=22aa05e92cd0';
+         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=704282ea8376';
+import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine, wireTrainingPrompt } from './image-model-dialog.js?v=704282ea8376';
+import { prejudgeFor, PREJUDGE_DEFAULTS } from '../pose/image-prejudge.js?v=704282ea8376';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=704282ea8376';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=704282ea8376';
+import { createBrightnessSampler } from './brightness-sampler.js?v=704282ea8376';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
          idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary,
-         idSwitchPlaceOf, idSwitchPrevPlaceEnd } from './id-switch-review.js?v=22aa05e92cd0';
+         idSwitchPlaceOf, idSwitchPrevPlaceEnd } from './id-switch-review.js?v=704282ea8376';
 
 const CUE_LABEL = { size: 'body size', image: 'images', brightness: 'coat brightness', review: 'review list' };
 
@@ -625,12 +626,10 @@ function syncMarkers(session) {
     setSeekbarSwitchMarkers(all, state.totalFrames);
 }
 
-/** Show the right panel (if hidden) on the ID Switches tab. */
+/** Open + expand the ID Switches section, showing the right panel if hidden. */
 export function openIdSwitchPanel() {
-    var wrap = document.getElementById('infoPanelWrapper');
-    if (wrap && wrap.classList.contains('collapsed')) { var t = document.getElementById('infoPanelToggleBtn'); if (t) t.click(); }
-    var tab = document.querySelector('.panel-tab[data-tab="tabIdSwitches"]');
-    if (tab) tab.click();
+    // Never a rail click: clicking the already-expanded panel would FOLD it.
+    showPanelTab('tabIdSwitches');
 }
 
 /** Forget a session's results (a new tracking pass relabels everything) and clear its markers. */
