@@ -23,7 +23,7 @@
  */
 import {
     isCalibrationImagesVideo, hasCalibrationStem, preferNonCalibrationVideos,
-    matchVideoToCamera,
+    matchVideoToCamera, assignFolderVideos, isFolderPick, isVideoFileName,
 } from '../loading/video-file-pick.js';
 
 let passed = 0, failed = 0;
@@ -157,6 +157,55 @@ console.log('\n8. matchVideoToCamera: directory beats stem beats referenced name
     check(matchVideoToCamera(bare('nothing.mp4'), ['back'], refs) === null,
         'and gives null when nothing matches');
     check(matchVideoToCamera(bare('x.mp4'), []) === null, 'no cameras gives null');
+}
+
+console.log('\n3. A picked recording folder: one video per camera, extras left out');
+{
+    const cams = ['Camera1_topB', 'Camera2_topB'];
+    // campy's layout: every camera's video is 0.mp4, beside cameras the file
+    // does not name, a calibration clip and a non-video.
+    const files = [
+        f('rec/Camera5_side/0.mp4'),
+        f('rec/Camera2_topB/0.mp4'),
+        f('rec/Camera1_topB/0.mp4'),
+        f('rec/Camera1_topB/calibration_images/x.mp4'),
+    ];
+    const refs = new Map([['Camera1_topB', '/data/rec/Camera1_topB/0.mp4'], ['Camera2_topB', '/data/rec/Camera2_topB/0.mp4']]);
+    const r = assignFolderVideos(files.slice(0, 3), cams, refs);
+    check(r.cameraOf.get(files[2]) === 'Camera1_topB' && r.cameraOf.get(files[1]) === 'Camera2_topB',
+        'each video goes to the camera its folder names');
+    check(r.unused.length === 1 && r.unused[0] === files[0],
+        'the side camera\'s 0.mp4 is left out, not bound by its shared name');
+    check(names(r.assigned).length === 2 && r.assigned[0] === files[2], 'assigned comes back in camera order');
+
+    // Cameras renamed on the way in (Add SLP suffixes a taken name): the
+    // referenced folder + name still finds them, and still not the extra.
+    const renamed = ['Camera1_topB_2', 'Camera2_topB_2'];
+    const refs2 = new Map([[renamed[0], refs.get(cams[0])], [renamed[1], refs.get(cams[1])]]);
+    const r2 = assignFolderVideos(files.slice(0, 3), renamed, refs2);
+    check(r2.cameraOf.get(files[2]) === renamed[0] && r2.cameraOf.get(files[1]) === renamed[1] && r2.unused[0] === files[0],
+        'the referenced folder and file name match when the camera name does not');
+
+    // The referenced file name alone counts only when one picked video has it.
+    const r3 = assignFolderVideos([f('new/a/0.mp4'), f('new/b/0.mp4')], ['cam'], new Map([['cam', 'old/x/0.mp4']]));
+    check(r3.assigned.length === 0, 'a shared file name binds nothing');
+    const r4 = assignFolderVideos([f('new/a/take3.mp4'), f('new/b/other.mp4')], ['cam'], new Map([['cam', 'C:\\old\\x\\take3.mp4']]));
+    check(r4.cameraOf.get(r4.assigned[0]) === 'cam' && r4.assigned[0].name === 'take3.mp4',
+        'a unique referenced file name binds, in a moved folder and with Windows separators');
+
+    // One video per camera, and a calibration-named one loses a tie.
+    const both = [f('rec/cam1/cam1-calibration.mp4'), f('rec/cam1/cam1.mp4')];
+    const r5 = assignFolderVideos(both, ['cam1'], null);
+    check(r5.assigned[0] === both[1] && r5.unused[0] === both[0], 'a plain sibling beats a -calibration stem');
+    check(assignFolderVideos([f('r/x/20260101-cam2-raw.mp4')], ['cam2']).assigned.length === 1,
+        'the camera name in the stem still binds');
+    check(assignFolderVideos([], ['cam']).assigned.length === 0 && assignFolderVideos(null, null).unused.length === 0,
+        'empty input');
+
+    check(isFolderPick([bare('a.mp4'), f('rec/a/a.mp4')]) && !isFolderPick([bare('a.mp4')]) && !isFolderPick(null),
+        'isFolderPick: a relative path with a folder in it');
+    check(isVideoFileName('X.MOV') && !isVideoFileName('session.json') && !isVideoFileName('mp4'),
+        'isVideoFileName');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
