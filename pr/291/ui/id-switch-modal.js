@@ -30,27 +30,27 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { noteProgress } from './progress-delta.js?v=b5c6154bd415';
-import { state, getActiveSession } from './app-state.js?v=b5c6154bd415';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=b5c6154bd415';
-import { showPanelTab } from './panel-rail.js?v=b5c6154bd415';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=b5c6154bd415';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=b5c6154bd415';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=b5c6154bd415';
-import { getTrackingThreshold } from './settings.js?v=b5c6154bd415';
-import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=b5c6154bd415';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js?v=b5c6154bd415';
+import { noteProgress } from './progress-delta.js?v=be716bec593e';
+import { state, getActiveSession } from './app-state.js?v=be716bec593e';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=be716bec593e';
+import { showPanelTab } from './panel-rail.js?v=be716bec593e';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=be716bec593e';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=be716bec593e';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=be716bec593e';
+import { getTrackingThreshold } from './settings.js?v=be716bec593e';
+import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=be716bec593e';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js?v=be716bec593e';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=b5c6154bd415';
-import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine, wireTrainingPrompt } from './image-model-dialog.js?v=b5c6154bd415';
-import { prejudgeFor, prejudgeSettings, PREJUDGE_DEFAULTS, PREJUDGE_BUILTIN } from '../pose/image-prejudge.js?v=b5c6154bd415';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=b5c6154bd415';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=b5c6154bd415';
-import { createBrightnessSampler } from './brightness-sampler.js?v=b5c6154bd415';
+         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=be716bec593e';
+import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine, wireTrainingPrompt } from './image-model-dialog.js?v=be716bec593e';
+import { prejudgeFor, prejudgeSettings, PREJUDGE_DEFAULTS, PREJUDGE_BUILTIN } from '../pose/image-prejudge.js?v=be716bec593e';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=be716bec593e';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=be716bec593e';
+import { createBrightnessSampler } from './brightness-sampler.js?v=be716bec593e';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
          idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary,
-         idSwitchPlaceOf, idSwitchPrevPlaceEnd } from './id-switch-review.js?v=b5c6154bd415';
+         idSwitchPlaceOf, idSwitchPrevPlaceEnd } from './id-switch-review.js?v=be716bec593e';
 
 const CUE_LABEL = { size: 'body size', image: 'images', brightness: 'coat brightness', review: 'review list' };
 
@@ -657,11 +657,16 @@ export function setReviewList(session, result, navigateToFrame) {
     refreshIdSwitchPanel(session);
 }
 
-/** The review list's rows, for the image check to pre-judge: frame, close-spell start and pair. Null without a list. */
+/**
+ * The review list's rows, for the image check to pre-judge: frame, close-spell start and pair. Null without a list.
+ * Leaves out the end-of-tracking row (cue 'videoEnd'): nothing follows it, so it could never get a verdict.
+ */
 function reviewRowsOf(session) {
     var rv = session && session._idSwitch && session._idSwitch.results.review;
     if (!rv || !rv.ok || !rv.flags.length) return null;
-    return rv.flags.map(function (f) {
+    var rows = rv.flags.filter(function (f) { return !(f.look && f.look.indexOf('videoEnd') >= 0); });
+    if (!rows.length) return null;
+    return rows.map(function (f) {
         return { frame: f.frame, startFrame: f.startFrame, identityA: f.identityA, identityB: f.identityB };
     });
 }

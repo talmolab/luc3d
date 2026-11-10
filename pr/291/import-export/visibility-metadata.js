@@ -51,10 +51,10 @@ import {
     serializeVideoContrast, ingestVideoContrast,
     serializeVideoBrightness, ingestVideoBrightness,
     serializeVideoRotation, ingestVideoRotation,
-} from '../ui/video-filters.js?v=b5c6154bd415';
-import { serializeHiddenSets, ingestHiddenSets } from '../ui/timeline-visibility.js?v=b5c6154bd415';
-import { serializeIdSwitchReview, ingestIdSwitchReview } from '../ui/id-switch-review.js?v=b5c6154bd415';
-import { ingestModelChoice } from '../pose/image-model-manifest.js?v=b5c6154bd415';
+} from '../ui/video-filters.js?v=be716bec593e';
+import { serializeHiddenSets, ingestHiddenSets } from '../ui/timeline-visibility.js?v=be716bec593e';
+import { serializeIdSwitchReview, ingestIdSwitchReview } from '../ui/id-switch-review.js?v=be716bec593e';
+import { ingestModelChoice } from '../pose/image-model-manifest.js?v=be716bec593e';
 
 /**
  * Every `metadata.lucid` key this module may write. Exported so tests (and the
