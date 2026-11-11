@@ -730,11 +730,12 @@ function aboutHtml(st, ran) {
             'compares each animal\'s look in the ' + PREJUDGE_DEFAULTS.windowSeconds + ' s before a place with the ' + PREJUDGE_DEFAULTS.windowSeconds +
             ' s after it. ' + (st.results.image.imageModel
                 ? 'It gives a verdict only where the model tells this video\'s two animals apart: where they look too alike, ' +
-                  'the row says so instead. On 1,626 places in 395 proofread two-mouse videos, with a model trained on that rig, it gave a ' +
-                  'verdict at 4 places in 5 and called 64 of 94 swaps, with no false alarm and one miss. '
+                  'the row says so instead. Run in this app on 395 proofread two-mouse videos, with a model trained on that rig, it gave a ' +
+                  'verdict at 4 of every 5 places where both animals were in view, and called 66 swaps, with one false alarm and one miss. '
                 : 'With the built-in model, never trained on your animals, it calls a place only when the score is past ±' +
-                  PREJUDGE_BUILTIN.margin.toFixed(1) + ': on 1,626 places in 395 proofread two-mouse videos it called 17 of 94 swaps, ' +
-                  'with no false alarm, and was unsure at 7 places in 10 (a model trained on that rig called 64, also with none). ') +
+                  PREJUDGE_BUILTIN.margin.toFixed(1) + ': run in this app on 395 proofread two-mouse videos, it called 14 swaps, ' +
+                  'with two false alarms and one miss, and was unsure at 3 places in 4 (a model trained on that rig called 66, with one ' +
+                  'false alarm). ') +
             'Still watch each place: a verdict is a lead, not the answer.</p>' : '') : '';
     if (!checks.length) return reviewAbout;
     return reviewAbout + aboutChecksHtml(st, checks);
