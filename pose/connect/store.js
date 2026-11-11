@@ -11,6 +11,7 @@
  * LUCID changes:
  *  - zustand -> `./mini-store.js`; `useConnectStore` is a module singleton (not a hook), `connectStore` an alias.
  *  - Per-runtime pieces are injected deps (`configureConnect(patch)`, defaults in `defaultDeps`, resolved at use).
+ *  - A multi-view run (`opts.run.count > 1`, one job per view) toasts once, when its last job ends (`runSummary`).
  *  - iroh is "available" exactly when `transport.js` has a registered socket factory.
  *  - `deps.notify` = `{success, error, info}(message, {description?, action?})`, same strings as sleap-app's toast; default no-op.
  *  - The cross-window `storage` listener is wired by the UI (`installConnectStorageSync(window)`).
@@ -274,6 +275,8 @@ function jobTag(o) {
   if (o?.projectTag !== undefined) tag.projectTag = o.projectTag;
   // The panel's "Existing predictions" mode at Run, used at Fetch & Load (sleap-app `pendingRemoteMerge.mode`).
   if (o?.mergeMode !== undefined) tag.mergeMode = o.mergeMode;
+  // LUCID: a multi-view run (one job per view) toasts once, when its last job ends (`notifyJobFinished`).
+  if (o?.run && o.run.count > 1) { tag.runId = o.run.id; tag.runCount = o.run.count; }
   // Null until `markJobFetched` records that the result was loaded (see `capTrackedJobs`).
   if (tag.sessionId !== undefined || tag.camera !== undefined) tag.fetchedAt = null;
   return tag;
@@ -712,6 +715,23 @@ function updateTrackedJob(set, jobId, patch) {
   }));
 }
 
+/**
+ * LUCID: the run of `job` once every one of its tracked jobs has ended, else null. Its label is the jobs'
+ * shared prefix ("Inference · back" -> "Inference · 6 views").
+ */
+function runSummary(job) {
+  const jobs = useConnectStore.getState().trackedJobs.filter((j) => j.runId === job.runId);
+  if (jobs.length < job.runCount || jobs.some((j) => j.state === "active")) return null;
+  const base = String(job.label).split(" · ")[0];
+  const unit = jobs.every((j) => j.camera !== undefined) ? "views" : "jobs";
+  return {
+    label: `${base} · ${jobs.length} ${unit}`,
+    count: jobs.length,
+    failed: jobs.filter((j) => j.state === "failed").length,
+    canceled: jobs.filter((j) => j.state === "canceled").length,
+  };
+}
+
 /** Jobs already toasted this session (`resumeTrackedJobs` can run more than once). */
 const notifiedJobIds = new Set();
 
@@ -724,6 +744,21 @@ async function notifyJobFinished(job, workerLabel, errorDetail) {
     label: "Open",
     onClick: () => deps.openConnectWindow?.(),
   };
+  if (job.runId && job.runCount > 1) {
+    const run = runSummary(job);
+    if (!run) return; // other jobs of the run are still going: the last one to end toasts
+    if (run.failed > 0) {
+      deps.notify.error(`${run.label} on ${workerLabel}: ${run.failed} of ${run.count} failed`, {
+        description: errorDetail ?? undefined,
+        action,
+      });
+    } else if (run.canceled > 0) {
+      deps.notify.info(`${run.label} on ${workerLabel} was canceled`, { action });
+    } else {
+      deps.notify.success(`${run.label} on ${workerLabel} finished`, { action });
+    }
+    return;
+  }
   if (job.state === "completed") {
     deps.notify.success(`${job.label} on ${workerLabel} finished`, { action });
   } else if (job.state === "canceled") {

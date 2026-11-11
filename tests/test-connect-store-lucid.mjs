@@ -115,6 +115,31 @@ describe('Connect store: defaults and injection', () => {
     await waitFor(() => useConnectStore.getState().trackedJobs[0].state === 'completed', 'completed');
   });
 
+  // LUCID: a six-view run gave six "finished" toasts on the real worker; one per run now.
+  it('a multi-view run toasts once, when its last job ends', async () => {
+    const st = useConnectStore.getState();
+    await st.pairWithCode(await worker.mintPairCode({ addrs: [WS] }));
+    const run = { id: 'run-1', count: 3 };
+    const ids = [];
+    for (const [i, cam] of ['back', 'mid', 'top'].entries()) {
+      const [id] = await useConnectStore.getState().submitJobsOn(worker.nodeId, TRACK,
+        { source: 'window', sessionId: 'S', camera: cam, run: { ...run, index: i }, label: 'Inference · ' + cam });
+      ids.push(id);
+    }
+    await waitFor(() => worker.calls.filter((c) => c.method === 'jobs.subscribe').length >= 3, 'subscribes');
+    await worker.completeJob(ids[0], { predictions: new Uint8Array([1]) });
+    worker.failJob(ids[1], 'boom');
+    await waitFor(() => useConnectStore.getState().trackedJobs.filter((j) => j.state !== 'active').length === 2, 'two ended');
+    await tick(20);
+    expect(toast.success.mock.calls.length + toast.error.mock.calls.length).toBe(0);
+    await worker.completeJob(ids[2], { predictions: new Uint8Array([1]) });
+    await waitFor(() => toast.error.mock.calls.length === 1, 'run notification');
+    expect(toast.error.mock.calls[0][0]).toBe(`Inference · 3 views on Worker ${worker.nodeId.slice(0, 8)}: 1 of 3 failed`);
+    await tick(20);
+    expect(toast.success.mock.calls).toHaveLength(0);
+    expect(useConnectStore.getState().trackedJobs[0]).toMatchObject({ runId: 'run-1', runCount: 3 });
+  });
+
   it('the toast action calls the injected openConnectWindow', async () => {
     const open = spy();
     configureConnect({ openConnectWindow: open });

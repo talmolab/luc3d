@@ -21,6 +21,7 @@
  *    promise of one or a `() => Promise<client>` (the store's `clientFor`); a connect /
  *    subscribe failure lands in `status: "unknown"` with the error as `detail`.
  *    `resume()` re-subscribes from the last applied `seq`, for a reconnect.
+ *  - Each buffered batch is folded in seq order (live events can arrive during the replay).
  *  - Race-free resume/stop (review B2): latest wins. A `resume()` or `stop()` while an earlier
  *    subscribe is still awaiting invalidates it; that subscribe unsubscribes what it got and
  *    installs nothing, so no second subscription or interval leaks.
@@ -295,7 +296,10 @@ export function createJobStream(client, jobId, opts = {}) {
 
   const flush = () => {
     if (buffer.length === 0) return;
-    const events = buffer;
+    // Sorted by seq: the worker starts live delivery BEFORE it replays the backlog, so a live
+    // event can land mid-replay; folded in arrival order its seq would drop the rest of the
+    // backlog (`seq <= lastSeq`), losing the job's status and epochs.
+    const events = buffer.slice().sort((x, y) => x.seq - y.seq);
     buffer = [];
     state = reduceJobEvents(state, events);
     onUpdate(state);

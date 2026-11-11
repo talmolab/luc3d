@@ -8947,6 +8947,10 @@ div.track-summary-steps { padding-left: 0; }
   font-family: inherit; color: var(--text-muted); background: #000; border: 1px solid var(--border-color); border-radius: 999px;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4); cursor: pointer; }
 .connect-toasts-clear[hidden], .cj-loss-tip[hidden], .cj-loss-sel[hidden] { display: none; }
+/* LUCID: while a Connect dialog is open (file browser, wizard, job viewer), the stack moves to the top-right so a toast
+   (whose clock stops under the pointer) never covers the dialog's bottom-right buttons. */
+body:has(.rfb-scrim, .njw-scrim, .cj-scrim) .connect-toasts { top: 56px; bottom: auto; flex-direction: column-reverse; }
+body:has(.rfb-scrim, .njw-scrim, .cj-scrim) .connect-toasts-clear { top: 16px; bottom: auto; }
 .connect-toasts-clear:hover { color: var(--text-primary); background: #171717; }
 .connect-toasts-clear .connect-icon { width: 14px; height: 14px; }
 

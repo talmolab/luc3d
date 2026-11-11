@@ -27,7 +27,10 @@
  *     `ui/connect/remote-inference.js` (+ `pose/connect/remote-inference-plan.js`);
  *     Models / Views / the run block swap to their remote versions. With no
  *     local sleap-nn (the web app, a desktop build without it) the panel is
- *     remote-only, as sleap-app's browser build is.
+ *     remote-only, as sleap-app's browser build is. With a worker selected, the
+ *     settings its track job cannot carry (Max instances, Bottom-Up grouping,
+ *     Post-processing, advanced tracking, Optical Flow / Kalman) are hidden;
+ *   - the Views list skips calibration cameras that have no video.
  *
  * Loaded on every build: `pose/initialization.js` imports it dynamically after
  * the rail exists. The local paths talk to native code only through
@@ -103,6 +106,7 @@ let elapsedTimer = null;
 // Backend: 'remote' = a paired SLEAP Connect worker (the only backend where there is no local
 // sleap-nn: the web app, or the desktop app without it); null = the default for this build.
 const backend = { remote: null };
+const TRACKERS = [['simple', 'Simple'], ['flow', 'Optical Flow'], ['kalman', 'Kalman Filter']];
 let remote = null;      // ui/connect/remote-inference.js controller
 
 // ---------------------------------------------------------------------------
@@ -248,14 +252,20 @@ function shownIf(node, pred) {
 // Session facts
 // ---------------------------------------------------------------------------
 
-/** The session's cameras: those shown as views first (in view order), then the rest. */
+/**
+ * The session's cameras: those shown as views first (in view order), then the rest. When some
+ * cameras have a video, a camera that is neither shown nor has one (a calibration camera whose
+ * folder was not loaded) is left out: it has nothing to run on. A project whose videos are not
+ * attached yet (none has one) keeps every camera.
+ */
 function sessionViews() {
     const s = state.session;
     if (!s) return [];
     const cams = s.cameras.map(function (c) { return c.name; });
     const shown = (state.views || []).map(function (v) { return v.name; })
         .filter(function (n) { return cams.indexOf(n) !== -1; });
-    return shown.concat(cams.filter(function (n) { return shown.indexOf(n) === -1; }));
+    const anyVideo = cams.some(function (n) { return !!videoFileOf(n); });
+    return shown.concat(cams.filter(function (n) { return shown.indexOf(n) === -1 && (!anyVideo || !!videoFileOf(n)); }));
 }
 
 function videoFileOf(view) {
@@ -475,6 +485,7 @@ function sleapNnAvailable() { return !!(sn && env.sleapNn && env.sleapNn.availab
 
 /** Whether this run goes to a worker: the only choice without a local sleap-nn, else the Backend picker's. */
 function isRemote() { return !sn ? true : backend.remote === true; }
+function isLocal() { return !isRemote(); }
 
 // ---------------------------------------------------------------------------
 // Run
@@ -915,13 +926,17 @@ function buildPanel(root) {
         function () { return cfg.runtime; }, function (v) { cfg.runtime = v; }), function () { return !isRemote(); });
     numField(inf, 'Peak threshold', null, function () { return cfg.peakThreshold; },
         function (v) { cfg.peakThreshold = v; }, { min: 0, max: 1, step: 0.05 });
-    numField(inf, 'Max instances', null, function () { return cfg.maxInstances == null ? 0 : cfg.maxInstances; },
-        function (v) { cfg.maxInstances = v; }, { min: 1, max: 100, integer: true, disabledIf: function () { return noMaxInstances; } });
-    check(inf, 'No limit', null, function () { return noMaxInstances; }, function (v) {
+    // LUCID: a worker's track job (sleap-connect `TrackJobSpec`) has no field for Max instances, the
+    // Bottom-Up grouping, the Post-processing filters or the advanced tracking options, and drops
+    // them silently, so they show only for the local engine (as Device and Runtime do).
+    shownIf(numField(inf, 'Max instances', null, function () { return cfg.maxInstances == null ? 0 : cfg.maxInstances; },
+        function (v) { cfg.maxInstances = v; }, { min: 1, max: 100, integer: true, disabledIf: function () { return noMaxInstances; } }),
+        isLocal);
+    shownIf(check(inf, 'No limit', null, function () { return noMaxInstances; }, function (v) {
         noMaxInstances = v;
         if (v) cfg.maxInstances = null;
         else if (cfg.maxInstances == null) cfg.maxInstances = 2;
-    });
+    }), isLocal);
     const bu = el('div', 'inf-sub');
     bu.appendChild(el('div', 'inf-subtitle', 'Bottom-Up'));
     numField(bu, 'Max edge length ratio', 'Maximum edge length as a fraction of the image size when grouping parts.',
@@ -932,7 +947,8 @@ function buildPanel(root) {
         function () { return cfg.nPoints; }, function (v) { cfg.nPoints = v; }, { min: 1, integer: true });
     numField(bu, 'Min line score', 'Minimum part-affinity score for a connection to be kept.',
         function () { return cfg.minLineScores; }, function (v) { cfg.minLineScores = v; }, { min: 0, max: 1, step: 0.05 });
-    inf.appendChild(shownIf(bu, function () { return cfg.pipeline === 'bottom-up' || cfg.pipeline === 'bottom-up-id'; }));
+    inf.appendChild(shownIf(bu, function () { return isLocal() && (cfg.pipeline === 'bottom-up' || cfg.pipeline === 'bottom-up-id'); }));
+    inf.appendChild(shownIf(el('p', 'inf-muted', 'A worker uses its own defaults for max instances, grouping and post-processing.'), isRemote));
     sep(top);
 
     // Tracking
@@ -942,9 +958,11 @@ function buildPanel(root) {
         function () { return cfg.tracking; }, function (v) { cfg.tracking = v; });
     const tOn = el('div', 'inf-sub0');
     trk.appendChild(shownIf(tOn, function () { return cfg.tracking; }));
+    // A worker has no Kalman tracker: fall back to Simple while one is the backend.
+    onRefresh(function () { if (isRemote() && cfg.trackerMethod === 'kalman') cfg.trackerMethod = 'simple'; });
     selectField(tOn, 'Method',
         'Simple matches instances by similarity alone. Optical Flow predicts motion from pixel displacement. Kalman Filter predicts motion from a per-track velocity model.',
-        [['simple', 'Simple'], ['flow', 'Optical Flow'], ['kalman', 'Kalman Filter']],
+        function () { return isRemote() ? TRACKERS.slice(0, 2) : TRACKERS; },
         function () { return cfg.trackerMethod; }, function (v) { cfg.trackerMethod = v; });
     selectField(tOn, 'Similarity', 'Metric for comparing instances across frames.',
         [['oks', 'OKS'], ['iou', 'IoU'], ['centroids', 'Centroid dist.'], ['euclidean_dist', 'Euclidean dist.']],
@@ -967,25 +985,27 @@ function buildPanel(root) {
         function () { return cfg.robust; }, function (v) { cfg.robust = v; }, { min: 0, max: 1, step: 0.05 });
     check(adv, 'Connect single-frame breaks', 'With Max tracks set, reconnects a break where one track is lost and one spawned in the same frame.',
         function () { return cfg.connectSingleBreaks; }, function (v) { cfg.connectSingleBreaks = v; });
-    numField(adv, 'Min match points', 'Minimum non-missing keypoints for a match candidate.',
+    const advLocal = el('div', 'inf-sub0');
+    adv.appendChild(shownIf(advLocal, isLocal));
+    numField(advLocal, 'Min match points', 'Minimum non-missing keypoints for a match candidate.',
         function () { return cfg.minMatchPoints; }, function (v) { cfg.minMatchPoints = v; }, { min: 0, integer: true });
-    numField(adv, 'Min new-track points', 'Minimum non-missing keypoints before an unmatched instance starts a track.',
+    numField(advLocal, 'Min new-track points', 'Minimum non-missing keypoints before an unmatched instance starts a track.',
         function () { return cfg.minNewTrackPoints; }, function (v) { cfg.minNewTrackPoints = v; }, { min: 0, integer: true });
-    selectField(adv, 'Scoring reduction', 'How several similarity scores for one track are combined.',
+    selectField(advLocal, 'Scoring reduction', 'How several similarity scores for one track are combined.',
         [['mean', 'Mean'], ['max', 'Max'], ['robust_quantile', 'Robust quantile']],
         function () { return cfg.scoringReduction; }, function (v) { cfg.scoringReduction = v; });
-    numField(adv, 'Target instance count', 'Instances to track per frame; needed by Kalman and Pre-cull. Empty = auto.',
+    numField(advLocal, 'Target instance count', 'Instances to track per frame; needed by Kalman and Pre-cull. Empty = auto.',
         function () { return cfg.trackingTargetInstanceCount; }, function (v) { cfg.trackingTargetInstanceCount = v; },
         { min: 1, max: 100, integer: true, nullable: true, placeholder: 'Auto' });
-    check(adv, 'Pre-cull to target', 'Before tracking, discard detections above the target count.',
+    check(advLocal, 'Pre-cull to target', 'Before tracking, discard detections above the target count.',
         function () { return cfg.trackingPreCullToTarget; }, function (v) { cfg.trackingPreCullToTarget = v; });
-    shownIf(numField(adv, 'Pre-cull IoU threshold', 'IoU used to remove overlapping instances above the target.',
+    shownIf(numField(advLocal, 'Pre-cull IoU threshold', 'IoU used to remove overlapping instances above the target.',
         function () { return cfg.trackingPreCullIouThreshold; }, function (v) { cfg.trackingPreCullIouThreshold = v; },
         { min: 0, max: 1, step: 0.05 }), function () { return cfg.trackingPreCullToTarget; });
-    numField(adv, 'Clean-up instance count', 'After tracking, cull instances above this count per frame. Empty = off.',
+    numField(advLocal, 'Clean-up instance count', 'After tracking, cull instances above this count per frame. Empty = off.',
         function () { return cfg.trackingCleanInstanceCount; }, function (v) { cfg.trackingCleanInstanceCount = v; },
         { min: 1, max: 100, integer: true, nullable: true, placeholder: 'Disabled' });
-    shownIf(numField(adv, 'Clean-up IoU threshold', 'IoU used when culling after tracking.',
+    shownIf(numField(advLocal, 'Clean-up IoU threshold', 'IoU used when culling after tracking.',
         function () { return cfg.trackingCleanIouThreshold; }, function (v) { cfg.trackingCleanIouThreshold = v; },
         { min: 0, max: 1, step: 0.05 }), function () { return cfg.trackingCleanInstanceCount != null; });
     const flow = el('div', 'inf-sub0');
@@ -996,7 +1016,7 @@ function buildPanel(root) {
         function () { return cfg.flowWindowSize; }, function (v) { cfg.flowWindowSize = v; }, { min: 3, max: 99, step: 2, integer: true });
     numField(flow, 'Pyramid levels', 'Image pyramid levels; more handle larger displacements.',
         function () { return cfg.flowMaxLevels; }, function (v) { cfg.flowMaxLevels = v; }, { min: 1, max: 10, integer: true });
-    tOn.appendChild(shownIf(flow, function () { return cfg.trackerMethod === 'flow'; }));
+    tOn.appendChild(shownIf(flow, function () { return isLocal() && cfg.trackerMethod === 'flow'; }));
     const kf = el('div', 'inf-sub0');
     kf.appendChild(el('div', 'inf-subtitle', 'Kalman Filter'));
     selectField(kf, 'Track features', 'Centroid moves the last pose with one filter per track; Keypoints runs one filter per node.',
@@ -1039,8 +1059,9 @@ function buildPanel(root) {
     tOn.appendChild(shownIf(kf, function () { return cfg.trackerMethod === 'kalman'; }));
     sep(top);
 
-    // Post-processing
+    // Post-processing (local only, see Max instances)
     const post = section(top, 'Post-processing', false);
+    shownIf(post.parentElement, isLocal);
     check(post, 'Filter overlapping instances', 'Remove duplicate detections that overlap a lot (greedy non-max suppression).',
         function () { return cfg.filterOverlapping; }, function (v) { cfg.filterOverlapping = v; });
     const fo = el('div', 'inf-sub0');

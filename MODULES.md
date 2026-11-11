@@ -4259,7 +4259,7 @@ WS->iroh fallback, `refreshWorkerInfo`, `listJobs`/`jobDetail`/`cancelJobOn`/`de
 `fetchResultBlob` / `fetchResultBlobOn(workerId, …)`, `markJobFetched(jobId)`, `resumeTrackedJobs`; `submitJobsOn` takes
 `opts.run` / `opts.label`; `planPairingForText` (non-throwing pairing-form plan); job subscriptions that resume from the persisted `lastSeq`
 (`resubscribeWorker`, which after each re-attach asks `jobs.status` and ends a job the worker marked
-terminal without an event, as a restarted worker does: `reconcileTerminalJob`), `watchTrackedJob`, chained jobs, one finish notification per job. Persisted under
+terminal without an event, as a restarted worker does: `reconcileTerminalJob`), `watchTrackedJob`, chained jobs, one finish notification per job (one per multi-view run: `opts.run.count > 1` tags `runId`/`runCount`, and the last job of the run toasts "Inference · N views …", `runSummary`). Persisted under
 `lucid-connect` through a three-way-merging storage shared with other windows (`syncConnectFromStorage`,
 `installConnectStorageSync`); the selection is per window (`lucid-connect-selected`, sessionStorage).
 **LUCID.** Singleton `useConnectStore` (not a hook; alias `connectStore`); every runtime difference is an
@@ -4384,7 +4384,7 @@ inference config (one spec, or one per video for `random` / a restricted
 **Purpose.** Replay/live reducer for one worker job's event stream plus the non-React core of
 `useJobStream`. **Exports.** `initialJobStream`, `reduceJobEvents` (pure fold, dedupes by `seq`),
 `createJobStream(client, jobId, { sinceSeq, label, onUpdate, flushIntervalMs, setIntervalImpl,
-clearIntervalImpl })` returning `{ getState, ready, resume, stop }` (buffers events, folds them on an
+clearIntervalImpl })` returning `{ getState, ready, resume, stop }` (buffers events, folds each batch in `seq` order (the worker starts live delivery before its replay, so a live event can land mid-backlog), on an
 interval, `resume()` re-subscribes from the last seq; latest-wins, `resume()`/`stop()` also drop a subscribe still in flight), and the `trainingStore` pieces it needs copied
 verbatim: `mergeLogLines`, `emptyModelProgress`, `emptyMetrics`. **Imports.** `job-telemetry.js`,
 `process-log.js`. **Coverage.** `tests/test-connect-job-stream.mjs`, `test-connect-review-fixes.mjs`.
@@ -12954,6 +12954,10 @@ SLEAP Connect worker; with no local sleap-nn (web, desktop without it) the panel
 is remote-only (Models/Views/run block swap to `ui/connect/remote-inference.js`).
 Local code reaches `window.lucidDesktop` only inside `setupInferencePanel` and
 the local paths. A 2 s refresh while shown notices a session opened meanwhile.
+With a worker selected, the settings sleap-connect's `TrackJobSpec` cannot carry (Max instances,
+Bottom-Up grouping, Post-processing, the advanced tracking options, Optical Flow / Kalman; the worker
+drops unknown keys silently) are hidden, and Kalman falls back to Simple. The Views list skips
+calibration cameras with no video (`sessionViews`).
 
 **Purpose.** The **Inference** panel (right-edge rail, Zap icon):
 run sleap-nn on every camera view of the open session and bring the
@@ -13255,7 +13259,7 @@ Esc closes the rename box, then the popover; opening moves focus into it; a `ref
 `ui/panel-rail-icons.js`.
 
 #### ui/connect/notify.js
-**Purpose.** Toast stack (bottom-right, `.connect-toasts`, z-index 10500: over every Connect dialog and its scrim, under the ask dialogs): `success/error/info(message,
+**Purpose.** Toast stack (bottom-right; top-right while a Connect dialog is open, so a toast never covers its buttons; `.connect-toasts`, z-index 10500: over every Connect dialog and its scrim, under the ask dialogs): `success/error/info(message,
 {description, action:{label,onClick}, id})`, deduped by id, 4 s auto-dismiss
 (hovering the stack pauses all), 3 shown and older ones collapsed (come back, not dropped), per-kind
 Lucide icon, copy icon only on a toast without an action, close x top-left, "Clear all (n)" pill

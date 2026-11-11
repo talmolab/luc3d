@@ -134,12 +134,20 @@ await runConnectE2E(9393, async ({ browser, BASE }) => {
         empty: { hidden: document.getElementById('infBackendEmpty').hidden, text: document.getElementById('infBackendEmpty').textContent },
         selectHidden: document.getElementById('infBackend').hidden,
         devRt: Array.from(document.querySelectorAll('#tabInference .inf-row')).filter((r) => /^(Device|Runtime)/.test(r.textContent)).map((r) => r.hidden),
+        localOnly: Array.from(document.querySelectorAll('#tabInference .inf-row, #tabInference .inf-check, #tabInference .inf-section'))
+            .filter((r) => /^(Max instances|Min match points|Scoring reduction|Post-processing)/.test(r.textContent.trim()))
+            .map((r) => r.hidden || !!r.closest('[hidden]')),
+        trackers: Array.from(document.querySelectorAll('#tabInference select')).map((s) => Array.from(s.options).map((o) => o.value))
+            .find((v) => v.includes('simple')),
         why: Array.from(document.querySelectorAll('#tabInference .inf-run ~ .inf-muted')).map((e) => e.textContent).join('|'),
         order: Array.from(document.querySelectorAll('#panelRail .panel-rail-btn')).map((b) => b.dataset.tab).slice(-2),
     }));
     check(w1.backend.length === 0 && w1.empty.hidden === false && /Connect to a worker in the Connect tab to start remote inference\./.test(w1.empty.text) && w1.selectHidden,
         'web with no worker paired: no blank select, sleap-app\'s empty-state text instead', w1);
     check(w1.devRt.length === 2 && w1.devRt.every(Boolean), 'Device and Runtime are hidden when the backend is remote', w1.devRt);
+    check(w1.localOnly.length >= 4 && w1.localOnly.every(Boolean),
+        'settings a worker\'s track job cannot carry (Max instances, advanced tracking, Post-processing) are hidden for a remote run', w1.localOnly);
+    check(w1.trackers && w1.trackers.join() === 'simple,flow', 'no Kalman tracker for a worker', w1.trackers);
     check(w1.order.join() === 'tabInference,tabConnect', 'rail order: Inference before Connect', w1.order);
     await openPanel();
     check(await page.evaluate(() => document.getElementById('infRun').disabled), 'Run disabled with nothing set up');

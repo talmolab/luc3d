@@ -198,6 +198,29 @@ describe("createJobStream (useJobStream's core)", () => {
     expect(updates).toHaveLength(1);
   });
 
+  // LUCID regression (real Run:ai worker): the worker starts live delivery before it replays the
+  // backlog, so a live event can arrive mid-replay. Folded in arrival order it dropped the rest of
+  // the backlog (seq <= lastSeq) and the viewer showed "unknown" / epoch 0 for a running job.
+  it("a live event arriving during the replay does not drop the rest of the backlog", async () => {
+    const client = new FakeJobClient();
+    client.backlog = [
+      ev(1, "job.log", { line: "starting" }),
+      ev(40, "job.curve", { points: [{ x: 900, y: 0.002 }] }), // live, mid-replay
+      ev(2, "job.status", { state: "running" }),
+      ev(3, "job.epoch", { epoch: 0, train_loss: 0.5, val_loss: 0.4 }),
+      ev(4, "job.epoch", { epoch: 1, train_loss: 0.4, val_loss: 0.3 }),
+    ];
+    const stream = createJobStream(async () => client, "job_1", {
+      label: "Train bottomup",
+      setIntervalImpl: () => "h",
+      clearIntervalImpl: () => {},
+    });
+    await stream.ready;
+    expect(stream.getState().status).toBe("running");
+    expect(stream.getState().model.epochSamples.map((e) => e.epoch)).toEqual([0, 1]);
+    expect(stream.getState().lastSeq).toBe(40);
+  });
+
   it("buffers live events and only applies them on the injected interval tick", async () => {
     const client = new FakeJobClient();
     let flushTick = null;
