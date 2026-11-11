@@ -15,7 +15,7 @@
  * through `loading/session-loader.js`.
  */
 
-import { state } from '../ui/app-state.js?v=be716bec593e';
+import { state } from '../ui/app-state.js?v=e17cc9b31302';
 
 /** The by-camera export's own picker memory (used when there is no project file to start at). */
 export var EXPORT_FOLDER_PICKER_ID = 'lucid-export-folder';

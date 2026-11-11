@@ -42,6 +42,14 @@
  * swaps called, 0 false alarms, 2 of 450 "look right" were swaps, 71% unsure
  * (margin 0.15: 31 called, 4 false alarms; 0.1: 49 and 15).
  *
+ * The app itself on the same 395 videos (2026-11-10, runs/2026-11-10_prejudge-app
+ * on cup: Load SLP, Track All, image check with each model, headless Chrome on
+ * the CPU) found 1,632 of the 1,633 rows (1,625 clean, 94 swaps) and agreed with the study (package
+ * separation r 0.985, scores r 0.975). Package: 66 swaps called, 1 false
+ * alarm, 1 miss (AUC 0.997). Built-in, margin 0.2: 14 called, 2 false alarms,
+ * 1 miss, ~3 in 4 unsure (its crops are the app's, the study's the training
+ * script's; margin 0.25: 7 / 1, 0.3: 4 / 0). The About text quotes these.
+ *
  * Pure — no DOM, no app state, no imports.
  */
 
