@@ -666,8 +666,24 @@ export function setupInteraction() {
             const isNulled = inst && inst.nulledNodes && inst.nulledNodes.has(nodeIdx);
             const nodeName = state.session.skeleton.nodes[nodeIdx] || 'node ' + nodeIdx;
             setStatus((isNulled ? 'Nulled ' : 'Restored ') + nodeName + ' in ' + viewName);
+            // A null toggle is saved, so it is an unsaved change. The group's
+            // own markDirty() only flags it for re-triangulation; without the
+            // project-level one, right-click left a fresh project clean.
+            markDirty();
             instanceGroup.markDirty();
 
+            if (timeline) {
+                timeline.setFrameModified(state.currentFrame, true);
+            }
+        },
+
+        onUnlinkedNodeSetNull: function (viewName, instance, nodeIdx) {
+            // Same as onNodeSetNull for an ungrouped instance: no group to
+            // re-triangulate, but the toggle is saved all the same.
+            markDirty();
+            const isNulled = instance && instance.nulledNodes && instance.nulledNodes.has(nodeIdx);
+            const nodeName = state.session.skeleton.nodes[nodeIdx] || 'node ' + nodeIdx;
+            setStatus((isNulled ? 'Nulled ' : 'Restored ') + nodeName + ' in ' + viewName);
             if (timeline) {
                 timeline.setFrameModified(state.currentFrame, true);
             }

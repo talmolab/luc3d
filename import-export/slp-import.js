@@ -44,7 +44,7 @@ import {
 import { readBlobArrayBuffer } from '../loading/cold-read-guard.js';
 import { adoptSmoothingSource, readSmoothingMetadata } from './smoothing-metadata.js';
 import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js';
-import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js';
+import { remapGlobalTrackToSession, nulledNodesFromOcclusion, fileNulledNodes } from './import-track-resolve.js';
 import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js';
 import { stampFrameIdentitiesFromGroups, readFrameIdentityMetadata } from './frame-identity-metadata.js';
 import {
@@ -172,7 +172,9 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
                     if (refMeta.trackIdx != null) refInst.trackIdx = refMeta.trackIdx;
                     if (refMeta.type) refInst.type = refMeta.type;
                     if (refMeta.modified) refInst.modified = true;
-                    if (refMeta.nulledNodes) refInst.nulledNodes = new Set(refMeta.nulledNodes);
+                    // The file's visibility wins over the metadata copy (`fileNulledNodes`).
+                    var _refNulled = fileNulledNodes(refInst, refMeta.nulledNodes || refInst.nulledNodes);
+                    if (_refNulled) refInst.nulledNodes = _refNulled; else delete refInst.nulledNodes;
                     // The pass-1 instance IS the group member (already in fg3.instances).
                     group.addInstance(refCamName, refInst);
                 }
@@ -211,12 +213,12 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
                 var inst = new Instance(points, instTrackIdx, instType, instScore);
                 inst.setOccludedFrom(occluded);
                 inst.modified = instMeta.modified || false;
-                if (instMeta.nulledNodes) {
-                    inst.nulledNodes = new Set(instMeta.nulledNodes);
-                }
                 if (instMeta.occluded) {
                     inst.setOccludedFrom(instMeta.occluded);
                 }
+                // The file's visibility wins over the metadata copy (`fileNulledNodes`).
+                var _dictNulled = fileNulledNodes(inst, instMeta.nulledNodes);
+                if (_dictNulled) inst.nulledNodes = _dictNulled;
 
                 // Pass 1 (above) already added a raw-SLP instance
                 // for this frame/cam to `fg3.instances`. Leaving
@@ -444,9 +446,10 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
                 inst.setOccludedFrom(occluded);
                 if (instType === 'predicted' && _isPred && typedInst._score) inst.setPointScores(typedInst._score);
                 inst.modified = instMeta.modified || false;
-                if (instMeta.nulledNodes) {
-                    inst.nulledNodes = new Set(instMeta.nulledNodes);
-                }
+                // The file's visibility wins over the metadata copy: a hide or
+                // un-hide made in SLEAP changes `visible` but not LUC3D's metadata.
+                var _typedNulled = fileNulledNodes(inst, instMeta.nulledNodes);
+                if (_typedNulled) inst.nulledNodes = _typedNulled;
 
                 // Remove the matching pass-1 raw-SLP duplicate for this
                 // frame/cam (same rationale as reconstructInstanceGroupsFromDicts).
@@ -613,6 +616,9 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
 
                 var inst = new Instance(points, instTrackIdx, instType, instScore);
                 inst.modified = instMeta.modified || false;
+                // Provisional: the metadata copy, until the member's 2D arrives
+                // (`adoptMemberRow`, pose/lazy-residency.js), which lets the
+                // file's visibility decide (`fileNulledNodes`).
                 if (instMeta.nulledNodes) inst.nulledNodes = new Set(instMeta.nulledNodes);
 
                 // _rawInstIndex = the member's instance index within its camera-frame.
