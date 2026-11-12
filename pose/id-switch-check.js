@@ -42,6 +42,7 @@
  */
 
 import { readPoint3d } from './pose-data.js';
+import { abortable, heapNearLimit } from './compute-governor.js';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
@@ -88,6 +89,7 @@ export const IMAGE_CHECK_DEFAULTS = Object.assign({}, SWITCH_CHECK_DEFAULTS, {
     getEmbeddings: null,   // REQUIRED: async (frame, items[{k, group}]) -> per item [{camera, vector}];
                            // STARTED in increasing frame order, at most `inFlight` in flight
     inFlight: 2,           // requests kept in flight (ui/image-embedder.js asks for 8, to batch frames)
+    heapCheck: null,       // () => null | {usedMB, limitMB}: stop the run (default compute-governor.js heapNearLimit; tests inject)
     prepareFrames: null,   // optional: async (frames[], items[][], gridFrames[]) — every frame getEmbeddings will be asked
                            // for next, in order, and the items it will be asked for at each (lets the provider skip frames
                            // it has cached); gridFrames = every image sample's frame (frames is a subset of it). Called
@@ -921,7 +923,7 @@ export async function checkImageSwitches(session, opts) {
     var perCam = new Map();   // camera -> {rows: [], vecs: []}
     var crops = 0, jobAt = new Map(), gridFrames = [];
     var st = { embeddable: new Uint8Array(T), embedded: new Uint8Array(T), got: new Uint8Array(T * K), expect: null,
-               keyframes: typeof o.keyframes === 'function' ? await o.keyframes() : null };
+               keyframes: typeof o.keyframes === 'function' ? await abortable(o.keyframes(), o.signal) : null };
     for (var i = 0; i < T; i += every) {
         var items = [];
         for (var k = 0; k < K; k++) if (grid.G[i * K + k] && grid.hasCen(i, k)) items.push({ k: k, group: grid.G[i * K + k] });
@@ -934,13 +936,13 @@ export async function checkImageSwitches(session, opts) {
     // overlap embedding (a provider can then batch several frames per model run).
     var asked = 0, answered = 0, rounds = 0;
     if (typeof o.croppable === 'function') {
-        var cand = Array.from(jobAt.values()), can = await o.croppable(cand.map(function (j) { return j.frame; }), cand.map(function (j) { return j.items; }), gridFrames);
+        var cand = Array.from(jobAt.values()), can = await abortable(o.croppable(cand.map(function (j) { return j.frame; }), cand.map(function (j) { return j.items; }), gridFrames), o.signal);
         st.expect = new Uint8Array(T * K);
         cand.forEach(function (j, ci) { j.items.forEach(function (itm, ii) { if (!can || !can[ci] || can[ci][ii]) st.expect[j.i * K + itm.k] = 1; }); });
     }
     var embedRound = async function (jobs) {
         if (typeof o.prepareFrames === 'function') {
-            await o.prepareFrames(jobs.map(function (j) { return j.frame; }), jobs.map(function (j) { return j.items; }), gridFrames);
+            await abortable(o.prepareFrames(jobs.map(function (j) { return j.frame; }), jobs.map(function (j) { return j.items; }), gridFrames), o.signal);
         }
         var ahead = Math.max(1, Math.floor(o.inFlight || 2));
         var start = function (j) { var p = o.getEmbeddings(jobs[j].frame, jobs[j].items); p.catch(function () {}); return p; };   // surfaced when awaited
@@ -949,7 +951,12 @@ export async function checkImageSwitches(session, opts) {
         fill();
         for (var ji = 0; ji < jobs.length; ji++) {
             throwIfAborted(o.signal);
-            var embs = await pending.shift();
+            // Cancel must not wait on an embedding that may never come (a lost GPU, a stuck worker):
+            // abortable rejects at once; releaseFrames (finally, below) then tears the workers down
+            var embs = await abortable(pending.shift(), o.signal);
+            // ...nor run the renderer into its ~4 GB heap (pose/compute-governor.js)
+            var heap = ji % 16 === 0 ? (o.heapCheck || heapNearLimit)() : null;
+            if (heap) { var he = new Error('stopped: the page is close to its memory limit (' + heap.usedMB + ' of ' + heap.limitMB + ' MB)'); he.heapStop = true; throw he; }
             fill();
             var job = jobs[ji];
             st.embedded[job.i] = 1;
@@ -978,6 +985,9 @@ export async function checkImageSwitches(session, opts) {
             rounds++; asked += next.length;
             await embedRound(next.map(function (i2) { return jobAt.get(i2); }));
         }
+    } catch (e) {
+        if (e && e.heapStop) return failure(e.message);
+        throw e;
     } finally {
         if (typeof o.releaseFrames === 'function') o.releaseFrames();
     }

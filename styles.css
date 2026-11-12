@@ -4532,10 +4532,11 @@ input[type="range"]::-moz-range-track {
 .progress-hint ol { margin: 6px 0; padding-left: 18px; }
 .progress-hint li + li { margin-top: 2px; }
 
-/* Dismiss (a startup error, pose/initialization.js) — right-aligned, as the
-   image check's Cancel. */
+/* Dismiss (a startup error, pose/initialization.js) and Cancel (an operation
+   that can stop, setLoadingCancel) — right-aligned, as the image check's Cancel. */
 .loading-actions { display: flex; justify-content: flex-end; }
-.loading-actions #loadingDismiss { margin-top: 16px; }
+.loading-actions #loadingDismiss, .loading-actions #loadingCancel { margin-top: 16px; }
+.loading-actions #loadingCancel[hidden] { display: none; }
 
 /* --------------------------------------------------------------------------
    Keyboard Key
@@ -4753,38 +4754,6 @@ kbd {
 }
 
 /* --- Tracker UI --- */
-.tracker-progress {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 32px;
-    background: #1a1a2e;
-    display: flex;
-    align-items: center;
-    padding: 0 12px;
-    z-index: 9999;
-    border-bottom: 1px solid #333;
-    gap: 8px;
-}
-.tracker-progress-inner {
-    flex: 1;
-    height: 4px;
-    background: #333;
-    border-radius: 2px;
-    overflow: hidden;
-}
-.tracker-progress-bar {
-    height: 100%;
-    background: #667eea;
-    border-radius: 2px;
-    transition: width 0.2s;
-}
-#trackerProgressText {
-    font-size: 12px;
-    color: #ccc;
-    white-space: nowrap;
-}
 .tracker-settings {
     background: #16213e;
     border: 1px solid #2a2d5e;

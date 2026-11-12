@@ -29,7 +29,8 @@ import {
 } from '../ui/settings.js';
 import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js';
 import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, setLoadingCancel, idleWhile, busyDuring } from '../ui/loading-overlay.js';
+import { abortError } from './compute-governor.js';
 import { startTrackerWorker } from './tracker-pool.js';
 import { passesDetectionFilter } from './detection-filter-stats.js';
 import { loadAllLazyFrames, sweepLazyFrameWindows, showCalibrationRequiredPopup } from './triangulation.js';
@@ -756,7 +757,6 @@ function triangulateGroup(group, camMap) {
 // ============================================
 
 var globalTracker = null;
-var trackerWorker = null;
 
 function getTrackerHyperparams() {
     var el2d = document.getElementById('trackerWeight2d');
@@ -1323,6 +1323,7 @@ function stepTrackerFrame(session, run, fi) {
     var detsByCam = buildTrackerDetections(fg, run.cameras, fi, session);
     run.trk.trackFrame(detsByCam, run.cameras);
     commitTrackedFrame(session, run.trk, fi, run.trackToIdentity, run.identityPool);
+    run.committedFi = fi;
 }
 
 // Drive the CrossViewTracker over `frameIndices`, populating identities, the
@@ -1361,12 +1362,14 @@ export async function runCrossViewTrackerProgress(session, cameras, frameIndices
 
 // The loop of runCrossViewTrackerProgress, on a run made by the caller — on its
 // worker when `run.pool` is set (attachTrackerWorker), where progress reports
-// the frames COMMITTED, not the frames sent.
+// the frames COMMITTED, not the frames sent. Once `run.signal` fires (Track All's
+// Cancel) it stops before the next frame and rejects with an AbortError.
 async function trackFrameListProgress(session, run, frameIndices, onProgress) {
     var total = frameIndices.length;
     var pacer = createProgressPacer();
-    var pool = run.pool, done = 0;
+    var pool = run.pool, done = 0, signal = run.signal;
     for (var f = 0; f < total; f++) {
+        if (signal && signal.aborted) throw abortError();
         if (pool) {
             var wait = submitTrackerFrame(session, run, frameIndices[f]);
             if (wait) await wait;
@@ -1405,7 +1408,7 @@ async function sweepTrackAllFrames(session, run, onProgress, opts) {
     if (!pool) {
         await sweepLazyFrameWindows(session, function (fi) {
             stepTrackerFrame(session, run, fi);
-        }, { window: opts.window || 2000, start: from, end: to, onProgress: onProgress });
+        }, { window: opts.window || 2000, start: from, end: to, onProgress: onProgress, signal: run.signal });
         return trackRunResult(session, run);
     }
     // On the worker: a window stays resident until its results are committed
@@ -1415,7 +1418,7 @@ async function sweepTrackAllFrames(session, run, onProgress, opts) {
     await sweepLazyFrameWindows(session, function (fi) {
         return submitTrackerFrame(session, run, fi);
     }, {
-        window: opts.window || 2000, start: from, end: to, releaseLag: 1,
+        window: opts.window || 2000, start: from, end: to, releaseLag: 1, signal: run.signal,
         beforeRelease: function (wStart, wEnd) { return idleWhile(pool.committedThrough(wEnd - 1)); },
         onProgress: onProgress && function (done, total) {
             return onProgress(done >= total ? total : Math.max(0, Math.min(done, run.committedFi - from + 1)), total);
@@ -1576,6 +1579,27 @@ function clearTrackingStateInRange(session, lo, hi) {
         if (rec.frameIdx >= lo && rec.frameIdx <= hi) doomed.push(rec.key);
     }
     for (var d = 0; d < doomed.length; d++) session.frameIdentityMap.delete(doomed[d]);
+}
+
+// After Cancel: the frames committed before it keep their identities and groups (a
+// commit rewrites its frame in place, so there is no earlier state to put back), and
+// the rest of the swept span is left untracked — the run had already cleared it.
+// Says so, and skips what follows a finished run (the ID-switch checks, the summary,
+// the blue Track button: the result is partial). `first`/`last`: the span swept.
+function finishCancelledPass(run, label, human, first, last, bail) {
+    var through = run && run.committedFi >= first ? Math.min(run.committedFi, last) : null;
+    console.log('[' + label + '] cancelled; tracked through frame', through);
+    console.timeEnd('[' + label + '] total');
+    drawAllOverlays(state.currentFrame);
+    updateInfoPanel();
+    if (timeline) timeline.refreshTracks(state.session, { cap: true });
+    var what = through == null
+        ? 'no frames were tracked (' + displayFrame(first) + '–' + displayFrame(last) + ' are untracked)'
+        : through >= last ? 'every frame was tracked'
+        : 'frames ' + displayFrame(first) + '–' + displayFrame(through) + ' were tracked, ' +
+          displayFrame(through + 1) + '–' + displayFrame(last) + ' are untracked';
+    setStatus(human + ' cancelled: ' + what + ' — run it again to track them all', 'warning');
+    return Object.assign({}, bail, { cancelled: true });
 }
 
 /**
@@ -1772,7 +1796,16 @@ async function runTrackingPass(range) {
         // The tracker steps the frames in order — on one worker (pose/tracker-pool.js) while this thread
         // hydrates frames and commits the results, or inline when the worker cannot start.
         run = createTrackerRun(session, cameras, effectiveNumAnimals, identityPool);
+        // The card's Cancel (and Esc) stops the run before its next frame: the worker is
+        // terminated at once, so nothing waits on it (see the AbortError branch below).
+        var cancel = new AbortController();
+        run.signal = cancel.signal;
+        setLoadingCancel(function () {
+            cancel.abort();
+            if (run.pool) run.pool.cancel(abortError());
+        });
         var onWorker = await attachTrackerWorker(session, run);
+        if (cancel.signal.aborted && run.pool) run.pool.cancel(abortError());   // pressed while the worker started
         // ...with its CPU line and graph (ui/loading-overlay.js; hideLoading stops it): the worker's busy
         // time plus this thread's, or, inline, this thread alone — one core's share at most.
         setLoadingCpu(onWorker
@@ -1882,6 +1915,11 @@ async function runTrackingPass(range) {
     } catch (e) {
         if (run) closeTrackerWorker(run);
         hideLoading();
+        if (e && e.name === 'AbortError') {
+            return finishCancelledPass(run, label, human,
+                isRange ? lo : (windowed ? 0 : frameIndices[0]),
+                isRange ? hi : (windowed ? loader.nFrames - 1 : frameIndices[frameIndices.length - 1]), bail);
+        }
         console.error('[' + label + '] error:', e, e.stack);
         setStatus(human + ' error: ' + e.message, 'error');
         return bail;
@@ -1912,13 +1950,9 @@ export async function trackFrameRange(startFrame, endFrame) {
 (function () {
     var btnTrackFrame = document.getElementById('tbTrackFrame');
     var btnTrackAll = document.getElementById('tbTrackAll');
-    var btnCancel = document.getElementById('trackerCancel');
 
     if (btnTrackFrame) btnTrackFrame.addEventListener('click', trackCurrentFrame);
     if (btnTrackAll) btnTrackAll.addEventListener('click', trackAll);
-    if (btnCancel) btnCancel.addEventListener('click', function () {
-        if (trackerWorker) trackerWorker.postMessage({ type: 'cancel' });
-    });
 
     // Slider value display
     ['trackerWeight2d', 'trackerWeight3d', 'trackerVelocity', 'trackerDistance', 'trackerTimePenalty'].forEach(function (id) {

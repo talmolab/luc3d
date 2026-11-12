@@ -58,6 +58,7 @@ import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-resid
 import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js';
 import { EmbeddingCache, cropKeyHash, hullsReachingCrop } from '../pose/embedding-cache.js';
 import { installModelPackageFetch, withPackageCachePolicy, modelPackageTransfer } from './image-model-package.js';
+import { createComputeGovernor, withTimeout, workerReplyTimeoutMs } from '../pose/compute-governor.js';
 
 // The load meter now lives in ui/load-graph.js (shared with the loading overlay); still exported from here.
 export { createLoadMeter };
@@ -205,6 +206,14 @@ export function loadImageModel(onStatus) {
         let device = null, ortAdapter = null;
         try { device = await T.env.backends.onnx.webgpu.device; } catch (e) { /* clsFromGpu falls back to a full read */ }
         try { ortAdapter = await T.env.backends.onnx.webgpu.adapter; } catch (e) { /* gpuAdapterInfo asks for one */ }
+        // A lost device (driver reset, GPU watchdog, sleep): the cached model is dead with it — the next
+        // run loads it again (createImageEmbedder stops the run in progress).
+        if (device && device.lost && typeof device.lost.then === 'function') {
+            device.lost.then(function (info) {
+                console.warn('[image-embedder] the GPU device was lost:', info && (info.reason + ' ' + info.message));
+                if (_modelPromise === p) _modelPromise = null;
+            });
+        }
         return { T: T, model: model, dtype: dtype, device: device, adapter: await gpuAdapterInfo(device, ortAdapter) };
     })().catch(function (e) { throw asModelDownloadFailure(e); });
     p.catch(function () { if (_modelPromise === p) _modelPromise = null; });   // allow a retry after a failure
@@ -293,8 +302,10 @@ export function cpuModelWorkerCount(cores, memoryGB) {
  * `clock` (createBusyClock, optional) is told while each worker has a run, for the CPU load.
  * @returns {Promise<{size: number, run: function(Float32Array, number): Promise<Float32Array[]>, terminate: function}>}
  */
-export async function createCpuModelPool(count, onStatus, clock) {
+export async function createCpuModelPool(count, onStatus, clock, opts) {
+    opts = opts || {};
     const SZ = 3 * INPUT * INPUT, slots = [];
+    const replyMs = opts.replyTimeoutMs > 0 ? opts.replyTimeoutMs : workerReplyTimeoutMs();
     const model = { id: _active.id, input: INPUT, pkg: modelPackageTransfer(_active) };
     let nextId = 0;
     const start = function (reportProgress) {
@@ -337,18 +348,31 @@ export async function createCpuModelPool(count, onStatus, clock) {
         const rest = await Promise.allSettled(Array.from({ length: count - 1 }, function () { return start(false); }));
         rest.forEach(function (r) { if (r.status === 'fulfilled') slots.push(r.value); });
     }
+    // A run must answer within replyMs (pose/compute-governor.js): a worker that does not is
+    // terminated (its runs reject) and the others carry on — never a wait that cannot end.
     const runOn = function (slot, data, n) {
-        return new Promise(function (resolve, reject) {
+        return withTimeout(new Promise(function (resolve, reject) {
             const id = nextId++;
             slot.pending.set(id, { resolve: resolve, reject: reject });
             if (clock) clock.begin(slot);
             slot.w.postMessage({ type: 'run', id: id, data: data, n: n }, [data.buffer]);
+        }), replyMs, 'a CPU model worker', function () {
+            slot.dead = slot.dead || new Error('the CPU model worker stopped answering');
+            if (clock) clock.close(slot);
+            slot.pending.clear();
+            try { slot.w.terminate(); } catch (e) { /* ignore */ }
         });
     };
+    // How many of the loaded workers share a batch now: all of them (the measured CPU run held the
+    // OS's pressure at "fair" on 4), halved each second the OS reports "critical" CPU pressure.
+    // Every crop is embedded on its own, so which worker runs it changes nothing in the result.
+    const gov = slots.length > 1 ? createComputeGovernor({ ceiling: slots.length, start: slots.length, Observer: opts.Observer }) : null;
     return {
         size: slots.length,
+        /** Workers sharing a batch now (the governor's count). */
+        active: function () { return gov ? gov.allowed() : slots.length; },
         run: async function (data, n) {
-            const live = slots.filter(function (s) { return !s.dead; });
+            const live = slots.filter(function (s) { return !s.dead; }).slice(0, gov ? gov.allowed() : slots.length);
             if (!live.length) throw new Error('no CPU model worker is running');
             const k = Math.min(live.length, n), base = Math.floor(n / k), extra = n % k, parts = [];
             for (let i = 0, at = 0; i < k; i++) {
@@ -363,6 +387,7 @@ export async function createCpuModelPool(count, onStatus, clock) {
             return out;
         },
         terminate: function () {
+            if (gov) gov.close();
             slots.forEach(function (s) { if (clock) clock.close(s); try { s.w.terminate(); } catch (e) { /* ignore */ } });
             slots.length = 0;
         },
@@ -1051,9 +1076,14 @@ export function createCropPool(clock) {
             const id = nextId++;
             w.load++;
             if (clock) clock.begin(w);
-            return new Promise(function (resolve, reject) {
+            // a worker that does not answer (pose/compute-governor.js) is failed like a crashed one: the
+            // pool is `broken` and the caller crops inline from then on
+            return withTimeout(new Promise(function (resolve, reject) {
                 pending.set(id, { resolve: resolve, reject: reject, w: w });
                 w.worker.postMessage({ id: id, image: image, crops: crops, input: INPUT }, [image]);
+            }), workerReplyTimeoutMs(), 'a crop worker', function () {
+                fail(w, 'crop worker did not answer');
+                try { w.worker.terminate(); } catch (e) { /* ignore */ }
             });
         },
         terminate: function () {
@@ -1261,12 +1291,29 @@ export async function createImageEmbedder(session, opts) {
     // which model produced a batch of vectors: the cache keeps each vector under its producer
     const tagged = function (vecs, tag) { vecs.tag = modelKey + ':' + tag; return vecs; };
     // busySince: when the model run in flight started (0: none) — busyMs() counts it while it runs
+    // The GPU guardrails (pose/compute-governor.js): a lost device (driver reset, watchdog, sleep) or a
+    // batch that does not come back within WORKER_REPLY_TIMEOUT_MS stops the run with a reason instead
+    // of leaving it waiting forever. ~20 ms a 64-crop batch on an M5: the deadline is far off.
+    let gpuGone = null;
+    const gpuLost = device && device.lost && typeof device.lost.then === 'function'
+        ? device.lost.then(function (info) {
+            gpuGone = cannotRun('stopped: the GPU was reset (' + ((info && info.message) || (info && info.reason) || 'device lost') + ') — run the check again');
+            throw gpuGone;
+        }) : null;
+    if (gpuLost) gpuLost.catch(function () {});
+    const onGpu = function (p) {
+        const raced = gpuLost ? Promise.race([p, gpuLost]) : p;
+        const ms = workerReplyTimeoutMs();
+        return withTimeout(raced, ms, 'the GPU', function () { _modelPromise = null; })
+            .catch(function (e) { throw e && e.name === 'TimeoutError' ? cannotRun('stopped: the GPU did not finish a batch within ' + Math.round(ms / 1000) + ' s', e) : e; });
+    };
     const runWebGPU = async function (data, n) {
+        if (gpuGone) throw gpuGone;
         const a = tm.busySince = performance.now();
         try {
-            const res = await model({ pixel_values: new T.Tensor('float32', data, [n, 3, INPUT, INPUT]) });
+            const res = await onGpu(model({ pixel_values: new T.Tensor('float32', data, [n, 3, INPUT, INPUT]) }));
             const b = performance.now();
-            const out = await clsFromGpu(res, n, device);
+            const out = await onGpu(clsFromGpu(res, n, device));
             tm.runMs += b - a; tm.readMs += performance.now() - b;
             return tagged(out, 'webgpu/' + dtype);
         } finally { tm.busySince = 0; }
@@ -1500,6 +1547,8 @@ export async function createImageEmbedder(session, opts) {
                     : await createImageBitmap(im.img);
                 if (im.owned) im.img = null;              // transferred: the worker closes it
                 return pool.run(send, job.crops).catch(function (e) {
+                    // the run ended (Cancel / releaseFrames) with this frame still cropping: nothing to report
+                    if (e && e.message === 'crop pool closed') return [];
                     console.warn('[image-embedder] crop worker failed, skipping one view of frame ' + frame + ':', e.message);
                     return [];
                 });

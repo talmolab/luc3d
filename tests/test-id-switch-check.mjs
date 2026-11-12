@@ -681,6 +681,20 @@ group('Image check — cancellation and failure reasons');
     ok(!r1.ok && /embedder/.test(r1.reason), 'no embedder → refused (' + r1.reason + ')');
     const r2 = await SC.checkImageSwitches(buildSession(null).session, { fps: 60, getEmbeddings: async (f, it) => it.map(() => []) });
     ok(!r2.ok && /No crops/.test(r2.reason), 'nothing embeddable → refused (' + r2.reason + ')');
+    // Cancel while an embedding never comes back (a lost GPU, a stuck worker): it must not wait on it
+    const ctl3 = new AbortController();
+    let calls3 = 0, released = 0;
+    const hangs = (f, items) => (++calls3 === 3 ? new Promise(() => {}) : Promise.resolve(items.map(() => [])));
+    setTimeout(() => ctl3.abort(), 30);
+    const t0 = Date.now();
+    const r3 = await Promise.race([
+        SC.checkImageSwitches(buildSession(null).session, { fps: 60, getEmbeddings: hangs, signal: ctl3.signal, inFlight: 1, releaseFrames: () => { released++; } })
+            .then(() => 'resolved', (e) => e.name),
+        new Promise((r) => setTimeout(() => r('HUNG'), 2000))]);
+    ok(r3 === 'AbortError' && released === 1, 'Cancel while an embedding hangs: AbortError at once, frames released (' + r3 + ', ' + (Date.now() - t0) + ' ms)');
+    // the heap stop: a run near the renderer's heap limit ends with a reason, not a crash
+    const r4 = await SC.checkImageSwitches(buildSession(null).session, { fps: 60, getEmbeddings: syntheticEmbedder(), heapCheck: () => ({ usedMB: 3600, limitMB: 4096 }) });
+    ok(!r4.ok && /memory limit \(3600 of 4096 MB\)/.test(r4.reason), 'near the heap limit → stopped with a reason (' + r4.reason + ')');
 }
 
 group('fitPCA — recovers the dominant direction');
