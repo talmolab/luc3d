@@ -43,6 +43,13 @@ const COMMANDS: &[&str] = &[
     "detect_gpu",
     "detect_sleap_nn",
     "input_picks",
+    // iroh: the dial-only byte pipe to a worker (iroh_client.rs).
+    "iroh_connect",
+    "iroh_send",
+    "iroh_disconnect",
+    "iroh_blob_open",
+    "iroh_blob_read_range",
+    "iroh_blob_close",
 ];
 
 fn main() {

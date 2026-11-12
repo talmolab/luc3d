@@ -38,13 +38,13 @@
  * A panel that only exists in some builds (the desktop app's Inference
  * panel) adds itself after setup with `registerPanelRailPanel`: it goes at
  * the end of the rail and the stack, and its remembered open/folded state is
- * restored then (setup drops ids it does not know yet).
+ * restored then (setup keeps the ids it does not know yet in what it stores, `_later`, until they register).
  *
  * Imports only the icon strings; `toggleInfoPanel` is handed in by
  * `setupPanelRail` (it lives in `ui/ui-wiring.js`, which would close a cycle
  * for `ui/id-switch-modal.js` and `ui/plane-definition.js`).
  */
-import { railIconSvg } from './panel-rail-icons.js?v=6a08874aa4a2';
+import { railIconSvg } from './panel-rail-icons.js?v=82449baaa3c2';
 
 /** Rail and stack order = the old tab bar's order. `tab` is the `.panel-tab-content` element id. */
 export const PANEL_RAIL_PANELS = [
@@ -93,9 +93,20 @@ function isExpanded(tabId) {
     return _open.indexOf(tabId) !== -1 && _folded.indexOf(tabId) === -1;
 }
 
+/**
+ * Stored ids of panels registered after setup (Inference, Connect) that have not
+ * arrived yet: kept in what `persist` writes, or the first repaint at startup
+ * would wipe their remembered open/folded state before they register.
+ */
+let _later = { open: [], folded: [] };
+
 function persist() {
     try {
-        localStorage.setItem(PANEL_RAIL_STORAGE_KEY, JSON.stringify({ open: _open, folded: _folded }));
+        const notYet = function (t) { return !isKnownTab(t); };
+        localStorage.setItem(PANEL_RAIL_STORAGE_KEY, JSON.stringify({
+            open: _open.concat(_later.open.filter(notYet)),
+            folded: _folded.concat(_later.folded.filter(notYet)),
+        }));
     } catch (e) { /* best effort */ }
 }
 
@@ -321,7 +332,7 @@ export function registerPanelRailPanel(p, pane) {
     return true;
 }
 
-function readStored() {
+function readStored(unfiltered) {
     let raw = null;
     try { raw = localStorage.getItem(PANEL_RAIL_STORAGE_KEY); } catch (e) { raw = null; }
     if (!raw) return null;
@@ -329,8 +340,8 @@ function readStored() {
         const v = JSON.parse(raw);
         if (!v || !Array.isArray(v.open)) return null;
         return {
-            open: v.open.filter(isKnownTab),
-            folded: Array.isArray(v.folded) ? v.folded.filter(isKnownTab) : [],
+            open: v.open.filter(function (t) { return typeof t === 'string' && (unfiltered || isKnownTab(t)); }),
+            folded: Array.isArray(v.folded) ? v.folded.filter(function (t) { return typeof t === 'string' && (unfiltered || isKnownTab(t)); }) : [],
         };
     } catch (e) { return null; }
 }
@@ -389,6 +400,9 @@ export function setupPanelRail(opts) {
     // whether the info panel is shown. An empty stored stack is honoured only
     // while the info panel is hidden (showing it reopens the default panel).
     const stored = readStored();
+    const raw = readStored(true);
+    _later = raw ? { open: raw.open.filter(function (t) { return !isKnownTab(t); }), folded: raw.folded.filter(function (t) { return !isKnownTab(t); }) }
+        : { open: [], folded: [] };
     _open = stored ? stored.open : DEFAULT_OPEN.slice();
     _folded = stored ? stored.folded : [];
     if (_open.length === 0 && !isInfoPanelCollapsed()) { _open = DEFAULT_OPEN.slice(); _folded = []; }

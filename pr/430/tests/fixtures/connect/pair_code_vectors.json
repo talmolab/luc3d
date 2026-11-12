@@ -1,0 +1,52 @@
+[
+  {
+    "description": "no addrs, no relay",
+    "ticket": {
+      "node_id": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
+      "secret": "ZGVmZ2hpamtsbW5vcHFycw",
+      "expires_at": 1700000000,
+      "addrs": [],
+      "relay_url": null
+    },
+    "code": "sleap1aeaqeayeaudaocajbifqydiob4ibceqtcqkrmfyydenbwha5dypsazdfmztwq2lknnwg23tpobyxe43fkpyqaaaa55pq"
+  },
+  {
+    "description": "one IPv4 addr, known relay",
+    "ticket": {
+      "node_id": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
+      "secret": "ZGVmZ2hpamtsbW5vcHFycw",
+      "expires_at": 1700000300,
+      "addrs": [
+        "ws://192.168.1.42:9631"
+      ],
+      "relay_url": "https://use1-1.relay.n0.iroh.link./"
+    },
+    "code": "sleap1aeaqeayeaudaocajbifqydiob4ibceqtcqkrmfyydenbwha5dypsazdfmztwq2lknnwg23tpobyxe43fkpzcyaieycuackrft4b7acq"
+  },
+  {
+    "description": "IPv6 addr, custom relay URL",
+    "ticket": {
+      "node_id": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
+      "secret": "ZGVmZ2hpamtsbW5vcHFycw",
+      "expires_at": 1700000600,
+      "addrs": [
+        "ws://[fe80::1]:9631"
+      ],
+      "relay_url": "https://relay.example.org/"
+    },
+    "code": "sleap1aeaqeayeaudaocajbifqydiob4ibceqtcqkrmfyydenbwha5dypsazdfmztwq2lknnwg23tpobyxe43fkpzvqaig72aaaaaaaaaaaaaaaaaaaaaaaesz77y2nb2hi4dthixs64tfnrqxsltfpbqw24dmmuxg64thf43jw"
+  },
+  {
+    "description": "a URL-tag addr (not ws://ip:port), no relay",
+    "ticket": {
+      "node_id": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
+      "secret": "ZGVmZ2hpamtsbW5vcHFycw",
+      "expires_at": 1700000900,
+      "addrs": [
+        "wss://tailnet-host.ts.net:9631/"
+      ],
+      "relay_url": null
+    },
+    "code": "sleap1aeaqeayeaudaocajbifqydiob4ibceqtcqkrmfyydenbwha5dypsazdfmztwq2lknnwg23tpobyxe43fkp2iiaiad53xg4z2f4xxiyljnrxgk5bnnbxxg5boorzs43tfoq5dsnrtgexqavgx"
+  }
+]

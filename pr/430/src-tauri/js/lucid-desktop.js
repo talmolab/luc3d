@@ -12,7 +12,7 @@
  *
  * What it does (contract: luc3d-app-contract.md, "JS shim"):
  *  1. `window.lucidDesktop` — {isDesktop, fsaWriteOnly, platform, systemInfo(),
- *     revealPath(p), openExternal(url), sleapNn{...}, fs{...}} and
+ *     revealPath(p), openExternal(url), sleapNn{...}, iroh{...}, fs{...}} and
  *     `<html data-lucid-desktop="1">`.
  *  2. Where the webview has no File System Access API (WKWebView, WebKitGTK):
  *     `showSaveFilePicker` / `showDirectoryPicker` polyfills backed by the
@@ -198,6 +198,50 @@
             pickModelDirectory: function (title) {
                 return call('pick_model_directory', title != null ? { title: String(title) } : {});
             },
+        },
+        /**
+         * iroh: the dial-only QUIC byte pipe to a sleap-connect worker (Connect;
+         * `iroh_client.rs`). The page speaks protocol v1 over it unchanged
+         * (`pose/connect/iroh-socket.js`), as over a WebSocket; Rust only moves
+         * 4-byte length-prefixed frames. Connections belong to this webview and
+         * are closed when it reloads or its window closes.
+         */
+        iroh: {
+            /**
+             * Dial `target` ({nodeId, relayUrl?, directAddrs?}); `onEvent` gets
+             * {kind:'message', data} | {kind:'closed'} | {kind:'error', message}.
+             * Resolves to the connection id every other call names.
+             */
+            connect: function (target, onEvent) {
+                var Channel = tauriChannelCtor();
+                if (!Channel) return Promise.reject(new Error(LOG + ' window.__TAURI__.core.Channel is unavailable'));
+                var channel = new Channel();
+                channel.onmessage = function (msg) {
+                    if (typeof onEvent !== 'function') return;
+                    try { onEvent(msg); } catch (e) { console.error(LOG, 'iroh onEvent threw', e); }
+                };
+                return call('iroh_connect', {
+                    target: {
+                        nodeId: String(target.nodeId),
+                        relayUrl: target.relayUrl || undefined,
+                        directAddrs: target.directAddrs || undefined,
+                    },
+                    onMessage: channel,
+                });
+            },
+            /** One framed message (a protocol-v1 envelope as JSON text). */
+            send: function (connId, msg) { return call('iroh_send', { connId: connId, msg: String(msg) }); },
+            disconnect: function (connId) { return call('iroh_disconnect', { connId: connId }); },
+            /** Opens the connection's blob stream: {size, chunkSize, chunkHashes}. Replaces an open one. */
+            blobOpen: function (connId, sha256) {
+                return call('iroh_blob_open', { connId: connId, sha256: String(sha256) });
+            },
+            /** Bytes [offset, offset+length) of the open blob (length <= 4 MiB) as a Uint8Array. */
+            blobReadRange: function (connId, offset, length) {
+                return call('iroh_blob_read_range', { connId: connId, offset: offset, length: length }).then(toU8);
+            },
+            /** Ends the blob stream; a no-op when none is open. */
+            blobClose: function (connId) { return call('iroh_blob_close', { connId: connId }); },
         },
         /**
          * Paths on disk, for features that hand files to native tools

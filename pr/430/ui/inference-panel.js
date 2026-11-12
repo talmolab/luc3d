@@ -1,6 +1,7 @@
 /**
- * ui/inference-panel.js — the desktop app's Inference panel: run sleap-nn on
- * every camera view of the open session, then bring the predictions back.
+ * ui/inference-panel.js — the Inference panel: run sleap-nn on every camera
+ * view of the open session (locally on the desktop app, or on a paired SLEAP
+ * Connect worker), then bring the predictions back.
  *
  * A replica of sleap-app's Inference panel (`InferencePanel.tsx`, its store
  * `inferenceStore.ts` and `BackendPicker.tsx`) in LUCID's vanilla JS: the same
@@ -20,26 +21,36 @@
  *   - Track only needs a per-view .slp input and is shown but not available;
  *     cross-view tracking is LUCID's Track ▸ All frames;
  *   - no Full Configuration window: every setting it holds is in the panel;
- *   - Backend offers Local only (the seam for a SLEAP Connect worker).
+ *   - Backend (`ui/connect/backend-picker.js`, sleap-app's BackendPicker):
+ *     Local (desktop with sleap-nn) or a paired worker. Remote runs, the worker
+ *     file browser, path rules and Fetch & Load live in
+ *     `ui/connect/remote-inference.js` (+ `pose/connect/remote-inference-plan.js`);
+ *     Models / Views / the run block swap to their remote versions. With no
+ *     local sleap-nn (the web app, a desktop build without it) the panel is
+ *     remote-only, as sleap-app's browser build is. With a worker selected, the
+ *     settings its track job cannot carry (Max instances, Bottom-Up grouping,
+ *     Post-processing, advanced tracking, Optical Flow / Kalman) are hidden;
+ *   - the Views list skips calibration cameras that have no video.
  *
- * Loaded ONLY on the desktop app with sleap-nn in the build:
- * `pose/initialization.js` imports it dynamically after checking
- * `window.lucidDesktop.sleapNn`, so the web app never fetches it. It talks to
- * native code only through `window.lucidDesktop` (installed by
- * src-tauri/js/lucid-desktop.js); it imports no desktop code.
+ * Loaded on every build: `pose/initialization.js` imports it dynamically after
+ * the rail exists. The local paths talk to native code only through
+ * `window.lucidDesktop` (src-tauri/js/lucid-desktop.js), looked up inside
+ * `setupInferencePanel` and never on the web; it imports no desktop code.
  */
-import { state } from './app-state.js?v=6a08874aa4a2';
-import { registerPanelRailPanel, showPanelTab } from './panel-rail.js?v=6a08874aa4a2';
-import { railIconSvg } from './panel-rail-icons.js?v=6a08874aa4a2';
-import { setInfoTip } from './info-tip.js?v=6a08874aa4a2';
-import { noteProgress, resetProgress } from './progress-delta.js?v=6a08874aa4a2';
+import { state } from './app-state.js?v=82449baaa3c2';
+import { registerPanelRailPanel, showPanelTab } from './panel-rail.js?v=82449baaa3c2';
+import { railIconSvg } from './panel-rail-icons.js?v=82449baaa3c2';
+import { setInfoTip } from './info-tip.js?v=82449baaa3c2';
+import { noteProgress, resetProgress } from './progress-delta.js?v=82449baaa3c2';
 import {
     defaultInferenceConfig, INFERENCE_DEFAULTS, targetFrames, sampleFrames, pickInferenceSubcommand,
-    parseProgressLine, formatDuration, formatEta,
-} from './inference-args.js?v=6a08874aa4a2';
-import { planInferenceJobs, runJobQueue, joinPath, viewInferenceBlocker } from './inference-jobs.js?v=6a08874aa4a2';
-import { matchViewVideos, isVideoName } from './inference-video-paths.js?v=6a08874aa4a2';
-import { mergeViewPredictions } from './inference-merge.js?v=6a08874aa4a2';
+    parseProgressLine, formatDuration, formatEta, framesToSpec,
+} from './inference-args.js?v=82449baaa3c2';
+import { planInferenceJobs, runJobQueue, joinPath, viewInferenceBlocker } from './inference-jobs.js?v=82449baaa3c2';
+import { matchViewVideos, isVideoName } from './inference-video-paths.js?v=82449baaa3c2';
+import { mergeViewPredictions } from './inference-merge.js?v=82449baaa3c2';
+import { createRemoteInference } from './connect/remote-inference.js?v=82449baaa3c2';
+import { createBackendPicker } from './connect/backend-picker.js?v=82449baaa3c2';
 
 export const INFERENCE_TAB_ID = 'tabInference';
 
@@ -72,8 +83,8 @@ const LOG_MAX = 5000;
 const LOG_TAIL = 12;
 const LISTING_MAX_DEPTH = 4;
 
-/** Backends a run can go to. Only Local today; a SLEAP Connect worker would be another entry. */
-export const INFERENCE_BACKENDS = [{ id: 'local', label: 'Local (this machine)' }];
+/** Backends a run can go to: this machine (desktop with sleap-nn) or a paired SLEAP Connect worker. */
+export const INFERENCE_BACKENDS = [{ id: 'local', label: 'Local (this machine)' }, { id: 'remote', label: 'SLEAP Connect worker' }];
 
 let sn = null;      // window.lucidDesktop.sleapNn
 let fsApi = null;   // window.lucidDesktop.fs
@@ -92,6 +103,11 @@ const run = {
 };
 const refreshers = [];
 let elapsedTimer = null;
+// Backend: 'remote' = a paired SLEAP Connect worker (the only backend where there is no local
+// sleap-nn: the web app, or the desktop app without it); null = the default for this build.
+const backend = { remote: null };
+const TRACKERS = [['simple', 'Simple'], ['flow', 'Optical Flow'], ['kalman', 'Kalman Filter']];
+let remote = null;      // ui/connect/remote-inference.js controller
 
 // ---------------------------------------------------------------------------
 // DOM helpers
@@ -118,11 +134,14 @@ function icon(name, cls) {
     return s;
 }
 
-function isRunning() { return run.status === 'running'; }
+function isRunning() { return run.status === 'running' || (remote !== null && isRemote() && remote.isRunning()); }
 function isDone() { return run.status === 'completed' || run.status === 'error' || run.status === 'cancelled'; }
 
 /** Re-evaluate visibility / disabled state of every control. */
-function refresh() { refreshers.forEach(function (f) { f(); }); }
+function refresh() {
+    refreshers.forEach(function (f) { f(); });
+    if (remote) { remote.sync(); remote.refreshUi(); }
+}
 function onRefresh(f) { refreshers.push(f); }
 
 function fieldLabel(label, hint) {
@@ -233,14 +252,20 @@ function shownIf(node, pred) {
 // Session facts
 // ---------------------------------------------------------------------------
 
-/** The session's cameras: those shown as views first (in view order), then the rest. */
+/**
+ * The session's cameras: those shown as views first (in view order), then the rest. When some
+ * cameras have a video, a camera that is neither shown nor has one (a calibration camera whose
+ * folder was not loaded) is left out: it has nothing to run on. A project whose videos are not
+ * attached yet (none has one) keeps every camera.
+ */
 function sessionViews() {
     const s = state.session;
     if (!s) return [];
     const cams = s.cameras.map(function (c) { return c.name; });
     const shown = (state.views || []).map(function (v) { return v.name; })
         .filter(function (n) { return cams.indexOf(n) !== -1; });
-    return shown.concat(cams.filter(function (n) { return shown.indexOf(n) === -1; }));
+    const anyVideo = cams.some(function (n) { return !!videoFileOf(n); });
+    return shown.concat(cams.filter(function (n) { return shown.indexOf(n) === -1 && (!anyVideo || !!videoFileOf(n)); }));
 }
 
 function videoFileOf(view) {
@@ -281,7 +306,11 @@ function framesWithType(type) {
 function customRangeError() {
     if (cfg.frameRange !== 'custom') return null;
     const s = Number(cfg.frameStart), e = Number(cfg.frameEnd);
-    const n = Math.max.apply(null, [0].concat(sessionViews().map(frameCountOf)));
+    // sleap-app checks the range against its one video. A session has several views and the range applies to
+    // each (frames past a shorter view's end are dropped, `perViewFrames`), so it must fit the LONGEST view
+    // that will run: the checked ones, or every view when none is checked.
+    const checked = sessionViews().filter(function (v) { return !videos.unselected.has(v); });
+    const n = Math.max.apply(null, [0].concat((checked.length ? checked : sessionViews()).map(frameCountOf)));
     if (!Number.isInteger(s) || !Number.isInteger(e) || s < 0 || e < 0) return 'Invalid range';
     if (s > e) return 'Start must be less than end';
     if (n > 0 && (s >= n || e >= n)) {
@@ -444,6 +473,7 @@ function mappedViewCount() { return runnableViews().length; }
 // ---------------------------------------------------------------------------
 
 async function detectEnvironment() {
+    if (!sn) { env.checked = true; refresh(); return; }
     env.error = null;
     try { env.sleapNn = await sn.detectSleapNn(); } catch (e) { env.sleapNn = null; env.error = e.message; }
     try { env.gpu = await sn.detectGpu(); } catch (e) { env.gpu = null; }
@@ -451,7 +481,11 @@ async function detectEnvironment() {
     refresh();
 }
 
-function sleapNnAvailable() { return !!(env.sleapNn && env.sleapNn.available); }
+function sleapNnAvailable() { return !!(sn && env.sleapNn && env.sleapNn.available); }
+
+/** Whether this run goes to a worker: the only choice without a local sleap-nn, else the Backend picker's. */
+function isRemote() { return !sn ? true : backend.remote === true; }
+function isLocal() { return !isRemote(); }
 
 // ---------------------------------------------------------------------------
 // Run
@@ -635,6 +669,12 @@ function stopElapsed() { if (elapsedTimer) clearInterval(elapsedTimer); elapsedT
 let progressRefresh = null;
 function refreshProgress() { if (progressRefresh) progressRefresh(); }
 
+/** Run is enabled for the current backend. */
+function runEnabled() {
+    if (isRemote()) return !!remote && remote.canRun() && !customRangeError();
+    return canRun();
+}
+
 function canRun() {
     syncVideosToSession();
     return !!state.session && sleapNnAvailable() && !isRunning() && !isDone() &&
@@ -645,10 +685,12 @@ function canRun() {
 // Log window (sleap-app LogTerminalDialog)
 // ---------------------------------------------------------------------------
 
-function openLogDialog() {
+function openLogDialog(lines) {
     if (document.getElementById('infLogDialog')) return;
+    const text = Array.isArray(lines) ? lines : run.log;
     const scrim = el('div', 'inf-log-scrim');
     scrim.id = 'infLogDialog';
+    scrim.setAttribute('data-shortcut-modal', '1');
     const box = el('div', 'inf-log-dialog');
     box.setAttribute('role', 'dialog');
     box.setAttribute('aria-label', 'Inference log');
@@ -657,7 +699,7 @@ function openLogDialog() {
     const close = el('button', 'btn btn-sm', 'Close');
     close.type = 'button';
     head.appendChild(close);
-    const pre = el('pre', 'inf-log-full', run.log.join('\n'));
+    const pre = el('pre', 'inf-log-full', text.join('\n'));
     box.appendChild(head);
     box.appendChild(pre);
     scrim.appendChild(box);
@@ -689,7 +731,7 @@ function buildPanel(root) {
     recheck.type = 'button';
     recheck.addEventListener('click', function () { env.checked = false; refresh(); detectEnvironment(); });
     warn.appendChild(recheck);
-    top.appendChild(shownIf(warn, function () { return env.checked && !sleapNnAvailable(); }));
+    top.appendChild(shownIf(warn, function () { return !!sn && env.checked && !sleapNnAvailable(); }));
 
     // Track only (not available in LUCID yet)
     check(top, 'Track only',
@@ -712,6 +754,11 @@ function buildPanel(root) {
 
     // Models
     const models = section(top, 'Models', true);
+    const lm = el('div', 'inf-sub0');
+    models.appendChild(shownIf(lm, function () { return !isRemote(); }));
+    const rmBox = el('div', 'inf-sub0');
+    models.appendChild(shownIf(rmBox, isRemote));
+    remote.buildModels(rmBox);
     const addRow = el('div', 'inf-right');
     const add = el('button', 'btn btn-sm inf-btn-outline');
     add.type = 'button';
@@ -726,13 +773,13 @@ function buildPanel(root) {
         refresh();
     });
     addRow.appendChild(add);
-    models.appendChild(addRow);
+    lm.appendChild(addRow);
     const modelsEmpty = el('p', 'inf-muted');
-    models.appendChild(modelsEmpty);
+    lm.appendChild(modelsEmpty);
     const modelList = el('div', 'inf-model-list');
-    models.appendChild(modelList);
+    lm.appendChild(modelList);
     const sameNote = el('p', 'inf-muted', 'Every view runs with these models.');
-    models.appendChild(sameNote);
+    lm.appendChild(sameNote);
     onRefresh(function () {
         add.disabled = isRunning();
         const topDown = cfg.pipeline === 'top-down' || cfg.pipeline === 'top-down-id';
@@ -811,8 +858,16 @@ function buildPanel(root) {
     const vdList = el('div', 'inf-view-list');
     vdList.id = 'infViewVideos';
     vd.appendChild(vdList);
-    data.appendChild(vd);
+    data.appendChild(shownIf(vd, function () { return !isRemote(); }));
+    const rv = el('div', 'inf-block');
+    const rvHead = el('div', 'inf-row');
+    rvHead.appendChild(fieldLabel('Views',
+        'Each checked view runs with the models above. Its video is found on the worker through path rules; Locate on worker\u2026 once per session folder if it is not.'));
+    rv.appendChild(rvHead);
+    remote.buildViews(rv);
+    data.appendChild(shownIf(rv, isRemote));
     onRefresh(function () {
+        if (!fsApi) return;
         syncVideosToSession();
         autoResolveVideos();
         choose.disabled = isRunning() || videos.scanning || !state.session;
@@ -862,20 +917,26 @@ function buildPanel(root) {
     const inf = section(top, 'Inference', true);
     numField(inf, 'Batch size', null, function () { return cfg.batchSize; }, function (v) { cfg.batchSize = v; },
         { min: 1, max: 128, integer: true });
-    selectField(inf, 'Device', null, DEVICE_OPTIONS, function () { return cfg.device; }, function (v) { cfg.device = v; });
-    selectField(inf, 'Runtime',
+    // sleap-app shows Device and Runtime only for the local engine (`InferencePanel.tsx:888,900`): a remote spec carries neither.
+    shownIf(selectField(inf, 'Device', null, DEVICE_OPTIONS, function () { return cfg.device; }, function (v) { cfg.device = v; }),
+        function () { return !isRemote(); });
+    shownIf(selectField(inf, 'Runtime',
         'Inference engine. ‘Auto’ lets sleap-nn choose. ‘ONNX’/‘TensorRT’ apply only to an exported model directory (model.onnx / model.trt).',
         function () { return RUNTIME_OPTIONS.filter(function (o) { return o[0] !== 'tensorrt' || env.gpu === 'cuda'; }); },
-        function () { return cfg.runtime; }, function (v) { cfg.runtime = v; });
+        function () { return cfg.runtime; }, function (v) { cfg.runtime = v; }), function () { return !isRemote(); });
     numField(inf, 'Peak threshold', null, function () { return cfg.peakThreshold; },
         function (v) { cfg.peakThreshold = v; }, { min: 0, max: 1, step: 0.05 });
-    numField(inf, 'Max instances', null, function () { return cfg.maxInstances == null ? 0 : cfg.maxInstances; },
-        function (v) { cfg.maxInstances = v; }, { min: 1, max: 100, integer: true, disabledIf: function () { return noMaxInstances; } });
-    check(inf, 'No limit', null, function () { return noMaxInstances; }, function (v) {
+    // LUCID: a worker's track job (sleap-connect `TrackJobSpec`) has no field for Max instances, the
+    // Bottom-Up grouping, the Post-processing filters or the advanced tracking options, and drops
+    // them silently, so they show only for the local engine (as Device and Runtime do).
+    shownIf(numField(inf, 'Max instances', null, function () { return cfg.maxInstances == null ? 0 : cfg.maxInstances; },
+        function (v) { cfg.maxInstances = v; }, { min: 1, max: 100, integer: true, disabledIf: function () { return noMaxInstances; } }),
+        isLocal);
+    shownIf(check(inf, 'No limit', null, function () { return noMaxInstances; }, function (v) {
         noMaxInstances = v;
         if (v) cfg.maxInstances = null;
         else if (cfg.maxInstances == null) cfg.maxInstances = 2;
-    });
+    }), isLocal);
     const bu = el('div', 'inf-sub');
     bu.appendChild(el('div', 'inf-subtitle', 'Bottom-Up'));
     numField(bu, 'Max edge length ratio', 'Maximum edge length as a fraction of the image size when grouping parts.',
@@ -886,7 +947,8 @@ function buildPanel(root) {
         function () { return cfg.nPoints; }, function (v) { cfg.nPoints = v; }, { min: 1, integer: true });
     numField(bu, 'Min line score', 'Minimum part-affinity score for a connection to be kept.',
         function () { return cfg.minLineScores; }, function (v) { cfg.minLineScores = v; }, { min: 0, max: 1, step: 0.05 });
-    inf.appendChild(shownIf(bu, function () { return cfg.pipeline === 'bottom-up' || cfg.pipeline === 'bottom-up-id'; }));
+    inf.appendChild(shownIf(bu, function () { return isLocal() && (cfg.pipeline === 'bottom-up' || cfg.pipeline === 'bottom-up-id'); }));
+    inf.appendChild(shownIf(el('p', 'inf-muted', 'A worker uses its own defaults for max instances, grouping and post-processing.'), isRemote));
     sep(top);
 
     // Tracking
@@ -896,9 +958,11 @@ function buildPanel(root) {
         function () { return cfg.tracking; }, function (v) { cfg.tracking = v; });
     const tOn = el('div', 'inf-sub0');
     trk.appendChild(shownIf(tOn, function () { return cfg.tracking; }));
+    // A worker has no Kalman tracker: fall back to Simple while one is the backend.
+    onRefresh(function () { if (isRemote() && cfg.trackerMethod === 'kalman') cfg.trackerMethod = 'simple'; });
     selectField(tOn, 'Method',
         'Simple matches instances by similarity alone. Optical Flow predicts motion from pixel displacement. Kalman Filter predicts motion from a per-track velocity model.',
-        [['simple', 'Simple'], ['flow', 'Optical Flow'], ['kalman', 'Kalman Filter']],
+        function () { return isRemote() ? TRACKERS.slice(0, 2) : TRACKERS; },
         function () { return cfg.trackerMethod; }, function (v) { cfg.trackerMethod = v; });
     selectField(tOn, 'Similarity', 'Metric for comparing instances across frames.',
         [['oks', 'OKS'], ['iou', 'IoU'], ['centroids', 'Centroid dist.'], ['euclidean_dist', 'Euclidean dist.']],
@@ -921,25 +985,27 @@ function buildPanel(root) {
         function () { return cfg.robust; }, function (v) { cfg.robust = v; }, { min: 0, max: 1, step: 0.05 });
     check(adv, 'Connect single-frame breaks', 'With Max tracks set, reconnects a break where one track is lost and one spawned in the same frame.',
         function () { return cfg.connectSingleBreaks; }, function (v) { cfg.connectSingleBreaks = v; });
-    numField(adv, 'Min match points', 'Minimum non-missing keypoints for a match candidate.',
+    const advLocal = el('div', 'inf-sub0');
+    adv.appendChild(shownIf(advLocal, isLocal));
+    numField(advLocal, 'Min match points', 'Minimum non-missing keypoints for a match candidate.',
         function () { return cfg.minMatchPoints; }, function (v) { cfg.minMatchPoints = v; }, { min: 0, integer: true });
-    numField(adv, 'Min new-track points', 'Minimum non-missing keypoints before an unmatched instance starts a track.',
+    numField(advLocal, 'Min new-track points', 'Minimum non-missing keypoints before an unmatched instance starts a track.',
         function () { return cfg.minNewTrackPoints; }, function (v) { cfg.minNewTrackPoints = v; }, { min: 0, integer: true });
-    selectField(adv, 'Scoring reduction', 'How several similarity scores for one track are combined.',
+    selectField(advLocal, 'Scoring reduction', 'How several similarity scores for one track are combined.',
         [['mean', 'Mean'], ['max', 'Max'], ['robust_quantile', 'Robust quantile']],
         function () { return cfg.scoringReduction; }, function (v) { cfg.scoringReduction = v; });
-    numField(adv, 'Target instance count', 'Instances to track per frame; needed by Kalman and Pre-cull. Empty = auto.',
+    numField(advLocal, 'Target instance count', 'Instances to track per frame; needed by Kalman and Pre-cull. Empty = auto.',
         function () { return cfg.trackingTargetInstanceCount; }, function (v) { cfg.trackingTargetInstanceCount = v; },
         { min: 1, max: 100, integer: true, nullable: true, placeholder: 'Auto' });
-    check(adv, 'Pre-cull to target', 'Before tracking, discard detections above the target count.',
+    check(advLocal, 'Pre-cull to target', 'Before tracking, discard detections above the target count.',
         function () { return cfg.trackingPreCullToTarget; }, function (v) { cfg.trackingPreCullToTarget = v; });
-    shownIf(numField(adv, 'Pre-cull IoU threshold', 'IoU used to remove overlapping instances above the target.',
+    shownIf(numField(advLocal, 'Pre-cull IoU threshold', 'IoU used to remove overlapping instances above the target.',
         function () { return cfg.trackingPreCullIouThreshold; }, function (v) { cfg.trackingPreCullIouThreshold = v; },
         { min: 0, max: 1, step: 0.05 }), function () { return cfg.trackingPreCullToTarget; });
-    numField(adv, 'Clean-up instance count', 'After tracking, cull instances above this count per frame. Empty = off.',
+    numField(advLocal, 'Clean-up instance count', 'After tracking, cull instances above this count per frame. Empty = off.',
         function () { return cfg.trackingCleanInstanceCount; }, function (v) { cfg.trackingCleanInstanceCount = v; },
         { min: 1, max: 100, integer: true, nullable: true, placeholder: 'Disabled' });
-    shownIf(numField(adv, 'Clean-up IoU threshold', 'IoU used when culling after tracking.',
+    shownIf(numField(advLocal, 'Clean-up IoU threshold', 'IoU used when culling after tracking.',
         function () { return cfg.trackingCleanIouThreshold; }, function (v) { cfg.trackingCleanIouThreshold = v; },
         { min: 0, max: 1, step: 0.05 }), function () { return cfg.trackingCleanInstanceCount != null; });
     const flow = el('div', 'inf-sub0');
@@ -950,7 +1016,7 @@ function buildPanel(root) {
         function () { return cfg.flowWindowSize; }, function (v) { cfg.flowWindowSize = v; }, { min: 3, max: 99, step: 2, integer: true });
     numField(flow, 'Pyramid levels', 'Image pyramid levels; more handle larger displacements.',
         function () { return cfg.flowMaxLevels; }, function (v) { cfg.flowMaxLevels = v; }, { min: 1, max: 10, integer: true });
-    tOn.appendChild(shownIf(flow, function () { return cfg.trackerMethod === 'flow'; }));
+    tOn.appendChild(shownIf(flow, function () { return isLocal() && cfg.trackerMethod === 'flow'; }));
     const kf = el('div', 'inf-sub0');
     kf.appendChild(el('div', 'inf-subtitle', 'Kalman Filter'));
     selectField(kf, 'Track features', 'Centroid moves the last pose with one filter per track; Keypoints runs one filter per node.',
@@ -993,8 +1059,9 @@ function buildPanel(root) {
     tOn.appendChild(shownIf(kf, function () { return cfg.trackerMethod === 'kalman'; }));
     sep(top);
 
-    // Post-processing
+    // Post-processing (local only, see Max instances)
     const post = section(top, 'Post-processing', false);
+    shownIf(post.parentElement, isLocal);
     check(post, 'Filter overlapping instances', 'Remove duplicate detections that overlap a lot (greedy non-max suppression).',
         function () { return cfg.filterOverlapping; }, function (v) { cfg.filterOverlapping = v; });
     const fo = el('div', 'inf-sub0');
@@ -1023,17 +1090,24 @@ function buildPanel(root) {
     });
     sep(top);
 
-    // Remote (backend seam)
-    const remote = section(top, 'Remote', false);
-    const bl = el('label', 'inf-label inf-caps', 'Backend');
-    bl.appendChild(hintBtn('Run this inference job on this machine. Remote workers (SLEAP Connect) are not available in LUCID yet.'));
-    remote.appendChild(bl);
-    selectField(remote, null, null, INFERENCE_BACKENDS.map(function (b) { return [b.id, b.label]; }),
-        function () { return 'local'; }, function () {});
+    // Remote: the Backend picker (Local | a paired SLEAP Connect worker), sleap-app's BackendPicker
+    const remoteSec = section(top, 'Remote', !sn);
+    const picker = createBackendPicker({
+        jobLabel: 'inference job',
+        localAvailable: function () { return !!sn; },
+        localListed: function () { return typeof window !== 'undefined' && !!window.lucidDesktop; },
+        remoteEnabled: isRemote,
+        onRemoteEnabledChange: function (on) { backend.remote = on; refresh(); },
+        hintButton: hintBtn,
+    });
+    remoteSec.appendChild(picker.el);
+    onRefresh(picker.refresh);
     const envLine = el('p', 'inf-muted');
     envLine.id = 'infEnvLine';
-    remote.appendChild(envLine);
+    remoteSec.appendChild(envLine);
     onRefresh(function () {
+        envLine.hidden = !sn;
+        if (!sn) return;
         envLine.textContent = !env.checked ? 'Checking for sleap-nn…'
             : sleapNnAvailable() ? 'sleap-nn ' + (env.sleapNn.version || '') + (env.gpu ? ' · ' + env.gpu.toUpperCase() : '')
                 : 'sleap-nn not found' + (env.error ? ': ' + env.error : '');
@@ -1045,14 +1119,20 @@ function buildPanel(root) {
     runBtn.type = 'button';
     runBtn.id = 'infRun';
     runBtn.appendChild(icon('play'));
-    runBtn.appendChild(document.createTextNode(' Run Inference'));
-    runBtn.addEventListener('click', function () { if (canRun()) startInference(); });
+    const runLabel = document.createTextNode(' Run Inference');
+    runBtn.appendChild(runLabel);
+    runBtn.addEventListener('click', function () {
+        if (!runEnabled()) return;
+        if (isRemote()) remote.start(); else startInference();
+    });
     top.appendChild(runBtn);
     const runWhy = el('p', 'inf-muted');
     top.appendChild(runWhy);
     onRefresh(function () {
-        runBtn.disabled = !canRun();
-        const why = isRunning() || isDone() ? '' : !state.session ? 'Open a session first.'
+        runBtn.disabled = !runEnabled();
+        runLabel.textContent = isRemote() ? ' Run Remote Inference' : ' Run Inference';
+        const rwhy = isRemote() ? (customRangeError() || remote.whyNot()) : '';
+        const why = isRemote() ? (isRunning() ? '' : rwhy) : isRunning() || isDone() ? '' : !state.session ? 'Open a session first.'
             : !sleapNnAvailable() ? '' : cfg.modelPaths.length === 0 ? 'Add a model.'
                 : mappedViewCount() === 0 ? (sessionViews().some(function (v) { return viewInferenceBlocker(state.session, v); })
                     && sessionViews().every(function (v) { return viewInferenceBlocker(state.session, v); })
@@ -1065,7 +1145,8 @@ function buildPanel(root) {
     // Progress (bottom)
     const prog = el('div', 'inf-progress');
     prog.id = 'infProgress';
-    root.appendChild(shownIf(prog, function () { return isRunning() || isDone(); }));
+    root.appendChild(shownIf(prog, function () { return run.status !== 'idle'; }));
+    remote.buildRun(root);
     const head = el('div', 'inf-status');
     const statusIcon = el('span', 'inf-icon');
     const statusText = el('span', 'inf-status-text');
@@ -1105,12 +1186,12 @@ function buildPanel(root) {
     expand.type = 'button';
     expand.appendChild(icon('maximize-2'));
     expand.appendChild(document.createTextNode(' Expand'));
-    expand.addEventListener('click', openLogDialog);
+    expand.addEventListener('click', function () { openLogDialog(); });
     logHead.appendChild(expand);
     const logPre = el('pre', 'inf-log');
     logPre.id = 'infLog';
     logPre.title = 'Click to open the full log';
-    logPre.addEventListener('click', openLogDialog);
+    logPre.addEventListener('click', function () { openLogDialog(); });
     const logWrap = el('div');
     logWrap.appendChild(logHead); logWrap.appendChild(logPre);
     prog.appendChild(logWrap);
@@ -1175,14 +1256,43 @@ function buildPanel(root) {
  * build. Resolves to true when it was added.
  */
 export async function setupInferencePanel() {
+    if (pane) return false;
+    // Local sleap-nn: the desktop app only (`window.lucidDesktop`), and only when it is in the build.
+    // Without it (the web app, or a desktop build without sleap-nn) the panel is remote-only.
     const d = typeof window !== 'undefined' ? window.lucidDesktop : null;
-    if (!d || !d.sleapNn || !d.fs || pane) return false;
-    try {
-        const st = await d.sleapNn.status();
-        if (!st || !st.available) return false;
-    } catch (e) { return false; }
-    sn = d.sleapNn;
-    fsApi = d.fs;
+    if (d && d.sleapNn && d.fs) {
+        try {
+            const st = await d.sleapNn.status();
+            if (st && st.available) { sn = d.sleapNn; fsApi = d.fs; }
+        } catch (e) { /* remote only */ }
+    }
+    remote = createRemoteInference({
+        getConfig: function () { return cfg; },
+        getSession: function () { return state.session; },
+        viewDescriptors: function () {
+            return viewDescriptors().map(function (v) {
+                const m = videos.byView[v.view];
+                return Object.assign({}, v, {
+                    absPath: m && m.path ? m.path : '',
+                    frameCount: frameCountOf(v.view),
+                    blocker: viewInferenceBlocker(state.session, v.view),
+                    checked: !videos.unselected.has(v.view),
+                });
+            });
+        },
+        setViewChecked: function (v, on) { if (on) videos.unselected.delete(v); else videos.unselected.add(v); },
+        framesFor: function (vs) {
+            return perViewFrames(vs).map(function (x) { return { view: x.view, framesSpec: x.frames == null ? null : framesToSpec(x.frames) }; });
+        },
+        getProjectInfo: function () {
+            return { fileName: state.slpFileHandle ? state.slpFileHandle.name : null,
+                sessionFolders: (state.sessions || []).map(function (s) { return s.name; }) };
+        },
+        mergeFile: function (file, view, mode) { return mergeViewPredictions(file, view, mode); },
+        getMode: function () { return cfg.existingPredictions; },
+        openLogDialog: function (lines) { openLogDialog(lines); },
+        onChange: refresh,
+    });
     pane = el('div', 'inference-panel');
     buildPanel(pane);
     if (!registerPanelRailPanel({ tab: INFERENCE_TAB_ID, label: 'Inference', icon: 'zap' }, pane)) {
@@ -1192,9 +1302,35 @@ export async function setupInferencePanel() {
     // A session loaded or switched since the last look: re-evaluate.
     pane.addEventListener('pointerenter', refresh);
     pane.addEventListener('focusin', function (e) { if (e.target === pane) refresh(); });
+    // A session opened while the panel is showing (there is no event for it): re-evaluate every 2 s.
+    setInterval(function () { if (pane && pane.offsetParent !== null && !document.hidden) refresh(); }, 2000);
     refresh();
     detectEnvironment();
     return true;
+}
+
+/**
+ * The Connect window's New job wizard ("This project" data source) hands its model folders here: they
+ * replace the remote model list and the panel's own remote Run starts (one job per view, the panel's
+ * views / frames / options / output folder), exactly as pressing Run Remote Inference would. Waits for the
+ * worker checks, and says why not when Run is not possible. P4 behaviour is unchanged.
+ *
+ * @param {string[]} models worker paths of the model folders
+ * @returns {Promise<{ok: true, jobs: number} | {ok: false, error: string}>}
+ */
+export async function runRemoteInferenceWithModels(models) {
+    if (!remote) return { ok: false, error: 'The Inference panel is not available.' };
+    if (sn) backend.remote = true;
+    remote.models.splice(0, remote.models.length, ...models);
+    refresh();
+    const t0 = Date.now();
+    while (Date.now() - t0 < 20000 && /^Checking/.test(remote.whyNot())) await new Promise(function (r) { setTimeout(r, 150); });
+    const why = customRangeError() || remote.whyNot();
+    if (why) return { ok: false, error: why };
+    await remote.start();
+    const s = remote._state();
+    if (s.run.error) return { ok: false, error: s.run.error };
+    return { ok: true, jobs: s.runIds.size };
 }
 
 /** Test/automation hook: show the panel. */

@@ -5,7 +5,7 @@ description = "luc3d (LUCID) - desktop shell"
 authors = ["talmolab"]
 repository = "https://github.com/talmolab/luc3d"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.91"
 
 [lib]
 name = "app_lib"
@@ -50,6 +50,14 @@ reqwest = { version = "0.13", default-features = false, features = ["json"] }
 # handshake (lib.rs installs ring's). Only "ring": the default "aws_lc_rs"
 # needs cmake.
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
+
+# iroh_client.rs: the dial-only QUIC transport to a sleap-connect worker (same
+# version as sleap-app, pinned exactly: its Cargo.lock resolves 1.3.0). The page runs the protocol; this is only the byte pipe.
+iroh = "=1.3.0"
+# iroh_client.rs: base64url node ids; tokio for the reader task, timeouts and
+# its tests (tauri already brings the runtime itself).
+base64 = "0.22"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
 
 [target.'cfg(unix)'.dependencies]
 # sysctlbyname (macOS total memory).

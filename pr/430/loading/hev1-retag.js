@@ -36,8 +36,8 @@
  * the SAME patched File object, which ui/image-embedder.js's cache keys on.
  */
 
-import { readBlobRange } from './cold-read-guard.js?v=6a08874aa4a2';
-import { parseBoxHeader, codecPlayable } from './video-codec-diagnosis.js?v=6a08874aa4a2';
+import { readBlobRange } from './cold-read-guard.js?v=82449baaa3c2';
+import { parseBoxHeader, codecPlayable } from './video-codec-diagnosis.js?v=82449baaa3c2';
 
 const ENC = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
 
