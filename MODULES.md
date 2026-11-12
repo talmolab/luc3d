@@ -2966,6 +2966,17 @@ so BA can raise it; the invariant is pinned over the solve's own views.
 behavior, which `tests/test-triangulation-ba.js` uses as a baseline. The LM
 ladder itself was verified monotone and was not changed.
 
+**Where Refined may go.** Every phase and the guard stay in a convex region
+around the DLT seed (`costUnder` is Infinity outside it): in front of, and
+inside the distortion fold (`_distortionFoldR2`) of, each used view where the
+seed is, at most `BA_MAX_DEPTH_GROWTH` (4) × the seed's depth there
+(`options.maxDepthGrowth`, `Infinity` = no bound). A seed holding in no view is
+refined freely and kept only if it ends holding in every view, else DLT's answer
+stands — or none (null) when the seed is behind every used camera. Without it, a stray view let Refined move points tens to hundreds of
+metres off (behind a camera, past a k1 < 0 fold, or along nearly parallel rays).
+On 5 SLAP sessions it changed 3 of 79,970 keypoints that Refined put within
+50 mm. Test: `tests/test-refined-far-points.mjs` (real SLAP cases).
+
 **No joint bundle adjustment: cameras are NEVER refined (deliberate scope).** The
 `'ba'` method is non-linear triangulation with fixed cameras. A joint
 camera+structure solve was implemented and **deleted**; do not re-add it. LUCID
