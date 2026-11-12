@@ -573,6 +573,59 @@ export function triangulatePoints(allObservations, projectionMatrices) {
 }
 
 /**
+ * Clear (to all-NaN) each keypoint of `points3d` that is behind EVERY camera
+ * whose observation solved it, and return `points3d`.
+ *
+ * DLT is linear in homogeneous coordinates, so it cannot tell a point in front
+ * of a camera from its mirror image behind it: both satisfy x ≅ P·X. When two
+ * rays diverge (one view on the wrong animal or the wrong tail), their
+ * "intersection" is behind both cameras — metres to kilometres from the
+ * animal — and it reprojects onto the detections, so it can even pass the
+ * reprojection-error threshold. No real point is there. A point behind only
+ * SOME of its cameras is kept: on the 5 held-out SLAP sessions of 2022-10-07
+ * that rule refused everyday keypoints too, while this one refused only
+ * keypoints more than 1 m off (8 cameras with the 12 px threshold: RMSE 75.5 →
+ * 29.9 mm, worst 18.5 → 3.2 m; 4 cameras, no threshold: worst 920 → 39 m),
+ * and none of the 79,970 within 1 m changed.
+ *
+ * Depth in a view is sign(det M)·(P[2]·X), M = P's left 3×3, so it holds for
+ * any scaling of P. A camera whose P is degenerate (det M = 0 or not finite)
+ * cannot say, and counts as "in front".
+ *
+ * @param {Float64Array} points3d - Flat [X,Y,Z] per keypoint (all-NaN = none); edited in place
+ * @param {(number[]|null)[][]} allObservations - per keypoint, per camera; null = not used
+ * @param {number[][][]} projectionMatrices - one 3x4 P per camera
+ * @returns {Float64Array} `points3d`
+ */
+export function clearPointsBehindEveryView(points3d, allObservations, projectionMatrices) {
+    const signs = new Float64Array(projectionMatrices.length);
+    for (let c = 0; c < projectionMatrices.length; c++) {
+        const P = projectionMatrices[c];
+        if (!P) continue;
+        const det = P[0][0] * (P[1][1] * P[2][2] - P[1][2] * P[2][1])
+            - P[0][1] * (P[1][0] * P[2][2] - P[1][2] * P[2][0])
+            + P[0][2] * (P[1][0] * P[2][1] - P[1][1] * P[2][0]);
+        signs[c] = (det !== 0 && isFinite(det)) ? Math.sign(det) : 0;
+    }
+    const X = [0, 0, 0];
+    for (let k = 0; k < allObservations.length; k++) {
+        if (!readPoint3d(points3d, k, X)) continue;
+        const obs = allObservations[k];
+        let used = 0, inFront = false;
+        for (let c = 0; c < obs.length && !inFront; c++) {
+            const P = projectionMatrices[c];
+            if (obs[c] == null || !P) continue;
+            used++;
+            if (signs[c] === 0) { inFront = true; break; }
+            const w = P[2][0] * X[0] + P[2][1] * X[1] + P[2][2] * X[2] + P[2][3];
+            if (!(w * signs[c] <= 0)) inFront = true;
+        }
+        if (used >= 2 && !inFront) clearPoint3d(points3d, k);
+    }
+    return points3d;
+}
+
+/**
  * One keypoint's DLT system, kept so it can be solved again on many SUBSETS of
  * its views — the tracker's reprojection check (`checkedPoints3d` in
  * `pose/cross-view-tracker.js`) leaves one view out at a time, up to V solves
@@ -1510,7 +1563,12 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
             });
             return triangulatePointsBA(rawMasked, projMatrices, dltPoints, baOptions);
         }
-        return triangulatePoints(obs, projMatrices);
+        // DLT's own answer: no point behind every camera that saw it (see
+        // `clearPointsBehindEveryView`). Only here, the 3D a group keeps — not
+        // the seed handed to Refined above (Refined starts from wherever DLT
+        // lands and decides about its own answer), nor the tracker's internal
+        // DLT solves.
+        return clearPointsBehindEveryView(triangulatePoints(obs, projMatrices), obs, projMatrices);
     }
     let points3d = triangulateFrom(allObservations);
 

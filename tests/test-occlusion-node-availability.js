@@ -191,13 +191,16 @@
     // in nulledNodes) MUST be excluded from the 3D solve, so the fanned-out
     // placeholder position can never pollute triangulation.
     describe('Occlusion: a filled-occluded node is excluded from triangulation', function () {
-        function cam(n) {
+        // CamB sits 45 mm beside CamA. (Both at the same centre, DLT's answer
+        // was that centre — depth 0, no real point — which the DLT method now
+        // refuses: see clearPointsBehindEveryView.)
+        function cam(n, t) {
             return new Camera(n, [[600, 0, 320], [0, 600, 240], [0, 0, 1]],
-                [0, 0, 0, 0, 0], [0, 0, 0], [1, 2, 3], [640, 480]);
+                [0, 0, 0, 0, 0], [0, 0, 0], t, [640, 480]);
         }
         it('nulledNodes node → points3d null; the real node still triangulates', function () {
             if (typeof triangulateAndReproject !== 'function' || typeof InstanceGroup === 'undefined') return;
-            var cams = [cam('CamA'), cam('CamB')];
+            var cams = [cam('CamA', [1, 2, 3]), cam('CamB', [46, 2, 3])];
             var group = new InstanceGroup(0, 0);
             // node 0 = real 2-view observation; node 1 = occluded placeholder,
             // flagged in nulledNodes exactly as _addNewInstance now produces.
