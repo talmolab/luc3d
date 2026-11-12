@@ -30,27 +30,27 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { noteProgress } from './progress-delta.js?v=e17cc9b31302';
-import { state, getActiveSession } from './app-state.js?v=e17cc9b31302';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=e17cc9b31302';
-import { showPanelTab } from './panel-rail.js?v=e17cc9b31302';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=e17cc9b31302';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=e17cc9b31302';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=e17cc9b31302';
-import { getTrackingThreshold } from './settings.js?v=e17cc9b31302';
-import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=e17cc9b31302';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js?v=e17cc9b31302';
+import { noteProgress } from './progress-delta.js?v=f2d3892f3ae3';
+import { state, getActiveSession } from './app-state.js?v=f2d3892f3ae3';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=f2d3892f3ae3';
+import { showPanelTab } from './panel-rail.js?v=f2d3892f3ae3';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=f2d3892f3ae3';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=f2d3892f3ae3';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=f2d3892f3ae3';
+import { getTrackingThreshold } from './settings.js?v=f2d3892f3ae3';
+import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=f2d3892f3ae3';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js?v=f2d3892f3ae3';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=e17cc9b31302';
-import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine, wireTrainingPrompt } from './image-model-dialog.js?v=e17cc9b31302';
-import { prejudgeFor, prejudgeSettings, PREJUDGE_DEFAULTS, PREJUDGE_BUILTIN } from '../pose/image-prejudge.js?v=e17cc9b31302';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=e17cc9b31302';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=e17cc9b31302';
-import { createBrightnessSampler } from './brightness-sampler.js?v=e17cc9b31302';
+         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=f2d3892f3ae3';
+import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine, wireTrainingPrompt } from './image-model-dialog.js?v=f2d3892f3ae3';
+import { prejudgeFor, prejudgeSettings, PREJUDGE_DEFAULTS, PREJUDGE_BUILTIN } from '../pose/image-prejudge.js?v=f2d3892f3ae3';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=f2d3892f3ae3';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=f2d3892f3ae3';
+import { createBrightnessSampler } from './brightness-sampler.js?v=f2d3892f3ae3';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
          idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary,
-         idSwitchPlaceOf, idSwitchPrevPlaceEnd } from './id-switch-review.js?v=e17cc9b31302';
+         idSwitchPlaceOf, idSwitchPrevPlaceEnd } from './id-switch-review.js?v=f2d3892f3ae3';
 
 const CUE_LABEL = { size: 'body size', image: 'images', brightness: 'coat brightness', review: 'review list' };
 
@@ -684,6 +684,8 @@ const PREJUDGE_TEXT = {
     alike: 'images can\'t tell these two apart', sparse: 'images: too few crops to judge',
     unknown: 'images: too few frames with both animals',
 };
+/** Verdicts a row does not show (no image verdict was possible there); the review list's summary still counts them. */
+const PREJUDGE_QUIET = { sparse: true, unknown: true };
 
 /** A row's pre-judge, for its second line: the verdict, the numbers in its tooltip. */
 function prejudgeNote(p, fixed, pj) {
@@ -1061,7 +1063,8 @@ function rowHtml(session, st, f, both) {
     }
     var fixed = idSwitchFixFor(st, f);
     var pj = prejudgeOfRow(st, f);
-    if (pj) note = (note ? note + ' · ' : '') + prejudgeNote(pj, fixed, st.results.image.prejudge);
+    // "too few crops" (about 4 rows in 10, mostly arrivals and tracklet changes) stays off the row: the summary counts it
+    if (pj && !PREJUDGE_QUIET[pj.verdict]) note = (note ? note + ' · ' : '') + prejudgeNote(pj, fixed, st.results.image.prejudge);
     return '<div class="id-switch-row cue-' + cue + (f.agree ? ' cue-both-' + f.cue + '-' + f.agree.cue : '') +
         (f.continues || f.followOf != null ? ' is-repeat' : '') + (rev ? ' is-reviewed' : '') +
         (fixed ? ' is-fixed' : '') +

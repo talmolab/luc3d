@@ -870,6 +870,17 @@ try {
     check(JSON.stringify(al.verdicts) === '["alike","alike"]', `look-alike animals, a model package: no verdict (${JSON.stringify(al.verdicts)}, cos ${al.cos})`);
     check(/images can't tell these two apart/.test(al.at1200) && /^Images can't tell these two animals apart \(how alike they look: [\d.]+; a verdict needs under 0\.70\)/.test(al.summary),
         'the rows and the summary say the images can\'t tell them apart: ' + al.summary);
+    // a row with too few crops to judge shows nothing; the summary still counts it
+    const few = await page.evaluate(async () => {
+        const S = window.__lucid.state.session, M = await import('/ui/id-switch-modal.js'), pj = S._idSwitch.results.image.prejudge;
+        pj.rows.forEach((p, i) => { p.verdict = ['sparse', 'unknown'][i]; });
+        M.refreshIdSwitchPanel(S);
+        const rows = [...document.querySelectorAll('#idSwitchPanel .id-switch-row')];
+        const text = (f) => { const el = rows.find(x => Number(x.dataset.frame) === f); return el ? el.querySelector('.id-switch-line2').textContent : ''; };
+        return { at600: text(605), at1200: text(1205), summary: (document.querySelector('#idSwitchPanel .id-switch-prejudge-summary') || {}).textContent || '' };
+    });
+    check(few.at600 && few.at1200 && !/images/.test(few.at600 + few.at1200), `rows with too few crops (or frames) say nothing about images: "${few.at600.slice(-40)}" / "${few.at1200.slice(-40)}"`);
+    check(/· 2 too few crops$/.test(few.summary), 'the summary still counts them: ' + few.summary);
     await page.evaluate(async () => (await import('/ui/image-embedder.js')).setActiveImageModel(null));
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
