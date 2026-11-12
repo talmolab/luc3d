@@ -37,6 +37,12 @@ const THRESHOLD_DEFAULTS = {
     matchGate: 0,
     maxPenalty: 0,
     matchReproj: 0,
+    scWindowSize: 5,
+    scOksStddev: 0.1,
+    scConnectBreaks: 1,
+    scRemoveDuplicates: 0,
+    scDuplicateIou: 0.5,
+    scDuplicateOks: 0.6,
     autoSwitchCheck: 1,
     autoImageSwitchCheck: 0,
     imageChangeThreshold: -0.8,
@@ -44,6 +50,9 @@ const THRESHOLD_DEFAULTS = {
     imageCheckBackgroundHz: 0.1,
     imageCheckMaxViews: 3,
     imageCheckWebNN: 0,
+    autoBrightnessSwitchCheck: 1,
+    brightnessCheckThreshold: -800,
+    brightnessCheckHz: 4,
 };
 
 const SETTINGS_STUB = `

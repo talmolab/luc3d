@@ -45,6 +45,7 @@ import time
 import numpy as np
 
 CROP = 160
+CROP_RULE = 2       # bump when the crop changes (part of the crop cache key); 2 = tail nodes t0/t1/... left out
 NOSE, TTI = 'Nose', 'TTI'
 BASES = {
     # name: (Hugging Face model, input side, license, flag threshold the app uses for it frozen)
@@ -61,9 +62,15 @@ def log(*a):
 
 # ---- crops (ui/image-embedder.js cropGeometry + cutCrop) ------------------------------------------------------------
 
+def is_tail_node(name):
+    """pose/id-switch-check.js isTailNode: a name starting with "tail", or `t` and a number (t0, t1, ...)."""
+    n = name.lower()
+    return n.startswith('tail') or (len(n) > 1 and n[0] == 't' and n[1:].isdigit())
+
+
 def body_index(names):
     """Indices of the body nodes (not tail), as the app's skeletonIndex."""
-    return [i for i, n in enumerate(names) if n and not n.lower().startswith('tail')]
+    return [i for i, n in enumerate(names) if n and not is_tail_node(n)]
 
 
 def geometry(p, iN, iT, body):
@@ -182,6 +189,8 @@ def self_test():
     check(len(set(a0) & set(s[T == 1])) == 0, 'stretches never span two tracks')
     s2 = stretches([0, 0], [0, 0], [(0, 0), (1, 0)], [40, 40], fps)
     check((s2 >= 0).all(), 'two rows of the SAME track on a frame are not a contact')
+    names = ['nose', 'head', 'trunk', 'tti', 'tail_tip', 't0', 't1', 'T2', 'Tail', 'thorax', 'tti2', 't']
+    check(body_index(names) == [0, 1, 2, 3, 9, 10, 11], 'body nodes leave out the tail as the app does (tail*, t<number>)')
     return ok
 
 
@@ -217,7 +226,8 @@ def cut_file(args):
     slp, cache_dir, step, contact, video_root = args
     import sleap_io as sio
     import av
-    key = hashlib.sha256(f'{os.path.abspath(slp)}|{os.path.getsize(slp)}|{os.path.getmtime(slp)}|{step}|{contact}'.encode()).hexdigest()[:16]
+    # CROP_RULE in the key: crops cut by an older rule (before 2, t0/t1/... tail nodes were in the body) are never reused
+    key = hashlib.sha256(f'{os.path.abspath(slp)}|{os.path.getsize(slp)}|{os.path.getmtime(slp)}|{step}|{contact}|{CROP_RULE}'.encode()).hexdigest()[:16]
     out = os.path.join(cache_dir, f'{os.path.splitext(os.path.basename(slp))[0]}-{key}.npz')
     if os.path.exists(out):
         return out

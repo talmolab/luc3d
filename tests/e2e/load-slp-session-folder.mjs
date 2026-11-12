@@ -25,8 +25,12 @@
  *     Select Video Files and Continue Without Video; the folder adds ONE video, the side
  *     camera's (its camera is named "side", not after its folder, so only the referenced
  *     folder + name places it).
- *  C. Load SLP top.slp again: its cameras are renamed (`Camera1_topB_2`, …) because the
- *     names are taken, and each still gets its own 0.mp4 by the referenced path.
+ *  C. Load SLP top.slp again: the same cameras on the same videos are not added a second
+ *     time (`camerasAlreadyInSession`) and no prompt opens. The same recording referenced
+ *     from another copy of it (topCopy.slp, `/mnt/backup/rec/…`): its cameras are renamed
+ *     (`Camera1_topB_2`, …) because the names are taken, and each still gets its own 0.mp4
+ *     by the referenced folder + name.
+ *  D. Esc on the prompt (extra.slp, a camera not in the session) continues without video.
  *
  * Negative control, run once on the build before this change: in A Camera1_topB shows
  * rec/Camera5_side/0.mp4, and B finds no Select Session Folder.
@@ -120,6 +124,9 @@ try {
         return {
             top: await make([['Camera1_topB', '/data/rec/Camera1_topB/0.mp4'], ['Camera2_topB', '/data/rec/Camera2_topB/0.mp4']]),
             side: await make([['side', '/data/rec/Camera5_side/0.mp4']]),
+            // The same recording, referenced from another copy of it: same camera names, other paths.
+            topCopy: await make([['Camera1_topB', '/mnt/backup/rec/Camera1_topB/0.mp4'], ['Camera2_topB', '/mnt/backup/rec/Camera2_topB/0.mp4']]),
+            extra: await make([['extra', '/data/rec/Camera9_extra/0.mp4']]),
         };
     }, NFRAMES);
     for (const [k, b64] of Object.entries(slps)) fs.writeFileSync(path.join(tmp, k + '.slp'), Buffer.from(b64, 'base64'));
@@ -185,9 +192,15 @@ try {
     }
 
     // ── C ──────────────────────────────────────────────────────────────────
-    console.log('C. the same file again: renamed cameras, placed by the referenced path');
+    console.log('C. the same file again adds nothing; another copy of it: renamed cameras, placed by the referenced path');
     {
-        await loadSlp('top.slp');
+        const before = await videos();
+        page.once('filechooser', fc => fc.setFiles(path.join(tmp, 'top.slp')));
+        await page.evaluate(() => document.getElementById('menuLoadSlp').click());
+        check(await waitStatus(/Already in this session|Added SLP|error/i) && /Already in this session: Camera1_topB, Camera2_topB/.test(await status()),
+            'the same file again: its cameras are already in the session', await status());
+        check(!(await page.$('#videoSelectOverlay')) && JSON.stringify(await videos()) === JSON.stringify(before), '…no prompt, nothing added');
+        await loadSlp('topCopy.slp');
         await pickRecordingFolder();
         check(await waitStatus(/Added SLP: 2 camera|error/i), 'the add finishes', await status());
         const v = await videos();
@@ -200,7 +213,7 @@ try {
     console.log('D. Esc still continues without video');
     {
         const before = (await videos()).length;
-        await loadSlp('side.slp');
+        await loadSlp('extra.slp');
         await page.keyboard.press('Escape');
         check(await waitStatus(/Added SLP|error/i), 'the add finishes', await status());
         check(!(await page.$('#videoSelectOverlay')) && (await videos()).length === before, 'no prompt, no video');
