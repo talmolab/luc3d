@@ -684,6 +684,8 @@ const PREJUDGE_TEXT = {
     alike: 'images can\'t tell these two apart', sparse: 'images: too few crops to judge',
     unknown: 'images: too few frames with both animals',
 };
+/** Verdicts a row does not show (no image verdict was possible there); the review list's summary still counts them. */
+const PREJUDGE_QUIET = { sparse: true, unknown: true };
 
 /** A row's pre-judge, for its second line: the verdict, the numbers in its tooltip. */
 function prejudgeNote(p, fixed, pj) {
@@ -1061,7 +1063,8 @@ function rowHtml(session, st, f, both) {
     }
     var fixed = idSwitchFixFor(st, f);
     var pj = prejudgeOfRow(st, f);
-    if (pj) note = (note ? note + ' · ' : '') + prejudgeNote(pj, fixed, st.results.image.prejudge);
+    // "too few crops" (about 4 rows in 10, mostly arrivals and tracklet changes) stays off the row: the summary counts it
+    if (pj && !PREJUDGE_QUIET[pj.verdict]) note = (note ? note + ' · ' : '') + prejudgeNote(pj, fixed, st.results.image.prejudge);
     return '<div class="id-switch-row cue-' + cue + (f.agree ? ' cue-both-' + f.cue + '-' + f.agree.cue : '') +
         (f.continues || f.followOf != null ? ' is-repeat' : '') + (rev ? ' is-reviewed' : '') +
         (fixed ? ' is-fixed' : '') +

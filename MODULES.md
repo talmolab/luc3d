@@ -4648,7 +4648,7 @@ swaps), shipped settings:
 | built-in (margin 0.2) | 14 | 2 | 1 | 1,195 unsure, 37 sparse |
 
 Built-in at margin 0.25: 7 / 1; 0.3: 4 / 0. About 1,230 further rows (mostly
-arrivals and tracklet changes) read "too few crops". The tab's About text quotes
+arrivals and tracklet changes) have too few crops: their rows show no image note, and the summary line counts them. The tab's About text quotes
 these app numbers.
 
 **Imports from project modules.** None.
@@ -9940,7 +9940,7 @@ the list's rows as `reviewRows` (all but the end-of-tracking row, which nothing 
 has no gate and margin 0.2 — and
 each review row — or a check's row agreeing with one — says the image check's
 verdict on its second line ("images: look swapped" / "look right" / "unsure" /
-"can't tell these two apart" / too few crops; score and separation in its tooltip;
+"can't tell these two apart"; a row with too few crops or frames to judge shows nothing, `PREJUDGE_QUIET`; score and separation in its tooltip;
 "(before the Fix)" once fixed); the review list's summary counts them, or says the
 images can't tell the animals apart (a package only); NOT saved: a reopened project shows none until
 the image check runs again), `ui/image-model-dialog.js` (`resolveSessionImageModel`,
