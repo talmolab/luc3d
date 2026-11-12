@@ -9,7 +9,9 @@
  * reporting itself as Chrome. LUCID uses that API to stream large saves and
  * exports straight to disk and to enumerate multi-session folders, so in
  * Brave those features quietly degrade (in-memory download, which can crash
- * the tab on a large project) or refuse ("Use Chrome or Edge"). Measured with
+ * the tab on a large project) or refuse (Load Multiple Sessions, which in a
+ * Chromium browser does not fall back to `webkitdirectory`: that drops files
+ * on big trees). Measured with
  * Brave 1.96 (Chromium 154) on macOS: all three pickers are `undefined` by
  * default and present with `--enable-features=FileSystemAccessAPI`, the
  * feature behind brave://flags/#file-system-access-api ("File System Access API";
@@ -34,6 +36,24 @@ export function hasFileSystemAccess() {
     return typeof window !== 'undefined' &&
         typeof window.showSaveFilePicker === 'function' &&
         typeof window.showDirectoryPicker === 'function';
+}
+
+/**
+ * Whether a folder picked with `showDirectoryPicker` can be READ through its
+ * handle (enumerated, and `getFile()` giving disk-backed Files). False without
+ * the API, and false in the desktop app's WebKit webviews, whose shim installs
+ * a WRITE-only `showDirectoryPicker` and says so with
+ * `window.lucidDesktop.fsaWriteOnly`. Every folder READ site asks this rather
+ * than testing for the picker; when false it uses `<input webkitdirectory>`.
+ * In a browser without `lucidDesktop` it is exactly the old
+ * `typeof window.showDirectoryPicker === 'function'` test.
+ * @param {Window} [win]  defaults to the global `window` (tests pass a stub)
+ * @returns {boolean}
+ */
+export function canReadDirectoryHandles(win) {
+    var w = win || (typeof window !== 'undefined' ? window : null);
+    if (!w || typeof w.showDirectoryPicker !== 'function') return false;
+    return !(w.lucidDesktop && w.lucidDesktop.fsaWriteOnly);
 }
 
 /**

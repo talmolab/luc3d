@@ -37,7 +37,11 @@ its target to the list on the next deploy, and a dynamic `import()` stays lazy.
 
 **Purpose.** App startup logic. Builds the empty-session UI, wires the
 `InteractionManager`, sets up the 3D viewport and timeline, and exposes
-helpers used by every load path. Calls `init()` at module-load.
+helpers used by every load path. Calls `init()` at module-load. On the desktop
+every build `init` dynamically imports `ui/inference-panel.js` (a literal
+`import()`, after the rail exists) and calls `setupInferencePanel()`, then the
+Connect panel (`ui/connect/index.js`), in that order (rail order Inference,
+Connect). The panel uses local sleap-nn only where the desktop shim has it.
 
 **Key exports.**
 - `hideWelcomeOverlay()` — hides the dock empty-state overlay.
@@ -4078,6 +4082,343 @@ Real-data check: `tests/e2e/_diag-real-align-views.mjs`.
 
 ---
 
+### pose/connect/ (SLEAP Connect client, helper modules)
+
+Ports of sleap-app's Connect client (`/Users/joshuapark/Documents/repos/sleap-app`
+@ `683a159`) for sending inference jobs to a sleap-connect worker. DOM-free, no
+`window` at import time, no CDN imports, only relative imports inside
+`pose/connect/`; every ported file's header names its source file and lists its
+"LUCID changes". The protocol, transport and store modules of this directory are
+documented in their own entries. Tests: `tests/test-connect-*.mjs`, run with
+`node tests/run-mjs-tests.mjs connect` (they use `tests/bun-test-shim.mjs`, a tiny
+`describe/it/expect` over node:assert, so sleap-app's bun:test bodies port nearly
+verbatim; a file ends with `await run()`).
+
+#### pose/connect/device-name.js
+
+**Purpose.** The default name this device reports to a worker (`hello`'s
+`agent.device_name`). **Exports.** `DEVICE_NAME_MAX`, `normalizeDeviceName`,
+`browserDeviceName(ua)` ("Chrome on macOS"), `defaultDeviceName({ computerName,
+userAgent })` — the OS lookup is INJECTED (sleap-app read Tauri's `computer_name`).
+**Imports.** None. **Imported by.** the Connect store port.
+**Coverage.** `tests/test-connect-device-name.mjs`.
+
+#### pose/connect/job-telemetry.js
+
+**Purpose.** Typed parsers for a training job's `job.epoch` / `job.curve` /
+`job.metric` events (`null` for a malformed payload). Kept so the protocol layer
+matches sleap-app though LUCID has no training UI. **Exports.** `parseJobTelemetry`.
+**Imports.** None. **Coverage.** `tests/test-connect-job-telemetry.mjs`.
+
+#### pose/connect/connect-sync.js
+
+**Purpose.** Three-way merge (`base` / `mine` / `theirs`) of the Connect state every
+window shares (paired workers, tracked jobs, device name, last selected worker), so
+a stale window cannot undo another's pairings. **Exports.** `mergeShared`,
+`sameShared`, typedef `SharedConnectState`. A tracked job's `fetchedAt` (latest wins) and `mergeMode`
+(the Inference panel's Existing-predictions mode recorded at submit) carry across windows. **Imports.** None.
+**Imported by.** the Connect store port, `store-helpers.js` (types).
+**Coverage.** `tests/test-connect-sync.mjs`.
+
+#### pose/connect/project-tag.js
+
+**Purpose.** The short stable `{ name, id }` tag (`JobProject`) that marks which
+project submitted a job. **Exports.** `projectTag(projectPath)` (verbatim from
+sleap-app: basename + 8-hex FNV-1a of the full path) and the LUCID addition
+`lucidProjectTag({ fileName, sessionFolders })`: a LUCID project is one `.slp` plus
+session folders and has no single path, so `name` is the file's basename
+(`untitled.slp` if none) and `id` hashes the file name plus each session's folder
+NAME, sorted — stable across reopen, session order and moving the project; equal to
+`projectTag(null)` with neither. **Imports.** None. **Imported by.** `job-groups.js`
+callers (`myProjectId`), the Connect store port.
+**Coverage.** `tests/test-connect-project-tag.mjs`.
+
+#### pose/connect/path-mappings.js
+
+**Purpose.** Local <-> worker path rules. **Exports.** `translatePath` (longest
+directory-boundary prefix), `isWorkerPath`, `detectPrefixDiff`, `buildPathMappings`,
+`parsePathMappingsFromToml`, `resolveProjectPaths`, and
+`loadSavedMappings(storage)` / `saveMapping(mapping, storage)` over an INJECTED
+`PathMappingsStorage` adapter (`homeDir/join/exists/readTextFile/writeTextFile/mkdir`;
+sleap-app used Tauri plugin-fs) — with no adapter both are no-ops. They read/write
+`~/.sleap-connect/config.toml` (falling back to the pre-rename `~/.sleap-rtc`).
+**Imports.** None. **Imported by.** `remote-output-dir.js`, `remote-visibility.js`.
+**Coverage.** `tests/test-connect-path-mappings.mjs` (incl. an in-memory adapter).
+
+#### pose/connect/remote-visibility.js
+
+**Purpose.** Can the worker see each video? **Exports.** `projectVideoPaths(labels)`
+(accepts a sleap-io `Labels`-like `{ videos }`, OR — LUCID — a plain array of path
+strings / `{ filename }` objects, so LUCID can pass one path per (session, camera)),
+`checkVideoVisibility(paths, { rules, mounts, stat, concurrency })` (bounded `stat`
+probes -> `VideoVisibility[]`), `classifyVisibility` (`all`/`some`/`none`),
+`inferRuleFromLocate`. **Imports.** `path-mappings.js`.
+**Coverage.** `tests/test-connect-remote-visibility.mjs`.
+
+#### pose/connect/remote-output-dir.js
+
+**Purpose.** Where a remote run saves its predictions on the worker: the project's own
+folder if shared, else `<serve folder>/sleap-connect/<project>/`. **Exports.**
+`projectFolderName`, `defaultOutputDir({ projectPath, projectName, rules, mounts,
+serveFolder, isSharedFolder })` (the worker probe is a parameter). **Imports.**
+`path-mappings.js`. **Coverage.** `tests/test-connect-remote-output-dir.mjs`.
+
+#### pose/connect/new-job-plan.js
+**Purpose.** DOM-free planning of the New job wizard's Inference path: `workerFileKind` (.slp / video /
+other), `inferenceTargetsFor` (a `.slp` = sleap-app's targets minus Random sample; a video = Entire video |
+Frame range), `frameRangeError`, `buildWorkerInferenceConfig`, `buildWorkerFileSpecs` (a `.slp` via
+`buildRunInferenceSpecs`, a video via `buildRemoteTrackSpecs`; both get the `project` tag of the worker
+path), `fileSourceBlocker`, and `seedWizardFromRun` (labels path + model type of a past run; training
+configs are not read). **Imports.** `launcher-spec`, `remote-track-spec`, `project-tag`, `worker-ui-helpers`.
+**Imported by.** `ui/connect/new-job-wizard.js`. **Coverage.** `tests/test-connect-new-job-plan.mjs`.
+
+#### pose/connect/remote-inference-plan.js
+
+**Purpose.** DOM-free planning of a remote inference run: each view's local key (web: session
+folder + relative path) and worker path (`resolveViewVideos`), `inferLocateRule` (one Locate per
+session root), the duplicate-worker-file refusal, `remoteOutputPath`
+(`<dir>/predictions/<session>__<view>.<stamp>.predictions.slp`), `buildViewSpec` (via
+`buildRemoteTrackSpecs`), `planRemoteRun`, `pendingFetches`, progress-line helpers
+(`progressFromLine`: sleap-nn `--gui` JSON, else the rich bar line `NN%|..| a/b [t<eta, x it/s]` /
+`NN% a/b`), `lastErrorLine` (the exception line of a failed job's log, shown beside the worker's "exit
+code 1"), `unresolvedViews` (checked views not on the worker: Run waits), `MAX_FRAMES_SPEC_CHARS` /
+`framesTooLongMessage`. `frames` is a range `a-b` or a plain list (sleap-nn `predict.py` `frame_list`
+takes no mix like `0-4,10-11`); `planRemoteRun` refuses a list over 100,000 characters (one argv entry on
+the worker, Linux caps it at 128 KiB). **Imports.**
+`path-mappings.js`, `remote-visibility.js`, `remote-track-spec.js`. **Imported by.**
+`ui/connect/remote-inference.js`. **Coverage.** `tests/test-connect-remote-inference-plan.mjs`.
+
+#### pose/connect/timestamp.js
+
+**Purpose.** Run/elapsed-time formatting. **Exports.** `formatDuration`,
+`formatRunTimestamp` (`YYMMDD_HHMMSS`), `modelRunTimestamp(modelName)`, `timeAgo(iso)`.
+**Imports.** None. **Imported by.** `job-groups.js`, `launcher-spec.js`.
+**Coverage.** `tests/test-connect-timestamp.mjs`.
+
+#### pose/connect/process-log.js
+
+**Purpose.** Bounded subprocess/job log helpers. **Exports.** `MAX_LOG_LINES`,
+`appendLogLine`, `lastErrorLine`, `subprocessFailureMessage`, `isErrorLine`,
+`logLineClassName` (sleap-app's Tailwind class strings, verbatim). **Imports.** None.
+**Coverage.** `tests/test-connect-process-log.mjs`.
+
+#### pose/connect/launcher-spec.js
+
+**Purpose.** Pure job-spec builders. **Exports.** `buildLauncherTrainSpec(input,
+deps)`, `buildRunInferenceSpecs(labelsPath, modelDirs, config, labels, deps)`,
+`seedFromJobSpec(spec, deps)`, `inferModelType(headTypes)`, `hydraQuote(value)` (from
+sleap-app's `platform/trainingArgs.ts`). The training-store, channel-detection and
+track-spec helpers sleap-app imports are passed in as `deps` (`LauncherSpecDeps`; `buildRunInferenceSpecs`'s `buildRemoteTrackSpecs` defaults to `remote-track-spec.js`), and
+YAML is never parsed here (`deps.parseYamlConfig`), so the module has no `yaml` import.
+**Imports.** `timestamp.js`, `remote-track-spec.js`. **Imported by.** `store-helpers.js` (`hydraQuote`).
+**Coverage.** `tests/test-connect-launcher-spec.mjs` (fake deps).
+
+#### pose/connect/job-groups.js
+
+**Purpose.** Everything the Jobs tab and sidebar queue compute from the worker's job
+list, minus React. **Exports.** `isMineJob`, `sortWorkerJobs`, `isManagedJob`,
+`siblingJobIds`, `jobTitle`, `canDeleteRun`, `deleteRunMessage`, `statusChipFor`,
+`jobStatusChip` (chip `className` is sleap-app's Tailwind string; the LUCID UI keys its
+own CSS off `text`), `jobTimeLabel`, `groupTimeLabel`, `groupJobs` (runs by
+`run.id`, status rolled up running > failed > queued > completed), `jobMatches`,
+`isActiveGroup`, `unfinishedJobs`, `cancelRunConfirm`, `queueRows`, `queueRunEntries`,
+`endJobConfirm`. **Imports.**
+`timestamp.js`. **Coverage.** `tests/test-connect-job-groups.mjs`.
+
+#### pose/connect/store-helpers.js
+
+**Purpose.** The pure exports of sleap-app's `connectStore.ts`: `UNPAIRED_MESSAGE`,
+`runJobsToEnd`, `capTrackedJobs`, `migrateConnectPersisted`, `withYamlRunName(spec,
+yamlLoad)` (the YAML parser is injected), plus the module-private pure helpers the store
+needs (`upsertWorker`, `activeJobsFor`, `latestActiveJobFor`, `trackedJobLabel`,
+`isMultiModelTrainSpec`, `sharedSlice`/`toShared`/`readStoredShared`/`capShared`,
+`mapLinkStatus`, `fetchAllRemoteEntries`, `withTimeout`, storage-key constants). LUCID: `capTrackedJobs`
+keeps completed, unfetched (`fetchedAt` unset), tagged jobs past the 50 cap (`MAX_HELD_TAGGED_JOBS` = 500).
+**Imports.** `launcher-spec.js`. **Imported by.** `store.js`.
+**Coverage.** `tests/test-connect-store-helpers.mjs`.
+
+#### pose/connect/mini-store.js
+
+**Purpose.** The zustand subset the Connect store needs, no dependency: `createStore(initializer)` ->
+`{getState, setState(partial|fn, replace?), subscribe, subscribeSelector(selector, listener(selected, prev),
+equalityFn = Object.is), getInitialState}`, a `shallowEqual` helper, and the `persist(config, options)`
+middleware (`name`, `version`, `storage`, `partialize`, `merge`, `migrate`, `skipHydration`;
+`api.persist.{rehydrate, hasHydrated, getOptions, setOptions, clearStorage, onHydrate, onFinishHydration}`).
+Synchronous storage only. `listenerCount()` is a test aid (leak checks). **Imports.** None. **Imported by.** `store.js`. **Coverage.**
+`tests/test-connect-mini-store.mjs`.
+
+#### pose/connect/store.js
+
+**Purpose.** Port of sleap-app `connectStore.ts` @ 683a159: the Connect state (paired workers, per-window
+selection, tracked jobs, device name; runtime connection status/mounts/errors/worker info) and every
+action: pairing (`pairWithTicket` incl. `sleap1…` codes, `pairWithCode` = `readCodeInfo` -> `planPairing`
+-> pair), connect / select / disconnect / forget (`clients.leave`), `clientFor` + managed connections with
+WS->iroh fallback, `refreshWorkerInfo`, `listJobs`/`jobDetail`/`cancelJobOn`/`deleteJobsOn`,
+`browseRemoteDir(On)`/`mountsFor`/`devicesFor`/`statWorkerPath`, `setDeviceName`, path rules / output dirs,
+`submitJob` (awaited, multi-model split) / `submitJobsOn` (fire and track) / `cancelJob` / `stopJob`,
+`fetchResultBlob` / `fetchResultBlobOn(workerId, …)`, `markJobFetched(jobId)`, `resumeTrackedJobs`; `submitJobsOn` takes
+`opts.run` / `opts.label`; `planPairingForText` (non-throwing pairing-form plan); job subscriptions that resume from the persisted `lastSeq`
+(`resubscribeWorker`, which after each re-attach asks `jobs.status` and ends a job the worker marked
+terminal without an event, as a restarted worker does: `reconcileTerminalJob`), `watchTrackedJob`, chained jobs, one finish notification per job (one per multi-view run: `opts.run.count > 1` tags `runId`/`runCount`, and the last job of the run toasts "Inference · N views …", `runSummary`). Persisted under
+`lucid-connect` through a three-way-merging storage shared with other windows (`syncConnectFromStorage`,
+`installConnectStorageSync`); the selection is per window (`lucid-connect-selected`, sessionStorage).
+**LUCID.** Singleton `useConnectStore` (not a hook; alias `connectStore`); every runtime difference is an
+injected dep set with `configureConnect` (`WorkerClient`, `getClientIdentity`, `localStorage`,
+`sessionStorage`, `notify` {success,error,info}, `openConnectWindow`, `appVersion`, `platform`,
+`computerName`, `userAgent`, `pathMappingsStorage`, `yamlLoad`, `randomUUID`), defaults resolved at use;
+iroh = the transport's registered socket factory; tracked jobs may carry `{sessionId, camera, projectTag}`.
+Test hooks `__setManagedDeps`, `__resetManagedConnections`, `__resetConnectState`. Also exports
+`pathRulesFor`, `resolveDeviceName`, `agentInfo`, `planPairingForText`, `readCodeInfo` (re-exported from `worker-ui-helpers.js`) and re-exports `capTrackedJobs`,
+`migrateConnectPersisted`, `runJobsToEnd`, `withYamlRunName`, `UNPAIRED_MESSAGE`. **Imports.**
+`mini-store.js`, `store-helpers.js`, `connect-sync.js`, `client.js`, `identity.js`, `managed-connection.js`,
+`transport.js`, `pair-code.js`, `pairing-plan.js`, `path-mappings.js`, `device-name.js`, `job-telemetry.js`,
+`errors.js`, `worker-ui-helpers.js`. **Coverage.** `tests/test-connect-store.mjs` (port of connectStore.test.ts),
+`test-connect-store-iroh.mjs`, `test-connect-store-lucid.mjs`, `test-connect-store-fakeworker.mjs`
+(pair from a minted code -> tagged job -> events -> reconnect resubscribe against `FakeWorker`);
+`test-connect-review-fixes.mjs` (P2 review fixes); helpers `tests/connect/store-test-env.mjs`.
+
+#### pose/connect/errors.js, envelope.js
+
+**Purpose.** Protocol v1 vocabulary (spec §2, §8). `errors.js`: every error code constant
+(`auth.*`, `proto.*`, `fs.*`, `blob.*`, `job.*`, `media.*`, `internal`, locally detected
+`client.*`) and `WorkerProtocolError(code, msg, data)`. `envelope.js`: `PROTOCOL_VERSION`,
+`buildHello`, `buildReq`, `parseEnvelope` (throws `EnvelopeError`), JSDoc typedefs of the
+four frames. **Imports.** None. **Imported by.** `client.js`, `managed-connection.js`.
+**Coverage.** `tests/test-connect-errors.mjs`, `test-connect-envelope.mjs`.
+
+#### pose/connect/pair-code.js
+
+**Purpose.** Decoder of the one-line `sleap1...` pairing code (base32 of version, node id,
+secret, expiry, LAN addrs, relay, 2-byte SHA-256 checksum). **Exports.** `CODE_PREFIX`,
+`RELAY_TABLE` (APPEND-ONLY, frozen), `PairCodeError`, `isPairCode`, `decodePairCode`.
+Never mints codes (the test-only encoder is `tests/connect/pair-code.mjs`). **Imports.**
+None (WebCrypto at call time). **Coverage.** `tests/test-connect-pair-code.mjs` against
+`tests/fixtures/connect/pair_code_vectors.json`.
+
+#### pose/connect/pairing-plan.js, transport.js
+
+**Purpose.** How a pasted code (or a paired worker) is reached. `pairing-plan.js`:
+`planPairing(code, {irohAvailable, addrOverride, now})` (ready ws / ready iroh /
+needs-address / error), `preferredTransport(worker, irohAvailable)`, `NOT_A_CODE`.
+`transport.js`: `parseTicketIroh`, `transportLabel`, `toIrohDialTarget`,
+`encodeIrohDialUrl`/`decodeIrohDialUrl`, and the iroh SEAM: iroh is available only once
+`registerIrohSocketFactory(createSocket-shaped factory)` has been called (the desktop app
+does, `ui/connect/index.js` `registerDesktopIroh`; the web never does), `irohTransportAvailable()`,
+`getIrohSocketFactory()`, and the blob seam `registerIrohBlobFetcher(fn)` / `getIrohBlobFetcher()`
+(the store downloads a result over iroh through it). **Imports.** None. **Coverage.**
+`tests/test-connect-pairing-plan.mjs`, `test-connect-transport.mjs`.
+
+#### pose/connect/iroh-socket.js, iroh-blob.js
+
+**Purpose.** The page side of the desktop iroh byte pipe (Rust `src-tauri/src/iroh_client.rs`; the page
+still speaks protocol v1, Rust only moves 4-byte length-prefixed frames). Ports of sleap-app
+`tauriIrohSocket.ts` / `tauriIrohBlob.ts` over the shim `window.lucidDesktop.iroh`
+(`src-tauri/js/lucid-desktop.js`: `connect(target, onEvent)` -> connection id, `send`, `disconnect`,
+`blobOpen`, `blobReadRange`, `blobClose`), injected so Node tests fake it. `iroh-socket.js`:
+`createIrohSocketFactory(getIroh)` -> `(url) => IrohSocket` (a `WebSocketLike` with `irohConnectionId`),
+re-exports `encodeIrohDialUrl`. `iroh-blob.js`: `createIrohBlobRangeSource(getIroh, connId, sha256, size)`
+(a sleap-io `RangeSource` + `dispose`, chunk-aligned, every chunk verified against the worker's hashes),
+`fetchBlobOverIroh(getIroh, connId, sha256, size, {onProgress})` (LUCID: the whole blob, size and sha256
+verified like `fetchBlob`; what the store's `fetchResultBlob(On)` uses), `MAX_BLOB_RANGE` (4 MiB, the
+Rust cap: reads are split into pieces of at most that size), `validateBlobOpen`, `MAX_FETCH_BYTES`. The
+open reply is validated before anything is sized from it; a failed open is not cached; `readRange` refuses
+bad ranges. `IrohSocket` buffers events that beat `iroh_connect`'s reply, delivers nothing after CLOSED, and
+ends a `close()` during CONNECTING at once (error + close 1006). **Rust hardening** (`iroh_client.rs`): frame
+payloads are read in steps that must progress within 60 s (never allocated from the announced length); blob
+headers, waits and writes are capped/timed; a failed blob read drops the stream; a failed write closes the
+connection; ids are never reused; each command touches only its own webview's connections; 16 per window; a
+dial that outlives its webview's reload is closed (`DialTicket`); the endpoint accepts no worker-opened
+streams. **Imports.** `transport.js`, `errors.js`.
+**Imported by.** `ui/connect/index.js`. **Coverage.** `tests/test-connect-iroh-socket.mjs`,
+`test-connect-iroh-blob.mjs`, `test-connect-store-iroh.mjs`, `tests/e2e/connect-iroh.mjs`; the Rust pipe
+against a real worker: `src-tauri/examples/iroh_real_worker.rs`.
+
+#### pose/connect/identity.js
+
+**Purpose.** The device's persistent Ed25519 identity (raw pkcs8 + raw public bytes under
+`client-identity`; node id = base64url raw public key). **Exports.** `getClientIdentity`
+(memoized, cross-tab Web Lock `lucid-connect-identity`), `clearClientIdentity`,
+`setIdentityStorage(adapter)`, `createIndexedDbAdapter` (database `lucid-connect`, store
+`identity`, opened lazily per call, never at import), `createMemoryAdapter` (Node tests),
+`withIdentityLock`, `IDENTITY_LOCK_NAME`, `_resetClientIdentityCache`. An adapter is
+`{get, put, delete, has?}`. A record the adapter cannot read is never replaced.
+**Imports.** None. **Coverage.** `tests/test-connect-identity.mjs` (memory adapter + a fake
+`IDBFactory`).
+
+#### pose/connect/client.js
+
+**Purpose.** `WorkerClient`: one WebSocket to a worker (hello with symmetric `hello.proof`
+check, `pair.claim` / `auth.prove`, req/res by monotonic id with `requestTimeoutMs`
+(15 s), events fanned out by job id, `jobs.*`, `clients.*`, `worker.info`, `fs.*`
+(with the `error_code`-inside-`ok` mapping), `media.frame`, `onClose`). `createSocket`
+and `fetchImpl` are injectable and resolved at use, never at import. **Blob download:**
+`fetchBlob(sha256, size, {fsFallback})` fetches `http://<host>:<blob_port>/blobs/<sha>`
+and verifies size + sha256; a browser page cannot read the blob port (no CORS headers),
+so with `fsFallback: {path, pageSize?, onProgress?}` a network `TypeError` falls back to
+`fetchFileViaFsRead` (paged `fs.read` into Blob parts, same verification). **Exports.**
+`WorkerClient`, `FS_READ_PAGE_BYTES`, JSDoc typedefs. **Imports.** `envelope.js`,
+`errors.js`. **Coverage.** `tests/test-connect-client.mjs` (sleap-app's tests on the
+permissive fake socket), `tests/test-connect-worker-client.mjs` (the server-faithful
+`FakeWorker`: pair, `auth.prove` reconnect, `auth.untrusted`, fs, jobs, backlog +
+`since_seq`, blob over real HTTP and over the `fs.read` fallback).
+
+#### pose/connect/managed-connection.js
+
+**Purpose.** Reconnect/fallback state machine around one worker: backoff 1/2/4/8/15/30 s,
+ws to iroh after `FALLBACK_AFTER_MS` (10 s) of failure, probe the preferred route every
+`PROBE_PREFERRED_EVERY_MS` (60 s), terminal `unpaired` on `auth.untrusted`. Injectable
+`dial`, `now`, `sleep`. **Exports.** `ManagedConnection`, `isUnpairedError`,
+`RECONNECT_BACKOFF_MS`, `FALLBACK_AFTER_MS`, `PROBE_PREFERRED_EVERY_MS`. **Imports.**
+`errors.js`. **Coverage.** `tests/test-connect-managed-connection.mjs` (fake clock).
+
+#### pose/connect/remote-track-spec.js
+
+**Purpose.** `buildRemoteTrackSpecs(config, ctx)`: the protocol-v1 `track` job spec(s) for an
+inference config (one spec, or one per video for `random` / a restricted
+`allowedVideoIndices`). Pure, logic verbatim from sleap-app. **Imports.** None.
+**Imported by.** `launcher-spec.js` (default for `deps.buildRemoteTrackSpecs`).
+**Coverage.** `tests/test-connect-remote-track-spec.mjs`.
+
+#### pose/connect/job-stream.js
+
+**Purpose.** Replay/live reducer for one worker job's event stream plus the non-React core of
+`useJobStream`. **Exports.** `initialJobStream`, `reduceJobEvents` (pure fold, dedupes by `seq`),
+`createJobStream(client, jobId, { sinceSeq, label, onUpdate, flushIntervalMs, setIntervalImpl,
+clearIntervalImpl })` returning `{ getState, ready, resume, stop }` (buffers events, folds each batch in `seq` order (the worker starts live delivery before its replay, so a live event can land mid-backlog), on an
+interval, `resume()` re-subscribes from the last seq; latest-wins, `resume()`/`stop()` also drop a subscribe still in flight), and the `trainingStore` pieces it needs copied
+verbatim: `mergeLogLines`, `emptyModelProgress`, `emptyMetrics`. **Imports.** `job-telemetry.js`,
+`process-log.js`. **Coverage.** `tests/test-connect-job-stream.mjs`, `test-connect-review-fixes.mjs`.
+
+#### pose/connect/worker-ui-helpers.js
+
+**Purpose.** The pure helpers of sleap-app's `src/components/connect/*.tsx`, `forgetWorker.ts`,
+`ConnectPanel.tsx` and `RemoteFileBrowser.tsx` for the future `ui/connect` code.
+**Exports.** `classifyWorkerStatus`, `workerSpecsLine`, `WORKER_FILTERS`, `sortDevices`,
+`describeError`, `describeVisibilityOutcome`, `shouldAutoMerge`, `forgetWorkerConfirm`,
+`FAILED_SHOWN_MS`, `failedRunShown`, `DISMISSED_FAILED_RUNS_KEY`
+(`lucid-connect-dismissed-failed-runs`), `loadDismissedFailedRuns(storage)` /
+`saveDismissedFailedRuns(storage, keys)`, `WORKER_FILE_INFERENCE_TARGETS`,
+`readWholeWorkerFile`, `summarizeVideoCheck`, `groupCompletedRuns`, `labelPastRuns`, `formatMB`,
+`readCodeInfo`, `clientDisplayName` / `clientAgentLabel` (`lucid` -> LUC3D, `sleap-app` -> SLEAP), `toTrainingStatus`, `connectionDotClass`, `basename`/`dirname`/`extOf`, and the
+file browser's constants. **Imports.** `errors.js`, `device-name.js`, `remote-visibility.js`,
+`timestamp.js`, `pair-code.js`, `transport.js`. **Coverage.** `tests/test-connect-worker-ui-helpers.mjs`.
+
+#### pose/connect/remote-browser.js, remote-browser-store.js
+
+**Purpose.** The worker file browser's logic. `remote-browser.js`: `joinPath`, `parentPath`,
+`baseName`, `mountRootFor`, `pathTrail`, `fileKind`, `filterLabel`, `normalizeFilter`,
+`matchesFilter`, `matchesSearch`, `sortEntries`, `formatSize`, `formatModified`, `DEFAULT_SORT`,
+`KIND_LABELS` (verbatim). `remote-browser-store.js`:
+`createRemoteBrowserStore({ storage, now })`, a `{ getState, setState, subscribe }` store holding
+view/sort/size/columnWidth and per-worker favorites/recents, persisted (zustand's
+`{ state, version: 1 }` shape) under `lucid-connect-remote-browser`. **Imports.** the store imports `mini-store.js` and
+`remote-browser.js`. **Coverage.** `tests/test-connect-remote-browser.mjs`.
+
+Test helper `tests/bun-test-shim.mjs` (not a suite) maps bun:test onto `node:assert`, incl. `.rejects.toThrow`,
+`.toBeInstanceOf`, class-aware `toThrow` and `itEach`.
+
+---
+
 ## ui/
 
 ### ui/app-state.js
@@ -4235,7 +4576,8 @@ Brave ships the File System Access API (`showSaveFilePicker`,
 `showDirectoryPicker`, `showOpenFilePicker`) DISABLED by default while
 identifying as Chrome, so in Brave saves fall back to an in-memory download
 (risky for a large project, never saved in place), large exports must be
-buffered in memory, and multi-session loading refuses. It is enabled at
+buffered in memory, and multi-session loading refuses (it does not fall back
+to `webkitdirectory` in a Chromium browser: that drops files on big trees). It is enabled at
 `brave://flags/#file-system-access-api`. Safari and Firefox can't enable the
 API, so they get no hint (existing messages stand).
 
@@ -4254,6 +4596,14 @@ land on the true count and the noise is still there.
 **Key exports.**
 - `isBrave()` — `navigator.brave.isBrave` present.
 - `hasFileSystemAccess()` — save + directory pickers available.
+- `canReadDirectoryHandles(win?)` — whether a `showDirectoryPicker` folder can be
+  READ through its handle: the picker is a function AND not
+  `window.lucidDesktop.fsaWriteOnly` (the desktop app's WebKit webviews, whose
+  shim installs a write-only picker). Every folder READ site asks this instead
+  of testing for the picker and, when false, uses `<input webkitdirectory>`:
+  `handleLoadMultiSession`, `pickParentDirectoryForSessions`,
+  `folderPickerStartFor` / `pickFolderNear` (`loading/session-loader.js`).
+  Without `lucidDesktop` it is exactly the old `typeof` test. `win` is for tests.
 - `fileSystemAccessHint()` — how to enable the API (paste
   `brave://flags/#file-system-access-api`, set Enabled, relaunch — or use
   Chrome/Edge); `''` unless Brave with the API off, so callers can append it.
@@ -4275,7 +4625,8 @@ land on the true count and the noise is still there.
 **Imports from project modules.** None. No DOM at load (the canvas probe runs
 on first use, on the main thread), so it is safe to import anywhere.
 
-**Imported by.** `loading/session-loader.js` (multi-session load message),
+**Imported by.** `loading/session-loader.js` (multi-session load message;
+`canReadDirectoryHandles` at the folder read sites),
 `import-export/save-load.js` (`saveProjectSlp` download fallback status),
 `ui/export-modals.js` (3D video + JSON export in-memory confirms),
 `ui/overlay-export-modal.js` (overlay video in-memory confirm),
@@ -4283,10 +4634,55 @@ on first use, on the main thread), so it is safe to import anywhere.
 line, `#loadingBraveHint`), `ui/id-switch-modal.js` (the image check's dialog,
 under its CPU and GPU lines).
 
-**Tests.** `tests/test-browser-hints.js`; `tests/e2e/brave-fingerprinting-hint.mjs`
+**Tests.** `tests/test-browser-hints.js`; `tests/test-file-list-directory.mjs` §7
+(`canReadDirectoryHandles`); `tests/e2e/brave-fingerprinting-hint.mjs`
 drives REAL Brave (skips when Brave is not installed, `BRAVE=` overrides the
 path): the note with default Shields, none with the per-site exception, none
 in Chromium.
+
+### ui/ask.js
+
+**Purpose.** The ONE place LUCID asks the user a yes/no or text question. The
+macOS desktop app runs in WKWebView, where wry implements none of the JavaScript
+dialog panels: `window.confirm()` returns false and `window.prompt()` null AT
+ONCE, showing nothing (and `alert()` shows nothing), so a direct call silently
+cancels the action. Every app question goes through these Promise-returning
+helpers instead; `tests/test-no-sync-dialogs.mjs` fails on a direct
+`confirm(` / `prompt(` / `alert(` anywhere else in app source.
+In a browser (no `window.lucidDesktop`) each is exactly the old native dialog,
+same text, wrapped in `Promise.resolve`: the dialog still runs synchronously in
+the caller's handler and the await adds only a microtask, so user activation is
+unaffected (every current confirm sits AFTER its picker anyway).
+
+**Key exports.**
+- `askConfirm(message, {title, okLabel, cancelLabel}?)` → `Promise<boolean>`.
+  Browser: `window.confirm(message)` (opts unused). Desktop:
+  `lucidDesktop.confirm(message, opts)` (the shim's native dialog); a shim
+  without it, or a rejected call, falls back to the in-app modal.
+- `askText(message, defaultValue, opts?)` → `Promise<string|null>`. Browser:
+  `window.prompt(message, defaultValue)`. Desktop: the in-app modal with a text
+  field, the default pre-selected; Enter submits, Esc / Cancel → null.
+- `askAlert(message, opts?)` → `Promise<void>`. Browser: `window.alert`.
+  Desktop: the in-app modal with one OK button. (No app call site yet.)
+- `isDesktopShell()` — `window.lucidDesktop` present.
+
+**The in-app modal** (`showAskModal`, internal) is the shared
+`.multi-frame-modal` card plus `.ask-modal` (styles.css: the card is the one
+scroller, `max-height: 90vh`; `.ask-modal-message` keeps line breaks). Its
+keydown listener is capture-phase on `document`, stops Enter/Esc so nothing
+underneath also acts, and is removed on close.
+
+**Imports from project modules.** None.
+
+**Imported by.** `import-export/save-load.js` (New Project, very large save,
+JSON project over 50 MB), `ui/sessions-panes.js` (`removeSession`),
+`ui/ui-wiring.js` (Track ▸ Swap Tracks), `ui/export-modals.js` (JSON labels and
+3D video in-memory confirms), `ui/overlay-export-modal.js` (in-memory confirm).
+
+**Tests.** `tests/test-no-sync-dialogs.mjs` (the guard);
+`tests/e2e/desktop-dialogs.mjs` (desktop: New Project / Delete session through
+`lucidDesktop.confirm`, Swap Tracks through the in-app modal, fallbacks;
+browser: the same native texts, accept / dismiss).
 
 ### ui/folder-confirm-tip.js
 
@@ -4811,6 +5207,8 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `./app-state.js` — `state`, `viewport3d`, `timeline`, `getActiveSession`.
 - `./browser-hints.js` — `fileSystemAccessHint` (appended to the 3D-video and
   JSON-export "must be built in memory" confirms in Brave).
+- `./ask.js` — `askConfirm` (those two confirms, awaited; each comes after its
+  save-file picker, so no user activation is spent on it).
 - `../pose/pose-data.js` — `InstanceGroup`, `UnlinkedInstance`, `pooledPoints3d`
   (Group by Identity / Track & Triangulate All store each solve in the slab pool).
 - `../pose/triangulation.js` — `triangulateAndReproject`,
@@ -5517,6 +5915,10 @@ bridges into both test runners and unit-tests against plain object stubs.
 **Imported by.** `ui/ui-wiring.js`, `ui/settings.js`, `ui/interaction.js`,
 `loading/video.js`.
 
+**Modal owns the keyboard.** `shouldIgnoreShortcut` is true while any element with
+`data-shortcut-modal` is in the document (`shortcutModalOpen`; the worker file browser and the
+inference log dialog set it), so no app shortcut acts on the view behind such a modal.
+
 **Tests.** `tests/test-keyboard-target.js`,
 `tests/e2e/checkbox-focus-hotkeys.mjs`, `tests/e2e/copy-panel-text.mjs` (the
 clipboard rule) and `tests/e2e/triangulate-button-focus.mjs` (the capture
@@ -6097,8 +6499,8 @@ or a folder (individual; the folder handle is deliberately NOT cached to
 `state.exportDirHandle`, which `showSlpExportAllModal` reuses without
 prompting) and streams; below, it buffers and downloads. Declining the picker
 for a large export **cancels** it rather than falling back to the memory buffer;
-with no File System Access API the user gets `exportLabels()`'s `confirm()`
-warning. Cancelling a streamed export leaves a partial `.mp4` on disk, which the
+with no File System Access API the user gets `exportLabels()`'s confirm
+(`askConfirm`, ui/ask.js, after the picker). Cancelling a streamed export leaves a partial `.mp4` on disk, which the
 status message says.
 
 **Settings persistence.** Seeded from the Visibility panel
@@ -6201,6 +6603,7 @@ exported but the amber `?` editing prompt is not.
 - `./app-state.js` — `state`, `videoController`, `getActiveSession`.
 - `./browser-hints.js` — `fileSystemAccessHint` (appended to the in-memory
   export confirm in Brave).
+- `./ask.js` — `askConfirm` (that confirm).
 - `./viewport3d.js` — `Viewport3D`.
 - `./overlays.js` — `drawFrameOverlays`, `drawLegend`, `drawViewNameLabel`,
   `getTrackColor`, `getGroupColor`, `TRAIL_SHADES`, `DEFAULT_TRAIL_SHADE`,
@@ -8744,7 +9147,9 @@ multi-video docking layout.
   non-CSS counterpart of `applyVideoFilters` (see below).
 - `populateViewStrip`, `populateSessionsPanel`, `populateSessionStrip`.
 - `showMoveVideoModal`.
-- `removeSession`, `switchSession` (async).
+- `removeSession`, `switchSession` (async). `removeSession(idx)` asks through
+  `askConfirm` (ui/ask.js) and, once answered, re-finds the session by identity
+  (the list may have changed meanwhile); resolves false when cancelled.
 
 **Imports from project modules.**
 - `./id-switch-modal.js` — `refreshIdSwitchPanel`: `switchSession` shows the new
@@ -8788,6 +9193,7 @@ multi-video docking layout.
   module), hoist-safe because the only read is inside the view strip's click
   handler, which cannot run during module evaluation.
 - `./info-panel.js` — `updateInfoPanel`, `populateTimelineVisibility`.
+- `./ask.js` — `askConfirm` (`removeSession`).
 - `./loading-progress-modal.js` — `getLoadingProgressModal` (`switchSession`'s
   "Loading videos" progress).
 - `./frame-readout.js` — `clearReadout` (session removed),
@@ -11109,6 +11515,12 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `setIdSwitchRefresher` (the repaint after the tab fixes a switch) are called
   once at setup, as is `setTrackSummaryNavigator` (`ui/track-summary-modal.js`:
   the Track All summary's Identities samples and maps go to a frame).
+  Labels and ticks computed when a menu opens are refreshed on `mouseenter`
+  of the top-level `.menu-item` (View ▸ Native Resolution's ✓, also on click)
+  or of the `.has-submenu` parent (Tracks ▸ Node Trails, which reads
+  `state.fps`): that is the cue the macOS desktop app's native menu bar gives
+  before it reads the menus (`src-tauri/js/lucid-desktop.js`, which mirrors
+  `#menuBar` natively and clicks the same elements).
 - Color-by toggle: the Tracks / Identity control is in the top toolbar
   (`colorByTracks` / `colorById`; group `aria-label="Color by"`).
   `updateColorByToggle()` reflects `state.colorByIdentity`. Every change goes
@@ -11178,6 +11590,10 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `showOverlayExportModal()` (overlay-export-modal.js); it sits directly above
   File ▸ "Export 3D Video" (`menuExportVideo3d`), which is wired to
   `showExport3DVideoModal()` (export-modals.js).
+- Track ▸ **Swap Tracks** (`menuSwapTracks`): an async handler asking four
+  questions through `askText` (ui/ask.js; native `prompt()` in a browser, an
+  in-app text modal in the desktop app), returning if the active session
+  changed while one was open.
 - Session strip: the **"+"** button (`btnAddSession`) calls
   `handleEmptySession()` to create a fresh empty session directly (inheriting the
   shared project skeleton — the user then adds video via File ▸ Load Videos);
@@ -11359,7 +11775,7 @@ would sit low in grid mode.
 header for the full list. Notable ones: `app-state.js`,
 `timeline-controller.js`, `pose-data.js`, `triangulation.js`
 (incl. `evictLazyFrames`), `lazy-residency.js` (`LAZY_PLAYBACK_AHEAD`),
-`rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`,
+`rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`, `ask.js`,
 `file-io.js`, `session-loader.js`, `video.js`, `tracker.js`,
 `initialization.js`, `identity-assignment.js` (the track/identity helpers,
 Edit Group, `startManualAssignment`, `purgeTriangulationDataForGroup`,
@@ -12467,6 +12883,9 @@ its default multi-panel (accordion) mode.
   the panel out of the stack. Panes keep their ids and markup; a pane carries
   `.active` while its body is on screen (open and not folded). Open sections
   stack in rail order.
+- **Late panels (Inference, Connect):** their stored open/folded ids are kept in
+  `_later` and written back by every `persist()` until the panel registers, so the
+  repaint at startup cannot wipe the state they restore.
 - **Click rules (sleap-app's accordion):** a rail click on a panel that is not
   expanded opens it if needed, expands it and folds every other open panel; a
   click on the expanded panel folds it; while the info panel is hidden a click
@@ -12520,11 +12939,143 @@ disables the panel icons; the top button stays live), `syncPanelRail()`.
 cycle.
 
 **Imported by.** `pose/initialization.js` (`setupPanelRail`),
+`ui/inference-panel.js` (`registerPanelRailPanel`, `showPanelTab`),
 `ui/id-switch-modal.js` (`showPanelTab` in `openIdSwitchPanel`),
 `ui/plane-definition.js` (`setPanelRailLocked` in `setPanelPlaneMode`).
 
 **User-facing features.** The icon rail on the window's right edge and the
 collapsible panel sections. Covered by `tests/e2e/panel-rail.mjs`.
+
+### ui/inference-panel.js
+
+**Remote / web (P4).** Loaded on every build. Backend picker
+(`ui/connect/backend-picker.js`): Local (desktop with sleap-nn) or a paired
+SLEAP Connect worker; with no local sleap-nn (web, desktop without it) the panel
+is remote-only (Models/Views/run block swap to `ui/connect/remote-inference.js`).
+Local code reaches `window.lucidDesktop` only inside `setupInferencePanel` and
+the local paths. A 2 s refresh while shown notices a session opened meanwhile.
+With a worker selected, the settings sleap-connect's `TrackJobSpec` cannot carry (Max instances,
+Bottom-Up grouping, Post-processing, the advanced tracking options, Optical Flow / Kalman; the worker
+drops unknown keys silently) are hidden, and Kalman falls back to Simple. The Views list skips
+calibration cameras with no video (`sessionViews`).
+
+**Purpose.** The **Inference** panel (right-edge rail, Zap icon):
+run sleap-nn on every camera view of the open session and bring the
+predictions back. A replica of sleap-app's Inference panel (`InferencePanel.tsx`,
+`inferenceStore.ts`, `BackendPicker.tsx`): same sections in the same order
+(Track only, Pipeline, Models, Data, Inference, Tracking › Advanced,
+Post-processing, Remote), same defaults, labels and hints, same progress block
+(status + elapsed, bar with `n / total frames` and %, fps, ETA, error box,
+Cancel, Load Results, log tail + Expand window, Copy Log, Dismiss).
+LUCID differences: one sleap-nn job PER VIEW, all views with the SAME models
+(a per-view slot exists in the config, `perViewModels`); Data gains **Videos on
+disk**, now **Views**: a checkbox per session camera (run a subset), each
+with its video path found from the files the user OPENED
+(`lucidDesktop.fs.pathOfFile`, macOS capture in `src-tauri/src/input_paths.rs`),
+else the path the .slp recorded if readable, else Choose folder… (native folder
+pick → matched, `ui/inference-video-paths.js`); predictions go to the picked
+session folder's `predictions/`. Lazy-loaded views are listed as blocked
+(TEMPORARY, `viewInferenceBlocker`);
+targets are per session (no suggestions in LUCID); Track only is shown but not
+available; no Full Configuration window (its settings are all in the panel);
+Backend offers Local only (`INFERENCE_BACKENDS`, the seam for a SLEAP Connect
+worker). The log tail is not a scroller (one scroller per panel); Expand opens
+a window (Esc closes). Output: `<video folder>/predictions/<view>.<stamp>.predictions.slp`.
+- **Loaded only on desktop with sleap-nn in the build:** `pose/initialization.js`
+  `import()`s it when `window.lucidDesktop.sleapNn` exists, and it adds the
+  panel only if `sleapNn.status().available`. Talks to native code only through
+  `window.lucidDesktop.sleapNn` / `.fs` (no desktop import), so the web app
+  never fetches it and is unchanged.
+
+**Key exports.** `setupInferencePanel()` → Promise<bool>, `showInferencePanel()`, `runRemoteInferenceWithModels(models)` (the Connect New job wizard's "This project" hand-off: sets the remote models and starts the panel's own remote Run),
+`INFERENCE_TAB_ID` (`tabInference`), `INFERENCE_BACKENDS`, `_inferenceState()` (tests).
+
+**Imports from project modules.** `./app-state.js`, `./panel-rail.js`,
+`./panel-rail-icons.js`, `./info-tip.js`, `./progress-delta.js`,
+`./inference-args.js`, `./inference-jobs.js`, `./inference-video-paths.js`,
+`./inference-merge.js`.
+
+**Imported by.** `pose/initialization.js` (dynamic `import()`, desktop only).
+
+**User-facing features.** Inference panel. Test: `tests/e2e/desktop-inference.mjs`.
+
+### ui/inference-args.js
+
+**Purpose.** The `sleap-nn predict` argv for ONE view (port of sleap-app's
+`inferenceArgs.ts`), plus sleap-app's panel defaults, the version gate
+(`predict` from 0.3.2, else legacy `track`), `--gui` progress-line parsing and
+duration/ETA formatting. `--data_path` is always a video: no `--video_index`,
+and every frame selection is an explicit `--frames` (one run → `a-b`, anything
+else a full comma list: sleap-nn 0.3.5 rejects mixed `0-4,10-11`). A flag added
+here must also be added to `src-tauri/src/sleap_nn_args.rs` (the native allowlist).
+Import-free.
+
+**Key exports.** `INFERENCE_DEFAULTS`, `defaultInferenceConfig()`,
+`modelsForView(config, view)` (per-view slot, else the shared list),
+`framesToSpec`, `sampleFrames`, `targetFrames(config, ctx)`,
+`buildInferenceArgs(config, {dataPath, outputPath, modelPaths, frames, subcommand})`,
+`compareVersions`, `pickInferenceSubcommand`, `MIN_SLEAP_NN_PREDICT_VERSION`,
+`parseProgressLine`, `formatDuration`, `formatEta`.
+
+**Imported by.** `ui/inference-jobs.js`, `ui/inference-panel.js`. Test:
+`tests/test-inference-args.mjs`.
+
+### ui/inference-jobs.js
+
+**Purpose.** One run → per-view JOBS (`{id, kind:'inference', view, videoPath,
+modelPaths, frames, outputPath, args}`; ids pass the native job-id rule), and a
+job queue (`runJobQueue`: in order, `concurrency` workers, stop on failure,
+cancellable). Today concurrency 1; the native side already runs up to 4
+processes keyed by job id, so parallel or per-GPU jobs need no rework, and a
+Training job would be another `kind`.
+
+**Key exports.** `planInferenceJobs(config, views, {outputDir, subcommand, stamp})`
+→ `{jobs, skipped}`, `runJobQueue(jobs, runJob, opts)` → `{done, failed, notRun}`,
+`joinPath`, `safeFilePart`, `predictionsTimestamp`,
+`viewInferenceBlocker(session, view)` — why a view cannot run, or null.
+TEMPORARY: a lazy-loaded camera (`session.lazyLoader.labelsByCam`) is blocked;
+lifting it (or allowing a chosen subset) changes only this function.
+
+**Imports from project modules.** `./inference-args.js`. **Imported by.**
+`ui/inference-panel.js`. Test: `tests/test-inference-args.mjs`.
+
+### ui/inference-video-paths.js
+
+**Purpose.** Match each view's browser `File` to a video on disk under the
+folder the user picked: by `webkitRelativePath` (without its first component,
+or as a suffix), by the `.slp`'s recorded `videoPath` (last two components), or
+by a unique file name; the size must equal the File's. A file goes to one view
+only; anything else is unmatched with a reason. Import-free.
+
+**Key exports.** `matchViewVideos(views, listing)`, `isVideoName`, `VIDEO_EXTENSIONS`.
+
+**Imported by.** `ui/inference-panel.js`. Test: `tests/test-inference-video-paths.mjs`.
+
+### ui/inference-merge.js
+
+**Purpose.** Bring one view's predictions `.slp` into the open session through
+the SLP import path: `parseSlpForImport` → `validateSkeletonCompatibility`
+(same node names, any order) → existing-predictions mode for THAT view
+(replace: delete its predicted instances on the re-inferred frames;
+clear_all: all of them; keep) via the Custom Delete path
+(`collectDeletionTargets` type=predicted + `executeDeletion`, store rows
+included on a lazy project) → hydrate the frames on a lazy project
+(`batchLoadLazyFrames`) → `mergePredictionsIntoCamera` (ungrouped predicted
+instances, per-node scores kept). User instances are never touched. sleap-nn's
+per-video tracks arrive as `<view>: <track>`. Then `markDirty`, timeline,
+overlays, info panel. On a lazy project the new instances pin their frames
+(`frameEvictionBlocker` 'count') until saved.
+
+**Key exports.** `mergeViewPredictions(file, camName, mode)` →
+`{instances, frames, deleted}`, `frameRuns(sortedFrames)`.
+
+**Imports from project modules.** `./app-state.js`,
+`../import-export/slp-import.js` (`parseSlpForImport`),
+`../import-export/slp-merge.js`, `./custom-delete-ops.js`,
+`../pose/triangulation.js`, `./identity-assignment.js`,
+`../import-export/save-load.js`, `./rendering.js`, `./info-panel.js`.
+
+**Imported by.** `ui/inference-panel.js`. Test: `tests/e2e/desktop-inference.mjs` §5, §7, §8.
 
 ### ui/panel-rail-icons.js
 
@@ -12534,19 +13085,261 @@ and `lib/LICENSES.txt`). sleap-app's glyph wherever the panel matches:
 Instances = Users, Visibility = Eye (sleap-app's View panel), Videos = Film,
 Skeleton = Bone. Others: ID Switches = ArrowLeftRight (two opposing arrows),
 Cameras = Camera, Session = FolderTree, plus PanelRightClose / PanelRightOpen
-and the section headers' ChevronDown / ChevronRight / X (sleap-app's).
-Inline strings: no fetch, so offline mode and the version stamp are unaffected.
+and the section headers' ChevronDown / ChevronRight / X (sleap-app's). The
+desktop Inference panel adds Zap (its rail icon, sleap-app's) and the glyphs its
+buttons and status use (Folder, FolderOpen, Play, LoaderCircle, CircleCheck,
+CircleX, CircleAlert, Download, Copy, Maximize2). The Connect panel adds Globe (its rail icon), Plug, Unplug, Trash2, ExternalLink and TriangleAlert. Inline strings: no fetch, so offline mode and the version stamp are unaffected.
 
 **Key exports.** `RAIL_ICONS` (Lucide name → SVG child markup),
 `railIconSvg(name)` (wraps it in Lucide's 24x24 stroke-2 currentColor `<svg>`;
 throws on an unknown name).
 
 **Imports from project modules.** None (leaf). **Imported by.**
-`ui/panel-rail.js`.
+`ui/panel-rail.js`, `ui/inference-panel.js`, `ui/connect/pair-worker-form.js`, `ui/connect/connect-panel.js`.
+
+### ui/connect/ (SLEAP Connect panel)
+
+The UI half of the Connect port (`pose/connect/` is the logic): sleap-app
+(`/Users/joshuapark/Documents/repos/sleap-app` @ `683a159`) `ConnectPanel.tsx`,
+`PairWorkerForm.tsx`, and a toast stack standing in for its sonner `toast`.
+Everything reads and writes through `useConnectStore` / `subscribeSelector`.
+Loaded by ONE literal `import('../ui/connect/index.js')` in
+`pose/initialization.js` (web and desktop). Tests: `tests/e2e/connect-rail-tab.mjs`,
+`tests/e2e/connect-pairing.mjs`.
+
+#### ui/connect/index.js
+**Purpose.** `setupConnect()` (idempotent): `configureConnect({notify,
+openConnectWindow, platform: 'desktop'|'web', appVersion: <meta lucid-release>|'dev'})`,
+`installConnectStorageSync(window)`, registers the rail panel (`tabConnect`, label
+Connect, icon `globe`) via `registerPanelRailPanel`, `resumeTrackedJobs()` once,
+`releaseIdleConnections()` on `pagehide`. `registerDesktopIroh(window.lucidDesktop)` registers the
+iroh socket factory and blob fetcher before the first connect when the shim has `iroh` (desktop only). **Exports.** `setupConnect`, `setConnectWindowOpener(fn)` (`setupConnect` installs
+a lazy opener: ONE literal `import('./connect-window.js')` on first open, the panel comes to
+the front if that fails; `null` restores the default, `showPanelTab`), `openConnectWindow(opts)`
+(what the panel button, the toasts' "Open" and View > Connect Window call). **Imports.** `pose/connect/store.js`, `transport.js`, `iroh-socket.js`, `iroh-blob.js`,
+`ui/panel-rail.js`, `./notify.js`, `./connect-panel.js`. **Imported by.**
+`pose/initialization.js` (dynamic).
+
+#### ui/connect/connect-panel.js
+**Purpose.** The panel: Open Connect window button, error box, "Paired workers
+(n)" cards (dot, label, Forget, node id + address, "Connected via …",
+"Unpaired by this worker …", "Reconnecting…", Connect / Connecting… /
+Disconnect), the pairing form or "Pair a new worker", "This device: <id>…".
+Forget confirms through `ui/ask.js` with `forgetWorkerConfirm`'s text (once per worker
+while one is open). With no worker paired the form always shows (also after Forget of
+the last); the form closes once when a paired worker first appears (as ConnectPanel.tsx) and resets (blank) whenever it is hidden; a repaint keeps
+keyboard focus on the card's button (through "Connecting…"); `contain: inline-size`
+stops a long label widening the panel.
+**Exports.** `createConnectPanel({openConnectWindow})` -> `{el, dispose}`,
+`forgetWorkerWithConfirm(nodeId)`. **Imports.** `pose/connect/{store,
+worker-ui-helpers,pairing-plan,transport,mini-store,identity}.js`, `ui/ask.js`,
+`ui/panel-rail-icons.js`, `./pair-worker-form.js`.
+
+#### ui/connect/pair-worker-form.js
+**Purpose.** "Pair with a worker": code box, live plan line (`planPairingForText`),
+"Advanced: connect by address" (opens itself when the plan needs an address),
+Pair -> `pairWithCode`, Cancel when a worker is already paired. **Exports.**
+`createPairWorkerForm({onPaired, onCancel, showCancel})` -> `{el, setShowCancel, reset}`;
+`reset()` blanks it (code, plan, Advanced, address, error); boxes are read-only while pairing, an edit
+clears the last failure, Enter in either box pairs (LUCID addition). Element ids are per instance
+(`connectPairCode-<n>`, ...; the rail panel and the Connect window each hold a form) and every field also
+carries `data-pf="code|plan|advanced|address|error|pair|cancel"` for callers and tests.
+**Imports.** `pose/connect/store.js`, `ui/panel-rail-icons.js`.
+
+#### ui/connect/backend-picker.js
+**Purpose.** Port of sleap-app `BackendPicker.tsx`: the Inference panel's Backend select (Local /
+each paired worker; picking a worker `selectWorker`s + connects), pair hint, status line
+(dot, text, "via <transport>", Connect button when idle), reattach banner with "Cancel it". `render()`
+runs on the panel's 2 s refresh, so it writes text and rebuilds the banner only when they change.
+Never a blank select: with no usable Local it has a disabled "Select a worker…" choice, and on the web
+with no worker paired the select is replaced by sleap-app's "Connect to a worker in the Connect tab to
+start remote inference." **Exports.** `createBackendPicker`. **Imports.** `pose/connect/{store,mini-store,transport}.js`, `ui/info-tip.js`.
+**Imported by.** `ui/inference-panel.js`.
+
+#### ui/connect/remote-file-browser.js
+**Purpose.** Port of sleap-app `RemoteFileBrowser.tsx` (list view): `openRemoteFileBrowser({workerId,
+mounts, mountLabels, mode: 'directory'|'file'|'browse', fileFilter, title})` -> Promise of the picked
+worker path or null. Breadcrumb / "Go to folder", back/forward, Favorites, Recents, Locations (the
+mounts), sort by column header, search, 100-entry batches, greyed non-matching files, stays inside the
+mounts, Esc closes (goto/search first). A sort other than name / a search keeps loading the remaining
+batches in the background. Long names keep their last 12 characters (`middleTruncate`); the fallback
+notice has a Dismiss. The scrim is a `data-shortcut-modal` (app shortcuts stay off the view behind it),
+handled keys stop propagating and Tab is trapped in the card. Icons/Columns views not ported. **Exports.**
+`openRemoteFileBrowser`, `remoteBrowserStore`, `mountRootFor`. **Imports.** `pose/connect/{store,
+remote-browser-store,remote-browser}.js`, `ui/panel-rail-icons.js`. **Imported by.**
+`ui/connect/remote-inference.js` (P5's Connect window reuses it).
+
+#### ui/connect/remote-inference.js
+**Purpose.** The Inference panel's remote branch (sleap-app `inferenceStore.ts` remote path +
+`RemoteOutputFolder.tsx`): models picked on the worker, each view's video placed on the worker
+(path rules, `fs.stat`, Locate on worker...), the output folder (per worker per project,
+`setOutputDir`), Run = one `track` job per view in one `run` (`submitJobsOn`, explicit
+`output_path`), per-view progress from job streams, Cancel, and Fetch & Load Results
+(`fetchResultBlobOn` + `fsFallback`, `mergeViewPredictions`, `markJobFetched`, a progress card);
+completed unfetched jobs of the project are offered again after a reload. The panel re-evaluates every
+2 s, so each block (models, views, run box) repaints only when its content signature changes (a focused
+control or a click in progress is never replaced); a failed job shows the log's exception line. Run waits
+until every checked view is on the worker and a finished run is Dismissed (sleap-app's all-resolved gate
+and `!isDone`); each job records the Existing-predictions `mergeMode` at submit, which Fetch & Load uses
+(a job without one uses the panel's current mode). Progress shows frames / percent / fps / ETA
+("Initializing..." first); the log holds the echoed spec (`$ Remote (N videos): …`), submit / fetch lines
+and each job's worker output (`[cam1] …`), with Expand and Copy Log. **Exports.**
+`createRemoteInference(host)`, and for the Connect window's Jobs tab: `fetchAndLoadJobs(jobs, {mode, mergeFile?, onLog?})`
+(the Fetch & Load loop: overlay per job, Esc cancels, `{loaded, failures, cancelled}`; the panel's own button runs
+through it), `fetchJobPredictions(workerId, jobId, {name, onProgress})` (blob or `fs.read` of the job's `output_path` →
+`{file, outPath, detail}`), `openProjectInfo()` (the open file name + session folder names, for `lucidProjectTag`).
+**Imports.** `pose/connect/*`, `remote-file-browser.js`, `ui/{app-state,inference-merge,loading-overlay,progress-delta,panel-rail-icons}.js`.
+**Imported by.** `ui/inference-panel.js`, `ui/connect/{worker-jobs,merge-predictions-dialog}.js`.
+**Coverage.** `tests/e2e/connect-inference-merge.mjs`, `connect-jobs.mjs`.
+
+#### ui/connect/dom.js
+**Purpose.** The small DOM helpers every Connect component shares: `el(tag, cls, text)`, `button(cls, text, title)` (sets `type="button"`), `icon(name, cls, base = "connect-icon")` (Lucide icons from `ui/panel-rail-icons.js`), `errMsg(e)`, `releaseVersion()` (the `lucid-release` meta tag). LUCID addition. **Exports.** `el`, `button`, `icon`, `errMsg`, `releaseVersion`. **Imports.** `ui/panel-rail-icons.js`. **Imported by.** every `ui/connect/*.js` component.
+
+#### ui/connect/layers.js
+**Purpose.** Which modal layer is on top: `layerAbove(el)` is true when another Connect layer (`.cw-scrim`,
+`.njw-scrim`, `.rfb-scrim`, `.cj-scrim`, the in-app `.ask-modal-overlay`) sits over the one `el` is in
+(computed z-index, then DOM order). Every capture-phase Esc/Tab handler (wizard, job viewer, merge dialog,
+file browser, devices popover, queue menu) returns early when it is not the top layer, because listeners on
+one `document` run in registration order and the layer opened first used to close together with the dialog
+above it. `trapModal(scrim, card, {onEscape, onKey, blocked, focusable, selector, bubble})` is the one Esc / Tab-trap / focus-restore used by the job viewer, merge dialog, file browser, wizard and Connect window (`bubble` = the window's bubble-phase variant); returns `{release, restoreFocus}`. **Exports.** `layerAbove`, `trapModal`. **Imports.** None. **Imported by.** the dialogs
+above. Tests: `tests/e2e/connect-window.mjs` §S4.
+
+#### ui/connect/connect-window.js
+**Purpose.** Port of sleap-app `ConnectDialog.tsx`: the Connect window, a full-window overlay (92vw x
+90vh, resizable, `data-shortcut-modal`, z-index 8500: under toasts (10500), the dialogs opened from it, a
+Fetch & Load progress card (`.loading-overlay` raised to 10100 by `body:has(.cw-scrim, …)`) and the ask
+dialogs (20000); header notes the web `askConfirm` = `window.confirm` difference, the one sleap-app
+parity gap left alone). Header (Connect, description, Refresh, close); 320 px sidebar = `worker-list.js` (top 45%) over
+`sidebar-queue.js`; right = the picked worker's name, Jobs / Data access tabs (`worker-jobs.js` /
+`worker-data-access.js`, agents B / C, `(container, props) -> {update, destroy}`), `worker-devices.js`,
+Forget (`forgetWorkerWithConfirm`), or "Pair a worker to see its jobs here.". The pick is window-local
+(never `selectedWorkerId`; default the backend worker, else the first; re-picked when forgotten). Open and
+Refresh refresh every worker's info (a worker paired while open too); `refreshToken` bumps on Refresh, a
+queue Stop Early / Cancel, and re-pairing an unpaired worker; a queue card click sets the Jobs tab and
+`focusRun {key, nonce}`. Close (Esc, X, click on the dim area, never a drag that began in the card)
+releases idle connections and returns focus; Tab is trapped. **Exports.** `openConnectWindow({workerId?})`.
+**Imports.** `pose/connect/{store,mini-store}.js`,
+`ui/panel-rail-icons.js`, the sibling components, `./connect-panel.js`. **Imported by.** `ui/connect/index.js`
+(dynamic). Tests: `tests/e2e/connect-window.mjs`.
+
+#### ui/connect/worker-list.js
+**Purpose.** Port of `WorkerList.tsx`: "Paired workers (n)", "+ Pair worker" (a `createPairWorkerForm`),
+the empty state (`sleap-connect serve`), All / Idle / Busy / Offline chips with counts, a card per worker
+(status dot, label, status, specs line, "via <route>"), the "has a new identity" and "unpaired" notes with
+Re-pair / Forget. Status, specs and filters come from `worker-ui-helpers.js`. A repaint keeps focus and what
+is typed in a form. **Exports.** `createWorkerList(container, {selectedId, onSelect})`.
+**Imports.** `pose/connect/{store,mini-store,worker-ui-helpers,transport}.js`, `./pair-worker-form.js`,
+`./connect-panel.js`.
+
+#### ui/connect/worker-queue.js
+**Purpose.** Port of `WorkerQueue.tsx`: queue cards (failed, running, queued `#n`; a row per model with the
+Jobs-tab badges, an "After training" row; click opens in Jobs, right-click: Open / Stop Early / Cancel run /
+"View only (another project's run)") and the small context menu (Esc closes only it).
+Re-exports the pure helpers of `pose/connect/job-groups.js` under WorkerQueue.tsx's names. **Exports.**
+`createQueueRunList(container, {entries, canManage, onOpen, onStopEarly, onCancelRun})`,
+`isActiveGroup`, `unfinishedJobs`, `cancelRunConfirm`, `queueRows`, `queueRunEntries`.
+**Imports.** `pose/connect/job-groups.js`. **Imported by.** `sidebar-queue.js`.
+
+#### ui/connect/sidebar-queue.js
+**Purpose.** Port of `SidebarQueue.tsx`: the picked worker's queue under Paired workers: polls `listJobs`
+(10 s; `refreshToken` refetches), my project's id from `lucidProjectTag` of the open project, failed runs of
+mine from the last day stay until clicked (cleared ones in `localStorage` `lucid-connect-dismissed-failed-runs`),
+Stop Early / Cancel run confirm (`ui/ask.js`) then `cancelJobOn` and `onChanged`. **Exports.**
+`createSidebarQueue(container, {workerId, workerLabel, refreshToken, onChanged, onOpenRun, ...})`.
+**Imports.** `pose/connect/{store,job-groups,worker-ui-helpers,project-tag}.js`, `ui/ask.js`, `ui/app-state.js`,
+`./notify.js`, `./worker-queue.js`.
+
+#### ui/connect/worker-devices.js
+**Purpose.** Port of `WorkerDevices.tsx`: the "N devices with access" button and its popover (`clients.list`
+via `devicesFor`, this device first, rename this device, `describeError` text). The worker records a device's
+version but not its app, so only THIS device's row names the client ("LUC3D <version>", `clientAgentLabel`).
+Esc closes the rename box, then the popover; opening moves focus into it; a `refreshToken` bump goes back to
+"Devices…" (list cleared) and reloads, as sleap-app. **Exports.** `createWorkerDevicesButton(container,
+{workerId, workerLabel, refreshToken})`. **Imports.** `pose/connect/{store,worker-ui-helpers,timestamp}.js`,
+`ui/panel-rail-icons.js`.
+
+#### ui/connect/notify.js
+**Purpose.** Toast stack (bottom-right; top-right while a Connect dialog is open, so a toast never covers its buttons; `.connect-toasts`, z-index 10500: over every Connect dialog and its scrim, under the ask dialogs): `success/error/info(message,
+{description, action:{label,onClick}, id})`, deduped by id, 4 s auto-dismiss
+(hovering the stack pauses all), 3 shown and older ones collapsed (come back, not dropped), per-kind
+Lucide icon, copy icon only on a toast without an action, close x top-left, "Clear all (n)" pill
+at 2+, selectable text, not modal. Notification history is not ported.
+**Exports.** `notify` (also `dismiss(id)`, `dismissAll()`). **Imports.** `ui/panel-rail-icons.js`.
+**Imported by.** `ui/connect/index.js`.
 
 ---
 
 ## loading/
+
+#### ui/connect/worker-data-access.js
+**Purpose.** Port of `WorkerDataAccess.tsx` (the Connect window's Data access tab): the worker's mounts
+(`fs.mounts`: path + label; "No mounts configured."; a fetch error is shown, not an empty list), Browse
+files (the look-only worker browser), and the worker's remembered local<->worker path rules (both sides on
+their own line, "Not in a shared folder" note, Clear via the store's `clearPathRule`; "None yet."). The rule
+list follows the store (`subscribeSelector`), so Clear repaints at once; `update({workerId, refreshToken})`
+re-fetches only when the worker or the token changed. **Exports.** `createWorkerDataAccess(container,
+{workerId, refreshToken}) -> {update, destroy}`. **Imports.** `pose/connect/{store,path-mappings}.js`,
+`./remote-file-browser.js`, `ui/panel-rail-icons.js`. **Imported by.** `ui/connect/connect-window.js`.
+**Coverage.** `tests/e2e/connect-data-access.mjs`.
+
+#### ui/connect/new-job-wizard.js
+**Purpose.** Port of the Inference half of `NewJobWizard.tsx` (the Jobs tab's "+ New job" / "Run again"):
+Train | Inference (Train shown disabled with a note: training is out of scope), Data (This project |
+A file on the worker), Models (finished training runs via `groupCompletedRuns`, "Browse model folder",
+removable chips), Inference on (target / frame range), summary, Add to queue, success card, toasts, Esc /
+Tab trap / `data-shortcut-modal` (z-index 10000: over the window, under the file browser). "This project"
+hands the models to the Inference panel's own remote run (`runRemoteInferenceWithModels`), which works on the
+selected Backend only: for another worker the wizard says so on its project line, selects it for the run and
+selects the previous Backend again afterwards (also after a failure); "A file on the
+worker" submits a `.slp` (sleap-app's spec) or a video (a plain track job, no view tag) with
+`source: 'worker-file'`. A worker `.slp` is not summarized: sleap-io's `readSlpStreaming` over a
+`RangeSource` needs SharedArrayBuffer and the page is not cross-origin isolated (no "Random sample",
+no missing-video check). **Exports.** `openNewJobWizard({workerId, workerLabel, seed?})`, re-exports
+`seedWizardFromRun`, `groupCompletedRuns`, `labelPastRuns`, `WORKER_FILE_INFERENCE_TARGETS`. **Imports.**
+`pose/connect/{store,worker-ui-helpers,new-job-plan,timestamp}.js`, `ui/{inference-args,app-state}.js`,
+`./remote-file-browser.js`, `./notify.js`, dynamic `ui/inference-panel.js`. **Imported by.**
+`ui/connect/worker-jobs.js`. **Coverage.** `tests/e2e/connect-new-job.mjs`.
+
+#### ui/connect/worker-jobs.js
+**Purpose.** The Connect window's Jobs tab (port of `WorkerJobs.tsx`, same strings): search box, "+ New job",
+one card per run (★ for this project's, rolled-up chip, "Queued · #N", time, short run id, Cancel run /
+"Canceling…", trash "Remove this run") with a row per job (Watch live / View / Logs / Stop Early / Cancel /
+Run again / Fetch & Load by sleap-app's ownership rules; Run again is hidden on a failed TRAIN job, since
+training is out of scope, and offered on a failed job of ours that is not a train job). Polls `listJobs` every 10 s; each run card is kept and
+repainted only when its signature changes (scroll, focus and search survive; a refresh never blanks), `focusRun`
+scrolls to and rings a run. "This project" = `lucidProjectTag(openProjectInfo())`; a job this page submitted for a
+view shows `· <view>`. All decisions are `pose/connect/job-groups.js`. **Exports.** `createWorkerJobs(container,
+{workerId, workerLabel, refreshToken, focusRun, pollIntervalMs?, setIntervalImpl?, clearIntervalImpl?})` →
+`{update, destroy, refresh}`. **Imports.** `pose/connect/{store,project-tag,job-groups,worker-ui-helpers}.js`,
+`ui/{ask,panel-rail-icons}.js`, `./{notify,job-viewer,merge-predictions-dialog,remote-inference,new-job-wizard}.js`.
+**Imported by.** `ui/connect/connect-window.js`. **Coverage.** `tests/e2e/connect-jobs.mjs`.
+
+#### ui/connect/job-viewer.js
+**Purpose.** Port of `JobViewerDialog.tsx`: replay + live viewer of any worker job (Monitor / Logs, Copy, Errors
+only, Wrap, Stop Early / Cancel while running and `canStop`, failure detail) over `pose/connect/job-stream.js`
+`createJobStream`; resumes the stream when the worker's link returns to "connected". Esc / X close, Tab trapped,
+`data-shortcut-modal`. **Exports.** `openJobViewer({workerId, jobId, label, initialView, kind, canStop, onClose})`
+→ `{el, close, stream}`. **Imports.** `pose/connect/{store,job-stream,process-log,job-groups,worker-ui-helpers}.js`,
+`ui/ask.js`, `./{notify,loss-plot}.js`. **Imported by.** `worker-jobs.js`. **Coverage.** `tests/e2e/connect-jobs.mjs`.
+
+#### ui/connect/loss-plot.js
+**Purpose.** The viewer's loss curve on a `<canvas>` (batch scatter, epoch train / val lines, best-val ring, log-y,
+"Log scale" / "Ignore outliers" / Batches 200-1000-5000-All, hover tooltip, drag-zoom + Reset zoom (double-click
+resets), PNG and CSV export through `downloadBytes`; colours from CSS variables), with LossPlot.tsx's empty-state
+texts and title numbering (`Epoch ${model.epoch}`, best epoch 1-based). **Exports.**
+`createLossPlot(container, {height})` → `{update({model, status}), destroy}`, `lossTitle`. **Imports.** `import-export/file-io.js` (`downloadBytes`). **Imported by.** `job-viewer.js`. **Coverage.** `tests/e2e/connect-jobs.mjs` §D.
+
+#### ui/connect/merge-predictions-dialog.js
+**Purpose.** Fetch & Load from a Jobs-tab row (`MergePredictionsDialog.tsx`, adapted to LUCID's views): a job this
+page submitted for a view of the open session merges straight in through `fetchAndLoadJobs` (Replace unless the job
+recorded a mode); one for another session is refused with its name; a job with no LUCID tag opens "Load
+predictions" (skeleton check, the predictions' video name(s) and frame count, "Merge into view" picker with
+the view named in the job's labels / video preselected, and NO preselection with Merge disabled when no view
+name matches (the stand-in for sleap-app's unmatched-video block), `mergeViewPredictions`, Download .slp through `downloadBytes`). No "Open predictions as a new project".
+**Exports.** `loadJobPredictions({workerId, jobId, mine})`.
+**Imports.** `pose/connect/{store,project-tag}.js`, `ui/{app-state,inference-merge}.js`,
+`import-export/{slp-import,slp-merge,file-io}.js`, `./{remote-inference,notify}.js`. **Imported by.**
+`worker-jobs.js`. **Coverage.** `tests/e2e/connect-jobs.mjs` §E.
 
 ### loading/frame-worker.js
 
@@ -12679,9 +13472,10 @@ opens there. A folder picked with `<input webkitdirectory>` gives File objects
 only, never the folder, so the session folder loaders pick with
 `showDirectoryPicker` when the browser has it and keep the handle on the
 session (`session._recordingFolder`, in memory only, never written to the
-`.slp`). Firefox, Safari, Brave with the File System Access API off and
-Playwright's headless shell have no `showDirectoryPicker`: they pick through the
-input, and Save opens where the browser chooses. A project opened from a `.slp`
+`.slp`). Firefox, Safari, Brave with the File System Access API off,
+Playwright's headless shell and the desktop app's WebKit webviews (a WRITE-only
+`showDirectoryPicker` polyfill) have no READABLE `showDirectoryPicker`
+(`canReadDirectoryHandles()`): they pick through the input, and Save opens where the browser chooses. A project opened from a `.slp`
 has no recording folder: Save writes that file, Save As opens beside it.
 
 **Key exports.**
@@ -12689,7 +13483,7 @@ has no recording folder: Save writes that file, Save As opens beside it.
   picker's own memory, so the next recording's pick opens beside the last one.
 - `pickRecordingFolder(fallbackPick)` → `{files, dirHandle}`: files as
   `pickFolder` gives them (`webkitRelativePath` = `<folder>/…`); a cancel gives
-  no files; without `showDirectoryPicker`, `fallbackPick()`'s files and no handle.
+  no files; without a readable `showDirectoryPicker`, `fallbackPick()`'s files and no handle.
   An automated browser (`navigator.webdriver`) keeps the input while its
   `showDirectoryPicker` is native code (Playwright cannot answer the native
   dialog; the e2e suites fill the input); a stubbed picker takes the picker path.
@@ -12701,9 +13495,9 @@ has no recording folder: Save writes that file, Save As opens beside it.
   handle, else null.
 
 **Imported by.** `loading/session-loader.js`, `import-export/save-load.js`.
-Imports nothing.
+Imports `canReadDirectoryHandles` from `ui/browser-hints.js`.
 
-**Tests.** `tests/e2e/save-opens-in-recording-folder.mjs`.
+**Tests.** `tests/e2e/save-opens-in-recording-folder.mjs`, `tests/e2e/desktop-read-fallback.mjs`.
 
 ### loading/campy-session.js
 
@@ -12864,12 +13658,57 @@ and left other cameras with out-of-range or misnamed track indices.
 (`LazyFrameLoader`, all six metadata orders), `tests/e2e/percam-track-union.mjs`
 (the real folder loader, lazy in all six open orders plus eager).
 
+### loading/file-list-directory.js
+
+**Purpose.** A read-only stand-in for a File System Access directory handle,
+built from the files an `<input webkitdirectory>` returns, so the handle-based
+folder readers (`handleLoadMultiSession`'s walk, `enumerateDirectoryHandle`) run
+unchanged where no READ handle exists: Safari, Firefox, and the desktop app's
+WebKit webviews (`window.lucidDesktop.fsaWriteOnly`: a write-only picker
+polyfill). `getFile()` returns the ORIGINAL disk-backed `File` from the input, so
+WORKERFS / FileReaderSync / blob-URL readers stream it without a copy.
+
+**Key exports.**
+- `directoryHandleFromFileList(files)` → `FileListDirectoryHandle`. Places each
+  file by `webkitRelativePath` (else `name`). When every file shares one top
+  folder (what a `webkitdirectory` pick gives) that folder is returned, named as
+  the picked folder; otherwise a nameless root (`''`). A file/folder clash or a
+  duplicate path keeps the first (a real file system cannot produce one).
+- `FileListDirectoryHandle` — `kind: 'directory'`, `name`, `entries()`, `keys()`,
+  `values()`, `[Symbol.asyncIterator]` (= entries), **sorted by name** (code-unit
+  order, so a walk does not depend on the OS's file order),
+  `getDirectoryHandle(name)` / `getFileHandle(name)` (NotFoundError when absent,
+  TypeMismatchError on the wrong kind, NotAllowedError with `{create: true}`),
+  `resolve(handle)`, `isSameEntry`, `queryPermission` / `requestPermission`
+  ('granted' for read, 'denied' for readwrite), `removeEntry` (NotAllowedError).
+- `FileListFileHandle` — `kind: 'file'`, `name`, `getFile()` (the original File),
+  `createWritable` / `createSyncAccessHandle` (NotAllowedError).
+Errors are `DOMException`s (an `Error` with that `name` where there is none).
+`webkitdirectory` lists files only, so an EMPTY folder is absent from the tree.
+
+**Imports from project modules.** None (DOM-free; Node tests load it directly).
+
+**Imported by.** `loading/session-loader.js` (`handleLoadMultiSession`).
+
+**Tests.** `tests/test-file-list-directory.mjs` (nesting, order, errors, root
+naming, the walk Load Multiple Sessions does, `canReadDirectoryHandles`);
+`tests/e2e/desktop-read-fallback.mjs` (Load Multiple Sessions, the videos
+prompt's folder buttons and a plain-Chromium control, with the desktop flags set).
+
 ### loading/session-loader.js
 
 **Purpose.** Orchestrator for every session-loading workflow — empty
 session, per-camera SLPs, single-SLP, multi-session, video-only,
 calibration-only. Owns view/grid layout, video selection prompts,
 filesystem enumeration, decoder rebuild.
+
+**hev1 videos played as hvc1.** Where the engine needed `loading/hev1-retag.js`
+(Safari, the macOS app), the final success status of `handleLoadVideos`, the
+single-SLP folder loader, the lazy project reopen and the per-camera folder
+loader ends with "— played N HEVC video(s) tagged hev1 as hvc1 (files
+unchanged)" (`withHev1RetagNote`, counted over the videos that LOADED; last, so
+it never pushes a failure off the line). Other paths (multi-session switches,
+project open in `save-load.js`, relink) log it to the console only.
 
 **Compact copies.** The single-SLP folder loader and the lazy project reopen end on `withCompactNote` (`import-export/compact-save.js`): a file saved as a compact copy opens with a warning status saying its keypoints and 3D were rounded.
 
@@ -12926,12 +13765,16 @@ filesystem enumeration, decoder rebuild.
   reopen) and closes on `Esc`; both resolve `null`, which every caller treats as
   "no videos picked". `options.startIn` (from `folderPickerStartFor(file)`: the
   `.slp` being opened's `state.slpFileHandle` — `projectFolderStart()`,
-  `loading/folder-picker-start.js` — only when the handle is THAT file's) makes Select Session Folder open
+  `loading/folder-picker-start.js` — only when the handle is THAT file's
+  and `canReadDirectoryHandles()`) makes Select Session Folder open
   `pickFolderNear(startIn)`: the folder picker starts in the project's own folder
   and the files are listed as `pickFolder` lists them. A page given one file cannot
   read the folder around it, but can start the picker there, so the user confirms
   the folder instead of finding it again. Load Project, Load SLP and both project
-  reopens pass it; without the API (Brave by default) it is the old upload picker.
+  reopens pass it; without the API (Brave by default), or in the desktop app's
+  WebKit webviews (write-only picker), it is the old upload picker — and
+  `pickFolderNear` itself falls back to `pickFolder` there (resolving `[]` on
+  cancel) should a start handle get through.
   `forceVideoSelection(refInfo, options)` (Load Project on a V2/legacy `.json`,
   Add SLP with no embedded video) is NOT blocking: a **Continue Without Video**
   button and `Esc` both resolve `[]`, which both callers treat as "no videos"
@@ -12994,13 +13837,28 @@ filesystem enumeration, decoder rebuild.
 - Filesystem: `enumerateDirectoryHandle` (re-exported from `./recording-folder.js`).
 - **Recording folder for Save.** The per-camera and single-SLP folder loaders
   pick through `pickRecordingFolder` (`./recording-folder.js`):
-  `showDirectoryPicker` when the browser has it, else `<input webkitdirectory>`
-  (`pickFolder`). With a handle, the new session keeps it as
+  `showDirectoryPicker` when it can READ folders (`canReadDirectoryHandles()`),
+  else `<input webkitdirectory>` (`pickFolder`). With a handle, the new session keeps it as
   `session._recordingFolder` (in memory only, never in the `.slp`), and
   File ▸ Save / Save As open there. `handleLoadSessionFolderPerCamera(files,
   deferVideos, folderHandle)` takes the handle as its third argument, which
   `handleLoadMultiSession` passes for each session subfolder. Test:
   `tests/e2e/save-opens-in-recording-folder.mjs`.
+- **Folder READS never use a handle that cannot be read.** Every read site asks
+  `canReadDirectoryHandles()` (`ui/browser-hints.js`), not `typeof
+  showDirectoryPicker`: the desktop app's WebKit webviews have a WRITE-only
+  `showDirectoryPicker` polyfill (`window.lucidDesktop.fsaWriteOnly`) whose
+  handles give no disk-backed Files. In plain Chrome/Edge nothing changes (same
+  pickers, ids, `startIn`, messages). `pickParentDirectoryForSessions` uses its
+  webkitdirectory branch; `folderPickerStartFor` returns null (so the videos
+  prompt uses `pickFolder`). **`handleLoadMultiSession`** keeps the handle walk
+  where handles are readable (Chromium: webkitdirectory drops files on big
+  trees); otherwise it picks with `pickFolder` and walks
+  `directoryHandleFromFileList(files)` (`./file-list-directory.js`), the same
+  code over the original Files. Only Brave with the API off still refuses (with
+  `fileSystemAccessHint`), being Chromium. Side effect: Load Multiple Sessions
+  now works in Safari and Firefox, which used to be told to use Chrome or Edge.
+  Test: `tests/e2e/desktop-read-fallback.mjs`.
 - **campy recordings** (`loading/campy-session.js`):
   `adoptCampyRecording(session, files, {record, calibFile, calibrationNames})`
   reads a picked folder's session.json (+ campy-live's manifests) onto
@@ -13210,10 +14068,12 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
   `./folder-picker-start.js` (`projectFolderStart`),
   `./percam-slp-choice.js` (`chooseCameraSlp`), `./video-file-pick.js`,
   `./video-codec-diagnosis.js` (`videoLoadFailureText`),
+  `./hev1-retag.js` (`withHev1RetagNote`),
   `../ui/video-codec-notice.js` (`noteUnplayableVideos`),
   `../ui/app-state.js` (incl. `buildRememberedSkeleton`, and `isViewDocked` as the
   rebuilt video controller's `isViewShown`), `../pose/pose-data.js`,
-  `../ui/browser-hints.js` (`fileSystemAccessHint`),
+  `../ui/browser-hints.js` (`fileSystemAccessHint`, `canReadDirectoryHandles`),
+  `./file-list-directory.js` (`directoryHandleFromFileList`),
   `../ui/folder-confirm-tip.js` (`confirmFolderPick` — awaited before every
   folder picker; a cancel ends the load with "No folder selected"),
   `./video.js` (`OnDemandVideoDecoder`, `VideoController`, `releaseViewsFrames` —
@@ -13614,7 +14474,8 @@ console warning and are counted in `coldReadStats`.
 
 **Imported by.** `loading/video.js` (mediabunny via `guardedRangeSource`;
 mp4box's scan via `readChunk`), `loading/video-codec-diagnosis.js`
-(`readRange`), `import-export/slp-import.js` (`handleLoadPoints3dH5`).
+(`readRange`), `loading/hev1-retag.js` (the sample-entry probe),
+`import-export/slp-import.js` (`handleLoadPoints3dH5`).
 
 **Not covered.** The `<video>` element reads its blob URL natively, where no
 page code can reach (playback, and stepping only when there is no
@@ -13628,6 +14489,75 @@ through the guard vs the unguarded read) and `tests/e2e/video-cold-read.mjs`
 (the real OnDemandVideoDecoder with faults injected under it; unguarded, a
 failed read leaves mp4box's scan at the `<video>` estimate and a zeroed first
 page freezes the page).
+
+### loading/hev1-retag.js
+
+**Purpose.** Play HEVC tagged `hev1` on engines that play HEVC only when tagged
+`hvc1` — Safari and the macOS desktop app's WKWebView (canPlayType: hev1 "",
+hvc1 "probably") — losslessly and without touching the file on disk. ffmpeg tags
+HEVC `hev1` by default, and on the desktop app an 8-camera session folder of
+such recordings loaded with no video at all. `ffmpeg -c copy -tag:v hvc1`
+rewrites the sample entry's 4-byte fourcc and nothing else (the fixtures' twins
+differ from their sources in exactly those bytes); that is valid when the
+entry's `hvcC` carries the parameter sets, as ffmpeg-written files' do. This
+module does the same in memory.
+
+**How.** `planHev1Retag(file)` walks `moov/trak/mdia/minf/stbl/stsd` with
+guarded reads (`readBlobRange`, served from 64 KiB windows: ~2 Blob reads per
+file; 15 ms on a 3 GB file with moov at the end), wherever `moov` sits (before
+or after `mdat`, fragmented too), never reading `mdat`. It finds every `hev1`
+sample entry and checks its `hvcC` (`hvccParameterSets`: at least one VPS, SPS
+and PPS NAL, each NAL header naming its array's type, the record parsed to its
+end). Any entry without them → no patch, and the diagnosis's `hevc-hev1-tag`
+message stays. Never throws. `retaggedFile(file, offsets)` builds `new
+File([file.slice(0, off), "hvc1", file.slice(off + 4), …], name, {type,
+lastModified})`, copying own properties (`webkitRelativePath`) and adding
+`lucidHev1Retag = {original, offsets}`; the original is never changed.
+**Disk-backed:** slices of a picked File stay file references. Chromium's
+`chrome://blob-internals` shows a patched 3 GB file as file item + 4-byte data
+item + file item, and Playwright WebKit's processes' RSS did not grow, so
+nothing is copied whatever the size.
+
+**Gate.** `hev1RetagNeeded()`: `<video>` can play `hvc1` but not `hev1`
+(`codecPlayable`, the diagnosis's own test); `globalThis.__lucidHev1RetagGate`
+= true/false forces it (tests). Chrome and Firefox play `hev1` (or no HEVC at
+all), so they never probe and keep the original File by identity.
+
+**Key exports.**
+- `playbackSourceFor(source, env?)` — the File the video consumers should read:
+  `source` itself, SYNCHRONOUSLY, when it is not a File, is already patched, or
+  the gate is off; else a never-rejecting Promise of the patched File (or of
+  `source` when there is nothing to patch). One plan per original File
+  (WeakMap), so the same original always yields the same patched object
+  (`ui/image-embedder.js` keys its cache on `decoder.file`). Logs one
+  `[hev1-retag]` console line per re-tagged file.
+- `videoFileForPlayback(source, env?)` — the same, always a Promise.
+- `planHev1Retag(blob)` → `{offsets, entries, reason}` (`ok`, `no-hev1`,
+  `incomplete-hvcc`, `no-moov`, `not-mp4`, `error`).
+- `hev1EntriesInStsd(stsdBytes, stsdOffset)`, `hvccParameterSets(record)` — pure.
+- `retaggedFile(file, offsets, tag?)`, `hev1RetagNeeded(env?)`,
+  `isPlayedRetagged(fileOr{file})`, `hev1RetagNote(files)`,
+  `withHev1RetagNote(message, files)` (the loaders' "— played N HEVC video(s)
+  tagged hev1 as hvc1 (files unchanged)").
+
+**Imports from project modules.** `./cold-read-guard.js` (`readBlobRange`),
+`./video-codec-diagnosis.js` (`parseBoxHeader`, `codecPlayable`).
+
+**Imported by.** `loading/video.js` (`OnDemandVideoDecoder.init` /
+`switchSource`, the choke point), `loading/session-loader.js`
+(`withHev1RetagNote`).
+
+**Not changed by it.** `state.videoFiles[i].file` keeps the original (names,
+`videoPath`, `videos_json`), so saves are byte-identical; the streaming save's
+`sourceFiles` are `.slp` files. Fixtures:
+`tests/fixtures/hev1-retag/make_fixture.sh`.
+
+**Tests.** `tests/test-hev1-retag.mjs` (box walking with moov at the end, moov
+first, fragmented, two tracks; patched bytes equal ffmpeg's `-tag:v hvc1` twins
+byte for byte; incomplete hvcC; no patch and no throw on avc1, hvc1, truncated,
+garbage; the probe reads 68 KiB of a 20 MB file; gate, identity, cache, note),
+`tests/e2e/hev1-retag.mjs` (Chromium; `BROWSER=webkit` plays the patched file
+end to end), `tests/test-video-codec-diagnosis.js` (desktop message).
 
 ### loading/video-codec-diagnosis.js
 
@@ -13651,13 +14581,24 @@ browser claims support — the original error then stands.
 
 **Key exports.**
 - `sniffMp4VideoCodec(source)` → `{fourcc, codecName}|null` (File/Blob/URL).
+- `parseBoxHeader(bytes, at?)` → `{size, type, header}|null` — one MP4 box
+  header (64-bit `largesize` read; size 0 left for the caller). Pure; shared
+  with `loading/hev1-retag.js`.
+- `codecPlayable(fourcc, canPlayType?)` — canPlayType with the representative
+  codecs= string for that fourcc (`PROBE_CODECS`); the `supported()` test of
+  `explainUnplayableCodec` and hev1-retag's gate.
 - `videoFourccFromMoov(moovBytes)` — first video sample-entry fourcc in a `moov`.
 - `explainUnplayableCodec(fourcc, fileName, env?)` → `{fourcc, codecName, kind,
   message, title?, why?, steps?, command?}|null`; pure (`env.canPlayType`,
-  `env.isSafari`, `env.isChromium`, `env.renderer` injectable). Kinds:
+  `env.isSafari`, `env.isChromium`, `env.renderer`, `env.desktop` injectable). Kinds:
   `hevc-hev1-tag`, `av1-unsupported`, `hevc-no-gpu`, `hevc-gpu-no-decode`,
   `hevc-unsupported`, `unsupported`, `encrypted`. The three HEVC-unsupported
   kinds carry `title`/`why`/`steps` for `ui/video-codec-notice.js`.
+  `hevc-hev1-tag` now reaches the user only when `loading/hev1-retag.js` could
+  not play the file as `hvc1` (its hvcC lacks VPS/SPS/PPS); its message keeps
+  the ffmpeg re-tag and drops "or open the project in Chrome or Firefox" inside
+  the desktop app (`window.lucidDesktop`, or `env.desktop`), whose engine is
+  the one that refused it.
 - `graphicsRenderer()` — WebGL's unmasked renderer string, cached ('' unknown).
 - `rendererHasGpu(renderer)` → true / false (software or virtual adapter) / null.
 - `diagnoseUnplayableVideo(source, fileName?, env?)` — sniff + explain.
@@ -13668,7 +14609,8 @@ browser claims support — the original error then stands.
 (`readBlobRange`: a cloud file still downloading).
 
 **Imported by.** `loading/video.js` (`OnDemandVideoDecoder._awaitPlayable`),
-`loading/session-loader.js` (`videoLoadFailureText`).
+`loading/session-loader.js` (`videoLoadFailureText`), `loading/hev1-retag.js`
+(`parseBoxHeader`, `codecPlayable`).
 
 **Tests.** `tests/test-video-codec-diagnosis.js` (synthetic MP4s, every message
 kind, renderer classes, decoder integration); real browsers via the
@@ -14229,11 +15171,30 @@ the cursor, so only this `e.altKey` early return keeps an Option+scroll there
 from zooming the view mid-rotation. Pinned by the margin check in
 `tests/e2e/alt-wheel-rotate-instance.mjs`.
 
+**`init()` / `switchSource()` are the one choke point for HEVC tagged `hev1`
+(`loading/hev1-retag.js`).** Both first replace a File source with
+`playbackSourceFor(source)`: on an engine whose `<video>` plays `hvc1` but not
+`hev1` (Safari, the macOS app's WKWebView) a disk-backed re-tagged view of the
+File, before the first play attempt; elsewhere the File itself, synchronously
+(no await, so Chrome and Firefox run exactly as before). Everything after reads
+`this.file` / `this._source` / the local `source`: the `<video>` blob URL,
+`_peekHTML5`, mp4box's `readChunk`, `_initMediabunny`'s `guardedRangeSource`,
+`_awaitPlayable`'s codec diagnosis, and outside the class
+`ui/image-embedder.js` (`d.file`) and `ui/seekbar-preview.js` (`d._source`).
+Every loader reaches video through these two methods (session folders per camera
+and single-SLP, multi-session switches, campy folders, the Videos prompt and
+camera prompt cells, lazy project reopen, project open in `save-load.js`,
+relink / add-matching-videos in `slp-import.js`, the demo). Callers keep the
+ORIGINAL File in `state.videoFiles[i].file` (names, `videoPath`, what a save
+writes); a later `switchSource(original)` gets the same patched object back.
+Test: `tests/e2e/hev1-retag.mjs`.
+
 **Imports from project modules.** `ui/keyboard-target.js` — the
 `shouldIgnoreShortcut` guard its `setupKeyboardHandlers` keydown listener
 applies; that module imports nothing itself — and
 `loading/video-codec-diagnosis.js` (`diagnoseUnplayableVideo`, for
-`_awaitPlayable`) — and `loading/cold-read-guard.js`: `_initMediabunny` builds
+`_awaitPlayable`) — and `loading/hev1-retag.js` (`playbackSourceFor`, in
+`init` and `switchSource`) — and `loading/cold-read-guard.js`: `_initMediabunny` builds
 the frame-accurate backend with `MediaBunnyVideoBackend.fromRangeSource` over
 `guardedRangeSource(file)` (falling back to `fromBlob` when a bundle lacks it),
 and `readChunk` (mp4box's index scan) reads through `readBlobRange`, so both
@@ -15174,7 +16135,9 @@ loading-overlay/status-text UI helpers.
   click), then the shared write (`writeProjectToHandle`, also Save's) inside
   `withCompactSave` (`import-export/compact-save.js`). A COPY: `state.slpFileHandle`
   and the dirty state are left alone, since nothing in memory is rounded. Without
-  `showSaveFilePicker` (Brave's default) it says which browser setting it needs.
+  `showSaveFilePicker` (Brave's default) it says which browser setting it needs;
+  in the desktop app (`window.lucidDesktop`, whose shim provides the picker, so
+  this is not expected) the message gives no browser advice.
 - **The Save progress card.** `quickSave`/`saveAs` and `saveProjectSlp` (the
   download path, which is what Save is in Brave — its save dialog cannot open
   until the whole file is built) show the shared loading overlay
@@ -15214,8 +16177,11 @@ loading-overlay/status-text UI helpers.
   suggested name is the session's name when there is one session. Save Compact
   Copy's picker gets the same `startIn` (else the project file's folder). Covered by
   `tests/e2e/save-opens-in-recording-folder.mjs`.
-- Project: `newProject(force)` (`force` skips the unsaved-changes confirm and
-  is used by the 3D-import reset), `markDirty`, `clearDirty`, `quickSave`,
+- Project: `newProject(force)` → `Promise<boolean>` (reset or not). `force`
+  skips the unsaved-changes confirm and is used by the 3D-import reset; with
+  `force`, or nothing open, the reset (`resetProject`, internal) runs
+  SYNCHRONOUSLY before it returns. Otherwise it asks through `askConfirm`
+  (ui/ask.js) and resets once answered yes. `markDirty`, `clearDirty`, `quickSave`,
   `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject` (routes a
   large `.slp` — over 200 MB, `LARGE_SLP_BYTES` — to the memory-bounded
   `handleLoadProjectSlpLazy` in `loading/session-loader.js` instead of the
@@ -15253,7 +16219,7 @@ loading-overlay/status-text UI helpers.
   `CAGE_WARN_FRACTION` (0.85) of `getCageLimitBytes()` (exported;
   `performance.memory.jsHeapSizeLimit`, else 4 GB) — set above a real project
   known to save at 77% —
-  `window.confirm(...)` warns the user and offers to cancel in favor of
+  `askConfirm(...)` (ui/ask.js) warns the user and offers to cancel in favor of
   per-camera export ("Export SLEAP File Per Session"/"By Cam"). Declining throws
   `SaveCancelledError`, which `quickSave`/`saveProjectSlp` report as "Save
   cancelled" (not "Save failed") — `quickSave` additionally calls
@@ -15352,7 +16318,8 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   `../pose/placeholder-cameras.js` (`ensurePlaceholderCameras`),
   `../ui/browser-hints.js` (`fileSystemAccessHint` — `saveProjectSlp`, the
   download fallback when there is no save-file picker, says why and how to
-  enable it in Brave), `../loading/video.js`, `../demo-data.js`, `./file-io.js`,
+  enable it in Brave), `../ui/ask.js` (`askConfirm` — New Project, the very
+  large save warning, a JSON project over 50 MB), `../loading/video.js`, `../demo-data.js`, `./file-io.js`,
   `../ui/app-state.js`, `../loading/session-loader.js`,
   `../loading/sio-lazy-loader.js` (`SioLazyLoader`, for
   `reopenSessionLazyLoader`), `./slp-streaming-write.js`,
@@ -15421,7 +16388,7 @@ no view, and the final status becomes a warning naming the unused videos and
 the cameras left without one (per session). Test:
 `tests/e2e/slp-load-unmatched-video.mjs`.
 
-The `.slp` parse is dispatched by the private `parseSlpForImport(file,
+The `.slp` parse is dispatched by `parseSlpForImport(file,
 onProgress)`: real `.slp` files go through `parseSlpViaSleapIO` (sleap-io.js
 streaming reader), with `parseSlpH5` (raw h5wasm worker) kept for SLEAP
 analysis `.h5` and as a fallback on any typed-read error. Both yield the same
@@ -15551,7 +16518,8 @@ first track.
 - `restoreGroupingAndUnlink` also calls `readFrameIdentityMetadata` right after
   the groups are rebuilt, which rebuilds `frameIdentityMap` from them when the
   file stored it in the compact form (see `import-export/frame-identity-metadata.js`).
-- `parseSlpForImport(file, onProgress)` (private) — dispatches `.slp` →
+- `parseSlpForImport(file, onProgress)` (exported for `ui/inference-merge.js`,
+  which reads sleap-nn's predictions through it) — dispatches `.slp` →
   `parseSlpViaSleapIO`, else / on error → `parseSlpH5`.
 
 **Private helpers (not exported).**
@@ -15700,13 +16668,17 @@ compatibility check, track merging, frame merging, group rebuild.
   `nodeReorderMap` exactly as its points are.
 - `rebuildInstanceGroupsForFrames(session, frameIndices)` — groups by `trackIdx`;
   trackless instances of any type are skipped (not bucketed into track 0).
+- `mergePredictionsIntoCamera(session, slpData, camName, {trackRemap, nodeReorderMap})`
+  → `{frames, instances}` — a single-video predictions file into ONE view as
+  ungrouped predicted instances (non-predicted rows skipped); touches nothing
+  else and regroups nothing. A lazy project must hydrate those frames first.
 
 **Imports from project modules.**
 - `../pose/pose-data.js` — `Skeleton`, `Camera`, `Instance`,
   `InstanceGroup`, `FrameGroup`, `Session`.
 
 **Imported by.** `import-export/slp-import.js`, `import-export/file-io.js`
-(`validateSkeletonCompatibility`).
+(`validateSkeletonCompatibility`), `ui/inference-merge.js`.
 
 **User-facing features.** Backs File ▸ Load SLP's merge path (`handleAddSlp`) — merging an SLP into
 an existing session without overwriting it.

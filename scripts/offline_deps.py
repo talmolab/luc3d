@@ -350,17 +350,26 @@ def check_pins(manifest):
     return problems
 
 
+# The CDN URLs `check --strict` looks for. Shared with
+# scripts/desktop/stage_frontend.py, which runs the same check on its staged tree.
+CDN_URL_PATTERN = re.compile(r"https://(?:cdn\.jsdelivr\.net|unpkg\.com)/[^\"'\s)]+")
+
+
+def cdn_urls(text):
+    """The distinct CDN URLs in `text`, trailing `;`/`,` left on (callers strip)."""
+    return set(CDN_URL_PATTERN.findall(text))
+
+
 def find_unmapped_cdn_urls(manifest):
     """CDN URLs in source that offline mode would not rewrite."""
     mapped = set(replacement_map(manifest)) | set(manifest.get("unmapped", {}))
-    pattern = re.compile(r"https://(?:cdn\.jsdelivr\.net|unpkg\.com)/[^\"'\s)]+")
     problems = []
     for path in source_files():
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        for url in set(pattern.findall(text)):
+        for url in cdn_urls(text):
             if url.rstrip(";,") not in mapped:
                 problems.append("%s: %s" % (rel(path), url))
     return problems
@@ -379,17 +388,21 @@ def source_files():
 # file inventory
 # --------------------------------------------------------------------------- #
 
-def tracked_files():
+def tracked_files(include_untracked=False):
     """Repo-relative Paths of the files a deploy would ship.
 
     Prefers `git ls-files`, which is exactly what deploy.yml's rsync of the
     actions/checkout workspace ends up with. Falls back to a filtered walk when
     git is unavailable (e.g. bundling from an extracted source zip).
+
+    include_untracked adds files git neither tracks nor ignores (a new module not
+    yet committed) -- the desktop stage wants the working tree a developer runs.
     """
+    cmd = ["git", "-C", str(REPO_ROOT), "ls-files", "-z"]
+    if include_untracked:
+        cmd += ["--cached", "--others", "--exclude-standard"]
     try:
-        out = subprocess.run(
-            ["git", "-C", str(REPO_ROOT), "ls-files", "-z"],
-            capture_output=True, check=True).stdout
+        out = subprocess.run(cmd, capture_output=True, check=True).stdout
         names = [n for n in out.decode("utf-8").split("\0") if n]
         if names:
             return [Path(n) for n in names]
@@ -404,6 +417,102 @@ def tracked_files():
                 continue
             found.append(Path(root, fname).relative_to(REPO_ROOT))
     return found
+
+
+# --------------------------------------------------------------------------- #
+# staging (shared by `bundle` and scripts/desktop/stage_frontend.py)
+# --------------------------------------------------------------------------- #
+
+def payload_files(manifest):
+    """Repo-relative Paths of the fetched packages' files (their .gitignore excluded)."""
+    out = []
+    for spec in manifest["packages"].values():
+        dest = REPO_ROOT / spec["dest"]
+        for path in sorted(dest.rglob("*")):
+            if path.is_file() and path.name != ".gitignore":
+                out.append(path.relative_to(REPO_ROOT))
+    return out
+
+
+def app_file_list(manifest, include_untracked=False):
+    """What `bundle` stages: everything a deploy would ship, plus the freshly
+    fetched payloads. May name a file twice (a payload's tracked PROVENANCE.txt);
+    stage_files() skips repeats. The desktop stage filters this same list."""
+    staged = []
+    for rel in tracked_files(include_untracked):
+        if rel.parts[0] in (".github", ".claude") or rel.name == ".gitignore":
+            continue
+        staged.append(rel)
+    staged.extend(payload_files(manifest))
+    return staged
+
+
+def license_files():
+    """Repo-relative Paths of every lib/**/LICENSE* file.
+
+    Listed explicitly rather than via tracked_files() so a not-yet-committed
+    LICENSE can never be silently dropped from a redistribution.
+    """
+    return [p.relative_to(REPO_ROOT) for p in sorted((REPO_ROOT / "lib").rglob("LICENSE*"))
+            if p.is_file()]
+
+
+class ZipSink:
+    """Stage into an open ZipFile (the `bundle` output)."""
+
+    def __init__(self, zf):
+        self.zf = zf
+
+    def add_bytes(self, name, data):
+        self.zf.writestr(name, data)
+
+    def add_file(self, name, src):
+        self.zf.write(src, name)
+
+
+class DirSink:
+    """Stage into a directory (the desktop app's frontend, dist-desktop/)."""
+
+    def __init__(self, root):
+        self.root = Path(root).resolve()
+
+    def _target(self, name):
+        target = (self.root / name).resolve()
+        if self.root not in target.parents:
+            raise RuntimeError("refusing to stage %r outside %s" % (name, self.root))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        return target
+
+    def add_bytes(self, name, data):
+        self._target(name).write_bytes(data)
+
+    def add_file(self, name, src):
+        shutil.copyfile(src, self._target(name))
+
+
+def stage_files(rels, mapping, sink, seen):
+    """Copy repo-relative `rels` into `sink`, CDN URLs rewritten to depth-relative
+    ./lib/ paths in every rewritable file (see is_rewritable) and every other file
+    copied byte for byte. Names already in `seen` are skipped -- a zip may not
+    carry the same name twice: unzip then stops to ask which copy to keep, which
+    is not something to hand a user on an offline machine. Returns how many files
+    the rewrite changed.
+    """
+    rewritten = 0
+    for rel in rels:
+        src = REPO_ROOT / rel
+        if not src.is_file() or rel.as_posix() in seen:
+            continue
+        seen.add(rel.as_posix())
+        if is_rewritable(rel.as_posix()):
+            text = src.read_text(encoding="utf-8", errors="surrogateescape")
+            new = rewrite_text(text, mapping, depth=len(rel.parts) - 1)
+            if new != text:
+                rewritten += 1
+            sink.add_bytes(str(rel.as_posix()), new.encode("utf-8", "surrogateescape"))
+        else:
+            sink.add_file(rel.as_posix(), src)
+    return rewritten
 
 
 # --------------------------------------------------------------------------- #
@@ -487,40 +596,16 @@ def cmd_bundle(manifest, args):
 
     mapping = replacement_map(manifest)
     out_zip = Path(args.output) if args.output else REPO_ROOT / ("luc3d-offline-%s.zip" % args.label)
-    staged = []
 
     # Everything a deploy would ship, plus the freshly fetched payloads.
-    for rel in tracked_files():
-        if rel.parts[0] in (".github", ".claude") or rel.name == ".gitignore":
-            continue
-        staged.append(rel)
-    for spec in manifest["packages"].values():
-        dest = REPO_ROOT / spec["dest"]
-        for path in sorted(dest.rglob("*")):
-            if path.is_file() and path.name != ".gitignore":
-                staged.append(path.relative_to(REPO_ROOT))
-
+    staged = app_file_list(manifest)
     log("staging %d files" % len(staged))
-    rewritten = 0
 
-    # A zip may not carry the same name twice: unzip then stops to ask which copy
-    # to keep, which is not something to hand a user on an offline machine.
     seen = set()
 
     with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as zf:
-        for rel in sorted(set(staged)):
-            src = REPO_ROOT / rel
-            if not src.is_file() or rel.as_posix() in seen:
-                continue
-            seen.add(rel.as_posix())
-            if is_rewritable(rel.as_posix()):
-                text = src.read_text(encoding="utf-8", errors="surrogateescape")
-                new = rewrite_text(text, mapping, depth=len(rel.parts) - 1)
-                if new != text:
-                    rewritten += 1
-                zf.writestr(str(rel.as_posix()), new.encode("utf-8", "surrogateescape"))
-            else:
-                zf.write(src, rel.as_posix())
+        sink = ZipSink(zf)
+        rewritten = stage_files(sorted(set(staged)), mapping, sink, seen)
 
         # Launchers and end-user docs.
         for tmpl in sorted(BUNDLE_TEMPLATES.iterdir()):
@@ -538,16 +623,15 @@ def cmd_bundle(manifest, args):
 
         # Licenses ship unconditionally -- the bundle is a redistribution, and
         # several of these licenses are satisfied precisely by carrying the notice
-        # with the files. Included explicitly rather than via tracked_files() so a
-        # not-yet-committed LICENSE can never be silently dropped.
+        # with the files (see license_files).
         licenses = REPO_ROOT / "lib" / "LICENSES.txt"
         if not licenses.is_file():
             fail("lib/LICENSES.txt is missing -- the bundle needs it")
-        for path in sorted((REPO_ROOT / "lib").rglob("LICENSE*")):
-            name = path.relative_to(REPO_ROOT).as_posix()
-            if path.is_file() and name not in seen:
+        for path in license_files():
+            name = path.as_posix()
+            if name not in seen:
                 seen.add(name)
-                zf.write(path, name)
+                sink.add_file(name, REPO_ROOT / path)
 
     log("rewrote CDN URLs in %d files" % rewritten)
     log("wrote %s (%.1f MB)" % (out_zip, out_zip.stat().st_size / 1e6))

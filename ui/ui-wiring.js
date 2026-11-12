@@ -121,6 +121,7 @@ import {
     nameExists, countNulledByCamera, deleteTrackAt, deleteIdentityAt,
 } from './track-identity-ops.js';
 import { setSessionRotation } from './video-filters.js';
+import { askText } from './ask.js';
 
 // ============================================
 // Rename Track / Identity modal
@@ -1259,17 +1260,26 @@ export function setupMenus() {
     // (assignTrackToSelected / assignIdentityToSelected) remain exported from
     // ui/identity-assignment.js.
 
-    document.getElementById('menuSwapTracks').addEventListener('click', function () {
+    // Four questions through `askText` (ui/ask.js): native prompt() in a
+    // browser, an in-app text modal in the desktop app (where prompt() returns
+    // null at once). Async, so the session is re-checked after each answer.
+    document.getElementById('menuSwapTracks').addEventListener('click', async function () {
         closeMenus();
         if (!state.session || state.session.tracks.length < 2) { setStatus('Need at least 2 tracks', 'warning'); return; }
-        var trackList = state.session.tracks.map(function (t, i) { return (i + 1) + '. ' + t; }).join('\n');
-        var a = parseInt(prompt('Swap track A?\n\n' + trackList + '\n\nEnter number:')) - 1;
+        var sess = state.session;
+        var trackList = sess.tracks.map(function (t, i) { return (i + 1) + '. ' + t; }).join('\n');
+        var swapOpts = { title: 'Swap Tracks' };
+        var a = parseInt(await askText('Swap track A?\n\n' + trackList + '\n\nEnter number:', undefined, swapOpts)) - 1;
+        if (state.session !== sess) return;
         if (isNaN(a) || a < 0 || a >= state.session.tracks.length) return;
-        var b = parseInt(prompt('Swap with track B?\n\n' + trackList + '\n\nEnter number:')) - 1;
+        var b = parseInt(await askText('Swap with track B?\n\n' + trackList + '\n\nEnter number:', undefined, swapOpts)) - 1;
+        if (state.session !== sess) return;
         if (isNaN(b) || b < 0 || b >= state.session.tracks.length || b === a) return;
 
-        var frameStart = parseInt(prompt('Start frame (1-indexed):', state.currentFrame + 1)) - 1;
-        var frameEnd = parseInt(prompt('End frame (1-indexed, or 0 for all):', 0)) - 1;
+        var frameStart = parseInt(await askText('Start frame (1-indexed):', state.currentFrame + 1, swapOpts)) - 1;
+        if (state.session !== sess) return;
+        var frameEnd = parseInt(await askText('End frame (1-indexed, or 0 for all):', 0, swapOpts)) - 1;
+        if (state.session !== sess) return;
         if (frameEnd < 0) frameEnd = state.totalFrames;
 
         var count = swapTracks(a, b, frameStart, frameEnd);
@@ -1483,12 +1493,19 @@ export function setupMenus() {
         closeMenus();
         if (videoController) videoController.toggleNativeResolution();
     });
+    // Also on mouseenter, like the Node Trails submenu: that is the "about to
+    // open" cue the desktop app's native menu bar gives before it reads the
+    // menus (src-tauri/js/lucid-desktop.js), since a native menu opening is
+    // invisible to the page.
     var viewMenuEl = document.querySelector('.menu-item[data-menu="view"]');
     if (viewMenuEl) {
-        viewMenuEl.addEventListener('click', function () {
+        var refreshNativeResolutionCheck = function () {
             var check = document.querySelector('#menuNativeResolution .trail-check');
-            if (check) check.textContent = (videoController && videoController.nativeResolutionActive()) ? '✓' : '';
-        });
+            var on = (videoController && videoController.nativeResolutionActive()) ? '✓' : '';
+            if (check && check.textContent !== on) check.textContent = on;
+        };
+        viewMenuEl.addEventListener('click', refreshNativeResolutionCheck);
+        viewMenuEl.addEventListener('mouseenter', refreshNativeResolutionCheck);
     }
 
     document.getElementById('menuResetView').addEventListener('click', function () {
@@ -1630,6 +1647,14 @@ export function setupMenus() {
     document.getElementById('menuLoadSkeletonMenu').addEventListener('click', function () {
         closeMenus();
         document.getElementById('btnLoadSkeleton').click();
+    });
+
+    // View > Connect Window...: the SLEAP Connect window (ui/connect/connect-window.js), loaded on first use.
+    document.getElementById('menuConnectWindow').addEventListener('click', function () {
+        closeMenus();
+        import('./connect/index.js').then(function (m) { m.openConnectWindow(); }).catch(function (err) {
+            console.warn('[connect] could not open the Connect window:', err);
+        });
     });
 
     document.getElementById('menuHotkeys').addEventListener('click', showHotkeysHelp);

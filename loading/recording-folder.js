@@ -11,10 +11,13 @@
  * (`session._recordingFolder`, in memory only: never written to the `.slp`).
  * `saveStartFolder` hands it to the save picker as `startIn`.
  *
- * Browsers without `showDirectoryPicker` (Firefox, Safari, Brave with the File
- * System Access API off, Playwright's headless shell) still pick through
+ * Browsers without a READABLE `showDirectoryPicker` (Firefox, Safari, Brave with
+ * the File System Access API off, Playwright's headless shell, the desktop app's
+ * WebKit webviews) still pick through
  * `<input webkitdirectory>`, and Save opens where the browser chooses.
  */
+
+import { canReadDirectoryHandles } from '../ui/browser-hints.js';
 
 /** The folder loaders' own picker memory: the next recording is usually beside the last one. */
 export var RECORDING_FOLDER_PICKER_ID = 'lucid-recording-folder';
@@ -51,7 +54,9 @@ export async function enumerateDirectoryHandle(dirHandle, rootName, prefix) {
  * the picker path, as a person's browser does.
  */
 function useDirectoryPicker() {
-    if (typeof window === 'undefined' || typeof window.showDirectoryPicker !== 'function') return false;
+    // `canReadDirectoryHandles`, not `typeof showDirectoryPicker`: the desktop
+    // app's WebKit webviews have a WRITE-only polyfill whose handles give no Files.
+    if (typeof window === 'undefined' || !canReadDirectoryHandles()) return false;
     var automated = typeof navigator !== 'undefined' && navigator.webdriver === true;
     if (!automated) return true;
     try {

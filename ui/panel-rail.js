@@ -35,6 +35,11 @@
  * `<section class="panel-section" data-tab>` holding its header; the pane
  * keeps its id and markup, and carries `.active` while its body is on screen.
  *
+ * A panel that only exists in some builds (the desktop app's Inference
+ * panel) adds itself after setup with `registerPanelRailPanel`: it goes at
+ * the end of the rail and the stack, and its remembered open/folded state is
+ * restored then (setup keeps the ids it does not know yet in what it stores, `_later`, until they register).
+ *
  * Imports only the icon strings; `toggleInfoPanel` is handed in by
  * `setupPanelRail` (it lives in `ui/ui-wiring.js`, which would close a cycle
  * for `ui/id-switch-modal.js` and `ui/plane-definition.js`).
@@ -88,9 +93,20 @@ function isExpanded(tabId) {
     return _open.indexOf(tabId) !== -1 && _folded.indexOf(tabId) === -1;
 }
 
+/**
+ * Stored ids of panels registered after setup (Inference, Connect) that have not
+ * arrived yet: kept in what `persist` writes, or the first repaint at startup
+ * would wipe their remembered open/folded state before they register.
+ */
+let _later = { open: [], folded: [] };
+
 function persist() {
     try {
-        localStorage.setItem(PANEL_RAIL_STORAGE_KEY, JSON.stringify({ open: _open, folded: _folded }));
+        const notYet = function (t) { return !isKnownTab(t); };
+        localStorage.setItem(PANEL_RAIL_STORAGE_KEY, JSON.stringify({
+            open: _open.concat(_later.open.filter(notYet)),
+            folded: _folded.concat(_later.folded.filter(notYet)),
+        }));
     } catch (e) { /* best effort */ }
 }
 
@@ -285,7 +301,38 @@ function buildSection(p) {
     section.appendChild(pane);
 }
 
-function readStored() {
+/**
+ * Add a panel after `setupPanelRail` (the desktop Inference panel). `p` is
+ * `{tab, label, icon}`; `pane` is its `.panel-tab-content` element (id = tab),
+ * appended after the last pane. Idempotent per tab id. Returns false when the
+ * rail is not set up.
+ */
+export function registerPanelRailPanel(p, pane) {
+    if (!_rail || !p || !pane || isKnownTab(p.tab)) return false;
+    const inner = _rail.querySelector('.panel-rail-inner');
+    const last = document.getElementById(PANEL_RAIL_PANELS[PANEL_RAIL_PANELS.length - 1].tab);
+    const lastSection = last ? last.closest('.panel-section') : null;
+    if (!inner || !lastSection) return false;
+    pane.id = p.tab;
+    pane.classList.add('panel-tab-content');
+    lastSection.parentNode.insertBefore(pane, lastSection.nextSibling);
+    PANEL_RAIL_PANELS.push({ tab: p.tab, label: p.label, icon: p.icon });
+    buildSection(p);
+    const btn = buildButton('panel-rail-tab', p.icon, p.label);
+    btn.setAttribute('data-tab', p.tab);
+    btn.setAttribute('aria-controls', p.tab);
+    btn.addEventListener('click', function () { clickPanelRailTab(p.tab); });
+    inner.appendChild(btn);
+    const stored = readStored();
+    if (stored && stored.open.indexOf(p.tab) !== -1 && _open.indexOf(p.tab) === -1) {
+        _open.push(p.tab);
+        if (stored.folded.indexOf(p.tab) !== -1) _folded.push(p.tab);
+    }
+    applySections();
+    return true;
+}
+
+function readStored(unfiltered) {
     let raw = null;
     try { raw = localStorage.getItem(PANEL_RAIL_STORAGE_KEY); } catch (e) { raw = null; }
     if (!raw) return null;
@@ -293,8 +340,8 @@ function readStored() {
         const v = JSON.parse(raw);
         if (!v || !Array.isArray(v.open)) return null;
         return {
-            open: v.open.filter(isKnownTab),
-            folded: Array.isArray(v.folded) ? v.folded.filter(isKnownTab) : [],
+            open: v.open.filter(function (t) { return typeof t === 'string' && (unfiltered || isKnownTab(t)); }),
+            folded: Array.isArray(v.folded) ? v.folded.filter(function (t) { return typeof t === 'string' && (unfiltered || isKnownTab(t)); }) : [],
         };
     } catch (e) { return null; }
 }
@@ -353,6 +400,9 @@ export function setupPanelRail(opts) {
     // whether the info panel is shown. An empty stored stack is honoured only
     // while the info panel is hidden (showing it reopens the default panel).
     const stored = readStored();
+    const raw = readStored(true);
+    _later = raw ? { open: raw.open.filter(function (t) { return !isKnownTab(t); }), folded: raw.folded.filter(function (t) { return !isKnownTab(t); }) }
+        : { open: [], folded: [] };
     _open = stored ? stored.open : DEFAULT_OPEN.slice();
     _folded = stored ? stored.folded : [];
     if (_open.length === 0 && !isInfoPanelCollapsed()) { _open = DEFAULT_OPEN.slice(); _folded = []; }

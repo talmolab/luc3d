@@ -1,0 +1,78 @@
+[package]
+name = "luc3d"
+version = "1.0.5"
+description = "luc3d (LUCID) - desktop shell"
+authors = ["talmolab"]
+repository = "https://github.com/talmolab/luc3d"
+edition = "2021"
+rust-version = "1.91"
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = []
+# The sleap-nn training/inference seam (spawning a local Python / uv process
+# and streaming its output, arguments allowlisted in sleap_nn_args.rs). Off by
+# default (`cargo build`, `tauri dev`); CI's installer builds turn it on
+# (desktop.yml) for the Inference panel. Without it the commands stay
+# registered and answer Err("SLEAP_NN_NOT_IN_THIS_BUILD").
+sleap-nn = []
+
+[build-dependencies]
+tauri-build = { version = "2.6", features = [] }
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# `dynamic-acl` enables Manager::add_capability, used to grant the
+# http://localhost:<port> origin its capability at runtime (the port is only
+# known at launch; see lib.rs).
+tauri = { version = "2.11", features = ["dynamic-acl"] }
+tauri-plugin-dialog = "2.7"
+# Serves the frontend from a real http://localhost origin in release builds
+# (secure context, Cache API, stable origin for localStorage).
+tauri-plugin-localhost = "2.3"
+# Same crate tauri uses to resolve app_config_dir(); needed before the app
+# exists, to read the persisted localhost port.
+dirs = "6"
+# In-app updates (updates.rs): signed bundles from GitHub Releases. Called only
+# from Rust through the `lucid` plugin, so no updater:* permission is granted.
+tauri-plugin-updater = "2.10"
+# Release-tag versions for the stable/latest channel resolver (updates.rs).
+semver = "1"
+# The GitHub releases API call of that resolver. Already in the graph through
+# tauri-plugin-updater; default features stay OFF (they would add http2/3 and
+# a second TLS backend).
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+# reqwest's rustls needs a process-wide CryptoProvider before the first TLS
+# handshake (lib.rs installs ring's). Only "ring": the default "aws_lc_rs"
+# needs cmake.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+
+# iroh_client.rs: the dial-only QUIC transport to a sleap-connect worker (same
+# version as sleap-app, pinned exactly: its Cargo.lock resolves 1.3.0). The page runs the protocol; this is only the byte pipe.
+iroh = "=1.3.0"
+# iroh_client.rs: base64url node ids; tokio for the reader task, timeouts and
+# its tests (tauri already brings the runtime itself).
+base64 = "0.22"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
+
+[target.'cfg(unix)'.dependencies]
+# sysctlbyname (macOS total memory).
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# input_paths.rs: wrap wry's file-input dialog to learn the picked paths.
+# Same versions wry already uses.
+objc2 = "0.6"
+block2 = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+# GlobalMemoryStatusEx (total memory). Already in tauri's dependency graph.
+windows-sys = { version = "0.60", features = ["Win32_System_SystemInformation"] }
+
+[profile.release]
+# Debug symbols are not shipped.
+strip = true
