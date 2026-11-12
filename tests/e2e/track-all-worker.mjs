@@ -21,6 +21,8 @@
  *     so commit promotes it: worker == inline, including what was promoted.
  *  3. Track Frame Range on the lazy project (the identity-pool path):
  *     worker == inline.
+ *  1b. With the flicker fix's soft gate + hold bonus on: worker == inline, and
+ *     the result differs from the same run without them.
  *  4. Negative control: the same comparison DOES see a difference when ONE
  *     keypoint of one detection is moved by 1e-9 px — so (1)-(3) are not
  *     comparing digests that cannot differ, and a last-bit change in the 3D
@@ -211,6 +213,25 @@ try {
     check(lazy.w.workers === 1 && lazy.i.workers === 0, `…on one tracker worker, and inline on none (${lazy.w.workers} / ${lazy.i.workers})`);
     check(lazy.w.groups > 10000 && lazy.w.identities >= 3, `…with real work to compare: ${lazy.w.groups.toLocaleString('en-US')} groups, ${lazy.w.identities} identities`);
     check(compare('lazy', lazy.w, lazy.i), `worker == inline, bit for bit: identities, per-frame identities, groups, members, 3D (${lazy.w.text.length.toLocaleString('en-US')} chars)`);
+
+    // ---- 1b. the flicker fix's settings on (soft gate + hold bonus): still worker == inline,
+    // and NOT the result without them — so they reach the worker as well as the inline tracker.
+    // The scene is in millimetres a few apart, so at the default 25 mm distance threshold nearly
+    // every match scores positive and neither setting has anything to refuse or hold; 2 mm gives
+    // them real decisions (and the comparison run uses the same 2 mm without them).
+    const flick = await page.evaluate(async () => {
+        const TR = await import('/pose/tracker.js');
+        const sc = await window.__scene(5000, 20261012);
+        const off = { distanceThreshold: 2 }, on = { distanceThreshold: 2, softGate: 20, holdBonus: 30 };
+        const w = await window.__track(sc, 'lazy', true, () => TR.trackAll(), on);
+        const i = await window.__track(sc, 'lazy', false, () => TR.trackAll(), on);
+        const d = await window.__track(sc, 'lazy', true, () => TR.trackAll(), off);
+        const a = w.text.split('\n'), b = d.text.split('\n');
+        return { w, i, differ: a.filter((l, j) => l !== b[j]).length };
+    });
+    check(flick.w.ok && flick.i.ok && flick.w.workers === 1 && flick.i.workers === 0, 'soft gate 20 + hold bonus 30: Track All ran on the worker and inline');
+    check(flick.differ > 0, `…and the settings change the result (${flick.differ.toLocaleString('en-US')} lines differ from the same run without them)`);
+    check(compare('flicker', flick.w, flick.i), '…worker == inline, bit for bit');
 
     // ---- 2. eager, unlinked pool
     const eager = await page.evaluate(async () => {
