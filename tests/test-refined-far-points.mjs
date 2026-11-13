@@ -112,9 +112,10 @@ group('parallelSlide: every view in front and unfolded; Refined slid to 36 m off
 group('behindAll: DLT behind both cameras; Refined went 51 m further behind');
 {
     const c = FIX.cases.behindAll;
-    const dlt = solve(c.obs, 'dlt'), ba = solve(c.obs, 'ba');
+    // The seed as Refined gets it (the DLT method itself may refuse a point behind every camera).
+    const { seed } = refineDirect(c.obs, {}), ba = solve(c.obs, 'ba');
     const used = cams.filter((_, i) => c.obs[i]);
-    ok(used.length === 2 && used.every(cam => depth(dlt.X, cam) < 0), 'seed behind both cameras');
+    ok(used.length === 2 && used.every(cam => depth(seed, cam) < 0), 'seed behind both cameras');
     ok(ba.X.every(v => Number.isNaN(v)), 'Refined gives no answer (no real point is behind both cameras)');
 }
 
