@@ -12,16 +12,16 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, hasPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=fcf602995547';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=fcf602995547';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=fcf602995547';
-import { createProgressPacer } from '../ui/loading-overlay.js?v=fcf602995547';
+         toBoxedPoints3d, hasPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=752949790d7e';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=752949790d7e';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=752949790d7e';
+import { createProgressPacer } from '../ui/loading-overlay.js?v=752949790d7e';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=fcf602995547';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=fcf602995547';
-import { writePlaneMetadata } from './plane-metadata.js?v=fcf602995547';
-import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=fcf602995547';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=752949790d7e';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=752949790d7e';
+import { writePlaneMetadata } from './plane-metadata.js?v=752949790d7e';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=752949790d7e';
 
 // ============================================
 // Generic file picker
@@ -2628,7 +2628,7 @@ var ROWS_WORKER_QUEUE = 8;
  * every pending and later call.
  */
 function _startRowsWorker(shell) {
-    var w = new Worker(new URL('import-export/slp-rows-worker.js?v=fcf602995547', document.baseURI), { type: 'module' });
+    var w = new Worker(new URL('import-export/slp-rows-worker.js?v=752949790d7e', document.baseURI), { type: 'module' });
     var h = { failed: null, inFlight: 0, waiters: [] };
     var readyFns, doneFns;
     h.ready = new Promise(function (res, rej) { readyFns = [res, rej]; });
@@ -3995,7 +3995,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=fcf602995547', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=752949790d7e', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },
