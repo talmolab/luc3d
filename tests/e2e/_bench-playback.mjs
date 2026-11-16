@@ -135,6 +135,9 @@
  *                            class of this repo-relative module (e.g. main's
  *                            ui/timeline.js copied into ui/) and compare its
  *                            rows with the live code's, value for value
+ *     OPEN_PANELS=tabVideos  info-panel sections to open (expanded) at boot, by
+ *                            pane id (ui/panel-rail.js PANEL_RAIL_PANELS), e.g.
+ *                            to time a run with the Videos table on screen
  *     DIAG_JS=<file>         after prep, run the file's code in the page (an async
  *                            function body) and save its return value to diag.json
  *     GC_REPS=3              forced full GCs per measurement (median and min reported)
@@ -352,6 +355,14 @@ try {
         hevc: (document.createElement('video').canPlayType('video/mp4; codecs="hvc1.1.6.L120.90"') || 'no'),
     }));
     log(`[${el()}] app booted: ${JSON.stringify(summary.env)}`);
+    if (process.env.OPEN_PANELS) {
+        const open = await page.evaluate(async (ids) => {
+            const rail = await import('/ui/panel-rail.js');
+            for (const id of ids) rail.showPanelTab(id);
+            return rail.getOpenPanelTabs();
+        }, process.env.OPEN_PANELS.split(',').map(x => x.trim()).filter(Boolean));
+        log(`[${el()}] info-panel sections: ${JSON.stringify(open)}`);
+    }
 
     // ---------------------------------------------------------------------
     // LOAD the per-camera folder, disk-backed.

@@ -17,6 +17,7 @@ import { confirmSkeletonEdit, isSkeletonEditWarningSuppressed,
          setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js';
 import { refreshIdSwitchPanel } from './id-switch-modal.js';
 import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js';
+import { videoTableCounts } from './video-table-counts.js';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
          setProjectSkeleton, getProjectSkeleton } from './app-state.js';
 import { setStatus, markDirty } from '../import-export/save-load.js';
@@ -259,6 +260,15 @@ export function setupVideosTab() {
 
     btnLoad.addEventListener('click', function () { handleLoadVideos(); });
 
+    // The counts skipped while the Videos section was folded or closed are
+    // made when it opens (the rail toggles `.active` on the pane).
+    const pane = document.getElementById('tabVideos');
+    if (pane && typeof MutationObserver !== 'undefined') {
+        new MutationObserver(function () {
+            if (videoCountsStale && isVideosSectionShown()) populateVideosTable();
+        }).observe(pane, { attributes: true, attributeFilter: ['class'] });
+    }
+
     btnRemove.addEventListener('click', function () {
         if (!selectedVideoFile) return;
         var name = selectedVideoFile.assignedCamera || selectedVideoFile.name;
@@ -269,6 +279,23 @@ export function setupVideosTab() {
         // `removeVideoFile` repaints the panel, which clears the selection.
         setStatus('Removed video: ' + name, 'success');
     });
+}
+
+// True while the table's Labeled / Groups / Score cells were left empty
+// because the Videos section was not on screen (`populateVideosTable`).
+let videoCountsStale = false;
+const NO_VIDEO_COUNTS = { labeled: 0, groups: 0, scoreSum: 0, scoreCount: 0 };
+
+/**
+ * Is the Videos section's body on screen: the info panel shown and the pane
+ * expanded in the rail's stack (`.active`, ui/panel-rail.js)? A pane outside
+ * any rail section (no `.panel-section`) counts as shown.
+ */
+function isVideosSectionShown() {
+    if (!isInfoPanelVisible()) return false;
+    const pane = document.getElementById('tabVideos');
+    if (!pane) return true;
+    return !pane.closest('.panel-section') || pane.classList.contains('active');
 }
 
 export function populateVideosTable() {
@@ -303,19 +330,14 @@ export function populateVideosTable() {
     document.getElementById('videosTable').style.display = '';
     empty.style.display = 'none';
 
-    // Groups per camera, in ONE pass over the groups: counting them per video
-    // row walked every group once per video (8 x 539,852 lookups, ~0.5 s, at
-    // the end of a Triangulate All on the 8-camera project).
-    const groupsByCam = new Map();
-    if (state.session) {
-        for (const [, groups] of state.session.instanceGroups) {
-            for (const g of groups) {
-                for (const [cam, inst] of g.instances) {
-                    if (inst) groupsByCam.set(cam, (groupsByCam.get(cam) || 0) + 1);
-                }
-            }
-        }
-    }
+    // The per-camera counts read every frame and every group member (~0.5 M
+    // groups on an 8-camera, 108,000-frame project), so they are made only
+    // while the section is on screen; otherwise their cells stay empty and
+    // the section's opening fills them (`setupVideosTab`). One pass for all
+    // the rows (`videoTableCounts`), not one per video.
+    const showCounts = isVideosSectionShown();
+    videoCountsStale = !showCounts;
+    const counts = showCounts ? videoTableCounts(state.session) : null;
 
     videoList.forEach(function (vf, i) {
         const tr = document.createElement('tr');
@@ -347,38 +369,21 @@ export function populateVideosTable() {
         tdSize.className = 'mono';
         tdSize.textContent = vf.videoWidth + 'x' + vf.videoHeight;
 
-        // Labeled frames count - search using camera name (assignedCamera or name)
+        // Counts by camera name (assignedCamera or name)
         var camName = vf.assignedCamera || vf.name;
-        let labelCount = 0;
-        let groupCount = 0;
-        let scoreSum = 0;
-        let scoreCount = 0;
-        if (state.session) {
-            for (const [frameIdx, fg] of state.session.frameGroups) {
-                const instances = fg.getInstances(camName);
-                const unlinked = fg.getUnlinkedInstances(camName);
-                if (instances.length > 0 || unlinked.length > 0) labelCount++;
-                for (let j = 0; j < instances.length; j++) {
-                    if (instances[j].score > 0) {
-                        scoreSum += instances[j].score;
-                        scoreCount++;
-                    }
-                }
-            }
-            groupCount = groupsByCam.get(camName) || 0;
-        }
+        const c = counts ? (counts.get(camName) || NO_VIDEO_COUNTS) : null;
 
         const tdLabeled = document.createElement('td');
         tdLabeled.className = 'mono';
-        tdLabeled.textContent = labelCount;
+        tdLabeled.textContent = c ? c.labeled : '';
 
         const tdGroups = document.createElement('td');
         tdGroups.className = 'mono';
-        tdGroups.textContent = groupCount;
+        tdGroups.textContent = c ? c.groups : '';
 
         const tdScore = document.createElement('td');
         tdScore.className = 'mono';
-        tdScore.textContent = scoreCount > 0 ? (scoreSum / scoreCount).toFixed(2) : '-';
+        tdScore.textContent = !c ? '' : c.scoreCount > 0 ? (c.scoreSum / c.scoreCount).toFixed(2) : '-';
 
         tr.appendChild(tdName);
         tr.appendChild(tdPath);
@@ -1025,7 +1030,8 @@ export function exportSkeletonJSON(skeleton) {
 
 export function updateInfoPanel() {
     // Collapsed panel: skip the whole rebuild. This is not a cheap refresh —
-    // `populateVideosTable` walks every frame of the session per video row,
+    // `populateVideosTable` walks every frame and group member (while the
+    // Videos section is open),
     // and `updateFrameInfo` below rebuilds the instance/reprojection tables
     // with a fresh <select> per row. All of it is a stateless full rebuild
     // from `state`, so one call from `refreshInfoPanelAfterShow` (ui-wiring)
