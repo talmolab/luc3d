@@ -1329,7 +1329,11 @@ camera index, 17 of `trackIdx + 1` (so the `-1` untracked sentinel packs as 0),
 Every read/write goes through `Session` so the layout lives in one place:
 `setFrameIdentity`, `getFrameIdentityValue`, `hasFrameIdentity`,
 `deleteFrameIdentity`, and `frameIdentityEntries()` (a generator of decoded
-`{frameIdx, camName, trackIdx, identityId, key}` records). **Do not index
+`{frameIdx, camName, trackIdx, identityId, key}` records).
+`forEachFrameIdentity(cb)` visits the same records in the same order as
+`cb(frameIdx, camName, trackIdx, identityId)` without allocating per entry
+(through `FrameIdentityMap.forEachKeyValue(cb)`, which skips the iterators'
+`[k, v]` arrays): for whole-map scans in one task, like the ID timeline's. **Do not index
 `frameIdentityMap` directly**; a raw `"frame:cam:track"` string will simply miss.
 
 Tuples that cannot be packed (trackIdx > 131070, or a camera absent from
@@ -2908,6 +2912,14 @@ loader it runs `sweepTriangulateAllFrames` over `sweepLazyFrameWindows`. Without
 hydration a reopened project's group members are null-filled placeholders and
 almost every group is skipped. `loadAllLazyFrames` is deliberately NOT used —
 that is the OOM the memory work exists to prevent.
+
+**The timeline's track rows are rebuilt in their own task.** Both Triangulate
+All paths end by rebuilding the timeline's rows (`refreshTracks`), which walks
+every group of the project (~0.2 s on 539,852 groups). They `await
+yieldToPaint()` first, so the results (overlays, 3D, status) paint and the
+run's tail and the rebuild are two tasks, not one (937 ms on the 108,000-frame
+project before; 102 + 210 ms after, Refined). `triangulateCurrentFrame` rebuilds
+once, through `updateTimelineForFrame` (it used to rebuild a second time).
 
 **Neither Triangulate All path keeps derived state.** Both clear every group's
 reprojections and `state.triangulationResults` up front
@@ -10406,6 +10418,29 @@ frames the live `fg.instances` win. Rows **cap** at `MAX_TRACK_ROWS_PER_CAMERA`
 in track-index order, plus a label-only `+N more` row; `counts` does not drive
 the cap. Covered by `tests/test-timeline-sparse-occupancy.js`.
 
+**The row builds are one pass, kept as runs.** `refreshTracks` runs after
+every whole-project run (Track All, Triangulate All, ...) in one task, over
+every group member (539,852 groups x 8 cameras on the 108,000-frame project)
+and, in Identities / Both mode, every `frameIdentityMap` entry (~4.2M). So both
+builders touch each member or entry once, with a camera lookup and a run
+update: each (camera, track) and (camera, identity) row is a `_FrameRuns`
+(module-private) that extends or closes its current run as frames arrive in
+order and keeps out-of-order frames (resident frames, walked after the groups)
+in a typed side buffer folded in at the end. Never a string key or a `Set`
+entry per member, never a segment object per frame: merging with occupancy is
+run list with run list (`mergeRunLists`). The group walk uses `Map.forEach`,
+not `for...of` with destructuring (that allocated a pair per member: ~400 MB
+of short-lived garbage per build). Pass 2 of `_buildIdentitySegments` walks
+the map with `Session.forEachFrameIdentity` (no record object per entry;
+falls back to `frameIdentityEntries()` on a session without it). The rows are
+the ones the Set-based builders made, with one fix: a resident instance with
+a `null` `trackIdx` used to put a NaN into the track sort, which could list a
+camera's tracks out of order. Covered by `tests/test-timeline-track-segments.mjs`
+(random sessions against a plain Set-based reference, each member read once);
+real project: `tests/e2e/_bench-playback.mjs` `TIMELINE_PROBE=1`
+(`TIMELINE_REF` builds the rows with another `ui/timeline.js`, e.g. main's,
+and compares them row for row).
+
 **ID Timeline and TRACKLESS ungrouped instances.** Pass 1 of
 `_buildIdentitySegments` resolves each unlinked row with
 `session.getIdentityIdForUnlinkedInstance(cam, instance, frameIdx)`, not the
@@ -10423,8 +10458,8 @@ Test: `tests/test-timeline-tree-grouping.js`. The same rule applies in
 identity-mode counterpart to `_buildTrackSegments`) cannot rely on
 `session.frameGroups` alone: on a lazy project it holds only resident frames.
 Two passes: pass 1 scans `frameGroups` and is AUTHORITATIVE for the frames it
-covers; pass 2 falls back to `session.frameIdentityEntries()` (the
-`FrameIdentityMap`, `pose/pose-data.js`) for every other frame. No caching —
+covers; pass 2 falls back to the `FrameIdentityMap` (`pose/pose-data.js`,
+read with `session.forEachFrameIdentity`) for every other frame. No caching —
 it re-runs on every `setDisplayMode`/`setData`/`refreshTracks`.
 `frameIdentityMap` is the right fallback (not `instanceGroups` +
 `trackOccupancy`): it covers the WHOLE tracked range, is never evicted, is
@@ -11716,7 +11751,9 @@ and identities use private helpers taking `kind = 'track' | 'identity'`, sharing
   FIRST (a stale `selectedInstanceGroup` would point at a deleted object, and
   `viewport3d.selectedInstanceIdx` is positional), runs `executeDeletion`, then
   `purgeTriangulationDataForGroup` over `purgedGroups` (the ops module is
-  import-free), and reports the **durable** store-row count, surfacing
+  import-free), sets each touched frame's "modified" tick and rebuilds the
+  timeline's rows ONCE (not `updateTimelineForFrame` per frame: each call is a
+  whole-project rebuild), and reports the **durable** store-row count, surfacing
   `errorRows` as a warning. All logic is in `ui/custom-delete-ops.js`. No
   shortcut (as in SLEAP), so no catalog entry. Deliberately does NOT copy
   SLEAP's `labels.clean()` cascade (pruning unused tracks/skeletons) — data

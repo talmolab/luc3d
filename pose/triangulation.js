@@ -2573,8 +2573,8 @@ export function triangulateCurrentFrame(method) {
 
     // Update timeline: mark frame only if it has grouped UserInstances,
     // then re-apply the 30% cap (triangulation can add track rows).
+    // (updateTimelineForFrame already rebuilds the track rows, capped.)
     updateTimelineForFrame(frameIdx);
-    if (timeline) timeline.refreshTracks(state.session, { cap: true });
 }
 
 /**
@@ -3068,7 +3068,12 @@ export async function triangulateAllFrames(method) {
             ' groups, avg error: ' + sweptAvg + 'px)' + (reprojOnly ? REPROJ_ONLY_NOTE : ''), 'success');
         console.log('[triangulate-all] windowed sweep done:', swept.frames, 'frames,',
             swept.groups, 'groups,', swept.skipped, 'groups skipped (<2 usable views), avg error:', sweptAvg);
-        if (timeline) timeline.refreshTracks(state.session, { cap: true });
+        // The track rows walk every group of the project (~0.2 s on 540k
+        // groups): their own task, after the results above have painted.
+        if (timeline) {
+            await yieldToPaint();
+            timeline.refreshTracks(state.session, { cap: true });
+        }
         return;
     }
 
@@ -3200,8 +3205,11 @@ export async function triangulateAllFrames(method) {
         ' (' + totalGroups.toLocaleString('en-US') + ' groups, avg error: ' + avgError + 'px)' + (reprojOnly ? REPROJ_ONLY_NOTE : ''), 'success');
     console.log('[triangulate-all] Done:', totalTriangulated, 'frames,', totalGroups, 'groups, avg error:', avgError);
 
-    // Update timeline: mark frames with grouped UserInstances, refresh track bars
+    // Update timeline: mark frames with grouped UserInstances, refresh track
+    // bars. The rebuild walks every group of the project: its own task, after
+    // the results above have painted.
     if (timeline) {
+        await yieldToPaint();
         for (var tfi = 0; tfi < triangulatedFrames.length; tfi++) {
             timeline.setFrameModified(triangulatedFrames[tfi], frameHasGroupedUserInstances(triangulatedFrames[tfi]));
         }
