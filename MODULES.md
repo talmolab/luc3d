@@ -9682,7 +9682,8 @@ any version bump.
 `pose/id-switch-check.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`),
 `pose/embedding-cache.js` (`EmbeddingCache`, `cropKeyHash`),
 `ui/image-model-package.js` (`installModelPackageFetch`, `withPackageCachePolicy`,
-`modelPackageTransfer`),
+`modelPackageTransfer`, `checkCachedPackageFiles` — `createCpuModelPool` checks a URL
+package's cached files once before its workers start),
 `pose/lazy-residency.js` (`hydrateFrameMembers2d`, `releaseFrameMembers2d` — DOM-free,
 so the crop worker can load it), `ui/load-graph.js` (`createLoadMeter`,
 `createBusyClock`, `formatCpuLoad`, `LOAD_WINDOW_MS`); `mediabunny`
@@ -9812,6 +9813,26 @@ skipped; `fp16: true` without its file falls back to fp32.
 (http only on localhost); only the manifest is fetched up front, the weights on
 first use, cached by the browser like the built-in model.
 
+**A URL package's files are checked against its manifest.** Every file the
+manifest lists a `sha256` for is hashed as it downloads (`verifiedResponse`, in
+the fetch hook below; the page and each CPU worker, which gets the hashes in
+`modelPackageTransfer`): the bytes pass through unchanged, so transformers.js's
+progress still counts them, and a mismatch ERRORS the stream at its end. The load
+then fails with `hashMismatchMessage(path, base)` ("… does not match the SHA-256 in
+lucid-model.json …"), and nothing is cached — transformers.js caches a file only
+once it has read all of it. Chrome reports any stream error from
+`Response.arrayBuffer()` (the read without a progress callback, e.g. WebNN) as a
+bare "Failed to fetch", so the checked Response's `arrayBuffer` rethrows the
+mismatch itself. A Range read (206), an error status and a bodiless response pass
+as they are. A cache hit never goes through `env.fetch`, so a copy already in
+Cache Storage (cached before this check existed, under the package's
+`packageCacheUrl`) is checked by `checkCachedPackageFiles(T|null, pkg)` once per
+page before a load — in `withPackageCachePolicy` on the page, and in
+`createCpuModelPool` before the workers start (they share the cache, so they do
+not repeat it) — and a wrong copy is deleted, so the load downloads it again,
+checked. A manifest without hashes cannot be checked (its key is tied to its URL
+and text instead).
+
 **Key.** SHA-256 of `modelKeyMaterial` (input, crop, fp16 and every weight file's
 hash). The same weights from a folder or a URL whose manifest lists their hashes get
 the SAME key; a URL manifest without hashes is keyed to its URL and manifest text.
@@ -9829,7 +9850,9 @@ package loads, or it would copy the in-memory files into Cache Storage under the
 made-up URL.
 
 **Other exports.** `registeredModelPackage(key)`, `registeredModelPackages()`,
-`clearModelPackages()` (tests), `packageFileOf(url)`, `PACKAGE_REPO_PREFIX`,
+`clearModelPackages()` (tests), `packageFileOf(url)`, `verifiedResponse(resp,
+expected, path, base)`, `hashMismatchMessage(path, base)`, `packageCacheUrl(T|null,
+repo, path)`, `checkCachedPackageFiles(T|null, pkg)` -> the paths deleted, `PACKAGE_REPO_PREFIX`,
 `PACKAGE_CROP` (= `CROP`; kept here so this module imports no UI).
 
 **Imports from project modules.** `pose/image-model-manifest.js`,
@@ -9839,10 +9862,13 @@ made-up URL.
 `ui/image-model-dialog.js`.
 
 **Coverage.** `tests/test-image-model-package.mjs` (loading, keys, refusals, the
-fetch hook, the cache policy), `tests/e2e/image-model-package.mjs` (the real model
+fetch hook, the cache policy, the download and cached-copy checks with one-bit
+tampered weights), `tests/e2e/image-model-package.mjs` (the real model
 from a folder and a URL: the built-in model's vectors bit for bit on the main
 thread and in a worker, no request for the package's files, nothing in Cache
-Storage).
+Storage; §2b a server with weights one byte off the manifest is refused on the
+page and in a worker and nothing of it cached, and a wrong cached copy is
+replaced).
 
 ---
 

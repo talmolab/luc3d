@@ -57,7 +57,7 @@ import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-c
 import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js';
 import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js';
 import { EmbeddingCache, cropKeyHash, hullsReachingCrop } from '../pose/embedding-cache.js';
-import { installModelPackageFetch, withPackageCachePolicy, modelPackageTransfer } from './image-model-package.js';
+import { installModelPackageFetch, withPackageCachePolicy, modelPackageTransfer, checkCachedPackageFiles } from './image-model-package.js';
 
 // The load meter now lives in ui/load-graph.js (shared with the loading overlay); still exported from here.
 export { createLoadMeter };
@@ -323,6 +323,9 @@ export function cpuModelWorkerCount(cores, memoryGB) {
 export async function createCpuModelPool(count, onStatus, clock) {
     const SZ = 3 * INPUT * INPUT, slots = [];
     const model = { id: _active.id, revision: _active.revision || null, input: INPUT, pkg: modelPackageTransfer(_active) };
+    // a URL package's cached files are checked here, once, not by each worker (they share the cache): a wrong
+    // copy is deleted, and the workers download it again, checked as it streams (ui/image-model-package.js)
+    await checkCachedPackageFiles(null, _active);
     let nextId = 0;
     const start = function (reportProgress) {
         return new Promise(function (resolve, reject) {
