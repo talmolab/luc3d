@@ -5042,8 +5042,12 @@ Videos section is on screen (info panel shown, pane `.active` in the rail's
 stack; a pane outside any rail section counts as shown). Otherwise a rebuild
 lists the videos, leaves those three cells empty and sets `videoCountsStale`; a
 `MutationObserver` on `#tabVideos`'s class (set up in `setupVideosTab`) rebuilds
-once the section opens. The counts come from `videoTableCounts`
-(`ui/video-table-counts.js`), one pass for every row. Before: one walk of
+once the section opens. The counts come from `createVideoTableCounter`
+(`ui/video-table-counts.js`), one pass for every row, run in tasks of
+`VIDEO_COUNT_SLICE_MS` (12) by `countVideosInSlices`: the first slice runs in
+the rebuild (a small project is done there), the rest each in a `setTimeout`
+task, with the three cells showing '…' until the end. A newer rebuild
+(`videoCountJob`) or another session stops a running count. Before: one walk of
 `frameGroups` per video plus a for...of over every member, ~205 ms in the last
 task of a DLT Triangulate All on the 8-camera, 539,852-group project, with the
 section closed (only Instances is open by default). Test:
@@ -5276,7 +5280,8 @@ In-memory only; see `ui/app-state.js`.
   toggles).
 - `./interaction.js` — `isInteractiveClickTarget`.
 - `./panel-visibility.js` — `isInfoPanelVisible`, `markInfoPanelStale`.
-- `./video-table-counts.js` — `videoTableCounts` (the Videos table's counts).
+- `./video-table-counts.js` — `createVideoTableCounter` (the Videos table's
+  counts, in slices).
 - `./section-state.js` — `persistSectionState` (Skeleton ▸ Nodes / Edges,
   under the `skeletonSectionsOpen` key).
 - `./lazy-select.js` — `buildLazySelect`, behind `buildTrackSelect` (both
@@ -13947,24 +13952,33 @@ kind, renderer classes, decoder integration); real browsers via the
 
 ### ui/video-table-counts.js
 
-**Purpose.** The Videos table's per-camera counts in ONE pass over the session:
+**Purpose.** The Videos table's per-camera counts in ONE pass over the session,
+resumable in slices:
 `labeled` (frames in `frameGroups` with a linked or unlinked instance on that
 camera; resident frames only on a lazy project), `groups` (group members on
 that camera; a null member does not count), `scoreSum` / `scoreCount` (linked
 instances with a score above 0, added in the same order as the per-camera loop
 it replaced, so the mean is bit-identical). Walks with `Map.forEach` (no entry
 pairs); a member finds its camera's counter by comparing names with the slot
-after the previous member's, since members come in camera order. DOM-free and
-import-free (Node tests load it).
+after the previous member's, since members come in camera order. The pass
+(the frames, then the groups) reads each Map through an iterator kept between
+slices; the clock is read every 256 frames. Still ~165 ms in one piece on the
+8-camera, 539,852-group project (bound by reading the members from memory),
+hence the slices. DOM-free and import-free (Node tests load it).
 
-**Key exports.** `videoTableCounts(session)` → `Map<cameraName, {labeled,
-groups, scoreSum, scoreCount}>` (a camera with nothing is absent; `null`
-session → empty).
+**Key exports.**
+- `createVideoTableCounter(session)` → `{ step(budgetMs), result() }`: `step`
+  counts until the budget is spent and returns true once done; `result()` →
+  `Map<cameraName, {labeled, groups, scoreSum, scoreCount}>` (a camera with
+  nothing is absent; `null` session → empty).
+  `globalThis.__lucidVideoCountSliceFrames` (tests) makes each step count
+  exactly that many frames.
+- `videoTableCounts(session)`: the whole count at once.
 
-**Imported by.** `ui/info-panel.js` (`populateVideosTable`).
+**Imported by.** `ui/info-panel.js` (`countVideosInSlices`).
 
 **Test.** `tests/test-video-table-counts.mjs` (random eager and lazy sessions
-against the old per-camera loops).
+against the old per-camera loops; any slice size gives the one-shot result).
 
 ---
 
