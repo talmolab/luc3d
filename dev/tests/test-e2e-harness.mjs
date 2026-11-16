@@ -23,7 +23,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 let passed = 0, failed = 0;
 const check = (cond, msg, extra) => {
     if (cond) { passed++; console.log('  ok   ' + msg); }
-    else { failed++; console.log('  FAIL ' + msg + (extra !== undefined ? ' -> ' + JSON.stringify(extra) : '')); }
+    else { failed++; console.log('  ✗ FAIL ' + msg + (extra !== undefined ? ' -> ' + JSON.stringify(extra) : '')); }
 };
 const section = (t) => console.log('\n' + t);
 
@@ -81,9 +81,14 @@ try {
             for (const p of PATHS) {
                 const [a, b] = [await get(base, p), await get(pyBase, p)];
                 const sameBody = p === '/listing/' ? a.body.includes('two') === b.body.includes('two') : a.body.equals(b.body);
-                // Python adds "; charset=utf-8" only to its listing page.
+                // Python adds "; charset=utf-8" only to its listing page. Its type
+                // for an extension the browser does not act on comes from the
+                // machine's own mime.types (.toml: octet-stream on macOS,
+                // application/toml on Ubuntu), so only the ones it acts on are
+                // compared; §2 pins the rest.
                 const typeOf = r => (r.type || '').split(';')[0];
-                check(a.status === b.status && typeOf(a) === typeOf(b) && (a.status !== 200 || sameBody) && a.location === b.location,
+                const typed = a.status !== 200 || /\.(m?js|wasm|css|html|json|mp4)(\?|$)|\/$/.test(p);
+                check(a.status === b.status && (!typed || typeOf(a) === typeOf(b)) && (a.status !== 200 || sameBody) && a.location === b.location,
                     `${p}: ${a.status} ${typeOf(a) || '-'}${a.location ? ' -> ' + a.location : ''}`,
                     { node: [a.status, a.type, a.location], python: [b.status, b.type, b.location] });
             }
@@ -107,7 +112,8 @@ try {
     check((await get(base, '/%2e%2e/secret.txt')).status === 404 && (await get(base, '/../secret.txt')).status === 404,
         'no way out of the root');
     check((await get(base, '/nested')).location === '/nested/', 'a directory without its slash redirects to it');
-    check(mimeTypeFor('x.SLP') === 'application/octet-stream' && mimeTypeFor('a.H5') === 'application/x-hdf5', 'unknown types are octet-stream; case does not matter');
+    check(mimeTypeFor('x.SLP') === 'application/octet-stream' && mimeTypeFor('c.toml') === 'application/octet-stream' && mimeTypeFor('a.H5') === 'application/x-hdf5',
+        'unknown types (.slp, .toml) are octet-stream on every machine; case does not matter');
     check(resolveUrlPath(site, '/a/%ZZ') === null, 'a malformed escape is refused, not thrown');
 
     // ------------------------------------------------------------------------
@@ -160,8 +166,8 @@ try {
     ];
     const notPinned = [
         'https://cdn.jsdelivr.net/npm/onnxruntime-common/+esm',
-        'https://cdn.jsdelivr.net/npm/three@latest/build/three.min.js',
-        'https://cdn.jsdelivr.net/npm/three@0.147/build/three.min.js',
+        'https://cdn.jsdelivr.net/npm/left-pad@latest/index.js',
+        'https://cdn.jsdelivr.net/npm/left-pad@1.3/index.js',   // (not a package offline-deps.json pins: its check reads every such URL)
         'https://huggingface.co/org/model/resolve/main/onnx/model.onnx',
     ];
     check(pinned.every(isPinnedUrl), 'exact versions and commit revisions are pinned', pinned.filter(u => !isPinnedUrl(u)));

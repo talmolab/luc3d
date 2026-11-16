@@ -20,9 +20,9 @@
 // pose/lazy-residency.js (hydrateFrameMembers2d, releaseFrameMembers2d),
 // pose/placeholder-cameras.js (isPlaceholderCamera).
 
-import { invert3x3, triangulateAndReproject } from './triangulation-core.js?v=fda963a93c28';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from './lazy-residency.js?v=fda963a93c28';
-import { isPlaceholderCamera } from './placeholder-cameras.js?v=fda963a93c28';
+import { invert3x3, triangulateAndReproject } from './triangulation-core.js?v=263dd3baeeb0';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from './lazy-residency.js?v=263dd3baeeb0';
+import { isPlaceholderCamera } from './placeholder-cameras.js?v=263dd3baeeb0';
 
 /** Frames solved per scan, at most, spread evenly over the recording. */
 export const EXAMPLE_MAX_FRAMES = 240;
