@@ -29,15 +29,15 @@
  *
  * Run: node tests/e2e/lazy-reopen-group-identities.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8247);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const FRAMES = Number(process.env.FRAMES || 400);
 const CAMS = 3, ANIMALS = 4, NODES = 3;
 
@@ -47,9 +47,6 @@ const check = (c, m, extra) => {
     if (!c) fails++;
 };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 const fixtures = {
     campy: path.join(repoRoot, '_lazy-group-ids-campy.slp'),
     idxOnly: path.join(repoRoot, '_lazy-group-ids-idx-only.slp'),
@@ -58,7 +55,7 @@ const fixtures = {
 
 let browser;
 try {
-    browser = await chromium.launch({ headless: true });
+    browser = await launchBrowser({ headless: true });
     const page = await browser.newPage();
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));

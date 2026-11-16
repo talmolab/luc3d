@@ -28,15 +28,15 @@
  *
  * Run: node tests/e2e/image-check-cpu.mjs   (downloads the ~86 MB fp32 model)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8277);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
@@ -44,12 +44,9 @@ const url = fs.readFileSync(path.join(repoRoot, 'ui', 'image-embedder.js'), 'utf
 try { const r = await fetch(url, { method: 'HEAD' }); if (!r.ok) throw new Error('HTTP ' + r.status); }
 catch (e) { console.log('SKIP — the model runtime is not reachable (' + e.message + ')'); process.exit(0); }
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
@@ -106,7 +103,7 @@ try {
     const dev = await pick(page);
     check(dev.picked.kind === 'cpu' && (!dev.hasAdapter || dev.fallback), `headless Chromium (${describe(dev)}) runs the model on the CPU — "${dev.picked.why}"`);
     {
-        const b2 = await chromium.launch({ args: ['--enable-unsafe-webgpu'] });
+        const b2 = await launchBrowser({ args: ['--enable-unsafe-webgpu'] });
         try {
             const p2 = await b2.newPage();
             await p2.goto(`http://localhost:${PORT}/tests/test-runner.html`).catch(() => {});

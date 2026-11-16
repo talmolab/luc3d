@@ -35,23 +35,21 @@
  *      composited window — on a Retina Mac its dpr-2 sections are the real
  *      display's; takes the machine-wide browser lock)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { acquireBrowserLock } from '../../scripts/browser-lock.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8273);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 const near = (a, b, tol) => Math.abs(a - b) <= tol;
 
 const HEADED = !!process.env.HEADED;
 const releaseLock = HEADED ? await acquireBrowserLock({ label: 'native-resolution-zoom (headed)' }) : null;
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 /** A project of `cams` ([{name, w, h}]), each canvas filled with its own noise. */
 async function loadProject(page, cams) {
@@ -205,7 +203,7 @@ const openViewMenuTick = async (page) => {
 };
 
 try {
-    const browser = await chromium.launch({ headless: !HEADED });
+    const browser = await launchBrowser({ headless: !HEADED });
     const errs = [];
 
     // ===== dpr 2 (a Retina Mac), one 1680x1200 camera ======================

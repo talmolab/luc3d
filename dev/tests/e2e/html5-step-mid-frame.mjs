@@ -22,17 +22,17 @@
  * (measured headless: 19 of 58 right), or the test could not tell the two seek
  * targets apart. 60 fps matters — at 10 fps both targets land exactly.
  *
- * Run: node tests/e2e/html5-step-mid-frame.mjs   (spawns its own http.server)
+ * Run: node tests/e2e/html5-step-mid-frame.mjs   (serves the app itself)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8118);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const CLIP = 'tests/fixtures/barcode-60/barcode-60.mp4';
 if (!fs.existsSync(path.join(repoRoot, CLIP))) {
     console.error(`  ✗ ${CLIP} is missing — regenerate it with tests/fixtures/barcode-60/make_fixture.sh`);
@@ -41,11 +41,8 @@ if (!fs.existsSync(path.join(repoRoot, CLIP))) {
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 try {
-    const browser = await chromium.launch();
+    const browser = await launchBrowser();
     const page = await browser.newPage();
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     await page.goto(`http://localhost:${PORT}/index.html`);

@@ -27,8 +27,7 @@
  *
  * Run: node tests/e2e/image-model-package.mjs   (downloads the ~86 MB fp32 model once; skips offline)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -37,7 +36,6 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8297), PKG_PORT = PORT + 1;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
@@ -70,24 +68,18 @@ fs.copyFileSync(path.join(dir, 'lucid-model.json'), path.join(dir, 'tampered', '
 fs.copyFileSync(path.join(dir, 'config.json'), path.join(dir, 'tampered', 'config.json'));
 { const bad = Buffer.from(fp32); bad[TAMPER_AT] ^= 0xff; fs.writeFileSync(path.join(dir, 'tampered', 'onnx', 'model.onnx'), bad); }
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-// the package's own server (CORS for the app's origin: Python's http.server sends none, so a tiny one)
-const pkgServer = spawn('python3', ['-c', `
-import http.server, functools
-class H(http.server.SimpleHTTPRequestHandler):
-    def end_headers(self):
-        self.send_header('Access-Control-Allow-Origin', '*'); self.send_header('Access-Control-Allow-Headers', '*'); super().end_headers()
-    def do_OPTIONS(self): self.send_response(204); self.end_headers()
-    def log_message(self, *a): open(${JSON.stringify(path.join(dir, '..', 'requests.log'))}, 'a').write(self.path + '\\n')
-http.server.ThreadingHTTPServer(('127.0.0.1', ${PKG_PORT}), functools.partial(H, directory=${JSON.stringify(dir)})).serve_forever()
-`], { stdio: 'ignore' });
+const server = await startServer(repoRoot);
+const PORT = server.port;
+// the package's own server: a second origin, so it must send CORS headers
+// (Python's http.server sent none, so this used to be a tiny Python one)
 const reqLog = path.join(dir, '..', 'requests.log');
 fs.writeFileSync(reqLog, '');
-await new Promise(r => setTimeout(r, 1500));
+const pkgServer = await startServer(dir, { port: 0, cors: true, onRequest: (req) => fs.appendFileSync(reqLog, req.url + '\n') });
+const PKG_PORT = pkgServer.port;
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
     const errs = [], pkgRequests = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
