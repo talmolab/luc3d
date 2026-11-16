@@ -335,11 +335,15 @@ try {
     });
     // Wait for the downloads to SETTLE rather than for a guessed count: this
     // session is calibrated, so there is a 3D tile too, and hard-coding "4" quietly
-    // truncated the wait and lost whichever file arrived last.
-    let seen = -1;
-    for (let i = 0; i < 90 && seen !== downloads.length; i++) {
-        seen = downloads.length;
+    // truncated the wait and lost whichever file arrived last. Settled means at
+    // least one file and then no new one for two checks: "no change" alone also
+    // held at 0 -> 0, so on a slower machine (CI) the wait ended before the
+    // first tile had finished encoding.
+    let seen = -1, steady = 0;
+    for (let i = 0; i < 120 && steady < 2; i++) {
         await page.waitForTimeout(700);
+        steady = downloads.length > 0 && downloads.length === seen ? steady + 1 : 0;
+        seen = downloads.length;
     }
     const names = downloads.map(d => d.suggestedFilename());
     check(downloads.length >= 4, `individual mode produced a file per tile (got ${downloads.length}: ${names.join(', ')})`);

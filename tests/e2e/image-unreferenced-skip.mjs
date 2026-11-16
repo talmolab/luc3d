@@ -49,7 +49,7 @@ const pyramid = make('b-pyramid.mp4', ['-c:v', 'libx264', '-bf', '3', '-b_strate
 const ponly = make('p-only.mp4', ['-c:v', 'libx264', '-bf', '0', ...GOP]);
 const hevc = make('hevc.mp4', ['-c:v', 'libx265', '-tag:v', 'hvc1', '-x265-params', 'log-level=error:keyint=250:min-keyint=250:scenecut=0']);
 if (!flat || !pyramid || !ponly) {
-    console.log('  (ffmpeg with libx264 unavailable — skipped)');
+    console.log('SKIP — ffmpeg with libx264 is not installed');
     fs.rmSync(tmp, { recursive: true, force: true });
     process.exit(0);
 }

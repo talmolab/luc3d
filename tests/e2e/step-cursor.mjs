@@ -47,7 +47,7 @@ const ff = spawnSync('ffmpeg', ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i',
     '-frames:v', '900', '-c:v', 'libx264', '-bf', '0', '-g', '300', '-keyint_min', '300', '-sc_threshold', '0',
     '-pix_fmt', 'yuv420p', vid]);
 if (ff.status !== 0 || !fs.existsSync(vid)) {
-    console.log('  (ffmpeg with libx264 unavailable — skipped)');
+    console.log('SKIP — ffmpeg with libx264 is not installed');
     fs.rmSync(tmp, { recursive: true, force: true });
     process.exit(0);
 }

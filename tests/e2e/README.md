@@ -49,6 +49,28 @@ options):
 
 `HEADED=1` runs one file at a time (a visible window: see `scripts/browser-lock.mjs`).
 
+Environment switches (any file, through `lib/harness.mjs`):
+
+- `LUC3D_E2E_CHANNEL=chrome` runs Google Chrome instead of Playwright's
+  Chromium (CI does).
+- `LUC3D_E2E_TRACE=1` logs each page's console errors, uncaught errors,
+  crashes, navigations, failed requests and downloads to stderr. The runner
+  sets it when it reruns a failure alone.
+
+## CI
+
+`.github/workflows/tests.yml` runs on every pull request and every push to
+`main`: the Node and browser unit suites in one job, and these files in four
+shards (`node tests/run-e2e-tests.mjs --shard I/4 -j 2`) in Google Chrome, with
+ffmpeg and the offline packages installed. Each shard's summary is on the run's
+page, each failure is an annotation on its file, and a failed shard's logs
+(with the traced rerun) are a run artifact for a week.
+
+The shards are split by `timings.json` (committed), so every machine computes
+the same split. After adding a slow file, refresh it:
+`node tests/run-e2e-tests.mjs --write-timings`. A stale entry only costs
+balance, never coverage.
+
 ## Writing a test
 
 Serve the app and open the browser through `lib/harness.mjs`:

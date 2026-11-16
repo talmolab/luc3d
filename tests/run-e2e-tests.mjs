@@ -28,10 +28,16 @@
  *   --logs DIR       where to keep each file's output (default: a new folder
  *                    under the system temp folder; printed at the end)
  *   --list           print the files in run order and stop
+ *   --shard I/N      run only part I of N (CI runs N machines). Every machine
+ *                    computes the same split, from `tests/e2e/timings.json`
+ *                    only (committed), never from this machine's own times
+ *   --write-timings  after the run, record its times in `tests/e2e/timings.json`
+ *                    (commit it when the slow files change, so shards stay even)
  *
  * Files that use `tests/e2e/lib/harness.mjs` get a free port of their own; any
  * other file is handed a free `PORT=`. Times and last results are kept in the
- * harness's cache folder (`LUC3D_E2E_CACHE`).
+ * harness's cache folder (`LUC3D_E2E_CACHE`). Under GitHub Actions each
+ * failure is also an error annotation, and the summary goes to the job's page.
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -49,7 +55,7 @@ const NOT_TESTS = new Set(['run-unit-tests.mjs']);
 
 // ---- arguments ----------------------------------------------------------------
 const argv = process.argv.slice(2);
-const opts = { jobs: null, timeout: 600, rerun: true, logs: null, list: false, failed: false, filters: [] };
+const opts = { jobs: null, timeout: 600, rerun: true, logs: null, list: false, failed: false, shard: null, writeTimings: false, filters: [] };
 for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '-j' || a === '--jobs') opts.jobs = Number(argv[++i]);
@@ -59,6 +65,13 @@ for (let i = 0; i < argv.length; i++) {
     else if (a === '--logs') opts.logs = argv[++i];
     else if (a === '--list') opts.list = true;
     else if (a === '--failed') opts.failed = true;
+    else if (a === '--write-timings') opts.writeTimings = true;
+    else if (a === '--shard' || a.startsWith('--shard=')) {
+        const v = a === '--shard' ? argv[++i] : a.slice(8);
+        const m = /^(\d+)\/(\d+)$/.exec(v || '');
+        if (!m || !(Number(m[1]) >= 1 && Number(m[1]) <= Number(m[2]))) { console.error('--shard needs I/N with 1 <= I <= N, e.g. 2/4'); process.exit(2); }
+        opts.shard = { index: Number(m[1]), count: Number(m[2]) };
+    }
     else if (a === '-h' || a === '--help') {
         console.log(fs.readFileSync(fileURLToPath(import.meta.url), 'utf8').split('*/')[0].replace(/^\/\*\*\n/, '').replace(/^ \* ?/gm, ''));
         process.exit(0);
@@ -78,6 +91,8 @@ const readJson = (f, fallback) => { try { return JSON.parse(fs.readFileSync(f, '
 const timings = readJson(timingsFile, {});
 const lastRun = readJson(lastRunFile, {});
 const known = readJson(path.join(e2eDir, 'known-failures.json'), { files: {} }).files || {};
+const committedTimingsFile = path.join(e2eDir, 'timings.json');
+const committed = readJson(committedTimingsFile, { seconds: {} }).seconds || {};
 
 // ---- which files, in what order ---------------------------------------------------
 let files = fs.readdirSync(e2eDir)
@@ -85,8 +100,23 @@ let files = fs.readdirSync(e2eDir)
     .filter(f => opts.filters.length === 0 || opts.filters.some(s => f.includes(s)));
 if (opts.failed) files = files.filter(f => lastRun[f] && lastRun[f] !== 'ok' && lastRun[f] !== 'skip');
 if (files.length === 0) { console.error(opts.failed ? 'nothing failed last time' : 'no matching tests/e2e/*.mjs'); process.exit(opts.failed ? 0 : 1); }
-// Slowest first; a file never timed counts as 1 s per 10 kB of source.
-const expected = f => timings[f] ?? fs.statSync(path.join(e2eDir, f)).size / 10000;
+// A file never timed counts as 1 s per 10 kB of source.
+const bySize = f => fs.statSync(path.join(e2eDir, f)).size / 10000;
+if (opts.shard) {
+    // Longest first, each to the emptiest shard: the same on every machine,
+    // because it reads only committed times and file sizes.
+    const weight = f => committed[f] ?? bySize(f);
+    const loads = Array(opts.shard.count).fill(0), mine = new Set();
+    for (const f of [...files].sort((a, b) => weight(b) - weight(a) || a.localeCompare(b))) {
+        const s = loads.indexOf(Math.min(...loads));
+        loads[s] += weight(f);
+        if (s === opts.shard.index - 1) mine.add(f);
+    }
+    files = files.filter(f => mine.has(f));
+    if (files.length === 0) { console.log(`shard ${opts.shard.index}/${opts.shard.count} has no files`); process.exit(0); }
+}
+// Slowest first, from this machine's last times when it has them.
+const expected = f => timings[f] ?? committed[f] ?? bySize(f);
 files.sort((a, b) => expected(b) - expected(a) || a.localeCompare(b));
 
 const cpus = os.cpus().length;
@@ -122,8 +152,10 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
     });
 }
 
-async function runFile(f, logName) {
+async function runFile(f, logName, { trace = false } = {}) {
     const env = { ...process.env };
+    // A rerun alone also logs the page's errors, crashes and navigations (harness tracePage).
+    if (trace) env.LUC3D_E2E_TRACE = '1';
     delete env.BASE;
     if (usesHarness(f)) delete env.PORT; else env.PORT = String(await freePort());
     const logPath = path.join(logDir, logName);
@@ -161,13 +193,13 @@ async function runFile(f, logName) {
 // Lines worth showing for a failure.
 function failureLines(text) {
     const lines = text.split('\n');
-    const picked = lines.filter(l => /✗|Error|error:|FAIL|Timeout|timed out|expected/.test(l));
+    const picked = lines.filter(l => /✗|Error|error:|FAIL|Timeout|timed out|expected|^\[trace .*(pageerror|CRASHED|console\.error|navigated|disconnected)/.test(l));
     return (picked.length ? picked : lines.filter(Boolean).slice(-8)).slice(0, 12).map(l => l.trim().slice(0, 200));
 }
 
 // ---- the run ----------------------------------------------------------------------------
 const label = s => ({ ok: 'ok   ', fail: 'FAIL ', timeout: 'TIME ', skip: 'skip ' }[s]);
-console.log(`running ${files.length} e2e file(s), ${jobs} at a time (${cpus} cores, load ${load.toFixed(1)}), ` +
+console.log(`running ${files.length} e2e file(s)${opts.shard ? ` (shard ${opts.shard.index}/${opts.shard.count})` : ''}, ${jobs} at a time (${cpus} cores, load ${load.toFixed(1)}), ` +
     `limit ${opts.timeout} s each; logs in ${logDir}\n`);
 const t0 = Date.now();
 const results = new Map();
@@ -190,7 +222,7 @@ const reruns = new Map();
 if (opts.rerun && failedFirst.length && jobs > 1) {
     console.log(`\nrunning ${failedFirst.length} failure(s) again, alone`);
     for (const f of failedFirst) {
-        const r = await runFile(f, f.replace(/\.mjs$/, '.rerun.log'));
+        const r = await runFile(f, f.replace(/\.mjs$/, '.rerun.log'), { trace: true });
         reruns.set(f, r);
         console.log(`  ${label(r.status)} ${r.secs.toFixed(1).padStart(6)} s  ${f}`);
     }
@@ -210,6 +242,17 @@ try {
     fs.writeFileSync(timingsFile, JSON.stringify(timings, null, 1));
     fs.writeFileSync(lastRunFile, JSON.stringify(lastRun, null, 1));
 } catch { /* a cache, nothing more */ }
+if (opts.writeTimings) {
+    const out = { ...committed };
+    for (const f of files) if (['ok', 'fail'].includes(results.get(f).status)) out[f] = Math.round(results.get(f).secs * 10) / 10;
+    for (const f of Object.keys(out)) if (!fs.existsSync(path.join(e2eDir, f))) delete out[f];
+    const sorted = Object.fromEntries(Object.keys(out).sort().map(f => [f, out[f]]));
+    fs.writeFileSync(committedTimingsFile, JSON.stringify({
+        about: 'Seconds per tests/e2e file, best from a CI runner (GitHub ubuntu-latest, Chrome, 2 at a time), where the split is used. Used only to split the files evenly across CI machines (--shard) and to start slow files first; a wrong or missing entry costs balance, never coverage. Refresh with `node tests/run-e2e-tests.mjs --write-timings` (or from a CI run).',
+        seconds: sorted,
+    }, null, 1) + '\n');
+    console.log(`\nwrote ${Object.keys(sorted).length} times to tests/e2e/timings.json`);
+}
 
 // ---- summary ------------------------------------------------------------------------------------
 const by = s => files.filter(f => finalStatus.get(f) === s);
@@ -243,4 +286,25 @@ const sum = files.reduce((s, f) => s + results.get(f).secs, 0);
 console.log(`\n${realFailures.length === 0 ? 'PASS' : 'FAIL'} — ${by('ok').length} passed, ${by('flaky').length} passed alone, ` +
     `${realFailures.length} failed, ${knownFailing.length} known failure(s), ${by('skip').length} skipped, of ${files.length}; ` +
     `${(wall / 60).toFixed(1)} min (${(sum / 60).toFixed(1)} min of test time, ${jobs} at a time); logs in ${logDir}`);
+
+// ---- GitHub Actions: annotations and the job summary ------------------------------------------------
+if (process.env.GITHUB_ACTIONS === 'true') {
+    const esc = s => String(s).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+    for (const f of realFailures) {
+        const r = reruns.get(f) || results.get(f);
+        console.log(`::error file=tests/e2e/${f},title=${finalStatus.get(f) === 'timeout' ? 'timed out' : 'failed'}${reruns.has(f) ? ' (also alone)' : ''}::${esc(failureLines(r.text).slice(0, 6).join('\n'))}`);
+    }
+    for (const f of by('flaky')) console.log(`::warning file=tests/e2e/${f},title=passed only when run alone::failed while running in parallel; see the log artifact`);
+    if (process.env.GITHUB_STEP_SUMMARY) {
+        const lines = [`### e2e${opts.shard ? ` shard ${opts.shard.index}/${opts.shard.count}` : ''}: ${realFailures.length === 0 ? 'passed' : `${realFailures.length} failed`}`, '',
+            `${by('ok').length} passed, ${by('flaky').length} passed alone, ${realFailures.length} failed, ${knownFailing.length} known failure(s), ${by('skip').length} skipped, of ${files.length}; ${(wall / 60).toFixed(1)} min, ${jobs} at a time.`, ''];
+        for (const f of realFailures) lines.push(`- ❌ \`${f}\`: ${failureLines((reruns.get(f) || results.get(f)).text).slice(0, 3).map(l => l.replace(/\|/g, '\\|')).join(' / ')}`);
+        for (const f of by('flaky')) lines.push(`- ⚠️ \`${f}\` failed in parallel, passed alone`);
+        for (const f of knownFailing) lines.push(`- known failure \`${f}\`: ${known[f]}`);
+        for (const f of knownPassing) lines.push(`- ✅ \`${f}\` is listed as a known failure but passed: take it off \`tests/e2e/known-failures.json\``);
+        if (by('skip').length) lines.push(`- skipped: ${by('skip').map(f => '`' + f + '`').join(', ')}`);
+        lines.push('', 'Slowest: ' + slow.map(r => `${r.file.replace(/\.mjs$/, '')} ${r.secs.toFixed(0)} s`).join(', '), '');
+        try { fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n'); } catch { /* not fatal */ }
+    }
+}
 process.exit(realFailures.length === 0 ? 0 : 1);
