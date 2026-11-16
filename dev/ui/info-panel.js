@@ -5,44 +5,45 @@
 
 import {
     Skeleton, Camera, Session,
-} from '../pose/pose-data.js?v=68ab3a68920e';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=68ab3a68920e';
-import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=68ab3a68920e';
-import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=68ab3a68920e';
-import { isInteractiveClickTarget } from './interaction.js?v=68ab3a68920e';
-import { persistSectionState } from './section-state.js?v=68ab3a68920e';
-import { renderRecordingInfo } from './recording-info.js?v=68ab3a68920e';
-import { buildLazySelect } from './lazy-select.js?v=68ab3a68920e';
+} from '../pose/pose-data.js?v=e092b3864260';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=e092b3864260';
+import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=e092b3864260';
+import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=e092b3864260';
+import { isInteractiveClickTarget } from './interaction.js?v=e092b3864260';
+import { persistSectionState } from './section-state.js?v=e092b3864260';
+import { renderRecordingInfo } from './recording-info.js?v=e092b3864260';
+import { buildLazySelect } from './lazy-select.js?v=e092b3864260';
 import { confirmSkeletonEdit, isSkeletonEditWarningSuppressed,
-         setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js?v=68ab3a68920e';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=68ab3a68920e';
-import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=68ab3a68920e';
+         setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js?v=e092b3864260';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=e092b3864260';
+import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=e092b3864260';
+import { createVideoTableCounter } from './video-table-counts.js?v=e092b3864260';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
-         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=68ab3a68920e';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=68ab3a68920e';
-import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=68ab3a68920e';
+         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=e092b3864260';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=e092b3864260';
+import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=e092b3864260';
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
     loadSingleSessionFromCache, removeVideoFile,
-} from '../loading/session-loader.js?v=68ab3a68920e';
+} from '../loading/session-loader.js?v=e092b3864260';
 
 // Circular import — these are still defined in app.js for now. They will be
 // retargeted as later passes land:
 // - swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu
 //   → ui/identity-assignment.js (Pass 3f)
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
-import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=68ab3a68920e';
+import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=e092b3864260';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
 // luc3d #172: every manual identity switch routes through applyIdentitySwitch,
 // which subsumes this file's former direct propagateIdentityForward calls.
 import {
     swapAssignTrack, applyIdentitySwitch, describeIdentitySwitch,
-} from './identity-assignment.js?v=68ab3a68920e';
+} from './identity-assignment.js?v=e092b3864260';
 // Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import {
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
-} from './sessions-panes.js?v=68ab3a68920e';
+} from './sessions-panes.js?v=e092b3864260';
 // Block 2 (Prompt 4): per-session timeline visibility toggles.
 import {
     toggleCameraVisibility,
@@ -51,7 +52,7 @@ import {
     getCameraVisibilityList,
     getTrackVisibilityList,
     getIdentityVisibilityList,
-} from './timeline-visibility.js?v=68ab3a68920e';
+} from './timeline-visibility.js?v=e092b3864260';
 
 // ============================================
 // Inline name entry for "+ New Track" / "+ New Identity"
@@ -259,6 +260,15 @@ export function setupVideosTab() {
 
     btnLoad.addEventListener('click', function () { handleLoadVideos(); });
 
+    // The counts skipped while the Videos section was folded or closed are
+    // made when it opens (the rail toggles `.active` on the pane).
+    const pane = document.getElementById('tabVideos');
+    if (pane && typeof MutationObserver !== 'undefined') {
+        new MutationObserver(function () {
+            if (videoCountsStale && isVideosSectionShown()) populateVideosTable();
+        }).observe(pane, { attributes: true, attributeFilter: ['class'] });
+    }
+
     btnRemove.addEventListener('click', function () {
         if (!selectedVideoFile) return;
         var name = selectedVideoFile.assignedCamera || selectedVideoFile.name;
@@ -269,6 +279,27 @@ export function setupVideosTab() {
         // `removeVideoFile` repaints the panel, which clears the selection.
         setStatus('Removed video: ' + name, 'success');
     });
+}
+
+// True while the table's Labeled / Groups / Score cells were left empty
+// because the Videos section was not on screen (`populateVideosTable`).
+let videoCountsStale = false;
+const NO_VIDEO_COUNTS = { labeled: 0, groups: 0, scoreSum: 0, scoreCount: 0 };
+/** Bumped by every rebuild: a count still running for an older table stops. */
+let videoCountJob = 0;
+/** Milliseconds of counting per task (`countVideosInSlices`). */
+const VIDEO_COUNT_SLICE_MS = 12;
+
+/**
+ * Is the Videos section's body on screen: the info panel shown and the pane
+ * expanded in the rail's stack (`.active`, ui/panel-rail.js)? A pane outside
+ * any rail section (no `.panel-section`) counts as shown.
+ */
+function isVideosSectionShown() {
+    if (!isInfoPanelVisible()) return false;
+    const pane = document.getElementById('tabVideos');
+    if (!pane) return true;
+    return !pane.closest('.panel-section') || pane.classList.contains('active');
 }
 
 export function populateVideosTable() {
@@ -303,19 +334,15 @@ export function populateVideosTable() {
     document.getElementById('videosTable').style.display = '';
     empty.style.display = 'none';
 
-    // Groups per camera, in ONE pass over the groups: counting them per video
-    // row walked every group once per video (8 x 539,852 lookups, ~0.5 s, at
-    // the end of a Triangulate All on the 8-camera project).
-    const groupsByCam = new Map();
-    if (state.session) {
-        for (const [, groups] of state.session.instanceGroups) {
-            for (const g of groups) {
-                for (const [cam, inst] of g.instances) {
-                    if (inst) groupsByCam.set(cam, (groupsByCam.get(cam) || 0) + 1);
-                }
-            }
-        }
-    }
+    // The per-camera counts read every frame and every group member (~0.5 M
+    // groups on an 8-camera, 108,000-frame project), so they are made only
+    // while the section is on screen; otherwise their cells stay empty and
+    // the section's opening fills them (`setupVideosTab`). One pass for all
+    // the rows, not one per video, run in slices (`countVideosInSlices`).
+    const showCounts = isVideosSectionShown();
+    videoCountsStale = !showCounts;
+    const job = ++videoCountJob;
+    const countCells = [];
 
     videoList.forEach(function (vf, i) {
         const tr = document.createElement('tr');
@@ -347,38 +374,22 @@ export function populateVideosTable() {
         tdSize.className = 'mono';
         tdSize.textContent = vf.videoWidth + 'x' + vf.videoHeight;
 
-        // Labeled frames count - search using camera name (assignedCamera or name)
-        var camName = vf.assignedCamera || vf.name;
-        let labelCount = 0;
-        let groupCount = 0;
-        let scoreSum = 0;
-        let scoreCount = 0;
-        if (state.session) {
-            for (const [frameIdx, fg] of state.session.frameGroups) {
-                const instances = fg.getInstances(camName);
-                const unlinked = fg.getUnlinkedInstances(camName);
-                if (instances.length > 0 || unlinked.length > 0) labelCount++;
-                for (let j = 0; j < instances.length; j++) {
-                    if (instances[j].score > 0) {
-                        scoreSum += instances[j].score;
-                        scoreCount++;
-                    }
-                }
-            }
-            groupCount = groupsByCam.get(camName) || 0;
-        }
-
+        // Counts by camera name (assignedCamera or name), filled in by
+        // `countVideosInSlices`: '…' while it counts, empty while the section
+        // is not on screen.
+        const pending = showCounts ? '\u2026' : '';
         const tdLabeled = document.createElement('td');
         tdLabeled.className = 'mono';
-        tdLabeled.textContent = labelCount;
+        tdLabeled.textContent = pending;
 
         const tdGroups = document.createElement('td');
         tdGroups.className = 'mono';
-        tdGroups.textContent = groupCount;
+        tdGroups.textContent = pending;
 
         const tdScore = document.createElement('td');
         tdScore.className = 'mono';
-        tdScore.textContent = scoreCount > 0 ? (scoreSum / scoreCount).toFixed(2) : '-';
+        tdScore.textContent = pending;
+        countCells.push({ camName: vf.assignedCamera || vf.name, tdLabeled, tdGroups, tdScore });
 
         tr.appendChild(tdName);
         tr.appendChild(tdPath);
@@ -389,6 +400,31 @@ export function populateVideosTable() {
         tr.appendChild(tdScore);
         tbody.appendChild(tr);
     });
+
+    if (showCounts) countVideosInSlices(job, state.session, countCells);
+}
+
+/**
+ * Count for the Videos table in tasks of `VIDEO_COUNT_SLICE_MS`: the first
+ * slice runs now (a small project is done in it), the rest each in a task of
+ * its own, so a big project's count (~165 ms on the 8-camera, 539,852-group
+ * one) never holds the page in one piece. Stops when a newer rebuild started
+ * (`videoCountJob`) or the session changed; the cells keep '…' until the end.
+ */
+function countVideosInSlices(job, session, cells) {
+    const counter = createVideoTableCounter(session);
+    const slice = function () {
+        if (job !== videoCountJob || state.session !== session) return;
+        if (!counter.step(VIDEO_COUNT_SLICE_MS)) { setTimeout(slice, 0); return; }
+        const counts = counter.result();
+        for (const cell of cells) {
+            const c = counts.get(cell.camName) || NO_VIDEO_COUNTS;
+            cell.tdLabeled.textContent = c.labeled;
+            cell.tdGroups.textContent = c.groups;
+            cell.tdScore.textContent = c.scoreCount > 0 ? (c.scoreSum / c.scoreCount).toFixed(2) : '-';
+        }
+    };
+    slice();
 }
 
 export function showVideoFileDetail(vf) {
@@ -1025,7 +1061,8 @@ export function exportSkeletonJSON(skeleton) {
 
 export function updateInfoPanel() {
     // Collapsed panel: skip the whole rebuild. This is not a cheap refresh —
-    // `populateVideosTable` walks every frame of the session per video row,
+    // `populateVideosTable` walks every frame and group member (while the
+    // Videos section is open),
     // and `updateFrameInfo` below rebuilds the instance/reprojection tables
     // with a fresh <select> per row. All of it is a stateless full rebuild
     // from `state`, so one call from `refreshInfoPanelAfterShow` (ui-wiring)
