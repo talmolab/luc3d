@@ -5,45 +5,45 @@
 
 import {
     Skeleton, Camera, Session,
-} from '../pose/pose-data.js?v=e36d2dae947f';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=e36d2dae947f';
-import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=e36d2dae947f';
-import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=e36d2dae947f';
-import { isInteractiveClickTarget } from './interaction.js?v=e36d2dae947f';
-import { persistSectionState } from './section-state.js?v=e36d2dae947f';
-import { renderRecordingInfo } from './recording-info.js?v=e36d2dae947f';
-import { buildLazySelect } from './lazy-select.js?v=e36d2dae947f';
+} from '../pose/pose-data.js?v=7e483cc80da5';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=7e483cc80da5';
+import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=7e483cc80da5';
+import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=7e483cc80da5';
+import { isInteractiveClickTarget } from './interaction.js?v=7e483cc80da5';
+import { persistSectionState } from './section-state.js?v=7e483cc80da5';
+import { renderRecordingInfo } from './recording-info.js?v=7e483cc80da5';
+import { buildLazySelect } from './lazy-select.js?v=7e483cc80da5';
 import { confirmSkeletonEdit, isSkeletonEditWarningSuppressed,
-         setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js?v=e36d2dae947f';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=e36d2dae947f';
-import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=e36d2dae947f';
-import { createVideoTableCounter } from './video-table-counts.js?v=e36d2dae947f';
+         setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js?v=7e483cc80da5';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=7e483cc80da5';
+import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=7e483cc80da5';
+import { createVideoTableCounter } from './video-table-counts.js?v=7e483cc80da5';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
-         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=e36d2dae947f';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=e36d2dae947f';
-import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=e36d2dae947f';
+         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=7e483cc80da5';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=7e483cc80da5';
+import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=7e483cc80da5';
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
     loadSingleSessionFromCache, removeVideoFile,
-} from '../loading/session-loader.js?v=e36d2dae947f';
+} from '../loading/session-loader.js?v=7e483cc80da5';
 
 // Circular import — these are still defined in app.js for now. They will be
 // retargeted as later passes land:
 // - swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu
 //   → ui/identity-assignment.js (Pass 3f)
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
-import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=e36d2dae947f';
+import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=7e483cc80da5';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
 // luc3d #172: every manual identity switch routes through applyIdentitySwitch,
 // which subsumes this file's former direct propagateIdentityForward calls.
 import {
     swapAssignTrack, applyIdentitySwitch, describeIdentitySwitch,
-} from './identity-assignment.js?v=e36d2dae947f';
+} from './identity-assignment.js?v=7e483cc80da5';
 // Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import {
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
-} from './sessions-panes.js?v=e36d2dae947f';
+} from './sessions-panes.js?v=7e483cc80da5';
 // Block 2 (Prompt 4): per-session timeline visibility toggles.
 import {
     toggleCameraVisibility,
@@ -52,7 +52,7 @@ import {
     getCameraVisibilityList,
     getTrackVisibilityList,
     getIdentityVisibilityList,
-} from './timeline-visibility.js?v=e36d2dae947f';
+} from './timeline-visibility.js?v=7e483cc80da5';
 
 // ============================================
 // Inline name entry for "+ New Track" / "+ New Identity"
@@ -153,6 +153,29 @@ function buildVisToggleRow(entry, onChange, opts) {
     return row;
 }
 
+/** What the Visibility tab's Timeline lists were last built from (`populateTimelineVisibility`). */
+var _timelineVisBuilt = { session: undefined, key: null };
+
+/**
+ * Everything a row shows or acts on, for all three lists: name, on/off and
+ * swatch colour. Equal keys (for the same session) build identical rows.
+ * Exported for tests.
+ */
+export function timelineVisibilityKey(camList, trackList, idList) {
+    var parts = [];
+    function add(list) {
+        for (var i = 0; i < list.length; i++) {
+            var e = list[i];
+            parts.push(e.name, e.visible ? '1' : '0', e.color || '');
+        }
+        parts.push('');
+    }
+    add(camList);
+    add(trackList);
+    add(idList);
+    return JSON.stringify(parts);
+}
+
 /**
  * Populate the Visibility-tab Timeline section's three toggle lists:
  *   - Views  (one row per camera)
@@ -173,15 +196,38 @@ export function populateTimelineVisibility(session) {
     var hostIds = document.getElementById('visTimelineIdentities');
     if (!hostCams || !hostTracks || !hostIds) return;
 
+    var camList = session ? getCameraVisibilityList(session) : [];
+    var trackList = session ? getTrackVisibilityList(session) : [];
+    var idList = session ? getIdentityVisibilityList(session) : [];
+    var i;
+    for (i = 0; i < trackList.length; i++) {
+        // `getTrackVisibilityList` returns names in the same order as
+        // `session.tracks`, so the list index is the trackIdx that
+        // `getTrackColor` uses for its palette lookup. Mirrors what the
+        // timeline canvas itself paints next to each track row — the No ID
+        // track's gray, and the palette of the current Tracks / Identity
+        // coloring — and matches the swatch behavior already in place for
+        // identities.
+        trackList[i].color = (session.isNoIdTrack && session.isNoIdTrack(i))
+            ? NULL_ID_COLOR : getTrackColor(i, state.colorByIdentity);
+    }
+
+    // Most calls change nothing (every `updateInfoPanel` makes one): on an
+    // 8-camera project with 863 tracks the rebuild was ~6 ms each, twice at
+    // the end of a Track All. Rows that would come out the same are kept.
+    var key = timelineVisibilityKey(camList, trackList, idList);
+    if (_timelineVisBuilt.session === session && _timelineVisBuilt.key === key &&
+        hostCams.childElementCount === camList.length &&
+        hostTracks.childElementCount === trackList.length &&
+        hostIds.childElementCount === idList.length) return;
+    _timelineVisBuilt.session = session;
+    _timelineVisBuilt.key = key;
+
     hostCams.innerHTML = '';
     hostTracks.innerHTML = '';
     hostIds.innerHTML = '';
 
     if (!session) return;
-
-    var camList = getCameraVisibilityList(session);
-    var trackList = getTrackVisibilityList(session);
-    var idList = getIdentityVisibilityList(session);
 
     function refreshAfterChange() {
         if (timeline && typeof timeline.refreshTracks === 'function') {
@@ -203,7 +249,6 @@ export function populateTimelineVisibility(session) {
         markDirty();
     }
 
-    var i;
     for (i = 0; i < camList.length; i++) {
         hostCams.appendChild(buildVisToggleRow(camList[i], function (name) {
             toggleCameraVisibility(session, name);
@@ -211,15 +256,6 @@ export function populateTimelineVisibility(session) {
         }));
     }
     for (i = 0; i < trackList.length; i++) {
-        // `getTrackVisibilityList` returns names in the same order as
-        // `session.tracks`, so the list index is the trackIdx that
-        // `getTrackColor` uses for its palette lookup. Mirrors what the
-        // timeline canvas itself paints next to each track row — the No ID
-        // track's gray, and the palette of the current Tracks / Identity
-        // coloring — and matches the swatch behavior already in place for
-        // identities.
-        trackList[i].color = (session.isNoIdTrack && session.isNoIdTrack(i))
-            ? NULL_ID_COLOR : getTrackColor(i, state.colorByIdentity);
         hostTracks.appendChild(buildVisToggleRow(trackList[i], function (name) {
             toggleTrackVisibility(session, name);
             refreshAfterChange();
