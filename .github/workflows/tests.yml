@@ -27,8 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 26
       - name: Node tests (tests/test-*.mjs)
@@ -51,8 +51,8 @@ jobs:
         shard: [1, 2, 3, 4]
         browser: [chrome, chromium]   # TEMPORARY: comparing the two while the workflow is being tried
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 26
       - name: Install Playwright
@@ -61,7 +61,7 @@ jobs:
           npm install --no-audit --no-fund
           echo "PLAYWRIGHT_VERSION=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_ENV"
       - name: Cache Playwright's browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ env.PLAYWRIGHT_VERSION }}
@@ -76,7 +76,7 @@ jobs:
       # The CDN libraries and the image model, per shard (each shard runs the
       # same files every time, so each keeps what its files download).
       - name: Cache CDN and model downloads
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.LUC3D_E2E_CACHE }}
           key: luc3d-e2e-${{ matrix.shard }}-${{ hashFiles('index.html', 'tests/test-runner.html', 'ui/image-embedder.js', 'offline-deps.json') }}
@@ -89,7 +89,7 @@ jobs:
         run: node tests/run-e2e-tests.mjs --shard ${{ matrix.shard }}/4 -j 2 --logs "$RUNNER_TEMP/e2e-logs"
       - name: Keep the logs of a failed run
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-logs-${{ matrix.shard }}-${{ matrix.browser }}
           path: ${{ runner.temp }}/e2e-logs
