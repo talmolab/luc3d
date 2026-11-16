@@ -68,6 +68,7 @@ import { refreshIdSwitchPanel } from './id-switch-modal.js';
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
 import { setup3DViewport } from '../pose/initialization.js';
 import { getLoadingProgressModal } from './loading-progress-modal.js';
+import { askConfirm } from './ask.js';
 
 // ============================================
 // Dockview Pane Manager
@@ -1685,11 +1686,22 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
     setStatus(label + (totalRetriangulated > 0 ? '. Re-triangulated ' + totalRetriangulated + ' group(s).' : '.'), 'success');
 }
 
-export function removeSession(idx) {
-    if (!confirm('Delete session "' + state.sessions[idx].name + '"?')) return;
+/**
+ * Delete session `idx` after asking (`askConfirm`, ui/ask.js — the desktop app
+ * cannot use `window.confirm`). Async: the session is re-found by identity
+ * once answered, since the list may have changed while the question was open.
+ * Resolves false when cancelled (or the session is already gone).
+ */
+export async function removeSession(idx) {
+    var sess = state.sessions[idx];
+    if (!sess) return false;
+    var ok = await askConfirm('Delete session "' + sess.name + '"?',
+        { title: 'Delete Session', okLabel: 'Delete' });
+    if (!ok) return false;
+    idx = state.sessions.indexOf(sess);
+    if (idx < 0) return false;
 
     // Clean up lazy loader if present
-    var sess = state.sessions[idx];
     if (sess.lazyLoader) {
         sess.lazyLoader.close();
     }

@@ -84,6 +84,20 @@ async function init() {
         setupSplitHandles();
         setupTimeline();
         setupMenus();
+        // The Inference panel: local sleap-nn on the desktop app (when it is in the build), and a
+        // paired SLEAP Connect worker everywhere (the only backend on the web). A literal dynamic
+        // import after the rail exists, so cold start is unchanged; it touches `window.lucidDesktop`
+        // only inside its own desktop checks.
+        const inferencePanelDone = import('../ui/inference-panel.js')
+            .then(function (m) { return m.setupInferencePanel(); })
+            .catch(function (e) { console.warn('[inference] panel not added:', e); });
+        // SLEAP Connect (remote GPU workers): the rail's Connect panel, in the
+        // web app and the desktop app. Fetched after the rail exists; failing
+        // to load it leaves the rest of the app untouched. Added after the
+        // Inference panel settles so the rail order is always the same.
+        inferencePanelDone.then(function () { return import('../ui/connect/index.js'); })
+            .then(function (m) { return m.setupConnect(); })
+            .catch(function (e) { console.warn('[connect] panel not added:', e); });
 
         hideLoading();
         setStatus('Ready - load session via File menu', 'success');

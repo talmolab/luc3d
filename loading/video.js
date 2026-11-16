@@ -11,6 +11,7 @@
 import { shouldIgnoreShortcut } from '../ui/keyboard-target.js';
 import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js';
 import { readBlobRange, guardedRangeSource } from './cold-read-guard.js';
+import { playbackSourceFor } from './hev1-retag.js';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -253,6 +254,15 @@ export class OnDemandVideoDecoder {
     }
 
     async init(source) {
+        // The one choke point every video load passes through (with
+        // switchSource): on an engine that plays HEVC only when tagged `hvc1`
+        // (Safari, the macOS app's WKWebView), a `hev1` file is replaced by a
+        // disk-backed re-tagged view of it BEFORE the first play attempt, and
+        // every consumer below (<video> blob URL, mp4box index, mediabunny,
+        // peekFrame, codec diagnosis, image check) reads that. Elsewhere this
+        // is `source` itself, synchronously (hev1-retag.js).
+        var played = playbackSourceFor(source);
+        if (played !== source) source = await played;
         this._source = source;
 
         // --- Phase 1: Instant load via HTML5 <video> element ---
@@ -1658,6 +1668,11 @@ export class OnDemandVideoDecoder {
      * Chrome browser-process crashes from repeated element creation/destruction.
      */
     async switchSource(source) {
+        // See init(): hev1 -> hvc1 where the engine needs it. First, so the
+        // decoder is not left half-switched while the probe reads; without
+        // the gate this is synchronous, as before.
+        var played = playbackSourceFor(source);
+        if (played !== source) source = await played;
         // Clear cached frames
         for (var entry of this.cache) {
             if (entry[1] && typeof entry[1].close === "function") {

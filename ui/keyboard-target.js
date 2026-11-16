@@ -190,6 +190,23 @@ export function targetOwnsKey(t, e) {
 }
 
 /**
+ * True while a modal that owns the keyboard is open: an element with `data-shortcut-modal`
+ * is in the document. (A DOM query, no module state, so a modal that forgets to close cannot
+ * leave a stale flag.)
+ *
+ * @param {Document} [doc]
+ * @returns {boolean}
+ */
+export function shortcutModalOpen(doc) {
+    const d = doc || (typeof document !== 'undefined' ? document : null);
+    try {
+        return !!(d && typeof d.querySelector === 'function' && d.querySelector('[data-shortcut-modal]'));
+    } catch (err) {
+        return false;
+    }
+}
+
+/**
  * The one guard every global keydown handler uses: true when this keystroke
  * belongs to whatever has focus — or to the browser — rather than to the app.
  *
@@ -208,6 +225,9 @@ export function targetOwnsKey(t, e) {
 export function shouldIgnoreShortcut(e) {
     if (!e) return false;
     const t = e.target;
+    // A modal that owns the keyboard (`data-shortcut-modal` on its scrim, e.g. the worker file browser)
+    // keeps every app shortcut from acting on the view behind it.
+    if (shortcutModalOpen(t && t.ownerDocument)) return true;
     if (isClipboardChord(e) &&
         hasTextSelection(t && t.ownerDocument)) return true;
     return isTextEntryTarget(t) || targetOwnsKey(t, e);
