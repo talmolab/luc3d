@@ -36,7 +36,7 @@
  * `apartSwapCost` elsewhere (in units of a typical sample's evidence).
  */
 
-import { buildGrid, contactEpisodes, SIZE_CHECK_DEFAULTS } from './id-switch-check.js?v=c9954aedee42';
+import { buildGrid, contactEpisodes, SIZE_CHECK_DEFAULTS } from './id-switch-check.js?v=4d1a3fc030bf';
 
 export const IDENTITY_CUE_DEFAULTS = {
     /** Swaps across a contact, and across a gap with no contact, in typical-sample units. */

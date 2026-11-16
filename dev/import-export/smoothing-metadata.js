@@ -31,8 +31,8 @@
 //
 // Depends on: pose/pose-data.js, pose/temporal-smoothing.js
 
-import { unsmoothedPoints3d, markPoints3dSmoothed, pooledPoints3d } from '../pose/pose-data.js?v=c9954aedee42';
-import { hasSmoothed3d, noteSmoothedFrames } from '../pose/temporal-smoothing.js?v=c9954aedee42';
+import { unsmoothedPoints3d, markPoints3dSmoothed, pooledPoints3d } from '../pose/pose-data.js?v=4d1a3fc030bf';
+import { hasSmoothed3d, noteSmoothedFrames } from '../pose/temporal-smoothing.js?v=4d1a3fc030bf';
 
 /** Every `metadata.lucid` key this module may write. */
 export const SMOOTHING_METADATA_KEYS = ['temporalSmoothing'];

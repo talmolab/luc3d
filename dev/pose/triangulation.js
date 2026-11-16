@@ -10,27 +10,27 @@
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
          setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d,
-         isPoints3dSmoothed } from './pose-data.js?v=c9954aedee42';
+         isPoints3dSmoothed } from './pose-data.js?v=4d1a3fc030bf';
 // The Jacobi eigensolver and the least-squares plane fit live in
 // `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
 // importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
 // re-exported unchanged, because every existing caller and test reads it here.
-import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=c9954aedee42';
+import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=4d1a3fc030bf';
 export { fitPlaneToPoints3d };
-import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=c9954aedee42';
+import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=4d1a3fc030bf';
 // Pass 3i-2: triangulation orchestration moved out of app.js
-import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=c9954aedee42';
-import { updateTriangulationBadge } from '../ui/info-panel.js?v=c9954aedee42';
-import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=c9954aedee42';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=c9954aedee42';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=c9954aedee42';
-import { createGroupSolver } from './triangulation-pool.js?v=c9954aedee42';
-import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=c9954aedee42';
+import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=4d1a3fc030bf';
+import { updateTriangulationBadge } from '../ui/info-panel.js?v=4d1a3fc030bf';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=4d1a3fc030bf';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=4d1a3fc030bf';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=4d1a3fc030bf';
+import { createGroupSolver } from './triangulation-pool.js?v=4d1a3fc030bf';
+import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=4d1a3fc030bf';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
-         dropDerivedReprojections, lazyRowInstance, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=c9954aedee42';
+         dropDerivedReprojections, lazyRowInstance, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=4d1a3fc030bf';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from './initialization.js?v=c9954aedee42';
-import { noteTriangulateRun, carryTriangulateMark } from './run-state.js?v=c9954aedee42';
+import { update3DViewport } from './initialization.js?v=4d1a3fc030bf';
+import { noteTriangulateRun, noteTriangulateRunMarked, markTriangulatedGroups, carryTriangulateMark } from './run-state.js?v=4d1a3fc030bf';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -50,7 +50,7 @@ import {
     hungarianAlgorithm, cameraCenter, backProjectToRay, backProjectToRays,
     pointToRayDistance, pointsToRayDistances,
     computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
-} from './triangulation-core.js?v=c9954aedee42';
+} from './triangulation-core.js?v=4d1a3fc030bf';
 export {
     triangulatePointDLT, triangulatePoints, clearPointsBehindEveryView, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,
@@ -3028,7 +3028,12 @@ async function sweepTriangulateAllFrames(session, cameras, method) {
                 if (!prep) { stats.skipped++; continue; }
                 solver.submit(list[gi], prep.groupCameras, applyResult.bind(null, list[gi], prep, frameState));
             }
-            solver.mark(function () { if (frameState.any) stats.frames++; });
+            solver.mark(function () {
+                if (frameState.any) stats.frames++;
+                // The frame's results have landed: mark them now, not in one
+                // walk over every group at the end (see run-state.js).
+                markTriangulatedGroups(session.instanceGroups.get(fi));
+            });
             return solver.throttle();
         }, {
             onProgress: function (done, tot) {
@@ -3076,7 +3081,7 @@ export async function triangulateAllFrames(method) {
         showLoadingProgress('Triangulating', 0, triLoader.nFrames,
             { detail: triangulationMethodLabel(method), title: 'Triangulate All' });   // the card's title, kept to hideLoading
         var swept = await sweepTriangulateAllFrames(state.session, cameras, method);
-        noteTriangulateRun(state.session, null);   // Triangulate turns blue (ui/run-buttons.js)
+        noteTriangulateRunMarked(state.session);   // Triangulate turns blue (ui/run-buttons.js); frames marked as they landed
         setReprojErrorVisible(true, { checkBoxes: false });
         var reprojOnly = showReprojectionsOnly();   // #243: proofreading comes next
         drawAllOverlays(state.currentFrame);
@@ -3170,7 +3175,11 @@ export async function triangulateAllFrames(method) {
                 applyGroupResult.bind(null, group, prep, frameState));
         }
         solver.mark(function () {
-            if (frameState.any) triangulatedFrames.push(frameIdx);
+            if (frameState.any) {
+                triangulatedFrames.push(frameIdx);
+                // Marked as the frame lands, not in one walk at the end (run-state.js).
+                markTriangulatedGroups(state.session.instanceGroups.get(frameIdx));
+            }
         });
     }
 
@@ -3212,7 +3221,7 @@ export async function triangulateAllFrames(method) {
     // Show reproj/error UI elements, then only the reprojections (#243).
     setReprojErrorVisible(true, { checkBoxes: false });
     var reprojOnly = showReprojectionsOnly();
-    noteTriangulateRun(state.session, triangulatedFrames);   // Triangulate turns blue (ui/run-buttons.js)
+    noteTriangulateRunMarked(state.session);   // Triangulate turns blue (ui/run-buttons.js); frames marked as they landed
 
     // Update display for current frame
     drawAllOverlays(state.currentFrame);
