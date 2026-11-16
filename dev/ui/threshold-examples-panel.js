@@ -44,12 +44,12 @@ import {
     solveExample3d,
     solveFrame3d,
     EXAMPLE_MIN_CAMERAS,
-} from '../pose/threshold-examples.js?v=c469a7bc3303';
-import { state } from './app-state.js?v=c469a7bc3303';
-import { formatFrameNumber } from './frame-readout.js?v=c469a7bc3303';
-import { desaturateColor, drawSkeleton, getGroupColor, symmetryEdgesFor } from './overlays.js?v=c469a7bc3303';
-import { getVisibilitySettings } from './rendering.js?v=c469a7bc3303';
-import { build3dView } from './threshold-examples-3d.js?v=c469a7bc3303';
+} from '../pose/threshold-examples.js?v=fda963a93c28';
+import { state } from './app-state.js?v=fda963a93c28';
+import { formatFrameNumber } from './frame-readout.js?v=fda963a93c28';
+import { desaturateColor, drawSkeleton, getGroupColor, symmetryEdgesFor } from './overlays.js?v=fda963a93c28';
+import { getVisibilitySettings } from './rendering.js?v=fda963a93c28';
+import { build3dView } from './threshold-examples-3d.js?v=fda963a93c28';
 
 /** Small tiles shown, at most. */
 export const SMALL_TILES = 4;
