@@ -5371,6 +5371,15 @@ re-renders the toggle lists. `populateTimelineVisibility` is called from
 `timeline.setData(newSession)` so the lists reflect the freshly-active
 session's hidden sets.
 
+**The lists are rebuilt only when they would change.** Every call builds the
+three entry lists (cheap) and their key, `timelineVisibilityKey` (each row's
+name, on/off and swatch colour; exported for tests). The same session, the
+same key and the same row counts keep the existing rows: a rebuild was ~6 ms
+on an 8-camera project with 863 tracks, and every `updateInfoPanel` asks for
+one (twice at the end of a Track All). Anything the rows show or act on must
+go into the key, or a change to it is never drawn. Test:
+`tests/e2e/timeline-visibility-lists-kept.mjs`.
+
 **Visibility tab — section order + Display Legend.** In `index.html` the
 **Timeline** subsection is at the top of the Visibility panel; **Display
 Legend** is its own `<h3>` section between Reprojections and Video Brightness.
