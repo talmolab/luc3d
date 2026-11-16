@@ -2408,7 +2408,10 @@ proofread SLAP sessions, gate off, softGate 150 + holdBonus 30: identity runs un
 mean 88.2% → 93.8% (89–94% at neighbouring values). Gate on + holdBonus 30: short runs
 568 → 433, accuracy unchanged. 5-mouse recording: the soft gate keeps 4 lasting
 relabels but swaps a different pair (17.8% → 22.8% wrong); holdBonus 30 alone 2,
-12.4%. Hence opt-in, both Tracking Wizard settings. Covered by
+12.4%. Re-measured 2026-11-16 through the app's own Track All: unchanged (108 of 110
+runs identical). With maxPenalty 4 + matchReproj 20 as well: 22 sessions, lasting
+switches 360 → 120, short runs 2,385 → 1,249, mean 94.65%; 5 mice 6 relabels, 19.3%
+(that pair alone: 8, 25.6%). Hence opt-in, both Tracking Wizard settings. Covered by
 `tests/test-cross-view-tracker.mjs` ("Soft gate", "Hold bonus") and
 `tests/e2e/track-all-worker.mjs` (1b: worker == inline with both on).
 
