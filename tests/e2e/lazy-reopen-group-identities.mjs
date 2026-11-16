@@ -192,16 +192,26 @@ try {
                 } catch (e) { window.__tstLoad.err = String(e && e.stack || e).slice(0, 500); }
             })();
         }, how);
+        // The lazy reopen's video prompt has "Skip — Load Videos Later"; the
+        // eager Load SLP prompt has no skip button, only Esc (both resolve as
+        // "no videos"). Waiting for a button that never comes held each eager
+        // load for the loop's full 100 s, and the checks then read a load that
+        // had not finished.
         for (let i = 0; i < 400; i++) {
             const s = await page.evaluate(() => {
                 const b = [...document.querySelectorAll('button')].find(x => /Skip|Later/i.test(x.textContent || '') && x.offsetParent);
                 if (b) { b.click(); return 'clicked'; }
+                if (document.getElementById('videoSelectOverlay')) {
+                    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+                    return 'escaped';
+                }
                 return window.__tstLoad.done ? 'done' : (window.__tstLoad.err ? 'err' : 'wait');
             });
             if (s === 'done' || s === 'err') break;
             await new Promise(r => setTimeout(r, 250));
         }
-        return await page.evaluate(() => window.__tstLoad.err);
+        return await page.evaluate(() => window.__tstLoad.err
+            || (window.__tstLoad.done ? null : 'the load did not finish within 100 s'));
     }
 
     /** What the reopened session holds, and the Identity timeline's rows. */
