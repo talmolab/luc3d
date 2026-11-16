@@ -27,15 +27,15 @@
  *
  * Run: node tests/e2e/seekbar-preview.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8287);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const SHOT_DIR = process.env.SHOT_DIR || '';
 const CLIP = 'tests/fixtures/barcode-60/barcode-60.mp4';
 if (!fs.existsSync(path.join(repoRoot, CLIP))) {
@@ -45,12 +45,9 @@ if (!fs.existsSync(path.join(repoRoot, CLIP))) {
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     page.on('console', m => {
