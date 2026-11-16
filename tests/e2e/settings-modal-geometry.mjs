@@ -447,6 +447,31 @@ try {
     check(tall.h === 700, `and does not follow the window (${tall.h})`);
     await closeModal();
 
+    // ---- 9. An instance that goes without being closed saves nothing --------
+    // Settings opened while it is open (its shortcut, twice) used to remove the
+    // old overlay without its teardown: its geometry watcher saw the detached
+    // card measure 0 x 0, took that for a resize, and 200 ms later saved it as
+    // the chosen size (Settings then reopened at its minimum; under load the
+    // stray save also landed in a later check).
+    const saved = { x: 300, y: 100, w: 1000, h: 800, sized: true };
+    const storedAfter = async (act) => {
+        await page.evaluate((r) => localStorage.setItem('lucid.modalGeometry.v1', JSON.stringify({ settings: r })), saved);
+        await act();
+        await page.waitForTimeout(400);   // past the 200 ms save delay
+        return page.evaluate(() => JSON.parse(localStorage.getItem('lucid.modalGeometry.v1')).settings);
+    };
+    const notZeroed = (g) => g.w > 0 && g.h > 0 && !g.heightChosen && !g.widthChosen;
+    let g = await storedAfter(async () => { await openModal(); await openModal(); });
+    check(notZeroed(g), `opening Settings while it is open does not save a 0 x 0 "chosen" size (${JSON.stringify(g)})`);
+    check(await page.evaluate(() => document.querySelectorAll('.settings-overlay').length) === 1, 'and leaves exactly one open');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(60);
+    check(await page.evaluate(() => document.querySelectorAll('.settings-overlay').length) === 0,
+        'Esc then closes it (no handler left behind by the one it replaced)');
+    await openModal();
+    g = await storedAfter(() => page.evaluate(() => document.querySelector('.settings-overlay').remove()));
+    check(notZeroed(g), `a modal removed without closing saves nothing either (${JSON.stringify(g)})`);
+
     check(errs.length === 0, `no page/console errors (got ${JSON.stringify(errs)})`);
 
     await browser.close();

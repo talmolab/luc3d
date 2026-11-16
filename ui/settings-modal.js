@@ -242,9 +242,15 @@ export function showSettingsModal(initialPanel) {
         ? initialPanel
         : (readLastPanel() || SETTINGS_PANELS[0]);
 
-    // Enforce a single instance.
+    // Enforce a single instance. Retire the open one through its own teardown:
+    // removing its overlay alone left its key handler on the document and its
+    // geometry watcher live, which then saved the detached card's zero size as
+    // the size the user had chosen (Settings reopened at its minimum).
     const existing = document.querySelector('.settings-overlay');
-    if (existing) existing.remove();
+    if (existing) {
+        if (typeof existing._lucidTeardown === 'function') existing._lucidTeardown();
+        else existing.remove();
+    }
 
     // Set once the footer exists: every write to `working` repaints its buttons.
     let onWorkingEdit = function () {};
@@ -978,6 +984,7 @@ export function showSettingsModal(initialPanel) {
     let disposeGeometry = null;
 
     function teardown() {
+        overlay._lucidTeardown = null;
         document.removeEventListener('keydown', onDocKeyDown, true);
         filterPreview.dispose();
         thrExamples.dispose();
@@ -989,6 +996,7 @@ export function showSettingsModal(initialPanel) {
         // Discard pending edits — just remove the overlay.
         teardown();
     }
+    overlay._lucidTeardown = teardown;
 
     function commit() {
         setDefaultTriangulationMethod(working.method);

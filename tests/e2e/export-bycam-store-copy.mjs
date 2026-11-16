@@ -186,7 +186,7 @@ try {
             const out = {};
             for (const name of ['frames', 'instances', 'points', 'pred_points']) {
                 const d = f.get(name);
-                out[name] = { shape: d.shape, cols: JSON.parse(d.attrs.field_names.value), v: Array.from(d.value, Number),
+                out[name] = { shape: d.shape, cols: JSON.parse(d.attrs.field_names.value), v: d.value,
                     layout: JSON.stringify({ chunks: d.metadata.chunks, filters: d.filters, dtype: d.dtype }) };
             }
             f.close();
@@ -231,36 +231,68 @@ try {
         const t1 = performance.now();
         const sweep = await fileio.exportCamerasSlpStreaming(s, cams, null, filter, { route: 'sweep' });
         const tSweep = performance.now() - t1;
-        return {
-            drift, resident, tStore: Math.round(tStore), tSweep: Math.round(tSweep),
+        // Compared HERE, on the files' own typed arrays: returning every table to
+        // Node (9 exports x 3 cameras, ~16M values as JSON) took ~35 s of the
+        // test, the exports themselves under 1 s.
+        const T = {
             store: store.map(tables), auto: auto.map(tables), sweep: sweep.map(tables),
             mainThread: mainThread.map(tables), fellBack: fellBack.map(tables),
             noEdits: noEdits.map(tables), noAdded: noAddedOut.map(tables), noScores: noScores.map(tables), noDrift: noDrift.map(tables),
         };
+        const num = (x) => typeof x === 'bigint' ? Number(x) : x;
+        const same = (a, b) => a === b || (Number.isNaN(a) && Number.isNaN(b));
+        // Differences between two exports of one camera, value for value.
+        function diff(A, B) {
+            const out = { other: [] };
+            for (const name of ['frames', 'instances', 'points', 'pred_points']) {
+                const a = A[name], b = B[name];
+                if (JSON.stringify(a.shape) !== JSON.stringify(b.shape) || JSON.stringify(a.cols) !== JSON.stringify(b.cols)) {
+                    out.other.push(`${name}: shape ${JSON.stringify(a.shape)} vs ${JSON.stringify(b.shape)}`);
+                    continue;
+                }
+                const nc = a.cols.length;
+                for (let i = 0; i < a.v.length; i++) {
+                    const x = num(a.v[i]), y = num(b.v[i]);
+                    if (same(x, y)) continue;
+                    const r = Math.floor(i / nc), c = i % nc;
+                    if (out.other.length < 5) out.other.push(`${name}[${r}].${a.cols[c]}: ${x} vs ${y}`);
+                    else out.other.length === 5 && out.other.push('…');
+                }
+            }
+            return out;
+        }
+        const invisibleUserNodes = (X) => {
+            const p = X.points, nc = p.cols.length, xi = p.cols.indexOf('x'), vi = p.cols.indexOf('visible');
+            let n = 0;
+            for (let r = 0; r < p.shape[0]; r++) if (Number.isFinite(num(p.v[r * nc + xi])) && num(p.v[r * nc + vi]) === 0) n++;
+            return n;
+        };
+        const NAMES = ['frames', 'instances', 'points', 'pred_points'];
+        const cams3 = [0, 1, 2];
+        const sc = T.store[0].pred_points, scoreCol = sc.cols.indexOf('score');
+        const distinct = new Set();
+        for (let r = 0; r < sc.shape[0]; r++) distinct.add(num(sc.v[r * sc.cols.length + scoreCol]).toFixed(3));
+        const anyDiff = (X) => cams3.some(ci => diff(T.sweep[ci], X[ci]).other.length > 0);
+        return {
+            drift, resident, tStore: Math.round(tStore), tSweep: Math.round(tSweep),
+            rows: cams3.map(ci => NAMES.map(n => T.store[ci][n].shape[0])),
+            sweepVsStore: cams3.map(ci => diff(T.sweep[ci], T.store[ci]).other),
+            invisible: cams3.map(ci => [invisibleUserNodes(T.sweep[ci]), invisibleUserNodes(T.store[ci])]),
+            storeVsAuto: cams3.map(ci => diff(T.store[ci], T.auto[ci])),
+            distinctScores: distinct.size,
+            negatives: { noEdits: anyDiff(T.noEdits), noAdded: diff(T.sweep[2], T.noAdded[2]).other.length > 0,
+                noScores: anyDiff(T.noScores), noDrift: anyDiff(T.noDrift) },
+            workers: cams3.map(ci => ({
+                value: diff(T.mainThread[ci], T.store[ci]).other,
+                layout: NAMES.filter(n => T.store[ci][n].layout !== T.mainThread[ci][n].layout)
+                    .map(n => `${n}: ${T.store[ci][n].layout} vs ${T.mainThread[ci][n].layout}`),
+                fellBack: diff(T.mainThread[ci], T.fellBack[ci]).other,
+            })),
+            predLayout: T.store[0].pred_points.layout,
+        };
     });
     if (res.err) { check(false, res.err); throw new Error(res.err); }
     console.log(`  store copy ${res.tStore} ms, per-frame pass ${res.tSweep} ms`);
-
-    const same = (a, b) => a === b || (Number.isNaN(a) && Number.isNaN(b));
-    // Differences between two exports of one camera, value for value.
-    function diff(A, B) {
-        const out = { other: [] };
-        for (const name of ['frames', 'instances', 'points', 'pred_points']) {
-            const a = A[name], b = B[name];
-            if (JSON.stringify(a.shape) !== JSON.stringify(b.shape) || JSON.stringify(a.cols) !== JSON.stringify(b.cols)) {
-                out.other.push(`${name}: shape ${JSON.stringify(a.shape)} vs ${JSON.stringify(b.shape)}`);
-                continue;
-            }
-            const nc = a.cols.length;
-            for (let i = 0; i < a.v.length; i++) {
-                if (same(a.v[i], b.v[i])) continue;
-                const r = Math.floor(i / nc), c = i % nc;
-                if (out.other.length < 5) out.other.push(`${name}[${r}].${a.cols[c]}: ${a.v[i]} vs ${b.v[i]}`);
-                else out.other.length === 5 && out.other.push('…');
-            }
-        }
-        return out;
-    }
 
     console.log('1. Same tables from both routes');
     // Nodes the file holds placed-but-invisible: user instances (k = 0) on
@@ -271,37 +303,26 @@ try {
         for (let f = 7; f < FRAMES; f += 2000) if ((f + 3 + 5 * ci) % 97 !== 0) n++;
         return n;
     };
-    const invisibleUserNodes = (T) => {
-        const p = T.points, nc = p.cols.length, xi = p.cols.indexOf('x'), vi = p.cols.indexOf('visible');
-        let n = 0;
-        for (let r = 0; r < p.shape[0]; r++) if (Number.isFinite(p.v[r * nc + xi]) && p.v[r * nc + vi] === 0) n++;
-        return n;
-    };
     check(res.resident.length > 0 && res.resident.length < 200, 'a few frames resident at export', res.resident.length);
     ['cam0', 'cam1', 'cam2'].forEach((cam, ci) => {
-        const S = res.sweep[ci], T = res.store[ci];
-        const rows = ['frames', 'instances', 'points', 'pred_points'].map(n => T[n].shape[0]);
+        const rows = res.rows[ci];
         check(rows[0] > 8192 && rows[1] > 8192 && rows[3] > 8192 && rows[2] > 0,
             `${cam}: frames/instances/pred_points past 8,192 rows, user points present`, rows);
-        const d = diff(S, T);
-        check(d.other.length === 0, `${cam}: store copy = per-frame pass, value for value (visibility included)`, d.other);
-        const inv = [invisibleUserNodes(S), invisibleUserNodes(T)];
+        const d = res.sweepVsStore[ci];
+        check(d.length === 0, `${cam}: store copy = per-frame pass, value for value (visibility included)`, d);
+        const inv = res.invisible[ci];
         check(inv[0] === expectInvisible(ci) && inv[1] === expectInvisible(ci),
             `${cam}: both routes write the ${expectInvisible(ci)} placed-but-invisible node(s) visible 0`, inv);
-        const da = diff(T, res.auto[ci]);
+        const da = res.storeVsAuto[ci];
         check(da.other.length === 0, `${cam}: the default route writes the store copy`, da);
     });
-    const sc = res.store[0].pred_points, scoreCol = sc.cols.indexOf('score');
-    const distinct = new Set();
-    for (let r = 0; r < sc.shape[0]; r++) distinct.add(sc.v[r * sc.cols.length + scoreCol].toFixed(3));
-    check(distinct.size > 100, 'per-node scores are each node\'s own (many distinct values)', distinct.size);
+    check(res.distinctScores > 100, 'per-node scores are each node\'s own (many distinct values)', res.distinctScores);
 
     console.log('2. Negative controls: the comparison catches a dropped edit, score or drift frame');
-    const anyDiff = (X) => [0, 1, 2].some(ci => diff(res.sweep[ci], X[ci]).other.length > 0);
-    check(anyDiff(res.noEdits), 'the bare store differs (edit, deletion, addition and drift lost)');
-    check(diff(res.sweep[2], res.noAdded[2]).other.length > 0, 'copy without the added instance\'s frame differs');
-    check(anyDiff(res.noScores), 'copy without per-node scores differs');
-    check(anyDiff(res.noDrift), 'copy without the drift frames differs');
+    check(res.negatives.noEdits, 'the bare store differs (edit, deletion, addition and drift lost)');
+    check(res.negatives.noAdded, 'copy without the added instance\'s frame differs');
+    check(res.negatives.noScores, 'copy without per-node scores differs');
+    check(res.negatives.noDrift, 'copy without the drift frames differs');
 
     console.log('3. Drift frames and route');
     check(res.drift[0].includes(5000) && res.drift[1].includes(6000) &&
@@ -310,14 +331,12 @@ try {
 
     console.log('4. Export workers');
     ['cam0', 'cam1', 'cam2'].forEach((cam, ci) => {
-        const W = res.store[ci], M = res.mainThread[ci];
-        check(diff(M, W).other.length === 0, `${cam}: workers = this thread, value for value`, diff(M, W).other);
-        const lay = ['frames', 'instances', 'points', 'pred_points'].filter(n => W[n].layout !== M[n].layout)
-            .map(n => `${n}: ${W[n].layout} vs ${M[n].layout}`);
-        check(lay.length === 0, `${cam}: workers = this thread, same chunks, filters and dtypes`, lay);
-        check(diff(M, res.fellBack[ci]).other.length === 0, `${cam}: without Worker the copy falls back and writes the same`);
+        const w = res.workers[ci];
+        check(w.value.length === 0, `${cam}: workers = this thread, value for value`, w.value);
+        check(w.layout.length === 0, `${cam}: workers = this thread, same chunks, filters and dtypes`, w.layout);
+        check(w.fellBack.length === 0, `${cam}: without Worker the copy falls back and writes the same`);
     });
-    check(/gzip|deflate|"1"|id":1/i.test(res.store[0].pred_points.layout), 'pred_points is gzipped in the worker\'s file', res.store[0].pred_points.layout);
+    check(/gzip|deflate|"1"|id":1/i.test(res.predLayout), 'pred_points is gzipped in the worker\'s file', res.predLayout);
     check(logs.some(l => /from the store: .*\(3 workers\)/.test(l)), 'the default copy ran in 3 workers', logs.filter(l => /from the store/.test(l)));
     check(logs.some(l => /from the store: .*\(this thread\)/.test(l)), 'workers: false copied on this thread');
     check(logs.some(l => /export workers unavailable/.test(l)), 'the fallback said why');
