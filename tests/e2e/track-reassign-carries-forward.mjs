@@ -20,15 +20,15 @@
  *
  * Run: node tests/e2e/track-reassign-carries-forward.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8257);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const CAMS = ['cam0', 'cam1', 'cam2'];
 const EAGER_FRAMES = 60;
 const LAZY_FRAMES = 2000;      // > LAZY_PLAYBACK_AHEAD (600) past the edit, so later frames are not loaded
@@ -65,13 +65,11 @@ function compare(label, got, want) {
 }
 const range = (a, b) => Array.from({ length: b - a }, (_, i) => a + i);
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 const fixturePath = path.join(repoRoot, '_track-reassign-fixture.slp');
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1500, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));

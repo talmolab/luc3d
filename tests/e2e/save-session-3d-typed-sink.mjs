@@ -23,17 +23,14 @@
  *
  * Run: node save-session-3d-typed-sink.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = Number(process.env.PORT || 8112);
+const server = await startServer(REPO);
+const PORT = server.port;
 const LOG = (...a) => console.log(...a);
-
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: REPO, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 let failures = 0;
 const check = (name, cond, extra) => {
@@ -43,7 +40,7 @@ const check = (name, cond, extra) => {
 
 let browser;
 try {
-    browser = await chromium.launch({ headless: true });
+    browser = await launchBrowser({ headless: true });
     const page = await browser.newPage();
     page.on('pageerror', e => LOG('[pageerror]', String(e).slice(0, 300)));
     page.on('console', m => { if (m.type() === 'error') LOG('[console.error]', m.text().slice(0, 300)); });
