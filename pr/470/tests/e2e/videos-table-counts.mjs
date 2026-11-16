@@ -12,7 +12,10 @@
  * §2  Opening it (`showPanelTab`) fills them, with the numbers the old
  *     per-camera loops gave.
  * §3  Folded: a rebuild empties them again; unfolding fills them.
- * §4  Open: a rebuild counts at once.
+ * §4  Open: a rebuild of a small project counts at once.
+ * §5  A count too big for one slice (forced with `__lucidVideoCountSliceFrames`)
+ *     shows "…" and finishes in later tasks, with the same numbers.
+ * §6  A rebuild during a count stops the older count.
  *
  * Run: node tests/e2e/videos-table-counts.mjs
  */
@@ -120,6 +123,30 @@ try {
     await ip();
     r = await read();
     check(JSON.stringify(r.rows) === JSON.stringify(r.expected), 'counted in the same call');
+
+    console.log('\n§5 a count too big for one slice shows "…" and finishes in later tasks');
+    await page.evaluate(() => { globalThis.__lucidVideoCountSliceFrames = 2; });
+    await ip();
+    r = await read();
+    check(r.rows.every(row => row[1] === '…' && row[2] === '…' && row[3] === '…'),
+        'right after the rebuild: "…" ' + JSON.stringify(r.rows[0]));
+    await page.waitForFunction(() => [...document.querySelectorAll('#videosTable tbody tr')]
+        .every(tr => tr.children[5].textContent !== '…'), null, { timeout: 10000 });
+    r = await read();
+    check(JSON.stringify(r.rows) === JSON.stringify(r.expected), 'then the same counts: ' + JSON.stringify(r.rows));
+
+    console.log('\n§6 a rebuild during a count: the older count stops, the newer one fills the table');
+    await ip();
+    const firstCells = await page.evaluateHandle(() => [...document.querySelectorAll('#videosTable tbody tr')].map(tr => tr.children[5]));
+    await ip();
+    await page.waitForFunction(() => [...document.querySelectorAll('#videosTable tbody tr')]
+        .every(tr => tr.children[5].textContent !== '…'), null, { timeout: 10000 });
+    await page.waitForTimeout(200);
+    check(await page.evaluate(cells => cells.every(td => td.textContent === '…'), firstCells),
+        'the replaced rows were never filled');
+    r = await read();
+    check(JSON.stringify(r.rows) === JSON.stringify(r.expected), 'the table has the counts');
+    await page.evaluate(() => { delete globalThis.__lucidVideoCountSliceFrames; });
 } finally {
     if (browser) await browser.close();
     server.kill();

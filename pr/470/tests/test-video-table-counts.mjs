@@ -10,10 +10,12 @@
  *     project's resident window).
  *   - Real Session / FrameGroup / InstanceGroup objects.
  *   - The score sums are bit-identical (same order of addition per camera).
+ *   - Counted in slices (`createVideoTableCounter`): any slice size, by frame
+ *     count or by clock, gives the one-shot result; a slice stops on time.
  *
  * Run: node tests/test-video-table-counts.mjs
  */
-import { videoTableCounts } from '../ui/video-table-counts.js';
+import { videoTableCounts, createVideoTableCounter } from '../ui/video-table-counts.js';
 import { FrameGroup, InstanceGroup, Instance, UnlinkedInstance } from '../pose/pose-data.js';
 
 let passed = 0, failed = 0;
@@ -108,6 +110,44 @@ for (let t = 0; t < 20; t++) {
     const cams = ['Camera0', 'Camera1', 'Camera2', 'Camera3', 'Camera4', 'Camera5', 'Camera6', 'Camera7'];
     const s = randomSession(300, cams, { lazy: true });
     compare(s, cams, 'lazy #' + t);
+}
+
+function sameCounts(a, b) {
+    if (a.size !== b.size) return false;
+    for (const [k, v] of a) {
+        const w = b.get(k);
+        if (!w || w.labeled !== v.labeled || w.groups !== v.groups
+            || !Object.is(w.scoreSum, v.scoreSum) || w.scoreCount !== v.scoreCount) return false;
+    }
+    return true;
+}
+
+group('counted in slices = counted at once');
+{
+    const cams = ['Camera0', 'Camera1', 'Camera2', 'Camera3', 'Camera4', 'Camera5', 'Camera6', 'Camera7'];
+    for (const lazy of [false, true]) {
+        const s = randomSession(1500, cams, { lazy });
+        const whole = videoTableCounts(s);
+        for (const frames of [1, 3, 64, 1000]) {
+            globalThis.__lucidVideoCountSliceFrames = frames;
+            const c = createVideoTableCounter(s);
+            let steps = 1;
+            while (!c.step(12)) steps++;
+            const expectSteps = Math.ceil((s.frameGroups.size + s.instanceGroups.size) / frames);
+            ok(steps >= expectSteps && steps <= expectSteps + 2,
+                `${lazy ? 'lazy' : 'eager'}, ${frames} frame(s) a slice: ${steps} slices (~${expectSteps})`);
+            ok(sameCounts(c.result(), whole), `${lazy ? 'lazy' : 'eager'}, ${frames} frame(s) a slice: same counts`);
+            ok(c.step(12) === true && sameCounts(c.result(), whole), 'a finished counter stays finished');
+        }
+        delete globalThis.__lucidVideoCountSliceFrames;
+        // By clock: a 0 ms budget stops at the first look at the clock (256 frames).
+        const c = createVideoTableCounter(s);
+        let steps = 1;
+        while (!c.step(0)) steps++;
+        ok(steps > 1, `${lazy ? 'lazy' : 'eager'}, 0 ms a slice: ${steps} slices`);
+        ok(sameCounts(c.result(), whole), `${lazy ? 'lazy' : 'eager'}, 0 ms a slice: same counts`);
+    }
+    ok(createVideoTableCounter(null).step(0) === true, 'no session: done at once');
 }
 
 group('no session, empty session');

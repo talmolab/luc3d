@@ -5,13 +5,13 @@
 // Follows the session the way the Animals field does (`ui/animal-count-field.js`):
 // the listener repaints it on a change, `syncTailMarkField` on a session switch.
 
-import { state } from './app-state.js?v=9abe74476002';
-import { setStatus } from '../import-export/save-load.js?v=9abe74476002';
+import { state } from './app-state.js?v=36b1db888e84';
+import { setStatus } from '../import-export/save-load.js?v=36b1db888e84';
 import {
     getTailMarkedIdentity, setTailMarkedIdentity, onTailMarkedIdentityChange,
     getIdentityMarks, setIdentityMarks, getTrackerNumAnimals,
-} from '../pose/tracker.js?v=9abe74476002';
-import { showIdentityMarksModal } from './identity-marks-modal.js?v=9abe74476002';
+} from '../pose/tracker.js?v=36b1db888e84';
+import { showIdentityMarksModal } from './identity-marks-modal.js?v=36b1db888e84';
 
 var _shownSession;
 var _shownValue;
