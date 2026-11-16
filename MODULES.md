@@ -5059,10 +5059,22 @@ Skeleton, Sessions, and Frame Info tables; hosts the skeleton editor and
 the per-frame instance-group / unlinked-instance tables. `updateInfoPanel` also
 renders the Session tab's Recording section (`ui/recording-info.js`).
 
-**Videos table (`populateVideosTable`).** The Groups column counts each
-camera's group members in ONE pass over `instanceGroups` (it walked every group
-once per video: ~0.5 s at the end of a Triangulate All on the 8-camera,
-539,852-group project).
+**Videos table (`populateVideosTable`).** The Labeled / Groups / Score columns
+read every frame and every group member, so they are counted only while the
+Videos section is on screen (info panel shown, pane `.active` in the rail's
+stack; a pane outside any rail section counts as shown). Otherwise a rebuild
+lists the videos, leaves those three cells empty and sets `videoCountsStale`; a
+`MutationObserver` on `#tabVideos`'s class (set up in `setupVideosTab`) rebuilds
+once the section opens. The counts come from `createVideoTableCounter`
+(`ui/video-table-counts.js`), one pass for every row, run in tasks of
+`VIDEO_COUNT_SLICE_MS` (12) by `countVideosInSlices`: the first slice runs in
+the rebuild (a small project is done there), the rest each in a `setTimeout`
+task, with the three cells showing '…' until the end. A newer rebuild
+(`videoCountJob`) or another session stops a running count. Before: one walk of
+`frameGroups` per video plus a for...of over every member, ~205 ms in the last
+task of a DLT Triangulate All on the 8-camera, 539,852-group project, with the
+section closed (only Instances is open by default). Test:
+`tests/e2e/videos-table-counts.mjs`.
 
 **Reprojection Error panel (`updateFrameInfo`).** The headline mean,
 undistorted residual, method label, and per-camera rows are the frame SUMMARY
@@ -5198,7 +5210,7 @@ marking the panel stale so `refreshInfoPanelAfterShow` (`ui-wiring.js`) rebuilds
 it once on re-show. Not a micro-optimization: `updateFrameInfo` runs on every
 frame (throttled to 10 Hz during playback) and rebuilds the breakdown plus both
 instance tables, and `updateInfoPanel` calls `populateVideosTable`, which walks
-EVERY frame of the session per video row. Three things deliberately stay
+every frame and group member of the session (when the Videos section is open). Three things deliberately stay
 outside the gate:
 - **The status bar**, which is NOT part of `#infoPanel` and is always on
   screen. `updateFrameInfo`'s tail writes `#statusError` and calls
@@ -5291,6 +5303,8 @@ In-memory only; see `ui/app-state.js`.
   toggles).
 - `./interaction.js` — `isInteractiveClickTarget`.
 - `./panel-visibility.js` — `isInfoPanelVisible`, `markInfoPanelStale`.
+- `./video-table-counts.js` — `createVideoTableCounter` (the Videos table's
+  counts, in slices).
 - `./section-state.js` — `persistSectionState` (Skeleton ▸ Nodes / Edges,
   under the `skeletonSectionsOpen` key).
 - `./lazy-select.js` — `buildLazySelect`, behind `buildTrackSelect` (both
@@ -12706,7 +12720,7 @@ collapse state has to be readable by code, not just CSS.
 - `markInfoPanelStale()` / `consumeInfoPanelStale()` — read-and-clear flag.
   Every info-panel populate function is a stateless full rebuild, so one call on
   re-show catches up; the flag avoids a redundant rebuild when nothing went
-  stale (`populateVideosTable` walks every frame).
+  stale (`populateVideosTable` walks every frame and group member).
 - `markViewport3DSkipped()`, `skipped` (`{ infoPanel, viewport3d }` counters,
   also on `window.__lucidPanelVis`) — diagnostics read by
   `tests/e2e/panel-toggle-independence.mjs`; a gate that still does the work has
@@ -13958,6 +13972,38 @@ browser claims support — the original error then stands.
 kind, renderer classes, decoder integration); real browsers via the
 `decoderErrors` step of `tests/e2e/_probe-capabilities.html`;
 `tests/e2e/video-codec-notice.mjs` (the notice, through File ▸ Load Videos).
+
+### ui/video-table-counts.js
+
+**Purpose.** The Videos table's per-camera counts in ONE pass over the session,
+resumable in slices:
+`labeled` (frames in `frameGroups` with a linked or unlinked instance on that
+camera; resident frames only on a lazy project), `groups` (group members on
+that camera; a null member does not count), `scoreSum` / `scoreCount` (linked
+instances with a score above 0, added in the same order as the per-camera loop
+it replaced, so the mean is bit-identical). Walks with `Map.forEach` (no entry
+pairs); a member finds its camera's counter by comparing names with the slot
+after the previous member's, since members come in camera order. The pass
+(the frames, then the groups) reads each Map through an iterator kept between
+slices; the clock is read every 256 frames. Still ~165 ms in one piece on the
+8-camera, 539,852-group project (bound by reading the members from memory),
+hence the slices. DOM-free and import-free (Node tests load it).
+
+**Key exports.**
+- `createVideoTableCounter(session)` → `{ step(budgetMs), result() }`: `step`
+  counts until the budget is spent and returns true once done; `result()` →
+  `Map<cameraName, {labeled, groups, scoreSum, scoreCount}>` (a camera with
+  nothing is absent; `null` session → empty).
+  `globalThis.__lucidVideoCountSliceFrames` (tests) makes each step count
+  exactly that many frames.
+- `videoTableCounts(session)`: the whole count at once.
+
+**Imported by.** `ui/info-panel.js` (`countVideosInSlices`).
+
+**Test.** `tests/test-video-table-counts.mjs` (random eager and lazy sessions
+against the old per-camera loops; any slice size gives the one-shot result).
+
+---
 
 ### ui/video-codec-notice.js
 
