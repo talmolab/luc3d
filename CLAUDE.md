@@ -273,6 +273,7 @@ node tests/e2e/<name>.mjs           # Playwright, one file per behavior
 ```
 - `tests/*.js` run only if `tests/test-runner.html` has a `<script>` tag for them; `tests/test-classic-tests-registered.mjs` fails on an untagged one. No Node runner for these; don't add one.
 - NaN must fail a check. `assertApprox` fails on NaN and non-numbers (to expect NaN, pass NaN as `expected`). In hand-rolled checks write the failure condition as `!(err <= tol)`, never `err > tol`, and never take a maximum with `if (d > worst) worst = d` (it skips NaN).
+- `assertDeepEqual` and `assertEqual` tell NaN, Infinity and -Infinity apart from `null` and from each other (NaN equals NaN). Otherwise `assertDeepEqual` is JSON equality: key order matters, `undefined` matches `null` or a missing key, and every Map and Set matches every other (compare `[...m]`). Pinned by `tests/test-assertions.js`.
 - `tests/test-*.mjs` are auto-discovered. Put ESM tests nowhere else.
 - `tests/e2e/_diag-*`, `_bench-*`, `_real-*` are investigation tools, not assertions.
 - Notable e2e: `sequence-lazy-workflow.mjs` (lazy-project regression harness; catches resident-only bugs, incl. edits: interactive deletes must use `deleteTargetsFromStore`, cycle 5c); `video-encode-streaming.mjs` (only coverage of streaming video export; run it if you touch `ui/video-encode.js`); `overlay-export-modal.mjs` / `export-3d-video.mjs` (the video modals); `_real-roundtrip.mjs` (real-data acceptance, needs a large `.slp`).
