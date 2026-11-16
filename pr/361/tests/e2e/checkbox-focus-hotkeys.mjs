@@ -137,8 +137,11 @@ try {
     // Tab to the checkbox rather than calling .focus(): only a real keyboard
     // focus sets :focus-visible, which is what the blur rule keys on.
     await reset();
+    // The Track, Triangulate and Smooth menus' items are Tab stops too (16 of
+    // them before #visUser), so allow plenty: Space below must not land on
+    // one of their Settings… buttons, whose overlay would cover the page.
     await page.evaluate(() => { document.getElementById('tbTrackAll').focus(); });
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 40; i++) {
         await page.keyboard.press('Tab');
         const id = await page.evaluate(() => document.activeElement.id);
         if (id === 'visUser') break;
