@@ -21,8 +21,8 @@
  * Needs ffmpeg (libx264); skipped with a note if absent.
  * Run: node tests/e2e/image-unreferenced-skip.mjs
  */
-import { chromium } from 'playwright';
-import { spawn, spawnSync } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -30,7 +30,8 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8278);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
@@ -52,9 +53,6 @@ if (!flat || !pyramid || !ponly) {
     fs.rmSync(tmp, { recursive: true, force: true });
     process.exit(0);
 }
-
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 const open = async (browser) => {
     const page = await browser.newPage();
@@ -126,7 +124,7 @@ const report = (r, expectSkips) => {
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await open(browser);
     console.log('\n• H.264, B-frames, no B-pyramid (every B-frame unreferenced)');
     const rf = await run(page, flat);
@@ -143,7 +141,7 @@ try {
     console.log('\n• HEVC, libx265 defaults (open GOP, B-frames — the SLAP recordings\' encoder)');
     if (!hevc) console.log('  (ffmpeg without libx265 — skipped)');
     else {
-        try { browser = await chromium.launch({ channel: 'chrome' }); } catch (e) { browser = null; }
+        try { browser = await launchBrowser({ channel: 'chrome' }); } catch (e) { browser = null; }
         if (!browser) console.log('  (Google Chrome not installed — HEVC needs it; skipped)');
         else {
             const p2 = await open(browser);

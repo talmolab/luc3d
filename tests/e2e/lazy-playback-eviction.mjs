@@ -19,28 +19,25 @@
  *     Frames edited in the four ways that must pin them are NOT evicted, and
  *     the pass reports each under its own reason.
  *
- * Run: node tests/e2e/lazy-playback-eviction.mjs   (spawns its own http.server)
+ * Run: node tests/e2e/lazy-playback-eviction.mjs   (serves the app itself)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8291);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m, extra) => {
     console.log((c ? '  ✓ ' : '  ✗ ') + m + (extra !== undefined && !c ? '  ' + JSON.stringify(extra).slice(0, 600) : ''));
     if (!c) fails++;
 };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch({ args: ['--disable-dev-shm-usage'] });
+    browser = await launchBrowser({ args: ['--disable-dev-shm-usage'] });
     const page = await browser.newPage();
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));

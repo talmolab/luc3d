@@ -269,8 +269,10 @@ Three populations, disjoint coverage; run all three:
 ```bash
 node tests/e2e/run-unit-tests.mjs   # tests/*.js classic scripts, headless browser
 node tests/run-mjs-tests.mjs        # tests/test-*.mjs, Node (optional substring filter)
-node tests/e2e/<name>.mjs           # Playwright, one file per behavior
+node tests/run-e2e-tests.mjs        # tests/e2e/*.mjs Playwright, in parallel (filters, --failed, -j N)
+node tests/e2e/<name>.mjs           # one Playwright file on its own
 ```
+- e2e files serve the app with `startServer` and open Chromium with `launchBrowser` (`tests/e2e/lib/harness.mjs`): a free port per file, no fixed sleep, a disk cache for jsdelivr and Hugging Face downloads. Never spawn `python3 -m http.server` or pick a fixed port in an e2e file (a taken port silently tested another worktree). `offline-server.mjs` is the exception (it tests `server.py`). The runner reruns failures alone, reports `SKIP` lines as skipped, and does not fail on files listed with a reason in `tests/e2e/known-failures.json`. See `tests/e2e/README.md`.
 - `tests/*.js` run only if `tests/test-runner.html` has a `<script>` tag for them; `tests/test-classic-tests-registered.mjs` fails on an untagged one. No Node runner for these; don't add one.
 - NaN must fail a check. `assertApprox` fails on NaN and non-numbers (to expect NaN, pass NaN as `expected`). In hand-rolled checks write the failure condition as `!(err <= tol)`, never `err > tol`, and never take a maximum with `if (d > worst) worst = d` (it skips NaN).
 - `assertDeepEqual` and `assertEqual` tell NaN, Infinity and -Infinity apart from `null` and from each other (NaN equals NaN). Otherwise `assertDeepEqual` is JSON equality: key order matters, `undefined` matches `null` or a missing key, and every Map and Set matches every other (compare `[...m]`). Pinned by `tests/test-assertions.js`.

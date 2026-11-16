@@ -27,8 +27,8 @@
  * Needs ffmpeg (libx264); skipped with a note if absent.
  * Run: node tests/e2e/step-cursor.mjs
  */
-import { chromium } from 'playwright';
-import { spawn, spawnSync } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -36,7 +36,8 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8277);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
@@ -51,12 +52,9 @@ if (ff.status !== 0 || !fs.existsSync(vid)) {
     process.exit(0);
 }
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage();
     // (close() itself throws a pre-existing TypeError from the <video> load listener — not this test's subject)
     page.on('pageerror', e => { if (!/reading 'error'/.test(String(e))) { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; } });

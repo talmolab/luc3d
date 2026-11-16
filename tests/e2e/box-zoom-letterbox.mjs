@@ -21,14 +21,14 @@
  *
  * Run: node tests/e2e/box-zoom-letterbox.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8286);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 const near = (a, b, tol) => Math.abs(a - b) <= tol;
@@ -38,9 +38,6 @@ const fmt = (p) => '(' + p.map(n => n.toFixed(2)).join(', ') + ')';
 // centre 100–300 video px off. Tight enough that dividing the vertical axis by
 // the horizontal 1:1 scale in section 4 (off by 0.18%) fails too: 1.1 px.
 const TOL = 0.25;
-
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 /** A one-camera project (1680x1200) in a single grid pane. */
 async function loadProject(page) {
@@ -177,7 +174,7 @@ const reset = (page) => page.evaluate(async () => {
 });
 
 try {
-    const browser = await chromium.launch();
+    const browser = await launchBrowser();
     const errs = [];
 
     // ===== A tall pane: the 1680x1200 video is letterboxed TOP AND BOTTOM ==

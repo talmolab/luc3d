@@ -43,15 +43,15 @@
  *   FRAMES=20000 CAMS=4 node tests/e2e/sequence-lazy-workflow.mjs
  *   KEEP=1 ...        # keep the generated .slp files for inspection
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8202);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const FRAMES = Number(process.env.FRAMES || 6000);
 const CAMS = Number(process.env.CAMS || 3);
 const NODES = Number(process.env.NODES || 5);
@@ -75,12 +75,9 @@ const outPath = (tag) => {
     return p;
 };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch({ headless: true, args: ['--enable-precise-memory-info'] });
+    browser = await launchBrowser({ headless: true, args: ['--enable-precise-memory-info'] });
     const page = await browser.newPage();
     page.on('pageerror', e => { log('[pageerror] ' + String(e).slice(0, 300)); fails++; });
     page.on('crash', () => { log('*** RENDERER CRASHED ***'); fails++; });
