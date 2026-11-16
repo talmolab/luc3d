@@ -38,7 +38,8 @@
  *
  *  7. The cache is per MODEL: another model (a package, ui/image-model-package.js)
  *     reuses none of the built-in model's vectors, has its own, and switching back
- *     finds the built-in ones again bit for bit. A 168-px package's input side
+ *     finds the built-in ones again bit for bit. The built-in model re-pinned to
+ *     another revision (cache key `builtin@<12 hex>`) is another model too. A 168-px package's input side
  *     reaches every crop the crop workers cut and every sample crop.
  *
  * Run: node tests/e2e/image-check-cache.mjs   (PORT=… to pick the server port)
@@ -370,6 +371,12 @@ try {
             const otherAgain = await window.__run(true);
             window.__embedOpts = Object.assign({}, saved, { imageModel: null });
             const back = await window.__run(true);
+            // the built-in model at another pinned revision (IMAGE_MODEL_REVISION moved): another model to the cache
+            window.__embedOpts = Object.assign({}, saved, { imageModel: Object.assign({}, E.BUILTIN_IMAGE_MODEL, { revision: 'f'.repeat(40) }) });
+            const repinned = await window.__run(true);
+            window.__embedOpts = Object.assign({}, saved, { imageModel: null });
+            const pinnedBack = await window.__run(true);
+            const keys = [E.cacheModelKey(E.BUILTIN_IMAGE_MODEL), E.cacheModelKey(Object.assign({}, E.BUILTIN_IMAGE_MODEL, { revision: 'f'.repeat(40) }))];
             // a 168-px package: what reaches the model, and the sample crops, are 168 x 168
             const sides = new Set(); let smallCrops = 0;
             const sideModel = async (data, n) => {
@@ -383,6 +390,9 @@ try {
             return { warmModel: warm.modelCrops, builtinCached: builtinAgain.stats.cachedCrops, builtinModel: builtinAgain.modelCrops,
                      otherCached: other.stats.cachedCrops, otherModel: other.modelCrops, otherAgainCached: otherAgain.stats.cachedCrops, otherAgainModel: otherAgain.modelCrops,
                      backCached: back.stats.cachedCrops, backModel: back.modelCrops, sameBack: window.__same(builtinAgain, back),
+                     repinnedCached: repinned.stats.cachedCrops, repinnedModel: repinned.modelCrops,
+                     pinnedBackCached: pinnedBack.stats.cachedCrops, pinnedBackModel: pinnedBack.modelCrops, keys,
+                     revision: E.IMAGE_MODEL_REVISION,
                      sides: [...sides], sampleSides: [...new Set(sampleSides)], smallCrops, smallOk: !!small.res };
         } finally { window.__embedOpts = saved; E.setActiveImageModel(null); }
     });
@@ -392,6 +402,12 @@ try {
     check(r7.otherAgainModel === 0 && r7.otherAgainCached === r7.otherModel, `…and its own second run is all cached (${r7.otherAgainCached})`);
     check(r7.backModel === 0 && r7.backCached === r7.builtinCached && r7.sameBack.vecDiff === 0 && r7.sameBack.missing === 0,
           `back to the built-in model: its own vectors, all cached and bit for bit (${JSON.stringify(r7.sameBack)})`);
+    check(r7.keys[0] === 'builtin@' + r7.revision.slice(0, 12) && r7.keys[1] === 'builtin@ffffffffffff',
+          `the built-in model's cache key names its pinned revision (${r7.keys.join(' vs ')})`);
+    check(r7.repinnedCached === 0 && r7.repinnedModel === r7.builtinCached,
+          `the built-in model re-pinned to another revision: nothing reused, all ${r7.repinnedModel} crops embedded`);
+    check(r7.pinnedBackModel === 0 && r7.pinnedBackCached === r7.builtinCached,
+          `…and back at the pinned revision, its own vectors are still all cached (${r7.pinnedBackCached})`);
     check(r7.sides.length === 1 && r7.sides[0] === 168 && r7.sampleSides.length === 1 && r7.sampleSides[0] === 168 && r7.smallCrops > 1000,
           `a 168-px package: every model input (${r7.smallCrops} crops, sides ${r7.sides}) and sample crop (sides ${r7.sampleSides}) is 168 x 168`);
     check(r7.input === 192, `the built-in model's 192-px input is back afterwards (INPUT ${r7.input})`);

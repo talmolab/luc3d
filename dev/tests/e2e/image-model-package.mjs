@@ -15,6 +15,10 @@
  *  2. From a URL (a local server here): only the manifest is fetched up front,
  *     the key equals the folder's (the manifest lists the weights' hashes), the
  *     weights come from that server, and the vectors are the same.
+ *  2b. The downloaded weights are checked against the manifest's SHA-256: a server
+ *     whose model.onnx differs by one byte fails the load (in a CPU worker and on
+ *     the page) with the reason, and nothing of it is cached; a wrong copy already
+ *     in Cache Storage is deleted and downloaded again, and the run is right.
  *  3. The dialog: Esc changes nothing; loading the folder and "Use this model"
  *     sets the session's choice (key, name, input, threshold, folder) and marks
  *     the project dirty; the ID Switches tab names the model.
@@ -39,8 +43,10 @@ const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fa
 
 const src = fs.readFileSync(path.join(repoRoot, 'ui', 'image-embedder.js'), 'utf8');
 const MODEL_ID = src.match(/IMAGE_MODEL_ID = '([^']+)'/)[1];
-const HF = `https://huggingface.co/${MODEL_ID}/resolve/main/`;
-const dir = path.join(os.tmpdir(), 'lucid-image-model-package-test', MODEL_ID.replace('/', '__'));
+const REVISION = src.match(/IMAGE_MODEL_REVISION = '([0-9a-f]{40})'/)[1];
+// the built-in model's files at its pinned commit (the ones the app loads), not whatever the repo's main holds now
+const HF = `https://huggingface.co/${MODEL_ID}/resolve/${REVISION}/`;
+const dir = path.join(os.tmpdir(), 'lucid-image-model-package-test', MODEL_ID.replace('/', '__') + '@' + REVISION.slice(0, 12));
 fs.mkdirSync(path.join(dir, 'onnx'), { recursive: true });
 try {
     for (const f of ['config.json', 'onnx/model.onnx']) {
@@ -57,6 +63,12 @@ const MANIFEST = { format: 'lucid-image-model', version: 1, name: 'Built-in weig
     license: 'DINOv3 License', input: 192, crop: 160, threshold: -1.2, fp16: false, sha256: { 'onnx/model.onnx': SHA },
     training: { method: 'none (test)' }, validation: { note: 'same weights as the built-in model' } };
 fs.writeFileSync(path.join(dir, 'lucid-model.json'), JSON.stringify(MANIFEST, null, 2));
+// a server whose weights are not the manifest's: one byte changed, same manifest (so the same key)
+const TAMPER_AT = 1 << 20;
+fs.mkdirSync(path.join(dir, 'tampered', 'onnx'), { recursive: true });
+fs.copyFileSync(path.join(dir, 'lucid-model.json'), path.join(dir, 'tampered', 'lucid-model.json'));
+fs.copyFileSync(path.join(dir, 'config.json'), path.join(dir, 'tampered', 'config.json'));
+{ const bad = Buffer.from(fp32); bad[TAMPER_AT] ^= 0xff; fs.writeFileSync(path.join(dir, 'tampered', 'onnx', 'model.onnx'), bad); }
 
 const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
 // the package's own server (CORS for the app's origin: Python's http.server sends none, so a tiny one)
@@ -104,7 +116,7 @@ try {
         const T = await E.importTransformers();
         P.installModelPackageFetch(T);
         const cls = async (id, isPkg) => {
-            const m = await P.withPackageCachePolicy(T, isPkg ? pkg : null, () => T.AutoModel.from_pretrained(id, { device: 'wasm', dtype: 'fp32' }));
+            const m = await P.withPackageCachePolicy(T, isPkg ? pkg : null, () => T.AutoModel.from_pretrained(id, E.pretrainedOptions(isPkg ? pkg : E.BUILTIN_IMAGE_MODEL, { device: 'wasm', dtype: 'fp32' })));
             const res = await m({ pixel_values: new T.Tensor('float32', data.slice(), [n, 3, 192, 192]) });
             const hs = res.last_hidden_state, tok = hs.dims[1], dim = hs.dims[2], out = [];
             for (let i = 0; i < n; i++) out.push(Float32Array.from(hs.data.subarray(i * tok * dim, i * tok * dim + dim)));
@@ -153,6 +165,48 @@ try {
     check(r2.kind === 'url' && r2.base === `http://localhost:${PKG_PORT}/`, `…its files come from ${r2.base}`);
     check(served.filter(p => p.startsWith('/lucid-model.json')).length === 2 && served.some(p => p.startsWith('/onnx/model.onnx')) && served.some(p => p.startsWith('/config.json')),
           `the server saw the manifest (twice: two loads) and, on first use, config.json and the weights: ${[...new Set(served.map(p => p.split('?')[0]))].join(', ')}`);
+
+    // ---- 2b. the weights are checked against the manifest
+    const r2b = await page.evaluate(async ({ PKG_PORT, TAMPER_AT }) => {
+        const P = await import('/ui/image-model-package.js'), E = await import('/ui/image-embedder.js');
+        const cache = await caches.open('transformers-cache');
+        const cached = async (id) => (await cache.keys()).map(r => r.url).filter(u => u.includes(id + '/'));
+        // drop what §2 cached for this key, so the tampered server's weights are downloaded
+        P.clearModelPackages();
+        const bad = await P.loadModelPackageFromUrl('http://localhost:' + PKG_PORT + '/tampered/');
+        for (const u of await cached(bad.id)) await cache.delete(u);
+        E.setActiveImageModel(bad);
+        let workerErr = null, pageErr = null;
+        try { const pool = await E.createCpuModelPool(1); pool.terminate(); } catch (e) { workerErr = e.message; }
+        const T = await E.importTransformers();
+        P.installModelPackageFetch(T);
+        try { await P.withPackageCachePolicy(T, bad, () => T.AutoModel.from_pretrained(bad.id, E.pretrainedOptions(bad, { device: 'wasm', dtype: 'fp32' }))); } catch (e) { pageErr = e.message; }
+        const afterBad = await cached(bad.id);
+        E.setActiveImageModel(null);
+        // a wrong copy already in the cache (cached before downloads were checked): deleted, downloaded again
+        P.clearModelPackages();
+        const good = await P.loadModelPackageFromUrl('http://localhost:' + PKG_PORT + '/');
+        const weightsUrl = P.packageCacheUrl(T, good.id, 'onnx/model.onnx');
+        const wrong = new Uint8Array(await (await fetch('http://localhost:' + PKG_PORT + '/tampered/onnx/model.onnx')).arrayBuffer());
+        await cache.put(weightsUrl, new Response(wrong, { headers: { 'content-length': String(wrong.length) } }));
+        E.setActiveImageModel(good);
+        const pool = await E.createCpuModelPool(1);
+        let seed = 7; const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296);
+        const n = 3, SZ = 3 * 192 * 192, data = Float32Array.from({ length: n * SZ }, () => (rnd() - 0.5) * 4);
+        const out = await pool.run(data, n);
+        pool.terminate();
+        E.setActiveImageModel(null);
+        const now = await cache.match(weightsUrl);
+        const nowBytes = now ? new Uint8Array(await now.arrayBuffer()) : null;
+        return { workerErr, pageErr, afterBad, first: Array.from(out[0].slice(0, 4)),
+                 recached: !!nowBytes && nowBytes.length === wrong.length, fixed: !!nowBytes && nowBytes[TAMPER_AT] !== wrong[TAMPER_AT] };
+    }, { PKG_PORT, TAMPER_AT });
+    const MISMATCH = /onnx\/model\.onnx from http:\/\/localhost:\d+\/tampered\/ does not match the SHA-256 in lucid-model\.json/;
+    check(MISMATCH.test(r2b.workerErr || ''), `weights one byte off the manifest: the CPU worker refuses them ("${(r2b.workerErr || 'loaded').slice(0, 140)}")`);
+    check(MISMATCH.test(r2b.pageErr || ''), `…and so does the page (WebGPU / WebNN path) ("${(r2b.pageErr || 'loaded').slice(0, 80)}…")`);
+    check(!r2b.afterBad.some(u => u.endsWith('onnx/model.onnx')), `…and the wrong weights were not cached (${r2b.afterBad.map(u => u.split('/').pop()).join(', ') || 'nothing'})`);
+    check(r2b.recached && r2b.fixed, 'a wrong cached copy is deleted and the right weights downloaded in its place');
+    check(JSON.stringify(r2b.first) === JSON.stringify(r2.first), `…and the run gives the right model's vectors (${r2b.first.map(v => v.toFixed(4)).join(', ')})`);
 
     // ---- 3. the dialog
     const r3 = await page.evaluate(async () => {

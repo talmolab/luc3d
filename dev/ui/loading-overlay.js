@@ -30,9 +30,9 @@
 // fingerprinting protection on, a note under it explains that the core count is
 // a random one and how to stop that (ui/browser-hints.js).
 
-import { noteProgress } from './progress-delta.js?v=497f54436c8d';
-import { createLoadMeter, createBusyClock, createLoadGraph, formatCpuLoad, setLoadLine, cpuCores } from './load-graph.js?v=497f54436c8d';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=497f54436c8d';
+import { noteProgress } from './progress-delta.js?v=3222adade73a';
+import { createLoadMeter, createBusyClock, createLoadGraph, formatCpuLoad, setLoadLine, cpuCores } from './load-graph.js?v=3222adade73a';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=3222adade73a';
 
 /** Default pacer interval. Each yield waits for one paint (~one display frame),
  *  so this bounds the overhead at roughly frame-time / interval (a few %). The
