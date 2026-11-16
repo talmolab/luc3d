@@ -127,6 +127,14 @@
  *                            Track All too), e.g. matchGate=0 or imageCheckHz=4
  *     NODE_WEIGHTS=n=w,...   Tracking Wizard per-node weights, applied at boot,
  *                            e.g. TailTip=0,Tail_0=0,Tail_1=0,Tail_2=0
+ *     TIMELINE_PROBE=1       after Track All and after Triangulate All, time the
+ *                            timeline's segment rebuild (`_rebuildSegments`, per
+ *                            phase, in tracks / identities / both modes) and
+ *                            fingerprint `_trackSegments` / `_trackNames`
+ *     TIMELINE_REF=<path>    with TIMELINE_PROBE: also rebuild with the Timeline
+ *                            class of this repo-relative module (e.g. main's
+ *                            ui/timeline.js copied into ui/) and compare its
+ *                            rows with the live code's, value for value
  *     DIAG_JS=<file>         after prep, run the file's code in the page (an async
  *                            function body) and save its return value to diag.json
  *     GC_REPS=3              forced full GCs per measurement (median and min reported)
@@ -177,6 +185,8 @@ const EXPORT_FRAMES = Number(process.env.EXPORT_FRAMES || 0);
 const EXPORT_START = Number(process.env.EXPORT_START || 20000);
 const HEAPPROBE = process.env.HEAPPROBE === '1';
 const DUMP_IDS = process.env.DUMP_IDS || '';
+const TIMELINE_PROBE = process.env.TIMELINE_PROBE === '1';
+const TIMELINE_REF = process.env.TIMELINE_REF || '';
 const IDSWITCH = (process.env.IDSWITCH || '').split(',').map(s => s.trim()).filter(s => s === 'size' || s === 'image');
 const DIAG_JS = process.env.DIAG_JS || '';
 // "a=1,b=2" -> {a: 1, b: 2}
@@ -441,6 +451,62 @@ try {
     // as a user would. Track All asks for the animal count in its first-use
     // dialog, answered by answerTrackSetup (NANIMALS, default 3: ~95% of frames in
     // the HardFight set hold 3 instances per camera).
+    // TIMELINE_PROBE: the timeline's segment rebuild as the end of a whole-
+    // project run calls it (refreshTracks -> _rebuildSegments), timed per
+    // phase, plus a fingerprint of the rows it builds (and, with TIMELINE_REF,
+    // a value-for-value comparison with another Timeline class's rows).
+    const timelineProbe = async (tag) => {
+        if (!TIMELINE_PROBE) return;
+        const r = await page.evaluate(async (REF) => {
+            const tl = window.__lucid.timeline, s = window.__lucid.state.session;
+            const P = Object.getPrototypeOf(tl);
+            const phases = ['_buildTrackSegments', '_buildIdentitySegments', '_applyVisibilityFilter',
+                '_finalizeTreeGrouping', '_recomputeLeftMargin'];
+            const snap = () => JSON.stringify([tl._trackSegments, tl._trackNames]);
+            const mode0 = tl._displayMode, out = { modes: {} };
+            const timed = (fn) => {
+                const acc = {}, saved = {};
+                for (const ph of phases) {
+                    saved[ph] = P[ph];
+                    tl[ph] = function (...a) { const t = performance.now(); try { return saved[ph].apply(this, a); } finally { acc[ph] = (acc[ph] || 0) + performance.now() - t; } };
+                }
+                const t = performance.now();
+                try { fn(); } finally { for (const ph of phases) delete tl[ph]; }
+                acc.total = performance.now() - t;
+                for (const k in acc) acc[k] = Math.round(acc[k]);
+                return acc;
+            };
+            for (const mode of ['tracks', 'identities', 'both']) {
+                tl._displayMode = mode;
+                const runs = [];
+                for (let i = 0; i < 3; i++) runs.push(timed(() => tl._rebuildSegments(s)));
+                const live = snap();
+                const m = out.modes[mode] = { runs, rows: tl._trackSegments.length, chars: live.length };
+                if (REF) {
+                    // A copy of the live timeline whose methods are ALL the
+                    // reference class's (calling only its _rebuildSegments on
+                    // the live object would run the live builders inside it).
+                    const Ref = (await import('/' + REF)).Timeline;
+                    const r = Object.assign(Object.create(Ref.prototype), tl);
+                    const t = performance.now();
+                    r._rebuildSegments(s);
+                    m.refMs = Math.round(performance.now() - t);
+                    const ref = JSON.stringify([r._trackSegments, r._trackNames]);
+                    m.sameAsRef = ref === live;
+                    if (!m.sameAsRef) {
+                        let k = 0; while (k < ref.length && ref[k] === live[k]) k++;
+                        m.firstDiff = { at: k, ref: ref.slice(Math.max(0, k - 80), k + 80), live: live.slice(Math.max(0, k - 80), k + 80) };
+                    }
+                }
+            }
+            tl._displayMode = mode0;
+            tl.refreshTracks(s, { cap: true });
+            return out;
+        }, TIMELINE_REF);
+        summary.timelineProbe = summary.timelineProbe || {};
+        summary.timelineProbe[tag] = r;
+        log(`[${el()}] timeline probe (${tag}): ${JSON.stringify(r)}`);
+    };
     if (PREP === 'none') log(`\n[${el()}] PREP=none — playing the project as loaded (no Track All / Triangulate All)`);
     if (PREP !== 'none' && ps.with3d === 0 && ps.identities === 0 && ps.groups === 0) {
         log(`\n[${el()}] no identities — running Track All (NANIMALS=${process.env.NANIMALS || 3})`);
@@ -457,6 +523,7 @@ try {
         log(`[${el()}] result hashes after Track All: ${JSON.stringify(summary.trackAll.hashes)}`);
         ps = await projState();
         log(`[${el()}] project: ${JSON.stringify(ps)}`);
+        await timelineProbe('afterTrackAll');
         if (DUMP_IDS) {
             // Track All's per-detection result, for scoring against proofread
             // labels: every frameIdentityMap entry as [frame, camIdx, trackIdx,
@@ -576,6 +643,7 @@ try {
         log(`[${el()}] Triangulate All: ${JSON.stringify(r)}`);
         ps = await projState();
         log(`[${el()}] project: ${JSON.stringify(ps)}`);
+        await timelineProbe('afterTriangulateAll');
     }
     summary.project = ps;
     if (ps.with3d === 0 && PREP !== 'none') log('  !! WARNING: still no 3D — reprojections will not be drawn; results will not reflect the user scenario');

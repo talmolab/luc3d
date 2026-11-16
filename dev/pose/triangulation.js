@@ -10,27 +10,27 @@
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
          setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d,
-         isPoints3dSmoothed } from './pose-data.js?v=8e2ee649c0e7';
+         isPoints3dSmoothed } from './pose-data.js?v=c9954aedee42';
 // The Jacobi eigensolver and the least-squares plane fit live in
 // `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
 // importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
 // re-exported unchanged, because every existing caller and test reads it here.
-import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=8e2ee649c0e7';
+import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=c9954aedee42';
 export { fitPlaneToPoints3d };
-import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=8e2ee649c0e7';
+import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=c9954aedee42';
 // Pass 3i-2: triangulation orchestration moved out of app.js
-import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=8e2ee649c0e7';
-import { updateTriangulationBadge } from '../ui/info-panel.js?v=8e2ee649c0e7';
-import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=8e2ee649c0e7';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=8e2ee649c0e7';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=8e2ee649c0e7';
-import { createGroupSolver } from './triangulation-pool.js?v=8e2ee649c0e7';
-import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=8e2ee649c0e7';
+import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=c9954aedee42';
+import { updateTriangulationBadge } from '../ui/info-panel.js?v=c9954aedee42';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=c9954aedee42';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=c9954aedee42';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=c9954aedee42';
+import { createGroupSolver } from './triangulation-pool.js?v=c9954aedee42';
+import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=c9954aedee42';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
-         dropDerivedReprojections, lazyRowInstance, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=8e2ee649c0e7';
+         dropDerivedReprojections, lazyRowInstance, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=c9954aedee42';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from './initialization.js?v=8e2ee649c0e7';
-import { noteTriangulateRun, carryTriangulateMark } from './run-state.js?v=8e2ee649c0e7';
+import { update3DViewport } from './initialization.js?v=c9954aedee42';
+import { noteTriangulateRun, carryTriangulateMark } from './run-state.js?v=c9954aedee42';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -50,7 +50,7 @@ import {
     hungarianAlgorithm, cameraCenter, backProjectToRay, backProjectToRays,
     pointToRayDistance, pointsToRayDistances,
     computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
-} from './triangulation-core.js?v=8e2ee649c0e7';
+} from './triangulation-core.js?v=c9954aedee42';
 export {
     triangulatePointDLT, triangulatePoints, clearPointsBehindEveryView, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,
@@ -2573,8 +2573,8 @@ export function triangulateCurrentFrame(method) {
 
     // Update timeline: mark frame only if it has grouped UserInstances,
     // then re-apply the 30% cap (triangulation can add track rows).
+    // (updateTimelineForFrame already rebuilds the track rows, capped.)
     updateTimelineForFrame(frameIdx);
-    if (timeline) timeline.refreshTracks(state.session, { cap: true });
 }
 
 /**
@@ -3089,7 +3089,12 @@ export async function triangulateAllFrames(method) {
             ' groups, avg error: ' + sweptAvg + 'px)' + (reprojOnly ? REPROJ_ONLY_NOTE : ''), 'success');
         console.log('[triangulate-all] windowed sweep done:', swept.frames, 'frames,',
             swept.groups, 'groups,', swept.skipped, 'groups skipped (<2 usable views), avg error:', sweptAvg);
-        if (timeline) timeline.refreshTracks(state.session, { cap: true });
+        // The track rows walk every group of the project (~0.2 s on 540k
+        // groups): their own task, after the results above have painted.
+        if (timeline) {
+            await yieldToPaint();
+            timeline.refreshTracks(state.session, { cap: true });
+        }
         return;
     }
 
@@ -3221,8 +3226,11 @@ export async function triangulateAllFrames(method) {
         ' (' + totalGroups.toLocaleString('en-US') + ' groups, avg error: ' + avgError + 'px)' + (reprojOnly ? REPROJ_ONLY_NOTE : ''), 'success');
     console.log('[triangulate-all] Done:', totalTriangulated, 'frames,', totalGroups, 'groups, avg error:', avgError);
 
-    // Update timeline: mark frames with grouped UserInstances, refresh track bars
+    // Update timeline: mark frames with grouped UserInstances, refresh track
+    // bars. The rebuild walks every group of the project: its own task, after
+    // the results above have painted.
     if (timeline) {
+        await yieldToPaint();
         for (var tfi = 0; tfi < triangulatedFrames.length; tfi++) {
             timeline.setFrameModified(triangulatedFrames[tfi], frameHasGroupedUserInstances(triangulatedFrames[tfi]));
         }

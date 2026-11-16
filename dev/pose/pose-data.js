@@ -332,6 +332,18 @@ export class FrameIdentityMap extends Map {
     forEach(cb, thisArg) {
         for (var e of this._iter(0)) cb.call(thisArg, e[1], e[0], this);
     }
+
+    /**
+     * `cb(key, value)` for every live entry, in insertion order, with no
+     * allocation per entry (the iterators build a `[k, v]` array each, ~4M of
+     * them on a large project). `cb` must not modify the map.
+     */
+    forEachKeyValue(cb) {
+        for (var i = 0; i < this._n; i++) {
+            if (!(this._state[i] & FIM_LIVE)) continue;
+            cb(this._keyAt(i), this._valAt(i));
+        }
+    }
 }
 
 export class Skeleton {
@@ -2692,6 +2704,33 @@ export class Session {
         var u = _fimUnpack(key);
         var cam = this.cameras[u.camIdx];
         return { frameIdx: u.frameIdx, camName: cam ? cam.name : String(u.camIdx), trackIdx: u.trackIdx };
+    }
+
+    /**
+     * The records of `frameIdentityEntries()`, same order and same skips, as
+     * `cb(frameIdx, camName, trackIdx, identityId)`: no record object, no
+     * `[k, v]` pair and no generator step per entry. For whole-map scans that
+     * run in one task (the ID timeline's rebuild). `cb` must not modify the map.
+     * @param {function(number, string, number, number): void} cb
+     */
+    forEachFrameIdentity(cb) {
+        var self = this, map = this.frameIdentityMap;
+        if (!map) return;
+        var visit = function (key, identityId) {
+            if (_fimIsPacked(key)) {
+                // _fimUnpack + _fimDecode, inlined
+                var frameIdx = Math.floor(key / FIM_CAM_STRIDE);
+                var rem = key - frameIdx * FIM_CAM_STRIDE;
+                var camIdx = Math.floor(rem / FIM_TRACK_STRIDE);
+                var cam = self.cameras[camIdx];
+                cb(frameIdx, cam ? cam.name : String(camIdx), (rem - camIdx * FIM_TRACK_STRIDE) - 1, identityId);
+                return;
+            }
+            var parts = self._fimDecode(key);
+            if (parts) cb(parts.frameIdx, parts.camName, parts.trackIdx, identityId);
+        };
+        if (typeof map.forEachKeyValue === 'function') map.forEachKeyValue(visit);
+        else for (var e of map) visit(e[0], e[1]);
     }
 
     /**
