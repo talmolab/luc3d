@@ -6,7 +6,7 @@ name: Tests
 on:
   pull_request:
   push:
-    branches: [main, claude/ci-tests]   # TEMPORARY: claude/ci-tests while the workflow is being tried
+    branches: [main]
   workflow_dispatch:
 
 # A new push to a pull request cancels its run still in progress.

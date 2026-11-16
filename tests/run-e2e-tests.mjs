@@ -248,7 +248,7 @@ if (opts.writeTimings) {
     for (const f of Object.keys(out)) if (!fs.existsSync(path.join(e2eDir, f))) delete out[f];
     const sorted = Object.fromEntries(Object.keys(out).sort().map(f => [f, out[f]]));
     fs.writeFileSync(committedTimingsFile, JSON.stringify({
-        about: 'Seconds per tests/e2e file, from `node tests/run-e2e-tests.mjs --write-timings`. Used only to split the files evenly across CI machines (--shard) and to start slow files first; a wrong or missing entry costs balance, never coverage.',
+        about: 'Seconds per tests/e2e file, best from a CI runner (GitHub ubuntu-latest, Chrome, 2 at a time), where the split is used. Used only to split the files evenly across CI machines (--shard) and to start slow files first; a wrong or missing entry costs balance, never coverage. Refresh with `node tests/run-e2e-tests.mjs --write-timings` (or from a CI run).',
         seconds: sorted,
     }, null, 1) + '\n');
     console.log(`\nwrote ${Object.keys(sorted).length} times to tests/e2e/timings.json`);
