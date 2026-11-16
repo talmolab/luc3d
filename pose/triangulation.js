@@ -40,7 +40,7 @@ import { noteTriangulateRun, carryTriangulateMark } from './run-state.js';
 // same place, so there is one implementation.
 import {
     matMul, matTranspose, solveSmallestEigenvector4x4, svd3x4,
-    triangulatePointDLT, triangulatePoints, BA_ROBUST_SCALE_PX,
+    triangulatePointDLT, triangulatePoints, clearPointsBehindEveryView, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,
     reprojectPoint, reprojectPoints, reprojectPointCamera, reprojectPointsCamera,
     cameraDepth,
@@ -52,7 +52,7 @@ import {
     computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
 } from './triangulation-core.js';
 export {
-    triangulatePointDLT, triangulatePoints, BA_ROBUST_SCALE_PX,
+    triangulatePointDLT, triangulatePoints, clearPointsBehindEveryView, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,
     reprojectPoint, reprojectPoints, reprojectPointCamera, reprojectPointsCamera,
     cameraDepth,

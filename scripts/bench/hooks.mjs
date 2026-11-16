@@ -49,6 +49,8 @@ const THRESHOLD_DEFAULTS = {
     imageCheckHz: 2,
     imageCheckBackgroundHz: 0.1,
     imageCheckMaxViews: 3,
+    imageCheckGpuTimePct: 100,
+    imageCheckCpuTimePct: 100,
     imageCheckWebNN: 0,
     autoBrightnessSwitchCheck: 1,
     brightnessCheckThreshold: -800,

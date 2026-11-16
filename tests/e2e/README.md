@@ -24,14 +24,84 @@ npx playwright install-deps chromium   # or apt-get install the libnss3/libnspr4
 
 ## Run
 
-From the **repo root**, start the static server, then run a test:
+Each file serves the app itself, so there is nothing to start first:
 
 ```bash
-python3 -m http.server 8080            # terminal 1 (repo root)
-node tests/e2e/session-video-scoping.mjs   # terminal 2
+node tests/run-e2e-tests.mjs                # every file, several at a time
+node tests/run-e2e-tests.mjs plane save-    # files whose name contains a filter
+node tests/run-e2e-tests.mjs --failed       # what failed last time in this checkout
+node tests/e2e/session-video-scoping.mjs    # one file on its own
 ```
 
-Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
+Exit code `0` = pass. The runner (`tests/run-e2e-tests.mjs`, `--help` for its
+options):
+
+- runs files several at a time (half the cores the current load leaves idle,
+  1 to 8; `-j N` to choose), slowest first, from the last runs' times;
+- stops a file after `--timeout` seconds (default 600) with the browser and any
+  server it started;
+- runs every failure again ALONE: one that then passes is reported as "passed
+  alone" (load or timing) and does not fail the run;
+- reports a file that prints a line starting with `SKIP` as skipped, not passed;
+- runs the files in `known-failures.json` (red on main for a stated reason)
+  without failing the run, and says when one passes again;
+- keeps each file's output in a log folder named at the start and the end.
+
+`HEADED=1` runs one file at a time (a visible window: see `scripts/browser-lock.mjs`).
+
+Environment switches (any file, through `lib/harness.mjs`):
+
+- `LUC3D_E2E_CHANNEL=chrome` runs Google Chrome instead of Playwright's
+  Chromium (CI does).
+- `LUC3D_E2E_TRACE=1` logs each page's console errors, uncaught errors,
+  crashes, navigations, failed requests and downloads to stderr. The runner
+  sets it when it reruns a failure alone.
+
+## CI
+
+`.github/workflows/tests.yml` runs on every pull request and every push to
+`main`: the Node and browser unit suites in one job, and these files in four
+shards (`node tests/run-e2e-tests.mjs --shard I/4 -j 2`) in Google Chrome, with
+ffmpeg and the offline packages installed. Each shard's summary is on the run's
+page, each failure is an annotation on its file, and a failed shard's logs
+(with the traced rerun) are a run artifact for a week.
+
+The shards are split by `timings.json` (committed), so every machine computes
+the same split. After adding a slow file, refresh it:
+`node tests/run-e2e-tests.mjs --write-timings`. A stale entry only costs
+balance, never coverage.
+
+## Writing a test
+
+Serve the app and open the browser through `lib/harness.mjs`:
+
+```js
+import { startServer, launchBrowser } from './lib/harness.mjs';
+
+const server = await startServer(repoRoot);   // a free port, ready when this resolves
+const PORT = server.port;                      // or server.url
+const browser = await launchBrowser();         // chromium.launch(), plus the CDN cache
+// ... page.goto(`http://localhost:${PORT}/index.html`) ...
+// finally: await browser.close(); server.close();
+```
+
+- **`startServer(root)`** serves `root` from the test's own process and answers
+  like `python3 -m http.server` (same types and headers, no Range support;
+  `tests/test-e2e-harness.mjs` compares the two). Never spawn a Python server
+  or pick a fixed port: a port another session's server already held made a
+  test run against that worktree's code. `PORT=` still picks the port, and
+  fails loudly when it is taken. `{ cors: true }` makes a second, cross-origin
+  server (as `image-model-package.mjs` does for a model package).
+- **`launchBrowser(options)`** keeps jsdelivr and Hugging Face downloads in a
+  disk cache shared by every worktree (`LUC3D_E2E_CACHE`, default
+  `<tmp>/luc3d-e2e-cache`; `LUC3D_E2E_CDN_CACHE=0` turns it off). A versioned
+  URL is reused as is; the model's `resolve/main/…` files are reused only while
+  their ETag is unchanged. A test's own `route()` still runs first, so tests
+  that cut the network (`image-check-offline.mjs`) still do.
+- A test that cannot run here (no Brave, no network) prints a line starting
+  with `SKIP` and exits 0.
+- `offline-server.mjs` is the one file that still starts a Python server:
+  `server.py --offline` is what it tests.
 
 ## Tests
 

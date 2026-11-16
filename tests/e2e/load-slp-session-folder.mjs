@@ -35,10 +35,9 @@
  * Negative control, run once on the build before this change: in A Camera1_topB shows
  * rec/Camera5_side/0.mp4, and B finds no Select Session Folder.
  *
- * Run: node tests/e2e/load-slp-session-folder.mjs   (spawns its own http.server; PORT= to move it)
+ * Run: node tests/e2e/load-slp-session-folder.mjs   (serves the app itself; PORT= to move it)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -46,7 +45,8 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8773);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const NFRAMES = 21;   // the demo clips' length
 
 let fails = 0;
@@ -69,12 +69,9 @@ sessionJson.cameras = Object.keys(CLIPS).map((name, i) => Object.assign({}, camT
     { index: i, selection: i, name, serial: 'emu' + i, folder: name, video: name + '/0.mp4' }));
 fs.writeFileSync(path.join(rec, 'session.json'), JSON.stringify(sessionJson, null, 2));
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     await page.goto(`http://localhost:${PORT}/index.html`);

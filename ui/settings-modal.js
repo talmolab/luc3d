@@ -42,6 +42,7 @@ import {
     getCameraWeight,
     setCameraWeights,
     getTrackingThresholdDefs,
+    ID_SWITCH_SETTING_IDS,
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
@@ -713,7 +714,11 @@ export function showSettingsModal(initialPanel) {
     // or an on/off switch for a `kind: 'toggle'` setting, with an inline
     // description. Edits mutate working.thresholds; numbers are clamped to the
     // catalog range on blur and on Apply.
-    const thSection = buildSection('Tracking Thresholds', thresholdDefs.length || null);
+    // The ID-switch checks' settings get their own section after this one (ID_SWITCH_SETTING_IDS).
+    const idSwitchDefs = ID_SWITCH_SETTING_IDS.map(function (id) { return thresholdDefs.find(function (d) { return d.id === id; }); })
+        .filter(Boolean);
+    const trackerDefs = thresholdDefs.filter(function (d) { return ID_SWITCH_SETTING_IDS.indexOf(d.id) < 0; });
+    const thSection = buildSection('Tracking Thresholds', trackerDefs.length || null);
     wizPanel.appendChild(thSection.root);
 
     const thHint = document.createElement('div');
@@ -724,17 +729,35 @@ export function showSettingsModal(initialPanel) {
         'Defaults are tuned values — change them only if tracking under/over-matches. Changes apply when you click Apply.';
     thSection.body.appendChild(thHint);
 
-    thresholdDefs.forEach(function (def) {
+    // One setting's row (buildParamRow: a labelled number field, or a switch for a `kind: 'toggle'`) into `body`.
+    function renderThresholdRow(def, body) {
         const isFilter = def.id === 'filterMinVisibleNodes' || def.id === 'filterMinInstanceScore' ||
             def.id === 'filterMinMeanNodeScore';
         const onEdit = isFilter ? function () { filterPreview.update(); }
             : def.id === 'reprojErrorThreshold'
                 ? function () { triFigure.update({ threshold: working.thresholds.reprojErrorThreshold }); }
                 : null;
-        thSection.body.appendChild(buildParamRow(def, working.thresholds, onEdit));
+        const row = buildParamRow(def, working.thresholds, onEdit);
+        row.dataset.setting = def.id;
+        body.appendChild(row);
         // The readout goes right under the last of the three filter fields.
-        if (def.id === 'filterMinMeanNodeScore') thSection.body.appendChild(filterPreview.root);
-    });
+        if (def.id === 'filterMinMeanNodeScore') body.appendChild(filterPreview.root);
+    }
+    trackerDefs.forEach(function (def) { renderThresholdRow(def, thSection.body); });
+
+    // ID Switches: the checks that run after Track All / Track Frame Range, and the image check's options.
+    if (idSwitchDefs.length) {
+        const idSection = buildSection('ID Switches', idSwitchDefs.length);
+        idSection.root.classList.add('settings-section-id-switches');
+        wizPanel.appendChild(idSection.root);
+        const idHint = document.createElement('div');
+        idHint.className = 'settings-kbd-hint';
+        idHint.style.marginTop = '0';
+        idHint.style.marginBottom = '8px';
+        idHint.textContent = 'Checks for identity switches after Track All or Track Frame Range. Changes apply when you click Apply.';
+        idSection.body.appendChild(idHint);
+        idSwitchDefs.forEach(function (def) { renderThresholdRow(def, idSection.body); });
+    }
 
     // Docs link at the bottom of the thresholds.
     const docsNote = document.createElement('div');
