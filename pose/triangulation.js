@@ -2761,6 +2761,9 @@ function _applyGroupStep(group, prep, result) {
  * yield, and once at the end) is actually seen. It used to yield every 100
  * frames, which on cheap per-frame work paid hundreds of yields for no visible
  * benefit, and on expensive work (BA) left the overlay frozen between them.
+ * The windowed branch checks the same pacer while it HYDRATES a window too
+ * (every `SWEEP_HYDRATE_SLICE` frames), so building a window is never one
+ * block on top of a chunk.
  * `done` is the POSITION in the sweep (frames passed, with or without data), so
  * it rises monotonically to `total` and can drive a progress bar directly.
  * `opts.onLoadProgress(done, total)` reports the up-front `loadAllLazyFrames`
@@ -2787,6 +2790,11 @@ function _hasFrameData(session, frameIdx) {
     var ig = session.instanceGroups && session.instanceGroups.get(frameIdx);
     return !!(ig && ig.length > 0);
 }
+
+/** Frames `sweepLazyFrameWindows` hydrates between pacer checks (~25 ms of
+ *  building on the 8-camera project), so a window's hydration can be split
+ *  across yields instead of running as one block. */
+export var SWEEP_HYDRATE_SLICE = 200;
 
 export async function sweepLazyFrameWindows(session, onFrame, opts) {
     holdLazyResidency();
@@ -2834,7 +2842,20 @@ async function _sweepLazyFrameWindowsHeld(session, onFrame, opts) {
         };
         for (var start = from; start <= to; start += W) {
             var end = Math.min(start + W, to + 1);
-            await batchLoadLazyFrames(start, end - start);
+            // Hydrate the window in slices, yielding on the pacer between them.
+            // Building a whole 2,000-frame window in one go (and the minor GC
+            // that promotes it) held the main thread 0.3-0.8 s at every window
+            // boundary of a Triangulate All on the 8-camera, 108,000-frame
+            // project, on top of the pacer's own chunk. The same frames are
+            // built in the same order before `onFrame` sees any of them; only
+            // the yields are new. `done` stays at the window's start.
+            for (var hs = start; hs < end; hs += SWEEP_HYDRATE_SLICE) {
+                await batchLoadLazyFrames(hs, Math.min(SWEEP_HYDRATE_SLICE, end - hs));
+                if (pacer.due()) {
+                    if (opts.onProgress) await opts.onProgress(start - from, total);
+                    await pacer.yield();
+                }
+            }
             for (var fi = start; fi < end; fi++) {
                 var fg = session.frameGroups.get(fi);
                 // A frame counts as HAVING DATA if it has 2D (a hydrated

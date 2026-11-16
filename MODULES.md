@@ -2861,6 +2861,13 @@ restrict it to a range. Contract points:
   `total`; `opts.onLoadProgress(done, total)` reports the non-windowed branch's
   up-front `loadAllLazyFrames` stage (`opts.onStatus(msg)` is the text-only
   fallback).
+- **Hydration is paced too**: a window is built `SWEEP_HYDRATE_SLICE` (200)
+  frames at a time with the pacer checked between slices (`done` stays at the
+  window's start), so building a window is never one block. It used to be:
+  0.3-0.8 s at every window boundary of a Triangulate All on the 8-camera,
+  108,000-frame project (the build plus the minor GC that promotes it). Same
+  frames, same order, and the whole window is still built before `onFrame`
+  sees any of it. Test: `tests/test-sweep-hydrate-yields.mjs`.
 `sweepTrackAllFrames` (`pose/tracker.js`), `ui/export-modals.js`'s sweeps and
 `sweepTriangulateAllFrames` all delegate to it.
 
@@ -5016,6 +5023,11 @@ Edit Group mode, track-swap dialogs.
 Skeleton, Sessions, and Frame Info tables; hosts the skeleton editor and
 the per-frame instance-group / unlinked-instance tables. `updateInfoPanel` also
 renders the Session tab's Recording section (`ui/recording-info.js`).
+
+**Videos table (`populateVideosTable`).** The Groups column counts each
+camera's group members in ONE pass over `instanceGroups` (it walked every group
+once per video: ~0.5 s at the end of a Triangulate All on the 8-camera,
+539,852-group project).
 
 **Reprojection Error panel (`updateFrameInfo`).** The headline mean,
 undistorted residual, method label, and per-camera rows are the frame SUMMARY
