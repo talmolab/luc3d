@@ -45,16 +45,16 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=80d371cfcf44';
-import { getActiveSession, state, timeline } from './app-state.js?v=80d371cfcf44';
-import { drawAllOverlays } from './rendering.js?v=80d371cfcf44';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=80d371cfcf44';
-import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=80d371cfcf44';
-import { buildThresholdExamples } from './threshold-examples-panel.js?v=80d371cfcf44';
-import { installModalGeometry } from './modal-geometry.js?v=80d371cfcf44';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=80d371cfcf44';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=80d371cfcf44';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=80d371cfcf44';
+} from './settings.js?v=808e9ea3e8da';
+import { getActiveSession, state, timeline } from './app-state.js?v=808e9ea3e8da';
+import { drawAllOverlays } from './rendering.js?v=808e9ea3e8da';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=808e9ea3e8da';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=808e9ea3e8da';
+import { buildThresholdExamples } from './threshold-examples-panel.js?v=808e9ea3e8da';
+import { installModalGeometry } from './modal-geometry.js?v=808e9ea3e8da';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=808e9ea3e8da';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=808e9ea3e8da';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=808e9ea3e8da';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
