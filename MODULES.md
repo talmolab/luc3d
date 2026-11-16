@@ -2969,6 +2969,17 @@ so BA can raise it; the invariant is pinned over the solve's own views.
 behavior, which `tests/test-triangulation-ba.js` uses as a baseline. The LM
 ladder itself was verified monotone and was not changed.
 
+**Where Refined may go.** Every phase and the guard stay in a convex region
+around the DLT seed (`costUnder` is Infinity outside it): in front of, and
+inside the distortion fold (`_distortionFoldR2`) of, each used view where the
+seed is, at most `BA_MAX_DEPTH_GROWTH` (4) × the seed's depth there
+(`options.maxDepthGrowth`, `Infinity` = no bound). A seed holding in no view is
+refined freely and kept only if it ends holding in every view, else DLT's answer
+stands — or none (null) when the seed is behind every used camera. Without it, a stray view let Refined move points tens to hundreds of
+metres off (behind a camera, past a k1 < 0 fold, or along nearly parallel rays).
+On 5 SLAP sessions it changed 3 of 79,970 keypoints that Refined put within
+50 mm. Test: `tests/test-refined-far-points.mjs` (real SLAP cases).
+
 **No joint bundle adjustment: cameras are NEVER refined (deliberate scope).** The
 `'ba'` method is non-linear triangulation with fixed cameras. A joint
 camera+structure solve was implemented and **deleted**; do not re-add it. LUCID
@@ -3500,8 +3511,8 @@ played far past the cap, save, reopen — a member's edit must survive the save)
 **Purpose.** The pure triangulation math, split out of `pose/triangulation.js`
 so a Web Worker can load it: matrix helpers (`matMul`, `matTranspose`,
 `solveSmallestEigenvector4x4`, `svd3x4`), DLT
-(`triangulatePointDLT`, `triangulatePoints`, and `DltViewSystem` for solving
-one keypoint again on subsets of its views), the "Refined" point stage
+(`triangulatePointDLT`, `triangulatePoints`, `clearPointsBehindEveryView`, and
+`DltViewSystem` for solving one keypoint again on subsets of its views), the "Refined" point stage
 (`triangulatePointBA`, `triangulatePointsBA`, `BA_ROBUST_SCALE_PX`),
 reprojection (`reprojectPoint(s)`, `reprojectPointCamera(s)`, `cameraDepth` —
 the homogeneous `w`, POSITIVE in front of the camera, which any caller
@@ -3617,6 +3628,23 @@ maps exactly. Rules:
   (`s, cx, cy, cz`); omitted is the identity frame, which reproduces the raw
   rows exactly (×1 and +0 are exact in IEEE 754), so the kernel bit-identity
   above is unaffected.
+
+**DLT gives no answer for a point behind every camera that saw it — in
+`triangulateAndReproject`'s `'dlt'` output only.** `clearPointsBehindEveryView(points3d,
+allObservations, Ps)` clears a keypoint whose depth sign(det M)·(P[2]·X) is ≤ 0 in
+every used view (a degenerate P counts as in front). DLT cannot tell a point from
+its mirror image behind the camera, so two diverging rays (one view on the wrong
+animal) "meet" behind both cameras, metres to km away, and that point can pass the
+reprojection threshold. Applied in every DLT solve of `triangulateAndReproject`
+(first solve and each threshold re-solve; on the SLAP study the two placements gave
+identical results). NOT applied to `triangulatePointDLT` / `triangulatePoints`
+themselves: Refined's seed and the tracker's association, `_retriangulate`,
+`checkedPoints3d` and `membersPoints3d` keep plain DLT, bit for bit. "Behind ANY
+camera" was rejected: it refused everyday keypoints. Numbers: 5 held-out SLAP
+sessions, 79,970 keypoints; every refused one was > 1 m off, none within 1 m
+changed; 8 cameras + 12 px: RMSE 75.5 → 29.9 mm, worst 18.5 → 3.2 m; 4 cameras, no
+threshold: RMSE 3,321 → 223 mm, worst 920 → 39 m. Test:
+`tests/test-dlt-behind-cameras.mjs`.
 
 **Imports from project modules.** `./pose-data.js` (point3d helpers, and `mat3x3Multiply` for `computeFundamentalMatrix`) and
 `./plane-fit.js` for `jacobiEigen`, which is re-exported from here. That
