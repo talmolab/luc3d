@@ -91,14 +91,12 @@ try {
     const page = await browser.newPage();
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid, null, { timeout: 30000 });
     await page.waitForTimeout(600);
 
-    // Open the Videos tab (it may be demoted into the "More ▾" overflow).
+    // Open the Videos panel from the right-edge rail.
     await page.evaluate(() => {
-        document.querySelectorAll('.panel-tab').forEach((t) => {
-            if (t.getAttribute('data-tab') === 'tabVideos') t.click();
-        });
+        document.querySelector('.panel-rail-btn[data-tab="tabVideos"]').click();
     });
     await page.waitForTimeout(200);
 

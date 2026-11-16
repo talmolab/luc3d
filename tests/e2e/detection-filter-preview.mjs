@@ -43,7 +43,7 @@ try {
     const errs = [];
     page.on('pageerror', e => errs.push(String(e).slice(0, 300)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // A session: per frame, 'top' has two good predictions (score 0.9, all 4
     // points, confidence 0.9); 'side' has one good one and one low one (score
@@ -75,12 +75,14 @@ try {
         AS.state.sessions = o.none ? [] : [s]; AS.state.session = o.none ? null : s; AS.state.activeSessionIdx = 0;
     }, Object.assign({ scores: true, frames: 400, none: false }, opts));
 
-    const openSettings = () => page.evaluate(() => document.getElementById('menuSettings').click());
+    // On another panel first, so the lazy start can be checked (Help ▸ Settings
+    // reopens on the panel last shown, which may be the wizard).
+    const openSettings = () => page.evaluate(async () => (await import('/ui/settings-modal.js')).showSettingsModal('triangulation'));
     const openWizard = () => page.evaluate(() => document.querySelector('.settings-nav-item[data-panel="wizard"]').click());
     const waitCounted = () => page.waitForFunction(() => {
         const r = document.querySelector('[data-testid="detection-filter-preview"]');
         return r && !/Counting detections/.test(r.textContent);
-    }, { timeout: 10000 });
+    }, null, { timeout: 30000 });
     const rows = () => page.evaluate(() => {
         const root = document.querySelector('[data-testid="detection-filter-preview"]');
         const t = root.querySelector('.dfp-filters');

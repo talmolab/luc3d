@@ -58,7 +58,7 @@ try {
     page.on('console', m => { if (m.type() === 'error') errs.push('console: ' + m.text().slice(0, 300)); });
     page.on('dialog', d => d.accept());   // New Project's "Unsaved changes" confirm
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
 
     // The session folder: <Camera>/0.mp4, 20 frames each.
     const video = Buffer.from(await page.evaluate(async () => {

@@ -52,7 +52,7 @@ try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // Three groups seen by cam1-cam4, each reprojected into cam5; one group is
     // dirty (its marker sits beside the track dropdown) and one has a

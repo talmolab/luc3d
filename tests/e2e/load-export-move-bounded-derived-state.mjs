@@ -65,7 +65,7 @@ try {
   page.on('pageerror', e => errs.push(String(e)));
   page.on('console', m => { if (m.type() === 'error') errs.push('console: ' + m.text().slice(0, 300)); });
   await page.goto(`http://localhost:${PORT}/index.html`);
-  await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 60000 });
+  await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 60000 });
 
   // Helpers shared by every phase, installed once on the page.
   await page.evaluate(async () => {
@@ -213,8 +213,10 @@ try {
           if (!H.sameArr(r.errors[cn], e.errors[cn])) bad.push('errors ' + cn);
           if (!H.sameArr((r.errorsUndistorted || {})[cn], e.errorsU[cn])) bad.push('undistorted errors ' + cn);
         }
-        if (Math.abs(r.meanError - e.mean) > 1e-12 * Math.max(1, e.mean)) bad.push(`mean ${r.meanError} vs ${e.mean}`);
-        if (Math.abs(r.meanErrorUndistorted - e.meanU) > 1e-12 * Math.max(1, e.meanU)) bad.push('undistorted mean');
+        // `!(… <= tol)`, not `> tol`: a NaN mean must count as a mismatch.
+        const near = (a, b) => Object.is(a, b) || Math.abs(a - b) <= 1e-12 * Math.max(1, b);
+        if (!near(r.meanError, e.mean)) bad.push(`mean ${r.meanError} vs ${e.mean}`);
+        if (!near(r.meanErrorUndistorted, e.meanU)) bad.push('undistorted mean');
         for (const c of cams) if (!g.reprojectedInstances || !g.reprojectedInstances.get(c.name)) bad.push('no reprojected instance ' + c.name);
       }
       return bad;
@@ -314,7 +316,7 @@ try {
   const dl = page.waitForEvent('download', { timeout: 300000 });
   await page.evaluate(() => document.getElementById('ovExport').click());
   const download = await dl;
-  await page.waitForFunction(() => !document.getElementById('ovExportOverlay'), { timeout: 60000 });
+  await page.waitForFunction(() => !document.getElementById('ovExportOverlay'), null, { timeout: 60000 });
   const E = await page.evaluate(async () => {
     const H = window.__H;
     const AS = await import('/ui/app-state.js');

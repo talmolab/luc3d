@@ -68,7 +68,7 @@ try {
     });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // =================================================================
     // A two-camera session with real canvases
@@ -96,7 +96,7 @@ try {
         AS.paneManager.addAllViewsAsGrid();
     });
     await page.waitForFunction(
-        () => window.__lucid.state.views.every(v => !!v.overlayCanvas), { timeout: 10000 });
+        () => window.__lucid.state.views.every(v => !!v.overlayCanvas), null, { timeout: 30000 });
 
     // Helpers: the same index-translation shims define-plane-mode.mjs installs,
     // so the assertions below are about behaviour rather than arithmetic.

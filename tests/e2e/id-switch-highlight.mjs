@@ -53,7 +53,7 @@ try {
     const errs = [];
     page.on('pageerror', e => errs.push(String(e).slice(0, 300)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     await page.evaluate(async () => {
         const pd = await import('/pose/pose-data.js'); const AS = await import('/ui/app-state.js');
@@ -140,6 +140,9 @@ try {
         `the bar is orange lead-in/out around a red close spell (${JSON.stringify(bar)})`);
 
     // ---- 5. click / drag on the bar (interval 10..80): x of t across it -> frame round(10 + 70 t)
+    // Other panel sections can be open above ID Switches, so bring the bar
+    // into the info panel's view first, as a user would by scrolling.
+    await page.locator('#idSwitchPanel .id-switch-row.is-current .id-switch-pbar').scrollIntoViewIfNeeded();
     const barBox = await page.locator('#idSwitchPanel .id-switch-row.is-current .id-switch-pbar').boundingBox();
     const atT = t => barBox.x + t * barBox.width, midY = barBox.y + barBox.height / 2;
     const cur = () => page.evaluate(() => window.__lucid.state.currentFrame);
@@ -249,6 +252,7 @@ try {
     await page.evaluate(async () => (await import('/ui/settings-modal.js')).showSettingsModal('wizard'));
     await page.fill('input[aria-label="Weight for node TTI"]', '0');
     await page.click('.settings-btn-apply');
+    await page.click('.settings-modal-close');
     await page.waitForTimeout(200);
     const tight = await tailCensus();
     const frameAfterApply = await cur();

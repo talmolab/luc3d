@@ -22,7 +22,7 @@ globalThis.window = globalThis;
 const E = await import(ui('image-embedder.js'));
 const { capPct, paceRestMs, createModelQueue, createCropPool, CPU_CAP_CROPS_PER_WORKER,
         IMAGE_CAP_MIN, EMBED_MAX_BATCH, formatEmbedTiming } = E;
-const { getTrackingThresholdDefs, formatThresholdValue } = await import(ui('settings.js'));
+const { getTrackingThresholdDefs } = await import(ui('settings.js'));
 const { IMAGE_CHECK_IDS } = await import(ui('track-setup-modal.js'));
 
 let passed = 0, failed = 0; const failures = [];
@@ -93,10 +93,12 @@ const cropRun = async (pct, workers, jobs) => {
 {
     const u = await cropRun(100, 2, 8);
     ok(u.outs.every((o, j) => o.length === 1 && o[0][0] === j), 'every crop job comes back with its own tensors');
-    ok(u.ws.every(w => w.maxHeld === 1), 'a worker holds one job at a time (the queue is the pool\'s)');
+    // uncapped is main's pool, unchanged: every job is handed out at once to the least-loaded worker
+    ok(u.ws.every(w => w.maxHeld === 4), `at 100% every job goes out at once, the workers queue them (held at once: ${u.ws.map(w => w.maxHeld).join(', ')})`);
     ok(u.ws.every(w => w.runs.length === 4), `the jobs are shared out over the workers (${u.ws.map(w => w.runs.length).join(', ')})`);
     ok(u.wall < 4 * JOB_MS * 1.6, `at 100% no worker idles: 8 jobs on 2 workers took ${Math.round(u.wall)} ms (~${4 * JOB_MS} ms of work each)`);
     const h = await cropRun(50, 2, 8);
+    ok(h.ws.every(w => w.maxHeld === 1), 'capped, a worker holds one job at a time (the queue is the pool\'s)');
     // each worker: 4 runs and the 3 idles between them, each as long as a run
     let duty = true;
     h.ws.forEach(w => {
@@ -128,17 +130,20 @@ const cropRun = async (pct, workers, jobs) => {
     await pool.run(img(), [2]).catch(() => { late = true; });
     ok(late, 'a terminated pool rejects new jobs');
 }
-{
-    // a worker that fails: its job is rejected, the pool is `broken`, the others finish the queue
+for (const pct of [100, 50]) {
+    // a worker that fails: the pool is `broken` (the caller crops the rest inline). Capped, only its own job is
+    // rejected and the other worker finishes the pool's queue; uncapped (main's pool, unchanged) the jobs it had
+    // been handed are rejected with it
     fakeWorkers.length = 0;
     window.LUCID_CROP_WORKERS = 2;
-    const pool = createCropPool(null, 100);
+    const pool = createCropPool(null, pct);
     const jobs = Array.from({ length: 4 }, (_, j) => pool.run({ close() {} }, [j]).then(() => 'ok', () => 'failed'));
     fakeWorkers[0].dead = true;
     fakeWorkers[0].onerror({ preventDefault() {}, message: 'boom' });
     const res = await Promise.all(jobs);
-    ok(pool.broken && res.filter(r => r === 'failed').length === 1 && res.filter(r => r === 'ok').length === 3,
-        `a failed worker rejects only its own job; the other worker finishes the queue (${res.join(', ')})`);
+    const nFailed = res.filter(r => r === 'failed').length;
+    ok(pool.broken && nFailed === (pct < 100 ? 1 : 2) && res.length - nFailed === (pct < 100 ? 3 : 2),
+        `${pct}%: a failed worker rejects ${pct < 100 ? 'only its own job; the other worker finishes the queue' : 'the jobs it was handed; the other worker\'s run'} (${res.join(', ')})`);
     pool.terminate();
 }
 delete globalThis.Worker;
@@ -171,6 +176,14 @@ const newTm = () => ({ queueMs: 0, batches: 0, maxBatch: 0, restMs: 0 });
     ok(log.length === 2 && log[0] === 5 && log[1] === 10, `…and batches what queued while a run was going, as before (${log.join(', ')})`);
 }
 {
+    // uncapped, a frame larger than a batch still runs alone as ONE batch, as main's queue did (only a paced queue splits)
+    const log = [], tm = newTm();
+    const q = createModelQueue(fakeModel(10, log), 2, tm, { maxBatch: 8, maxPct: 100 });
+    const out = await q.enqueue(crops(20, 4));
+    ok(log.length === 1 && log[0] === 20 && out.length === 20 && out.every((v, i) => v[0] === 4000 + i),
+       `at 100% a 20-crop frame runs as one batch of 20, not split (${log.join(', ')})`);
+}
+{
     const log = [], tm = newTm();
     const q = createModelQueue(fakeModel(50, log), 2, tm, { maxBatch: 8, maxPct: 10 });
     await q.enqueue(crops(4, 1));                       // runs, then a 9x rest (~450 ms)
@@ -191,14 +204,12 @@ for (const [id, label, tip] of [['imageCheckGpuTimePct', 'Image check: GPU time 
     ok(!!d && d.label === label, `${id} is labelled "${d && d.label}"`);
     ok(!!d && d.tip === tip, `${id}'s tip: "${d && d.tip}"`);
     ok(!!d && !('note' in d), `${id} has no per-machine note (a duty cycle means the same on every machine)`);
-    ok(!!d && d.default === 100 && d.value === 100 && d.min === IMAGE_CAP_MIN && d.max === 100 && d.step === 1 && !d.decimals,
+    ok(!!d && d.default === 100 && d.value === 100 && d.min === IMAGE_CAP_MIN && d.max === 100 && d.step === 1,
         `${id}: default 100 (uncapped), whole numbers 1..100`);
-    ok(!!d && formatThresholdValue(d, 80) === '80' && formatThresholdValue(d, d.value) === '100', `${id} reads "100" (and "80") in its field`);
     ok(IMAGE_CHECK_IDS.includes(id), `${id} is offered in the Track All / Track Frame Range dialogs`);
 }
 ok(!defs.some(d => ['imageCheckMaxGpu', 'imageCheckMaxCpu', 'imageCheckGpuTime', 'imageCheckCpuCores', 'imageCheckCpuCoresPct'].includes(d.id)),
     'the earlier ids are gone (a stored 0.5 cannot be read as 1%, nor a share of the cores as a share of the time)');
-ok(formatThresholdValue(defs.find(d => d.id === 'imageCheckHz'), 2) === '2', 'a setting without `decimals` is shown as before');
 
 // ---- the run summary says what was capped ------------------------------------
 const t = { crops: 90, cropsPerS: 9, seconds: 10, gpuBusyPct: 50, batches: 5, avgBatch: 18, modelMsPerCrop: 80,
