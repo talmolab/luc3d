@@ -11,7 +11,7 @@
 //   - `planeState`   — mode flag, THE model (pool + planes + per-view 2D), and
 //                      which plane the editor is editing.
 //   - Mode enter/exit — shows the "Defining Plane Mode" banner and swaps the
-//                      info panel's tab bar for the Define Plane panel.
+//                      info panel's panes for the Define Plane panel (rail icons disabled).
 //   - The Define Plane panel — TWO sibling sections: the global Nodes pool,
 //                      and Planes (the roster, plus the editor for whichever
 //                      plane is selected: its name, its member nodes, its
@@ -163,18 +163,14 @@ export const ICON_PIN = (function () {
     };
 }());
 
-/** The Pin column's explanation button. @private */
-export const ICON_INFO =
-    '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" ' +
-    'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
-    'aria-hidden="true"><circle cx="12" cy="12" r="9"/>' +
-    '<path d="M12 11.2v5"/>' +
-    '<circle cx="12" cy="7.6" r="1.1" fill="currentColor" stroke="none"/></svg>';
+/** The Pin column's explanation button: now defined in ui/info-tip.js (import-free, so the Track
+ *  dialogs can use it too) and re-exported here for the plane modules that import it from the hub. */
+export { ICON_INFO };
 
 import { state, interactionManager, viewport3d } from './app-state.js';
 import { makeVideoToCanvasTransform } from './overlays.js';
 import { persistSectionStates } from './section-state.js';
-import { setInfoTip } from './info-tip.js';
+import { setInfoTip, ICON_INFO } from './info-tip.js';
 import { showPlaneDialog } from './plane-dialog.js';
 // The Visibility panel's `Planes` toggles. Read by `syncPlanes3D` here and by
 // the 2D overlay, which is what keeps the two representations agreeing about
@@ -204,6 +200,7 @@ import {
 } from './plane-list-panel.js';
 // The EDITOR half of section 2, below the roster in the same <details>.
 import { renderEditor } from './plane-editor-panel.js';
+import { setPanelRailLocked } from './panel-rail.js';
 import { setStatus, markDirty } from '../import-export/save-load.js';
 // The 3D Mesh Objects table lives in its own module and is purely additive —
 // this import and the two calls below are the whole of its coupling to the
@@ -1725,16 +1722,16 @@ export function togglePlaneMode() {
 }
 
 /**
- * Swap the info panel between its normal tabbed content and the Define Plane
- * panel. The tab bar's own layout code (`setupPanelTabs`) is untouched — we
- * only toggle visibility, so restoring is exact.
+ * Swap the info panel between its stack of panel sections and the Define
+ * Plane panel. Only visibility is toggled (and the rail's panel icons
+ * disabled), so leaving restores the open/folded sections, and the scroll,
+ * exactly.
  */
 function setPanelPlaneMode(on) {
-    var tabBar = document.querySelector('.panel-tabs');
-    if (tabBar) tabBar.style.display = on ? 'none' : '';
-    document.querySelectorAll('.panel-tab-content').forEach(function (el) {
-        // Only the ACTIVE tab is normally visible; `.active` still governs
-        // that, so we just force-hide all of them while the mode is on.
+    setPanelRailLocked(on);
+    document.querySelectorAll('.panel-section').forEach(function (el) {
+        // Which sections are open/folded is still the rail's (`.open` /
+        // `.folded`); we just force-hide all of them while the mode is on.
         el.style.display = on ? 'none' : '';
     });
     var panel = document.getElementById('planePanel');

@@ -93,6 +93,8 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
 
     <!-- Test files -->
+    <!-- The framework's own assertions: NaN and the infinities match only themselves. -->
+    <script src="test-assertions.js"></script>
     <script src="test-pose-data.js"></script>
     <script src="test-skeleton-json.js"></script>
     <script src="test-triangulation.js"></script>
@@ -318,6 +320,7 @@
          its graph), so no ordering constraint — placed here for proximity to
          the other lazy-export tests above. -->
     <script src="test-lazy-export-instance-filter.js"></script>
+    <script src="test-export-identity-tracks.js"></script>
 
     <!-- Custom Instance Delete: the columnar-store durability primitive
          (`SioLazyLoader.deleteInstanceRows`). Hand-builds a store and drives the

@@ -32,6 +32,7 @@ import {
     trackFrameRange, trackableFrameBounds,
     getTrackerNumAnimals, setTrackerNumAnimals,
 } from '../pose/tracker.js';
+import { hasRealCalibration } from '../pose/placeholder-cameras.js';
 
 // Frames pre-filled into the End field, measured from the current frame. The
 // feature is for narrow windows around a suspected switch, so the default is a
@@ -77,6 +78,12 @@ export function showTrackRangeModal(opts) {
     var session = getActiveSession();
     if (!session || !session.cameras || session.cameras.length === 0) {
         setStatus('No session with cameras loaded', 'error');
+        return;
+    }
+    // Placeholder cameras only (no calibration loaded): tracking would refuse
+    // after the dialog (runTrackingPass), so say so before opening it.
+    if (!hasRealCalibration(session)) {
+        setStatus('Tracking needs a calibration — load one with File \u2192 Load Calibration', 'error');
         return;
     }
     var bounds = trackableFrameBounds(session);

@@ -203,6 +203,12 @@ try {
         // declared key (talmolab/luc3d#312). Until then nothing writes it, and
         // the checks below compare only the keys the module declares.
         s.numAnimals = 3;
+        // Which identity Track All gives the tail marks (pose/tail-mark.js): same module.
+        s.tailMarkedIdentity = 'mouseB';
+        // ...and per-identity marks (pose/identity-cues.js), same module.
+        s.identityMarks = { tailBands: { mouseA: 0, mouseB: 2 } };
+        // ...and the image check's model choice (pose/image-model-manifest.js), same module.
+        s.imageModel = { key: 'a'.repeat(64), name: 'Rig fine-tune', input: 168, threshold: -1, url: 'olinesn/rig-model' };
 
         // ---- the ID Switches checklist (shapes as in pose/id-switch-check.js) ----
         const pt = (frame, a, b, score, extra) => Object.assign(

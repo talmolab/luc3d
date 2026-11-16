@@ -55,7 +55,7 @@ try {
   page.on('pageerror', e => errs.push(String(e)));
   page.on('console', m => { if (m.type() === 'error') errs.push('console: ' + m.text()); });
   await page.goto(`http://localhost:${PORT}/index.html`);
-  await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+  await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
   const out = await page.evaluate(async () => {
     const AS = await import('/ui/app-state.js');

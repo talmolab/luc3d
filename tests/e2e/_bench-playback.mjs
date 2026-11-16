@@ -262,7 +262,7 @@ try {
     });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 30000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     if (Object.keys(THRESHOLDS).length) {
         // before anything runs, so tracker settings (e.g. matchGate=0) reach Track All too
         const applied = await page.evaluate(async (ov) => {

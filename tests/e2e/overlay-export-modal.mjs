@@ -45,7 +45,7 @@ try {
     page.on('pageerror', e => errs.push(String(e)));
     page.on('console', m => { if (m.type() === 'error') errs.push('console.error: ' + m.text().slice(0, 200)); });
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // ---- synthetic session: 3 CALIBRATED cameras, 40 frames, one group ------
     await page.evaluate(async () => {
@@ -981,7 +981,7 @@ try {
     const individualDls = [];
     page.on('download', d => individualDls.push(d));
     await page.evaluate(() => document.getElementById('ovExport').click());
-    await page.waitForFunction(() => !document.getElementById('ovExportOverlay'), { timeout: 60000 });
+    await page.waitForFunction(() => !document.getElementById('ovExportOverlay'), null, { timeout: 60000 });
     await page.waitForTimeout(1000);
     check(individualDls.length === 2,
         `individual mode downloads one mp4 per tile (got ${individualDls.length}: ` +

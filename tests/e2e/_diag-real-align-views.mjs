@@ -52,7 +52,7 @@ try {
     page.on('pageerror', e => log('  [pageerror] ' + String(e).slice(0, 300)));
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 30000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     await page.evaluate(() => {
         const inp = document.createElement('input');

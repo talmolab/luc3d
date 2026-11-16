@@ -48,7 +48,7 @@ try {
     page.on('pageerror', e => errs.push(String(e)));
     page.on('console', m => { if (m.type() === 'error') errs.push('console.error: ' + m.text().slice(0, 300)); });
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // ---- A calibrated session with triangulated 3D, over several frames ----
     // Calibration (non-zero rvec/tvec) is what makes `sessionHasCalibration()`

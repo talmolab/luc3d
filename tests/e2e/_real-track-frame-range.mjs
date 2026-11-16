@@ -62,7 +62,7 @@ try {
     await answerTrackSetup(page, ANIMALS != null ? ANIMALS : '');
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.SleapIO, { timeout: 30000 });
+    await page.waitForFunction(() => window.__lucid && window.SleapIO, null, { timeout: 30000 });
 
     // The lazy project loader ends in an interactive attach-videos modal that
     // never resolves headlessly, so dismiss modals on a timer and poll the
@@ -106,7 +106,7 @@ try {
     await page.waitForFunction(() => {
         const s = window.__lucid.state.session;
         return !!(s && s.cameras && s.cameras.length >= 2 && s.lazyLoader) || window.__load.err;
-    }, { timeout: 300000 });
+    }, null, { timeout: 300000 });
 
     const info = await page.evaluate(() => {
         const s = window.__lucid.state.session;

@@ -28,7 +28,7 @@ try {
     page.on('pageerror', e => console.log('PAGEERROR ' + e));
     page.on('console', m => { if (m.type() === 'error') console.log('console.error: ' + m.text().slice(0, 160)); });
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     await page.evaluate(async (n) => {
         const pd = await import('/pose/pose-data.js');
