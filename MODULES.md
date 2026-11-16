@@ -4902,6 +4902,12 @@ assignment, edit-group mode, track/identity helpers.
   `pose/triangulation.js` for why both maps are required and why the
   de-duplication is load-bearing. The reported count is the durable row count
   when a store exists, the in-memory changed count otherwise.
+  `swapAssignTrack` (the Instances panel's Track dropdowns) swaps with the
+  detection already on the picked track, then applies the same swap to every
+  later frame on that camera only. Test: `tests/e2e/track-reassign-carries-forward.mjs`
+  (eager ungrouped and grouped, and lazy, where frames not loaded at edit time
+  must come back from the store changed). The classic runner cannot load this
+  module (it imports `app.js`).
 - Manual identity switch: `applyIdentitySwitch`, `describeIdentitySwitch`.
   **The single entry point for "the user picked a different ID for
   this instance"** — the `1`–`9` hotkeys (`assignIdentityToSelected`), the Linked
