@@ -72,6 +72,16 @@
  *     network share is about)
  *     TRI=0                  skip the explicit Triangulate All (measures the
  *                            lazy per-frame re-solve path after Track All)
+ *     TRI_METHOD=dlt         Triangulate All's method as the toolbar routes it:
+ *                            dlt (group by identity, then DLT) or ba (Refined).
+ *                            The run records long tasks and long animation
+ *                            frames (with script attribution) from its start
+ *                            to 2 s after it ends, timed from its start, plus
+ *                            the loading card's text: summary.triangulateAll
+ *     TRI_TRACE=1            also take a Chrome trace (timeline, CPU profile,
+ *                            GC) of the Triangulate All run, to
+ *                            trace-triangulate-all.json (a 'tri-start' user
+ *                            timing mark is its zero)
  *     START=3000             start frame for every scenario without an @<frame>
  *     SEEKS=0                after the scenarios, N paused random JUMPS (each
  *                            followed by STEPS single forward steps): time until
@@ -187,6 +197,8 @@ const PREP = process.env.PREP || 'full';
 const WARMUP = Number(process.env.WARMUP || 2);
 const DUR = Number(process.env.DUR || 20);
 const TRACE_SECS = Number(process.env.TRACE_SECS ?? 8);
+const TRI_METHOD = process.env.TRI_METHOD === 'ba' ? 'ba' : 'dlt';
+const TRI_TRACE = process.env.TRI_TRACE === '1';
 const RVFC_ALL = process.env.RVFC_ALL === '1';
 const PORT = Number(process.env.PORT || 8123);
 // Files the folder pick must NOT include (relative path regex): dotfiles and a
@@ -281,6 +293,49 @@ try {
         }, NODE_WEIGHTS);
         log(`[${el()}] node weights applied: ${JSON.stringify(applied)}`);
     }
+    // Result fingerprints (A/B checks that a change kept results bit-identical):
+    // FNV-1a over every group's points3d bits, in instanceGroups order, plus
+    // its frame, identity and member cameras; and over frameIdentityMap.
+    const resultHashes = () => page.evaluate(() => {
+        const s = window.__lucid.state.session;
+        let h = 0x811c9dc5 >>> 0, g = 0, nan = 0;
+        const mix = (x) => { h ^= x; h = Math.imul(h, 0x01000193) >>> 0; };
+        const f64 = new Float64Array(1), u32 = new Uint32Array(f64.buffer);
+        for (const [fi, gs] of s.instanceGroups) {
+            mix(fi);
+            for (const grp of gs) {
+                g++; mix(grp.identityId == null ? 0xffffffff : grp.identityId >>> 0);
+                for (const [cam] of grp.instances) for (let i = 0; i < cam.length; i++) mix(cam.charCodeAt(i));
+                const p = grp.points3d; if (!p) { mix(0xdeadbeef); continue; }
+                for (let i = 0; i < p.length; i++) { const v = p[i]; if (v !== v) nan++; f64[0] = v; mix(u32[0]); mix(u32[1]); }
+            }
+        }
+        // Per frame, order-independent across frames (Map order moves when a
+        // frame is regrouped): frame -> hash of its groups' points3d in list order.
+        const perFrame = new Map();
+        for (const [fi, gs] of s.instanceGroups) {
+            let hf = 0x811c9dc5 >>> 0;
+            const mixf = (x) => { hf ^= x; hf = Math.imul(hf, 0x01000193) >>> 0; };
+            for (const grp of gs) {
+                mixf(grp.identityId == null ? 0xffffffff : grp.identityId >>> 0);
+                const p = grp.points3d; if (!p) { mixf(0xdeadbeef); continue; }
+                for (let i = 0; i < p.length; i++) { f64[0] = p[i]; mixf(u32[0]); mixf(u32[1]); }
+            }
+            perFrame.set(fi, hf);
+        }
+        const frames = [...perFrame.keys()].sort((a, b) => a - b);
+        let hs = 0x811c9dc5 >>> 0;
+        for (const fi of frames) { hs ^= fi >>> 0; hs = Math.imul(hs, 0x01000193) >>> 0; hs ^= perFrame.get(fi); hs = Math.imul(hs, 0x01000193) >>> 0; }
+        window.__benchPerFrameHash = frames.map(fi => [fi, perFrame.get(fi)]);
+        let hi = 0x811c9dc5 >>> 0, ni = 0;
+        for (const [k, v] of s.frameIdentityMap) { ni++; hi ^= (typeof k === 'number' ? k : 0) >>> 0; hi = Math.imul(hi, 0x01000193) >>> 0; hi ^= v >>> 0; hi = Math.imul(hi, 0x01000193) >>> 0; }
+        return { groups: g, points3d: h.toString(16), points3dByFrame: hs.toString(16), nanCoords: nan, frameIdentities: ni, frameIdentityMap: hi.toString(16) };
+    });
+    // the per-frame hashes of the last resultHashes() call, to a file in OUT_DIR
+    const savePerFrameHashes = async (name) => {
+        const rows = await page.evaluate(() => window.__benchPerFrameHash);
+        fs.writeFileSync(path.join(OUT_DIR, name), JSON.stringify(rows));
+    };
     summary.env = await page.evaluate(() => ({
         ua: navigator.userAgent, dpr: devicePixelRatio,
         inner: [innerWidth, innerHeight], screen: [screen.width, screen.height],
@@ -398,6 +453,8 @@ try {
             return { ms: Math.round(performance.now() - t) };
         });
         log(`[${el()}] Track All: ${JSON.stringify(r)}`);
+        summary.trackAll = { ...r, hashes: await resultHashes() };
+        log(`[${el()}] result hashes after Track All: ${JSON.stringify(summary.trackAll.hashes)}`);
         ps = await projState();
         log(`[${el()}] project: ${JSON.stringify(ps)}`);
         if (DUMP_IDS) {
@@ -428,13 +485,60 @@ try {
     // "Track All -> Triangulate All" user state); TRI=0 measures the lazy path.
     const wantTri = process.env.TRI !== '0' && ps.withReproj < ps.groups * 0.9;
     if (PREP !== 'none' && (ps.with3d === 0 || wantTri)) {
-        log(`\n[${el()}] running Triangulate All (toolbar routing)`);
-        const r = await page.evaluate(async () => {
+        log(`\n[${el()}] running Triangulate All (toolbar routing, method ${TRI_METHOD})`);
+        // Record the main thread for the whole run (TRI_LT): long tasks and
+        // long animation frames (with script attribution), plus the loading
+        // card's text as it changes, so a freeze can be placed in a phase.
+        // Times are ms since the run started.
+        await page.evaluate(() => {
+            const T = window.__benchTri = { t0: 0, lt: [], loaf: [], card: [], obs: [] };
+            const rel = (t) => Math.round(t - T.t0);
+            try {
+                const o = new PerformanceObserver(l => { for (const e of l.getEntries()) T.lt.push({ at: rel(e.startTime), dur: Math.round(e.duration) }); });
+                o.observe({ type: 'longtask', buffered: false }); T.obs.push(o);
+            } catch (e) { T.ltErr = String(e); }
+            try {
+                const o = new PerformanceObserver(l => {
+                    for (const e of l.getEntries()) T.loaf.push({
+                        at: rel(e.startTime), dur: Math.round(e.duration), blocking: Math.round(e.blockingDuration),
+                        scripts: (e.scripts || []).map(s => ({ inv: s.invoker, fn: s.sourceFunctionName,
+                            src: (s.sourceURL || '').replace(/^.*\/\/[^/]+/, '').replace(/\?.*$/, '') + ':' + s.sourceCharPosition,
+                            dur: Math.round(s.duration), fsl: Math.round(s.forcedStyleAndLayoutDuration || 0) })),
+                    });
+                });
+                o.observe({ type: 'long-animation-frame', buffered: false }); T.obs.push(o);
+            } catch (e) { T.loafErr = String(e); }
+            let last = '';
+            const card = () => {
+                const el = document.getElementById('loadingOverlay');
+                const t = (id) => { const x = document.getElementById(id); return x ? x.textContent.replace(/\s+/g, ' ').trim() : ''; };
+                const txt = el && !el.classList.contains('hidden')
+                    ? (t('loadingStatus') + ' | ' + t('loadingSubstatus')).slice(0, 160) : '(hidden)';
+                if (txt !== last) { last = txt; T.card.push({ at: rel(performance.now()), txt }); }
+            };
+            T.cardTimer = setInterval(card, 100);
+        });
+        const triTracePath = TRI_TRACE ? path.join(OUT_DIR, 'trace-triangulate-all.json') : null;
+        if (triTracePath) {
+            await browser.startTracing(page, {
+                path: triTracePath, screenshots: false,
+                categories: ['-*', 'devtools.timeline', 'disabled-by-default-devtools.timeline', 'toplevel',
+                    'v8.execute', 'disabled-by-default-v8.cpu_profiler', 'disabled-by-default-v8.gc', 'blink.user_timing'],
+            });
+        }
+        const r = await page.evaluate(async (METHOD) => {
             const st = window.__lucid.state;
-            const t = performance.now();
+            performance.mark('tri-start');
+            const t = window.__benchTri.t0 = performance.now();
             let route;
             try {
-                if (st.session.identities.length > 0) {
+                // ui/ui-wiring.js `triangulateDropdown`'s `all`: Refined ('ba')
+                // always goes to triangulateAllFrames; DLT groups by identity first.
+                if (METHOD === 'ba') {
+                    route = 'triangulateAllFrames(ba)';
+                    const tri = await import('/pose/triangulation.js');
+                    await tri.triangulateAllFrames('ba');
+                } else if (st.session.identities.length > 0) {
                     route = 'groupByIdentityAndTriangulateAll(dlt)';
                     const em = await import('/ui/export-modals.js');
                     await em.groupByIdentityAndTriangulateAll('dlt');
@@ -444,8 +548,31 @@ try {
                     await tri.triangulateAllFrames('dlt');
                 }
             } catch (e) { return { route, err: String(e && e.stack || e).slice(0, 500) }; }
-            return { route, ms: Math.round(performance.now() - t) };
+            const ms = Math.round(performance.now() - t);
+            // two more seconds: a freeze right after the await (a deferred draw) still counts
+            await new Promise(res => setTimeout(res, 2000));
+            return { route, ms };
+        }, TRI_METHOD);
+        if (triTracePath) {
+            await browser.stopTracing();
+            log(`[${el()}] Triangulate All trace: ${triTracePath} (${(fs.statSync(triTracePath).size / 1e6).toFixed(1)} MB)`);
+        }
+        const triLt = await page.evaluate(() => {
+            const T = window.__benchTri; clearInterval(T.cardTimer);
+            for (const o of T.obs) o.disconnect();
+            return { lt: T.lt, loaf: T.loaf, card: T.card, ltErr: T.ltErr, loafErr: T.loafErr };
         });
+        const triHash = await resultHashes();
+        log(`[${el()}] result hashes after Triangulate All: ${JSON.stringify(triHash)}`);
+        await savePerFrameHashes('points3d-by-frame-after-triangulate.json');
+        summary.triangulateAll = { method: TRI_METHOD, ...r, hashes: triHash, ...triLt };
+        const big = triLt.lt.filter(e => e.dur >= 200);
+        log(`[${el()}] Triangulate All main thread: ${triLt.lt.length} long tasks (${triLt.lt.reduce((a, e) => a + e.dur, 0)} ms), ` +
+            `${big.length} >= 200 ms: ${big.map(e => `${e.dur}@${(e.at / 1000).toFixed(1)}s`).join(', ')}`);
+        for (const f of triLt.loaf.filter(e => e.dur >= 200)) {
+            log(`  LoAF ${f.dur} ms @${(f.at / 1000).toFixed(1)}s blocking ${f.blocking}: ` +
+                f.scripts.map(s => `${s.inv} ${s.fn || ''} ${s.src} ${s.dur}ms`).join(' | '));
+        }
         log(`[${el()}] Triangulate All: ${JSON.stringify(r)}`);
         ps = await projState();
         log(`[${el()}] project: ${JSON.stringify(ps)}`);

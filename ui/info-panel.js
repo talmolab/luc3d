@@ -303,6 +303,20 @@ export function populateVideosTable() {
     document.getElementById('videosTable').style.display = '';
     empty.style.display = 'none';
 
+    // Groups per camera, in ONE pass over the groups: counting them per video
+    // row walked every group once per video (8 x 539,852 lookups, ~0.5 s, at
+    // the end of a Triangulate All on the 8-camera project).
+    const groupsByCam = new Map();
+    if (state.session) {
+        for (const [, groups] of state.session.instanceGroups) {
+            for (const g of groups) {
+                for (const [cam, inst] of g.instances) {
+                    if (inst) groupsByCam.set(cam, (groupsByCam.get(cam) || 0) + 1);
+                }
+            }
+        }
+    }
+
     videoList.forEach(function (vf, i) {
         const tr = document.createElement('tr');
         tr.addEventListener('click', function () {
@@ -351,11 +365,7 @@ export function populateVideosTable() {
                     }
                 }
             }
-            for (const [frameIdx, groups] of state.session.instanceGroups) {
-                for (const g of groups) {
-                    if (g.getInstance(camName)) groupCount++;
-                }
-            }
+            groupCount = groupsByCam.get(camName) || 0;
         }
 
         const tdLabeled = document.createElement('td');
