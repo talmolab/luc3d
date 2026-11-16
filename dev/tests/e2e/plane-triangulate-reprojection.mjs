@@ -104,6 +104,14 @@ try {
                 r.top + vy * (r.height / v.videoHeight),
             ];
         };
+        window.__clientToVideo = (viewName, cx, cy) => {
+            const v = AS.state.views.find(x => x.name === viewName);
+            const r = v.overlayCanvas.getBoundingClientRect();
+            return [
+                (cx - r.left) * (v.videoWidth / r.width),
+                (cy - r.top) * (v.videoHeight / r.height),
+            ];
+        };
     });
     await page.waitForFunction(
         () => window.__lucid.state.views.every(v => !!v.overlayCanvas), null, { timeout: 30000 });
@@ -350,9 +358,16 @@ try {
         const [cx1, cy1] = await page.evaluate(
             ([v, x, y]) => window.__videoToClient(v, x, y),
             ['camC', dragTarget.from[0], dragTarget.from[1]]);
-        const [cx2, cy2] = await page.evaluate(
+        // Drop on a whole CSS pixel: Chromium delivers the pointer's position
+        // in whole pixels, and in a small pane one pixel is several video
+        // pixels (198 px wide for 640 at 1280x720). Expect the video point that
+        // pixel maps to, so the check stays exact at any pane size.
+        const [cx2f, cy2f] = await page.evaluate(
             ([v, x, y]) => window.__videoToClient(v, x, y),
             ['camC', dragTarget.to[0], dragTarget.to[1]]);
+        const cx2 = Math.round(cx2f), cy2 = Math.round(cy2f);
+        dragTarget.to = await page.evaluate(
+            ([v, x, y]) => window.__clientToVideo(v, x, y), ['camC', cx2, cy2]);
         await page.mouse.move(cx1, cy1);
         await page.mouse.down();
         await page.mouse.move(cx2, cy2, { steps: 6 });
