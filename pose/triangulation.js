@@ -30,7 +30,7 @@ import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseF
          dropDerivedReprojections, lazyRowInstance, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from './initialization.js';
-import { noteTriangulateRun, carryTriangulateMark } from './run-state.js';
+import { noteTriangulateRun, noteTriangulateRunMarked, markTriangulatedGroups, carryTriangulateMark } from './run-state.js';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -3028,7 +3028,12 @@ async function sweepTriangulateAllFrames(session, cameras, method) {
                 if (!prep) { stats.skipped++; continue; }
                 solver.submit(list[gi], prep.groupCameras, applyResult.bind(null, list[gi], prep, frameState));
             }
-            solver.mark(function () { if (frameState.any) stats.frames++; });
+            solver.mark(function () {
+                if (frameState.any) stats.frames++;
+                // The frame's results have landed: mark them now, not in one
+                // walk over every group at the end (see run-state.js).
+                markTriangulatedGroups(session.instanceGroups.get(fi));
+            });
             return solver.throttle();
         }, {
             onProgress: function (done, tot) {
@@ -3076,7 +3081,7 @@ export async function triangulateAllFrames(method) {
         showLoadingProgress('Triangulating', 0, triLoader.nFrames,
             { detail: triangulationMethodLabel(method), title: 'Triangulate All' });   // the card's title, kept to hideLoading
         var swept = await sweepTriangulateAllFrames(state.session, cameras, method);
-        noteTriangulateRun(state.session, null);   // Triangulate turns blue (ui/run-buttons.js)
+        noteTriangulateRunMarked(state.session);   // Triangulate turns blue (ui/run-buttons.js); frames marked as they landed
         setReprojErrorVisible(true, { checkBoxes: false });
         var reprojOnly = showReprojectionsOnly();   // #243: proofreading comes next
         drawAllOverlays(state.currentFrame);
@@ -3170,7 +3175,11 @@ export async function triangulateAllFrames(method) {
                 applyGroupResult.bind(null, group, prep, frameState));
         }
         solver.mark(function () {
-            if (frameState.any) triangulatedFrames.push(frameIdx);
+            if (frameState.any) {
+                triangulatedFrames.push(frameIdx);
+                // Marked as the frame lands, not in one walk at the end (run-state.js).
+                markTriangulatedGroups(state.session.instanceGroups.get(frameIdx));
+            }
         });
     }
 
@@ -3212,7 +3221,7 @@ export async function triangulateAllFrames(method) {
     // Show reproj/error UI elements, then only the reprojections (#243).
     setReprojErrorVisible(true, { checkBoxes: false });
     var reprojOnly = showReprojectionsOnly();
-    noteTriangulateRun(state.session, triangulatedFrames);   // Triangulate turns blue (ui/run-buttons.js)
+    noteTriangulateRunMarked(state.session);   // Triangulate turns blue (ui/run-buttons.js); frames marked as they landed
 
     // Update display for current frame
     drawAllOverlays(state.currentFrame);

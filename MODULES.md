@@ -2782,9 +2782,25 @@ showed the result) and walks `session.instanceGroups` only when the witness
 stops holding: it finds a new one or forgets the run, after which nothing is
 walked until the next run.
 
+**Whole-project runs mark as they go.** Marking every group (~540k on the
+8-camera, 108,000-frame project) in one walk cost ~80 ms of the run's last
+task: a `WeakSet.add` and a `someValidPoint3d` per group. So Triangulate All
+(windowed and eager, `pose/triangulation.js`), Group by Identity and Group by
+Track (`ui/export-modals.js`, through `withAfterFrame`) call
+`markTriangulatedGroups` for each frame once its results have landed (inside
+the solver's `mark` callback where solves run on the pool), and end with
+`noteTriangulateRunMarked`, which is O(1). The marks are the same: every frame
+the sweep visits is marked after its last write, and nothing later in the run
+replaces it. A run that stops part-way leaves its finished frames marked but is
+not noted.
+
 **Exports.** `noteTrackRun(session)`, `noteTriangulateRun(session, frames)`
 (marks the 3D of every group on `frames`, null = all, that has a
-`triangulationMethod` and valid 3D, solved or kept by the run),
+`triangulationMethod` and valid 3D, solved or kept by the run, then notes the
+run; used by the this-frame and frame-range runs),
+`markTriangulatedGroups(groups)` (that marking, for one frame's list),
+`noteTriangulateRunMarked(session)` (notes a run whose frames are marked),
+`isTriangulateMarked(points3d)` (for checks and tests),
 `carryTriangulateMark(old, new)`, `hasTrackResult(session)`,
 `hasTriangulateResult(session)`.
 
@@ -3389,10 +3405,11 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
 - `./triangulation-core.js` — the pure math (re-exported) and
   `setTriangulationSettingsHooks`.
 - `./triangulation-pool.js` — `createGroupSolver` (Triangulate All's parallel solve).
-- `./run-state.js` — `noteTriangulateRun` (at the end of `triangulateAllFrames`,
-  both paths, `triangulateCurrentFrame` and `triangulateMultiFrameInstances`)
-  and `carryTriangulateMark` (`reTriangulateGroup`): the blue Triangulate
-  button.
+- `./run-state.js` — `markTriangulatedGroups` per frame as results land and
+  `noteTriangulateRunMarked` at the end (`triangulateAllFrames`, both paths),
+  `noteTriangulateRun` (`triangulateCurrentFrame`,
+  `triangulateMultiFrameInstances`) and `carryTriangulateMark`
+  (`reTriangulateGroup`): the blue Triangulate button.
 - `../loading/track-union.js` — `unionTrackNames`, `remapTrackIdx`,
   `isIdentityRemap` (`LazyFrameLoader`'s track union).
 - `./initialization.js` — `update3DViewport` (circular).
@@ -4732,6 +4749,11 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   frame (not only resident ones), releasing each lazy window after use; 3D
   persists in `session.instanceGroups`. The JSON labels export (`exportLabels`)
   streams through the same sweep.
+- `withAfterFrame(onFrame, afterFrame)` (module-private) — wraps a sweep's
+  `onFrame` so `afterFrame(frameIdx)` runs on every path out of it (early
+  returns included). Both bulk-triangulate paths use it to mark each frame's 3D
+  for the Triangulate button as the run goes (`markTriangulatedGroups`,
+  `pose/run-state.js`; after the frame's pool solves land, via `gSolver.mark`).
 - `showExportResultPopup(message, ok)` (module-private) — small ✓/✗ card shown
   after a By-Cam / per-session SLP export (auto-dismisses; closes on
   click/Esc/Enter).
@@ -4895,9 +4917,10 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   `showReprojectionsOnly`, `REPROJ_ONLY_NOTE` (both group-and-triangulate-all
   paths end Reproj-only).
 - `./info-panel.js` — `updateInfoPanel`.
-- `../pose/run-state.js` — `noteTriangulateRun` (after
-  `groupByIdentityAndTriangulateAll`, Triangulate All's DLT path once
-  identities exist, and `groupByTrackAndTriangulateAll`).
+- `../pose/run-state.js` — `markTriangulatedGroups` per frame (through
+  `withAfterFrame`) and `noteTriangulateRunMarked` at the end of
+  `groupByIdentityAndTriangulateAll` (Triangulate All's DLT path once
+  identities exist) and `groupByTrackAndTriangulateAll`.
 - `../import-export/save-load.js` — `showLoading`, `hideLoading`,
   `setStatus`.
 - `./loading-overlay.js` — `showLoadingProgress`, `yieldToPaint` (the

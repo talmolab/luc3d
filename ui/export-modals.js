@@ -53,7 +53,7 @@ import { createMp4Writer, videoEncodingAvailable } from './video-encode.js';
 import { fileSystemAccessHint } from './browser-hints.js';
 import { pickExportFolder } from '../loading/folder-picker-start.js';
 import { chooseProofreadSource, proofreadSlpName } from '../loading/percam-slp-choice.js';
-import { noteTriangulateRun } from '../pose/run-state.js';
+import { noteTriangulateRunMarked, markTriangulatedGroups } from '../pose/run-state.js';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
 // private copies of all four and had silently drifted apart (a 2x bitrate floor
@@ -290,6 +290,21 @@ async function sweepTriangulationFrames(session, onFrame, opts) {
 }
 
 /**
+ * `onFrame`, then `afterFrame(frameIdx)` on every path out of it (each early
+ * return included), for per-frame bookkeeping that must see every visited
+ * frame: here, marking the frame's 3D for the Triangulate button as the run
+ * goes (`markTriangulatedGroups`, pose/run-state.js) instead of in one walk
+ * over every group at the end.
+ */
+function withAfterFrame(onFrame, afterFrame) {
+    return function (frameIdx, fg) {
+        var r = onFrame(frameIdx, fg);
+        afterFrame(frameIdx);
+        return r;
+    };
+}
+
+/**
  * Bulk-group by identity, then triangulate every group.
  *
  * @param {'ba'|'dlt'} [explicitMethod] - the method the user explicitly asked
@@ -368,7 +383,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
     // replacing the old loadAllLazyFrames-then-iterate path that re-OOMed.
     var processedFrames;
     try {
-    processedFrames = await sweepTriangulationFrames(session, function (frameIdx, fg) {
+    processedFrames = await sweepTriangulationFrames(session, withAfterFrame(function (frameIdx, fg) {
         // `fg` is undefined for a frame that has 3D grouping but no resident 2D
         // (the sweep's contract — see `sweepLazyFrameWindows`). Without this guard
         // the very next line throws a TypeError, which aborts the whole operation
@@ -534,7 +549,10 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
         }
         return gSolver.throttle();
 
-    }, {
+    }, function (frameIdx) {
+        // After the frame's solves land (results apply in submission order).
+        gSolver.mark(function () { markTriangulatedGroups(session.instanceGroups.get(frameIdx)); });
+    }), {
         onLoadProgress: function (done, total) {
             showLoadingProgress('Loading frames', done, total, { step: 1, steps: gSteps });
         },
@@ -547,7 +565,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
         },
     });
     await gSolver.finish();
-    noteTriangulateRun(session, null);   // Triangulate turns blue (ui/run-buttons.js)
+    noteTriangulateRunMarked(session);   // Triangulate turns blue (ui/run-buttons.js); frames marked as they landed
     } catch (e) {
         gSolver.cancel();
         throw e;
@@ -638,7 +656,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
 
     // Memory-bounded sweep over every frame (windows + release on lazy sessions);
     // also fixes the prior silent-drop (only resident frames were grouped before).
-    await sweepTriangulationFrames(session, function (frameIdx, fg) {
+    await sweepTriangulationFrames(session, withAfterFrame(function (frameIdx, fg) {
         // `fg` is undefined for a frame that has 3D grouping but no 2D (the
         // sweep's contract — see `sweepLazyFrameWindows`). Without this guard the
         // first `fg.instances` below throws, which aborts the whole operation
@@ -804,7 +822,10 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
         if (solvedHere) solvedFrames++;
         if (priorGroups.length > 0 || session.instanceGroups.has(frameIdx)) regroupedFrames.push(frameIdx);
 
-    }, {
+    }, function (frameIdx) {
+        // Solved inline above: the frame's 3D is final.
+        markTriangulatedGroups(session.instanceGroups.get(frameIdx));
+    }), {
         onProgress: function (done, total) {
             showLoadingProgress('Grouping & triangulating', done, total, {
                 detail: triangulationMethodLabel(prefMethodT) + ' · ' +
@@ -814,7 +835,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
     });
 
     // Post-triangulation updates — hide loading first so user sees results
-    noteTriangulateRun(session, null);   // Triangulate turns blue (ui/run-buttons.js)
+    noteTriangulateRunMarked(session);   // Triangulate turns blue (ui/run-buttons.js); frames marked as they went
     hideLoading();
     setReprojErrorVisible(true, { checkBoxes: false });
     var reprojOnly = showReprojectionsOnly();   // #243: proofreading comes next
