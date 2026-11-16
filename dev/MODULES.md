@@ -2114,7 +2114,9 @@ tracked and never fails the run; the status line and summary box say what it did
   `PREDICTED_ONLY_NOTE`: Track Frame (when it found targets), Track Frame Range
   and Track All (when they assigned identities) end showing ONLY the Predicted
   layer — User, Reprojections, Errors unticked — and append the note to the
-  status line when that changed anything.
+  status line when that changed anything. `holdOverlayDraws`: Track All's end
+  switches (Color by ID, Predictions only, trails) inside it, then redraws
+  once.
 - `../ui/info-panel.js` — `updateInfoPanel`.
 - `../ui/id-switch-modal.js` — `runIdSwitchChecks`, `clearIdSwitchResults`: after
   a successful Track All or Track Frame Range that assigned 2+ identities,
@@ -6722,8 +6724,9 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   reprojection fill under `drawAllOverlays`); exported for tests.
 - `showReprojectionsOnly()` -> `boolean` — after Triangulate All: User,
   Predictions, Errors off, Reprojections on, each changed box firing its own `change`
-  event (so the deselect-hidden-instance handler and redraw run as for a
-  click); returns whether anything changed. `REPROJ_ONLY_NOTE` is the status
+  event (so the deselect-hidden-instance handler runs as for a click), with
+  the handlers' overlay redraws held (`holdOverlayDraws`): every caller
+  redraws once right after; returns whether anything changed. `REPROJ_ONLY_NOTE` is the status
   suffix the callers append when it did. The four Triangulate All endings
   (`triangulateAllFrames` windowed + in-memory, `groupByIdentityAndTriangulateAll`,
   `groupByTrackAndTriangulateAll`) call `setReprojErrorVisible(true, {checkBoxes:
@@ -6733,6 +6736,16 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   Frame / Track Frame Range / Track All (`pose/tracker.js`) Predictions on; User,
   Reprojections, Errors off, by the same change-event mechanics (shared private
   `setToolbarLayers`). `PREDICTED_ONLY_NOTE` is its status suffix.
+- `holdOverlayDraws(fn)` — runs `fn` with `drawAllOverlays` held (it returns
+  at once and counts the call in `overlayDrawHold.held`; nesting is fine,
+  `overlayDrawHold.depth`); the caller redraws once afterwards. For a run's
+  end, where several view switches each redraw every view and each redraw
+  forced a layout of the page the previous one changed (the info panel's
+  tables): four redraws in a row at the end of a Triangulate All on the
+  8-camera project, 23 ms, 14 ms of it layout. Used by `setToolbarLayers` and
+  by Track All's end (`pose/tracker.js`: Color by ID, Predictions only,
+  trails). Only the redraw is held; the switches' other work still runs.
+  `overlayDrawHold` is exported for tests.
 - `getVisibilitySettings()` — reads per-view checkbox state from the DOM.
   Includes **`showUnlinkedBadge`** (the Visibility panel's *Unlinked Instances ▸
   Show "?" badge* toggle, `#visUnlinkedBadge`), passed straight through to
