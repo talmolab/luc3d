@@ -51,7 +51,7 @@ const make = (name, gop, codec = 'h264') => {
 };
 const dense = make('dense.mp4', 30), sparse = make('sparse.mp4', 1000), av1 = make('av1.mp4', 30, 'av1');
 if (!dense || !sparse) {
-    console.log('  (ffmpeg with libx264 unavailable — skipped)');
+    console.log('SKIP — ffmpeg with libx264 is not installed');
     fs.rmSync(tmp, { recursive: true, force: true });
     process.exit(0);
 }

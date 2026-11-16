@@ -59,7 +59,7 @@ const camA = mk('camA.mp4', 'testsrc');
 const camB = mk('camB.mp4', 'testsrc2');
 const camC = mk('camC.mp4', 'smptebars');
 if (!camA || !camB || !camC) {
-    console.log('  (ffmpeg unavailable — skipping videos-panel-buttons.mjs)');
+    console.log('SKIP — ffmpeg is not installed');
     fs.rmSync(tmp, { recursive: true, force: true });
     process.exit(0);
 }

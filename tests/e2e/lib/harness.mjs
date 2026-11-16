@@ -339,7 +339,11 @@ export async function installCdnCache(context) {
 export async function launchBrowser(options) {
     // Imported here so the server half loads without Playwright (Node tests).
     const { chromium } = await import('playwright');
-    const browser = await chromium.launch(options);
+    // LUC3D_E2E_CHANNEL=chrome runs Google Chrome instead of Playwright's own
+    // Chromium build, which on Linux cannot decode or encode H.264 (every video
+    // fixture is H.264). CI sets it; a file's own `channel` still wins.
+    const channel = process.env.LUC3D_E2E_CHANNEL;
+    const browser = await chromium.launch(channel ? { channel, ...options } : options);
     const newContext = browser.newContext.bind(browser);
     browser.newContext = async (opts) => {
         const context = await newContext(opts);
