@@ -72,7 +72,8 @@ export function setReprojErrorVisible(visible, opts) {
  * the reprojections and hide what competes with them — User, Predicted and
  * Errors off, Reprojections on (the toolbar checkboxes). Each change fires the
  * checkbox's own `change` event, exactly as a click would, so the existing
- * handler deselects an instance whose type just got hidden and redraws.
+ * handler deselects an instance whose type just got hidden — but does NOT
+ * redraw: the caller redraws once afterwards (see `setToolbarLayers`).
  *
  * Pair it with `setReprojErrorVisible(true, { checkBoxes: false })` so the
  * boxes are compared with what the USER had, not with Errors just re-ticked.
@@ -91,7 +92,8 @@ export var REPROJ_ONLY_NOTE = ' · showing Reprojections only (toolbar)';
  * After Track Frame / Track Frame Range / Track All: the run's product is the
  * tracked PREDICTIONS (now colored by identity), so show only those — Predictions
  * on; User, Reprojections and Errors off. Same mechanics as `showReprojectionsOnly`
- * (each box fires its own `change` event). Returns whether anything changed.
+ * (each box fires its own `change` event; the caller redraws). Returns whether
+ * anything changed.
  */
 export function showPredictedOnly() {
     return setToolbarLayers([['visUser', false], ['visPredicted', true], ['visReprojections', false], ['visErrors', false]]);
@@ -100,17 +102,48 @@ export function showPredictedOnly() {
 // Suffix for a tracking status line when `showPredictedOnly` changed anything.
 export var PREDICTED_ONLY_NOTE = ' · showing Predictions only (toolbar)';
 
-/** Set toolbar layer checkboxes `[[id, checked], …]` as clicks would; true if any changed. */
-function setToolbarLayers(want) {
-    var changed = false;
-    for (var i = 0; i < want.length; i++) {
-        var el = document.getElementById(want[i][0]);
-        if (!el || el.checked === want[i][1]) continue;
-        el.checked = want[i][1];
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        changed = true;
+/**
+ * While `depth` is above 0, `drawAllOverlays` returns at once and counts the
+ * call in `held` (`holdOverlayDraws`). Exported for tests.
+ */
+export var overlayDrawHold = { depth: 0, held: 0 };
+
+/**
+ * Run `fn` with `drawAllOverlays` held: every redraw asked for meanwhile is
+ * skipped, and the CALLER redraws once afterwards. For a run's end, where
+ * several view switches (layer boxes, Color by ID, trails) each redraw every
+ * view and each redraw forces a layout of the page the previous one changed
+ * (the info panel's tables): at the end of a Triangulate All on an 8-camera
+ * project, four redraws in a row, 23 ms, 14 ms of it layout. Only the overlay
+ * redraw is held; the switches' other work (deselecting, menus, 3D, timeline)
+ * still runs. Returns `fn`'s result.
+ */
+export function holdOverlayDraws(fn) {
+    overlayDrawHold.depth++;
+    try {
+        return fn();
+    } finally {
+        overlayDrawHold.depth--;
     }
-    return changed;
+}
+
+/**
+ * Set toolbar layer checkboxes `[[id, checked], …]` as clicks would; true if
+ * any changed. Their redraws are held (`holdOverlayDraws`): every caller of
+ * `showReprojectionsOnly` / `showPredictedOnly` calls `drawAllOverlays` next.
+ */
+function setToolbarLayers(want) {
+    return holdOverlayDraws(function () {
+        var changed = false;
+        for (var i = 0; i < want.length; i++) {
+            var el = document.getElementById(want[i][0]);
+            if (!el || el.checked === want[i][1]) continue;
+            el.checked = want[i][1];
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            changed = true;
+        }
+        return changed;
+    });
 }
 
 // ============================================
@@ -415,6 +448,7 @@ export function noteOverlayViewTransform(view) {
  *   `frameIdx` (seek / step / edits).
  */
 export function drawAllOverlays(frameIdx, viewFrames) {
+    if (overlayDrawHold.depth > 0) { overlayDrawHold.held++; return; }
     if (!state.session) return;
 
     // A node tooltip names a node on the frame it was hovered on; on any other
