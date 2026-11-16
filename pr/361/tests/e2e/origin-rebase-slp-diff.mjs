@@ -66,7 +66,7 @@ try {
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(
         () => window.__lucid && window.__lucid.state && window.SleapIO && window.h5wasm,
-        { timeout: 120000 });
+        null, { timeout: 120000 });
 
     // =================================================================
     // Fixture
@@ -126,7 +126,7 @@ try {
         AS.paneManager.addAllViewsAsGrid();
     });
     await page.waitForFunction(
-        () => window.__lucid.state.views.every(v => !!v.overlayCanvas), { timeout: 10000 });
+        () => window.__lucid.state.views.every(v => !!v.overlayCanvas), null, { timeout: 30000 });
 
     await page.evaluate(async (TF) => {
         const P = await import('/ui/plane-definition.js');

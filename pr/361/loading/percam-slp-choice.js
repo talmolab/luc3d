@@ -1,4 +1,5 @@
-// percam-slp-choice.js — which `.slp` a camera directory is loaded from.
+// percam-slp-choice.js — which `.slp` a camera directory is loaded from, and
+// what File ▸ Export SLEAP File By Cam names its proofread file next to it.
 //
 // Extracted from `loading/session-loader.js` for the same reason
 // `import-export/import-track-resolve.js` was: session-loader pulls app.js
@@ -69,4 +70,42 @@ export function chooseCameraSlp(slps) {
     }
 
     return { file: best, version: bestVersion, newer: newest };
+}
+
+/** Appended to a camera's source `.slp` stem by File ▸ Export SLEAP File By Cam. */
+export var PROOFREAD_SUFFIX = '_proofread';
+
+/** True for a name By Cam wrote (`<stem>_proofread.slp`), which is never a source. */
+export function isProofreadSlp(name) {
+    return /_proofread\.slp$/i.test(String(name || ''));
+}
+
+/**
+ * The name By Cam writes next to a camera's source `.slp`:
+ * `21241563-20260921105806_nn.slp` → `21241563-20260921105806_nn_proofread.slp`.
+ * @param {string} sourceName  a file name (or a video name, when the camera has no `.slp`)
+ * @returns {string}
+ */
+export function proofreadSlpName(sourceName) {
+    var stem = String(sourceName).replace(/\.[^.\/]+$/, '');
+    return stem + PROOFREAD_SUFFIX + '.slp';
+}
+
+/**
+ * Which `.slp` in a camera folder the project's 2D came from, for naming the
+ * proofread export. Our own `_proofread` outputs never count. The file the
+ * folder load recorded (`loadedName`, `videoFiles[].slpFilename`) wins when it is
+ * still there; otherwise the loader's own rule (`chooseCameraSlp`), so an
+ * unchanged folder gives the file the project was built from.
+ * @param {Array<{name: string, lastModified?: number}>} slps  the folder's `.slp` files
+ * @param {?string} [loadedName]
+ * @returns {?Object}  one of `slps`, or null when there is no candidate
+ */
+export function chooseProofreadSource(slps, loadedName) {
+    var cands = (slps || []).filter(function (f) { return !isProofreadSlp(f.name); });
+    if (cands.length === 0) return null;
+    if (loadedName) {
+        for (var i = 0; i < cands.length; i++) if (cands[i].name === loadedName) return cands[i];
+    }
+    return chooseCameraSlp(cands).file;
 }

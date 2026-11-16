@@ -27,6 +27,7 @@
             readGeometry: pick('readGeometry'),
             writeGeometry: pick('writeGeometry'),
             clearGeometry: pick('clearGeometry'),
+            rememberedSizeIsChosen: pick('rememberedSizeIsChosen'),
             DEFAULT_MIN_W: pick('DEFAULT_MIN_W'),
             DEFAULT_MIN_H: pick('DEFAULT_MIN_H'),
         };
@@ -154,14 +155,14 @@
             const mg = MG();
             const st = fakeStorage();
             assertTrue(mg.writeGeometry('settings', { x: 120, y: 40, w: 1180, h: 800 }, st), 'wrote');
-            assertDeepEqual(mg.readGeometry('settings', st), { x: 120, y: 40, w: 1180, h: 800 });
+            assertDeepEqual(mg.readGeometry('settings', st), { x: 120, y: 40, w: 1180, h: 800, sized: false });
         });
 
         it('values are rounded — sub-pixel drag noise is not worth storing', function () {
             const mg = MG();
             const st = fakeStorage();
             mg.writeGeometry('settings', { x: 120.4, y: 40.6, w: 1180.5, h: 800.49 }, st);
-            assertDeepEqual(mg.readGeometry('settings', st), { x: 120, y: 41, w: 1181, h: 800 });
+            assertDeepEqual(mg.readGeometry('settings', st), { x: 120, y: 41, w: 1181, h: 800, sized: false });
         });
 
         it('ids are independent, so one modal cannot clobber another', function () {
@@ -169,8 +170,8 @@
             const st = fakeStorage();
             mg.writeGeometry('settings', { x: 1, y: 2, w: 300, h: 400 }, st);
             mg.writeGeometry('export', { x: 9, y: 9, w: 500, h: 600 }, st);
-            assertDeepEqual(mg.readGeometry('settings', st), { x: 1, y: 2, w: 300, h: 400 });
-            assertDeepEqual(mg.readGeometry('export', st), { x: 9, y: 9, w: 500, h: 600 });
+            assertDeepEqual(mg.readGeometry('settings', st), { x: 1, y: 2, w: 300, h: 400, sized: false });
+            assertDeepEqual(mg.readGeometry('export', st), { x: 9, y: 9, w: 500, h: 600, sized: false });
         });
 
         it('an unknown id reads as null, so the caller centres instead', function () {
@@ -213,7 +214,38 @@
             const mg = MG();
             const st = fakeStorage();
             mg.writeGeometry('settings', { x: 4000, y: 3000, w: 2400, h: 1600 }, st);
-            assertDeepEqual(mg.readGeometry('settings', st), { x: 4000, y: 3000, w: 2400, h: 1600 });
+            assertDeepEqual(mg.readGeometry('settings', st), { x: 4000, y: 3000, w: 2400, h: 1600, sized: false });
+        });
+    });
+
+    describe('Modal geometry - only a size the user chose is remembered', function () {
+        it('the sized flag round-trips', function () {
+            const mg = MG();
+            const st = fakeStorage();
+            mg.writeGeometry('settings', { x: 1, y: 2, w: 1200, h: 700, sized: true }, st);
+            assertTrue(mg.readGeometry('settings', st).sized === true, 'sized read back');
+            assertTrue(mg.rememberedSizeIsChosen(mg.readGeometry('settings', st)), 'chosen');
+        });
+
+        it('a record saved without a resize is not a chosen size', function () {
+            const mg = MG();
+            const st = fakeStorage();
+            mg.writeGeometry('settings', { x: 1, y: 2, w: 1040, h: 620 }, st);
+            assertFalse(mg.rememberedSizeIsChosen(mg.readGeometry('settings', st)), 'sized: false');
+        });
+
+        it('an old record (no flag) at the old default size is not chosen; any other size is', function () {
+            const mg = MG();
+            const OLD = { w: 880, h: 620 };
+            const oldDefault = mg.readGeometry('settings', fakeStorage({
+                'lucid.modalGeometry.v1': '{"settings":{"x":260,"y":140,"w":880,"h":620}}',
+            }));
+            assertFalse(mg.rememberedSizeIsChosen(oldDefault, OLD), 'old default size');
+            const resized = mg.readGeometry('settings', fakeStorage({
+                'lucid.modalGeometry.v1': '{"settings":{"x":260,"y":140,"w":1180,"h":800}}',
+            }));
+            assertTrue(mg.rememberedSizeIsChosen(resized, OLD), 'a size the user resized to');
+            assertTrue(mg.rememberedSizeIsChosen(oldDefault), 'no legacy default named: kept as before');
         });
     });
 })();

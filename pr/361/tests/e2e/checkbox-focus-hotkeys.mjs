@@ -46,7 +46,7 @@ try {
     page.on('console', m => { if (m.type() === 'error') errs.push('console.error: ' + m.text().slice(0, 300)); });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // A project with frames but no decoder — the video-less branch of the
     // transport handler, which is enough to observe play/pause and stepping
@@ -173,7 +173,7 @@ try {
     // ---- 4. A real text field still swallows everything ---------------------
     // The per-camera rotation row lives in the Visibility tab, which has to be
     // showing before anything in it can take focus.
-    await page.click('.panel-tab[data-tab="tabVisibility"]');
+    await page.click('.panel-rail-btn[data-tab="tabVisibility"]');
     await reset();
     const typed = await page.evaluate(() => {
         const el = document.querySelector('#visVideoRotationTable input[type=number]');

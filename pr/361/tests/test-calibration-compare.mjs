@@ -262,6 +262,24 @@ console.log('\n6. Sessions with no calibration are excluded, not counted as diff
     check(r.withoutCalibration.join(',') === 'noCal', 'and the uncalibrated one is named');
     check(r.comparedCount === 2 && r.sessionCount === 3,
         'compared 2 of 3, so the modal can explain the shortfall');
+
+    // The same folder now loads with PLACEHOLDER cameras (all-zero extrinsics,
+    // pose/placeholder-cameras.js) so it can be saved. They name its views; they
+    // are not a calibration, and must not be compared as one.
+    const placeholders = ['back', 'mid', 'side'].map((n) => ({
+        name: n, matrix: [[600, 0, 640], [0, 600, 512], [0, 0, 1]], dist: [0, 0, 0, 0, 0],
+        size: [1280, 1024], rvec: [0, 0, 0], tvec: [0, 0, 0],
+    }));
+    const p = compareSessionCalibrations([
+        session('A', rig()), session('B', rig()), session('noCalPlaceholders', placeholders),
+    ]);
+    check(p.ok === true, 'placeholder cameras are not a third calibration');
+    check(p.withoutCalibration.join(',') === 'noCalPlaceholders', 'the placeholder session is named as uncalibrated');
+    check(p.comparedCount === 2, 'and is not compared');
+    // A rig whose reference camera sits at the origin IS a calibration.
+    const refAtOrigin = rig({ back: { rvec: [0, 0, 0], tvec: [0, 0, 0] } });
+    const q = compareSessionCalibrations([session('A', refAtOrigin), session('B', refAtOrigin)]);
+    check(q.comparedCount === 2 && q.ok === true, 'a rig with one camera at the origin is still compared');
 }
 
 console.log('\n7. Nothing to compare');

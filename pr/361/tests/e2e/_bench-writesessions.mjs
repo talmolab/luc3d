@@ -33,7 +33,7 @@ try {
     const page = await browser.newPage();
     page.on('pageerror', e => console.log('  [pageerror]', String(e).slice(0, 300)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.SleapIO, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.SleapIO, null, { timeout: 30000 });
 
     const r = await page.evaluate(async ({ GROUPS, CAMS, NODES }) => {
         const S = window.SleapIO;

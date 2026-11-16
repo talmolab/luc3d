@@ -106,7 +106,7 @@ try {
     const cdp = await ctx.newCDPSession(page);
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 60000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 60000 });
     await page.evaluate((n) => {
         setInterval(() => {
             const ts = document.querySelector('.track-setup-modal');

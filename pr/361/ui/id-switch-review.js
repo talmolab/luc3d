@@ -214,6 +214,8 @@ export function serializeIdSwitchReview(session) {
         if (cue === 'image') {
             c.imageHz = r.imageHz; c.crops = r.crops; c.cameras = (r.cameras || []).slice();
             if (r.model && r.model.note) c.model = { name: r.model.name, note: r.model.note };
+            // a package model (absent for the built-in one): which model, and the threshold it flagged at
+            if (r.imageModel && typeof r.imageModel.key === 'string') c.imageModel = { key: r.imageModel.key, name: String(r.imageModel.name || ''), threshold: r.imageModel.threshold };
         }
         checks[cue] = c;
     });
@@ -263,6 +265,9 @@ export function ingestIdSwitchReview(session, payload) {
                 r.imageHz = isNum(c.imageHz) ? c.imageHz : 0; r.crops = isNum(c.crops) ? c.crops : 0;
                 r.cameras = Array.isArray(c.cameras) ? c.cameras.filter(function (x) { return typeof x === 'string'; }) : [];
                 if (c.model && typeof c.model.note === 'string') r.model = { name: String(c.model.name || ''), note: c.model.note };
+                if (c.imageModel && typeof c.imageModel.key === 'string' && isNum(c.imageModel.threshold)) {
+                    r.imageModel = { key: c.imageModel.key, name: String(c.imageModel.name || ''), threshold: c.imageModel.threshold };
+                }
             }
             results[cue] = r;
         });

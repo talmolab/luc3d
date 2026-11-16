@@ -146,7 +146,7 @@ check(unresolved.length === 0,
 
 // `triangulateMultiFrameInstances(start, end, onProgress, method)` has the same
 // silent default — an omitted 4th argument is DLT — and Triangulate Multiple
-// Frames omitted it, solving with DLT whatever Settings ▸ Default Triangulation
+// Frames omitted it, solving with DLT whatever Settings ▸ Triangulation Wizard
 // said. Its callers must name a method too.
 const ranged = [];
 for (const rel of sourceFiles()) {

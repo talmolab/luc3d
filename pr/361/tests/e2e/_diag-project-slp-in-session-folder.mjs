@@ -33,7 +33,7 @@ async function run(where, relPaths) {
     page.on('console', m => logs.push(m.type() + ': ' + m.text()));
     page.on('pageerror', e => logs.push('pageerror: ' + String(e)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     const outcome = await page.evaluate(async (paths) => {
         const loader = await import('/loading/session-loader.js');
