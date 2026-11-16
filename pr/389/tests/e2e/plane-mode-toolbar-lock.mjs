@@ -26,23 +26,20 @@
  *     already follows. §5b leaves such a button disabled and checks it stays
  *     that way across the whole cycle.
  *
- * Run: node plane-mode-toolbar-lock.mjs   (spawns its own http.server)
+ * Run: node plane-mode-toolbar-lock.mjs   (serves the app itself)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8193);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 /** Every button the mode must block. */
 const LOCKED = ['tbInstanceMenu', 'tbAddInstance', 'tbDeleteInstance', 'tbGroupMenu', 'tbGroup', 'tbEditGroup',
@@ -59,7 +56,7 @@ const FREE_CHECKBOXES = ['visUser', 'visPredicted', 'visReprojections', 'visErro
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage();
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     page.on('console', m => {

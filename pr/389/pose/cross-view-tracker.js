@@ -124,7 +124,12 @@
  * soft gate keeps 4 relabels but swaps a different pair (17.8% -> 22.8% of
  * animal-frames wrong); holdBonus 30 alone gives 2 relabels, 12.4%. Not yet
  * measured on Mouse-Dyad / s-DANNCE, where the gate itself hurt (#285) — so
- * neither is a default.
+ * neither is a default. Re-measured 2026-11-16 through the app's own Track All
+ * on the current build: identical (108 of 110 runs; 2 gate-on runs moved by
+ * <0.05%). Combined with MISPLACED NODES' maxPenalty 4 + matchReproj 20 they
+ * stack: 22 sessions, lasting switches 360 -> 120 (that pair alone: 168), short
+ * runs 2,385 -> 1,249, mean 94.65%, median 99.90%; 5 mice 6 relabels, 19.3%
+ * wrong (that pair alone: 8, 25.6%).
  *
  * -----------------------------------------------------------------------
  * MISPLACED NODES (2026-10-20) — three opt-in changes, all off by default
@@ -222,8 +227,8 @@ import {
     hungarianAlgorithm,
     computeFundamentalMatrix,
     epipolarErrorMatrix,
-} from './triangulation-core.js?v=40895ea3bb97';
-import { points3dNodeCount, readPoint3d } from './pose-data.js?v=40895ea3bb97';
+} from './triangulation-core.js?v=1ba185d159db';
+import { points3dNodeCount, readPoint3d } from './pose-data.js?v=1ba185d159db';
 
 // ---------------------------------------------------------------------------
 // Normalized-coordinate helpers

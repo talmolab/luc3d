@@ -27,15 +27,15 @@
  * `lucidInsts.length === 0`, so an emptied camera-frame streams back verbatim
  * unless the store itself was mutated.
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8101);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const FIXTURE = '_custom-delete-roundtrip.slp';
 const FIXTURE_PATH = path.join(repoRoot, FIXTURE);
 
@@ -44,16 +44,13 @@ const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fa
 
 try { fs.unlinkSync(FIXTURE_PATH); } catch (e) { /* ignore */ }
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 const NF = 12;           // frames
 const CAMS = ['camA', 'camB', 'camC'];
 const PER_CAM = 2;       // instances per camera per frame -> 12*3*2 = 72 rows
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
 
     // =======================================================================
     // Page 1 — build a real multi-camera project and save it through the real

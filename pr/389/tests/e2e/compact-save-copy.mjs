@@ -19,23 +19,19 @@
  *
  * Run: node tests/e2e/compact-save-copy.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PORT = Number(process.env.PORT || 8296);
+const server = await startServer(REPO);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m, extra) => { console.log((c ? '  ✓ ' : '  ✗ ') + m + (c || extra === undefined ? '' : ' -> ' + JSON.stringify(extra))); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: REPO, stdio: 'ignore' });
-await new Promise((r) => setTimeout(r, 1200));
-if (server.exitCode !== null) { console.error(`port ${PORT} is in use; pass PORT= a free port`); process.exit(2); }
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
     page.setDefaultTimeout(300000);
     const errs = [];

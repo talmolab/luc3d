@@ -26,11 +26,10 @@
  * Negative control, run once: on the pre-fix build §1 and §3 fail (no view,
  * a success status naming nothing); §2 and §4 pass there too.
  *
- * Run: node tests/e2e/slp-load-unmatched-video.mjs   (spawns its own
- * http.server; PORT= to move it)
+ * Run: node tests/e2e/slp-load-unmatched-video.mjs   (serves the app
+ * itself; PORT= to choose the port)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -38,19 +37,18 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8391);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const REF = '240615_251B_balbc_home_top-06152024120645-0000';
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lucid-unmatched-'));
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
     const errs = [];
     const logs = [];

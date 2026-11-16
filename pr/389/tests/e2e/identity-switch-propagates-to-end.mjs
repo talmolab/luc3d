@@ -33,15 +33,15 @@
  *   node tests/e2e/identity-switch-propagates-to-end.mjs
  *   FRAMES=8000 SEG=500 CAMS=4 KEEP=1 node tests/e2e/...
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8207);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const FRAMES = Number(process.env.FRAMES || 3000);
 const SEG = Number(process.env.SEG || 200);
 const CAMS = Number(process.env.CAMS || 3);
@@ -71,12 +71,9 @@ const outPath = (tag) => {
     return p;
 };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch({ headless: true, args: ['--enable-precise-memory-info'] });
+    browser = await launchBrowser({ headless: true, args: ['--enable-precise-memory-info'] });
     const page = await browser.newPage();
     page.on('pageerror', e => { log('[pageerror] ' + String(e).slice(0, 300)); fails++; });
     page.on('crash', () => { log('*** RENDERER CRASHED ***'); fails++; });
