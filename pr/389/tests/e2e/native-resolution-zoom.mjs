@@ -56,7 +56,7 @@ await new Promise(r => setTimeout(r, 1200));
 /** A project of `cams` ([{name, w, h}]), each canvas filled with its own noise. */
 async function loadProject(page, cams) {
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     await page.evaluate(async (cams) => {
         const pd = await import('/pose/pose-data.js');
         const AS = await import('/ui/app-state.js');
@@ -525,6 +525,33 @@ try {
         check(z.native && /rotate\(90deg\)/.test(z.transform), 'rotated and native');
         score = await exactness(page, 'camA', 90);
         check(score > 0.999, `rotated 90°: every screen pixel equals its source pixel (${(score * 100).toFixed(2)}%)`);
+        // Panned so the picture overhangs the cell's right / bottom edge, the
+        // cell clips the rotated quad part-way into the texture. Chrome then
+        // filtered it (7% exact, every corner still on the device grid) until
+        // the canvas was drawn nearest-neighbour at 1:1.
+        const pans = [];
+        for (const [edge, d] of [['right', 0.5], ['right', 31.5], ['bottom', 0.5], ['bottom', 45]]) {
+            pans.push(await page.evaluate(async ([edge, d]) => {
+                const AS = await import('/ui/app-state.js');
+                const v = AS.state.views[0];
+                const r = v.canvas.getBoundingClientRect(), c = v.canvas.closest('.video-cell').getBoundingClientRect();
+                if (edge === 'right') v.zoom.offsetX += c.right - r.right + d;
+                else v.zoom.offsetY += c.bottom - r.bottom + d;
+                AS.videoController.applyZoom(v);
+                return edge + ' +' + d;
+            }, [edge, d]));
+            await page.waitForTimeout(150);
+            pans.push(((await exactness(page, 'camA', 90)) * 100).toFixed(2));
+        }
+        check(pans.filter((s, i) => i % 2 === 1).every(s => Number(s) > 99.9),
+            `rotated 90°, panned past the cell's edge: still exact (${pans.join(', ').replace(/(\+[\d.]+), /g, '$1: ')}%)`);
+        const rendering = await page.evaluate(async () => {
+            const AS = await import('/ui/app-state.js');
+            const v = AS.state.views[0];
+            return [v.canvas.style.imageRendering, getComputedStyle(v.overlayCanvas).imageRendering];
+        });
+        check(rendering[0] === 'pixelated' && rendering[1] !== 'pixelated',
+            `the rotated 1:1 video canvas is drawn nearest-neighbour, the pose overlay is not (${rendering.join(' / ')})`);
         // Click mapping: the screen point a known video pixel is drawn at must map back to it.
         const probe = await page.evaluate(async () => {
             const AS = await import('/ui/app-state.js');
@@ -544,6 +571,8 @@ try {
             v.rotation = 0;
             AS.videoController.reapplyZoom(v);
         });
+        check((await page.evaluate(async () => (await import('/ui/app-state.js')).state.views[0].canvas.style.imageRendering)) === '',
+            'unrotated again, the video canvas is filtered as usual');
         await ctx.close();
     }
 

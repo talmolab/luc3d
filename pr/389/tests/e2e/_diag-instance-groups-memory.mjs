@@ -66,7 +66,7 @@ try {
     };
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 60000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 60000 });
     const boot = await measure('booted, nothing loaded');
 
     // ---- load (same path as _bench-playback.mjs) ----

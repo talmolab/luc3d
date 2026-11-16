@@ -71,7 +71,7 @@ try {
     });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     // §9 writes `skeletonEditWarningOff`. A fresh context starts clean, but
     // clear it anyway so a re-run against a persisted profile cannot start with
     // the dialog already suppressed and pass every "no modal" check for free.
@@ -122,7 +122,8 @@ try {
 
     // The Skeleton tab, since the edit controls live in it and Playwright will
     // not type into a hidden input.
-    await page.click('.panel-tab[data-tab="tabSkeleton"]');
+    await page.click('.panel-rail-btn[data-tab="tabSkeleton"]');
+    await page.mouse.move(300, 300);   // off the rail: widened, it covers + Node
     await page.waitForTimeout(120);
 
     const modalOpen = () => page.evaluate(() => !!document.getElementById('skeletonEditConfirm'));

@@ -31,7 +31,7 @@ try {
     const page = await browser.newPage({ viewport: { width: 1500, height: 1000 } });
     page.on('pageerror', e => console.log('  [pageerror]', String(e).slice(0, 200)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // ---- the same fixture `set-new-calibration.mjs` stages -------------
     await page.evaluate(async () => {
@@ -82,7 +82,7 @@ try {
         AS.paneManager.addAllViewsAsGrid();
     });
     await page.waitForFunction(
-        () => window.__lucid.state.views.every(v => !!v.overlayCanvas), { timeout: 10000 });
+        () => window.__lucid.state.views.every(v => !!v.overlayCanvas), null, { timeout: 30000 });
 
     const TRUTH = [
         [-40.678, -30.234, 216.588], [40, -30, 220], [40, 30, 225], [-40, 30, 221],

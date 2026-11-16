@@ -10,6 +10,10 @@
  * `_score`, `score`, `track` — and every field default it may read must still
  * be what the old construction gave, or the file changes. The reference here is
  * the old construction itself, built from the same LUCID instances.
+ *
+ * "Same bytes" leaves out the clock: HDF5 stamps each object header with the
+ * second it was written, so two saves in different seconds differ there even
+ * when the content is identical (`withoutHeaderTimes`).
  */
 (function () {
     const { describe, it, assertEqual, assertTrue } = TestFramework;
@@ -55,6 +59,33 @@
         if (a.length !== b.length) return false;
         for (var i = 0; i < a.length; i++) if (!Object.is(a[i], b[i])) return false;
         return true;
+    }
+
+    // A copy of an HDF5 file with the clock taken out. Every v2 object header
+    // ("OHDR", version 2) written with flag 0x20 holds four 4-byte times
+    // (access, modification, change, birth: the save's Unix second), and the
+    // checksum that ends the header covers them. Zero both. The header's own
+    // bytes are still compared, so clearing its checksum hides nothing.
+    // `cleared` counts the headers; none means the format changed under us.
+    function withoutHeaderTimes(bytes) {
+        var b = bytes.slice();
+        var dv = new DataView(b.buffer, b.byteOffset, b.length);
+        var cleared = 0;
+        for (var p = 0; p + 6 <= b.length; p++) {
+            if (b[p] !== 0x4f || b[p + 1] !== 0x48 || b[p + 2] !== 0x44 || b[p + 3] !== 0x52 || b[p + 4] !== 2) continue;
+            var flags = b[p + 5];
+            if (!(flags & 0x20)) continue;
+            var q = p + 6;
+            b.fill(0, q, q + 16);                                     // the four times
+            q += 16 + (flags & 0x10 ? 4 : 0);                         // attribute phase-change values
+            var w = 1 << (flags & 3);                                 // width of the chunk-0 size field
+            var size = w === 1 ? b[q] : w === 2 ? dv.getUint16(q, true)
+                : w === 4 ? dv.getUint32(q, true) : Number(dv.getBigUint64(q, true));
+            q += w + size;
+            b.fill(0, q, q + 4);                                      // the checksum
+            cleared++;
+        }
+        return { bytes: b, cleared: cleared };
     }
 
     describe('SLP export: pooled sleap-io instances', function () {
@@ -153,9 +184,12 @@
                 return reference(SIO, sk, N, inst, track);
             }));
             assertEqual(pooled.length, old.length, 'same length');
+            var a = withoutHeaderTimes(pooled), b = withoutHeaderTimes(old);
+            assertTrue(a.cleared > 0, 'found the HDF5 object headers');
+            assertEqual(a.cleared, b.cleared, 'same number of object headers');
             var same = pooled.length === old.length;
-            for (var i = 0; same && i < pooled.length; i++) if (pooled[i] !== old[i]) same = false;
-            assertTrue(same, 'byte-identical files');
+            for (var i = 0; same && i < pooled.length; i++) if (a.bytes[i] !== b.bytes[i]) same = false;
+            assertTrue(same, 'byte-identical files apart from the save time');
         });
     });
 })();

@@ -59,7 +59,7 @@ try {
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 60000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 60000 });
 
     /** Load `.slp` bytes (a page global) through the real File ▸ Load path, skipping the video prompt. */
     async function loadThroughApp(globalName, fileName) {

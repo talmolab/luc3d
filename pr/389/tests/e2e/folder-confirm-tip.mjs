@@ -51,12 +51,18 @@ async function open(browser, platform, automated) {
         });
         if (!automated) {
             Object.defineProperty(Navigator.prototype, 'webdriver', { configurable: true, get: () => false });
+            // A person's browser picks a recording folder with showDirectoryPicker
+            // (loading/recording-folder.js), whose native dialog Playwright cannot
+            // answer: take it away so the loaders use the folder input, which the
+            // file chooser fills. §5 puts a stub back to watch that picker.
+            delete window.showDirectoryPicker;
+            delete Window.prototype.showDirectoryPicker;
         }
     }, { platform, automated });
     const page = await ctx.newPage();
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     // The remembered loader choice decides which loader the menu item runs.
     await page.evaluate(() => {
         localStorage.setItem('sessionFolderType', 'single-slp');
