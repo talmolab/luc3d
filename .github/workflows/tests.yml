@@ -20,6 +20,11 @@ permissions:
 env:
   # Every e2e cache (jsdelivr libraries, the image model) lives here.
   LUC3D_E2E_CACHE: ${{ github.workspace }}/../luc3d-e2e-cache
+  # Run the browser tests in Google Chrome (installed on GitHub's Ubuntu
+  # runners), not Playwright's own Chromium build: on Linux that build's
+  # headless shell died mid-run on export-bycam-store-copy.mjs, and Chrome is
+  # the browser people use. (On a Mac the suite runs in Playwright's Chromium.)
+  LUC3D_E2E_CHANNEL: chrome
 
 jobs:
   unit:
@@ -37,19 +42,16 @@ jobs:
         working-directory: tests/e2e
         run: npm install --no-audit --no-fund
       - name: Browser unit tests (tests/*.js via tests/test-runner.html)
-        env:
-          LUC3D_E2E_CHANNEL: chrome
         run: node tests/e2e/run-unit-tests.mjs
 
   e2e:
-    name: e2e ${{ matrix.shard }}/4 (${{ matrix.browser }})
+    name: e2e ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
-        browser: [chrome, chromium]   # TEMPORARY: comparing the two while the workflow is being tried
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -83,14 +85,14 @@ jobs:
       # So offline-server.mjs runs instead of skipping.
       - name: Install the offline packages
         run: python3 scripts/offline_deps.py install
+      # Two files at a time on the runner's 4 cores; each failure is rerun
+      # alone (with page tracing) before it counts.
       - name: e2e tests, shard ${{ matrix.shard }} of 4
-        env:
-          LUC3D_E2E_CHANNEL: ${{ matrix.browser == 'chrome' && 'chrome' || '' }}
         run: node tests/run-e2e-tests.mjs --shard ${{ matrix.shard }}/4 -j 2 --logs "$RUNNER_TEMP/e2e-logs"
       - name: Keep the logs of a failed run
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-logs-${{ matrix.shard }}-${{ matrix.browser }}
+          name: e2e-logs-${{ matrix.shard }}
           path: ${{ runner.temp }}/e2e-logs
           retention-days: 7

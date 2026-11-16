@@ -134,7 +134,12 @@ try {
             blobs[cam] = await fio.exportSlpClientSide(s1, cam, false, vf, cam + '_v1.slp', null);
         }
 
-        const pad = new Uint8Array(tri.LAZY_SLP_THRESHOLD + (1 << 20));
+        // One Blob of padding, shared: a File made from an existing Blob refers
+        // to its bytes, while one made from the typed array copied all 151 MB
+        // again for every big file (four of them, ~600 MB of blobs), more than
+        // Chrome keeps for a Playwright context on Linux: the lazy loader's
+        // worker then failed to read the file.
+        const pad = new Blob([new Uint8Array(tri.LAZY_SLP_THRESHOLD + (1 << 20))]);
         const slpFor = (cam, big) => mkFile(
             big ? [blobs[cam], pad] : [blobs[cam]],
             ROOT + '/' + cam + '/' + cam + '_v1.slp', 'application/x-hdf5');
