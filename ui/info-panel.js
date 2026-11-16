@@ -153,6 +153,29 @@ function buildVisToggleRow(entry, onChange, opts) {
     return row;
 }
 
+/** What the Visibility tab's Timeline lists were last built from (`populateTimelineVisibility`). */
+var _timelineVisBuilt = { session: undefined, key: null };
+
+/**
+ * Everything a row shows or acts on, for all three lists: name, on/off and
+ * swatch colour. Equal keys (for the same session) build identical rows.
+ * Exported for tests.
+ */
+export function timelineVisibilityKey(camList, trackList, idList) {
+    var parts = [];
+    function add(list) {
+        for (var i = 0; i < list.length; i++) {
+            var e = list[i];
+            parts.push(e.name, e.visible ? '1' : '0', e.color || '');
+        }
+        parts.push('');
+    }
+    add(camList);
+    add(trackList);
+    add(idList);
+    return JSON.stringify(parts);
+}
+
 /**
  * Populate the Visibility-tab Timeline section's three toggle lists:
  *   - Views  (one row per camera)
@@ -173,15 +196,38 @@ export function populateTimelineVisibility(session) {
     var hostIds = document.getElementById('visTimelineIdentities');
     if (!hostCams || !hostTracks || !hostIds) return;
 
+    var camList = session ? getCameraVisibilityList(session) : [];
+    var trackList = session ? getTrackVisibilityList(session) : [];
+    var idList = session ? getIdentityVisibilityList(session) : [];
+    var i;
+    for (i = 0; i < trackList.length; i++) {
+        // `getTrackVisibilityList` returns names in the same order as
+        // `session.tracks`, so the list index is the trackIdx that
+        // `getTrackColor` uses for its palette lookup. Mirrors what the
+        // timeline canvas itself paints next to each track row — the No ID
+        // track's gray, and the palette of the current Tracks / Identity
+        // coloring — and matches the swatch behavior already in place for
+        // identities.
+        trackList[i].color = (session.isNoIdTrack && session.isNoIdTrack(i))
+            ? NULL_ID_COLOR : getTrackColor(i, state.colorByIdentity);
+    }
+
+    // Most calls change nothing (every `updateInfoPanel` makes one): on an
+    // 8-camera project with 863 tracks the rebuild was ~6 ms each, twice at
+    // the end of a Track All. Rows that would come out the same are kept.
+    var key = timelineVisibilityKey(camList, trackList, idList);
+    if (_timelineVisBuilt.session === session && _timelineVisBuilt.key === key &&
+        hostCams.childElementCount === camList.length &&
+        hostTracks.childElementCount === trackList.length &&
+        hostIds.childElementCount === idList.length) return;
+    _timelineVisBuilt.session = session;
+    _timelineVisBuilt.key = key;
+
     hostCams.innerHTML = '';
     hostTracks.innerHTML = '';
     hostIds.innerHTML = '';
 
     if (!session) return;
-
-    var camList = getCameraVisibilityList(session);
-    var trackList = getTrackVisibilityList(session);
-    var idList = getIdentityVisibilityList(session);
 
     function refreshAfterChange() {
         if (timeline && typeof timeline.refreshTracks === 'function') {
@@ -203,7 +249,6 @@ export function populateTimelineVisibility(session) {
         markDirty();
     }
 
-    var i;
     for (i = 0; i < camList.length; i++) {
         hostCams.appendChild(buildVisToggleRow(camList[i], function (name) {
             toggleCameraVisibility(session, name);
@@ -211,15 +256,6 @@ export function populateTimelineVisibility(session) {
         }));
     }
     for (i = 0; i < trackList.length; i++) {
-        // `getTrackVisibilityList` returns names in the same order as
-        // `session.tracks`, so the list index is the trackIdx that
-        // `getTrackColor` uses for its palette lookup. Mirrors what the
-        // timeline canvas itself paints next to each track row — the No ID
-        // track's gray, and the palette of the current Tracks / Identity
-        // coloring — and matches the swatch behavior already in place for
-        // identities.
-        trackList[i].color = (session.isNoIdTrack && session.isNoIdTrack(i))
-            ? NULL_ID_COLOR : getTrackColor(i, state.colorByIdentity);
         hostTracks.appendChild(buildVisToggleRow(trackList[i], function (name) {
             toggleTrackVisibility(session, name);
             refreshAfterChange();
