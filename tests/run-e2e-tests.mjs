@@ -152,8 +152,10 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
     });
 }
 
-async function runFile(f, logName) {
+async function runFile(f, logName, { trace = false } = {}) {
     const env = { ...process.env };
+    // A rerun alone also logs the page's errors, crashes and navigations (harness tracePage).
+    if (trace) env.LUC3D_E2E_TRACE = '1';
     delete env.BASE;
     if (usesHarness(f)) delete env.PORT; else env.PORT = String(await freePort());
     const logPath = path.join(logDir, logName);
@@ -191,7 +193,7 @@ async function runFile(f, logName) {
 // Lines worth showing for a failure.
 function failureLines(text) {
     const lines = text.split('\n');
-    const picked = lines.filter(l => /✗|Error|error:|FAIL|Timeout|timed out|expected/.test(l));
+    const picked = lines.filter(l => /✗|Error|error:|FAIL|Timeout|timed out|expected|^\[trace .*(pageerror|CRASHED|console\.error|navigated|disconnected)/.test(l));
     return (picked.length ? picked : lines.filter(Boolean).slice(-8)).slice(0, 12).map(l => l.trim().slice(0, 200));
 }
 
@@ -220,7 +222,7 @@ const reruns = new Map();
 if (opts.rerun && failedFirst.length && jobs > 1) {
     console.log(`\nrunning ${failedFirst.length} failure(s) again, alone`);
     for (const f of failedFirst) {
-        const r = await runFile(f, f.replace(/\.mjs$/, '.rerun.log'));
+        const r = await runFile(f, f.replace(/\.mjs$/, '.rerun.log'), { trace: true });
         reruns.set(f, r);
         console.log(`  ${label(r.status)} ${r.secs.toFixed(1).padStart(6)} s  ${f}`);
     }

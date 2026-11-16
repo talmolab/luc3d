@@ -323,6 +323,24 @@ async function cachedResponse(route) {
     return route.fulfill({ status: resp.status(), headers: { ...headers, 'access-control-allow-origin': '*' }, body });
 }
 
+/**
+ * With `LUC3D_E2E_TRACE=1`, print what each page does that a failing check does
+ * not show: console errors, uncaught errors, crashes, navigations, failed
+ * requests and closes (stderr, `[trace +12.3s]`). The e2e runner sets it when
+ * it reruns a failure alone, so the failure's log explains itself.
+ */
+export function tracePage(page) {
+    const t0 = performance.now();
+    const say = (what) => process.stderr.write(`[trace +${((performance.now() - t0) / 1000).toFixed(1)}s] ${what}\n`);
+    page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') say(`console.${m.type()}: ${m.text().slice(0, 300)}`); });
+    page.on('pageerror', e => say(`pageerror: ${String(e && e.stack || e).slice(0, 500)}`));
+    page.on('crash', () => say('page CRASHED'));
+    page.on('framenavigated', f => { if (f === page.mainFrame()) say(`navigated: ${f.url().slice(0, 200)}`); });
+    page.on('requestfailed', r => { if (!/^(data|blob):/.test(r.url())) say(`request failed: ${r.url().slice(0, 160)} (${r.failure() && r.failure().errorText})`); });
+    page.on('download', d => say(`download: ${d.suggestedFilename()}`));
+    page.on('close', () => say('page closed'));
+}
+
 const cachedContexts = new WeakSet();
 
 /** Route the CDN and model hosts of `context` through the disk cache (once). */
@@ -345,11 +363,14 @@ export async function launchBrowser(options) {
     const channel = process.env.LUC3D_E2E_CHANNEL;
     const browser = await chromium.launch(channel ? { channel, ...options } : options);
     const newContext = browser.newContext.bind(browser);
+    const trace = process.env.LUC3D_E2E_TRACE === '1';
     browser.newContext = async (opts) => {
         const context = await newContext(opts);
         await installCdnCache(context);
+        if (trace) context.on('page', tracePage);
         return context;
     };
+    if (trace) browser.on('disconnected', () => process.stderr.write('[trace] browser disconnected\n'));
     // Playwright's newPage goes through newContext; this covers it if it ever stops.
     const newPage = browser.newPage.bind(browser);
     browser.newPage = async (opts) => {
