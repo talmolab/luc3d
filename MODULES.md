@@ -14136,7 +14136,14 @@ under `_mbSeekLock`; one at a time; a request for a frame it is decoding waits f
 it), and `_scheduleBackWarm` does the same `STEP_BACK_WARM_MS` (250 ms) after the
 user LANDS on a frame by a jump and stays — counted from when the frame is
 shown, so back-to-back jumps never start one. Anything but a step back cancels
-it (`job.cancelled`, checked per decoded frame; `releaseStepCursor` too). Chunk
+it (`_cancelBackPrefetch`; `releaseStepCursor` too), which CLOSES its stream
+(`job.it.return()`): mediabunny's `samples(start, end)` decodes from the keyframe
+but yields nothing before `start`, so a `job.cancelled` checked per yielded frame
+never fired and the warm-up decoded its whole run (up to ~250 frames per camera)
+alongside the next jump — on the 8-camera field recordings a jump 300 ms after
+another took ~0.87 s instead of ~0.5 s (VM: ~2.4 s instead of ~0.65 s). Keeping
+the chunk from the jump's own decode instead was measured too: no faster on the
+Mac and 0.15–0.3 s slower per jump on an Arc B50 VM (the extra ImageBitmaps). Chunk
 frames are cached by `_cacheNear`, which evicts the frame FARTHEST from the
 user, not the least recently used: stepping back, the not-yet-reached
 prefetched frames ARE the least recently used, and LRU evicted exactly them.
