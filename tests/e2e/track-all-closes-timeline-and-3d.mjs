@@ -11,6 +11,11 @@
  *  3. Both already closed -> Track All leaves them closed (never OPENS them).
  *  4. Track Frame Range and Track Frame leave both open.
  *
+ * The 3D viewer's width is a CSS transition (`--transition-normal`, 250 ms):
+ * sizes are read once every transition on the two panels has finished
+ * (`settled`), never after a fixed wait, which under load (e2e files running
+ * in parallel) read the width part-way (317.8 of 320 px).
+ *
  * Run: node tests/e2e/track-all-closes-timeline-and-3d.mjs
  */
 import { startServer, launchBrowser } from './lib/harness.mjs';
@@ -87,6 +92,13 @@ try {
                  active: document.getElementById('viewport3dToggleBtn').classList.contains('active'),
                  rendering: v ? v._visible !== false : null };
     });
+    // Wait until no CSS transition or animation runs on either panel.
+    const settled = () => page.waitForFunction(() => ['timelineContainer', 'viewport3dContainer']
+        .every(id => { const el = document.getElementById(id); return !el || el.getAnimations().length === 0; }),
+        null, { timeout: 10000 });
+    // Poll `pred` (in the page) until it holds or `ms` pass; never throws, so
+    // the check that follows reports what was seen.
+    const until = (pred, ms = 5000) => page.waitForFunction(pred, null, { timeout: ms }).then(() => true, () => false);
     const openTimeline = async () => { if ((await tl()).collapsed) await page.click('#timelineToggleBtn'); };
     const open3d = async () => { if ((await v3()).collapsed) await page.click('#viewport3dToggleBtn'); };
     const runTrackAll = async () => {
@@ -107,7 +119,7 @@ try {
         document.getElementById('timelineContainer').style.height = '180px';
         document.getElementById('viewport3dContainer').style.width = '320px';
     });
-    await page.waitForTimeout(400);   // width transition
+    await settled();
     let s = await tl();
     check(!s.collapsed && s.height > 0, `precondition: Timeline is open (${s.height}px)`);
     const openHeight = s.height;
@@ -120,7 +132,9 @@ try {
     s = await tl();
     check(s.collapsed && s.height === 0, `after Track All the Timeline is collapsed (${s.height}px)`);
     check(!s.btnActive, 'the Timeline toolbar button no longer reads active');
-    await page.waitForTimeout(100);   // let the MutationObserver update the button
+    // The 3D button follows the panel through a MutationObserver.
+    await until(() => !document.getElementById('viewport3dToggleBtn').classList.contains('active'));
+    await settled();
     d = await v3();
     check(d.collapsed, 'after Track All the 3D viewer is collapsed');
     check(!d.active, 'the 3D toolbar button is no longer highlighted');
@@ -129,11 +143,12 @@ try {
 
     // ---- 2. reopening restores the prior height -------------------------------------------
     await page.click('#timelineToggleBtn');
+    await settled();
     s = await tl();
     check(!s.collapsed && Math.abs(s.height - openHeight) < 1, `reopening restores ${openHeight}px (${s.height}px)`);
     check(s.btnActive, 'and the button reads active again');
     await page.click('#viewport3dToggleBtn');
-    await page.waitForTimeout(400);   // width transition
+    await settled();
     d = await v3();
     check(!d.collapsed && Math.abs(d.width - openWidth) < 1, `reopening the 3D viewer restores ${openWidth}px (${d.width}px)`);
     if (d.rendering !== null) check(d.rendering === true, 'and its render loop resumes');
