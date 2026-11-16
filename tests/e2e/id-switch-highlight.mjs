@@ -32,7 +32,7 @@
  *
  * Run: node tests/e2e/id-switch-highlight.mjs     (HL_SHOT=/path.png saves a screenshot)
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { startServer, launchBrowser, waitForAnimations } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -164,6 +164,7 @@ try {
     await page.click('#idSwitchPanel .id-switch-row .id-switch-end');               // frame 50, in range
     await page.waitForFunction(() => window.__lucid.state.currentFrame === 50, null, { timeout: 10000 }).catch(() => {});
     await page.waitForTimeout(150);
+    await waitForAnimations(page);   // the bar grows in (160 ms keyframes) before it is measured
     const close = await census();
     const head = await page.evaluate(() => {
         const b = document.querySelector('#idSwitchPanel .id-switch-row.is-current .id-switch-pbar');

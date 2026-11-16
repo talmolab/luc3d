@@ -56,6 +56,12 @@ Environment switches (any file, through `lib/harness.mjs`):
 - `LUC3D_E2E_TRACE=1` logs each page's console errors, uncaught errors,
   crashes, navigations, failed requests and downloads to stderr. The runner
   sets it when it reruns a failure alone.
+- `LUC3D_E2E_ANIM_RATE=0.25` plays every page's CSS transitions and
+  animations at a quarter speed. A check that reads a size or an opacity a
+  fixed time after starting a transition (passes alone, fails on a loaded
+  machine) then fails every time. Wait for the transition instead: e.g.
+  `page.waitForFunction(() => !document.getAnimations().some(a => a instanceof
+  CSSTransition))`.
 
 ## CI
 
