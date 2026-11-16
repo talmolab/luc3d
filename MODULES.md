@@ -5910,6 +5910,13 @@ on the opposite side.
 **Geometry is browser-local display taste**: `localStorage`, NOT the `.slp`.
 Blocked or full storage degrades to "forgets", never to a throw.
 
+**A card that is not laid out saves nothing** (`laidOut()`: connected and wider
+and taller than 0). A card taken out of the page measures 0 x 0; the
+`ResizeObserver`, the debounced persist and `dispose()` used to take that for a
+resize and save it as the chosen size, so the modal reopened at its minimum
+(any caller that removed the card without calling dispose, e.g. Settings opened
+twice).
+
 **Imports from project modules.** None — `clampGeometry` is a pure function of
 (rect, viewport), so it bridges into both test runners.
 
@@ -10113,6 +10120,11 @@ commas. One scroller: the block grows to its full height.
 ---
 
 ### ui/settings-modal.js
+
+**One instance, retired properly.** `showSettingsModal` on an open Settings runs
+the open one's teardown (`overlay._lucidTeardown`): removing its overlay alone
+left its capture-phase key handler on the document and its geometry watcher live
+(`tests/e2e/settings-modal-geometry.mjs` §9).
 
 The Triangulation Wizard panel's footer adds **Triangulate All** ("Apply & Triangulate All" with
 edits pending): it applies them, closes Settings and clicks `#tbTriangulateAll`, so it runs what the

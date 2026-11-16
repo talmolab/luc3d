@@ -55,6 +55,11 @@ try {
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
+    // The tip's own timers (NODE_TIP_DELAY_MS, NODE_TIP_AWAKE_MS: setTimeout and
+    // Date.now) run on Playwright's clock: `page.clock.runFor(ms)` moves them on
+    // at once where the test used to sleep through them (~19 s). Time still
+    // flows on its own, so everything else runs as before.
+    await page.clock.install();
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 60000 });
 
@@ -204,9 +209,9 @@ try {
     await page.waitForTimeout(100);
 
     const [tx, ty] = await hover('camA', P[1]);
-    await page.waitForTimeout(250);
+    await page.clock.runFor(250);
     check(!(await tip()).shown, 'no tip before the delay (Qt waits before the first tooltip)');
-    await page.waitForTimeout(700);
+    await page.clock.runFor(700);
     let t = await tip();
     check(t.shown && t.text === 'trunk\n(score: 0.42)', 'resting on a predicted node: its name, then ITS score', t);
     check(t.shown && t.lines.length === 2 && t.lines[0] === 'trunk' && t.lines[1] === '(score: 0.42)', 'shown as two lines, as SLEAP does', t.lines);
@@ -241,16 +246,16 @@ try {
 
     // An edge is not a node: SLEAP's tooltips are on nodes.
     await hover('camA', [(P[0][0] + P[1][0]) / 2, (P[0][1] + P[1][1]) / 2]);
-    await page.waitForTimeout(1000);
+    await page.clock.runFor(1000);
     check(!(await tip()).shown, 'on an edge: no tip');
 
     // Asleep again after a while off the nodes: the delay is back.
     await hover('camA', [560, 40]);
-    await page.waitForTimeout(2300);
+    await page.clock.runFor(2300);
     await hover('camA', P[1]);
-    await page.waitForTimeout(250);
+    await page.clock.runFor(250);
     check(!(await tip()).shown, 'after resting off the nodes, the delay applies again');
-    await page.waitForTimeout(700);
+    await page.clock.runFor(700);
     check((await tip()).text === 'trunk\n(score: 0.42)', 'and the tip then appears');
 
     // A new frame moves the node out from under a still pointer.
@@ -261,9 +266,9 @@ try {
 
     // A press puts it away (and starts whatever the press does).
     await hover('camA', [560, 40]);
-    await page.waitForTimeout(2300);
+    await page.clock.runFor(2300);
     await hover('camA', P[1]);
-    await page.waitForTimeout(1000);
+    await page.clock.runFor(1000);
     check((await tip()).shown, 'shown again before the press');
     await page.mouse.down();
     await page.waitForTimeout(50);
@@ -376,9 +381,9 @@ try {
     await showViews(['camL'], 7, NF);
     const t1trunk = [100 + 120 + 7, 120 + 220 + 30];
     await hover('camL', [600, 30]);
-    await page.waitForTimeout(2300);
+    await page.clock.runFor(2300);
     await hover('camL', t1trunk);
-    await page.waitForTimeout(1000);
+    await page.clock.runFor(1000);
     t = await tip();
     const want = await page.evaluate(() => window.__expScore(7, 1, 1));
     check(t.shown && t.text === 'trunk\n(score: ' + want.toFixed(2) + ')', `lazy: the tip shows the store's score for that node (${want})`, t);
@@ -459,9 +464,9 @@ try {
     });
     check(expected.A !== expected.B && expected.A !== expected.C, 'the fixture\'s three colors differ', expected);
 
-    const tipOn = async (pt, waitMs) => { await hover('camA', pt); await page.waitForTimeout(waitMs); return { t: await tip(), c: await stripe() }; };
+    const tipOn = async (pt, waitMs) => { await hover('camA', pt); await page.clock.runFor(waitMs); return { t: await tip(), c: await stripe() }; };
     await hover('camA', [560, 40]);
-    await page.waitForTimeout(2300);
+    await page.clock.runFor(2300);
     let a = await tipOn(XA[1], 1000);
     let b = await tipOn(XB[1], 100);
     let c = await tipOn(XC[1], 100);
@@ -482,7 +487,7 @@ try {
         return id.color;
     }, XA);
     await hover('camA', [560, 40]);
-    await page.waitForTimeout(2300);
+    await page.clock.runFor(2300);
     a = await tipOn(XA[1], 1000);
     check(a.t.shown && a.c === expected.A, `grouped, Tracks mode: still t0's color (${a.c})`, expected.A);
     await page.evaluate(async () => {
@@ -490,7 +495,7 @@ try {
         (await import('/ui/rendering.js')).drawAllOverlays(0);
     });
     await hover('camA', [560, 40]);
-    await page.waitForTimeout(2300);
+    await page.clock.runFor(2300);
     a = await tipOn(XA[1], 1000);
     check(a.t.shown && a.c === 'rgb(51, 102, 255)', `grouped, Identity mode: the identity's color (${a.c})`, identityColor);
     // Where they overlap, the grouped A wins the hit test (grouped instances are
