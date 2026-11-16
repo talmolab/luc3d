@@ -14,6 +14,9 @@
  *     Frame (single frame) does NOT flip it again.
  *  4. Running Track All with coloring already on Identity changes nothing and does not
  *     claim a switch.
+ *  5. The switches' own overlay redraws (Color by ID, trails, the layer boxes)
+ *     are held, and Track All redraws once (`holdOverlayDraws`): each redraw
+ *     forced a layout of the page the previous one changed.
  *
  * Run: node tests/e2e/track-all-switches-to-id.mjs
  */
@@ -102,11 +105,15 @@ try {
     let t = await toggle();
     check(t.tracks && !t.id && !t.state, 'precondition: Color is on Tracks');
     const threeDBefore = t.threeD;
+    const heldBefore = await page.evaluate(async () => (await import('/ui/rendering.js')).overlayDrawHold.held);
     await runTrackAll();
+    const hold = await page.evaluate(async () => (await import('/ui/rendering.js')).overlayDrawHold);
     t = await toggle();
     check(t.identities === 2, `Track All assigned identities (${t.identities})`);
     check(t.id && !t.tracks && t.state, 'after Track All the toggle is on Identity (button and state)');
     check(/now coloring by Identity/.test(t.status), `status says so: "${t.status}"`);
+    check(hold.held - heldBefore >= 2 && hold.depth === 0,
+        `5. the switches' redraws were held (${hold.held - heldBefore}) and the hold released (depth ${hold.depth})`);
     const hasViewer = await page.evaluate(async () => !!(await import('/ui/app-state.js')).viewport3d);
     if (hasViewer) check(t.threeD > threeDBefore, `the 3D viewer was refreshed for the recolor (${threeDBefore} -> ${t.threeD})`);
     else console.log('  - no 3D viewer in this build; skipped the 3D recolor check');
