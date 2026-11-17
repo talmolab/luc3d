@@ -661,12 +661,13 @@ export function setReviewList(session, result, navigateToFrame) {
 
 /**
  * The review list's rows, for the image check to pre-judge: frame, close-spell start and pair. Null without a list.
- * Leaves out the end-of-tracking row (cue 'videoEnd'): nothing follows it, so it could never get a verdict.
+ * Leaves out the end-of-tracking row (cue 'videoEnd': nothing follows it, so it could never get a verdict) and the
+ * row where every animal is first in view ('videoStart': a look at who is who, not a place a swap is suspected).
  */
 function reviewRowsOf(session) {
     var rv = session && session._idSwitch && session._idSwitch.results.review;
     if (!rv || !rv.ok || !rv.flags.length) return null;
-    var rows = rv.flags.filter(function (f) { return !(f.look && f.look.indexOf('videoEnd') >= 0); });
+    var rows = rv.flags.filter(function (f) { return !(f.look && (f.look.indexOf('videoEnd') >= 0 || f.look.indexOf('videoStart') >= 0)); });
     if (!rows.length) return null;
     return rows.map(function (f) {
         return { frame: f.frame, startFrame: f.startFrame, identityA: f.identityA, identityB: f.identityB };
@@ -728,7 +729,7 @@ function aboutHtml(st, ran) {
     var rv = st.results.review && st.results.review.ok ? st.results.review : null;
     var reviewAbout = rv ? '<p><b>The review list</b> is where a switch is most likely on one camera — where the tracker nearly ' +
         'chose the other assignment, where the input file\'s own tracks disagree with Track All, or where a lone animal\'s track ' +
-        'changes, plus a check of who is who at the end. About one place a minute; on proofread videos about 9 of every 10 switches were within 2 s of one. Rows have ' +
+        'changes, plus a check of who is who where every animal is first in view and at the end. About one place a minute; on proofread videos about 9 of every 10 switches were within 2 s of one. Rows have ' +
         'no score: look at each, and Fix the ones where the labels swap.</p>' +
         (st.results.image && st.results.image.ok && st.results.image.prejudge ? '<p><b>Image pre-judge.</b> The image check also ' +
             'compares each animal\'s look in the ' + PREJUDGE_DEFAULTS.windowSeconds + ' s before a place with the ' + PREJUDGE_DEFAULTS.windowSeconds +
@@ -1090,7 +1091,8 @@ function lookNote(cues) {
             : c === 'handover' ? 'a lone animal\'s track changes'
             : c === 'arrival' ? 'a second animal arrives (the one already there kept one track until here)'
             : c === 'return' ? 'an animal comes back after being out of sight'
-            : c === 'videoEnd' ? 'the end of the tracking: check who is who (a swap after the last place shows only here)' : c;
+            : c === 'videoEnd' ? 'the end of the tracking: check who is who (a swap after the last place shows only here)'
+            : c === 'videoStart' ? 'every animal first in view: note who is who (a later swap is noticed against this)' : c;
     }).join(', ');
 }
 

@@ -224,7 +224,8 @@ function trackerPoints(inst) {
  *          (`returnMoments`), what the checks test; `review` = the candidate moments plus
  *          handovers (`handoverCandidates`) and returns while the other animal was out of
  *          sight too (`reviewReturnCandidates`), the review list's rows, plus the lone-animal
- *          arrival row and a check row at the end of the tracking (`videoEndRow`)
+ *          arrival row, a check row where every animal is first in view (`videoStartRow`) and a check row
+ *          at the end of the tracking (`videoEndRow`)
  */
 export async function trackSingleCamera(session, cfg, opts) {
     var cam = singleCameraName(session);
@@ -318,6 +319,13 @@ export async function trackSingleCamera(session, cfg, opts) {
     // a check row at the end of the tracking, unless a row already ends near it: a swap after the last place shows only there
     var endRow = videoEndRow(frames, out, review, fps);
     if (endRow) review.push(endRow);
+    // ...and one where every animal is first in view, unless a row already shows that moment: who is who there is
+    // what a later swap with no place of its own is noticed against
+    var startRow = videoStartRow(frames, out, review, fps);
+    if (startRow) {
+        review.push(startRow);
+        review.sort(function (x, y) { return x.frame - y.frame || x.identityA - y.identityA || x.identityB - y.identityB; });
+    }
     return { numIdentities: nTracks, frames: seenFrames, tracked: tracked, untracked: untracked,
              filtered: filtered.length, duplicates: removed.length, moments: moments, review: review,
              lone: lone && lone.fired ? { until: lone.until, relabelled: lone.relabelled, untracked: lone.untracked } : null };
@@ -716,6 +724,42 @@ export function videoEndRow(frames, out, review, fps, opts) {
         return (count.get(b) || 0) - (count.get(a) || 0) || lastSeen.get(b) - lastSeen.get(a) || a - b;
     });
     return { frame: last, startFrame: last, identityA: Math.min(pick[0], pick[1]), identityB: Math.max(pick[0], pick[1]), cues: ['videoEnd'] };
+}
+
+/** The check row where every animal is first in view: none when a row's clip (from `clipBeforeSeconds` before
+ *  its start to `clipAfterSeconds` after its place) already shows that frame. */
+export const VIDEO_START_DEFAULTS = { clipBeforeSeconds: 2, clipAfterSeconds: 5 };
+
+/**
+ * A review row at the first frame where every track is in view together — "check who is who" — unless a row's
+ * clip already shows that frame (on recordings where one animal starts alone, the arrival row does). A swap that
+ * starts in a close encounter with no place of its own is noticed at a later place only by someone who saw the
+ * animals the right way round before it; this row is that look. Its pair is the two lowest tracks in that frame
+ * (with more tracks the Fix dialog picks the pair). Null with fewer than two tracks, or when they are never all
+ * in view together.
+ * Measured 2026-11-16 (MODULES.md) with the simulated reviewer, which learns who is who only from the rows it
+ * watches, on top of every other row: SLAP-2M 99.551 -> 99.834% (3 of 163 views better, none worse),
+ * +0.13 rows a minute; intact, sham_gdx and SLAP unchanged (+0.002, 0.002 and 0.08 rows a minute).
+ * @returns {?{frame, startFrame, identityA, identityB, cues: ['videoStart']}}
+ */
+export function videoStartRow(frames, out, review, fps, opts) {
+    var o = Object.assign({}, VIDEO_START_DEFAULTS, opts || {}), rate = fps || 30, all = new Set();
+    for (var p = 0; p < out.length; p++) (out[p] || []).forEach(function (t) { if (t != null && t >= 0) all.add(t); });
+    if (all.size < 2) return null;
+    for (var p2 = 0; p2 < frames.length; p2++) {
+        var here = new Set();
+        (out[p2] || []).forEach(function (t) { if (t != null && t >= 0) here.add(t); });
+        if (here.size < all.size) continue;
+        var f = frames[p2].frameIdx;
+        var shown = (review || []).some(function (m) {
+            var s0 = Math.min(m.startFrame != null ? m.startFrame : m.frame, m.frame);
+            return f >= s0 - o.clipBeforeSeconds * rate && f <= m.frame + o.clipAfterSeconds * rate;
+        });
+        if (shown) return null;
+        var pick = Array.from(here).sort(function (a, b) { return a - b; });
+        return { frame: f, startFrame: f, identityA: pick[0], identityB: pick[1], cues: ['videoStart'] };
+    }
+    return null;
 }
 
 /** What counts as a close encounter when stepping back: centroids under `closeBody` body lengths apart, runs

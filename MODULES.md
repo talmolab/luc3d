@@ -2938,6 +2938,26 @@ or never when no place follows (SLAP 151549-top at 8:24, intact 111696_3328 at
   help; SLAP 99.478%, the last encounter often is not the one), and a check row
   every 60 s without one (99.902 / 99.942 / 99.698 / 99.608 for +0.6 rows a minute).
 
+**A check row where every animal is first in view.** `videoStartRow(frames, out,
+review, fps, opts)` adds a review row (cue `videoStart`, "every animal first in view:
+note who is who") at the first frame where every track is in view together, unless a
+row's clip already shows that frame (from `VIDEO_START_DEFAULTS.clipBeforeSeconds` (2)
+before its start to `clipAfterSeconds` (5) after its place; where one animal starts
+alone, the arrival row usually does). Its pair is the two lowest tracks in that frame
+(with more, the Fix dialog picks the pair); null with fewer than two tracks or when
+they are never all in view together. `trackSingleCamera` adds it after the end row and
+re-sorts the list by frame. The image pre-judge leaves it out (a look at who is who,
+not a suspected swap). Why: measured 2026-11-16 offline (Spock `runs/2026-11-16_jumps`,
+`start.mjs`, `summary_start.py`) with the 5 s reviewer on the list at 24fd6d4d1 (end
+row and Earlier encounter included), intact scored on the answer key with Mae's five
+confirmed proofreading errors corrected: SLAP-2M (163 views) 99.551 -> 99.834%, 3 views
+better, none worse, +0.13 rows a minute; intact (725) 99.928%, sham_gdx (207) 99.980%
+and SLAP (83) 99.923% unchanged, at +0.002, +0.002 and +0.08 rows a minute. The gain is
+close-encounter swaps with no row: the simulated reviewer catches one at a later place
+only once it has seen the animals the right way round, and it learns who is who only
+from rows. A person who looks at the start of the video anyway gets this without the
+row.
+
 **Eager sessions only.** A lazy (> 150 MB) single-camera project is refused with
 `SINGLE_CAMERA_LAZY_REASON` rather than tracked from its resident window. Track
 Frame and Track Frame Range are refused on one camera (the tracker is temporal,
@@ -2984,7 +3004,9 @@ opts)` -> `[{f, a, b, cue: 'handover'}]`; `HANDOVER_DEFAULTS` (`lookSeconds` 1,
 identityB, cues: ['return']}]`; `RETURN_DEFAULTS` (`gapSeconds` 1); `reviewReturnCandidates(frames,
 out, fps, opts)` -> `[{f, a, b, cue: 'return'}]`; `REVIEW_RETURN_DEFAULTS` (`gapSeconds` 1,
 `otherAwaySeconds` 0.5); `videoEndRow(frames, out, review, fps, opts)` -> the check row at the end or
-null; `VIDEO_END_DEFAULTS` (`clearSeconds` 5, `pairSeconds` 2); `pairEncounters(session, idA, idB, from,
+null; `VIDEO_END_DEFAULTS` (`clearSeconds` 5, `pairSeconds` 2); `videoStartRow(frames, out, review, fps,
+opts)` -> the check row where every animal is first in view or null; `VIDEO_START_DEFAULTS`
+(`clipBeforeSeconds` 2, `clipAfterSeconds` 5); `pairEncounters(session, idA, idB, from,
 to, opts)` -> `[{start, end}]` ascending; `PAIR_ENCOUNTER_DEFAULTS` (`closeBody` 1.5, `gapSeconds` 0.25);
 `reviewResult(moments, session, fps)` -> the review list's result; `singleCameraCheckSession(session)`
 -> stand-in | null | `{fail}`; `swapSingleCameraIdentities(session, from, to, idA, idB)`
@@ -10083,7 +10105,7 @@ read a frozen "0/1"),
 `formatEmbedDevice`, `formatEmbedCpu`, `inputTensorToPixels`, `INPUT`, `setActiveImageModel`),
 `pose/image-prejudge.js` (`prejudgeFor`, `prejudgeSettings`, `PREJUDGE_DEFAULTS`,
 `PREJUDGE_BUILTIN`: on a single-camera session with a review list, `runImage` passes
-the list's rows as `reviewRows` (all but the end-of-tracking row, which nothing follows), with `prejudgeSettings(!pkg)` — the built-in model
+the list's rows as `reviewRows` (all but the end-of-tracking row, which nothing follows, and the row where every animal is first in view, a look at who is who rather than a suspected swap), with `prejudgeSettings(!pkg)` — the built-in model
 has no gate and margin 0.2 — and
 each review row — or a check's row agreeing with one — says the image check's
 verdict on its second line ("images: look swapped" / "look right" / "unsure" /
