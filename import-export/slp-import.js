@@ -35,6 +35,7 @@ import {
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
     adoptCampyRecording,
 } from '../loading/session-loader.js';
+import { setPageProject } from '../ui/page-title.js';
 import {
     preferNonCalibrationVideos, assignFolderVideos, isFolderPick, isVideoFileName,
 } from '../loading/video-file-pick.js';
@@ -966,6 +967,7 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
         state.sessions = [];
         // Save writes back to THIS file, never the replaced project's.
         state.slpFileHandle = fileHandle || null;
+        setPageProject(slpFile.name);
         // Plane state is project-scoped and lives on a module singleton, so
         // it does NOT go away with `state.sessions`. `readPlaneMetadata`
         // only restores into an EMPTY model, so without this the previous

@@ -56,6 +56,7 @@ import { withCompactSave } from './compact-save.js';
 import { showCompactSaveModal } from '../ui/compact-save-modal.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
 import { saveStartFolder } from '../loading/recording-folder.js';
+import { setPageDirty, setPageProject } from '../ui/page-title.js';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -131,6 +132,7 @@ export function newProject(force) {
     // Drop the "imported 3D points without a session" marker — a full reset
     // erases any such overlay (including the skeleton) by design.
     state.has3dImportWithoutSession = false;
+    setPageProject(null);
 
     // Detach interaction handlers from old canvases
     if (interactionManager) {
@@ -377,7 +379,7 @@ export function markDirty() {
     if (state.session) state.session.isDirty = true;
     if (state.isDirty) return;
     state.isDirty = true;
-    document.title = '\u2022 LUC3D';
+    setPageDirty(true);
     var saveDot = document.getElementById('saveDirtyDot');
     if (saveDot) saveDot.style.display = 'inline-block';
 }
@@ -391,7 +393,7 @@ export function clearDirty() {
     } else if (state.session) {
         state.session.isDirty = false;
     }
-    document.title = 'LUC3D';
+    setPageDirty(false);
     var saveDot = document.getElementById('saveDirtyDot');
     if (saveDot) saveDot.style.display = 'none';
 }
@@ -1202,6 +1204,8 @@ export async function quickSave(previousFile) {
         state.isSaving = false;
         hideLoading();
         clearDirty();
+        // The project is now the file it was saved to (Save As retitles the tab).
+        if (state.slpFileHandle && state.slpFileHandle.name) setPageProject(state.slpFileHandle.name);
         var sizeMB = (bytesWritten / 1024 / 1024).toFixed(1);
         setStatus('Saved (' + sizeMB + ' MB)', 'success');
     } catch (err) {
@@ -1650,6 +1654,7 @@ export async function handleLoadProject(prePickedFile, fileHandle) {
         // `readPlaneMetadata` only restores into an EMPTY model, so without
         // this the previous project's planes survive and this file's are lost.
         resetPlaneState();
+        setPageProject(file.name);
         var cameras;
         if (data.version === 3) {
             cameras = _restoreProjectV3(data);
