@@ -10433,6 +10433,16 @@ user expanded mid-session is never clipped.
 narrow segments get the min-width center-and-clamp treatment (clamping a wide
 segment's midpoint made bars "fill in/out" while panning).
 
+**A collapsed timeline does not rebuild.** `refreshTracks` on a collapsed
+timeline (`isCollapsed()`: `.collapsed` on its container) only records the session
+and `_staleRows`; `catchUp()` rebuilds them, called by `toggleTimeline` as it opens
+the timeline, before anything measures the rows (`getPreferredHeight`). The rebuild
+walks every group (~0.2 s on an 8-camera, 108,000-frame project) and Track All
+closes the timeline as it finishes (it now closes it BEFORE its `refreshTracks`), so
+those rows were never seen. `setData` clears `_staleRows` (it rebuilds). Code
+reading `_trackSegments` of a collapsed timeline gets the rows as of its last
+rebuild (tests open it first). Test: e2e `track-all-closes-timeline-and-3d` §5.
+
 **`refreshTracks` modes.** Default: rebuild segments, `_growContainerToFit`
 (grow-only), `resize()` — used by track add / rename / delete. `{ keepSize: true
 }` skips both, so container height AND canvas pixel size stay as the user left
@@ -10612,9 +10622,15 @@ Frame Number") keyboard-shortcut installer. Has zero transitive
 - `collapseTimeline()` closes the timeline only if it is open (never opens
   it), via `toggleTimeline()` so the height cache and toolbar button match a
   manual collapse. Returns whether it collapsed anything.
+- Opening calls the timeline's `catchUp()` first (rows a refresh skipped while
+  it was collapsed), then restores the height and resizes.
+
+The timeline instance is app-state's live `timeline` binding (`setTimeline`);
+`state.timeline`, which this used to read, was never set, so until 2026-11 the
+expand's `fitTimelineToData` and delayed `resize()` never ran.
 
 **Imports from project modules.**
-- `./app-state.js` — `state` (for `state.timeline`).
+- `./app-state.js` — `state`, `timeline` (the live binding; `state.timeline` as a fallback).
 
 **Imported by.** `pose/initialization.js`, `pose/tracker.js`
 (`collapseTimeline`, after Track All), `ui/ui-wiring.js`

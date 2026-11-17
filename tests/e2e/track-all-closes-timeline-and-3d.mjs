@@ -10,6 +10,9 @@
  *  2. Reopening each with its button restores the size it had before.
  *  3. Both already closed -> Track All leaves them closed (never OPENS them).
  *  4. Track Frame Range and Track Frame leave both open.
+ *  5. The closed timeline's rows are not rebuilt at Track All's end (they walk
+ *     every group, and nobody sees them); reopening it rebuilds them once, the
+ *     same rows a fresh rebuild gives (Timeline.refreshTracks / catchUp).
  *
  * The 3D viewer's width is a CSS transition (`--transition-normal`, 250 ms):
  * sizes are read once every transition on the two panels has finished
@@ -126,7 +129,14 @@ try {
     let d = await v3();
     check(!d.collapsed && d.width > 0 && d.active, `precondition: 3D viewer is open (${d.width}px)`);
     const openWidth = d.width;
+    // Count the timeline's row rebuilds (§5).
+    await page.evaluate(() => {
+        const t = window.__lucid.timeline, orig = t._rebuildSegments.bind(t);
+        window.__rebuilds = 0;
+        t._rebuildSegments = (sess) => { window.__rebuilds++; return orig(sess); };
+    });
     await runTrackAll();
+    const rebuildsInTrackAll = await page.evaluate(() => window.__rebuilds);
     const ids = await page.evaluate(() => window.__lucid.state.session.identities.length);
     check(ids === 2, `Track All assigned identities (${ids})`);
     s = await tl();
@@ -144,6 +154,14 @@ try {
     // ---- 2. reopening restores the prior height -------------------------------------------
     await page.click('#timelineToggleBtn');
     await settled();
+    // §5: rebuilt once on reopening, with what a fresh rebuild gives
+    const reopened = await page.evaluate(() => {
+        const t = window.__lucid.timeline;
+        const rows = () => JSON.stringify((t._trackSegments || []).map(r => [r.cameraName, r.trackIdx, r.trackName, r.color, r.segments]));
+        const n = window.__rebuilds, got = rows();
+        t._rebuildSegments(window.__lucid.state.session);
+        return { n, got, fresh: rows(), count: (t._trackSegments || []).length };
+    });
     s = await tl();
     check(!s.collapsed && Math.abs(s.height - openHeight) < 1, `reopening restores ${openHeight}px (${s.height}px)`);
     check(s.btnActive, 'and the button reads active again');
@@ -152,6 +170,9 @@ try {
     d = await v3();
     check(!d.collapsed && Math.abs(d.width - openWidth) < 1, `reopening the 3D viewer restores ${openWidth}px (${d.width}px)`);
     if (d.rendering !== null) check(d.rendering === true, 'and its render loop resumes');
+    check(rebuildsInTrackAll === 0, `5. Track All's end does not rebuild the closed timeline's rows (${rebuildsInTrackAll} rebuilds)`);
+    check(reopened.n === 1, `5. reopening it rebuilds them once (${reopened.n})`);
+    check(reopened.count > 0 && reopened.got === reopened.fresh, `5. the same rows a fresh rebuild gives (${reopened.count} rows)`);
 
     // ---- 3. already closed -> stays closed ---------------------------------------------------
     await page.click('#timelineToggleBtn');

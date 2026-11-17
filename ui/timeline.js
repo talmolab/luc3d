@@ -686,6 +686,7 @@ export class Timeline {
             return;
         }
 
+        this._staleRows = false;
         this._rebuildSegments(session);
         this._buildFrameMarkers(session);
         // Initial-load sizing: `setData` is the "new project/session
@@ -3137,6 +3138,12 @@ export class Timeline {
     refreshTracks(session, opts) {
         if (!session) return;
         this._session = session;
+        // A collapsed timeline draws nothing: the rebuild waits for it to be
+        // opened (`catchUp`, from toggleTimeline). It walks every group of the
+        // project (~0.2 s on an 8-camera, 108,000-frame one), and Track All
+        // closes the timeline as it finishes, so rows built then were never seen.
+        if (this.isCollapsed()) { this._staleRows = true; return; }
+        this._staleRows = false;
         this._rebuildSegments(session);
         if (opts && opts.keepSize) {
             // Segments rebuilt; row positions reflowed; outer container
@@ -3151,6 +3158,23 @@ export class Timeline {
             this._growContainerToFit();
         }
         this.resize();
+    }
+
+    /** Is the timeline collapsed (`.collapsed` on its container, ui/timeline-controller.js)? */
+    isCollapsed() {
+        return !!(this._container && this._container.classList && this._container.classList.contains('collapsed'));
+    }
+
+    /**
+     * Rebuild the rows a `refreshTracks` skipped while the timeline was
+     * collapsed. Called by `toggleTimeline` as it opens the timeline, before
+     * anything measures the rows (`getPreferredHeight`). Returns whether it rebuilt.
+     */
+    catchUp() {
+        if (!this._staleRows || !this._session) return false;
+        this._staleRows = false;
+        this._rebuildSegments(this._session);
+        return true;
     }
 
     /**
