@@ -60,8 +60,10 @@
  *     dialog (three tracks here), and Esc cancels it; the fixed row offers Fix
  *     again…, which from a frame past its own window (before the next place)
  *     swaps back, leaving only the stretch between the two fixes swapped.
- *  9. The review list ends with a check row at the last tracked frame ("the end
- *     of the tracking: check who is who"); on a place, "◂ Earlier encounter" goes
+ *  9. The review list starts with a check row where every animal is first in
+ *     view ("every animal first in view: note who is who") and ends with one at
+ *     the last tracked frame ("the end of the tracking: check who is who"); on a
+ *     place, "◂ Earlier encounter" goes
  *     to 1 s before the pair's close encounters before it, latest first, then says
  *     there is none; after it the place's Fix may start before the place (and
  *     the dialog says why), without it a frame before the place still falls back
@@ -69,14 +71,16 @@
  * 10. With a review list, the image check embeds every image sample and
  *     pre-judges each row (pose/image-prejudge.js): "images: look right" /
  *     "look swapped" on the rows and a count under the list (the end-of-tracking
- *     row is left out: nothing follows it). With the built-in
+ *     row is left out: nothing follows it; so is the row where every animal is
+ *     first in view: a look at who is who, not a suspected swap). With the built-in
  *     model there is no gate (look-alikes are "unsure") and a "How to train
  *     one…" prompt opens the image model dialog on its training steps, and Esc
  *     closes it; with a model package, animals that look too alike get "can't
  *     tell these two apart" instead, and no prompt.
  *  1b. Track All ends on the summary box, planned for one camera: it counts
  *     tracks, lists coat brightness / images / body size, recommends reviewing
- *     the list (here only its check row at the end) then saving, and
+ *     the list (here only its check rows where every animal is first in view
+ *     and at the end) then saving, and
  *     never Triangulate All, has an Identities row per track, and the ID
  *     Switches tab reopens it.
  *
@@ -172,9 +176,12 @@ try {
     check(box && box.stats[0] === 'Tracks3for 3 animals' && box.ids === 3, `it counts the TRACKS, one per animal (${box && box.stats[0]}, ${box && box.ids} bars)`);
     check(box && box.checks.join('|').startsWith('brightness:skipped:') && /^image:off:/.test(box.checks[1]) && /^size:off:not run automatically on one camera — optional/.test(box.checks[2]),
         'its checks: coat brightness (skipped here: no video), images (not run), body size (not run on one camera, the reason on hover)');
-    // the review list holds only its check row at the end here (no other place), so reviewing comes before saving
+    // the review list holds only its check rows here (no other place), so reviewing comes before saving
+    const rows1 = await page.evaluate(() => window.__lucid.state.session._idSwitch.results.review.flags.map(m => [m.frame, m.look.join(), m.identityA, m.identityB].join(':')));
+    check(rows1.join('|') === '0:videoStart:0:1|2249:videoEnd:0:1',
+        `the review list holds only its check rows: where every animal is first in view (frame 0) and at the last tracked frame (${rows1.join(' | ')})`);
     check(box && !/Triangulate/.test(box.text) && box.primary === 'Review the list' && /File ▸ Save/.test(box.text),
-        `no Triangulate All on one camera: review the list (its check row at the end), then save (primary "${box && box.primary}")`);
+        `no Triangulate All on one camera: review the list (its check rows), then save (primary "${box && box.primary}")`);
     check(box && box.gallery === 3, `the Identities section has a row per track (${box && box.gallery}), from the single-camera stand-in`);
     await page.click('#trackSummaryClose');
     const re = await page.evaluate(async () => {
@@ -531,6 +538,16 @@ try {
     });
     check(!!rv && rv.n > 0 && rv.handover > 0 && new RegExp(rv.n + ' places? to review in the ID Switches tab').test(st8),
         `Track All leaves ${rv && rv.n} places to review (${rv && rv.handover} handovers), and the status says so: …${st8.slice(st8.indexOf('detection') - 20, st8.indexOf('ID Switches tab') + 15)}`);
+    // every track is first in view together where SLEAP's first copy of the lone animal is (frame 25): the place there
+    // (its clip runs from 2 s before its start to 5 s after it) shows that frame, so there is no separate check row for it
+    const start8 = await page.evaluate(() => {
+        const flags = window.__lucid.state.session._idSwitch.results.review.flags, tr = window.__lone();
+        const all = new Set(tr.flat().filter(t => t != null && t >= 0)), first = tr.findIndex(r => new Set(r.filter(t => t != null && t >= 0)).size === all.size);
+        return { first, start: flags.filter(m => m.look.includes('videoStart')).length,
+                 covered: flags.some(m => !m.look.includes('videoEnd') && first >= Math.min(m.startFrame, m.frame) - 60 && first <= m.frame + 150) };
+    });
+    check(start8.first > 0 && start8.covered && start8.start === 0,
+        `no check row where every animal is first in view (frame ${start8.first}): a place's clip already shows it (${JSON.stringify(start8)})`);
     const box8 = await page.evaluate(() => { const o = document.getElementById('trackSummaryOverlay'); return o ? { stats: [...o.querySelectorAll('.track-summary-stat')].map(r => r.textContent),
         primary: (o.querySelector('#trackSummaryPrimary') || {}).textContent, text: o.textContent } : null; });
     check(box8 && box8.stats.some(x => new RegExp('^To review' + rv.n + ' place').test(x)) && box8.primary === 'Review the list' && /most likely to hold a switch/.test(box8.text),
@@ -729,12 +746,18 @@ try {
     });
     await page.evaluate(() => { document.getElementById('statusText').textContent = ''; document.getElementById('tbTrackAll').click(); });
     await page.waitForFunction(() => /Tracked \d+ animal|Track All error/.test(document.getElementById('statusText').textContent), { timeout: 60000 });
+    const start9 = await page.evaluate(() => { const m = window.__lucid.state.session._idSwitch.results.review.flags[0];
+        return m ? { frame: m.frame, look: m.look, a: m.identityA, b: m.identityB } : null; });
+    check(start9 && start9.frame === 0 && start9.look.join() === 'videoStart' && start9.a === 0 && start9.b === 1,
+        `the review list starts with a check row where every animal is first in view (${JSON.stringify(start9)})`);
     const end9 = await page.evaluate(() => { const r = window.__lucid.state.session._idSwitch.results.review;
         const m = r.flags[r.flags.length - 1]; return m ? { frame: m.frame, look: m.look } : null; });
     check(end9 && end9.frame === 899 && end9.look.join() === 'videoEnd', `the review list ends with a check row at the last tracked frame (${JSON.stringify(end9)})`);
     await page.click('#trackSummaryPrimary').catch(() => {});
     const endNote = await page.evaluate(() => { const r = [...document.querySelectorAll('#idSwitchPanel .id-switch-row.cue-review')].pop(); return r ? r.textContent : ''; });
     check(/the end of the tracking: check who is who/.test(endNote), 'its row says so: …' + endNote.slice(endNote.indexOf('the end of the tracking'), endNote.indexOf('the end of the tracking') + 40));
+    const startNote = await page.evaluate(() => { const r = document.querySelector('#idSwitchPanel .id-switch-row.cue-review'); return r ? r.textContent : ''; });
+    check(/every animal first in view: note who is who/.test(startNote), 'the first row says why: …' + startNote.slice(startNote.indexOf('every animal'), startNote.indexOf('every animal') + 50));
     // one place at 0:27 (frame 810), between id_0 and id_1
     const key9 = await page.evaluate(async () => {
         const S = window.__lucid.state.session, st = S._idSwitch, R = await import('/ui/id-switch-review.js'), M = await import('/ui/id-switch-modal.js');
@@ -824,8 +847,9 @@ try {
         const S = window.__lucid.state.session, st = S._idSwitch, R = await import('/ui/id-switch-review.js'), M = await import('/ui/id-switch-modal.js');
         const row = (frame) => ({ frame: frame + 5, startFrame: frame - 5, identityA: 0, identityB: 1, nameA: 'id_0', nameB: 'id_1', kind: 'onset', score: 0,
             look: ['ambiguity'], switchBackAt: null, cue: 'review' });
-        // ...and the end-of-tracking row, which the pre-judge leaves out (nothing follows it)
-        st.results.review.flags = [row(600), row(1200), Object.assign(row(2239), { frame: 2244, startFrame: 2244, look: ['videoEnd'] })];
+        // ...and the check rows where every animal is first in view and at the end, which the pre-judge leaves out
+        st.results.review.flags = [Object.assign(row(0), { frame: 0, startFrame: 0, look: ['videoStart'] }), row(600), row(1200),
+            Object.assign(row(2239), { frame: 2244, startFrame: 2244, look: ['videoEnd'] })];
         delete st.results.image;
         R.linkIdSwitchResults(st.results); M.refreshIdSwitchPanel(S);
         await M.runIdSwitchChecks({ image: true, inject: { createEmbedder: window.__looks(alike), hasWebGPU: async () => true,
@@ -834,7 +858,7 @@ try {
         const text = (f) => { const el = rows.find(x => Number(x.dataset.frame) === f); return el ? el.querySelector('.id-switch-line2').textContent : ''; };
         return { ok: !!(res && res.ok), reason: res && res.reason, all: res && res.samples && res.samples.embedded === res.samples.of,
                  verdicts: res && res.prejudge ? res.prejudge.rows.map(p => p.verdict) : null, cos: res && res.prejudge ? res.prejudge.pairs.map(q => q.cos) : null,
-                 at600: text(605), at1200: text(1205), atEnd: text(2244),
+                 at600: text(605), at1200: text(1205), atEnd: text(2244), atStart: text(0),
                  summary: (document.querySelector('#idSwitchPanel .id-switch-prejudge-summary') || {}).textContent || '',
                  prompt: (document.querySelector('#idSwitchPanel .id-switch-train-prompt') || {}).textContent || '',
                  tip: ((rows.find(x => Number(x.dataset.frame) === 1205) || document).querySelector('.id-switch-prejudge') || {}).title || '' };
@@ -845,6 +869,7 @@ try {
     check(/images: look right/.test(lk.at600) && /images: look swapped/.test(lk.at1200), `the rows say so: "${lk.at600.slice(-30)}" / "${lk.at1200.slice(-30)}"`);
     check(/^Image pre-judge: 1 looks swapped · 1 looks right · 0 unsure/.test(lk.summary) && !/too few/.test(lk.summary), 'the review list\'s summary counts them: ' + lk.summary);
     check(lk.atEnd && !/images/.test(lk.atEnd), 'the end-of-tracking row has no pre-judge (not "too few crops"): ' + lk.atEnd.slice(-60));
+    check(/every animal first in view/.test(lk.atStart) && !/images/.test(lk.atStart), 'nor has the row where every animal is first in view: ' + lk.atStart.slice(-60));
     check(/built-in image model/.test(lk.prompt) && /How to train one…/.test(lk.prompt), 'with the built-in model, a prompt to train one for this rig: ' + lk.prompt.slice(0, 60));
     check(/below −0\.2 looks swapped/.test(lk.tip) && /no check of how alike/.test(lk.tip), 'the built-in model: margin 0.2, no gate (row tooltip): ' + lk.tip);
     const bl = await runLooks(true, false);

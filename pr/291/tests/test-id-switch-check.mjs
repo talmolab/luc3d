@@ -858,6 +858,52 @@ group('fitPCA — recovers the dominant direction');
     ok(along > 3 && across < 0.3 * along, `first component follows the planted direction (|pc1| ${along.toFixed(2)}, |pc2| ${across.toFixed(2)})`);
 }
 
+group('fitPCA keeping every direction = centring only; the identity metric does not care about a rotation');
+{
+    // The size check asks for metricPcaDims (64) of at most 16 bone lengths: every
+    // direction is kept, so the PCA basis could only rotate the centred rows. It
+    // now just centres them. That is safe only because learnIdentityMetric's
+    // answers (cosines between projected rows) are the same for rotated rows.
+    const r = rng(9), n = 240, D = 6, X = new Float64Array(n * D), stretch = new Int32Array(n), sample = new Int32Array(n);
+    const proto = [0, 1, 2].map(() => Float64Array.from({ length: D }, () => 2 * gauss(r)));
+    for (let i = 0; i < n; i++) {
+        const a = i % 3;
+        for (let d = 0; d < D; d++) X[i * D + d] = proto[a][d] + 0.7 * gauss(r);
+        stretch[i] = a * 10 + Math.floor(i / 40); sample[i] = Math.floor(i / 3);
+    }
+    const w = Float64Array.from({ length: n }, (_, i) => 1 + (i % 4));
+    const pca = SC.fitPCA(X, n, D, 64, { weights: w });
+    const mean = new Float64Array(D); let W = 0;
+    for (let i = 0; i < n; i++) { W += w[i]; for (let d = 0; d < D; d++) mean[d] += w[i] * X[i * D + d]; }
+    for (let d = 0; d < D; d++) mean[d] /= W;
+    const probe = Float64Array.from({ length: D }, () => gauss(r));
+    const p = pca.project(probe);
+    ok(pca.dims === D && p.every((v, d) => v === probe[d] - mean[d]), 'k ≥ D: project = the row minus the (weighted) mean, every dimension kept');
+    const into = pca.projectInto(probe, new Float64Array(D + 3), 3);
+    ok(p.every((v, d) => v === into[3 + d]), 'projectInto writes the same values at the offset');
+    // A random rotation R: rows x -> R x
+    const R = new Float64Array(D * D);
+    for (let c = 0; c < D; c++) {
+        const v = Float64Array.from({ length: D }, () => gauss(r));
+        for (let c2 = 0; c2 < c; c2++) { let dot = 0; for (let d = 0; d < D; d++) dot += v[d] * R[d * D + c2]; for (let d = 0; d < D; d++) v[d] -= dot * R[d * D + c2]; }
+        let nn = 0; for (let d = 0; d < D; d++) nn += v[d] * v[d]; nn = Math.sqrt(nn);
+        for (let d = 0; d < D; d++) R[d * D + c] = v[d] / nn;
+    }
+    const rot = (x) => { const y = new Float64Array(D); for (let i = 0; i < D; i++) { let s = 0; for (let j = 0; j < D; j++) s += R[i * D + j] * x[j]; y[i] = s; } return y; };
+    const XR = new Float64Array(n * D);
+    for (let i = 0; i < n; i++) XR.set(rot(X.subarray(i * D, (i + 1) * D)), i * D);
+    const o = { metricPcaDims: 64, metricDims: 3, metricReg: 0.1 };
+    const m = SC.learnIdentityMetric(X, n, D, stretch, sample, o, w), mR = SC.learnIdentityMetric(XR, n, D, stretch, sample, o, w);
+    const cos = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };   // unit vectors
+    let worst = 0;
+    for (let t = 0; t < 20; t++) {
+        const a = X.subarray((t * 11) * D, (t * 11 + 1) * D), b = X.subarray((t * 7 + 3) * D, (t * 7 + 4) * D);
+        const d = Math.abs(cos(m.project(a), m.project(b)) - cos(mR.project(rot(a)), mR.project(rot(b))));
+        if (!(d <= worst)) worst = d;
+    }
+    ok(worst < 1e-9, `rotated rows give the same cosines between projected rows (worst difference ${worst.toExponential(1)})`);
+}
+
 group('Crop geometry (ui/image-embedder.js)');
 {
     globalThis.window = globalThis;           // image-embedder imports app-state, which is DOM-free at import

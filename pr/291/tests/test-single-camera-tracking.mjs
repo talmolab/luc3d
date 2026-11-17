@@ -731,7 +731,7 @@ group('12. The lone-animal rule: one track while one animal is in view, a review
     ok(!on.review.some(m => m.frame < ENTER && m.cues.includes('handover')), 'no handover rows left in the lone phase (it has one track)');
 }
 
-group('13. A check row at the end of the tracking, and the pair encounters "Earlier encounter" steps through');
+group('13. Check rows at the start and the end of the tracking, and the pair encounters "Earlier encounter" steps through');
 {
     const fr = (f, n) => ({ frameIdx: f, dets: Array.from({ length: n }, () => ({ points: new Float64Array(2) })) });
     const vid = (n, tracks) => { const frames = [], out = []; for (let f = 0; f < n; f++) { frames.push(fr(f, tracks(f).length)); out.push(tracks(f)); } return { frames, out }; };
@@ -750,13 +750,40 @@ group('13. A check row at the end of the tracking, and the pair encounters "Earl
     row = SCT.videoEndRow(v.frames, v.out, [], 30);
     ok(row && row.identityA === 0 && row.identityB === 1, `one in view at the end: it and the one seen last (${row && [row.identityA, row.identityB]})`);
 
-    // Track All on the three-animal fixture: the review list ends with the check row unless a place is near the end
+    // the check row where every animal is first in view (videoStartRow)
+    eq([SCT.VIDEO_START_DEFAULTS.clipBeforeSeconds, SCT.VIDEO_START_DEFAULTS.clipAfterSeconds].join(), '2,5', 'a row\'s clip: 2 s before its start to 5 s after its place');
+    v = vid(300, () => [0, 1]); row = SCT.videoStartRow(v.frames, v.out, [], 30);
+    ok(row && row.frame === 0 && row.startFrame === 0 && row.identityA === 0 && row.identityB === 1 && row.cues.join() === 'videoStart',
+        `two tracks in view from the start, no rows: a 'videoStart' row at frame 0 (${JSON.stringify(row)})`);
+    v = vid(400, f => f < 200 ? [0] : [0, 1]);
+    row = SCT.videoStartRow(v.frames, v.out, [], 30);
+    ok(row && row.frame === 200, `one animal alone first: the row is where both are first in view (${row && row.frame})`);
+    eq(SCT.videoStartRow(v.frames, v.out, [{ frame: 205, startFrame: 200 }], 30), null, 'a row there already (the arrival row) shows it: no start row');
+    eq(SCT.videoStartRow(v.frames, v.out, [{ frame: 265, startFrame: 260 }], 30), null, '…nor one whose clip starts up to 2 s after it');
+    ok(SCT.videoStartRow(v.frames, v.out, [{ frame: 266, startFrame: 261 }], 30) !== null, 'a row whose clip starts later leaves it');
+    eq(SCT.videoStartRow(v.frames, v.out, [{ frame: 50 }], 30), null, 'a row up to 5 s before it shows it too');
+    ok(SCT.videoStartRow(v.frames, v.out, [{ frame: 49 }], 30) !== null, '…an earlier one does not');
+    v = vid(300, f => f < 50 ? [0, 1] : f < 150 ? [1, 2] : [0, 1, 2]);
+    row = SCT.videoStartRow(v.frames, v.out, [], 30);
+    ok(row && row.frame === 150 && row.identityA === 0 && row.identityB === 1, `three tracks: the first frame with all three, the two lowest (${row && [row.frame, row.identityA, row.identityB]})`);
+    v = vid(300, f => f % 2 ? [0] : [1]);
+    eq(SCT.videoStartRow(v.frames, v.out, [], 30), null, 'never in view together: no start row');
+    v = vid(300, () => [0]);
+    eq(SCT.videoStartRow(v.frames, v.out, [], 30), null, 'one track: no start row');
+
+    // Track All on the three-animal fixture: the review list ends with the check row unless a place is near the end,
+    // and starts with the start row unless a place shows the first frame with all three in view
     const S = build(); S.identities = []; S.frameIdentityMap = new Map();
     const r = await SCT.trackSingleCamera(S, cfg, { fps: FPS });
     const last = Math.max(...S.frameGroups.keys()), endRows = r.review.filter(m => m.cues.includes('videoEnd'));
     const near = r.review.some(m => !m.cues.includes('videoEnd') && m.frame >= last - 5 * FPS);
     ok(near ? endRows.length === 0 : endRows.length === 1 && endRows[0].frame === last && r.review[r.review.length - 1] === endRows[0],
         `Track All: ${near ? 'a place near the end, no end row' : 'one end row, last on the list, at frame ' + last} (${endRows.map(m => m.frame)})`);
+    const startRows = r.review.filter(m => m.cues.includes('videoStart')), first = Math.min(...S.frameGroups.keys());
+    const shows = r.review.some(m => !m.cues.includes('videoStart') && first >= Math.min(m.startFrame ?? m.frame, m.frame) - 2 * FPS && first <= m.frame + 5 * FPS);
+    ok(shows ? startRows.length === 0 : startRows.length === 1 && startRows[0].frame === first && r.review[0] === startRows[0],
+        `Track All: ${shows ? 'a place shows the start, no start row' : 'one start row, first on the list, at frame ' + first} (${startRows.map(m => m.frame)})`);
+    ok(r.review.every((m, i, a) => i === 0 || a[i - 1].frame <= m.frame), 'the review rows stay sorted by frame');
 
     // pairEncounters: animals 0 and 1 meet every 10 s (frames 150, 450, 750 in the first 30 s)
     const idOf = (f, q) => S.getIdentityIdForUnlinkedInstance(CAM, instancesAt(S, f)[q], f);

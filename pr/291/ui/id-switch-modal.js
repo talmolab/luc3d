@@ -30,27 +30,27 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { noteProgress } from './progress-delta.js?v=aecb2b2ba066';
-import { state, getActiveSession } from './app-state.js?v=aecb2b2ba066';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=aecb2b2ba066';
-import { showPanelTab } from './panel-rail.js?v=aecb2b2ba066';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=aecb2b2ba066';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=aecb2b2ba066';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=aecb2b2ba066';
-import { getTrackingThreshold } from './settings.js?v=aecb2b2ba066';
-import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=aecb2b2ba066';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js?v=aecb2b2ba066';
+import { noteProgress } from './progress-delta.js?v=66ec0c2c1fb8';
+import { state, getActiveSession } from './app-state.js?v=66ec0c2c1fb8';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=66ec0c2c1fb8';
+import { showPanelTab } from './panel-rail.js?v=66ec0c2c1fb8';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=66ec0c2c1fb8';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=66ec0c2c1fb8';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=66ec0c2c1fb8';
+import { getTrackingThreshold } from './settings.js?v=66ec0c2c1fb8';
+import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=66ec0c2c1fb8';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js?v=66ec0c2c1fb8';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=aecb2b2ba066';
-import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine, wireTrainingPrompt } from './image-model-dialog.js?v=aecb2b2ba066';
-import { prejudgeFor, prejudgeSettings, PREJUDGE_DEFAULTS, PREJUDGE_BUILTIN } from '../pose/image-prejudge.js?v=aecb2b2ba066';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=aecb2b2ba066';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=aecb2b2ba066';
-import { createBrightnessSampler } from './brightness-sampler.js?v=aecb2b2ba066';
+         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=66ec0c2c1fb8';
+import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine, wireTrainingPrompt } from './image-model-dialog.js?v=66ec0c2c1fb8';
+import { prejudgeFor, prejudgeSettings, PREJUDGE_DEFAULTS, PREJUDGE_BUILTIN } from '../pose/image-prejudge.js?v=66ec0c2c1fb8';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=66ec0c2c1fb8';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=66ec0c2c1fb8';
+import { createBrightnessSampler } from './brightness-sampler.js?v=66ec0c2c1fb8';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
          idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary,
-         idSwitchPlaceOf, idSwitchPrevPlaceEnd } from './id-switch-review.js?v=aecb2b2ba066';
+         idSwitchPlaceOf, idSwitchPrevPlaceEnd } from './id-switch-review.js?v=66ec0c2c1fb8';
 
 const CUE_LABEL = { size: 'body size', image: 'images', brightness: 'coat brightness', review: 'review list' };
 
@@ -324,13 +324,15 @@ function openProgressDialog(title) {
 // ---------------------------------------------------------------------------
 
 async function runSize(session, rate) {
-    // The overlay's plain form (spinner + message), not a counter: the check is one uninterrupted block of
-    // main-thread work (~0.2-1.5 s) whose only progress is 0 then 1 of one fitting step — which the counter
-    // used to print as "0/1 frames (0%)", frozen until the overlay closed.
+    // The overlay's plain form (spinner + message), not a counter: the check is main-thread work (~0.6 s on
+    // an 8-camera, 108,000-frame project) whose only progress is 0 then 1 of one fitting step — which the
+    // counter used to print as "0/1 frames (0%)", frozen until the overlay closed.
     showLoading('Comparing each animal\'s body size before and after its contacts…', { title: 'Checking ID switches (body size)' });
     await yieldToPaint();
     try {
-        return await checkSizeSwitches(session, { fps: rate.fps });
+        // `onProgress` is awaited between sampling the session and fitting/scoring (and at the end):
+        // yielding there lets the page paint between the two halves instead of holding it for both.
+        return await checkSizeSwitches(session, { fps: rate.fps, onProgress: function () { return yieldToPaint(); } });
     } finally { hideLoading(); }
 }
 
@@ -661,12 +663,13 @@ export function setReviewList(session, result, navigateToFrame) {
 
 /**
  * The review list's rows, for the image check to pre-judge: frame, close-spell start and pair. Null without a list.
- * Leaves out the end-of-tracking row (cue 'videoEnd'): nothing follows it, so it could never get a verdict.
+ * Leaves out the end-of-tracking row (cue 'videoEnd': nothing follows it, so it could never get a verdict) and the
+ * row where every animal is first in view ('videoStart': a look at who is who, not a place a swap is suspected).
  */
 function reviewRowsOf(session) {
     var rv = session && session._idSwitch && session._idSwitch.results.review;
     if (!rv || !rv.ok || !rv.flags.length) return null;
-    var rows = rv.flags.filter(function (f) { return !(f.look && f.look.indexOf('videoEnd') >= 0); });
+    var rows = rv.flags.filter(function (f) { return !(f.look && (f.look.indexOf('videoEnd') >= 0 || f.look.indexOf('videoStart') >= 0)); });
     if (!rows.length) return null;
     return rows.map(function (f) {
         return { frame: f.frame, startFrame: f.startFrame, identityA: f.identityA, identityB: f.identityB };
@@ -728,7 +731,7 @@ function aboutHtml(st, ran) {
     var rv = st.results.review && st.results.review.ok ? st.results.review : null;
     var reviewAbout = rv ? '<p><b>The review list</b> is where a switch is most likely on one camera — where the tracker nearly ' +
         'chose the other assignment, where the input file\'s own tracks disagree with Track All, or where a lone animal\'s track ' +
-        'changes, plus a check of who is who at the end. About one place a minute; on proofread videos about 9 of every 10 switches were within 2 s of one. Rows have ' +
+        'changes, plus a check of who is who where every animal is first in view and at the end. About one place a minute; on proofread videos about 9 of every 10 switches were within 2 s of one. Rows have ' +
         'no score: look at each, and Fix the ones where the labels swap.</p>' +
         (st.results.image && st.results.image.ok && st.results.image.prejudge ? '<p><b>Image pre-judge.</b> The image check also ' +
             'compares each animal\'s look in the ' + PREJUDGE_DEFAULTS.windowSeconds + ' s before a place with the ' + PREJUDGE_DEFAULTS.windowSeconds +
@@ -1090,7 +1093,8 @@ function lookNote(cues) {
             : c === 'handover' ? 'a lone animal\'s track changes'
             : c === 'arrival' ? 'a second animal arrives (the one already there kept one track until here)'
             : c === 'return' ? 'an animal comes back after being out of sight'
-            : c === 'videoEnd' ? 'the end of the tracking: check who is who (a swap after the last place shows only here)' : c;
+            : c === 'videoEnd' ? 'the end of the tracking: check who is who (a swap after the last place shows only here)'
+            : c === 'videoStart' ? 'every animal first in view: note who is who (a later swap is noticed against this)' : c;
     }).join(', ');
 }
 
