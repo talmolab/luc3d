@@ -47,7 +47,7 @@
  */
 
 import { readPoint3d } from './pose-data.js';
-import { prejudgeReviewRows, combinePrejudges, unitVector } from './image-prejudge.js';
+import { prejudgeReviewRows, poolViews, unitVector } from './image-prejudge.js';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
@@ -1209,25 +1209,33 @@ export async function checkImageSwitches(session, opts) {
 
 /**
  * The review list's pre-judge (pose/image-prejudge.js) from the image check's crops: per embedded image
- * sample, each identity's unit vector, one camera at a time — a single-camera session has one; on several
- * cameras each is pre-judged on its own and `combinePrejudges` averages them. Before the scoring, which reads
- * the same vectors.
+ * sample, each identity's unit vector — on several cameras its views pooled into one (`poolViews`; a
+ * single-camera session has one view) — then the rows pre-judged once. Before the scoring, which reads the
+ * same vectors.
  */
 function prejudgeFromEmbeddings(grid, perCam, every, st, o) {
     var K = grid.K;
     var kOf = new Map(grid.idents.map(function (id, k) { return [id.id, k]; }));
     var sampI = [], frames = [];
     for (var i = 0; i < grid.T; i += every) if (st.embedded[i]) { sampI.push(i); frames.push(grid.frames[i]); }
-    var results = [];
+    var views = new Map();   // sample row (sample * K + identity) -> its unit vectors, one per camera
     perCam.forEach(function (v) {
-        var vec = new Map();
-        for (var r = 0; r < v.rows.length; r++) if (!vec.has(v.rows[r])) { var u = unitVector(v.vecs[r]); if (u) vec.set(v.rows[r], u); }
-        results.push(prejudgeReviewRows({
-            frames: frames,
-            vector: function (j, id) { var k = kOf.get(id); return k == null ? null : (vec.get(sampI[j] * K + k) || null); },
-        }, o.reviewRows, o.fps, o.prejudge));
+        var seen = new Set();
+        for (var r = 0; r < v.rows.length; r++) {
+            if (seen.has(v.rows[r])) continue;
+            var u = unitVector(v.vecs[r]);
+            if (!u) continue;
+            seen.add(v.rows[r]);
+            var l = views.get(v.rows[r]);
+            if (l) l.push(u); else views.set(v.rows[r], [u]);
+        }
     });
-    return combinePrejudges(results, o.prejudge);
+    var vec = new Map();
+    views.forEach(function (l, row) { vec.set(row, poolViews(l)); });
+    return prejudgeReviewRows({
+        frames: frames,
+        vector: function (j, id) { var k = kOf.get(id); return k == null ? null : (vec.get(sampI[j] * K + k) || null); },
+    }, o.reviewRows, o.fps, o.prejudge);
 }
 
 // ---------------------------------------------------------------------------

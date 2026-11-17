@@ -758,8 +758,11 @@ function aboutHtml(st, ran) {
                   PREJUDGE_BUILTIN.margin.toFixed(1) + ': run in this app on 1,632 places in 395 proofread two-mouse videos, it called ' +
                   '14 of 95 swaps, with two false alarms and one miss, and was unsure at 3 places in 4 (a model trained on that rig called ' +
                   '67, with one false alarm). ') +
-            (multi ? 'On several cameras each camera is judged on its own, as measured on one camera, and the scores of the ' +
-                'cameras that tell the two animals apart are averaged (not measured on multi-camera recordings). ' : '') +
+            (multi ? 'On several cameras each animal\'s views at a moment are averaged first. Run in this app on 186 places in 22 ' +
+                'proofread 8-camera recordings, ' + (st.results.image.imageModel
+                    ? 'with a model trained on that rig\'s other recordings, it gave a verdict at 2 places in 3 and called 8 of 16 swaps, ' +
+                      'with no false alarm. '
+                    : 'it called 4 of 16 swaps, with no false alarm. ') : '') +
             'Still watch each place: a verdict is a lead, not the answer.</p>' : '') : '';
     if (!checks.length) return reviewAbout;
     return reviewAbout + aboutChecksHtml(st, checks);

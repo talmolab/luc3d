@@ -4810,13 +4810,12 @@ review rows, single- or multi-camera, `[{frame, startFrame, identityA, identityB
 the 2-means was calibrated on every sample, not the scored windows; the check's own
 rows were unchanged by it on the synthetic sessions) and returns `prejudge`
 (`pose/image-prejudge.js` `prejudgeReviewRows`, computed before the scoring from the
-same vectors, unit-normalised, one camera at a time; on several cameras
-`combinePrejudges` averages the cameras that can judge a row; `opts.prejudge` overrides
-its defaults). Without
+same vectors, unit-normalised; on several cameras each identity's views at a sample
+are pooled into one vector first, `poolViews`; `opts.prejudge` overrides its defaults). Without
 `reviewRows`, `prejudge` is null and nothing changes.
 
 **Imports from project modules.** `pose/pose-data.js` (`readPoint3d`), `pose/image-prejudge.js`
-(`prejudgeReviewRows`, `combinePrejudges`, `unitVector`).
+(`prejudgeReviewRows`, `poolViews`, `unitVector`).
 
 **Imported by.** `ui/id-switch-modal.js`, `ui/image-embedder.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`),
 `ui/brightness-sampler.js` (`planKeyframeSamples`).
@@ -4843,16 +4842,23 @@ review rows every sample is embedded and the pre-judge calls a swap and a kept r
 multi-camera): for each review row, do the two animals look like themselves after
 it, or like each other — given only where the image model tells this video's two
 animals apart. Pure — no DOM, no app state, no imports. Called by `checkImageSwitches`
-(`pose/id-switch-check.js`) with the check's own crop embeddings, one camera at a
-time; on several cameras `combinePrejudges` makes one result of them.
+(`pose/id-switch-check.js`) with the check's own crop embeddings; on several cameras
+each identity's views at a sample are pooled first (`poolViews`).
 
-**Several cameras (`combinePrejudges`, 2026-11-16).** Each camera is pre-judged on its
-own crops, as calibrated on one camera; per row, the scores of the cameras that can
-judge it (a score, and with a gate a separation below `gateCos`) are averaged and the
-verdict taken from the mean with `margin` (`cameras` = how many judged). No camera can:
-'alike' if one found the pair too alike (its cos), else 'sparse' if one had too few
-crops, else 'unknown'. A pair's `cos` is the best camera's, `samples` the sum. One
-camera: its result unchanged. NOT measured on multi-camera recordings.
+**Several cameras (`poolViews`, measured 2026-11-17).** Per image sample, each
+identity's unit vectors from its views (the image check's 3 largest by default) are
+averaged and re-normalised; the rows are then pre-judged once with the one-camera
+settings (one view: that vector itself, so single-camera sessions are unchanged).
+Measured on the 22 proofread SLAP sessions (8 cameras; `runs/2026-11-16_multicam-prejudge`
+on cup: the app's own Track All and image check in headless Chromium on Spock, every
+crop embedding recorded and other rules scored offline; each session judged with the
+package trained on the other fold): on the 186 crossing rows with a known answer the
+package called 8 of 16 swaps with 0 false alarms and gave a verdict at 129 (the rest too
+few crops); the built-in model 4 of 16, 0 false alarms. On all 1,311 3D close encounters:
+package 11 of 14, 0 false alarms. The first version judged each camera on its own and
+averaged: with 3 views per animal spread over 8 cameras most rows had too few crops on
+any one camera (package 1 of 16 called, 2 false alarms). Embedding every view instead
+of the 3 largest: no better (8 of 16), about twice the time.
 
 **Key exports.** `PREJUDGE_DEFAULTS` (a fine-tuned package's settings:
 `windowSeconds` 3, `gateCos` 0.7, `margin` 0.1, `minCrops` 2, `minPairs` 10,
@@ -4871,9 +4877,8 @@ few crops on a side), `'unknown'` (fewer than 10 samples with both);
 `prejudgeReviewRows({frames, vector(i, identityId)}, rows, fps, opts)` →
 `{rows: [{frame, startFrame, identityA, identityB, score, cos, verdict}], pairs:
 [{identityA, identityB, cos, agree, samples}], gateCos, margin, windowSeconds}`
-(each pair separated once); `combinePrejudges(perCam, opts)` → the same shape
-(plus `cameras` per row and overall; the one result itself for one camera, null for
-none); `prejudgeFor(prejudge, row)` (by frame and pair, either order); `unitVector(v)`.
+(each pair separated once); `poolViews(vectors)` → the mean of an identity's unit
+vectors at one sample, re-normalised (one: itself; none: null); `prejudgeFor(prejudge, row)` (by frame and pair, either order); `unitVector(v)`.
 
 **Calibration (2026-11-09).** The study's code (`runs/2026-11-09_hard-swaps/audit.py`
 on cup) on 1,633 review rows of Mae's 395 intact two-mouse videos (100 proofread
@@ -4936,7 +4941,7 @@ these app numbers.
 
 **Coverage.** `tests/test-image-prejudge.mjs` (separation of distinct vs look-alike
 animals, under partly swapped labels; score signs; every verdict and the gate; the
-windows; `prejudgeFor`; the built-in settings; `combinePrejudges`), `tests/test-id-switch-check.mjs` (through
+windows; `prejudgeFor`; the built-in settings; `poolViews`, incl. a swap no single camera has crops on both sides of), `tests/test-id-switch-check.mjs` (through
 `checkImageSwitches`), `tests/e2e/single-camera-track-all.mjs` §10, `tests/e2e/multi-camera-review-list.mjs` §3
 (three cameras).
 
@@ -10066,8 +10071,9 @@ way)") and the check rows where every animal is first in view and at the end. "A
 these flags" then explains the multi-camera list (its measurement: 88.2% -> 99.7% on
 22 proofread 8-camera recordings). A place's Fix swaps the two IDENTITIES in every view
 (its buttons say so); Earlier encounter reads `pairEncounters3d`; the image pre-judge
-judges each camera on its own and averages them (`combinePrejudges`; "About these
-flags" says so; not measured on multi-camera data).
+pools each animal's views at a sample first (`poolViews`; "About these flags" quotes
+its measurement on the same 22 recordings: package 8 of 16 swaps called, built-in 4,
+no false alarm).
 
 A check row at the same
 place and pair is ONE row, the check's, marked "on the review list" ('review' is

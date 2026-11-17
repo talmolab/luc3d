@@ -9,7 +9,7 @@
  *  2. On a place, "◂ Earlier encounter" (multi-camera too) goes to 1 s before the pair's close encounters by 3D
  *     distance (pairEncounters3d), latest first, then says there is none; after it the place's Fix may start before
  *     the place, and swaps the two identities from there to the end in EVERY view (and in the 3D groups).
- *  3. The image check pre-judges the list on several cameras (each camera on its own, the scores averaged): with a
+ *  3. The image check pre-judges the list on several cameras (each animal's views at a sample averaged first): with a
  *     stand-in embedder whose two looks trade places from 0:40, the place at 0:20 "looks right" and the one at 0:40
  *     "looks swapped"; the check rows get no note; "About these flags" says how several cameras are combined.
  *
@@ -164,17 +164,16 @@ try {
         const res = st.results.image, rows = [...document.querySelectorAll('#idSwitchPanel .id-switch-row')];
         const text = f => { const el = rows.find(x => Number(x.dataset.frame) === f); return el ? el.querySelector('.id-switch-line2').textContent : ''; };
         return { ok: !!(res && res.ok), reason: res && res.reason, verdicts: res && res.prejudge ? res.prejudge.rows.map(p => p.verdict) : null,
-                 cams: res && res.prejudge ? res.prejudge.rows.map(p => p.cameras) : null,
                  at600: text(605), at1200: text(1205), atStart: text(0), atEnd: text(2249),
                  about: (document.querySelector('#idSwitchPanel .id-switch-about') || {}).textContent || '' };
     });
     check(pj.ok, `the image check ran (${pj.reason || 'ok'})`);
-    check(JSON.stringify(pj.verdicts) === '["kept","swapped"]' && pj.cams && pj.cams.every(n => n === 3),
-        `verdicts from all three cameras: 0:20 looks right, 0:40 looks swapped (${JSON.stringify(pj.verdicts)}, cameras ${JSON.stringify(pj.cams)})`);
+    check(JSON.stringify(pj.verdicts) === '["kept","swapped"]',
+        `verdicts from the three cameras' pooled views: 0:20 looks right, 0:40 looks swapped (${JSON.stringify(pj.verdicts)})`);
     check(/images: look right/.test(pj.at600) && /images: look swapped/.test(pj.at1200), 'the rows say so');
     check(!/images/.test(pj.atStart) && !/images/.test(pj.atEnd), 'the check rows get no pre-judge');
-    check(/across the cameras/.test(pj.about) && /On several cameras each camera is judged on its own/.test(pj.about),
-        'About these flags: the multi-camera review list, and how the cameras\' verdicts are combined');
+    check(/across the cameras/.test(pj.about) && /On several cameras each animal's views at a moment are averaged first/.test(pj.about) && /4 of 16 swaps/.test(pj.about),
+        'About these flags: the multi-camera review list, how the cameras are combined, and what that measured (built-in model)');
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } catch (e) {
