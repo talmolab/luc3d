@@ -11275,8 +11275,15 @@ either ID-switch check is run.
   scales with the thinning) or a point does not project; `defaultMapCamera` — the
   camera with the most 2D members over a thinned sample of the groups.
 
-**Drawing.** `renderIdentityGallery(host, session, {onPick})` builds the rows
-with placeholders at once and fills them AFTER the box paints: the maps first,
+**Drawing.** `renderIdentityGallery(host, session, {onPick, onEmpty})` builds the
+rows with placeholders at once — for `identitiesWith3d` (a cheap scan that stops
+once every identity has a 3D point) — and reads the tracks only AFTER the box
+paints, in slices (`identityTracksAsync`, the same pass as `identityTracks` with a
+pause every `TRACKS_SLICE_MS`, 20 ms): opening the summary on the 8-camera,
+108,000-frame project went from one 89 ms task to 25 ms, the tracks following in
+slices under 25 ms. A row whose identity then has no track is removed; with fewer
+than two left the section removes itself and calls `onEmpty` (the summary drops
+`has-gallery`). Then it fills them: the maps first,
 then the images, one decoded frame per sample (`view.decoder.getFrame`, drawn
 immediately — a decoder's cached frame may be closed by the next decode). Every
 row's samples are planned first (`planRow`: frame, camera, crop), then fetched one

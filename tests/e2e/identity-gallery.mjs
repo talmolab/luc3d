@@ -32,6 +32,10 @@
  *  5b. The images are fetched one queue per camera, the queues side by side: with a
  *     decoder that takes 30 ms per frame, requests to different cameras overlap,
  *     no decoder is asked for two frames at once, and every image still arrives.
+ *  5c. The tracks are read after the box paints: renderIdentityGallery returns its
+ *     rows with no map drawn yet, and they come once it is done. An identity whose
+ *     only 3D is on frames where it has two groups has no track: with fewer than two
+ *     rows left the section removes itself and says so (onEmpty).
  *  6. Without videos the images say "no video" and the maps still draw the paths
  *     — and resting on an image shows no preview, while a map still enlarges.
  *
@@ -326,6 +330,33 @@ try {
     check(conc.cams > 1 && conc.maxAll > 1, `5b. requests to different cameras overlap (up to ${conc.maxAll} at once over ${conc.cams} cameras)`);
     check(conc.maxPerCam === 1, `5b. no decoder is asked for two frames at once (${conc.maxPerCam})`);
     check(conc.tiles > 0 && conc.filled === conc.tiles, `5b. every image arrives (${conc.filled} of ${conc.tiles}; ${conc.calls} fetches in ${conc.ms} ms)`);
+
+    // ---- 5c. the tracks are read after the box paints ------------------------------------------
+    const late = await page.evaluate(async () => {
+        const G = await import('/ui/identity-gallery.js'), AS = await import('/ui/app-state.js'), pd = await import('/pose/pose-data.js');
+        const host = document.createElement('div'); document.body.appendChild(host);
+        const res = G.renderIdentityGallery(host, AS.state.session, {});
+        const now = { rows: host.querySelectorAll('.identity-gallery-row').length, maps: host.querySelectorAll('.identity-gallery-map canvas').length };
+        await res.done;
+        const after = { rows: host.querySelectorAll('.identity-gallery-row').length, maps: host.querySelectorAll('.identity-gallery-map canvas').length };
+        host.remove();
+        // two identities, the second only ever with TWO groups a frame: it has 3D but no track
+        const g = (id, x) => { const gr = new pd.InstanceGroup(id * 100 + x, id); gr.points3d = new Float64Array([x, 0, 100, x + 5, 0, 100]); return gr; };
+        const s2 = { identities: [{ id: 0, name: 'a' }, { id: 1, name: 'b' }], cameras: [], instanceGroups: new Map() };
+        for (let f = 0; f < 50; f++) s2.instanceGroups.set(f, [g(0, f), g(1, f), g(1, f + 50)]);
+        const host2 = document.createElement('div'); document.body.appendChild(host2);
+        let empty = 0;
+        const res2 = G.renderIdentityGallery(host2, s2, { onEmpty: () => { empty++; } });
+        const before2 = !!res2 && host2.querySelectorAll('.identity-gallery-row').length;
+        if (res2) await res2.done;
+        const gone = !host2.querySelector('.identity-gallery');
+        host2.remove();
+        return { now, after, before2, gone, empty };
+    });
+    check(late.now.rows > 0 && late.now.maps === 0 && late.after.maps === late.after.rows,
+        `5c. the rows come at once (${late.now.rows}) and the maps once the tracks are read (${late.now.maps} -> ${late.after.maps})`);
+    check(late.before2 === 2 && late.gone && late.empty === 1,
+        `5c. an identity with 3D but no track: the section shows two rows, then removes itself and calls onEmpty (${JSON.stringify(late)})`);
 
     // ---- 6. no videos ---------------------------------------------------------------------
     await page.evaluate(async () => { await window.__build('noVideo', { noVideo: true }); await (await import('/pose/tracker.js')).trackAll(); });
