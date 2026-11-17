@@ -1989,10 +1989,14 @@ async function runSingleCameraTrackAll(session, bail) {
         var reviewFps = state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 30);
         var nReview = res.numIdentities > 1 ? res.review.length : 0;
         if (nReview) setReviewList(session, reviewResult(res.review, session, reviewFps));
-        var switchedToIds = res.numIdentities > 0 && setColorByIdentity(state, true);
-        var predOnly = res.numIdentities > 0 && showPredictedOnly();
-        // ...and node trails at ¼ s if they are off, as after a multi-camera Track All (runTrackingPass).
-        var trailsOn = res.numIdentities > 0 && !(state.trailSeconds > 0) && setTrailSeconds(state, TRACK_ALL_TRAIL_SECONDS);
+        // Color: ID, predictions only, and node trails at ¼ s if they are off, as after a multi-camera Track All
+        // (runTrackingPass); their own redraws are held, and the one below draws the combined result.
+        var switchedToIds = false, predOnly = false, trailsOn = false;
+        holdOverlayDraws(function () {
+            switchedToIds = res.numIdentities > 0 && setColorByIdentity(state, true);
+            predOnly = res.numIdentities > 0 && showPredictedOnly();
+            trailsOn = res.numIdentities > 0 && !(state.trailSeconds > 0) && setTrailSeconds(state, TRACK_ALL_TRAIL_SECONDS);
+        });
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
