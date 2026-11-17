@@ -39,6 +39,7 @@ import { setStatus, markDirty } from '../import-export/save-load.js';
 import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js';
 import { getTrackingThreshold } from './settings.js';
 import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js';
+import { scoreSizeGridOffThread } from '../pose/size-check-pool.js';
 import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js';
 import { pairEncounters3d } from '../pose/multi-camera-review.js';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
@@ -325,13 +326,19 @@ function openProgressDialog(title) {
 // ---------------------------------------------------------------------------
 
 async function runSize(session, rate) {
-    // The overlay's plain form (spinner + message), not a counter: the check is one uninterrupted block of
-    // main-thread work (~0.2-1.5 s) whose only progress is 0 then 1 of one fitting step — which the counter
-    // used to print as "0/1 frames (0%)", frozen until the overlay closed.
+    // The overlay's plain form (spinner + message), not a counter: the check (~0.5 s on an 8-camera,
+    // 108,000-frame project) has no progress worth counting — the counter used to print "0/1 frames (0%)",
+    // frozen until the overlay closed.
     showLoading('Comparing each animal\'s body size before and after its contacts…', { title: 'Checking ID switches (body size)' });
     await yieldToPaint();
     try {
-        return await checkSizeSwitches(session, { fps: rate.fps });
+        // Sampling the session runs here (it reads the InstanceGroups), in slices of ~25 ms with the
+        // page painting between them (`pauseSampling`); the scoring goes to a worker
+        // (pose/size-check-pool.js). Without one it scores here, and `onProgress` lets the page paint
+        // between the two halves.
+        var paint = function () { return yieldToPaint(); };
+        return await checkSizeSwitches(session, { fps: rate.fps, scoreGrid: scoreSizeGridOffThread,
+            pauseSampling: paint, onProgress: paint });
     } finally { hideLoading(); }
 }
 

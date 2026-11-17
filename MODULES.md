@@ -1828,6 +1828,50 @@ both worker-safe.
 
 ---
 
+### pose/size-check-worker.js
+
+**Purpose.** Module worker that scores the body-size ID-switch check: posts
+`{type:'ready'}` once loaded, then answers `{type:'score', grid, o}` (from
+`sizeGridMessage` / `sizeScoreOptions`) with `{type:'scored', res}` or
+`{type:'error', message}`, running `scoreSizeGrid(gridFromMessage(grid), o)` — the
+code the page runs without a worker, so the same result.
+
+**Imports from project modules.** `./id-switch-check.js` (`gridFromMessage`,
+`scoreSizeGrid`), DOM-free, with `pose/pose-data.js` behind it.
+
+**Imported by.** None: spawned by `pose/size-check-pool.js`
+(`new URL('pose/size-check-worker.js', document.baseURI)`).
+
+---
+
+### pose/size-check-pool.js
+
+**Purpose.** The body-size check's scoring on a worker. At the end of Track All
+the check held the page for ~0.2 s sampling + ~0.3 s fitting and scoring (8-camera,
+108,000-frame project); sampling stays (it reads the InstanceGroups), the scoring
+moves off the page: `scoreSizeGridOffThread(grid, o)` is `checkSizeSwitches`'
+`scoreGrid`. The grid is COPIED (structured clone), not transferred, so the page
+still holds it when the worker cannot help — no `Worker`,
+`window.LUCID_SIZE_CHECK_WORKER === 0`, a worker that throws or fails as it loads,
+no `ready` within `SIZE_WORKER_READY_MS` (10 s), or an error while scoring — and
+then scores it itself (`scoreSizeGrid`). An abort (`o.signal`) terminates the
+worker and rejects with AbortError. Same code on the same numbers: the same
+result (e2e `size-check-worker`).
+
+**Key exports.** `scoreSizeGridOffThread(grid, o)`, `sizeCheckWorkerWanted()`,
+`SIZE_WORKER_READY_MS`, `sizeCheckRuns` (`{worker, inPage, fellBack}`, for tests).
+
+**Imports from project modules.** `./id-switch-check.js` (`scoreSizeGrid`,
+`sizeGridMessage`, `sizeScoreOptions`).
+
+**Imported by.** `ui/id-switch-modal.js` (`runSize`).
+
+**Tests.** `tests/e2e/size-check-worker.mjs` (worker = page, value for value; the
+app's size check uses it; kill switch; a worker that cannot start or fails to load;
+abort), `tests/test-id-switch-check.mjs` (a structured-cloned grid scores the same).
+
+---
+
 ### pose/tracker-pool.js
 
 **Purpose.** The main-thread side of Track All's tracker worker
@@ -4470,13 +4514,34 @@ threshold, fps, step, sampleHz, cue}` (+ `bones` for size; + `imageHz`, `crops`,
 `checkBrightnessSwitches(session, opts)` (async) -> the classifier's `{ok, flags,
 changes, encounters, moments, identities, sampledFrames, closeDistance, threshold,
 continueBelow, skipEmpty, clearestEndLeads, fps, step, sampleHz, cue: 'brightness',
-imageHz, crops, cameras}`; the
+imageHz, crops, cameras}`.
+The size check is two halves: `buildGrid` (reads the InstanceGroups) then
+`scoreSizeGrid(grid, o)` (only the grid's numbers and names, never `grid.G`);
+`opts.scoreGrid(grid, o)` scores instead when given — the app's worker
+(`pose/size-check-pool.js`) — and `opts.pauseSampling` (async) samples in slices:
+`buildGridAsync(session, o, needSize, pause, sliceMs?)` awaits `pause()` whenever
+`GRID_SLICE_MS` (25) of sampling have passed (clock read every 256 samples), from
+the same generator as the synchronous `buildGrid`, so the same grid. `sizeGridMessage(grid)` / `gridFromMessage(m)` turn a
+grid into plain data and back (with `buildGrid`'s `hasCen` / `secToSamples`, no
+`G`), `sizeScoreOptions(o)` keeps the options a worker can receive (numbers,
+strings, booleans, nulls). The
 pipeline's parts — `buildGrid(session, o, needSize)`, `contactEpisodes(grid,
 gapSeconds)`, `learnIdentityMetric(X, n, D, stretch, sample, o, weights?)`,
-`contactChangeScores(grid, feat, o, every)`, `markContactChanges(scored, o)`
+`contactChangeScores(grid, feat, o, every, has?)` (`has(i, k)` answers whether
+features exist without building them; default `!!feat(i, k)`), `markContactChanges(scored, o)`
 (the change-point step, returning the change points; exported so a threshold can
 be re-applied to the same scores), `symmetricEigen(A, n)` (cyclic Jacobi) and
-`fitPCA(X, n, D, k, {weights?})` (randomized subspace iteration); which image
+`fitPCA(X, n, D, k, {weights?})` (randomized subspace iteration; `{dims, project(x),
+projectInto(x, out, off)}`). When it keeps every direction (`k === D`: the size
+check, ≤ 16 bone lengths against `metricPcaDims` 64) it only centres: the basis
+would just rotate the rows, and `learnIdentityMetric`'s cosines do not change
+under a rotation (test `fitPCA keeping every direction`). That, and summing only
+one triangle of its symmetric within/between scatter (mirrored after, bit-identical),
+took the size check from ~1.3 s to ~0.6 s on the 8-camera, 108,000-frame project
+(same encounters and flags, scores within 3e-14). `scoreContacts` projects each
+view's rows into ONE flat buffer (`metric.projectInto`) and builds a row's `[{c, u}]`
+entries (views of that buffer) only when the scoring reads it, answering presence
+from a byte per row: ~0.5 s, the fitting task 392 → 297 ms, bit-identical. Which image
 samples to embed — `contactReads(grid, has, o, every)` (the samples the scoring
 asks about, given which have features), `planImageSamples(grid, o, every, st)`,
 `MAX_PLAN_ROUNDS` (4), `MAX_BACKGROUND_GAP_SECONDS` (10); the classifier's (coat
@@ -10215,12 +10280,16 @@ lit stretch on the image check dialog's bar), `ui/app-state.js` (`state`,
 `import-export/save-load.js` (`setStatus`, `markDirty`),
 `ui/loading-overlay.js` (`showLoading`, `hideLoading`, `yieldToPaint` — the body-size
 check shows the overlay's card titled "Checking ID switches (body size)" with a
-spinner, not a counter: it is one uninterrupted short block whose counter would
-read a frozen "0/1"),
+spinner, not a counter: a short block whose counter would read a frozen "0/1";
+`runSize` samples the session here in ~25 ms slices (`pauseSampling: yieldToPaint`)
+and scores it on a worker (`scoreGrid: scoreSizeGridOffThread`); without one it
+scores here and its `onProgress: yieldToPaint` lets the page paint between the two
+halves. On the 8-camera, 108,000-frame project no task of the check passes ~50 ms),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
 `pose/single-camera-tracking.js` (`singleCameraName`, `singleCameraCheckSession`,
 `swapSingleCameraIdentities`, `singleCameraCheckOptions`, `pairEncounters`),
 `pose/multi-camera-review.js` (`pairEncounters3d`),
+`pose/size-check-pool.js` (`scoreSizeGridOffThread`),
 `ui/image-embedder.js` (`createImageEmbedder`, `IMAGE_MODEL_MB`, `formatEmbedTiming`,
 `formatEmbedDevice`, `formatEmbedCpu`, `inputTensorToPixels`, `INPUT`, `setActiveImageModel`),
 `pose/image-prejudge.js` (`prejudgeFor`, `prejudgeSettings`, `PREJUDGE_DEFAULTS`,
@@ -12240,6 +12309,10 @@ either ID-switch check is run.
 - `identityTracks(session)` — every identity's tracked frames and 3D centroids,
   from `session.instanceGroups` (resident in full even on a lazy project). A
   frame where an identity has two groups is left out, as the image check does.
+  It runs at the end of every Track All over every group, so a frame allocates
+  nothing (no per-frame Map/Set, the centroid into a reused array) and an
+  identity's frames are sorted only when they arrive out of order: ~100 → ~47 ms
+  on the 8-camera, 108,000-frame project, the same tracks value for value.
 - `pickSampleFrames` — the middles of five equal slots of the identity's tracked
   span, each moved, when it has to be, to a frame where the animal is ISOLATED
   (its nearest other identity more than 1.5 of its body sizes away), the

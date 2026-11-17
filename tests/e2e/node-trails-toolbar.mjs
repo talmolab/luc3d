@@ -30,7 +30,7 @@
  *
  * Run: node tests/e2e/node-trails-toolbar.mjs     (SHOT_DIR=… to save a screenshot)
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { startServer, launchBrowser, waitForAnimations } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -52,9 +52,10 @@ try {
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // Opening fades in over 0.12s; closing waits out the menu's 0.35s hover
-    // grace period first (styles.css `.tri-dropdown-menu`).
-    const settleOpen = () => page.waitForTimeout(250);
-    const settleClose = () => page.waitForTimeout(700);
+    // grace period first (styles.css `.tri-dropdown-menu`): both are CSS
+    // transitions, so wait for them to end, not for a fixed time.
+    const settleOpen = () => waitForAnimations(page);
+    const settleClose = () => waitForAnimations(page);
     const menuOpen = () => page.evaluate(() =>
         getComputedStyle(document.getElementById('trailsMenu')).visibility === 'visible');
     const awayFromMenu = () => page.mouse.move(400, 500);
