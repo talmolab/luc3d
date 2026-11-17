@@ -143,7 +143,6 @@ Tests: `test-node-scores.mjs`, `test-node-score-export.js`, e2e `node-score-tool
 - The tracker always uses DLT, never BA. Fix the estimator, not the setting.
 - Test with noisy fixtures: noiseless rays pass on a broken build.
 - New tracker cost terms must not read absolute world coordinates.
-- `backProjectToRay(s)` cast rays from M⁻¹ (P = [M | p4]), never through the pseudo-inverse point, which is NaN for a camera at the world origin; campy puts cam_0 there. Test: `tests/test-back-projection.mjs`.
 - `dltHomogeneousFlat`'s frame arguments are optional; leaving them out must be bit-identical to the raw rows (`tests/test-triangulation-kernels.mjs`).
 - `smallestEigvec4Inverse` must iterate until it converges, with the Jacobi kernel as fallback. Never loosen `INVERSE_TOL` (1e-15); invariance tests fail. Before changing the solve, A/B Track All identities with `tests/e2e/_diag-trackall-ab.mjs`.
 Test: `tests/e2e/triangulation-frame-invariant.mjs`.
