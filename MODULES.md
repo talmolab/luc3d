@@ -13715,7 +13715,12 @@ synchronous.
 - `openProjectSlp(file, onProgress, onReadBytes)` — `onReadBytes(done, total)`
   (optional, awaited) counts the bytes read of the four big tables, which the
   vendored reader then reads in row slices (LUCID local patch, open progress);
-  without it the read is unchanged. Lazy reopen of a SINGLE multi-camera
+  without it the read is unchanged. It also passes `lucidReadWorkers:
+  projectReadWorkers()` (cores − 1, at most `PROJECT_READ_WORKERS_MAX` = 5):
+  the vendored reader reads a big column-chunked table's columns side by side
+  on that many workers (LUCID local patch, column reads; 05mice reopen ~14.5 →
+  ~2.9 s). `open()` does not: a per-camera folder load already opens its
+  cameras at once. Lazy reopen of a SINGLE multi-camera
   project `.slp` (Load Project for large projects): one interleaved store shared
   by every camera, split into the same per-camera maps. Sets `_sharedStore =
   true` so the streaming re-save appends the store ONCE, retains `videoIdByCam`
@@ -13767,7 +13772,10 @@ column (`deleteInstanceRows`) — are always Float64Array; a new in-place writer
 must write only those, or add its column to neither list
 (`LUCID_NARROW_COLUMNS` / `lucidNarrowKindW` in `lib/sleap-io/chunk-X76PRJK6.js`).
 On the 8-camera 05mice project the stores went from 2,770 MB to 1,080 MB.
-Test: `tests/e2e/reopen-store-columns-typed.mjs`.
+Test: `tests/e2e/reopen-store-columns-typed.mjs`. A column-chunked table (every
+big table LUCID writes) is narrowed in the reader's worker, a column at a time
+(`lucidReadColumn`, LUCID local patch, column reads), with the same rule and the
+same result (`tests/e2e/reopen-column-reads.mjs`).
 
 `trackOccupancy` is populated per camera by `_computeSparseOccupancy(labels,
 nFrames, rowMap?)` — one O(nInstances) pass over the columnar store emitting

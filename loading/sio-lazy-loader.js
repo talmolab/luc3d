@@ -68,6 +68,17 @@ function storeNodeColumn(skel, nodeName) {
 var DELETE_RUN_COPY_MAX = 4096;
 
 /**
+ * Workers reading a project `.slp`'s big tables side by side
+ * (`lucidReadWorkers`, the vendored reader's column reads): one column each,
+ * `pred_points` has five. One core is left for the page.
+ */
+var PROJECT_READ_WORKERS_MAX = 5;
+function projectReadWorkers() {
+    var cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 2;
+    return Math.max(1, Math.min(PROJECT_READ_WORKERS_MAX, cores - 1));
+}
+
+/**
  * Adapt a materialized sleap-io.js typed Instance/PredictedInstance into the flat
  * instance dict the lazy consumers expect: `{ trackIdx, score, type, points,
  * occluded }`. Mirrors `_typedInstanceToSlpData` (import-export/file-io.js) but
@@ -467,6 +478,10 @@ export class SioLazyLoader {
                 ? function (n, total, msg) { onProgress(msg || ('Reading ' + n + '/' + total)); }
                 : undefined,
             onReadBytes: onReadBytes || undefined,
+            // Read the big tables' columns side by side on this many workers
+            // (the vendored reader's LUCID local patch, column reads). Only
+            // here: a per-camera folder load already reads its files at once.
+            lucidReadWorkers: projectReadWorkers(),
         });
         this._projectLabels = labels;
         // A single project `.slp` interleaves every camera in ONE store, so all
