@@ -190,6 +190,33 @@ function median(arr) {
  * @returns {object} grid, or {fail: reason}
  */
 export function buildGrid(session, o, needSize) {
+    var steps = gridSteps(session, o, needSize, 0), r;
+    while (!(r = steps.next()).done) { /* no pauses */ }
+    return r.value;
+}
+
+/** The longest stretch of sampling between two pauses of `buildGridAsync`, in ms. */
+export const GRID_SLICE_MS = 25;
+
+/**
+ * `buildGrid` in slices: `await pause()` whenever sampling has run for
+ * `sliceMs` (default GRID_SLICE_MS; the clock is read every 256 samples), so a
+ * caller can let the page paint (~0.1 s of sampling on an 8-camera,
+ * 108,000-frame project). The same loops in the same order: the same grid.
+ * @param {function(): Promise} pause
+ * @returns {Promise<object>} grid, or {fail: reason}
+ */
+export async function buildGridAsync(session, o, needSize, pause, sliceMs) {
+    var steps = gridSteps(session, o, needSize, sliceMs > 0 ? sliceMs : GRID_SLICE_MS), r;
+    while (!(r = steps.next()).done) await pause();
+    return r.value;
+}
+
+/**
+ * buildGrid's body: yields (to be resumed) whenever `sliceMs` > 0 of sampling
+ * have passed; returns the grid or {fail}.
+ */
+function* gridSteps(session, o, needSize, sliceMs) {
     if (!(typeof o.fps === 'number' && isFinite(o.fps) && o.fps > 0)) return { fail: 'Unknown frame rate (set the fps)' };
     if (!(o.sampleHz > 0)) return { fail: 'sampleHz must be positive' };
     var step = Math.max(1, Math.round(o.fps / o.sampleHz));
@@ -233,7 +260,12 @@ export function buildGrid(session, o, needSize) {
     var xyz = new Float64Array(nodes.length * 3), ok = new Uint8Array(nodes.length), p = [0, 0, 0];
     var bodyPts = new Int32Array(bodyNodes.length);           // the present body nodes, in bodyNodes order
     var seenAt = new Int32Array(K).fill(-1);                   // sample at which identity k was last seen
+    var clock = typeof performance !== 'undefined' ? performance : Date, sliceStart = sliceMs > 0 ? clock.now() : 0;
     for (var i = 0; i < T; i++) {
+        if (sliceMs > 0 && i > 0 && (i & 255) === 0 && clock.now() - sliceStart >= sliceMs) {
+            yield i;
+            sliceStart = clock.now();
+        }
         var groups = session.instanceGroups.get(frames[i]) || [];
         for (var gi = 0; gi < groups.length; gi++) {
             var g = groups[gi], k = kOf.get(g.identityId);
@@ -915,7 +947,9 @@ function result(grid, scored, o, extra) {
  *
  * @param {Session} session  needs `instanceGroups` (frame -> groups with
  *        `identityId` + flat `points3d`), `identities`, `skeleton.nodes`.
- * @param {object} opts      see SIZE_CHECK_DEFAULTS; `fps` is required. Plus `onProgress`, `scoreGrid`.
+ * @param {object} opts      see SIZE_CHECK_DEFAULTS; `fps` is required. Plus `onProgress`, `scoreGrid`,
+ *        and `pauseSampling` (async; when given, the session is sampled in slices of
+ *        `samplingSliceMs`, default GRID_SLICE_MS, awaiting it between them — `buildGridAsync`).
  * @returns {Promise<object>} {ok, flags, changes ([]), encounters, identities,
  *   bones, sampledFrames, closeDistance, threshold, fps, step, sampleHz, cue} or
  *   {ok: false, reason}. `encounters` = the scored contact episodes: { frame (their
@@ -925,7 +959,9 @@ function result(grid, scored, o, extra) {
  */
 export async function checkSizeSwitches(session, opts) {
     var o = Object.assign({}, SIZE_CHECK_DEFAULTS, opts || {});
-    var grid = buildGrid(session, o, true);
+    var grid = typeof o.pauseSampling === 'function'
+        ? await buildGridAsync(session, o, true, o.pauseSampling, o.samplingSliceMs)
+        : buildGrid(session, o, true);
     if (grid.fail) return failure(grid.fail);
     if (typeof o.scoreGrid === 'function') return o.scoreGrid(grid, o);
     return scoreSizeGrid(grid, o);

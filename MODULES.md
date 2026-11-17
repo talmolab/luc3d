@@ -3835,7 +3835,10 @@ threshold, fps, step, sampleHz, cue}` (+ `bones` for size; + `imageHz`, `crops`,
 The size check is two halves: `buildGrid` (reads the InstanceGroups) then
 `scoreSizeGrid(grid, o)` (only the grid's numbers and names, never `grid.G`);
 `opts.scoreGrid(grid, o)` scores instead when given — the app's worker
-(`pose/size-check-pool.js`). `sizeGridMessage(grid)` / `gridFromMessage(m)` turn a
+(`pose/size-check-pool.js`) — and `opts.pauseSampling` (async) samples in slices:
+`buildGridAsync(session, o, needSize, pause, sliceMs?)` awaits `pause()` whenever
+`GRID_SLICE_MS` (25) of sampling have passed (clock read every 256 samples), from
+the same generator as the synchronous `buildGrid`, so the same grid. `sizeGridMessage(grid)` / `gridFromMessage(m)` turn a
 grid into plain data and back (with `buildGrid`'s `hasCen` / `secToSamples`, no
 `G`), `sizeScoreOptions(o)` keeps the options a worker can receive (numbers,
 strings, booleans, nulls). The
@@ -9321,9 +9324,10 @@ lit stretch on the image check dialog's bar), `ui/app-state.js` (`state`,
 `ui/loading-overlay.js` (`showLoading`, `hideLoading`, `yieldToPaint` — the body-size
 check shows the overlay's card titled "Checking ID switches (body size)" with a
 spinner, not a counter: a short block whose counter would read a frozen "0/1";
-`runSize` samples the session here and scores it on a worker
-(`scoreGrid: scoreSizeGridOffThread`); without one it scores here and its
-`onProgress: yieldToPaint` lets the page paint between the two halves),
+`runSize` samples the session here in ~25 ms slices (`pauseSampling: yieldToPaint`)
+and scores it on a worker (`scoreGrid: scoreSizeGridOffThread`); without one it
+scores here and its `onProgress: yieldToPaint` lets the page paint between the two
+halves. On the 8-camera, 108,000-frame project no task of the check passes ~50 ms),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
 `pose/size-check-pool.js` (`scoreSizeGridOffThread`),
 `ui/image-embedder.js` (`createImageEmbedder`, `IMAGE_MODEL_MB`, `formatEmbedTiming`,

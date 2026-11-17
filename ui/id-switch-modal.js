@@ -306,11 +306,13 @@ async function runSize(session, rate) {
     showLoading('Comparing each animal\'s body size before and after its contacts…', { title: 'Checking ID switches (body size)' });
     await yieldToPaint();
     try {
-        // Sampling the session runs here (it reads the InstanceGroups); the scoring goes to a worker
-        // (pose/size-check-pool.js) so the page keeps painting. Without one it scores here, and then
-        // `onProgress` lets the page paint between the two halves.
+        // Sampling the session runs here (it reads the InstanceGroups), in slices of ~25 ms with the
+        // page painting between them (`pauseSampling`); the scoring goes to a worker
+        // (pose/size-check-pool.js). Without one it scores here, and `onProgress` lets the page paint
+        // between the two halves.
+        var paint = function () { return yieldToPaint(); };
         return await checkSizeSwitches(session, { fps: rate.fps, scoreGrid: scoreSizeGridOffThread,
-            onProgress: function () { return yieldToPaint(); } });
+            pauseSampling: paint, onProgress: paint });
     } finally { hideLoading(); }
 }
 
