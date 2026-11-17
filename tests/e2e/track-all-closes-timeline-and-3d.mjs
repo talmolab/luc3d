@@ -11,8 +11,10 @@
  *  3. Both already closed -> Track All leaves them closed (never OPENS them).
  *  4. Track Frame Range and Track Frame leave both open.
  *  5. The closed timeline's rows are not rebuilt at Track All's end (they walk
- *     every group, and nobody sees them); reopening it rebuilds them once, the
- *     same rows a fresh rebuild gives (Timeline.refreshTracks / catchUp).
+ *     every group, and nobody sees them): they are built in the background, in
+ *     idle-time slices, so reopening rebuilds nothing — and they are the rows a
+ *     fresh rebuild gives (Timeline.refreshTracks / _startBackgroundRows / catchUp).
+ *     Reopened while that build still runs, it is finished on the spot, same rows.
  *
  * The 3D viewer's width is a CSS transition (`--transition-normal`, 250 ms):
  * sizes are read once every transition on the two panels has finished
@@ -137,6 +139,9 @@ try {
     });
     await runTrackAll();
     const rebuildsInTrackAll = await page.evaluate(() => window.__rebuilds);
+    // the background build finishes in idle time
+    const bgDone = await page.waitForFunction(() => { const t = window.__lucid.timeline; return !t._bgRows && !t._staleRows; }, null, { timeout: 10000 })
+        .then(() => true, () => false);
     const ids = await page.evaluate(() => window.__lucid.state.session.identities.length);
     check(ids === 2, `Track All assigned identities (${ids})`);
     s = await tl();
@@ -171,8 +176,25 @@ try {
     check(!d.collapsed && Math.abs(d.width - openWidth) < 1, `reopening the 3D viewer restores ${openWidth}px (${d.width}px)`);
     if (d.rendering !== null) check(d.rendering === true, 'and its render loop resumes');
     check(rebuildsInTrackAll === 0, `5. Track All's end does not rebuild the closed timeline's rows (${rebuildsInTrackAll} rebuilds)`);
-    check(reopened.n === 1, `5. reopening it rebuilds them once (${reopened.n})`);
+    check(bgDone, '5. the rows are built in the background while it is closed');
+    check(reopened.n === 0, `5. so reopening it rebuilds nothing (${reopened.n} rebuilds)`);
     check(reopened.count > 0 && reopened.got === reopened.fresh, `5. the same rows a fresh rebuild gives (${reopened.count} rows)`);
+
+    // §5, reopened while the background build still runs: finished on the spot, same rows
+    const early = await page.evaluate(() => {
+        const t = window.__lucid.timeline, s = window.__lucid.state.session;
+        const rows = () => JSON.stringify((t._trackSegments || []).map(r => [r.cameraName, r.trackIdx, r.trackName, r.color, r.segments]));
+        const want = (t._rebuildSegments(s), rows());
+        document.getElementById('timelineContainer').classList.add('collapsed');
+        t.refreshTracks(s, { cap: true });               // collapsed: starts a background build
+        const running = !!t._bgRows;
+        t._trackSegments = []; t._trackNames = [];        // so only the finished build can bring them back
+        const caught = t.catchUp();
+        document.getElementById('timelineContainer').classList.remove('collapsed');
+        return { running, caught, same: rows() === want, left: !!t._bgRows || !!t._staleRows };
+    });
+    check(early.running && early.caught && early.same && !early.left,
+        `5. reopened mid-build: finished on the spot, the same rows (${JSON.stringify(early)})`);
 
     // ---- 3. already closed -> stays closed ---------------------------------------------------
     await page.click('#timelineToggleBtn');
