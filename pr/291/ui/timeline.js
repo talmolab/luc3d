@@ -8,9 +8,9 @@
  * ES module. Exports `Timeline`.
  */
 
-import { getTrackColor, NULL_ID_COLOR } from './overlays.js?v=58b1a5534779';
-import { someValidPoint3d, points3dNodeCount, hasPoint3d } from '../pose/pose-data.js?v=58b1a5534779';
-import { isCameraTracked } from './settings.js?v=58b1a5534779';
+import { getTrackColor, NULL_ID_COLOR } from './overlays.js?v=1150e29379e6';
+import { someValidPoint3d, points3dNodeCount, hasPoint3d } from '../pose/pose-data.js?v=1150e29379e6';
+import { isCameraTracked } from './settings.js?v=1150e29379e6';
 
 /**
  * Parse a `session.frameIdentityMap` key ("frameIdx:camName:trackIdx") into
@@ -40,6 +40,91 @@ function _parseFrameIdentityKey(key) {
 // ============================================================================
 // Timeline class
 // ============================================================================
+
+/**
+ * Union of two sorted, non-overlapping run lists, as one sorted list with
+ * adjacent or overlapping runs coalesced. O(|a| + |b|); the inputs are not
+ * modified.
+ * @param {Array<{start:number,end:number}>} a
+ * @param {Array<{start:number,end:number}>} b
+ * @returns {Array<{start:number,end:number}>}
+ */
+function mergeRunLists(a, b) {
+    var merged = [];
+    var last = null;
+    var ai = 0, bi = 0;
+    while (ai < a.length || bi < b.length) {
+        var seg = (bi >= b.length || (ai < a.length && a[ai].start <= b[bi].start))
+            ? a[ai++] : b[bi++];
+        if (last !== null && seg.start <= last.end + 1) {
+            if (seg.end > last.end) last.end = seg.end;
+        } else {
+            last = { start: seg.start, end: seg.end };
+            merged.push(last);
+        }
+    }
+    return merged;
+}
+
+/**
+ * The frames one timeline row covers (a camera's track or identity), added
+ * one frame at a time and kept as runs. Frames normally arrive in ascending
+ * order (the project's groups are walked frame by frame), so `add` only
+ * extends or closes the current run: no per-frame storage. A frame below the
+ * current run (resident frames walked after the groups, a group list not in
+ * frame order) goes to a typed side buffer, folded in by `toSegments`.
+ * Frames are frame indices: integers in [0, 2^31).
+ * @private
+ */
+class _FrameRuns {
+    constructor() {
+        this.n = 0;          // frames added (repeats included); > 0 = the row has data
+        this.runs = [];      // closed runs, ascending
+        this.start = -1;     // the open run (none while start < 0)
+        this.end = -2;
+        this.extra = null;   // Int32Array of out-of-order frames
+        this.nExtra = 0;
+    }
+
+    add(f) {
+        this.n++;
+        var e = this.end;
+        if (f === e) return;                              // repeat
+        if (f === e + 1) { this.end = f; return; }       // extends the run
+        if (f > e) {                                      // a new run
+            if (this.start >= 0) this.runs.push({ start: this.start, end: e });
+            this.start = f;
+            this.end = f;
+            return;
+        }
+        if (this.extra === null) this.extra = new Int32Array(16);
+        else if (this.nExtra === this.extra.length) {
+            var grown = new Int32Array(this.extra.length * 2);
+            grown.set(this.extra);
+            this.extra = grown;
+        }
+        this.extra[this.nExtra++] = f;
+    }
+
+    /** @returns {Array<{start:number,end:number}>} sorted maximal runs (a new array) */
+    toSegments() {
+        var runs = this.runs.slice();
+        if (this.start >= 0) runs.push({ start: this.start, end: this.end });
+        if (this.nExtra === 0) return runs;
+        var frames = this.extra.subarray(0, this.nExtra).slice().sort();   // typed sort: numeric
+        var extraRuns = [];
+        var s = frames[0], e = frames[0];
+        for (var i = 1; i < frames.length; i++) {
+            var f = frames[i];
+            if (f === e) continue;
+            if (f === e + 1) { e = f; continue; }
+            extraRuns.push({ start: s, end: e });
+            s = f; e = f;
+        }
+        extraRuns.push({ start: s, end: e });
+        return mergeRunLists(runs, extraRuns);
+    }
+}
 
 export class Timeline {
 
@@ -917,45 +1002,6 @@ export class Timeline {
         this._trackSegments = [];
         this._trackNames = [];
 
-        // Find max track index across all data (not just session.tracks.length,
-        // which may be stale if tracks were added dynamically)
-        var maxTrackIdx = session.tracks ? session.tracks.length - 1 : -1;
-        if (session.trackOccupancy) {
-            for (var [, occ] of session.trackOccupancy) {
-                if (occ.nTracks - 1 > maxTrackIdx) maxTrackIdx = occ.nTracks - 1;
-            }
-        }
-        if (session.instanceGroups) {
-            for (var [_fi, grps] of session.instanceGroups) {
-                for (var _gi = 0; _gi < grps.length; _gi++) {
-                    // Use per-instance trackIdx, not group.identityId, which
-                    // can drift — swapAssignTrack updates trackIdx on each
-                    // instance but `group.identityId` is only set for the
-                    // group the dropdown was changed on, at the moment of
-                    // the change.
-                    for (var [, _inst] of grps[_gi].instances) {
-                        if (_inst.trackIdx != null && _inst.trackIdx > maxTrackIdx) {
-                            maxTrackIdx = _inst.trackIdx;
-                        }
-                    }
-                }
-            }
-        }
-        for (var [_fi2, fg] of session.frameGroups) {
-            for (var [_cn, insts] of fg.instances) {
-                for (var _ii = 0; _ii < insts.length; _ii++) {
-                    if (insts[_ii].trackIdx > maxTrackIdx) maxTrackIdx = insts[_ii].trackIdx;
-                }
-            }
-            for (var [_cn2, ulList] of fg.unlinkedInstances) {
-                for (var _ui = 0; _ui < ulList.length; _ui++) {
-                    if (ulList[_ui].instance.trackIdx > maxTrackIdx) maxTrackIdx = ulList[_ui].instance.trackIdx;
-                }
-            }
-        }
-
-        var numTracks = maxTrackIdx + 1;
-
         // Collect camera names. When the session has been annotated with
         // `_uploadedCameras` (set by session-loader / slp-import after video
         // assignments are settled), restrict the timeline to those cameras
@@ -966,10 +1012,26 @@ export class Timeline {
             cameraNames = cameraNames.filter(function (n) { return allowed.has(n); });
         }
 
-        // When no tracks exist but the session has cameras with uploaded
-        // videos, fall through into the camera loop below so each camera
-        // still gets an empty-row placeholder. The early-return removed.
-        if (numTracks === 0 && cameraNames.length === 0) return;
+        // Rows exist only per camera; with no camera there is nothing to build.
+        // (When no tracks exist but cameras do, the camera loop below still
+        // gives each camera an empty-row placeholder.)
+        if (cameraNames.length === 0) return;
+
+        // This runs after every whole-project run (Track All, Triangulate
+        // All, ...) on projects with ~500k groups x 8 cameras, in one task,
+        // so the per-member work is kept to an index lookup and an int
+        // append: frames go into a typed buffer per (camera, track)
+        // (`_FrameRuns`), never a Set or a string key per member.
+        var camIndex = new Map();   // camera name -> its first index in cameraNames
+        for (var cix = 0; cix < cameraNames.length; cix++) {
+            if (!camIndex.has(cameraNames[cix])) camIndex.set(cameraNames[cix], cix);
+        }
+        var camRuns = [];   // per camera: Map<trackIdx, _FrameRuns>
+        var camOcc = [];    // per camera: Map<trackIdx, [{start,end}]> (occupancy)
+        for (var cix2 = 0; cix2 < cameraNames.length; cix2++) {
+            camRuns.push(new Map());
+            camOcc.push(new Map());
+        }
 
         // --- Build segments from track occupancy (lazy H5 / SLP sessions) ---
         // Occupancy is a static "as-loaded" prediction grid. Once a frame
@@ -979,45 +1041,44 @@ export class Timeline {
         // frames the live `fg.instances` data is authoritative. We skip
         // those frames when building occupancy segments; otherwise the
         // old track's bar would persist even after reassignment.
-        var materializedFrames = new Set();
-        if (session.frameGroups) {
-            for (var [_mfIdx] of session.frameGroups) materializedFrames.add(_mfIdx);
-        }
-        var occSegmentMap = {};  // "trackIdx:camName" -> [{start, end}, ...]
-        if (session.trackOccupancy) {
-            // Sorted materialized-frame array (built once) for the sparse branch's
-            // segment splitting.
-            var sortedMat = null;
+        if (session.trackOccupancy && session.trackOccupancy.size > 0) {
+            var materializedFrames = [];
+            if (session.frameGroups) {
+                for (var [_mfIdx] of session.frameGroups) materializedFrames.push(_mfIdx);
+            }
+            // Sorted materialized frames (built once): the sparse branch
+            // splits its runs at them; the dense branch marks them in a mask.
+            var sortedMat = materializedFrames.sort(function (a, b) { return a - b; });
             for (var oci = 0; oci < cameraNames.length; oci++) {
                 var occCam = cameraNames[oci];
+                if (camIndex.get(occCam) !== oci) continue;   // a repeated name reads the first one's
                 var occ = session.trackOccupancy.get(occCam);
                 if (!occ) continue;
+                var occOut = camOcc[oci];
                 if (occ.sparse) {
                     // Sparse (lazy `.slp`): per-track run-segments are precomputed.
                     // Subtract materialized frames — for those the live fg.instances
                     // data below is authoritative (track may have been reassigned).
-                    if (sortedMat === null) {
-                        sortedMat = materializedFrames.size > 0
-                            ? Array.from(materializedFrames).sort(function (a, b) { return a - b; })
-                            : [];
-                    }
                     if (occ.segments) {
                         for (var occEnt of occ.segments) {
-                            var occTrS = occEnt[0];
                             var segs = occEnt[1];
                             if (!segs || segs.length === 0) continue;
                             var subd = this._subtractFramesFromSegments(segs, sortedMat);
-                            if (subd.length > 0) occSegmentMap[occTrS + ':' + occCam] = subd;
+                            if (subd.length > 0) occOut.set(occEnt[0], subd);
                         }
                     }
                     continue;
+                }
+                var matMask = new Uint8Array(occ.nFrames);
+                for (var mk = 0; mk < sortedMat.length; mk++) {
+                    var mf = sortedMat[mk];
+                    if (mf >= 0 && mf < occ.nFrames) matMask[mf] = 1;
                 }
                 for (var occTr = 0; occTr < occ.nTracks; occTr++) {
                     var occSegments = [];
                     var occStart = -1;
                     for (var occFi = 0; occFi < occ.nFrames; occFi++) {
-                        var present = occ.data[occFi * occ.nTracks + occTr]
-                            && !materializedFrames.has(occFi);
+                        var present = occ.data[occFi * occ.nTracks + occTr] && !matMask[occFi];
                         if (present) {
                             if (occStart < 0) occStart = occFi;
                         } else {
@@ -1028,16 +1089,19 @@ export class Timeline {
                         }
                     }
                     if (occStart >= 0) occSegments.push({ start: occStart, end: occ.nFrames - 1 });
-                    if (occSegments.length > 0) {
-                        occSegmentMap[occTr + ':' + occCam] = occSegments;
-                    }
+                    if (occSegments.length > 0) occOut.set(occTr, occSegments);
                 }
             }
         }
 
-        // --- Build per-track-per-camera frame sets from frameGroups/instanceGroups ---
-        // key: "trackIdx:camName" → Set<frameIdx>
-        var trackCamFrames = {};
+        // --- Per-track-per-camera frames from instanceGroups/frameGroups ---
+        // A member counts when its trackIdx is a track (>= 0); null/undefined
+        // never does. Members on cameras without a row are skipped.
+        function addFrame(ci, t, frameIdx) {
+            var runs = camRuns[ci].get(t);
+            if (runs === undefined) { runs = new _FrameRuns(); camRuns[ci].set(t, runs); }
+            runs.add(frameIdx);
+        }
 
         // Scan grouped instances (instanceGroups). Key off each member's
         // actual `trackIdx`, not `group.identityId`. swapAssignTrack only
@@ -1046,56 +1110,47 @@ export class Timeline {
         // the new one — using identityId here would phantom-draw the new
         // track's bar across the past frames too.
         if (session.instanceGroups) {
-            for (var [frameIdx, groups] of session.instanceGroups) {
-                for (var gi = 0; gi < groups.length; gi++) {
-                    for (var [camName, gInst] of groups[gi].instances) {
-                        var gt = gInst && gInst.trackIdx != null ? gInst.trackIdx : -1;
-                        if (gt < 0) continue;
-                        var key = gt + ':' + camName;
-                        if (!trackCamFrames[key]) trackCamFrames[key] = new Set();
-                        trackCamFrames[key].add(frameIdx);
-                    }
-                }
-            }
+            // Map.forEach, not for...of: destructuring each member entry
+            // allocated a [camera, instance] pair per member (~400 MB of
+            // short-lived garbage per build on the large project).
+            var memberFrame = 0;
+            var visitMember = function (gInst, camName) {
+                if (!gInst) return;
+                var gt = gInst.trackIdx;
+                if (gt == null || !(gt >= 0)) return;
+                var gci = camIndex.get(camName);
+                if (gci === undefined) return;
+                addFrame(gci, gt, memberFrame);
+            };
+            session.instanceGroups.forEach(function (groups, frameIdx) {
+                memberFrame = frameIdx;
+                for (var gi = 0; gi < groups.length; gi++) groups[gi].instances.forEach(visitMember);
+            });
         }
 
         // Scan linked and unlinked instances in frameGroups
         for (var [frameIdx2, fg] of session.frameGroups) {
             // Linked instances (fg.instances)
             for (var [camName2, instances] of fg.instances) {
+                var lci = camIndex.get(camName2);
+                if (lci === undefined) continue;
                 for (var i = 0; i < instances.length; i++) {
                     var t = instances[i].trackIdx;
-                    if (t >= 0) {
-                        var key2 = t + ':' + camName2;
-                        if (!trackCamFrames[key2]) trackCamFrames[key2] = new Set();
-                        trackCamFrames[key2].add(frameIdx2);
-                    }
+                    if (t == null || !(t >= 0)) continue;
+                    addFrame(lci, t, frameIdx2);
                 }
             }
             // Unlinked instances (fg.unlinkedInstances)
             for (var [camName3, ulList] of fg.unlinkedInstances) {
+                var uci = camIndex.get(camName3);
+                if (uci === undefined) continue;
                 for (var u = 0; u < ulList.length; u++) {
                     var t2 = ulList[u].instance.trackIdx;
-                    if (t2 >= 0) {
-                        var key3 = t2 + ':' + camName3;
-                        if (!trackCamFrames[key3]) trackCamFrames[key3] = new Set();
-                        trackCamFrames[key3].add(frameIdx2);
-                    }
+                    if (t2 == null || !(t2 >= 0)) continue;
+                    addFrame(uci, t2, frameIdx2);
                 }
             }
         }
-
-        // Collect all track indices from any source (occupancy or frameGroups)
-        var allTrackIndices = new Set();
-        for (var tcfKey in trackCamFrames) {
-            var colonPos = tcfKey.indexOf(':');
-            if (colonPos > 0) allTrackIndices.add(parseInt(tcfKey.substring(0, colonPos)));
-        }
-        for (var occMapKey in occSegmentMap) {
-            var oColon = occMapKey.indexOf(':');
-            if (oColon > 0) allTrackIndices.add(parseInt(occMapKey.substring(0, oColon)));
-        }
-        var sortedTrackIndices = Array.from(allTrackIndices).sort(function(a, b) { return a - b; });
 
         // Build segments ordered by camera then track (view-first layout).
         // For each camera, count how many real track rows it produces; if
@@ -1104,29 +1159,35 @@ export class Timeline {
         var rowCap = this.MAX_TRACK_ROWS_PER_CAMERA;
         for (var ci = 0; ci < cameraNames.length; ci++) {
             var camRowsBefore = this._trackSegments.length;
+            var slot = camIndex.get(cameraNames[ci]);
+            var runsByTrack = camRuns[slot];
+            var occByTrack = camOcc[slot];
+
+            // Track indices with data on this camera, ascending.
+            var camTracks = [];
+            for (var [rt] of runsByTrack) camTracks.push(rt);
+            for (var [ot] of occByTrack) if (!runsByTrack.has(ot)) camTracks.push(ot);
+            camTracks.sort(function (a, b) { return a - b; });
 
             // 1. Collect every candidate track row for this camera (in track-index
             //    order) with its first-appearance frame, used only to rank for the cap.
             var candidates = [];
-            for (var ti = 0; ti < sortedTrackIndices.length; ti++) {
-                var t3 = sortedTrackIndices[ti];
-                var camKey = t3 + ':' + cameraNames[ci];
-                var frameSet = trackCamFrames[camKey];
-                var occSegs = occSegmentMap[camKey];
+            for (var ti = 0; ti < camTracks.length; ti++) {
+                var t3 = camTracks[ti];
+                var runs3 = runsByTrack.get(t3);
+                var occSegs = occByTrack.get(t3);
 
                 var segments;
-                if (occSegs && (!frameSet || frameSet.size === 0)) {
+                if (!runs3) {
                     // Only occupancy data — fast path, use segments directly
                     segments = occSegs;
-                } else if (!occSegs && frameSet && frameSet.size > 0) {
+                } else if (!occSegs) {
                     // Only frameGroup/instanceGroup frames
-                    segments = this._framesToSegments(frameSet);
-                } else if (occSegs && frameSet && frameSet.size > 0) {
-                    // Both — merge occupancy segments with fg frames without
-                    // expanding occupancy into a full frame set (memory-efficient).
-                    segments = this._mergeSegmentsWithFrames(occSegs, frameSet);
+                    segments = runs3.toSegments();
                 } else {
-                    continue;
+                    // Both — merge occupancy segments with the frames' runs
+                    // without expanding occupancy into frames.
+                    segments = this._mergeSegmentLists(occSegs, runs3.toSegments());
                 }
 
                 if (!segments || segments.length === 0) continue;
@@ -1272,48 +1333,17 @@ export class Timeline {
     }
 
     /**
-     * Merge an existing sorted non-overlapping segment list with a set of extra
-     * frames, returning a new sorted non-overlapping segment list. Does NOT
-     * expand the input segments into a full frame Set, so the memory cost is
-     * O(|segments| + |extraFrames|) rather than O(total frames covered).
+     * Union of two sorted, non-overlapping segment lists, as one sorted list
+     * with adjacent or overlapping segments coalesced. O(|a| + |b|); the
+     * inputs are not modified.
      *
-     * @param {Array<{start:number,end:number}>} segments - sorted, non-overlapping
-     * @param {Set<number>} extraFrameSet
+     * @param {Array<{start:number,end:number}>} a
+     * @param {Array<{start:number,end:number}>} b
      * @returns {Array<{start:number,end:number}>}
      * @private
      */
-    _mergeSegmentsWithFrames(segments, extraFrameSet) {
-        var extras = Array.from(extraFrameSet).sort(function (a, b) { return a - b; });
-        var extraSegs = [];
-        for (var i = 0; i < extras.length; i++) {
-            extraSegs.push({ start: extras[i], end: extras[i] });
-        }
-
-        // Merge two sorted segment lists by start
-        var all = [];
-        var ai = 0, bi = 0;
-        while (ai < segments.length && bi < extraSegs.length) {
-            if (segments[ai].start <= extraSegs[bi].start) {
-                all.push(segments[ai++]);
-            } else {
-                all.push(extraSegs[bi++]);
-            }
-        }
-        while (ai < segments.length) all.push(segments[ai++]);
-        while (bi < extraSegs.length) all.push(extraSegs[bi++]);
-
-        // Coalesce adjacent/overlapping segments
-        if (all.length === 0) return [];
-        var merged = [{ start: all[0].start, end: all[0].end }];
-        for (var k = 1; k < all.length; k++) {
-            var last = merged[merged.length - 1];
-            if (all[k].start <= last.end + 1) {
-                if (all[k].end > last.end) last.end = all[k].end;
-            } else {
-                merged.push({ start: all[k].start, end: all[k].end });
-            }
-        }
-        return merged;
+    _mergeSegmentLists(a, b) {
+        return mergeRunLists(a, b);
     }
 
     /**
@@ -1869,11 +1899,30 @@ export class Timeline {
         }
         var hasIdentities = !!(session.identities && session.identities.length > 0);
 
-        // Build identity -> camName -> Set<frameIdx>
-        var idCamFrames = {};  // "identityId:camName" -> Set<frameIdx>
-        // Frames the tracker explicitly marked as "no identity" (-1) get a
-        // gray "No ID" row per camera, keyed under this sentinel prefix.
-        var NO_ID_KEY = '__noid__';
+        // Per camera: identity id -> its frames, and the frames the tracker
+        // explicitly marked as "no identity" (-1), which get a gray "No ID"
+        // row. The fallback pass below visits every frameIdentityMap entry
+        // (~4M after Track All on a large project) in one task, so frames go
+        // into typed buffers (`_FrameRuns`), never a string key + Set entry
+        // per detection.
+        var camSlot = new Map();   // camera name -> its first index in cameraNames
+        var idRuns = [], noIdRuns = [];
+        for (var cs = 0; cs < cameraNames.length; cs++) {
+            if (!camSlot.has(cameraNames[cs])) camSlot.set(cameraNames[cs], cs);
+            idRuns.push(new Map());
+            noIdRuns.push(new _FrameRuns());
+        }
+        function addIdentityFrame(camName, identityId, frameIdx) {
+            var slot = camSlot.get(camName);
+            if (slot === undefined) return;
+            var runs = idRuns[slot].get(identityId);
+            if (runs === undefined) { runs = new _FrameRuns(); idRuns[slot].set(identityId, runs); }
+            runs.add(frameIdx);
+        }
+        function addNoIdFrame(camName, frameIdx) {
+            var slot = camSlot.get(camName);
+            if (slot !== undefined) noIdRuns[slot].add(frameIdx);
+        }
 
         if (hasIdentities) {
             // Pass 1: materialized frames (session.frameGroups) — AUTHORITATIVE.
@@ -1890,15 +1939,11 @@ export class Timeline {
                         if (idId == null) {
                             if (session.isExplicitNoIdentity &&
                                 session.isExplicitNoIdentity(camName, instances[i].trackIdx, frameIdx)) {
-                                var nKey = NO_ID_KEY + ':' + camName;
-                                if (!idCamFrames[nKey]) idCamFrames[nKey] = new Set();
-                                idCamFrames[nKey].add(frameIdx);
+                                addNoIdFrame(camName, frameIdx);
                             }
                             continue;
                         }
-                        var segKey = idId + ':' + camName;
-                        if (!idCamFrames[segKey]) idCamFrames[segKey] = new Set();
-                        idCamFrames[segKey].add(frameIdx);
+                        addIdentityFrame(camName, idId, frameIdx);
                     }
                 }
                 // Unlinked instances. Resolved with the UNLINKED resolver, not
@@ -1917,15 +1962,11 @@ export class Timeline {
                         if (idId2 == null) {
                             if (session.isExplicitNoIdentity &&
                                 session.isExplicitNoIdentity(camName2, ulList[u].instance.trackIdx, frameIdx)) {
-                                var nKey2 = NO_ID_KEY + ':' + camName2;
-                                if (!idCamFrames[nKey2]) idCamFrames[nKey2] = new Set();
-                                idCamFrames[nKey2].add(frameIdx);
+                                addNoIdFrame(camName2, frameIdx);
                             }
                             continue;
                         }
-                        var segKey2 = idId2 + ':' + camName2;
-                        if (!idCamFrames[segKey2]) idCamFrames[segKey2] = new Set();
-                        idCamFrames[segKey2].add(frameIdx);
+                        addIdentityFrame(camName2, idId2, frameIdx);
                     }
                 }
             }
@@ -1941,16 +1982,16 @@ export class Timeline {
             // everything (>=0 → identityId, <0 → explicit no-identity), no
             // per-key helper calls needed.
             if (session.frameIdentityMap) {
-                for (var rec of session.frameIdentityEntries()) {
-                    if (materializedFrames.has(rec.frameIdx)) continue;
-                    if (rec.identityId < 0) {
-                        var fbNKey = NO_ID_KEY + ':' + rec.camName;
-                        if (!idCamFrames[fbNKey]) idCamFrames[fbNKey] = new Set();
-                        idCamFrames[fbNKey].add(rec.frameIdx);
-                    } else {
-                        var fbKey = rec.identityId + ':' + rec.camName;
-                        if (!idCamFrames[fbKey]) idCamFrames[fbKey] = new Set();
-                        idCamFrames[fbKey].add(rec.frameIdx);
+                var visitEntry = function (fFrame, fCam, fTrack, fIdentity) {
+                    if (materializedFrames.has(fFrame)) return;
+                    if (fIdentity < 0) addNoIdFrame(fCam, fFrame);
+                    else addIdentityFrame(fCam, fIdentity, fFrame);
+                };
+                if (typeof session.forEachFrameIdentity === 'function') {
+                    session.forEachFrameIdentity(visitEntry);
+                } else {
+                    for (var rec of session.frameIdentityEntries()) {
+                        visitEntry(rec.frameIdx, rec.camName, rec.trackIdx, rec.identityId);
                     }
                 }
             }
@@ -1961,29 +2002,18 @@ export class Timeline {
         // camera with no identity rows still gets an empty placeholder.
         for (var ci = 0; ci < cameraNames.length; ci++) {
             var camRowsBefore = this._trackSegments.length;
+            var slot = camSlot.get(cameraNames[ci]);
             if (hasIdentities) {
                 for (var idIdx = 0; idIdx < session.identities.length; idIdx++) {
                     var ident = session.identities[idIdx];
-                    var sKey = ident.id + ':' + cameraNames[ci];
-                    var frameSet = idCamFrames[sKey];
-                    if (!frameSet || frameSet.size === 0) continue;
-
-                    var sorted = Array.from(frameSet).sort(function (a, b) { return a - b; });
-                    var segments = [];
-                    var segStart = -1, segEnd = -1;
-                    for (var si = 0; si < sorted.length; si++) {
-                        var f = sorted[si];
-                        if (segStart < 0) { segStart = f; segEnd = f; }
-                        else if (f === segEnd + 1) { segEnd = f; }
-                        else { segments.push({ start: segStart, end: segEnd }); segStart = f; segEnd = f; }
-                    }
-                    if (segStart >= 0) segments.push({ start: segStart, end: segEnd });
+                    var runs = idRuns[slot].get(ident.id);
+                    if (runs === undefined) continue;
 
                     this._trackSegments.push({
                         trackIdx: ident.id,
                         cameraName: cameraNames[ci],
                         color: ident.color || '#667eea',
-                        segments: segments,
+                        segments: runs.toSegments(),
                         trackName: ident.name,
                         treeRole: 'middle',
                         _isIdentity: true, // marker for visibility filter (Block 2)
@@ -1994,13 +2024,13 @@ export class Timeline {
             // No-ID row: frames the tracker marked explicit-none (-1) for this
             // camera. Rendered in space gray so proofreaders see un-identified
             // instances — and the frames they occur on — in the tracks/id window.
-            var noIdFrames = idCamFrames[NO_ID_KEY + ':' + cameraNames[ci]];
-            if (noIdFrames && noIdFrames.size > 0) {
+            var noIdFrames = noIdRuns[slot];
+            if (noIdFrames.n > 0) {
                 this._trackSegments.push({
                     trackIdx: -1,
                     cameraName: cameraNames[ci],
                     color: NULL_ID_COLOR,
-                    segments: this._framesToSegments(noIdFrames),
+                    segments: noIdFrames.toSegments(),
                     trackName: 'No ID',
                     treeRole: 'middle',
                     _isIdentity: true,

@@ -19,6 +19,9 @@
  *      and does not add the note.
  *   G. a selected user instance is deselected when its type is hidden — the
  *      boxes fire their normal change handler, not a silent `.checked` write.
+ *   H. the boxes' change handlers do not each redraw every view (each redraw
+ *      forced a layout of the page): their three redraws are held
+ *      (`overlayDrawHold`), and the run's own redraw paints the result.
  *
  * Run: node tests/e2e/triangulate-all-shows-reproj-only.mjs
  */
@@ -162,6 +165,23 @@ try {
     await runAndWait(() => document.getElementById('tbTriangulateAll').click());
     const stillSelected = await page.evaluate(async () => !!(await import('/ui/app-state.js')).interactionManager.selectedInstanceGroup);
     check(!stillSelected, 'G. hiding Predicted cleared the selection, as a click on the box would');
+
+    // ---- H. one redraw, not one per box -------------------------------------------------
+    await useSession('reprojOnly_H', true);
+    await setBoxes([true, true, true, true]);
+    const heldBefore = await page.evaluate(async () => (await import('/ui/rendering.js')).overlayDrawHold.held);
+    await runAndWait(() => document.getElementById('tbTriangulateAll').click());
+    const hold = await page.evaluate(async () => (await import('/ui/rendering.js')).overlayDrawHold);
+    check(hold.held - heldBefore === 3, `H. the three boxes' redraws were held (${hold.held - heldBefore})`);
+    check(hold.depth === 0, 'H. and the hold is released');
+    // A redraw outside the hold draws again (the hold does not stick).
+    const drew = await page.evaluate(async () => {
+        const R = await import('/ui/rendering.js');
+        const before = R.overlayDrawHold.held;
+        R.drawAllOverlays(window.__lucid.state.currentFrame);
+        return R.overlayDrawHold.held === before;
+    });
+    check(drew, 'H. a later redraw is not held');
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

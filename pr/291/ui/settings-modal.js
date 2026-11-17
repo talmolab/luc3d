@@ -46,16 +46,16 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=58b1a5534779';
-import { getActiveSession, state, timeline } from './app-state.js?v=58b1a5534779';
-import { drawAllOverlays } from './rendering.js?v=58b1a5534779';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=58b1a5534779';
-import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=58b1a5534779';
-import { buildThresholdExamples } from './threshold-examples-panel.js?v=58b1a5534779';
-import { installModalGeometry } from './modal-geometry.js?v=58b1a5534779';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=58b1a5534779';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=58b1a5534779';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=58b1a5534779';
+} from './settings.js?v=1150e29379e6';
+import { getActiveSession, state, timeline } from './app-state.js?v=1150e29379e6';
+import { drawAllOverlays } from './rendering.js?v=1150e29379e6';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=1150e29379e6';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=1150e29379e6';
+import { buildThresholdExamples } from './threshold-examples-panel.js?v=1150e29379e6';
+import { installModalGeometry } from './modal-geometry.js?v=1150e29379e6';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=1150e29379e6';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=1150e29379e6';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=1150e29379e6';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -242,9 +242,15 @@ export function showSettingsModal(initialPanel) {
         ? initialPanel
         : (readLastPanel() || SETTINGS_PANELS[0]);
 
-    // Enforce a single instance.
+    // Enforce a single instance. Retire the open one through its own teardown:
+    // removing its overlay alone left its key handler on the document and its
+    // geometry watcher live, which then saved the detached card's zero size as
+    // the size the user had chosen (Settings reopened at its minimum).
     const existing = document.querySelector('.settings-overlay');
-    if (existing) existing.remove();
+    if (existing) {
+        if (typeof existing._lucidTeardown === 'function') existing._lucidTeardown();
+        else existing.remove();
+    }
 
     // Set once the footer exists: every write to `working` repaints its buttons.
     let onWorkingEdit = function () {};
@@ -978,6 +984,7 @@ export function showSettingsModal(initialPanel) {
     let disposeGeometry = null;
 
     function teardown() {
+        overlay._lucidTeardown = null;
         document.removeEventListener('keydown', onDocKeyDown, true);
         filterPreview.dispose();
         thrExamples.dispose();
@@ -989,6 +996,7 @@ export function showSettingsModal(initialPanel) {
         // Discard pending edits — just remove the overlay.
         teardown();
     }
+    overlay._lucidTeardown = teardown;
 
     function commit() {
         setDefaultTriangulationMethod(working.method);
