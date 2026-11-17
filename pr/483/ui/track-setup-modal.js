@@ -30,8 +30,8 @@
  * Range collects the count in its own dialog and never reaches this one.
  */
 
-import { setInfoTip, ICON_INFO } from './info-tip.js?v=0ce46b79ee31';
-import { buildBandCountFields } from './identity-marks-modal.js?v=0ce46b79ee31';
+import { setInfoTip, ICON_INFO } from './info-tip.js?v=a8f9838b57b7';
+import { buildBandCountFields } from './identity-marks-modal.js?v=a8f9838b57b7';
 
 /**
  * Show the dialog. Resolves with the answer on Continue / Enter, or `null` on
