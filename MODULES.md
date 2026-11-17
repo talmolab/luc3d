@@ -11274,10 +11274,15 @@ either ID-switch check is run.
 
 **Drawing.** `renderIdentityGallery(host, session, {onPick})` builds the rows
 with placeholders at once and fills them AFTER the box paints: the maps first,
-then each row's images, one decoded frame per sample (`view.decoder.getFrame`,
-drawn immediately — a decoder's cached frame may be closed by the next decode).
-It stops as soon as the box is closed (a few seconds on an 8–10-camera
-session). Without a video a sample says "no video" and the maps draw on a dark
+then the images, one decoded frame per sample (`view.decoder.getFrame`, drawn
+immediately — a decoder's cached frame may be closed by the next decode). Every
+row's samples are planned first (`planRow`: frame, camera, crop), then fetched one
+queue per decoder (`fetchSamples`): a decoder is asked for one frame at a time, in
+frame order, while the cameras' queues run side by side — 25 samples on an
+8-camera project took 2.3 s one after another, 1.3 s so (local disk; decodes
+slow down when several run at once, and over a network the gain is larger). Tiles
+fill in as their camera's frames arrive, not row by row. It stops as soon as the
+box is closed (test: e2e `identity-gallery` §5b). Without a video a sample says "no video" and the maps draw on a dark
 ground. The map is a darkened still of the chosen camera with the path coloured
 by TIME on a one-hue sequential ramp and a 0:00 → end key; hovering shows the
 nearest point's time, a click goes there. The chosen view is kept on

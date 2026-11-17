@@ -11,7 +11,8 @@
 // camera to cut each sample from, the crop square, its 2D at a frame (hydrating a
 // lazy project's members for the read), and the projected path. The
 // drawing half decodes one frame per sample (`view.decoder.getFrame`) AFTER the
-// box is on screen, row by row, so the summary never waits on video, and stops
+// box is on screen, one queue per camera with the cameras side by side, so the
+// summary never waits on video, and stops
 // when the box closes. Resting the pointer on a sample shows it enlarged beside
 // the tile: the crop is copied at up to the enlarged size when it is drawn (a
 // decoder's frame may be closed by the next decode), so the preview is a sharper
@@ -717,11 +718,12 @@ export function renderIdentityGallery(host, session, opts) {
     }
 
     // ---- sample images -----------------------------------------------------
-    var fillRow = async function (r) {
+    // A row's samples are planned at once (frame, camera, crop: no video needed);
+    // each that needs an image becomes a job, fetched by `fetchSamples`.
+    var planRow = function (r) {
         var frames = pickSampleFrames(session, tracks.get(r.id.id), r.id.id, GALLERY_SAMPLES);
-        var used = new Map();
+        var used = new Map(), jobs = [];
         for (var s = 0; s < r.slots.length; s++) {
-            if (!alive()) return;
             var fig = r.slots[s], frame = frames[s];
             if (frame == null) { fig.className = 'identity-gallery-tile is-empty'; continue; }
             var group = identityGroupAt(session, frame, r.id.id);
@@ -741,59 +743,90 @@ export function renderIdentityGallery(host, session, opts) {
                 fig.querySelector('.identity-gallery-blank').textContent = view ? 'no keypoints' : 'no video';
                 continue;
             }
-            var img = null;
-            try { img = await view.decoder.getFrame(frame); } catch (e) { img = null; }
-            if (!alive()) return;
-            // draw now: a decoder's cached frame may be closed once another is decoded
-            var c = hiDpiCanvas(GALLERY_TILE, GALLERY_TILE, 'identity-gallery-img'), ctx = c.getContext('2d');
-            ctx.fillStyle = '#000'; ctx.fillRect(0, 0, GALLERY_TILE, GALLERY_TILE);
-            var drawn = false;
-            if (img) {
-                try { ctx.drawImage(img, box.x, box.y, box.side, box.side, 0, 0, GALLERY_TILE, GALLERY_TILE); drawn = true; }
-                catch (e) { drawn = false; }
-            }
-            if (!drawn) {
-                fig.className = 'identity-gallery-tile is-missing';
-                fig.querySelector('.identity-gallery-blank').textContent = 'no frame';
-                continue;
-            }
-            // the crop again at up to the enlarged size, for the hover preview — no
-            // larger than the video's own pixels, which would only be scaled up
-            var bigSide = Math.max(GALLERY_TILE, Math.min(Math.ceil(box.side), Math.round(GALLERY_ZOOM * pixelRatio())));
-            var big = el('canvas');
-            big.width = big.height = bigSide;
-            var bctx = big.getContext('2d');
-            bctx.fillStyle = '#000'; bctx.fillRect(0, 0, bigSide, bigSide);
-            try { bctx.drawImage(img, box.x, box.y, box.side, box.side, 0, 0, bigSide, bigSide); } catch (e) { big = null; }
-            // this animal's keypoints as small dots in its colour: which one the row means when two share a crop
-            drawSampleDots(ctx, pts, box, GALLERY_TILE, r.color, 1.6);
-            if (big) {
-                fig._zoom = { kind: 'sample', w: GALLERY_ZOOM, h: GALLERY_ZOOM, color: r.color, frame: frame,
-                    label: r.id.name + ' · ' + fmtTime(frame) + ' · ' + cam + ' — click to go to this frame',
-                    draw: (function (src, pts, box, color) {
-                        return function (ctx, w, h) { ctx.drawImage(src, 0, 0, w, h); drawSampleDots(ctx, pts, box, w, color, 3); };
-                    })(big, pts, box, r.color) };
-                fig.removeAttribute('title');   // the preview says it; a native tooltip would cover it
-                fig.addEventListener('mouseenter', zoom.show.bind(null, fig));
-                fig.addEventListener('mouseleave', zoom.hide);
-            }
-            var sz = imageSize(img);
-            c.setAttribute('data-source', sz[0] + 'x' + sz[1]);
-            fig.replaceChild(c, fig.querySelector('.identity-gallery-blank'));
-            fig.className = 'identity-gallery-tile';
-            if (r.color) fig.style.borderColor = r.color;
+            jobs.push({ r: r, fig: fig, frame: frame, cam: cam, view: view, box: box, pts: pts });
         }
+        return jobs;
+    };
+
+    // Draw a sample's image into its tile, as soon as it is decoded: a decoder's
+    // cached frame may be closed once another is decoded.
+    var drawSample = function (job, img) {
+        var r = job.r, fig = job.fig, frame = job.frame, cam = job.cam, box = job.box, pts = job.pts;
+        var c = hiDpiCanvas(GALLERY_TILE, GALLERY_TILE, 'identity-gallery-img'), ctx = c.getContext('2d');
+        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, GALLERY_TILE, GALLERY_TILE);
+        var drawn = false;
+        if (img) {
+            try { ctx.drawImage(img, box.x, box.y, box.side, box.side, 0, 0, GALLERY_TILE, GALLERY_TILE); drawn = true; }
+            catch (e) { drawn = false; }
+        }
+        if (!drawn) {
+            fig.className = 'identity-gallery-tile is-missing';
+            fig.querySelector('.identity-gallery-blank').textContent = 'no frame';
+            return;
+        }
+        // the crop again at up to the enlarged size, for the hover preview — no
+        // larger than the video's own pixels, which would only be scaled up
+        var bigSide = Math.max(GALLERY_TILE, Math.min(Math.ceil(box.side), Math.round(GALLERY_ZOOM * pixelRatio())));
+        var big = el('canvas');
+        big.width = big.height = bigSide;
+        var bctx = big.getContext('2d');
+        bctx.fillStyle = '#000'; bctx.fillRect(0, 0, bigSide, bigSide);
+        try { bctx.drawImage(img, box.x, box.y, box.side, box.side, 0, 0, bigSide, bigSide); } catch (e) { big = null; }
+        // this animal's keypoints as small dots in its colour: which one the row means when two share a crop
+        drawSampleDots(ctx, pts, box, GALLERY_TILE, r.color, 1.6);
+        if (big) {
+            fig._zoom = { kind: 'sample', w: GALLERY_ZOOM, h: GALLERY_ZOOM, color: r.color, frame: frame,
+                label: r.id.name + ' · ' + fmtTime(frame) + ' · ' + cam + ' — click to go to this frame',
+                draw: (function (src, pts, box, color) {
+                    return function (ctx, w, h) { ctx.drawImage(src, 0, 0, w, h); drawSampleDots(ctx, pts, box, w, color, 3); };
+                })(big, pts, box, r.color) };
+            fig.removeAttribute('title');   // the preview says it; a native tooltip would cover it
+            fig.addEventListener('mouseenter', zoom.show.bind(null, fig));
+            fig.addEventListener('mouseleave', zoom.hide);
+        }
+        var sz = imageSize(img);
+        c.setAttribute('data-source', sz[0] + 'x' + sz[1]);
+        fig.replaceChild(c, fig.querySelector('.identity-gallery-blank'));
+        fig.className = 'identity-gallery-tile';
+        if (r.color) fig.style.borderColor = r.color;
+    };
+
+    // Every sample's image, one queue per decoder: a decoder is asked for one frame
+    // at a time, in frame order, while the cameras' queues run side by side. Each
+    // fetch is a seek and a decode (~0.1 s on local disk, far more over a network);
+    // one after another, the 25 of five identities took ~2.3 s on an 8-camera
+    // project, now about the busiest camera's share.
+    var fetchSamples = function (jobs) {
+        var byView = new Map();
+        jobs.forEach(function (j) {
+            var q = byView.get(j.view);
+            if (!q) byView.set(j.view, q = []);
+            q.push(j);
+        });
+        return Promise.all(Array.from(byView.values()).map(async function (q) {
+            q.sort(function (a, b) { return a.frame - b.frame; });
+            for (var k = 0; k < q.length; k++) {
+                if (!alive()) return;
+                var img = null;
+                try { img = await q[k].view.decoder.getFrame(q[k].frame); } catch (e) { img = null; }
+                if (!alive()) return;
+                try { drawSample(q[k], img); }
+                catch (e) { console.warn('[identity-gallery] ' + q[k].r.id.name + ':', e); }
+            }
+        }));
     };
 
     var done = (async function () {
         await new Promise(function (res) { setTimeout(res, 0); });   // the box paints first
         if (!alive()) return;
         await drawMaps(mapCam);
+        if (!alive()) return;
+        var jobs = [];
         for (var i = 0; i < rows.length; i++) {
-            if (!alive()) return;
-            try { await fillRow(rows[i]); }
+            try { jobs = jobs.concat(planRow(rows[i])); }
             catch (e) { console.warn('[identity-gallery] ' + rows[i].id.name + ':', e); }
         }
+        await fetchSamples(jobs);
     })();
     return { done: done, element: section };
 }
