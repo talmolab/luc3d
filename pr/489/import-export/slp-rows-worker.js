@@ -25,7 +25,7 @@
  *
  * Imports h5wasm by relative path: a worker has no import map.
  */
-import * as h5 from '../lib/h5wasm/hdf5_hl.js?v=1ea24f070165';
+import * as h5 from '../lib/h5wasm/hdf5_hl.js?v=d0f9f875b8c6';
 
 let file = null;
 let path = null;
