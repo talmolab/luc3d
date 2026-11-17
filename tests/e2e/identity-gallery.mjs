@@ -29,6 +29,9 @@
  *  5. Negative control — the identities swapped for the second half of the
  *     recording (an ID switch): the reopened summary's rows each show BOTH
  *     animals. This is what the section is for.
+ *  5b. The images are fetched one queue per camera, the queues side by side: with a
+ *     decoder that takes 30 ms per frame, requests to different cameras overlap,
+ *     no decoder is asked for two frames at once, and every image still arrives.
  *  6. Without videos the images say "no video" and the maps still draw the paths
  *     — and resting on an image shows no preview, while a map still enlarges.
  *
@@ -292,6 +295,37 @@ try {
     check(g.rows.every(r => new Set(r.tiles.map(t => t.color)).size === 2),
         `after an ID switch halfway, each row shows BOTH animals: ${g.rows.map(r => r.name + ' ' + r.tiles.map(t => t.color[0]).join('')).join(' · ')}`);
     await page.keyboard.press('Escape');
+
+    // ---- 5b. images fetched per camera, the cameras side by side -----------------------------
+    const conc = await page.evaluate(async () => {
+        const G = await import('/ui/identity-gallery.js'), AS = await import('/ui/app-state.js');
+        let inFlight = 0, maxAll = 0, calls = 0;
+        const per = new Map(), maxPer = new Map();
+        const saved = AS.state.views.map(v => v.decoder.getFrame);
+        AS.state.views.forEach(v => {
+            const orig = v.decoder.getFrame;
+            v.decoder.getFrame = async (f) => {
+                calls++; inFlight++; maxAll = Math.max(maxAll, inFlight);
+                per.set(v.name, (per.get(v.name) || 0) + 1);
+                maxPer.set(v.name, Math.max(maxPer.get(v.name) || 0, per.get(v.name)));
+                try { await new Promise(r => setTimeout(r, 30)); return await orig(f); }
+                finally { inFlight--; per.set(v.name, per.get(v.name) - 1); }
+            };
+        });
+        const host = document.createElement('div'); document.body.appendChild(host);
+        const t0 = performance.now();
+        const res = G.renderIdentityGallery(host, AS.state.session, {});
+        await res.done;
+        const ms = Math.round(performance.now() - t0);
+        const tiles = host.querySelectorAll('.identity-gallery-tile').length;
+        const filled = host.querySelectorAll('.identity-gallery-tile canvas.identity-gallery-img').length;
+        AS.state.views.forEach((v, i) => { v.decoder.getFrame = saved[i]; });
+        host.remove();
+        return { maxAll, maxPerCam: Math.max(...maxPer.values()), cams: maxPer.size, calls, tiles, filled, ms };
+    });
+    check(conc.cams > 1 && conc.maxAll > 1, `5b. requests to different cameras overlap (up to ${conc.maxAll} at once over ${conc.cams} cameras)`);
+    check(conc.maxPerCam === 1, `5b. no decoder is asked for two frames at once (${conc.maxPerCam})`);
+    check(conc.tiles > 0 && conc.filled === conc.tiles, `5b. every image arrives (${conc.filled} of ${conc.tiles}; ${conc.calls} fetches in ${conc.ms} ms)`);
 
     // ---- 6. no videos ---------------------------------------------------------------------
     await page.evaluate(async () => { await window.__build('noVideo', { noVideo: true }); await (await import('/pose/tracker.js')).trackAll(); });
