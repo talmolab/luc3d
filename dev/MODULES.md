@@ -1333,7 +1333,12 @@ Every read/write goes through `Session` so the layout lives in one place:
 `forEachFrameIdentity(cb)` visits the same records in the same order as
 `cb(frameIdx, camName, trackIdx, identityId)` without allocating per entry
 (through `FrameIdentityMap.forEachKeyValue(cb)`, which skips the iterators'
-`[k, v]` arrays): for whole-map scans in one task, like the ID timeline's. **Do not index
+`[k, v]` arrays): for whole-map scans in one task, like the ID timeline's. With
+`from` / `to` it scans a stretch of entry positions and returns where the next starts:
+`frameIdentityScan()` gives `{span, stamp}` (`FrameIdentityMap.entrySpan()` /
+`layoutStamp()`, which changes on a clear or compaction), and consecutive stretches
+visit what one scan visits while the stamp holds (the timeline's background build).
+**Do not index
 `frameIdentityMap` directly**; a raw `"frame:cam:track"` string will simply miss.
 
 Tuples that cannot be packed (trackIdx > 131070, or a camera absent from
@@ -10490,6 +10495,29 @@ user expanded mid-session is never clipped.
 narrow segments get the min-width center-and-clamp treatment (clamping a wide
 segment's midpoint made bars "fill in/out" while panning).
 
+**A collapsed timeline does not rebuild.** `refreshTracks` on a collapsed
+timeline (`isCollapsed()`: `.collapsed` on its container) records the session and
+`_staleRows`, and starts a BACKGROUND build (`_startBackgroundRows`): the row builders
+are generators (`_rowBuildSteps` → `_trackSegmentSteps` / `_identitySegmentSteps`,
+pausing every `rowBuildTuning.frames` (256) frames of the group walk and every
+`fimStretch` (65,536) identity entries), run in idle-time slices of at most 10 ms
+(`requestIdleCallback`, else a timer) on `Object.create(this)` — reads fall through,
+the two fields they write (`_trackSegments`, `_trackNames`) land on the scratch —
+and swapped in whole when done, then `_finishRows` (filter, tree grouping, margin) runs
+on the timeline. It gives up (rows stay stale) when the resident frames (a count +
+two sums of `frameGroups` keys) or the identity map's `layoutStamp` change while it
+runs; any `_rebuildSegments` cancels it. The synchronous builds run the same
+generators straight through (`drainSteps`, `NO_SLICES`), so the rows are the same
+(Node test group 6). `catchUp()`, called by `toggleTimeline` as it opens the timeline
+before anything measures the rows (`getPreferredHeight`), finishes a running build on
+the spot or rebuilds. On the 8-camera, 108,000-frame project reopening after Track
+All takes ~0 ms (a fresh rebuild: ~150 ms). The rebuild
+walks every group (~0.2 s on an 8-camera, 108,000-frame project) and Track All
+closes the timeline as it finishes (it now closes it BEFORE its `refreshTracks`), so
+those rows were never seen. `setData` clears `_staleRows` (it rebuilds). Code
+reading `_trackSegments` of a collapsed timeline gets the rows as of its last
+rebuild (tests open it first). Test: e2e `track-all-closes-timeline-and-3d` §5.
+
 **`refreshTracks` modes.** Default: rebuild segments, `_growContainerToFit`
 (grow-only), `resize()` — used by track add / rename / delete. `{ keepSize: true
 }` skips both, so container height AND canvas pixel size stay as the user left
@@ -10669,9 +10697,15 @@ Frame Number") keyboard-shortcut installer. Has zero transitive
 - `collapseTimeline()` closes the timeline only if it is open (never opens
   it), via `toggleTimeline()` so the height cache and toolbar button match a
   manual collapse. Returns whether it collapsed anything.
+- Opening calls the timeline's `catchUp()` first (rows a refresh skipped while
+  it was collapsed), then restores the height and resizes.
+
+The timeline instance is app-state's live `timeline` binding (`setTimeline`);
+`state.timeline`, which this used to read, was never set, so until 2026-11 the
+expand's `fitTimelineToData` and delayed `resize()` never ran.
 
 **Imports from project modules.**
-- `./app-state.js` — `state` (for `state.timeline`).
+- `./app-state.js` — `state`, `timeline` (the live binding; `state.timeline` as a fallback).
 
 **Imported by.** `pose/initialization.js`, `pose/tracker.js`
 (`collapseTimeline`, after Track All), `ui/ui-wiring.js`

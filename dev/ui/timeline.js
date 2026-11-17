@@ -8,9 +8,9 @@
  * ES module. Exports `Timeline`.
  */
 
-import { getTrackColor, NULL_ID_COLOR } from './overlays.js?v=4ea22dee07b5';
-import { someValidPoint3d, points3dNodeCount, hasPoint3d } from '../pose/pose-data.js?v=4ea22dee07b5';
-import { isCameraTracked } from './settings.js?v=4ea22dee07b5';
+import { getTrackColor, NULL_ID_COLOR } from './overlays.js?v=c4da17935895';
+import { someValidPoint3d, points3dNodeCount, hasPoint3d } from '../pose/pose-data.js?v=c4da17935895';
+import { isCameraTracked } from './settings.js?v=c4da17935895';
 
 /**
  * Parse a `session.frameIdentityMap` key ("frameIdx:camName:trackIdx") into
@@ -124,6 +124,54 @@ class _FrameRuns {
         extraRuns.push({ start: s, end: e });
         return mergeRunLists(runs, extraRuns);
     }
+}
+
+// --- Building the rows in slices ---------------------------------------------
+// The row builders are generators (`_rowBuildSteps`) that pause where a sliced
+// build may hand the thread back; run straight through they are the old builds.
+
+/** A build that never pauses. */
+var NO_SLICES = { due: function () { return false; } };
+
+/** Run steps to the end. */
+function drainSteps(steps) { while (!steps.next().done) { /* run */ } }
+
+/**
+ * How often a sliced build looks at the clock: every `frames` frames of the
+ * group walk, every `fimStretch` per-detection identity entries. Exported so a
+ * test can make them small (the rows do not depend on them).
+ */
+export var rowBuildTuning = { frames: 256, fimStretch: 65536 };
+
+/** A slice of a background row build, in ms (an idle period's time left, at most). */
+var ROW_SLICE_MS = 10;
+
+function nowMs() { return typeof performance !== 'undefined' ? performance.now() : Date.now(); }
+
+/** Run `fn` when the page is idle (or soon, without requestIdleCallback); `fn(deadlineMs)`. */
+function whenIdle(fn) {
+    if (typeof requestIdleCallback === 'function') {
+        requestIdleCallback(function (d) {
+            var left = d && typeof d.timeRemaining === 'function' ? d.timeRemaining() : ROW_SLICE_MS;
+            fn(nowMs() + Math.max(1, Math.min(ROW_SLICE_MS, left)));
+        }, { timeout: 1000 });
+    } else {
+        setTimeout(function () { fn(nowMs() + ROW_SLICE_MS); }, 16);
+    }
+}
+
+/**
+ * A stamp of the resident frames (`frameGroups` keys): their count and two sums.
+ * Rows read them, so a build in slices gives up if this changes while it runs.
+ * One pass, no sort and no string: on a fully loaded project every frame is
+ * resident, and this runs at the end of a run.
+ */
+function residentStamp(session) {
+    var n = 0, s1 = 0, s2 = 0;
+    if (session && session.frameGroups) {
+        for (var k of session.frameGroups.keys()) { n++; s1 += k; s2 += (k % 65521) * (k % 65519); }
+    }
+    return n + ':' + s1 + ':' + s2;
 }
 
 export class Timeline {
@@ -686,6 +734,7 @@ export class Timeline {
             return;
         }
 
+        this._staleRows = false;
         this._rebuildSegments(session);
         this._buildFrameMarkers(session);
         // Initial-load sizing: `setData` is the "new project/session
@@ -999,6 +1048,11 @@ export class Timeline {
      * @private
      */
     _buildTrackSegments(session) {
+        drainSteps(this._trackSegmentSteps(session, NO_SLICES));
+    }
+
+    /** `_buildTrackSegments` as steps: pauses (yields) when `slicer.due()`, for a build in slices. */
+    *_trackSegmentSteps(session, slicer) {
         this._trackSegments = [];
         this._trackNames = [];
 
@@ -1090,6 +1144,7 @@ export class Timeline {
                     }
                     if (occStart >= 0) occSegments.push({ start: occStart, end: occ.nFrames - 1 });
                     if (occSegments.length > 0) occOut.set(occTr, occSegments);
+                    if (slicer.due()) yield;
                 }
             }
         }
@@ -1122,10 +1177,15 @@ export class Timeline {
                 if (gci === undefined) return;
                 addFrame(gci, gt, memberFrame);
             };
-            session.instanceGroups.forEach(function (groups, frameIdx) {
-                memberFrame = frameIdx;
-                for (var gi = 0; gi < groups.length; gi++) groups[gi].instances.forEach(visitMember);
-            });
+            // In the Map's frame order, by key (no entry pair per frame), pausing
+            // every 256 frames when the build is sliced.
+            var igKeys = session.instanceGroups.keys(), walked = 0;
+            for (var igNext = igKeys.next(); !igNext.done; igNext = igKeys.next()) {
+                memberFrame = igNext.value;
+                var igGroups = session.instanceGroups.get(memberFrame);
+                for (var gi = 0; gi < igGroups.length; gi++) igGroups[gi].instances.forEach(visitMember);
+                if (++walked % rowBuildTuning.frames === 0 && slicer.due()) yield;
+            }
         }
 
         // Scan linked and unlinked instances in frameGroups
@@ -1421,10 +1481,23 @@ export class Timeline {
     }
 
     _rebuildSegments(session) {
+        // A rebuild here supersedes any build in slices (it would swap in older rows).
+        this._cancelBackgroundRows();
+        this._staleRows = false;
+        drainSteps(this._rowBuildSteps(session, NO_SLICES));
+        this._finishRows(session);
+    }
+
+    /**
+     * The rows' build (`_trackSegments` / `_trackNames`, per display mode), as
+     * steps that pause (yield) when `slicer.due()`. Writes only those two
+     * fields, so a build in slices can run on a scratch object (`_startBackgroundRows`).
+     */
+    *_rowBuildSteps(session, slicer) {
         if (this._is3DPointsProject(session)) {
             this._build3DPointsSegments(session);
         } else if (this._displayMode === 'identities') {
-            this._buildIdentitySegments(session);
+            yield* this._identitySegmentSteps(session, slicer);
         } else if (this._displayMode === 'both') {
             // Build tracks then identities, then interleave by camera so
             // each camera's rows are contiguous in the row list. Without
@@ -1432,11 +1505,11 @@ export class Timeline {
             // [tracks_camA, tracks_camB, identities_camA, identities_camB]
             // which produces 4 camera groups (camA, camB, camA, camB) and
             // breaks the Block 1 tree grouping.
-            this._buildTrackSegments(session);
+            yield* this._trackSegmentSteps(session, slicer);
             var trackSegs = this._trackSegments;
             this._trackSegments = [];
             this._trackNames = [];
-            this._buildIdentitySegments(session);
+            yield* this._identitySegmentSteps(session, slicer);
             var idSegs = this._trackSegments;
 
             // Group rows by camera, preserving the camera order from the
@@ -1480,9 +1553,12 @@ export class Timeline {
                 }
             }
         } else {
-            this._buildTrackSegments(session);
+            yield* this._trackSegmentSteps(session, slicer);
         }
+    }
 
+    /** After the rows' build, on the timeline itself: visibility filter, tree grouping, label margin. */
+    _finishRows(session) {
         // --- Block 2 (Prompt 4): apply per-session visibility filter.
         // Drops rows whose camera / track / identity is in the session's
         // hidden Sets. Runs unconditionally (no-op when all sets are
@@ -1886,6 +1962,11 @@ export class Timeline {
      * @private
      */
     _buildIdentitySegments(session) {
+        drainSteps(this._identitySegmentSteps(session, NO_SLICES));
+    }
+
+    /** `_buildIdentitySegments` as steps: pauses (yields) when `slicer.due()`, for a build in slices. */
+    *_identitySegmentSteps(session, slicer) {
         this._trackSegments = [];
         this._trackNames = [];
 
@@ -1987,7 +2068,15 @@ export class Timeline {
                     if (fIdentity < 0) addNoIdFrame(fCam, fFrame);
                     else addIdentityFrame(fCam, fIdentity, fFrame);
                 };
-                if (typeof session.forEachFrameIdentity === 'function') {
+                var fimScan = typeof session.frameIdentityScan === 'function' ? session.frameIdentityScan() : null;
+                if (fimScan) {
+                    // In stretches of positions, pausing between them when sliced:
+                    // the stretches visit what one scan visits, in the same order.
+                    for (var fimAt = 0; fimAt < fimScan.span; ) {
+                        fimAt = session.forEachFrameIdentity(visitEntry, fimAt, Math.min(fimScan.span, fimAt + rowBuildTuning.fimStretch));
+                        if (fimAt < fimScan.span && slicer.due()) yield;
+                    }
+                } else if (typeof session.forEachFrameIdentity === 'function') {
                     session.forEachFrameIdentity(visitEntry);
                 } else {
                     for (var rec of session.frameIdentityEntries()) {
@@ -3137,6 +3226,16 @@ export class Timeline {
     refreshTracks(session, opts) {
         if (!session) return;
         this._session = session;
+        // A collapsed timeline draws nothing: the rebuild waits for it to be
+        // opened (`catchUp`, from toggleTimeline). It walks every group of the
+        // project (~0.2 s on an 8-camera, 108,000-frame one), and Track All
+        // closes the timeline as it finishes, so rows built then were never seen.
+        if (this.isCollapsed()) {
+            this._staleRows = true;
+            this._startBackgroundRows();   // so reopening has them ready
+            return;
+        }
+        this._staleRows = false;
         this._rebuildSegments(session);
         if (opts && opts.keepSize) {
             // Segments rebuilt; row positions reflowed; outer container
@@ -3151,6 +3250,82 @@ export class Timeline {
             this._growContainerToFit();
         }
         this.resize();
+    }
+
+    /** Is the timeline collapsed (`.collapsed` on its container, ui/timeline-controller.js)? */
+    isCollapsed() {
+        return !!(this._container && this._container.classList && this._container.classList.contains('collapsed'));
+    }
+
+    /**
+     * Rebuild the rows a `refreshTracks` skipped while the timeline was
+     * collapsed. Called by `toggleTimeline` as it opens the timeline, before
+     * anything measures the rows (`getPreferredHeight`). Returns whether it rebuilt.
+     */
+    catchUp() {
+        if (!this._staleRows || !this._session) return false;
+        // A build in slices still running: finish it now (or rebuild if it can't).
+        if (this._bgRows && this._bgRows.session === this._session && this._finishBackgroundRows(this._bgRows, Infinity)) return true;
+        this._staleRows = false;
+        this._rebuildSegments(this._session);
+        return true;
+    }
+
+    /**
+     * Build the rows of a collapsed timeline in the background, in idle-time
+     * slices of at most ROW_SLICE_MS, so reopening it has them ready. The build
+     * runs on a scratch object (`Object.create(this)`: reads fall through to the
+     * timeline, the builders' two fields land on the scratch) and is swapped in
+     * whole when done; `_finishRows` then runs on the timeline. Any rebuild
+     * (`_rebuildSegments`) or a new `refreshTracks` cancels it. It gives up —
+     * the rows stay stale, for `catchUp` — when the resident frames or the
+     * identity map's layout change while it runs (rows read both).
+     */
+    _startBackgroundRows() {
+        this._cancelBackgroundRows();
+        var session = this._session;
+        if (!session) return;
+        var slicer = { deadline: 0, due: function () { return nowMs() >= this.deadline; } };
+        var scratch = Object.create(this);
+        var scan = typeof session.frameIdentityScan === 'function' ? session.frameIdentityScan() : null;
+        var job = this._bgRows = {
+            session: session, scratch: scratch, slicer: slicer,
+            steps: this._rowBuildSteps.call(scratch, session, slicer),
+            resident: residentStamp(session), fimStamp: scan ? scan.stamp : null,
+        };
+        var self = this;
+        var slice = function (deadline) {
+            if (self._bgRows !== job) return;                 // cancelled / replaced
+            if (!self._finishBackgroundRows(job, deadline)) {
+                if (self._bgRows === job) whenIdle(slice);    // more to do
+            }
+        };
+        whenIdle(slice);
+    }
+
+    /**
+     * Run `job` until `deadline` (ms, `Infinity` = to the end). Returns true when
+     * its rows were swapped in; false when it paused, or gave up (then
+     * `_bgRows` is cleared and the rows stay stale).
+     */
+    _finishBackgroundRows(job, deadline) {
+        var session = job.session;
+        var scan = typeof session.frameIdentityScan === 'function' ? session.frameIdentityScan() : null;
+        if ((scan ? scan.stamp : null) !== job.fimStamp) { this._bgRows = null; return false; }
+        job.slicer.deadline = deadline;
+        if (!job.steps.next().done) return false;
+        this._bgRows = null;
+        if (residentStamp(session) !== job.resident) return false;
+        this._trackSegments = job.scratch._trackSegments;
+        this._trackNames = job.scratch._trackNames;
+        this._finishRows(session);
+        this._staleRows = false;
+        return true;
+    }
+
+    /** Drop a build in slices, if one is running. */
+    _cancelBackgroundRows() {
+        this._bgRows = null;
     }
 
     /**
