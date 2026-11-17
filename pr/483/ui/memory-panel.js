@@ -24,13 +24,13 @@
  * The samples live in a ring in memory (`MemoryRing`): nothing goes to the
  * `.slp` or `localStorage`. Test hook: `window.__lucidMemoryPanel`.
  */
-import { onPanelRailChange, isPanelOnScreen } from './panel-rail.js?v=a8f9838b57b7';
-import { setInfoTip, ICON_INFO } from './info-tip.js?v=a8f9838b57b7';
-import { state } from './app-state.js?v=a8f9838b57b7';
+import { onPanelRailChange, isPanelOnScreen } from './panel-rail.js?v=0bcc5c65462f';
+import { setInfoTip, ICON_INFO } from './info-tip.js?v=0bcc5c65462f';
+import { state } from './app-state.js?v=0bcc5c65462f';
 import {
     MEMORY_SAMPLE_MS, MEMORY_WINDOW_MS, UA_MEMORY_EVERY_MS,
     MemoryRing, readHeap, summarizeUaMemory, projectCounts, formatMB, plotGeometry,
-} from './memory-plot.js?v=a8f9838b57b7';
+} from './memory-plot.js?v=0bcc5c65462f';
 
 const TAB = 'tabMemory';
 const PLOT_W = 260;
@@ -118,6 +118,7 @@ function render(heap, now) {
     const uaShown = uaMemoryAvailable();
     e.uaRow.hidden = !uaShown;
     e.uaWorkersRow.hidden = !uaShown;
+    e.legendUa.hidden = !uaShown;
     if (uaShown) {
         setText(e.ua, _ua ? formatMB(_ua.bytes) : 'measuring…');
         setText(e.uaWorkers, _ua ? formatMB(_ua.workers) : '–');
@@ -237,8 +238,11 @@ function build(pane) {
     const legend = document.createElement('div');
     legend.className = 'memory-legend';
     legend.innerHTML = '<span class="memory-key memory-key-used"></span>used' +
-        '<span class="memory-key memory-key-limit"></span>heap limit';
+        '<span class="memory-key memory-key-limit"></span>heap limit' +
+        '<span class="memory-legend-ua" id="memoryLegendUa" hidden>' +
+        '<span class="memory-key memory-key-ua"></span>whole page, workers too</span>';
     body.appendChild(legend);
+    const legendUa = legend.querySelector('#memoryLegendUa');
 
     const coarse = document.createElement('div');
     coarse.className = 'memory-note';
@@ -275,7 +279,7 @@ function build(pane) {
 
     return {
         unavailable: unavailable, heapBody: body, now: now, coarse: coarse,
-        usedPath: usedPath, uaPath: uaPath, limitLine: limitLine, scale: scale,
+        usedPath: usedPath, uaPath: uaPath, limitLine: limitLine, scale: scale, legendUa: legendUa,
         peak: peak.value, total: total.value, limit: limit.value,
         ua: ua.value, uaRow: ua.row, uaWorkers: uaWorkers.value, uaWorkersRow: uaWorkers.row,
         resident: resident.value, groups: groups.value, sessions: sessions.value,

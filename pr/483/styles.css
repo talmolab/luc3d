@@ -3782,6 +3782,7 @@ button.tri-dropdown-item:disabled {
 
 .memory-legend {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   margin: 4px 0 6px;
@@ -3796,9 +3797,23 @@ button.tri-dropdown-item:disabled {
   border-top: 2px solid var(--accent);
 }
 
-.memory-key-limit {
+.memory-key-limit,
+.memory-key-ua {
   margin-left: 8px;
+}
+
+.memory-key-limit {
   border-top: 1px dashed var(--error-color);
+}
+
+.memory-legend-ua {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.memory-key-ua {
+  border-top-color: var(--warning-color);
 }
 
 .memory-note {

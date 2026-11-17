@@ -9,53 +9,53 @@ import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
     toBoxedPoints3d, someValidPoint3d, pooledPoints3d,
-} from '../pose/pose-data.js?v=a8f9838b57b7';
-import { ensurePlaceholderCameras } from '../pose/placeholder-cameras.js?v=a8f9838b57b7';
+} from '../pose/pose-data.js?v=0bcc5c65462f';
+import { ensurePlaceholderCameras } from '../pose/placeholder-cameras.js?v=0bcc5c65462f';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
-} from '../pose/triangulation.js?v=a8f9838b57b7';
-import { OnDemandVideoDecoder } from '../loading/video.js?v=a8f9838b57b7';
-import { createDemoSkeleton } from '../demo-data.js?v=a8f9838b57b7';
+} from '../pose/triangulation.js?v=0bcc5c65462f';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=0bcc5c65462f';
+import { createDemoSkeleton } from '../demo-data.js?v=0bcc5c65462f';
 import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
-} from './file-io.js?v=a8f9838b57b7';
+} from './file-io.js?v=0bcc5c65462f';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setInteractionManager,
-} from '../ui/app-state.js?v=a8f9838b57b7';
+} from '../ui/app-state.js?v=0bcc5c65462f';
 import {
     autoAssignVideosToCameras, forceVideoSelection, showParentDirMatchSummary,
     forceVideoSelectionWithFolder, folderPickerStartFor, createViewForVideoFile, updateTotalFrames,
     adoptLabeledFrameCount, rebuildVideoController, fitCanvasesToCells,
-} from '../loading/session-loader.js?v=a8f9838b57b7';
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=a8f9838b57b7';
-import { updateInfoPanel } from '../ui/info-panel.js?v=a8f9838b57b7';
+} from '../loading/session-loader.js?v=0bcc5c65462f';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=0bcc5c65462f';
+import { updateInfoPanel } from '../ui/info-panel.js?v=0bcc5c65462f';
 // Pass 3i-3: setupInteraction / setup3DViewport / hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, hideWelcomeOverlay,
-} from '../pose/initialization.js?v=a8f9838b57b7';
+} from '../pose/initialization.js?v=0bcc5c65462f';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=a8f9838b57b7';
-import { handleLoadSlpFile } from './slp-import.js?v=a8f9838b57b7';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=0bcc5c65462f';
+import { handleLoadSlpFile } from './slp-import.js?v=0bcc5c65462f';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
     openProjectWriter, streamSessionIntoWriter, finalizeProjectWriter,
-} from './slp-streaming-write.js?v=a8f9838b57b7';
-import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=a8f9838b57b7';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=a8f9838b57b7';
+} from './slp-streaming-write.js?v=0bcc5c65462f';
+import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=0bcc5c65462f';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=0bcc5c65462f';
 import {
     showLoading, hideLoading, showLoadingProgress, createProgressPacer, yieldToPaint,
-} from '../ui/loading-overlay.js?v=a8f9838b57b7';
-import { clearReadout } from '../ui/frame-readout.js?v=a8f9838b57b7';
-import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=a8f9838b57b7';
-import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adoptSmoothingSource } from './smoothing-metadata.js?v=a8f9838b57b7';
-import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=a8f9838b57b7';
-import { buildSaveProvenance } from './slp-provenance.js?v=a8f9838b57b7';
-import { withCompactSave } from './compact-save.js?v=a8f9838b57b7';
-import { showCompactSaveModal } from '../ui/compact-save-modal.js?v=a8f9838b57b7';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=a8f9838b57b7';
-import { saveStartFolder } from '../loading/recording-folder.js?v=a8f9838b57b7';
+} from '../ui/loading-overlay.js?v=0bcc5c65462f';
+import { clearReadout } from '../ui/frame-readout.js?v=0bcc5c65462f';
+import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=0bcc5c65462f';
+import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adoptSmoothingSource } from './smoothing-metadata.js?v=0bcc5c65462f';
+import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=0bcc5c65462f';
+import { buildSaveProvenance } from './slp-provenance.js?v=0bcc5c65462f';
+import { withCompactSave } from './compact-save.js?v=0bcc5c65462f';
+import { showCompactSaveModal } from '../ui/compact-save-modal.js?v=0bcc5c65462f';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=0bcc5c65462f';
+import { saveStartFolder } from '../loading/recording-folder.js?v=0bcc5c65462f';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -363,7 +363,7 @@ function serializeSessionFrames(session) {
 async function ensureSleapIO() {
     if (window.SleapIO) return window.SleapIO;
     // Relative to THIS module (import-export/), not the page — hence `../`.
-    var mod = await import('../lib/sleap-io/index.browser.js?v=a8f9838b57b7');
+    var mod = await import('../lib/sleap-io/index.browser.js?v=0bcc5c65462f');
     window.SleapIO = mod;
     return mod;
 }
@@ -1614,7 +1614,7 @@ export async function handleLoadProject(prePickedFile) {
             var LARGE_SLP_BYTES = 200 * 1024 * 1024;
             if (ext === 'slp' && file.size > LARGE_SLP_BYTES) {
                 // Dynamic import avoids a session-loader ↔ save-load import cycle.
-                var _sl = await import('../loading/session-loader.js?v=a8f9838b57b7');
+                var _sl = await import('../loading/session-loader.js?v=0bcc5c65462f');
                 if (_sl && typeof _sl.handleLoadProjectSlpLazy === 'function') {
                     return _sl.handleLoadProjectSlpLazy(file);
                 }
