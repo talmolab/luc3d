@@ -882,7 +882,13 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
     return { hasSessionData: hasSessionData };
 }
 
-export async function handleLoadSlpFile(slpFile) {
+/**
+ * Open an `.slp` (or analysis `.h5`) as the project, replacing the open one.
+ * @param {File} slpFile
+ * @param {?FileSystemFileHandle} [fileHandle]  its handle, File ▸ Save's target
+ *   from then on; without one Save asks where to write.
+ */
+export async function handleLoadSlpFile(slpFile, fileHandle) {
     try {
         // Warn + reset if 3D points were imported into a skeleton-only project.
         if (!(await ensureNo3dImportBlockingLoad())) {
@@ -958,6 +964,8 @@ export async function handleLoadSlpFile(slpFile) {
         state.views = [];
         state.videoFiles = [];
         state.sessions = [];
+        // Save writes back to THIS file, never the replaced project's.
+        state.slpFileHandle = fileHandle || null;
         // Plane state is project-scoped and lives on a module singleton, so
         // it does NOT go away with `state.sessions`. `readPlaneMetadata`
         // only restores into an EMPTY model, so without this the previous

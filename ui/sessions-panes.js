@@ -1714,6 +1714,8 @@ export function removeSession(idx) {
         // Last session removed — full reset to fresh state
         state.session = null;
         state.activeSessionIdx = 0;
+        // Nothing left of the project: a new one must not Save over its file.
+        state.slpFileHandle = null;
         state.triangulationResults = new Map();
         state.views = [];
         state.videoFiles = [];

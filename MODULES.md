@@ -13058,7 +13058,9 @@ bridged into the test runner as `window.__PerCamSlpChoice`.
 
 **Purpose.** Where a `showDirectoryPicker` opens. `startIn` = a file handle opens
 in that file's folder; the project's `.slp` handle is `state.slpFileHandle` (Load
-Project, Load SLP and Save As keep it; it is what File ▸ Save writes). Without
+Project, Load SLP and Save As keep it; it is what File ▸ Save writes). A loader
+adopts it only once it replaces the open project, and New Project or closing the
+last session clears it (`tests/e2e/save-target-handle.mjs`). Without
 `startIn` or `id`, Chromium opens wherever ANY picker of the origin last picked
 (Load Project, Save As, an export…), else Documents — so a picker with neither
 lands somewhere that depends on the browser's history, not the project. An `id`
@@ -13578,7 +13580,9 @@ Project" path for a large saved project `.slp` (routed by `handleLoadProject` in
 `import-export/save-load.js` via `shouldUseLazySlp`, and by
 `handleLoadSessionFolderSingleSlp` for a large root `.slp`, which passes
 `{folderFiles}` so `attachVideosForLazyReopen` takes the videos from that pick
-instead of prompting). **It shows the progress
+instead of prompting). `opts.fileHandle` (the picked `.slp`'s handle, from Load
+Project) becomes `state.slpFileHandle` when the old project is freed; without it
+the handle is cleared. **It shows the progress
 card, titled "Open project"** (`createOpenProgress(fileName)`, exported for the
 test), one step per stage, the file name on the detail line: 1. Reading the
 project file — counted in MB, from `openProjectSlp`'s `onReadBytes` (one decimal
@@ -15695,8 +15699,11 @@ loading-overlay/status-text UI helpers.
   Copy's picker gets the same `startIn` (else the project file's folder). Covered by
   `tests/e2e/save-opens-in-recording-folder.mjs`.
 - Project: `newProject(force)` (`force` skips the unsaved-changes confirm and
-  is used by the 3D-import reset), `markDirty`, `clearDirty`, `quickSave`,
-  `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject` (routes a
+  is used by the 3D-import reset; it clears `state.slpFileHandle`, so Save never
+  writes the new project over the old one's file), `markDirty`, `clearDirty`,
+  `quickSave`, `saveAs`, `saveProjectSlp`, `saveProject`,
+  `handleLoadProject(file, fileHandle)` (hands `fileHandle`, an `.slp`'s own, to
+  the loader; a `.json` leaves none; routes a
   large `.slp` — over 200 MB, `LARGE_SLP_BYTES` — to the memory-bounded
   `handleLoadProjectSlpLazy` in `loading/session-loader.js` instead of the
   eager parse, freeing any previously loaded project first). A `.json` loaded
@@ -15935,7 +15942,10 @@ path uses `resolveImportTrackIdx`, and the grouped-reconstruction path keeps
 first track.
 
 **Key exports.**
-- `handleLoadSlpFile(slpFile)` — replace-current-state load. Pre-allocates all
+- `handleLoadSlpFile(slpFile, fileHandle)` — replace-current-state load. Sets
+  `state.slpFileHandle` (File ▸ Save's target) to `fileHandle` or null at the
+  point it clears the old project, never before, so a load cancelled at its
+  first prompt leaves the open project's file alone. Pre-allocates all
   N session groups in the LoadingProgressModal before the per-session loop so
   the header reads the true "Session n of N"; re-engages `showLoading` after the
   non-embedded folder picker so the overlay stays up during video decode. Calls
