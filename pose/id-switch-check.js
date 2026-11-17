@@ -221,34 +221,52 @@ export function buildGrid(session, o, needSize) {
     }
     var X = new Float64Array(T * K * Math.max(B, 1)).fill(NaN), C = new Float64Array(T * K * 3).fill(NaN);
     var G = new Array(T * K).fill(null);      // the InstanceGroup behind each (sample, identity)
-    var p = [0, 0, 0], q = [0, 0, 0], extents = [];
+    var extents = [];
+    // Each group's nodes are read ONCE into `xyz` (`ok`: present), and the bones,
+    // centroid and extent read from there in the same order with the same
+    // arithmetic as reading the points3d each time (bit-identical). A node shared
+    // by several bones used to be read once per bone; ~135,000 groups on an
+    // 8-camera, 108,000-frame project.
+    var used = [];
+    boneIdx.forEach(function (bi) { if (used.indexOf(bi[0]) < 0) used.push(bi[0]); if (used.indexOf(bi[1]) < 0) used.push(bi[1]); });
+    bodyNodes.forEach(function (nd) { if (used.indexOf(nd) < 0) used.push(nd); });
+    var xyz = new Float64Array(nodes.length * 3), ok = new Uint8Array(nodes.length), p = [0, 0, 0];
+    var bodyPts = new Int32Array(bodyNodes.length);           // the present body nodes, in bodyNodes order
+    var seenAt = new Int32Array(K).fill(-1);                   // sample at which identity k was last seen
     for (var i = 0; i < T; i++) {
         var groups = session.instanceGroups.get(frames[i]) || [];
-        var seen = new Set();
         for (var gi = 0; gi < groups.length; gi++) {
             var g = groups[gi], k = kOf.get(g.identityId);
             if (k == null || !g.points3d) continue;
-            if (seen.has(k)) {                          // duplicate identity this frame: ambiguous
+            if (seenAt[k] === i) {                      // duplicate identity this frame: ambiguous
                 for (var c0 = 0; c0 < 3; c0++) C[(i * K + k) * 3 + c0] = NaN;
                 G[i * K + k] = null; continue;
             }
-            seen.add(k); G[i * K + k] = g;
+            seenAt[k] = i; G[i * K + k] = g;
             var P3 = g.points3d;
+            for (var u = 0; u < used.length; u++) {
+                var nd2 = used[u];
+                if (readPoint3d(P3, nd2, p)) { xyz[nd2 * 3] = p[0]; xyz[nd2 * 3 + 1] = p[1]; xyz[nd2 * 3 + 2] = p[2]; ok[nd2] = 1; }
+                else ok[nd2] = 0;
+            }
             for (var b = 0; b < B; b++) {
-                if (readPoint3d(P3, boneIdx[b][0], p) && readPoint3d(P3, boneIdx[b][1], q)) {
-                    X[(i * K + k) * B + b] = Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+                var na = boneIdx[b][0], nb = boneIdx[b][1];
+                if (ok[na] && ok[nb]) {
+                    X[(i * K + k) * B + b] = Math.hypot(xyz[na * 3] - xyz[nb * 3], xyz[na * 3 + 1] - xyz[nb * 3 + 1], xyz[na * 3 + 2] - xyz[nb * 3 + 2]);
                 }
             }
-            var sx = 0, sy = 0, sz = 0, n = 0, pts = [];
+            var sx = 0, sy = 0, sz = 0, n = 0;
             for (var bn = 0; bn < bodyNodes.length; bn++) {
-                if (readPoint3d(P3, bodyNodes[bn], p)) { sx += p[0]; sy += p[1]; sz += p[2]; n++; pts.push([p[0], p[1], p[2]]); }
+                var nd3 = bodyNodes[bn];
+                if (ok[nd3]) { sx += xyz[nd3 * 3]; sy += xyz[nd3 * 3 + 1]; sz += xyz[nd3 * 3 + 2]; bodyPts[n++] = nd3; }
             }
             if (n) {
                 C[(i * K + k) * 3] = sx / n; C[(i * K + k) * 3 + 1] = sy / n; C[(i * K + k) * 3 + 2] = sz / n;
-                if (i % 7 === 0 && pts.length >= 2) {           // body extent, sampled sparsely
+                if (i % 7 === 0 && n >= 2) {                    // body extent, sampled sparsely
                     var ext = 0;
-                    for (var a1 = 0; a1 < pts.length; a1++) for (var a2 = a1 + 1; a2 < pts.length; a2++) {
-                        var e = Math.hypot(pts[a1][0] - pts[a2][0], pts[a1][1] - pts[a2][1], pts[a1][2] - pts[a2][2]);
+                    for (var a1 = 0; a1 < n; a1++) for (var a2 = a1 + 1; a2 < n; a2++) {
+                        var e1 = bodyPts[a1] * 3, e2 = bodyPts[a2] * 3;
+                        var e = Math.hypot(xyz[e1] - xyz[e2], xyz[e1 + 1] - xyz[e2 + 1], xyz[e1 + 2] - xyz[e2 + 2]);
                         if (e > ext) ext = e;
                     }
                     extents.push(ext);
