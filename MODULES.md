@@ -11147,6 +11147,10 @@ either ID-switch check is run.
 - `identityTracks(session)` — every identity's tracked frames and 3D centroids,
   from `session.instanceGroups` (resident in full even on a lazy project). A
   frame where an identity has two groups is left out, as the image check does.
+  It runs at the end of every Track All over every group, so a frame allocates
+  nothing (no per-frame Map/Set, the centroid into a reused array) and an
+  identity's frames are sorted only when they arrive out of order: ~100 → ~47 ms
+  on the 8-camera, 108,000-frame project, the same tracks value for value.
 - `pickSampleFrames` — the middles of five equal slots of the identity's tracked
   span, each moved, when it has to be, to a frame where the animal is ISOLATED
   (its nearest other identity more than 1.5 of its body sizes away), the
