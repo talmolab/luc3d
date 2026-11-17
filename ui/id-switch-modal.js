@@ -299,13 +299,15 @@ function openProgressDialog(title) {
 // ---------------------------------------------------------------------------
 
 async function runSize(session, rate) {
-    // The overlay's plain form (spinner + message), not a counter: the check is one uninterrupted block of
-    // main-thread work (~0.2-1.5 s) whose only progress is 0 then 1 of one fitting step — which the counter
-    // used to print as "0/1 frames (0%)", frozen until the overlay closed.
+    // The overlay's plain form (spinner + message), not a counter: the check is main-thread work (~0.6 s on
+    // an 8-camera, 108,000-frame project) whose only progress is 0 then 1 of one fitting step — which the
+    // counter used to print as "0/1 frames (0%)", frozen until the overlay closed.
     showLoading('Comparing each animal\'s body size before and after its contacts…', { title: 'Checking ID switches (body size)' });
     await yieldToPaint();
     try {
-        return await checkSizeSwitches(session, { fps: rate.fps });
+        // `onProgress` is awaited between sampling the session and fitting/scoring (and at the end):
+        // yielding there lets the page paint between the two halves instead of holding it for both.
+        return await checkSizeSwitches(session, { fps: rate.fps, onProgress: function () { return yieldToPaint(); } });
     } finally { hideLoading(); }
 }
 

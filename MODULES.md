@@ -3793,7 +3793,14 @@ gapSeconds)`, `learnIdentityMetric(X, n, D, stretch, sample, o, weights?)`,
 `contactChangeScores(grid, feat, o, every)`, `markContactChanges(scored, o)`
 (the change-point step, returning the change points; exported so a threshold can
 be re-applied to the same scores), `symmetricEigen(A, n)` (cyclic Jacobi) and
-`fitPCA(X, n, D, k, {weights?})` (randomized subspace iteration); which image
+`fitPCA(X, n, D, k, {weights?})` (randomized subspace iteration; `{dims, project(x),
+projectInto(x, out, off)}`). When it keeps every direction (`k === D`: the size
+check, ≤ 16 bone lengths against `metricPcaDims` 64) it only centres: the basis
+would just rotate the rows, and `learnIdentityMetric`'s cosines do not change
+under a rotation (test `fitPCA keeping every direction`). That, and summing only
+one triangle of its symmetric within/between scatter (mirrored after, bit-identical),
+took the size check from ~1.3 s to ~0.6 s on the 8-camera, 108,000-frame project
+(same encounters and flags, scores within 3e-14). Which image
 samples to embed — `contactReads(grid, has, o, every)` (the samples the scoring
 asks about, given which have features), `planImageSamples(grid, o, every, st)`,
 `MAX_PLAN_ROUNDS` (4), `MAX_BACKGROUND_GAP_SECONDS` (10); `KEYFRAME_GAP_TOLERANCE` (1.1);
@@ -9258,8 +9265,9 @@ lit stretch on the image check dialog's bar), `ui/app-state.js` (`state`,
 `import-export/save-load.js` (`setStatus`, `markDirty`),
 `ui/loading-overlay.js` (`showLoading`, `hideLoading`, `yieldToPaint` — the body-size
 check shows the overlay's card titled "Checking ID switches (body size)" with a
-spinner, not a counter: it is one uninterrupted short block whose counter would
-read a frozen "0/1"),
+spinner, not a counter: a short block whose counter would read a frozen "0/1";
+`runSize` passes `onProgress: yieldToPaint`, so the page paints between sampling
+the session and fitting/scoring, two tasks of ~0.2 and ~0.4 s on that project),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
 `ui/image-embedder.js` (`createImageEmbedder`, `IMAGE_MODEL_MB`, `formatEmbedTiming`,
 `formatEmbedDevice`, `formatEmbedCpu`, `inputTensorToPixels`, `INPUT`, `setActiveImageModel`),
