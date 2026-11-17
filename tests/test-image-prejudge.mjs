@@ -9,7 +9,8 @@
  *  - verdicts: the gate (cos ≥ 0.7: 'alike', whatever the score), the margin
  *    ('unsure'), too few crops ('sparse'), too few samples ('unknown');
  *  - windows: ±3 s around the close spell, the spell itself left out;
- *  - the built-in model's settings (PREJUDGE_BUILTIN): no gate, margin 0.2.
+ *  - the built-in model's settings (PREJUDGE_BUILTIN): no gate, margin 0.2;
+ *  - several cameras (`combinePrejudges`): the mean score of the cameras that can judge.
  *
  * Run:  node tests/test-image-prejudge.mjs
  */
@@ -153,6 +154,36 @@ group('prejudgeReviewRows — rows of a video with one swap');
     // one identity hardly ever cropped together with the other: no separation
     const lone = PJ.prejudgeReviewRows(stream(animals(0, 31), { fps, missing: (f, id) => id === 1 && f > 150 }), rows.slice(0, 1), fps);
     eq(lone.rows[0].verdict, 'unknown', 'fewer than 10 samples show both: unknown');
+}
+
+group('several cameras: combinePrejudges (multi-camera review lists)');
+{
+    const r = (score, cos, verdict) => ({ frame: 100, startFrame: 90, identityA: 0, identityB: 1, score, cos, verdict });
+    const cam = (rows, pairs) => ({ rows, pairs: pairs || [{ identityA: 0, identityB: 1, cos: rows[0].cos, agree: 0.9, samples: 20 }], gateCos: 0.7, margin: 0.1, windowSeconds: 3 });
+    const one = cam([r(-0.5, 0.2, 'swapped')]);
+    ok(PJ.combinePrejudges([one]) === one, 'one camera: its own result, unchanged (single-camera sessions)');
+    eq(PJ.combinePrejudges([]), null, 'no camera: null');
+    // the scores of the cameras that can judge are averaged; one that finds the animals alike is left out
+    let c = PJ.combinePrejudges([cam([r(-0.4, 0.2, 'swapped')]), cam([r(-0.1, 0.3, 'unsure')]), cam([r(0.9, 0.9, 'alike')])]);
+    ok(Math.abs(c.rows[0].score - -0.25) < 1e-12 && c.rows[0].verdict === 'swapped' && c.rows[0].cameras === 2,
+        `two cameras judge (-0.4, -0.1 → -0.25, swapped), the look-alike one does not (${JSON.stringify(c.rows[0])})`);
+    ok(Math.abs(c.rows[0].cos - 0.25) < 1e-12, 'cos: the judging cameras\' mean');
+    eq(c.pairs[0].cos, 0.2, 'a pair\'s separation: the best camera\'s');
+    eq(c.pairs[0].samples, 60, '...and its samples summed');
+    c = PJ.combinePrejudges([cam([r(0.05, 0.2, 'unsure')]), cam([r(0.1, 0.4, 'unsure')])]);
+    eq(c.rows[0].verdict, 'unsure', 'a mean within the margin: unsure');
+    c = PJ.combinePrejudges([cam([r(0.5, 0.8, 'alike')]), cam([r(null, 0.3, 'sparse')])]);
+    ok(c.rows[0].verdict === 'alike' && c.rows[0].score === null && c.rows[0].cos === 0.8, 'no camera can judge, one finds them alike: alike');
+    c = PJ.combinePrejudges([cam([r(null, 0.3, 'sparse')]), cam([r(null, null, 'unknown')])]);
+    eq(c.rows[0].verdict, 'sparse', 'no camera can judge, one has too few crops: sparse');
+    c = PJ.combinePrejudges([cam([r(-0.3, null, 'swapped')]), cam([r(-0.5, null, 'swapped')])], PJ.prejudgeSettings(true));
+    ok(Math.abs(c.rows[0].score - -0.4) < 1e-12 && c.rows[0].verdict === 'swapped', 'the built-in model (no gate, margin 0.2): every camera with a score judges');
+    // real per-camera results: a swap seen by two cameras of distinct animals
+    const fps = 30, rows = [{ frame: 2420, startFrame: 2400, identityA: 0, identityB: 1 }];
+    const a = PJ.prejudgeReviewRows(stream(animals(0, 31), { fps, swapAt: 2400, gaps: [[2380, 2420]] }), rows, fps);
+    const b = PJ.prejudgeReviewRows(stream(animals(0, 41), { fps, swapAt: 2400, gaps: [[2380, 2420]] }), rows, fps);
+    c = PJ.combinePrejudges([a, b]);
+    ok(c.rows[0].verdict === 'swapped' && c.cameras === 2, `two cameras' streams of the same swap: swapped (${c.rows[0].score.toFixed(3)})`);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

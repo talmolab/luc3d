@@ -50,6 +50,10 @@
  * 1 miss, ~3 in 4 unsure (its crops are the app's, the study's the training
  * script's; margin 0.25: 7 / 1, 0.3: 4 / 0). The About text quotes these.
  *
+ * On several cameras (multi-camera Track All's review list, pose/multi-camera-review.js) each camera is
+ * pre-judged on its own crops and `combinePrejudges` averages the scores of the cameras that can judge a row:
+ * not measured on multi-camera recordings.
+ *
  * Pure — no DOM, no app state, no imports.
  */
 
@@ -208,6 +212,54 @@ export function prejudgeReviewRows(emb, rows, fps, opts) {
                  verdict: prejudgeVerdict(sep, score, o) };
     });
     return { rows: out, pairs: pairs, gateCos: o.gateCos, margin: o.margin, windowSeconds: o.windowSeconds };
+}
+
+/**
+ * Several cameras' pre-judges of the same rows (each `prejudgeReviewRows` on one camera's crops, rows in the same
+ * order) as one: per row, the mean score of the cameras that can judge it (a score, and with a gate, a pair
+ * separation below `gateCos`), and the verdict from that mean with `margin` (no camera can: 'alike' if one found
+ * the animals too alike, else 'sparse' if one had a separation but too few crops, else 'unknown'). Each camera is
+ * judged as the pre-judge was calibrated, on one camera; the averaging itself is not measured. A pair's `cos` is
+ * the best (lowest) camera's, `samples` the sum.
+ * @param {Array<object>} perCam  prejudgeReviewRows results
+ * @returns {object} the same shape, plus `cameras` (how many judged) per row and overall
+ */
+export function combinePrejudges(perCam, opts) {
+    var o = Object.assign({}, PREJUDGE_DEFAULTS, opts || {});
+    if (!perCam.length) return null;
+    if (perCam.length === 1) return perCam[0];
+    var rows = perCam[0].rows.map(function (r0, i) {
+        var use = [], verdicts = [];
+        perCam.forEach(function (pc) {
+            var r = pc.rows[i];
+            verdicts.push(r.verdict);
+            if (r.score != null && (o.gateCos == null || (r.cos != null && r.cos < o.gateCos))) use.push(r);
+        });
+        var score = null, cos = null, verdict;
+        if (use.length) {
+            score = use.reduce(function (a, r) { return a + r.score; }, 0) / use.length;
+            var cs = use.filter(function (r) { return r.cos != null; });
+            cos = cs.length ? cs.reduce(function (a, r) { return a + r.cos; }, 0) / cs.length : null;
+            verdict = score < -o.margin ? 'swapped' : score > o.margin ? 'kept' : 'unsure';
+        } else {
+            var alike = perCam.map(function (pc) { return pc.rows[i]; }).filter(function (r) { return r.verdict === 'alike'; });
+            verdict = alike.length ? 'alike' : verdicts.indexOf('sparse') >= 0 ? 'sparse' : 'unknown';
+            if (alike.length) cos = Math.min.apply(null, alike.map(function (r) { return r.cos; }));
+        }
+        return { frame: r0.frame, startFrame: r0.startFrame, identityA: r0.identityA, identityB: r0.identityB,
+                 score: score, cos: cos, verdict: verdict, cameras: use.length };
+    });
+    var byPair = new Map();
+    perCam.forEach(function (pc) {
+        pc.pairs.forEach(function (q) {
+            var k = q.identityA + ':' + q.identityB, b = byPair.get(k);
+            if (!b) { byPair.set(k, Object.assign({}, q)); return; }
+            b.samples += q.samples;
+            if (q.cos != null && (b.cos == null || q.cos < b.cos)) { b.cos = q.cos; b.agree = q.agree; }
+        });
+    });
+    return { rows: rows, pairs: Array.from(byPair.values()), gateCos: o.gateCos, margin: o.margin, windowSeconds: o.windowSeconds,
+             cameras: perCam.length };
 }
 
 /** The pre-judge row for a review-list row (same frame and pair, either order), or null. */

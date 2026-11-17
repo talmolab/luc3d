@@ -141,6 +141,15 @@ A session with ONE camera (File ▸ Load SLP, or Load Single Session Folder on o
 
 Tests: `test-sleap-tracker.mjs`, `test-single-camera-tracking.mjs`, `test-id-switch-check.mjs`, e2e `single-camera-track-all`, `single-camera-folder-load`.
 
+## Multi-camera Track All leaves a review list too
+
+`pose/multi-camera-review.js` (`multiCameraReview`, after the tail-mark pass; Track All only, never a range): 'crossing' rows where two identities' 3D centroids nearly coincide ((swapped − kept)/(swapped + kept) < 0.01 against each one's previous sighting ≤ 5 frames back, 3 s clusters per pair), plus the start and end check rows (`videoStartRow`/`videoEndRow` on `identityTrack`). Same tab, Fix (identities, every view), Earlier encounter (`pairEncounters3d`, node-name-free 3D body length) and pre-judge as one camera.
+- Measured on the 22 proofread SLAP sessions (app's own list, simulated reviewer): 88.21% → 99.69%, 1.03 rows a minute, 11 better, none worse. Every 3D encounter as a row: 8.6 a minute (encounters cover 45–97% of those videos).
+- The pre-judge on several cameras judges each camera on its own and averages (`combinePrejudges`): NOT measured on multi-camera data — say so wherever it is quoted.
+- Every multi-camera Track All with ≥ 2 identities now has a list (at least the two check rows), so the summary's primary is Review the list, with Triangulation Wizard… beside it; a reopened summary recounts the list (Clear → back to Triangulation).
+
+Tests: `test-multi-camera-review.mjs`, `test-image-prejudge.mjs`, e2e `multi-camera-review-list`, `track-all-summary`.
+
 ## Per-node prediction scores
 
 `ui/node-tooltip.js` shows a node's name and, on a prediction, that node's score, with a stripe in its skeleton colour. Take the colour from `getGroupColor`/`unlinkedBaseColor` (`ui/overlays.js`); never compute it separately.

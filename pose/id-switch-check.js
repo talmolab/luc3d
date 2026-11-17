@@ -47,7 +47,7 @@
  */
 
 import { readPoint3d } from './pose-data.js';
-import { prejudgeReviewRows, unitVector } from './image-prejudge.js';
+import { prejudgeReviewRows, combinePrejudges, unitVector } from './image-prejudge.js';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
@@ -104,7 +104,7 @@ export const IMAGE_CHECK_DEFAULTS = Object.assign({}, SWITCH_CHECK_DEFAULTS, {
                            // return at least one crop of it? (from the keypoints, before decoding; lets planImageSamples
                            // plan in one round what missing crops would otherwise make it ask for in a second)
     releaseFrames: null,   // optional: () — called when done (or cancelled)
-    reviewRows: null,      // optional: single-camera Track All's review rows [{frame, startFrame, identityA, identityB}]:
+    reviewRows: null,      // optional: Track All's review rows [{frame, startFrame, identityA, identityB}]:
                            // embeds EVERY image sample and returns `prejudge` (pose/image-prejudge.js) for them
     prejudge: null,        // optional: PREJUDGE_DEFAULTS overrides
 });
@@ -1043,21 +1043,25 @@ export async function checkImageSwitches(session, opts) {
 
 /**
  * The review list's pre-judge (pose/image-prejudge.js) from the image check's crops: per embedded image
- * sample, each identity's unit vector (the first camera that has one; a single-camera session has one).
- * Before the scoring, which reads the same vectors.
+ * sample, each identity's unit vector, one camera at a time — a single-camera session has one; on several
+ * cameras each is pre-judged on its own and `combinePrejudges` averages them. Before the scoring, which reads
+ * the same vectors.
  */
 function prejudgeFromEmbeddings(grid, perCam, every, st, o) {
-    var K = grid.K, vec = new Map();
-    perCam.forEach(function (v) {
-        for (var r = 0; r < v.rows.length; r++) if (!vec.has(v.rows[r])) { var u = unitVector(v.vecs[r]); if (u) vec.set(v.rows[r], u); }
-    });
+    var K = grid.K;
     var kOf = new Map(grid.idents.map(function (id, k) { return [id.id, k]; }));
     var sampI = [], frames = [];
     for (var i = 0; i < grid.T; i += every) if (st.embedded[i]) { sampI.push(i); frames.push(grid.frames[i]); }
-    return prejudgeReviewRows({
-        frames: frames,
-        vector: function (j, id) { var k = kOf.get(id); return k == null ? null : (vec.get(sampI[j] * K + k) || null); },
-    }, o.reviewRows, o.fps, o.prejudge);
+    var results = [];
+    perCam.forEach(function (v) {
+        var vec = new Map();
+        for (var r = 0; r < v.rows.length; r++) if (!vec.has(v.rows[r])) { var u = unitVector(v.vecs[r]); if (u) vec.set(v.rows[r], u); }
+        results.push(prejudgeReviewRows({
+            frames: frames,
+            vector: function (j, id) { var k = kOf.get(id); return k == null ? null : (vec.get(sampI[j] * K + k) || null); },
+        }, o.reviewRows, o.fps, o.prejudge));
+    });
+    return combinePrejudges(results, o.prejudge);
 }
 
 // ---------------------------------------------------------------------------
