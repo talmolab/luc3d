@@ -23,8 +23,9 @@
 // Depends on: ui/app-state.js (state), pose/lazy-residency.js
 // (hydrateFrameMembers2d, releaseFrameMembers2d).
 
-import { state } from './app-state.js?v=42dd9911fe36';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=42dd9911fe36';
+import { state } from './app-state.js?v=7f95d2e3204f';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=7f95d2e3204f';
+import { keyframeIndices } from './image-embedder.js?v=7f95d2e3204f';
 
 /** Sample images per identity. */
 export const GALLERY_SAMPLES = 5;
@@ -177,11 +178,16 @@ function isolationAt(session, frame, identityId, own) {
  * With more than `k` tracked frames there are always `k` samples: slots that a
  * long gap left without one of their own are filled evenly over the tracked frames.
  *
+ * `opts.keyframes` (the video's keyframe indices, increasing): a slot's
+ * candidates are then only its tracked KEYFRAMES, when it has any — the same
+ * rules among fewer frames. A keyframe decodes as one frame; any other frame
+ * decodes from the keyframe before it (up to 249 frames at a keyframe every 250).
+ *
  * @param {Object} session
  * @param {{frames: Int32Array, xyz: Float64Array}} track  from `identityTracks`
  * @param {number} identityId
  * @param {number} [k]  GALLERY_SAMPLES
- * @param {{maxCandidates?: number}} [opts]
+ * @param {{maxCandidates?: number, keyframes?: ArrayLike<number>}} [opts]
  * @returns {number[]} ascending, distinct
  */
 export function pickSampleFrames(session, track, identityId, k, opts) {
@@ -193,6 +199,19 @@ export function pickSampleFrames(session, track, identityId, k, opts) {
     var lo = F[0], hi = F[n - 1], span = hi - lo, out = [];
     // index of the first tracked frame >= f
     var lower = function (f) { var a = 0, b = n; while (a < b) { var m = (a + b) >> 1; if (F[m] < f) a = m + 1; else b = m; } return a; };
+    var KF = opts && opts.keyframes && opts.keyframes.length ? opts.keyframes : null;
+    // the tracked frames in [a0, a1) that are keyframes, as indices into F
+    var trackedKeyframes = function (a0, a1) {
+        var out2 = [];
+        if (!KF || a1 <= a0) return out2;
+        var x = 0, y = KF.length, f0 = F[a0];
+        while (x < y) { var m = (x + y) >> 1; if (KF[m] < f0) x = m + 1; else y = m; }
+        for (; x < KF.length && KF[x] <= F[a1 - 1]; x++) {
+            var at = lower(KF[x]);
+            if (at < a1 && F[at] === KF[x]) out2.push(at);
+        }
+        return out2;
+    };
     for (var s = 0; s < k; s++) {
         var a0 = lower(lo + span * (s + 0.2) / k), a1 = lower(lo + span * (s + 0.8) / k);
         if (s === k - 1 && a1 >= n) a1 = n;
@@ -200,9 +219,13 @@ export function pickSampleFrames(session, track, identityId, k, opts) {
             a0 = Math.min(n - 1, lower(lo + span * (s + 0.5) / k)); a1 = a0 + 1;
         }
         var target = lo + span * (s + 0.5) / k;
-        var step = Math.max(1, Math.floor((a1 - a0) / maxCand));
+        // the candidates: the slot's tracked keyframes when it has any, else its tracked frames
+        var cand = trackedKeyframes(a0, a1);
+        if (!cand.length) { cand = []; for (var c0 = a0; c0 < a1; c0++) cand.push(c0); }
+        var step = Math.max(1, Math.floor(cand.length / maxCand));
         var near = -1, nearDist = Infinity, most = -1, mostIso = -1;
-        for (var i = a0; i < a1; i += step) {
+        for (var ci = 0; ci < cand.length; ci += step) {
+            var i = cand[ci];
             var own = [track.xyz[3 * i], track.xyz[3 * i + 1], track.xyz[3 * i + 2]];
             var iso = isolationAt(session, F[i], identityId, own), dist = Math.abs(F[i] - target);
             var g = identityGroupAt(session, F[i], identityId);
@@ -422,6 +445,21 @@ function hiDpiCanvas(w, h, className) {
     c.style.width = w + 'px'; c.style.height = h + 'px';
     c.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
     return c;
+}
+
+/** How long the gallery waits for a video's keyframes before planning without them. */
+export const SAMPLE_KEYFRAMES_WAIT_MS = 1500;
+
+/**
+ * A view's keyframe indices for `pickSampleFrames`, or null: no decoder, an
+ * unreadable index (`keyframeIndices`, read once per video and cached), or not
+ * within SAMPLE_KEYFRAMES_WAIT_MS.
+ */
+function sampleKeyframes(view) {
+    if (!view || !view.decoder) return Promise.resolve(null);
+    var read = Promise.resolve().then(function () { return keyframeIndices(view.decoder); }).catch(function () { return null; });
+    var late = new Promise(function (res) { setTimeout(function () { res(null); }, SAMPLE_KEYFRAMES_WAIT_MS); });
+    return Promise.race([read, late]);
 }
 
 function viewFor(cam) {
@@ -720,8 +758,8 @@ export function renderIdentityGallery(host, session, opts) {
     // ---- sample images -----------------------------------------------------
     // A row's samples are planned at once (frame, camera, crop: no video needed);
     // each that needs an image becomes a job, fetched by `fetchSamples`.
-    var planRow = function (r) {
-        var frames = pickSampleFrames(session, tracks.get(r.id.id), r.id.id, GALLERY_SAMPLES);
+    var planRow = function (r, keyframes) {
+        var frames = pickSampleFrames(session, tracks.get(r.id.id), r.id.id, GALLERY_SAMPLES, { keyframes: keyframes });
         var used = new Map(), jobs = [];
         for (var s = 0; s < r.slots.length; s++) {
             var fig = r.slots[s], frame = frames[s];
@@ -821,9 +859,15 @@ export function renderIdentityGallery(host, session, opts) {
         if (!alive()) return;
         await drawMaps(mapCam);
         if (!alive()) return;
+        // The samples land on keyframes where they can (one decoded frame each,
+        // not up to a keyframe gap's worth): the keyframes of one camera, read
+        // once per video from its index — campy's cameras share them, and a camera
+        // that did not would only decode slower, never show the wrong frame.
+        var keyframes = await sampleKeyframes(viewFor(mapCam) || (state.views || []).filter(function (v) { return v && v.decoder; })[0]);
+        if (!alive()) return;
         var jobs = [];
         for (var i = 0; i < rows.length; i++) {
-            try { jobs = jobs.concat(planRow(rows[i])); }
+            try { jobs = jobs.concat(planRow(rows[i], keyframes)); }
             catch (e) { console.warn('[identity-gallery] ' + rows[i].id.name + ':', e); }
         }
         await fetchSamples(jobs);
