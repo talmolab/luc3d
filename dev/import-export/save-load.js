@@ -9,53 +9,54 @@ import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
     toBoxedPoints3d, someValidPoint3d, pooledPoints3d,
-} from '../pose/pose-data.js?v=67001d3dc73e';
-import { ensurePlaceholderCameras } from '../pose/placeholder-cameras.js?v=67001d3dc73e';
+} from '../pose/pose-data.js?v=e074a2b5fe63';
+import { ensurePlaceholderCameras } from '../pose/placeholder-cameras.js?v=e074a2b5fe63';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
-} from '../pose/triangulation.js?v=67001d3dc73e';
-import { OnDemandVideoDecoder } from '../loading/video.js?v=67001d3dc73e';
-import { createDemoSkeleton } from '../demo-data.js?v=67001d3dc73e';
+} from '../pose/triangulation.js?v=e074a2b5fe63';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=e074a2b5fe63';
+import { createDemoSkeleton } from '../demo-data.js?v=e074a2b5fe63';
 import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
-} from './file-io.js?v=67001d3dc73e';
+} from './file-io.js?v=e074a2b5fe63';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setInteractionManager,
-} from '../ui/app-state.js?v=67001d3dc73e';
+} from '../ui/app-state.js?v=e074a2b5fe63';
 import {
     autoAssignVideosToCameras, forceVideoSelection, showParentDirMatchSummary,
     forceVideoSelectionWithFolder, folderPickerStartFor, createViewForVideoFile, updateTotalFrames,
     adoptLabeledFrameCount, rebuildVideoController, fitCanvasesToCells,
-} from '../loading/session-loader.js?v=67001d3dc73e';
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=67001d3dc73e';
-import { updateInfoPanel } from '../ui/info-panel.js?v=67001d3dc73e';
+} from '../loading/session-loader.js?v=e074a2b5fe63';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=e074a2b5fe63';
+import { updateInfoPanel } from '../ui/info-panel.js?v=e074a2b5fe63';
 // Pass 3i-3: setupInteraction / setup3DViewport / hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, hideWelcomeOverlay,
-} from '../pose/initialization.js?v=67001d3dc73e';
+} from '../pose/initialization.js?v=e074a2b5fe63';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=67001d3dc73e';
-import { handleLoadSlpFile } from './slp-import.js?v=67001d3dc73e';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=e074a2b5fe63';
+import { handleLoadSlpFile } from './slp-import.js?v=e074a2b5fe63';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
     openProjectWriter, streamSessionIntoWriter, finalizeProjectWriter,
-} from './slp-streaming-write.js?v=67001d3dc73e';
-import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=67001d3dc73e';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=67001d3dc73e';
+} from './slp-streaming-write.js?v=e074a2b5fe63';
+import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=e074a2b5fe63';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=e074a2b5fe63';
 import {
     showLoading, hideLoading, showLoadingProgress, createProgressPacer, yieldToPaint,
-} from '../ui/loading-overlay.js?v=67001d3dc73e';
-import { clearReadout } from '../ui/frame-readout.js?v=67001d3dc73e';
-import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=67001d3dc73e';
-import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adoptSmoothingSource } from './smoothing-metadata.js?v=67001d3dc73e';
-import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=67001d3dc73e';
-import { buildSaveProvenance } from './slp-provenance.js?v=67001d3dc73e';
-import { withCompactSave } from './compact-save.js?v=67001d3dc73e';
-import { showCompactSaveModal } from '../ui/compact-save-modal.js?v=67001d3dc73e';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=67001d3dc73e';
-import { saveStartFolder } from '../loading/recording-folder.js?v=67001d3dc73e';
+} from '../ui/loading-overlay.js?v=e074a2b5fe63';
+import { clearReadout } from '../ui/frame-readout.js?v=e074a2b5fe63';
+import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=e074a2b5fe63';
+import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adoptSmoothingSource } from './smoothing-metadata.js?v=e074a2b5fe63';
+import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=e074a2b5fe63';
+import { buildSaveProvenance } from './slp-provenance.js?v=e074a2b5fe63';
+import { withCompactSave } from './compact-save.js?v=e074a2b5fe63';
+import { showCompactSaveModal } from '../ui/compact-save-modal.js?v=e074a2b5fe63';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=e074a2b5fe63';
+import { saveStartFolder } from '../loading/recording-folder.js?v=e074a2b5fe63';
+import { setPageDirty, setPageProject } from '../ui/page-title.js?v=e074a2b5fe63';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -131,6 +132,7 @@ export function newProject(force) {
     // Drop the "imported 3D points without a session" marker — a full reset
     // erases any such overlay (including the skeleton) by design.
     state.has3dImportWithoutSession = false;
+    setPageProject(null);
 
     // Detach interaction handlers from old canvases
     if (interactionManager) {
@@ -363,7 +365,7 @@ function serializeSessionFrames(session) {
 async function ensureSleapIO() {
     if (window.SleapIO) return window.SleapIO;
     // Relative to THIS module (import-export/), not the page — hence `../`.
-    var mod = await import('../lib/sleap-io/index.browser.js?v=67001d3dc73e');
+    var mod = await import('../lib/sleap-io/index.browser.js?v=e074a2b5fe63');
     window.SleapIO = mod;
     return mod;
 }
@@ -375,7 +377,7 @@ export function markDirty() {
     if (state.session) state.session.isDirty = true;
     if (state.isDirty) return;
     state.isDirty = true;
-    document.title = '\u2022 LUC3D';
+    setPageDirty(true);
     var saveDot = document.getElementById('saveDirtyDot');
     if (saveDot) saveDot.style.display = 'inline-block';
 }
@@ -389,7 +391,7 @@ export function clearDirty() {
     } else if (state.session) {
         state.session.isDirty = false;
     }
-    document.title = 'LUC3D';
+    setPageDirty(false);
     var saveDot = document.getElementById('saveDirtyDot');
     if (saveDot) saveDot.style.display = 'none';
 }
@@ -1200,6 +1202,8 @@ export async function quickSave(previousFile) {
         state.isSaving = false;
         hideLoading();
         clearDirty();
+        // The project is now the file it was saved to (Save As retitles the tab).
+        if (state.slpFileHandle && state.slpFileHandle.name) setPageProject(state.slpFileHandle.name);
         var sizeMB = (bytesWritten / 1024 / 1024).toFixed(1);
         setStatus('Saved (' + sizeMB + ' MB)', 'success');
     } catch (err) {
@@ -1614,7 +1618,7 @@ export async function handleLoadProject(prePickedFile) {
             var LARGE_SLP_BYTES = 200 * 1024 * 1024;
             if (ext === 'slp' && file.size > LARGE_SLP_BYTES) {
                 // Dynamic import avoids a session-loader ↔ save-load import cycle.
-                var _sl = await import('../loading/session-loader.js?v=67001d3dc73e');
+                var _sl = await import('../loading/session-loader.js?v=e074a2b5fe63');
                 if (_sl && typeof _sl.handleLoadProjectSlpLazy === 'function') {
                     return _sl.handleLoadProjectSlpLazy(file);
                 }
@@ -1641,6 +1645,7 @@ export async function handleLoadProject(prePickedFile) {
         // `readPlaneMetadata` only restores into an EMPTY model, so without
         // this the previous project's planes survive and this file's are lost.
         resetPlaneState();
+        setPageProject(file.name);
         var cameras;
         if (data.version === 3) {
             cameras = _restoreProjectV3(data);
