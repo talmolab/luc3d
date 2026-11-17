@@ -168,6 +168,13 @@ try {
     }
 
     // ---- 3. timeline rows and Visibility swatches follow the mode ----------------------
+    // Track All closes the timeline, and a closed timeline builds its rows when it is
+    // opened again (Timeline.catchUp): open it, as a user would to look at them.
+    await page.evaluate(async () => {
+        if (document.getElementById('timelineContainer').classList.contains('collapsed')) {
+            (await import('/ui/timeline-controller.js')).toggleTimeline();
+        }
+    });
     const panels = () => page.evaluate(async () => {
         const tl = window.__lucid.timeline;
         const rows = (tl && tl._trackSegments || []).filter(r => r._isTrack && r._trackColored);

@@ -16,7 +16,7 @@
  * Imports only pose/id-switch-check.js (and through it pose/pose-data.js),
  * both DOM-free.
  */
-import { gridFromMessage, scoreSizeGrid } from './id-switch-check.js?v=321d9848a087';
+import { gridFromMessage, scoreSizeGrid } from './id-switch-check.js?v=5b7b81048e0b';
 
 self.onmessage = async function (ev) {
     var m = ev.data;
