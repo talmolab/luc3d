@@ -20,7 +20,7 @@
  *   { type: 'error', message: string }
  */
 
-import * as h5wasm from '../lib/h5wasm/hdf5_hl.js?v=85ddf47d86f7';   // local vendored 0.10.3 ESM
+import * as h5wasm from '../lib/h5wasm/hdf5_hl.js?v=b2238ac361d9';   // local vendored 0.10.3 ESM
 
 var h5wasmReady = false;
 var FS = null;
