@@ -3702,6 +3702,117 @@ button.tri-dropdown-item:disabled {
   top: var(--panel-section-header-height);
 }
 
+/* ---- Memory panel (ui/memory-panel.js) ---- */
+/* Its rows are .session-info-row (display: flex), which would beat [hidden]. */
+#tabMemory [hidden] {
+  display: none;
+}
+
+.memory-heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.memory-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.memory-now {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-now-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.memory-plot {
+  display: block;
+  width: 100%;
+  height: 90px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: visible;
+}
+
+.memory-plot-base {
+  stroke: var(--border-light);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.memory-plot-limit {
+  stroke: var(--error-color);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.memory-plot-used,
+.memory-plot-ua {
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.memory-plot-used {
+  stroke: var(--accent);
+}
+
+.memory-plot-ua {
+  stroke: var(--warning-color);
+}
+
+.memory-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.memory-key {
+  display: inline-block;
+  width: 12px;
+  height: 0;
+  border-top: 2px solid var(--accent);
+}
+
+.memory-key-limit {
+  margin-left: 8px;
+  border-top: 1px dashed var(--error-color);
+}
+
+.memory-note {
+  margin: 4px 0 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--warning-color);
+}
+
+.memory-note code {
+  white-space: nowrap;
+  font-size: 10px;
+}
+
 /* ---- Data Tables ---- */
 .data-table {
   width: 100%;

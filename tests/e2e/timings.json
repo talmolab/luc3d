@@ -64,6 +64,7 @@
   "mediabunny-bframe-decode-order.mjs": 2.6,
   "mediabunny-fallback-status-warning.mjs": 2.1,
   "mediabunny-frame-index-metadata-only.mjs": 1.9,
+  "memory-panel.mjs": 25.0,
   "mesh-membership-highlight.mjs": 2.7,
   "mesh-object-export.mjs": 2.6,
   "mesh-object-roundtrip.mjs": 2.1,

@@ -107,6 +107,8 @@ helpers used by every load path. Calls `init()` at module-load.
 - `../ui/panel-rail.js` — `setupPanelRail({ toggleInfoPanel })` (builds the
   right-edge icon rail and wraps each panel in its collapsible section; `toggleInfoPanel` from `../ui/ui-wiring.js` is handed
   in so the rail stays free of that import).
+- `../ui/memory-panel.js` — `setupMemoryPanel`, right after `setupPanelRail`
+  (builds `#tabMemory` and follows the rail to sample only while it is seen).
 - `../ui/info-panel.js` — `setupSkeletonEditing`,
   `setupVideosTab` (the Videos tab's Load/Remove buttons, wired once here
   because `updateInfoPanel` returns early with no session),
@@ -12882,7 +12884,7 @@ actually stops the corresponding rendering / data work.
 
 **Purpose.** The right-edge icon rail and the stack of collapsible panel
 sections it drives (Instances, Visibility, ID Switches, Videos, Cameras,
-Skeleton, Session); it also shows/hides the info panel. It replaced the
+Skeleton, Session, Memory); it also shows/hides the info panel. It replaced the
 horizontal tab bar. Modelled on sleap-app's sidebar
 (`src/components/layout/AppShell.tsx` `Sidebar`; rules in `appStore.ts`
 `togglePanelOpen` / `openPanel` / `closePanel` / `toggleSectionCollapsed`) in
@@ -12928,6 +12930,11 @@ its default multi-panel (accordion) mode.
   covers the panel's right edge until the pointer leaves it.
 - The rail is a sibling AFTER `#infoPanelWrapper` in `.main-content`, so a
   collapsed wrapper still measures 0 wide and `isInfoPanelVisible` is unchanged.
+- **Panels that work only while seen** (the Memory panel samples once a
+  second) register `onPanelRailChange(fn)`; `syncPanelRail` calls every
+  listener after each repaint (open, fold, close, info panel shown/hidden,
+  Define Planes lock), and the listener asks `isPanelOnScreen(tabId)`
+  (expanded, info panel shown, not locked; scrolled out of view still counts).
 - Open / folded sections are display taste:
   `localStorage.lucidPanelRailSections` (`{open, folded}`, best-effort),
   restored once in `setupPanelRail`; whether the info panel is shown is not
@@ -12939,7 +12946,8 @@ its default multi-panel (accordion) mode.
 `clickPanelRailTab(tabId)` (the rail-click rule), `togglePanelSection(tabId)`
 (header chevron), `closePanelTab(tabId)` (header ✕), `getOpenPanelTabs()`
 (`[{tab, expanded}]` in stack order), `setPanelRailLocked(on)` (Define Planes
-disables the panel icons; the top button stays live), `syncPanelRail()`.
+disables the panel icons; the top button stays live), `syncPanelRail()`,
+`onPanelRailChange(fn)` (returns an unsubscribe), `isPanelOnScreen(tabId)`.
 
 **Imports from project modules.** `ui/panel-rail-icons.js` only.
 `toggleInfoPanel` is passed in, because `ui/id-switch-modal.js` and
@@ -12948,7 +12956,8 @@ cycle.
 
 **Imported by.** `pose/initialization.js` (`setupPanelRail`),
 `ui/id-switch-modal.js` (`showPanelTab` in `openIdSwitchPanel`),
-`ui/plane-definition.js` (`setPanelRailLocked` in `setPanelPlaneMode`).
+`ui/plane-definition.js` (`setPanelRailLocked` in `setPanelPlaneMode`),
+`ui/memory-panel.js` (`onPanelRailChange`, `isPanelOnScreen`).
 
 **User-facing features.** The icon rail on the window's right edge and the
 collapsible panel sections. Covered by `tests/e2e/panel-rail.mjs`.
@@ -12960,7 +12969,7 @@ release sleap-app uses through `lucide-react`; ISC, notice in the file header
 and `lib/LICENSES.txt`). sleap-app's glyph wherever the panel matches:
 Instances = Users, Visibility = Eye (sleap-app's View panel), Videos = Film,
 Skeleton = Bone. Others: ID Switches = ArrowLeftRight (two opposing arrows),
-Cameras = Camera, Session = FolderTree, plus PanelRightClose / PanelRightOpen
+Cameras = Camera, Session = FolderTree, Memory = MemoryStick, plus PanelRightClose / PanelRightOpen
 and the section headers' ChevronDown / ChevronRight / X (sleap-app's).
 Inline strings: no fetch, so offline mode and the version stamp are unaffected.
 
@@ -12970,6 +12979,66 @@ throws on an unknown name).
 
 **Imports from project modules.** None (leaf). **Imported by.**
 `ui/panel-rail.js`.
+
+### ui/memory-panel.js
+
+**Purpose.** The Memory panel (`#tabMemory`, last on the right-edge rail): the
+page's JavaScript heap (`performance.memory.usedJSHeapSize`) over the last
+five minutes as an inline-SVG line, the heap limit (`jsHeapSizeLimit`) as a
+dashed reference line, the current reading as a `toLocaleString('en-US')` MB
+number, peak / allocated / limit rows, and what the project holds (frames in
+memory of the project's frames, `(lazy)` when lazy; frames with instance
+groups, the size of the frame-keyed `instanceGroups`; sessions). An ⓘ says what the number leaves out (workers, video decoding,
+Chrome's GPU and other processes) and that typed arrays count, so it can read
+above the ~4 GB cap.
+- **Samples once a second ONLY while on screen** (`onPanelRailChange` →
+  `isPanelOnScreen`): folded, closed, info panel hidden or Define Planes open,
+  the interval is cleared. A sample reads `performance.memory` and Map sizes
+  (`projectCounts`) and rewrites a few attributes: never a walk over frames,
+  so it cannot stall playback, Track All or Triangulate All. A gap in sampling
+  is a gap in the line.
+- **Chrome rounds `performance.memory`** unless started with
+  `--enable-precise-memory-info`: 100 fixed sizes, multiples of 100,000 bytes,
+  capped near 4 GB, refreshed every 20 minutes (Chromium `HeapSizeCache`).
+  `isBucketizedHeap` spots it and the panel says so with the flag to use.
+- **Firefox / Safari** (no `performance.memory`): "Not available in this
+  browser" instead of the plot; the project rows still update.
+- **`measureUserAgentSpecificMemory()`** (whole page, workers included) only
+  where `crossOriginIsolated`: at most every 10 s, one call in flight, shown as
+  two rows and an orange line. LUCID sends no COOP/COEP headers, so it is off
+  on every deployed channel and under `server.py`.
+- Samples live in a `MemoryRing` in memory only: nothing in the `.slp` or
+  `localStorage` (the rail remembers only whether the panel is open).
+
+**Key exports.** `setupMemoryPanel()` (once, after `setupPanelRail`),
+`syncMemorySampling()`, `MEMORY_INFO_TEXT`. Test hook
+`window.__lucidMemoryPanel` (`isSampling`, `samplesTaken`, `samples`).
+
+**Imports from project modules.** `ui/panel-rail.js` (`onPanelRailChange`,
+`isPanelOnScreen`), `ui/info-tip.js` (`setInfoTip`, `ICON_INFO`),
+`ui/app-state.js` (`state`), `ui/memory-plot.js`.
+
+**Imported by.** `pose/initialization.js`.
+
+**User-facing features.** Memory panel. Tests: `tests/e2e/memory-panel.mjs`,
+`tests/test-memory-plot.mjs`.
+
+### ui/memory-plot.js
+
+**Purpose.** The DOM-free half of the Memory panel, import-free for Node tests:
+`MemoryRing` (fixed-capacity sample ring, oldest first), `isBucketizedHeap` /
+`readHeap` (Chrome's `performance.memory`, null elsewhere),
+`summarizeUaMemory` (whole page + dedicated-worker bytes),
+`projectCounts(sessions)` (Map sizes and `lazyLoader.nFrames` only),
+`formatMB`, and `plotGeometry(samples, {width, height, now, windowMs, limit})`
+(SVG path data; y from 0 to max(limit, 1.1 x peak), so the limit line is
+always drawn; a step over `MEMORY_GAP_MS` breaks the line).
+
+**Key exports.** The above, plus `MEMORY_SAMPLE_MS` (1 s), `MEMORY_WINDOW_MS`
+(5 min), `MEMORY_RING_CAPACITY` (360), `MEMORY_GAP_MS`, `UA_MEMORY_EVERY_MS`.
+
+**Imports from project modules.** None (leaf). **Imported by.**
+`ui/memory-panel.js`, `tests/test-memory-plot.mjs`.
 
 ---
 
