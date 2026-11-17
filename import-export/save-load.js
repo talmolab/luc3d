@@ -154,6 +154,8 @@ export function newProject(force) {
 
     // Clear session and annotation data
     state.session = null;
+    // File ▸ Save must not write the new project over the old one's file.
+    state.slpFileHandle = null;
     state.currentFrame = 0;
     state.totalFrames = 0;
     state.fps = 30;
@@ -1586,7 +1588,14 @@ export function saveProject() {
     }
 }
 
-export async function handleLoadProject(prePickedFile) {
+/**
+ * Open a project file (`.slp`, `.h5` or project `.json`); without one, pick it.
+ * @param {File} [prePickedFile]
+ * @param {?FileSystemFileHandle} [fileHandle]  the `.slp`'s own handle: File ▸ Save
+ *   writes back to it. Adopted only once the load replaces the open project; any
+ *   other load leaves no handle, so Save asks where to write.
+ */
+export async function handleLoadProject(prePickedFile, fileHandle) {
     try {
         // Warn + reset if 3D points were imported into a skeleton-only project.
         if (!(await ensureNo3dImportBlockingLoad())) {
@@ -1620,10 +1629,10 @@ export async function handleLoadProject(prePickedFile) {
                 // Dynamic import avoids a session-loader ↔ save-load import cycle.
                 var _sl = await import('../loading/session-loader.js');
                 if (_sl && typeof _sl.handleLoadProjectSlpLazy === 'function') {
-                    return _sl.handleLoadProjectSlpLazy(file);
+                    return _sl.handleLoadProjectSlpLazy(file, { fileHandle: fileHandle });
                 }
             }
-            return handleLoadSlpFile(file);
+            return handleLoadSlpFile(file, fileHandle);
         }
 
         var fileSize = file.size;
@@ -1654,6 +1663,8 @@ export async function handleLoadProject(prePickedFile) {
         } else {
             cameras = _restoreLegacySession(data);
         }
+        // A .json project has no .slp to save back to: Save asks where.
+        state.slpFileHandle = null;
 
 
         // 2. Load videos — check if already loaded, only prompt for missing ones

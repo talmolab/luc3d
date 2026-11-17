@@ -2937,10 +2937,12 @@ export function createOpenProgress(fileName) {
 
 /**
  * @param {File} slpFile
- * @param {{folderFiles?: File[], projectName?: string}} [opts]  `folderFiles`: the files of
- *   a folder the user already picked (the session-folder loader); the videos are matched
- *   from them instead of asking for a folder again. `projectName`: the tab's name for the
- *   project (that folder's), else the file's name.
+ * @param {{folderFiles?: File[], projectName?: string, fileHandle?: FileSystemFileHandle}} [opts]
+ *   `folderFiles`: the files of a folder the user already picked (the session-folder
+ *   loader); the videos are matched from them instead of asking for a folder again.
+ *   `projectName`: the tab's name for the project (that folder's), else the file's name.
+ *   `fileHandle`: the `.slp`'s own handle, File ▸ Save's target from then on (none: Save
+ *   asks where to write).
  */
 export async function handleLoadProjectSlpLazy(slpFile, opts) {
     try {
@@ -2982,6 +2984,9 @@ export async function handleLoadProjectSlpLazy(slpFile, opts) {
         }
         state._decoderPoolCold = [];
         state.sessions = [];
+        // Save writes back to THIS file (when opened with its handle), never
+        // the replaced project's.
+        state.slpFileHandle = (opts && opts.fileHandle) || null;
         state.session = null;
         state.views = [];
         state.videoFiles = [];
