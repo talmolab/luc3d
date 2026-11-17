@@ -190,6 +190,33 @@ function median(arr) {
  * @returns {object} grid, or {fail: reason}
  */
 export function buildGrid(session, o, needSize) {
+    var steps = gridSteps(session, o, needSize, 0), r;
+    while (!(r = steps.next()).done) { /* no pauses */ }
+    return r.value;
+}
+
+/** The longest stretch of sampling between two pauses of `buildGridAsync`, in ms. */
+export const GRID_SLICE_MS = 25;
+
+/**
+ * `buildGrid` in slices: `await pause()` whenever sampling has run for
+ * `sliceMs` (default GRID_SLICE_MS; the clock is read every 256 samples), so a
+ * caller can let the page paint (~0.1 s of sampling on an 8-camera,
+ * 108,000-frame project). The same loops in the same order: the same grid.
+ * @param {function(): Promise} pause
+ * @returns {Promise<object>} grid, or {fail: reason}
+ */
+export async function buildGridAsync(session, o, needSize, pause, sliceMs) {
+    var steps = gridSteps(session, o, needSize, sliceMs > 0 ? sliceMs : GRID_SLICE_MS), r;
+    while (!(r = steps.next()).done) await pause();
+    return r.value;
+}
+
+/**
+ * buildGrid's body: yields (to be resumed) whenever `sliceMs` > 0 of sampling
+ * have passed; returns the grid or {fail}.
+ */
+function* gridSteps(session, o, needSize, sliceMs) {
     if (!(typeof o.fps === 'number' && isFinite(o.fps) && o.fps > 0)) return { fail: 'Unknown frame rate (set the fps)' };
     if (!(o.sampleHz > 0)) return { fail: 'sampleHz must be positive' };
     var step = Math.max(1, Math.round(o.fps / o.sampleHz));
@@ -233,7 +260,12 @@ export function buildGrid(session, o, needSize) {
     var xyz = new Float64Array(nodes.length * 3), ok = new Uint8Array(nodes.length), p = [0, 0, 0];
     var bodyPts = new Int32Array(bodyNodes.length);           // the present body nodes, in bodyNodes order
     var seenAt = new Int32Array(K).fill(-1);                   // sample at which identity k was last seen
+    var clock = typeof performance !== 'undefined' ? performance : Date, sliceStart = sliceMs > 0 ? clock.now() : 0;
     for (var i = 0; i < T; i++) {
+        if (sliceMs > 0 && i > 0 && (i & 255) === 0 && clock.now() - sliceStart >= sliceMs) {
+            yield i;
+            sliceStart = clock.now();
+        }
         var groups = session.instanceGroups.get(frames[i]) || [];
         for (var gi = 0; gi < groups.length; gi++) {
             var g = groups[gi], k = kOf.get(g.identityId);
@@ -849,6 +881,40 @@ async function scoreContacts(grid, views, o, every, unitRows, fitProgress, sampl
 
 function failure(reason) { return { ok: false, reason: reason, flags: [], changes: [], encounters: [] }; }
 
+/**
+ * The grid as plain data — what `scoreSizeGrid` reads — for `postMessage` to a
+ * worker (structured clone copies it; the InstanceGroups in `grid.G` stay here).
+ * Inverse: `gridFromMessage`.
+ */
+export function sizeGridMessage(grid) {
+    return {
+        T: grid.T, K: grid.K, B: grid.B, X: grid.X, C: grid.C, frames: grid.frames,
+        idents: grid.idents.map(function (id) { return { id: id.id, name: id.name }; }),
+        bones: grid.bones, sep: grid.sep, step: grid.step, hz: grid.hz, tl: grid.tl,
+    };
+}
+
+/** A grid back from `sizeGridMessage`'s data, with `buildGrid`'s two helpers (and no `G`). */
+export function gridFromMessage(m) {
+    var K = m.K, C = m.C, hz = m.hz;
+    return {
+        T: m.T, K: K, B: m.B, X: m.X, C: C, G: null, frames: m.frames, idents: m.idents,
+        bones: m.bones, sep: m.sep, step: m.step, hz: hz, tl: m.tl,
+        secToSamples: function (sec) { return Math.max(1, Math.ceil(sec * hz)); },
+        hasCen: function (i, k) { return isFinite(C[(i * K + k) * 3]); },
+    };
+}
+
+/** The check's options a worker can receive: the numbers, strings and booleans (not `signal`, callbacks). */
+export function sizeScoreOptions(o) {
+    var out = {};
+    Object.keys(o).forEach(function (key) {
+        var v = o[key];
+        if (v === null || typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean') out[key] = v;
+    });
+    return out;
+}
+
 /** The result both checks return. */
 function result(grid, scored, o, extra) {
     return Object.assign({
@@ -870,13 +936,20 @@ function result(grid, scored, o, extra) {
  * with the bone lengths of every grid sample (each standardised by its spread
  * over the session) as ONE view.
  *
+ * Two halves: sampling the session (`buildGrid`, which needs its InstanceGroups)
+ * and scoring the grid (`scoreSizeGrid`, plain numbers). `opts.scoreGrid(grid, o)`
+ * (async), when given, scores instead — the app hands the grid to a worker
+ * (pose/size-check-pool.js) so the page is not held for it.
+ *
  * Async so a caller can keep the page painting: `opts.onProgress(done, total)`
- * is awaited before the work and at its end (seconds for a 30-minute, 5-animal
- * recording).
+ * is awaited before the scoring and at its end when it runs here (seconds for a
+ * 30-minute, 5-animal recording).
  *
  * @param {Session} session  needs `instanceGroups` (frame -> groups with
  *        `identityId` + flat `points3d`), `identities`, `skeleton.nodes`.
- * @param {object} opts      see SIZE_CHECK_DEFAULTS; `fps` is required. Plus `onProgress`.
+ * @param {object} opts      see SIZE_CHECK_DEFAULTS; `fps` is required. Plus `onProgress`, `scoreGrid`,
+ *        and `pauseSampling` (async; when given, the session is sampled in slices of
+ *        `samplingSliceMs`, default GRID_SLICE_MS, awaiting it between them — `buildGridAsync`).
  * @returns {Promise<object>} {ok, flags, changes ([]), encounters, identities,
  *   bones, sampledFrames, closeDistance, threshold, fps, step, sampleHz, cue} or
  *   {ok: false, reason}. `encounters` = the scored contact episodes: { frame (their
@@ -886,8 +959,24 @@ function result(grid, scored, o, extra) {
  */
 export async function checkSizeSwitches(session, opts) {
     var o = Object.assign({}, SIZE_CHECK_DEFAULTS, opts || {});
-    var grid = buildGrid(session, o, true);
+    var grid = typeof o.pauseSampling === 'function'
+        ? await buildGridAsync(session, o, true, o.pauseSampling, o.samplingSliceMs)
+        : buildGrid(session, o, true);
     if (grid.fail) return failure(grid.fail);
+    if (typeof o.scoreGrid === 'function') return o.scoreGrid(grid, o);
+    return scoreSizeGrid(grid, o);
+}
+
+/**
+ * The size check's second half: standardise every sample's bone lengths, learn
+ * the identity metric and score the contacts — reading only the grid's numbers
+ * and names (never `grid.G`), so it runs the same in a worker on
+ * `gridFromMessage(sizeGridMessage(grid))`.
+ * @param {object} grid  from buildGrid (or gridFromMessage)
+ * @param {object} o     the check's options (SIZE_CHECK_DEFAULTS merged)
+ * @returns {Promise<object>} as checkSizeSwitches
+ */
+export async function scoreSizeGrid(grid, o) {
     var T = grid.T, K = grid.K, B = grid.B, X = grid.X;
     var rows = [], vecs = [], mean = new Float64Array(B), sd = new Float64Array(B);
     for (var row = 0; row < T * K; row++) {

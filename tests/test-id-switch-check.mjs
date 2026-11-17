@@ -121,6 +121,49 @@ group('Clean labels — no possible switches flagged');
     ok(res.encounters.every(e => e.score > 0), `every contact scores positive: each animal keeps its size across it (min ${Math.min(...res.encounters.map(e => e.score)).toFixed(2)})`);
 }
 
+group('Size check scored from a copied grid (what the worker gets) = scored in place');
+{
+    const { session } = buildSession([3, 10]);
+    const here = await SC.checkSizeSwitches(session, { fps: 60 });
+    let handed = null;
+    const viaHook = await SC.checkSizeSwitches(session, { fps: 60, scoreGrid: async (grid, o) => {
+        handed = { grid, o };
+        // what postMessage does to the data: a structured clone, then the worker's side
+        const msg = structuredClone(SC.sizeGridMessage(grid)), opts = structuredClone(SC.sizeScoreOptions(o));
+        return SC.scoreSizeGrid(SC.gridFromMessage(msg), opts);
+    } });
+    ok(handed && handed.grid.G && handed.o.fps === 60, 'scoreGrid is handed the sampled grid and the options');
+    ok(here.ok && here.encounters.length > 0 && here.flags.length > 0, `precondition: the check scores contacts and flags the swaps (${here.encounters.length} contacts, ${here.flags.length} flags)`);
+    ok(JSON.stringify(viaHook) === JSON.stringify(here), 'the copied grid gives the same result, value for value');
+    const opts = SC.sizeScoreOptions({ fps: 60, threshold: -1, name: 'x', on: true, none: null, signal: new AbortController().signal, onProgress: () => {}, scoreGrid: () => {} });
+    eq(JSON.stringify(opts), '{"fps":60,"threshold":-1,"name":"x","on":true,"none":null}', 'sizeScoreOptions keeps numbers, strings, booleans and nulls only');
+    const g = SC.gridFromMessage(structuredClone(SC.sizeGridMessage(handed.grid)));
+    ok(g.G === null && [0, 1, 5, 100].every(i => [0, 1, 2].every(k => g.hasCen(i, k) === handed.grid.hasCen(i, k)))
+        && [0.5, 3, 10].every(sec => g.secToSamples(sec) === handed.grid.secToSamples(sec)), 'gridFromMessage rebuilds hasCen and secToSamples as buildGrid has them, and no G');
+}
+
+group('Sampling in slices (buildGridAsync) = sampling at once');
+{
+    const { session } = buildSession([3, 10]);
+    const o = Object.assign({}, SC.SIZE_CHECK_DEFAULTS, { fps: 60 });
+    const whole = SC.buildGrid(session, o, true);
+    let pauses = 0;
+    const sliced = await SC.buildGridAsync(session, o, true, async () => { pauses++; await null; }, 1e-6);   // a pause every 256 samples
+    const same = (a, b) => a.length === b.length && Array.prototype.every.call(a, (v, i) => Object.is(v, b[i]));
+    ok(pauses >= Math.floor((whole.T - 1) / 256), `it paused every 256 samples (${pauses} pauses for ${whole.T} samples)`);
+    ok(same(sliced.X, whole.X) && same(sliced.C, whole.C) && same(sliced.G, whole.G) && same(sliced.frames, whole.frames)
+        && Object.is(sliced.sep, whole.sep) && JSON.stringify(sliced.tl) === JSON.stringify(whole.tl), 'the same grid, value for value');
+    let none = 0;
+    await SC.buildGridAsync(session, o, true, async () => { none++; }, 60000);
+    eq(none, 0, 'no pause when a slice is long enough for all of it');
+    const here = await SC.checkSizeSwitches(session, { fps: 60 });
+    let checkPauses = 0;
+    const slicedCheck = await SC.checkSizeSwitches(session, { fps: 60, pauseSampling: async () => { checkPauses++; }, samplingSliceMs: 1e-6 });
+    ok(checkPauses > 0 && JSON.stringify(slicedCheck) === JSON.stringify(here), `checkSizeSwitches with pauseSampling: the same result (${checkPauses} pauses)`);
+    const fail = await SC.buildGridAsync(session, Object.assign({}, o, { fps: 0 }), true, async () => {});
+    ok(fail.fail && /frame rate/.test(fail.fail), 'a refusal comes back the same way (' + fail.fail + ')');
+}
+
 async function switchCase(SWAP) {
     const { session, events, encounterEnds } = buildSession(SWAP);
     const res = await SC.checkSizeSwitches(session, { fps: 60 });
