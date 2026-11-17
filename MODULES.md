@@ -11250,6 +11250,9 @@ either ID-switch check is run.
   samples stay 40% of a slot apart even in a crowded cage. A gap wider than a
   slot would send several slots to one frame, so the count is made up evenly over
   the tracked frames: more than five tracked frames always give five samples.
+  With `opts.keyframes`, a slot's candidates are only its tracked keyframes
+  when it has any (same rules among fewer frames); a slot with none picks as
+  without them.
 - `pickCamera` — among the views where the group has a 2D member: the largest
   projection of its 3D (diagonal, with the camera's distortion) inside the image
   is the best, and among the views good enough to use (inside the image, at
@@ -11278,9 +11281,15 @@ then the images, one decoded frame per sample (`view.decoder.getFrame`, drawn
 immediately — a decoder's cached frame may be closed by the next decode). Every
 row's samples are planned first (`planRow`: frame, camera, crop), then fetched one
 queue per decoder (`fetchSamples`): a decoder is asked for one frame at a time, in
-frame order, while the cameras' queues run side by side — 25 samples on an
-8-camera project took 2.3 s one after another, 1.3 s so (local disk; decodes
-slow down when several run at once, and over a network the gain is larger). Tiles
+frame order, while the cameras' queues run side by side. And the samples land on
+KEYFRAMES where they can: before planning, the gallery reads one camera's keyframe
+indices (`keyframeIndices`, `ui/image-embedder.js`: once per video, from the
+container's index; the map camera, else the first with a video; at most
+`SAMPLE_KEYFRAMES_WAIT_MS`, 1.5 s, else none) and hands them to `pickSampleFrames`
+(`opts.keyframes`), so each sample decodes as one frame instead of up to a keyframe
+gap's worth. campy's cameras share keyframes; one that did not would only decode
+slower. 26 samples on an 8-camera project (keyframe every 250 frames): 2.3 s one
+after another, 1.3 s per camera side by side, 0.37 s on keyframes (local disk). Tiles
 fill in as their camera's frames arrive, not row by row. It stops as soon as the
 box is closed (test: e2e `identity-gallery` §5b). Without a video a sample says "no video" and the maps draw on a dark
 ground. The map is a darkened still of the chosen camera with the path coloured
