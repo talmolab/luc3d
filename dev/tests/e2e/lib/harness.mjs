@@ -354,6 +354,43 @@ export async function installCdnCache(context) {
  * `chromium.launch(options)` whose every context (from `newContext` or
  * `newPage`) goes through the disk cache for CDN and model downloads.
  */
+/**
+ * LUC3D_E2E_ANIM_RATE=<rate> (e.g. 0.25): every page plays its CSS
+ * transitions and animations at that rate (DevTools
+ * `Animation.setPlaybackRate`), so a check that reads a size or an opacity
+ * a fixed time after starting a transition — the kind that fails only on a
+ * loaded machine — fails every time. A detector, not a mode to test in.
+ */
+async function slowPageAnimations(page, rate) {
+    try {
+        const cdp = await page.context().newCDPSession(page);
+        await cdp.send('Animation.enable');
+        await cdp.send('Animation.setPlaybackRate', { playbackRate: rate });
+    } catch (e) {
+        process.stderr.write(`[anim-rate] could not slow ${page.url()}: ${e.message}\n`);
+    }
+}
+
+/**
+ * True in the page while a CSS transition or a finite CSS animation is
+ * running anywhere in it (pseudo-elements included). An infinite one (a
+ * spinner) never ends, so it does not count; neither does a paused one.
+ * Shared by `waitForAnimations` and tests that wait inside `page.evaluate`.
+ */
+export const ANIMATING_IN_PAGE = `document.getAnimations().some(a =>
+    (a instanceof CSSTransition || a instanceof CSSAnimation) && a.playState === 'running' &&
+    a.effect && Number.isFinite(a.effect.getComputedTiming().endTime))`;
+
+/**
+ * Wait until no CSS transition or finite CSS animation runs in the page.
+ * Read a size, an opacity or a colour that one is changing only after this,
+ * never after a fixed `waitForTimeout`: under load (files in parallel) a fixed
+ * wait reads the value part-way. `LUC3D_E2E_ANIM_RATE` finds checks that do.
+ */
+export function waitForAnimations(page, timeout = 10000) {
+    return page.waitForFunction('!(' + ANIMATING_IN_PAGE + ')', null, { timeout });
+}
+
 export async function launchBrowser(options) {
     // Imported here so the server half loads without Playwright (Node tests).
     const { chromium } = await import('playwright');
@@ -364,10 +401,12 @@ export async function launchBrowser(options) {
     const browser = await chromium.launch(channel ? { channel, ...options } : options);
     const newContext = browser.newContext.bind(browser);
     const trace = process.env.LUC3D_E2E_TRACE === '1';
+    const animRate = Number(process.env.LUC3D_E2E_ANIM_RATE) || 0;
     browser.newContext = async (opts) => {
         const context = await newContext(opts);
         await installCdnCache(context);
         if (trace) context.on('page', tracePage);
+        if (animRate > 0) context.on('page', page => slowPageAnimations(page, animRate));
         return context;
     };
     if (trace) browser.on('disconnected', () => process.stderr.write('[trace] browser disconnected\n'));
