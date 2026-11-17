@@ -12,11 +12,14 @@
  *
  * Where the page is cross-origin isolated it also asks
  * `performance.measureUserAgentSpecificMemory()` (the whole page, workers
- * included) every 10 s, one call at a time. LUCID sends no COOP/COEP headers,
- * so on the deployed site this stays off.
+ * included) every 10 s, one call at a time; a refused call hides its rows for
+ * good. The deployed site sends no COOP/COEP headers, so this stays off there;
+ * `python3 server.py --isolated` sends them.
  *
- * Chrome without `--enable-precise-memory-info` rounds the heap to one of 100
- * sizes and refreshes it every 20 minutes; the panel says so (`isBucketizedHeap`).
+ * Chrome 157 reports the heap live on an ordinary page. Older Chrome
+ * (Playwright's Chromium 153) without `--enable-precise-memory-info` rounds it
+ * to one of 100 sizes and refreshes it every 20 minutes; the panel says so
+ * (`isBucketizedHeap`).
  *
  * The samples live in a ring in memory (`MemoryRing`): nothing goes to the
  * `.slp` or `localStorage`. Test hook: `window.__lucidMemoryPanel`.
@@ -43,11 +46,13 @@ let _timer = null;
 let _uaBusy = false;
 let _uaLastAt = -Infinity;
 let _ua = null; // { bytes, workers, t }
+/** The browser refused the call (Playwright's Chromium does, isolated or not): stop asking, hide its rows. */
+let _uaRefused = false;
 let _els = null;
 let _samplesTaken = 0;
 
 function uaMemoryAvailable() {
-    return typeof self !== 'undefined' && self.crossOriginIsolated === true &&
+    return !_uaRefused && typeof self !== 'undefined' && self.crossOriginIsolated === true &&
         typeof performance.measureUserAgentSpecificMemory === 'function';
 }
 
@@ -59,8 +64,11 @@ function maybeMeasureUa(now) {
     performance.measureUserAgentSpecificMemory().then(function (r) {
         const s = summarizeUaMemory(r);
         if (s) _ua = { bytes: s.bytes, workers: s.workers, t: performance.now() };
-    }).catch(function () { /* refused (e.g. not isolated after all): keep the heap view */ })
-        .then(function () { _uaBusy = false; });
+    }).catch(function () {
+        // A refusal (SecurityError) will not change on this page: keep the heap view only.
+        _uaRefused = true;
+        _ua = null;
+    }).then(function () { _uaBusy = false; });
 }
 
 function sample() {
@@ -236,11 +244,12 @@ function build(pane) {
     coarse.className = 'memory-note';
     coarse.id = 'memoryCoarse';
     coarse.appendChild(document.createTextNode(
-        'Chrome rounds this number and refreshes it only every 20 minutes. Start Chrome with '));
+        'This browser rounds this number and refreshes it only every 20 minutes. Update Chrome ' +
+        '(157 reports it live), or start it with '));
     const flag = document.createElement('code');
     flag.textContent = '--enable-precise-memory-info';
     coarse.appendChild(flag);
-    coarse.appendChild(document.createTextNode(' for a live reading.'));
+    coarse.appendChild(document.createTextNode('.'));
     coarse.hidden = true;
     body.appendChild(coarse);
 

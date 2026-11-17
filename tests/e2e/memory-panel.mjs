@@ -13,12 +13,14 @@
  *       comes back. The samples stay in memory only: nothing in localStorage
  *       but the rail's own open/folded list.
  *   §3  The project rows count frames in memory and frames with groups (demo).
- *   §4  Chrome without the flag: the rounded reading is flagged in the panel.
+ *   §4  A rounded reading (older Chrome without the flag; stubbed, since
+ *       Chrome 157 reads live) is flagged in the panel.
  *   §5  No `performance.memory` (Firefox, Safari): a "not available" line,
  *       no plot; the project rows still work.
  *   §6  A cross-origin-isolated page with `measureUserAgentSpecificMemory`
  *       (stubbed here; LUCID sends no COOP/COEP) shows the whole page and its
- *       workers as rows and a second line.
+ *       workers as rows and a second line; where the browser refuses the call
+ *       (Playwright's Chromium does), the rows go away.
  *
  * Run: node memory-panel.mjs   (serves the app itself)
  */
@@ -28,7 +30,9 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const server = await startServer(repoRoot);
+// Never isolated (even under LUC3D_E2E_ISOLATED=1): §1 needs a plain page, and §6
+// stubs isolation itself. tests/e2e/isolated-server.mjs covers the real thing.
+const server = await startServer(repoRoot, { isolated: false });
 const URL_ = `http://localhost:${server.port}/index.html`;
 
 let fails = 0;
@@ -81,7 +85,7 @@ const takenOver = async (page) => {
 };
 const MB_RE = /^[\d,]+ MB$/;
 
-let precise, coarse;
+let precise;
 try {
     precise = await launchBrowser({ args: ['--enable-precise-memory-info'] });
 
@@ -193,14 +197,36 @@ try {
         await context.close();
     }
 
-    // ---- §4 Chrome without the flag ----
-    coarse = await launchBrowser();
+    // ---- §6b ... and where the browser refuses it ----
     {
-        const { context, page } = await openApp(coarse);
+        const { context, page } = await openApp(precise, () => {
+            Object.defineProperty(window, 'crossOriginIsolated', { get() { return true; }, configurable: true });
+            performance.measureUserAgentSpecificMemory = function () {
+                return Promise.reject(new DOMException('performance.measureUserAgentSpecificMemory is not available.', 'SecurityError'));
+            };
+        });
+        await openPanel(page);
+        await waitTaken(page, 3);
+        const s = await panelState(page);
+        check(s.ua === null && s.uaWorkers === null && MB_RE.test(s.now),
+            'a refused call hides the whole-page rows (never "measuring…" forever); the heap view stays', s);
+        await context.close();
+    }
+
+    // ---- §4 a rounded reading (older Chrome without the flag) ----
+    // Chrome 157 reads live with no flag and Playwright's Chromium 153 rounds,
+    // so the rounded values are stubbed: the ones Chromium 153 returned here.
+    {
+        const { context, page } = await openApp(precise, () => {
+            Object.defineProperty(Performance.prototype, 'memory', {
+                get() { return { usedJSHeapSize: 35100000, totalJSHeapSize: 37300000, jsHeapSizeLimit: 3760000000 }; },
+                configurable: true,
+            });
+        });
         await openPanel(page);
         await waitTaken(page, 2);
         const s = await panelState(page);
-        check(s.coarse && MB_RE.test(s.now), `without --enable-precise-memory-info the rounded reading is flagged (${s.now})`);
+        check(s.coarse && s.now === '33 MB' && s.plot, `a rounded reading is still plotted, and flagged in the panel (${s.now})`, s);
         await context.close();
     }
 } catch (e) {
@@ -208,7 +234,6 @@ try {
     fails++;
 } finally {
     if (precise) await precise.close();
-    if (coarse) await coarse.close();
     await server.close();
 }
 

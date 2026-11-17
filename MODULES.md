@@ -12997,16 +12997,22 @@ above the ~4 GB cap.
   (`projectCounts`) and rewrites a few attributes: never a walk over frames,
   so it cannot stall playback, Track All or Triangulate All. A gap in sampling
   is a gap in the line.
-- **Chrome rounds `performance.memory`** unless started with
-  `--enable-precise-memory-info`: 100 fixed sizes, multiples of 100,000 bytes,
-  capped near 4 GB, refreshed every 20 minutes (Chromium `HeapSizeCache`).
-  `isBucketizedHeap` spots it and the panel says so with the flag to use.
+- **Chrome 157 reports `performance.memory` live** on an ordinary page (checked
+  in a real, non-automated window and on luc3d.sleap.ai), no flag needed.
+  Older Chrome (Playwright's Chromium 153), and `about:blank` in any, rounds it
+  unless started with `--enable-precise-memory-info`: 100 fixed sizes,
+  multiples of 100,000 bytes, capped near 4 GB, refreshed every 20 minutes
+  (Chromium `HeapSizeCache`). `isBucketizedHeap` spots that and the panel says so.
 - **Firefox / Safari** (no `performance.memory`): "Not available in this
   browser" instead of the plot; the project rows still update.
 - **`measureUserAgentSpecificMemory()`** (whole page, workers included) only
   where `crossOriginIsolated`: at most every 10 s, one call in flight, shown as
-  two rows and an orange line. LUCID sends no COOP/COEP headers, so it is off
-  on every deployed channel and under `server.py`.
+  two rows and an orange line. The deployed site sends no COOP/COEP headers,
+  so it is off there; `python3 server.py --isolated` sends them. A refused call
+  (Playwright's Chromium rejects it even when isolated) hides the two rows for
+  the rest of the page's life.
+- **Workers** are counted only by `measureUserAgentSpecificMemory()`, so only
+  on an isolated page (`server.py --isolated`) in Chrome.
 - Samples live in a `MemoryRing` in memory only: nothing in the `.slp` or
   `localStorage` (the rail remembers only whether the panel is open).
 
@@ -13021,7 +13027,7 @@ above the ~4 GB cap.
 **Imported by.** `pose/initialization.js`.
 
 **User-facing features.** Memory panel. Tests: `tests/e2e/memory-panel.mjs`,
-`tests/test-memory-plot.mjs`.
+`tests/test-memory-plot.mjs`, `tests/e2e/isolated-server.mjs`.
 
 ### ui/memory-plot.js
 
@@ -16300,8 +16306,21 @@ fallback skeleton when loaded data carries none).
 tree, keeps a legacy `POST /convert-slp` endpoint alive when `h5py` is present,
 and implements **offline mode**.
 
-**CLI.** `python3 server.py [port] [--offline]`; `LUCID_OFFLINE=1` also enables
-offline. Prints which mode it started in.
+**CLI.** `python3 server.py [port] [--offline] [--isolated]`; `LUCID_OFFLINE=1`
+also enables offline, `LUCID_ISOLATED=1` isolation. Prints which mode it
+started in.
+
+**Isolated mode** (`--isolated`, opt-in). `LucidHandler.end_headers` adds
+`ISOLATION_HEADERS` (COOP `same-origin`, COEP `credentialless`) to EVERY
+response, errors and 304s included (an isolated page refuses a worker script
+without COEP). The page is then cross-origin isolated, and Chrome (157; not
+Playwright's Chromium 153) allows `measureUserAgentSpecificMemory()`: the whole
+page with its web workers, shown by the Memory panel (`ui/memory-panel.js`). `credentialless`, not
+`require-corp`, because the CDN scripts and Hugging Face send no CORP header.
+Off by default: no deployed channel sends these headers. Combines with
+`--offline`. The e2e harness does the same with `LUC3D_E2E_ISOLATED=1`
+(`startServer({ isolated })`), to run any file or the whole suite isolated.
+Test: `tests/e2e/isolated-server.mjs`.
 
 **Offline mode.** Reads `offline-deps.json` via `scripts/offline_deps.py` and
 rewrites the mapped CDN URLs in served `.html` / `.js` / `.mjs` bodies to
@@ -16315,7 +16334,8 @@ are ESM imports inside `ui/sessions-panes.js` and `ui/overlay-export-modal.js`.
 `load_manifest`, `package_status`, `replacement_map`, `rewrite_text`,
 `is_rewritable`.
 
-**User-facing features.** Local development; offline development.
+**User-facing features.** Local development; offline development; the Memory
+panel's whole-page reading with workers (`--isolated`).
 
 ---
 

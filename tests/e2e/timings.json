@@ -49,6 +49,7 @@
   "info-panel-instance-tables.mjs": 1.7,
   "info-panel-many-tracks.mjs": 2.7,
   "info-tip.mjs": 3.2,
+  "isolated-server.mjs": 30.0,
   "label-size-rotation-invariant.mjs": 1.7,
   "label-upright-on-rotation.mjs": 1.8,
   "lazy-embedded-calibration.mjs": 2.6,

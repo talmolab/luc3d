@@ -57,10 +57,12 @@ export class MemoryRing {
 }
 
 /**
- * Chrome's `performance.memory` without `--enable-precise-memory-info` is
- * "bucketized": every size is one of 100 fixed values, all multiples of
- * 100,000 bytes from 10,000,000 up to about 4 GB, and the reading refreshes
- * once every 20 minutes. A precise reading lands on a multiple of 100,000 for
+ * Older Chrome (Playwright's Chromium 153), and any Chrome on `about:blank`,
+ * gives a "bucketized" `performance.memory` unless started with
+ * `--enable-precise-memory-info`: every size is one of 100 fixed values, all
+ * multiples of 100,000 bytes from 10,000,000 up to about 4 GB, and the reading
+ * refreshes once every 20 minutes. Chrome 157 reports a live value on an
+ * ordinary page, with no flag. A precise reading lands on a multiple of 100,000 for
  * both sizes about once in ten billion.
  */
 export function isBucketizedHeap(used, total) {
