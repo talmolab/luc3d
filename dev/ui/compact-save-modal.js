@@ -13,7 +13,7 @@
  * A leaf: imports only the rounding steps.
  */
 
-import { COMPACT_STEPS } from '../import-export/compact-save.js?v=8a3b98092e40';
+import { COMPACT_STEPS } from '../import-export/compact-save.js?v=47ae124802cc';
 
 /**
  * @param {{suggestedName?: string, startIn?: Object, pickFile?: function(Object): Promise<Object>}} [opts]
