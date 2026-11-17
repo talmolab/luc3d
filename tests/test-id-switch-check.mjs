@@ -565,6 +565,13 @@ group('Image check — embeds only the samples the scoring reads (planImageSampl
     };
     const full = SC.contactChangeScores(grid, (i, k) => FEAT.get(i * K + k) || null, o, every);
     const same = (a, b) => a.length === b.length && a.every((e, i) => e.frame === b[i].frame && e.identityA === b[i].identityA && e.score === b[i].score);
+    // `has` answers "does it have features?" (scoreContacts' rowHas): the same scores, and feat()
+    // is then asked only for the features it averages, not for every sample it looks at
+    let featCalls = 0, featCallsHas = 0;
+    const plain = SC.contactChangeScores(grid, (i, k) => { featCalls++; return FEAT.get(i * K + k) || null; }, o, every);
+    const viaHas = SC.contactChangeScores(grid, (i, k) => { featCallsHas++; return FEAT.get(i * K + k) || null; }, o, every, (i, k) => FEAT.has(i * K + k));
+    ok(same(viaHas, plain) && JSON.stringify(viaHas) === JSON.stringify(plain), `contactChangeScores with has(): the same scored contacts (${plain.length})`);
+    ok(featCallsHas > 0 && featCallsHas < featCalls, `…asking feat() for fewer samples (${featCallsHas} instead of ${featCalls})`);
 
     const st = newState(), plan = SC.planImageSamples(grid, o, every, st);
     plan.forEach(i => { st.embedded[i] = 1; for (let k = 0; k < K; k++) if (FEAT.has(i * K + k)) st.got[i * K + k] = 1; });
