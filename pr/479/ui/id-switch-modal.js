@@ -30,29 +30,29 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { noteProgress } from './progress-delta.js?v=883b32ca5923';
-import { state, getActiveSession } from './app-state.js?v=883b32ca5923';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=883b32ca5923';
-import { showPanelTab } from './panel-rail.js?v=883b32ca5923';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=883b32ca5923';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=883b32ca5923';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=883b32ca5923';
-import { getTrackingThreshold } from './settings.js?v=883b32ca5923';
-import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=883b32ca5923';
-import { scoreSizeGridOffThread } from '../pose/size-check-pool.js?v=883b32ca5923';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js?v=883b32ca5923';
-import { pairEncounters3d } from '../pose/multi-camera-review.js?v=883b32ca5923';
+import { noteProgress } from './progress-delta.js?v=2fa0b6d23798';
+import { state, getActiveSession } from './app-state.js?v=2fa0b6d23798';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=2fa0b6d23798';
+import { showPanelTab } from './panel-rail.js?v=2fa0b6d23798';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=2fa0b6d23798';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=2fa0b6d23798';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=2fa0b6d23798';
+import { getTrackingThreshold } from './settings.js?v=2fa0b6d23798';
+import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=2fa0b6d23798';
+import { scoreSizeGridOffThread } from '../pose/size-check-pool.js?v=2fa0b6d23798';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js?v=2fa0b6d23798';
+import { pairEncounters3d } from '../pose/multi-camera-review.js?v=2fa0b6d23798';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=883b32ca5923';
-import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine, wireTrainingPrompt } from './image-model-dialog.js?v=883b32ca5923';
-import { prejudgeFor, prejudgeSettings, PREJUDGE_DEFAULTS, PREJUDGE_BUILTIN } from '../pose/image-prejudge.js?v=883b32ca5923';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=883b32ca5923';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=883b32ca5923';
-import { createBrightnessSampler } from './brightness-sampler.js?v=883b32ca5923';
+         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=2fa0b6d23798';
+import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine, wireTrainingPrompt } from './image-model-dialog.js?v=2fa0b6d23798';
+import { prejudgeFor, prejudgeSettings, PREJUDGE_DEFAULTS, PREJUDGE_BUILTIN } from '../pose/image-prejudge.js?v=2fa0b6d23798';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=2fa0b6d23798';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=2fa0b6d23798';
+import { createBrightnessSampler } from './brightness-sampler.js?v=2fa0b6d23798';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
          idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary,
-         idSwitchPlaceOf, idSwitchPrevPlaceEnd } from './id-switch-review.js?v=883b32ca5923';
+         idSwitchPlaceOf, idSwitchPrevPlaceEnd } from './id-switch-review.js?v=2fa0b6d23798';
 
 const CUE_LABEL = { size: 'body size', image: 'images', brightness: 'coat brightness', review: 'review list' };
 
@@ -758,8 +758,11 @@ function aboutHtml(st, ran) {
                   PREJUDGE_BUILTIN.margin.toFixed(1) + ': run in this app on 1,632 places in 395 proofread two-mouse videos, it called ' +
                   '14 of 95 swaps, with two false alarms and one miss, and was unsure at 3 places in 4 (a model trained on that rig called ' +
                   '67, with one false alarm). ') +
-            (multi ? 'On several cameras each camera is judged on its own, as measured on one camera, and the scores of the ' +
-                'cameras that tell the two animals apart are averaged (not measured on multi-camera recordings). ' : '') +
+            (multi ? 'On several cameras each animal\'s views at a moment are averaged first. Run in this app on 186 places in 22 ' +
+                'proofread 8-camera recordings, ' + (st.results.image.imageModel
+                    ? 'with a model trained on that rig\'s other recordings, it gave a verdict at 2 places in 3 and called 8 of 16 swaps, ' +
+                      'with no false alarm. '
+                    : 'it called 4 of 16 swaps, with no false alarm. ') : '') +
             'Still watch each place: a verdict is a lead, not the answer.</p>' : '') : '';
     if (!checks.length) return reviewAbout;
     return reviewAbout + aboutChecksHtml(st, checks);
