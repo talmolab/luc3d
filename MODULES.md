@@ -1337,7 +1337,11 @@ camera index, 17 of `trackIdx + 1` (so the `-1` untracked sentinel packs as 0),
 Every read/write goes through `Session` so the layout lives in one place:
 `setFrameIdentity`, `getFrameIdentityValue`, `hasFrameIdentity`,
 `deleteFrameIdentity`, and `frameIdentityEntries()` (a generator of decoded
-`{frameIdx, camName, trackIdx, identityId, key}` records). **Do not index
+`{frameIdx, camName, trackIdx, identityId, key}` records).
+`forEachFrameIdentity(cb)` visits the same records in the same order as
+`cb(frameIdx, camName, trackIdx, identityId)` without allocating per entry
+(through `FrameIdentityMap.forEachKeyValue(cb)`, which skips the iterators'
+`[k, v]` arrays): for whole-map scans in one task, like the ID timeline's. **Do not index
 `frameIdentityMap` directly**; a raw `"frame:cam:track"` string will simply miss.
 
 Tuples that cannot be packed (trackIdx > 131070, or a camera absent from
@@ -2165,7 +2169,9 @@ tracked and never fails the run; the status line and summary box say what it did
   `PREDICTED_ONLY_NOTE`: Track Frame (when it found targets), Track Frame Range
   and Track All (when they assigned identities) end showing ONLY the Predicted
   layer — User, Reprojections, Errors unticked — and append the note to the
-  status line when that changed anything.
+  status line when that changed anything. `holdOverlayDraws`: Track All's end
+  switches (Color by ID, Predictions only, trails) inside it, then redraws
+  once.
 - `../ui/info-panel.js` — `updateInfoPanel`.
 - `../ui/id-switch-modal.js` — `runIdSwitchChecks`, `clearIdSwitchResults`: after
   a successful Track All or Track Frame Range that assigned 2+ identities,
@@ -3332,9 +3338,25 @@ showed the result) and walks `session.instanceGroups` only when the witness
 stops holding: it finds a new one or forgets the run, after which nothing is
 walked until the next run.
 
+**Whole-project runs mark as they go.** Marking every group (~540k on the
+8-camera, 108,000-frame project) in one walk cost ~80 ms of the run's last
+task: a `WeakSet.add` and a `someValidPoint3d` per group. So Triangulate All
+(windowed and eager, `pose/triangulation.js`), Group by Identity and Group by
+Track (`ui/export-modals.js`, through `withAfterFrame`) call
+`markTriangulatedGroups` for each frame once its results have landed (inside
+the solver's `mark` callback where solves run on the pool), and end with
+`noteTriangulateRunMarked`, which is O(1). The marks are the same: every frame
+the sweep visits is marked after its last write, and nothing later in the run
+replaces it. A run that stops part-way leaves its finished frames marked but is
+not noted.
+
 **Exports.** `noteTrackRun(session)`, `noteTriangulateRun(session, frames)`
 (marks the 3D of every group on `frames`, null = all, that has a
-`triangulationMethod` and valid 3D, solved or kept by the run),
+`triangulationMethod` and valid 3D, solved or kept by the run, then notes the
+run; used by the this-frame and frame-range runs),
+`markTriangulatedGroups(groups)` (that marking, for one frame's list),
+`noteTriangulateRunMarked(session)` (notes a run whose frames are marked),
+`isTriangulateMarked(points3d)` (for checks and tests),
 `carryTriangulateMark(old, new)`, `hasTrackResult(session)`,
 `hasTriangulateResult(session)`.
 
@@ -3415,6 +3437,13 @@ restrict it to a range. Contract points:
   `total`; `opts.onLoadProgress(done, total)` reports the non-windowed branch's
   up-front `loadAllLazyFrames` stage (`opts.onStatus(msg)` is the text-only
   fallback).
+- **Hydration is paced too**: a window is built `SWEEP_HYDRATE_SLICE` (200)
+  frames at a time with the pacer checked between slices (`done` stays at the
+  window's start), so building a window is never one block. It used to be:
+  0.3-0.8 s at every window boundary of a Triangulate All on the 8-camera,
+  108,000-frame project (the build plus the minor GC that promotes it). Same
+  frames, same order, and the whole window is still built before `onFrame`
+  sees any of it. Test: `tests/test-sweep-hydrate-yields.mjs`.
 `sweepTrackAllFrames` (`pose/tracker.js`), `ui/export-modals.js`'s sweeps and
 `sweepTriangulateAllFrames` all delegate to it.
 
@@ -3462,6 +3491,14 @@ loader it runs `sweepTriangulateAllFrames` over `sweepLazyFrameWindows`. Without
 hydration a reopened project's group members are null-filled placeholders and
 almost every group is skipped. `loadAllLazyFrames` is deliberately NOT used —
 that is the OOM the memory work exists to prevent.
+
+**The timeline's track rows are rebuilt in their own task.** Both Triangulate
+All paths end by rebuilding the timeline's rows (`refreshTracks`), which walks
+every group of the project (~0.2 s on 539,852 groups). They `await
+yieldToPaint()` first, so the results (overlays, 3D, status) paint and the
+run's tail and the rebuild are two tasks, not one (937 ms on the 108,000-frame
+project before; 102 + 210 ms after, Refined). `triangulateCurrentFrame` rebuilds
+once, through `updateTimelineForFrame` (it used to rebuild a second time).
 
 **Neither Triangulate All path keeps derived state.** Both clear every group's
 reprojections and `state.triangulationResults` up front
@@ -3924,10 +3961,11 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
 - `./triangulation-core.js` — the pure math (re-exported) and
   `setTriangulationSettingsHooks`.
 - `./triangulation-pool.js` — `createGroupSolver` (Triangulate All's parallel solve).
-- `./run-state.js` — `noteTriangulateRun` (at the end of `triangulateAllFrames`,
-  both paths, `triangulateCurrentFrame` and `triangulateMultiFrameInstances`)
-  and `carryTriangulateMark` (`reTriangulateGroup`): the blue Triangulate
-  button.
+- `./run-state.js` — `markTriangulatedGroups` per frame as results land and
+  `noteTriangulateRunMarked` at the end (`triangulateAllFrames`, both paths),
+  `noteTriangulateRun` (`triangulateCurrentFrame`,
+  `triangulateMultiFrameInstances`) and `carryTriangulateMark`
+  (`reTriangulateGroup`): the blue Triangulate button.
 - `../loading/track-union.js` — `unionTrackNames`, `remapTrackIdx`,
   `isIdentityRemap` (`LazyFrameLoader`'s track union).
 - `./initialization.js` — `update3DViewport` (circular).
@@ -5447,6 +5485,11 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   frame (not only resident ones), releasing each lazy window after use; 3D
   persists in `session.instanceGroups`. The JSON labels export (`exportLabels`)
   streams through the same sweep.
+- `withAfterFrame(onFrame, afterFrame)` (module-private) — wraps a sweep's
+  `onFrame` so `afterFrame(frameIdx)` runs on every path out of it (early
+  returns included). Both bulk-triangulate paths use it to mark each frame's 3D
+  for the Triangulate button as the run goes (`markTriangulatedGroups`,
+  `pose/run-state.js`; after the frame's pool solves land, via `gSolver.mark`).
 - `showExportResultPopup(message, ok)` (module-private) — small ✓/✗ card shown
   after a By-Cam / per-session SLP export (auto-dismisses; closes on
   click/Esc/Enter).
@@ -5610,9 +5653,10 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   `showReprojectionsOnly`, `REPROJ_ONLY_NOTE` (both group-and-triangulate-all
   paths end Reproj-only).
 - `./info-panel.js` — `updateInfoPanel`.
-- `../pose/run-state.js` — `noteTriangulateRun` (after
-  `groupByIdentityAndTriangulateAll`, Triangulate All's DLT path once
-  identities exist, and `groupByTrackAndTriangulateAll`).
+- `../pose/run-state.js` — `markTriangulatedGroups` per frame (through
+  `withAfterFrame`) and `noteTriangulateRunMarked` at the end of
+  `groupByIdentityAndTriangulateAll` (Triangulate All's DLT path once
+  identities exist) and `groupByTrackAndTriangulateAll`.
 - `../import-export/save-load.js` — `showLoading`, `hideLoading`,
   `setStatus`.
 - `./loading-overlay.js` — `showLoadingProgress`, `yieldToPaint` (the
@@ -5750,6 +5794,23 @@ Edit Group mode, track-swap dialogs.
 Skeleton, Sessions, and Frame Info tables; hosts the skeleton editor and
 the per-frame instance-group / unlinked-instance tables. `updateInfoPanel` also
 renders the Session tab's Recording section (`ui/recording-info.js`).
+
+**Videos table (`populateVideosTable`).** The Labeled / Groups / Score columns
+read every frame and every group member, so they are counted only while the
+Videos section is on screen (info panel shown, pane `.active` in the rail's
+stack; a pane outside any rail section counts as shown). Otherwise a rebuild
+lists the videos, leaves those three cells empty and sets `videoCountsStale`; a
+`MutationObserver` on `#tabVideos`'s class (set up in `setupVideosTab`) rebuilds
+once the section opens. The counts come from `createVideoTableCounter`
+(`ui/video-table-counts.js`), one pass for every row, run in tasks of
+`VIDEO_COUNT_SLICE_MS` (12) by `countVideosInSlices`: the first slice runs in
+the rebuild (a small project is done there), the rest each in a `setTimeout`
+task, with the three cells showing '…' until the end. A newer rebuild
+(`videoCountJob`) or another session stops a running count. Before: one walk of
+`frameGroups` per video plus a for...of over every member, ~205 ms in the last
+task of a DLT Triangulate All on the 8-camera, 539,852-group project, with the
+section closed (only Instances is open by default). Test:
+`tests/e2e/videos-table-counts.mjs`.
 
 **Reprojection Error panel (`updateFrameInfo`).** The headline mean,
 undistorted residual, method label, and per-camera rows are the frame SUMMARY
@@ -5892,7 +5953,7 @@ marking the panel stale so `refreshInfoPanelAfterShow` (`ui-wiring.js`) rebuilds
 it once on re-show. Not a micro-optimization: `updateFrameInfo` runs on every
 frame (throttled to 10 Hz during playback) and rebuilds the breakdown plus both
 instance tables, and `updateInfoPanel` calls `populateVideosTable`, which walks
-EVERY frame of the session per video row. Three things deliberately stay
+every frame and group member of the session (when the Videos section is open). Three things deliberately stay
 outside the gate:
 - **The status bar**, which is NOT part of `#infoPanel` and is always on
   screen. `updateFrameInfo`'s tail writes `#statusError` and calls
@@ -5988,6 +6049,8 @@ In-memory only; see `ui/app-state.js`.
   toggles).
 - `./interaction.js` — `isInteractiveClickTarget`.
 - `./panel-visibility.js` — `isInfoPanelVisible`, `markInfoPanelStale`.
+- `./video-table-counts.js` — `createVideoTableCounter` (the Videos table's
+  counts, in slices).
 - `./section-state.js` — `persistSectionState` (Skeleton ▸ Nodes / Edges,
   under the `skeletonSectionsOpen` key).
 - `./lazy-select.js` — `buildLazySelect`, behind `buildTrackSelect` (both
@@ -6053,6 +6116,15 @@ re-renders the toggle lists. `populateTimelineVisibility` is called from
 `updateInfoPanel(...)` and again from `switchSession` after
 `timeline.setData(newSession)` so the lists reflect the freshly-active
 session's hidden sets.
+
+**The lists are rebuilt only when they would change.** Every call builds the
+three entry lists (cheap) and their key, `timelineVisibilityKey` (each row's
+name, on/off and swatch colour; exported for tests). The same session, the
+same key and the same row counts keep the existing rows: a rebuild was ~6 ms
+on an 8-camera project with 863 tracks, and every `updateInfoPanel` asks for
+one (twice at the end of a Track All). Anything the rows show or act on must
+go into the key, or a change to it is never drawn. Test:
+`tests/e2e/timeline-visibility-lists-kept.mjs`.
 
 **Visibility tab — section order + Display Legend.** In `index.html` the
 **Timeline** subsection is at the top of the Visibility panel; **Display
@@ -6653,6 +6725,13 @@ on the opposite side.
 
 **Geometry is browser-local display taste**: `localStorage`, NOT the `.slp`.
 Blocked or full storage degrades to "forgets", never to a throw.
+
+**A card that is not laid out saves nothing** (`laidOut()`: connected and wider
+and taller than 0). A card taken out of the page measures 0 x 0; the
+`ResizeObserver`, the debounced persist and `dispose()` used to take that for a
+resize and save it as the chosen size, so the modal reopened at its minimum
+(any caller that removed the card without calling dispose, e.g. Settings opened
+twice).
 
 **Imports from project modules.** None — `clampGeometry` is a pure function of
 (rect, viewport), so it bridges into both test runners.
@@ -7398,8 +7477,9 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   reprojection fill under `drawAllOverlays`); exported for tests.
 - `showReprojectionsOnly()` -> `boolean` — after Triangulate All: User,
   Predictions, Errors off, Reprojections on, each changed box firing its own `change`
-  event (so the deselect-hidden-instance handler and redraw run as for a
-  click); returns whether anything changed. `REPROJ_ONLY_NOTE` is the status
+  event (so the deselect-hidden-instance handler runs as for a click), with
+  the handlers' overlay redraws held (`holdOverlayDraws`): every caller
+  redraws once right after; returns whether anything changed. `REPROJ_ONLY_NOTE` is the status
   suffix the callers append when it did. The four Triangulate All endings
   (`triangulateAllFrames` windowed + in-memory, `groupByIdentityAndTriangulateAll`,
   `groupByTrackAndTriangulateAll`) call `setReprojErrorVisible(true, {checkBoxes:
@@ -7409,6 +7489,16 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   Frame / Track Frame Range / Track All (`pose/tracker.js`) Predictions on; User,
   Reprojections, Errors off, by the same change-event mechanics (shared private
   `setToolbarLayers`). `PREDICTED_ONLY_NOTE` is its status suffix.
+- `holdOverlayDraws(fn)` — runs `fn` with `drawAllOverlays` held (it returns
+  at once and counts the call in `overlayDrawHold.held`; nesting is fine,
+  `overlayDrawHold.depth`); the caller redraws once afterwards. For a run's
+  end, where several view switches each redraw every view and each redraw
+  forced a layout of the page the previous one changed (the info panel's
+  tables): four redraws in a row at the end of a Triangulate All on the
+  8-camera project, 23 ms, 14 ms of it layout. Used by `setToolbarLayers` and
+  by Track All's end (`pose/tracker.js`: Color by ID, Predictions only,
+  trails). Only the redraw is held; the switches' other work still runs.
+  `overlayDrawHold` is exported for tests.
 - `getVisibilitySettings()` — reads per-view checkbox state from the DOM.
   Includes **`showUnlinkedBadge`** (the Visibility panel's *Unlinked Instances ▸
   Show "?" badge* toggle, `#visUnlinkedBadge`), passed straight through to
@@ -11032,6 +11122,11 @@ commas. One scroller: the block grows to its full height.
 
 ### ui/settings-modal.js
 
+**One instance, retired properly.** `showSettingsModal` on an open Settings runs
+the open one's teardown (`overlay._lucidTeardown`): removing its overlay alone
+left its capture-phase key handler on the document and its geometry watcher live
+(`tests/e2e/settings-modal-geometry.mjs` §9).
+
 The Triangulation Wizard panel's footer adds **Triangulate All** ("Apply & Triangulate All" with
 edits pending): it applies them, closes Settings and clicks `#tbTriangulateAll`, so it runs what the
 toolbar runs. It is disabled when that button is, or with no session.
@@ -11324,6 +11419,29 @@ frames the live `fg.instances` win. Rows **cap** at `MAX_TRACK_ROWS_PER_CAMERA`
 in track-index order, plus a label-only `+N more` row; `counts` does not drive
 the cap. Covered by `tests/test-timeline-sparse-occupancy.js`.
 
+**The row builds are one pass, kept as runs.** `refreshTracks` runs after
+every whole-project run (Track All, Triangulate All, ...) in one task, over
+every group member (539,852 groups x 8 cameras on the 108,000-frame project)
+and, in Identities / Both mode, every `frameIdentityMap` entry (~4.2M). So both
+builders touch each member or entry once, with a camera lookup and a run
+update: each (camera, track) and (camera, identity) row is a `_FrameRuns`
+(module-private) that extends or closes its current run as frames arrive in
+order and keeps out-of-order frames (resident frames, walked after the groups)
+in a typed side buffer folded in at the end. Never a string key or a `Set`
+entry per member, never a segment object per frame: merging with occupancy is
+run list with run list (`mergeRunLists`). The group walk uses `Map.forEach`,
+not `for...of` with destructuring (that allocated a pair per member: ~400 MB
+of short-lived garbage per build). Pass 2 of `_buildIdentitySegments` walks
+the map with `Session.forEachFrameIdentity` (no record object per entry;
+falls back to `frameIdentityEntries()` on a session without it). The rows are
+the ones the Set-based builders made, with one fix: a resident instance with
+a `null` `trackIdx` used to put a NaN into the track sort, which could list a
+camera's tracks out of order. Covered by `tests/test-timeline-track-segments.mjs`
+(random sessions against a plain Set-based reference, each member read once);
+real project: `tests/e2e/_bench-playback.mjs` `TIMELINE_PROBE=1`
+(`TIMELINE_REF` builds the rows with another `ui/timeline.js`, e.g. main's,
+and compares them row for row).
+
 **ID Timeline and TRACKLESS ungrouped instances.** Pass 1 of
 `_buildIdentitySegments` resolves each unlinked row with
 `session.getIdentityIdForUnlinkedInstance(cam, instance, frameIdx)`, not the
@@ -11341,8 +11459,8 @@ Test: `tests/test-timeline-tree-grouping.js`. The same rule applies in
 identity-mode counterpart to `_buildTrackSegments`) cannot rely on
 `session.frameGroups` alone: on a lazy project it holds only resident frames.
 Two passes: pass 1 scans `frameGroups` and is AUTHORITATIVE for the frames it
-covers; pass 2 falls back to `session.frameIdentityEntries()` (the
-`FrameIdentityMap`, `pose/pose-data.js`) for every other frame. No caching —
+covers; pass 2 falls back to the `FrameIdentityMap` (`pose/pose-data.js`,
+read with `session.forEachFrameIdentity`) for every other frame. No caching —
 it re-runs on every `setDisplayMode`/`setData`/`refreshTracks`.
 `frameIdentityMap` is the right fallback (not `instanceGroups` +
 `trackOccupancy`): it covers the WHOLE tracked range, is never evicted, is
@@ -12682,7 +12800,9 @@ and identities use private helpers taking `kind = 'track' | 'identity'`, sharing
   FIRST (a stale `selectedInstanceGroup` would point at a deleted object, and
   `viewport3d.selectedInstanceIdx` is positional), runs `executeDeletion`, then
   `purgeTriangulationDataForGroup` over `purgedGroups` (the ops module is
-  import-free), and reports the **durable** store-row count, surfacing
+  import-free), sets each touched frame's "modified" tick and rebuilds the
+  timeline's rows ONCE (not `updateTimelineForFrame` per frame: each call is a
+  whole-project rebuild), and reports the **durable** store-row count, surfacing
   `errorRows` as a warning. All logic is in `ui/custom-delete-ops.js`. No
   shortcut (as in SLEAP), so no catalog entry. Deliberately does NOT copy
   SLEAP's `labels.clean()` cascade (pruning unused tracks/skeletons) — data
@@ -13589,7 +13709,7 @@ collapse state has to be readable by code, not just CSS.
 - `markInfoPanelStale()` / `consumeInfoPanelStale()` — read-and-clear flag.
   Every info-panel populate function is a stateless full rebuild, so one call on
   re-show catches up; the flag avoids a redundant rebuild when nothing went
-  stale (`populateVideosTable` walks every frame).
+  stale (`populateVideosTable` walks every frame and group member).
 - `markViewport3DSkipped()`, `skipped` (`{ infoPanel, viewport3d }` counters,
   also on `window.__lucidPanelVis`) — diagnostics read by
   `tests/e2e/panel-toggle-independence.mjs`; a gate that still does the work has
@@ -14863,6 +14983,38 @@ kind, renderer classes, decoder integration); real browsers via the
 `decoderErrors` step of `tests/e2e/_probe-capabilities.html`;
 `tests/e2e/video-codec-notice.mjs` (the notice, through File ▸ Load Videos).
 
+### ui/video-table-counts.js
+
+**Purpose.** The Videos table's per-camera counts in ONE pass over the session,
+resumable in slices:
+`labeled` (frames in `frameGroups` with a linked or unlinked instance on that
+camera; resident frames only on a lazy project), `groups` (group members on
+that camera; a null member does not count), `scoreSum` / `scoreCount` (linked
+instances with a score above 0, added in the same order as the per-camera loop
+it replaced, so the mean is bit-identical). Walks with `Map.forEach` (no entry
+pairs); a member finds its camera's counter by comparing names with the slot
+after the previous member's, since members come in camera order. The pass
+(the frames, then the groups) reads each Map through an iterator kept between
+slices; the clock is read every 256 frames. Still ~165 ms in one piece on the
+8-camera, 539,852-group project (bound by reading the members from memory),
+hence the slices. DOM-free and import-free (Node tests load it).
+
+**Key exports.**
+- `createVideoTableCounter(session)` → `{ step(budgetMs), result() }`: `step`
+  counts until the budget is spent and returns true once done; `result()` →
+  `Map<cameraName, {labeled, groups, scoreSum, scoreCount}>` (a camera with
+  nothing is absent; `null` session → empty).
+  `globalThis.__lucidVideoCountSliceFrames` (tests) makes each step count
+  exactly that many frames.
+- `videoTableCounts(session)`: the whole count at once.
+
+**Imported by.** `ui/info-panel.js` (`countVideosInSlices`).
+
+**Test.** `tests/test-video-table-counts.mjs` (random eager and lazy sessions
+against the old per-camera loops; any slice size gives the one-shot result).
+
+---
+
 ### ui/video-codec-notice.js
 
 **Purpose.** The note a load leaves when its videos can't play in this browser:
@@ -15040,7 +15192,14 @@ under `_mbSeekLock`; one at a time; a request for a frame it is decoding waits f
 it), and `_scheduleBackWarm` does the same `STEP_BACK_WARM_MS` (250 ms) after the
 user LANDS on a frame by a jump and stays — counted from when the frame is
 shown, so back-to-back jumps never start one. Anything but a step back cancels
-it (`job.cancelled`, checked per decoded frame; `releaseStepCursor` too). Chunk
+it (`_cancelBackPrefetch`; `releaseStepCursor` too), which CLOSES its stream
+(`job.it.return()`): mediabunny's `samples(start, end)` decodes from the keyframe
+but yields nothing before `start`, so a `job.cancelled` checked per yielded frame
+never fired and the warm-up decoded its whole run (up to ~250 frames per camera)
+alongside the next jump — on the 8-camera field recordings a jump 300 ms after
+another took ~0.87 s instead of ~0.5 s (VM: ~2.4 s instead of ~0.65 s). Keeping
+the chunk from the jump's own decode instead was measured too: no faster on the
+Mac and 0.15–0.3 s slower per jump on an Arc B50 VM (the extra ImageBitmaps). Chunk
 frames are cached by `_cacheNear`, which evicts the frame FARTHEST from the
 user, not the least recently used: stepping back, the not-yet-reached
 prefetched frames ARE the least recently used, and LRU evicted exactly them.

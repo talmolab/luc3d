@@ -26,7 +26,7 @@ import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance
          someValidPoint3d } from '../pose/pose-data.js';
 import { ensureLazyFrameData, batchLoadLazyFrames, getInstanceGroupsForFrame, evictLazyFrames,
          loadAllLazyFrames, updateTimelineForFrame, triangulateAndReproject,
-         resolveTriangulationMethod } from '../pose/triangulation.js';
+         resolveTriangulationMethod, frameHasGroupedUserInstances } from '../pose/triangulation.js';
 import { LAZY_PLAYBACK_AHEAD } from '../pose/lazy-residency.js';
 import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
@@ -675,8 +675,15 @@ function showCustomDeleteModal() {
         }
 
         markDirty();
-        for (var f = 0; f < res.touchedFrames.length; f++) updateTimelineForFrame(res.touchedFrames[f]);
-        if (timeline) timeline.refreshTracks(session, { cap: true });
+        // Each frame's "modified" tick, then ONE rebuild of the track rows (a
+        // rebuild walks every group of the project; updateTimelineForFrame per
+        // touched frame would do it once per frame).
+        if (timeline) {
+            for (var f = 0; f < res.touchedFrames.length; f++) {
+                timeline.setFrameModified(res.touchedFrames[f], frameHasGroupedUserInstances(res.touchedFrames[f]));
+            }
+            timeline.refreshTracks(session, { cap: true });
+        }
         if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();

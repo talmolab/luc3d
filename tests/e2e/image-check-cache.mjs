@@ -68,21 +68,23 @@ try {
     await page.evaluate(async () => {
         const pd = await import('/pose/pose-data.js'), AS = await import('/ui/app-state.js');
         const E = await import('/ui/image-embedder.js'), SC = await import('/pose/id-switch-check.js');
-        // ---- a tracked session with 2D: 3 animals, 3 cameras, one pair's labels swapped after encounter #16
+        // ---- a tracked session with 2D: 3 animals, 3 cameras, one pair's labels swapped after encounter #8
+        // (12 encounters, ~3,300 crops a run: every floor below holds, and each of the ~17 runs costs half what
+        // 24 encounters did; the checks compare runs with each other, never a count of this size)
         const NODES = ['Nose', 'Ear_R', 'Ear_L', 'TTI', 'TailTip', 'Head', 'Trunk', 'Tail_0', 'Tail_1', 'Tail_2',
             'Shoulder_left', 'Shoulder_right', 'Haunch_left', 'Haunch_right', 'Neck'];
         const TEMPLATE = { Nose: [45, 0, 0], Ear_R: [25, -11, 4], Ear_L: [25, 11, 4], Head: [30, 0, 3], Neck: [20, 0, 2],
             Trunk: [-5, 0, 4], TTI: [-40, 0, 0], Shoulder_left: [10, 12, 0], Shoulder_right: [10, -12, 0],
             Haunch_left: [-25, 15, 0], Haunch_right: [-25, -15, 0], Tail_0: [-65, 0, 0], Tail_1: [-88, 0, 0],
             Tail_2: [-110, 0, 0], TailTip: [-132, 0, 0] };
-        const CAMS = ['camA', 'camB', 'camC'], STEP = 4, SWAP = 16, FPS = 60;
+        const CAMS = ['camA', 'camB', 'camC'], STEP = 4, SWAP = 8, FPS = 60, ENCOUNTERS = 12;
         const pose = (cx, cy, h) => { const out = new Float64Array(45), c = Math.cos(h), s = Math.sin(h);
             NODES.forEach((n, i) => { const [x, y, z] = TEMPLATE[n]; out[i * 3] = cx + c * x - s * y; out[i * 3 + 1] = cy + s * x + c * y; out[i * 3 + 2] = z; }); return out; };
         const inst = (P, ci) => { const pts = []; for (let i = 0; i < NODES.length; i++) pts.push([130 + 12 * ci + 0.8 * P[i * 3], 130 + 8 * ci + 0.8 * P[i * 3 + 1]]);
             return { getPoint: (i) => pts[i] }; };
         const home = [[0, 0], [400, 0], [200, 350]], PAIRS = [[0, 1], [1, 2], [0, 2]];
-        const events = []; for (let e = 0; e < 24; e++) events.push({ pair: PAIRS[e % 3], t0: 300 + e * 260 });
-        const T = 300 + 24 * 260 + 300;
+        const events = []; for (let e = 0; e < ENCOUNTERS; e++) events.push({ pair: PAIRS[e % 3], t0: 300 + e * 260 });
+        const T = 300 + ENCOUNTERS * 260 + 300;
         const session = new pd.Session([], new pd.Skeleton('m', NODES, []), [], 'CacheFixture');
         for (let i = 0; i < 3; i++) session.addIdentity('id_' + i);
         let gid = 1; const label = [0, 1, 2];
