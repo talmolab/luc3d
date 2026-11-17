@@ -41,7 +41,7 @@
  * Depends on: pose-data.js (readPoint3d). Pure — no DOM, no app state.
  */
 
-import { readPoint3d } from './pose-data.js?v=dd295437d279';
+import { readPoint3d } from './pose-data.js?v=f113dd771a17';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
@@ -119,6 +119,23 @@ export function fitPCA(X, n, D, k, opts) {
     var mean = new Float64Array(D);
     for (var r = 0; r < n; r++) { var wr = w ? w[r] : 1; W += wr; for (var d = 0; d < D; d++) mean[d] += wr * X[r * D + d]; }
     for (var d1 = 0; d1 < D; d1++) mean[d1] /= w ? W : Math.max(1, n);
+    if (k === D) {
+        // Every direction kept: the basis would only ROTATE the centred rows, and
+        // everything downstream (learnIdentityMetric's scatter, whitening and
+        // eigen-directions, then cosines) answers the same under a rotation. The
+        // size check asks for this (≤ 16 bone lengths, metricPcaDims 64): six
+        // subspace iterations over every sample were ~0.6 s of Track All's end on
+        // an 8-camera, 108,000-frame project, for nothing.
+        var projectIntoId = function (x, out, off) {
+            for (var c0 = 0; c0 < D; c0++) out[off + c0] = x[c0] - mean[c0];
+            return out;
+        };
+        return {
+            dims: D,
+            projectInto: projectIntoId,
+            project: function (x) { return projectIntoId(x, new Float64Array(D), 0); },
+        };
+    }
     var seed = 12345, rnd = function () { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 - 0.5; };
     var Q = new Float64Array(D * k);
     for (var i = 0; i < Q.length; i++) Q[i] = rnd();
@@ -144,13 +161,14 @@ export function fitPCA(X, n, D, k, opts) {
         }
         orth(Z); Q.set(Z);                           // Q <- orth((X - mean)^T (X - mean) Q)
     }
+    var projectInto = function (x, out, off) {
+        for (var c5 = 0; c5 < k; c5++) { var s3 = 0; for (var d9 = 0; d9 < D; d9++) s3 += (x[d9] - mean[d9]) * Q[d9 * k + c5]; out[off + c5] = s3; }
+        return out;
+    };
     return {
         dims: k,
-        project: function (x) {
-            var out = new Float64Array(k);
-            for (var c5 = 0; c5 < k; c5++) { var s3 = 0; for (var d9 = 0; d9 < D; d9++) s3 += (x[d9] - mean[d9]) * Q[d9 * k + c5]; out[c5] = s3; }
-            return out;
-        },
+        projectInto: projectInto,
+        project: function (x) { return projectInto(x, new Float64Array(k), 0); },
     };
 }
 
@@ -371,7 +389,7 @@ export function learnIdentityMetric(X, n, D, stretch, sample, o, weights) {
     var w = weights || null, wOf = function (r) { return w ? w[r] : 1; };
     var pca = fitPCA(X, n, D, o.metricPcaDims || 64, { weights: w }), d = pca.dims;
     var Y = new Float64Array(n * d);
-    for (var r = 0; r < n; r++) Y.set(pca.project(X.subarray(r * D, (r + 1) * D)), r * d);
+    for (var r = 0; r < n; r++) pca.projectInto(X.subarray(r * D, (r + 1) * D), Y, r * d);
     var groups = function (key) {
         var m = new Map();
         for (var r2 = 0; r2 < n; r2++) { var g = key[r2]; if (g < 0) continue; if (!m.has(g)) m.set(g, []); m.get(g).push(r2); }
@@ -388,7 +406,7 @@ export function learnIdentityMetric(X, n, D, stretch, sample, o, weights) {
         rows.forEach(function (r3) {
             var wr = wOf(r3);
             for (var x = 0; x < d; x++) dv[x] = Y[r3 * d + x] - mu[x];
-            for (var x2 = 0; x2 < d; x2++) for (var y2 = 0; y2 < d; y2++) Sw[x2 * d + y2] += dv[x2] * dv[y2] * wr;
+            for (var x2 = 0; x2 < d; x2++) for (var y2 = x2; y2 < d; y2++) Sw[x2 * d + y2] += dv[x2] * dv[y2] * wr;
             nw++; sw += wr;
         });
     });
@@ -396,10 +414,17 @@ export function learnIdentityMetric(X, n, D, stretch, sample, o, weights) {
         for (var p = 0; p < rows.length; p++) for (var q = p + 1; q < rows.length; q++) {
             var wp = wOf(rows[p]);                    // one sample: both rows weigh the same
             for (var x = 0; x < d; x++) dv[x] = Y[rows[p] * d + x] - Y[rows[q] * d + x];
-            for (var x2 = 0; x2 < d; x2++) for (var y2 = 0; y2 < d; y2++) Sb[x2 * d + y2] += dv[x2] * dv[y2] * wp;
+            for (var x2 = 0; x2 < d; x2++) for (var y2 = x2; y2 < d; y2++) Sb[x2 * d + y2] += dv[x2] * dv[y2] * wp;
             nb++; sb += wp;
         }
     });
+    // Both are symmetric, so only the upper triangle was summed: each entry got
+    // the same products in the same order as a full pass (a*b === b*a), so the
+    // mirror is bit-identical to summing both halves, at half the cost.
+    for (var xm = 0; xm < d; xm++) for (var ym = xm + 1; ym < d; ym++) {
+        Sw[ym * d + xm] = Sw[xm * d + ym];
+        Sb[ym * d + xm] = Sb[xm * d + ym];
+    }
     var unit = function (z) {
         var nn = 0; for (var x = 0; x < z.length; x++) nn += z[x] * z[x];
         nn = Math.sqrt(nn) || 1; for (var x2 = 0; x2 < z.length; x2++) z[x2] /= nn;
@@ -422,10 +447,11 @@ export function learnIdentityMetric(X, n, D, stretch, sample, o, weights) {
     for (var x8 = 0; x8 < d; x8++) order.forEach(function (col, j) {
         var s3 = 0; for (var y8 = 0; y8 < d; y8++) s3 += W1[x8 * d + y8] * em.vectors[y8 * d + col]; P[x8 * Q + j] = s3;
     });
+    var yBuf = new Float64Array(d);
     return {
         dims: Q,
         project: function (x) {
-            var y = pca.project(x), z = new Float64Array(Q);
+            var y = pca.projectInto(x, yBuf, 0), z = new Float64Array(Q);
             for (var j = 0; j < Q; j++) { var s4 = 0; for (var x9 = 0; x9 < d; x9++) s4 += y[x9] * P[x9 * Q + j]; z[j] = s4; }
             return unit(z);
         },
