@@ -28,28 +28,21 @@
  *
  * Run: node tests/e2e/single-camera-folder-load.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8283);
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
+const server = await startServer();
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push(String(e).slice(0, 300)));
     if (process.env.DEBUG) page.on('console', m => console.log('   [page] ' + m.text().slice(0, 160)));
-    await page.goto(`http://localhost:${PORT}/index.html`);
+    await page.goto(`${server.url}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
 
     // Builders, kept on window: an mp4, a one-camera predictions .slp (two animals), and File objects with paths.
@@ -139,7 +132,7 @@ try {
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {
     if (browser) await browser.close();
-    server.kill();
+    server.close();
 }
 console.log(fails ? `\n✗ ${fails} check(s) failed` : '\n✓ all checks passed');
 process.exit(fails ? 1 : 0);

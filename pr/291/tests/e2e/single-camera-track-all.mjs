@@ -82,29 +82,22 @@
  *
  * Run: node tests/e2e/single-camera-track-all.mjs
  */
-import { chromium } from 'playwright';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import { answerTrackSetup } from './fixtures/track-setup.js';
-import { spawn } from 'node:child_process';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8276);
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
+const server = await startServer();
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push(String(e).slice(0, 300)));
     await answerTrackSetup(page, 3);   // Track All's first-run dialog: the animal count
-    await page.goto(`http://localhost:${PORT}/index.html`);
+    await page.goto(`${server.url}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
 
     await page.evaluate(async () => {
@@ -886,7 +879,7 @@ try {
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {
     if (browser) await browser.close();
-    server.kill();
+    server.close();
 }
 console.log(fails ? `\n✗ ${fails} check(s) failed` : '\n✓ all checks passed');
 process.exit(fails ? 1 : 0);

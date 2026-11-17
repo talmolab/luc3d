@@ -30,34 +30,27 @@
  * view on `<name>_2`, twice the detections, the "with 3D" wording) and §3 adds
  * a third camera.
  *
- * Run: node tests/e2e/load-slp-same-video-twice.mjs   (spawns its own
- * http.server; PORT= to move it)
+ * Run: node tests/e2e/load-slp-same-video-twice.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser, repoRoot } from './lib/harness.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8413);
 const VIDEO = path.join(repoRoot, 'tests', 'fixtures', 'barcode-60', 'barcode-60.mp4');   // 60 frames, 256 x 32
 const CAM = 'barcode-60';
 let fails = 0;
 const check = (c, m, extra) => { console.log((c ? '  ✓ ' : '  ✗ ') + m + (c || extra === undefined ? '' : '  — ' + JSON.stringify(extra))); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
+const server = await startServer();
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lucid-load-twice-'));
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     await page.addInitScript(() => { delete window.showOpenFilePicker; delete window.showDirectoryPicker; delete window.showSaveFilePicker; });
     page.on('pageerror', e => { console.log('  ✗ page error: ' + e.message); fails++; });
-    await page.goto(`http://localhost:${PORT}/index.html`);
+    await page.goto(`${server.url}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
 
     // A one-video SLEAP predictions file: two animals on two tracks in every frame.
@@ -152,7 +145,7 @@ try {
     check(s.dets === 240, 'with its own detections', s.dets);
 } finally {
     if (browser) await browser.close();
-    server.kill();
+    server.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
 }
 console.log(fails ? `\n${fails} check(s) failed` : '\nall checks passed');
