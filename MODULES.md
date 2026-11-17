@@ -1341,7 +1341,12 @@ Every read/write goes through `Session` so the layout lives in one place:
 `forEachFrameIdentity(cb)` visits the same records in the same order as
 `cb(frameIdx, camName, trackIdx, identityId)` without allocating per entry
 (through `FrameIdentityMap.forEachKeyValue(cb)`, which skips the iterators'
-`[k, v]` arrays): for whole-map scans in one task, like the ID timeline's. **Do not index
+`[k, v]` arrays): for whole-map scans in one task, like the ID timeline's. With
+`from` / `to` it scans a stretch of entry positions and returns where the next starts:
+`frameIdentityScan()` gives `{span, stamp}` (`FrameIdentityMap.entrySpan()` /
+`layoutStamp()`, which changes on a clear or compaction), and consecutive stretches
+visit what one scan visits while the stamp holds (the timeline's background build).
+**Do not index
 `frameIdentityMap` directly**; a raw `"frame:cam:track"` string will simply miss.
 
 Tuples that cannot be packed (trackIdx > 131070, or a camera absent from
@@ -11430,6 +11435,29 @@ user expanded mid-session is never clipped.
 narrow segments get the min-width center-and-clamp treatment (clamping a wide
 segment's midpoint made bars "fill in/out" while panning).
 
+**A collapsed timeline does not rebuild.** `refreshTracks` on a collapsed
+timeline (`isCollapsed()`: `.collapsed` on its container) records the session and
+`_staleRows`, and starts a BACKGROUND build (`_startBackgroundRows`): the row builders
+are generators (`_rowBuildSteps` → `_trackSegmentSteps` / `_identitySegmentSteps`,
+pausing every `rowBuildTuning.frames` (256) frames of the group walk and every
+`fimStretch` (65,536) identity entries), run in idle-time slices of at most 10 ms
+(`requestIdleCallback`, else a timer) on `Object.create(this)` — reads fall through,
+the two fields they write (`_trackSegments`, `_trackNames`) land on the scratch —
+and swapped in whole when done, then `_finishRows` (filter, tree grouping, margin) runs
+on the timeline. It gives up (rows stay stale) when the resident frames (a count +
+two sums of `frameGroups` keys) or the identity map's `layoutStamp` change while it
+runs; any `_rebuildSegments` cancels it. The synchronous builds run the same
+generators straight through (`drainSteps`, `NO_SLICES`), so the rows are the same
+(Node test group 6). `catchUp()`, called by `toggleTimeline` as it opens the timeline
+before anything measures the rows (`getPreferredHeight`), finishes a running build on
+the spot or rebuilds. On the 8-camera, 108,000-frame project reopening after Track
+All takes ~0 ms (a fresh rebuild: ~150 ms). The rebuild
+walks every group (~0.2 s on an 8-camera, 108,000-frame project) and Track All
+closes the timeline as it finishes (it now closes it BEFORE its `refreshTracks`), so
+those rows were never seen. `setData` clears `_staleRows` (it rebuilds). Code
+reading `_trackSegments` of a collapsed timeline gets the rows as of its last
+rebuild (tests open it first). Test: e2e `track-all-closes-timeline-and-3d` §5.
+
 **`refreshTracks` modes.** Default: rebuild segments, `_growContainerToFit`
 (grow-only), `resize()` — used by track add / rename / delete. `{ keepSize: true
 }` skips both, so container height AND canvas pixel size stay as the user left
@@ -11609,9 +11637,15 @@ Frame Number") keyboard-shortcut installer. Has zero transitive
 - `collapseTimeline()` closes the timeline only if it is open (never opens
   it), via `toggleTimeline()` so the height cache and toolbar button match a
   manual collapse. Returns whether it collapsed anything.
+- Opening calls the timeline's `catchUp()` first (rows a refresh skipped while
+  it was collapsed), then restores the height and resizes.
+
+The timeline instance is app-state's live `timeline` binding (`setTimeline`);
+`state.timeline`, which this used to read, was never set, so until 2026-11 the
+expand's `fitTimelineToData` and delayed `resize()` never ran.
 
 **Imports from project modules.**
-- `./app-state.js` — `state` (for `state.timeline`).
+- `./app-state.js` — `state`, `timeline` (the live binding; `state.timeline` as a fallback).
 
 **Imported by.** `pose/initialization.js`, `pose/tracker.js`
 (`collapseTimeline`, after Track All), `ui/ui-wiring.js`
@@ -12202,6 +12236,9 @@ either ID-switch check is run.
   frame, so the count is made up evenly over the tracked frames (each the usable
   frame nearest its spot, when that one is not taken yet): more than five tracked
   frames always give five samples.
+  With `opts.keyframes`, a slot's candidates are only its usable tracked
+  keyframes when it has any (same rules among fewer frames); a slot with none
+  picks as without them.
 - `pickCamera` — among the views where the group has a 2D member: the largest
   projection of its 3D (diagonal, with the camera's distortion) inside the image
   is the best, and among the views good enough to use (inside the image, at
@@ -12226,10 +12263,21 @@ either ID-switch check is run.
 
 **Drawing.** `renderIdentityGallery(host, session, {onPick})` builds the rows
 with placeholders at once and fills them AFTER the box paints: the maps first,
-then each row's images, one decoded frame per sample (`view.decoder.getFrame`,
-drawn immediately — a decoder's cached frame may be closed by the next decode).
-It stops as soon as the box is closed (a few seconds on an 8–10-camera
-session). Without a video a sample says "no video" and the maps draw on a dark
+then the images, one decoded frame per sample (`view.decoder.getFrame`, drawn
+immediately — a decoder's cached frame may be closed by the next decode). Every
+row's samples are planned first (`planRow`: frame, camera, crop), then fetched one
+queue per decoder (`fetchSamples`): a decoder is asked for one frame at a time, in
+frame order, while the cameras' queues run side by side. And the samples land on
+KEYFRAMES where they can: before planning, the gallery reads one camera's keyframe
+indices (`keyframeIndices`, `ui/image-embedder.js`: once per video, from the
+container's index; the map camera, else the first with a video; at most
+`SAMPLE_KEYFRAMES_WAIT_MS`, 1.5 s, else none) and hands them to `pickSampleFrames`
+(`opts.keyframes`), so each sample decodes as one frame instead of up to a keyframe
+gap's worth. campy's cameras share keyframes; one that did not would only decode
+slower. 26 samples on an 8-camera project (keyframe every 250 frames): 2.3 s one
+after another, 1.3 s per camera side by side, 0.37 s on keyframes (local disk). Tiles
+fill in as their camera's frames arrive, not row by row. It stops as soon as the
+box is closed (test: e2e `identity-gallery` §5b). Without a video a sample says "no video" and the maps draw on a dark
 ground. The map is a darkened still of the chosen camera with the path coloured
 by TIME on a one-hue sequential ramp and a 0:00 → end key; hovering shows the
 nearest point's time, a click goes there. The chosen view is kept on

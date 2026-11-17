@@ -11,7 +11,8 @@
 // camera to cut each sample from, the crop square, its 2D at a frame (hydrating a
 // lazy project's members for the read), and the projected path. The
 // drawing half decodes one frame per sample (`view.decoder.getFrame`) AFTER the
-// box is on screen, row by row, so the summary never waits on video, and stops
+// box is on screen, one queue per camera with the cameras side by side, so the
+// summary never waits on video, and stops
 // when the box closes. Resting the pointer on a sample shows it enlarged beside
 // the tile: the crop is copied at up to the enlarged size when it is drawn (a
 // decoder's frame may be closed by the next decode), so the preview is a sharper
@@ -24,6 +25,7 @@
 
 import { state } from './app-state.js';
 import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js';
+import { keyframeIndices } from './image-embedder.js';
 
 /** Sample images per identity. */
 export const GALLERY_SAMPLES = 5;
@@ -182,11 +184,16 @@ function isolationAt(session, frame, identityId, own) {
  * long gap left without one of their own are filled evenly over the tracked frames
  * (the usable frame nearest each spot, when that one is not taken yet).
  *
+ * `opts.keyframes` (the video's keyframe indices, increasing): a slot's
+ * candidates are then only its tracked KEYFRAMES, when it has any — the same
+ * rules among fewer frames. A keyframe decodes as one frame; any other frame
+ * decodes from the keyframe before it (up to 249 frames at a keyframe every 250).
+ *
  * @param {Object} session
  * @param {{frames: Int32Array, xyz: Float64Array}} track  from `identityTracks`
  * @param {number} identityId
  * @param {number} [k]  GALLERY_SAMPLES
- * @param {{maxCandidates?: number}} [opts]
+ * @param {{maxCandidates?: number, keyframes?: ArrayLike<number>}} [opts]
  * @returns {number[]} ascending, distinct
  */
 export function pickSampleFrames(session, track, identityId, k, opts) {
@@ -209,11 +216,30 @@ export function pickSampleFrames(session, track, identityId, k, opts) {
         }
         return -1;
     };
-    // the slot's pick among frames a0..a1-1: the isolated one nearest the target, else the most isolated
+    var KF = opts && opts.keyframes && opts.keyframes.length ? opts.keyframes : null;
+    // the tracked frames in [a0, a1) that are keyframes, as indices into F
+    var trackedKeyframes = function (a0, a1) {
+        var out2 = [];
+        if (!KF || a1 <= a0) return out2;
+        var x = 0, y = KF.length, f0 = F[a0];
+        while (x < y) { var m = (x + y) >> 1; if (KF[m] < f0) x = m + 1; else y = m; }
+        for (; x < KF.length && KF[x] <= F[a1 - 1]; x++) {
+            var at = lower(KF[x]);
+            if (at < a1 && F[at] === KF[x]) out2.push(at);
+        }
+        return out2;
+    };
+    // the slot's pick among frames a0..a1-1: the isolated one nearest the target, else the most isolated.
+    // The candidates are the slot's (usable) tracked keyframes when it has any, else its tracked frames.
     var bestIn = function (a0, a1, target, onlyUsable) {
-        var step = Math.max(1, Math.floor((a1 - a0) / maxCand));
+        var cand = trackedKeyframes(a0, a1);
+        if (onlyUsable) cand = cand.filter(function (i) { return usable(i); });
+        var all = !cand.length;
+        var len = all ? a1 - a0 : cand.length;
+        var step = Math.max(1, Math.floor(len / maxCand));
         var near = -1, nearDist = Infinity, most = -1, mostIso = -1;
-        for (var i = a0; i < a1; i += step) {
+        for (var ci = 0; ci < len; ci += step) {
+            var i = all ? a0 + ci : cand[ci];
             if (onlyUsable && !usable(i)) continue;
             var own = [track.xyz[3 * i], track.xyz[3 * i + 1], track.xyz[3 * i + 2]];
             var iso = isolationAt(session, F[i], identityId, own), dist = Math.abs(F[i] - target);
@@ -457,6 +483,21 @@ function hiDpiCanvas(w, h, className) {
     c.style.width = w + 'px'; c.style.height = h + 'px';
     c.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
     return c;
+}
+
+/** How long the gallery waits for a video's keyframes before planning without them. */
+export const SAMPLE_KEYFRAMES_WAIT_MS = 1500;
+
+/**
+ * A view's keyframe indices for `pickSampleFrames`, or null: no decoder, an
+ * unreadable index (`keyframeIndices`, read once per video and cached), or not
+ * within SAMPLE_KEYFRAMES_WAIT_MS.
+ */
+function sampleKeyframes(view) {
+    if (!view || !view.decoder) return Promise.resolve(null);
+    var read = Promise.resolve().then(function () { return keyframeIndices(view.decoder); }).catch(function () { return null; });
+    var late = new Promise(function (res) { setTimeout(function () { res(null); }, SAMPLE_KEYFRAMES_WAIT_MS); });
+    return Promise.race([read, late]);
 }
 
 function viewFor(cam) {
@@ -753,11 +794,12 @@ export function renderIdentityGallery(host, session, opts) {
     }
 
     // ---- sample images -----------------------------------------------------
-    var fillRow = async function (r) {
-        var frames = pickSampleFrames(session, tracks.get(r.id.id), r.id.id, GALLERY_SAMPLES);
-        var used = new Map();
+    // A row's samples are planned at once (frame, camera, crop: no video needed);
+    // each that needs an image becomes a job, fetched by `fetchSamples`.
+    var planRow = function (r, keyframes) {
+        var frames = pickSampleFrames(session, tracks.get(r.id.id), r.id.id, GALLERY_SAMPLES, { keyframes: keyframes });
+        var used = new Map(), jobs = [];
         for (var s = 0; s < r.slots.length; s++) {
-            if (!alive()) return;
             var fig = r.slots[s], frame = frames[s];
             if (frame == null) { fig.className = 'identity-gallery-tile is-empty'; continue; }
             var group = identityGroupAt(session, frame, r.id.id);
@@ -777,59 +819,96 @@ export function renderIdentityGallery(host, session, opts) {
                 fig.querySelector('.identity-gallery-blank').textContent = view ? 'no keypoints' : 'no video';
                 continue;
             }
-            var img = null;
-            try { img = await view.decoder.getFrame(frame); } catch (e) { img = null; }
-            if (!alive()) return;
-            // draw now: a decoder's cached frame may be closed once another is decoded
-            var c = hiDpiCanvas(GALLERY_TILE, GALLERY_TILE, 'identity-gallery-img'), ctx = c.getContext('2d');
-            ctx.fillStyle = '#000'; ctx.fillRect(0, 0, GALLERY_TILE, GALLERY_TILE);
-            var drawn = false;
-            if (img) {
-                try { ctx.drawImage(img, box.x, box.y, box.side, box.side, 0, 0, GALLERY_TILE, GALLERY_TILE); drawn = true; }
-                catch (e) { drawn = false; }
-            }
-            if (!drawn) {
-                fig.className = 'identity-gallery-tile is-missing';
-                fig.querySelector('.identity-gallery-blank').textContent = 'no frame';
-                continue;
-            }
-            // the crop again at up to the enlarged size, for the hover preview — no
-            // larger than the video's own pixels, which would only be scaled up
-            var bigSide = Math.max(GALLERY_TILE, Math.min(Math.ceil(box.side), Math.round(GALLERY_ZOOM * pixelRatio())));
-            var big = el('canvas');
-            big.width = big.height = bigSide;
-            var bctx = big.getContext('2d');
-            bctx.fillStyle = '#000'; bctx.fillRect(0, 0, bigSide, bigSide);
-            try { bctx.drawImage(img, box.x, box.y, box.side, box.side, 0, 0, bigSide, bigSide); } catch (e) { big = null; }
-            // this animal's keypoints as small dots in its colour: which one the row means when two share a crop
-            drawSampleDots(ctx, pts, box, GALLERY_TILE, r.color, 1.6);
-            if (big) {
-                fig._zoom = { kind: 'sample', w: GALLERY_ZOOM, h: GALLERY_ZOOM, color: r.color, frame: frame,
-                    label: r.id.name + ' · ' + fmtTime(frame) + ' · ' + cam + ' — click to go to this frame',
-                    draw: (function (src, pts, box, color) {
-                        return function (ctx, w, h) { ctx.drawImage(src, 0, 0, w, h); drawSampleDots(ctx, pts, box, w, color, 3); };
-                    })(big, pts, box, r.color) };
-                fig.removeAttribute('title');   // the preview says it; a native tooltip would cover it
-                fig.addEventListener('mouseenter', zoom.show.bind(null, fig));
-                fig.addEventListener('mouseleave', zoom.hide);
-            }
-            var sz = imageSize(img);
-            c.setAttribute('data-source', sz[0] + 'x' + sz[1]);
-            fig.replaceChild(c, fig.querySelector('.identity-gallery-blank'));
-            fig.className = 'identity-gallery-tile';
-            if (r.color) fig.style.borderColor = r.color;
+            jobs.push({ r: r, fig: fig, frame: frame, cam: cam, view: view, box: box, pts: pts });
         }
+        return jobs;
+    };
+
+    // Draw a sample's image into its tile, as soon as it is decoded: a decoder's
+    // cached frame may be closed once another is decoded.
+    var drawSample = function (job, img) {
+        var r = job.r, fig = job.fig, frame = job.frame, cam = job.cam, box = job.box, pts = job.pts;
+        var c = hiDpiCanvas(GALLERY_TILE, GALLERY_TILE, 'identity-gallery-img'), ctx = c.getContext('2d');
+        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, GALLERY_TILE, GALLERY_TILE);
+        var drawn = false;
+        if (img) {
+            try { ctx.drawImage(img, box.x, box.y, box.side, box.side, 0, 0, GALLERY_TILE, GALLERY_TILE); drawn = true; }
+            catch (e) { drawn = false; }
+        }
+        if (!drawn) {
+            fig.className = 'identity-gallery-tile is-missing';
+            fig.querySelector('.identity-gallery-blank').textContent = 'no frame';
+            return;
+        }
+        // the crop again at up to the enlarged size, for the hover preview — no
+        // larger than the video's own pixels, which would only be scaled up
+        var bigSide = Math.max(GALLERY_TILE, Math.min(Math.ceil(box.side), Math.round(GALLERY_ZOOM * pixelRatio())));
+        var big = el('canvas');
+        big.width = big.height = bigSide;
+        var bctx = big.getContext('2d');
+        bctx.fillStyle = '#000'; bctx.fillRect(0, 0, bigSide, bigSide);
+        try { bctx.drawImage(img, box.x, box.y, box.side, box.side, 0, 0, bigSide, bigSide); } catch (e) { big = null; }
+        // this animal's keypoints as small dots in its colour: which one the row means when two share a crop
+        drawSampleDots(ctx, pts, box, GALLERY_TILE, r.color, 1.6);
+        if (big) {
+            fig._zoom = { kind: 'sample', w: GALLERY_ZOOM, h: GALLERY_ZOOM, color: r.color, frame: frame,
+                label: r.id.name + ' · ' + fmtTime(frame) + ' · ' + cam + ' — click to go to this frame',
+                draw: (function (src, pts, box, color) {
+                    return function (ctx, w, h) { ctx.drawImage(src, 0, 0, w, h); drawSampleDots(ctx, pts, box, w, color, 3); };
+                })(big, pts, box, r.color) };
+            fig.removeAttribute('title');   // the preview says it; a native tooltip would cover it
+            fig.addEventListener('mouseenter', zoom.show.bind(null, fig));
+            fig.addEventListener('mouseleave', zoom.hide);
+        }
+        var sz = imageSize(img);
+        c.setAttribute('data-source', sz[0] + 'x' + sz[1]);
+        fig.replaceChild(c, fig.querySelector('.identity-gallery-blank'));
+        fig.className = 'identity-gallery-tile';
+        if (r.color) fig.style.borderColor = r.color;
+    };
+
+    // Every sample's image, one queue per decoder: a decoder is asked for one frame
+    // at a time, in frame order, while the cameras' queues run side by side. Each
+    // fetch is a seek and a decode (~0.1 s on local disk, far more over a network);
+    // one after another, the 25 of five identities took ~2.3 s on an 8-camera
+    // project, now about the busiest camera's share.
+    var fetchSamples = function (jobs) {
+        var byView = new Map();
+        jobs.forEach(function (j) {
+            var q = byView.get(j.view);
+            if (!q) byView.set(j.view, q = []);
+            q.push(j);
+        });
+        return Promise.all(Array.from(byView.values()).map(async function (q) {
+            q.sort(function (a, b) { return a.frame - b.frame; });
+            for (var k = 0; k < q.length; k++) {
+                if (!alive()) return;
+                var img = null;
+                try { img = await q[k].view.decoder.getFrame(q[k].frame); } catch (e) { img = null; }
+                if (!alive()) return;
+                try { drawSample(q[k], img); }
+                catch (e) { console.warn('[identity-gallery] ' + q[k].r.id.name + ':', e); }
+            }
+        }));
     };
 
     var done = (async function () {
         await new Promise(function (res) { setTimeout(res, 0); });   // the box paints first
         if (!alive()) return;
         await drawMaps(mapCam);
+        if (!alive()) return;
+        // The samples land on keyframes where they can (one decoded frame each,
+        // not up to a keyframe gap's worth): the keyframes of one camera, read
+        // once per video from its index — campy's cameras share them, and a camera
+        // that did not would only decode slower, never show the wrong frame.
+        var keyframes = await sampleKeyframes(viewFor(mapCam) || (state.views || []).filter(function (v) { return v && v.decoder; })[0]);
+        if (!alive()) return;
+        var jobs = [];
         for (var i = 0; i < rows.length; i++) {
-            if (!alive()) return;
-            try { await fillRow(rows[i]); }
+            try { jobs = jobs.concat(planRow(rows[i], keyframes)); }
             catch (e) { console.warn('[identity-gallery] ' + rows[i].id.name + ':', e); }
         }
+        await fetchSamples(jobs);
     })();
     return { done: done, element: section };
 }

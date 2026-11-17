@@ -1837,16 +1837,17 @@ async function runTrackingPass(range) {
         });
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
-        if (timeline) timeline.refreshTracks(state.session, { cap: true });
         // Track All closes the Timeline and the 3D viewer if they are open, handing
         // the space back to the views where the new IDs are shown. There is no 3D
         // pose to look at yet: tracking assigns IDs, and Triangulate All comes next.
         // A range does not: it is a targeted re-run whose result the user is usually
-        // inspecting on the timeline.
+        // inspecting on the timeline. Closed FIRST, so the timeline's rebuild below waits
+        // for it to be reopened (Timeline.refreshTracks) instead of building hidden rows.
         if (!isRange) {
             collapseTimeline();
             collapseViewport3D(viewport3d);
         }
+        if (timeline) timeline.refreshTracks(state.session, { cap: true });
         console.timeEnd('[' + label + '] total');
         var doneMsg = 'Assigned ' + lres.numIdentities + ' identities across ' +
             totalFrameCount.toLocaleString('en-US') + ' frames' +
