@@ -258,7 +258,8 @@ export function rememberTrackSummary(session, opts, checks, identities) {
  * Reopen the session's last Track All summary. The numbers are re-counted from the
  * session as it is now (a fixed switch moves the shares), the time is the pass's own,
  * and each check shows its current result: a check run since replaces the pass's
- * "Not run" / "Skipped", and one whose results were cleared reads "Not run" again.
+ * "Not run" / "Skipped", and one whose results were cleared reads "Not run" again; so
+ * does the review list (cleared: no "To review", and it is no longer the next step).
  * A skip or a failure is not kept by the check itself, so it comes from the pass —
  * or from `latest`, a check just run from this box, whose outcome (a cancel, skip or
  * failure included) replaces the pass's from then on.
@@ -282,7 +283,9 @@ export function reopenTrackSummary(session, latest) {
     });
     var counted = summarySession(session);
     if (!counted) return null;
-    return showTrackSummaryModal(summarizeTrackedIdentities(counted, saved.opts), checks, { session: counted });
+    // ...and the review list as it is now (Clear removes it, and then it is no longer the next step)
+    var rv = results.review, opts = Object.assign({}, saved.opts, { reviewPlaces: rv && rv.ok ? rv.flags.length : 0 });
+    return showTrackSummaryModal(summarizeTrackedIdentities(counted, opts), checks, { session: counted });
 }
 
 // The ID Switches tab's "Show Track All summary" (ui/id-switch-modal.js stays a leaf: it is handed this)

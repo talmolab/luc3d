@@ -50,6 +50,16 @@
  * 1 miss, ~3 in 4 unsure (its crops are the app's, the study's the training
  * script's; margin 0.25: 7 / 1, 0.3: 4 / 0). The About text quotes these.
  *
+ * On several cameras (multi-camera Track All's review list, pose/multi-camera-review.js) each identity's
+ * views at an image sample are pooled into one vector first (`poolViews`), then the rows are pre-judged once.
+ * Measured 2026-11-17 on the 22 proofread SLAP sessions (8 cameras; runs/2026-11-16_multicam-prejudge on cup:
+ * the app's own Track All and image check, the image check's default 3 largest views per animal, each session
+ * scored with the package trained on the other fold's sessions). On the 186 crossing rows with a known answer:
+ * package 8 of 16 swaps called, 0 false alarms, a verdict at 129 rows (the rest too few crops); built-in 4 of 16,
+ * 0 false alarms. On every 3D close encounter (1,311 rows): package 11 of 14, 0 false alarms. Judging each
+ * camera on its own and averaging (the first version) left most rows without enough crops on any one camera:
+ * package 1 of 16 called, 2 false alarms. Every view instead of the 3 largest: no better, ~2x the time.
+ *
  * Pure — no DOM, no app state, no imports.
  */
 
@@ -208,6 +218,21 @@ export function prejudgeReviewRows(emb, rows, fps, opts) {
                  verdict: prejudgeVerdict(sep, score, o) };
     });
     return { rows: out, pairs: pairs, gateCos: o.gateCos, margin: o.margin, windowSeconds: o.windowSeconds };
+}
+
+/**
+ * One identity's vector at one image sample from its views on several cameras: the mean of their unit vectors,
+ * re-normalised. One view: that vector itself, so a single-camera session is judged exactly as calibrated.
+ * @param {Array<?Float64Array>} vectors  unit vectors (null entries skipped)
+ * @returns {?Float64Array}
+ */
+export function poolViews(vectors) {
+    var vs = vectors.filter(Boolean);
+    if (!vs.length) return null;
+    if (vs.length === 1) return vs[0];
+    var D = vs[0].length, sum = new Float64Array(D);
+    for (var i = 0; i < vs.length; i++) for (var x = 0; x < D; x++) sum[x] += vs[i][x];
+    return unitVector(sum);
 }
 
 /** The pre-judge row for a review-list row (same frame and pair, either order), or null. */
