@@ -27,7 +27,7 @@
  *
  * Run:  node tests/test-timeline-track-segments.mjs
  */
-import { Timeline } from '../ui/timeline.js';
+import { Timeline, rowBuildTuning } from '../ui/timeline.js';
 import { getTrackColor, NULL_ID_COLOR } from '../ui/overlays.js';
 import { Session, Camera, Skeleton } from '../pose/pose-data.js';
 
@@ -373,6 +373,41 @@ group('5. Identities rows equal the reference; forEachFrameIdentity = frameIdent
     if (first) console.error('    first mismatch', first);
     ok(bad === 0, `800 random sessions build the reference Identities rows (${bad} differ)`);
     ok(badVisit === 0, `forEachFrameIdentity visits the frameIdentityEntries records in order (${badVisit} differ)`);
+}
+
+group('6. rows built in slices (a pause at every chance) = rows built at once');
+{
+    // The background build of a collapsed timeline (Timeline._startBackgroundRows)
+    // runs the same steps with pauses between them.
+    const saved = Object.assign({}, rowBuildTuning);
+    rowBuildTuning.frames = 1; rowBuildTuning.fimStretch = 3;
+    const always = { due: () => true };
+    const run = (steps) => { let pauses = 0; while (!steps.next().done) pauses++; return pauses; };
+    let badT = 0, badI = 0, pausesT = 0, pausesI = 0, badScan = 0;
+    for (let it = 0; it < 300; it++) {
+        const s = randomSession(it % 4 === 0);
+        const a = makeTimeline(), b = makeTimeline();
+        a._buildTrackSegments(s);
+        pausesT += run(b._trackSegmentSteps(s, always));
+        if (JSON.stringify(a._trackSegments) !== JSON.stringify(b._trackSegments) || JSON.stringify(a._trackNames) !== JSON.stringify(b._trackNames)) badT++;
+    }
+    for (let it = 0; it < 300; it++) {
+        const s = identitySession();
+        const a = makeTimeline(), b = makeTimeline();
+        a._buildIdentitySegments(s);
+        pausesI += run(b._identitySegmentSteps(s, always));
+        if (JSON.stringify(a._trackSegments) !== JSON.stringify(b._trackSegments)) badI++;
+        // the identity walk in stretches visits what one walk visits, in order
+        const whole = [], parts = [];
+        s.forEachFrameIdentity((f, c, t, id) => whole.push([f, c, t, id]));
+        const scan = s.frameIdentityScan();
+        for (let at = 0; at < scan.span; ) at = s.forEachFrameIdentity((f, c, t, id) => parts.push([f, c, t, id]), at, Math.min(scan.span, at + 2));
+        if (JSON.stringify(whole) !== JSON.stringify(parts)) badScan++;
+    }
+    Object.assign(rowBuildTuning, saved);
+    ok(pausesT > 0 && badT === 0, `Tracks rows: the same in 300 random sessions (${badT} differ; ${pausesT} pauses)`);
+    ok(pausesI > 0 && badI === 0, `Identities rows: the same in 300 random sessions (${badI} differ; ${pausesI} pauses)`);
+    ok(badScan === 0, `forEachFrameIdentity in stretches of 2 = one walk (${badScan} differ)`);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
