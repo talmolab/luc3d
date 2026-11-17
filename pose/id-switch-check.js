@@ -425,12 +425,17 @@ export function learnIdentityMetric(X, n, D, stretch, sample, o, weights) {
         Sw[ym * d + xm] = Sw[xm * d + ym];
         Sb[ym * d + xm] = Sb[xm * d + ym];
     }
-    var unit = function (z) {
-        var nn = 0; for (var x = 0; x < z.length; x++) nn += z[x] * z[x];
-        nn = Math.sqrt(nn) || 1; for (var x2 = 0; x2 < z.length; x2++) z[x2] /= nn;
+    // Scale out[off .. off+len) to unit length (the same operations, in the same
+    // order, whether the vector is its own array or a stretch of a shared one).
+    var unitAt = function (z, off, len) {
+        var nn = 0; for (var x = 0; x < len; x++) nn += z[off + x] * z[off + x];
+        nn = Math.sqrt(nn) || 1; for (var x2 = 0; x2 < len; x2++) z[off + x2] /= nn;
         return z;
     };
-    if (nw < 20 || nb < 20) return { dims: d, project: function (x) { return unit(pca.project(x)); } };
+    if (nw < 20 || nb < 20) {
+        var pcaUnitInto = function (x, out, off) { return unitAt(pca.projectInto(x, out, off), off, d); };
+        return { dims: d, projectInto: pcaUnitInto, project: function (x) { return pcaUnitInto(x, new Float64Array(d), 0); } };
+    }
     var tr = 0;
     for (var x3 = 0; x3 < d; x3++) { for (var y3 = 0; y3 < d; y3++) { Sw[x3 * d + y3] /= sw; Sb[x3 * d + y3] /= sb; } tr += Sw[x3 * d + x3]; }
     for (var x4 = 0; x4 < d; x4++) Sw[x4 * d + x4] += (o.metricReg != null ? o.metricReg : 0.1) * tr / d;
@@ -448,13 +453,15 @@ export function learnIdentityMetric(X, n, D, stretch, sample, o, weights) {
         var s3 = 0; for (var y8 = 0; y8 < d; y8++) s3 += W1[x8 * d + y8] * em.vectors[y8 * d + col]; P[x8 * Q + j] = s3;
     });
     var yBuf = new Float64Array(d);
+    var metricInto = function (x, out, off) {
+        var y = pca.projectInto(x, yBuf, 0);
+        for (var j = 0; j < Q; j++) { var s4 = 0; for (var x9 = 0; x9 < d; x9++) s4 += y[x9] * P[x9 * Q + j]; out[off + j] = s4; }
+        return unitAt(out, off, Q);
+    };
     return {
         dims: Q,
-        project: function (x) {
-            var y = pca.projectInto(x, yBuf, 0), z = new Float64Array(Q);
-            for (var j = 0; j < Q; j++) { var s4 = 0; for (var x9 = 0; x9 < d; x9++) s4 += y[x9] * P[x9 * Q + j]; z[j] = s4; }
-            return unit(z);
-        },
+        projectInto: metricInto,
+        project: function (x) { return metricInto(x, new Float64Array(Q), 0); },
     };
 }
 
@@ -487,13 +494,14 @@ export function learnIdentityMetric(X, n, D, stretch, sample, o, weights) {
  * @param {number} every grid samples per feature sample (1 for size)
  * @returns {Array<{frame, startFrame, identityA, identityB, nameA, nameB, score, cameras}>} sorted by frame
  */
-export function contactChangeScores(grid, feat, o, every) {
+export function contactChangeScores(grid, feat, o, every, has) {
     var T = grid.T, K = grid.K, frames = grid.frames, idents = grid.idents;
+    var hasFeat = has || function (i, k) { return !!feat(i, k); };
     var ce = contactEpisodes(grid, o.episodeGapSeconds), comp = ce.comp;
     var perSide = Math.max(1, Math.round(o.windowSeconds * grid.hz / every)), span = grid.secToSamples(o.maxSpanSeconds);
     var minN = Math.max(0, Math.round((o.minApartSeconds || 0) * grid.hz / every));
     var usable = function (i, k, p) {
-        return grid.hasCen(i, k) && !(comp[i * K + p] >= 0 && comp[i * K + p] === comp[i * K + k]) && !!feat(i, k);
+        return grid.hasCen(i, k) && !(comp[i * K + p] >= 0 && comp[i * K + p] === comp[i * K + k]) && hasFeat(i, k);
     };
     var collect = function (k, p, from, dir, limit) {
         var got = [];
@@ -760,7 +768,13 @@ async function scoreContacts(grid, views, o, every, unitRows, fitProgress, sampl
     var T = grid.T, K = grid.K;
     var stretchOf = new Int32Array(T * K).fill(-1);
     grid.tl.forEach(function (t, ti) { for (var i = t.start; i <= t.end; i++) stretchOf[i * K + t.k] = ti; });
-    var feats = new Map();    // row (sample * K + identity) -> [{c, u}]
+    // Each view's features go into ONE flat buffer (its rows in `rowAt`), and a
+    // row's [{c, u}] entries are built only when the scoring reads that row: it
+    // reads the samples around contacts, not all of them (~135,000 rows of
+    // arrays, objects and lists on an 8-camera, 108,000-frame project, mostly
+    // garbage). `rowHas` answers "does it have features?" without building any.
+    var feats = new Map();    // row (sample * K + identity) -> [{c, u}], built on first read
+    var rowHas = new Uint8Array(T * K), viewFeat = [];
     for (var ci = 0; ci < views.length; ci++) {
         throwIfAborted(o.signal);
         if (fitProgress) await fitProgress(ci, views.length);
@@ -783,14 +797,33 @@ async function scoreContacts(grid, views, o, every, unitRows, fitProgress, sampl
             st[j] = stretchOf[data.rows[r2]]; sm[j] = Math.floor(data.rows[r2] / K);
             if (wt) wt[j] = wRow(r2);
         });
-        var metric = learnIdentityMetric(Xt, use.length, D, st, sm, o, wt);
+        var metric = learnIdentityMetric(Xt, use.length, D, st, sm, o, wt), Q = metric.dims;
+        // rowAt: a row's first index in this view; nextAt chains any further ones in push order
+        var U = new Float64Array(n * Q), rowAt = new Int32Array(T * K).fill(-1), lastAt = new Int32Array(T * K).fill(-1);
+        var nextAt = new Int32Array(n).fill(-1);
         for (var r3 = 0; r3 < n; r3++) {
-            var row = data.rows[r3];
-            if (!feats.has(row)) feats.set(row, []);
-            feats.get(row).push({ c: ci, u: metric.project(X.subarray(r3 * D, (r3 + 1) * D)) });
+            metric.projectInto(X.subarray(r3 * D, (r3 + 1) * D), U, r3 * Q);
+            var row3 = data.rows[r3];
+            if (rowAt[row3] < 0) rowAt[row3] = r3; else nextAt[lastAt[row3]] = r3;
+            lastAt[row3] = r3; rowHas[row3] = 1;
         }
+        viewFeat.push({ U: U, Q: Q, rowAt: rowAt, nextAt: nextAt });
     }
-    var scored = contactChangeScores(grid, function (i3, k3) { return feats.get(i3 * K + k3) || null; }, o, every);
+    var featOf = function (i3, k3) {
+        var row = i3 * K + k3;
+        if (!rowHas[row]) return null;
+        var list = feats.get(row);
+        if (!list) {
+            list = [];
+            for (var cj = 0; cj < viewFeat.length; cj++) {        // in view order, as when they were pushed per view
+                var vf = viewFeat[cj];
+                for (var r4 = vf.rowAt[row]; r4 >= 0; r4 = vf.nextAt[r4]) list.push({ c: cj, u: vf.U.subarray(r4 * vf.Q, (r4 + 1) * vf.Q) });
+            }
+            feats.set(row, list);
+        }
+        return list;
+    };
+    var scored = contactChangeScores(grid, featOf, o, every, function (i3, k3) { return rowHas[i3 * K + k3] === 1; });
     markContactChanges(scored, o);
     if (fitProgress) await fitProgress(views.length, views.length);
     return scored;

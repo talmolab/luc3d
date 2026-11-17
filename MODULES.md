@@ -3790,7 +3790,8 @@ threshold, fps, step, sampleHz, cue}` (+ `bones` for size; + `imageHz`, `crops`,
 `cameras`, `samples: {embedded, of, rounds}` for images) or `{ok:false, reason}`; the
 pipeline's parts — `buildGrid(session, o, needSize)`, `contactEpisodes(grid,
 gapSeconds)`, `learnIdentityMetric(X, n, D, stretch, sample, o, weights?)`,
-`contactChangeScores(grid, feat, o, every)`, `markContactChanges(scored, o)`
+`contactChangeScores(grid, feat, o, every, has?)` (`has(i, k)` answers whether
+features exist without building them; default `!!feat(i, k)`), `markContactChanges(scored, o)`
 (the change-point step, returning the change points; exported so a threshold can
 be re-applied to the same scores), `symmetricEigen(A, n)` (cyclic Jacobi) and
 `fitPCA(X, n, D, k, {weights?})` (randomized subspace iteration; `{dims, project(x),
@@ -3800,7 +3801,10 @@ would just rotate the rows, and `learnIdentityMetric`'s cosines do not change
 under a rotation (test `fitPCA keeping every direction`). That, and summing only
 one triangle of its symmetric within/between scatter (mirrored after, bit-identical),
 took the size check from ~1.3 s to ~0.6 s on the 8-camera, 108,000-frame project
-(same encounters and flags, scores within 3e-14). Which image
+(same encounters and flags, scores within 3e-14). `scoreContacts` projects each
+view's rows into ONE flat buffer (`metric.projectInto`) and builds a row's `[{c, u}]`
+entries (views of that buffer) only when the scoring reads it, answering presence
+from a byte per row: ~0.5 s, the fitting task 392 → 297 ms, bit-identical. Which image
 samples to embed — `contactReads(grid, has, o, every)` (the samples the scoring
 asks about, given which have features), `planImageSamples(grid, o, every, st)`,
 `MAX_PLAN_ROUNDS` (4), `MAX_BACKGROUND_GAP_SECONDS` (10); `KEYFRAME_GAP_TOLERANCE` (1.1);
