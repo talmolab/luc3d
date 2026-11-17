@@ -28,23 +28,24 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { noteProgress } from './progress-delta.js?v=47ae124802cc';
-import { state, getActiveSession } from './app-state.js?v=47ae124802cc';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=47ae124802cc';
-import { showPanelTab } from './panel-rail.js?v=47ae124802cc';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=47ae124802cc';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=47ae124802cc';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=47ae124802cc';
-import { getTrackingThreshold } from './settings.js?v=47ae124802cc';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=47ae124802cc';
+import { noteProgress } from './progress-delta.js?v=4ea22dee07b5';
+import { state, getActiveSession } from './app-state.js?v=4ea22dee07b5';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=4ea22dee07b5';
+import { showPanelTab } from './panel-rail.js?v=4ea22dee07b5';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=4ea22dee07b5';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=4ea22dee07b5';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=4ea22dee07b5';
+import { getTrackingThreshold } from './settings.js?v=4ea22dee07b5';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=4ea22dee07b5';
+import { scoreSizeGridOffThread } from '../pose/size-check-pool.js?v=4ea22dee07b5';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=47ae124802cc';
-import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine } from './image-model-dialog.js?v=47ae124802cc';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=47ae124802cc';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=47ae124802cc';
+         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=4ea22dee07b5';
+import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine } from './image-model-dialog.js?v=4ea22dee07b5';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=4ea22dee07b5';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=4ea22dee07b5';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=47ae124802cc';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=4ea22dee07b5';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -299,15 +300,19 @@ function openProgressDialog(title) {
 // ---------------------------------------------------------------------------
 
 async function runSize(session, rate) {
-    // The overlay's plain form (spinner + message), not a counter: the check is main-thread work (~0.6 s on
-    // an 8-camera, 108,000-frame project) whose only progress is 0 then 1 of one fitting step — which the
-    // counter used to print as "0/1 frames (0%)", frozen until the overlay closed.
+    // The overlay's plain form (spinner + message), not a counter: the check (~0.5 s on an 8-camera,
+    // 108,000-frame project) has no progress worth counting — the counter used to print "0/1 frames (0%)",
+    // frozen until the overlay closed.
     showLoading('Comparing each animal\'s body size before and after its contacts…', { title: 'Checking ID switches (body size)' });
     await yieldToPaint();
     try {
-        // `onProgress` is awaited between sampling the session and fitting/scoring (and at the end):
-        // yielding there lets the page paint between the two halves instead of holding it for both.
-        return await checkSizeSwitches(session, { fps: rate.fps, onProgress: function () { return yieldToPaint(); } });
+        // Sampling the session runs here (it reads the InstanceGroups), in slices of ~25 ms with the
+        // page painting between them (`pauseSampling`); the scoring goes to a worker
+        // (pose/size-check-pool.js). Without one it scores here, and `onProgress` lets the page paint
+        // between the two halves.
+        var paint = function () { return yieldToPaint(); };
+        return await checkSizeSwitches(session, { fps: rate.fps, scoreGrid: scoreSizeGridOffThread,
+            pauseSampling: paint, onProgress: paint });
     } finally { hideLoading(); }
 }
 
