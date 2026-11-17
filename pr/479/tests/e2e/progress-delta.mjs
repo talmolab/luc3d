@@ -21,7 +21,7 @@
  *      `width` fill: same stretch, and the tint grows with that fill's own
  *      transition (120 ms linear), read from its computed style.
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { startServer, launchBrowser, waitForAnimations, ANIMATING_IN_PAGE } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -44,7 +44,15 @@ try {
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // The tint's box, as a fraction of its track, plus its state.
-    await page.evaluate(() => {
+    // `__animating()` / `__settled()`: whether a CSS transition or finite
+    // animation runs (the fills glide, the tint flashes), and a wait for none,
+    // for the waits inside `evaluate`.
+    await page.evaluate((ANIMATING) => {
+        window.__animating = new Function('return ' + ANIMATING);
+        window.__settled = async () => {
+            const t0 = performance.now();
+            while (window.__animating() && performance.now() - t0 < 10000) await new Promise(r => requestAnimationFrame(r));
+        };
         window.__delta = (track) => {
             const d = track.querySelector('.progress-delta');
             if (!d) return null;
@@ -55,8 +63,8 @@ try {
                 transition: d.style.transition,
             };
         };
-    });
-    const settle = () => page.waitForTimeout(400);
+    }, ANIMATING_IN_PAGE);
+    const settle = () => waitForAnimations(page);
 
     // ---- 1. loading overlay ----
     const ov = (fn, ...a) => page.evaluate(async ([fn, a]) => {
@@ -86,10 +94,10 @@ try {
         const at = () => parseFloat(getComputedStyle(d, '::after').opacity);
         await new Promise(r => requestAnimationFrame(r));
         const start = at();
-        await new Promise(r => setTimeout(r, 1000));
+        await window.__settled();
         return { start, end: at() };
     });
-    await page.waitForTimeout(100);
+    await settle();
     const steadyShot = await page.locator('#loadingProgress').screenshot();
     d = await ovDelta();
     check(d && d.on && Math.abs(d.left - 0.30) < 0.005 && Math.abs(d.right - 0.55) < 0.005,
@@ -118,8 +126,11 @@ try {
         const fill = document.getElementById('loadingProgressFill');
         lo.showLoadingProgress('Working', 90, 100);
         const t = track.getBoundingClientRect(), out = [];
+        // Every frame until the glide is over (not a fixed time, which under
+        // load or slowed animations ends mid-glide), then one more.
         const t0 = performance.now();
-        while (performance.now() - t0 < 300) {
+        let more = 1;
+        while ((window.__animating() || more-- > 0) && performance.now() - t0 < 10000) {
             await new Promise(r => requestAnimationFrame(r));
             const f = fill.getBoundingClientRect(), d = track.querySelector('.progress-delta').getBoundingClientRect();
             out.push({ fill: (f.right - t.left) / t.width, delta: (d.right - t.left) / t.width });
@@ -156,13 +167,13 @@ try {
         const id = m.addTask({ label: 'cam0.mp4' });
         m.show();
         m.updateTask(id, { phase: 'mp4box', ratio: 0 });
-        await new Promise(r => setTimeout(r, 300));
+        await window.__settled();
         m.updateTask(id, { phase: 'mp4box', ratio: 0.5 });    // 5% + 85% x 0.5 = 47.5%
-        await new Promise(r => setTimeout(r, 300));
+        await window.__settled();
         const wrap = document.querySelector('.lpm-bar-wrap');
         const out = { a: window.__delta(wrap) };
         m.updateTask(id, { phase: 'mp4box', ratio: 1 });      // 90%
-        await new Promise(r => setTimeout(r, 300));
+        await window.__settled();
         out.b = window.__delta(wrap);
         m.dismiss();
         return out;
