@@ -4687,13 +4687,15 @@ to train a model for the rig.
 Load SLP, Track All and the image check with each model, headless Chrome on the CPU,
 all 395 videos: the review list holds 1,632 of the 1,633 rows, and the scores follow
 the study's (package separation r 0.985, row score r 0.975; built-in score r 0.88,
-its crops being the app's, not the training script's). Clean truth (1,625 rows, 94
-swaps), shipped settings:
+its crops being the app's, not the training script's). Answer key: the proofread
+files with the five stretches the proofreader confirmed as her mistakes corrected
+(2026-11-16, `runs/2026-11-16_gtfix`; 7 places change answer; 1,632 rows, 95 swaps),
+shipped settings:
 
 | model | swaps called | false alarms | misses | unsure / no verdict |
 |---|---|---|---|---|
-| package (gate 0.7, margin 0.1) | 66 | 1 | 1 | 5 unsure, 289 alike, 35 sparse |
-| built-in (margin 0.2) | 14 | 2 | 1 | 1,195 unsure, 37 sparse |
+| package (gate 0.7, margin 0.1) | 67 | 1 | 1 | 5 unsure, 289 alike, 35 sparse |
+| built-in (margin 0.2) | 14 | 2 | 1 | 1,201 unsure, 37 sparse |
 
 Built-in at margin 0.25: 7 / 1; 0.3: 4 / 0. About 1,230 further rows (mostly
 arrivals and tracklet changes) have too few crops: their rows show no image note, and the summary line counts them. The tab's About text quotes
