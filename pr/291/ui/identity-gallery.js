@@ -22,8 +22,8 @@
 // Depends on: ui/app-state.js (state), pose/lazy-residency.js
 // (hydrateFrameMembers2d, releaseFrameMembers2d).
 
-import { state } from './app-state.js?v=66ec0c2c1fb8';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=66ec0c2c1fb8';
+import { state } from './app-state.js?v=321d9848a087';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=321d9848a087';
 
 /** Sample images per identity. */
 export const GALLERY_SAMPLES = 5;
@@ -47,7 +47,13 @@ export const MAP_MAX_POINTS = 2400;
  * `[x, y, z]` rows — or null when it has none.
  */
 export function groupCentroid(p3) {
-    if (!p3 || !p3.length) return null;
+    var out = [0, 0, 0];
+    return groupCentroidInto(p3, out) ? out : null;
+}
+
+/** `groupCentroid` into a caller's `out` (no allocation); false when the group has no 3D point. */
+function groupCentroidInto(p3, out) {
+    if (!p3 || !p3.length) return false;
     var sx = 0, sy = 0, sz = 0, n = 0, i, x, y, z;
     if (typeof p3[0] === 'number') {
         for (i = 0; i + 2 < p3.length; i += 3) {
@@ -60,7 +66,9 @@ export function groupCentroid(p3) {
             if (r && isFinite(r[0]) && isFinite(r[1]) && isFinite(r[2])) { sx += r[0]; sy += r[1]; sz += r[2]; n++; }
         }
     }
-    return n ? [sx / n, sy / n, sz / n] : null;
+    if (!n) return false;
+    out[0] = sx / n; out[1] = sy / n; out[2] = sz / n;
+    return true;
 }
 
 /**
@@ -73,26 +81,35 @@ export function groupCentroid(p3) {
 export function identityTracks(session) {
     var acc = new Map();
     if (!session || !session.instanceGroups) return new Map();
+    // Runs once per Track All summary over every group (~540,000 on an 8-camera,
+    // 108,000-frame project), so a frame allocates nothing: a frame holds a few
+    // groups, so an identity's second group is found by scanning them, and the
+    // centroid goes into `c`. Each identity is pushed in the order of its group
+    // among the frame's groups, as the Map of first appearances gave.
+    var c = [0, 0, 0];
     session.instanceGroups.forEach(function (groups, frame) {
-        var seen = new Map(), dup = new Set();
-        (groups || []).forEach(function (g) {
-            if (!g || g.identityId == null || g.identityId < 0) return;
-            if (seen.has(g.identityId)) dup.add(g.identityId); else seen.set(g.identityId, g);
-        });
-        seen.forEach(function (g, id) {
-            if (dup.has(id)) return;
-            var c = groupCentroid(g.points3d);
-            if (!c) return;
+        if (!groups) return;
+        for (var gi = 0; gi < groups.length; gi++) {
+            var g = groups[gi];
+            if (!g || g.identityId == null || g.identityId < 0) continue;
+            var id = g.identityId, twice = false;
+            for (var gj = 0; gj < groups.length && !twice; gj++) {
+                if (gj !== gi && groups[gj] && groups[gj].identityId === id) twice = true;
+            }
+            if (twice) continue;                         // ambiguous frame for this identity
+            if (!groupCentroidInto(g.points3d, c)) continue;
             var a = acc.get(id);
             if (!a) acc.set(id, a = { frames: [], xyz: [] });
             a.frames.push(+frame); a.xyz.push(c[0], c[1], c[2]);
-        });
+        }
     });
     var out = new Map();
     acc.forEach(function (a, id) {
-        var n = a.frames.length, order = new Int32Array(n);
-        for (var i = 0; i < n; i++) order[i] = i;
-        order.sort(function (p, q) { return a.frames[p] - a.frames[q]; });
+        var n = a.frames.length, order = new Int32Array(n), sorted = true;
+        for (var i = 0; i < n; i++) { order[i] = i; if (i && a.frames[i] < a.frames[i - 1]) sorted = false; }
+        // Frames usually arrive in order already: a comparator sort over each
+        // identity's ~100,000 frames was ~30 ms for nothing.
+        if (!sorted) order.sort(function (p, q) { return a.frames[p] - a.frames[q]; });
         var frames = new Int32Array(n), xyz = new Float64Array(3 * n);
         for (var j = 0; j < n; j++) {
             var k = order[j];

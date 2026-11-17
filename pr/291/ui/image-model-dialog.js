@@ -21,12 +21,12 @@
  * ui/image-embedder.js (BUILTIN_IMAGE_MODEL), import-export/save-load.js (markDirty).
  */
 
-import { BUILTIN_IMAGE_MODEL } from './image-embedder.js?v=66ec0c2c1fb8';
+import { BUILTIN_IMAGE_MODEL } from './image-embedder.js?v=321d9848a087';
 import {
     loadModelPackageFromFiles, loadModelPackageFromUrl, registeredModelPackage, registeredModelPackages,
-} from './image-model-package.js?v=66ec0c2c1fb8';
-import { modelChoiceOf } from '../pose/image-model-manifest.js?v=66ec0c2c1fb8';
-import { markDirty } from '../import-export/save-load.js?v=66ec0c2c1fb8';
+} from './image-model-package.js?v=321d9848a087';
+import { modelChoiceOf } from '../pose/image-model-manifest.js?v=321d9848a087';
+import { markDirty } from '../import-export/save-load.js?v=321d9848a087';
 
 function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, function (c) {
