@@ -13007,7 +13007,8 @@ above the ~4 GB cap.
   browser" instead of the plot; the project rows still update.
 - **`measureUserAgentSpecificMemory()`** (whole page, workers included) only
   where `crossOriginIsolated`: at most every 10 s, one call in flight, shown as
-  two rows and an orange line. The deployed site sends no COOP/COEP headers,
+  two rows and an orange line (named in the legend only while it is shown).
+  The deployed site sends no COOP/COEP headers,
   so it is off there; `python3 server.py --isolated` sends them. A refused call
   (Playwright's Chromium rejects it even when isolated) hides the two rows for
   the rest of the page's life.

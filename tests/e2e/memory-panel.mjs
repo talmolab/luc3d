@@ -68,6 +68,7 @@ const panelState = page => page.evaluate(() => {
         plot: vis('memoryPlot'),
         ua: vis('memoryUa') ? document.getElementById('memoryUa').textContent : null,
         uaWorkers: vis('memoryUaWorkers') ? document.getElementById('memoryUaWorkers').textContent : null,
+        uaLegend: vis('memoryLegendUa'),
         resident: document.getElementById('memoryResident').textContent,
         groups: document.getElementById('memoryGroups').textContent,
         sessions: document.getElementById('memorySessions').textContent,
@@ -100,7 +101,7 @@ try {
         check(s.sampling && s.plot && MB_RE.test(s.now) && /^M[\d.]+ [\d.]+(L[\d.]+ [\d.]+)+$/.test(s.path),
             `opened from the rail it samples once a second and draws a line (${s.now})`, s);
         check(s.limitShown && MB_RE.test(s.limit), `the heap limit is a reference line (${s.limit})`);
-        check(!s.coarse && !s.unavailable && s.ua === null,
+        check(!s.coarse && !s.unavailable && s.ua === null && !s.uaLegend,
             'a live reading: no rounding note, no "not available", no whole-page rows on a non-isolated page');
         check(/workers/.test(s.tip) && /GPU/.test(s.tip) && /typed arrays/.test(s.tip),
             'the ⓘ says what the number leaves out (workers, GPU) and that typed arrays count');
@@ -191,8 +192,8 @@ try {
         await waitTaken(page, 4);
         const s = await panelState(page);
         const calls = await page.evaluate(() => window.__uaCalls);
-        check(s.ua === '700 MB' && s.uaWorkers === '200 MB' && s.uaPath.length > 0,
-            'an isolated page shows the whole page and its workers, and a second line', s);
+        check(s.ua === '700 MB' && s.uaWorkers === '200 MB' && s.uaPath.length > 0 && s.uaLegend,
+            'an isolated page shows the whole page and its workers, and a second line named in the legend', s);
         check(calls === 1, `it asks at most every 10 s (${calls} call in ${s.taken} samples)`);
         await context.close();
     }
@@ -208,7 +209,7 @@ try {
         await openPanel(page);
         await waitTaken(page, 3);
         const s = await panelState(page);
-        check(s.ua === null && s.uaWorkers === null && MB_RE.test(s.now),
+        check(s.ua === null && s.uaWorkers === null && !s.uaLegend && MB_RE.test(s.now),
             'a refused call hides the whole-page rows (never "measuring…" forever); the heap view stays', s);
         await context.close();
     }

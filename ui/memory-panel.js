@@ -118,6 +118,7 @@ function render(heap, now) {
     const uaShown = uaMemoryAvailable();
     e.uaRow.hidden = !uaShown;
     e.uaWorkersRow.hidden = !uaShown;
+    e.legendUa.hidden = !uaShown;
     if (uaShown) {
         setText(e.ua, _ua ? formatMB(_ua.bytes) : 'measuring…');
         setText(e.uaWorkers, _ua ? formatMB(_ua.workers) : '–');
@@ -237,8 +238,11 @@ function build(pane) {
     const legend = document.createElement('div');
     legend.className = 'memory-legend';
     legend.innerHTML = '<span class="memory-key memory-key-used"></span>used' +
-        '<span class="memory-key memory-key-limit"></span>heap limit';
+        '<span class="memory-key memory-key-limit"></span>heap limit' +
+        '<span class="memory-legend-ua" id="memoryLegendUa" hidden>' +
+        '<span class="memory-key memory-key-ua"></span>whole page, workers too</span>';
     body.appendChild(legend);
+    const legendUa = legend.querySelector('#memoryLegendUa');
 
     const coarse = document.createElement('div');
     coarse.className = 'memory-note';
@@ -275,7 +279,7 @@ function build(pane) {
 
     return {
         unavailable: unavailable, heapBody: body, now: now, coarse: coarse,
-        usedPath: usedPath, uaPath: uaPath, limitLine: limitLine, scale: scale,
+        usedPath: usedPath, uaPath: uaPath, limitLine: limitLine, scale: scale, legendUa: legendUa,
         peak: peak.value, total: total.value, limit: limit.value,
         ua: ua.value, uaRow: ua.row, uaWorkers: uaWorkers.value, uaWorkersRow: uaWorkers.row,
         resident: resident.value, groups: groups.value, sessions: sessions.value,
