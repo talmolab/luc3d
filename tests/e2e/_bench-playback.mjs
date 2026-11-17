@@ -82,6 +82,9 @@
  *                            GC) of the Triangulate All run, to
  *                            trace-triangulate-all.json (a 'tri-start' user
  *                            timing mark is its zero)
+ *     TRACK_TRACE=1          a Chrome trace (same categories) of the Track All
+ *                            run and the 2 s after it, to trace-track-all.json
+ *                            (a 'track-start' user timing mark is its zero)
  *     START=3000             start frame for every scenario without an @<frame>
  *     SEEKS=0                after the scenarios, N paused random JUMPS (each
  *                            followed by STEPS single forward steps): time until
@@ -212,6 +215,9 @@ const DUR = Number(process.env.DUR || 20);
 const TRACE_SECS = Number(process.env.TRACE_SECS ?? 8);
 const TRI_METHOD = process.env.TRI_METHOD === 'ba' ? 'ba' : 'dlt';
 const TRI_TRACE = process.env.TRI_TRACE === '1';
+const TRACK_TRACE = process.env.TRACK_TRACE === '1';
+const TRACE_CATEGORIES = ['-*', 'devtools.timeline', 'disabled-by-default-devtools.timeline', 'toplevel',
+    'v8.execute', 'disabled-by-default-v8.cpu_profiler', 'disabled-by-default-v8.gc', 'blink.user_timing'];
 const RVFC_ALL = process.env.RVFC_ALL === '1';
 const PORT = Number(process.env.PORT || 8123);
 // Files the folder pick must NOT include (relative path regex): dotfiles and a
@@ -521,7 +527,10 @@ try {
     if (PREP === 'none') log(`\n[${el()}] PREP=none — playing the project as loaded (no Track All / Triangulate All)`);
     if (PREP !== 'none' && ps.with3d === 0 && ps.identities === 0 && ps.groups === 0) {
         log(`\n[${el()}] no identities — running Track All (NANIMALS=${process.env.NANIMALS || 3})`);
+        const trackTracePath = TRACK_TRACE ? path.join(OUT_DIR, 'trace-track-all.json') : null;
+        if (trackTracePath) await browser.startTracing(page, { path: trackTracePath, screenshots: false, categories: TRACE_CATEGORIES });
         const r = await page.evaluate(async () => {
+            performance.mark('track-start');
             const t = performance.now();
             try {
                 const tr = await import('/pose/tracker.js');
@@ -530,6 +539,11 @@ try {
             return { ms: Math.round(performance.now() - t) };
         });
         log(`[${el()}] Track All: ${JSON.stringify(r)}`);
+        if (trackTracePath) {
+            await page.waitForTimeout(2000);   // the tasks it leaves queued
+            await browser.stopTracing();
+            log(`[${el()}] Track All trace: ${trackTracePath} (${(fs.statSync(trackTracePath).size / 1e6).toFixed(1)} MB)`);
+        }
         summary.trackAll = { ...r, hashes: await resultHashes() };
         log(`[${el()}] result hashes after Track All: ${JSON.stringify(summary.trackAll.hashes)}`);
         ps = await projState();
@@ -598,11 +612,7 @@ try {
         });
         const triTracePath = TRI_TRACE ? path.join(OUT_DIR, 'trace-triangulate-all.json') : null;
         if (triTracePath) {
-            await browser.startTracing(page, {
-                path: triTracePath, screenshots: false,
-                categories: ['-*', 'devtools.timeline', 'disabled-by-default-devtools.timeline', 'toplevel',
-                    'v8.execute', 'disabled-by-default-v8.cpu_profiler', 'disabled-by-default-v8.gc', 'blink.user_timing'],
-            });
+            await browser.startTracing(page, { path: triTracePath, screenshots: false, categories: TRACE_CATEGORIES });
         }
         const r = await page.evaluate(async (METHOD) => {
             const st = window.__lucid.state;
