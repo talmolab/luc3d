@@ -30,6 +30,7 @@ import {
     setVideoController, setPaneManager,
 } from './app-state.js';
 import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js';
+import { setPageProject } from './page-title.js';
 import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js';
 import {
     triangulateAndReproject, getInstanceGroupsForFrame,
@@ -1713,6 +1714,7 @@ export function removeSession(idx) {
     if (state.sessions.length === 0) {
         // Last session removed — full reset to fresh state
         state.session = null;
+        setPageProject(null);
         state.activeSessionIdx = 0;
         state.triangulationResults = new Map();
         state.views = [];
