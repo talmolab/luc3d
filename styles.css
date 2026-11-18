@@ -3847,6 +3847,20 @@ button.tri-dropdown-item:disabled {
   white-space: nowrap;
 }
 
+/* sleap-app stacks its three-button rows when the panel is under 18rem
+   (`@[18rem]:flex-row`); the info panel is ~300px, so they stack there. */
+.sugg-controls,
+.sugg-foot {
+  container-type: inline-size;
+}
+
+@container (max-width: 288px) {
+  .sugg-btns {
+    flex-direction: column;
+    gap: 4px;
+  }
+}
+
 .sugg-generate {
   height: 30px;
   font-size: 12.5px;
@@ -3984,12 +3998,15 @@ button.tri-dropdown-item:disabled {
   gap: 6px;
 }
 
-.sugg-nav-btn {
+.sugg-nav .sugg-nav-btn {
   flex: none;
+  padding: 4px 10px;
 }
 
 .sugg-status {
   flex: 1;
+  min-width: 0;
+  white-space: nowrap;
   text-align: center;
   font-size: 12px;
   color: var(--text-secondary);

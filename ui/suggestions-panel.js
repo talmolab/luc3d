@@ -469,7 +469,7 @@ function build(pane) {
     // The grouped table.
     const listSec = el('div', { className: 'info-section sugg-list' });
     els.groupTools = el('div', { className: 'sugg-row sugg-group-tools' }, [
-        el('span', { className: 'sugg-hint', text: 'Grouped by view, current view first' }),
+        el('span', { className: 'sugg-hint', text: 'Current view first' }),
         el('button', { className: 'sugg-mini', id: 'suggExpandAll', type: 'button', text: 'Expand all',
             onclick: function () { viewGroupsCameras().forEach(function (c) { _open.add(c); }); refreshSuggestionsPanel({ force: true }); } }),
         el('button', { className: 'sugg-mini', id: 'suggCollapseAll', type: 'button', text: 'Collapse',
