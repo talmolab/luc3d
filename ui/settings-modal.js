@@ -309,6 +309,7 @@ export function showSettingsModal(initialPanel) {
     // --- Build DOM --------------------------------------------------------
     const overlay = document.createElement('div');
     overlay.className = 'settings-overlay';
+    overlay.setAttribute('data-allow-playback', '');  // tracking/triangulation: playback keys still work (ui/keyboard-target.js playbackBlockedByModal)
 
     const card = document.createElement('div');
     card.className = 'settings-modal';

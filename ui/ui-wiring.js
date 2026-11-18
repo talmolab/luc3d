@@ -83,7 +83,7 @@ import { smoothSessionAsync, smoothFrame, unsmoothSession, resolveSmoothingParam
 import { syncSmoothingButton, noteSmoothingScope } from './smoothing-button.js';
 import { smoothingRunOf } from '../import-export/smoothing-metadata.js';
 import { showLoadingProgress, createProgressPacer, yieldToPaint } from './loading-overlay.js';
-import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js';
+import { shouldIgnoreShortcut, shouldIgnorePlaybackKey, installFocusRelease } from './keyboard-target.js';
 import { showSettingsModal } from './settings-modal.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
 import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js';
@@ -2219,7 +2219,7 @@ export function setupUI() {
     });
 
     document.addEventListener('keydown', function (e) {
-        if (shouldIgnoreShortcut(e)) return;
+        if (shouldIgnorePlaybackKey(e)) return;   // + playback keys under a modal
         // Shift+R+Arrow is the rotation chord — don't also step frames. Checked
         // BEFORE the video-less branch below, not just inside the real-video
         // one: this guard used to sit after that branch's `return`, so on a

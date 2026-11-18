@@ -214,6 +214,7 @@ function openProgressDialog(title) {
     var ctl = new AbortController();
     var overlay = document.createElement('div');
     overlay.className = 'multi-frame-modal-overlay id-switch-progress-overlay';   // no grey backdrop (styles.css)
+    overlay.setAttribute('data-allow-playback', '');  // tracking/triangulation: playback keys still work (ui/keyboard-target.js playbackBlockedByModal)
     overlay.innerHTML = '<div class="multi-frame-modal id-switch-progress"><h3>' + escapeHtml(title) + '</h3>' +
         '<div class="id-switch-progress-text">Starting…</div>' +
         // the same playhead line as the ID Switches rows' bars, standing proud of an inner track that clips the fill
@@ -671,6 +672,7 @@ function openFixDialog(session, st, f) {
     }
     var overlay = document.createElement('div');
     overlay.className = 'multi-frame-modal-overlay';
+    overlay.setAttribute('data-allow-playback', '');  // tracking/triangulation: playback keys still work (ui/keyboard-target.js playbackBlockedByModal)
     overlay.innerHTML = '<div class="multi-frame-modal id-switch-fix-modal" role="dialog" aria-labelledby="idSwitchFixTitle">' +
         '<h3 id="idSwitchFixTitle">Fix ID switch</h3>' +
         '<p>Swap ' + idName(session, plan.nameA) + ' ↔ ' + idName(session, plan.nameB) + ' on <b>frames ' +

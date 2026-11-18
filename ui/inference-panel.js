@@ -8,8 +8,10 @@
  * sections in the same order (Track only, Pipeline, Models, Data, Inference,
  * Tracking, Post-processing, Remote), the same defaults, labels, hints and
  * progress / log / Copy Log / Dismiss block. What LUCID changes:
- *   - one run = one sleap-nn job PER VIEW (`ui/inference-jobs.js`), all views
- *     with the SAME models for now (a per-view model slot exists in the config);
+ *   - one run = one sleap-nn job PER VIEW (`ui/inference-jobs.js`), each view
+ *     with ITS model: Models ▸ Assign models… opens `ui/inference-models-modal.js`
+ *     (one model per view, one model for several views; a view with no model is
+ *     skipped); the run hands it over as `config.perViewModels`;
  *   - the Data section adds "Views": which views run, and each one's video
  *     on disk, found from the files the user OPENED (the desktop app records
  *     what was picked in the file dialogs, `lucidDesktop.fs.pathOfFile`), or
@@ -51,6 +53,8 @@ import { matchViewVideos, isVideoName } from './inference-video-paths.js';
 import { mergeViewPredictions } from './inference-merge.js';
 import { createRemoteInference } from './connect/remote-inference.js';
 import { createBackendPicker } from './connect/backend-picker.js';
+import { createAssignment, perViewModelPaths, viewsOfModel, modelLabel, pruneViews } from './inference-model-assignment.js';
+import { openModelsModal } from './inference-models-modal.js';
 
 export const INFERENCE_TAB_ID = 'tabInference';
 
@@ -108,6 +112,8 @@ let elapsedTimer = null;
 const backend = { remote: null };
 const TRACKERS = [['simple', 'Simple'], ['flow', 'Optical Flow'], ['kalman', 'Kalman Filter']];
 let remote = null;      // ui/connect/remote-inference.js controller
+// Which model each view runs with (ui/inference-model-assignment.js); every view starts with none.
+let assignment = createAssignment();
 
 // ---------------------------------------------------------------------------
 // DOM helpers
@@ -468,6 +474,34 @@ function runnableViews() {
 
 function mappedViewCount() { return runnableViews().length; }
 
+/** Runnable views that have a model. */
+function viewsWithModel() {
+    return runnableViews().filter(function (v) { return !!assignment.byView[v]; });
+}
+
+/** The modal's rows: every session view, its video and why it cannot run (if so). */
+function modalViews() {
+    return sessionViews().map(function (v) {
+        const r = videos.byView[v];
+        return {
+            view: v,
+            video: r && r.path ? (relLabel(r.path, videos.root) || r.path) : null,
+            blocked: viewInferenceBlocker(state.session, v),
+        };
+    });
+}
+
+function openAssignModels() {
+    syncVideosToSession();
+    openModelsModal({
+        assignment: assignment,
+        views: modalViews(),
+        pipeline: cfg.pipeline,
+        pickModel: function () { return sn.pickModelDirectory('Select Model Directory'); },
+        onApply: function (a) { assignment = a; refresh(); },
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Environment
 // ---------------------------------------------------------------------------
@@ -564,6 +598,9 @@ async function startInference() {
                 : (videos.byView[v] && videos.byView[v].error) || 'no video file on disk');
             appendLog('\u2014 ' + v + ' skipped: ' + why);
         });
+        // Each view runs with its own model; no shared fallback (a view without one is skipped).
+        cfg.modelPaths = [];
+        cfg.perViewModels = perViewModelPaths(assignment, runnableViews());
         const plan = planInferenceJobs(cfg, perViewFrames(runnableViews()), {
             outputDir: outputDir,
             subcommand: pickInferenceSubcommand(env.sleapNn && env.sleapNn.version),
@@ -678,7 +715,7 @@ function runEnabled() {
 function canRun() {
     syncVideosToSession();
     return !!state.session && sleapNnAvailable() && !isRunning() && !isDone() &&
-        cfg.modelPaths.length > 0 && mappedViewCount() > 0 && !customRangeError();
+        viewsWithModel().length > 0 && !customRangeError();
 }
 
 // ---------------------------------------------------------------------------
@@ -762,46 +799,40 @@ function buildPanel(root) {
     const addRow = el('div', 'inf-right');
     const add = el('button', 'btn btn-sm inf-btn-outline');
     add.type = 'button';
-    add.id = 'infAddModel';
+    add.id = 'infAssignModels';
     add.appendChild(icon('folder-open'));
-    add.appendChild(document.createTextNode(' Add'));
-    add.addEventListener('click', async function () {
-        try {
-            const p = await sn.pickModelDirectory('Select Model Directory');
-            if (p && cfg.modelPaths.indexOf(p) === -1) cfg.modelPaths.push(p);
-        } catch (e) { appendLog('Add model failed: ' + e.message); }
-        refresh();
-    });
+    add.appendChild(document.createTextNode(' Assign models\u2026'));
+    add.addEventListener('click', openAssignModels);
     addRow.appendChild(add);
     lm.appendChild(addRow);
     const modelsEmpty = el('p', 'inf-muted');
     lm.appendChild(modelsEmpty);
-    const modelList = el('div', 'inf-model-list');
+    const modelList = el('div', 'inf-model-assign');
+    modelList.id = 'infModelSummary';
     lm.appendChild(modelList);
-    const sameNote = el('p', 'inf-muted', 'Every view runs with these models.');
-    lm.appendChild(sameNote);
+    const unassigned = el('p', 'inf-muted');
+    lm.appendChild(unassigned);
     onRefresh(function () {
-        add.disabled = isRunning();
-        const topDown = cfg.pipeline === 'top-down' || cfg.pipeline === 'top-down-id';
-        modelsEmpty.hidden = cfg.modelPaths.length > 0;
-        modelsEmpty.textContent = topDown ? 'Add two directories (centroid + centered-instance).' : 'Add a model directory.';
-        sameNote.hidden = cfg.modelPaths.length === 0;
+        add.disabled = isRunning() || !sn;
+        const views = sessionViews();
+        pruneViews(assignment, views);
         modelList.textContent = '';
-        cfg.modelPaths.forEach(function (p, i) {
-            const item = el('div', 'inf-model');
-            item.appendChild(icon('folder', 'inf-ok'));
-            const name = el('span', 'inf-model-name', basename(p));
-            name.title = p;
-            item.appendChild(name);
-            const rm = el('button', 'inf-x');
-            rm.type = 'button';
-            rm.innerHTML = railIconSvg('x');
-            rm.setAttribute('aria-label', 'Remove');
-            rm.disabled = isRunning();
-            rm.addEventListener('click', function () { cfg.modelPaths.splice(i, 1); refresh(); });
-            item.appendChild(rm);
-            modelList.appendChild(item);
+        assignment.models.forEach(function (m) {
+            const vs = viewsOfModel(assignment, m.id, views);
+            const row = el('div', 'inf-model-row');
+            row.style.setProperty('--inf-mc', m.color);
+            const name = el('span', 'inf-model-name', modelLabel(m));
+            name.title = m.paths.join('\n');
+            row.appendChild(name);
+            row.appendChild(el('span', 'inf-model-views', vs.length ? (vs.length === views.length ? 'all views' : vs.join(' \u00b7 ')) : 'no views'));
+            modelList.appendChild(row);
         });
+        const without = views.filter(function (v) { return !assignment.byView[v] && !viewInferenceBlocker(state.session, v); });
+        modelsEmpty.hidden = assignment.models.length > 0;
+        modelsEmpty.textContent = !state.session ? 'Import a session or project first.'
+            : 'No models yet. Assign models\u2026 picks a model for each view.';
+        unassigned.hidden = !assignment.models.length || !without.length;
+        unassigned.textContent = 'No model (skipped): ' + without.join(', ');
     });
     sep(top);
 
@@ -1133,7 +1164,8 @@ function buildPanel(root) {
         runLabel.textContent = isRemote() ? ' Run Remote Inference' : ' Run Inference';
         const rwhy = isRemote() ? (customRangeError() || remote.whyNot()) : '';
         const why = isRemote() ? (isRunning() ? '' : rwhy) : isRunning() || isDone() ? '' : !state.session ? 'Open a session first.'
-            : !sleapNnAvailable() ? '' : cfg.modelPaths.length === 0 ? 'Add a model.'
+            : !sleapNnAvailable() ? ''
+                : mappedViewCount() > 0 && viewsWithModel().length === 0 ? 'Assign a model to a view (Models \u25b8 Assign models\u2026).'
                 : mappedViewCount() === 0 ? (sessionViews().some(function (v) { return viewInferenceBlocker(state.session, v); })
                     && sessionViews().every(function (v) { return viewInferenceBlocker(state.session, v); })
                     ? 'Inference on lazy-loaded views is not supported yet.'
@@ -1337,4 +1369,4 @@ export async function runRemoteInferenceWithModels(models) {
 export function showInferencePanel() { return showPanelTab(INFERENCE_TAB_ID); }
 
 /** For tests: the live config and run state (read-only use). */
-export function _inferenceState() { return { cfg: cfg, run: run, videos: videos, env: env, defaults: INFERENCE_DEFAULTS }; }
+export function _inferenceState() { return { cfg: cfg, run: run, videos: videos, env: env, defaults: INFERENCE_DEFAULTS, assignment: assignment }; }

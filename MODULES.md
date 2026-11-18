@@ -131,6 +131,7 @@ Connect). The panel uses local sleap-nn only where the desktop shim has it.
   `purgeTriangulationDataForGroup`.
 - `../ui/overlays.js` — `getTrackColor`, `getGroupColor`.
 - `../ui/viewport3d.js` — `Viewport3D`.
+- `../ui/viewport3d-options.js` — `viewport3DDisplayOptions`.
 - `../ui/panel-visibility.js` — `isViewport3DVisible`, `markViewport3DSkipped`.
 - `../ui/timeline.js` — `Timeline`.
 - `../ui/interaction.js` — `InteractionManager`.
@@ -5918,6 +5919,17 @@ bridges into both test runners and unit-tests against plain object stubs.
 **Modal owns the keyboard.** `shouldIgnoreShortcut` is true while any element with
 `data-shortcut-modal` is in the document (`shortcutModalOpen`; the worker file browser and the
 inference log dialog set it), so no app shortcut acts on the view behind such a modal.
+
+**Playback keys under modals.** `shouldIgnorePlaybackKey(e)` (the two frame-key
+handlers: `ui/ui-wiring.js`, `loading/video.js`) is `shouldIgnoreShortcut` plus:
+a playback key (`isPlaybackKey`: ←/→ incl. Opt, Space, Home, End) while
+`playbackBlockedByModal` — any visible `MODAL_LAYER_SELECTOR` backdrop without
+`data-allow-playback`. The tracking / triangulation modals carry that attribute
+(Settings, Track setup, Track Frame Range, the Track All summary, Fix ID switch
+and its progress card, Group by Track & Triangulate, Choose Frames for
+Triangulation, the non-modal Set Angle dialog) and keep scrubbing. A new modal
+blocks playback with no wiring; a new tracking/triangulation one adds the
+attribute. Test: `tests/test-inference-model-assignment.mjs` §7.
 
 **Tests.** `tests/test-keyboard-target.js`,
 `tests/e2e/checkbox-focus-hotkeys.mjs`, `tests/e2e/copy-panel-text.mjs` (the
@@ -12002,6 +12014,9 @@ via the options bag.
   `clearOriginCandidates`, `setOriginFrame`, `clearOriginFrame`,
   `addCameraPyramids`, `selectCamera`, `showSelectedCameraView`,
   `showInitialView`, `setMissingVideoCameras`, `highlightCamera`,
+  `tintCameras({colors, defaultColor, focus})` (a caller's colour per camera and a
+  lit FOCUS set, the rest dimmed; the Inference Models modal), `getPlanes()`
+  (the last `setPlanes` payload, to mirror the scene),
   `resize`, `resetCamera`, `lookAtOrigin`, `fitToScene`, `originPivot`,
   `originUp`, `setVisible(visible)` / `isVisible()`, `dispose`.
 - **`skeleton` may be null** (`newProject`, removing the last session) and the
@@ -12967,8 +12982,13 @@ predictions back. A replica of sleap-app's Inference panel (`InferencePanel.tsx`
 Post-processing, Remote), same defaults, labels and hints, same progress block
 (status + elapsed, bar with `n / total frames` and %, fps, ETA, error box,
 Cancel, Load Results, log tail + Expand window, Copy Log, Dismiss).
-LUCID differences: one sleap-nn job PER VIEW, all views with the SAME models
-(a per-view slot exists in the config, `perViewModels`); Data gains **Videos on
+LUCID differences: one sleap-nn job PER VIEW, each view with ITS model:
+Models ▸ **Assign models…** opens `ui/inference-models-modal.js` (one model per
+view, one model for several views; every view starts with no model, and a view
+without one is skipped); the panel keeps the applied assignment
+(`ui/inference-model-assignment.js`), shows it as model → views rows
+(`#infModelSummary`), and a run passes it as `config.perViewModels` with an
+empty shared `modelPaths` (no fallback). Data gains **Videos on
 disk**, now **Views**: a checkbox per session camera (run a subset), each
 with its video path found from the files the user OPENED
 (`lucidDesktop.fs.pathOfFile`, macOS capture in `src-tauri/src/input_paths.rs`),
@@ -12993,11 +13013,61 @@ a window (Esc closes). Output: `<video folder>/predictions/<view>.<stamp>.predic
 **Imports from project modules.** `./app-state.js`, `./panel-rail.js`,
 `./panel-rail-icons.js`, `./info-tip.js`, `./progress-delta.js`,
 `./inference-args.js`, `./inference-jobs.js`, `./inference-video-paths.js`,
-`./inference-merge.js`.
+`./inference-merge.js`, `./inference-model-assignment.js`, `./inference-models-modal.js`.
 
 **Imported by.** `pose/initialization.js` (dynamic `import()`, desktop only).
 
 **User-facing features.** Inference panel. Test: `tests/e2e/desktop-inference.mjs`.
+
+### ui/inference-model-assignment.js
+
+**Purpose.** Which sleap-nn model each camera view runs with. A model = the
+folder list the user added (one folder; Top-Down: centroid + centered instance,
+`foldersNeeded`); each view has at most one, a model can serve many; nothing is
+assigned until the user assigns it. Plain data, import-free.
+
+**Key exports.** `createAssignment`, `cloneAssignment`, `addModel`,
+`addFolderToModel`, `removeModel`, `assignView`, `assignViews`,
+`clearAssignments`, `modelOfView`, `modelById`, `viewsOfModel`, `pruneViews`,
+`perViewModelPaths(a, views)` (→ `config.perViewModels`), `modelLabel`,
+`folderName`, `foldersNeeded`, `MODEL_COLORS`.
+
+**Imported by.** `ui/inference-panel.js`, `ui/inference-models-modal.js`.
+Test: `tests/test-inference-model-assignment.mjs`.
+
+### ui/inference-models-modal.js
+
+**Purpose.** The "Models for each view" modal (Inference ▸ Models ▸ Assign
+models…). A Models table (colour, folders, view count, ✕; + folder for Top-Down's
+second folder) and a Views table (checkbox, view, video, model menu; tick
+several + Assign for one model on many views; Clear all = every view back to no
+model; no views → "Import a session or project first."). Beside them a
+collapsible 3D view: a second `Viewport3D` with the app viewer's display
+settings (`viewport3DDisplayOptions`) and its scene (the current frame's
+skeletons, the main viewer's planes via `getPlanes`), cameras coloured by model
+(`tintCameras`), `pickCameras: false`. HOVER highlights: a view row its camera,
+a model row all its cameras. The card moves by its header, resizes from its
+corner (CSS `resize`), ⤢ / header double-click fills the window. Edits a copy;
+Apply → `onApply`; Cancel / ✕ / Esc drop it. `data-shortcut-modal` scrim.
+
+**Key exports.** `openModelsModal({assignment, views, pipeline, pickModel, onApply})`.
+
+**Imports from project modules.** `./app-state.js`, `./viewport3d.js`,
+`./viewport3d-options.js`, `./overlays.js`, `../pose/triangulation.js`,
+`./connect/layers.js` (`trapModal`), `./inference-model-assignment.js`.
+
+**Imported by.** `ui/inference-panel.js`. Test: `tests/e2e/desktop-inference.mjs` §3–4.
+
+### ui/viewport3d-options.js
+
+**Purpose.** Visibility ▸ 3D Viewer's settings (label/sphere/pyramid sizes and
+toggles, skeleton node/edge size, brightness, node shape) read from their
+controls as `Viewport3D` options, so a second viewport looks like the app's.
+DOM reads only, import-free.
+
+**Key exports.** `viewport3DDisplayOptions()`.
+
+**Imported by.** `pose/initialization.js` (`setup3DViewport`), `ui/inference-models-modal.js`.
 
 ### ui/inference-args.js
 

@@ -537,6 +537,7 @@ export function showPlaneAngleModal() {
 
     angleOverlay = document.createElement('div');
     angleOverlay.className = 'plane-confirm-overlay';
+    angleOverlay.setAttribute('data-allow-playback', '');  // tracking/triangulation: playback keys still work (ui/keyboard-target.js playbackBlockedByModal)
     angleOverlay.id = 'planeAngleOverlay';
     var modal = document.createElement('div');
     modal.className = 'plane-confirm-modal plane-angle-modal';
