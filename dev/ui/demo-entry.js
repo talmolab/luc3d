@@ -5,8 +5,8 @@
 // The dock button is for a first visit: it shows only while nothing is
 // loaded, so closing every video panel of a project does not offer it.
 
-import { state } from './app-state.js?v=35646fe2a8aa';
-import { loadDemoProject } from '../loading/demo-project.js?v=35646fe2a8aa';
+import { state } from './app-state.js?v=6482763f0e6a';
+import { loadDemoProject } from '../loading/demo-project.js?v=6482763f0e6a';
 
 /** Whether the page was opened with `?demo`. */
 export function demoRequested(search) {

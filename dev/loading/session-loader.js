@@ -18,98 +18,98 @@
  * can then be retargeted.
  */
 
-import { withCompactNote } from '../import-export/compact-save.js?v=35646fe2a8aa';
+import { withCompactNote } from '../import-export/compact-save.js?v=6482763f0e6a';
 import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, VIEW_NAMES, buildRememberedSkeleton, setProjectSkeleton,
     isViewDocked,
-} from '../ui/app-state.js?v=35646fe2a8aa';
+} from '../ui/app-state.js?v=6482763f0e6a';
 
 import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
-} from '../pose/pose-data.js?v=35646fe2a8aa';
+} from '../pose/pose-data.js?v=6482763f0e6a';
 import {
     makePlaceholderCamera, hasRealCalibration, ensurePlaceholderCameras,
-} from '../pose/placeholder-cameras.js?v=35646fe2a8aa';
+} from '../pose/placeholder-cameras.js?v=6482763f0e6a';
 
-import { OnDemandVideoDecoder, VideoController, releaseViewsFrames } from './video.js?v=35646fe2a8aa';
-import { videoLoadFailureText } from './video-codec-diagnosis.js?v=35646fe2a8aa';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=35646fe2a8aa';
-import { confirmFolderPick } from '../ui/folder-confirm-tip.js?v=35646fe2a8aa';
-import { enumerateDirectoryHandle, pickRecordingFolder } from './recording-folder.js?v=35646fe2a8aa';
+import { OnDemandVideoDecoder, VideoController, releaseViewsFrames } from './video.js?v=6482763f0e6a';
+import { videoLoadFailureText } from './video-codec-diagnosis.js?v=6482763f0e6a';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=6482763f0e6a';
+import { confirmFolderPick } from '../ui/folder-confirm-tip.js?v=6482763f0e6a';
+import { enumerateDirectoryHandle, pickRecordingFolder } from './recording-folder.js?v=6482763f0e6a';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
     parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO,
     loadCalibrationFile,
-} from '../import-export/file-io.js?v=35646fe2a8aa';
+} from '../import-export/file-io.js?v=6482763f0e6a';
 
-import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=35646fe2a8aa';
+import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=6482763f0e6a';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
 // the browser test runner (session-loader itself pulls app.js) — same reason
 // and same shape as `resolveImportTrackIdx` above.
-import { chooseCameraSlp } from './percam-slp-choice.js?v=35646fe2a8aa';
+import { chooseCameraSlp } from './percam-slp-choice.js?v=6482763f0e6a';
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy, stampFrameIdentitiesFromGroups } from '../import-export/slp-import.js?v=35646fe2a8aa';
-import { readFrameIdentityMetadata } from '../import-export/frame-identity-metadata.js?v=35646fe2a8aa';
-import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=35646fe2a8aa';
+import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy, stampFrameIdentitiesFromGroups } from '../import-export/slp-import.js?v=6482763f0e6a';
+import { readFrameIdentityMetadata } from '../import-export/frame-identity-metadata.js?v=6482763f0e6a';
+import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=6482763f0e6a';
 import {
     isCalibrationImagesVideo, preferNonCalibrationVideos, matchVideoToCamera,
     isVideoFileName,
-} from './video-file-pick.js?v=35646fe2a8aa';
+} from './video-file-pick.js?v=6482763f0e6a';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, shouldUseLazySlpFolder, getInstanceGroupsForFrame,
     ensureLazyFrameData,
-} from '../pose/triangulation.js?v=35646fe2a8aa';
-import { SioLazyLoader } from './sio-lazy-loader.js?v=35646fe2a8aa';
-import { fileSessionNames, fileSessionProvenance } from '../import-export/slp-provenance.js?v=35646fe2a8aa';
-import { unionTrackNames, remapTrackIdx } from './track-union.js?v=35646fe2a8aa';
+} from '../pose/triangulation.js?v=6482763f0e6a';
+import { SioLazyLoader } from './sio-lazy-loader.js?v=6482763f0e6a';
+import { fileSessionNames, fileSessionProvenance } from '../import-export/slp-provenance.js?v=6482763f0e6a';
+import { unionTrackNames, remapTrackIdx } from './track-union.js?v=6482763f0e6a';
 import {
     readCampyRecording, campyCameraFor, orderByCampyCameras, preferCampyVideo, campyVideoFile,
     compareCampyCameraNames, compareCalibrationSha256, sha256Hex, frameRatesDisagree,
     withCampyWarnings, findCampyManifestFiles,
-} from './campy-session.js?v=35646fe2a8aa';
-import { readBlobArrayBuffer } from './cold-read-guard.js?v=35646fe2a8aa';
-import { projectFolderStart } from './folder-picker-start.js?v=35646fe2a8aa';
+} from './campy-session.js?v=6482763f0e6a';
+import { readBlobArrayBuffer } from './cold-read-guard.js?v=6482763f0e6a';
+import { projectFolderStart } from './folder-picker-start.js?v=6482763f0e6a';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
     setStatus, showLoading, hideLoading, ensureNo3dImportBlockingLoad,
-} from '../import-export/save-load.js?v=35646fe2a8aa';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=35646fe2a8aa';
+} from '../import-export/save-load.js?v=6482763f0e6a';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=6482763f0e6a';
 
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible, noteOverlayViewTransform } from '../ui/rendering.js?v=35646fe2a8aa';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=35646fe2a8aa';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=35646fe2a8aa';
-import { noteUnplayableVideos } from '../ui/video-codec-notice.js?v=35646fe2a8aa';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=35646fe2a8aa';
-import { setPageProject } from '../ui/page-title.js?v=35646fe2a8aa';
-import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=35646fe2a8aa';
+import { drawAllOverlays, setReprojErrorVisible, noteOverlayViewTransform } from '../ui/rendering.js?v=6482763f0e6a';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=6482763f0e6a';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=6482763f0e6a';
+import { noteUnplayableVideos } from '../ui/video-codec-notice.js?v=6482763f0e6a';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=6482763f0e6a';
+import { setPageProject } from '../ui/page-title.js?v=6482763f0e6a';
+import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=6482763f0e6a';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, setupTimeline,
     updateFpsDisplay,
     hideWelcomeOverlay,
-} from '../pose/initialization.js?v=35646fe2a8aa';
+} from '../pose/initialization.js?v=6482763f0e6a';
 // Pass 3h: populateViewStrip / populateSessionStrip / switchSession moved to sessions-panes.js.
 import {
     populateViewStrip, populateSessionStrip, switchSession, multiSelectViews,
-} from '../ui/sessions-panes.js?v=35646fe2a8aa';
+} from '../ui/sessions-panes.js?v=6482763f0e6a';
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
 import {
     updateSeekbar, fitTimelineToData, onPlaybackStateChange, updateVideoGridDisplay,
-} from '../ui/ui-wiring.js?v=35646fe2a8aa';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=35646fe2a8aa';
-import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=35646fe2a8aa';
-import { readSmoothingMetadata } from '../import-export/smoothing-metadata.js?v=35646fe2a8aa';
-import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js?v=35646fe2a8aa';
+} from '../ui/ui-wiring.js?v=6482763f0e6a';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=6482763f0e6a';
+import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=6482763f0e6a';
+import { readSmoothingMetadata } from '../import-export/smoothing-metadata.js?v=6482763f0e6a';
+import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js?v=6482763f0e6a';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
