@@ -3,7 +3,8 @@
  * clip in talmolab/slap-2m's `demo/` folder, read from the pinned commit
  * (the harness caches pinned Hugging Face files on disk).
  *
- * §1  An empty app offers the demo: the dock button and the File menu item.
+ * §1  An empty app offers the demo: the dock button (and it takes a REAL
+ *     click, not covered by dockview's empty-state layer) and the menu item.
  * §2  `?demo` opens it: 8 cameras, 450 frames, two animals' 2D in the six
  *     proofread cameras, the calibration, the project's name in the tab, and
  *     nothing unsaved. The dock button is gone.
@@ -63,6 +64,16 @@ try {
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     check(await page.isVisible('#dockDemoBtn'), 'the empty dock shows "Open the demo"');
     check(await page.locator('#menuOpenDemo').count() === 1, 'File ▸ Open Demo exists');
+    // A real click: Playwright refuses one that another element would receive.
+    // dockview's empty-state layer covered the button once (styles.css
+    // `.video-dock-empty` z-index), and a scripted `.click()` would not notice.
+    const clicked = await page.click('#dockDemoBtn', { timeout: 10000 }).then(() => true, e => String(e).split('\n')[0]);
+    check(clicked === true, `the button takes a real click (${clicked})`);
+    if (clicked === true) {
+        const opened = await page.waitForFunction(() => window.__lucid.state.views.length === 8, null, { timeout: 120000 })
+            .then(() => true, () => false);
+        check(opened, 'the click opens the demo');
+    }
 
     console.log('\n§2 ?demo opens it');
     await page.goto(`http://localhost:${PORT}/index.html?demo`);

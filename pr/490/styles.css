@@ -600,7 +600,10 @@ body {
   color: var(--text-muted);
   font-size: 13px;
   pointer-events: none;
-  z-index: 1;
+  /* Above dockview's own empty-state layer (`.dv-watermark-container`,
+     z-index 1, later in the DOM), or the demo button below cannot be clicked.
+     The rest of this layer ignores the pointer, so drops still reach the dock. */
+  z-index: 2;
 }
 
 .video-dock-empty.hidden {
