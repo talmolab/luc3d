@@ -11327,17 +11327,23 @@ either ID-switch check is run.
   scales with the thinning) or a point does not project; `defaultMapCamera` — the
   camera with the most 2D members over a thinned sample of the groups.
 
-**Drawing.** `renderIdentityGallery(host, session, {onPick})` builds the rows
-with placeholders at once and fills them AFTER the box paints: the maps first,
-then the images, one decoded frame per sample, drawn immediately. **Each frame,
-and the map's background, is a caller-owned copy** (`galleryFrame`:
-`view.decoder.peekFrame`, closed once drawn; `getFrame` only for a decoder
-without `peekFrame`, whose frames are never closed here). Not `getFrame`: a jump
-through it keeps the frame in the view's frame cache and warms the 24 frames
-before it in the background (`_scheduleBackWarm`, `loading/video.js`), and the
-summary's samples left ~28 frames per camera cached for good on the 8-camera
-1280x1024 project: Chrome's GPU process ended a Track All + Triangulate All at
-~1.6 GB, ~0.47 GB with copies (VM, two runs each). Every
+**Drawing.** `renderIdentityGallery(host, session, {onPick, onEmpty})` builds the
+rows with placeholders at once — for `identitiesWith3d` (a cheap scan that stops
+once every identity has a 3D point) — and reads the tracks only AFTER the box
+paints, in slices (`identityTracksAsync`, the same pass as `identityTracks` with a
+pause every `TRACKS_SLICE_MS`, 20 ms): opening the summary on the 8-camera,
+108,000-frame project went from one 89 ms task to 25 ms, the tracks following in
+slices under 25 ms. A row whose identity then has no track is removed; with fewer
+than two left the section removes itself and calls `onEmpty` (the summary drops
+`has-gallery`). Then it fills them: the maps first, then the images, one decoded
+frame per sample, drawn immediately. **Each frame, and the map's background, is a
+caller-owned copy** (`galleryFrame`: `view.decoder.peekFrame`, closed once drawn;
+`getFrame` only for a decoder without `peekFrame`, whose frames are never closed
+here). Not `getFrame`: a jump through it keeps the frame in the view's frame cache
+and warms the 24 frames before it in the background (`_scheduleBackWarm`,
+`loading/video.js`), and the summary's samples left ~28 frames per camera cached
+for good on the 8-camera 1280x1024 project: Chrome's GPU process ended a Track All
++ Triangulate All at ~1.6 GB, ~0.47 GB with copies (VM, two runs each). Every
 row's samples are planned first (`planRow`: frame, camera, crop), then fetched one
 queue per decoder (`fetchSamples`): a decoder is asked for one frame at a time, in
 frame order, while the cameras' queues run side by side. And the samples land on

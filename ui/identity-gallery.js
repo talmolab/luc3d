@@ -101,6 +101,29 @@ function groupCentroidInto(p3, out) {
  * @returns {Map<number, {frames: Int32Array, xyz: Float64Array}>}
  */
 export function identityTracks(session) {
+    var steps = identityTrackSteps(session, 0), r;
+    while (!(r = steps.next()).done) { /* no pauses */ }
+    return r.value;
+}
+
+/** The longest stretch of `identityTracksAsync` between two pauses, in ms. */
+export const TRACKS_SLICE_MS = 20;
+
+/**
+ * `identityTracks` in slices: `await pause()` whenever `sliceMs` (default
+ * TRACKS_SLICE_MS) of it have passed (the clock is read every 1,024 frames).
+ * The same pass in the same order: the same tracks.
+ * @param {function(): Promise} pause
+ * @returns {Promise<Map<number, {frames: Int32Array, xyz: Float64Array}>>}
+ */
+export async function identityTracksAsync(session, pause, sliceMs) {
+    var steps = identityTrackSteps(session, sliceMs > 0 ? sliceMs : TRACKS_SLICE_MS), r;
+    while (!(r = steps.next()).done) await pause();
+    return r.value;
+}
+
+/** identityTracks' body: yields (to be resumed) whenever `sliceMs` > 0 have passed. */
+function* identityTrackSteps(session, sliceMs) {
     var acc = new Map();
     if (!session || !session.instanceGroups) return new Map();
     // Runs once per Track All summary over every group (~540,000 on an 8-camera,
@@ -109,8 +132,15 @@ export function identityTracks(session) {
     // centroid goes into `c`. Each identity is pushed in the order of its group
     // among the frame's groups, as the Map of first appearances gave.
     var c = [0, 0, 0];
-    session.instanceGroups.forEach(function (groups, frame) {
-        if (!groups) return;
+    var clock = typeof performance !== 'undefined' ? performance : Date, sliceStart = sliceMs > 0 ? clock.now() : 0;
+    var keys = session.instanceGroups.keys(), walked = 0;
+    for (var kr = keys.next(); !kr.done; kr = keys.next()) {
+        if (sliceMs > 0 && (++walked & 1023) === 0 && clock.now() - sliceStart >= sliceMs) {
+            yield walked;
+            sliceStart = clock.now();
+        }
+        var frame = kr.value, groups = session.instanceGroups.get(frame);
+        if (!groups) continue;
         for (var gi = 0; gi < groups.length; gi++) {
             var g = groups[gi];
             if (!g || g.identityId == null || g.identityId < 0) continue;
@@ -124,7 +154,7 @@ export function identityTracks(session) {
             if (!a) acc.set(id, a = { frames: [], xyz: [] });
             a.frames.push(+frame); a.xyz.push(c[0], c[1], c[2]);
         }
-    });
+    }
     var out = new Map();
     acc.forEach(function (a, id) {
         var n = a.frames.length, order = new Int32Array(n), sorted = true;
@@ -141,6 +171,30 @@ export function identityTracks(session) {
         out.set(id, { frames: frames, xyz: xyz });
     });
     return out;
+}
+
+/**
+ * The identities (in `session.identities` order) with a group that has a 3D
+ * point, found cheaply: the scan stops once every identity has one (usually
+ * within the first frames) and allocates nothing per group. `identityTracks`
+ * can still leave one out (3D only on frames where it has two groups).
+ * @returns {Object[]} identity objects
+ */
+export function identitiesWith3d(session) {
+    var idents = (session && session.identities) || [];
+    if (!idents.length || !session.instanceGroups) return [];
+    var want = new Map(), found = new Set(), c = [0, 0, 0];
+    idents.forEach(function (id) { want.set(id.id, true); });
+    var keys = session.instanceGroups.keys();
+    for (var r = keys.next(); !r.done && found.size < want.size; r = keys.next()) {
+        var groups = session.instanceGroups.get(r.value) || [];
+        for (var gi = 0; gi < groups.length; gi++) {
+            var g = groups[gi];
+            if (!g || !want.has(g.identityId) || found.has(g.identityId)) continue;
+            if (groupCentroidInto(g.points3d, c)) found.add(g.identityId);
+        }
+    }
+    return idents.filter(function (id) { return found.has(id.id); });
 }
 
 /** The identity's one group at `frame` (null when it has none, or two). */
@@ -603,17 +657,24 @@ function makeZoom(section) {
  * Build the section into `host` and fill it in the background. Nothing is drawn
  * for fewer than two identities with tracked 3D.
  *
+ * The rows are built at once from `identitiesWith3d`; every identity's track
+ * (`identityTracks`, a pass over every group: ~50 ms on an 8-camera,
+ * 108,000-frame project) is read AFTER the box paints, so opening the summary
+ * does not wait for it. A row whose identity then has no track is removed, and
+ * with fewer than two left so is the section (`opts.onEmpty()`).
+ *
  * @param {HTMLElement} host
  * @param {Object} session
- * @param {{onPick?: function(number)}} [opts]  a sample or a map point was clicked: go to that frame
+ * @param {{onPick?: function(number), onEmpty?: function()}} [opts]  onPick: a sample or a map point was
+ *   clicked, go to that frame; onEmpty: the section removed itself after all
  * @returns {{done: Promise<void>, element: HTMLElement}|null}
  */
 export function renderIdentityGallery(host, session, opts) {
     if (typeof document === 'undefined' || !host || !session) return null;
     opts = opts || {};
-    var tracks = identityTracks(session);
-    var ids = (session.identities || []).filter(function (id) { return tracks.has(id.id); });
+    var ids = identitiesWith3d(session);
     if (ids.length < 2) return null;
+    var tracks = null;   // identityTracks(session), read after the box paints (`done`)
     var cams = (session.cameras || []).filter(function (c) { return c && c.name; });
 
     var section = el('div', 'identity-gallery');
@@ -665,7 +726,7 @@ export function renderIdentityGallery(host, session, opts) {
         var map = el('div', 'identity-gallery-map');
         row.appendChild(map);
         section.appendChild(row);
-        return { id: id, color: color, slots: slots, map: map };
+        return { id: id, color: color, slots: slots, map: map, el: row };
     });
     if (ids.length > shown.length) {
         section.appendChild(el('div', 'track-summary-id-more', 'and ' + (ids.length - shown.length).toLocaleString('en-US') + ' more'));
@@ -681,6 +742,7 @@ export function renderIdentityGallery(host, session, opts) {
     // ---- maps --------------------------------------------------------------
     var mapToken = 0;
     var drawMaps = async function (camName) {
+        if (!tracks) return;   // before the tracks are read: `done` draws the view selected then
         var token = ++mapToken;
         var cam = cams.filter(function (c) { return c.name === camName; })[0];
         var view = viewFor(camName);
@@ -879,7 +941,20 @@ export function renderIdentityGallery(host, session, opts) {
     var done = (async function () {
         await new Promise(function (res) { setTimeout(res, 0); });   // the box paints first
         if (!alive()) return;
-        await drawMaps(mapCam);
+        // in slices, the page painting between them (~50 ms in all on a large project)
+        tracks = await identityTracksAsync(session, function () { return new Promise(function (res) { setTimeout(res, 0); }); });
+        if (!alive()) return;
+        rows = rows.filter(function (r) {
+            if (tracks.has(r.id.id)) return true;
+            r.el.remove();
+            return false;
+        });
+        if (rows.length < 2) {
+            section.remove();
+            if (opts.onEmpty) opts.onEmpty();
+            return;
+        }
+        await drawMaps(select ? select.value : mapCam);
         if (!alive()) return;
         // The samples land on keyframes where they can (one decoded frame each,
         // not up to a keyframe gap's worth): the keyframes of one camera, read
