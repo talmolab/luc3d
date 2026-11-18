@@ -13950,6 +13950,22 @@ then keeps the live columns for pass 2; see `import-export/save-load.js`).
 so a later `_unifyTracks` starts from that. Covered by
 `tests/e2e/percam-track-union.mjs`.
 
+**Store column types (vendored sleap-io.js, `LUCID local patch (narrow
+columns)`).** Each `labels._lazyDataStore` column is a typed array, as narrow as
+holds every value exactly: `x`/`y`/`score`/`tracking_score` Float32Array,
+`visible`/`complete`/`instance_type`/`skeleton` Uint8Array,
+`point_id_start/end` Uint32Array; a column with a value that does not fit (a
+NaN flag, a -1, an f64 coordinate) stays Float64Array, as does every other
+column. Reads return the same numbers as Float64Array would, so readers index
+element-wise and never depend on the type (no `instanceof Float64Array`, no
+`.buffer` reinterpretation). The columns this module WRITES — `track`
+(`_unifyTracks`, `remapTracksFromIdentity`), `from_predicted` and every `frames`
+column (`deleteInstanceRows`) — are always Float64Array; a new in-place writer
+must write only those, or add its column to neither list
+(`LUCID_NARROW_COLUMNS` / `lucidNarrowKindW` in `lib/sleap-io/chunk-X76PRJK6.js`).
+On the 8-camera 05mice project the stores went from 2,770 MB to 1,080 MB.
+Test: `tests/e2e/reopen-store-columns-typed.mjs`.
+
 `trackOccupancy` is populated per camera by `_computeSparseOccupancy(labels,
 nFrames, rowMap?)` — one O(nInstances) pass over the columnar store emitting
 **sparse** per-track run-segments `{ sparse:true, nTracks, nFrames,
