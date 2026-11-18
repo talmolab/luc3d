@@ -22,13 +22,13 @@
  *      "(none)" still un-tracks a group, and "(+) New Track" still opens the
  *      inline name box.
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8093);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 
 let fails = 0;
 const check = (c, m, extra) => {
@@ -39,11 +39,9 @@ const check = (c, m, extra) => {
 const CAMS = 8;
 const UNLINKED_TRACKS = (nt) => [0, 1, Math.floor(nt / 2), null, nt - 1];
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage();
     const errs = [];
     page.on('pageerror', e => errs.push(String(e)));

@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const { tailMarkNodeIndices, readTailProfile, normalizeTailProfile, tailBandScore, learnTailTemplates, tailVote,
-    planTailMarkSamples, contactGaps, evidenceScale, evidenceOf, decodeMarkedStates, refineChange, stretchesToSwap, resolveTailMarks } =
+    planTailMarkSamples, contactGaps, evidenceScale, evidenceOf, decodeMarkedStates, refineChange, stretchesToSwap, resolveTailMarks, countBands, TAIL_BAND_READ } =
     await import(pathToFileURL(path.join(HERE, '..', 'pose', 'tail-mark.js')).href);
 
 let passed = 0, failed = 0; const failures = [];
@@ -62,6 +62,21 @@ ok(score(drawn([]), [20, 44, 80, 36, 140, 43]) < 0.03, 'keypoints off a plain ta
     ok(score(bodies, POLY) < 0.02, 'bright bodies at both ends are not bands');
 }
 eq(readTailProfile(floor(), W, H, [10, 10, 12, 12, 14, 14]), null, 'a foreshortened tail is too short to read');
+{
+    // four narrow bands packed before Tail_0, the first right at the base keypoint, with the
+    // body behind and bright haunches beside the base (the 4-band mouse of 05mice_flippers)
+    const img = floor();
+    disk(img, 18, 40, 16, 200);
+    tail(img, 30, 40, 120, [[0, 0.035], [0.075, 0.11], [0.15, 0.185], [0.225, 0.26]]);
+    disk(img, 38, 30, 5, 200); disk(img, 38, 50, 5, 200);
+    const poly = [30, 40, 90, 40, 150, 40], e = TAIL_BAND_READ.baseExtension;
+    ok(countBands(read(img, poly)) < 4, 'the wide read blurs packed bands: counts ' + countBands(read(img, poly)));
+    const r = readTailProfile(img, W, H, [30 + e * (30 - 90), 40].concat(poly), undefined, TAIL_BAND_READ);
+    eq(countBands(normalizeTailProfile(r.profile, r.background)), 4, 'the band-counting read, started before the base, counts all four');
+    const same = readTailProfile(img, W, H, poly, undefined, { percentile: 0.85, widthShare: 1 / 12 });
+    eq(Array.from(same.profile), Array.from(readTailProfile(img, W, H, poly).profile), 'the default options are the default read');
+}
+
 eq(readTailProfile(floor(), W, H, [NaN, NaN, 50, 50]), null, 'a missing node leaves too little');
 eq(normalizeTailProfile(new Float32Array(64).fill(13), 12), null, 'nothing brighter than the floor: no tail');
 eq(tailBandScore(null), 0, 'no tail, no score');
@@ -102,6 +117,7 @@ eq(planTailMarkSamples(framesTo(100), null, 30), [0, 30, 60, 90], 'no keyframes:
 eq(planTailMarkSamples(framesTo(100), [0, 90], 30), [0, 90], 'keyframes at the gap limit (3 s) kept');
 eq(planTailMarkSamples(framesTo(100), [0, 90], 10).length, 10, 'keyframes further than the limit: one per second');
 eq(planTailMarkSamples([], [0, 1], 30), [], 'no tracked frames');
+eq(planTailMarkSamples(framesTo(100), [0, 90], 10, 10), [0, 90], 'a larger limit given (the identity engine): keyframes 9 s apart kept');
 
 // ---- the decision ---------------------------------------------------------------
 const ev = (ds) => ds.map((d) => d == null ? null : ({ a: d > 0 ? d : 0, b: d < 0 ? -d : 0, views: 5 }));

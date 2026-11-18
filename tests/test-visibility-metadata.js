@@ -411,6 +411,25 @@
             assertNull(dst.tailMarkedIdentity, 'garbage reads back as off');
         });
 
+        // What each identity should show, per identity cue (pose/identity-cues.js).
+        it('round-trips per-identity marks; none writes nothing; garbage reads as none', function () {
+            var m = M();
+            var src = fakeSession('src');
+            src.identityMarks = { tailBands: { id_0: 0, id_1: 1, id_2: 4 } };
+            var lucid = m.writeVisibilityMetadata(fakeLucid(), src);
+            assertDeepEqual(lucid.identityMarks, { tailBands: { id_0: 0, id_1: 1, id_2: 4 } }, 'written');
+            var dst = fakeSession('dst');
+            m.readVisibilityMetadata(dst, lucid);
+            assertDeepEqual(dst.identityMarks, { tailBands: { id_0: 0, id_1: 1, id_2: 4 } }, 'reads back');
+            src.identityMarks = null;
+            var none = m.writeVisibilityMetadata(fakeLucid(), src);
+            assertFalse('identityMarks' in none, 'none is the default and is not written');
+            m.readVisibilityMetadata(dst, { identityMarks: 'red' });
+            assertNull(dst.identityMarks, 'a string reads as none');
+            m.readVisibilityMetadata(dst, { identityMarks: { tailBands: { id_0: {}, id_1: NaN } } });
+            assertNull(dst.identityMarks, 'no usable class reads as none');
+        });
+
         it('the image check\'s model choice round-trips, and the built-in model writes nothing', function () {
             var m = M();
             var choice = { key: 'a'.repeat(64), name: 'SLAP fine-tune', input: 168, threshold: -1, url: 'olinesn/slap-model' };

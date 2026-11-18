@@ -35,7 +35,10 @@ import {
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
     adoptCampyRecording,
 } from '../loading/session-loader.js';
-import { preferNonCalibrationVideos } from '../loading/video-file-pick.js';
+import { setPageProject } from '../ui/page-title.js';
+import {
+    preferNonCalibrationVideos, assignFolderVideos, isFolderPick, isVideoFileName,
+} from '../loading/video-file-pick.js';
 import {
     campyVideoFile, orderByCampyCameras, campyRecordingWarnings,
 } from '../loading/campy-session.js';
@@ -880,7 +883,13 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
     return { hasSessionData: hasSessionData };
 }
 
-export async function handleLoadSlpFile(slpFile) {
+/**
+ * Open an `.slp` (or analysis `.h5`) as the project, replacing the open one.
+ * @param {File} slpFile
+ * @param {?FileSystemFileHandle} [fileHandle]  its handle, File ▸ Save's target
+ *   from then on; without one Save asks where to write.
+ */
+export async function handleLoadSlpFile(slpFile, fileHandle) {
     try {
         // Warn + reset if 3D points were imported into a skeleton-only project.
         if (!(await ensureNo3dImportBlockingLoad())) {
@@ -956,6 +965,9 @@ export async function handleLoadSlpFile(slpFile) {
         state.views = [];
         state.videoFiles = [];
         state.sessions = [];
+        // Save writes back to THIS file, never the replaced project's.
+        state.slpFileHandle = fileHandle || null;
+        setPageProject(slpFile.name);
         // Plane state is project-scoped and lives on a module singleton, so
         // it does NOT go away with `state.sessions`. `readPlaneMetadata`
         // only restores into an EMPTY model, so without this the previous
@@ -1012,6 +1024,8 @@ export async function handleLoadSlpFile(slpFile) {
 
         // Whether the session loaded last — the one left active — has 3D.
         var lastSessionHas3d = false;
+        // Picked videos that matched no camera, per session, for the status.
+        var unboundVideoWarn = [];
         for (var slpSessIdx = 0; slpSessIdx < numSlpSessions; slpSessIdx++) {
         showLoading('Building session ' + (slpSessIdx + 1) + '/' + numSlpSessions + '...');
         await new Promise(function (r) { setTimeout(r, 0); });
@@ -1422,6 +1436,32 @@ export async function handleLoadSlpFile(slpFile) {
                     return null;
                 };
 
+                // A picked folder holds more than this session's videos (the
+                // side cameras of the same recording), and campy names every
+                // camera's video 0.mp4, which the referenced-name rule above
+                // would bind to the first camera. So a folder's videos are
+                // placed by `assignFolderVideos` instead: one per camera, by
+                // folder or a name that tells the cameras apart; any other
+                // video is left out before it is decoded. A folder with ONE
+                // video keeps the rules above (and the one-camera fallback
+                // below): nothing shares its name.
+                if (isFolderPick(vidFiles) && vidFiles.length > 1) {
+                    var slpRefPathByCam = new Map();
+                    for (var srpi in videoIdxToCameraName) {
+                        var srpCam = videoIdxToCameraName[srpi];
+                        var srpMeta = slpData.videos[srpi];
+                        if (!srpCam || !srpMeta || slpRefPathByCam.has(srpCam)) continue;
+                        slpRefPathByCam.set(srpCam, srpMeta.sourceFilename || srpMeta.filename || '');
+                    }
+                    var slpFolder = assignFolderVideos(vidFiles, cameraNames, slpRefPathByCam);
+                    if (slpFolder.unused.length) {
+                        console.log('[load-slp] folder videos on no camera of this session, not loaded: ' +
+                            slpFolder.unused.map(function (f) { return f.webkitRelativePath || f.name; }).join(', '));
+                    }
+                    vidFiles = slpFolder.assigned;
+                    slpMatchCam = function (vFile) { return slpFolder.cameraOf.get(vFile) || null; };
+                }
+
                 // A `-calibration` stem loses to a plainly-named video of the
                 // SAME camera, but still loads when it is that camera's only
                 // candidate (#199). Applied before the decoders open so a
@@ -1573,6 +1613,32 @@ export async function handleLoadSlpFile(slpFile) {
 
                 autoAssignVideosToCameras();
 
+                // One camera and one picked video that no rule above matched:
+                // the video is that camera's whatever it is called (a renamed
+                // copy or export of the file the SLP references). Runs after
+                // every name rule, so it only decides what they left open.
+                var sessVfs = state.videoFiles.filter(function (o) { return o.sessionIdx === slpSessIdx; });
+                if (cameras.length === 1 && vidFiles.length === 1 && sessVfs.length === 1
+                        && !sessVfs[0].assignedCamera) {
+                    sessVfs[0].assignedCamera = cameras[0].name;
+                    console.log('[load-slp] video "' + sessVfs[0].file.name + '" matches no camera by name; ' +
+                        'bound to the session\'s only camera "' + cameras[0].name + '"');
+                }
+                // Any other picked video that matched no camera gets no view.
+                // Say so on the final status, with the cameras left without one.
+                var unboundNames = sessVfs.filter(function (o) { return !o.assignedCamera; })
+                    .map(function (o) { return o.file.name; });
+                if (unboundNames.length) {
+                    var camsNoVideo = cameraNames.filter(function (cn) {
+                        return !sessVfs.some(function (o) { return o.assignedCamera === cn; });
+                    });
+                    var unboundText = (unboundNames.length > 1 ? 'videos ' : 'video ') +
+                        unboundNames.join(', ') + ' matched no camera, not loaded' +
+                        (camsNoVideo.length ? '; no video for ' + camsNoVideo.join(', ') : '');
+                    console.warn('[load-slp] ' + unboundText);
+                    unboundVideoWarn.push({ session: session, text: unboundText });
+                }
+
                 // Don't create views yet — wait until after session loop
                 // so we only create views for the active session
             }
@@ -1692,15 +1758,20 @@ export async function handleLoadSlpFile(slpFile) {
         if (state.session) statusParts.push(state.session.numFrames.toLocaleString('en-US') + ' labeled frames');
         if (state.views.length > 0) statusParts.push(state.views.length + ' views');
         // A campy recording's warnings (status, cameras), per session.
-        var campyWarn = [];
+        var loadWarn = [];
         state.sessions.forEach(function (cs) {
             campyRecordingWarnings(cs.campyRecording).forEach(function (w) {
-                campyWarn.push(state.sessions.length > 1 ? cs.name + ': ' + w : w);
+                loadWarn.push(state.sessions.length > 1 ? cs.name + ': ' + w : w);
             });
+        });
+        // Videos that matched no camera (a session whose load failed is gone).
+        unboundVideoWarn.forEach(function (u) {
+            if (state.sessions.indexOf(u.session) < 0) return;
+            loadWarn.push(state.sessions.length > 1 ? u.session.name + ': ' + u.text : u.text);
         });
         // A compact copy (import-export/compact-save.js) says it holds rounded values.
         var loadedStatus = withCompactNote('SLP loaded (' + statusParts.join(', ') + ')'
-            + (campyWarn.length ? ' — ' + campyWarn.join('; ') : ''), campyWarn.length ? 'warning' : 'success',
+            + (loadWarn.length ? ' — ' + loadWarn.join('; ') : ''), loadWarn.length ? 'warning' : 'success',
             state.sessions.find(function (cs) { return compactRoundingOf(cs.fileProvenance); }) || null);
         setStatus(loadedStatus.message, loadedStatus.kind);
 
@@ -1995,8 +2066,38 @@ export async function handleAddSlp() {
             console.log('[add-slp] SLP references videos:', addSlpVideoRefs);
 
             // Ask for the video files; [] = the user continued without video.
+            // Each camera's video can sit in its own camera folder, so a whole
+            // recording folder is offered too.
             var addVideoFiles = await forceVideoSelection(addRefInfo,
-                { title: 'SLP loaded — now select the video file(s)' });
+                { title: 'SLP loaded — now select the video file(s)', folder: true });
+
+            // A picked folder holds more than this file's videos (the side
+            // cameras of the same recording, campy's manifests), and campy
+            // names every camera's video 0.mp4: only a video placed on one of
+            // the file's cameras by its folder or name loads, and nothing is
+            // bound by elimination (`assignFolderVideos`).
+            // A folder with ONE video keeps the name rules below.
+            var addFolderCam = null;
+            var addRefPathByCam = new Map();
+            if (isFolderPick(addVideoFiles)) {
+                addVideoFiles = addVideoFiles.filter(function (f) { return isVideoFileName(f.name); });
+            }
+            if (isFolderPick(addVideoFiles) && addVideoFiles.length > 1) {
+                for (var arp = 0; arp < slpData.videos.length; arp++) {
+                    var arpCam = videoIdxToCameraName[arp];
+                    var arpMeta = slpData.videos[arp];
+                    if (!arpCam || !arpMeta || addRefPathByCam.has(arpCam)) continue;
+                    addRefPathByCam.set(arpCam, arpMeta.sourceFilename || arpMeta.filename || '');
+                }
+                var addFolder = assignFolderVideos(addVideoFiles,
+                    cameras.map(function (c) { return c.name; }), addRefPathByCam);
+                if (addFolder.unused.length) {
+                    console.log('[add-slp] folder videos on no camera of this file, not loaded: ' +
+                        addFolder.unused.map(function (f) { return f.webkitRelativePath || f.name; }).join(', '));
+                }
+                addFolderCam = addFolder.cameraOf;
+                addVideoFiles = addFolder.assigned;
+            }
 
             if (addVideoFiles.length > 0) {
                 for (var amvi = 0; amvi < addVideoFiles.length; amvi++) {
@@ -2007,11 +2108,16 @@ export async function handleAddSlp() {
                         var amvDec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
                         await amvDec.init(amvFile);
 
-                        // Match to SLP video reference by filename
-                        var amvCam = null;
+                        // Match to SLP video reference by filename (a folder
+                        // pick's videos are already placed, above)
+                        var amvCam = addFolderCam ? addFolderCam.get(amvFile) : null;
                         var amvMatchedVideoPath = null;
+                        if (amvCam) {
+                            var amvRefPath = addRefPathByCam.get(amvCam);
+                            if (amvRefPath && amvRefPath !== '.') amvMatchedVideoPath = amvRefPath;
+                        }
                         var amvStemLower = amvStem.toLowerCase();
-                        for (var arvi = 0; arvi < addSlpVideoRefs.length; arvi++) {
+                        for (var arvi = 0; !amvCam && arvi < addSlpVideoRefs.length; arvi++) {
                             var aRefName = addSlpVideoRefs[arvi];
                             if (!aRefName) continue;
                             var aRefStem = aRefName.replace(/\.[^.]+$/, '').toLowerCase();

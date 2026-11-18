@@ -31,25 +31,22 @@
  *     independence guarantee from the same PR), so the new entry point does
  *     not reintroduce the width handoff that caused the original bug.
  *
- * Run: node toolbar-3d-toggle-button.mjs   (spawns its own http.server)
+ * Run: node toolbar-3d-toggle-button.mjs   (serves the app itself)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser, waitForAnimations } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8121);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1600, height: 950 } });
     const errs = [];
     page.on('pageerror', e => errs.push(String(e)));
@@ -95,6 +92,7 @@ try {
         init.setup3DViewport();
     });
     await page.waitForTimeout(500);
+    await waitForAnimations(page);
 
     const snap = () => page.evaluate(() => {
         const b3 = document.getElementById('viewport3dToggleBtn');
@@ -187,7 +185,7 @@ try {
     check(s0.vp3dCollapsed === false, 'viewport starts expanded');
 
     await page.click('#viewport3dToggleBtn');
-    await page.waitForTimeout(350);
+    await waitForAnimations(page);   // the panels' width transitions
     const s1 = await snap();
     check(s1.vp3dCollapsed === true, 'clicking the button collapses the 3D viewport');
     check(s1.vp3dWidth === 0, `collapsed viewport has zero width (got ${s1.vp3dWidth}) — not merely hidden behind another panel`);
@@ -198,7 +196,7 @@ try {
         `the info panel keeps its width when the 3D viewer is hidden from the button (${s0.infoWidth} -> ${s1.infoWidth})`);
 
     await page.click('#viewport3dToggleBtn');
-    await page.waitForTimeout(350);
+    await waitForAnimations(page);   // the panels' width transitions
     const s2 = await snap();
     check(s2.vp3dCollapsed === false, 'clicking again re-expands the 3D viewport');
     check(s2.active3d && s2.title3d === 'Hide 3D viewer (\\)', `and comes back on (tooltip "${s2.title3d}")`);
@@ -208,7 +206,7 @@ try {
     // ---------------- 4. The state follows the OTHER two entry points -----
     // A button-local boolean would pass section 3 and desync here.
     await page.keyboard.press('Backslash');
-    await page.waitForTimeout(350);
+    await waitForAnimations(page);   // the panels' width transitions
     const s3 = await snap();
     check(s3.vp3dCollapsed === true, 'the `\\` shortcut still collapses the viewport');
     check(!s3.active3d,
@@ -218,7 +216,7 @@ try {
     await page.click('.menu-item[data-menu="view"]');
     await page.waitForTimeout(150);
     await page.click('#menuToggle3D');
-    await page.waitForTimeout(350);
+    await waitForAnimations(page);   // the panels' width transitions
     const s4 = await snap();
     check(s4.vp3dCollapsed === false, 'View ▸ Toggle 3D Viewport still expands the viewport');
     check(s4.active3d,
@@ -228,12 +226,12 @@ try {
     // states — otherwise its width check below never varies the state and
     // passes for free.
     await page.click('#infoPanelToggleBtn');
-    await page.waitForTimeout(350);
+    await waitForAnimations(page);   // the panels' width transitions
     const s5 = await snap();
     check(!s5.activeInfo && s5.titleInfo === 'Show info panel (I)' && s5.labelInfo === 'Panel',
         `the info-panel button's highlight goes off, label unchanged (tooltip "${s5.titleInfo}")`);
     await page.click('#infoPanelToggleBtn');
-    await page.waitForTimeout(350);
+    await waitForAnimations(page);   // the panels' width transitions
     const s6 = await snap();
     check(s6.activeInfo && s6.titleInfo === 'Hide info panel (I)', `and back on (tooltip "${s6.titleInfo}")`);
 
@@ -280,6 +278,7 @@ try {
     // ---------------- 7. The toolbar fits a 1440 px window ----------------
     await page.setViewportSize({ width: 1440, height: 950 });
     await page.waitForTimeout(200);
+    await waitForAnimations(page);
     const s7 = await snap();
     check(s7.toolbarScrollOverflow <= 0 && s7.gapToEdge >= 0,
         `at 1440 px nothing overflows the toolbar and "Panel" ends inside the window (overflow ${s7.toolbarScrollOverflow}px, right gap ${s7.gapToEdge.toFixed(1)}px)`);

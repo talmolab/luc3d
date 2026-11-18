@@ -29,29 +29,29 @@
  *  5. Negative control — the identities swapped for the second half of the
  *     recording (an ID switch): the reopened summary's rows each show BOTH
  *     animals. This is what the section is for.
+ *  5b. The images are fetched one queue per camera, the queues side by side: with a
+ *     decoder that takes 30 ms per frame, requests to different cameras overlap,
+ *     no decoder is asked for two frames at once, and every image still arrives.
  *  6. Without videos the images say "no video" and the maps still draw the paths
  *     — and resting on an image shows no preview, while a map still enlarges.
  *
  * Run: node tests/e2e/identity-gallery.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { answerTrackSetup } from './fixtures/track-setup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8298);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
@@ -92,16 +92,19 @@ try {
                 });
                 s.addFrameGroup(fg);
             }
+            const draw = (camName, f) => {
+                const cv = new OffscreenCanvas(640, 480), ctx = cv.getContext('2d'), t = truth.get(camName);
+                ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 640, 480);
+                [['#ff0000', 0], ['#00ff00', 1]].forEach(([col, ai]) => {
+                    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(t[f * 4 + 2 * ai], t[f * 4 + 2 * ai + 1], 45, 0, 2 * Math.PI); ctx.fill();
+                });
+                return cv.transferToImageBitmap();
+            };
+            // getFrame = the decoder's own (cached) frame; peekFrame = a caller-owned copy (loading/video.js)
             const decoder = (camName) => ({
                 samples: { length: FRAMES },
-                getFrame: async (f) => {
-                    const cv = new OffscreenCanvas(640, 480), ctx = cv.getContext('2d'), t = truth.get(camName);
-                    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 640, 480);
-                    [['#ff0000', 0], ['#00ff00', 1]].forEach(([col, ai]) => {
-                        ctx.fillStyle = col; ctx.beginPath(); ctx.arc(t[f * 4 + 2 * ai], t[f * 4 + 2 * ai + 1], 45, 0, 2 * Math.PI); ctx.fill();
-                    });
-                    return cv.transferToImageBitmap();
-                },
+                getFrame: async (f) => draw(camName, f),
+                peekFrame: async (f) => draw(camName, f),
             });
             AS.state.sessions = [s]; AS.state.activeSessionIdx = 0; AS.state.session = s;
             AS.state.totalFrames = FRAMES; AS.state.currentFrame = 0; AS.state.fps = 30;
@@ -295,6 +298,82 @@ try {
     check(g.rows.every(r => new Set(r.tiles.map(t => t.color)).size === 2),
         `after an ID switch halfway, each row shows BOTH animals: ${g.rows.map(r => r.name + ' ' + r.tiles.map(t => t.color[0]).join('')).join(' · ')}`);
     await page.keyboard.press('Escape');
+
+    // ---- 5b. images fetched per camera, the cameras side by side -----------------------------
+    const conc = await page.evaluate(async () => {
+        const G = await import('/ui/identity-gallery.js'), AS = await import('/ui/app-state.js');
+        let inFlight = 0, maxAll = 0, calls = 0;
+        const per = new Map(), maxPer = new Map();
+        const saved = AS.state.views.map(v => v.decoder.peekFrame);
+        AS.state.views.forEach(v => {
+            const orig = v.decoder.peekFrame;
+            v.decoder.peekFrame = async (f) => {
+                calls++; inFlight++; maxAll = Math.max(maxAll, inFlight);
+                per.set(v.name, (per.get(v.name) || 0) + 1);
+                maxPer.set(v.name, Math.max(maxPer.get(v.name) || 0, per.get(v.name)));
+                try { await new Promise(r => setTimeout(r, 30)); return await orig(f); }
+                finally { inFlight--; per.set(v.name, per.get(v.name) - 1); }
+            };
+        });
+        const host = document.createElement('div'); document.body.appendChild(host);
+        const t0 = performance.now();
+        const res = G.renderIdentityGallery(host, AS.state.session, {});
+        await res.done;
+        const ms = Math.round(performance.now() - t0);
+        const tiles = host.querySelectorAll('.identity-gallery-tile').length;
+        const filled = host.querySelectorAll('.identity-gallery-tile canvas.identity-gallery-img').length;
+        AS.state.views.forEach((v, i) => { v.decoder.peekFrame = saved[i]; });
+        host.remove();
+        return { maxAll, maxPerCam: Math.max(...maxPer.values()), cams: maxPer.size, calls, tiles, filled, ms };
+    });
+    check(conc.cams > 1 && conc.maxAll > 1, `5b. requests to different cameras overlap (up to ${conc.maxAll} at once over ${conc.cams} cameras)`);
+    check(conc.maxPerCam === 1, `5b. no decoder is asked for two frames at once (${conc.maxPerCam})`);
+    check(conc.tiles > 0 && conc.filled === conc.tiles, `5b. every image arrives (${conc.filled} of ${conc.tiles}; ${conc.calls} fetches in ${conc.ms} ms)`);
+
+    // ---- 5c. a caller-owned copy per image, closed once drawn; getFrame left alone --------------
+    // getFrame keeps a jump's frame in the view's cache and warms the frames before it
+    // (loading/video.js): 25 samples left ~1.1 GB of decoded video in the GPU process.
+    const own = await page.evaluate(async () => {
+        const G = await import('/ui/identity-gallery.js'), AS = await import('/ui/app-state.js');
+        let gets = 0, peeks = 0, closed = 0;
+        const saved = AS.state.views.map(v => [v.decoder.getFrame, v.decoder.peekFrame]);
+        AS.state.views.forEach(v => {
+            const g = v.decoder.getFrame, p = v.decoder.peekFrame;
+            v.decoder.getFrame = async (f) => { gets++; return g(f); };
+            v.decoder.peekFrame = async (f) => {
+                peeks++;
+                const b = await p(f), close = b.close.bind(b);
+                b.close = () => { closed++; close(); };
+                return b;
+            };
+        });
+        const run = async () => {
+            const host = document.createElement('div'); document.body.appendChild(host);
+            await G.renderIdentityGallery(host, AS.state.session, {}).done;
+            const tiles = host.querySelectorAll('.identity-gallery-tile').length;
+            const filled = host.querySelectorAll('.identity-gallery-tile canvas.identity-gallery-img').length;
+            const maps = host.querySelectorAll('.identity-gallery-map-canvas').length;
+            host.remove();
+            return { tiles, filled, maps };
+        };
+        const withPeek = await run();
+        const counts = { gets, peeks, closed };
+        // a decoder without peekFrame (the fallback): its own frames, drawn and never closed
+        AS.state.views.forEach(v => { delete v.decoder.peekFrame; });
+        gets = 0; peeks = 0; closed = 0;
+        const without = await run();
+        const fallback = { gets, peeks, closed };
+        AS.state.views.forEach((v, i) => { v.decoder.getFrame = saved[i][0]; v.decoder.peekFrame = saved[i][1]; });
+        return { withPeek, counts, without, fallback };
+    });
+    check(own.counts.gets === 0 && own.counts.peeks > 0,
+        `5c. with peekFrame the gallery never calls getFrame (getFrame ${own.counts.gets}, peekFrame ${own.counts.peeks})`);
+    check(own.counts.closed === own.counts.peeks,
+        `5c. every copy is closed once drawn (${own.counts.closed} of ${own.counts.peeks}, the map's background included)`);
+    check(own.withPeek.tiles > 0 && own.withPeek.filled === own.withPeek.tiles && own.withPeek.maps > 0,
+        `5c. and every tile and map still draws (${own.withPeek.filled} of ${own.withPeek.tiles} tiles, ${own.withPeek.maps} maps)`);
+    check(own.fallback.gets > 0 && own.fallback.closed === 0 && own.without.filled === own.without.tiles,
+        `5c. without peekFrame: getFrame's frames, never closed (${own.fallback.gets} fetches, ${own.without.filled} of ${own.without.tiles} tiles)`);
 
     // ---- 6. no videos ---------------------------------------------------------------------
     await page.evaluate(async () => { await window.__build('noVideo', { noVideo: true }); await (await import('/pose/tracker.js')).trackAll(); });

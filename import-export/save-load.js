@@ -55,6 +55,8 @@ import { buildSaveProvenance } from './slp-provenance.js';
 import { withCompactSave } from './compact-save.js';
 import { showCompactSaveModal } from '../ui/compact-save-modal.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
+import { saveStartFolder } from '../loading/recording-folder.js';
+import { setPageDirty, setPageProject } from '../ui/page-title.js';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -130,6 +132,7 @@ export function newProject(force) {
     // Drop the "imported 3D points without a session" marker — a full reset
     // erases any such overlay (including the skeleton) by design.
     state.has3dImportWithoutSession = false;
+    setPageProject(null);
 
     // Detach interaction handlers from old canvases
     if (interactionManager) {
@@ -144,13 +147,20 @@ export function newProject(force) {
     state.isPlaying = false;
     setVideoController(null);
 
-    // Close lazy loader if active
-    if (state.session && state.session.lazyLoader) {
-        state.session.lazyLoader.close();
-    }
+    // Close every session's lazy loader (the active one, and any other session
+    // of a multi-session project).
+    var closing = state.sessions.slice();
+    if (state.session && closing.indexOf(state.session) < 0) closing.push(state.session);
+    closing.forEach(function (s) { if (s && s.lazyLoader) s.lazyLoader.close(); });
 
-    // Clear session and annotation data
+    // Clear session and annotation data. The session LIST too: a session left
+    // in it stayed on the session strip, and the next folder loaded was added
+    // to it as a second session of the old project.
     state.session = null;
+    state.sessions = [];
+    state.activeSessionIdx = 0;
+    // File ▸ Save must not write the new project over the old one's file.
+    state.slpFileHandle = null;
     state.currentFrame = 0;
     state.totalFrames = 0;
     state.fps = 30;
@@ -181,6 +191,9 @@ export function newProject(force) {
     paneManager.clearAll();
     var stripList = document.getElementById('viewStripList');
     if (stripList) stripList.innerHTML = '';
+    if (document.getElementById('sessionStripList')) populateSessionStrip();
+    // Nothing is open, so nothing is unsaved.
+    clearDirty();
 
     // Reset frame counter display
     clearReadout();
@@ -374,7 +387,7 @@ export function markDirty() {
     if (state.session) state.session.isDirty = true;
     if (state.isDirty) return;
     state.isDirty = true;
-    document.title = '\u2022 LUC3D';
+    setPageDirty(true);
     var saveDot = document.getElementById('saveDirtyDot');
     if (saveDot) saveDot.style.display = 'inline-block';
 }
@@ -388,7 +401,7 @@ export function clearDirty() {
     } else if (state.session) {
         state.session.isDirty = false;
     }
-    document.title = 'LUC3D';
+    setPageDirty(false);
     var saveDot = document.getElementById('saveDirtyDot');
     if (saveDot) saveDot.style.display = 'none';
 }
@@ -629,8 +642,18 @@ function saveSteps(streaming, download) {
  * writer, and the CSS spinner keeps turning there, so the card still says the
  * app is working. Every call that changes what the card shows returns a
  * promise for the next paint, so the step is on screen BEFORE the work starts.
- * `progress.disk(bytes)` reports the streamed write to the picked file.
+ * `progress.disk(bytes)` reports the write to the picked file: a bar in MB (KB under 1 MB)
+ * once `progress.diskTotal(bytes)` gave the file's size (the streaming path
+ * learns it from the finished in-memory file, `finalizeProjectWriter`; the
+ * eager one from its bytes), else a running MB count. It stays on the last
+ * step (Finishing the file / Writing the file). `progress.closing()` shows
+ * the browser's close() as a spinner: it reports no progress (Chrome moves
+ * its swap file into place, reading it back on a network share), so the bar
+ * does not pretend to.
  */
+/** The eager save's write size per chunk (the streaming writer's default too). */
+var DISK_CHUNK_BYTES = 8 * 1024 * 1024;
+
 function createSaveProgress(steps) {
     var pacer = createProgressPacer();
     var shown = null;
@@ -650,10 +673,34 @@ function createSaveProgress(steps) {
         showLoadingProgress(SAVE_STEP_LABELS[stage], done, total, opts(stage, unit || 'frames'));
         return pacer.yield();
     };
+    var diskStep = steps[steps.length - 1];
+    var diskTotal = 0;
+    var diskShown = false;
+    // The unit the file's size reads well in: KB under 1 MB, MB to one
+    // decimal under 10 MB, whole MB above (a 25 KB file must not read 0/0 MB).
+    function diskUnit() { return diskTotal > 0 && diskTotal < 1048576 ? 'KB' : 'MB'; }
+    function mb(bytes) {
+        if (diskUnit() === 'KB') return Math.round(bytes / 1024);
+        var v = bytes / 1048576;
+        return diskTotal > 0 && diskTotal < 10 * 1048576 ? Math.round(v * 10) / 10 : Math.round(v);
+    }
+    progress.diskTotal = function (bytes) { diskTotal = bytes > 0 ? bytes : 0; };
     progress.disk = function (bytes) {
-        if (!pacer.due()) return;
-        showLoading('Writing to disk: ' + Math.round(bytes / 1048576).toLocaleString('en-US') + ' MB…',
-            opts('finish'));
+        var last = diskTotal > 0 && bytes >= diskTotal;
+        if (diskShown && !last && !pacer.due()) return null;
+        diskShown = true;
+        if (diskTotal > 0) {
+            showLoadingProgress('Writing to disk', mb(Math.min(bytes, diskTotal)), mb(diskTotal), opts(diskStep, diskUnit()));
+        } else {
+            showLoading('Writing to disk: ' + mb(bytes).toLocaleString('en-US') + ' MB…', opts(diskStep));
+        }
+        return pacer.yield();
+    };
+    progress.closing = function () {
+        var o = opts(diskStep);
+        o.detail = 'the browser shows no progress while it puts the file in place (slow on a network share)';
+        showLoading('Closing the file…', o);
+        return yieldToPaint();
     };
     return progress;
 }
@@ -734,9 +781,9 @@ async function buildSlpBytes(opts) {
             console.log('[save-slp] lazy session → streaming writer (', lazySess.lazyLoader.nFrames, 'frames ×',
                 lazySess.cameras.length, 'cameras )');
             return await buildSessionSlpBytesStreaming(lazySess, lazyViews, lazyVideoFiles,
-                { sink: opts.sink || undefined, provenance: buildSaveProvenance([lazySess]), onProgress: onProgress });
+                { sink: opts.sink || undefined, chunkBytes: opts.chunkBytes, provenance: buildSaveProvenance([lazySess]), onProgress: onProgress });
         }
-        return await saveAllSessionsStreaming(sessionsToExport, { sink: opts.sink, onProgress: onProgress });
+        return await saveAllSessionsStreaming(sessionsToExport, { sink: opts.sink, chunkBytes: opts.chunkBytes, onProgress: onProgress });
     }
 
     // MIXED PROJECT GUARD. The eager builder below iterates only the RESIDENT
@@ -1114,7 +1161,7 @@ export async function saveAllSessionsStreaming(sessions, opts) {
     return await finalizeMultiSessionSave(handle, opts);
 }
 
-export async function quickSave() {
+export async function quickSave(previousFile) {
     if (!state.session) {
         setStatus('No session to save', 'error');
         return;
@@ -1136,14 +1183,20 @@ export async function quickSave() {
             if (state.sessions.length === 1 && state.session.name) {
                 filename = state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.slp';
             }
+            var pickOpts = {
+                suggestedName: filename,
+                types: [{
+                    description: 'SLEAP Labels',
+                    accept: { 'application/x-hdf5': ['.slp'] }
+                }]
+            };
+            // Open in the open recording's folder (else beside the file Save As
+            // replaces). Without `startIn` Chromium opens wherever the last
+            // save went: another recording's folder.
+            var start = saveStartFolder(state, previousFile);
+            if (start) pickOpts.startIn = start;
             try {
-                state.slpFileHandle = await window.showSaveFilePicker({
-                    suggestedName: filename,
-                    types: [{
-                        description: 'SLEAP Labels',
-                        accept: { 'application/x-hdf5': ['.slp'] }
-                    }]
-                });
+                state.slpFileHandle = await window.showSaveFilePicker(pickOpts);
             } catch (pickErr) {
                 if (pickErr.name === 'AbortError') {
                     setStatus('Save cancelled', 'warning');
@@ -1159,6 +1212,8 @@ export async function quickSave() {
         state.isSaving = false;
         hideLoading();
         clearDirty();
+        // The project is now the file it was saved to (Save As retitles the tab).
+        if (state.slpFileHandle && state.slpFileHandle.name) setPageProject(state.slpFileHandle.name);
         var sizeMB = (bytesWritten / 1024 / 1024).toFixed(1);
         setStatus('Saved (' + sizeMB + ' MB)', 'success');
     } catch (err) {
@@ -1196,20 +1251,31 @@ async function writeProjectToHandle(handle, title) {
     var writable = await handle.createWritable();
     var bytesWritten = 0;
     var sink = {
-        write: function (chunk) {
+        setTotalBytes: function (n) { progress.diskTotal(n); },
+        write: async function (chunk) {
+            await writable.write(chunk);
             bytesWritten += chunk.byteLength;
-            progress.disk(bytesWritten);
-            return writable.write(chunk);
+            await progress.disk(bytesWritten);
         },
-        close: function () { return writable.close(); },
+        close: async function () {
+            await progress.closing();
+            return writable.close();
+        },
     };
     try {
-        var bytes = await buildSlpBytes({ sink: sink, onProgress: progress });
+        // `__lucidSaveChunkBytes` (tests only) shrinks the write chunks so a
+        // small file still reaches the disk in several writes.
+        var chunkBytes = globalThis.__lucidSaveChunkBytes || DISK_CHUNK_BYTES;
+        var bytes = await buildSlpBytes({ sink: sink, onProgress: progress, chunkBytes: chunkBytes });
         if (bytes) {
             // Eager (non-streaming) path returned bytes directly instead of
-            // using the sink — write them out now.
-            await writable.write(bytes);
-            await writable.close();
+            // using the sink — write them out now, in chunks, so the disk
+            // bar moves.
+            sink.setTotalBytes(bytes.byteLength);
+            for (var pos = 0; pos < bytes.byteLength; pos += chunkBytes) {
+                await sink.write(bytes.subarray(pos, Math.min(pos + chunkBytes, bytes.byteLength)));
+            }
+            await sink.close();
             bytesWritten = bytes.byteLength;
         }
     } catch (err) {
@@ -1239,7 +1305,9 @@ export async function saveCompactCopy(opts) {
     }
     var base = (state.sessions.length === 1 && state.session.name)
         ? state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_') : 'project';
-    var handle = await showCompactSaveModal({ suggestedName: base + '_compact.slp', pickFile: opts.pickFile });
+    // Opens beside the project: its recording folder, else its file.
+    var handle = await showCompactSaveModal({ suggestedName: base + '_compact.slp', pickFile: opts.pickFile,
+        startIn: saveStartFolder(state, state.slpFileHandle) || undefined });
     if (!handle) { setStatus('Compact copy cancelled', 'warning'); return; }
     state.isSaving = true;
     setStatus('Saving a compact copy...', 'warning');
@@ -1259,9 +1327,11 @@ export async function saveCompactCopy(opts) {
 }
 
 export async function saveAs() {
-    // Force a new file picker regardless of existing handle
+    // Force a new file picker regardless of existing handle; it opens beside
+    // the current file when the session has no recording folder.
+    var previous = state.slpFileHandle;
     state.slpFileHandle = null;
-    await quickSave();
+    await quickSave(previous);
 }
 
 export async function saveProjectSlp() {
@@ -1526,7 +1596,14 @@ export function saveProject() {
     }
 }
 
-export async function handleLoadProject(prePickedFile) {
+/**
+ * Open a project file (`.slp`, `.h5` or project `.json`); without one, pick it.
+ * @param {File} [prePickedFile]
+ * @param {?FileSystemFileHandle} [fileHandle]  the `.slp`'s own handle: File ▸ Save
+ *   writes back to it. Adopted only once the load replaces the open project; any
+ *   other load leaves no handle, so Save asks where to write.
+ */
+export async function handleLoadProject(prePickedFile, fileHandle) {
     try {
         // Warn + reset if 3D points were imported into a skeleton-only project.
         if (!(await ensureNo3dImportBlockingLoad())) {
@@ -1560,10 +1637,10 @@ export async function handleLoadProject(prePickedFile) {
                 // Dynamic import avoids a session-loader ↔ save-load import cycle.
                 var _sl = await import('../loading/session-loader.js');
                 if (_sl && typeof _sl.handleLoadProjectSlpLazy === 'function') {
-                    return _sl.handleLoadProjectSlpLazy(file);
+                    return _sl.handleLoadProjectSlpLazy(file, { fileHandle: fileHandle });
                 }
             }
-            return handleLoadSlpFile(file);
+            return handleLoadSlpFile(file, fileHandle);
         }
 
         var fileSize = file.size;
@@ -1585,6 +1662,7 @@ export async function handleLoadProject(prePickedFile) {
         // `readPlaneMetadata` only restores into an EMPTY model, so without
         // this the previous project's planes survive and this file's are lost.
         resetPlaneState();
+        setPageProject(file.name);
         var cameras;
         if (data.version === 3) {
             cameras = _restoreProjectV3(data);
@@ -1593,6 +1671,8 @@ export async function handleLoadProject(prePickedFile) {
         } else {
             cameras = _restoreLegacySession(data);
         }
+        // A .json project has no .slp to save back to: Save asks where.
+        state.slpFileHandle = null;
 
 
         // 2. Load videos — check if already loaded, only prompt for missing ones

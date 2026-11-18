@@ -32,21 +32,18 @@
  * where the tracker never marks anything. Confirmed: with the tracker's
  * `markDirty()` calls removed, every check in (1) and (2) fails.
  *
- * Run: node tests/e2e/track-marks-dirty.mjs   (spawns its own http.server)
+ * Run: node tests/e2e/track-marks-dirty.mjs   (serves the app itself)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8099);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
-
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 const NF = 30;
 
@@ -56,7 +53,7 @@ const isFullyClean = (d) => !d.state && !d.session && !d.title && !d.dot;
 const fmt = (d) => JSON.stringify(d);
 
 try {
-    const browser = await chromium.launch();
+    const browser = await launchBrowser();
     const page = await browser.newPage();
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     page.on('console', msg => { if (msg.type() === 'error') console.log('  [console.error]', msg.text().slice(0, 300)); });
