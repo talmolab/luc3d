@@ -11323,8 +11323,15 @@ either ID-switch check is run.
 
 **Drawing.** `renderIdentityGallery(host, session, {onPick})` builds the rows
 with placeholders at once and fills them AFTER the box paints: the maps first,
-then the images, one decoded frame per sample (`view.decoder.getFrame`, drawn
-immediately — a decoder's cached frame may be closed by the next decode). Every
+then the images, one decoded frame per sample, drawn immediately. **Each frame,
+and the map's background, is a caller-owned copy** (`galleryFrame`:
+`view.decoder.peekFrame`, closed once drawn; `getFrame` only for a decoder
+without `peekFrame`, whose frames are never closed here). Not `getFrame`: a jump
+through it keeps the frame in the view's frame cache and warms the 24 frames
+before it in the background (`_scheduleBackWarm`, `loading/video.js`), and the
+summary's samples left ~28 frames per camera cached for good on the 8-camera
+1280x1024 project: Chrome's GPU process ended a Track All + Triangulate All at
+~1.6 GB, ~0.47 GB with copies (VM, two runs each). Every
 row's samples are planned first (`planRow`: frame, camera, crop), then fetched one
 queue per decoder (`fetchSamples`): a decoder is asked for one frame at a time, in
 frame order, while the cameras' queues run side by side. And the samples land on
@@ -11337,7 +11344,7 @@ gap's worth. campy's cameras share keyframes; one that did not would only decode
 slower. 26 samples on an 8-camera project (keyframe every 250 frames): 2.3 s one
 after another, 1.3 s per camera side by side, 0.37 s on keyframes (local disk). Tiles
 fill in as their camera's frames arrive, not row by row. It stops as soon as the
-box is closed (test: e2e `identity-gallery` §5b). Without a video a sample says "no video" and the maps draw on a dark
+box is closed (test: e2e `identity-gallery` §5b; the copies, §5c). Without a video a sample says "no video" and the maps draw on a dark
 ground. The map is a darkened still of the chosen camera with the path coloured
 by TIME on a one-hue sequential ramp and a 0:00 → end key; hovering shows the
 nearest point's time, a click goes there. The chosen view is kept on
@@ -11363,7 +11370,7 @@ time captioned. Changing the map's camera hides a stale preview. The preview
 reads the element's `_zoom` (`{kind, w, h, draw, color, label, frame}`): one box
 serves both kinds.
 
-**Key exports.** `renderIdentityGallery`, `identityTracks`, `identityGroupAt`,
+**Key exports.** `renderIdentityGallery`, `galleryFrame`, `identityTracks`, `identityGroupAt`,
 `groupCentroid`, `pickSampleFrames`, `projectedBox`, `pickCamera`, `cropSquare`,
 `memberPointsByCamera`, `projectTrack`, `defaultMapCamera`, `timeColor`;
 `GALLERY_SAMPLES` (5), `GALLERY_MAX_ROWS`, `GALLERY_TILE` (88 px),
