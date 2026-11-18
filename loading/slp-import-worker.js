@@ -10,6 +10,8 @@
  *   { type: 'getFrame', frameIdx, requestId }  — Lazy mode: read single frame
  *   { type: 'getFrames', startIdx, endIdx, requestId } — Lazy mode: read frame range
  *   { type: 'close' }                          — Lazy mode: close file, free resources
+ *   { type: 'readProvenance', files: File[] }  — Each file's `provenance` dict only
+ *   { type: 'analysisToSlp', file: File }      — A SLEAP analysis .h5 rewritten as .slp bytes
  *
  * Messages OUT:
  *   { type: 'progress', message: string }
@@ -17,6 +19,8 @@
  *   { type: 'metadata', data: { skeleton, trackNames, nodeNames, nFrames, nTracks, nNodes, videos } }
  *   { type: 'frameData', frameIdx, requestId, instances }
  *   { type: 'framesData', startIdx, endIdx, requestId, frames }
+ *   { type: 'provenance', provenances: Array<Object|null> }  — parallel to `files`
+ *   { type: 'slpBytes', bytes: ArrayBuffer, name: string }   — answer to `analysisToSlp`
  *   { type: 'error', message: string }
  */
 
@@ -76,7 +80,242 @@ async function handleMessage(data) {
         readFramesLazy(data.startIdx, data.endIdx, data.requestId);
     } else if (data.type === 'close') {
         closeLazy();
+    } else if (data.type === 'readProvenance' && data.files) {
+        readProvenances(data.files);
+    } else if (data.type === 'analysisToSlp' && data.file) {
+        analysisToSlp(data.file);
     }
+}
+
+/** A fixed-length string attribute, as sleap-io.js writes them (`setStringAttr`). */
+function setStringAttr(target, name, value) {
+    var n = new TextEncoder().encode(value).length;
+    target.create_attribute(name, value, null, 'S' + Math.max(1, n));
+}
+
+/**
+ * Rewrite a SLEAP analysis `.h5` as an `.slp`, in memory, and post its bytes
+ * (#414). A per-camera folder that goes lazy reads every camera through ONE
+ * reader; when its cameras mix `.slp` and analysis `.h5`, that reader is
+ * `SioLazyLoader`, which reads `.slp` only — so each `.h5` is handed to it in
+ * this form. Same poses as `parseAnalysisH5` builds: one predicted instance per
+ * (frame, track) with at least one finite node, skipped where
+ * `track_occupancy` says the track is absent; the instance score from
+ * `instance_scores`, `tracking_score` from `tracking_scores`. Per-node scores
+ * are NOT carried, the same as every other analysis-`.h5` path (luc3d #322,
+ * see the NOTE in `parseAnalysisH5`): each node's score column is NaN, so the
+ * node tooltip shows no score and a writer falls back to the instance score.
+ *
+ * The tables use LUC3D's own layout (2-D matrices + `field_names`, the
+ * `instances` table as float64 — sleap-io.js#231), built in typed arrays, so
+ * no per-instance object is ever made, and the file lives in this worker's
+ * memory filesystem only until its bytes are posted.
+ */
+function analysisToSlp(file) {
+    var src = null, out = null;
+    var outPath = '/convert/' + String(file.name).replace(/[^A-Za-z0-9._-]/g, '_') + '.slp';
+    try {
+        try { FS.mkdir('/work'); } catch (e) { /* exists */ }
+        try { FS.unmount('/work'); } catch (e) { /* not mounted */ }
+        FS.mount(FS.filesystems.WORKERFS, { files: [file] }, '/work');
+        src = new h5wasm.File('/work/' + file.name, 'r');
+        var keys = [];
+        try { keys = src.keys() || []; } catch (e) { keys = []; }
+        if (keys.indexOf('tracks') < 0) throw new Error('Not a SLEAP analysis .h5 (no tracks dataset): ' + file.name);
+
+        var strings = function (name) {
+            var ds = keys.indexOf(name) >= 0 ? src.get(name) : null;
+            if (!ds) return [];
+            var v = ds.value;
+            if (typeof v === 'string') return [v];
+            var outS = [];
+            for (var i = 0; i < v.length; i++) outS.push(String(v[i]));
+            return outS;
+        };
+        var nodeNames = strings('node_names');
+        var nNodes = nodeNames.length;
+        var trackNames = strings('track_names');
+
+        var edges = [];
+        if (keys.indexOf('edge_inds') >= 0) {
+            var eiDs = src.get('edge_inds');
+            var ei = eiDs.value, es = eiDs.shape;
+            if (es && es.length === 2) {
+                if (es[0] === 2 && es[1] !== 2) {
+                    for (var e1 = 0; e1 < es[1]; e1++) edges.push([Number(ei[e1]), Number(ei[es[1] + e1])]);
+                } else {
+                    for (var e2 = 0; e2 < es[0]; e2++) edges.push([Number(ei[e2 * 2]), Number(ei[e2 * 2 + 1])]);
+                }
+            }
+        }
+
+        var tracksDs = src.get('tracks');
+        var tv = tracksDs.value, ts = tracksDs.shape;
+        if (!ts || ts.length !== 4) throw new Error('Unexpected tracks shape in ' + file.name);
+        var transposed, nTracks, nFrames;
+        if (ts[2] === 2 && ts[1] === nNodes && !(ts[1] === 2 && ts[2] === nNodes)) {
+            transposed = false; nTracks = ts[3]; nFrames = ts[0];        // [frames, nodes, 2, tracks]
+        } else {
+            transposed = true; nTracks = ts[0]; nFrames = ts[3];         // [tracks, 2, nodes, frames]
+        }
+        if (nNodes === 0) nNodes = transposed ? ts[2] : ts[1];
+        while (nodeNames.length < nNodes) nodeNames.push('node_' + nodeNames.length);
+        while (trackNames.length < nTracks) trackNames.push(nTracks === 1 ? 'track' : 'track_' + trackNames.length);
+        var X = function (t, n, f, c) {
+            return transposed
+                ? tv[t * (2 * nNodes * nFrames) + c * (nNodes * nFrames) + n * nFrames + f]
+                : tv[f * (nNodes * 2 * nTracks) + n * (2 * nTracks) + c * nTracks + t];
+        };
+        var occ = keys.indexOf('track_occupancy') >= 0 ? src.get('track_occupancy').value : null;   // [frames, tracks]
+        var instScores = keys.indexOf('instance_scores') >= 0 ? src.get('instance_scores').value : null;   // [tracks, frames]
+        var trkScores = keys.indexOf('tracking_scores') >= 0 ? src.get('tracking_scores').value : null;
+        var videoPath = strings('video_path')[0] || String(file.name).replace(/\.analysis\.h5$/i, '').replace(/\.h5$/i, '');
+
+        // Pass 1: count, so every table is one pre-sized typed array.
+        var present = new Uint8Array(nFrames * nTracks);
+        var nInst = 0, nFr = 0;
+        for (var f = 0; f < nFrames; f++) {
+            var any = false;
+            for (var t = 0; t < nTracks; t++) {
+                if (occ && occ.length >= nFrames * nTracks && !Number(occ[f * nTracks + t])) continue;
+                for (var n = 0; n < nNodes; n++) {
+                    var x0 = X(t, n, f, 0), y0 = X(t, n, f, 1);
+                    if (x0 === x0 && y0 === y0) { present[f * nTracks + t] = 1; break; }
+                }
+                if (present[f * nTracks + t]) { nInst++; any = true; }
+            }
+            if (any) nFr++;
+        }
+
+        // Pass 2: fill.
+        var frames = new Int32Array(nFr * 5);
+        var insts = new Float64Array(nInst * 10);
+        var pts = new Float32Array(nInst * nNodes * 5);
+        var fr = 0, ii = 0, pp = 0;
+        for (var f2 = 0; f2 < nFrames; f2++) {
+            var start = ii;
+            for (var t2 = 0; t2 < nTracks; t2++) {
+                if (!present[f2 * nTracks + t2]) continue;
+                var sc = instScores ? Number(instScores[t2 * nFrames + f2]) : 0;
+                var tsc = trkScores ? Number(trkScores[t2 * nFrames + f2]) : 0;
+                var o = ii * 10;
+                insts[o] = ii; insts[o + 1] = 1; insts[o + 2] = fr; insts[o + 3] = 0; insts[o + 4] = t2;
+                insts[o + 5] = -1; insts[o + 6] = sc === sc ? sc : 0;
+                insts[o + 7] = pp; insts[o + 8] = pp + nNodes; insts[o + 9] = tsc === tsc ? tsc : 0;
+                for (var n2 = 0; n2 < nNodes; n2++) {
+                    var x = X(t2, n2, f2, 0), y = X(t2, n2, f2, 1);
+                    var ok = x === x && y === y;
+                    var q = (pp + n2) * 5;
+                    pts[q] = ok ? x : NaN; pts[q + 1] = ok ? y : NaN;
+                    pts[q + 2] = ok ? 1 : 0; pts[q + 3] = ok ? 1 : 0; pts[q + 4] = NaN;
+                }
+                pp += nNodes;
+                ii++;
+            }
+            if (ii > start) {
+                var fo = fr * 5;
+                frames[fo] = fr; frames[fo + 1] = 0; frames[fo + 2] = f2; frames[fo + 3] = start; frames[fo + 4] = ii;
+                fr++;
+            }
+        }
+        tv = null; occ = null;
+        try { src.close(); } catch (e) { /* closed */ }
+        src = null;
+        try { FS.unmount('/work'); } catch (e) { /* not mounted */ }
+
+        var links = edges.map(function (ed, k) {
+            return { edge_insert_idx: k, key: 0, source: ed[0], target: ed[1],
+                     type: k === 0 ? { 'py/reduce': [{ 'py/type': 'sleap.skeleton.EdgeType' }, { 'py/tuple': [1] }] }
+                                   : { 'py/id': 1 } };
+        });
+        var metadata = {
+            version: '2.0.0',
+            skeletons: [{ directed: true, graph: { name: 'skeleton', num_edges_inserted: edges.length },
+                          links: links, multigraph: true,
+                          nodes: nodeNames.map(function (_, k) { return { id: k }; }) }],
+            nodes: nodeNames.map(function (nm) { return { name: nm }; }),
+            videos: [], tracks: [], suggestions: [], negative_anchors: {},
+            provenance: { converted_from: String(file.name) },
+        };
+
+        try { FS.mkdir('/convert'); } catch (e) { /* exists */ }
+        out = new h5wasm.File(outPath, 'w');
+        out.create_group('metadata');
+        var mg = out.get('metadata');
+        mg.create_attribute('format_id', 1.4);
+        setStringAttr(mg, 'json', JSON.stringify(metadata));
+        var table = function (name, data, cols, dtype, fields) {
+            out.create_dataset({ name: name, data: data, shape: [data.length / cols, cols], dtype: dtype });
+            setStringAttr(out.get(name), 'field_names', JSON.stringify(fields));
+        };
+        table('frames', frames, 5, '<i', ['frame_id', 'video', 'frame_idx', 'instance_id_start', 'instance_id_end']);
+        table('instances', insts, 10, '<d', ['instance_id', 'instance_type', 'frame_id', 'skeleton', 'track',
+            'from_predicted', 'score', 'point_id_start', 'point_id_end', 'tracking_score']);
+        table('points', new Float32Array(0), 4, '<f', ['x', 'y', 'visible', 'complete']);
+        table('pred_points', pts, 5, '<f', ['x', 'y', 'visible', 'complete', 'score']);
+        out.create_dataset({ name: 'videos_json', data: [JSON.stringify({
+            filename: videoPath,
+            backend: { type: 'MediaVideo', shape: [nFrames, 0, 0, 1], filename: videoPath, grayscale: false, bgr: false },
+        })] });
+        out.create_dataset({ name: 'tracks_json', data: trackNames.map(function (tn) { return JSON.stringify([0, tn]); }) });
+        out.flush();
+        out.close();
+        out = null;
+        var bytes = FS.readFile(outPath);
+        try { FS.unlink(outPath); } catch (e) { /* gone */ }
+        // FS.readFile returns its own exact buffer: transfer it, no copy.
+        var buf = (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength)
+            ? bytes.buffer
+            : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+        postMessage({ type: 'slpBytes', bytes: buf, name: String(file.name) + '.slp' }, [buf]);
+    } catch (err) {
+        if (src) { try { src.close(); } catch (e) { /* closed */ } }
+        if (out) { try { out.close(); } catch (e) { /* closed */ } }
+        try { FS.unmount('/work'); } catch (e) { /* not mounted */ }
+        try { FS.unlink(outPath); } catch (e) { /* none */ }
+        postMessage({ type: 'error', message: (err && err.message) || String(err) });
+    }
+}
+
+/**
+ * Each file's `provenance` dict (from the `metadata` group's `json` attribute),
+ * and nothing else: no table is read, so this costs a file open and one small
+ * attribute however large the file is. The per-camera folder loader uses it to
+ * tell which of a camera directory's `.slp` files LUC3D wrote last
+ * (`chooseCameraSlp`). A file that cannot be opened, is not an SLP, or carries
+ * no provenance gives `null` — never an error: the loader then falls back to
+ * the version suffix for it, which is what it did before it asked.
+ */
+function readProvenances(files) {
+    var out = [];
+    for (var i = 0; i < files.length; i++) {
+        var file = files[i];
+        var f = null;
+        var prov = null;
+        try {
+            try { FS.mkdir('/work'); } catch (e) { /* exists */ }
+            try { FS.unmount('/work'); } catch (e) { /* not mounted */ }
+            FS.mount(FS.filesystems.WORKERFS, { files: [file] }, '/work');
+            f = new h5wasm.File('/work/' + file.name, 'r');
+            var keys = null;
+            try { keys = f.keys(); } catch (e) { keys = null; }
+            if (keys && keys.indexOf('metadata') >= 0) {
+                var attr = f.get('metadata').attrs['json'];
+                if (attr) {
+                    var str = typeof attr.value === 'string' ? attr.value : new TextDecoder().decode(attr.value);
+                    var meta = JSON.parse(str);
+                    if (meta && meta.provenance && typeof meta.provenance === 'object') prov = meta.provenance;
+                }
+            }
+        } catch (e) {
+            prov = null;
+        } finally {
+            if (f) { try { f.close(); } catch (e) { /* invalid id */ } }
+            try { FS.unmount('/work'); } catch (e) { /* not mounted */ }
+        }
+        out.push(prov);
+    }
+    postMessage({ type: 'provenance', provenances: out });
 }
 
 onmessage = async function (e) {

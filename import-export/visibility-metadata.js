@@ -1,9 +1,10 @@
 // import-export/visibility-metadata.js — the `metadata.lucid` <-> Session
 // mapping for the Visibility panel's SESSION-SCOPED settings, and for the other
 // per-session state that belongs in the project file: the ID Switches tab's
-// review checklist (`idSwitchReview`, ui/id-switch-review.js) and the number of
+// review checklist (`idSwitchReview`, ui/id-switch-review.js), the number of
 // animals tracking uses (`numAnimals`, `Session.numAnimals`, the toolbar's
-// Animals field).
+// Animals field) and the data file each camera was loaded from when the user
+// chose it (`dataFileChoices`, `Session.dataFileChoices`, #413).
 //
 // ## What this covers, and what it deliberately does not
 //
@@ -75,6 +76,7 @@ export const VISIBILITY_METADATA_KEYS = [
     'tailMarkedIdentity',
     'identityMarks',
     'imageModel',
+    'dataFileChoices',
 ];
 
 // `Session.numAnimals` <-> `metadata.lucid.numAnimals`: a positive integer, or
@@ -111,6 +113,36 @@ function serializeIdentityMarks(raw) {
         if (Object.keys(clean).length) { out = out || {}; out[cue] = clean; }
     });
     return out;
+}
+
+// `Session.dataFileChoices` <-> `metadata.lucid.dataFileChoices`: for each
+// camera whose data file the USER decided in the per-camera folder loader's
+// chooser (now or in an earlier load, `loading/data-file-resolve.js`), the
+// file it loaded as `"<camera dir>/<file name>"`, or null for "None". Cameras
+// the loader settled on its own are not listed, and a session with no such
+// camera writes nothing. Record only — no loader acts on it yet.
+function serializeDataFileChoices(session) {
+    var c = session.dataFileChoices;
+    if (!c || typeof c !== 'object') return null;
+    var out = {};
+    var n = 0;
+    Object.keys(c).sort().forEach(function (cam) {
+        var v = c[cam];
+        if (v === null || typeof v === 'string') { out[cam] = v; n++; }
+    });
+    return n ? out : null;
+}
+
+function ingestDataFileChoices(session, raw) {
+    var out = null;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        for (var cam in raw) {
+            if (!Object.prototype.hasOwnProperty.call(raw, cam)) continue;
+            var v = raw[cam];
+            if (v === null || typeof v === 'string') { (out = out || {})[cam] = v; }
+        }
+    }
+    session.dataFileChoices = out;
 }
 
 /**
@@ -162,6 +194,8 @@ export function writeVisibilityMetadata(lucid, session) {
     // The image check's model (ID Switches tab ▸ Image model): absent while it is the built-in one.
     var model = ingestModelChoice(session.imageModel);
     if (model) lucid.imageModel = model;
+    var dataFiles = serializeDataFileChoices(session);
+    if (dataFiles) lucid.dataFileChoices = dataFiles;
 
     return lucid;
 }
@@ -187,5 +221,6 @@ export function readVisibilityMetadata(session, lucid) {
     session.tailMarkedIdentity = (typeof src.tailMarkedIdentity === 'string' && src.tailMarkedIdentity) ? src.tailMarkedIdentity : null;
     session.identityMarks = serializeIdentityMarks(src.identityMarks);
     session.imageModel = ingestModelChoice(src.imageModel);
+    ingestDataFileChoices(session, src.dataFileChoices);
     return session;
 }

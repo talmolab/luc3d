@@ -206,6 +206,9 @@ try {
         s.identityMarks = { tailBands: { mouseA: 0, mouseB: 2 } };
         // ...and the image check's model choice (pose/image-model-manifest.js), same module.
         s.imageModel = { key: 'a'.repeat(64), name: 'Rig fine-tune', input: 168, threshold: -1, url: 'olinesn/rig-model' };
+        // The data files the per-camera chooser recorded (#413): a record
+        // that rides the same module.
+        s.dataFileChoices = { camA: 'camA/camA.predictions.proofread.slp', camB: null };
 
         // ---- the ID Switches checklist (shapes as in pose/id-switch-check.js) ----
         const pt = (frame, a, b, score, extra) => Object.assign(
